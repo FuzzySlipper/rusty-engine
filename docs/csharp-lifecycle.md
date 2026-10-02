@@ -369,10 +369,10 @@ omitted faces use the required base slot binding. `ReadMaterialMapping` returns
 copied effective source-slot/face selections, material provenance values, and
 renderer slots. The Engine keeps incremental renderer identity and owns all
 generated mesh/frame work; C# receives only copied facts. `Clear` or disposal
-removes the matching renderer objects. Select `VoxelSurfaceMode` in
-`SpatialSessionConfig` when creating the session; it chooses only the
-Engine-derived mesh posture and is retained through subsequent voxel changes.
-There is no C# API to change the mode of an existing session.
+removes the matching renderer objects. `SpatialSessionConfig.VoxelSurfaceMode`
+selects how the session's voxels are drawn; `Voxel.ConfigureMaterialSurfaces`
+changes it, and each material's own mode and character, later. See
+[smooth voxel surfaces and densities](smooth-voxel-surfaces.md).
 
 ### Voxel material collision
 

@@ -186,7 +186,8 @@ The same `ImplicitSurfaces` service owns `SampledVolume`. Create one with an
 origin, positive uniform spacing, lattice-point counts (at least two per axis),
 and initial scalar value. Values are finite floats, negative inside, in x-fastest
 order: `((z * height) + y) * width + x`. The last sample lies at
-`origin + spacing * (dimensions - 1)`. The retained limit is eight million points.
+`origin + spacing * (dimensions - 1)`. `MaxSamples` limits the retained points;
+zero selects eight million.
 
 `WriteSampledVolume` replaces a bounded contiguous sample range;
 `ReadSampledVolume` returns a managed copy and descriptor/revision.
@@ -205,15 +206,42 @@ material, resource, and collision paths. `SampledRecipeSurface` is an optional
 synchronous description for this extraction. `ReadSampledVolumeGeneration`
 reports actual lattice spacing and topology; octree depth and adaptive leaf
 recoveries are zero because this path is uniform. Operation failures throw
-`EngineCallException` with copied diagnostics.
+`EngineCallException` with copied diagnostics. `MaxExtractionVertices`,
+`MaxExtractionTriangles` (zero: 262,144 each), `MaxSampledCells` (zero: four
+million) and `MaxTemporaryBytes` (zero: 256 MiB) bound one extraction.
+
+Each sample may carry a material index. `WriteSampledVolumeMaterials` and
+`ReadSampledVolumeMaterials` replace and copy ranges of indices, and
+`PaintSampledVolume` gives every sample where an analytic node is at or below
+zero an index. A face takes the index of its edge's inside sample. List every
+index on the surface other than zero in the request's `Materials` as
+`SampledVolumeMaterial(index, material, character, textureMapping)`; index
+zero is the default material unless listed. The character's placement and
+roughness shape that material's cells ([surface characters](smooth-voxel-surfaces.md#surface-modes-and-characters));
+its crease angle and texture mapping replace the request's for its faces. A
+`Blocky` brick index inside `Smooth` rock gives planar, hard-edged blocks in
+rounded stone with no crack between them. Material regions still apply on top.
+
+For editing, mesh in blocks. `ReadSampledVolumeDirtyBlocks(new(volume,
+blockSamples))` returns the blocks of `blockSamples` owned samples per axis
+whose surface changed since the last read (every block on the first read and
+after `RasterizeSampledVolume`), and forgets them. `GenerateSampledVolumeBlock(
+request.ForBlock(blockSamples, block))` meshes one block into its own
+`MeshResource`, or returns no mesh when the block has no surface, with its
+vertex, triangle and time cost. A block owns the faces whose inside sample it
+holds and computes border normals with a one-sample halo, so blocks meet
+without seams and their faces are exactly the whole volume's. Replace each
+changed block's appearance and its `ApplyCollisionResidency` asset; untouched
+blocks keep theirs.
 
 Sampling resolution remains a real limit: crossings hidden between lattice
 points are lost, and one vertex per active cell cannot represent arbitrary
 within-cell topology. The mesher does not add padding or caps at volume edges;
 include exterior samples around closed solids. Dense extraction has explicit
 cell, temporary-memory, and mesh budgets, so not every retained volume can be
-meshed in one request. Partition large products deliberately. This foundation
-does not implement erosion, world streaming, or efficient sparse edits.
+meshed in one request; mesh large volumes in blocks. A volume is one dense
+allocation and is not streamed; for a streamed, editable density world use
+[voxel densities](smooth-voxel-surfaces.md#densities).
 
 ### Opt-in authored surface audit
 

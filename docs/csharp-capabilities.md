@@ -39,7 +39,7 @@ to force a rerun.
 | `Spatial` | Own collision, navigation, character movement proposals, voxel picking, spatial queries, and session-owned triggers. It can atomically admit collision plus planar navigation from an immutable Engine `ContentReference`, or derive a bounded planar projection from the session's retained voxel/static-mesh collision scene under a `CollisionNavigationConfig` and explain why a column or edge is refused; navigation also includes distinct planar and volumetric traversal overlays plus bounded weighted queries. `EvaluateNavigationStep` returns bounded one-step navigation facts and its path without changing session state; path requests return their cells directly. Registered triggers support activation/retirement and fact-free restore rebasing through generated APIs. |
 | `Perception` | Query reusable visibility facts; the product retains AI and awareness policy. |
 | `WorldOrigin` | Prepare, inspect, and commit world-origin rebases. |
-| `Voxel` | Read and mutate Engine-owned voxel state. |
+| `Voxel` | Read and mutate Engine-owned voxel state: edits, residency, densities and brush edits, collision and surface modes per material ([smooth voxel surfaces](smooth-voxel-surfaces.md)). |
 | `VoxelContent` | Admit and inspect reusable voxel content resources, including bounded MagicaVoxel objects and retained object presentations. |
 | `VoxelScenePresentation` | Project Engine voxel scenes into retained renderer resources, including GreedyCubes face-directed material selection. |
 | `Content` | Read product content admitted by the host, open content bundles and [portable assets](portable-assets.md), and admit product-owned content snapshots. |

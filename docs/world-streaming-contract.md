@@ -61,8 +61,8 @@ material; missing overrides fall back to variant zero, then the base material.
 Those are ordinary Appearance materials, including atlas-region materials.
 `ReadMaterialMapping` includes variant in its provenance rows. Collision remains
 cube occupancy: rotating state does not turn a cell into a door-shaped collider.
-Nonzero state requires GreedyCubes; reconstructed smooth surfaces have no authored
-cube-face orientation and reject it explicitly.
+Nonzero state requires a material drawn as GreedyCubes; reconstructed smooth
+surfaces have no authored cube-face orientation and reject it explicitly.
 
 The stable packed cell encoding remains 32 bits (material, solid tag, state).
 Dense C# state input costs four extra bytes per cell when provided; it is optional
