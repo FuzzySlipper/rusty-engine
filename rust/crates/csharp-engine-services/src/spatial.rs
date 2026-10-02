@@ -18,7 +18,7 @@ use collision_navigation::{
 };
 use core_ids::EntityId;
 use core_math::{Vec2, Vec3};
-use core_space::{ChunkDims, Face, GridId, VoxelCoord, VoxelGridSpec};
+use core_space::{ChunkDims, GridId, VoxelCoord, VoxelGridSpec};
 use csharp_engine_abi::*;
 use engine_spatial::{
     character_edge_outcome, CharacterCapsule, CharacterCollisionQueryStats,

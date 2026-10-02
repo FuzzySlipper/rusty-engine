@@ -71,7 +71,7 @@ use parry3d_f64::query::{
     ShapeCastHit, ShapeCastOptions, ShapeCastStatus,
 };
 use parry3d_f64::shape::{
-    Capsule, CompositeShapeRef, Compound, Cuboid, Shape, SharedShape, TriMesh, TriMeshFlags,
+    Capsule, CompositeShapeRef, Compound, Cuboid, Shape, SharedShape, TriMesh,
 };
 
 /// How a voxel value participates in collision. Derived from the value/material;
@@ -191,6 +191,9 @@ pub struct VoxelHit {
     pub face: Face,
     /// The world-space point of impact.
     pub point: WorldPos,
+    /// The unit surface normal at the impact: a face axis on a cube, the
+    /// triangle's normal on a reconstructed surface.
+    pub normal: WorldVec,
     /// Distance from the ray origin along the (unit-normalised) direction.
     pub distance: f64,
 }
@@ -220,11 +223,11 @@ struct ChunkCollider {
     source_hash: u64,
     /// World-positioned solid cuboids.
     cubes: Option<Arc<Compound>>,
-    /// The canonical voxel owning each Compound child, in the same order as
-    /// `cubes.shapes()`. Ray queries need this rather than reconstructing a
-    /// cell from an impact point: a ray may strike a top face precisely at an
-    /// adjacent sparse-cell boundary.
-    voxels: Vec<VoxelCoord>,
+    /// The canonical voxels of each Compound child, in the same order as
+    /// `cubes.shapes()`. A cube voxel's own cuboid names its voxel exactly:
+    /// a ray may strike a top face precisely at an adjacent sparse-cell
+    /// boundary. A merged box names the voxel under the impact.
+    boxes: Vec<VoxelBox>,
     /// The reconstructed surface drawn for this chunk, when its materials are
     /// not drawn as cubes.
     surface: Option<ChunkSurfacePart>,
@@ -234,8 +237,26 @@ struct ChunkCollider {
     bounds: Option<WorldAabb>,
 }
 
+/// An inclusive box of voxels collided as one cuboid.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct VoxelBox {
+    min: VoxelCoord,
+    max: VoxelCoord,
+}
+
+impl VoxelBox {
+    const fn single(voxel: VoxelCoord) -> Self {
+        Self {
+            min: voxel,
+            max: voxel,
+        }
+    }
+}
+
 #[derive(Clone)]
 struct ChunkSurfacePart {
+    /// The caller's identity of the triangles, so unchanged ones are reused.
+    key: u64,
     /// Oriented, so a point near the surface can be classified inside or out.
     shape: Arc<TriMesh>,
     /// The voxel owning each triangle.
@@ -980,12 +1001,13 @@ impl CollisionProjection {
         match build_chunk_shape(&self.grid, self.world_offset, coord, chunk) {
             Some((shape, voxels)) => {
                 let bounds = shape_world_aabb(&shape);
+                let boxes = voxels.into_iter().map(VoxelBox::single).collect();
                 self.chunks.insert(
                     coord,
                     ChunkCollider {
                         source_hash: chunk.content_hash().0,
                         cubes: Some(Arc::new(shape)),
-                        voxels,
+                        boxes,
                         surface: None,
                         bounds,
                     },
@@ -1047,46 +1069,75 @@ impl CollisionProjection {
     /// chunks whose materials are drawn as reconstructed surfaces, so
     /// collision follows what is drawn; the owner supplies cuboids only for
     /// cube materials and for solid voxels deep enough that no surface passes
-    /// through them. Does not bump the version; call [`Self::touch`] after a
-    /// batch.
+    /// through them. A neighbour's arrival rebuilds a chunk's mesh without
+    /// always changing it, so parts equal to the current ones are kept: the
+    /// cuboids when the voxel list is unchanged, and the surface when
+    /// `surface_key` (the triangles' identity, such as the mesh's content
+    /// hash) is unchanged; `surface` is only called otherwise. Does not bump
+    /// the version; call [`Self::touch`] after a batch.
     pub fn set_chunk_parts(
         &mut self,
         coord: ChunkCoord,
         source_hash: u64,
         cube_voxels: &[VoxelCoord],
-        surface: Option<ChunkSurfaceCollider>,
+        surface_key: u64,
+        surface: impl FnOnce() -> Option<ChunkSurfaceCollider>,
     ) {
-        let half: Real = self.grid.voxel_size() * 0.5;
-        let cubes = (!cube_voxels.is_empty()).then(|| {
-            let parts = cube_voxels
-                .iter()
-                .map(|voxel| {
-                    let center = self.grid.voxel_center_world(*voxel) + self.world_offset;
-                    (
-                        Pose::translation(center.x, center.y, center.z),
-                        SharedShape::cuboid(half, half, half),
-                    )
-                })
-                .collect();
-            Arc::new(Compound::new(parts))
-        });
-        let surface = surface
-            .filter(|surface| !surface.triangles.is_empty())
-            .and_then(|surface| {
-                let offset = self.world_offset;
-                let vertices = surface
-                    .positions
+        let boxes = merge_boxes(&self.grid, coord, cube_voxels);
+        let previous = self.chunks.get(&coord);
+        let kept_cubes = previous
+            .filter(|previous| previous.boxes == boxes)
+            .map(|previous| previous.cubes.clone());
+        let kept_surface = previous
+            .and_then(|previous| previous.surface.as_ref())
+            .filter(|previous| previous.key == surface_key)
+            .cloned();
+        let cubes = kept_cubes.unwrap_or_else(|| {
+            (!boxes.is_empty()).then(|| {
+                let parts = boxes
                     .iter()
-                    .map(|p| Vector::new(p[0] + offset.x, p[1] + offset.y, p[2] + offset.z))
+                    .map(|cells| {
+                        let (low, _) = self.grid.voxel_bounds_world(cells.min);
+                        let (_, high) = self.grid.voxel_bounds_world(cells.max);
+                        let center = WorldPos::new(
+                            (low.x + high.x) * 0.5,
+                            (low.y + high.y) * 0.5,
+                            (low.z + high.z) * 0.5,
+                        ) + self.world_offset;
+                        (
+                            Pose::translation(center.x, center.y, center.z),
+                            SharedShape::cuboid(
+                                (high.x - low.x) * 0.5,
+                                (high.y - low.y) * 0.5,
+                                (high.z - low.z) * 0.5,
+                            ),
+                        )
+                    })
                     .collect();
-                let flags = TriMeshFlags::ORIENTED | TriMeshFlags::MERGE_DUPLICATE_VERTICES;
-                let shape = TriMesh::with_flags(vertices, surface.triangles, flags).ok()?;
-                debug_assert_eq!(shape.indices().len(), surface.owners.len());
-                Some(ChunkSurfacePart {
-                    shape: Arc::new(shape),
-                    owners: surface.owners,
+                Arc::new(Compound::new(parts))
+            })
+        });
+        let surface = kept_surface.or_else(|| {
+            surface()
+                .filter(|surface| !surface.triangles.is_empty())
+                .and_then(|surface| {
+                    let offset = self.world_offset;
+                    let vertices = surface
+                        .positions
+                        .iter()
+                        .map(|p| Vector::new(p[0] + offset.x, p[1] + offset.y, p[2] + offset.z))
+                        .collect();
+                    // Containment reads the nearest triangle's own normal, so the
+                    // mesh needs no merged topology or pseudo-normals.
+                    let shape = TriMesh::new(vertices, surface.triangles).ok()?;
+                    debug_assert_eq!(shape.indices().len(), surface.owners.len());
+                    Some(ChunkSurfacePart {
+                        key: surface_key,
+                        shape: Arc::new(shape),
+                        owners: surface.owners,
+                    })
                 })
-            });
+        });
         if cubes.is_none() && surface.is_none() {
             self.chunks.remove(&coord);
             return;
@@ -1121,7 +1172,7 @@ impl CollisionProjection {
             ChunkCollider {
                 source_hash,
                 cubes,
-                voxels: cube_voxels.to_vec(),
+                boxes,
                 surface,
                 bounds,
             },
@@ -1188,15 +1239,16 @@ impl CollisionProjection {
                     else {
                         continue;
                     };
-                    let Some((projection, _)) = surface
+                    let Some((projection, (triangle, _))) = surface
                         .shape
-                        .project_local_point_and_get_location_with_max_dist(point, true, reach)
+                        .project_local_point_and_get_location_with_max_dist(point, false, reach)
                     else {
                         continue;
                     };
                     let distance = (projection.point - point).length();
                     if nearest.is_none_or(|(best, _)| distance < best) {
-                        nearest = Some((distance, projection.is_inside));
+                        let normal = surface.shape.triangle(triangle).scaled_normal();
+                        nearest = Some((distance, (point - projection.point).dot(normal) <= 0.0));
                     }
                 }
             }
@@ -1227,11 +1279,29 @@ impl CollisionProjection {
                     true,
                 )
             }) {
-                let Some(&voxel) = collider.voxels.get(primitive as usize) else {
+                let Some(&cells) = collider.boxes.get(primitive as usize) else {
                     debug_assert!(false, "compound ray primitive must retain a voxel owner");
                     continue;
                 };
                 if best.is_none_or(|(t, _, _)| hit.time_of_impact < t) {
+                    let voxel = if cells.min == cells.max {
+                        cells.min
+                    } else {
+                        // The voxel just inside the box at the impact.
+                        let toi = hit.time_of_impact;
+                        let inward = self.grid.voxel_size() * 1.0e-3;
+                        let point = WorldPos::new(
+                            ray.origin.x + dir.x * toi - hit.normal.x * inward,
+                            ray.origin.y + dir.y * toi - hit.normal.y * inward,
+                            ray.origin.z + dir.z * toi - hit.normal.z * inward,
+                        );
+                        let at = self.grid.world_to_voxel(point - self.world_offset);
+                        VoxelCoord::new(
+                            at.x.clamp(cells.min.x, cells.max.x),
+                            at.y.clamp(cells.min.y, cells.max.y),
+                            at.z.clamp(cells.min.z, cells.max.z),
+                        )
+                    };
                     best = Some((hit.time_of_impact, hit.normal, voxel));
                 }
             }
@@ -1261,6 +1331,7 @@ impl CollisionProjection {
             chunk: self.grid.voxel_to_chunk(voxel),
             face: normal_to_face(normal),
             point,
+            normal: WorldVec::new(normal.x, normal.y, normal.z),
             distance: toi,
         })
     }
@@ -1413,6 +1484,66 @@ impl CollisionProjection {
                 pose.translation.z,
             ))
     }
+}
+
+/// Merge one chunk's voxels into boxes: each grows along X, then whole rows
+/// along Y, then whole slabs along Z. Deterministic for a given voxel set.
+fn merge_boxes(grid: &VoxelGridSpec, chunk: ChunkCoord, voxels: &[VoxelCoord]) -> Vec<VoxelBox> {
+    if voxels.is_empty() {
+        return Vec::new();
+    }
+    let size = grid.chunk_dims().to_array().map(|value| value as usize);
+    let origin = grid.chunk_origin_voxel(chunk);
+    let index = |x: usize, y: usize, z: usize| (z * size[1] + y) * size[0] + x;
+    let mut open = vec![false; size[0] * size[1] * size[2]];
+    for voxel in voxels {
+        let local = [voxel.x - origin.x, voxel.y - origin.y, voxel.z - origin.z];
+        debug_assert!((0..3).all(|axis| (0..size[axis] as i64).contains(&local[axis])));
+        open[index(local[0] as usize, local[1] as usize, local[2] as usize)] = true;
+    }
+    let mut boxes = Vec::new();
+    for z in 0..size[2] {
+        for y in 0..size[1] {
+            for x in 0..size[0] {
+                if !open[index(x, y, z)] {
+                    continue;
+                }
+                let mut end_x = x + 1;
+                while end_x < size[0] && open[index(end_x, y, z)] {
+                    end_x += 1;
+                }
+                let row =
+                    |y: usize, z: usize, open: &[bool]| (x..end_x).all(|x| open[index(x, y, z)]);
+                let mut end_y = y + 1;
+                while end_y < size[1] && row(end_y, z, &open) {
+                    end_y += 1;
+                }
+                let mut end_z = z + 1;
+                while end_z < size[2] && (y..end_y).all(|y| row(y, end_z, &open)) {
+                    end_z += 1;
+                }
+                for zz in z..end_z {
+                    for yy in y..end_y {
+                        for xx in x..end_x {
+                            open[index(xx, yy, zz)] = false;
+                        }
+                    }
+                }
+                let at = |x: usize, y: usize, z: usize| {
+                    VoxelCoord::new(
+                        origin.x + x as i64,
+                        origin.y + y as i64,
+                        origin.z + z as i64,
+                    )
+                };
+                boxes.push(VoxelBox {
+                    min: at(x, y, z),
+                    max: at(end_x - 1, end_y - 1, end_z - 1),
+                });
+            }
+        }
+    }
+    boxes
 }
 
 /// Build the parry `Compound` of world-positioned cuboids for one chunk's solid
@@ -1682,6 +1813,62 @@ mod tests {
                 .len(),
             2
         );
+    }
+
+    #[test]
+    fn merged_part_boxes_name_the_voxel_under_a_ray_and_surfaces_classify_points() {
+        let coord = ChunkCoord::new(0, 0, 0);
+        let mut projection = CollisionProjection::build(&VoxelWorld::new(spec()));
+        // A 4 x 2 x 3 slab of cuboid voxels, and one surface triangle above it.
+        let cubes: Vec<_> = (0..4)
+            .flat_map(|x| (0..2).flat_map(move |y| (0..3).map(move |z| VoxelCoord::new(x, y, z))))
+            .collect();
+        let surface = ChunkSurfaceCollider {
+            positions: vec![[0.0, 3.0, 0.0], [0.0, 3.0, 8.0], [8.0, 3.0, 0.0]],
+            triangles: vec![[0, 1, 2]],
+            owners: vec![VoxelCoord::new(1, 2, 1)],
+        };
+        projection.set_chunk_parts(coord, 1, &cubes, 7, || Some(surface.clone()));
+        projection.touch();
+        assert_eq!(projection.chunks[&coord].boxes.len(), 1);
+        let side = projection
+            .raycast(
+                Ray::new(WorldPos::new(-2.0, 1.5, 2.5), WorldVec::new(1.0, 0.0, 0.0)),
+                10.0,
+            )
+            .unwrap();
+        assert_eq!(side.voxel, VoxelCoord::new(0, 1, 2));
+        assert_eq!(side.face, Face::NegX);
+        let top = projection
+            .raycast(
+                Ray::new(WorldPos::new(1.5, 2.5, 1.5), WorldVec::new(0.0, -1.0, 0.0)),
+                10.0,
+            )
+            .unwrap();
+        assert_eq!(top.voxel, VoxelCoord::new(1, 1, 1));
+        let surface_hit = projection
+            .raycast(
+                Ray::new(WorldPos::new(1.0, 6.0, 1.0), WorldVec::new(0.0, -1.0, 0.0)),
+                10.0,
+            )
+            .unwrap();
+        assert_eq!(surface_hit.voxel, VoxelCoord::new(1, 2, 1));
+        assert!((surface_hit.normal.y - 1.0).abs() < 1.0e-9);
+        // Below the triangle reads inside, above it outside.
+        assert!(projection.contains_point(WorldPos::new(1.0, 2.6, 1.0)));
+        assert!(!projection.contains_point(WorldPos::new(1.0, 3.4, 1.0)));
+        // Unchanged parts are kept rather than rebuilt.
+        let kept = projection.chunks[&coord]
+            .surface
+            .as_ref()
+            .unwrap()
+            .shape
+            .clone();
+        projection.set_chunk_parts(coord, 2, &cubes, 7, || panic!("the surface is unchanged"));
+        assert!(Arc::ptr_eq(
+            &kept,
+            &projection.chunks[&coord].surface.as_ref().unwrap().shape
+        ));
     }
 
     #[test]

@@ -362,10 +362,10 @@ a live `Appearance` material, retain the disposable projection, and call
 `RefreshScene` after voxel edits, residency changes, or origin changes. A
 refresh right after one voxel update visits only the chunks that update
 changed; after several updates, a replaced scene, a material change or an
-origin rebase it checks every chunk. For a
-`GreedyCubes` session, `ProjectSceneDirectional` and
+origin rebase it checks every chunk. `ProjectSceneDirectional` and
 `UpdateSceneDirectional` additionally accept sparse `SpatialFace` overrides;
-omitted faces use the required base slot binding. `ReadMaterialMapping` returns
+omitted faces use the required base slot binding. On a reconstructed surface
+the face is the polygon's box-projection face. `ReadMaterialMapping` returns
 copied effective source-slot/face selections, material provenance values, and
 renderer slots. The Engine keeps incremental renderer identity and owns all
 generated mesh/frame work; C# receives only copied facts. `Clear` or disposal

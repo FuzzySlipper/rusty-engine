@@ -110,20 +110,34 @@ voxel that no surface passes through (all 26 neighbours solid, or beside a
 non-collidable solid), plus the chunk's reconstructed triangles. Each
 triangle belongs to a voxel (the solid end of its dual-contoured edge, or the
 first solid corner of its marched cell), so `CastRay` and picking still name
-a voxel and a face. Character casts, overlaps, Dynamics and collision
-navigation use the same shapes. Point and box queries in the shell between
-the surface and the interior cuboids classify by the nearest surface
-triangle. Non-collidable materials contribute neither cuboids nor triangles.
+a voxel, a face (the axis nearest the surface normal) and the normal itself.
+Cuboids are merged into boxes; a ray into a box names the voxel under the
+impact. Character casts, overlaps, Dynamics and collision navigation use the
+same shapes. Point and box queries in the shell between the surface and the
+interior cuboids classify by the side of the nearest surface triangle.
+Non-collidable materials contribute neither cuboids nor triangles. A chunk's
+parts are rebuilt with its mesh and kept when unchanged.
+
+Collision navigation samples a support's height and slope from the hit normal,
+and where a curved or filleted floor (the rounded foot of a dual-contoured
+riser) rises under the standing capsule's rim it rests the capsule on the
+surface, within one step height. A stair of one-voxel risers drawn by dual
+contouring is a run of rounded steps: its cell-centre heights vary by a few
+centimetres, so a step height tuned to exactly one voxel can refuse an edge.
 The voxel navigation projection (`navigation_step`) stays a voxel-cell
 projection; collision navigation follows the surface.
 
 ## Cost
 
 Reconstructed chunks mesh from the chunk and a one-voxel halo of its
-neighbours, in parallel during scene builds and large residency changes. On a
-180-chunk dungeon of 16³ one-metre chunks (`svc-mesh` example
-`smooth_chunk_meshing`, release build) dual contouring costs about 0.3 ms per
-chunk, marching cubes 0.5 ms and cubes 0.4 ms. Reconstructed vertices are
+neighbours, in parallel when a change rebuilds several chunks. On a 180-chunk
+dungeon of 16³ one-metre chunks (`svc-mesh` example `smooth_chunk_meshing`,
+release build) dual contouring costs about 0.3 ms per chunk, marching cubes
+0.5 ms and cubes 0.4 ms. A chunk's surface depends on all 26 neighbours, so
+admitting a world chunk by chunk remeshes each chunk several times; admitting
+that dungeon in slices of six chunks (`engine-spatial` example
+`smooth_residency_load`) takes about 0.43 s with dual contouring, 0.63 s with
+marching cubes and 0.40 s with cubes, collision and navigation included. Reconstructed vertices are
 split per texture face and crease, so a smooth chunk draws more vertices than
 its cell count suggests. `VoxelSceneReadout.MeshMicroseconds`, and the same
 field on edit, residency and density receipts, report the meshing time of the

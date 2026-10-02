@@ -15,7 +15,7 @@ use std::{
 use crate::operation_diagnostics::{clear_receipt, refuse};
 use core_space::Direction6;
 use csharp_engine_abi::*;
-use engine_spatial::{SurfaceMode, VoxelCollisionScene};
+use engine_spatial::VoxelCollisionScene;
 use render_model::{
     RenderDiff, RenderFrameDiff, RenderMaterialDescriptor, TextureDescriptor, Transform,
 };
@@ -573,16 +573,8 @@ impl RuntimeVoxelScenePresentationBridge {
                 format!("voxel scene material bindings are missing used source slots {missing:?}"),
             ));
         }
-        if !face_bindings.is_empty()
-            && scene
-                .mesh_chunks()
-                .any(|chunk| chunk.surface_mode != SurfaceMode::GreedyCubes)
-        {
-            return Err(CsharpEngineServicesError::new(
-                "CSHARP_VOXEL_SCENE_PRESENTATION_DIRECTIONAL",
-                "face material overrides require a GreedyCubes voxel surface",
-            ));
-        }
+        // Reconstructed groups carry the face of their box projection, so
+        // face overrides select materials on smooth surfaces as on cubes.
         let mut overrides = BTreeMap::new();
         for binding in face_bindings {
             let slot = u16::try_from(binding.material_slot).map_err(|_| {
@@ -1773,7 +1765,7 @@ mod tests {
     }
 
     #[test]
-    fn reconstructed_groups_use_base_renderer_slots_and_reject_face_overrides() {
+    fn reconstructed_groups_use_base_renderer_slots_and_accept_face_overrides() {
         let mut spatial = RuntimeSpatialBridge::new();
         let first_session =
             session_with_voxel_mode(&mut spatial, NativeVoxelSurfaceMode::MarchingCubes);
@@ -1843,7 +1835,7 @@ mod tests {
         assert_eq!(
             slots,
             BTreeSet::from([0, 1]),
-            "directionless groups retain their per-presentation base renderer remaps"
+            "groups without an override keep their per-presentation base renderer remaps"
         );
 
         let face = [NativeVoxelSceneFaceMaterialBinding {
@@ -1852,7 +1844,9 @@ mod tests {
             face: NativeSpatialFace::PosY,
             material: first_material,
         }];
-        let mut rejected = NativeVoxelScenePresentationHandle::default();
+        // Reconstructed groups carry their box-projection face, so a face
+        // override selects a material on the smooth surface too.
+        let mut directional = NativeVoxelScenePresentationHandle::default();
         assert_eq!(
             unsafe {
                 (api.project_scene_directional)(
@@ -1864,11 +1858,11 @@ mod tests {
                         face_materials: face.as_ptr(),
                         face_materials_len: face.len(),
                     },
-                    &mut rejected,
+                    &mut directional,
                     &mut std::mem::zeroed::<NativeOperationErrorReceipt>(),
                 )
             },
-            0
+            ABI_OK
         );
     }
 

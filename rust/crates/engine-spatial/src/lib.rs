@@ -343,6 +343,8 @@ pub struct CollisionRayHit {
     pub voxel: [i64; 3],
     pub face: Face,
     pub point: [f64; 3],
+    /// The unit surface normal at the impact.
+    pub normal: [f64; 3],
     pub distance: f64,
 }
 
@@ -986,6 +988,7 @@ impl VoxelCollisionScene {
                 voxel: hit.voxel.to_array(),
                 face: hit.face,
                 point: hit.point.to_array(),
+                normal: [hit.normal.x, hit.normal.y, hit.normal.z],
                 distance: hit.distance,
             })
     }
@@ -1011,6 +1014,7 @@ impl VoxelCollisionScene {
                     voxel: hit.voxel.to_array(),
                     face: hit.face,
                     point: hit.point.to_array(),
+                    normal: [hit.normal.x, hit.normal.y, hit.normal.z],
                     distance: hit.distance,
                 }),
                 CollisionHit::StaticMesh(hit) => SpatialCollisionHit::StaticMesh(hit),
@@ -1168,22 +1172,33 @@ impl VoxelCollisionScene {
     /// meshes draw. Sessions with any reconstructed material only.
     fn install_surface_colliders(&mut self, coordinates: impl IntoIterator<Item = ChunkCoord>) {
         for coordinate in coordinates {
-            let (cubes, surface) = surface_collision::collider_parts(
+            let Some(chunk) = self.voxel_world.get(coordinate) else {
+                self.projection.remove_chunk(coordinate);
+                continue;
+            };
+            let mesh = self.mesh_chunks.get(&coordinate).map(|mesh| mesh.as_ref());
+            let cubes = surface_collision::collider_cubes(
                 &self.voxel_world,
                 &self.noncollidable_materials,
                 &self.mesh_options,
                 coordinate,
-                self.mesh_chunks.get(&coordinate).map(|mesh| mesh.as_ref()),
             );
-            match self.voxel_world.get(coordinate) {
-                Some(chunk) => self.projection.set_chunk_parts(
-                    coordinate,
-                    chunk.content_hash().0,
-                    &cubes,
-                    surface,
-                ),
-                None => self.projection.remove_chunk(coordinate),
-            }
+            self.projection.set_chunk_parts(
+                coordinate,
+                chunk.content_hash().0,
+                &cubes,
+                mesh.map_or(0, |mesh| mesh.content_hash),
+                || {
+                    mesh.and_then(|mesh| {
+                        surface_collision::collider_surface(
+                            &self.voxel_world,
+                            &self.noncollidable_materials,
+                            coordinate,
+                            mesh,
+                        )
+                    })
+                },
+            );
         }
         self.projection.touch();
     }

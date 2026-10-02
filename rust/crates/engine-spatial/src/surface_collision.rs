@@ -67,20 +67,20 @@ pub(crate) fn mesh_chunks(
     Ok((meshes, microseconds))
 }
 
-/// The collider parts of one chunk of a session with reconstructed
-/// materials. Noncollidable materials contribute nothing; a reconstructed
-/// voxel beside a noncollidable solid keeps its cuboid, since no surface is
-/// drawn between them.
-pub(crate) fn collider_parts(
+/// The cuboid voxels of one chunk of a session with reconstructed materials:
+/// cube materials, and reconstructed voxels no surface passes through.
+/// Noncollidable materials contribute nothing; a reconstructed voxel beside a
+/// noncollidable solid keeps its cuboid, since no surface is drawn between
+/// them.
+pub(crate) fn collider_cubes(
     world: &VoxelWorld,
     noncollidable: &BTreeSet<u16>,
     options: &SurfaceMeshOptions,
     coordinate: ChunkCoord,
-    mesh: Option<&VoxelMeshChunk>,
-) -> (Vec<VoxelCoord>, Option<ChunkSurfaceCollider>) {
+) -> Vec<VoxelCoord> {
     let grid = world.grid();
     let Some(chunk) = world.get(coordinate) else {
-        return (Vec::new(), None);
+        return Vec::new();
     };
     let size = grid.chunk_dims().to_array().map(|value| value as usize);
     let origin = grid.chunk_origin_voxel(coordinate);
@@ -164,7 +164,21 @@ pub(crate) fn collider_parts(
             cubes.push(voxel);
         }
     }
-    let surface = mesh.and_then(|mesh| {
+    cubes
+}
+
+/// The reconstructed triangles one chunk draws, owned by their voxels,
+/// without noncollidable materials.
+pub(crate) fn collider_surface(
+    world: &VoxelWorld,
+    noncollidable: &BTreeSet<u16>,
+    coordinate: ChunkCoord,
+    mesh: &VoxelMeshChunk,
+) -> Option<ChunkSurfaceCollider> {
+    let grid = world.grid();
+    let size = grid.chunk_dims().to_array().map(|value| value as usize);
+    let origin = grid.chunk_origin_voxel(coordinate);
+    {
         let base = grid.voxel_min_world(origin);
         let mut surface = ChunkSurfaceCollider::default();
         for group in mesh
@@ -200,6 +214,5 @@ pub(crate) fn collider_parts(
             }
         }
         (!surface.triangles.is_empty()).then_some(surface)
-    });
-    (cubes, surface)
+    }
 }

@@ -660,11 +660,31 @@ pub(super) fn sample_column(
             cell,
             overlap: None,
         };
+        let overlap = |standing_y: f64| {
+            scene.character_capsule_overlap(collision_navigation_capsule(
+                center, standing_y, standing,
+            ))
+        };
+        let mut overlapping = None;
+        if normal_y >= minimum_upward_normal {
+            if let Some(found) = overlap(standing_y)? {
+                // A curved or filleted floor (a reconstructed surface) can
+                // rise under the capsule's rim; rest the capsule on it, as
+                // the character does, within one step of the support.
+                match rest_height(scene, center, standing_y, standing)? {
+                    Some(rest) if overlap(rest)?.is_none() => {
+                        sample.standing_y = rest;
+                        sample.cell = grid
+                            .world_to_voxel(core_space::WorldPos::new(center.x, rest, center.z));
+                    }
+                    _ => overlapping = Some(found),
+                }
+            }
+        }
+        let (standing_y, cell) = (sample.standing_y, sample.cell);
         if normal_y < minimum_upward_normal {
             sample.outcome = NativeCollisionNavigationSampleOutcome::TooSteep;
-        } else if let Some(overlap) = scene
-            .character_capsule_overlap(collision_navigation_capsule(center, standing_y, standing))?
-        {
+        } else if let Some(overlap) = overlapping {
             sample.outcome = NativeCollisionNavigationSampleOutcome::CapsuleOverlap;
             sample.overlap = Some((overlap.source, overlap.point));
         } else if supports.iter().any(|(existing, _)| *existing == cell) {
@@ -723,6 +743,35 @@ pub(super) fn edge_outcome(
     )
 }
 
+/// Where a standing capsule above `standing_y` comes to rest when lowered
+/// onto the surface, searching up to one step height above it; `None` when it
+/// rests no higher than `standing_y` or is blocked from above.
+fn rest_height(
+    scene: &VoxelCollisionScene,
+    center: core_space::WorldPos,
+    standing_y: f64,
+    config: &CharacterControllerConfig,
+) -> Result<Option<f64>, CharacterControllerError> {
+    let lift = f64::from(config.surface.maximum_step_height);
+    if lift <= 0.0 {
+        return Ok(None);
+    }
+    let start = collision_navigation_capsule(center, standing_y + lift, config);
+    if scene.character_capsule_overlap(start)?.is_some() {
+        return Ok(None);
+    }
+    let Some(hit) = scene.cast_character_capsule(
+        start,
+        core_space::WorldVec::new(0.0, -lift, 0.0),
+        f64::from(config.shape.contact_skin),
+    )?
+    else {
+        return Ok(None);
+    };
+    let rest = standing_y + lift * (1.0 - hit.time_of_impact);
+    Ok((rest > standing_y).then_some(rest))
+}
+
 fn collision_navigation_capsule(
     center: core_space::WorldPos,
     standing_y: f64,
@@ -760,11 +809,11 @@ fn collision_navigation_support(
     hit: engine_spatial::SpatialCollisionHit,
 ) -> (f64, f64, NativeSpatialHitKind) {
     match hit {
-        engine_spatial::SpatialCollisionHit::Voxel(hit) => (
-            hit.point[1],
-            f64::from((hit.face == Face::PosY) as u8),
-            NativeSpatialHitKind::Voxel,
-        ),
+        // A cube face's normal is its axis; a reconstructed surface's is
+        // its triangle's.
+        engine_spatial::SpatialCollisionHit::Voxel(hit) => {
+            (hit.point[1], hit.normal[1], NativeSpatialHitKind::Voxel)
+        }
         engine_spatial::SpatialCollisionHit::StaticMesh(hit) => {
             (hit.point.y, hit.normal.y, NativeSpatialHitKind::StaticMesh)
         }
@@ -1752,6 +1801,33 @@ mod tests {
         assert!(floor.point[1] < 2.6, "crater floor {:?}", floor.point);
         assert_eq!(
             route_both_ways(scene, walker(0.4)),
+            [NativeNavigationPathOutcome::Reached; 2]
+        );
+    }
+
+    #[test]
+    fn a_route_climbs_and_descends_a_dual_contoured_voxel_stair() {
+        use engine_spatial::{SurfaceMeshOptions, SurfaceMode};
+        // One-voxel treads and risers along +X. Dual contouring fills each
+        // riser's foot with a fillet that the standing capsule rests on.
+        let mut voxels = Vec::new();
+        for x in -4..12 {
+            for z in -4..8 {
+                let height = (x.clamp(0, 7) / 2) + 1;
+                for y in 0..height {
+                    voxels.push([x, y, z]);
+                }
+            }
+        }
+        let scene = VoxelCollisionScene::from_solid_voxels_with_mesh_options(
+            1.0,
+            16,
+            voxels,
+            SurfaceMeshOptions::with_mode(SurfaceMode::DualContouring),
+        )
+        .unwrap();
+        assert_eq!(
+            route_both_ways(scene, walker(1.05)),
             [NativeNavigationPathOutcome::Reached; 2]
         );
     }
