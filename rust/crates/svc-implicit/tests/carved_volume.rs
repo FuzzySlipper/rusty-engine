@@ -91,11 +91,28 @@ fn carved_volume_recovers_escaped_leaf_vertices_without_opening_edges() {
 #[test]
 fn sampled_carved_volume_reports_closed_boundary_and_cell_ambiguity() {
     let (field, root) = cave();
-    let mut volume =
-        svc_implicit::volume::SampledVolume::new([-12.5, -0.5, -6.5], 0.4, [64, 39, 79], 1.)
-            .unwrap();
+    let mut volume = svc_implicit::volume::SampledVolume::new(
+        [-12.5, -0.5, -6.5],
+        0.4,
+        [64, 39, 79],
+        1.,
+        svc_implicit::volume::DEFAULT_MAX_SAMPLES,
+    )
+    .unwrap();
     volume.rasterize(&field, root).unwrap();
-    let mesh = volume.generate(0., 262144, 262144).unwrap();
+    let materials = svc_mesh::SurfaceMaterials::default();
+    let mesh = volume
+        .generate(svc_implicit::volume::VolumeGenerateOptions {
+            isovalue: 0.,
+            materials: &materials,
+            region: None,
+            limits: svc_mesh::SurfaceMeshLimits {
+                max_vertices: 262_144,
+                max_indices: 262_144 * 3,
+                ..svc_mesh::SurfaceMeshLimits::default()
+            },
+        })
+        .unwrap();
     assert!(!mesh.triangles.is_empty());
     // The uniform path retains one vertex per active cell. This deliberately
     // thin-cut fixture has one aliased internal edge at 0.4 spacing; preserve

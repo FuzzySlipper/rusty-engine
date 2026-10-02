@@ -94,6 +94,7 @@ pub use svc_mesh::{
     MaterialSurface, MeshError as SurfaceMeshError, SurfaceCharacter, SurfaceMaterials,
     SurfaceMeshLimits, SurfaceMeshOptions, SurfaceMode, VertexPlacement,
 };
+pub use svc_volume::DEFAULT_DENSITY_MAGNITUDE;
 pub use voxel_density::{
     VoxelDensityApplyError, VoxelDensityEdit, VoxelDensityEditService, VoxelDensityOperation,
     VoxelDensityReceipt, VoxelDensityRejection, VoxelDensityShape, MAX_DENSITY_EDIT_VOXELS,
@@ -691,6 +692,35 @@ impl VoxelCollisionScene {
 
     pub const fn mesh_options(&self) -> &SurfaceMeshOptions {
         &self.mesh_options
+    }
+
+    /// Replace the surface modes and characters. Every chunk is remeshed and
+    /// its collision rebuilt from what is drawn; the voxels, static meshes,
+    /// collision materials, source revision and world origin are kept. A
+    /// failed rebuild leaves the scene unchanged.
+    pub fn set_mesh_options(
+        &mut self,
+        options: SurfaceMeshOptions,
+    ) -> Result<(), CollisionSceneError> {
+        let mut candidate = Self::build_from_voxel_world_at_revision(
+            self.voxel_size,
+            self.chunk_size,
+            self.voxel_world.clone(),
+            SceneBuildRevision {
+                source: self.source_revision,
+                world_origin: self.world_origin,
+                rebase: self.rebase_revision,
+            },
+            options,
+        )?;
+        if !self.noncollidable_materials.is_empty() {
+            candidate.set_noncollidable_materials(self.noncollidable_materials.clone());
+        }
+        candidate
+            .projection
+            .copy_static_meshes_from(&self.projection);
+        *self = candidate;
+        Ok(())
     }
 
     /// The mesh of one chunk, if it has one.

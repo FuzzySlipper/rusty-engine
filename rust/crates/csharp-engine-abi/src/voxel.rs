@@ -49,6 +49,8 @@ pub struct NativeVoxelSceneReadout {
     pub rebuilt_mesh_chunks: u32,
     pub reused_mesh_chunks: u32,
     pub removed_mesh_chunks: u32,
+    /// Time meshing the chunks the last change rebuilt, summed over chunks.
+    pub mesh_microseconds: u64,
 }
 
 #[repr(C)]
@@ -138,6 +140,7 @@ pub struct NativeVoxelEditReceipt {
     pub reused_mesh_chunks: u32,
     pub removed_mesh_chunks: u32,
     pub status: NativeVoxelEditStatus,
+    pub mesh_microseconds: u64,
 }
 
 #[repr(u32)]
@@ -150,7 +153,8 @@ pub enum NativeVoxelResidencyOperationKind {
 }
 
 /// One flat chunk operation. For Admit/Replace, material_offset/count select
-/// the dense u32 material-slot range carried by the enclosing transaction.
+/// the dense u32 material-slot range carried by the enclosing transaction,
+/// and density_offset/count the chunk's densities (count zero: none).
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct NativeVoxelResidencyOperation {
@@ -158,8 +162,12 @@ pub struct NativeVoxelResidencyOperation {
     pub chunk: NativeVoxelChunkIdentity,
     pub material_offset: u32,
     pub material_count: u32,
+    pub density_offset: u32,
+    pub density_count: u32,
 }
 
+/// Densities are signed, negative inside, in voxel units, one per slot and
+/// negative exactly where the slot is solid.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeVoxelResidencyTransaction {
@@ -170,6 +178,8 @@ pub struct NativeVoxelResidencyTransaction {
     pub operations_len: usize,
     pub material_slots: *const u32,
     pub material_slots_len: usize,
+    pub densities: *const f32,
+    pub densities_len: usize,
 }
 
 #[repr(C)]
@@ -191,6 +201,7 @@ pub struct NativeVoxelResidencyReceipt {
     pub rebuilt_mesh_chunks: u32,
     pub reused_mesh_chunks: u32,
     pub removed_mesh_chunks: u32,
+    pub mesh_microseconds: u64,
 }
 
 /// Collision policy for one occupied material slot; visuals retain the cell.
@@ -214,6 +225,177 @@ pub struct NativeVoxelMaterialCollisionRequest {
 pub type NativeConfigureVoxelMaterialCollision = unsafe extern "C" fn(
     *mut c_void,
     *const NativeVoxelMaterialCollisionRequest,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+
+/// How one voxel material slot is surfaced.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct NativeVoxelMaterialSurface {
+    pub material_slot: u32,
+    pub mode: crate::NativeVoxelSurfaceMode,
+    /// Used by the reconstructed modes.
+    pub character: crate::NativeSurfaceCharacter,
+}
+
+/// Replace a session's surface modes: `mode` for every unlisted material and
+/// each listed material's own. Every chunk is remeshed and its collision
+/// rebuilt; collision follows reconstructed materials' drawn surfaces.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeVoxelMaterialSurfaceRequest {
+    pub session: NativeSpatialSessionHandle,
+    pub mode: crate::NativeVoxelSurfaceMode,
+    pub materials: *const NativeVoxelMaterialSurface,
+    pub materials_len: usize,
+}
+
+pub type NativeConfigureVoxelMaterialSurfaces = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeVoxelMaterialSurfaceRequest,
+    *mut NativeVoxelSceneReadout,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum NativeVoxelDensityEditKind {
+    /// Replace the densities of a box of voxels.
+    #[default]
+    Region = 0,
+    /// Blend a shape into the densities.
+    Brush = 1,
+}
+
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum NativeVoxelDensityShape {
+    #[default]
+    Sphere = 0,
+    Box = 1,
+}
+
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum NativeVoxelDensityOperation {
+    /// Union: newly solid voxels take the edit's material.
+    #[default]
+    Add = 0,
+    /// Subtraction: voxels whose density turns non-negative empty.
+    Subtract = 1,
+    /// Move densities inside the shape toward their neighbours' mean by
+    /// `strength` (0 to 1].
+    Smooth = 2,
+    /// Give solid voxels inside the shape the edit's material.
+    Paint = 3,
+}
+
+/// One density edit. Densities are signed, negative inside, in voxel units:
+/// a solid voxel without one reads -0.5, putting the surface on its cube
+/// face. A Region replaces the densities of `size` voxels from `min`
+/// (x-fastest) with `density_count` values from the transaction's densities;
+/// where a density is negative the voxel is solid with the matching
+/// transaction material, or keeps its own when material_count is zero. A
+/// Brush blends a sphere (center, radius) or box (box_min, box_max) given in
+/// the scene's local frame.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeVoxelDensityEdit {
+    pub kind: NativeVoxelDensityEditKind,
+    pub min: NativeVoxelAddress,
+    pub size_x: u32,
+    pub size_y: u32,
+    pub size_z: u32,
+    pub density_offset: u32,
+    pub density_count: u32,
+    pub material_offset: u32,
+    pub material_count: u32,
+    pub shape: NativeVoxelDensityShape,
+    pub operation: NativeVoxelDensityOperation,
+    pub center: NativeVec3,
+    pub radius: f32,
+    pub box_min: NativeVec3,
+    pub box_max: NativeVec3,
+    pub strength: f32,
+    pub material_slot: u32,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeVoxelDensityTransaction {
+    pub session: NativeSpatialSessionHandle,
+    pub edits: *const NativeVoxelDensityEdit,
+    pub edits_len: usize,
+    pub densities: *const f32,
+    pub densities_len: usize,
+    pub materials: *const u32,
+    pub materials_len: usize,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct NativeVoxelDensityReceipt {
+    pub status: NativeVoxelEditStatus,
+    pub revision_before: u64,
+    pub accepted_revision: u64,
+    /// Voxels whose density or material changed.
+    pub changed_voxels: u32,
+    /// Voxels that became solid or empty.
+    pub solidity_changes: u32,
+    pub changed_min: NativeVoxelAddress,
+    pub changed_max_inclusive: NativeVoxelAddress,
+    pub solid_voxel_count: u64,
+    pub authority_hash: u64,
+    pub collision_revision: u64,
+    pub navigation_revision: u64,
+    pub mesh_revision: u64,
+    pub dirty_chunk_count: u32,
+    pub rebuilt_mesh_chunks: u32,
+    pub reused_mesh_chunks: u32,
+    pub removed_mesh_chunks: u32,
+    pub mesh_microseconds: u64,
+}
+
+pub type NativeApplyVoxelDensityEdits = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeVoxelDensityTransaction,
+    *mut NativeVoxelDensityReceipt,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+
+/// A box of `size` voxels from `min`, read x-fastest.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct NativeVoxelDensityReadRequest {
+    pub session: NativeSpatialSessionHandle,
+    pub min: NativeVoxelAddress,
+    pub size_x: u32,
+    pub size_y: u32,
+    pub size_z: u32,
+}
+
+/// One voxel's signed density and material (zero when empty). Voxels outside
+/// the resident chunks are not resident and read as default-empty.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct NativeVoxelDensitySample {
+    pub density: f32,
+    pub material_slot: u32,
+    pub resident: bool,
+}
+
+/// Borrowed until the next Voxel call.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeVoxelDensityResult {
+    pub samples: *const NativeVoxelDensitySample,
+    pub samples_len: usize,
+}
+
+pub type NativeReadVoxelDensities = unsafe extern "C" fn(
+    *mut c_void,
+    NativeVoxelDensityReadRequest,
+    *mut NativeVoxelDensityResult,
     *mut NativeOperationErrorReceipt,
 ) -> i32;
 
@@ -259,6 +441,9 @@ pub struct NativeVoxelApi {
     pub read_chunk: NativeReadVoxelChunk,
     pub apply_edits: NativeApplyVoxelEdits,
     pub apply_residency: NativeApplyVoxelResidency,
+    pub configure_material_surfaces: NativeConfigureVoxelMaterialSurfaces,
+    pub apply_density_edits: NativeApplyVoxelDensityEdits,
+    pub read_densities: NativeReadVoxelDensities,
 }
 
 /// Samples direct incident light at address + offset (in voxel units). Descriptors

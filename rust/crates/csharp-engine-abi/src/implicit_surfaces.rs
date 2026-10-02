@@ -150,6 +150,8 @@ pub struct NativeSampledVolumeCreateRequest {
     pub height: u32,
     pub depth: u32,
     pub initial_value: f32,
+    /// The most samples this volume may hold; zero selects 8,000,000.
+    pub max_samples: u32,
 }
 
 #[repr(C)]
@@ -207,6 +209,18 @@ pub struct NativeSampledVolumeRasterizeRequest {
     pub source: NativeImplicitNode,
 }
 
+/// The material, surface character and texture mapping of one per-sample
+/// material index. Index zero overrides the request's default material.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeSampledVolumeMaterial {
+    pub index: u32,
+    pub material: NativeMaterialHandle,
+    pub character: crate::NativeSurfaceCharacter,
+    /// Disabled: the request's texture mapping.
+    pub texture_mapping: NativeImplicitTextureMapping,
+}
+
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeSampledVolumeGenerateRequest {
@@ -221,6 +235,96 @@ pub struct NativeSampledVolumeGenerateRequest {
     pub regions_len: usize,
     pub material_boundary_mode: NativeImplicitMaterialBoundaryMode,
     pub material_sample_spacing: f32,
+    /// Replaces the legacy `uv_scale` chart when enabled.
+    pub texture_mapping: NativeImplicitTextureMapping,
+    /// Per-sample material indices; a face takes its edge's inside sample's
+    /// index. Every index present on the surface other than zero is listed.
+    pub materials: *const NativeSampledVolumeMaterial,
+    pub materials_len: usize,
+    /// Zero selects 262,144 each.
+    pub max_extraction_vertices: u32,
+    pub max_extraction_triangles: u32,
+    /// Zero selects 4,000,000 cells and 256 MiB.
+    pub max_sampled_cells: u64,
+    pub max_temporary_bytes: u64,
+    /// GenerateSampledVolumeBlock only: owned samples per block axis, and the
+    /// block. GenerateSampledVolume requires zero.
+    pub block_samples: u32,
+    pub block_x: u32,
+    pub block_y: u32,
+    pub block_z: u32,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeSampledMaterial {
+    pub index: u32,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeSampledVolumeMaterialWriteRequest {
+    pub volume: NativeSampledVolumeHandle,
+    /// X-fast linear lattice index.
+    pub start: u32,
+    pub materials: *const NativeSampledMaterial,
+    pub materials_len: usize,
+}
+
+/// Borrowed material indices, valid until the next ImplicitSurfaces call.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeSampledMaterialSnapshotResult {
+    pub materials: *const NativeSampledMaterial,
+    pub materials_len: usize,
+    pub start: u32,
+}
+
+/// Give every sample where `source` is at or below zero material `index`.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeSampledVolumePaintRequest {
+    pub volume: NativeSampledVolumeHandle,
+    pub field: NativeImplicitFieldHandle,
+    pub source: NativeImplicitNode,
+    pub index: u32,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeSampledVolumeBlockLayout {
+    pub volume: NativeSampledVolumeHandle,
+    pub block_samples: u32,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeSampledVolumeBlock {
+    pub x: u32,
+    pub y: u32,
+    pub z: u32,
+}
+
+/// Blocks whose surface changed since the last read, borrowed until the next
+/// ImplicitSurfaces call. `blocks_x/y/z` is the layout's block count.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeSampledVolumeBlocksResult {
+    pub blocks: *const NativeSampledVolumeBlock,
+    pub blocks_len: usize,
+    pub blocks_x: u32,
+    pub blocks_y: u32,
+    pub blocks_z: u32,
+}
+
+/// One block's mesh, absent when the block has no surface, and its cost.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeSampledVolumeBlockOptionalMesh {
+    pub mesh: NativeMeshResourceHandle,
+    pub vertices: u32,
+    pub triangles: u32,
+    pub generation_seconds: f64,
 }
 
 #[repr(C)]
@@ -383,6 +487,39 @@ pub type NativeReadSampledVolumeGeneration = unsafe extern "C" fn(
     *mut NativeOperationErrorReceipt,
 ) -> i32;
 
+pub type NativeWriteSampledVolumeMaterials = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeSampledVolumeMaterialWriteRequest,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+
+pub type NativeReadSampledVolumeMaterials = unsafe extern "C" fn(
+    *mut c_void,
+    NativeSampledVolumeReadRequest,
+    *mut NativeSampledMaterialSnapshotResult,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+
+pub type NativePaintSampledVolume = unsafe extern "C" fn(
+    *mut c_void,
+    NativeSampledVolumePaintRequest,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+
+pub type NativeReadSampledVolumeDirtyBlocks = unsafe extern "C" fn(
+    *mut c_void,
+    NativeSampledVolumeBlockLayout,
+    *mut NativeSampledVolumeBlocksResult,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+
+pub type NativeGenerateSampledVolumeBlock = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeSampledVolumeGenerateRequest,
+    *mut NativeSampledVolumeBlockOptionalMesh,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+
 pub type NativeAddImplicitBox = unsafe extern "C" fn(
     *mut c_void,
     NativeImplicitBoxRequest,
@@ -533,6 +670,11 @@ pub struct NativeImplicitSurfacesApi {
     pub read_mesh_integrity: NativeReadImplicitIntegrity,
     pub read_expected_join: NativeReadImplicitJoin,
     pub read_enclosure: NativeReadImplicitEnclosure,
+    pub write_sampled_volume_materials: NativeWriteSampledVolumeMaterials,
+    pub read_sampled_volume_materials: NativeReadSampledVolumeMaterials,
+    pub paint_sampled_volume: NativePaintSampledVolume,
+    pub read_sampled_volume_dirty_blocks: NativeReadSampledVolumeDirtyBlocks,
+    pub generate_sampled_volume_block: NativeGenerateSampledVolumeBlock,
 }
 
 /// Opt-in authoring collection; captured fields and mesh facts outlive sources.

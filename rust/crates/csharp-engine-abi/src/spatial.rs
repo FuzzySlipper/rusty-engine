@@ -12,14 +12,15 @@ pub struct NativeSpatialSessionHandle {
 pub struct NativeSpatialSessionConfig {
     pub collision_voxel_size: f64,
     pub collision_chunk_size: u32,
-    /// Engine-owned derived mesh posture for this canonical Spatial scene.
-    /// It does not change voxel occupancy, collision, navigation, or edits.
+    /// The surface mode of every voxel material without its own surface
+    /// (Voxel.ConfigureMaterialSurfaces). A reconstructed mode also makes
+    /// collision follow the drawn surface.
     pub voxel_surface_mode: NativeVoxelSurfaceMode,
 }
 
-/// Renderer-neutral surface derivation selected when a canonical Spatial
-/// session is created. The Engine retains the chosen mode through later voxel
-/// edits, residency changes, and origin rebases.
+/// How voxels are drawn: cube faces, or a surface reconstructed from the
+/// voxels (and their densities). The Engine retains the chosen modes through
+/// later voxel edits, residency changes, and origin rebases.
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum NativeVoxelSurfaceMode {
@@ -27,6 +28,34 @@ pub enum NativeVoxelSurfaceMode {
     GreedyCubes = 0,
     MarchingCubes = 1,
     DualContouring = 2,
+}
+
+/// How a reconstructed material places each surface cell's vertex. Where
+/// materials meet in one cell the sharper placement wins (Smooth, Sharp,
+/// Blocky, then cube materials).
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum NativeVertexPlacement {
+    /// Minimizes the error to the crossings' planes: keeps corners and edges.
+    #[default]
+    Sharp = 0,
+    /// The mean of the crossings: rounded, blob-like surfaces.
+    Smooth = 1,
+    /// Sharp with crossing normals snapped to the voxel axes: a cube of
+    /// material meshes as a cube.
+    Blocky = 2,
+}
+
+/// The character of one material's reconstructed surface.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct NativeSurfaceCharacter {
+    pub placement: NativeVertexPlacement,
+    /// Faces bending further than this from their vertex's normal shade flat;
+    /// 0 shades every facet flat, 180 everything smooth.
+    pub crease_angle_degrees: f32,
+    /// Deterministic per-cell vertex displacement, 0 to 0.5 of a cell.
+    pub roughness: f32,
 }
 
 /// Named source of a spatial query result. `None` is a miss, while the other

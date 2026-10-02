@@ -459,6 +459,7 @@ fn native_sampled_volume_copies_snapshots_and_invalidates_stale_generation() {
                     height: 5,
                     depth: 5,
                     initial_value: 1.0,
+                    max_samples: 0,
                 },
                 &mut volume,
                 &mut receipt,
@@ -552,6 +553,7 @@ fn native_sampled_volume_copies_snapshots_and_invalidates_stale_generation() {
         regions_len: 0,
         material_boundary_mode: NativeImplicitMaterialBoundaryMode::Centroid,
         material_sample_spacing: 0.0,
+        ..whole_volume_request(volume, field, material)
     };
     let mut mesh = NativeMeshResourceHandle::default();
     assert_eq!(
@@ -582,6 +584,313 @@ fn native_sampled_volume_copies_snapshots_and_invalidates_stale_generation() {
     let retained = implicit
         .take_call()
         .expect("expected generation readout rejection leaves the call usable");
+    implicit.commit_call(retained);
+    appearance.end_call();
+}
+
+/// A whole-volume request with the default limits and no per-sample materials.
+fn whole_volume_request(
+    volume: NativeSampledVolumeHandle,
+    field: NativeImplicitFieldHandle,
+    material: NativeMaterialHandle,
+) -> NativeSampledVolumeGenerateRequest {
+    NativeSampledVolumeGenerateRequest {
+        volume,
+        field,
+        isovalue: 0.0,
+        crease_angle_degrees: 35.0,
+        uv_scale: 1.0,
+        default_material: material,
+        regions: std::ptr::null(),
+        regions_len: 0,
+        material_boundary_mode: NativeImplicitMaterialBoundaryMode::Centroid,
+        material_sample_spacing: 0.0,
+        texture_mapping: NativeImplicitTextureMapping::default(),
+        materials: std::ptr::null(),
+        materials_len: 0,
+        max_extraction_vertices: 0,
+        max_extraction_triangles: 0,
+        max_sampled_cells: 0,
+        max_temporary_bytes: 0,
+        block_samples: 0,
+        block_x: 0,
+        block_y: 0,
+        block_z: 0,
+    }
+}
+
+#[test]
+fn native_sampled_volume_blocks_carry_sample_materials_and_regenerate_only_dirty_blocks() {
+    let mut appearance =
+        RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), BTreeMap::new());
+    let mut implicit = RuntimeImplicitBridge::new();
+    appearance.begin_call();
+    implicit.begin_call();
+    let api = implicit_api(&mut implicit, &mut appearance);
+    let appearance_context = (&mut appearance as *mut RuntimeAppearanceBridge).cast();
+    let material = |appearance_context| {
+        let mut material = NativeMaterialHandle::default();
+        assert_eq!(
+            unsafe {
+                appearance::create_material(
+                    appearance_context,
+                    opaque_material(),
+                    &mut material,
+                    std::ptr::null_mut(),
+                )
+            },
+            ABI_OK
+        );
+        material
+    };
+    let stone = material(appearance_context);
+    let brick = material(appearance_context);
+    let mut receipt = unsafe { std::mem::zeroed::<NativeOperationErrorReceipt>() };
+    let mut field = NativeImplicitFieldHandle { value: 0 };
+    assert_eq!(
+        unsafe { (api.create_field)(api.context, &mut field, std::ptr::null_mut()) },
+        ABI_OK
+    );
+    let mut rock = NativeImplicitNode { value: 0 };
+    assert_eq!(
+        unsafe {
+            (api.add_sphere)(
+                api.context,
+                NativeImplicitSphereRequest {
+                    field,
+                    center: NativeVec3 {
+                        x: 12.0,
+                        y: 10.0,
+                        z: 11.0,
+                    },
+                    radius: 8.0,
+                },
+                &mut rock,
+                std::ptr::null_mut(),
+            )
+        },
+        ABI_OK
+    );
+    let mut block_node = NativeImplicitNode { value: 0 };
+    assert_eq!(
+        unsafe {
+            (api.add_box)(
+                api.context,
+                NativeImplicitBoxRequest {
+                    field,
+                    minimum: NativeVec3 {
+                        x: 14.0,
+                        y: 7.0,
+                        z: 8.0,
+                    },
+                    maximum: NativeVec3 {
+                        x: 22.0,
+                        y: 13.0,
+                        z: 14.0,
+                    },
+                },
+                &mut block_node,
+                std::ptr::null_mut(),
+            )
+        },
+        ABI_OK
+    );
+    let mut both = NativeImplicitNode { value: 0 };
+    assert_eq!(
+        unsafe {
+            (api.union)(
+                api.context,
+                NativeImplicitBinaryRequest {
+                    field,
+                    left: rock,
+                    right: block_node,
+                },
+                &mut both,
+                std::ptr::null_mut(),
+            )
+        },
+        ABI_OK
+    );
+    let mut volume = NativeSampledVolumeHandle::default();
+    assert_eq!(
+        unsafe {
+            (api.create_sampled_volume)(
+                api.context,
+                NativeSampledVolumeCreateRequest {
+                    origin: NativeVec3::default(),
+                    spacing: 1.0,
+                    width: 32,
+                    height: 24,
+                    depth: 24,
+                    initial_value: 1.0,
+                    max_samples: 32 * 24 * 24,
+                },
+                &mut volume,
+                &mut receipt,
+            )
+        },
+        ABI_OK
+    );
+    assert_eq!(
+        unsafe {
+            (api.rasterize_sampled_volume)(
+                api.context,
+                NativeSampledVolumeRasterizeRequest {
+                    volume,
+                    field,
+                    source: both,
+                },
+                &mut receipt,
+            )
+        },
+        ABI_OK
+    );
+    assert_eq!(
+        unsafe {
+            (api.paint_sampled_volume)(
+                api.context,
+                NativeSampledVolumePaintRequest {
+                    volume,
+                    field,
+                    source: block_node,
+                    index: 2,
+                },
+                &mut receipt,
+            )
+        },
+        ABI_OK
+    );
+    let materials = [NativeSampledVolumeMaterial {
+        index: 2,
+        material: brick,
+        character: NativeSurfaceCharacter {
+            placement: NativeVertexPlacement::Blocky,
+            crease_angle_degrees: 0.0,
+            roughness: 0.0,
+        },
+        texture_mapping: NativeImplicitTextureMapping::default(),
+    }];
+    let whole = NativeSampledVolumeGenerateRequest {
+        materials: materials.as_ptr(),
+        materials_len: materials.len(),
+        ..whole_volume_request(volume, field, stone)
+    };
+    let mut mesh = NativeMeshResourceHandle::default();
+    assert_eq!(
+        unsafe { (api.generate_sampled_volume)(api.context, &whole, &mut mesh, &mut receipt) },
+        ABI_OK
+    );
+    let mut generation = unsafe { std::mem::zeroed::<NativeImplicitGenerationReadout>() };
+    assert_eq!(
+        unsafe {
+            (api.read_sampled_volume_generation)(api.context, volume, &mut generation, &mut receipt)
+        },
+        ABI_OK
+    );
+    assert_eq!(generation.material_groups, 2);
+    let whole_triangles = generation.triangles;
+
+    // Every block of a fresh layout is dirty; their owned triangles add up to
+    // the whole volume's.
+    let layout = NativeSampledVolumeBlockLayout {
+        volume,
+        block_samples: 8,
+    };
+    let read_dirty = |receipt: &mut NativeOperationErrorReceipt| {
+        let mut result = unsafe { std::mem::zeroed::<NativeSampledVolumeBlocksResult>() };
+        assert_eq!(
+            unsafe {
+                (api.read_sampled_volume_dirty_blocks)(api.context, layout, &mut result, receipt)
+            },
+            ABI_OK
+        );
+        unsafe { std::slice::from_raw_parts(result.blocks, result.blocks_len) }.to_vec()
+    };
+    let blocks = read_dirty(&mut receipt);
+    assert_eq!(blocks.len(), 4 * 3 * 3);
+    let mut block_triangles = 0;
+    let mut empty_blocks = 0;
+    for block in &blocks {
+        let request = NativeSampledVolumeGenerateRequest {
+            block_samples: 8,
+            block_x: block.x,
+            block_y: block.y,
+            block_z: block.z,
+            ..whole
+        };
+        let mut result = unsafe { std::mem::zeroed::<NativeSampledVolumeBlockOptionalMesh>() };
+        assert_eq!(
+            unsafe {
+                (api.generate_sampled_volume_block)(
+                    api.context,
+                    &request,
+                    &mut result,
+                    &mut receipt,
+                )
+            },
+            ABI_OK
+        );
+        if result.mesh.value == 0 {
+            empty_blocks += 1;
+            assert_eq!(result.triangles, 0);
+        }
+        block_triangles += result.triangles;
+    }
+    assert!(empty_blocks > 0);
+    // Without material cuts, a block's triangles are exactly the whole
+    // volume's triangles that block owns.
+    assert_eq!(block_triangles, whole_triangles);
+    assert!(read_dirty(&mut receipt).is_empty());
+
+    // One written sample dirties only the blocks its surface reaches.
+    let center = [NativeDensitySample { value: 1.0 }];
+    let write = NativeSampledVolumeWriteRequest {
+        volume,
+        start: (12 * 24 + 12) * 32 + 12,
+        samples: center.as_ptr(),
+        samples_len: 1,
+    };
+    assert_eq!(
+        unsafe { (api.write_sampled_volume)(api.context, &write, &mut receipt) },
+        ABI_OK
+    );
+    let dirty = read_dirty(&mut receipt);
+    assert!(
+        !dirty.is_empty() && dirty.len() <= 8,
+        "{} blocks",
+        dirty.len()
+    );
+
+    let mut indices = unsafe { std::mem::zeroed::<NativeSampledMaterialSnapshotResult>() };
+    let inside_block = (10 * 24 + 10) * 32 + 18;
+    assert_eq!(
+        unsafe {
+            (api.read_sampled_volume_materials)(
+                api.context,
+                NativeSampledVolumeReadRequest {
+                    volume,
+                    start: inside_block,
+                    count: 1,
+                },
+                &mut indices,
+                &mut receipt,
+            )
+        },
+        ABI_OK
+    );
+    assert_eq!(unsafe { (*indices.materials).index }, 2);
+
+    // A surface index without a material in the request is refused.
+    let missing = NativeSampledVolumeGenerateRequest {
+        materials: std::ptr::null(),
+        materials_len: 0,
+        ..whole
+    };
+    assert_eq!(
+        unsafe { (api.generate_sampled_volume)(api.context, &missing, &mut mesh, &mut receipt) },
+        0
+    );
+    let retained = implicit.take_call().expect("the call stays usable");
     implicit.commit_call(retained);
     appearance.end_call();
 }

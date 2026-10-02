@@ -79,6 +79,14 @@ impl TextureMapping {
     }
 }
 
+/// Per-slot shading and texture mapping that replace the request's defaults
+/// for faces of that slot.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SlotSurface {
+    pub crease_angle_degrees: f32,
+    pub texture_mapping: TextureMapping,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Surface {
     pub positions: Vec<[f32; 3]>,
@@ -102,6 +110,7 @@ struct Face {
     area_normal: [f32; 3],
     projection_axis: u8,
     slot: u32,
+    halo: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -125,12 +134,41 @@ pub fn assemble(
     regions: &[MaterialRegion],
     options: SurfaceOptions,
 ) -> Result<Surface, Error> {
+    assemble_with(field, geometry, regions, options, &BTreeMap::new())
+}
+
+/// [`assemble`] where each triangle starts in its geometry slot and slots in
+/// `slot_surfaces` use their own crease angle and texture mapping. Halo
+/// triangles contribute to normals only.
+pub fn assemble_with(
+    field: &Field,
+    geometry: &Geometry,
+    regions: &[MaterialRegion],
+    options: SurfaceOptions,
+    slot_surfaces: &BTreeMap<u32, SlotSurface>,
+) -> Result<Surface, Error> {
     validate_options(options)?;
+    for surface in slot_surfaces.values() {
+        validate_options(SurfaceOptions {
+            crease_angle_degrees: surface.crease_angle_degrees,
+            texture_mapping: surface.texture_mapping,
+            material_sampling: None,
+            ..options
+        })?;
+    }
     validate_positions(&geometry.positions)?;
+    let count = geometry.triangles.len();
+    if !(geometry.slots.is_empty() || geometry.slots.len() == count)
+        || !(geometry.halo.is_empty() || geometry.halo.len() == count)
+    {
+        return Err(Error(
+            "geometry slots and halo flags must be absent or one per triangle".into(),
+        ));
+    }
 
     let mut faces = Vec::with_capacity(geometry.triangles.len());
     let mut centroids = Vec::with_capacity(geometry.triangles.len());
-    for &triangle in &geometry.triangles {
+    for (index, &triangle) in geometry.triangles.iter().enumerate() {
         let vertices = triangle_positions(&geometry.positions, triangle)?;
         let area_normal = cross(sub(vertices[1], vertices[0]), sub(vertices[2], vertices[0]));
         let length_squared = dot(area_normal, area_normal);
@@ -151,7 +189,12 @@ pub fn assemble(
             normal,
             area_normal,
             projection_axis: major_axis(normal),
-            slot: options.default_slot,
+            slot: geometry
+                .slots
+                .get(index)
+                .copied()
+                .unwrap_or(options.default_slot),
+            halo: geometry.halo.get(index).copied().unwrap_or(false),
         });
         let centroid = scale(add(add(vertices[0], vertices[1]), vertices[2]), 1.0 / 3.0);
         if centroid.iter().any(|value| !value.is_finite()) {
@@ -175,26 +218,25 @@ pub fn assemble(
         assign_materials(field, &mut faces, &centroids, regions)?;
     }
     let incidents = incident_faces(geometry.positions.len(), &faces);
-    let normals = corner_normals(&faces, &incidents, options.crease_angle_degrees);
-    let surface = emit_surface(
-        &geometry.positions,
-        &faces,
-        &normals,
-        options.texture_mapping,
-    )?;
+    let surface_of = |slot: u32| {
+        slot_surfaces.get(&slot).copied().unwrap_or(SlotSurface {
+            crease_angle_degrees: options.crease_angle_degrees,
+            texture_mapping: options.texture_mapping,
+        })
+    };
+    let normals = corner_normals(&faces, &incidents, |slot| {
+        surface_of(slot).crease_angle_degrees
+    });
+    let surface = emit_surface(&geometry.positions, &faces, &normals, |slot| {
+        surface_of(slot).texture_mapping
+    })?;
     if options.material_boundary_mode == MaterialBoundaryMode::Interpolated && !regions.is_empty() {
         let surface = if let Some(sampling) = options.material_sampling {
             refinement::refine(surface, sampling)?
         } else {
             surface
         };
-        regions::split(
-            field,
-            surface,
-            regions,
-            options.default_slot,
-            options.material_sampling,
-        )
+        regions::split(field, surface, regions, options.material_sampling)
     } else {
         Ok(surface)
     }
@@ -312,15 +354,16 @@ fn incident_faces(vertex_count: usize, faces: &[Face]) -> Vec<Vec<usize>> {
 fn corner_normals(
     faces: &[Face],
     incidents: &[Vec<usize>],
-    crease_degrees: f32,
+    crease_degrees: impl Fn(u32) -> f32,
 ) -> Vec<[[f32; 3]; 3]> {
-    if crease_degrees == 0.0 {
-        return faces.iter().map(|face| [face.normal; 3]).collect();
-    }
-    let cosine = crease_degrees.to_radians().cos();
     faces
         .iter()
         .map(|face| {
+            let crease = crease_degrees(face.slot);
+            if crease == 0.0 {
+                return [face.normal; 3];
+            }
+            let cosine = crease.to_radians().cos();
             face.vertices.map(|vertex| {
                 let sum = incidents[vertex as usize]
                     .iter()
@@ -340,7 +383,7 @@ fn emit_surface(
     source_positions: &[[f32; 3]],
     faces: &[Face],
     normals: &[[[f32; 3]; 3]],
-    texture_mapping: TextureMapping,
+    texture_mapping: impl Fn(u32) -> TextureMapping,
 ) -> Result<Surface, Error> {
     let mut positions = Vec::new();
     let mut output_normals = Vec::new();
@@ -349,13 +392,16 @@ fn emit_surface(
     let mut vertices = HashMap::<VertexKey, u32>::new();
     let mut groups = BTreeMap::<u32, Vec<usize>>::new();
     for (index, face) in faces.iter().enumerate() {
-        groups.entry(face.slot).or_default().push(index);
+        if !face.halo {
+            groups.entry(face.slot).or_default().push(index);
+        }
     }
 
     let mut output_groups = Vec::with_capacity(groups.len());
     for (slot, face_indices) in groups {
         let index_start = u32::try_from(indices.len())
             .map_err(|_| Error("surface index capacity exceeded".into()))?;
+        let texture_mapping = texture_mapping(slot);
         for face_index in face_indices {
             let face = faces[face_index];
             for corner in 0..3 {
@@ -469,6 +515,8 @@ mod tests {
         Geometry {
             positions,
             triangles,
+            slots: Vec::new(),
+            halo: Vec::new(),
             depth: 0,
             cell_size: [1.0; 3],
             generation_seconds: 0.0,

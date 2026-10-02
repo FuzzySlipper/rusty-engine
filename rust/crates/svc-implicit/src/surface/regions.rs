@@ -27,7 +27,6 @@ pub(super) fn split(
     field: &Field,
     surface: Surface,
     regions: &[MaterialRegion],
-    default_slot: u32,
     limits: Option<MaterialSampling>,
 ) -> Result<Surface, Error> {
     let samples = regions
@@ -49,20 +48,24 @@ pub(super) fn split(
         limits,
         ..Output::default()
     };
-    for triangle in surface.indices.as_chunks::<3>().0 {
-        let mut remaining: Vec<_> = triangle
-            .iter()
-            .map(|&i| source[i as usize].clone())
-            .collect();
-        for (index, region) in regions.iter().enumerate() {
-            let (inside, outside) = partition(remaining, index);
-            output.polygon(inside, region.slot)?;
-            remaining = outside;
-            if remaining.is_empty() {
-                break;
+    for group in &surface.groups {
+        let range = group.index_start as usize..(group.index_start + group.index_count) as usize;
+        for triangle in surface.indices[range].as_chunks::<3>().0 {
+            let mut remaining: Vec<_> = triangle
+                .iter()
+                .map(|&i| source[i as usize].clone())
+                .collect();
+            for (index, region) in regions.iter().enumerate() {
+                let (inside, outside) = partition(remaining, index);
+                output.polygon(inside, region.slot)?;
+                remaining = outside;
+                if remaining.is_empty() {
+                    break;
+                }
             }
+            // Outside every region a triangle keeps its own slot.
+            output.polygon(remaining, group.slot)?;
         }
-        output.polygon(remaining, default_slot)?;
     }
     output.finish()
 }
@@ -223,14 +226,7 @@ mod tests {
                 index_count: 3,
             }],
         };
-        let output = split(
-            &field,
-            surface,
-            &[MaterialRegion { node, slot: 1 }],
-            0,
-            None,
-        )
-        .unwrap();
+        let output = split(&field, surface, &[MaterialRegion { node, slot: 1 }], None).unwrap();
         assert!(output.positions.len() > 3);
         for (p, n) in output.positions.iter().zip(&output.normals) {
             assert_eq!(*n, [1.0 - p[0] - p[1], p[0], p[1]]);

@@ -24,7 +24,20 @@ public readonly partial record struct VoxelResidencyTransaction
     public VoxelResidencyTransaction(SpatialSession Session,
         System.ReadOnlyMemory<VoxelResidencyOperation> Operations,
         System.ReadOnlyMemory<uint> MaterialSlots)
-        : this(default, Session, Operations, MaterialSlots) { }
+        : this(default, Session, Operations, MaterialSlots, default) { }
+
+    /// <summary>Admits chunks with cell states and no densities.</summary>
+    public VoxelResidencyTransaction(System.ReadOnlyMemory<uint> States, SpatialSession Session,
+        System.ReadOnlyMemory<VoxelResidencyOperation> Operations,
+        System.ReadOnlyMemory<uint> MaterialSlots)
+        : this(States, Session, Operations, MaterialSlots, default) { }
+}
+public readonly partial record struct VoxelResidencyOperation
+{
+    /// <summary>An operation whose chunk carries no densities.</summary>
+    public VoxelResidencyOperation(VoxelResidencyOperationKind Kind, VoxelChunkIdentity Chunk,
+        uint MaterialOffset, uint MaterialCount)
+        : this(Kind, Chunk, MaterialOffset, MaterialCount, 0, 0) { }
 }
 public readonly partial record struct VoxelSceneFaceMaterialBinding
 {

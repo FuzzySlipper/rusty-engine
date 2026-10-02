@@ -178,6 +178,11 @@ sealed class RecordingImplicitSurfacesService : IImplicitSurfacesService
     public void RasterizeSampledVolume(SampledVolumeRasterizeRequest arg0) => Unsupported();
     public MeshResource GenerateSampledVolume(SampledVolumeGenerateRequest arg0) => Unsupported<MeshResource>();
     public ImplicitGenerationReadout ReadSampledVolumeGeneration(SampledVolume arg0) => Unsupported<ImplicitGenerationReadout>();
+    public void WriteSampledVolumeMaterials(SampledVolumeMaterialWriteRequest arg0) => Unsupported();
+    public SampledMaterialSnapshotResult ReadSampledVolumeMaterials(SampledVolumeReadRequest arg0) => Unsupported<SampledMaterialSnapshotResult>();
+    public void PaintSampledVolume(SampledVolumePaintRequest arg0) => Unsupported();
+    public SampledVolumeBlocksResult ReadSampledVolumeDirtyBlocks(SampledVolumeBlockLayout arg0) => Unsupported<SampledVolumeBlocksResult>();
+    public SampledVolumeBlockOptionalMesh GenerateSampledVolumeBlock(SampledVolumeGenerateRequest arg0) => Unsupported<SampledVolumeBlockOptionalMesh>();
     public ImplicitNode AddSphere(ImplicitSphereRequest arg0) => Unsupported<ImplicitNode>();
     public ImplicitNode AddEllipsoid(ImplicitEllipsoidRequest arg0) => Unsupported<ImplicitNode>();
     public ImplicitNode AddCapsule(ImplicitCapsuleRequest arg0) => Unsupported<ImplicitNode>();

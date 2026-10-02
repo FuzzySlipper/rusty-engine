@@ -403,6 +403,8 @@ impl Field {
         Ok(Geometry {
             positions,
             triangles,
+            slots: Vec::new(),
+            halo: Vec::new(),
             depth: depth as u32,
             cell_size: [extent.max() / 2_f32.powi(depth as i32); 3],
             generation_seconds: started.elapsed().as_secs_f64(),
@@ -482,10 +484,15 @@ pub struct GenerateOptions {
     pub max_triangles: u32,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Geometry {
     pub positions: Vec<[f32; 3]>,
     pub triangles: Vec<[u32; 3]>,
+    /// The material slot of each triangle, or empty for the default slot.
+    pub slots: Vec<u32>,
+    /// Triangles beyond a region's owned samples, kept only so border normals
+    /// agree with the neighbouring region; empty when there are none.
+    pub halo: Vec<bool>,
     pub depth: u32,
     pub cell_size: [f32; 3],
     pub generation_seconds: f64,
@@ -655,6 +662,8 @@ mod tests {
         let mut mesh = Geometry {
             positions: vec![],
             triangles: vec![[0, 1, 2]],
+            slots: Vec::new(),
+            halo: Vec::new(),
             depth: 0,
             cell_size: [1.; 3],
             generation_seconds: 0.,

@@ -1,10 +1,18 @@
 //! Conforming edge subdivision for material sampling. Positions remain on the
 //! original triangles; normals and UVs retain their original interpolation.
 
-use super::{Error, HashMap, MaterialSampling, Surface};
+use super::{Error, HashMap, MaterialSampling, Surface, SurfaceGroup};
 
+/// Subdivide every triangle longer than the sampling spacing. Each piece keeps
+/// its triangle's material group.
 pub(super) fn refine(mut surface: Surface, sampling: MaterialSampling) -> Result<Surface, Error> {
     let threshold = f64::from(sampling.max_edge_length).powi(2);
+    let mut slots = vec![0_u32; surface.indices.len() / 3];
+    for group in &surface.groups {
+        let first = group.index_start as usize / 3;
+        let count = group.index_count as usize / 3;
+        slots[first..first + count].fill(group.slot);
+    }
     loop {
         if surface.positions.len() > sampling.max_vertices
             || surface.indices.len() / 3 > sampling.max_triangles
@@ -13,7 +21,13 @@ pub(super) fn refine(mut surface: Surface, sampling: MaterialSampling) -> Result
         }
         let mut midpoints = HashMap::<[u32; 2], u32>::new();
         let mut indices = Vec::with_capacity(surface.indices.len());
-        for triangle in std::mem::take(&mut surface.indices).as_chunks::<3>().0 {
+        let mut piece_slots = Vec::with_capacity(slots.len());
+        for (triangle, slot) in std::mem::take(&mut surface.indices)
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .zip(&slots)
+        {
             let [a, b, c] = *triangle;
             let mut mids = [None; 3];
             for (edge, [u, v]) in [[a, b], [b, c], [c, a]].into_iter().enumerate() {
@@ -71,14 +85,38 @@ pub(super) fn refine(mut surface: Surface, sampling: MaterialSampling) -> Result
             if indices.len() / 3 + pieces.len() > sampling.max_triangles {
                 return Err(Error("material sampling triangle budget exceeded".into()));
             }
+            piece_slots.extend(std::iter::repeat_n(*slot, pieces.len()));
             indices.extend(pieces.into_iter().flatten());
         }
         surface.indices = indices;
-        // Groups will be rebuilt by material clipping, which immediately follows.
-        surface.groups.clear();
+        slots = piece_slots;
         if midpoints.is_empty() {
+            regroup(&mut surface, &slots);
             return Ok(surface);
         }
+    }
+}
+
+/// Order triangles by slot into one contiguous group per slot.
+fn regroup(surface: &mut Surface, slots: &[u32]) {
+    let mut order: Vec<usize> = (0..slots.len()).collect();
+    order.sort_by_key(|triangle| slots[*triangle]);
+    let indices = std::mem::take(&mut surface.indices);
+    surface.groups.clear();
+    for triangle in order {
+        let slot = slots[triangle];
+        let start = surface.indices.len() as u32;
+        match surface.groups.last_mut() {
+            Some(group) if group.slot == slot => group.index_count += 3,
+            _ => surface.groups.push(SurfaceGroup {
+                slot,
+                index_start: start,
+                index_count: 3,
+            }),
+        }
+        surface
+            .indices
+            .extend_from_slice(&indices[triangle * 3..triangle * 3 + 3]);
     }
 }
 

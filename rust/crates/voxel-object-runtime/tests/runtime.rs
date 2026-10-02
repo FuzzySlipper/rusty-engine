@@ -134,7 +134,8 @@ fn reconstructed_surface_admission_covers_animation_and_aggregate_limits() {
         assert!(admitted
             .meshes()
             .iter()
-            .all(|mesh| mesh.surface_mode == surface_mode && mesh.tile_coordinates.is_empty()));
+            .all(|mesh| mesh.surface_mode == surface_mode
+                && mesh.tile_coordinates.len() == mesh.positions.len() / 3 * 2));
         assert_ne!(
             admitted.frames()[2].mesh_index,
             admitted.frames()[3].mesh_index,

@@ -132,21 +132,37 @@ pub(super) struct SceneRevisions {
     static_mesh: u64,
     rebase: u64,
     noncollidable: u64,
+    /// Surface modes decide whether collision follows cubes or drawn
+    /// surfaces, and have no revision either.
+    surface: u64,
 }
 
 impl SceneRevisions {
     pub(super) fn of(scene: &VoxelCollisionScene) -> Self {
+        let mix = |hash: u64, value: u64| (hash ^ value).wrapping_mul(0x0100_0000_01b3);
         let noncollidable = scene
             .noncollidable_materials()
             .iter()
             .fold(0xcbf2_9ce4_8422_2325_u64, |hash, slot| {
-                (hash ^ u64::from(*slot)).wrapping_mul(0x0100_0000_01b3)
+                mix(hash, u64::from(*slot))
             });
+        let options = scene.mesh_options();
+        let surface = options.materials.entries().iter().fold(
+            mix(0xcbf2_9ce4_8422_2325_u64, options.mode as u64),
+            |hash, (slot, surface)| {
+                let hash = mix(mix(hash, u64::from(*slot)), surface.mode as u64);
+                let character = surface.character;
+                let hash = mix(hash, character.placement as u64);
+                let hash = mix(hash, u64::from(character.crease_angle_degrees.to_bits()));
+                mix(hash, u64::from(character.roughness.to_bits()))
+            },
+        );
         Self {
             voxel: scene.source_revision().raw(),
             static_mesh: scene.static_mesh_collision_revision(),
             rebase: scene.rebase_revision(),
             noncollidable,
+            surface,
         }
     }
 }
@@ -1679,6 +1695,65 @@ mod tests {
             })
             .collect();
         assert_eq!(route_both_ways(surface(&profile), walker(0.4)), reached);
+    }
+
+    #[test]
+    fn a_route_crosses_a_crater_dug_in_a_dual_contoured_floor() {
+        use engine_spatial::{
+            MaterialSurface, SurfaceCharacter, SurfaceMaterials, SurfaceMeshOptions, SurfaceMode,
+            VertexPlacement, VoxelDensityEdit, VoxelDensityEditService, VoxelDensityOperation,
+            VoxelDensityShape,
+        };
+        // A floor three voxels deep, wider than the published box so its
+        // rounded edges stay outside it.
+        let mut voxels = Vec::new();
+        for x in -4..12 {
+            for z in -4..8 {
+                for y in 0..3 {
+                    voxels.push([x, y, z]);
+                }
+            }
+        }
+        let options = SurfaceMeshOptions {
+            mode: SurfaceMode::DualContouring,
+            materials: SurfaceMaterials::new([(
+                1,
+                MaterialSurface {
+                    mode: SurfaceMode::DualContouring,
+                    character: SurfaceCharacter {
+                        placement: VertexPlacement::Smooth,
+                        crease_angle_degrees: 180.0,
+                        roughness: 0.0,
+                    },
+                },
+            )])
+            .unwrap(),
+            ..SurfaceMeshOptions::default()
+        };
+        let mut scene =
+            VoxelCollisionScene::from_solid_voxels_with_mesh_options(1.0, 16, voxels, options)
+                .unwrap();
+        // A crater 0.6 m deep whose rim slopes about 40 degrees.
+        VoxelDensityEditService::apply(
+            &mut scene,
+            &[VoxelDensityEdit::Brush {
+                shape: VoxelDensityShape::Sphere {
+                    center: [4.0, 5.0, 2.5],
+                    radius: 2.6,
+                },
+                operation: VoxelDensityOperation::Subtract,
+                material_slot: 1,
+            }],
+        )
+        .unwrap();
+        let floor = scene
+            .raycast([4.0, 8.0, 2.5], [0.0, -1.0, 0.0], 10.0)
+            .unwrap();
+        assert!(floor.point[1] < 2.6, "crater floor {:?}", floor.point);
+        assert_eq!(
+            route_both_ways(scene, walker(0.4)),
+            [NativeNavigationPathOutcome::Reached; 2]
+        );
     }
 
     #[test]

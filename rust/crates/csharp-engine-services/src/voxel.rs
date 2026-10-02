@@ -9,9 +9,11 @@ use std::{ffi::c_void, sync::Arc, time::Instant};
 use crate::operation_diagnostics::{clear_receipt, refuse};
 use csharp_engine_abi::*;
 use engine_spatial::{
+    MaterialSurface, SurfaceCharacter, SurfaceMaterials, SurfaceMeshOptions, VertexPlacement,
     VoxelChunkIdentity, VoxelChunkPayload, VoxelChunkResidencyApplyError,
     VoxelChunkResidencyOperation, VoxelChunkResidencyRejection, VoxelChunkResidencyService,
-    VoxelEdit, VoxelEditApplyError, VoxelEditRejection,
+    VoxelDensityApplyError, VoxelDensityEdit, VoxelDensityEditService, VoxelDensityOperation,
+    VoxelDensityRejection, VoxelDensityShape, VoxelEdit, VoxelEditApplyError, VoxelEditRejection,
 };
 
 use crate::{
@@ -46,7 +48,162 @@ impl RuntimeSpatialBridge {
             rebuilt_mesh_chunks: narrow(update.rebuilt_chunks),
             reused_mesh_chunks: narrow(update.reused_chunks),
             removed_mesh_chunks: narrow(update.removed_chunks),
+            mesh_microseconds: update.mesh_microseconds,
         })
+    }
+
+    fn configure_voxel_material_surfaces(
+        &mut self,
+        request: &NativeVoxelMaterialSurfaceRequest,
+    ) -> Result<NativeVoxelSceneReadout, CsharpEngineServicesError> {
+        let materials = unsafe {
+            crate::composition::borrowed_slice(
+                request.materials,
+                request.materials_len,
+                "voxel material surfaces",
+            )
+        }?;
+        let invalid = |message: &str| voxel_error("CSHARP_VOXEL_MATERIAL_SURFACE", message);
+        let entries = materials
+            .iter()
+            .map(|material| {
+                let slot = u16::try_from(material.material_slot)
+                    .map_err(|_| invalid("material slot must be in 0..=65535"))?;
+                Ok((
+                    slot,
+                    MaterialSurface {
+                        mode: crate::spatial::surface_mode(material.mode),
+                        character: surface_character(material.character),
+                    },
+                ))
+            })
+            .collect::<Result<Vec<_>, CsharpEngineServicesError>>()?;
+        let materials =
+            SurfaceMaterials::new(entries).map_err(|error| invalid(&error.to_string()))?;
+        let session = self.session_mut(request.session)?;
+        let options = SurfaceMeshOptions {
+            mode: crate::spatial::surface_mode(request.mode),
+            materials,
+            ..session.scene.mesh_options().clone()
+        };
+        // The surface hash in the collision navigation key changes, so the
+        // next collision navigation publication derives everything.
+        self.edit_scene(request.session, |session| {
+            Arc::make_mut(&mut session.scene).set_mesh_options(options)
+        })?
+        .map_err(|error| invalid(&error.to_string()))?;
+        self.read_voxel_scene(NativeVoxelSceneReadRequest {
+            session: request.session,
+        })
+    }
+
+    fn apply_voxel_density_edits(
+        &mut self,
+        request: &NativeVoxelDensityTransaction,
+    ) -> Result<NativeVoxelDensityReceipt, CsharpEngineServicesError> {
+        let edits = unsafe {
+            crate::composition::borrowed_slice(
+                request.edits,
+                request.edits_len,
+                "voxel density edits",
+            )
+        }?;
+        let densities = unsafe {
+            crate::composition::borrowed_slice(
+                request.densities,
+                request.densities_len,
+                "voxel densities",
+            )
+        }?;
+        let materials = unsafe {
+            crate::composition::borrowed_slice(
+                request.materials,
+                request.materials_len,
+                "voxel density materials",
+            )
+        }?;
+        let edits = edits
+            .iter()
+            .map(|edit| native_density_edit(edit, densities, materials))
+            .collect::<Result<Vec<_>, _>>()?;
+        self.edit_scene(request.session, |session| {
+            session.change_collision(
+                |scene| match VoxelDensityEditService::apply(scene, &edits) {
+                    Ok(receipt) => {
+                        let changed = collision_reach(
+                            scene,
+                            voxel_box(scene, receipt.changed_min, receipt.changed_max_inclusive),
+                        );
+                        (Ok(native_density_receipt(scene, &receipt)), vec![changed])
+                    }
+                    Err(VoxelDensityApplyError::Rejected(VoxelDensityRejection::NoChanges)) => {
+                        let revision = scene.source_revision().raw();
+                        (
+                            Ok(NativeVoxelDensityReceipt {
+                                status: NativeVoxelEditStatus::NoChanges,
+                                revision_before: revision,
+                                accepted_revision: revision,
+                                solid_voxel_count: scene.solid_voxel_count() as u64,
+                                authority_hash: scene.authority_hash(),
+                                ..Default::default()
+                            }),
+                            Vec::new(),
+                        )
+                    }
+                    Err(error) => (
+                        Err(voxel_error("CSHARP_VOXEL_DENSITY_EDIT", error.to_string())),
+                        Vec::new(),
+                    ),
+                },
+            )
+        })?
+    }
+
+    fn read_voxel_densities(
+        &mut self,
+        request: NativeVoxelDensityReadRequest,
+    ) -> Result<NativeVoxelDensityResult, CsharpEngineServicesError> {
+        let count = [request.size_x, request.size_y, request.size_z]
+            .iter()
+            .map(|value| u64::from(*value))
+            .product::<u64>();
+        if count == 0 || count > engine_spatial::MAX_DENSITY_EDIT_VOXELS {
+            return Err(voxel_error(
+                "CSHARP_VOXEL_DENSITY_READ",
+                "a density read covers 1 to 16,777,216 voxels",
+            ));
+        }
+        let min = address(request.min);
+        let session = self.session_mut(request.session)?;
+        let scene = session.scene.as_ref();
+        let mut samples = Vec::with_capacity(count as usize);
+        for z in 0..i64::from(request.size_z) {
+            for y in 0..i64::from(request.size_y) {
+                for x in 0..i64::from(request.size_x) {
+                    let at = [min[0] + x, min[1] + y, min[2] + z];
+                    samples.push(match scene.density(at) {
+                        Some(density) => NativeVoxelDensitySample {
+                            density,
+                            material_slot: scene
+                                .material_voxel(at)
+                                .map_or(0, |voxel| u32::from(voxel.material_slot)),
+                            resident: true,
+                        },
+                        None => NativeVoxelDensitySample {
+                            density: engine_spatial::DEFAULT_DENSITY_MAGNITUDE,
+                            material_slot: 0,
+                            resident: false,
+                        },
+                    });
+                }
+            }
+        }
+        let result = NativeVoxelDensityResult {
+            samples: samples.as_ptr(),
+            samples_len: samples.len(),
+        };
+        self.borrowed.hold(samples);
+        Ok(result)
     }
 
     fn read_voxel(
@@ -103,12 +260,17 @@ impl RuntimeSpatialBridge {
             session.change_collision(|scene| {
                 match engine_spatial::VoxelEditService::apply(scene, &edits) {
                     Ok(receipt) => {
-                        let changed = voxel_box(
+                        let changed = collision_reach(
                             scene,
-                            receipt.fact.changed_min,
-                            receipt.fact.changed_max_inclusive,
+                            voxel_box(
+                                scene,
+                                receipt.fact.changed_min,
+                                receipt.fact.changed_max_inclusive,
+                            ),
                         );
-                        (Ok(native_edit_receipt(&receipt)), vec![changed])
+                        let mut native = native_edit_receipt(&receipt);
+                        native.mesh_microseconds = scene.mesh_update().mesh_microseconds;
+                        (Ok(native), vec![changed])
                     }
                     Err(VoxelEditApplyError::Rejected(VoxelEditRejection::NoChanges)) => {
                         let revision = scene.source_revision().raw();
@@ -144,9 +306,11 @@ impl RuntimeSpatialBridge {
                             .iter()
                             .chain(&receipt.replaced)
                             .chain(&receipt.evicted)
-                            .map(|chunk| chunk_box(scene, *chunk))
+                            .map(|chunk| collision_reach(scene, chunk_box(scene, *chunk)))
                             .collect();
-                        (Ok(native_residency_receipt(&receipt)), changed)
+                        let mut native = native_residency_receipt(&receipt);
+                        native.mesh_microseconds = scene.mesh_update().mesh_microseconds;
+                        (Ok(native), changed)
                     }
                     // A batch that changes nothing is an ordinary outcome.
                     Err(VoxelChunkResidencyApplyError::Rejected(
@@ -193,6 +357,114 @@ fn voxel_box(
     ([min.x, min.y, min.z], [max.x, max.y, max.z])
 }
 
+/// A changed box grown by the reach of a reconstructed surface: its
+/// triangles move with the samples within two voxels of them.
+fn collision_reach(
+    scene: &engine_spatial::VoxelCollisionScene,
+    (min, max): ([f64; 3], [f64; 3]),
+) -> ([f64; 3], [f64; 3]) {
+    if scene.mesh_options().all_greedy() {
+        return (min, max);
+    }
+    let reach = 2.0 * scene.voxel_size();
+    (
+        min.map(|value| value - reach),
+        max.map(|value| value + reach),
+    )
+}
+
+fn surface_character(value: NativeSurfaceCharacter) -> SurfaceCharacter {
+    SurfaceCharacter {
+        placement: match value.placement {
+            NativeVertexPlacement::Sharp => VertexPlacement::Sharp,
+            NativeVertexPlacement::Smooth => VertexPlacement::Smooth,
+            NativeVertexPlacement::Blocky => VertexPlacement::Blocky,
+        },
+        crease_angle_degrees: value.crease_angle_degrees,
+        roughness: value.roughness,
+    }
+}
+
+fn native_density_edit(
+    edit: &NativeVoxelDensityEdit,
+    densities: &[f32],
+    materials: &[u32],
+) -> Result<VoxelDensityEdit, CsharpEngineServicesError> {
+    let invalid = |message: &str| voxel_error("CSHARP_VOXEL_DENSITY_EDIT", message);
+    let span = |offset: u32, count: u32, len: usize| {
+        let start = offset as usize;
+        let end = start
+            .checked_add(count as usize)
+            .filter(|end| *end <= len)
+            .ok_or_else(|| invalid("an edit's range exceeds the transaction's span"))?;
+        Ok::<_, CsharpEngineServicesError>(start..end)
+    };
+    let material_slot =
+        u16::try_from(edit.material_slot).map_err(|_| invalid("material slot exceeded u16"))?;
+    Ok(match edit.kind {
+        NativeVoxelDensityEditKind::Region => VoxelDensityEdit::Region {
+            min: address(edit.min),
+            size: [edit.size_x, edit.size_y, edit.size_z],
+            densities: densities[span(edit.density_offset, edit.density_count, densities.len())?]
+                .to_vec(),
+            materials: materials[span(edit.material_offset, edit.material_count, materials.len())?]
+                .iter()
+                .map(|slot| u16::try_from(*slot).map_err(|_| invalid("material slot exceeded u16")))
+                .collect::<Result<_, _>>()?,
+        },
+        NativeVoxelDensityEditKind::Brush => {
+            let vector = |value: NativeVec3| [value.x, value.y, value.z].map(f64::from);
+            VoxelDensityEdit::Brush {
+                shape: match edit.shape {
+                    NativeVoxelDensityShape::Sphere => VoxelDensityShape::Sphere {
+                        center: vector(edit.center),
+                        radius: f64::from(edit.radius),
+                    },
+                    NativeVoxelDensityShape::Box => VoxelDensityShape::Box {
+                        min: vector(edit.box_min),
+                        max: vector(edit.box_max),
+                    },
+                },
+                operation: match edit.operation {
+                    NativeVoxelDensityOperation::Add => VoxelDensityOperation::Add,
+                    NativeVoxelDensityOperation::Subtract => VoxelDensityOperation::Subtract,
+                    NativeVoxelDensityOperation::Smooth => VoxelDensityOperation::Smooth {
+                        strength: edit.strength,
+                    },
+                    NativeVoxelDensityOperation::Paint => VoxelDensityOperation::Paint,
+                },
+                material_slot,
+            }
+        }
+    })
+}
+
+fn native_density_receipt(
+    scene: &engine_spatial::VoxelCollisionScene,
+    receipt: &engine_spatial::VoxelDensityReceipt,
+) -> NativeVoxelDensityReceipt {
+    let revisions = scene.projection_revisions();
+    NativeVoxelDensityReceipt {
+        status: NativeVoxelEditStatus::Accepted,
+        revision_before: receipt.revision_before.raw(),
+        accepted_revision: receipt.accepted_revision.raw(),
+        changed_voxels: narrow(receipt.changed_voxels),
+        solidity_changes: narrow(receipt.solidity_changes),
+        changed_min: native_address(receipt.changed_min),
+        changed_max_inclusive: native_address(receipt.changed_max_inclusive),
+        solid_voxel_count: receipt.solid_voxel_count as u64,
+        authority_hash: receipt.authority_hash,
+        collision_revision: revisions.collision().raw(),
+        navigation_revision: revisions.navigation().raw(),
+        mesh_revision: revisions.mesh().raw(),
+        dirty_chunk_count: narrow(receipt.dirty_mesh_chunks.len()),
+        rebuilt_mesh_chunks: narrow(receipt.rebuilt_mesh_chunks),
+        reused_mesh_chunks: narrow(receipt.reused_mesh_chunks),
+        removed_mesh_chunks: narrow(receipt.removed_mesh_chunks),
+        mesh_microseconds: receipt.mesh_microseconds,
+    }
+}
+
 /// World bounds of one voxel chunk.
 fn chunk_box(
     scene: &engine_spatial::VoxelCollisionScene,
@@ -224,6 +496,7 @@ fn native_payload(
     chunk_size: u32,
     material_slots: &[u32],
     states: &[u32],
+    densities: &[f32],
 ) -> Result<VoxelChunkPayload, CsharpEngineServicesError> {
     let start = usize::try_from(operation.material_offset)
         .map_err(|_| voxel_error("CSHARP_VOXEL_RESIDENCY", "material offset exceeded usize"))?;
@@ -258,6 +531,19 @@ fn native_payload(
             })
             .collect::<Result<_, _>>()?;
     }
+    if operation.density_count != 0 {
+        let start = operation.density_offset as usize;
+        payload.densities = start
+            .checked_add(operation.density_count as usize)
+            .and_then(|end| densities.get(start..end))
+            .ok_or_else(|| {
+                voxel_error(
+                    "CSHARP_VOXEL_RESIDENCY",
+                    "density range exceeded the transaction span",
+                )
+            })?
+            .to_vec();
+    }
     Ok(payload)
 }
 
@@ -278,6 +564,7 @@ fn native_edit_receipt(receipt: &engine_spatial::VoxelEditReceipt) -> NativeVoxe
         reused_mesh_chunks: narrow(receipt.reused_mesh_chunks),
         removed_mesh_chunks: narrow(receipt.removed_mesh_chunks),
         status: NativeVoxelEditStatus::Accepted,
+        mesh_microseconds: 0,
     }
 }
 
@@ -301,6 +588,7 @@ fn native_residency_receipt(
         rebuilt_mesh_chunks: narrow(receipt.rebuilt_mesh_chunks),
         reused_mesh_chunks: narrow(receipt.reused_mesh_chunks),
         removed_mesh_chunks: narrow(receipt.removed_mesh_chunks),
+        mesh_microseconds: 0,
     }
 }
 
@@ -524,6 +812,82 @@ pub(crate) fn api(bridge: &mut RuntimeSpatialBridge) -> NativeVoxelApi {
         read_chunk,
         apply_edits,
         apply_residency,
+        configure_material_surfaces,
+        apply_density_edits,
+        read_densities,
+    }
+}
+
+unsafe extern "C" fn configure_material_surfaces(
+    context: *mut c_void,
+    request: *const NativeVoxelMaterialSurfaceRequest,
+    output: *mut NativeVoxelSceneReadout,
+    receipt: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    if receipt.is_null() {
+        return 0;
+    }
+    // SAFETY: this borrowed receipt starts empty for every direct callback.
+    unsafe { *receipt = std::mem::zeroed() };
+    if context.is_null() || request.is_null() || output.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeSpatialBridge>() };
+    match bridge.configure_voxel_material_surfaces(unsafe { &*request }) {
+        Ok(value) => {
+            unsafe { *output = value };
+            ABI_OK
+        }
+        Err(error) => {
+            bridge.operation_diagnostics.retain(&error, receipt);
+            0
+        }
+    }
+}
+
+unsafe extern "C" fn apply_density_edits(
+    context: *mut c_void,
+    request: *const NativeVoxelDensityTransaction,
+    output: *mut NativeVoxelDensityReceipt,
+    receipt: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    if receipt.is_null() {
+        return 0;
+    }
+    // SAFETY: this borrowed receipt starts empty for every direct callback.
+    unsafe { *receipt = std::mem::zeroed() };
+    if context.is_null() || request.is_null() || output.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeSpatialBridge>() };
+    match bridge.apply_voxel_density_edits(unsafe { &*request }) {
+        Ok(value) => {
+            unsafe { *output = value };
+            ABI_OK
+        }
+        Err(error) => {
+            bridge.operation_diagnostics.retain(&error, receipt);
+            0
+        }
+    }
+}
+
+unsafe extern "C" fn read_densities(
+    context: *mut c_void,
+    request: NativeVoxelDensityReadRequest,
+    output: *mut NativeVoxelDensityResult,
+    error: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    clear_receipt(error);
+    if context.is_null() || output.is_null() {
+        return 0;
+    }
+    match unsafe { &mut *context.cast::<RuntimeSpatialBridge>() }.read_voxel_densities(request) {
+        Ok(value) => {
+            unsafe { *output = value };
+            ABI_OK
+        }
+        Err(refusal) => refuse(&refusal, error),
     }
 }
 
@@ -548,6 +912,13 @@ fn translate_residency(
     let states = unsafe {
         crate::composition::borrowed_slice(request.states, request.states_len, "voxel states")
     }?;
+    let densities = unsafe {
+        crate::composition::borrowed_slice(
+            request.densities,
+            request.densities_len,
+            "voxel residency densities",
+        )
+    }?;
     if !states.is_empty() && states.len() != material_slots.len() {
         return Err(voxel_error(
             "CSHARP_VOXEL_STATE",
@@ -559,11 +930,13 @@ fn translate_residency(
         let chunk = chunk_identity(operation.chunk);
         let translated_operation = match operation.kind {
             NativeVoxelResidencyOperationKind::Admit => {
-                let payload = native_payload(*operation, chunk_size, material_slots, states)?;
+                let payload =
+                    native_payload(*operation, chunk_size, material_slots, states, densities)?;
                 VoxelChunkResidencyOperation::Admit { chunk, payload }
             }
             NativeVoxelResidencyOperationKind::Replace => {
-                let payload = native_payload(*operation, chunk_size, material_slots, states)?;
+                let payload =
+                    native_payload(*operation, chunk_size, material_slots, states, densities)?;
                 VoxelChunkResidencyOperation::Replace { chunk, payload }
             }
             NativeVoxelResidencyOperationKind::Evict => {
@@ -752,6 +1125,121 @@ mod tests {
                 .voxel,
             [0, 1, 0]
         );
+    }
+
+    #[test]
+    fn material_surfaces_and_density_edits_reshape_what_collision_meets() {
+        let mut bridge = RuntimeSpatialBridge::new();
+        let session = create_session(&mut bridge);
+        let api = api(&mut bridge);
+        // A 16 x 2 x 16 stone floor.
+        let floor: Vec<_> = (0..16)
+            .flat_map(|x| (0..16).flat_map(move |z| (0..2).map(move |y| (x, y, z))))
+            .map(|(x, y, z)| set(NativeVoxelAddress { x, y, z }, 1))
+            .collect();
+        bridge
+            .apply_voxel_edits(&NativeVoxelEditTransaction {
+                session,
+                edits: floor.as_ptr(),
+                edits_len: floor.len(),
+            })
+            .unwrap();
+        let surfaces = [NativeVoxelMaterialSurface {
+            material_slot: 1,
+            mode: NativeVoxelSurfaceMode::DualContouring,
+            character: NativeSurfaceCharacter {
+                placement: NativeVertexPlacement::Smooth,
+                crease_angle_degrees: 180.0,
+                roughness: 0.0,
+            },
+        }];
+        let mut readout = NativeVoxelSceneReadout::default();
+        let mut receipt: NativeOperationErrorReceipt = unsafe { std::mem::zeroed() };
+        assert_eq!(
+            unsafe {
+                (api.configure_material_surfaces)(
+                    api.context,
+                    &NativeVoxelMaterialSurfaceRequest {
+                        session,
+                        mode: NativeVoxelSurfaceMode::GreedyCubes,
+                        materials: surfaces.as_ptr(),
+                        materials_len: surfaces.len(),
+                    },
+                    &mut readout,
+                    &mut receipt,
+                )
+            },
+            ABI_OK
+        );
+        assert_eq!(readout.solid_voxel_count, 16 * 16 * 2);
+        // Blast a crater; collision follows its drawn floor.
+        let edits = [NativeVoxelDensityEdit {
+            kind: NativeVoxelDensityEditKind::Brush,
+            shape: NativeVoxelDensityShape::Sphere,
+            operation: NativeVoxelDensityOperation::Subtract,
+            center: NativeVec3 {
+                x: 8.0,
+                y: 2.0,
+                z: 8.0,
+            },
+            radius: 1.5,
+            material_slot: 1,
+            ..Default::default()
+        }];
+        let mut density = NativeVoxelDensityReceipt::default();
+        assert_eq!(
+            unsafe {
+                (api.apply_density_edits)(
+                    api.context,
+                    &NativeVoxelDensityTransaction {
+                        session,
+                        edits: edits.as_ptr(),
+                        edits_len: edits.len(),
+                        densities: std::ptr::null(),
+                        densities_len: 0,
+                        materials: std::ptr::null(),
+                        materials_len: 0,
+                    },
+                    &mut density,
+                    &mut receipt,
+                )
+            },
+            ABI_OK
+        );
+        assert_eq!(density.status, NativeVoxelEditStatus::Accepted);
+        assert!(density.solidity_changes > 0);
+        assert!(density.mesh_microseconds > 0);
+        let scene = &bridge.session_mut(session).unwrap().scene;
+        let floor = scene
+            .raycast([8.0, 5.0, 8.0], [0.0, -1.0, 0.0], 10.0)
+            .unwrap();
+        assert!(
+            floor.point[1] < 1.2 && floor.point[1] > 0.0,
+            "crater floor {:?}",
+            floor.point
+        );
+        let mut samples = unsafe { std::mem::zeroed::<NativeVoxelDensityResult>() };
+        assert_eq!(
+            unsafe {
+                (api.read_densities)(
+                    api.context,
+                    NativeVoxelDensityReadRequest {
+                        session,
+                        min: NativeVoxelAddress { x: 7, y: 1, z: 8 },
+                        size_x: 2,
+                        size_y: 1,
+                        size_z: 1,
+                    },
+                    &mut samples,
+                    &mut receipt,
+                )
+            },
+            ABI_OK
+        );
+        let samples = unsafe { std::slice::from_raw_parts(samples.samples, samples.samples_len) };
+        assert_eq!(samples.len(), 2);
+        assert!(samples.iter().all(|sample| sample.resident));
+        assert!(samples[1].density >= 0.0 && samples[1].material_slot == 0);
     }
 
     fn set(address: NativeVoxelAddress, material_slot: u32) -> NativeVoxelEdit {

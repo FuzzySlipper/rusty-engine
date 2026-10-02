@@ -9,11 +9,15 @@ use csharp_engine_abi::*;
 use std::{collections::BTreeMap, ffi::c_void, sync::Arc, time::Instant};
 use svc_implicit::{
     surface::{
-        self, MaterialBoundaryMode, MaterialRegion, MaterialSampling, SurfaceOptions,
+        self, MaterialBoundaryMode, MaterialRegion, MaterialSampling, SlotSurface, SurfaceOptions,
         TextureMapping, TextureProjection,
     },
-    volume::{SampledVolume, VolumeDescriptor},
+    volume::{SampledVolume, VolumeDescriptor, VolumeGenerateOptions, DEFAULT_MAX_SAMPLES},
     Bounds, Field, GenerateOptions, Geometry, Node,
+};
+use svc_mesh::{
+    MaterialSurface, SurfaceCharacter, SurfaceMaterials, SurfaceMeshLimits, SurfaceMode,
+    VertexPlacement,
 };
 
 #[path = "implicit_audit.rs"]
@@ -76,6 +80,25 @@ impl RetainedField {
 struct RetainedVolume {
     volume: Arc<SampledVolume>,
     generation: Option<NativeImplicitGenerationReadout>,
+}
+
+struct GeneratedVolume {
+    field: Arc<Field>,
+    region_nodes: Vec<(Node, NativeMaterialHandle)>,
+    sampled: Vec<NativeSampledVolumeMaterial>,
+    geometry: Geometry,
+}
+
+fn surface_character(value: NativeSurfaceCharacter) -> SurfaceCharacter {
+    SurfaceCharacter {
+        placement: match value.placement {
+            NativeVertexPlacement::Sharp => VertexPlacement::Sharp,
+            NativeVertexPlacement::Smooth => VertexPlacement::Smooth,
+            NativeVertexPlacement::Blocky => VertexPlacement::Blocky,
+        },
+        crease_angle_degrees: value.crease_angle_degrees,
+        roughness: value.roughness,
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -230,6 +253,7 @@ impl RuntimeImplicitBridge {
         field: &Field,
         geometry: &Geometry,
         region_nodes: &[(Node, NativeMaterialHandle)],
+        sampled: &[NativeSampledVolumeMaterial],
         options: SurfaceGenerationOptions,
         started: Instant,
     ) -> Result<(NativeMeshResourceHandle, NativeImplicitGenerationReadout)> {
@@ -260,6 +284,46 @@ impl RuntimeImplicitBridge {
         }
         let topology = geometry.topology();
         let mut materials = vec![options.default_material];
+        // Each per-sample material index takes its own slot; index zero is the
+        // default slot.
+        let mut index_slots = BTreeMap::from([(0_u32, 0_u32)]);
+        let mut slot_surfaces = BTreeMap::new();
+        for entry in sampled {
+            let slot = if entry.index == 0 {
+                materials[0] = entry.material;
+                0
+            } else {
+                materials.push(entry.material);
+                (materials.len() - 1) as u32
+            };
+            index_slots.insert(entry.index, slot);
+            slot_surfaces.insert(
+                slot,
+                SlotSurface {
+                    crease_angle_degrees: entry.character.crease_angle_degrees,
+                    texture_mapping: if entry.texture_mapping.enabled {
+                        texture_mapping(0.0, entry.texture_mapping)
+                    } else {
+                        options.texture_mapping
+                    },
+                },
+            );
+        }
+        let slotted;
+        let geometry = if geometry.slots.iter().all(|index| *index == 0) {
+            geometry
+        } else {
+            let mut remapped: Geometry = geometry.clone();
+            for slot in &mut remapped.slots {
+                *slot = *index_slots.get(slot).ok_or_else(|| {
+                    error(format!(
+                        "sample material index {slot} is on the surface but has no material in the request"
+                    ))
+                })?;
+            }
+            slotted = remapped;
+            &slotted
+        };
         let regions: Vec<_> = region_nodes
             .iter()
             .map(|(node, material)| {
@@ -276,7 +340,7 @@ impl RuntimeImplicitBridge {
                 }
             })
             .collect();
-        let mesh = surface::assemble(
+        let mesh = surface::assemble_with(
             field,
             geometry,
             &regions,
@@ -292,6 +356,7 @@ impl RuntimeImplicitBridge {
                 },
                 material_sampling,
             },
+            &slot_surfaces,
         )
         .map_err(kernel)?;
         let positions: Vec<_> = mesh.positions.iter().copied().map(nv).collect();
@@ -363,6 +428,109 @@ impl RuntimeImplicitBridge {
             },
         ))
     }
+    /// Extract a sampled volume, or one block of it, with the request's
+    /// per-sample materials and limits.
+    unsafe fn generate_volume(
+        &mut self,
+        request: &NativeSampledVolumeGenerateRequest,
+        region: Option<svc_mesh::ScalarRegion>,
+    ) -> Result<GeneratedVolume> {
+        let regions = unsafe {
+            borrowed_slice(
+                request.regions,
+                request.regions_len,
+                "sampled volume material regions",
+            )
+        }?;
+        if regions.len() > 255 {
+            return Err(error("at most 255 material regions are supported per mesh"));
+        }
+        let sampled = unsafe {
+            borrowed_slice(
+                request.materials,
+                request.materials_len,
+                "sampled volume materials",
+            )
+        }?
+        .to_vec();
+        let mut characters = Vec::with_capacity(sampled.len());
+        for entry in &sampled {
+            let index = u16::try_from(entry.index)
+                .map_err(|_| error("sample material indices are 0 to 65535"))?;
+            characters.push((
+                index,
+                MaterialSurface {
+                    mode: SurfaceMode::DualContouring,
+                    character: surface_character(entry.character),
+                },
+            ));
+        }
+        let characters = SurfaceMaterials::new(characters).map_err(|e| error(e.to_string()))?;
+        let (field, region_nodes) = {
+            let retained = self.retained(request.field)?;
+            let region_nodes = regions
+                .iter()
+                .map(|region| Ok((retained.node(region.node)?, region.material)))
+                .collect::<Result<Vec<_>>>()?;
+            (retained.field.clone(), region_nodes)
+        };
+        let defaults = SurfaceMeshLimits::default();
+        let max_triangles = extraction_capacity(request.max_extraction_triangles);
+        let limits = SurfaceMeshLimits {
+            max_vertices: extraction_capacity(request.max_extraction_vertices),
+            max_indices: max_triangles
+                .checked_mul(3)
+                .ok_or_else(|| error("triangle budget overflow"))?,
+            max_sampled_cells: match request.max_sampled_cells {
+                0 => defaults.max_sampled_cells,
+                cells => cells,
+            },
+            max_temporary_field_bytes: match request.max_temporary_bytes {
+                0 => defaults.max_temporary_field_bytes,
+                bytes => bytes,
+            },
+            ..defaults
+        };
+        let geometry = self
+            .retained_volume(request.volume)?
+            .volume
+            .generate(VolumeGenerateOptions {
+                isovalue: request.isovalue,
+                materials: &characters,
+                region,
+                limits,
+            })
+            .map_err(kernel)?;
+        Ok(GeneratedVolume {
+            field,
+            region_nodes,
+            sampled,
+            geometry,
+        })
+    }
+    unsafe fn admit_volume(
+        &mut self,
+        request: &NativeSampledVolumeGenerateRequest,
+        generated: GeneratedVolume,
+        started: Instant,
+    ) -> Result<(NativeMeshResourceHandle, NativeImplicitGenerationReadout)> {
+        unsafe {
+            self.admit_geometry(
+                &generated.field,
+                &generated.geometry,
+                &generated.region_nodes,
+                &generated.sampled,
+                SurfaceGenerationOptions {
+                    crease_angle_degrees: request.crease_angle_degrees,
+                    texture_mapping: texture_mapping(request.uv_scale, request.texture_mapping),
+                    default_material: request.default_material,
+                    material_boundary_mode: request.material_boundary_mode,
+                    material_sample_spacing: request.material_sample_spacing,
+                },
+                started,
+            )
+        }
+    }
     unsafe fn generate(
         &mut self,
         request: &NativeImplicitGenerateRequest,
@@ -406,6 +574,7 @@ impl RuntimeImplicitBridge {
                 &field,
                 &geometry,
                 &region_nodes,
+                &[],
                 SurfaceGenerationOptions {
                     crease_angle_degrees: request.crease_angle_degrees,
                     texture_mapping: texture_mapping(request.uv_scale, request.texture_mapping),
@@ -462,6 +631,11 @@ pub(crate) fn api(
         read_mesh_integrity,
         read_expected_join,
         read_enclosure,
+        write_sampled_volume_materials,
+        read_sampled_volume_materials,
+        paint_sampled_volume,
+        read_sampled_volume_dirty_blocks,
+        generate_sampled_volume_block,
     }
 }
 fn call<T>(
@@ -577,11 +751,16 @@ unsafe extern "C" fn create_sampled_volume(
     receipt: *mut NativeOperationErrorReceipt,
 ) -> i32 {
     call_operation(context, result, receipt, |b| {
+        let max_samples = match request.max_samples {
+            0 => DEFAULT_MAX_SAMPLES,
+            limit => limit as usize,
+        };
         let volume = SampledVolume::new(
             v(request.origin),
             request.spacing,
             [request.width, request.height, request.depth],
             request.initial_value,
+            max_samples,
         )
         .map_err(kernel)?;
         let value = b.allocate_volume()?;
@@ -715,47 +894,165 @@ unsafe extern "C" fn generate_sampled_volume(
             return Err(error("sampled volume generate request was null"));
         }
         let request = unsafe { &*request };
-        let regions = unsafe {
-            borrowed_slice(
-                request.regions,
-                request.regions_len,
-                "sampled volume material regions",
-            )
-        }?;
-        if regions.len() > 255 {
-            return Err(error("at most 255 material regions are supported per mesh"));
+        if request.block_samples != 0 {
+            return Err(error(
+                "GenerateSampledVolume meshes the whole volume; use GenerateSampledVolumeBlock for a block",
+            ));
         }
-        let (field, region_nodes) = {
-            let retained = b.retained(request.field)?;
-            let region_nodes = regions
-                .iter()
-                .map(|region| Ok((retained.node(region.node)?, region.material)))
-                .collect::<Result<Vec<_>>>()?;
-            (retained.field.clone(), region_nodes)
-        };
         let started = Instant::now();
-        let geometry = b
-            .retained_volume(request.volume)?
-            .volume
-            .generate(request.isovalue, 262_144, 262_144)
-            .map_err(kernel)?;
-        let (mesh, readout) = unsafe {
-            b.admit_geometry(
-                &field,
-                &geometry,
-                &region_nodes,
-                SurfaceGenerationOptions {
-                    crease_angle_degrees: request.crease_angle_degrees,
-                    texture_mapping: TextureMapping::legacy(request.uv_scale),
-                    default_material: request.default_material,
-                    material_boundary_mode: request.material_boundary_mode,
-                    material_sample_spacing: request.material_sample_spacing,
-                },
-                started,
-            )
-        }?;
+        let generated = unsafe { b.generate_volume(request, None) }?;
+        let (mesh, readout) = unsafe { b.admit_volume(request, generated, started) }?;
         b.retained_volume(request.volume)?.generation = Some(readout);
         Ok(mesh)
+    })
+}
+unsafe extern "C" fn generate_sampled_volume_block(
+    context: *mut c_void,
+    request: *const NativeSampledVolumeGenerateRequest,
+    result: *mut NativeSampledVolumeBlockOptionalMesh,
+    receipt: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    call_operation(context, result, receipt, |b| {
+        if request.is_null() {
+            return Err(error("sampled volume generate request was null"));
+        }
+        let request = unsafe { &*request };
+        let started = Instant::now();
+        let region = b
+            .retained_volume(request.volume)?
+            .volume
+            .block_region(
+                request.block_samples,
+                [request.block_x, request.block_y, request.block_z],
+            )
+            .map_err(kernel)?;
+        let generated = unsafe { b.generate_volume(request, Some(region)) }?;
+        let owned = generated
+            .geometry
+            .triangles
+            .len()
+            .saturating_sub(generated.geometry.halo.iter().filter(|halo| **halo).count());
+        if owned == 0 {
+            return Ok(NativeSampledVolumeBlockOptionalMesh {
+                mesh: NativeMeshResourceHandle::default(),
+                vertices: 0,
+                triangles: 0,
+                generation_seconds: started.elapsed().as_secs_f64(),
+            });
+        }
+        let (mesh, readout) = unsafe { b.admit_volume(request, generated, started) }?;
+        b.retained_volume(request.volume)?.generation = Some(readout);
+        Ok(NativeSampledVolumeBlockOptionalMesh {
+            mesh,
+            vertices: readout.vertices,
+            triangles: readout.triangles,
+            generation_seconds: readout.generation_seconds,
+        })
+    })
+}
+unsafe extern "C" fn write_sampled_volume_materials(
+    context: *mut c_void,
+    request: *const NativeSampledVolumeMaterialWriteRequest,
+    receipt: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    call_operation(context, &mut (), receipt, |b| {
+        if request.is_null() {
+            return Err(error("sampled volume material write request was null"));
+        }
+        let request = unsafe { &*request };
+        let materials = unsafe {
+            borrowed_slice(
+                request.materials,
+                request.materials_len,
+                "sampled volume materials",
+            )
+        }?;
+        let materials = materials
+            .iter()
+            .map(|material| {
+                u16::try_from(material.index)
+                    .map_err(|_| error("sample material indices are 0 to 65535"))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let retained = b.retained_volume(request.volume)?;
+        Arc::make_mut(&mut retained.volume)
+            .write_materials(request.start as usize, &materials)
+            .map_err(kernel)?;
+        retained.generation = None;
+        Ok(())
+    })
+}
+unsafe extern "C" fn read_sampled_volume_materials(
+    context: *mut c_void,
+    request: NativeSampledVolumeReadRequest,
+    result: *mut NativeSampledMaterialSnapshotResult,
+    receipt: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    call_operation(context, result, receipt, |b| {
+        let materials: Vec<_> = b
+            .retained_volume(request.volume)?
+            .volume
+            .read_materials(request.start as usize, request.count as usize)
+            .map_err(kernel)?
+            .into_iter()
+            .map(|index| NativeSampledMaterial {
+                index: u32::from(index),
+            })
+            .collect();
+        let result = NativeSampledMaterialSnapshotResult {
+            materials: materials.as_ptr(),
+            materials_len: materials.len(),
+            start: request.start,
+        };
+        b.borrowed.hold(materials);
+        Ok(result)
+    })
+}
+unsafe extern "C" fn paint_sampled_volume(
+    context: *mut c_void,
+    request: NativeSampledVolumePaintRequest,
+    receipt: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    call_operation(context, &mut (), receipt, |b| {
+        let index = u16::try_from(request.index)
+            .map_err(|_| error("sample material indices are 0 to 65535"))?;
+        let (field, source) = {
+            let retained = b.retained(request.field)?;
+            (retained.field.clone(), retained.node(request.source)?)
+        };
+        let retained = b.retained_volume(request.volume)?;
+        Arc::make_mut(&mut retained.volume)
+            .paint(&field, source, index)
+            .map_err(kernel)?;
+        retained.generation = None;
+        Ok(())
+    })
+}
+unsafe extern "C" fn read_sampled_volume_dirty_blocks(
+    context: *mut c_void,
+    layout: NativeSampledVolumeBlockLayout,
+    result: *mut NativeSampledVolumeBlocksResult,
+    receipt: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    call_operation(context, result, receipt, |b| {
+        let retained = b.retained_volume(layout.volume)?;
+        let dims = retained.volume.descriptor().dimensions;
+        let blocks: Vec<_> = Arc::make_mut(&mut retained.volume)
+            .take_dirty_blocks(layout.block_samples)
+            .map_err(kernel)?
+            .into_iter()
+            .map(|[x, y, z]| NativeSampledVolumeBlock { x, y, z })
+            .collect();
+        let count = dims.map(|d| d.div_ceil(layout.block_samples));
+        let result = NativeSampledVolumeBlocksResult {
+            blocks: blocks.as_ptr(),
+            blocks_len: blocks.len(),
+            blocks_x: count[0],
+            blocks_y: count[1],
+            blocks_z: count[2],
+        };
+        b.borrowed.hold(blocks);
+        Ok(result)
     })
 }
 unsafe extern "C" fn read_sampled_volume_generation(

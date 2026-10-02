@@ -2784,7 +2784,7 @@ fn native_trigger_facts(facts: &[TriggerOverlapFact]) -> Box<[NativeSpatialTrigg
         .collect()
 }
 
-fn surface_mode(mode: NativeVoxelSurfaceMode) -> SurfaceMode {
+pub(crate) fn surface_mode(mode: NativeVoxelSurfaceMode) -> SurfaceMode {
     match mode {
         NativeVoxelSurfaceMode::GreedyCubes => SurfaceMode::GreedyCubes,
         NativeVoxelSurfaceMode::MarchingCubes => SurfaceMode::MarchingCubes,
