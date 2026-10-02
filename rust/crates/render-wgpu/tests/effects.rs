@@ -338,7 +338,9 @@ fn synthetic_sprite_domes_span_the_atlas_frame() {
         if whole {
             // Frame 0 of the sheet, alone.
             let red: Vec<u8> = atlas_image()
-                .chunks_exact(4)
+                .as_chunks::<4>()
+                .0
+                .iter()
                 .enumerate()
                 .filter(|(index, _)| index % 16 < 8)
                 .flat_map(|(_, pixel)| pixel.to_vec())
@@ -386,11 +388,16 @@ fn synthetic_sprite_domes_span_the_atlas_frame() {
     };
     let (cell, whole) = (render(false), render(true));
     let differing = cell
-        .chunks_exact(4)
-        .zip(whole.chunks_exact(4))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(whole.as_chunks::<4>().0)
         .filter(|(a, b)| a.iter().zip(b.iter()).any(|(a, b)| a.abs_diff(*b) > 2))
         .count();
-    assert_eq!(differing, 0, "an atlas cell and a whole texture shade differently");
+    assert_eq!(
+        differing, 0,
+        "an atlas cell and a whole texture shade differently"
+    );
 }
 
 fn particle_frame(ops: Vec<ParticleProjectionOp>) -> PresentationFrameDiff {
