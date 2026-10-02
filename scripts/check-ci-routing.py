@@ -69,10 +69,15 @@ def main() -> None:
             "docs",
         )
     }
-    concurrency = "group: ${{ github.workflow }}-${{ github.ref }}\n  cancel-in-progress: true"
+    # A pull request's newer run cancels its older one; every pushed commit
+    # keeps its own run, because each can be a review gate.
+    concurrency = (
+        "group: ${{ github.workflow }}-${{ github.event_name == 'push' && github.sha || github.ref }}"
+        "\n  cancel-in-progress: true"
+    )
     for name, workflow in workflows.items():
         if concurrency not in workflow:
-            fail(f"{name} does not cancel superseded runs per workflow/ref")
+            fail(f"{name} does not cancel superseded pull request runs while keeping each pushed commit's run")
 
     require_paths(
         "verify",

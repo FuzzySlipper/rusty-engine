@@ -3,7 +3,9 @@
 ## CI lanes
 
 CI follows the current C# product, Rust Engine, and browser shell ownership.
-Changes route to their owning lanes; superseded check runs are cancelled.
+Changes route to their owning lanes. A pull request's newer check run cancels
+its older one; every commit pushed to `main` keeps its own runs, so each can
+gate a review. Pair publications run one at a time.
 
 | Lane | Default evidence |
 | --- | --- |
