@@ -399,6 +399,19 @@ pub struct RenderMaterialDescriptor {
     pub double_sided: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub voxel_surface: Option<VoxelSurfaceDescriptor>,
+    /// A tangent-space normal map (x right, y up the image; glTF), read
+    /// through the same uv (and voxel tiling) as the base texture. Its
+    /// texture holds data, so it is retained with a linear colour space.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub normal_map: Option<MaterialNormalMapDescriptor>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MaterialNormalMapDescriptor {
+    pub texture: String,
+    /// Scales the map's x and y (0 flattens it).
+    pub scale: f32,
 }
 
 fn is_false(value: &bool) -> bool {
@@ -410,6 +423,14 @@ fn is_zero(value: &f32) -> bool {
 }
 
 impl RenderMaterialDescriptor {
+    /// Every texture the material reads: its base texture, then its normal
+    /// map's.
+    pub fn textures(&self) -> impl Iterator<Item = &String> {
+        self.texture
+            .iter()
+            .chain(self.normal_map.iter().map(|map| &map.texture))
+    }
+
     pub fn validate(&self) -> Result<(), MaterialDescriptorError> {
         validate_asset_id(&self.id, RenderAssetKind::Material)
             .map_err(MaterialDescriptorError::Asset)?;
@@ -428,6 +449,13 @@ impl RenderMaterialDescriptor {
         }
         if !self.metalness.is_finite() || !(0.0..=1.0).contains(&self.metalness) {
             return Err(MaterialDescriptorError::InvalidMetalness);
+        }
+        if let Some(map) = &self.normal_map {
+            if validate_asset_id(&map.texture, RenderAssetKind::Texture).is_err()
+                || !map.scale.is_finite()
+            {
+                return Err(MaterialDescriptorError::InvalidNormalMap);
+            }
         }
         if !valid_color(self.emission_color)
             || !self.emission_intensity.is_finite()
@@ -459,6 +487,7 @@ pub enum MaterialDescriptorError {
     InvalidColor,
     InvalidRoughness,
     InvalidMetalness,
+    InvalidNormalMap,
     InvalidEmission,
     InvalidAlphaCutoff,
     InvalidVoxelSurface(VoxelSurfaceDescriptorError),
@@ -1461,6 +1490,7 @@ mod tests {
             alpha_mode: Default::default(),
             double_sided: false,
             voxel_surface: Some(surface.clone()),
+            normal_map: None,
         };
         assert_eq!(material.validate(), Ok(()));
         let material_json = serde_json::to_string(&material).unwrap();
@@ -1483,6 +1513,7 @@ mod tests {
 
         let legacy = RenderMaterialDescriptor {
             voxel_surface: None,
+            normal_map: None,
             ..material
         };
         let encoded = serde_json::to_string(&legacy).unwrap();
@@ -1508,6 +1539,7 @@ mod tests {
             alpha_mode: MaterialAlphaModeDescriptor::Mask { cutoff: 0.5 },
             double_sided: true,
             voxel_surface: None,
+            normal_map: None,
         };
         material.validate().unwrap();
         let encoded = serde_json::to_string(&material).unwrap();

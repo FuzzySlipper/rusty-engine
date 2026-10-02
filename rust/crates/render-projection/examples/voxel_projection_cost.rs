@@ -139,5 +139,6 @@ fn material() -> RenderMaterialDescriptor {
         alpha_mode: Default::default(),
         double_sided: false,
         voxel_surface: None,
+        normal_map: None,
     }
 }

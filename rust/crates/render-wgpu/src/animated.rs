@@ -501,6 +501,7 @@ impl Renderer {
                 },
                 double_sided: material.double_sided,
                 voxel_surface: None,
+                normal_map: None,
             };
             self.define_material_with(descriptor, material.unlit, maps);
         }

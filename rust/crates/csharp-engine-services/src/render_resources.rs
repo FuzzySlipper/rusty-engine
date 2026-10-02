@@ -16,8 +16,8 @@ use csharp_engine_abi::{
     NativeMeshMaterialBinding, NativeMeshPartitionHandle, NativeMeshPartitionPartRequest,
     NativeMeshPartitionReadout, NativeMeshPartitionRequest, NativeMeshResourceCreateRequest,
     NativeMeshResourceHandle, NativeOperationErrorReceipt, NativeRenderResourceHandle,
-    NativeRenderResourceInfo, NativeRenderResourceKind, NativeTextureFilter, NativeTextureWrap,
-    NativeVec3,
+    NativeRenderResourceInfo, NativeRenderResourceKind, NativeTextureColorSpace,
+    NativeTextureFilter, NativeTextureWrap, NativeVec3,
 };
 use render_model::{
     decode_mesh_resource_payload, mesh_resource_content_hash, pack_mesh_resources,
@@ -63,6 +63,7 @@ impl CsharpRenderResource {
         bytes: Arc<[u8]>,
         filter: NativeTextureFilter,
         wrap: NativeTextureWrap,
+        color_space: NativeTextureColorSpace,
     ) -> Result<Self, CsharpEngineServicesError> {
         let path = renderer_path(path, ".png")?;
         let mut descriptor = TextureDescriptor::admit_png_rgba8_resource(
@@ -96,6 +97,12 @@ impl CsharpRenderResource {
         );
         if filter != NativeTextureFilter::Nearest || wrap != NativeTextureWrap::Clamp {
             identity.push_str(&format!("-f{}-w{}", filter as u32, wrap as u32));
+        }
+        if color_space == NativeTextureColorSpace::Linear {
+            identity.push_str("-linear");
+            if let Some(payload) = descriptor.payload.as_mut() {
+                payload.color_space = render_model::TextureColorSpace::Linear;
+            }
         }
         descriptor.id = identity.clone();
         descriptor.validate().map_err(|error| {
@@ -649,6 +656,7 @@ impl RenderResourceImports {
         content: RetainedContent,
         filter: NativeTextureFilter,
         wrap: NativeTextureWrap,
+        color_space: NativeTextureColorSpace,
         content_admitted: bool,
     ) -> Result<CsharpRenderResource, CsharpEngineServicesError> {
         let relative_path = content.path;
@@ -657,7 +665,13 @@ impl RenderResourceImports {
         let browser_path = format!("content/{relative_path}");
         match () {
             _ if relative_path.ends_with(".png") => {
-                CsharpRenderResource::admit_texture(browser_path.clone(), bytes, filter, wrap)
+                CsharpRenderResource::admit_texture(
+                    browser_path.clone(),
+                    bytes,
+                    filter,
+                    wrap,
+                    color_space,
+                )
             }
             _ if relative_path.ends_with(".rmesh") => {
                 let resource = match self.mesh.get(&relative_path) {
@@ -1627,6 +1641,7 @@ pub(crate) mod tests {
             Arc::from(RGBA_PNG),
             NativeTextureFilter::Nearest,
             NativeTextureWrap::Clamp,
+            NativeTextureColorSpace::Srgb,
         )
         .expect("texture");
         let handle = registry.admit(texture).expect("admitted texture");

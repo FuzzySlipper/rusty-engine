@@ -918,3 +918,166 @@ fn linear_textures_mipmap_so_a_receding_tiled_floor_settles_to_its_average() {
         "far texels average to grey with mips: spread {smooth} against {aliased} unmipmapped"
     );
 }
+
+/// A normal map texture tilted toward tangent-space +X, opened as linear
+/// data as a product opens one.
+fn tilted_normal_map(harness: &mut Harness, id: &str, wrap: TextureWrap) -> TextureDescriptor {
+    let texel = [
+        ((0.6_f32 * 0.5 + 0.5) * 255.0).round() as u8,
+        128,
+        ((0.8_f32 * 0.5 + 0.5) * 255.0).round() as u8,
+        255,
+    ];
+    let mut texture = harness.resources.texture(id, 2, 2, &texel.repeat(4), wrap);
+    if let Some(payload) = texture.payload.as_mut() {
+        payload.color_space = TextureColorSpace::Linear;
+    }
+    texture
+}
+
+fn sun(direction: [f32; 3]) -> RenderDiff {
+    RenderDiff::CreateLight {
+        handle: RenderHandle::new(90),
+        parent: None,
+        light: LightDescriptor::Directional {
+            color: [1.0; 3],
+            intensity: 2.5,
+            enabled: true,
+            direction,
+            shadow_intent: LightShadowIntent::Disabled,
+        },
+    }
+}
+
+#[test]
+fn an_engine_material_normal_map_turns_shading_as_the_light_moves() {
+    let render = |normal_map: bool, direction: [f32; 3]| {
+        let mut harness = Harness::new(RendererOptions {
+            default_world_lights: false,
+            ..RendererOptions::default()
+        });
+        let map = tilted_normal_map(&mut harness, "texture/normal", TextureWrap::Clamp);
+        let mut descriptor = material("material/wall", [0.8, 0.8, 0.8, 1.0], None);
+        descriptor.normal_map = normal_map.then(|| MaterialNormalMapDescriptor {
+            texture: map.id.clone(),
+            scale: 1.0,
+        });
+        harness.apply(vec![
+            RenderDiff::DefineTexture { texture: map },
+            RenderDiff::DefineMaterial {
+                material: descriptor,
+            },
+            static_mesh(
+                "mesh/wall",
+                box_mesh([-1.0, -1.0, -0.1], [1.0, 1.0, 0.1], |_| 0),
+                "material/wall",
+            ),
+            instance(1, None, "mesh/wall", Transform::IDENTITY),
+            sun(direction),
+        ]);
+        let (_, rgba) = harness.render(&camera([0.0, 0.0, 3.0], 0.0, 0.0));
+        let at = (HEIGHT as usize / 2 * WIDTH as usize + WIDTH as usize / 2) * 4;
+        u32::from(rgba[at]) + u32::from(rgba[at + 1]) + u32::from(rgba[at + 2])
+    };
+    // The face's +u runs along +X, so the map turns it toward +X.
+    let from_right = render(true, [-1.0, 0.0, -1.0]);
+    let from_left = render(true, [1.0, 0.0, -1.0]);
+    assert!(
+        from_right > from_left + 60,
+        "lit from +X {from_right}, from -X {from_left}"
+    );
+    // Without the map the face is lit alike from either side.
+    let (plain_right, plain_left) = (
+        render(false, [-1.0, 0.0, -1.0]),
+        render(false, [1.0, 0.0, -1.0]),
+    );
+    assert!(
+        plain_right.abs_diff(plain_left) < 6,
+        "{plain_right} {plain_left}"
+    );
+}
+
+#[test]
+fn a_voxel_surface_normal_map_follows_its_tiles_without_seams() {
+    let render = |direction: [f32; 3]| {
+        let mut harness = Harness::new(RendererOptions {
+            default_world_lights: false,
+            ..RendererOptions::default()
+        });
+        let stone = harness.resources.texture(
+            "texture/stone",
+            2,
+            2,
+            &[200, 200, 200, 255].repeat(4),
+            TextureWrap::Repeat,
+        );
+        let map = tilted_normal_map(&mut harness, "texture/stone-normal", TextureWrap::Repeat);
+        let mut floor = voxel_material(
+            1,
+            [1.0; 4],
+            Some(&stone),
+            Some(VoxelSurfaceMappingDescriptor::Repeat {
+                texture: stone.id.clone(),
+                texture_version: stone.version,
+                texture_content_hash: stone.content_hash.clone().unwrap(),
+                tile_scale_cells: [1.0, 1.0],
+                tile_origin_cells: [0.0, 0.0],
+            }),
+        );
+        floor.normal_map = Some(MaterialNormalMapDescriptor {
+            texture: map.id.clone(),
+            scale: 1.0,
+        });
+        let materials = BTreeMap::from([(1, floor)]);
+        let floor_only = VoxelCollisionScene::from_material_voxels_with_mesh_options(
+            1.0,
+            CHUNK_CELLS,
+            (-6..6).flat_map(|x| {
+                (-12..2).map(move |z| MaterialVoxel {
+                    state: 0,
+                    address: [x, -1, z],
+                    material_slot: 1,
+                })
+            }),
+            SurfaceMeshOptions::default(),
+        )
+        .unwrap();
+        let mut projector = VoxelRenderProjector::new();
+        let mut ops = vec![
+            RenderDiff::DefineTexture { texture: stone },
+            RenderDiff::DefineTexture { texture: map },
+            sun(direction),
+        ];
+        ops.extend(project(&mut projector, &floor_only, &materials));
+        harness.apply(ops);
+        harness.render(&camera([0.0, 1.5, 1.0], 0.0, -35.0)).1
+    };
+    // A floor tile's +u runs along +Z, so the map tilts the floor toward +Z.
+    let lit = render([0.0, -0.6, -1.0]);
+    let dim = render([0.0, -0.6, 1.0]);
+    // A block of floor spanning several tile seams in each direction.
+    let block = |rgba: &[u8]| -> Vec<u32> {
+        (HEIGHT as usize / 3..HEIGHT as usize)
+            .flat_map(|y| (WIDTH as usize / 4..WIDTH as usize * 3 / 4).map(move |x| (x, y)))
+            .map(|(x, y)| {
+                let at = (y * WIDTH as usize + x) * 4;
+                u32::from(rgba[at]) + u32::from(rgba[at + 1]) + u32::from(rgba[at + 2])
+            })
+            .collect()
+    };
+    let (lit, dim) = (block(&lit), block(&dim));
+    let mean = |values: &[u32]| values.iter().sum::<u32>() / values.len() as u32;
+    assert!(
+        mean(&lit) > mean(&dim) + 30,
+        "tilted relief: {} against {}",
+        mean(&lit),
+        mean(&dim)
+    );
+    // Uniform tiles: no darker line where one tile meets the next, as a
+    // frame from the wrapped uv would draw.
+    let (low, high) = (lit.iter().min().unwrap(), lit.iter().max().unwrap());
+    assert!(
+        high - low < 12,
+        "seam lines across the floor: {low}..{high}"
+    );
+}

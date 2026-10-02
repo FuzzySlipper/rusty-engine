@@ -32,7 +32,8 @@ use:
 | Unlit | it is a GLB `KHR_materials_unlit` material or an Engine primitive |
 | Alpha mask | its alpha mode is `MaterialAlphaMode.Mask`, or its voxel surface is masked |
 | Voxel surface | it carries a voxel surface mapping |
-| Normal, emissive, occlusion map | it is a GLB material with that texture |
+| Normal map | it is a GLB material with a normal texture, or `MaterialRequest.NormalMap` names one |
+| Emissive, occlusion map | it is a GLB material with that texture |
 
 Materials with the same features share pipelines and batch together. A new
 feature set compiles once, when its first material is defined: about 8 ms on

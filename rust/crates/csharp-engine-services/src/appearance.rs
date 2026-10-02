@@ -2848,7 +2848,7 @@ impl RuntimeAppearanceBridge {
             borrowed_utf8(request.path.bytes, request.path.len, "resource path")?.to_owned()
         };
         let content = self.content_path(&requested_path)?;
-        self.admit_resource(content, request.filter, request.wrap)
+        self.admit_resource(content, request.filter, request.wrap, request.color_space)
     }
 
     fn admit_resource(
@@ -2856,9 +2856,12 @@ impl RuntimeAppearanceBridge {
         content: crate::content::RetainedContent,
         filter: NativeTextureFilter,
         wrap: NativeTextureWrap,
+        color_space: NativeTextureColorSpace,
     ) -> Result<NativeRenderResourceInfo, CsharpEngineServicesError> {
         let content_admitted = self.content.is_some();
-        let resource = self.imports.file(content, filter, wrap, content_admitted)?;
+        let resource = self
+            .imports
+            .file(content, filter, wrap, color_space, content_admitted)?;
         let resources = &mut self.staged_mut()?.state.render_resources;
         let handle = resources.admit(resource)?;
         resources.info(handle)
@@ -3076,18 +3079,19 @@ impl RuntimeAppearanceBridge {
         })?;
         let id = runtime_material_id(handle);
         let descriptor = material_descriptor(id.clone(), request, &staged.state.render_resources)?;
-        let texture = texture_descriptor_for_material(&descriptor, &staged.state.render_resources)?;
+        let textures =
+            texture_descriptors_for_material(&descriptor, &staged.state.render_resources)?;
         staged.state.next_material = next_material;
         let resources = staged.state.projector.resources_mut();
-        if let Some(texture) = texture {
+        for texture in textures {
             retain_texture_descriptor(&mut resources.textures, texture)?;
         }
         resources.materials.push(descriptor);
         staged.state.materials.insert(handle, id);
-        staged
-            .state
-            .material_resources
-            .insert(handle, resource_set([request.texture.value]));
+        staged.state.material_resources.insert(
+            handle,
+            resource_set([request.texture.value, request.normal_map.value]),
+        );
         Ok(NativeMaterialHandle { value: handle })
     }
 
@@ -3218,9 +3222,10 @@ impl RuntimeAppearanceBridge {
             request.replacement,
             &staged.state.render_resources,
         )?;
-        let texture = texture_descriptor_for_material(&descriptor, &staged.state.render_resources)?;
+        let textures =
+            texture_descriptors_for_material(&descriptor, &staged.state.render_resources)?;
         let resources = staged.state.projector.resources_mut();
-        if let Some(texture) = texture {
+        for texture in textures {
             retain_texture_descriptor(&mut resources.textures, texture)?;
         }
         let material = resources
@@ -3233,7 +3238,10 @@ impl RuntimeAppearanceBridge {
         *material = descriptor;
         staged.state.material_resources.insert(
             request.material.value,
-            resource_set([request.replacement.texture.value]),
+            resource_set([
+                request.replacement.texture.value,
+                request.replacement.normal_map.value,
+            ]),
         );
         Ok(())
     }
@@ -3250,7 +3258,7 @@ impl RuntimeAppearanceBridge {
             request.replacement,
             &state.render_resources,
         )?;
-        texture_descriptor_for_material(&descriptor, &state.render_resources)?;
+        texture_descriptors_for_material(&descriptor, &state.render_resources)?;
         self.destroy_material(request.material)?;
         self.create_material(request.replacement)
     }
@@ -8791,6 +8799,7 @@ fn render_material(id: String, color: NativeColor) -> RenderMaterialDescriptor {
         alpha_mode: MaterialAlphaModeDescriptor::Opaque,
         double_sided: false,
         voxel_surface: None,
+        normal_map: None,
     }
 }
 
@@ -8906,6 +8915,29 @@ fn material_descriptor(
         }
         Some(resource.asset_identity().to_owned())
     };
+    let normal_map = if request.normal_map.value == 0 {
+        None
+    } else {
+        let linear = resources
+            .get(request.normal_map.value)
+            .and_then(CsharpRenderResource::texture)
+            .and_then(|texture| texture.payload.as_ref())
+            .is_some_and(|payload| payload.color_space == render_model::TextureColorSpace::Linear);
+        if !linear {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_MATERIAL_NORMAL_MAP",
+                "a material's normal map must be a texture opened with TextureColorSpace.Linear",
+            ));
+        }
+        let identity = resources
+            .get(request.normal_map.value)
+            .map(|resource| resource.asset_identity().to_owned())
+            .expect("checked above");
+        Some(render_model::MaterialNormalMapDescriptor {
+            texture: identity,
+            scale: request.normal_scale,
+        })
+    };
     let descriptor = RenderMaterialDescriptor {
         id,
         color: native_color(request.color),
@@ -8925,6 +8957,7 @@ fn material_descriptor(
         },
         double_sided: request.double_sided,
         voxel_surface: None,
+        normal_map,
     };
     descriptor.validate().map_err(|error| {
         CsharpEngineServicesError::new("CSHARP_MATERIAL", format!("material is invalid: {error:?}"))
@@ -8968,25 +9001,26 @@ fn retarget_voxel_surface(surface: &mut VoxelSurfaceDescriptor, texture_id: &str
     }
 }
 
-fn texture_descriptor_for_material(
+fn texture_descriptors_for_material(
     material: &RenderMaterialDescriptor,
     resources: &RenderResourceRegistry,
-) -> Result<Option<TextureDescriptor>, CsharpEngineServicesError> {
-    let Some(identity) = material.texture.as_deref() else {
-        return Ok(None);
-    };
-    resources
-        .iter()
-        .find(|resource| resource.asset_identity() == identity)
-        .and_then(CsharpRenderResource::texture)
-        .cloned()
-        .map(Some)
-        .ok_or_else(|| {
-            CsharpEngineServicesError::new(
-                "CSHARP_MATERIAL_TEXTURE",
-                "material texture descriptor is not retained",
-            )
+) -> Result<Vec<TextureDescriptor>, CsharpEngineServicesError> {
+    material
+        .textures()
+        .map(|identity| {
+            resources
+                .iter()
+                .find(|resource| resource.asset_identity() == identity)
+                .and_then(CsharpRenderResource::texture)
+                .cloned()
+                .ok_or_else(|| {
+                    CsharpEngineServicesError::new(
+                        "CSHARP_MATERIAL_TEXTURE",
+                        "material texture descriptor is not retained",
+                    )
+                })
         })
+        .collect()
 }
 
 fn retain_texture_descriptor(
@@ -9020,8 +9054,9 @@ pub(crate) unsafe extern "C" fn open_render_resource_from_content(
         let request = unsafe { *request };
         match bridge
             .content_reference(request.content)
-            .and_then(|content| bridge.admit_resource(content, request.filter, request.wrap))
-        {
+            .and_then(|content| {
+                bridge.admit_resource(content, request.filter, request.wrap, request.color_space)
+            }) {
             Ok(value) => {
                 unsafe { *result = value };
                 ABI_OK
@@ -9326,6 +9361,7 @@ pub(super) mod tests {
             },
             filter: NativeTextureFilter::Nearest,
             wrap: NativeTextureWrap::Clamp,
+            color_space: NativeTextureColorSpace::Srgb,
         }
     }
 
@@ -9610,6 +9646,8 @@ pub(super) mod tests {
                 alpha_mode: NativeMaterialAlphaMode::Mask,
                 alpha_cutoff: 0.4,
                 metalness: 0.0,
+                normal_map: NativeRenderResourceReference::default(),
+                normal_scale: 1.0,
             })
             .unwrap();
         let positions = [
@@ -9805,6 +9843,8 @@ pub(super) mod tests {
                 alpha_mode: NativeMaterialAlphaMode::Mask,
                 alpha_cutoff: 0.4,
                 metalness: 0.0,
+                normal_map: NativeRenderResourceReference::default(),
+                normal_scale: 1.0,
             })
             .unwrap();
         let mut positions = [
@@ -10300,6 +10340,8 @@ pub(super) mod tests {
             alpha_mode: NativeMaterialAlphaMode::Opaque,
             alpha_cutoff: 0.5,
             metalness: 0.0,
+            normal_map: NativeRenderResourceReference::default(),
+            normal_scale: 1.0,
         };
         let original = bridge.create_material(request).expect("material");
         let replacement = bridge
@@ -10346,6 +10388,8 @@ pub(super) mod tests {
             alpha_mode: NativeMaterialAlphaMode::Opaque,
             alpha_cutoff: 0.5,
             metalness: 1.0,
+            normal_map: NativeRenderResourceReference::default(),
+            normal_scale: 1.0,
         };
         let resources = RenderResourceRegistry::default();
         let descriptor = material_descriptor("material/metal".to_owned(), metal, &resources)
@@ -10355,6 +10399,8 @@ pub(super) mod tests {
             "material/over".to_owned(),
             NativeMaterialRequest {
                 metalness: 1.5,
+                normal_map: NativeRenderResourceReference::default(),
+                normal_scale: 1.0,
                 ..metal
             },
             &resources,
@@ -10398,6 +10444,65 @@ pub(super) mod tests {
         bridge.begin_call();
         bridge.destroy_light(light).unwrap();
         assert!(bridge.take_staged_call().render_frames().is_empty());
+    }
+
+    #[test]
+    fn normal_maps_are_linear_textures_retained_beside_the_base_texture() {
+        let mut content = BTreeMap::new();
+        content.insert("stone.png".to_owned(), Arc::from(RGBA_PNG));
+        let mut bridge = RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), content);
+        bridge.begin_call();
+        let colour = bridge
+            .open_resource(&resource_request("stone.png"))
+            .unwrap();
+        let mut data_request = resource_request("stone.png");
+        data_request.color_space = NativeTextureColorSpace::Linear;
+        let data = bridge.open_resource(&data_request).unwrap();
+        assert_ne!(colour.handle, data.handle, "one PNG, two colour spaces");
+        let resources = &bridge.staged_ref().unwrap().state.render_resources;
+        let linear = resources
+            .get(data.handle.value)
+            .and_then(CsharpRenderResource::texture)
+            .and_then(|texture| texture.payload.as_ref())
+            .map(|payload| payload.color_space);
+        assert_eq!(linear, Some(render_model::TextureColorSpace::Linear));
+
+        let white = NativeColor {
+            r: 1.0,
+            g: 1.0,
+            b: 1.0,
+            a: 1.0,
+        };
+        let request = |normal_map: NativeRenderResourceHandle| NativeMaterialRequest {
+            color: white,
+            texture: NativeRenderResourceReference {
+                value: colour.handle.value,
+            },
+            roughness: 0.8,
+            texture_tint: white,
+            emission_color: NativeVec3::default(),
+            emission_intensity: 0.0,
+            double_sided: false,
+            alpha_mode: NativeMaterialAlphaMode::Opaque,
+            alpha_cutoff: 0.5,
+            metalness: 0.0,
+            normal_map: NativeRenderResourceReference {
+                value: normal_map.value,
+            },
+            normal_scale: 0.5,
+        };
+        let refused =
+            material_descriptor("material/a".to_owned(), request(colour.handle), resources)
+                .unwrap_err();
+        assert_eq!(refused.code(), "CSHARP_MATERIAL_NORMAL_MAP");
+        let descriptor =
+            material_descriptor("material/b".to_owned(), request(data.handle), resources).unwrap();
+        let map = descriptor.normal_map.as_ref().expect("normal map");
+        assert_eq!(map.scale, 0.5);
+        let textures = texture_descriptors_for_material(&descriptor, resources).unwrap();
+        assert_eq!(textures.len(), 2);
+        assert_eq!(textures[1].id, map.texture);
+        assert!(map.texture.ends_with("-linear"));
     }
 
     #[test]
@@ -10466,6 +10571,8 @@ pub(super) mod tests {
                     },
                     roughness: 1.0,
                     metalness: 0.0,
+                    normal_map: NativeRenderResourceReference::default(),
+                    normal_scale: 1.0,
                     texture_tint: NativeColor {
                         r: 1.0,
                         g: 1.0,
@@ -10682,6 +10789,8 @@ pub(super) mod tests {
                 },
                 roughness: 1.0,
                 metalness: 0.0,
+                normal_map: NativeRenderResourceReference::default(),
+                normal_scale: 1.0,
                 texture_tint: NativeColor {
                     r: 1.0,
                     g: 1.0,
@@ -11425,6 +11534,8 @@ pub(super) mod tests {
                 texture: NativeRenderResourceReference { value: 0 },
                 roughness: 0.5,
                 metalness: 0.0,
+                normal_map: NativeRenderResourceReference::default(),
+                normal_scale: 1.0,
                 texture_tint: NativeColor {
                     r: 1.0,
                     g: 1.0,

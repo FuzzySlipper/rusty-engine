@@ -77,6 +77,7 @@ pub fn project_catalog_material(
         alpha_mode: Default::default(),
         double_sided: false,
         voxel_surface,
+        normal_map: None,
     };
     descriptor
         .validate()

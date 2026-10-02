@@ -752,9 +752,10 @@ fn project_all_presentations(
         .ops
         .iter()
         .filter_map(|operation| match operation {
-            RenderDiff::DefineMaterial { material } => material.texture.clone(),
+            RenderDiff::DefineMaterial { material } => Some(material.textures().cloned()),
             _ => None,
         })
+        .flatten()
         .collect::<BTreeSet<_>>();
     if !used_textures.is_empty() {
         let mut operations = used_textures
@@ -1180,6 +1181,8 @@ mod tests {
                         texture: NativeRenderResourceReference::default(),
                         roughness: 1.0,
                         metalness: 0.0,
+                        normal_map: NativeRenderResourceReference::default(),
+                        normal_scale: 1.0,
                         texture_tint: NativeColor {
                             r: 1.0,
                             g: 1.0,
@@ -2076,6 +2079,7 @@ mod tests {
                         },
                         filter: csharp_engine_abi::NativeTextureFilter::Nearest,
                         wrap: csharp_engine_abi::NativeTextureWrap::Clamp,
+                        color_space: NativeTextureColorSpace::Srgb,
                     },
                     &mut resource,
                     std::ptr::null_mut(),
@@ -2100,6 +2104,8 @@ mod tests {
                         },
                         roughness: 1.0,
                         metalness: 0.0,
+                        normal_map: NativeRenderResourceReference::default(),
+                        normal_scale: 1.0,
                         texture_tint: NativeColor {
                             r: 1.0,
                             g: 1.0,

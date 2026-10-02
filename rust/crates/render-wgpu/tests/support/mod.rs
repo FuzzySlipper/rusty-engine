@@ -268,6 +268,7 @@ pub fn material(id: &str, color: [f32; 4], texture: Option<&str>) -> RenderMater
         alpha_mode: MaterialAlphaModeDescriptor::Opaque,
         double_sided: false,
         voxel_surface: None,
+        normal_map: None,
     }
 }
 

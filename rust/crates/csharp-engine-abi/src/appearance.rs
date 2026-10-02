@@ -284,6 +284,16 @@ pub enum NativeTextureWrap {
     Repeat = 1,
 }
 
+/// How a PNG texture's values are read: as sRGB colour (the default) or as
+/// linear data, such as a normal map.
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord)]
+pub enum NativeTextureColorSpace {
+    #[default]
+    Srgb = 0,
+    Linear = 1,
+}
+
 /// One admitted immutable renderer resource selected by its product content path.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -291,6 +301,7 @@ pub struct NativeRenderResourceRequest {
     pub path: NativeUtf8Slice,
     pub filter: NativeTextureFilter,
     pub wrap: NativeTextureWrap,
+    pub color_space: NativeTextureColorSpace,
 }
 
 #[repr(C)]
@@ -563,6 +574,11 @@ pub struct NativeMaterialRequest {
     pub alpha_cutoff: f32,
     /// 0 (dielectric) to 1 (metal).
     pub metalness: f32,
+    /// A tangent-space normal map (x right, y up the image), opened with a
+    /// linear colour space; 0 for none. Read through the base texture's uv.
+    pub normal_map: NativeRenderResourceReference,
+    /// Scales the normal map's x and y.
+    pub normal_scale: f32,
 }
 
 /// Projects one admitted authored material through Engine-owned catalog and
@@ -776,6 +792,7 @@ pub struct NativeRenderResourceContentRequest {
     pub content: NativeContentReferenceHandle,
     pub filter: NativeTextureFilter,
     pub wrap: NativeTextureWrap,
+    pub color_space: NativeTextureColorSpace,
 }
 
 #[repr(C)]

@@ -190,6 +190,12 @@ than treating each input sample as a mouse displacement.
 Ordinary `MaterialRequest` exposes opaque, mask/cutoff, and blend alpha modes,
 and `Metalness` from 0 (the default, dielectric) to 1 (metal; see
 [the standard shader](lighting-and-sky.md#the-standard-shader)).
+`NormalMap` names a tangent-space normal map (x right, y up the image, as
+glTF stores them), and `NormalScale` scales its tilt. The texture must be
+opened as data, with `TextureColorSpace.Linear`. A colour texture is refused
+with `CSHARP_MATERIAL_NORMAL_MAP`. The map reads the base texture's uv. On a
+voxel surface it repeats or follows the atlas region with the base texture,
+and its tangent frame stays continuous across tile seams.
 Sprite requests accept a `SpriteMaterialDescriptor` for lighting, normal/depth
 maps, alpha, and shadow policy. Sprites and atlases keep the sampler selected
 when their texture was opened; the short constructors select opaque mesh and
@@ -312,7 +318,9 @@ var texture = engine.Graphics.OpenResource(new RenderResourceRequest(
     "textures/stone.png", TextureFilter.Nearest, TextureWrap.Repeat));
 ```
 
-`TextureFilter.Linear` is also available. A linear texture gets a mip chain
+`TextureFilter.Linear` is also available. A fourth argument,
+`TextureColorSpace.Linear`, opens a PNG as data rather than sRGB colour; normal
+maps need it. The same PNG opened both ways is two retained textures. A linear texture gets a mip chain
 at upload, built in linear light, and materials sample it trilinearly with
 16× anisotropic filtering, so tiled surfaces do not speckle at distance. That
 costs about 40 ms and a third more memory for a 2048² colour texture.

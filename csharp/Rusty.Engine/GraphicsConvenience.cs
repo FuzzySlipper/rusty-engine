@@ -24,7 +24,9 @@ public readonly partial record struct MaterialRequest
             doubleSided,
             MaterialAlphaMode.Opaque,
             0.5f,
-            0)
+            0,
+            default,
+            1)
     {
     }
 
@@ -49,7 +51,37 @@ public readonly partial record struct MaterialRequest
             doubleSided,
             alphaMode,
             alphaCutoff,
-            0)
+            0,
+            default,
+            1)
+    {
+    }
+
+    /// <summary>A material without a normal map.</summary>
+    public MaterialRequest(
+        Color color,
+        RenderResourceReference texture,
+        float roughness,
+        Color textureTint,
+        Vector3 emissionColor,
+        float emissionIntensity,
+        bool doubleSided,
+        MaterialAlphaMode alphaMode,
+        float alphaCutoff,
+        float metalness)
+        : this(
+            color,
+            texture,
+            roughness,
+            textureTint,
+            emissionColor,
+            emissionIntensity,
+            doubleSided,
+            alphaMode,
+            alphaCutoff,
+            metalness,
+            default,
+            1)
     {
     }
 }

@@ -309,6 +309,7 @@ fn materials(
                 alpha_mode: Default::default(),
                 double_sided: false,
                 voxel_surface: texture.map(|descriptor| atlas_surface(descriptor, slot)),
+                normal_map: None,
             };
             (material.id.clone(), material)
         })

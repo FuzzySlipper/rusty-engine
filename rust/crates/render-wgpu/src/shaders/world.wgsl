@@ -111,12 +111,22 @@ fn fs_world(in: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<
 #endif
     let geometric = normalize(in.normal);
 #ifdef NORMAL_MAP
+#ifdef VOXEL_SURFACE
+    // Through the same tiling as the base texture; the frame comes from the
+    // continuous tile coordinate, which does not jump at tile seams.
+    let normal_sample = textureSampleLevel(normal_map, normal_sampler,
+        transform_uv(material.normal_uv_u, material.normal_uv_v, uv),
+        voxel_lod(in.uv, material.tile, material.sample_rect, vec2<f32>(textureDimensions(normal_map, 0)))).rgb;
+    var normal = perturb_normal(geometric, in.world_position, (in.uv - material.tile.zw) / material.tile.xy,
+        normal_sample, material.normal_scale);
+#else
     let normal_uv = transform_uv(material.normal_uv_u, material.normal_uv_v, slot_uv(in, material.tex_coords.z));
     let normal_sample = textureSample(normal_map, normal_sampler, normal_uv).rgb;
 #ifdef VERTEX_TANGENTS
     var normal = tangent_normal(geometric, in.tangent, normal_sample, material.normal_scale);
 #else
     var normal = perturb_normal(geometric, in.world_position, normal_uv, normal_sample, material.normal_scale);
+#endif
 #endif
 #else
     var normal = geometric;

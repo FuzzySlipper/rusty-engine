@@ -30,6 +30,18 @@ internal static class EngineTestHostChecks
 
         host.Call(engine =>
         {
+            // A normal map is linear data: the same PNG opened as colour is refused.
+            using RenderResource colour = engine.Graphics.OpenResource(new RenderResourceRequest("textures/atlas.png")).Handle;
+            using RenderResource data = engine.Graphics.OpenResource(new RenderResourceRequest(
+                "textures/atlas.png", TextureFilter.Linear, TextureWrap.Repeat, TextureColorSpace.Linear)).Handle;
+            MaterialRequest Mapped(RenderResource normalMap) => new(new(1, 1, 1, 1), colour, .8f, new(1, 1, 1, 1),
+                Vector3.Zero, 0, false, MaterialAlphaMode.Opaque, .5f, 0, normalMap, 1);
+            using Material material = engine.Graphics.CreateMaterial(Mapped(data));
+            ExpectRefusal(() => engine.Graphics.CreateMaterial(Mapped(colour)), "CSHARP_MATERIAL_NORMAL_MAP");
+        });
+
+        host.Call(engine =>
+        {
             using SpatialSession session = engine.Spatial.CreateSession(new(1, 16, VoxelSurfaceMode.GreedyCubes));
             Vector3[] vertices = [new(0, 0, 0), new(1, 0, 0), new(1, 0, 1), new(0, 0, 1)];
             Triangle[] triangles = [new(0, 2, 1), new(0, 3, 2)];

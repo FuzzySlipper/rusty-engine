@@ -782,7 +782,7 @@ impl Renderer {
             .tables
             .materials
             .values()
-            .filter(|row| row.descriptor.texture.as_deref() == Some(texture.id.as_str()))
+            .filter(|row| row.descriptor.textures().any(|used| *used == texture.id))
             .map(|row| row.descriptor.clone())
             .collect();
         for descriptor in dependents {
@@ -1201,7 +1201,19 @@ impl MaterialParams {
             unlit: false,
             metalness: descriptor.metalness,
             voxel_surface,
-            maps: MaterialMaps::default(),
+            maps: MaterialMaps {
+                normal: descriptor.normal_map.as_ref().map(|map| {
+                    (
+                        MapSlot {
+                            texture: map.texture.clone(),
+                            transform: UvTransform::IDENTITY,
+                            tex_coord: 0,
+                        },
+                        map.scale,
+                    )
+                }),
+                ..MaterialMaps::default()
+            },
         }
     }
 

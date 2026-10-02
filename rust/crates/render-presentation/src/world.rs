@@ -555,7 +555,7 @@ impl PresentationWorld {
             .materials
             .retain(|id, _| materials.contains(id));
         for material in captured.retained.materials.values() {
-            textures.extend(material.texture.iter().cloned());
+            textures.extend(material.textures().cloned());
             if let Some(surface) = &material.voxel_surface {
                 match &surface.mapping {
                     VoxelSurfaceMappingDescriptor::Repeat { texture, .. }
@@ -1045,7 +1045,7 @@ impl PresentationWorld {
                 if !self.retained.textures.contains_key(id) {
                     return Err(PresentationWorldError::UndefinedResource(id.clone()));
                 }
-                let bound = self.retained.materials.values().any(|material| material.texture.as_ref() == Some(id)
+                let bound = self.retained.materials.values().any(|material| material.textures().any(|texture| texture == id)
                     || material.voxel_surface.as_ref().is_some_and(|surface| match &surface.mapping {
                         VoxelSurfaceMappingDescriptor::Repeat { texture, .. } | VoxelSurfaceMappingDescriptor::Atlas { texture, .. } => texture == id,
                     }))

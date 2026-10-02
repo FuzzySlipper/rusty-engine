@@ -275,6 +275,7 @@ pub fn coloured_mesh(
                 alpha_mode: MaterialAlphaModeDescriptor::Opaque,
                 double_sided: false,
                 voxel_surface: None,
+                normal_map: None,
             },
         },
         RenderDiff::DefineStaticMesh {

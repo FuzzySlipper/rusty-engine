@@ -429,6 +429,7 @@ fn material(id: &str, color: [f32; 4]) -> RenderMaterialDescriptor {
         alpha_mode: Default::default(),
         double_sided: false,
         voxel_surface: None,
+        normal_map: None,
     }
 }
 

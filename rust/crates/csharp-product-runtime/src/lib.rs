@@ -5781,6 +5781,8 @@ mod tests {
                         texture: NativeRenderResourceReference::default(),
                         roughness: 1.0,
                         metalness: 0.0,
+                        normal_map: NativeRenderResourceReference::default(),
+                        normal_scale: 1.0,
                         texture_tint: NativeColor {
                             r: 1.0,
                             g: 1.0,
