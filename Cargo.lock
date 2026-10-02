@@ -4440,6 +4440,7 @@ dependencies = [
  "render-projection",
  "render-video",
  "serde",
+ "serde_json",
  "welding",
  "wgpu",
  "winit",

@@ -42,11 +42,24 @@ struct MaterialUniform {
     tile: vec4<f32>,
     // Voxel surface: xy sample min, zw sample max (texture uv).
     sample_rect: vec4<f32>,
+    // Each texture slot's uv transform, two rows (xyz) applied to (u, v, 1):
+    // identity unless a GLB material sets KHR_texture_transform.
+    base_uv0: vec4<f32>,
+    base_uv1: vec4<f32>,
+    emissive_uv0: vec4<f32>,
+    emissive_uv1: vec4<f32>,
+    normal_uv0: vec4<f32>,
+    normal_uv1: vec4<f32>,
+    occlusion_uv0: vec4<f32>,
+    occlusion_uv1: vec4<f32>,
+    // x: normal map scale; y: occlusion strength (0 without an occlusion map).
+    maps: vec4<f32>,
 };
 
 const FLAG_UNLIT: u32 = 1u;
 const FLAG_MASK: u32 = 2u;
 const FLAG_VOXEL_SURFACE: u32 = 4u;
+const FLAG_NORMAL_MAP: u32 = 8u;
 const PI: f32 = 3.141592653589793;
 
 @group(0) @binding(0) var<uniform> frame: Frame;
@@ -62,6 +75,14 @@ const SHADOW_MAP_SIZE: f32 = 512.0;
 @group(1) @binding(0) var<uniform> material: MaterialUniform;
 @group(1) @binding(1) var albedo: texture_2d<f32>;
 @group(1) @binding(2) var albedo_sampler: sampler;
+// GLB maps; white for other materials (an emission multiplier of one, no
+// occlusion), and the normal map only read under FLAG_NORMAL_MAP.
+@group(1) @binding(3) var emissive_map: texture_2d<f32>;
+@group(1) @binding(4) var emissive_sampler: sampler;
+@group(1) @binding(5) var normal_map: texture_2d<f32>;
+@group(1) @binding(6) var normal_sampler: sampler;
+@group(1) @binding(7) var occlusion_map: texture_2d<f32>;
+@group(1) @binding(8) var occlusion_sampler: sampler;
 
 struct VsOut {
     @builtin(position) clip: vec4<f32>,
@@ -156,14 +177,42 @@ fn shadow_visibility(layer: u32, position: vec3<f32>) -> f32 {
     return lit / 9.0;
 }
 
+fn transform_uv(row0: vec4<f32>, row1: vec4<f32>, uv: vec2<f32>) -> vec2<f32> {
+    let point = vec3<f32>(uv, 1.0);
+    return vec2<f32>(dot(row0.xyz, point), dot(row1.xyz, point));
+}
+
+// The surface normal under a tangent-space normal map sample, with the
+// tangent frame from the screen-space derivatives of the map's uv and the
+// position (as glTF viewers do for a mesh without tangents): the tangent
+// follows +u, the bitangent completes a right-handed frame with the normal.
+fn perturb_normal(normal: vec3<f32>, world_position: vec3<f32>, uv: vec2<f32>, sample: vec3<f32>, scale: f32) -> vec3<f32> {
+    let dp_dx = dpdx(world_position);
+    let dp_dy = dpdy(world_position);
+    let duv_dx = dpdx(uv);
+    let duv_dy = dpdy(uv);
+    let determinant = duv_dx.x * duv_dy.y - duv_dy.x * duv_dx.y;
+    let along_u = (duv_dy.y * dp_dx - duv_dx.y * dp_dy) * sign(determinant);
+    let tangent_length = length(along_u - normal * dot(normal, along_u));
+    if abs(determinant) < 1e-12 || tangent_length < 1e-12 {
+        return normal;
+    }
+    let tangent = (along_u - normal * dot(normal, along_u)) / tangent_length;
+    let bitangent = cross(normal, tangent);
+    let mapped = vec3<f32>((sample.xy * 2.0 - 1.0) * scale, sample.z * 2.0 - 1.0);
+    return normalize(tangent * mapped.x + bitangent * mapped.y + normal * mapped.z);
+}
+
 // MeshStandardMaterial with metalness 0 under the pass's light rows: diffuse
-// plus GGX specular, before emission.
+// plus GGX specular, before emission. `occlusion` scales the ambient and
+// hemisphere (indirect) light only.
 fn standard_radiance(
     albedo: vec3<f32>,
     normal: vec3<f32>,
     world_position: vec3<f32>,
     roughness: f32,
     metalness: f32,
+    occlusion: f32,
 ) -> vec3<f32> {
     // MeshStandardMaterial: metals tint specular and lose diffuse.
     let f0 = mix(vec3<f32>(0.04), albedo, metalness);
@@ -175,9 +224,9 @@ fn standard_radiance(
         let kind = u32(light.color_kind.w);
         let color = light.color_kind.rgb;
         if kind == 0u {
-            irradiance += color;
+            irradiance += color * occlusion;
         } else if kind == 1u {
-            irradiance += mix(light.extra.rgb, color, 0.5 * normal.y + 0.5);
+            irradiance += mix(light.extra.rgb, color, 0.5 * normal.y + 0.5) * occlusion;
         } else {
             var direction = -normalize(light.direction_decay.xyz);
             var attenuation = 1.0;
@@ -217,12 +266,26 @@ fn fs_world(in: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<
         let repeated = fract((uv - material.tile.zw) / material.tile.xy);
         uv = mix(material.sample_rect.xy, material.sample_rect.zw, repeated);
     }
-    let base = row.color * in.color * textureSample(albedo, albedo_sampler, uv);
-    var normal = normalize(in.normal);
+    let base = row.color * in.color
+        * textureSample(albedo, albedo_sampler, transform_uv(material.base_uv0, material.base_uv1, uv));
+    // Every map is sampled, and every derivative taken, before any branch.
+    let emissive = textureSample(emissive_map, emissive_sampler,
+        transform_uv(material.emissive_uv0, material.emissive_uv1, in.uv)).rgb;
+    let occlusion_sample = textureSample(occlusion_map, occlusion_sampler,
+        transform_uv(material.occlusion_uv0, material.occlusion_uv1, in.uv)).r;
+    let normal_uv = transform_uv(material.normal_uv0, material.normal_uv1, in.uv);
+    let normal_sample = textureSample(normal_map, normal_sampler, normal_uv).rgb;
+    let geometric = normalize(in.normal);
+    var normal = geometric;
+    if (material.flags & FLAG_NORMAL_MAP) != 0u {
+        normal = perturb_normal(geometric, in.world_position, normal_uv, normal_sample, material.maps.x);
+    }
+    var facing = geometric;
     if !front {
         normal = -normal;
+        facing = -facing;
     }
-    let normal_change = max(abs(dpdx(normal)), abs(dpdy(normal)));
+    let normal_change = max(abs(dpdx(facing)), abs(dpdy(facing)));
     let geometry_roughness = max(max(normal_change.x, normal_change.y), normal_change.z);
     if (material.flags & FLAG_MASK) != 0u && base.a < material.alpha_cutoff {
         discard;
@@ -231,8 +294,9 @@ fn fs_world(in: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<
         return base;
     }
     let roughness = min(max(material.roughness, 0.0525) + geometry_roughness, 1.0);
-    let radiance = standard_radiance(base.rgb, normal, in.world_position, roughness, material.metalness)
-        + row.emission.rgb;
+    let occlusion = 1.0 + material.maps.y * (occlusion_sample - 1.0);
+    let radiance = standard_radiance(base.rgb, normal, in.world_position, roughness, material.metalness, occlusion)
+        + row.emission.rgb * emissive;
     return vec4<f32>(radiance, base.a);
 }
 

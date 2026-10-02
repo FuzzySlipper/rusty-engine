@@ -125,7 +125,7 @@ fn fs_sprite(in: SpriteOut, @builtin(front_facing) front: bool) -> @location(0) 
         normal = normalize(abs(determinant) * normal - direction);
     }
     let roughness = min(SPRITE_ROUGHNESS + geometry_roughness, 1.0);
-    return vec4<f32>(standard_radiance(color.rgb, normal, in.world_position, roughness, 0.0), color.a);
+    return vec4<f32>(standard_radiance(color.rgb, normal, in.world_position, roughness, 0.0, 1.0), color.a);
 }
 
 // Particle billboard: a screen-aligned quad of constant pixel size

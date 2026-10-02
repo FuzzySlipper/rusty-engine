@@ -18,6 +18,9 @@ struct MaterialUniform {
     metalness: f32,
     tile: vec4<f32>,
     sample_rect: vec4<f32>,
+    // The base colour slot's uv transform (world.wgsl).
+    base_uv0: vec4<f32>,
+    base_uv1: vec4<f32>,
 };
 
 struct Layer {
@@ -69,7 +72,11 @@ fn fs_shadow(in: VsOut) {
         let repeated = fract((uv - material.tile.zw) / material.tile.xy);
         uv = mix(material.sample_rect.xy, material.sample_rect.zw, repeated);
     }
-    let alpha = parts[in.part].color.a * in.alpha * textureSampleLevel(albedo, albedo_sampler, uv, 0.0).a;
+    let base_uv = vec2<f32>(
+        dot(material.base_uv0.xyz, vec3<f32>(uv, 1.0)),
+        dot(material.base_uv1.xyz, vec3<f32>(uv, 1.0)),
+    );
+    let alpha = parts[in.part].color.a * in.alpha * textureSampleLevel(albedo, albedo_sampler, base_uv, 0.0).a;
     if alpha < material.alpha_cutoff {
         discard;
     }

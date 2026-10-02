@@ -104,13 +104,75 @@ pub struct GlbClip {
 
 pub struct GlbMaterial {
     pub base_color: [f32; 4],
-    pub base_color_texture: Option<usize>,
+    pub base_color_texture: Option<GlbTextureSlot>,
     pub metallic: f32,
     pub roughness: f32,
     pub emissive: [f32; 3],
+    /// Multiplies `emissive`.
+    pub emissive_texture: Option<GlbTextureSlot>,
+    /// With its `scale`.
+    pub normal_texture: Option<(GlbTextureSlot, f32)>,
+    /// With its `strength`.
+    pub occlusion_texture: Option<(GlbTextureSlot, f32)>,
     pub alpha: GlbAlpha,
     pub double_sided: bool,
     pub unlit: bool,
+}
+
+/// A material's use of one texture: which texture, and the map from the
+/// primitive's `TEXCOORD_0` to the texture's uv (`KHR_texture_transform`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GlbTextureSlot {
+    pub texture: usize,
+    pub transform: UvTransform,
+}
+
+/// An affine uv map, two rows: `u' = a·u + b·v + c`, `v' = d·u + e·v + f`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct UvTransform(pub [f32; 6]);
+
+impl UvTransform {
+    pub const IDENTITY: Self = Self([1.0, 0.0, 0.0, 0.0, 1.0, 0.0]);
+
+    /// `KHR_texture_transform`: translation × rotation × scale, the rotation
+    /// counter-clockwise in the image (uv's v points down).
+    pub fn of(offset: [f32; 2], rotation: f32, scale: [f32; 2]) -> Self {
+        let (sin, cos) = rotation.sin_cos();
+        Self([
+            cos * scale[0],
+            sin * scale[1],
+            offset[0],
+            -sin * scale[0],
+            cos * scale[1],
+            offset[1],
+        ])
+    }
+
+    /// From a texture reference's `KHR_texture_transform` extension object.
+    fn from_extension(value: Option<&gltf::json::Value>) -> Self {
+        let Some(value) = value else {
+            return Self::IDENTITY;
+        };
+        let pair = |key: &str, default: [f32; 2]| {
+            value
+                .get(key)
+                .and_then(|pair| {
+                    Some([pair.get(0)?.as_f64()? as f32, pair.get(1)?.as_f64()? as f32])
+                })
+                .unwrap_or(default)
+        };
+        let rotation = value.get("rotation").and_then(gltf::json::Value::as_f64);
+        Self::of(
+            pair("offset", [0.0, 0.0]),
+            rotation.unwrap_or(0.0) as f32,
+            pair("scale", [1.0, 1.0]),
+        )
+    }
+
+    pub fn apply(&self, uv: [f32; 2]) -> [f32; 2] {
+        let [a, b, c, d, e, f] = self.0;
+        [a * uv[0] + b * uv[1] + c, d * uv[0] + e * uv[1] + f]
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -302,12 +364,45 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<GlbModel, String> {
         .map(|material| {
             let pbr = material.pbr_metallic_roughness();
             let strength = material.emissive_strength().unwrap_or(1.0);
+            let slot = |info: gltf::texture::Info<'_>| GlbTextureSlot {
+                texture: info.texture().index(),
+                transform: info
+                    .texture_transform()
+                    .map_or(UvTransform::IDENTITY, |transform| {
+                        UvTransform::of(transform.offset(), transform.rotation(), transform.scale())
+                    }),
+            };
             GlbMaterial {
                 base_color: pbr.base_color_factor(),
-                base_color_texture: pbr.base_color_texture().map(|info| info.texture().index()),
+                base_color_texture: pbr.base_color_texture().map(slot),
                 metallic: pbr.metallic_factor(),
                 roughness: pbr.roughness_factor(),
                 emissive: material.emissive_factor().map(|value| value * strength),
+                emissive_texture: material.emissive_texture().map(slot),
+                normal_texture: material.normal_texture().map(|normal| {
+                    let transform = UvTransform::from_extension(
+                        normal.extension_value("KHR_texture_transform"),
+                    );
+                    (
+                        GlbTextureSlot {
+                            texture: normal.texture().index(),
+                            transform,
+                        },
+                        normal.scale(),
+                    )
+                }),
+                occlusion_texture: material.occlusion_texture().map(|occlusion| {
+                    let transform = UvTransform::from_extension(
+                        occlusion.extension_value("KHR_texture_transform"),
+                    );
+                    (
+                        GlbTextureSlot {
+                            texture: occlusion.texture().index(),
+                            transform,
+                        },
+                        occlusion.strength(),
+                    )
+                }),
                 alpha: match material.alpha_mode() {
                     gltf::material::AlphaMode::Opaque => GlbAlpha::Opaque,
                     gltf::material::AlphaMode::Mask => {
@@ -489,7 +584,13 @@ mod tests {
         let png = crate::resources::encode_png(8, 8, &rgba).unwrap();
         for (bytes, mime) in [(&jpeg, "image/jpeg"), (&png, "image/png")] {
             let model = decode(&textured_glb(bytes, mime)).unwrap();
-            assert_eq!(model.materials[0].base_color_texture, Some(0));
+            assert_eq!(
+                model.materials[0].base_color_texture,
+                Some(GlbTextureSlot {
+                    texture: 0,
+                    transform: UvTransform::IDENTITY
+                })
+            );
             let image = model.textures[0]
                 .image
                 .as_ref()
@@ -503,6 +604,24 @@ mod tests {
                 assert_eq!(pixel[3], 255);
             }
         }
+    }
+
+    #[test]
+    fn texture_transforms_scale_then_rotate_counter_clockwise_then_offset() {
+        let transform = UvTransform::of([0.5, 0.25], std::f32::consts::FRAC_PI_2, [2.0, 3.0]);
+        // +u, scaled to 2, turns counter-clockwise in the image: up, -v.
+        let [u, v] = transform.apply([1.0, 0.0]);
+        assert!(
+            (u - 0.5).abs() < 1e-6 && (v - (0.25 - 2.0)).abs() < 1e-6,
+            "{u} {v}"
+        );
+        // +v (down the image), scaled to 3, turns to +u.
+        let [u, v] = transform.apply([0.0, 1.0]);
+        assert!((u - 3.5).abs() < 1e-6 && (v - 0.25).abs() < 1e-6, "{u} {v}");
+        assert_eq!(
+            UvTransform::of([0.0, 0.0], 0.0, [1.0, 1.0]),
+            UvTransform::IDENTITY
+        );
     }
 
     fn channel(interpolation: Interp, values: Vec<f32>) -> Channel {

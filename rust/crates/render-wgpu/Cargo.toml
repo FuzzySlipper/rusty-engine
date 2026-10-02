@@ -17,7 +17,7 @@ glam.workspace = true
 png.workspace = true
 jpeg-decoder = { version = "0.3.2", default-features = false }
 # Animated mesh GLBs (the runtime admits them; this crate only reads them).
-gltf.workspace = true
+gltf = { workspace = true, features = ["extensions"] }
 bytemuck.workspace = true
 pollster.workspace = true
 # Billboard labels (#8827): glyph rasterizing and WOFF2 font decoding.
@@ -38,6 +38,7 @@ render-projection.workspace = true
 engine-spatial.workspace = true
 # Animated fixtures: GLBs admitted exactly as the runtime admits them.
 asset-import.workspace = true
+serde_json.workspace = true
 serde.workspace = true
 # Window for the surface presentation example only; the desktop shell owns
 # the real window.

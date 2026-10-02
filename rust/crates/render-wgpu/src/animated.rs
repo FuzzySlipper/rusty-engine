@@ -36,7 +36,7 @@ use render_model::{
 
 use render_presentation::{AnimationControllerProjectionState, AnimationProjectionOp};
 
-use crate::apply::MaterialParams;
+use crate::apply::{MapSlot, MaterialMaps, MaterialParams};
 use crate::glb::{self, GlbAlpha, GlbClip, GlbModel, Path, Trs};
 use crate::pipelines::VERTEX_FLOATS;
 use crate::resources::ResourceSource;
@@ -145,6 +145,8 @@ pub(crate) struct AnimatedAssetRow {
     /// Retained material id per GLB material.
     materials: Vec<String>,
     textures: Vec<String>,
+    /// Linear copies of the textures normal and occlusion maps read.
+    linear_textures: Vec<String>,
     /// Engine slot to GLB material index.
     slots: BTreeMap<u16, usize>,
     /// Joint (bone) names that resolve to exactly one node.
@@ -402,13 +404,80 @@ impl Renderer {
             };
             self.tables.textures.insert(id.clone(), uploaded);
         }
+        // Normal and occlusion maps hold data, not colour: they read linear
+        // copies of their images. A slot whose image did not decode is absent.
+        let mut linear_textures = HashMap::new();
+        for material in &model.materials {
+            let data = [
+                material.normal_texture.map(|(slot, _)| slot),
+                material.occlusion_texture.map(|(slot, _)| slot),
+            ];
+            for slot in data.into_iter().flatten() {
+                let (Some(texture), false) = (
+                    model.textures.get(slot.texture),
+                    linear_textures.contains_key(&slot.texture),
+                ) else {
+                    continue;
+                };
+                let Some(image) = &texture.image else {
+                    continue;
+                };
+                let id = format!("{label}#texture/{}#linear", slot.texture);
+                let uploaded = crate::apply::upload_rgba_texture(
+                    &self.gpu,
+                    &id,
+                    image.width,
+                    image.height,
+                    &image.rgba,
+                    false,
+                    texture.nearest,
+                    texture.repeat,
+                );
+                self.tables.textures.insert(id.clone(), uploaded);
+                linear_textures.insert(slot.texture, id);
+            }
+        }
+        let decoded = |slot: &glb::GlbTextureSlot| {
+            model
+                .textures
+                .get(slot.texture)
+                .is_some_and(|texture| texture.image.is_some())
+        };
         let materials: Vec<String> = (0..model.materials.len())
             .map(|index| format!("{label}#material/{index}"))
             .collect();
         for (id, material) in materials.iter().zip(&model.materials) {
             let texture = material
                 .base_color_texture
-                .map(|index| textures[index].clone());
+                .map(|slot| textures[slot.texture].clone());
+            let maps = MaterialMaps {
+                base: material.base_color_texture.map(|slot| slot.transform),
+                emissive: material
+                    .emissive_texture
+                    .filter(|slot| decoded(slot))
+                    .map(|slot| MapSlot {
+                        texture: textures[slot.texture].clone(),
+                        transform: slot.transform,
+                    }),
+                normal: material.normal_texture.and_then(|(slot, scale)| {
+                    Some((
+                        MapSlot {
+                            texture: linear_textures.get(&slot.texture)?.clone(),
+                            transform: slot.transform,
+                        },
+                        scale,
+                    ))
+                }),
+                occlusion: material.occlusion_texture.and_then(|(slot, strength)| {
+                    Some((
+                        MapSlot {
+                            texture: linear_textures.get(&slot.texture)?.clone(),
+                            transform: slot.transform,
+                        },
+                        strength,
+                    ))
+                }),
+            };
             let descriptor = RenderMaterialDescriptor {
                 id: id.clone(),
                 color: material.base_color,
@@ -426,8 +495,9 @@ impl Renderer {
                 double_sided: material.double_sided,
                 voxel_surface: None,
             };
-            self.define_material_with(descriptor, material.metallic, material.unlit);
+            self.define_material_with(descriptor, material.metallic, material.unlit, maps);
         }
+        let linear_textures = linear_textures.into_values().collect();
 
         let mut rigid = HashMap::new();
         for (mesh_index, primitives) in model.meshes.iter().enumerate() {
@@ -472,6 +542,7 @@ impl Renderer {
                 rigid,
                 materials,
                 textures,
+                linear_textures,
                 slots,
                 joints,
             },
@@ -512,7 +583,7 @@ impl Renderer {
                     self.tables.materials.remove(id);
                 }
             }
-            for id in row.textures {
+            for id in row.textures.into_iter().chain(row.linear_textures) {
                 self.tables.textures.remove(&id);
             }
         }
@@ -1200,7 +1271,8 @@ impl Renderer {
                 let mut descriptor = row.descriptor.clone();
                 descriptor.id = matte_id;
                 descriptor.roughness = 1.0;
-                self.define_material_with(descriptor, 0.0, false);
+                let maps = row.maps.clone();
+                self.define_material_with(descriptor, 0.0, false, maps);
             }
         }
         parts
@@ -1254,12 +1326,14 @@ impl Renderer {
         self.tables.animated.remove(&handle);
     }
 
-    /// Material with GLB extras: metalness and the unlit extension.
+    /// Material with GLB extras: metalness, the unlit extension and the
+    /// emissive, normal and occlusion maps.
     pub(crate) fn define_material_with(
         &mut self,
         descriptor: RenderMaterialDescriptor,
         metalness: f32,
         unlit: bool,
+        maps: MaterialMaps,
     ) {
         let texture = descriptor
             .texture
@@ -1267,6 +1341,7 @@ impl Renderer {
             .and_then(|id| self.tables.textures.get(id));
         let mut params = MaterialParams::of(&descriptor, texture.map(|texture| texture.size));
         params.metalness = metalness;
+        params.maps = maps;
         if unlit {
             params.flags |= crate::apply::FLAG_UNLIT;
         }

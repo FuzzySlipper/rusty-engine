@@ -12,6 +12,7 @@ use render_model::{
 };
 use wgpu::util::DeviceExt;
 
+use crate::glb::UvTransform;
 use crate::pipelines::VERTEX_FLOATS;
 use crate::resources::{self, ResourceSource};
 use crate::tables::{
@@ -32,9 +33,12 @@ pub struct ApplyIssue {
 pub(crate) const FLAG_UNLIT: u32 = 1;
 const FLAG_MASK: u32 = 2;
 const FLAG_VOXEL_SURFACE: u32 = 4;
-/// `MaterialUniform` size: roughness, cutoff, flags, metalness, then the
-/// voxel surface's tile scale, tile origin, and sample rect.
-const MATERIAL_UNIFORM_BYTES: usize = 48;
+const FLAG_NORMAL_MAP: u32 = 8;
+/// `MaterialUniform` size: roughness, cutoff, flags, metalness; the voxel
+/// surface's tile scale, tile origin and sample rect; the base, emissive,
+/// normal and occlusion uv transforms (two rows each); the normal scale and
+/// occlusion strength.
+const MATERIAL_UNIFORM_BYTES: usize = 192;
 /// Payload groups without a voxel material are fully rough.
 const FALLBACK_ROUGHNESS: f32 = 1.0;
 /// Prefix of the retained materials payload mesh groups bind by slot.
@@ -839,6 +843,7 @@ impl Renderer {
             MaterialRow {
                 descriptor,
                 bind_group,
+                maps: params.maps.clone(),
             },
         );
         // Parts bound to this material carry its colour and emission in their
@@ -860,18 +865,44 @@ impl Renderer {
         }
     }
 
+    /// A material's bind group, its maps resolved to retained textures. A map
+    /// whose texture is not retained binds white: no emission mask, no
+    /// occlusion, and (cleared) no normal map.
     pub(crate) fn material_bind_group(
         &self,
         label: &str,
         params: &MaterialParams,
         texture: &GpuTexture,
     ) -> wgpu::BindGroup {
+        let lookup =
+            |slot: Option<&MapSlot>| slot.and_then(|map| self.tables.textures.get(&map.texture));
+        let normal = lookup(params.maps.normal.as_ref().map(|(map, _)| map));
+        let resolved;
+        let params = if params.maps.normal.is_some() && normal.is_none() {
+            resolved = MaterialParams {
+                maps: MaterialMaps {
+                    normal: None,
+                    ..params.maps.clone()
+                },
+                voxel_surface: params.voxel_surface,
+                ..*params
+            };
+            &resolved
+        } else {
+            params
+        };
         material_bind_group(
             &self.gpu.device,
             &self.layouts.material,
             label,
             params,
             texture,
+            &MapTextures {
+                emissive: lookup(params.maps.emissive.as_ref()).unwrap_or(&self.white),
+                normal: normal.unwrap_or(&self.white),
+                occlusion: lookup(params.maps.occlusion.as_ref().map(|(map, _)| map))
+                    .unwrap_or(&self.white),
+            },
         )
     }
 
@@ -1055,6 +1086,28 @@ pub(crate) struct MaterialParams {
     /// Metalness 0 for Engine materials; GLB materials carry their own.
     pub metalness: f32,
     pub voxel_surface: Option<VoxelSurfaceUniform>,
+    pub maps: MaterialMaps,
+}
+
+/// A GLB material's texture maps beyond its base colour, and each slot's uv
+/// transform. Engine materials have none.
+#[derive(Clone, Default)]
+pub(crate) struct MaterialMaps {
+    pub base: Option<UvTransform>,
+    /// Multiplies the part's emission.
+    pub emissive: Option<MapSlot>,
+    /// With the normal scale.
+    pub normal: Option<(MapSlot, f32)>,
+    /// With the occlusion strength.
+    pub occlusion: Option<(MapSlot, f32)>,
+}
+
+/// A map's retained texture (linear for normal and occlusion data) and uv
+/// transform.
+#[derive(Clone)]
+pub(crate) struct MapSlot {
+    pub texture: String,
+    pub transform: UvTransform,
 }
 
 impl MaterialParams {
@@ -1083,6 +1136,7 @@ impl MaterialParams {
                 | voxel_surface.map_or(0, |_| FLAG_VOXEL_SURFACE),
             metalness: 0.0,
             voxel_surface,
+            maps: MaterialMaps::default(),
         }
     }
 }
@@ -1095,17 +1149,30 @@ pub(crate) fn blends(descriptor: &RenderMaterialDescriptor) -> bool {
     }
 }
 
+/// The textures a material binds after its albedo: emissive, normal and
+/// occlusion maps (white where the material has none).
+pub(crate) struct MapTextures<'a> {
+    pub emissive: &'a GpuTexture,
+    pub normal: &'a GpuTexture,
+    pub occlusion: &'a GpuTexture,
+}
+
 pub(crate) fn material_bind_group(
     device: &wgpu::Device,
     layout: &wgpu::BindGroupLayout,
     label: &str,
     params: &MaterialParams,
     texture: &GpuTexture,
+    maps: &MapTextures<'_>,
 ) -> wgpu::BindGroup {
     let mut floats = [0f32; MATERIAL_UNIFORM_BYTES / 4];
+    let mut flags = params.flags;
+    if params.maps.normal.is_some() {
+        flags |= FLAG_NORMAL_MAP;
+    }
     floats[0] = params.roughness;
     floats[1] = params.alpha_cutoff;
-    floats[2] = f32::from_bits(params.flags);
+    floats[2] = f32::from_bits(flags);
     floats[3] = params.metalness;
     if let Some(surface) = &params.voxel_surface {
         floats[4..6].copy_from_slice(&surface.tile_scale);
@@ -1113,6 +1180,24 @@ pub(crate) fn material_bind_group(
         floats[8..10].copy_from_slice(&surface.uv_min);
         floats[10..12].copy_from_slice(&surface.uv_max);
     }
+    let transforms = [
+        params.maps.base,
+        params.maps.emissive.as_ref().map(|map| map.transform),
+        params.maps.normal.as_ref().map(|(map, _)| map.transform),
+        params.maps.occlusion.as_ref().map(|(map, _)| map.transform),
+    ];
+    for (slot, transform) in transforms.into_iter().enumerate() {
+        let [a, b, c, d, e, f] = transform.unwrap_or(UvTransform::IDENTITY).0;
+        let start = 12 + slot * 8;
+        floats[start..start + 3].copy_from_slice(&[a, b, c]);
+        floats[start + 4..start + 7].copy_from_slice(&[d, e, f]);
+    }
+    floats[44] = params.maps.normal.as_ref().map_or(1.0, |(_, scale)| *scale);
+    floats[45] = params
+        .maps
+        .occlusion
+        .as_ref()
+        .map_or(0.0, |(_, strength)| *strength);
     let uniform: &[u8] = bytemuck::cast_slice(&floats);
     let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some(label),
@@ -1135,6 +1220,30 @@ pub(crate) fn material_bind_group(
                 binding: 2,
                 resource: wgpu::BindingResource::Sampler(&texture.sampler),
             },
+            wgpu::BindGroupEntry {
+                binding: 3,
+                resource: wgpu::BindingResource::TextureView(&maps.emissive.view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 4,
+                resource: wgpu::BindingResource::Sampler(&maps.emissive.sampler),
+            },
+            wgpu::BindGroupEntry {
+                binding: 5,
+                resource: wgpu::BindingResource::TextureView(&maps.normal.view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 6,
+                resource: wgpu::BindingResource::Sampler(&maps.normal.sampler),
+            },
+            wgpu::BindGroupEntry {
+                binding: 7,
+                resource: wgpu::BindingResource::TextureView(&maps.occlusion.view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 8,
+                resource: wgpu::BindingResource::Sampler(&maps.occlusion.sampler),
+            },
         ],
     })
 }
@@ -1156,8 +1265,14 @@ pub(crate) fn builtin_materials(
                 flags: FLAG_UNLIT,
                 metalness: 0.0,
                 voxel_surface: None,
+                maps: MaterialMaps::default(),
             },
             white,
+            &MapTextures {
+                emissive: white,
+                normal: white,
+                occlusion: white,
+            },
         ),
         material_bind_group(
             device,
@@ -1169,8 +1284,14 @@ pub(crate) fn builtin_materials(
                 flags: 0,
                 metalness: 0.0,
                 voxel_surface: None,
+                maps: MaterialMaps::default(),
             },
             white,
+            &MapTextures {
+                emissive: white,
+                normal: white,
+                occlusion: white,
+            },
         ),
     )
 }

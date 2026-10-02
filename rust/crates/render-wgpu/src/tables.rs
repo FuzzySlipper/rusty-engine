@@ -52,6 +52,8 @@ pub(crate) struct GpuTexture {
 pub(crate) struct MaterialRow {
     pub descriptor: RenderMaterialDescriptor,
     pub bind_group: wgpu::BindGroup,
+    /// A GLB material's maps, kept for variants (matte inspection).
+    pub maps: crate::apply::MaterialMaps,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]

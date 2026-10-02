@@ -540,12 +540,24 @@ GLB admission accepts the `EXT_texture_webp`, `KHR_materials_unlit`,
 extensions, including when they are declared required. Optional
 `FB_ngon_encoding` exporter hints over core triangles are accepted; declaring
 that metadata as required is unsupported. Any other extension fails admission
-with an import diagnostic. The renderer draws the base color factor and
-texture, metallic and roughness factors, emissive color with its strength,
-alpha mode and unlit; specular and volume data are admitted but not drawn.
-Textures are drawn with `TEXCOORD_0`. A texture's `texCoord` selection and its
-`KHR_texture_transform` are admitted (a transform may name sets 0 through 3)
-but not applied.
+with an import diagnostic. The renderer draws, for static and skinned GLB
+meshes alike:
+
+- the base color factor and texture;
+- metallic and roughness factors;
+- the emissive color times its strength, masked by the emissive texture;
+- the normal texture with its `scale`, in a tangent frame built per pixel from
+  the texture's uv and the surface position (as glTF viewers do for a mesh
+  without tangents);
+- the occlusion texture with its `strength`, on ambient and hemisphere light
+  only;
+- alpha mode and unlit.
+
+Each texture's `KHR_texture_transform` (offset, rotation, scale) applies to its
+own slot. Specular and volume data are admitted but not drawn. Textures are
+read from `TEXCOORD_0`: a `texCoord` naming another set, a mesh's own
+`TANGENT` attribute, and mirrored uv layouts (whose normal maps need the
+tangent's handedness) are admitted but not applied.
 
 ### Checking a GLB before publishing it
 

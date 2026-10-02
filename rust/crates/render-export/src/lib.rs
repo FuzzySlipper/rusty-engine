@@ -1115,7 +1115,7 @@ impl<'a> Writer<'a> {
             value["extensions"] = json!({ "KHR_materials_unlit": {} });
             self.document.extensions.insert("KHR_materials_unlit");
         }
-        if let Some(texture) = material.base_color_texture {
+        if let Some(texture) = material.base_color_texture.map(|slot| slot.texture) {
             let key = format!("{asset}#texture/{texture}");
             let index = match self.textures.get(&key) {
                 Some(index) => Some(*index),

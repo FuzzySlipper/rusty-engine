@@ -167,7 +167,18 @@ impl Layouts {
         });
         let material = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("render-wgpu material"),
-            entries: &[uniform_entry(0), texture_entry(1), sampler_entry(2)],
+            // Uniform, albedo; then emissive, normal and occlusion maps.
+            entries: &[
+                uniform_entry(0),
+                texture_entry(1),
+                sampler_entry(2),
+                texture_entry(3),
+                sampler_entry(4),
+                texture_entry(5),
+                sampler_entry(6),
+                texture_entry(7),
+                sampler_entry(8),
+            ],
         });
         let sky = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("render-wgpu sky"),
