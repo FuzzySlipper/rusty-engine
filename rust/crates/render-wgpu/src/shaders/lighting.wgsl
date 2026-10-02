@@ -72,9 +72,20 @@ fn shadow_visibility(layer: u32, position: vec3<f32>) -> f32 {
     return lit / 9.0;
 }
 
+// Specular reflectance of a uniform environment: Karis' analytic fit of the
+// split-sum environment BRDF (no lookup texture).
+fn environment_brdf(f0: vec3<f32>, roughness: f32, n_dot_v: f32) -> vec3<f32> {
+    let r = roughness * vec4<f32>(-1.0, -0.0275, -0.572, 0.022) + vec4<f32>(1.0, 0.0425, 1.04, -0.04);
+    let a004 = min(r.x * r.x, exp2(-9.28 * n_dot_v)) * r.x + r.y;
+    let ab = vec2<f32>(-1.04, 1.04) * a004 + r.zw;
+    return f0 * ab.x + ab.y;
+}
+
 // Diffuse plus GGX specular from every light row of the pass, before
 // emission. `occlusion` scales the ambient and hemisphere (indirect) light
-// only; metals tint specular and lose diffuse.
+// only. Metals tint specular and lose diffuse; they reflect ambient and
+// hemisphere light as a uniform environment (the hemisphere along the
+// reflection), while dielectrics take that light as diffuse only.
 fn standard_radiance(
     albedo: vec3<f32>,
     normal: vec3<f32>,
@@ -87,14 +98,19 @@ fn standard_radiance(
     let view = normalize(frame.camera.xyz - world_position);
     var irradiance = vec3<f32>(0.0);
     var specular = vec3<f32>(0.0);
+    // Ambient and hemisphere light seen along the reflection.
+    var environment = vec3<f32>(0.0);
+    let reflected = reflect(-view, normal);
     for (var index = frame.counts.y; index < frame.counts.y + frame.counts.x; index = index + 1u) {
         let light = lights[index];
         let kind = u32(light.color_kind.w);
         let color = light.color_kind.rgb;
         if kind == 0u {
             irradiance += color * occlusion;
+            environment += color * occlusion;
         } else if kind == 1u {
             irradiance += mix(light.extra.rgb, color, 0.5 * normal.y + 0.5) * occlusion;
+            environment += mix(light.extra.rgb, color, 0.5 * reflected.y + 0.5) * occlusion;
         } else {
             var direction = -normalize(light.direction_decay.xyz);
             var attenuation = 1.0;
@@ -121,5 +137,7 @@ fn standard_radiance(
             specular += incident * brdf_ggx(direction, view, normal, roughness, f0);
         }
     }
-    return albedo * (1.0 - metalness) * irradiance / PI + specular;
+    let n_dot_v = clamp(dot(normal, view), 0.0, 1.0);
+    let reflection = metalness * environment * environment_brdf(f0, roughness, n_dot_v);
+    return albedo * (1.0 - metalness) * irradiance / PI + specular + reflection;
 }

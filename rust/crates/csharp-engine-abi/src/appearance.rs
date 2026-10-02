@@ -561,6 +561,8 @@ pub struct NativeMaterialRequest {
     pub double_sided: bool,
     pub alpha_mode: NativeMaterialAlphaMode,
     pub alpha_cutoff: f32,
+    /// 0 (dielectric) to 1 (metal).
+    pub metalness: f32,
 }
 
 /// Projects one admitted authored material through Engine-owned catalog and

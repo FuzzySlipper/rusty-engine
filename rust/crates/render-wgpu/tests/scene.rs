@@ -772,3 +772,83 @@ fn materials_share_a_pipeline_per_feature_set_made_when_the_material_is_defined(
         (5, 3, 0)
     );
 }
+
+#[test]
+fn metal_materials_lose_their_diffuse_and_tint_their_specular() {
+    let mut harness = Harness::new(RendererOptions {
+        default_world_lights: false,
+        ..RendererOptions::default()
+    });
+    let gold = [1.0, 0.75, 0.3, 1.0];
+    let mut ops = vec![
+        RenderDiff::SetBackgroundColor {
+            color: [0.1, 0.1, 0.12, 1.0],
+        },
+        RenderDiff::CreateLight {
+            handle: RenderHandle::new(90),
+            parent: None,
+            light: LightDescriptor::Directional {
+                color: [1.0, 1.0, 1.0],
+                intensity: 3.0,
+                enabled: true,
+                direction: [0.4, -0.6, -1.0],
+                shadow_intent: LightShadowIntent::Disabled,
+            },
+        },
+        RenderDiff::CreateLight {
+            handle: RenderHandle::new(91),
+            parent: None,
+            light: LightDescriptor::Ambient {
+                color: [0.6, 0.7, 0.9],
+                intensity: 0.8,
+                enabled: true,
+                shadow_intent: LightShadowIntent::Disabled,
+            },
+        },
+    ];
+    for (index, metalness) in [0.0, 1.0].into_iter().enumerate() {
+        let id = format!("material/gold-{index}");
+        let mesh = format!("mesh/gold-{index}");
+        ops.push(RenderDiff::DefineMaterial {
+            material: RenderMaterialDescriptor {
+                metalness,
+                roughness: 0.35,
+                ..material(&id, gold, None)
+            },
+        });
+        ops.push(static_mesh(
+            &mesh,
+            box_mesh([-0.6, -0.6, -0.6], [0.6, 0.6, 0.6], |_| 0),
+            &id,
+        ));
+        let x = if index == 0 { -0.9 } else { 0.9 };
+        ops.push(instance(
+            index as u64 + 1,
+            None,
+            &mesh,
+            transform([x, 0.0, -4.0], 35.0, [1.0; 3]),
+        ));
+    }
+    harness.apply(ops);
+    let (_, rgba) = harness.render(&camera([0.0, 0.0, 0.0], 0.0, 0.0));
+    assert_screenshot("metalness", &rgba);
+
+    // The two boxes' front faces: the metal one has no diffuse. Away from
+    // the sun's highlight it shows the ambient light reflected and tinted
+    // gold, darker here than the dielectric's diffuse.
+    let at = |x: usize| {
+        let offset = (HEIGHT as usize / 2 * WIDTH as usize + x) * 4;
+        [rgba[offset], rgba[offset + 1], rgba[offset + 2]].map(f32::from)
+    };
+    let quarter = WIDTH as usize / 4;
+    let (dielectric, metal) = (at(quarter + 20), at(3 * quarter - 10));
+    let luminance = |c: [f32; 3]| 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+    assert!(
+        luminance(metal) < luminance(dielectric),
+        "metal {metal:?} dielectric {dielectric:?}"
+    );
+    assert!(
+        metal[0] > metal[2],
+        "metal reflection keeps the gold tint: {metal:?}"
+    );
+}

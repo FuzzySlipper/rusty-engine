@@ -1187,6 +1187,7 @@ mod tests {
                         color,
                         texture: NativeRenderResourceReference::default(),
                         roughness: 1.0,
+                        metalness: 0.0,
                         texture_tint: NativeColor {
                             r: 1.0,
                             g: 1.0,
@@ -2104,6 +2105,7 @@ mod tests {
                             value: resource.handle.value,
                         },
                         roughness: 1.0,
+                        metalness: 0.0,
                         texture_tint: NativeColor {
                             r: 1.0,
                             g: 1.0,

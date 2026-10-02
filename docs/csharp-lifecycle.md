@@ -187,7 +187,9 @@ than treating each input sample as a mouse displacement.
 
 ### Runtime-generated geometry
 
-Ordinary `MaterialRequest` exposes opaque, mask/cutoff, and blend alpha modes.
+Ordinary `MaterialRequest` exposes opaque, mask/cutoff, and blend alpha modes,
+and `Metalness` from 0 (the default, dielectric) to 1 (metal; see
+[the standard shader](lighting-and-sky.md#the-standard-shader)).
 Sprite requests accept a `SpriteMaterialDescriptor` for lighting, normal/depth
 maps, alpha, and shadow policy. Sprites and atlases keep the sampler selected
 when their texture was opened; the short constructors select opaque mesh and

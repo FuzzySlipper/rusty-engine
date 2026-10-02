@@ -131,6 +131,7 @@ fn material() -> RenderMaterialDescriptor {
         color: [0.45, 0.7, 0.35, 1.0],
         texture: None,
         roughness: 1.0,
+        metalness: 0.0,
         texture_tint: [1.0; 4],
         emission_color: [0.0; 3],
         emission_intensity: 0.0,

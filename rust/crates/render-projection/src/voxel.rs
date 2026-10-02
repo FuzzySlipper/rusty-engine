@@ -737,6 +737,7 @@ mod tests {
             color: [0.4, 0.5, 0.6, 1.0],
             texture: None,
             roughness: 1.0,
+            metalness: 0.0,
             texture_tint: [1.0; 4],
             emission_color: [0.0; 3],
             emission_intensity: 0.0,

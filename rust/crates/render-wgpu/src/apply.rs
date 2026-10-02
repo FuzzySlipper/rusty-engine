@@ -1115,7 +1115,6 @@ pub(crate) struct MaterialParams {
     /// Alpha-masked below this cutoff.
     pub alpha_cutoff: Option<f32>,
     pub unlit: bool,
-    /// Metalness 0 for Engine materials; GLB materials carry their own.
     pub metalness: f32,
     pub voxel_surface: Option<VoxelSurfaceUniform>,
     pub maps: MaterialMaps,
@@ -1165,7 +1164,7 @@ impl MaterialParams {
             roughness: descriptor.roughness,
             alpha_cutoff: cutoff,
             unlit: false,
-            metalness: 0.0,
+            metalness: descriptor.metalness,
             voxel_surface,
             maps: MaterialMaps::default(),
         }

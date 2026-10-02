@@ -5,6 +5,7 @@ namespace Rusty.Engine;
 
 public readonly partial record struct MaterialRequest
 {
+    /// <summary>An opaque dielectric material.</summary>
     public MaterialRequest(
         Color color,
         RenderResourceReference texture,
@@ -22,7 +23,33 @@ public readonly partial record struct MaterialRequest
             emissionIntensity,
             doubleSided,
             MaterialAlphaMode.Opaque,
-            0.5f)
+            0.5f,
+            0)
+    {
+    }
+
+    /// <summary>A dielectric material (metalness 0).</summary>
+    public MaterialRequest(
+        Color color,
+        RenderResourceReference texture,
+        float roughness,
+        Color textureTint,
+        Vector3 emissionColor,
+        float emissionIntensity,
+        bool doubleSided,
+        MaterialAlphaMode alphaMode,
+        float alphaCutoff)
+        : this(
+            color,
+            texture,
+            roughness,
+            textureTint,
+            emissionColor,
+            emissionIntensity,
+            doubleSided,
+            alphaMode,
+            alphaCutoff,
+            0)
     {
     }
 }

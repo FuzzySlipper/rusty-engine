@@ -382,6 +382,10 @@ pub struct RenderMaterialDescriptor {
     pub color: [f32; 4],
     pub texture: Option<String>,
     pub roughness: f32,
+    /// 0 for dielectrics; 1 for metals, whose specular takes the base colour
+    /// and which lose their diffuse.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub metalness: f32,
     pub texture_tint: [f32; 4],
     pub emission_color: [f32; 3],
     pub emission_intensity: f32,
@@ -401,6 +405,10 @@ fn is_false(value: &bool) -> bool {
     !*value
 }
 
+fn is_zero(value: &f32) -> bool {
+    *value == 0.0
+}
+
 impl RenderMaterialDescriptor {
     pub fn validate(&self) -> Result<(), MaterialDescriptorError> {
         validate_asset_id(&self.id, RenderAssetKind::Material)
@@ -417,6 +425,9 @@ impl RenderMaterialDescriptor {
         }
         if !self.roughness.is_finite() || !(0.0..=1.0).contains(&self.roughness) {
             return Err(MaterialDescriptorError::InvalidRoughness);
+        }
+        if !self.metalness.is_finite() || !(0.0..=1.0).contains(&self.metalness) {
+            return Err(MaterialDescriptorError::InvalidMetalness);
         }
         if !valid_color(self.emission_color)
             || !self.emission_intensity.is_finite()
@@ -447,6 +458,7 @@ pub enum MaterialDescriptorError {
     InvalidTextureReference,
     InvalidColor,
     InvalidRoughness,
+    InvalidMetalness,
     InvalidEmission,
     InvalidAlphaCutoff,
     InvalidVoxelSurface(VoxelSurfaceDescriptorError),
@@ -1441,6 +1453,7 @@ mod tests {
             color: [1.0; 4],
             texture: Some("texture/voxel-surfaces".to_string()),
             roughness: 1.0,
+            metalness: 0.0,
             texture_tint: [1.0; 4],
             emission_color: [0.0; 3],
             emission_intensity: 0.0,
@@ -1487,6 +1500,7 @@ mod tests {
             color: [1.0; 4],
             texture: None,
             roughness: 1.0,
+            metalness: 0.0,
             texture_tint: [1.0; 4],
             emission_color: [0.0; 3],
             emission_intensity: 0.0,

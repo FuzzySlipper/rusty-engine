@@ -18,8 +18,14 @@ its surroundings. Updating or disabling that light changes the same retained lig
 Retained meshes, voxel surfaces and GLB parts all draw with the Engine's
 standard shader: metallic-roughness lighting (Lambert diffuse plus GGX
 specular) from the scene's lights and requested shadows, in linear light,
-then finished by the product's exposure, tone mapping and fog (below). A
-material compiles only the features its contents use:
+then finished by the product's exposure, tone mapping and fog (below).
+`MaterialRequest.Metalness` (and a GLB's metallic factor) runs from 0, a
+dielectric, to 1, a metal. A metal has no diffuse; its specular takes the base
+colour, and it reflects ambient light (and a hemisphere light along the
+reflection) as a uniform environment, so its look depends on those lights.
+Dielectrics take ambient light as diffuse only. There is no sky or
+environment-map reflection. A material compiles only the features its contents
+use:
 
 | Feature | A material has it when |
 | --- | --- |

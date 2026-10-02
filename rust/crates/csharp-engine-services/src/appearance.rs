@@ -8783,6 +8783,7 @@ fn render_material(id: String, color: NativeColor) -> RenderMaterialDescriptor {
         color: native_color(color),
         texture: None,
         roughness: 1.0,
+        metalness: 0.0,
         texture_tint: [1.0; 4],
         emission_color: [0.0; 3],
         emission_intensity: 0.0,
@@ -8910,6 +8911,7 @@ fn material_descriptor(
         color: native_color(request.color),
         texture,
         roughness: request.roughness,
+        metalness: request.metalness,
         texture_tint: native_color(request.texture_tint),
         emission_color: native_vec3_array(request.emission_color),
         emission_intensity: request.emission_intensity,
@@ -9607,6 +9609,7 @@ pub(super) mod tests {
                 double_sided: true,
                 alpha_mode: NativeMaterialAlphaMode::Mask,
                 alpha_cutoff: 0.4,
+                metalness: 0.0,
             })
             .unwrap();
         let positions = [
@@ -9801,6 +9804,7 @@ pub(super) mod tests {
                 double_sided: true,
                 alpha_mode: NativeMaterialAlphaMode::Mask,
                 alpha_cutoff: 0.4,
+                metalness: 0.0,
             })
             .unwrap();
         let mut positions = [
@@ -10295,6 +10299,7 @@ pub(super) mod tests {
             double_sided: false,
             alpha_mode: NativeMaterialAlphaMode::Opaque,
             alpha_cutoff: 0.5,
+            metalness: 0.0,
         };
         let original = bridge.create_material(request).expect("material");
         let replacement = bridge
@@ -10320,6 +10325,42 @@ pub(super) mod tests {
             .expect_err("an unknown texture is refused");
         let state = &bridge.staged_ref().unwrap().state;
         assert!(state.materials.contains_key(&replacement.value));
+    }
+
+    #[test]
+    fn material_metalness_reaches_the_descriptor_and_out_of_range_is_refused() {
+        let color = NativeColor {
+            r: 1.0,
+            g: 0.75,
+            b: 0.3,
+            a: 1.0,
+        };
+        let metal = NativeMaterialRequest {
+            color,
+            texture: NativeRenderResourceReference { value: 0 },
+            roughness: 0.35,
+            texture_tint: color,
+            emission_color: NativeVec3::default(),
+            emission_intensity: 0.0,
+            double_sided: false,
+            alpha_mode: NativeMaterialAlphaMode::Opaque,
+            alpha_cutoff: 0.5,
+            metalness: 1.0,
+        };
+        let resources = RenderResourceRegistry::default();
+        let descriptor = material_descriptor("material/metal".to_owned(), metal, &resources)
+            .expect("metal material");
+        assert_eq!(descriptor.metalness, 1.0);
+        let error = material_descriptor(
+            "material/over".to_owned(),
+            NativeMaterialRequest {
+                metalness: 1.5,
+                ..metal
+            },
+            &resources,
+        )
+        .unwrap_err();
+        assert_eq!(error.code(), "CSHARP_MATERIAL");
     }
 
     #[test]
@@ -10424,6 +10465,7 @@ pub(super) mod tests {
                         value: resource.handle.value,
                     },
                     roughness: 1.0,
+                    metalness: 0.0,
                     texture_tint: NativeColor {
                         r: 1.0,
                         g: 1.0,
@@ -10639,6 +10681,7 @@ pub(super) mod tests {
                     value: first.handle.value,
                 },
                 roughness: 1.0,
+                metalness: 0.0,
                 texture_tint: NativeColor {
                     r: 1.0,
                     g: 1.0,
@@ -11381,6 +11424,7 @@ pub(super) mod tests {
                 },
                 texture: NativeRenderResourceReference { value: 0 },
                 roughness: 0.5,
+                metalness: 0.0,
                 texture_tint: NativeColor {
                     r: 1.0,
                     g: 1.0,

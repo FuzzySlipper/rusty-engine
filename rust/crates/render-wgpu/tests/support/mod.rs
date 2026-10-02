@@ -260,6 +260,7 @@ pub fn material(id: &str, color: [f32; 4], texture: Option<&str>) -> RenderMater
         color,
         texture: texture.map(str::to_owned),
         roughness: 0.9,
+        metalness: 0.0,
         texture_tint: [1.0; 4],
         emission_color: [0.0; 3],
         emission_intensity: 0.0,

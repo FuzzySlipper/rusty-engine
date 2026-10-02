@@ -483,6 +483,7 @@ impl Renderer {
                 color: material.base_color,
                 texture,
                 roughness: material.roughness,
+                metalness: material.metallic,
                 texture_tint: [1.0; 4],
                 emission_color: material.emissive,
                 emission_intensity: 1.0,
@@ -495,7 +496,7 @@ impl Renderer {
                 double_sided: material.double_sided,
                 voxel_surface: None,
             };
-            self.define_material_with(descriptor, material.metallic, material.unlit, maps);
+            self.define_material_with(descriptor, material.unlit, maps);
         }
         let linear_textures = linear_textures.into_values().collect();
 
@@ -1271,8 +1272,9 @@ impl Renderer {
                 let mut descriptor = row.descriptor.clone();
                 descriptor.id = matte_id;
                 descriptor.roughness = 1.0;
+                descriptor.metalness = 0.0;
                 let maps = row.maps.clone();
-                self.define_material_with(descriptor, 0.0, false, maps);
+                self.define_material_with(descriptor, false, maps);
             }
         }
         parts
@@ -1326,12 +1328,11 @@ impl Renderer {
         self.tables.animated.remove(&handle);
     }
 
-    /// Material with GLB extras: metalness, the unlit extension and the
-    /// emissive, normal and occlusion maps.
+    /// Material with GLB extras: the unlit extension and the emissive,
+    /// normal and occlusion maps.
     pub(crate) fn define_material_with(
         &mut self,
         descriptor: RenderMaterialDescriptor,
-        metalness: f32,
         unlit: bool,
         maps: MaterialMaps,
     ) {
@@ -1340,7 +1341,6 @@ impl Renderer {
             .as_ref()
             .and_then(|id| self.tables.textures.get(id));
         let mut params = MaterialParams::of(&descriptor, texture.map(|texture| texture.size));
-        params.metalness = metalness;
         params.maps = maps;
         params.unlit = unlit;
         self.insert_material(descriptor, &params);

@@ -61,6 +61,7 @@ pub fn project_catalog_material(
         color: rgba(entry.1.style.color),
         texture,
         roughness: entry.1.style.roughness,
+        metalness: 0.0,
         texture_tint: rgba(entry.1.style.texture_tint),
         emission_color: [
             entry.1.style.emission_color.r,

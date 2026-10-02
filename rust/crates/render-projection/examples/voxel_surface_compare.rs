@@ -297,6 +297,7 @@ fn materials(
                 color,
                 texture: texture.map(|descriptor| descriptor.id.clone()),
                 roughness: 0.85,
+                metalness: 0.0,
                 texture_tint: [1.0; 4],
                 emission_color: [0.0; 3],
                 emission_intensity: 0.0,
