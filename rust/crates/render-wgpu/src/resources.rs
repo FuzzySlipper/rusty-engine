@@ -104,56 +104,82 @@ pub(crate) fn decode_jpeg(bytes: &[u8]) -> Result<DecodedImage, String> {
 /// linear light for sRGB images. Returns the level count and the pixels of
 /// all levels, base first, as one texture upload expects them.
 pub(crate) fn mip_chain(width: u32, height: u32, rgba: &[u8], srgb: bool) -> (u32, Vec<u8>) {
-    let to_linear: [f32; 256] = std::array::from_fn(|value| {
-        let c = value as f32 / 255.0;
-        if !srgb {
-            c
-        } else if c <= 0.04045 {
-            c / 12.92
-        } else {
-            ((c + 0.055) / 1.055).powf(2.4)
-        }
-    });
-    let encode = |linear: f32| {
-        let c = if !srgb {
-            linear
-        } else if linear <= 0.0031308 {
-            linear * 12.92
-        } else {
-            1.055 * linear.powf(1.0 / 2.4) - 0.055
-        };
-        (c.clamp(0.0, 1.0) * 255.0 + 0.5) as u8
-    };
+    let tables = srgb.then(srgb_tables);
     let levels = 32 - width.max(height).max(1).leading_zeros();
     let mut all = rgba.to_vec();
     let (mut source, mut w, mut h) = (0usize, width as usize, height as usize);
     for _ in 1..levels {
         let (next_w, next_h) = ((w / 2).max(1), (h / 2).max(1));
         let start = all.len();
-        all.reserve(next_w * next_h * 4);
-        for y in 0..next_h {
-            for x in 0..next_w {
-                let texel = |sx: usize, sy: usize| source + (sy.min(h - 1) * w + sx.min(w - 1)) * 4;
+        all.resize(start + next_w * next_h * 4, 0);
+        let (above, below) = all.split_at_mut(start);
+        let above = &above[source..];
+        let row = |y: usize| &above[y.min(h - 1) * w * 4..][..w * 4];
+        for (y, out) in below.chunks_exact_mut(next_w * 4).enumerate() {
+            let (top, bottom) = (row(2 * y), row(2 * y + 1));
+            for (x, texel) in out.as_chunks_mut::<4>().0.iter_mut().enumerate() {
+                let (left, right) = (2 * x * 4, (2 * x + 1).min(w - 1) * 4);
                 let corners = [
-                    texel(2 * x, 2 * y),
-                    texel(2 * x + 1, 2 * y),
-                    texel(2 * x, 2 * y + 1),
-                    texel(2 * x + 1, 2 * y + 1),
+                    &top[left..left + 4],
+                    &top[right..right + 4],
+                    &bottom[left..left + 4],
+                    &bottom[right..right + 4],
                 ];
-                for channel in 0..3 {
-                    let sum: f32 = corners
-                        .iter()
-                        .map(|at| to_linear[all[at + channel] as usize])
-                        .sum();
-                    all.push(encode(sum * 0.25));
+                // Colour averages in linear light; alpha as stored.
+                let channels = match tables {
+                    Some(_) => 3,
+                    None => 0,
+                };
+                if let Some((decode, encode)) = tables {
+                    for channel in 0..3 {
+                        let linear: u32 = corners
+                            .iter()
+                            .map(|corner| u32::from(decode[usize::from(corner[channel])]))
+                            .sum();
+                        texel[channel] = encode[((linear + 2) / 4) as usize];
+                    }
                 }
-                let alpha: u32 = corners.iter().map(|at| u32::from(all[at + 3])).sum();
-                all.push(((alpha + 2) / 4) as u8);
+                for channel in channels..4 {
+                    let sum: u32 = corners
+                        .iter()
+                        .map(|corner| u32::from(corner[channel]))
+                        .sum();
+                    texel[channel] = ((sum + 2) / 4) as u8;
+                }
             }
         }
         (source, w, h) = (start, next_w, next_h);
     }
     (levels, all)
+}
+
+/// sRGB bytes to linear light in 65536 steps, and those steps back to the
+/// nearest sRGB byte: built once, so a mip level costs integer lookups.
+fn srgb_tables() -> &'static ([u16; 256], Box<[u8]>) {
+    static TABLES: std::sync::OnceLock<([u16; 256], Box<[u8]>)> = std::sync::OnceLock::new();
+    TABLES.get_or_init(|| {
+        let decode = std::array::from_fn(|value| {
+            let c = value as f32 / 255.0;
+            let linear = if c <= 0.04045 {
+                c / 12.92
+            } else {
+                ((c + 0.055) / 1.055).powf(2.4)
+            };
+            (linear * 65535.0 + 0.5) as u16
+        });
+        let encode = (0..=u16::MAX)
+            .map(|step| {
+                let linear = f32::from(step) / 65535.0;
+                let c = if linear <= 0.0031308 {
+                    linear * 12.92
+                } else {
+                    1.055 * linear.powf(1.0 / 2.4) - 0.055
+                };
+                (c.clamp(0.0, 1.0) * 255.0 + 0.5) as u8
+            })
+            .collect();
+        (decode, encode)
+    })
 }
 
 /// A lossy or lossless WebP image (GLB `EXT_texture_webp`), as RGBA.
