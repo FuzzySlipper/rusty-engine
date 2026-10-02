@@ -27,7 +27,8 @@ public readonly partial record struct MaterialRequest
             0,
             default,
             1,
-            0)
+            0,
+            default)
     {
     }
 
@@ -55,7 +56,8 @@ public readonly partial record struct MaterialRequest
             0,
             default,
             1,
-            0)
+            0,
+            default)
     {
     }
 
@@ -84,7 +86,8 @@ public readonly partial record struct MaterialRequest
             metalness,
             default,
             1,
-            0)
+            0,
+            default)
     {
     }
 
@@ -115,9 +118,50 @@ public readonly partial record struct MaterialRequest
             metalness,
             normalMap,
             normalScale,
-            0)
+            0,
+            default)
     {
     }
+
+    /// <summary>A material shaded by the standard shader.</summary>
+    public MaterialRequest(
+        Color color,
+        RenderResourceReference texture,
+        float roughness,
+        Color textureTint,
+        Vector3 emissionColor,
+        float emissionIntensity,
+        bool doubleSided,
+        MaterialAlphaMode alphaMode,
+        float alphaCutoff,
+        float metalness,
+        RenderResourceReference normalMap,
+        float normalScale,
+        float triplanarSharpness)
+        : this(
+            color,
+            texture,
+            roughness,
+            textureTint,
+            emissionColor,
+            emissionIntensity,
+            doubleSided,
+            alphaMode,
+            alphaCutoff,
+            metalness,
+            normalMap,
+            normalScale,
+            triplanarSharpness,
+            default)
+    {
+    }
+}
+
+public readonly partial record struct MaterialShader
+{
+    /// <summary>A product shader reading one parameter vector; the rest are zero.</summary>
+    public MaterialShader(RenderResourceReference shader, Vector4 parameter0)
+        : this(shader, parameter0, default, default, default) { }
 }
 
 public readonly partial record struct MeshResourceCreateRequest
@@ -196,7 +240,7 @@ public readonly partial record struct AuthoredMaterialAppearanceRequest
 {
     /// <summary>An authored material appearance without a normal map.</summary>
     public AuthoredMaterialAppearanceRequest(AuthoredCatalog catalog, string materialId, RenderResourceReference texture)
-        : this(catalog, materialId, texture, default, 1, 0) { }
+        : this(catalog, materialId, texture, default, 1, 0, default) { }
 
     /// <summary>An authored material appearance read through its tile coordinates (no triplanar planes).</summary>
     public AuthoredMaterialAppearanceRequest(
@@ -205,5 +249,15 @@ public readonly partial record struct AuthoredMaterialAppearanceRequest
         RenderResourceReference texture,
         RenderResourceReference normalMap,
         float normalScale)
-        : this(catalog, materialId, texture, normalMap, normalScale, 0) { }
+        : this(catalog, materialId, texture, normalMap, normalScale, 0, default) { }
+
+    /// <summary>An authored material appearance shaded by the standard shader.</summary>
+    public AuthoredMaterialAppearanceRequest(
+        AuthoredCatalog catalog,
+        string materialId,
+        RenderResourceReference texture,
+        RenderResourceReference normalMap,
+        float normalScale,
+        float triplanarSharpness)
+        : this(catalog, materialId, texture, normalMap, normalScale, triplanarSharpness, default) { }
 }

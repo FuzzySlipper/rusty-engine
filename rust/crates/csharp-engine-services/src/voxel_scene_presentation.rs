@@ -36,6 +36,7 @@ struct RetainedVoxelScenePresentation {
     base_materials: BTreeMap<u16, RenderMaterialDescriptor>,
     face_materials: BTreeMap<(u16, u16, Direction6), RenderMaterialDescriptor>,
     textures: BTreeMap<String, TextureDescriptor>,
+    shaders: BTreeMap<String, render_model::ShaderDescriptor>,
     base_renderer_slots: BTreeMap<u16, u16>,
     face_renderer_slots: BTreeMap<(u16, u16, Direction6), u16>,
     base_material_provenance: BTreeMap<u16, u64>,
@@ -231,6 +232,7 @@ impl RuntimeVoxelScenePresentationBridge {
                 base_materials: resolved.base_materials,
                 face_materials: resolved.face_materials,
                 textures: resolved.textures,
+                shaders: resolved.shaders,
                 base_renderer_slots: renderer_slots,
                 face_renderer_slots,
                 base_material_provenance: resolved.base_material_provenance,
@@ -384,6 +386,7 @@ impl RuntimeVoxelScenePresentationBridge {
         presentation.base_materials = resolved.base_materials;
         presentation.face_materials = resolved.face_materials;
         presentation.textures = resolved.textures;
+        presentation.shaders = resolved.shaders;
         presentation.base_renderer_slots = retained_base_slots;
         presentation.base_renderer_slots.extend(new_base_slots);
         presentation.face_renderer_slots = retained_face_slots;
@@ -627,7 +630,7 @@ impl RuntimeVoxelScenePresentationBridge {
         let base_materials = slots
             .iter()
             .map(|(slot, material)| {
-                let (descriptor, _) = resolved_by_handle
+                let (descriptor, _, _) = resolved_by_handle
                     .get(&material.value)
                     .expect("all admitted material handles were resolved");
                 (*slot, descriptor.clone())
@@ -636,16 +639,22 @@ impl RuntimeVoxelScenePresentationBridge {
         let face_materials = overrides
             .iter()
             .map(|(key, material)| {
-                let (descriptor, _) = resolved_by_handle
+                let (descriptor, _, _) = resolved_by_handle
                     .get(&material.value)
                     .expect("all admitted material handles were resolved");
                 (*key, descriptor.clone())
             })
             .collect();
-        let textures = resolved_by_handle
-            .into_values()
-            .filter_map(|(_, texture)| texture.map(|texture| (texture.id.clone(), texture)))
-            .collect();
+        let mut textures = BTreeMap::new();
+        let mut shaders = BTreeMap::new();
+        for (_, used_textures, shader) in resolved_by_handle.into_values() {
+            for texture in used_textures {
+                textures.insert(texture.id.clone(), texture);
+            }
+            if let Some(shader) = shader {
+                shaders.insert(shader.id.clone(), shader);
+            }
+        }
         let base_material_count = u32::try_from(slots.len()).map_err(|_| {
             CsharpEngineServicesError::new(
                 "CSHARP_VOXEL_SCENE_PRESENTATION_MATERIALS",
@@ -656,6 +665,7 @@ impl RuntimeVoxelScenePresentationBridge {
             base_materials,
             face_materials,
             textures,
+            shaders,
             base_material_provenance: slots
                 .into_iter()
                 .map(|(slot, material)| (slot, material.value))
@@ -673,6 +683,7 @@ struct ResolvedSceneMaterials {
     base_materials: BTreeMap<u16, RenderMaterialDescriptor>,
     face_materials: BTreeMap<(u16, u16, Direction6), RenderMaterialDescriptor>,
     textures: BTreeMap<String, TextureDescriptor>,
+    shaders: BTreeMap<String, render_model::ShaderDescriptor>,
     base_material_provenance: BTreeMap<u16, u64>,
     face_material_provenance: BTreeMap<(u16, u16, Direction6), u64>,
     base_material_count: u32,
@@ -748,16 +759,23 @@ fn project_all_presentations(
             CsharpEngineServicesError::new("CSHARP_VOXEL_SCENE_PRESENTATION", format!("{error:?}"))
         })?;
     let mut frame = result.frame;
-    let used_textures = frame
-        .ops
-        .iter()
-        .filter_map(|operation| match operation {
-            RenderDiff::DefineMaterial { material } => Some(material.textures().cloned()),
-            _ => None,
-        })
-        .flatten()
+    let defined = frame.ops.iter().filter_map(|operation| match operation {
+        RenderDiff::DefineMaterial { material } => Some(material),
+        _ => None,
+    });
+    let used_textures = defined
+        .clone()
+        .flat_map(|material| material.textures().cloned())
         .collect::<BTreeSet<_>>();
-    if !used_textures.is_empty() {
+    let used_shaders = defined
+        .filter_map(|material| material.shader.as_ref().map(|used| used.shader.clone()))
+        .collect::<BTreeSet<_>>();
+    if !used_textures.is_empty() || !used_shaders.is_empty() {
+        let shaders = state
+            .presentations
+            .values()
+            .flat_map(|presentation| presentation.shaders.iter())
+            .collect::<BTreeMap<_, _>>();
         let mut operations = used_textures
             .into_iter()
             .map(|identity| {
@@ -772,6 +790,19 @@ fn project_all_presentations(
                         )
                     })
             })
+            .chain(used_shaders.into_iter().map(|identity| {
+                shaders
+                    .get(&identity)
+                    .map(|shader| RenderDiff::DefineShader {
+                        shader: (*shader).clone(),
+                    })
+                    .ok_or_else(|| {
+                        CsharpEngineServicesError::new(
+                            "CSHARP_VOXEL_SCENE_PRESENTATION_SHADER",
+                            "projected voxel material referenced an unavailable shader",
+                        )
+                    })
+            }))
             .collect::<Result<Vec<_>, _>>()?;
         let publication = frame.publication.take();
         operations.append(&mut frame.ops);
@@ -1177,6 +1208,7 @@ mod tests {
                 crate::appearance::create_material(
                     (appearance as *mut RuntimeAppearanceBridge).cast(),
                     NativeMaterialRequest {
+                        shader: Default::default(),
                         triplanar_sharpness: 0.0,
                         color,
                         texture: NativeRenderResourceReference::default(),
@@ -2062,6 +2094,14 @@ mod tests {
         let mut bridge = RuntimeVoxelScenePresentationBridge::new(spatial.collision_source());
         let mut resources = BTreeMap::new();
         resources.insert("surface.png".to_owned(), Arc::from(TEXTURE));
+        resources.insert(
+            "shaders/tint.wgsl".to_owned(),
+            Arc::from(
+                "#import rusty::types::Surface\n#import rusty::shade::standard_shade\n\
+                 fn shade(surface: Surface) -> vec4<f32> { return standard_shade(surface); }\n"
+                    .as_bytes(),
+            ),
+        );
         let mut appearance =
             RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), resources);
 
@@ -2088,12 +2128,53 @@ mod tests {
             },
             ABI_OK
         );
+        // The same image opened as data is a normal map, and a product
+        // shader shades the material: both reach the voxel frame with it.
+        let open = |appearance: &mut RuntimeAppearanceBridge,
+                    path: &[u8],
+                    color_space: NativeTextureColorSpace| {
+            let mut opened = NativeRenderResourceInfo::default();
+            assert_eq!(
+                unsafe {
+                    crate::appearance::open_render_resource(
+                        (appearance as *mut RuntimeAppearanceBridge).cast(),
+                        &NativeRenderResourceRequest {
+                            path: NativeUtf8Slice {
+                                bytes: path.as_ptr(),
+                                len: path.len(),
+                            },
+                            filter: csharp_engine_abi::NativeTextureFilter::Nearest,
+                            wrap: csharp_engine_abi::NativeTextureWrap::Clamp,
+                            color_space,
+                        },
+                        &mut opened,
+                        std::ptr::null_mut(),
+                    )
+                },
+                ABI_OK
+            );
+            opened.handle.value
+        };
+        let normal = open(
+            &mut appearance,
+            b"surface.png",
+            NativeTextureColorSpace::Linear,
+        );
+        let tint = open(
+            &mut appearance,
+            b"shaders/tint.wgsl",
+            NativeTextureColorSpace::Srgb,
+        );
         let mut material = NativeMaterialHandle::default();
         assert_eq!(
             unsafe {
                 crate::appearance::create_material(
                     (&mut appearance as *mut RuntimeAppearanceBridge).cast(),
                     NativeMaterialRequest {
+                        shader: csharp_engine_abi::NativeMaterialShader {
+                            shader: NativeRenderResourceReference { value: tint },
+                            ..Default::default()
+                        },
                         triplanar_sharpness: 0.0,
                         color: NativeColor {
                             r: 1.0,
@@ -2106,7 +2187,7 @@ mod tests {
                         },
                         roughness: 1.0,
                         metalness: 0.0,
-                        normal_map: NativeRenderResourceReference::default(),
+                        normal_map: NativeRenderResourceReference { value: normal },
                         normal_scale: 1.0,
                         texture_tint: NativeColor {
                             r: 1.0,
@@ -2209,6 +2290,23 @@ mod tests {
         let texture_id = texture.id.clone();
         assert_eq!(material_texture, texture_id);
         assert!(texture_index < material_index);
+        let defined = |wanted: &dyn Fn(&RenderDiff) -> bool| {
+            frame
+                .ops
+                .iter()
+                .position(wanted)
+                .expect("defined in the voxel frame")
+        };
+        assert!(
+            defined(
+                &|operation| matches!(operation, RenderDiff::DefineTexture { texture }
+            if texture.id.ends_with("-linear"))
+            ) < material_index
+        );
+        assert!(
+            defined(&|operation| matches!(operation, RenderDiff::DefineShader { .. }))
+                < material_index
+        );
         let payload_resource = match texture.payload.as_ref().map(|payload| &payload.source) {
             Some(render_model::TexturePayloadSource::Resource { resource }) => resource.clone(),
             _ => panic!("texture descriptor did not retain a resource payload"),

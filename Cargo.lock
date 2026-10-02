@@ -1097,6 +1097,7 @@ dependencies = [
  "render-model",
  "render-presentation",
  "render-projection",
+ "render-shaders",
  "runtime-diagnostics",
  "runtime-input",
  "runtime-lifecycle",
@@ -4465,6 +4466,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "render-shaders"
+version = "0.1.0"
+dependencies = [
+ "naga",
+ "naga_oil",
+]
+
+[[package]]
 name = "render-stream"
 version = "0.1.0"
 dependencies = [
@@ -4497,13 +4506,13 @@ dependencies = [
  "image-webp",
  "jpeg-decoder",
  "jpeg-encoder",
- "naga_oil",
  "png",
  "pollster",
  "render-host-contracts",
  "render-model",
  "render-presentation",
  "render-projection",
+ "render-shaders",
  "render-video",
  "serde",
  "serde_json",

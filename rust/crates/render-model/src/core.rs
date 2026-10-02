@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     AnimatedMeshAsset, AnimatedMeshPlaybackCommand, LightDescriptor, MaterialInstanceParameters,
-    MeshPayloadDescriptor, RenderMaterialDescriptor, SpriteAtlasDescriptor,
+    MeshPayloadDescriptor, RenderMaterialDescriptor, ShaderDescriptor, SpriteAtlasDescriptor,
     SpriteInstanceDescriptor, StaticMeshAsset, StaticMeshInstanceDescriptor, TextureDescriptor,
     VoxelObjectInstanceDescriptor, VoxelObjectRenderAsset,
 };
@@ -415,6 +415,12 @@ pub enum RenderDiff {
     ReleaseTexture {
         id: String,
     },
+    DefineShader {
+        shader: ShaderDescriptor,
+    },
+    ReleaseShader {
+        id: String,
+    },
     SetSkyBackground {
         background: Option<SkyBackgroundDescriptor>,
     },
@@ -546,6 +552,7 @@ impl RenderDiff {
             Self::DefineTexture { texture } => {
                 texture.validate().map_err(RenderOperationError::Texture)
             }
+            Self::DefineShader { shader } => shader.validate().map_err(RenderOperationError::Asset),
             Self::SetSkyBackground {
                 background: Some(background),
             } => background
@@ -574,6 +581,10 @@ impl RenderDiff {
             }
             Self::ReleaseTexture { id } => {
                 crate::validate_asset_id(id, crate::RenderAssetKind::Texture)
+                    .map_err(RenderOperationError::Asset)
+            }
+            Self::ReleaseShader { id } => {
+                crate::validate_asset_id(id, crate::RenderAssetKind::Shader)
                     .map_err(RenderOperationError::Asset)
             }
             Self::ReleaseSpriteAtlas { id } => {
@@ -648,6 +659,8 @@ impl RenderDiff {
             | Self::UpdateSprite { handle, .. } => handle.validate()?,
             Self::DefineMaterial { .. }
             | Self::DefineTexture { .. }
+            | Self::DefineShader { .. }
+            | Self::ReleaseShader { .. }
             | Self::SetSkyBackground { .. }
             | Self::SetBackgroundColor { .. }
             | Self::SetFog { .. }
@@ -750,6 +763,8 @@ impl RenderFrameDiff {
                 | RenderDiff::SetMaterialInstanceParameters { .. }
                 | RenderDiff::DefineTexture { .. }
                 | RenderDiff::ReleaseTexture { .. }
+                | RenderDiff::DefineShader { .. }
+                | RenderDiff::ReleaseShader { .. }
                 | RenderDiff::SetSkyBackground { .. }
                 | RenderDiff::SetBackgroundColor { .. }
                 | RenderDiff::SetFog { .. }

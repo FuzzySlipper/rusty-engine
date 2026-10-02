@@ -9,7 +9,7 @@ use std::{
 use render_model::{
     AnimatedMeshAsset, AnimatedMeshInstanceDescriptor, AnimatedMeshPlaybackCommand, Geometry,
     LightDescriptor, Material, MeshMaterialSlot, RenderDiff, RenderHandle, RenderLayer,
-    RenderMaterialDescriptor, RenderMetadata, RenderNode, SpriteAtlasDescriptor,
+    RenderMaterialDescriptor, RenderMetadata, RenderNode, ShaderDescriptor, SpriteAtlasDescriptor,
     SpriteInstanceDescriptor, StaticMeshAsset, StaticMeshInstanceDescriptor, TextureDescriptor,
     Transform,
 };
@@ -55,6 +55,9 @@ pub struct AppearanceResources {
     pub materials: Vec<RenderMaterialDescriptor>,
     #[serde(default)]
     pub textures: Vec<TextureDescriptor>,
+    /// Product shaders the materials name.
+    #[serde(default)]
+    pub shaders: Vec<ShaderDescriptor>,
     #[serde(default)]
     pub sprite_atlases: Vec<SpriteAtlasDescriptor>,
     /// Admitted mesh bodies are immutable and shared; cloning a catalog
@@ -69,6 +72,7 @@ pub struct AppearanceResources {
 pub(crate) struct ResourceSnapshot {
     pub(crate) materials: BTreeMap<String, RenderMaterialDescriptor>,
     pub(crate) textures: BTreeMap<String, TextureDescriptor>,
+    pub(crate) shaders: BTreeMap<String, ShaderDescriptor>,
     pub(crate) atlases: BTreeMap<String, SpriteAtlasDescriptor>,
     pub(crate) static_meshes: BTreeMap<String, Arc<StaticMeshAsset>>,
     pub(crate) animated_meshes: BTreeMap<String, Arc<AnimatedMeshAsset>>,
@@ -108,6 +112,15 @@ pub(crate) fn validate_resources(
             texture.clone(),
             "texture",
         )?;
+    }
+    for shader in &input.shaders {
+        shader
+            .validate()
+            .map_err(|source| AppearanceProjectionError::InvalidShader {
+                id: shader.id.clone(),
+                source,
+            })?;
+        insert_unique(&mut resources.shaders, &shader.id, shader.clone(), "shader")?;
     }
     for atlas in &input.sprite_atlases {
         atlas
@@ -314,6 +327,13 @@ pub(crate) fn resource_diffs(
             });
         }
     }
+    for (id, value) in &next.shaders {
+        if previous.shaders.get(id) != Some(value) {
+            operations.push(RenderDiff::DefineShader {
+                shader: value.clone(),
+            });
+        }
+    }
     for (id, value) in &next.materials {
         if previous.materials.get(id) != Some(value) {
             operations.push(RenderDiff::DefineMaterial {
@@ -367,6 +387,11 @@ pub(crate) fn resource_diffs(
     for id in previous.textures.keys() {
         if !next.textures.contains_key(id) {
             operations.push(RenderDiff::ReleaseTexture { id: id.clone() });
+        }
+    }
+    for id in previous.shaders.keys() {
+        if !next.shaders.contains_key(id) {
+            operations.push(RenderDiff::ReleaseShader { id: id.clone() });
         }
     }
     operations
@@ -672,6 +697,10 @@ pub enum AppearanceProjectionError {
     InvalidAnimatedMesh {
         id: String,
         source: render_model::AnimatedMeshAssetError,
+    },
+    InvalidShader {
+        id: String,
+        source: render_model::RenderAssetError,
     },
     MissingTexture {
         owner: String,

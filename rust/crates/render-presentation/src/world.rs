@@ -113,6 +113,7 @@ struct RetainedGraphics {
     /// entity's node is found without scanning every node.
     entity_nodes: BTreeMap<u64, BTreeSet<RenderHandle>>,
     textures: BTreeMap<String, Arc<TextureDescriptor>>,
+    shaders: BTreeMap<String, Arc<ShaderDescriptor>>,
     materials: BTreeMap<String, Arc<RenderMaterialDescriptor>>,
     atlases: BTreeMap<String, Arc<SpriteAtlasDescriptor>>,
     static_meshes: BTreeMap<String, Arc<StaticMeshAsset>>,
@@ -605,6 +606,13 @@ impl PresentationWorld {
         );
         ops.extend(
             self.retained
+                .shaders
+                .values()
+                .map(|value| value.as_ref().clone())
+                .map(|shader| RenderDiff::DefineShader { shader }),
+        );
+        ops.extend(
+            self.retained
                 .materials
                 .values()
                 .map(|value| value.as_ref().clone())
@@ -1082,6 +1090,25 @@ impl PresentationWorld {
                 self.retained
                     .textures
                     .insert(texture.id.clone(), Arc::new(texture.clone()));
+            }
+            RenderDiff::DefineShader { shader } => {
+                self.retained
+                    .shaders
+                    .insert(shader.id.clone(), Arc::new(shader.clone()));
+            }
+            RenderDiff::ReleaseShader { id } => {
+                if !self.retained.shaders.contains_key(id) {
+                    return Err(PresentationWorldError::UndefinedResource(id.clone()));
+                }
+                if self.retained.materials.values().any(|material| {
+                    material
+                        .shader
+                        .as_ref()
+                        .is_some_and(|shader| &shader.shader == id)
+                }) {
+                    return Err(PresentationWorldError::ReferencedResource(id.clone()));
+                }
+                self.retained.shaders.remove(id);
             }
             RenderDiff::DefineMaterial { material } => {
                 self.retained

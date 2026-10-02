@@ -22,6 +22,7 @@ members = [
     "rust/crates/render-presentation",
     "rust/crates/render-audio",
     "rust/crates/render-projection",
+    "rust/crates/render-shaders",
     "rust/crates/render-wgpu",
     "rust/crates/render-export",
     "rust/crates/render-stream",
@@ -73,6 +74,7 @@ render-model = { path = "rust/crates/render-model" }
 render-presentation = { path = "rust/crates/render-presentation" }
 render-audio = { path = "rust/crates/render-audio" }
 render-projection = { path = "rust/crates/render-projection" }
+render-shaders = { path = "rust/crates/render-shaders" }
 render-wgpu = { path = "rust/crates/render-wgpu" }
 render-export = { path = "rust/crates/render-export" }
 render-stream = { path = "rust/crates/render-stream" }

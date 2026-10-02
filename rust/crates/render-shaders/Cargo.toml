@@ -1,0 +1,15 @@
+[package]
+name = "render-shaders"
+version.workspace = true
+edition.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+# The standard shader's WGSL modules: #import and #ifdef. Only this crate
+# composes shaders (scripts/dependency_boundary_check.py); render-wgpu turns
+# the modules into pipelines and the C# services check product shaders.
+naga_oil = { version = "0.23", default-features = false }
+# The composed module type (naga_oil's, which wgpu takes as is).
+naga = { version = "30", default-features = false }

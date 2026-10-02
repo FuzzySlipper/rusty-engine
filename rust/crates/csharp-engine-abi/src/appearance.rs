@@ -134,6 +134,8 @@ pub enum NativeRenderResourceKind {
     Texture = 1,
     StaticMesh = 2,
     Font = 3,
+    /// A product shader (`.wgsl`) materials may name.
+    Shader = 4,
 }
 
 #[repr(u32)]
@@ -584,6 +586,21 @@ pub struct NativeMaterialRequest {
     /// Plane weights are |normal| to this power (1 or more): higher keeps
     /// each plane sharper, nearer box projection.
     pub triplanar_sharpness: f32,
+    /// A product shader shading this material; a zero handle for the
+    /// standard shade stage.
+    pub shader: NativeMaterialShader,
+}
+
+/// A product shader resource (`.wgsl`, `NativeRenderResourceKind::Shader`)
+/// and the values it reads as `material.parameters[0..4]`.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeMaterialShader {
+    pub shader: NativeRenderResourceReference,
+    pub parameter_0: NativeVec4,
+    pub parameter_1: NativeVec4,
+    pub parameter_2: NativeVec4,
+    pub parameter_3: NativeVec4,
 }
 
 /// Projects one admitted authored material through Engine-owned catalog and
@@ -605,6 +622,8 @@ pub struct NativeAuthoredMaterialAppearanceRequest {
     /// atlas regions in the faces' texture bases, so axis-aligned faces keep
     /// their tiles.
     pub triplanar_sharpness: f32,
+    /// A product shader shading the material, as in `NativeMaterialRequest`.
+    pub shader: NativeMaterialShader,
 }
 
 #[repr(C)]

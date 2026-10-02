@@ -2271,11 +2271,19 @@ impl RuntimeAppearanceBridge {
     /// Resolves one live C# material into an Engine-owned descriptor for a
     /// separate retained presentation family. The caller copies the returned
     /// value; it never retains this Appearance handle or any product pointer.
+    /// A live material for a voxel presentation, with the textures and
+    /// product shader its definition names.
     pub(crate) fn voxel_material_projection(
         &mut self,
         material: NativeMaterialHandle,
-    ) -> Result<(RenderMaterialDescriptor, Option<TextureDescriptor>), CsharpEngineServicesError>
-    {
+    ) -> Result<
+        (
+            RenderMaterialDescriptor,
+            Vec<TextureDescriptor>,
+            Option<render_model::ShaderDescriptor>,
+        ),
+        CsharpEngineServicesError,
+    > {
         let staged = self.staged_mut()?;
         let state = &*staged.state;
         let id = state.materials.get(&material.value).ok_or_else(|| {
@@ -2296,23 +2304,40 @@ impl RuntimeAppearanceBridge {
                     "voxel-object material descriptor is not retained",
                 )
             })?;
-        let texture = material
-            .texture
-            .as_ref()
-            .and_then(|identity| {
+        let textures = material
+            .textures()
+            .map(|identity| {
                 resources
                     .textures
                     .iter()
                     .find(|texture| texture.id == *identity)
+                    .cloned()
+                    .ok_or_else(|| {
+                        CsharpEngineServicesError::new(
+                            "CSHARP_VOXEL_PRESENTATION_TEXTURE",
+                            "voxel material texture descriptor is not retained",
+                        )
+                    })
             })
-            .cloned();
-        if material.texture.is_some() && texture.is_none() {
-            return Err(CsharpEngineServicesError::new(
-                "CSHARP_VOXEL_PRESENTATION_TEXTURE",
-                "voxel material texture descriptor is not retained",
-            ));
-        }
-        Ok((material, texture))
+            .collect::<Result<Vec<_>, _>>()?;
+        let shader = material
+            .shader
+            .as_ref()
+            .map(|used| {
+                resources
+                    .shaders
+                    .iter()
+                    .find(|shader| shader.id == used.shader)
+                    .cloned()
+                    .ok_or_else(|| {
+                        CsharpEngineServicesError::new(
+                            "CSHARP_VOXEL_PRESENTATION_SHADER",
+                            "voxel material shader is not retained",
+                        )
+                    })
+            })
+            .transpose()?;
+        Ok((material, textures, shader))
     }
 
     pub(crate) fn voxel_material_descriptor(
@@ -2320,7 +2345,7 @@ impl RuntimeAppearanceBridge {
         material: NativeMaterialHandle,
     ) -> Result<RenderMaterialDescriptor, CsharpEngineServicesError> {
         self.voxel_material_projection(material)
-            .map(|(material, _)| material)
+            .map(|(material, _, _)| material)
     }
 
     pub(crate) fn staged_mut(
@@ -3081,16 +3106,24 @@ impl RuntimeAppearanceBridge {
         let descriptor = material_descriptor(id.clone(), request, &staged.state.render_resources)?;
         let textures =
             texture_descriptors_for_material(&descriptor, &staged.state.render_resources)?;
+        let shader = material_shader(&staged.state.render_resources, request.shader)?;
         staged.state.next_material = next_material;
         let resources = staged.state.projector.resources_mut();
         for texture in textures {
             retain_texture_descriptor(&mut resources.textures, texture)?;
         }
+        if let Some((_, shader)) = shader {
+            retain_shader_descriptor(&mut resources.shaders, shader);
+        }
         resources.materials.push(descriptor);
         staged.state.materials.insert(handle, id);
         staged.state.material_resources.insert(
             handle,
-            resource_set([request.texture.value, request.normal_map.value]),
+            resource_set([
+                request.texture.value,
+                request.normal_map.value,
+                request.shader.shader.value,
+            ]),
         );
         Ok(NativeMaterialHandle { value: handle })
     }
@@ -3188,6 +3221,8 @@ impl RuntimeAppearanceBridge {
             request.normal_scale,
         )?;
         material.triplanar = triplanar_descriptor(request.triplanar_sharpness);
+        let shader = material_shader(&staged.state.render_resources, request.shader)?;
+        material.shader = shader.as_ref().map(|(used, _)| used.clone());
         let normal_texture = match &material.normal_map {
             Some(map) => Some(
                 texture_descriptors_for_material(
@@ -3213,11 +3248,18 @@ impl RuntimeAppearanceBridge {
         for texture in texture.into_iter().chain(normal_texture) {
             retain_texture_descriptor(&mut resources.textures, texture)?;
         }
+        if let Some((_, shader)) = shader {
+            retain_shader_descriptor(&mut resources.shaders, shader);
+        }
         resources.materials.push(material.clone());
         staged.state.materials.insert(handle, material.id);
         staged.state.material_resources.insert(
             handle,
-            resource_set([request.texture.value, request.normal_map.value]),
+            resource_set([
+                request.texture.value,
+                request.normal_map.value,
+                request.shader.shader.value,
+            ]),
         );
         Ok(NativeMaterialHandle { value: handle })
     }
@@ -3245,9 +3287,13 @@ impl RuntimeAppearanceBridge {
         )?;
         let textures =
             texture_descriptors_for_material(&descriptor, &staged.state.render_resources)?;
+        let shader = material_shader(&staged.state.render_resources, request.replacement.shader)?;
         let resources = staged.state.projector.resources_mut();
         for texture in textures {
             retain_texture_descriptor(&mut resources.textures, texture)?;
+        }
+        if let Some((_, shader)) = shader {
+            retain_shader_descriptor(&mut resources.shaders, shader);
         }
         let material = resources
             .materials
@@ -3262,6 +3308,7 @@ impl RuntimeAppearanceBridge {
             resource_set([
                 request.replacement.texture.value,
                 request.replacement.normal_map.value,
+                request.replacement.shader.shader.value,
             ]),
         );
         Ok(())
@@ -8809,6 +8856,7 @@ fn sprite_texture_descriptor(
 
 fn render_material(id: String, color: NativeColor) -> RenderMaterialDescriptor {
     RenderMaterialDescriptor {
+        shader: None,
         id,
         color: native_color(color),
         texture: None,
@@ -8902,6 +8950,13 @@ fn remove_resource(
             .animated_meshes
             .retain(|entry| entry.asset != animated.asset);
     }
+    if let Some(shader) = resource.shader() {
+        state
+            .projector
+            .resources_mut()
+            .shaders
+            .retain(|entry| entry.id != shader.id);
+    }
     state.animation_clip_pack_resources.remove(&handle);
     Ok(resource)
 }
@@ -8960,6 +9015,7 @@ fn material_descriptor(
         voxel_surface: None,
         normal_map,
         triplanar: triplanar_descriptor(request.triplanar_sharpness),
+        shader: material_shader(resources, request.shader)?.map(|(shader, _)| shader),
     };
     descriptor.validate().map_err(|error| {
         CsharpEngineServicesError::new("CSHARP_MATERIAL", format!("material is invalid: {error:?}"))
@@ -9033,6 +9089,54 @@ fn normal_map_descriptor(
         texture: resource.asset_identity().to_owned(),
         scale,
     }))
+}
+
+/// A material's product shader and its definition, or none for handle 0.
+fn material_shader(
+    resources: &RenderResourceRegistry,
+    request: csharp_engine_abi::NativeMaterialShader,
+) -> Result<
+    Option<(
+        render_model::MaterialShaderDescriptor,
+        render_model::ShaderDescriptor,
+    )>,
+    CsharpEngineServicesError,
+> {
+    if request.shader.value == 0 {
+        return Ok(None);
+    }
+    let shader = resources
+        .get(request.shader.value)
+        .and_then(|resource| resource.shader())
+        .ok_or_else(|| {
+            CsharpEngineServicesError::new(
+                "CSHARP_MATERIAL_SHADER",
+                "a material's shader must be a resource opened from a .wgsl file",
+            )
+        })?;
+    let row = |value: csharp_engine_abi::NativeVec4| [value.x, value.y, value.z, value.w];
+    Ok(Some((
+        render_model::MaterialShaderDescriptor {
+            shader: shader.id.clone(),
+            parameters: [
+                row(request.parameter_0),
+                row(request.parameter_1),
+                row(request.parameter_2),
+                row(request.parameter_3),
+            ],
+        },
+        shader,
+    )))
+}
+
+/// Keep `shader` among the definitions published with the materials.
+fn retain_shader_descriptor(
+    shaders: &mut Vec<render_model::ShaderDescriptor>,
+    shader: render_model::ShaderDescriptor,
+) {
+    if !shaders.iter().any(|retained| retained.id == shader.id) {
+        shaders.push(shader);
+    }
 }
 
 /// Triplanar sampling at this sharpness, or none for 0.
@@ -9675,6 +9779,7 @@ pub(super) mod tests {
         };
         let material = bridge
             .create_material(NativeMaterialRequest {
+                shader: Default::default(),
                 triplanar_sharpness: 0.0,
                 color,
                 texture: NativeRenderResourceReference { value: 0 },
@@ -9873,6 +9978,7 @@ pub(super) mod tests {
         };
         let material = bridge
             .create_material(NativeMaterialRequest {
+                shader: Default::default(),
                 triplanar_sharpness: 0.0,
                 color,
                 texture: NativeRenderResourceReference { value: 0 },
@@ -10371,6 +10477,7 @@ pub(super) mod tests {
             a: 1.0,
         };
         let request = NativeMaterialRequest {
+            shader: Default::default(),
             triplanar_sharpness: 0.0,
             color,
             texture: NativeRenderResourceReference { value: 0 },
@@ -10420,6 +10527,7 @@ pub(super) mod tests {
             a: 1.0,
         };
         let metal = NativeMaterialRequest {
+            shader: Default::default(),
             triplanar_sharpness: 0.0,
             color,
             texture: NativeRenderResourceReference { value: 0 },
@@ -10517,6 +10625,7 @@ pub(super) mod tests {
             a: 1.0,
         };
         let request = |normal_map: NativeRenderResourceHandle| NativeMaterialRequest {
+            shader: Default::default(),
             triplanar_sharpness: 0.0,
             color: white,
             texture: NativeRenderResourceReference {
@@ -10547,6 +10656,103 @@ pub(super) mod tests {
         assert_eq!(textures.len(), 2);
         assert_eq!(textures[1].id, map.texture);
         assert!(map.texture.ends_with("-linear"));
+    }
+
+    #[test]
+    fn product_shaders_are_checked_when_opened_and_retained_with_their_materials() {
+        const TINT: &str = "#import rusty::types::Surface
+#import rusty::material::material
+#import rusty::shade::standard_shade
+
+fn shade(surface: Surface) -> vec4<f32> {
+    return standard_shade(surface) * material.parameters[0];
+}
+";
+        let mut content = BTreeMap::new();
+        content.insert("shaders/tint.wgsl".to_owned(), Arc::from(TINT.as_bytes()));
+        content.insert(
+            "shaders/broken.wgsl".to_owned(),
+            Arc::from(
+                TINT.replace("standard_shade(surface)", "missing")
+                    .as_bytes(),
+            ),
+        );
+        let mut bridge = RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), content);
+        bridge.begin_call();
+        let refused = bridge
+            .open_resource(&resource_request("shaders/broken.wgsl"))
+            .unwrap_err();
+        assert_eq!(refused.code(), "CSHARP_SHADER");
+        assert!(
+            refused.detail().contains("shaders/broken.wgsl:6:"),
+            "{}",
+            refused.detail()
+        );
+        let shader = bridge
+            .open_resource(&resource_request("shaders/tint.wgsl"))
+            .unwrap();
+        assert_eq!(shader.kind, NativeRenderResourceKind::Shader);
+
+        let white = NativeColor {
+            r: 1.0,
+            g: 1.0,
+            b: 1.0,
+            a: 1.0,
+        };
+        let parameter = csharp_engine_abi::NativeVec4 {
+            x: 1.0,
+            y: 0.5,
+            z: 0.25,
+            w: 1.0,
+        };
+        let material = bridge
+            .create_material(NativeMaterialRequest {
+                color: white,
+                texture: NativeRenderResourceReference::default(),
+                roughness: 0.8,
+                texture_tint: white,
+                emission_color: NativeVec3::default(),
+                emission_intensity: 0.0,
+                double_sided: false,
+                alpha_mode: NativeMaterialAlphaMode::Opaque,
+                alpha_cutoff: 0.5,
+                metalness: 0.0,
+                normal_map: NativeRenderResourceReference::default(),
+                normal_scale: 1.0,
+                triplanar_sharpness: 0.0,
+                shader: csharp_engine_abi::NativeMaterialShader {
+                    shader: NativeRenderResourceReference {
+                        value: shader.handle.value,
+                    },
+                    parameter_0: parameter,
+                    ..Default::default()
+                },
+            })
+            .unwrap();
+        let resources = bridge.staged_ref().unwrap().state.projector.resources();
+        let descriptor = resources.materials.last().unwrap();
+        let used = descriptor
+            .shader
+            .as_ref()
+            .expect("the material names its shader");
+        assert_eq!(used.parameters[0], [1.0, 0.5, 0.25, 1.0]);
+        assert_eq!(resources.shaders.len(), 1);
+        assert_eq!(resources.shaders[0].id, used.shader);
+        assert_eq!(resources.shaders[0].path, "shaders/tint.wgsl");
+        assert_eq!(
+            bridge.destroy_resource(shader.handle).unwrap_err().code(),
+            "CSHARP_RENDER_RESOURCE_IN_USE"
+        );
+        bridge.destroy_material(material).unwrap();
+        bridge.destroy_resource(shader.handle).unwrap();
+        assert!(bridge
+            .staged_ref()
+            .unwrap()
+            .state
+            .projector
+            .resources()
+            .shaders
+            .is_empty());
     }
 
     #[test]
@@ -10604,6 +10810,7 @@ pub(super) mod tests {
         for resource in [clamp, repeat, linear] {
             bridge
                 .create_material(NativeMaterialRequest {
+                    shader: Default::default(),
                     triplanar_sharpness: 0.0,
                     color: NativeColor {
                         r: 1.0,
@@ -10823,6 +11030,7 @@ pub(super) mod tests {
         assert!(bridge.resource(first.handle.value).is_ok());
         bridge
             .create_material(NativeMaterialRequest {
+                shader: Default::default(),
                 triplanar_sharpness: 0.0,
                 color: NativeColor {
                     r: 1.0,
@@ -11572,6 +11780,7 @@ pub(super) mod tests {
             .expect("animated appearance");
         let material = bridge
             .create_material(NativeMaterialRequest {
+                shader: Default::default(),
                 triplanar_sharpness: 0.0,
                 color: NativeColor {
                     r: 0.8,

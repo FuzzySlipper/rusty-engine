@@ -34,8 +34,9 @@ pub struct ApplyIssue {
 /// `MaterialUniform` size (`rusty::types`): roughness, cutoff, metalness,
 /// normal scale; the voxel surface's tile scale, tile origin and sample rect;
 /// the base, emissive, normal and occlusion uv transforms (two rows each); the
-/// occlusion strength and triplanar sharpness; each slot's uv set.
-const MATERIAL_UNIFORM_BYTES: usize = 208;
+/// occlusion strength and triplanar sharpness; each slot's uv set; a
+/// product shader's 16 parameters.
+const MATERIAL_UNIFORM_BYTES: usize = 272;
 /// Anisotropic filtering of mipmapped material textures.
 const MATERIAL_ANISOTROPY: u16 = 16;
 /// Payload groups without a voxel material are fully rough.
@@ -75,7 +76,11 @@ impl Renderer {
                     self.effects.forget_texture(id);
                 }
             }
-            RenderDiff::DefineMaterial { material } => self.define_material(material.clone()),
+            RenderDiff::DefineMaterial { material } => self.define_material(material.clone())?,
+            RenderDiff::DefineShader { shader } => self.define_shader(shader)?,
+            RenderDiff::ReleaseShader { id } => {
+                self.tables.shaders.remove(id);
+            }
             RenderDiff::ReleaseMaterial { id } => {
                 if let Some(id) = self.tables.names.get(id) {
                     self.tables.materials.remove(id);
@@ -789,7 +794,8 @@ impl Renderer {
             .map(|row| row.descriptor.clone())
             .collect();
         for descriptor in dependents {
-            self.define_material(descriptor);
+            // A product shader's error was reported when it was defined.
+            let _ = self.define_material(descriptor);
         }
         self.tables.environment_dirty = true;
         match image {
@@ -830,28 +836,85 @@ impl Renderer {
         )
     }
 
-    fn define_material(&mut self, descriptor: RenderMaterialDescriptor) {
+    fn define_material(&mut self, descriptor: RenderMaterialDescriptor) -> Result<(), String> {
         let texture = descriptor
             .texture
             .as_ref()
             .and_then(|id| self.tables.textures.get(id));
         let params = MaterialParams::of(&descriptor, texture.map(|texture| texture.size));
-        self.insert_material(descriptor, &params);
+        self.insert_material(descriptor, &params)
+    }
+
+    /// Hold a product shader, and redefine the materials it shades so they
+    /// compile it. Its error, if it does not compose, names its file and
+    /// line; those materials draw with the standard shade stage.
+    fn define_shader(&mut self, shader: &render_model::ShaderDescriptor) -> Result<(), String> {
+        let product = self.layouts.shaders.product(crate::shaders::ProductShader {
+            path: shader.path.clone(),
+            source: shader.source.clone(),
+        });
+        self.tables
+            .shaders
+            .insert(shader.id.clone(), (shader.clone(), product));
+        let dependents: Vec<RenderMaterialDescriptor> = self
+            .tables
+            .materials
+            .values()
+            .filter(|row| {
+                row.descriptor
+                    .shader
+                    .as_ref()
+                    .is_some_and(|used| used.shader == shader.id)
+            })
+            .map(|row| row.descriptor.clone())
+            .collect();
+        let mut errors: Vec<String> = Vec::new();
+        for descriptor in dependents {
+            if let Err(error) = self.define_material(descriptor) {
+                if !errors.contains(&error) {
+                    errors.push(error);
+                }
+            }
+        }
+        match errors.is_empty() {
+            true => Ok(()),
+            false => Err(errors.join("\n")),
+        }
     }
 
     /// Store a material row with `params` and re-derive the parts drawing it.
+    /// A product shader that is not defined, or does not compose, is an
+    /// error; the material is stored and draws with the standard shade stage.
     pub(crate) fn insert_material(
         &mut self,
         descriptor: RenderMaterialDescriptor,
         params: &MaterialParams,
-    ) {
+    ) -> Result<(), String> {
         let texture = descriptor
             .texture
             .as_ref()
             .and_then(|id| self.tables.textures.get(id));
         let (bind_group, features) =
             self.material_bind_group(&descriptor.id, params, texture.unwrap_or(&self.white));
+        let mut error = None;
+        let product = match &descriptor.shader {
+            Some(used) => match self.tables.shaders.get(&used.shader) {
+                Some((_, product)) => *product,
+                None => {
+                    error = Some(format!("{} is not defined", used.shader));
+                    0
+                }
+            },
+            None => 0,
+        };
+        let mut features = features.with_product(product);
         self.prepare_material(features, blends(&descriptor), descriptor.double_sided);
+        let composed = self.layouts.shader_errors.drain(..).next();
+        if let Some(composed) = composed {
+            error = Some(composed);
+            features = features.with_product(0);
+            self.prepare_material(features, blends(&descriptor), descriptor.double_sided);
+        }
         let id = self.tables.names.id(&descriptor.id);
         self.tables.materials.insert(
             id,
@@ -879,6 +942,7 @@ impl Renderer {
         for handle in dedup(dependents) {
             self.rebuild_parts(handle);
         }
+        error.map_or(Ok(()), Err)
     }
 
     /// Make a material's pipelines on every target so far and for the shadow
@@ -891,6 +955,9 @@ impl Renderer {
             (true, true) => &[Pass::BlendDoubleSided],
         };
         let device = &self.gpu.device;
+        // Compiled even before any target exists, so a product shader's
+        // error is known when its material is defined.
+        self.layouts.world_shader(device, features);
         for &pass in passes {
             for pipelines in &mut self.pipelines {
                 self.layouts.prepare(device, pipelines, features, pass);
@@ -1154,6 +1221,8 @@ pub(crate) struct MaterialParams {
     pub voxel_surface: Option<VoxelSurfaceUniform>,
     /// Triplanar blend sharpness.
     pub triplanar: Option<f32>,
+    /// A product shader's parameters (`material.parameters`).
+    pub parameters: [[f32; 4]; 4],
     pub maps: MaterialMaps,
 }
 
@@ -1208,6 +1277,10 @@ impl MaterialParams {
             metalness: descriptor.metalness,
             voxel_surface,
             triplanar: descriptor.triplanar.map(|triplanar| triplanar.sharpness),
+            parameters: descriptor
+                .shader
+                .as_ref()
+                .map_or([[0.0; 4]; 4], |shader| shader.parameters),
             maps: MaterialMaps {
                 normal: descriptor.normal_map.as_ref().map(|map| {
                     (
@@ -1310,6 +1383,9 @@ pub(crate) fn material_bind_group(
         .as_ref()
         .map_or(0.0, |(_, strength)| *strength);
     floats[45] = params.triplanar.unwrap_or(1.0);
+    for (row, values) in params.parameters.iter().enumerate() {
+        floats[52 + row * 4..56 + row * 4].copy_from_slice(values);
+    }
     let uniform: &[u8] = bytemuck::cast_slice(&floats);
     let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some(label),
@@ -1378,6 +1454,7 @@ pub(crate) fn builtin_materials(
                 metalness: 0.0,
                 voxel_surface: None,
                 triplanar: None,
+                parameters: [[0.0; 4]; 4],
                 maps: MaterialMaps::default(),
             },
             white,
@@ -1398,6 +1475,7 @@ pub(crate) fn builtin_materials(
                 metalness: 0.0,
                 voxel_surface: None,
                 triplanar: None,
+                parameters: [[0.0; 4]; 4],
                 maps: MaterialMaps::default(),
             },
             white,
@@ -1599,6 +1677,8 @@ fn op_name(op: &RenderDiff) -> &'static str {
         RenderDiff::ReleaseMaterial { .. } => "releaseMaterial",
         RenderDiff::SetMaterialInstanceParameters { .. } => "setMaterialInstanceParameters",
         RenderDiff::DefineTexture { .. } => "defineTexture",
+        RenderDiff::DefineShader { .. } => "defineShader",
+        RenderDiff::ReleaseShader { .. } => "releaseShader",
         RenderDiff::ReleaseTexture { .. } => "releaseTexture",
         RenderDiff::SetSkyBackground { .. } => "setSkyBackground",
         RenderDiff::SetBackgroundColor { .. } => "setBackgroundColor",

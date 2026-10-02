@@ -71,6 +71,30 @@ struct MaterialUniform {
     factors: vec4<f32>,
     // The uv set (0 or 1) each slot reads: base, emissive, normal, occlusion.
     tex_coords: vec4<u32>,
+    // A product shader's own values (`MaterialShaderDescriptor::parameters`).
+    parameters: array<vec4<f32>, 4>,
+};
+
+// What the standard surface stages make of a world fragment, which the shade
+// stage lights and finishes: `rusty::shade::standard_shade`, or a product
+// shader's `shade`.
+struct Surface {
+    // Base colour and alpha: `tint` times the base texture.
+    base: vec4<f32>,
+    // The material colour and texture tint, times the node and vertex
+    // colour: for a product sampling a texture of its own.
+    tint: vec4<f32>,
+    // The shading normal, normal map applied, facing the camera.
+    normal: vec3<f32>,
+    world_position: vec3<f32>,
+    // The mesh uv; a voxel surface's tile coordinates in cells.
+    uv: vec2<f32>,
+    roughness: f32,
+    metalness: f32,
+    // Scales ambient light (the occlusion map).
+    occlusion: f32,
+    // Emitted light: the part's emission times the emissive map.
+    emission: vec3<f32>,
 };
 
 const PI: f32 = 3.141592653589793;

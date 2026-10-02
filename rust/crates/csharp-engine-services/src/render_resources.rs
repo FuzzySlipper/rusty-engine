@@ -55,6 +55,7 @@ pub enum CsharpRenderResourceKind {
     Video,
     AnimatedMesh,
     AnimationClipPack,
+    Shader,
 }
 
 impl CsharpRenderResource {
@@ -186,6 +187,43 @@ impl CsharpRenderResource {
             content_hash,
             path,
             bytes: Arc::from(bytes),
+            texture: None,
+            animated_mesh: None,
+        })
+    }
+
+    /// A product shader: UTF-8 WGSL that composes with the standard shader
+    /// family (render-shaders), checked now so its error names the content
+    /// file and line.
+    fn admit_shader(
+        path: String,
+        relative_path: &str,
+        bytes: Arc<[u8]>,
+    ) -> Result<Self, CsharpEngineServicesError> {
+        use sha2::{Digest, Sha256};
+
+        let path = renderer_path(path, ".wgsl")?;
+        let source = std::str::from_utf8(&bytes).map_err(|_| {
+            CsharpEngineServicesError::new(
+                "CSHARP_SHADER",
+                format!("shader `{relative_path}` is not UTF-8 text"),
+            )
+        })?;
+        render_shaders::check_product_shader(relative_path, source)
+            .map_err(|error| CsharpEngineServicesError::new("CSHARP_SHADER", error))?;
+        let content_hash = format!("sha256:{:x}", Sha256::digest(&bytes));
+        let identity = format!(
+            "shader/{}",
+            content_hash
+                .strip_prefix("sha256:")
+                .expect("SHA-256 prefix")
+        );
+        Ok(Self {
+            kind: CsharpRenderResourceKind::Shader,
+            identity,
+            content_hash,
+            path,
+            bytes,
             texture: None,
             animated_mesh: None,
         })
@@ -337,6 +375,18 @@ impl CsharpRenderResource {
     }
     pub(crate) fn animated_mesh(&self) -> Option<&AnimatedMeshAsset> {
         self.animated_mesh.as_ref()
+    }
+    /// A shader resource's renderer definition, its errors naming `path`.
+    pub(crate) fn shader(&self) -> Option<render_model::ShaderDescriptor> {
+        (self.kind == CsharpRenderResourceKind::Shader).then(|| render_model::ShaderDescriptor {
+            id: self.identity.clone(),
+            path: self
+                .path
+                .strip_prefix("content/")
+                .unwrap_or(&self.path)
+                .to_owned(),
+            source: String::from_utf8_lossy(&self.bytes).into_owned(),
+        })
     }
 
     /// A mesh body for tests that only need a large admitted resource.
@@ -578,6 +628,7 @@ impl RenderResourceRegistry {
                 CsharpRenderResourceKind::Texture => NativeRenderResourceKind::Texture,
                 CsharpRenderResourceKind::Mesh => NativeRenderResourceKind::StaticMesh,
                 CsharpRenderResourceKind::Font => NativeRenderResourceKind::Font,
+                CsharpRenderResourceKind::Shader => NativeRenderResourceKind::Shader,
                 CsharpRenderResourceKind::Audio => {
                     return Err(CsharpEngineServicesError::new(
                         "CSHARP_RENDER_RESOURCE_KIND",
@@ -698,10 +749,13 @@ impl RenderResourceImports {
             _ if relative_path.ends_with(".woff2") => {
                 CsharpRenderResource::admit_font(browser_path.clone(), bytes.to_vec())
             }
+            _ if relative_path.ends_with(".wgsl") => {
+                CsharpRenderResource::admit_shader(browser_path.clone(), &relative_path, bytes)
+            }
             _ => Err(CsharpEngineServicesError::new(
                 "CSHARP_RENDER_RESOURCE_KIND",
                 format!(
-                    "renderer resource `{requested_path}` must be an RGBA PNG, packed .rmesh, or WOFF2 file"
+                    "renderer resource `{requested_path}` must be an RGBA PNG, packed .rmesh, WOFF2 or WGSL file"
                 ),
             )),
         }
@@ -1592,6 +1646,7 @@ pub(crate) mod tests {
                 "pub fn shared_bytes",
                 "pub(crate) fn texture",
                 "pub(crate) fn animated_mesh",
+                "pub(crate) fn shader",
                 "pub(crate) fn test_mesh",
                 "pub(crate) struct RenderResourceRegistry",
                 "pub(crate) fn begin_call",

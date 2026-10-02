@@ -44,7 +44,13 @@ RENDER_PRESENTATION_FORBIDDEN = (
 # The only workspace crates the renderer may depend on, so the runtime, its
 # host and its publications never enter it.
 RENDER_WGPU_WORKSPACE_DEPENDENCIES = frozenset(
-    {"render-host-contracts", "render-model", "render-presentation", "render-video"}
+    {
+        "render-host-contracts",
+        "render-model",
+        "render-presentation",
+        "render-shaders",
+        "render-video",
+    }
 )
 # External crates that only the named workspace crates may depend on, so a
 # device or backend library stays behind its owner's API.
@@ -56,8 +62,9 @@ EXTERNAL_DEPENDENCY_OWNERS = {
     "symphonia": frozenset({"render-audio"}),
     "fontdue": frozenset({"render-wgpu"}),
     "glam": frozenset({"render-wgpu"}),
-    "naga": frozenset({"render-wgpu"}),
-    "naga_oil": frozenset({"render-wgpu"}),
+    # Shader composition and checking (render-shaders); wgpu's own naga.
+    "naga": frozenset({"render-shaders", "render-wgpu"}),
+    "naga_oil": frozenset({"render-shaders"}),
     "wgpu": frozenset({"render-wgpu"}),
     "wgpu-core": frozenset({"render-wgpu"}),
     "wgpu-hal": frozenset({"render-wgpu"}),

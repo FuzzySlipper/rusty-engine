@@ -609,6 +609,8 @@ internal static class Emit
         output.AppendLine("    internal static Vector2 FromNative(NativeVec2 value) => new(value.x, value.y);");
         output.AppendLine("    internal static NativeVec3 ToNative(Vector3 value) => new() { x = value.X, y = value.Y, z = value.Z };");
         output.AppendLine("    internal static Vector3 FromNative(NativeVec3 value) => new(value.x, value.y, value.z);");
+        output.AppendLine("    internal static NativeVec4 ToNative(Vector4 value) => new() { x = value.X, y = value.Y, z = value.Z, w = value.W };");
+        output.AppendLine("    internal static Vector4 FromNative(NativeVec4 value) => new(value.x, value.y, value.z, value.w);");
         output.AppendLine("    internal static NativeQuat ToNative(Quaternion value) => new() { x = value.X, y = value.Y, z = value.Z, w = value.W };");
         output.AppendLine("    internal static Quaternion FromNative(NativeQuat value) => new(value.x, value.y, value.z, value.w);");
         foreach (Enum value in model.Enums.Values.OrderBy(value => value.Name, StringComparer.Ordinal))
@@ -1257,7 +1259,7 @@ internal static class Emit
     private static string NativeTableParameter(Service service) => char.ToLowerInvariant(service.Name[0]) + service.Name[1..];
     private static string NativeTableField(Service emittedService, Service owner) => emittedService.Name == owner.Name ? "_native" : $"_{NativeTableParameter(owner)}";
 
-    private static bool IsSafeValue(Struct value, BindingModel model) => value.Name is not "NativeEngineApi" and not "NativeProductApi" and not "NativeEngineTestHostRequest" and not "NativeProductAbiHandshakeV1" and not "NativeProductCreateArgs" and not "NativeProductTimelineCompletion" and not "NativeProductUpdateArgs" and not "NativeProductCallError" and not "NativeContentFile" and not "NativeInputBinding" and not "NativeInputSequence" and not "NativeInputDescriptor" and not "NativeInputMapping" and not "NativeInputConfiguration" and not "NativeInputEvent" and not "NativeUtf8Slice" and not "NativeByteSlice" and not "NativeWritableByteSlice" and not "NativeStructuredValue" and not "NativeOperationErrorReceipt" and not "NativeVec2" and not "NativeVec3" and not "NativeQuat" and not "NativeAnimationFeedbackText" && !value.Name.EndsWith("Api", StringComparison.Ordinal) && !BindingModel.IsBorrowedResult(value.Name, model.Structs);
+    private static bool IsSafeValue(Struct value, BindingModel model) => value.Name is not "NativeEngineApi" and not "NativeProductApi" and not "NativeEngineTestHostRequest" and not "NativeProductAbiHandshakeV1" and not "NativeProductCreateArgs" and not "NativeProductTimelineCompletion" and not "NativeProductUpdateArgs" and not "NativeProductCallError" and not "NativeContentFile" and not "NativeInputBinding" and not "NativeInputSequence" and not "NativeInputDescriptor" and not "NativeInputMapping" and not "NativeInputConfiguration" and not "NativeInputEvent" and not "NativeUtf8Slice" and not "NativeByteSlice" and not "NativeWritableByteSlice" and not "NativeStructuredValue" and not "NativeOperationErrorReceipt" and not "NativeVec2" and not "NativeVec3" and not "NativeVec4" and not "NativeQuat" and not "NativeAnimationFeedbackText" && !value.Name.EndsWith("Api", StringComparison.Ordinal) && !BindingModel.IsBorrowedResult(value.Name, model.Structs);
     private static IReadOnlyList<(Field Field, string Type)> SafeFields(Struct value, BindingModel model)
     {
         List<(Field, string)> fields = [];
@@ -1305,7 +1307,7 @@ internal static class Emit
         }
         return string.Join(", ", args.Select((type, index) => $"{SafeType(model, BindingModel.Bare(type))} arg{index}"));
     }
-    private static string SafeType(string native) => native switch { "bool" or "_Bool" => "bool", "int16_t" => "short", "int" or "int32_t" => "int", "int64_t" => "long", "uint16_t" => "ushort", "uint32_t" => "uint", "uint64_t" => "ulong", "size_t" => "nuint", "float" => "float", "double" => "double", "uint8_t" => "byte", "NativeVec2" => "Vector2", "NativeVec3" => "Vector3", "NativeQuat" => "Quaternion", "NativeStructuredValue" => "UiValue", "NativeAnimationFeedbackText" => "string", _ when native.StartsWith("Native", StringComparison.Ordinal) => native["Native".Length..], _ => native };
+    private static string SafeType(string native) => native switch { "bool" or "_Bool" => "bool", "int16_t" => "short", "int" or "int32_t" => "int", "int64_t" => "long", "uint16_t" => "ushort", "uint32_t" => "uint", "uint64_t" => "ulong", "size_t" => "nuint", "float" => "float", "double" => "double", "uint8_t" => "byte", "NativeVec2" => "Vector2", "NativeVec3" => "Vector3", "NativeVec4" => "Vector4", "NativeQuat" => "Quaternion", "NativeStructuredValue" => "UiValue", "NativeAnimationFeedbackText" => "string", _ when native.StartsWith("Native", StringComparison.Ordinal) => native["Native".Length..], _ => native };
     private static string SafeEnumMember(string enumName, string member) => RawIdentifier(member.StartsWith($"{enumName}_", StringComparison.Ordinal) ? member[(enumName.Length + 1)..] : member);
     private static string SafeType(BindingModel model, string native) => IsDisposableHandle(model, native) ? OwnerType(native) : SafeType(native);
     private static string RawType(string type)

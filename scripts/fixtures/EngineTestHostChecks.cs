@@ -13,7 +13,12 @@ internal static class EngineTestHostChecks
         using var host = EngineTestHost.Create(new EngineTestHostOptions
         {
             PersistenceRoot = persistenceRoot,
-            Content = new Dictionary<string, ReadOnlyMemory<byte>> { ["textures/atlas.png"] = png },
+            Content = new Dictionary<string, ReadOnlyMemory<byte>>
+            {
+                ["textures/atlas.png"] = png,
+                ["shaders/tint.wgsl"] = System.Text.Encoding.UTF8.GetBytes(TintShader),
+                ["shaders/broken.wgsl"] = System.Text.Encoding.UTF8.GetBytes(TintShader.Replace("surface.base", "missing")),
+            },
             LibraryPath = library,
         });
 
@@ -41,6 +46,21 @@ internal static class EngineTestHostChecks
             // Triplanar planes blend at a sharpness of 1 or more.
             using Material triplanar = engine.Graphics.CreateMaterial(Mapped(data) with { TriplanarSharpness = 4 });
             ExpectRefusal(() => engine.Graphics.CreateMaterial(Mapped(data) with { TriplanarSharpness = .5f }), "CSHARP_MATERIAL");
+        });
+
+        host.Call(engine =>
+        {
+            // A product shader is checked when it is opened, and held by its materials.
+            ExpectRefusal(() => engine.Graphics.OpenResource(new RenderResourceRequest("shaders/broken.wgsl")), "CSHARP_SHADER");
+            RenderResourceInfo tint = engine.Graphics.OpenResource(new RenderResourceRequest("shaders/tint.wgsl"));
+            Require(tint.Kind == RenderResourceKind.Shader, "a .wgsl resource is a shader");
+            RenderResource shader = tint.Handle;
+            Material material = engine.Graphics.CreateMaterial(new MaterialRequest(new(1, 1, 1, 1), default, .8f,
+                new(1, 1, 1, 1), Vector3.Zero, 0, false, MaterialAlphaMode.Opaque, .5f, 0, default, 1, 0,
+                new MaterialShader(shader, new Vector4(1, 0, 0, 1))));
+            ExpectRefusal(shader.Dispose, "CSHARP_RENDER_RESOURCE_IN_USE");
+            material.Dispose();
+            shader.Dispose();
         });
 
         host.Call(engine =>
@@ -85,6 +105,17 @@ internal static class EngineTestHostChecks
             ExpectRefusal(() => engine.Ui.PublishProjection(new(stream, 1, value)), "CSHARP_UI_SEQUENCE");
         });
     }
+
+    private const string TintShader = """
+        #import rusty::types::Surface
+        #import rusty::material::material
+        #import rusty::shade::standard_shade
+
+        fn shade(surface: Surface) -> vec4<f32> {
+            let shaded = standard_shade(surface);
+            return vec4<f32>(shaded.rgb * material.parameters[0].rgb, surface.base.a);
+        }
+        """;
 
     private static void ExpectRefusal(Action operation, string code)
     {

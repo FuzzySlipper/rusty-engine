@@ -18,6 +18,7 @@ pub enum RenderAssetKind {
     VoxelObject,
     Audio,
     Font,
+    Shader,
 }
 
 impl RenderAssetKind {
@@ -32,6 +33,7 @@ impl RenderAssetKind {
             Self::VoxelObject => &["voxel-object/"],
             Self::Audio => &["audio/"],
             Self::Font => &["font/"],
+            Self::Shader => &["shader/"],
         }
     }
 }
@@ -410,6 +412,36 @@ pub struct RenderMaterialDescriptor {
     /// (absolute cells on voxel chunks) or else its object-space positions.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub triplanar: Option<MaterialTriplanarDescriptor>,
+    /// A product shader that shades this material in place of the standard
+    /// shade stage, with its parameters.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shader: Option<MaterialShaderDescriptor>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MaterialShaderDescriptor {
+    /// A defined `ShaderDescriptor`.
+    pub shader: String,
+    /// The shader's own values, `material.parameters` in WGSL.
+    pub parameters: [[f32; 4]; 4],
+}
+
+/// A product shader: one WGSL module imported as `rusty::product`, defining
+/// `fn shade(surface: Surface) -> vec4<f32>` (render-shaders). `path` is the
+/// content path its errors name.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ShaderDescriptor {
+    pub id: String,
+    pub path: String,
+    pub source: String,
+}
+
+impl ShaderDescriptor {
+    pub fn validate(&self) -> Result<(), RenderAssetError> {
+        validate_asset_id(&self.id, RenderAssetKind::Shader)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -470,6 +502,17 @@ impl RenderMaterialDescriptor {
         {
             return Err(MaterialDescriptorError::InvalidTriplanar);
         }
+        if let Some(shader) = &self.shader {
+            if validate_asset_id(&shader.shader, RenderAssetKind::Shader).is_err()
+                || !shader
+                    .parameters
+                    .iter()
+                    .flatten()
+                    .all(|value| value.is_finite())
+            {
+                return Err(MaterialDescriptorError::InvalidShader);
+            }
+        }
         if let Some(map) = &self.normal_map {
             if validate_asset_id(&map.texture, RenderAssetKind::Texture).is_err()
                 || !map.scale.is_finite()
@@ -509,6 +552,7 @@ pub enum MaterialDescriptorError {
     InvalidMetalness,
     InvalidNormalMap,
     InvalidTriplanar,
+    InvalidShader,
     InvalidEmission,
     InvalidAlphaCutoff,
     InvalidVoxelSurface(VoxelSurfaceDescriptorError),
@@ -1499,6 +1543,7 @@ mod tests {
         };
         assert_eq!(surface.validate(), Ok(()));
         let material = RenderMaterialDescriptor {
+            shader: None,
             id: "material/stone".to_string(),
             color: [1.0; 4],
             texture: Some("texture/voxel-surfaces".to_string()),
@@ -1550,6 +1595,7 @@ mod tests {
     #[test]
     fn generic_material_alpha_and_sidedness_are_explicit_and_bounded() {
         let material = RenderMaterialDescriptor {
+            shader: None,
             id: "material/generic-alpha-test".to_string(),
             color: [1.0; 4],
             texture: None,

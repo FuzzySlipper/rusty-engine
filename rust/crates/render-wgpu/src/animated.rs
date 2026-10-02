@@ -503,6 +503,7 @@ impl Renderer {
                 voxel_surface: None,
                 normal_map: None,
                 triplanar: None,
+                shader: None,
             };
             self.define_material_with(descriptor, material.unlit, maps);
         }
@@ -1417,7 +1418,8 @@ impl Renderer {
         let mut params = MaterialParams::of(&descriptor, texture.map(|texture| texture.size));
         params.maps = maps;
         params.unlit = unlit;
-        self.insert_material(descriptor, &params);
+        // GLB materials name no product shader, so all compose.
+        let _ = self.insert_material(descriptor, &params);
     }
 }
 

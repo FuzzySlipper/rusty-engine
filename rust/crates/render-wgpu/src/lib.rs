@@ -217,16 +217,22 @@ impl Renderer {
         let effects = effects::Effects::new(
             device,
             &layouts.frame,
-            layouts
-                .shaders
-                .module(device, Entry::Effects, Features::default()),
+            pipelines::standard(layouts.shaders.module(
+                device,
+                Entry::Effects,
+                Features::default(),
+            )),
         );
-        let ghost_shader = layouts
-            .shaders
-            .module(device, Entry::Ghost, Features::default());
-        let compose_shader = layouts
-            .shaders
-            .module(device, Entry::Compose, Features::default());
+        let ghost_shader = pipelines::standard(layouts.shaders.module(
+            device,
+            Entry::Ghost,
+            Features::default(),
+        ));
+        let compose_shader = pipelines::standard(layouts.shaders.module(
+            device,
+            Entry::Compose,
+            Features::default(),
+        ));
         let mut renderer = Self {
             gpu: gpu.clone(),
             options,

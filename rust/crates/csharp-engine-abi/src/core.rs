@@ -15,6 +15,15 @@ pub struct NativeVec3 {
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
+pub struct NativeVec4 {
+    pub x: f32,
+    pub y: f32,
+    pub z: f32,
+    pub w: f32,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct NativeQuat {
     pub x: f32,
     pub y: f32,

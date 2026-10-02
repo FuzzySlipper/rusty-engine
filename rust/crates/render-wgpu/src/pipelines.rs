@@ -17,6 +17,11 @@ pub const VERTEX_FLOATS: usize = 12;
 /// The optional second stream (`GpuMesh::extra`): tangent (4), uv1 (2).
 pub const EXTRA_VERTEX_FLOATS: usize = 6;
 
+/// A standard-family module, which always composes.
+pub(crate) fn standard(module: Result<wgpu::ShaderModule, String>) -> wgpu::ShaderModule {
+    module.unwrap_or_else(|error| panic!("{error}"))
+}
+
 pub(crate) struct Layouts {
     pub frame: wgpu::BindGroupLayout,
     pub material: wgpu::BindGroupLayout,
@@ -35,6 +40,9 @@ pub(crate) struct Layouts {
     /// The caster entry per caster feature set (`Features::caster`).
     shadow_shaders: HashMap<Features, wgpu::ShaderModule>,
     pub shadow: ShadowPipelines,
+    /// Product shaders that did not compose since last taken; their
+    /// materials draw with the standard shade stage.
+    pub shader_errors: Vec<String>,
 }
 
 /// One target format's pipelines: the sky, and a world pipeline per feature
@@ -215,7 +223,7 @@ impl Layouts {
             immediate_size: 0,
         });
         let mut shaders = Shaders::new();
-        let sky_shader = shaders.module(device, Entry::Sky, Features::default());
+        let sky_shader = standard(shaders.module(device, Entry::Sky, Features::default()));
         Self {
             frame,
             material,
@@ -230,7 +238,29 @@ impl Layouts {
             world_shaders: HashMap::new(),
             shadow_shaders: HashMap::new(),
             shadow: ShadowPipelines::default(),
+            shader_errors: Vec::new(),
         }
+    }
+
+    /// The world entry compiled with `features`, compiled now if new. A
+    /// product shader that does not compose is compiled with the standard
+    /// shade stage instead, and its error kept in `shader_errors`.
+    pub fn world_shader(
+        &mut self,
+        device: &wgpu::Device,
+        features: Features,
+    ) -> &wgpu::ShaderModule {
+        self.world_shaders.entry(features).or_insert_with(|| {
+            self.shaders
+                .module(device, Entry::World, features)
+                .unwrap_or_else(|error| {
+                    self.shader_errors.push(error);
+                    standard(
+                        self.shaders
+                            .module(device, Entry::World, features.with_product(0)),
+                    )
+                })
+        })
     }
 
     /// Feature sets compiled for the world and caster passes.
@@ -287,10 +317,8 @@ impl Layouts {
         if pipelines.world.contains_key(&(features, pass)) {
             return false;
         }
-        let shader = self
-            .world_shaders
-            .entry(features)
-            .or_insert_with(|| self.shaders.module(device, Entry::World, features));
+        self.world_shader(device, features);
+        let shader = &self.world_shaders[&features];
         let (topology, cull_mode, front_face, blend) = match pass {
             Pass::Opaque => (TRIANGLES, BACK, CCW, false),
             Pass::OpaqueMirrored => (TRIANGLES, BACK, CW, false),
@@ -375,7 +403,7 @@ impl Layouts {
         let shader = self
             .shadow_shaders
             .entry(features)
-            .or_insert_with(|| self.shaders.module(device, Entry::Shadow, features));
+            .or_insert_with(|| standard(self.shaders.module(device, Entry::Shadow, features)));
         let attributes = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x2, 3 => Float32x4];
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("render-wgpu shadow"),

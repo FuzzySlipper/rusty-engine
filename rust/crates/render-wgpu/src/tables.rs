@@ -556,6 +556,9 @@ pub(crate) enum Environment {
 
 pub(crate) struct Tables {
     pub textures: HashMap<String, GpuTexture>,
+    /// Product shaders by id, with the composer id materials shaded by
+    /// them take (`Shaders::product`).
+    pub shaders: HashMap<String, (render_model::ShaderDescriptor, u32)>,
     pub materials: Slots<MaterialRow>,
     pub static_meshes: Slots<GpuMesh>,
     pub payload_meshes: HashMap<RenderHandle, GpuMesh>,
@@ -586,6 +589,7 @@ impl Tables {
     pub fn new() -> Self {
         Self {
             textures: HashMap::new(),
+            shaders: HashMap::new(),
             materials: Slots::default(),
             static_meshes: Slots::default(),
             payload_meshes: HashMap::new(),

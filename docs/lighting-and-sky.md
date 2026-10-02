@@ -61,8 +61,67 @@ Materials with the same features share pipelines and batch together. A new
 feature set compiles once, when its first material is defined: about 8 ms on
 an RX 9070 XT, then about 0.4 ms for each further pass it draws in. Doom's E1M1
 uses two. The shader is composed from importable WGSL modules in
-`render-wgpu/src/shaders/` (`types`, `view`, `material`, `surface`,
-`lighting`, `tonemap`, `finish`).
+`render-shaders/src/shaders/` (`types`, `view`, `material`, `surface`,
+`lighting`, `tonemap`, `finish`, `shade`).
+
+## Product shaders
+
+Grow the standard shader through an Engine request when a look is common. For
+a look of the product's own (toon or rim lighting, dissolves, stylised
+colour), write a shader. It is one WGSL file in the product's content, opened
+like a texture:
+
+```csharp
+RenderResource toon = engine.Graphics.OpenResource(new RenderResourceRequest("shaders/toon.wgsl")).Handle;
+Material material = engine.Graphics.CreateMaterial(request with
+{
+    Shader = new MaterialShader(toon, new Vector4(0.2f, 0.8f, 1f, 3f)),
+});
+```
+
+The file defines `shade`, which the world pass calls in place of the standard
+shade stage, after the standard stages have sampled the material's textures,
+normal map, triplanar planes and alpha mask:
+
+```wgsl
+#import rusty::types::Surface
+#import rusty::material::material
+#import rusty::view::frame
+#import rusty::shade::standard_shade
+
+fn shade(surface: Surface) -> vec4<f32> {
+    let lit = standard_shade(surface);
+    let view = normalize(frame.camera.xyz - surface.world_position);
+    let rim = pow(1.0 - max(dot(surface.normal, view), 0.0), material.parameters[0].w);
+    return vec4<f32>(lit.rgb + material.parameters[0].rgb * rim, lit.a);
+}
+```
+
+- **What it gets.** `Surface` holds the base colour and alpha, the tint
+  (material, node and vertex colour without the texture), the shading normal,
+  world position, uv, roughness, metalness, occlusion and emission.
+  `material.parameters` holds the four `MaterialShader` vectors. Any standard
+  module may be imported: `rusty::shade::standard_shade` lights and finishes
+  a surface, `rusty::lighting` has `standard_radiance` and the light rows,
+  `rusty::finish::finish` applies exposure, tone mapping and fog, and
+  `rusty::material` has the material's textures and samplers.
+- **What it returns.** The fragment's colour, finished or not; output that
+  skips `finish` is not tone mapped or fogged. It may `discard`.
+- **Variants.** It compiles once per standard feature set its materials use
+  and may test them (`#ifdef NORMAL_MAP`, `UNLIT`, `VOXEL_SURFACE`,
+  `TRIPLANAR`…). Materials sharing a shader and feature set batch together;
+  each shader adds its own pipelines.
+- **Checked when opened.** `OpenResource` composes it with the standard
+  modules and refuses an error with `CSHARP_SHADER`, naming the file, line
+  and column. A product shader still draws in blended passes and casts
+  shadows through the standard caster (its alpha mask, not its own discard).
+- **Lifetime.** A shader resource is held while a material uses it. Under
+  `rusty dev`, an edited loose `.wgsl` restarts the runtime and is checked
+  again; the stream and the window draw it alike.
+
+There is no per-frame time input yet; animate a shader by updating its
+material's parameters. Product shaders sample only the material's base
+texture and normal map.
 
 ## Exposure, tone mapping and fog
 

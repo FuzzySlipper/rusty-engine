@@ -715,6 +715,7 @@ mod tests {
 
     fn material(slot: u16) -> RenderMaterialDescriptor {
         RenderMaterialDescriptor {
+            shader: None,
             id: voxel_material_id(slot),
             color: [0.4, 0.5, 0.6, 1.0],
             texture: None,

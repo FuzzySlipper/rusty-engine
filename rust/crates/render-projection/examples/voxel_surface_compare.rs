@@ -293,6 +293,7 @@ fn materials(
                 1.0,
             ];
             let material = RenderMaterialDescriptor {
+                shader: None,
                 id: binding.material_asset_id.clone(),
                 color,
                 texture: texture.map(|descriptor| descriptor.id.clone()),

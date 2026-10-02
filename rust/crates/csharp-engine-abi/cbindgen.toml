@@ -73,6 +73,7 @@ include = [
 
     "NativeVec2",
     "NativeVec3",
+    "NativeVec4",
     "NativeQuat",
     "NativeTransform",
     "NativeByteSlice",
@@ -376,6 +377,7 @@ include = [
     "NativeLightUpdateRequest",
     "NativeLightReadout",
     "NativeRenderResourceKind",
+    "NativeMaterialShader",
     "NativePrimitiveGeometry",
     "NativeBillboardMode",
     "NativeSpriteSizeMode",

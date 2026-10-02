@@ -1,8 +1,9 @@
 // The standard shader's world pass: parts drawn with their material and the
 // pass's light rows, finished by exposure, tone mapping and fog
 // (`rusty::finish`). Each material compiles the features it uses
-// (`shaders.rs` `Features`): UNLIT, MASK, VOXEL_SURFACE, NORMAL_MAP,
-// EMISSIVE_MAP, OCCLUSION_MAP, TRIPLANAR.
+// (`lib.rs` `Features`): UNLIT, MASK, VOXEL_SURFACE, NORMAL_MAP,
+// EMISSIVE_MAP, OCCLUSION_MAP, TRIPLANAR. A product shader (PRODUCT_SHADER)
+// shades the surface in place of `rusty::shade`.
 
 #import rusty::types::texture_space_position
 #import rusty::view::{frame, parts, instances}
@@ -27,8 +28,11 @@
     triplanar_weights,
     triplanar_normal,
 }
-#import rusty::lighting::standard_radiance
-#import rusty::finish::finish
+#import rusty::types::Surface
+#import rusty::shade::standard_shade
+#ifdef PRODUCT_SHADER
+#import rusty::product::shade
+#endif
 
 struct VsOut {
     @builtin(position) clip: vec4<f32>,
@@ -116,8 +120,10 @@ fn normal_texture(uv: vec2<f32>) -> vec3<f32> {
 #endif
 }
 
-@fragment
-fn fs_world(in: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
+// The standard surface stages: what the material's maps, the part and the
+// vertex make of this fragment. Every map is sampled, and every derivative
+// taken, here, before the shade stage may discard.
+fn standard_surface(in: VsOut, front: bool) -> Surface {
     let row = parts[in.part];
 #ifdef TRIPLANAR
     let planes = triplanar_uvs(in.texture_position, in.texture_normal);
@@ -131,30 +137,31 @@ fn fs_world(in: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<
     let texture_color = base_texture(slot_uv(in, material.tex_coords.x));
 #endif
 #endif
-    let base = row.color * in.color * texture_color;
+    var surface: Surface;
+    surface.tint = row.color * in.color;
+    surface.base = surface.tint * texture_color;
+    surface.world_position = in.world_position;
+    surface.uv = in.uv;
+    surface.roughness = 1.0;
+    surface.metalness = 0.0;
+    surface.occlusion = 1.0;
+    surface.emission = vec3<f32>(0.0);
+    let geometric = normalize(in.normal);
 #ifdef UNLIT
-#ifdef MASK
-    if base.a < material.alpha_cutoff {
-        discard;
-    }
-#endif
-    return finish(base, in.world_position);
+    surface.normal = select(-geometric, geometric, front);
 #else
-    // Every map is sampled, and every derivative taken, before the discard.
 #ifdef EMISSIVE_MAP
     let emissive = textureSample(emissive_map, emissive_sampler,
         transform_uv(material.emissive_uv_u, material.emissive_uv_v, slot_uv(in, material.tex_coords.y))).rgb;
 #else
     let emissive = vec3<f32>(1.0);
 #endif
+    surface.emission = row.emission.rgb * emissive;
 #ifdef OCCLUSION_MAP
     let occlusion_sample = textureSample(occlusion_map, occlusion_sampler,
         transform_uv(material.occlusion_uv_u, material.occlusion_uv_v, slot_uv(in, material.tex_coords.w))).r;
-    let occlusion = 1.0 + material.factors.x * (occlusion_sample - 1.0);
-#else
-    let occlusion = 1.0;
+    surface.occlusion = 1.0 + material.factors.x * (occlusion_sample - 1.0);
 #endif
-    let geometric = normalize(in.normal);
 #ifdef NORMAL_MAP
 #ifdef TRIPLANAR
     // Blended in texture space, then into the world by the normal matrix.
@@ -186,16 +193,26 @@ fn fs_world(in: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<
         normal = -normal;
         facing = -facing;
     }
+    surface.normal = normal;
     let normal_change = max(abs(dpdx(facing)), abs(dpdy(facing)));
     let geometry_roughness = max(max(normal_change.x, normal_change.y), normal_change.z);
+    surface.roughness = min(max(material.roughness, 0.0525) + geometry_roughness, 1.0);
+    surface.metalness = material.metalness;
+#endif
+    return surface;
+}
+
+@fragment
+fn fs_world(in: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
+    let surface = standard_surface(in, front);
 #ifdef MASK
-    if base.a < material.alpha_cutoff {
+    if surface.base.a < material.alpha_cutoff {
         discard;
     }
 #endif
-    let roughness = min(max(material.roughness, 0.0525) + geometry_roughness, 1.0);
-    let radiance = standard_radiance(base.rgb, normal, in.world_position, roughness, material.metalness, occlusion)
-        + row.emission.rgb * emissive;
-    return finish(vec4<f32>(radiance, base.a), in.world_position);
+#ifdef PRODUCT_SHADER
+    return shade(surface);
+#else
+    return standard_shade(surface);
 #endif
 }

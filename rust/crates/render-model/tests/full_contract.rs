@@ -2,6 +2,7 @@ use render_model::*;
 
 fn material() -> RenderMaterialDescriptor {
     RenderMaterialDescriptor {
+        shader: None,
         id: "material/plain".to_string(),
         color: [0.5, 0.6, 0.7, 1.0],
         texture: Some("texture/checker".to_string()),

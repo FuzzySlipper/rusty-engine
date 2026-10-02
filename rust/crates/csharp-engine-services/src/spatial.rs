@@ -5625,6 +5625,7 @@ mod tests {
                 crate::appearance::create_material(
                     appearance_context,
                     NativeMaterialRequest {
+                        shader: Default::default(),
                         triplanar_sharpness: 0.0,
                         color: NativeColor {
                             r: 0.8,
