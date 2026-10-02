@@ -12,8 +12,10 @@
 //! A product shader is one WGSL module imported as `rusty::product`. It
 //! defines `fn shade(surface: Surface) -> vec4<f32>`, which the world pass
 //! calls in place of `rusty::shade::standard_shade` with the surface the
-//! standard stages computed. It may import any module above, and read the
-//! standard feature defs (`#ifdef NORMAL_MAP`).
+//! standard stages computed, and may define `fn cast_shadow(caster: Caster)`, which
+//! the shadow pass calls (and which may discard). It may import any module
+//! above, and read the standard feature defs (`#ifdef NORMAL_MAP`) and its
+//! own keywords, chosen when it is opened.
 
 use std::collections::HashMap;
 use std::ops::BitOr;
@@ -83,10 +85,17 @@ impl Features {
     }
 
     /// What the shadow caster pass compiles: only the alpha mask and the
-    /// voxel uv remap and triplanar planes it samples through. Product
-    /// shaders do not cast differently.
+    /// voxel uv remap and triplanar planes it samples through, and a product
+    /// shader that defines a caster stage.
     pub fn caster(self) -> Self {
-        Self::bit(self.bits & (Self::MASK.bits | Self::VOXEL_SURFACE.bits | Self::TRIPLANAR.bits))
+        Self {
+            bits: self.bits & (Self::MASK.bits | Self::VOXEL_SURFACE.bits | Self::TRIPLANAR.bits),
+            product: if self.product & PRODUCT_CASTS != 0 {
+                self.product
+            } else {
+                0
+            },
+        }
     }
 
     fn defs(self) -> HashMap<String, ShaderDefValue> {
@@ -97,6 +106,10 @@ impl Features {
             .collect();
         if self.product != 0 {
             defs.insert("PRODUCT_SHADER".to_string(), ShaderDefValue::Bool(true));
+        }
+        // The shadow pass has a fragment stage only to discard.
+        if self.contains(Self::MASK) || self.product != 0 {
+            defs.insert("CASTER_FRAGMENT".to_string(), ShaderDefValue::Bool(true));
         }
         defs
     }
@@ -134,6 +147,13 @@ const MODULES: [(&str, &str); 8] = [
 /// The import path a product shader's module takes.
 const PRODUCT_MODULE: &str = "rusty::product";
 
+/// Set in a product id whose shader defines `cast_shadow`, so `Features::caster`
+/// keeps it.
+const PRODUCT_CASTS: u32 = 1 << 31;
+
+/// Shader defs a product keyword may not take.
+const RESERVED_DEFS: [&str; 2] = ["PRODUCT_SHADER", "CASTER_FRAGMENT"];
+
 #[derive(Clone, Copy, Debug)]
 pub enum Entry {
     World,
@@ -157,11 +177,44 @@ impl Entry {
     }
 }
 
-/// A product shader's WGSL, named by the content path its errors cite.
+/// A product shader's WGSL, named by the content path its errors cite, and
+/// the keywords (its own shader defs) it is compiled with.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProductShader {
     pub path: String,
     pub source: String,
+    pub keywords: Vec<String>,
+}
+
+impl ProductShader {
+    /// Whether it defines a caster stage, `fn cast_shadow(`, outside comments.
+    fn casts(&self) -> bool {
+        self.source.lines().any(|line| {
+            let code = line.split("//").next().unwrap_or_default();
+            code.contains("fn cast_shadow(") || code.contains("fn cast_shadow (")
+        })
+    }
+}
+
+/// A keyword is an upper-case shader def name the standard family does not
+/// use: `[A-Z_][A-Z0-9_]*`.
+pub fn check_keyword(keyword: &str) -> Result<(), String> {
+    let mut characters = keyword.chars();
+    let valid = characters
+        .next()
+        .is_some_and(|first| first.is_ascii_uppercase() || first == '_')
+        && characters.all(|rest| rest.is_ascii_uppercase() || rest.is_ascii_digit() || rest == '_');
+    if !valid {
+        return Err(format!(
+            "shader keyword `{keyword}` must be upper case: [A-Z_][A-Z0-9_]*"
+        ));
+    }
+    if Features::DEFS.iter().any(|(_, name)| *name == keyword) || RESERVED_DEFS.contains(&keyword) {
+        return Err(format!(
+            "shader keyword `{keyword}` is a standard shader feature"
+        ));
+    }
+    Ok(())
 }
 
 pub struct Shaders {
@@ -198,8 +251,10 @@ impl Shaders {
     }
 
     /// The id `Features::with_product` takes for `shader`: the same id for
-    /// the same path and source, so materials sharing a shader batch.
+    /// the same path, source and keywords, so materials sharing a shader
+    /// batch.
     pub fn product(&mut self, shader: ProductShader) -> u32 {
+        let casts = shader.casts();
         let index = match self.products.iter().position(|known| *known == shader) {
             Some(index) => index,
             None => {
@@ -207,15 +262,16 @@ impl Shaders {
                 self.products.len() - 1
             }
         };
-        index as u32 + 1
+        (index as u32 + 1) | if casts { PRODUCT_CASTS } else { 0 }
     }
 
     /// An entry shader compiled with `features`. A product shader that does
     /// not compose under them is an error naming its file and line; the
     /// standard family always composes.
     pub fn compose(&mut self, entry: Entry, features: Features) -> Result<naga::Module, String> {
+        let index = (features.product & !PRODUCT_CASTS) as usize;
         if features.product != 0 && self.current != Some(features.product) {
-            let shader = &self.products[features.product as usize - 1];
+            let shader = &self.products[index - 1];
             self.current = None;
             let added = self
                 .composer
@@ -231,13 +287,19 @@ impl Shaders {
             self.current = Some(features.product);
         }
         let (path, source) = entry.source();
+        let mut defs = features.defs();
+        if index != 0 {
+            for keyword in &self.products[index - 1].keywords {
+                defs.insert(keyword.clone(), ShaderDefValue::Bool(true));
+            }
+        }
         let module = self
             .composer
             .make_naga_module(NagaModuleDescriptor {
                 source,
                 file_path: path,
                 shader_type: ShaderType::Wgsl,
-                shader_defs: features.defs(),
+                shader_defs: defs,
                 ..Default::default()
             })
             .map_err(|error| error.emit_to_string(&self.composer));
@@ -248,18 +310,26 @@ impl Shaders {
     }
 }
 
-/// Check a product shader before it is admitted: it composes into the world
-/// pass with the standard features a plain material has. The error names
+/// Check a product shader before it is admitted: its keywords, and that it
+/// composes into the world pass (and the shadow pass, if it defines a
+/// caster) with the standard features a plain material has. The error names
 /// its file and line.
-pub fn check_product_shader(path: &str, source: &str) -> Result<(), String> {
+pub fn check_product_shader(path: &str, source: &str, keywords: &[String]) -> Result<(), String> {
+    for keyword in keywords {
+        check_keyword(keyword)?;
+    }
     let mut shaders = Shaders::new();
     let product = shaders.product(ProductShader {
         path: path.to_string(),
         source: source.to_string(),
+        keywords: keywords.to_vec(),
     });
-    shaders
-        .compose(Entry::World, Features::default().with_product(product))
-        .map(|_| ())
+    let features = Features::default().with_product(product);
+    shaders.compose(Entry::World, features)?;
+    if features.caster().product() != 0 {
+        shaders.compose(Entry::Shadow, features.caster())?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -316,16 +386,18 @@ fn shade(surface: Surface) -> vec4<f32> {
 
     #[test]
     fn a_product_shader_composes_under_the_standard_features_and_its_errors_name_its_line() {
-        check_product_shader("shaders/rim.wgsl", RIM).unwrap();
+        check_product_shader("shaders/rim.wgsl", RIM, &[]).unwrap();
         let mut shaders = Shaders::new();
         let rim = shaders.product(ProductShader {
             path: "shaders/rim.wgsl".to_string(),
             source: RIM.to_string(),
+            keywords: Vec::new(),
         });
         assert_eq!(
             shaders.product(ProductShader {
                 path: "shaders/rim.wgsl".to_string(),
                 source: RIM.to_string(),
+                keywords: Vec::new(),
             }),
             rim,
             "one id for one shader"
@@ -339,10 +411,101 @@ fn shade(surface: Surface) -> vec4<f32> {
         shaders.compose(Entry::World, Features::NORMAL_MAP).unwrap();
 
         let broken = RIM.replace("pow(1.0 -", "pow(missing -");
-        let error = check_product_shader("shaders/broken.wgsl", &broken).unwrap_err();
+        let error = check_product_shader("shaders/broken.wgsl", &broken, &[]).unwrap_err();
         assert!(error.contains("shaders/broken.wgsl"), "{error}");
         assert!(error.contains(":8:"), "{error}");
-        let error = check_product_shader("shaders/empty.wgsl", "fn other() {}").unwrap_err();
+        let error = check_product_shader("shaders/empty.wgsl", "fn other() {}", &[]).unwrap_err();
         assert!(error.contains("shade"), "{error}");
+    }
+
+    const DISSOLVE: &str = "#import rusty::types::{Surface, Caster}
+#import rusty::material::{material, product_map_a, product_sampler_a}
+#import rusty::view::frame
+#import rusty::shade::standard_shade
+
+fn dissolved(uv: vec2<f32>) -> bool {
+    let noise = textureSampleLevel(product_map_a, product_sampler_a, uv, 0.0).r;
+    return noise < fract(frame.time.x * material.parameters[0].x);
+}
+
+fn shade(surface: Surface) -> vec4<f32> {
+#ifdef DISSOLVE
+    if dissolved(surface.uv) {
+        discard;
+    }
+#endif
+#ifdef BROKEN
+    return missing;
+#else
+    return standard_shade(surface);
+#endif
+}
+
+// A shadow that follows the discard.
+fn cast_shadow(caster: Caster) {
+#ifdef DISSOLVE
+    if dissolved(caster.uv) {
+        discard;
+    }
+#endif
+}
+";
+
+    #[test]
+    fn keywords_select_a_product_variant_and_a_caster_stage_composes_into_the_shadow_pass() {
+        let keywords = |names: &[&str]| {
+            names
+                .iter()
+                .map(|name| name.to_string())
+                .collect::<Vec<_>>()
+        };
+        check_product_shader("shaders/dissolve.wgsl", DISSOLVE, &keywords(&["DISSOLVE"])).unwrap();
+        check_product_shader("shaders/dissolve.wgsl", DISSOLVE, &[]).unwrap();
+        let error = check_product_shader("shaders/dissolve.wgsl", DISSOLVE, &keywords(&["BROKEN"]))
+            .unwrap_err();
+        assert!(error.contains("shaders/dissolve.wgsl:18:"), "{error}");
+        for refused in ["NORMAL_MAP", "PRODUCT_SHADER", "lower", "1ST", ""] {
+            assert!(check_keyword(refused).is_err(), "{refused}");
+        }
+
+        let mut shaders = Shaders::new();
+        let dissolve = shaders.product(ProductShader {
+            path: "shaders/dissolve.wgsl".to_string(),
+            source: DISSOLVE.to_string(),
+            keywords: keywords(&["DISSOLVE"]),
+        });
+        let plain = shaders.product(ProductShader {
+            path: "shaders/dissolve.wgsl".to_string(),
+            source: DISSOLVE.to_string(),
+            keywords: Vec::new(),
+        });
+        assert_ne!(dissolve, plain, "keywords make a separate variant");
+        let features = Features::MASK.with_product(dissolve);
+        assert_eq!(
+            features.caster().product(),
+            dissolve,
+            "a caster stage keeps the product"
+        );
+        let rim = shaders.product(ProductShader {
+            path: "shaders/rim.wgsl".to_string(),
+            source: RIM.to_string(),
+            keywords: Vec::new(),
+        });
+        assert_eq!(
+            Features::MASK.with_product(rim).caster(),
+            Features::MASK,
+            "no caster stage"
+        );
+        for bits in (0..=u8::MAX).map(Features::bit) {
+            for product in [dissolve, plain] {
+                let features = bits.with_product(product);
+                if let Err(error) = shaders.compose(Entry::World, features) {
+                    panic!("{features:?}: {error}");
+                }
+                if let Err(error) = shaders.compose(Entry::Shadow, features.caster()) {
+                    panic!("{features:?}: {error}");
+                }
+            }
+        }
     }
 }

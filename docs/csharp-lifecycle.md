@@ -200,8 +200,10 @@ and its tangent frame stays continuous across tile seams.
 normal map from three axis planes blended by the surface normal instead of
 the uv; see [textures on reconstructed
 surfaces](smooth-voxel-surfaces.md#textures-on-reconstructed-surfaces).
-`Shader` names a product shader opened from a `.wgsl` file, with four
-parameter vectors; see [product shaders](lighting-and-sky.md#product-shaders).
+`Shader` names a product shader opened from a `.wgsl` file (its keywords
+chosen at open with `RenderResourceRequest.ShaderKeywords`), with four
+parameter vectors and two textures of its own; see [product
+shaders](lighting-and-sky.md#product-shaders).
 `AuthoredMaterialAppearanceRequest.Shader` does the same for authored and
 voxel materials.
 Sprite requests accept a `SpriteMaterialDescriptor` for lighting, normal/depth

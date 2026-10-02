@@ -852,6 +852,7 @@ impl Renderer {
         let product = self.layouts.shaders.product(crate::shaders::ProductShader {
             path: shader.path.clone(),
             source: shader.source.clone(),
+            keywords: shader.keywords.clone(),
         });
         self.tables
             .shaders
@@ -991,6 +992,7 @@ impl Renderer {
                     .filter(|(map, _)| retained(map)),
             },
             voxel_surface: params.voxel_surface,
+            product_textures: params.product_textures.clone(),
             ..*params
         };
         let lookup = |map: Option<&MapSlot>| {
@@ -1007,6 +1009,12 @@ impl Renderer {
                 emissive: lookup(params.maps.emissive.as_ref()),
                 normal: lookup(params.maps.normal.as_ref().map(|(map, _)| map)),
                 occlusion: lookup(params.maps.occlusion.as_ref().map(|(map, _)| map)),
+                product: params.product_textures.each_ref().map(|texture| {
+                    texture
+                        .as_ref()
+                        .and_then(|id| self.tables.textures.get(id))
+                        .unwrap_or(&self.white)
+                }),
             },
         );
         (bind_group, params.features())
@@ -1223,6 +1231,8 @@ pub(crate) struct MaterialParams {
     pub triplanar: Option<f32>,
     /// A product shader's parameters (`material.parameters`).
     pub parameters: [[f32; 4]; 4],
+    /// A product shader's own textures (`product_map_a`, `product_map_b`).
+    pub product_textures: [Option<String>; 2],
     pub maps: MaterialMaps,
 }
 
@@ -1281,6 +1291,12 @@ impl MaterialParams {
                 .shader
                 .as_ref()
                 .map_or([[0.0; 4]; 4], |shader| shader.parameters),
+            product_textures: std::array::from_fn(|slot| {
+                descriptor
+                    .shader
+                    .as_ref()
+                    .and_then(|shader| shader.textures.get(slot).cloned())
+            }),
             maps: MaterialMaps {
                 normal: descriptor.normal_map.as_ref().map(|map| {
                     (
@@ -1322,11 +1338,13 @@ pub(crate) fn blends(descriptor: &RenderMaterialDescriptor) -> bool {
 }
 
 /// The textures a material binds after its albedo: emissive, normal and
-/// occlusion maps (white where the material has none).
+/// occlusion maps, and a product shader's two maps (white where the material
+/// has none).
 pub(crate) struct MapTextures<'a> {
     pub emissive: &'a GpuTexture,
     pub normal: &'a GpuTexture,
     pub occlusion: &'a GpuTexture,
+    pub product: [&'a GpuTexture; 2],
 }
 
 pub(crate) fn material_bind_group(
@@ -1432,6 +1450,22 @@ pub(crate) fn material_bind_group(
                 binding: 8,
                 resource: wgpu::BindingResource::Sampler(maps.occlusion.material_binding().1),
             },
+            wgpu::BindGroupEntry {
+                binding: 9,
+                resource: wgpu::BindingResource::TextureView(maps.product[0].material_binding().0),
+            },
+            wgpu::BindGroupEntry {
+                binding: 10,
+                resource: wgpu::BindingResource::Sampler(maps.product[0].material_binding().1),
+            },
+            wgpu::BindGroupEntry {
+                binding: 11,
+                resource: wgpu::BindingResource::TextureView(maps.product[1].material_binding().0),
+            },
+            wgpu::BindGroupEntry {
+                binding: 12,
+                resource: wgpu::BindingResource::Sampler(maps.product[1].material_binding().1),
+            },
         ],
     })
 }
@@ -1455,6 +1489,7 @@ pub(crate) fn builtin_materials(
                 voxel_surface: None,
                 triplanar: None,
                 parameters: [[0.0; 4]; 4],
+                product_textures: [None, None],
                 maps: MaterialMaps::default(),
             },
             white,
@@ -1462,6 +1497,7 @@ pub(crate) fn builtin_materials(
                 emissive: white,
                 normal: white,
                 occlusion: white,
+                product: [white; 2],
             },
         ),
         material_bind_group(
@@ -1476,6 +1512,7 @@ pub(crate) fn builtin_materials(
                 voxel_surface: None,
                 triplanar: None,
                 parameters: [[0.0; 4]; 4],
+                product_textures: [None, None],
                 maps: MaterialMaps::default(),
             },
             white,
@@ -1483,6 +1520,7 @@ pub(crate) fn builtin_materials(
                 emissive: white,
                 normal: white,
                 occlusion: white,
+                product: [white; 2],
             },
         ),
     )

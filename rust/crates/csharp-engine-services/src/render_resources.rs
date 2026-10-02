@@ -199,6 +199,7 @@ impl CsharpRenderResource {
         path: String,
         relative_path: &str,
         bytes: Arc<[u8]>,
+        keywords: &[String],
     ) -> Result<Self, CsharpEngineServicesError> {
         use sha2::{Digest, Sha256};
 
@@ -209,14 +210,19 @@ impl CsharpRenderResource {
                 format!("shader `{relative_path}` is not UTF-8 text"),
             )
         })?;
-        render_shaders::check_product_shader(relative_path, source)
+        render_shaders::check_product_shader(relative_path, source, keywords)
             .map_err(|error| CsharpEngineServicesError::new("CSHARP_SHADER", error))?;
         let content_hash = format!("sha256:{:x}", Sha256::digest(&bytes));
+        // Each keyword set is its own variant, so its own resource.
         let identity = format!(
-            "shader/{}",
+            "shader/{}{}",
             content_hash
                 .strip_prefix("sha256:")
-                .expect("SHA-256 prefix")
+                .expect("SHA-256 prefix"),
+            keywords
+                .iter()
+                .map(|keyword| format!("+{keyword}"))
+                .collect::<String>()
         );
         Ok(Self {
             kind: CsharpRenderResourceKind::Shader,
@@ -386,6 +392,12 @@ impl CsharpRenderResource {
                 .unwrap_or(&self.path)
                 .to_owned(),
             source: String::from_utf8_lossy(&self.bytes).into_owned(),
+            keywords: self
+                .identity
+                .split('+')
+                .skip(1)
+                .map(str::to_owned)
+                .collect(),
         })
     }
 
@@ -708,6 +720,7 @@ impl RenderResourceImports {
         filter: NativeTextureFilter,
         wrap: NativeTextureWrap,
         color_space: NativeTextureColorSpace,
+        shader_keywords: &[String],
         content_admitted: bool,
     ) -> Result<CsharpRenderResource, CsharpEngineServicesError> {
         let relative_path = content.path;
@@ -750,7 +763,12 @@ impl RenderResourceImports {
                 CsharpRenderResource::admit_font(browser_path.clone(), bytes.to_vec())
             }
             _ if relative_path.ends_with(".wgsl") => {
-                CsharpRenderResource::admit_shader(browser_path.clone(), &relative_path, bytes)
+                CsharpRenderResource::admit_shader(
+                    browser_path.clone(),
+                    &relative_path,
+                    bytes,
+                    shader_keywords,
+                )
             }
             _ => Err(CsharpEngineServicesError::new(
                 "CSHARP_RENDER_RESOURCE_KIND",

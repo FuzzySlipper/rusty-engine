@@ -2114,6 +2114,10 @@ mod tests {
                 crate::appearance::open_render_resource(
                     (&mut appearance as *mut RuntimeAppearanceBridge).cast(),
                     &NativeRenderResourceRequest {
+                        shader_keywords: csharp_engine_abi::NativeUtf8Slice {
+                            bytes: std::ptr::null(),
+                            len: 0,
+                        },
                         path: NativeUtf8Slice {
                             bytes: path.as_ptr(),
                             len: path.len(),
@@ -2139,6 +2143,10 @@ mod tests {
                     crate::appearance::open_render_resource(
                         (appearance as *mut RuntimeAppearanceBridge).cast(),
                         &NativeRenderResourceRequest {
+                            shader_keywords: csharp_engine_abi::NativeUtf8Slice {
+                                bytes: std::ptr::null(),
+                                len: 0,
+                            },
                             path: NativeUtf8Slice {
                                 bytes: path.as_ptr(),
                                 len: path.len(),

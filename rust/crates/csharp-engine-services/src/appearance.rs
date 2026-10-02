@@ -2873,20 +2873,34 @@ impl RuntimeAppearanceBridge {
             borrowed_utf8(request.path.bytes, request.path.len, "resource path")?.to_owned()
         };
         let content = self.content_path(&requested_path)?;
-        self.admit_resource(content, request.filter, request.wrap, request.color_space)
+        // SAFETY: the borrowed keywords are copied before the call returns.
+        let keywords = unsafe { shader_keywords(request.shader_keywords)? };
+        self.admit_resource(
+            content,
+            request.filter,
+            request.wrap,
+            request.color_space,
+            &keywords,
+        )
     }
 
-    fn admit_resource(
+    pub(crate) fn admit_resource(
         &mut self,
         content: crate::content::RetainedContent,
         filter: NativeTextureFilter,
         wrap: NativeTextureWrap,
         color_space: NativeTextureColorSpace,
+        shader_keywords: &[String],
     ) -> Result<NativeRenderResourceInfo, CsharpEngineServicesError> {
         let content_admitted = self.content.is_some();
-        let resource = self
-            .imports
-            .file(content, filter, wrap, color_space, content_admitted)?;
+        let resource = self.imports.file(
+            content,
+            filter,
+            wrap,
+            color_space,
+            shader_keywords,
+            content_admitted,
+        )?;
         let resources = &mut self.staged_mut()?.state.render_resources;
         let handle = resources.admit(resource)?;
         resources.info(handle)
@@ -3123,6 +3137,8 @@ impl RuntimeAppearanceBridge {
                 request.texture.value,
                 request.normal_map.value,
                 request.shader.shader.value,
+                request.shader.texture_a.value,
+                request.shader.texture_b.value,
             ]),
         );
         Ok(NativeMaterialHandle { value: handle })
@@ -3223,6 +3239,15 @@ impl RuntimeAppearanceBridge {
         material.triplanar = triplanar_descriptor(request.triplanar_sharpness);
         let shader = material_shader(&staged.state.render_resources, request.shader)?;
         material.shader = shader.as_ref().map(|(used, _)| used.clone());
+        // The shader's own textures, beside the selected and normal ones.
+        let shader_textures = texture_descriptors_for_material(
+            &RenderMaterialDescriptor {
+                texture: None,
+                normal_map: None,
+                ..material.clone()
+            },
+            &staged.state.render_resources,
+        )?;
         let normal_texture = match &material.normal_map {
             Some(map) => Some(
                 texture_descriptors_for_material(
@@ -3245,7 +3270,11 @@ impl RuntimeAppearanceBridge {
             )
         })?;
         let resources = staged.state.projector.resources_mut();
-        for texture in texture.into_iter().chain(normal_texture) {
+        for texture in texture
+            .into_iter()
+            .chain(normal_texture)
+            .chain(shader_textures)
+        {
             retain_texture_descriptor(&mut resources.textures, texture)?;
         }
         if let Some((_, shader)) = shader {
@@ -3259,6 +3288,8 @@ impl RuntimeAppearanceBridge {
                 request.texture.value,
                 request.normal_map.value,
                 request.shader.shader.value,
+                request.shader.texture_a.value,
+                request.shader.texture_b.value,
             ]),
         );
         Ok(NativeMaterialHandle { value: handle })
@@ -3309,6 +3340,8 @@ impl RuntimeAppearanceBridge {
                 request.replacement.texture.value,
                 request.replacement.normal_map.value,
                 request.replacement.shader.shader.value,
+                request.replacement.shader.texture_a.value,
+                request.replacement.shader.texture_b.value,
             ]),
         );
         Ok(())
@@ -9091,6 +9124,25 @@ fn normal_map_descriptor(
     }))
 }
 
+/// A shader resource request's keywords: space separated, as a sorted set,
+/// so one set opens one resource whatever its order.
+///
+/// # Safety
+/// The slice must be valid for this call.
+unsafe fn shader_keywords(
+    keywords: csharp_engine_abi::NativeUtf8Slice,
+) -> Result<Vec<String>, CsharpEngineServicesError> {
+    if keywords.len == 0 {
+        return Ok(Vec::new());
+    }
+    // SAFETY: the caller keeps the slice valid for this call.
+    let text = unsafe { borrowed_utf8(keywords.bytes, keywords.len, "shader keywords")? };
+    let mut keywords: Vec<String> = text.split_whitespace().map(str::to_owned).collect();
+    keywords.sort();
+    keywords.dedup();
+    Ok(keywords)
+}
+
 /// A material's product shader and its definition, or none for handle 0.
 fn material_shader(
     resources: &RenderResourceRegistry,
@@ -9115,6 +9167,22 @@ fn material_shader(
             )
         })?;
     let row = |value: csharp_engine_abi::NativeVec4| [value.x, value.y, value.z, value.w];
+    let textures = [request.texture_a, request.texture_b]
+        .into_iter()
+        .filter(|texture| texture.value != 0)
+        .map(|texture| {
+            resources
+                .get(texture.value)
+                .and_then(CsharpRenderResource::texture)
+                .map(|texture| texture.id.clone())
+                .ok_or_else(|| {
+                    CsharpEngineServicesError::new(
+                        "CSHARP_MATERIAL_SHADER",
+                        "a material shader's textures must be texture resources",
+                    )
+                })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
     Ok(Some((
         render_model::MaterialShaderDescriptor {
             shader: shader.id.clone(),
@@ -9124,6 +9192,7 @@ fn material_shader(
                 row(request.parameter_2),
                 row(request.parameter_3),
             ],
+            textures,
         },
         shader,
     )))
@@ -9198,7 +9267,15 @@ pub(crate) unsafe extern "C" fn open_render_resource_from_content(
         match bridge
             .content_reference(request.content)
             .and_then(|content| {
-                bridge.admit_resource(content, request.filter, request.wrap, request.color_space)
+                // SAFETY: the borrowed keywords are copied before the call returns.
+                let keywords = unsafe { shader_keywords(request.shader_keywords)? };
+                bridge.admit_resource(
+                    content,
+                    request.filter,
+                    request.wrap,
+                    request.color_space,
+                    &keywords,
+                )
             }) {
             Ok(value) => {
                 unsafe { *result = value };
@@ -9498,6 +9575,10 @@ pub(super) mod tests {
 
     pub(crate) fn resource_request(path: &'static str) -> NativeRenderResourceRequest {
         NativeRenderResourceRequest {
+            shader_keywords: csharp_engine_abi::NativeUtf8Slice {
+                bytes: std::ptr::null(),
+                len: 0,
+            },
             path: NativeUtf8Slice {
                 bytes: path.as_ptr(),
                 len: path.len(),
@@ -10753,6 +10834,109 @@ fn shade(surface: Surface) -> vec4<f32> {
             .resources()
             .shaders
             .is_empty());
+    }
+
+    #[test]
+    fn shader_keywords_open_variants_and_shader_textures_are_held_by_their_materials() {
+        const GLOW: &str = "#import rusty::types::Surface
+#import rusty::material::{product_map_a, product_sampler_a}
+#import rusty::shade::standard_shade
+
+fn shade(surface: Surface) -> vec4<f32> {
+#ifdef GLOW
+    return standard_shade(surface) + textureSample(product_map_a, product_sampler_a, surface.uv);
+#else
+    return standard_shade(surface);
+#endif
+}
+";
+        let mut content = BTreeMap::new();
+        content.insert("shaders/glow.wgsl".to_owned(), Arc::from(GLOW.as_bytes()));
+        content.insert("noise.png".to_owned(), Arc::from(RGBA_PNG));
+        let mut bridge = RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), content);
+        bridge.begin_call();
+        let open = |bridge: &mut RuntimeAppearanceBridge, keywords: &'static str| {
+            let mut request = resource_request("shaders/glow.wgsl");
+            request.shader_keywords = NativeUtf8Slice {
+                bytes: keywords.as_ptr(),
+                len: keywords.len(),
+            };
+            bridge.open_resource(&request)
+        };
+        let plain = open(&mut bridge, "").unwrap();
+        let glow = open(&mut bridge, "GLOW  EXTRA").unwrap();
+        assert_ne!(
+            plain.handle, glow.handle,
+            "a keyword set is its own resource"
+        );
+        assert_eq!(
+            open(&mut bridge, "EXTRA GLOW").unwrap().handle,
+            glow.handle,
+            "in any order"
+        );
+        let refused = open(&mut bridge, "NORMAL_MAP").unwrap_err();
+        assert_eq!(refused.code(), "CSHARP_SHADER");
+        assert_eq!(
+            open(&mut bridge, "glow").unwrap_err().code(),
+            "CSHARP_SHADER"
+        );
+        let resources = &bridge.staged_ref().unwrap().state.render_resources;
+        let variant = resources.get(glow.handle.value).unwrap().shader().unwrap();
+        assert_eq!(variant.keywords, ["EXTRA", "GLOW"]);
+
+        let noise = bridge
+            .open_resource(&resource_request("noise.png"))
+            .unwrap();
+        let white = NativeColor {
+            r: 1.0,
+            g: 1.0,
+            b: 1.0,
+            a: 1.0,
+        };
+        let request = |texture_a: u64| NativeMaterialRequest {
+            color: white,
+            texture: NativeRenderResourceReference::default(),
+            roughness: 0.8,
+            texture_tint: white,
+            emission_color: NativeVec3::default(),
+            emission_intensity: 0.0,
+            double_sided: false,
+            alpha_mode: NativeMaterialAlphaMode::Opaque,
+            alpha_cutoff: 0.5,
+            metalness: 0.0,
+            normal_map: NativeRenderResourceReference::default(),
+            normal_scale: 1.0,
+            triplanar_sharpness: 0.0,
+            shader: csharp_engine_abi::NativeMaterialShader {
+                shader: NativeRenderResourceReference {
+                    value: glow.handle.value,
+                },
+                texture_a: NativeRenderResourceReference { value: texture_a },
+                ..Default::default()
+            },
+        };
+        assert_eq!(
+            bridge
+                .create_material(request(plain.handle.value))
+                .unwrap_err()
+                .code(),
+            "CSHARP_MATERIAL_SHADER",
+            "a shader texture must be a texture"
+        );
+        let material = bridge.create_material(request(noise.handle.value)).unwrap();
+        let resources = bridge.staged_ref().unwrap().state.projector.resources();
+        let used = resources.materials.last().unwrap().shader.clone().unwrap();
+        assert_eq!(used.textures.len(), 1);
+        assert!(resources
+            .textures
+            .iter()
+            .any(|texture| texture.id == used.textures[0]));
+        assert_eq!(
+            bridge.destroy_resource(noise.handle).unwrap_err().code(),
+            "CSHARP_RENDER_RESOURCE_IN_USE"
+        );
+        bridge.destroy_material(material).unwrap();
+        bridge.destroy_resource(noise.handle).unwrap();
     }
 
     #[test]

@@ -100,28 +100,71 @@ fn shade(surface: Surface) -> vec4<f32> {
 - **What it gets.** `Surface` holds the base colour and alpha, the tint
   (material, node and vertex colour without the texture), the shading normal,
   world position, uv, roughness, metalness, occlusion and emission.
-  `material.parameters` holds the four `MaterialShader` vectors. Any standard
-  module may be imported: `rusty::shade::standard_shade` lights and finishes
-  a surface, `rusty::lighting` has `standard_radiance` and the light rows,
+  `material.parameters` holds the four `MaterialShader` vectors, and
+  `product_map_a` and `product_map_b` (with `product_sampler_a`/`_b`, in
+  `rusty::material`) its `TextureA` and `TextureB`: white when unset, sampled
+  as they were opened (a ramp or noise read as data is opened with
+  `TextureColorSpace.Linear`). `frame.time.x` (`rusty::view`) is the Engine's
+  presentation time in seconds: it advances with the simulation, holds while
+  it is paused, and needs no material update, so scrolling, pulsing and
+  dissolving cost nothing per frame on the C# side. Any standard module may
+  be imported: `rusty::shade::standard_shade` lights and finishes a surface,
+  `rusty::lighting` has `standard_radiance` and the light rows,
   `rusty::finish::finish` applies exposure, tone mapping and fog, and
   `rusty::material` has the material's textures and samplers.
 - **What it returns.** The fragment's colour, finished or not; output that
   skips `finish` is not tone mapped or fogged. It may `discard`.
 - **Variants.** It compiles once per standard feature set its materials use
   and may test them (`#ifdef NORMAL_MAP`, `UNLIT`, `VOXEL_SURFACE`,
-  `TRIPLANAR`…). Materials sharing a shader and feature set batch together;
-  each shader adds its own pipelines.
-- **Checked when opened.** `OpenResource` composes it with the standard
-  modules and refuses an error with `CSHARP_SHADER`, naming the file, line
-  and column. A product shader still draws in blended passes and casts
-  shadows through the standard caster (its alpha mask, not its own discard).
+  `TRIPLANAR`…). Its own keywords, like Unity's shader features, are chosen
+  when it is opened: `new RenderResourceRequest("shaders/fx.wgsl") with {
+  ShaderKeywords = "DISSOLVE GLOW" }` opens that variant as its own resource
+  (in any order), compiled with `#ifdef DISSOLVE` and `#ifdef GLOW` true.
+  Keywords are upper case (`[A-Z_][A-Z0-9_]*`) and may not be a standard
+  feature's name. Materials sharing a shader variant and feature set batch
+  together; each variant adds its own pipelines.
+- **Shadows.** A shader may also define `fn cast_shadow(caster: Caster)`,
+  which the shadow pass calls for its materials after the alpha mask and
+  which may `discard`, so a dissolve's shadow follows its image. `Caster`
+  holds the uv, world position and alpha (part, vertex and base texture).
+  Without it, materials cast through the standard caster.
+- **Checked when opened.** `OpenResource` checks the keywords and composes
+  the shader (and its caster stage) with the standard modules, refusing an
+  error with `CSHARP_SHADER`, naming the file, line and column. A product
+  shader draws in blended passes too.
 - **Lifetime.** A shader resource is held while a material uses it. Under
   `rusty dev`, an edited loose `.wgsl` restarts the runtime and is checked
   again; the stream and the window draw it alike.
 
-There is no per-frame time input yet; animate a shader by updating its
-material's parameters. Product shaders sample only the material's base
-texture and normal map.
+```wgsl
+#import rusty::types::{Surface, Caster}
+#import rusty::material::{material, product_map_a, product_sampler_a}
+#import rusty::view::frame
+#import rusty::shade::standard_shade
+
+// Noise below a rising threshold is cut away, in the image and the shadow.
+fn dissolved(uv: vec2<f32>) -> bool {
+    let noise = textureSampleLevel(product_map_a, product_sampler_a, uv, 0.0).r;
+    return noise < fract(frame.time.x * material.parameters[0].x);
+}
+
+fn shade(surface: Surface) -> vec4<f32> {
+#ifdef DISSOLVE
+    if dissolved(surface.uv) {
+        discard;
+    }
+#endif
+    return standard_shade(surface);
+}
+
+fn cast_shadow(caster: Caster) {
+#ifdef DISSOLVE
+    if dissolved(caster.uv) {
+        discard;
+    }
+#endif
+}
+```
 
 ## Exposure, tone mapping and fog
 

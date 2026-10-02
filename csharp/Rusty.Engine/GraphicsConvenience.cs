@@ -162,6 +162,15 @@ public readonly partial record struct MaterialShader
     /// <summary>A product shader reading one parameter vector; the rest are zero.</summary>
     public MaterialShader(RenderResourceReference shader, Vector4 parameter0)
         : this(shader, parameter0, default, default, default) { }
+
+    /// <summary>A product shader without textures of its own.</summary>
+    public MaterialShader(
+        RenderResourceReference shader,
+        Vector4 parameter0,
+        Vector4 parameter1,
+        Vector4 parameter2,
+        Vector4 parameter3)
+        : this(shader, parameter0, parameter1, parameter2, parameter3, default, default) { }
 }
 
 public readonly partial record struct MeshResourceCreateRequest

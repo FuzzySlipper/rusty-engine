@@ -304,6 +304,9 @@ pub struct NativeRenderResourceRequest {
     pub filter: NativeTextureFilter,
     pub wrap: NativeTextureWrap,
     pub color_space: NativeTextureColorSpace,
+    /// A shader's keywords, space separated: its own shader defs this
+    /// variant compiles with. Each keyword set opens its own resource.
+    pub shader_keywords: NativeUtf8Slice,
 }
 
 #[repr(C)]
@@ -591,8 +594,9 @@ pub struct NativeMaterialRequest {
     pub shader: NativeMaterialShader,
 }
 
-/// A product shader resource (`.wgsl`, `NativeRenderResourceKind::Shader`)
-/// and the values it reads as `material.parameters[0..4]`.
+/// A product shader resource (`.wgsl`, `NativeRenderResourceKind::Shader`),
+/// the values it reads as `material.parameters[0..4]`, and two textures of
+/// its own (`product_map_a`, `product_map_b`; 0 binds white).
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct NativeMaterialShader {
@@ -601,6 +605,8 @@ pub struct NativeMaterialShader {
     pub parameter_1: NativeVec4,
     pub parameter_2: NativeVec4,
     pub parameter_3: NativeVec4,
+    pub texture_a: NativeRenderResourceReference,
+    pub texture_b: NativeRenderResourceReference,
 }
 
 /// Projects one admitted authored material through Engine-owned catalog and
@@ -827,6 +833,8 @@ pub struct NativeRenderResourceContentRequest {
     pub filter: NativeTextureFilter,
     pub wrap: NativeTextureWrap,
     pub color_space: NativeTextureColorSpace,
+    /// As in `NativeRenderResourceRequest`.
+    pub shader_keywords: NativeUtf8Slice,
 }
 
 #[repr(C)]

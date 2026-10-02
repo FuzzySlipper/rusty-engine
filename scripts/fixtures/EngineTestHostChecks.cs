@@ -61,6 +61,19 @@ internal static class EngineTestHostChecks
             ExpectRefusal(shader.Dispose, "CSHARP_RENDER_RESOURCE_IN_USE");
             material.Dispose();
             shader.Dispose();
+
+            // Keywords open their own variant; a standard feature name is refused.
+            RenderResourceRequest tintRequest = new("shaders/tint.wgsl");
+            using RenderResource loud = engine.Graphics.OpenResource(tintRequest with { ShaderKeywords = "LOUD" }).Handle;
+            ExpectRefusal(() => engine.Graphics.OpenResource(tintRequest with { ShaderKeywords = "NORMAL_MAP" }), "CSHARP_SHADER");
+            // A shader's own texture is held by its material.
+            RenderResource ramp = engine.Graphics.OpenResource(new RenderResourceRequest("textures/atlas.png")).Handle;
+            Material ramped = engine.Graphics.CreateMaterial(new MaterialRequest(new(1, 1, 1, 1), default, .8f,
+                new(1, 1, 1, 1), Vector3.Zero, 0, false, MaterialAlphaMode.Opaque, .5f, 0, default, 1, 0,
+                new MaterialShader(loud, new Vector4(1, 0, 0, 1), default, default, default, ramp, default)));
+            ExpectRefusal(ramp.Dispose, "CSHARP_RENDER_RESOURCE_IN_USE");
+            ramped.Dispose();
+            ramp.Dispose();
         });
 
         host.Call(engine =>

@@ -1,7 +1,8 @@
 //! Product shaders (#9099): a material naming a WGSL module that shades its
 //! surface in place of the standard shade stage, beside standard materials,
 //! in the opaque, blend and shadow passes; their standard-feature variants;
-//! redefinition; and a shader that does not compose.
+//! redefinition; a shader that does not compose; its own textures and the
+//! presentation time (#9126); keywords and a caster stage (#9127).
 
 mod support;
 
@@ -31,6 +32,7 @@ fn shader(id: &str, source: &str) -> RenderDiff {
             id: id.to_owned(),
             path: format!("shaders/{}.wgsl", id.trim_start_matches("shader/")),
             source: source.to_owned(),
+            keywords: Vec::new(),
         },
     }
 }
@@ -45,6 +47,7 @@ fn shaded(
     descriptor.shader = Some(MaterialShaderDescriptor {
         shader: "shader/flat".to_owned(),
         parameters: [first, second, [0.0; 4], [0.0; 4]],
+        textures: Vec::new(),
     });
     descriptor
 }
@@ -282,4 +285,136 @@ fn a_product_shader_that_does_not_compose_is_reported_by_line_and_shades_as_stan
         drawn[0], drawn[1],
         "grey, not the parameter's green: {drawn:?}"
     );
+}
+
+/// Its own two textures, alternating every half second of presentation time.
+const BLINK: &str = "#import rusty::types::Surface
+#import rusty::material::{product_map_a, product_sampler_a, product_map_b, product_sampler_b}
+#import rusty::view::frame
+#import rusty::finish::finish
+
+fn shade(surface: Surface) -> vec4<f32> {
+    let a = textureSample(product_map_a, product_sampler_a, surface.uv);
+    let b = textureSample(product_map_b, product_sampler_b, surface.uv);
+    let colour = select(a, b, fract(frame.time.x) >= 0.5);
+    return finish(vec4<f32>(colour.rgb, 1.0), surface.world_position);
+}
+";
+
+#[test]
+fn a_product_shader_samples_its_own_textures_and_animates_with_presentation_time() {
+    let mut harness = Harness::new(RendererOptions {
+        default_world_lights: false,
+        ..RendererOptions::default()
+    });
+    let red =
+        harness
+            .resources
+            .texture("texture/red", 1, 1, &[255, 0, 0, 255], TextureWrap::Repeat);
+    let blue =
+        harness
+            .resources
+            .texture("texture/blue", 1, 1, &[0, 0, 255, 255], TextureWrap::Repeat);
+    let mut blink = material("material/right", [1.0; 4], None);
+    blink.shader = Some(MaterialShaderDescriptor {
+        shader: "shader/blink".to_owned(),
+        parameters: [[0.0; 4]; 4],
+        textures: vec![red.id.clone(), blue.id.clone()],
+    });
+    harness.apply(vec![
+        RenderDiff::DefineTexture { texture: red },
+        RenderDiff::DefineTexture { texture: blue },
+        shader("shader/blink", BLINK),
+    ]);
+    scene(&mut harness, blink);
+    let view = camera(VIEW.0, VIEW.1, VIEW.2);
+    let right = (WIDTH * 3 / 4 - 25, HEIGHT / 2);
+    // No material update between frames: only the Engine's time moves.
+    harness.renderer.set_animation_time(10.25);
+    assert_eq!(
+        pixel(&harness.render(&view).1, right.0, right.1),
+        [255, 0, 0, 255]
+    );
+    harness.renderer.set_animation_time(10.75);
+    assert_eq!(
+        pixel(&harness.render(&view).1, right.0, right.1),
+        [0, 0, 255, 255]
+    );
+    harness.renderer.set_animation_time(11.25);
+    assert_eq!(
+        pixel(&harness.render(&view).1, right.0, right.1),
+        [255, 0, 0, 255]
+    );
+}
+
+/// With DISSOLVE, the left part of each face (uv.x below the first
+/// parameter) is cut away, in its image and its shadow alike.
+const DISSOLVE: &str = "#import rusty::types::{Surface, Caster}
+#import rusty::material::material
+#import rusty::shade::standard_shade
+
+fn shade(surface: Surface) -> vec4<f32> {
+#ifdef DISSOLVE
+    if surface.uv.x < material.parameters[0].x {
+        discard;
+    }
+#endif
+    return standard_shade(surface);
+}
+
+fn cast_shadow(caster: Caster) {
+#ifdef DISSOLVE
+    if caster.uv.x < material.parameters[0].x {
+        discard;
+    }
+#endif
+}
+";
+
+#[test]
+fn a_keyword_variant_dissolves_a_material_and_its_caster_stage_cuts_the_shadow_alike() {
+    let render = |keywords: &[&str]| {
+        let mut harness = Harness::new(RendererOptions {
+            default_world_lights: false,
+            shadows: true,
+            ..RendererOptions::default()
+        });
+        let mut dissolving = material("material/right", [0.8, 0.8, 0.8, 1.0], None);
+        dissolving.shader = Some(MaterialShaderDescriptor {
+            shader: "shader/dissolve".to_owned(),
+            parameters: [[0.6, 0.0, 0.0, 0.0], [0.0; 4], [0.0; 4], [0.0; 4]],
+            textures: Vec::new(),
+        });
+        harness.apply(vec![RenderDiff::DefineShader {
+            shader: ShaderDescriptor {
+                id: "shader/dissolve".to_owned(),
+                path: "shaders/dissolve.wgsl".to_owned(),
+                source: DISSOLVE.to_owned(),
+                keywords: keywords.iter().map(|keyword| keyword.to_string()).collect(),
+            },
+        }]);
+        scene(&mut harness, dissolving);
+        harness.render(&camera(VIEW.0, VIEW.1, VIEW.2)).1
+    };
+    let (whole, dissolved) = (render(&[]), render(&["DISSOLVE"]));
+    // Dark floor pixels in the right box's shadow, in front of it.
+    let shadowed = |rgba: &[u8]| {
+        (HEIGHT / 2 + 10..HEIGHT * 3 / 4)
+            .flat_map(|y| (WIDTH / 2 + 10..WIDTH - 10).map(move |x| (x, y)))
+            .filter(|(x, y)| pixel(rgba, *x, *y)[0] < 60)
+            .count()
+    };
+    let (whole_shadow, dissolved_shadow) = (shadowed(&whole), shadowed(&dissolved));
+    assert!(whole_shadow > 500, "the whole box casts {whole_shadow}");
+    assert!(
+        dissolved_shadow * 10 < whole_shadow * 7,
+        "the dissolved box casts {dissolved_shadow} of {whole_shadow}"
+    );
+    // The image is cut too: background shows where the box was.
+    let right = (WIDTH * 3 / 4 - 25, HEIGHT / 2);
+    assert_ne!(
+        pixel(&whole, right.0 - 12, right.1),
+        pixel(&dissolved, right.0 - 12, right.1)
+    );
+    assert_screenshot("product-shader-dissolve", &dissolved);
 }

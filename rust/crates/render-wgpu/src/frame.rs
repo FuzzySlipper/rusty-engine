@@ -31,8 +31,8 @@ use crate::{
 const LIGHT_ROW_FLOATS: usize = 16;
 /// Frame uniform (`rusty::types` `Frame`): two matrices, camera position,
 /// light count and first light; then exposure and fog distances, fog colour,
-/// and the tone mapping and fog modes.
-const FRAME_UNIFORM_BYTES: u64 = (16 + 16 + 4 + 4 + 4 + 4 + 4) * 4;
+/// and the tone mapping and fog modes; then the presentation time.
+const FRAME_UNIFORM_BYTES: u64 = (16 + 16 + 4 + 4 + 4 + 4 + 4 + 4) * 4;
 
 /// Per-frame counts for diagnostics.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -825,6 +825,11 @@ impl Renderer {
             bytes.extend_from_slice(&count.to_le_bytes());
         }
         bytes.extend_from_slice(&finish_uniform(self.tables.tone_mapping, self.tables.fog));
+        // The Engine presentation time (`set_animation_time`): it holds while
+        // the simulation does, so a held frame draws the same.
+        for value in [self.animation_time as f32, 0.0, 0.0, 0.0] {
+            bytes.extend_from_slice(&value.to_le_bytes());
+        }
         self.gpu.queue.write_buffer(&self.frame_buffer, 0, &bytes);
 
         // Format and sample count: every pipeline drawing here must match.

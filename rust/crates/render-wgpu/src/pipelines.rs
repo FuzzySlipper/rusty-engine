@@ -184,7 +184,8 @@ impl Layouts {
         });
         let material = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("render-wgpu material"),
-            // Uniform, albedo; then emissive, normal and occlusion maps.
+            // Uniform, albedo; then emissive, normal and occlusion maps; then
+            // a product shader's two maps.
             entries: &[
                 uniform_entry(0),
                 texture_entry(1),
@@ -195,6 +196,10 @@ impl Layouts {
                 sampler_entry(6),
                 texture_entry(7),
                 sampler_entry(8),
+                texture_entry(9),
+                sampler_entry(10),
+                texture_entry(11),
+                sampler_entry(12),
             ],
         });
         let sky = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -430,14 +435,15 @@ impl Layouts {
                 bias: Default::default(),
             }),
             multisample: Default::default(),
-            fragment: features
-                .contains(Features::MASK)
-                .then(|| wgpu::FragmentState {
+            // Only to discard: the alpha mask or a product's caster stage.
+            fragment: (features.contains(Features::MASK) || features.product() != 0).then(|| {
+                wgpu::FragmentState {
                     module: shader,
                     entry_point: Some("fs_shadow"),
                     compilation_options: Default::default(),
                     targets: &[],
-                }),
+                }
+            }),
             multiview_mask: None,
             cache: None,
         });

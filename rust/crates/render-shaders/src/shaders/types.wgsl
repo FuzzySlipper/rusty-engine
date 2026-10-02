@@ -16,6 +16,9 @@ struct Frame {
     // x: tone mapping operator (0 none, 1 neutral, 2 ACES filmic);
     // y: fog (0 off, 1 linear, 2 exponential, 3 exponential squared)
     modes: vec4<u32>,
+    // x: the Engine's presentation time in seconds: it advances with the
+    // simulation, holds while it is paused, and is the same in every view.
+    time: vec4<f32>,
 };
 
 struct Part {
@@ -95,6 +98,16 @@ struct Surface {
     occlusion: f32,
     // Emitted light: the part's emission times the emissive map.
     emission: vec3<f32>,
+};
+
+// What the shadow pass gives a product shader's caster stage
+// (`fn cast_shadow(caster: Caster)`), which may discard.
+struct Caster {
+    // The mesh uv; a voxel surface's tile coordinates in cells.
+    uv: vec2<f32>,
+    world_position: vec3<f32>,
+    // The part and vertex alpha times the base texture's.
+    alpha: f32,
 };
 
 const PI: f32 = 3.141592653589793;
