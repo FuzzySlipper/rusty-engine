@@ -7,6 +7,7 @@
 
 mod asset;
 mod pair;
+mod session;
 
 use std::{
     collections::BTreeMap,
@@ -26,6 +27,7 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use pair::{InstalledPair, Pin};
+use session::Session;
 
 const STAGE_TARGET: &str = "StageRustyEngineCoreClrProduct";
 const AOT_TARGET: &str = "VerifyRustyEngineAot";
@@ -82,6 +84,9 @@ fn run() -> Result<ExitCode, String> {
             Ok(ExitCode::SUCCESS)
         }
         CommandName::Dev(options) => dev(options).map(|()| ExitCode::SUCCESS),
+        CommandName::DevStart(options, arguments) => session::start(&options.project, &arguments),
+        CommandName::DevStop(project) => session::stop(&project),
+        CommandName::DevStatus(project) => session::status(&project),
         CommandName::Build(options) => build(&options),
         CommandName::Install(options) => install(&options),
         CommandName::Update(options) => update(&options),
@@ -134,11 +139,17 @@ fn dev(mut options: DevOptions) -> Result<(), String> {
             }
         }
     }
+    let persistence_root = development_persistence_root(&options.project)?;
+    let session = if options.session {
+        Some(Session::claim(&options.project, &persistence_root)?)
+    } else {
+        None
+    };
+    let session = session.as_ref();
     let termination = install_termination_signal_hook()?;
     let runtime = RuntimePack::resolve(&options)?;
     runtime.verify()?;
 
-    let persistence_root = development_persistence_root(&options.project)?;
     let initial = stage_product(&options)?;
     let mut staged = initial.directory;
     verify_staged_product(&staged)?;
@@ -151,6 +162,7 @@ fn dev(mut options: DevOptions) -> Result<(), String> {
         &staged,
         &persistence_root,
         &options,
+        session,
     )?);
     let mut crash_budget = CrashBudget::new(MAX_UNEXPECTED_EXITS_PER_ARTIFACT);
 
@@ -169,14 +181,17 @@ fn dev(mut options: DevOptions) -> Result<(), String> {
     );
 
     loop {
-        if termination.load(Ordering::Acquire) {
+        let stop_requested = session.is_some_and(|session| session.stop_requested());
+        if termination.load(Ordering::Acquire) || stop_requested {
             if let Some(mut active_child) = child.take() {
                 active_child.shutdown()?;
             }
-            diagnostic(
-                "stopped",
-                serde_json::json!({ "reason": "termination-signal" }),
-            );
+            let reason = if stop_requested {
+                "stop-requested"
+            } else {
+                "termination-signal"
+            };
+            diagnostic("stopped", serde_json::json!({ "reason": reason }));
             return Ok(());
         }
         if let Some(active_child) = child.as_mut() {
@@ -205,6 +220,7 @@ fn dev(mut options: DevOptions) -> Result<(), String> {
                             &staged,
                             &persistence_root,
                             &options,
+                            session,
                         )?;
                         diagnostic(
                             "restarted-after-unexpected-exit",
@@ -217,6 +233,9 @@ fn dev(mut options: DevOptions) -> Result<(), String> {
                         child = Some(restarted);
                     }
                     CrashBudgetDecision::PausedFault => {
+                        if let Some(session) = session {
+                            session.paused_fault();
+                        }
                         diagnostic(
                             "paused-fault",
                             serde_json::json!({
@@ -369,6 +388,7 @@ fn dev(mut options: DevOptions) -> Result<(), String> {
                 &next_staged,
                 &persistence_root,
                 &options,
+                session,
             )?);
             true
         };
@@ -378,6 +398,7 @@ fn dev(mut options: DevOptions) -> Result<(), String> {
                 &next_staged,
                 &persistence_root,
                 &options,
+                session,
             )?);
         }
         if replacement_failed {
@@ -472,6 +493,10 @@ enum CommandName {
     /// `rusty dev --help`, with the `--project` it names, if any.
     DevHelp(Option<PathBuf>),
     Dev(DevOptions),
+    /// `rusty dev start`: the options, checked, and the arguments that name them.
+    DevStart(DevOptions, Vec<std::ffi::OsString>),
+    DevStop(PathBuf),
+    DevStatus(PathBuf),
     Build(BuildOptions),
     Install(InstallOptions),
     Update(UpdateOptions),
@@ -507,6 +532,8 @@ struct DevOptions {
     chromium: Option<PathBuf>,
     /// Where the host writes its NDJSON diagnostics.
     diagnostics_log: Option<PathBuf>,
+    /// Run as the background session `rusty dev start` launched.
+    session: bool,
 }
 
 #[derive(Debug)]
@@ -560,7 +587,22 @@ impl Arguments {
                         .and_then(|index| rest.get(index + 1))
                         .map(PathBuf::from),
                 ),
-                None => CommandName::Dev(parse_dev(rest)?),
+                None => match rest.first().map(String::as_str) {
+                    Some("start") => {
+                        let arguments: Vec<String> = rest[1..].to_vec();
+                        CommandName::DevStart(
+                            parse_dev(arguments.clone())?,
+                            arguments.into_iter().map(Into::into).collect(),
+                        )
+                    }
+                    Some("stop") => {
+                        CommandName::DevStop(parse_session_project(&rest[1..], "stop")?)
+                    }
+                    Some("status") => {
+                        CommandName::DevStatus(parse_session_project(&rest[1..], "status")?)
+                    }
+                    _ => CommandName::Dev(parse_dev(rest)?),
+                },
             },
             "build" => match help(build_usage) {
                 Some(help) => return Ok(help),
@@ -628,6 +670,7 @@ fn parse_dev(values: Vec<String>) -> Result<DevOptions, String> {
     let mut cef_switches = Vec::new();
     let mut chromium = None;
     let mut diagnostics_log = None;
+    let mut session = false;
     while let Some(value) = values.next() {
         match value.as_str() {
             "--project" => project = Some(PathBuf::from(required_value(&mut values, "--project")?)),
@@ -682,6 +725,7 @@ fn parse_dev(values: Vec<String>) -> Result<DevOptions, String> {
                     "--diagnostics-log",
                 )?))
             }
+            "--session" => session = true,
             _ => return Err(unknown_argument("dev", &value, dev_usage)),
         }
     }
@@ -710,7 +754,18 @@ fn parse_dev(values: Vec<String>) -> Result<DevOptions, String> {
         cef_switches,
         chromium,
         diagnostics_log,
+        session,
     })
+}
+
+fn parse_session_project(values: &[String], command: &str) -> Result<PathBuf, String> {
+    match values {
+        [flag, project] if flag == "--project" => Ok(PathBuf::from(project)),
+        _ => Err(format!(
+            "RUSTY_DEV_ARGUMENT: rusty dev {command} needs `--project <ordinary-product.csproj>`\n\n{}",
+            dev_usage()
+        )),
+    }
 }
 
 fn parse_build(values: Vec<String>) -> Result<BuildOptions, String> {
@@ -886,14 +941,21 @@ Get or refresh this command:
 }
 
 fn dev_usage() -> String {
-    "usage: rusty dev --project <ordinary-product.csproj> [--port <u16>] [--bind-host <IPv4>] [--live-debug] [--debugger]
+    "usage: rusty dev [start] --project <ordinary-product.csproj> [--port <u16>] [--bind-host <IPv4>] [--live-debug] [--debugger]
                  [--headless [--chromium <executable>]] [--output <stream|window>]
                  [--audio-output <device-optional|device-required>] [--cef-switch <name[=value]>]...
                  [--diagnostics-log <file>] [--runtime <runtime-pack> | --engine-source <rusty-engine-source>]
+       rusty dev stop|status --project <ordinary-product.csproj>
 
 Builds and stages the product through its SDK, starts it on CoreCLR, and restages when declared
 C#, UI or content inputs change. UI and content-bundle edits reload into the running product; other
 edits replace the runtime.
+
+`rusty dev start` runs the same session in the background, one per project: it returns once the
+product serves and prints {url, port, pid, runtimeInstanceId, persistenceRoot, log} as JSON, or exits
+nonzero with the log's tail if staging or startup failed. `rusty dev stop` ends that project's session
+and disposes the product as Ctrl+C would; `rusty dev status` reports it. The session's record and log
+live in the repository's .runtime/dev/<project file>/.
 
 The runtime is the pair pinned in the product's Directory.Build.props, installed by `rusty install`.
 `rusty dev` runs that pair's own copy of this command, so the supervisor always matches its host;
@@ -919,7 +981,8 @@ This command never invokes Cargo and never searches for an adjacent Engine check
 Examples:
   rusty dev --project src/Game/Game.csproj --port 8787
   rusty dev --project src/Game/Game.csproj --live-debug --headless
-  rusty dev --project src/Game/Game.csproj --output window"
+  rusty dev --project src/Game/Game.csproj --output window
+  rusty dev start --project src/Game/Game.csproj --live-debug && rusty dev stop --project src/Game/Game.csproj"
         .to_owned()
 }
 
@@ -1484,6 +1547,7 @@ fn delegated_arguments(options: &DevOptions) -> Vec<std::ffi::OsString> {
         (options.live_debug, "--live-debug"),
         (options.debugger, "--debugger"),
         (options.headless, "--headless"),
+        (options.session, "--session"),
     ] {
         if enabled {
             arguments.push(flag.into());
@@ -2055,24 +2119,30 @@ impl SupervisedHost {
         product: &Path,
         persistence_root: &Path,
         options: &DevOptions,
+        session: Option<&Arc<Session>>,
     ) -> Result<Self, String> {
         let runtime_instance_id = next_supervised_runtime_instance_id()?;
         let arguments =
             supervised_host_arguments(product, persistence_root, runtime_instance_id, options)?;
-        let mut child = Command::new(host)
-            .args(&arguments)
-            .stdin(Stdio::piped())
-            .spawn()
-            .map_err(|error| {
-                format!(
-                    "RUSTY_DEV_CHILD_START: could not launch `{}`: {error}",
-                    host.display()
-                )
-            })?;
+        let mut command = Command::new(host);
+        command.args(&arguments).stdin(Stdio::piped());
+        // A background session learns where the host serves from its output.
+        if session.is_some() {
+            command.stdout(Stdio::piped());
+        }
+        let mut child = command.spawn().map_err(|error| {
+            format!(
+                "RUSTY_DEV_CHILD_START: could not launch `{}`: {error}",
+                host.display()
+            )
+        })?;
         let stdin = child
             .stdin
             .take()
             .ok_or("RUSTY_DEV_CHILD_START: supervised child stdin was unavailable")?;
+        if let (Some(session), Some(output)) = (session, child.stdout.take()) {
+            session.forward_host_output(output, runtime_instance_id);
+        }
         Ok(Self {
             child,
             stdin: Some(stdin),
@@ -2523,6 +2593,7 @@ mod tests {
             cef_switches: Vec::new(),
             chromium: None,
             diagnostics_log: None,
+            session: false,
         };
 
         let properties = stage_properties(&options).expect("source properties");
