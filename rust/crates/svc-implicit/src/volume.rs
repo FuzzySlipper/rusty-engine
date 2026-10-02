@@ -464,6 +464,26 @@ mod tests {
     }
 
     #[test]
+    fn a_surface_beyond_the_default_vertex_budget_generates_when_it_is_raised() {
+        // A gyroid with a five-sample period: about 300k active cells.
+        const SIDE: u32 = 80;
+        let mut v = SampledVolume::new([0.; 3], 1., [SIDE; 3], 0., DEFAULT_MAX_SAMPLES).unwrap();
+        let period = std::f32::consts::TAU / 5.0;
+        let samples: Vec<f32> = (0..SIDE.pow(3) as usize)
+            .map(|index| {
+                let [x, y, z] = v.coordinate(index).map(|c| c as f32 * period);
+                x.sin() * y.cos() + y.sin() * z.cos() + z.sin() * x.cos()
+            })
+            .collect();
+        v.write(0, &samples).unwrap();
+        let materials = SurfaceMaterials::default();
+        let default_budget = 262_144;
+        assert!(v.generate(whole(&materials, default_budget)).is_err());
+        let mesh = v.generate(whole(&materials, 1_000_000)).unwrap();
+        assert!(mesh.positions.len() > default_budget as usize);
+    }
+
+    #[test]
     fn writes_report_the_blocks_their_surface_reaches_once() {
         let mut v = SampledVolume::new([0.; 3], 1., [64, 64, 64], 1., DEFAULT_MAX_SAMPLES).unwrap();
         assert_eq!(v.take_dirty_blocks(16).unwrap().len(), 64);

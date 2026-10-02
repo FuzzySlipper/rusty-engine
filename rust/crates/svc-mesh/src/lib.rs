@@ -60,8 +60,10 @@ pub enum VertexPlacement {
     /// corners and edges at any angle.
     #[default]
     Sharp,
-    /// The QEF minimizer with crossing normals snapped to the crossing edge's
-    /// axis: a cube of material meshes as a cube.
+    /// Blocks on the sample grid: the material's crossings sit on the face
+    /// between samples whatever the densities, and every crossing normal of a
+    /// cell it wins snaps to its edge axis, so a cube of material meshes as a
+    /// cube and neighbouring materials meet its planes.
     Blocky,
 }
 

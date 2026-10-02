@@ -466,3 +466,73 @@ fn triangles_carry_finite_geometry() {
         assert!(face_normal(a, b, c).iter().all(|v| v.is_finite()));
     }
 }
+
+#[test]
+fn a_blocky_brick_box_in_smooth_rock_is_planar_and_closed_against_it() {
+    let dims = [24, 20, 22];
+    let (samples, materials) = scalar_field(dims);
+    let characters = SurfaceMaterials::new([
+        (
+            BRICK,
+            MaterialSurface {
+                mode: SurfaceMode::DualContouring,
+                character: character(VertexPlacement::Blocky, 0.0, 0.0),
+            },
+        ),
+        (
+            STONE,
+            MaterialSurface {
+                mode: SurfaceMode::DualContouring,
+                character: character(VertexPlacement::Smooth, 180.0, 0.0),
+            },
+        ),
+    ])
+    .unwrap();
+    let surface = mesh_scalar_surface(
+        ScalarVolume {
+            origin: [0.0; 3],
+            spacing: 1.0,
+            dimensions: dims,
+            samples: &samples,
+            materials: Some(&materials),
+            isovalue: 0.0,
+        },
+        &characters,
+        None,
+        SurfaceMeshLimits::default(),
+    )
+    .unwrap();
+    // Closed: every edge joins exactly two triangles, across materials too.
+    let mut edges = std::collections::BTreeMap::<(u32, u32), u32>::new();
+    for triangle in &surface.triangles {
+        for (a, b) in [(0, 1), (1, 2), (2, 0)] {
+            let (a, b) = (triangle[a], triangle[b]);
+            *edges.entry((a.min(b), a.max(b))).or_default() += 1;
+        }
+    }
+    assert!(edges.values().all(|uses| *uses == 2));
+    // Away from the rock, the brick's faces are exact axis planes on the
+    // sample grid; only triangles sharing a vertex with rock bend to meet it.
+    let rock_vertices: std::collections::BTreeSet<u32> = surface
+        .triangles
+        .iter()
+        .zip(&surface.slots)
+        .filter(|(_, slot)| **slot == STONE)
+        .flat_map(|(triangle, _)| *triangle)
+        .collect();
+    let mut faces = 0;
+    for (triangle, slot) in surface.triangles.iter().zip(&surface.slots) {
+        if *slot != BRICK || triangle.iter().any(|vertex| rock_vertices.contains(vertex)) {
+            continue;
+        }
+        faces += 1;
+        let [a, b, c] = triangle.map(|index| surface.positions[index as usize]);
+        let normal = face_normal(a, b, c);
+        let axis = (0..3)
+            .max_by(|l, r| normal[*l].abs().total_cmp(&normal[*r].abs()))
+            .unwrap();
+        assert!(normal[axis].abs() > 0.99999, "{normal:?}");
+        assert_eq!(a[axis].fract(), 0.5, "on a face between samples");
+    }
+    assert!(faces > 0);
+}

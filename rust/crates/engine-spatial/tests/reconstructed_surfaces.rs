@@ -313,3 +313,92 @@ fn a_region_that_makes_empty_voxels_solid_needs_their_material() {
     );
     assert_eq!(scene.density([2, 14, 2]), Some(-0.3));
 }
+
+#[test]
+fn residency_carries_densities_through_eviction_and_rebase() {
+    use engine_spatial::{
+        VoxelChunkIdentity, VoxelChunkPayload, VoxelChunkResidencyOperation,
+        VoxelChunkResidencyService, WorldOrigin, WorldOriginRebaseRequest,
+        WorldOriginRebaseService, WorldOriginState,
+    };
+    const SIZE: u32 = 8;
+    // Two chunks side by side holding the plane y = 2.3 as densities.
+    let payload = |_: i64| {
+        let mut slots = Vec::new();
+        let mut densities = Vec::new();
+        for _z in 0..SIZE {
+            for y in 0..SIZE {
+                for _x in 0..SIZE {
+                    let density = y as f32 + 0.5 - 2.3;
+                    slots.push(if density < 0.0 { STONE } else { 0 });
+                    densities.push(density);
+                }
+            }
+        }
+        let mut payload = VoxelChunkPayload::new([SIZE; 3], slots);
+        payload.densities = densities;
+        payload
+    };
+    let mut scene = VoxelCollisionScene::from_material_voxels_with_mesh_options(
+        1.0,
+        SIZE,
+        [],
+        dual_contoured(SurfaceMaterials::default()),
+    )
+    .unwrap();
+    let admit = |x: i64| VoxelChunkResidencyOperation::Admit {
+        chunk: VoxelChunkIdentity::new(x, 0, 0),
+        payload: payload(x),
+    };
+    VoxelChunkResidencyService::apply(&mut scene, &[admit(0), admit(1)]).unwrap();
+    let height = |scene: &VoxelCollisionScene, x: f64| {
+        scene
+            .raycast([x, 7.5, 4.0], [0.0, -1.0, 0.0], 16.0)
+            .unwrap()
+            .point[1]
+    };
+    assert!((height(&scene, 3.3) - 2.3).abs() < 1.0e-4);
+    assert!((height(&scene, 8.0) - 2.3).abs() < 1.0e-4, "chunk border");
+    assert!((scene.density([3, 2, 4]).unwrap() - 0.2).abs() < 1.0e-6);
+    assert!((scene.density([3, 1, 4]).unwrap() + 0.8).abs() < 1.0e-6);
+
+    // A payload whose density sign disagrees with its slot is refused.
+    let mut wrong = payload(2);
+    wrong.densities[0] = 0.4;
+    assert!(VoxelChunkResidencyService::apply(
+        &mut scene,
+        &[VoxelChunkResidencyOperation::Admit {
+            chunk: VoxelChunkIdentity::new(2, 0, 0),
+            payload: wrong,
+        }],
+    )
+    .is_err());
+
+    // Evicted and readmitted, the chunk draws and collides the same.
+    VoxelChunkResidencyService::apply(
+        &mut scene,
+        &[VoxelChunkResidencyOperation::Evict {
+            chunk: VoxelChunkIdentity::new(1, 0, 0),
+        }],
+    )
+    .unwrap();
+    VoxelChunkResidencyService::apply(&mut scene, &[admit(1)]).unwrap();
+    assert!((height(&scene, 12.5) - 2.3).abs() < 1.0e-4);
+
+    // A rebase by whole cells keeps the densities and moves the surface.
+    let mut origin = WorldOriginState::default();
+    let prepared = WorldOriginRebaseService
+        .prepare(
+            &origin,
+            WorldOriginRebaseRequest {
+                target_origin: WorldOrigin::new([4, 1, 0]),
+                entities: Vec::new(),
+            },
+        )
+        .unwrap();
+    let (rebased, _) = WorldOriginRebaseService
+        .commit(&mut origin, &scene, &prepared)
+        .unwrap();
+    assert!((height(&rebased, 3.3 - 4.0) - 1.3).abs() < 1.0e-4);
+    assert_eq!(rebased.density([3, 2, 4]), scene.density([3, 2, 4]));
+}

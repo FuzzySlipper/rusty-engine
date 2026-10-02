@@ -36,8 +36,11 @@ reconstructed material:
 
 - `VertexPlacement.Sharp` (default) minimizes the error to the crossing planes,
   keeping corners and edges at any angle. `Smooth` uses the mean of the
-  crossings: rounded, blob-like surfaces. `Blocky` snaps the crossing normals
-  to the voxel axes, so a cube of material meshes as an exact cube.
+  crossings: rounded, blob-like surfaces. `Blocky` keeps the material on the
+  voxel grid: its crossings sit on voxel faces whatever the densities, and the
+  normals of a cell it wins snap to the axes, so a cube of material meshes as
+  an exact cube and a neighbouring material meets its planes. Use Sharp to
+  shape sharp features with densities instead.
 - `CreaseAngleDegrees` shades a vertex smooth where the facet bends less than
   this from the vertex's interpolated normal, and flat beyond it: 0 is every
   facet flat, 180 everything smooth. `SurfaceCharacter.Default` is Sharp,

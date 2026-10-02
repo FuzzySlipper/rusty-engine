@@ -512,12 +512,22 @@ impl DualContouring<'_> {
             if inside[a] == inside[b] {
                 continue;
             }
-            let t = values[a] / (values[a] - values[b]);
+            // A Blocky or cube material's crossing sits on the face between
+            // its sample and the outside one, whatever the densities: blocks
+            // stay on the sample grid.
+            let inside_corner = if inside[a] { a } else { b };
+            let t = if surfaces[inside_corner].is_some_and(|surface| sharpness(surface) >= 2) {
+                0.5
+            } else {
+                values[a] / (values[a] - values[b])
+            };
             let local = edge_local_point(edge, t);
             let point = std::array::from_fn(|axis| base[axis] + local[axis] + 0.5);
-            let inside_corner = if inside[a] { a } else { b };
-            let snapped = surfaces[inside_corner].is_some_and(|surface| sharpness(surface) >= 2);
-            let normal = if snapped {
+            // A cell a Blocky or cube material wins is a block cell: every
+            // crossing's normal snaps to its edge axis, so the shared vertex
+            // stays on the block's planes and neighbouring materials meet
+            // them there.
+            let normal = if placement_rank >= 2 {
                 let mut direction = [0.0; 3];
                 for axis in 0..3 {
                     direction[axis] = CORNERS[b][axis] as f64 - CORNERS[a][axis] as f64;

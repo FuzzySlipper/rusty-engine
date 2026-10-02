@@ -1806,6 +1806,57 @@ mod tests {
     }
 
     #[test]
+    fn a_route_crosses_from_dual_contoured_stone_onto_cube_brick_and_back() {
+        use engine_spatial::{
+            MaterialSurface, MaterialVoxel, SurfaceCharacter, SurfaceMaterials, SurfaceMeshOptions,
+            SurfaceMode,
+        };
+        const STONE: u16 = 1;
+        const BRICK: u16 = 2;
+        // Stone ground three voxels deep; a brick platform one voxel higher
+        // from x = 4 to 5, then stone at the platform's height.
+        let mut voxels = Vec::new();
+        for x in -4..12_i64 {
+            for z in -4..8_i64 {
+                let top = if x < 4 { 3 } else { 4 };
+                for y in 0..top {
+                    let brick = (4..6).contains(&x) && y == 3;
+                    voxels.push(MaterialVoxel {
+                        state: 0,
+                        address: [x, y, z],
+                        material_slot: if brick { BRICK } else { STONE },
+                    });
+                }
+            }
+        }
+        let options = SurfaceMeshOptions {
+            mode: SurfaceMode::DualContouring,
+            materials: SurfaceMaterials::new([(
+                BRICK,
+                MaterialSurface {
+                    mode: SurfaceMode::GreedyCubes,
+                    character: SurfaceCharacter::default(),
+                },
+            )])
+            .unwrap(),
+            ..SurfaceMeshOptions::default()
+        };
+        let scene =
+            VoxelCollisionScene::from_material_voxels_with_mesh_options(1.0, 16, voxels, options)
+                .unwrap();
+        // The brick top is an exact cube face.
+        let top = scene
+            .raycast([4.5, 8.0, 2.5], [0.0, -1.0, 0.0], 10.0)
+            .unwrap();
+        assert_eq!(top.point[1], 4.0);
+        assert_eq!(top.voxel, [4, 3, 2]);
+        assert_eq!(
+            route_both_ways(scene, walker(1.05)),
+            [NativeNavigationPathOutcome::Reached; 2]
+        );
+    }
+
+    #[test]
     fn a_route_climbs_and_descends_a_dual_contoured_voxel_stair() {
         use engine_spatial::{SurfaceMeshOptions, SurfaceMode};
         // One-voxel treads and risers along +X. Dual contouring fills each

@@ -41,8 +41,8 @@ pub enum NativeVertexPlacement {
     Sharp = 0,
     /// The mean of the crossings: rounded, blob-like surfaces.
     Smooth = 1,
-    /// Sharp with crossing normals snapped to the voxel axes: a cube of
-    /// material meshes as a cube.
+    /// Blocks on the voxel grid: crossings sit on voxel faces and normals snap
+    /// to the axes, so a cube of material meshes as a cube.
     Blocky = 2,
 }
 

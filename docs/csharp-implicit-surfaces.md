@@ -219,8 +219,8 @@ index on the surface other than zero in the request's `Materials` as
 zero is the default material unless listed. The character's placement and
 roughness shape that material's cells ([surface characters](smooth-voxel-surfaces.md#surface-modes-and-characters));
 its crease angle and texture mapping replace the request's for its faces. A
-`Blocky` brick index inside `Smooth` rock gives planar, hard-edged blocks in
-rounded stone with no crack between them. Material regions still apply on top.
+`Blocky` brick index inside `Smooth` rock gives planar, hard-edged blocks on
+the sample grid in rounded stone, with no crack between them. Material regions still apply on top.
 
 For editing, mesh in blocks. `ReadSampledVolumeDirtyBlocks(new(volume,
 blockSamples))` returns the blocks of `blockSamples` owned samples per axis
