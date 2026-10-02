@@ -30,6 +30,7 @@ pub enum NativeAudioBus {
     Sfx = 1,
     Ambient = 2,
     Ui = 3,
+    Music = 4,
 }
 
 #[repr(u32)]

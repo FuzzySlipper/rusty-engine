@@ -745,3 +745,50 @@ fn spatial_voices_fall_off_to_silence_at_their_maximum_distance() {
     assert!(close(range(&mut realizer, 24.0), 1.0 - 19.0 / 23.0));
     assert_eq!(range(&mut realizer, 16.0), 0.0);
 }
+
+#[test]
+fn the_music_bus_silences_music_and_leaves_ambience_playing() {
+    let on = |bus| AudioSourceDescriptor {
+        bus,
+        ..descriptor("sha256:wav", true)
+    };
+    let silence_music = op(
+        3,
+        AudioProjectionOp::BusControl {
+            bus: AudioBus::Music,
+            control: AudioBusControl::SetVolume { volume: 0.0 },
+        },
+    );
+    let mut realizer = capture_realizer();
+    let peak = |realizer: &mut AudioRealizer<CaptureBackend>| {
+        let [left, right] = settled_peaks(realizer);
+        left.max(right)
+    };
+    realizer.apply(
+        &[restore(
+            1,
+            on(AudioBus::Music),
+            AudioVoiceDesiredState::Playing,
+            0.0,
+        )],
+        &Clips::fixtures(),
+        &NoEntityPositions,
+    );
+    let music = peak(&mut realizer);
+    assert!(music > 0.05, "music plays: {music}");
+    realizer.apply(&[silence_music], &Clips::fixtures(), &NoEntityPositions);
+    let silenced = peak(&mut realizer);
+    assert!(silenced < music * 0.05, "music bus at 0: {silenced}");
+    realizer.apply(
+        &[restore(
+            2,
+            on(AudioBus::Ambient),
+            AudioVoiceDesiredState::Playing,
+            0.0,
+        )],
+        &Clips::fixtures(),
+        &NoEntityPositions,
+    );
+    let ambience = peak(&mut realizer);
+    assert!(ambience > music * 0.5, "ambience still plays: {ambience}");
+}

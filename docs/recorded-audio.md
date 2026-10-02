@@ -55,6 +55,11 @@ realization facts the product reads through `Audio`. The device also plays a
 playing video clip's Opus soundtrack (demuxed by `render-video`) from the
 clip's start, outside the Engine buses.
 
+Every voice plays on one of four buses, `Sfx`, `Ambient`, `Ui` and `Music`,
+each with its own volume and mute (`Audio.SetBusVolume`, `SetBusMuted`,
+`ReadBus`), so a product can give players separate music, ambience, effects
+and interface levels.
+
 Opus streams through symphonia's Ogg demuxer and seeking, and the pure-Rust
 `opus-decoder` (MIT/Apache-2.0, no FFI) decodes it, applying the OpusHead
 output gain. Its output matches libopus for the fixtures, and seeks decode

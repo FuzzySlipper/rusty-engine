@@ -638,6 +638,7 @@ impl RuntimeAudioBridge {
             NativeAudioBus::Sfx => AudioBus::Sfx,
             NativeAudioBus::Ambient => AudioBus::Ambient,
             NativeAudioBus::Ui => AudioBus::Ui,
+            NativeAudioBus::Music => AudioBus::Music,
         };
         let emitter = match value.emitter_kind {
             NativeAudioEmitterKind::Global2d => AudioEmitter::Global2d,
@@ -1151,6 +1152,7 @@ fn audio_bus(bus: NativeAudioBus) -> AudioBus {
         NativeAudioBus::Sfx => AudioBus::Sfx,
         NativeAudioBus::Ambient => AudioBus::Ambient,
         NativeAudioBus::Ui => AudioBus::Ui,
+        NativeAudioBus::Music => AudioBus::Music,
     }
 }
 
@@ -2150,8 +2152,8 @@ mod tests {
         ));
         assert_eq!(
             baseline.ops.len(),
-            7,
-            "one restored voice and three bus states"
+            9,
+            "one restored voice and four bus states"
         );
         assert_eq!(bridge.state.projector.readout(), before);
     }

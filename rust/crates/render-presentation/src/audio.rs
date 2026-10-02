@@ -49,6 +49,7 @@ pub enum AudioBus {
     Sfx,
     Ambient,
     Ui,
+    Music,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -338,11 +339,12 @@ impl AudioProjector {
 
     /// Returns the complete closed bus state, including buses that retain
     /// their default values and therefore have no explicit map entry.
-    pub fn buses(&self) -> [AudioBusReadout; 3] {
+    pub fn buses(&self) -> [AudioBusReadout; 4] {
         [
             self.bus(AudioBus::Sfx),
             self.bus(AudioBus::Ambient),
             self.bus(AudioBus::Ui),
+            self.bus(AudioBus::Music),
         ]
     }
 

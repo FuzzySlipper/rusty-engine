@@ -143,7 +143,7 @@ public sealed class ProductContentMixedBundleChecks : IDisposable
                 true));
         AudioVoice voice = engine.Audio.CreateVoice(new AudioSourceDescriptor(
             clip,
-            AudioBus.Sfx,
+            AudioBus.Music,
             1,
             1,
             true,
@@ -156,6 +156,10 @@ public sealed class ProductContentMixedBundleChecks : IDisposable
             0,
             Vector3.Zero));
         engine.Audio.ControlVoice(new AudioVoiceControlRequest(voice, AudioVoiceControl.Retrigger));
+        engine.Audio.SetBusVolume(new AudioBusVolumeRequest(AudioBus.Music, 0.5f));
+        Require(engine.Audio.ReadBus(new AudioBusReadRequest(AudioBus.Music)).Volume == 0.5f
+            && engine.Audio.ReadBus(new AudioBusReadRequest(AudioBus.Ambient)).Volume == 1,
+            "the music bus volume is its own");
 
         resources = new MixedBundleResources(
             texture,

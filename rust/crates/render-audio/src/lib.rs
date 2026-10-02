@@ -47,7 +47,12 @@ const IMMEDIATE: Tween = Tween {
     duration: std::time::Duration::ZERO,
     easing: Easing::Linear,
 };
-const BUSES: [AudioBus; 3] = [AudioBus::Sfx, AudioBus::Ambient, AudioBus::Ui];
+const BUSES: [AudioBus; 4] = [
+    AudioBus::Sfx,
+    AudioBus::Ambient,
+    AudioBus::Ui,
+    AudioBus::Music,
+];
 
 /// Encoded clip bytes by content hash. The Engine owns the bytes; the
 /// realizer shares them while it decodes or streams the clip.
@@ -247,8 +252,8 @@ type OpError = (AudioProjectionDiagnosticCode, String);
 pub struct AudioRealizer<B: Backend = DefaultBackend> {
     manager: AudioManager<B>,
     listener: ListenerHandle,
-    buses: [TrackHandle; 3],
-    bus_states: [BusState; 3],
+    buses: [TrackHandle; BUSES.len()],
+    bus_states: [BusState; BUSES.len()],
     clips: HashMap<String, ClipData>,
     voices: BTreeMap<AudioHandle, Voice>,
     one_shots: Vec<OneShot>,
@@ -297,12 +302,12 @@ impl<B: Backend> AudioRealizer<B> {
                 )
                 .map_err(|error| error.to_string())
         };
-        let buses = [bus()?, bus()?, bus()?];
+        let buses = [bus()?, bus()?, bus()?, bus()?];
         Ok(Self {
             manager,
             listener,
             buses,
-            bus_states: [BusState::DEFAULT; 3],
+            bus_states: [BusState::DEFAULT; BUSES.len()],
             clips: HashMap::new(),
             voices: BTreeMap::new(),
             one_shots: Vec::new(),
@@ -877,6 +882,7 @@ fn bus_index(bus: AudioBus) -> usize {
         AudioBus::Sfx => 0,
         AudioBus::Ambient => 1,
         AudioBus::Ui => 2,
+        AudioBus::Music => 3,
     }
 }
 
