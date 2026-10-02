@@ -941,10 +941,11 @@ Get or refresh this command:
 }
 
 fn dev_usage() -> String {
-    "usage: rusty dev [start] --project <ordinary-product.csproj> [--port <u16>] [--bind-host <IPv4>] [--live-debug] [--debugger]
+    "usage: rusty dev --project <ordinary-product.csproj> [--port <u16>] [--bind-host <IPv4>] [--live-debug] [--debugger]
                  [--headless [--chromium <executable>]] [--output <stream|window>]
                  [--audio-output <device-optional|device-required>] [--cef-switch <name[=value]>]...
                  [--diagnostics-log <file>] [--runtime <runtime-pack> | --engine-source <rusty-engine-source>]
+       rusty dev start --project <ordinary-product.csproj> [the same options]
        rusty dev stop|status --project <ordinary-product.csproj>
 
 Builds and stages the product through its SDK, starts it on CoreCLR, and restages when declared
