@@ -94,14 +94,12 @@ impl RuntimeSpatialBridge {
                     }
                 }
                 if let Some(nav) = &session.navigation {
+                    let [x, y, z] =
+                        nav.grid_position([(min[0] + max[0]) * 0.5, 0.0, (min[2] + max[2]) * 0.5]);
                     let sample = nav
                         .projection
                         .grid()
-                        .world_to_voxel(core_space::WorldPos::new(
-                            (min[0] + max[0]) * 0.5,
-                            0.0,
-                            (min[2] + max[2]) * 0.5,
-                        ))
+                        .world_to_voxel(core_space::WorldPos::new(x, y, z))
                         .to_array();
                     if let Some(supports) = columns.get(&(sample[0], sample[2])) {
                         cell.minimum_support_y =

@@ -522,13 +522,25 @@ neighbours, not the box: one that derives nothing costs microseconds.
 ### Collision navigation coordinates
 
 `ReplaceCollisionNavigation` uses a **world-aligned grid with origin (0, 0, 0)**
-in the session's current coordinate frame. `WorldMin` and `WorldMax` select
-where collision is sampled; they do not translate the grid. `ChunkSize` groups
-cells and `GridId` identifies the grid; neither changes its origin.
+in the session's coordinate frame at publication. `WorldMin` and `WorldMax`
+select where collision is sampled; they do not translate the grid. `ChunkSize`
+groups cells and `GridId` identifies the grid; neither changes its origin.
 `RequestNavigationPath`, `RequestWeightedNavigationPath`, traversal cells and
-returned path cells use these same signed coordinates.
+returned path cells use these same signed coordinates. Every navigation source
+(`ReplaceNavigation`, `ReplaceVoxelNavigation`, `ReplaceCollisionNavigation` and
+a content artifact's navigation) keeps its grid this way, and a
+`WorldOrigin.Commit` moves the installed grid with the world as it moves
+collision, whether or not the move is a whole number of cells. Its cells, supports, traversal
+overlays and connections are unchanged; positions, both those a query accepts
+and the waypoints and nearest positions it returns, are in the current local
+frame. So after commits whose receipts moved local coordinates by a total `d`
+(origin before minus origin after, summed), the cell holding local position
+`p` is the one that held `p - d` at publication. A later publication, or a
+content artifact replaced after the commit, starts again at (0, 0, 0) in the
+current frame.
 
-For cell size `s`, a retained support at world position `(x, supportY, z)` has:
+For cell size `s`, a retained support at world position `(x, supportY, z)` in
+the publication's frame has:
 
 ```text
 cell.X = floor(x / s)
@@ -563,8 +575,8 @@ position to the nearest retained support within the configuration's snap:
 footprint, `SnapAcross`. The nearest across wins, then the nearest vertically.
 The defaults (0.101 m, and the containing cell only) handle the controller's
 small standing clearance. A position with no support within the snap returns
-`StartNotWalkable` or `GoalNotWalkable`. Supply both endpoints in the same
-current session frame as the collision publication.
+`StartNotWalkable` or `GoalNotWalkable`. Supply both endpoints in the session's
+current local frame.
 
 The result's `NextPathCell` is a grid identity; `NextWaypoint` is a
 world-space movement proposal bounded by `maximumStepDistance`. Use that

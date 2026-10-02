@@ -1598,6 +1598,217 @@ mod tests {
         assert_spatial_admission_diagnostic(error, "CSHARP_SPATIAL_CONTENT_REFERENCE");
         let _ = services.finish_call();
     }
+    /// An admitted artifact's navigation, like its collision, follows a
+    /// world-origin commit by a non-whole number of its 0.8 m cells, and a
+    /// replacement admitted afterwards keeps the committed origin.
+    #[test]
+    fn content_artifact_navigation_follows_world_origin_commits() {
+        let path = "spatial/example/collision-navigation.json";
+        let artifact = br#"{
+            "schemaVersion":1,
+            "staticMeshArtifactId":"mesh/example",
+            "bounds":{"min":[0.0,0.0,0.0],"max":[3.0,20.0,2.0]},
+            "collision":{"positions":[[0.0,0.0,0.0],[2.0,0.0,0.0],[0.0,0.0,2.0]],"triangles":[[0,1,2]]},
+            "navigation":{"id":"navigation/example","config":{"schemaVersion":1,"cellSize":0.8,"levelQuantum":0.25,"maximumSlopeDegrees":45.0,"requiredHeadroom":1.0,"supportProbeDrop":0.1},"cells":[{"column":0,"row":0,"level":51,"supportHeight":12.8,"walkable":true},{"column":1,"row":0,"level":51,"supportHeight":12.8,"walkable":true},{"column":2,"row":0,"level":51,"supportHeight":12.8,"walkable":true}]}
+        }"#;
+        let mut content = BTreeMap::new();
+        content.insert(path.to_owned(), Arc::<[u8]>::from(artifact.as_slice()));
+        let mut services = EngineServiceSet::new(
+            parse_runtime_appearance_catalog(None).expect("default catalog"),
+            content,
+            None,
+            RuntimeDiagnosticsSink::new(Default::default()).unwrap(),
+        )
+        .expect("service set");
+        services.begin_call(binding());
+        let api = services.api();
+        let mut session = NativeSpatialSessionHandle::default();
+        assert_eq!(
+            unsafe {
+                (api.spatial.create_session)(
+                    api.spatial.context,
+                    NativeSpatialSessionConfig {
+                        collision_voxel_size: 1.0,
+                        collision_chunk_size: 8,
+                        voxel_surface_mode: NativeVoxelSurfaceMode::GreedyCubes,
+                    },
+                    &mut session,
+                    std::ptr::null_mut(),
+                )
+            },
+            ABI_OK
+        );
+        let mut reference = NativeContentReferenceHandle::default();
+        assert_eq!(
+            unsafe {
+                (api.content.open_reference)(
+                    api.content.context,
+                    &NativeContentOpenRequest {
+                        path: NativeUtf8Slice {
+                            bytes: path.as_ptr(),
+                            len: path.len(),
+                        },
+                    },
+                    &mut reference,
+                    std::ptr::null_mut(),
+                )
+            },
+            ABI_OK
+        );
+        let replace = || {
+            let mut receipt = NativeSpatialContentArtifactReplaceReceipt::default();
+            let mut error: NativeOperationErrorReceipt = unsafe { std::mem::zeroed() };
+            assert_eq!(
+                unsafe {
+                    (api.spatial.replace_content_artifact)(
+                        api.spatial.context,
+                        &NativeSpatialContentArtifactReplaceRequest {
+                            session,
+                            content: reference,
+                            navigation_grid_id: 7,
+                            navigation_chunk_size: 8,
+                            navigation_max_step_cells: 1,
+                        },
+                        &mut receipt,
+                        &mut error,
+                    )
+                },
+                ABI_OK
+            );
+        };
+        let step = |from: [f32; 3], target: [f32; 3]| {
+            let vec3 = |[x, y, z]: [f32; 3]| NativeVec3 { x, y, z };
+            let mut step = NativeNavigationStepResult::default();
+            assert_eq!(
+                unsafe {
+                    (api.spatial.evaluate_navigation_step)(
+                        api.spatial.context,
+                        NativeNavigationStepRequest {
+                            session,
+                            from: vec3(from),
+                            target: vec3(target),
+                            max_step_units: 0.5,
+                            max_visited: 32,
+                        },
+                        &mut step,
+                        std::ptr::null_mut(),
+                    )
+                },
+                ABI_OK
+            );
+            step
+        };
+        let ray_distance = |services: &EngineServiceSet, from: [f32; 3]| {
+            let hit = services.spatial.sessions[&session.value]
+                .scene
+                .raycast_world(from.map(f64::from), [0.0, -1.0, 0.0], 50.0);
+            match hit {
+                Some(engine_spatial::SpatialCollisionHit::StaticMesh(hit)) => Some(hit.distance),
+                _ => None,
+            }
+        };
+        let moved =
+            |point: [f32; 3], delta: [f32; 3]| [0, 1, 2].map(|axis| point[axis] + delta[axis]);
+        let (from, target, above) = ([0.4, 12.8, 0.4], [2.0, 12.8, 0.4], [0.5, 5.0, 0.5]);
+
+        replace();
+        let before = step(from, target);
+        assert_eq!(before.outcome, NativeNavigationPathOutcome::Reached);
+        let distance = ray_distance(&services, above).expect("the artifact collision is resident");
+
+        let mut prepared = NativeWorldOriginPreparedHandle::default();
+        assert_eq!(
+            unsafe {
+                (api.world_origin.prepare)(
+                    api.world_origin.context,
+                    &NativeWorldOriginPrepareRequest {
+                        session,
+                        target_cell_x: 1_000,
+                        target_cell_y: 3,
+                        target_cell_z: 5,
+                        entities: std::ptr::null(),
+                        entities_len: 0,
+                    },
+                    &mut prepared,
+                    std::ptr::null_mut(),
+                )
+            },
+            ABI_OK
+        );
+        let mut commit = NativeWorldOriginCommitReceipt::default();
+        assert_eq!(
+            unsafe {
+                (api.world_origin.commit)(
+                    api.world_origin.context,
+                    NativeWorldOriginCommitRequest { prepared },
+                    &mut commit,
+                    std::ptr::null_mut(),
+                )
+            },
+            ABI_OK
+        );
+        let delta = [-1_000.0, -3.0, -5.0];
+
+        let after = step(moved(from, delta), moved(target, delta));
+        assert_eq!(after.outcome, NativeNavigationPathOutcome::Reached);
+        assert_eq!(
+            (
+                after.next_path_cell.x,
+                after.next_path_cell.y,
+                after.next_path_cell.z
+            ),
+            (
+                before.next_path_cell.x,
+                before.next_path_cell.y,
+                before.next_path_cell.z
+            )
+        );
+        let expected = moved(
+            [
+                before.next_waypoint.x,
+                before.next_waypoint.y,
+                before.next_waypoint.z,
+            ],
+            delta,
+        );
+        assert!(
+            (after.next_waypoint.x - expected[0]).abs() < 1.0e-3
+                && (after.next_waypoint.y - expected[1]).abs() < 1.0e-3
+                && (after.next_waypoint.z - expected[2]).abs() < 1.0e-3,
+            "waypoint {:?} is not {expected:?}",
+            after.next_waypoint
+        );
+        assert_eq!(
+            step(from, target).outcome,
+            NativeNavigationPathOutcome::StartNotWalkable,
+            "the pre-commit local position still navigated"
+        );
+        assert_eq!(ray_distance(&services, moved(above, delta)), Some(distance));
+
+        // A whole-content replacement keeps the committed origin and admits
+        // the artifact's collision and navigation together in the current frame.
+        replace();
+        let mut origin = NativeWorldOriginReadout::default();
+        assert_eq!(
+            unsafe {
+                (api.world_origin.read)(
+                    api.world_origin.context,
+                    NativeWorldOriginReadRequest { session },
+                    &mut origin,
+                    std::ptr::null_mut(),
+                )
+            },
+            ABI_OK
+        );
+        assert_eq!((origin.cell_x, origin.cell_y, origin.cell_z), (1_000, 3, 5));
+        assert_eq!(
+            step(from, target).outcome,
+            NativeNavigationPathOutcome::Reached
+        );
+        assert_eq!(ray_distance(&services, above), Some(distance));
+        let _ = services.finish_call();
+    }
+
     fn assert_spatial_admission_diagnostic(error: NativeOperationErrorReceipt, expected: &str) {
         assert_eq!(error.diagnostics_len, 1);
         let diagnostic = unsafe { *error.diagnostics };

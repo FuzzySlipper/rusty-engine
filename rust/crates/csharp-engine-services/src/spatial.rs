@@ -183,8 +183,9 @@ impl SpatialSession {
     }
 
     /// Installs the scene a world-origin rebase produced. Local coordinates
-    /// moved by `origin_before - origin_after` whole units; the navigation
-    /// cache moves with them when that is a whole number of cells.
+    /// moved by `origin_before - origin_after` whole units. The installed
+    /// navigation's grid moves with them by that amount; the collision
+    /// navigation cache moves when that is a whole number of cells.
     pub(crate) fn rebase_collision(
         &mut self,
         scene: Arc<VoxelCollisionScene>,
@@ -193,9 +194,14 @@ impl SpatialSession {
     ) {
         let before = SceneRevisions::of(&self.scene);
         self.scene = scene;
+        let shift =
+            [0, 1, 2].map(|axis| origin_before[axis].saturating_sub(origin_after[axis]) as f64);
+        if let Some(navigation) = &mut self.navigation {
+            for (origin, shift) in navigation.grid_origin.iter_mut().zip(shift) {
+                *origin += shift;
+            }
+        }
         if let Some(cache) = &mut self.collision_navigation {
-            let shift =
-                [0, 1, 2].map(|axis| origin_before[axis].saturating_sub(origin_after[axis]) as f64);
             cache.rebase(before, SceneRevisions::of(&self.scene), shift);
         }
     }
@@ -278,6 +284,10 @@ struct NavigationState {
     volumetric_traversal: VolumetricNavTraversalOverlay,
     vertical_mapping: Option<NavigationVerticalMapping>,
     revision: u64,
+    /// Where the grid's zero corner lies in the session's current local
+    /// frame. A publication's cells, supports and overlays keep their grid;
+    /// each world-origin commit moves the grid with the world instead.
+    grid_origin: [f64; 3],
 }
 
 struct NavigationVerticalMapping {
@@ -312,20 +322,21 @@ impl NavigationState {
         }
     }
 
+    /// A local position in the grid's own frame.
+    fn grid_position(&self, local: [f64; 3]) -> [f64; 3] {
+        [0, 1, 2].map(|axis| local[axis] - self.grid_origin[axis])
+    }
+
     fn world_cell(&self, position: Vec3) -> VoxelCoord {
+        let [px, y, pz] = self.grid_position([position.x, position.y, position.z].map(f64::from));
         let base = self
             .projection
             .grid()
-            .world_to_voxel(core_space::WorldPos::new(
-                f64::from(position.x),
-                f64::from(position.y),
-                f64::from(position.z),
-            ));
+            .world_to_voxel(core_space::WorldPos::new(px, y, pz));
         let Some(vertical) = &self.vertical_mapping else {
             return base;
         };
         let [x, _, z] = base.to_array();
-        let y = f64::from(position.y);
         let Some(snap) = vertical.snap else {
             // The column's nearest support at any height, else the level the
             // height rounds to.
@@ -344,7 +355,7 @@ impl NavigationState {
         let grid = self.projection.grid();
         let cell_size = grid.voxel_size();
         let ring = (snap.across / cell_size).ceil().min(1024.0) as i64;
-        let point = [f64::from(position.x), f64::from(position.z)];
+        let point = [px, pz];
         let mut best: Option<(f64, f64, VoxelCoord)> = None;
         for cx in x - ring..=x + ring {
             let lowest = VoxelCoord::new(cx, i64::MIN, i64::MIN);
@@ -378,7 +389,9 @@ impl NavigationState {
             .and_then(|vertical| vertical.support_heights.get(&cell))
             .copied()
             .unwrap_or(center.y);
-        Vec3::new(center.x as f32, y as f32, center.z as f32)
+        let [x, y, z] = [center.x, y, center.z];
+        let [ox, oy, oz] = self.grid_origin;
+        Vec3::new((x + ox) as f32, (y + oy) as f32, (z + oz) as f32)
     }
 }
 
@@ -1008,6 +1021,7 @@ impl RuntimeSpatialBridge {
                 volumetric_traversal: VolumetricNavTraversalOverlay::empty(),
                 vertical_mapping: Some(navigation_vertical_mapping),
                 revision: navigation_revision,
+                grid_origin: [0.0; 3],
             };
             let identity = SpatialContentIdentity {
                 content_reference: request.content,
@@ -1125,6 +1139,7 @@ impl RuntimeSpatialBridge {
             volumetric_traversal: VolumetricNavTraversalOverlay::empty(),
             vertical_mapping: None,
             revision: navigation_revision,
+            grid_origin: [0.0; 3],
         });
         session.content_artifact = None;
         Ok(receipt)
@@ -1196,6 +1211,7 @@ impl RuntimeSpatialBridge {
             volumetric_traversal: VolumetricNavTraversalOverlay::empty(),
             vertical_mapping: None,
             revision: navigation_revision,
+            grid_origin: [0.0; 3],
         });
         session.content_artifact = None;
         Ok(receipt)
@@ -1353,6 +1369,7 @@ impl RuntimeSpatialBridge {
                 snap: Some(snap),
             }),
             revision: navigation_revision,
+            grid_origin: [0.0; 3],
         });
         session.content_artifact = None;
         Ok(receipt)
@@ -8743,6 +8760,352 @@ mod tests {
                 )
             },
             0
+        );
+    }
+
+    /// Commits `session`'s world origin to `target` and returns how far local
+    /// coordinates moved: origin before minus origin after.
+    fn commit_world_origin(
+        bridge: &mut RuntimeSpatialBridge,
+        session: NativeSpatialSessionHandle,
+        target: [i64; 3],
+    ) -> [f32; 3] {
+        let world_origin = crate::world_origin::api(bridge);
+        let request = NativeWorldOriginPrepareRequest {
+            session,
+            target_cell_x: target[0],
+            target_cell_y: target[1],
+            target_cell_z: target[2],
+            entities: std::ptr::null(),
+            entities_len: 0,
+        };
+        let mut prepared = NativeWorldOriginPreparedHandle::default();
+        assert_eq!(
+            unsafe {
+                (world_origin.prepare)(
+                    world_origin.context,
+                    &request,
+                    &mut prepared,
+                    std::ptr::null_mut(),
+                )
+            },
+            ABI_OK
+        );
+        let mut receipt = NativeWorldOriginCommitReceipt::default();
+        assert_eq!(
+            unsafe {
+                (world_origin.commit)(
+                    world_origin.context,
+                    NativeWorldOriginCommitRequest { prepared },
+                    &mut receipt,
+                    std::ptr::null_mut(),
+                )
+            },
+            ABI_OK
+        );
+        [
+            receipt.origin_before_cell_x - receipt.origin_after_cell_x,
+            receipt.origin_before_cell_y - receipt.origin_after_cell_y,
+            receipt.origin_before_cell_z - receipt.origin_after_cell_z,
+        ]
+        .map(|value| value as f32)
+    }
+
+    /// One navigation step with its path copied out of bridge storage.
+    fn navigation_step(
+        api: &NativeSpatialApi,
+        session: NativeSpatialSessionHandle,
+        from: [f32; 3],
+        target: [f32; 3],
+    ) -> (NativeNavigationStepResult, Vec<NativePlanarNavCell>) {
+        let vec3 = |[x, y, z]: [f32; 3]| NativeVec3 { x, y, z };
+        let mut step = NativeNavigationStepResult::default();
+        assert_eq!(
+            unsafe {
+                (api.evaluate_navigation_step)(
+                    api.context,
+                    NativeNavigationStepRequest {
+                        session,
+                        from: vec3(from),
+                        target: vec3(target),
+                        max_step_units: 0.5,
+                        max_visited: 64,
+                    },
+                    &mut step,
+                    std::ptr::null_mut(),
+                )
+            },
+            ABI_OK
+        );
+        let path = if step.path_len == 0 {
+            Vec::new()
+        } else {
+            unsafe { std::slice::from_raw_parts(step.path, step.path_len) }.to_vec()
+        };
+        (step, path)
+    }
+
+    /// Takes the same step before and after two origin commits (one by a
+    /// non-whole number of cells, one moving every axis) and checks that the
+    /// route, its cells and overlays are unchanged while every returned
+    /// position moved with local coordinates.
+    fn assert_navigation_follows_origin(
+        bridge: &mut RuntimeSpatialBridge,
+        session: NativeSpatialSessionHandle,
+        from: [f32; 3],
+        target: [f32; 3],
+        unreachable: Option<[f32; 3]>,
+    ) {
+        let api = api(bridge);
+        let translated =
+            |point: [f32; 3], delta: [f32; 3]| [0, 1, 2].map(|axis| point[axis] + delta[axis]);
+        let close = |left: NativeVec3, right: [f32; 3]| {
+            (left.x - right[0]).abs() < 1.0e-3
+                && (left.y - right[1]).abs() < 1.0e-3
+                && (left.z - right[2]).abs() < 1.0e-3
+        };
+        let at = |value: NativeVec3| [value.x, value.y, value.z];
+        let cells = |path: &[NativePlanarNavCell]| {
+            path.iter()
+                .map(|cell| (cell.x, cell.y, cell.z))
+                .collect::<Vec<_>>()
+        };
+        let (before, before_path) = navigation_step(&api, session, from, target);
+        assert_eq!(before.outcome, NativeNavigationPathOutcome::Reached);
+        let before_nearest = unreachable.map(|goal| navigation_step(&api, session, from, goal).0);
+        if let Some(nearest) = before_nearest {
+            assert_eq!(nearest.outcome, NativeNavigationPathOutcome::NoPath);
+            assert!(nearest.nearest_present);
+        }
+        let retained = navigation_state_fingerprint(bridge, session);
+
+        let mut moved = [0.0_f32; 3];
+        for origin in [[1_000, 3, 5], [-7, -2, 999]] {
+            let delta = commit_world_origin(bridge, session, origin);
+            moved = translated(moved, delta);
+            let (after, after_path) = navigation_step(
+                &api,
+                session,
+                translated(from, moved),
+                translated(target, moved),
+            );
+            assert_eq!(
+                after.outcome,
+                NativeNavigationPathOutcome::Reached,
+                "after {origin:?}"
+            );
+            assert_eq!(
+                cells(&after_path),
+                cells(&before_path),
+                "the route changed after {origin:?}"
+            );
+            assert_eq!(
+                cells(&[after.next_path_cell]),
+                cells(&[before.next_path_cell])
+            );
+            assert_eq!(after.path_hash, before.path_hash);
+            assert!(
+                close(
+                    after.next_waypoint,
+                    translated(at(before.next_waypoint), moved)
+                ),
+                "waypoint {:?} did not move with the origin by {moved:?} from {:?}",
+                after.next_waypoint,
+                before.next_waypoint
+            );
+            if let (Some(goal), Some(nearest)) = (unreachable, before_nearest) {
+                let (after, _) = navigation_step(
+                    &api,
+                    session,
+                    translated(from, moved),
+                    translated(goal, moved),
+                );
+                assert_eq!(after.outcome, NativeNavigationPathOutcome::NoPath);
+                assert_eq!(cells(&[after.nearest_cell]), cells(&[nearest.nearest_cell]));
+                assert!(close(after.nearest, translated(at(nearest.nearest), moved)));
+            }
+            assert_eq!(
+                navigation_state_fingerprint(bridge, session),
+                retained,
+                "a commit changed the retained navigation"
+            );
+            let (stale, _) = navigation_step(&api, session, from, target);
+            assert_ne!(
+                stale.outcome,
+                NativeNavigationPathOutcome::Reached,
+                "the pre-commit local position still navigated after {origin:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn host_walkable_navigation_follows_world_origin_commits() {
+        let mut bridge = RuntimeSpatialBridge::new();
+        let api = api(&mut bridge);
+        let session = create_session(&api);
+        // Two rows of 0.8 m cells, an island at x = 5, and a closed cell the
+        // route detours around.
+        let mut cells: Vec<_> = (0..3)
+            .flat_map(|x| (0..2).map(move |z| NativePlanarNavCell { x, y: 0, z }))
+            .collect();
+        cells.push(NativePlanarNavCell { x: 5, y: 0, z: 0 });
+        let mut receipt = NativeNavigationReplaceReceipt::default();
+        assert_eq!(
+            unsafe {
+                (api.replace_navigation)(
+                    api.context,
+                    &NativeNavigationReplaceRequest {
+                        session,
+                        config: NativePlanarNavConfig {
+                            grid_id: 1,
+                            cell_size: 0.8,
+                            chunk_size: 8,
+                            max_step_cells: 1,
+                        },
+                        cells: cells.as_ptr(),
+                        cells_len: cells.len(),
+                    },
+                    &mut receipt,
+                    std::ptr::null_mut(),
+                )
+            },
+            ABI_OK
+        );
+        let closed = [NativeNavigationTraversalCell {
+            cell: NativePlanarNavCell { x: 1, y: 0, z: 0 },
+            allowed: false,
+            traversal_cost: 1,
+        }];
+        let mut overlay = NativeNavigationTraversalReplaceReceipt::default();
+        assert_eq!(
+            unsafe {
+                (api.replace_navigation_traversal)(
+                    api.context,
+                    &NativeNavigationTraversalReplaceRequest {
+                        session,
+                        cells: closed.as_ptr(),
+                        cells_len: closed.len(),
+                    },
+                    &mut overlay,
+                    std::ptr::null_mut(),
+                )
+            },
+            ABI_OK
+        );
+        let (detour, path) = navigation_step(&api, session, [0.4, 0.4, 0.4], [2.0, 0.4, 0.4]);
+        assert_eq!(detour.outcome, NativeNavigationPathOutcome::Reached);
+        assert!(path.iter().all(|cell| cell.x != 1 || cell.z != 0));
+        assert_navigation_follows_origin(
+            &mut bridge,
+            session,
+            [0.4, 0.4, 0.4],
+            [2.0, 0.4, 0.4],
+            Some([4.4, 0.4, 0.4]),
+        );
+    }
+
+    #[test]
+    fn collision_and_voxel_derived_navigation_follow_world_origin_commits() {
+        let floor = || (0..3).flat_map(|x| (0..2).map(move |z| [x, 0, z]));
+
+        let mut bridge = RuntimeSpatialBridge::new();
+        let api = api(&mut bridge);
+        let session = create_session(&api);
+        bridge.sessions.get_mut(&session.value).unwrap().scene =
+            Arc::new(VoxelCollisionScene::from_solid_voxels(1.0, 8, floor()).unwrap());
+        let mut request = collision_navigation_request(session);
+        request.world_max.z = 2.0;
+        let mut receipt = NativeCollisionNavigationReplaceReceipt::default();
+        assert_eq!(
+            unsafe {
+                (api.replace_collision_navigation)(
+                    api.context,
+                    &request,
+                    &mut receipt,
+                    std::ptr::null_mut(),
+                )
+            },
+            ABI_OK
+        );
+        assert_eq!(receipt.walkable_cell_count, 6);
+        assert_navigation_follows_origin(
+            &mut bridge,
+            session,
+            [0.5, 1.02, 0.5],
+            [2.5, 1.02, 1.5],
+            None,
+        );
+        // A publication after the commits derives in the current frame, where
+        // the floor moved by the commits' total (7, 2, -999).
+        let [x, y, z] = [7.0, 2.0, -999.0];
+        let mut republished = request;
+        republished.world_min = NativeVec3 { x, y, z };
+        republished.world_max = NativeVec3 {
+            x: x + 3.0,
+            y: y + 3.0,
+            z: z + 2.0,
+        };
+        assert_eq!(
+            unsafe {
+                (api.replace_collision_navigation)(
+                    api.context,
+                    &republished,
+                    &mut receipt,
+                    std::ptr::null_mut(),
+                )
+            },
+            ABI_OK
+        );
+        assert_eq!(receipt.walkable_cell_count, 6);
+        assert_eq!(
+            receipt.reused_column_count, 6,
+            "the cache moved with whole cells"
+        );
+        let (step, _) = navigation_step(
+            &api,
+            session,
+            [x + 0.5, y + 1.02, z + 0.5],
+            [x + 2.5, y + 1.02, z + 1.5],
+        );
+        assert_eq!(step.outcome, NativeNavigationPathOutcome::Reached);
+
+        let mut bridge = RuntimeSpatialBridge::new();
+        let api = super::api(&mut bridge);
+        let session = create_session(&api);
+        let solids: Vec<_> = floor()
+            .map(|[x, y, z]| NativePlanarNavCell { x, y, z })
+            .collect();
+        let mut receipt = NativeNavigationReplaceReceipt::default();
+        assert_eq!(
+            unsafe {
+                (api.replace_voxel_navigation)(
+                    api.context,
+                    &NativeNavigationVoxelReplaceRequest {
+                        session,
+                        config: NativePlanarNavConfig {
+                            grid_id: 0,
+                            cell_size: 1.0,
+                            chunk_size: 8,
+                            max_step_cells: 1,
+                        },
+                        agent_height_voxels: 1,
+                        require_solid_floor: true,
+                        solid_cells: solids.as_ptr(),
+                        solid_cells_len: solids.len(),
+                    },
+                    &mut receipt,
+                    std::ptr::null_mut(),
+                )
+            },
+            ABI_OK
+        );
+        assert_eq!(receipt.walkable_cell_count, 6);
+        assert_navigation_follows_origin(
+            &mut bridge,
+            session,
+            [0.5, 1.5, 0.5],
+            [2.5, 1.5, 1.5],
+            None,
         );
     }
 }
