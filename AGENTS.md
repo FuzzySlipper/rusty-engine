@@ -109,6 +109,12 @@ Read [the architecture overview](docs/architecture.md) and
 - C# publishes product facts through named Engine APIs. It must not build a
   second renderer, retained-frame implementation, resource loader, canvas, or
   browser-rendering substitute.
+- Customising how things look through shaders is product work, not a second
+  renderer. Common needs grow the Engine's standard shader through core
+  requests. A product with an unusual look may feature-compile the standard
+  shader or supply its own WGSL through the Engine's material and shader
+  mechanism, and the Engine still owns pipelines, resources and frame
+  construction.
 - TypeScript may own DOM UI, accessibility, and explicit Engine host/backend
   implementation. Downstream TypeScript must never render non-UI game elements
   or acquire application/gameplay state.
