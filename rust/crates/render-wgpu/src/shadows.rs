@@ -14,6 +14,12 @@
 //! both with near 0.5 and far = range, or 500 without one. Receivers take a
 //! 3×3 PCF sample with linear comparison filtering.
 //!
+//! An ambient light that requests shadows casts one sky layer: straight down
+//! from 250 above its object position over a ±32 box, snapped to its texels
+//! so a light that follows the player does not shimmer. Its light reaches a
+//! fragment as the sky does, scaled by a wider 5×5 PCF, so ground under rock
+//! (a cave, an overhang, a roofed room) loses it and open ground keeps it.
+//!
 //! Maps are re-rendered only when a light or a part changed.
 
 use glam::{Mat4, Vec3};
@@ -28,6 +34,10 @@ const SHADOW_FAR: f32 = 500.0;
 const DIRECTIONAL_HALF_EXTENT: f32 = 5.0;
 /// A directional light sits at its node's +Y, one unit up.
 const DIRECTIONAL_POSITION: Vec3 = Vec3::Y;
+const SKY_HALF_EXTENT: f32 = 32.0;
+/// How far above its object position an ambient light's sky layer looks
+/// down from; it sees as far below.
+const SKY_HEIGHT: f32 = 250.0;
 /// Dynamic uniform offsets must be 256-byte aligned.
 const LAYER_UNIFORM_STRIDE: u64 = 256;
 
@@ -39,10 +49,24 @@ pub(crate) fn light_views(light: &LightDescriptor, world: &Mat4) -> Vec<Mat4> {
     }
     let far = |range: &Option<f32>| range.unwrap_or(SHADOW_FAR);
     match light {
-        LightDescriptor::Ambient { .. }
+        LightDescriptor::Ambient { enabled: false, .. }
         | LightDescriptor::Directional { enabled: false, .. }
         | LightDescriptor::Point { enabled: false, .. }
         | LightDescriptor::Spot { enabled: false, .. } => Vec::new(),
+        LightDescriptor::Ambient { .. } => {
+            let texel = 2.0 * SKY_HALF_EXTENT / SHADOW_MAP_SIZE as f32;
+            let centre = (world.transform_point3(Vec3::ZERO) / texel).round() * texel;
+            let projection = Mat4::orthographic_rh(
+                -SKY_HALF_EXTENT,
+                SKY_HALF_EXTENT,
+                -SKY_HALF_EXTENT,
+                SKY_HALF_EXTENT,
+                0.0,
+                2.0 * SKY_HEIGHT,
+            );
+            let eye = centre + Vec3::Y * SKY_HEIGHT;
+            vec![projection * look_at(eye, centre)]
+        }
         LightDescriptor::Directional { direction, .. } => {
             let position = world.transform_point3(DIRECTIONAL_POSITION);
             let target = world.transform_point3(
@@ -269,7 +293,7 @@ mod tests {
     }
 
     #[test]
-    fn only_requested_non_ambient_lights_cast() {
+    fn only_requested_lights_cast() {
         assert!(light_views(
             &directional([0.0, -1.0, 0.0], LightShadowIntent::Disabled),
             &Mat4::IDENTITY
@@ -285,6 +309,38 @@ mod tests {
             shadow_intent: LightShadowIntent::Requested,
         };
         assert_eq!(light_views(&point, &Mat4::IDENTITY).len(), 6);
+        let ambient = |shadow_intent| LightDescriptor::Ambient {
+            color: [1.0; 3],
+            intensity: 1.0,
+            enabled: true,
+            shadow_intent,
+        };
+        assert!(light_views(&ambient(LightShadowIntent::Disabled), &Mat4::IDENTITY).is_empty());
+        assert_eq!(
+            light_views(&ambient(LightShadowIntent::Requested), &Mat4::IDENTITY).len(),
+            1
+        );
+    }
+
+    #[test]
+    fn an_ambient_sky_layer_looks_down_over_its_object_position_snapped_to_texels() {
+        let ambient = LightDescriptor::Ambient {
+            color: [1.0; 3],
+            intensity: 1.0,
+            enabled: true,
+            shadow_intent: LightShadowIntent::Requested,
+        };
+        let at = |x: f32| light_views(&ambient, &Mat4::from_translation(Vec3::new(x, 4.0, 0.0)))[0];
+        // Higher is nearer the sky.
+        let view = at(10.0);
+        let high = view.project_point3(Vec3::new(10.0, 20.0, 0.0));
+        let low = view.project_point3(Vec3::new(10.0, -20.0, 0.0));
+        assert!(high.x.abs() < 1e-4 && high.y.abs() < 1e-4);
+        assert!(0.0 < high.z && high.z < low.z && low.z < 1.0);
+        let edge = view.project_point3(Vec3::new(10.0 + 31.0, 0.0, 0.0));
+        assert!(edge.x.abs().max(edge.y.abs()) < 1.0);
+        // Moving less than half a texel (1/8) keeps the same layer.
+        assert_eq!(at(10.0), at(10.05));
     }
 
     #[test]

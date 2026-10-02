@@ -13,6 +13,27 @@ color makes a surface visible but does not emit light onto other surfaces. Pair
 a torch's emissive appearance with a retained point light when it should light
 its surroundings. Updating or disabling that light changes the same retained light.
 
+## Dark caves: an ambient light's sky
+
+An ambient light reaches every surface alike, so on its own a cave is as
+bright as the open ground beside it. Give the sky's ambient light
+`ShadowIntent.Requested` (with renderer shadows enabled) and it reaches a
+surface only where the sky above it is open: ground under rock, an overhang
+or a roof loses it, fading over about a metre at a cave mouth, while open
+ground and the walls facing out of it keep it. Keep a second, unshadowed
+ambient light for the fill a dark interior should still have, and torches for
+the rest.
+
+- The sky is looked at straight down over a 64 m square centred on the
+  light's position and snapped to its texels, so move the light with the
+  player (or camera) in a large world, as for a directional light's shadow.
+  Outside the square nothing is occluded.
+- It is one more shadow layer: every shown part casts into it, and it
+  re-renders only when a light or part changes. Each lit fragment takes 25
+  more comparison samples. Meshing is unchanged.
+- It is presentation only. `Voxel.SampleDirectLighting` (below) still treats
+  ambient light as unoccluded.
+
 ## The standard shader
 
 Retained meshes, voxel surfaces and GLB parts all draw with the Engine's
@@ -101,9 +122,11 @@ shadow-query horizon chosen for the loaded world.
 
 Point/spot light uses inverse-power decay and a smooth range cutoff, matching
 the renderer's direct-light attenuation. Spot cones include penumbra; directional
-lights use their opposite travel direction. Ambient light is unoccluded, so it
-cannot make sealed caves dark. Disabled/zero-intensity and out-of-range lights
-contribute nothing. `ShadowIntent.Requested` enables a ray against the current
+lights use their opposite travel direction. Ambient light is unoccluded here,
+even when it requests shadows ([its sky](#dark-caves-an-ambient-lights-sky)
+is presentation only), so it cannot make sealed caves dark. Disabled/zero-intensity and out-of-range lights
+contribute nothing.
+`ShadowIntent.Requested` enables a ray against the current
 voxel and retained static-mesh **collision** projection. This is an explicit
 CPU lighting proxy, not GPU shadow-map or final-pixel readback: non-collidable
 visual occluders, active entities, translucent shadow transmission, indirect

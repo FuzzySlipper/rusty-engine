@@ -72,6 +72,28 @@ fn shadow_visibility(layer: u32, position: vec3<f32>) -> f32 {
     return lit / 9.0;
 }
 
+// Fraction of an ambient light's sky reaching `position` through its sky
+// layer (`shadows.rs`): a 5×5 PCF two texels apart, about a metre across,
+// so light fades in over a cave mouth. The position moves a quarter metre
+// along the normal first, off the surface it lies on.
+fn sky_visibility(layer: u32, position: vec3<f32>, normal: vec3<f32>) -> f32 {
+    let clip = shadow_views[layer] * vec4<f32>(position + normal * 0.25, 1.0);
+    let ndc = clip.xyz / clip.w;
+    let uv = vec2<f32>(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
+    if any(uv < vec2<f32>(0.0)) || any(uv > vec2<f32>(1.0)) || ndc.z > 1.0 || ndc.z < 0.0 {
+        return 1.0;
+    }
+    let step = 2.0 / SHADOW_MAP_SIZE;
+    var lit = 0.0;
+    for (var y = -2; y <= 2; y = y + 1) {
+        for (var x = -2; x <= 2; x = x + 1) {
+            let offset = vec2<f32>(f32(x), f32(y)) * step;
+            lit += textureSampleCompareLevel(shadow_maps, shadow_sampler, uv + offset, layer, ndc.z);
+        }
+    }
+    return lit / 25.0;
+}
+
 // Specular reflectance of a uniform environment: Karis' analytic fit of the
 // split-sum environment BRDF (no lookup texture).
 fn environment_brdf(f0: vec3<f32>, roughness: f32, n_dot_v: f32) -> vec3<f32> {
@@ -83,7 +105,7 @@ fn environment_brdf(f0: vec3<f32>, roughness: f32, n_dot_v: f32) -> vec3<f32> {
 
 // Diffuse plus GGX specular from every light row of the pass, before
 // emission. `occlusion` scales the ambient and hemisphere (indirect) light
-// only. Metals tint specular and lose diffuse; they reflect ambient and
+// only, as does an ambient light's sky layer. Metals tint specular and lose diffuse; they reflect ambient and
 // hemisphere light as a uniform environment (the hemisphere along the
 // reflection), while dielectrics take that light as diffuse only.
 fn standard_radiance(
@@ -106,8 +128,13 @@ fn standard_radiance(
         let kind = u32(light.color_kind.w);
         let color = light.color_kind.rgb;
         if kind == 0u {
-            irradiance += color * occlusion;
-            environment += color * occlusion;
+            let sky_layer = u32(light.extra.w);
+            var sky = 1.0;
+            if sky_layer > 0u {
+                sky = sky_visibility(sky_layer - 1u, world_position, normal);
+            }
+            irradiance += color * occlusion * sky;
+            environment += color * occlusion * sky;
         } else if kind == 1u {
             irradiance += mix(light.extra.rgb, color, 0.5 * normal.y + 0.5) * occlusion;
             environment += mix(light.extra.rgb, color, 0.5 * reflected.y + 0.5) * occlusion;

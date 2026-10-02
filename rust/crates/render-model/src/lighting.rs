@@ -22,6 +22,8 @@ pub enum LightDescriptor {
         color: [f32; 3],
         intensity: f32,
         enabled: bool,
+        /// Requested: the light is the sky's, reaching a surface only where
+        /// the sky above it is open (render-wgpu `shadows.rs`).
         shadow_intent: LightShadowIntent,
     },
     Directional {

@@ -508,7 +508,7 @@ fn shadow_scene(harness: &mut Harness) {
                 color: [1.0; 3],
                 intensity: 0.4,
                 enabled: true,
-                shadow_intent: LightShadowIntent::Requested,
+                shadow_intent: LightShadowIntent::Disabled,
             },
         },
     ]);
@@ -1312,4 +1312,92 @@ fn a_triplanar_material_draws_a_dual_contoured_mound_without_chart_seams() {
     );
     assert_eq!(triplanar_steps, 0, "triplanar seams");
     assert_screenshot("scene_triplanar_dual_contoured_mound", &triplanar);
+}
+
+/// Open ground in front of a hill with a tunnel driven into it.
+fn cave_mouth() -> VoxelCollisionScene {
+    let mut voxels = Vec::new();
+    for x in -14..14 {
+        for z in -24..6 {
+            voxels.push(MaterialVoxel {
+                state: 0,
+                address: [x, -1, z],
+                material_slot: 1,
+            });
+            let hill = (-6..6).contains(&x) && (-22..-8).contains(&z);
+            let tunnel = (-2..2).contains(&x) && z >= -18;
+            for y in 0..6 {
+                if hill && !(tunnel && y < 3) {
+                    voxels.push(MaterialVoxel {
+                        state: 0,
+                        address: [x, y, z],
+                        material_slot: 1,
+                    });
+                }
+            }
+        }
+    }
+    VoxelCollisionScene::from_material_voxels_with_mesh_options(
+        1.0,
+        CHUNK_CELLS,
+        voxels,
+        SurfaceMeshOptions::default(),
+    )
+    .expect("cave mouth")
+}
+
+#[test]
+fn an_ambient_light_requesting_shadows_leaves_a_cave_darker_than_open_ground() {
+    let scene = cave_mouth();
+    let render = |shadow_intent| {
+        let mut harness = Harness::new(RendererOptions {
+            default_world_lights: false,
+            shadows: true,
+            ..RendererOptions::default()
+        });
+        let materials = BTreeMap::from([(1, voxel_material(1, [0.6, 0.55, 0.5, 1.0], None, None))]);
+        let mut projector = VoxelRenderProjector::new();
+        let mut ops = vec![RenderDiff::CreateLight {
+            handle: RenderHandle::new(90),
+            parent: None,
+            light: LightDescriptor::Ambient {
+                color: [1.0; 3],
+                intensity: std::f32::consts::PI,
+                enabled: true,
+                shadow_intent,
+            },
+        }];
+        ops.extend(project(&mut projector, &scene, &materials));
+        harness.apply(ops);
+        harness.render(&camera([0.5, 1.6, 2.0], 0.0, -5.0)).1
+    };
+    let open = render(LightShadowIntent::Disabled);
+    let sky = render(LightShadowIntent::Requested);
+    let luminance = |rgba: &[u8], x: u32, y: u32| {
+        let at = ((y * WIDTH + x) * 4) as usize;
+        rgba[at..at + 3]
+            .iter()
+            .map(|value| u32::from(*value))
+            .sum::<u32>()
+    };
+    // Unshadowed, the ambient light draws every surface alike: the open
+    // ground below the horizon and the tunnel in the middle.
+    let (centre, ground) = ((WIDTH / 2, HEIGHT / 2), (WIDTH / 2, HEIGHT - 4));
+    assert_eq!(
+        luminance(&open, centre.0, centre.1),
+        luminance(&open, ground.0, ground.1)
+    );
+    // Under its sky layer, the open ground keeps its light and the tunnel
+    // loses it.
+    assert_eq!(
+        luminance(&sky, ground.0, ground.1),
+        luminance(&open, ground.0, ground.1)
+    );
+    assert!(
+        luminance(&sky, centre.0, centre.1) * 4 < luminance(&open, centre.0, centre.1),
+        "tunnel {} against open {}",
+        luminance(&sky, centre.0, centre.1),
+        luminance(&open, centre.0, centre.1)
+    );
+    assert_screenshot("scene_ambient_sky_cave_mouth", &sky);
 }
