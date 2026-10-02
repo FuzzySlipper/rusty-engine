@@ -97,7 +97,7 @@ pub(crate) struct GhostPipelines {
 }
 
 impl GhostPipelines {
-    pub fn new(device: &wgpu::Device) -> Self {
+    pub fn new(device: &wgpu::Device, shader: wgpu::ShaderModule) -> Self {
         let entry = |binding, visibility, ty| wgpu::BindGroupLayoutEntry {
             binding,
             visibility,
@@ -154,10 +154,6 @@ impl GhostPipelines {
             label: Some("render-wgpu ghost"),
             bind_group_layouts: &[Some(&frame_layout), Some(&sector_layout)],
             immediate_size: 0,
-        });
-        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("render-wgpu ghost"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("ghost.wgsl").into()),
         });
         Self {
             sampler: device.create_sampler(&wgpu::SamplerDescriptor {

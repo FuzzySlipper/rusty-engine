@@ -13,6 +13,27 @@ color makes a surface visible but does not emit light onto other surfaces. Pair
 a torch's emissive appearance with a retained point light when it should light
 its surroundings. Updating or disabling that light changes the same retained light.
 
+## The standard shader
+
+Retained meshes, voxel surfaces and GLB parts all draw with the Engine's
+standard shader: metallic-roughness lighting (Lambert diffuse plus GGX
+specular) from the scene's lights and requested shadows, in linear light with
+no tone mapping. A material compiles only the features its contents use:
+
+| Feature | A material has it when |
+| --- | --- |
+| Unlit | it is a GLB `KHR_materials_unlit` material or an Engine primitive |
+| Alpha mask | its alpha mode is `MaterialAlphaMode.Mask`, or its voxel surface is masked |
+| Voxel surface | it carries a voxel surface mapping |
+| Normal, emissive, occlusion map | it is a GLB material with that texture |
+
+Materials with the same features share pipelines and batch together. A new
+feature set compiles once, when its first material is defined: about 8 ms on
+an RX 9070 XT, then about 0.4 ms for each further pass it draws in. Doom's E1M1
+uses two. The shader is composed from importable WGSL modules in
+`render-wgpu/src/shaders/` (`types`, `view`, `material`, `surface`,
+`lighting`).
+
 ## Read light at a voxel location
 
 `Voxel.SampleDirectLighting(VoxelLightSampleRequest)` evaluates the same typed

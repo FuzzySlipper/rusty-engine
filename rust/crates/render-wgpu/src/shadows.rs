@@ -91,7 +91,7 @@ pub(crate) fn light_views(light: &LightDescriptor, world: &Mat4) -> Vec<Mat4> {
     }
 }
 
-/// Point light faces in the order `world.wgsl`'s `point_face` selects them.
+/// Point light faces in the order `lighting.wgsl`'s `point_face` selects them.
 const CUBE_FACES: [(Vec3, Vec3); 6] = [
     (Vec3::X, Vec3::NEG_Y),
     (Vec3::NEG_X, Vec3::NEG_Y),

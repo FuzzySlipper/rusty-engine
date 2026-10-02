@@ -38,6 +38,7 @@ mod particles;
 mod pipelines;
 mod primitives;
 mod resources;
+mod shaders;
 mod shadows;
 mod surface;
 mod tables;
@@ -83,6 +84,7 @@ pub use target::OffscreenTarget;
 pub use video::{VideoFact, VideoFailure};
 
 use pipelines::{Layouts, Pipelines};
+use shaders::{Entry, Features};
 use tables::{Builtin, GpuMesh, GpuTexture, Tables};
 
 /// The default world rig: a hemisphere light and a key light at (5, 8, 6),
@@ -183,7 +185,7 @@ const INITIAL_INSTANCES_BYTES: u64 = 16 * 1024;
 impl Renderer {
     pub fn new(gpu: &Gpu, options: RendererOptions) -> Self {
         let device = &gpu.device;
-        let layouts = Layouts::new(device);
+        let mut layouts = Layouts::new(device);
         let frame_buffer = frame::frame_uniform_buffer(device);
         let parts_buffer = frame::storage_buffer(device, "render-wgpu parts", INITIAL_PARTS_BYTES);
         let lights_buffer =
@@ -212,7 +214,16 @@ impl Renderer {
         let white = white_texture(gpu);
         let (unlit_material, lit_fallback_material) =
             apply::builtin_materials(device, &layouts.material, &white);
-        let effects = effects::Effects::new(device, &layouts.frame);
+        let effects = effects::Effects::new(
+            device,
+            &layouts.frame,
+            layouts
+                .shaders
+                .module(device, Entry::Effects, Features::default()),
+        );
+        let ghost_shader = layouts
+            .shaders
+            .module(device, Entry::Ghost, Features::default());
         let mut renderer = Self {
             gpu: gpu.clone(),
             options,
@@ -240,7 +251,7 @@ impl Renderer {
             animation_facts: Vec::new(),
             animation_generations: HashMap::new(),
             ghosts: HashMap::new(),
-            ghost_pipelines: ghost::GhostPipelines::new(device),
+            ghost_pipelines: ghost::GhostPipelines::new(device, ghost_shader),
             scene_generation: 0,
             compose: compose::Compose::new(device),
             composition: Default::default(),
@@ -331,6 +342,7 @@ impl Renderer {
             animated_meshes: self.tables.animated_assets.len(),
             animated_instances: self.tables.animated.len(),
             shadow_layers: self.shadows.layers as usize,
+            shader_variants: self.layouts.shader_variants(),
         }
     }
 }
@@ -357,6 +369,8 @@ pub struct TableCounts {
     pub animated_meshes: usize,
     pub animated_instances: usize,
     pub shadow_layers: usize,
+    /// Standard shader feature sets compiled for the world and caster passes.
+    pub shader_variants: usize,
 }
 
 /// A 1×1 white texture: untextured materials sample it.

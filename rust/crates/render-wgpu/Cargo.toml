@@ -12,7 +12,9 @@ render-host-contracts.workspace = true
 render-presentation.workspace = true
 render-video.workspace = true
 # Only this crate may depend on wgpu (scripts/dependency_boundary_check.py).
-wgpu = "30.0.1"
+wgpu = { version = "30.0.1", features = ["naga-ir"] }
+# The standard shader's WGSL modules (`src/shaders`): #import and #ifdef.
+naga_oil = { version = "0.23", default-features = false }
 glam.workspace = true
 png.workspace = true
 jpeg-decoder = { version = "0.3.2", default-features = false }

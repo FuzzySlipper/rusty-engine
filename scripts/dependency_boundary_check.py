@@ -57,6 +57,7 @@ EXTERNAL_DEPENDENCY_OWNERS = {
     "fontdue": frozenset({"render-wgpu"}),
     "glam": frozenset({"render-wgpu"}),
     "naga": frozenset({"render-wgpu"}),
+    "naga_oil": frozenset({"render-wgpu"}),
     "wgpu": frozenset({"render-wgpu"}),
     "wgpu-core": frozenset({"render-wgpu"}),
     "wgpu-hal": frozenset({"render-wgpu"}),

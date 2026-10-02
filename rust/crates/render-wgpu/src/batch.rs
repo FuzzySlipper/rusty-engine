@@ -4,8 +4,9 @@
 //! a batch is a run of part ids in the `instances` buffer drawn with one
 //! `draw_indexed`. Parts that share a mesh, index range and material (a batch
 //! key, interned in `Parts`) draw together; colour, tint and emission are per
-//! row, so instance parameters do not split a batch. Blended parts stay one
-//! draw each, back to front.
+//! row, so instance parameters do not split a batch. Opaque batches group by
+//! their material's features first, so parts sharing a pipeline draw
+//! together. Blended parts stay one draw each, back to front.
 //!
 //! A moved part only rewrites its own row. The instance runs change when the
 //! drawn set does (a part is created, destroyed, shown, hidden or culled),
@@ -15,9 +16,10 @@
 use glam::{Mat4, Vec3, Vec4};
 use render_model::RenderLayer;
 
+use crate::shaders::Features;
 use crate::tables::{Aabb, PartClass, PartId, Parts};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub(crate) enum Pass {
     Opaque,
     /// Negative determinant: the mirror reverses winding, so front faces
@@ -111,7 +113,7 @@ impl Frustum {
 
 /// The parts a view pass sees: shown, in the viewmodel layer or (for a world
 /// pass) any other layer, inside the frustum.
-/// Opaque parts are grouped by pass and batch key; blended parts are sorted
+/// Opaque parts are grouped by pass, features and batch key; blended parts are sorted
 /// back to front from `eye`. Instance ids are offset by `base`.
 pub(crate) fn view_list(
     parts: &Parts,
@@ -130,20 +132,24 @@ pub(crate) fn view_list(
             continue;
         }
         let pass = Pass::of(state.class, state.mirrored);
-        let order = if pass.blends() {
+        let (features, order) = if pass.blends() {
             // Farthest first: larger distances sort earlier.
             let center = (state.world_bounds.min + state.world_bounds.max) * 0.5;
-            u32::MAX - center.distance_squared(eye).to_bits()
+            (
+                Features::default(),
+                u32::MAX - center.distance_squared(eye).to_bits(),
+            )
         } else {
-            state.key
+            (state.class.features, state.key)
         };
-        entries.push((pass.bucket(), order, id as PartId, pass));
+        entries.push((pass.bucket(), features, order, id as PartId, pass));
     }
     group(parts, entries, base)
 }
 
-/// (sort bucket, order within the bucket, part, pass the part draws with)
-type Entry = (Pass, u32, PartId, Pass);
+/// (sort bucket, features (opaque passes), order within the bucket, part,
+/// pass the part draws with)
+type Entry = (Pass, Features, u32, PartId, Pass);
 
 /// Shadow casters: every shown triangle part of the scene layer, not culled
 /// by any camera. Blended parts cast as opaque. Passes select the face culling: single-sided parts render their back
@@ -163,7 +169,13 @@ pub(crate) fn caster_list(parts: &Parts, base: u32) -> DrawList {
             ..state.class
         };
         let pass = Pass::of(opaque, state.mirrored);
-        entries.push((pass, state.key, id as PartId, pass));
+        entries.push((
+            pass,
+            state.class.features.caster(),
+            state.key,
+            id as PartId,
+            pass,
+        ));
     }
     group(parts, entries, base)
 }
@@ -175,7 +187,7 @@ fn group(parts: &Parts, mut entries: Vec<Entry>, base: u32) -> DrawList {
         ids: Vec::with_capacity(entries.len()),
     };
     let mut previous: Option<(Pass, u32)> = None;
-    for (_, _, id, pass) in entries {
+    for (_, _, _, id, pass) in entries {
         let key = parts.state[id as usize].key;
         match list.batches.last_mut() {
             Some(batch) if !pass.blends() && previous == Some((pass, key)) => {

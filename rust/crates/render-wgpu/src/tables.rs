@@ -52,6 +52,8 @@ pub(crate) struct GpuTexture {
 pub(crate) struct MaterialRow {
     pub descriptor: RenderMaterialDescriptor,
     pub bind_group: wgpu::BindGroup,
+    /// The standard shader features its pipelines compile.
+    pub features: crate::shaders::Features,
     /// A GLB material's maps, kept for variants (matte inspection).
     pub maps: crate::apply::MaterialMaps,
 }
@@ -318,6 +320,9 @@ pub(crate) struct PartClass {
     pub blend: bool,
     pub double_sided: bool,
     pub lines: bool,
+    /// The material's features: opaque draws group by them, so parts sharing
+    /// a pipeline draw together.
+    pub features: crate::shaders::Features,
 }
 
 /// Dense per-part draw state: what the draw list reads without touching the

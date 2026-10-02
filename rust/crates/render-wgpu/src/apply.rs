@@ -12,9 +12,11 @@ use render_model::{
 };
 use wgpu::util::DeviceExt;
 
+use crate::batch::Pass;
 use crate::glb::UvTransform;
 use crate::pipelines::VERTEX_FLOATS;
 use crate::resources::{self, ResourceSource};
+use crate::shaders::Features;
 use crate::tables::{
     Aabb, Builtin, Environment, GpuMesh, GpuTexture, MaterialRef, MaterialRow, MeshRef, NodeKind,
     NodeRow, Part, PartClass, PartRow, Topology,
@@ -29,14 +31,9 @@ pub struct ApplyIssue {
     pub detail: String,
 }
 
-/// Material flags in `MaterialUniform.flags` (world.wgsl).
-pub(crate) const FLAG_UNLIT: u32 = 1;
-const FLAG_MASK: u32 = 2;
-const FLAG_VOXEL_SURFACE: u32 = 4;
-const FLAG_NORMAL_MAP: u32 = 8;
-/// `MaterialUniform` size: roughness, cutoff, flags, metalness; the voxel
-/// surface's tile scale, tile origin and sample rect; the base, emissive,
-/// normal and occlusion uv transforms (two rows each); the normal scale and
+/// `MaterialUniform` size (`rusty::types`): roughness, cutoff, metalness,
+/// normal scale; the voxel surface's tile scale, tile origin and sample rect;
+/// the base, emissive, normal and occlusion uv transforms (two rows each); the
 /// occlusion strength.
 const MATERIAL_UNIFORM_BYTES: usize = 192;
 /// Payload groups without a voxel material are fully rough.
@@ -717,16 +714,22 @@ impl Renderer {
                 mesh.edges
                     .get_or_init(|| edge_buffer(&self.gpu.device, &mesh.cpu.indices));
             }
-            let descriptor = match &part.material {
+            let (descriptor, features) = match &part.material {
                 MaterialRef::Retained(id) => {
-                    self.tables.materials.get(*id).map(|row| &row.descriptor)
+                    let row = self.tables.materials.get(*id);
+                    (
+                        row.map(|row| &row.descriptor),
+                        row.map_or(Features::default(), |row| row.features),
+                    )
                 }
-                _ => None,
+                MaterialRef::Unlit => (None, Features::UNLIT),
+                MaterialRef::LitFallback => (None, Features::default()),
             };
             let class = PartClass {
                 blend: row.color[3] < 1.0 || descriptor.is_some_and(blends),
                 double_sided: descriptor.is_some_and(|descriptor| descriptor.double_sided),
                 lines: part.wireframe || mesh.is_some_and(|mesh| mesh.topology == Topology::Lines),
+                features,
             };
             let id = self.tables.parts.insert(part, row, bounds, class);
             self.tables.parts.write(id, &world, shown, layer);
@@ -835,14 +838,16 @@ impl Renderer {
             .texture
             .as_ref()
             .and_then(|id| self.tables.textures.get(id));
-        let bind_group =
+        let (bind_group, features) =
             self.material_bind_group(&descriptor.id, params, texture.unwrap_or(&self.white));
+        self.prepare_material(features, blends(&descriptor), descriptor.double_sided);
         let id = self.tables.names.id(&descriptor.id);
         self.tables.materials.insert(
             id,
             MaterialRow {
                 descriptor,
                 bind_group,
+                features,
                 maps: params.maps.clone(),
             },
         );
@@ -865,45 +870,67 @@ impl Renderer {
         }
     }
 
-    /// A material's bind group, its maps resolved to retained textures. A map
-    /// whose texture is not retained binds white: no emission mask, no
-    /// occlusion, and (cleared) no normal map.
+    /// Make a material's pipelines on every target so far and for the shadow
+    /// casters, so its first draw does not compile them.
+    fn prepare_material(&mut self, features: Features, blend: bool, double_sided: bool) {
+        let passes: &[Pass] = match (blend, double_sided) {
+            (false, false) => &[Pass::Opaque, Pass::OpaqueMirrored],
+            (false, true) => &[Pass::OpaqueDoubleSided],
+            (true, false) => &[Pass::Blend, Pass::BlendMirrored],
+            (true, true) => &[Pass::BlendDoubleSided],
+        };
+        let device = &self.gpu.device;
+        for &pass in passes {
+            for pipelines in &mut self.pipelines {
+                self.layouts.prepare(device, pipelines, features, pass);
+            }
+            if self.options.shadows {
+                self.layouts.prepare_caster(device, features, pass);
+            }
+        }
+    }
+
+    /// A material's bind group and the features its variant compiles, its
+    /// maps resolved to retained textures. A map whose texture is not
+    /// retained is left out: it binds white and its feature is off.
     pub(crate) fn material_bind_group(
         &self,
         label: &str,
         params: &MaterialParams,
         texture: &GpuTexture,
-    ) -> wgpu::BindGroup {
-        let lookup =
-            |slot: Option<&MapSlot>| slot.and_then(|map| self.tables.textures.get(&map.texture));
-        let normal = lookup(params.maps.normal.as_ref().map(|(map, _)| map));
-        let resolved;
-        let params = if params.maps.normal.is_some() && normal.is_none() {
-            resolved = MaterialParams {
-                maps: MaterialMaps {
-                    normal: None,
-                    ..params.maps.clone()
-                },
-                voxel_surface: params.voxel_surface,
-                ..*params
-            };
-            &resolved
-        } else {
-            params
+    ) -> (wgpu::BindGroup, Features) {
+        let retained = |map: &MapSlot| self.tables.textures.contains_key(&map.texture);
+        let params = MaterialParams {
+            maps: MaterialMaps {
+                base: params.maps.base,
+                emissive: params.maps.emissive.clone().filter(retained),
+                normal: params.maps.normal.clone().filter(|(map, _)| retained(map)),
+                occlusion: params
+                    .maps
+                    .occlusion
+                    .clone()
+                    .filter(|(map, _)| retained(map)),
+            },
+            voxel_surface: params.voxel_surface,
+            ..*params
         };
-        material_bind_group(
+        let lookup = |map: Option<&MapSlot>| {
+            map.and_then(|map| self.tables.textures.get(&map.texture))
+                .unwrap_or(&self.white)
+        };
+        let bind_group = material_bind_group(
             &self.gpu.device,
             &self.layouts.material,
             label,
-            params,
+            &params,
             texture,
             &MapTextures {
-                emissive: lookup(params.maps.emissive.as_ref()).unwrap_or(&self.white),
-                normal: normal.unwrap_or(&self.white),
-                occlusion: lookup(params.maps.occlusion.as_ref().map(|(map, _)| map))
-                    .unwrap_or(&self.white),
+                emissive: lookup(params.maps.emissive.as_ref()),
+                normal: lookup(params.maps.normal.as_ref().map(|(map, _)| map)),
+                occlusion: lookup(params.maps.occlusion.as_ref().map(|(map, _)| map)),
             },
-        )
+        );
+        (bind_group, params.features())
     }
 
     fn define_static_mesh(
@@ -1081,8 +1108,9 @@ pub(crate) fn upload_rgba_texture(
 /// What a material bind group's uniform carries.
 pub(crate) struct MaterialParams {
     pub roughness: f32,
-    pub alpha_cutoff: f32,
-    pub flags: u32,
+    /// Alpha-masked below this cutoff.
+    pub alpha_cutoff: Option<f32>,
+    pub unlit: bool,
     /// Metalness 0 for Engine materials; GLB materials carry their own.
     pub metalness: f32,
     pub voxel_surface: Option<VoxelSurfaceUniform>,
@@ -1131,13 +1159,26 @@ impl MaterialParams {
             .map(|surface| VoxelSurfaceUniform::resolve(surface, texture_size));
         Self {
             roughness: descriptor.roughness,
-            alpha_cutoff: cutoff.unwrap_or(0.0),
-            flags: cutoff.map_or(0, |_| FLAG_MASK)
-                | voxel_surface.map_or(0, |_| FLAG_VOXEL_SURFACE),
+            alpha_cutoff: cutoff,
+            unlit: false,
             metalness: 0.0,
             voxel_surface,
             maps: MaterialMaps::default(),
         }
+    }
+
+    /// The standard shader features the material compiles in. An unlit
+    /// material reads no maps beyond its base colour.
+    pub(crate) fn features(&self) -> Features {
+        let base = Features::default()
+            .with(Features::MASK, self.alpha_cutoff.is_some())
+            .with(Features::VOXEL_SURFACE, self.voxel_surface.is_some());
+        if self.unlit {
+            return base | Features::UNLIT;
+        }
+        base.with(Features::NORMAL_MAP, self.maps.normal.is_some())
+            .with(Features::EMISSIVE_MAP, self.maps.emissive.is_some())
+            .with(Features::OCCLUSION_MAP, self.maps.occlusion.is_some())
     }
 }
 
@@ -1166,14 +1207,10 @@ pub(crate) fn material_bind_group(
     maps: &MapTextures<'_>,
 ) -> wgpu::BindGroup {
     let mut floats = [0f32; MATERIAL_UNIFORM_BYTES / 4];
-    let mut flags = params.flags;
-    if params.maps.normal.is_some() {
-        flags |= FLAG_NORMAL_MAP;
-    }
     floats[0] = params.roughness;
-    floats[1] = params.alpha_cutoff;
-    floats[2] = f32::from_bits(flags);
-    floats[3] = params.metalness;
+    floats[1] = params.alpha_cutoff.unwrap_or(0.0);
+    floats[2] = params.metalness;
+    floats[3] = params.maps.normal.as_ref().map_or(1.0, |(_, scale)| *scale);
     if let Some(surface) = &params.voxel_surface {
         floats[4..6].copy_from_slice(&surface.tile_scale);
         floats[6..8].copy_from_slice(&surface.tile_origin);
@@ -1192,8 +1229,7 @@ pub(crate) fn material_bind_group(
         floats[start..start + 3].copy_from_slice(&[a, b, c]);
         floats[start + 4..start + 7].copy_from_slice(&[d, e, f]);
     }
-    floats[44] = params.maps.normal.as_ref().map_or(1.0, |(_, scale)| *scale);
-    floats[45] = params
+    floats[44] = params
         .maps
         .occlusion
         .as_ref()
@@ -1261,8 +1297,8 @@ pub(crate) fn builtin_materials(
             "render-wgpu unlit",
             &MaterialParams {
                 roughness: 1.0,
-                alpha_cutoff: 0.0,
-                flags: FLAG_UNLIT,
+                alpha_cutoff: None,
+                unlit: true,
                 metalness: 0.0,
                 voxel_surface: None,
                 maps: MaterialMaps::default(),
@@ -1280,8 +1316,8 @@ pub(crate) fn builtin_materials(
             "render-wgpu lit fallback",
             &MaterialParams {
                 roughness: FALLBACK_ROUGHNESS,
-                alpha_cutoff: 0.0,
-                flags: 0,
+                alpha_cutoff: None,
+                unlit: false,
                 metalness: 0.0,
                 voxel_surface: None,
                 maps: MaterialMaps::default(),
@@ -1296,7 +1332,7 @@ pub(crate) fn builtin_materials(
     )
 }
 
-/// World-space light rows for the shader, in `world.wgsl`'s `Light` layout.
+/// World-space light rows for the shader, in `rusty::types`' `Light` layout.
 pub(crate) fn light_row(light: &LightDescriptor, world: &Mat4) -> Option<[f32; 16]> {
     let scaled = |color: [f32; 3], intensity: f32| color.map(|c| c * intensity);
     let rotate = |direction: [f32; 3]| {

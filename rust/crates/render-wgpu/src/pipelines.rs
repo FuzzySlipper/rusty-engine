@@ -1,7 +1,13 @@
-//! Bind group layouts and the fixed set of render pipelines, one set per
-//! target colour format (offscreen RGBA8 sRGB, and whatever a surface uses).
+//! Bind group layouts and the render pipelines: per target colour format
+//! (offscreen RGBA8 sRGB, and whatever a surface uses), the sky and a world
+//! pipeline per material feature set and pass; depth-only shadow casters per
+//! caster feature set and culling. Pipelines are made when a material is
+//! defined and before a pass is encoded, never while drawing.
+
+use std::collections::HashMap;
 
 use crate::batch::Pass;
+use crate::shaders::{Entry, Features, Shaders};
 use crate::target::{ColorTarget, DEPTH_FORMAT};
 
 /// Interleaved position (3), normal (3), uv (2), linear RGBA colour (4;
@@ -18,53 +24,52 @@ pub(crate) struct Layouts {
     pub shadow_layer: wgpu::BindGroupLayout,
     world: wgpu::PipelineLayout,
     sky_pipeline: wgpu::PipelineLayout,
-    shader: wgpu::ShaderModule,
+    shadow_pipeline: wgpu::PipelineLayout,
+    pub shaders: Shaders,
+    sky_shader: wgpu::ShaderModule,
+    /// The world entry compiled per feature set in use.
+    world_shaders: HashMap<Features, wgpu::ShaderModule>,
+    /// The caster entry per caster feature set (`Features::caster`).
+    shadow_shaders: HashMap<Features, wgpu::ShaderModule>,
     pub shadow: ShadowPipelines,
 }
 
+/// One target format's pipelines: the sky, and a world pipeline per feature
+/// set and pass, created as materials need them.
 pub(crate) struct Pipelines {
     pub target: ColorTarget,
-    pub opaque: wgpu::RenderPipeline,
-    pub opaque_mirrored: wgpu::RenderPipeline,
-    pub opaque_double_sided: wgpu::RenderPipeline,
-    pub blend: wgpu::RenderPipeline,
-    pub blend_mirrored: wgpu::RenderPipeline,
-    pub blend_double_sided: wgpu::RenderPipeline,
-    pub lines: wgpu::RenderPipeline,
     pub sky: wgpu::RenderPipeline,
+    world: HashMap<(Features, Pass), wgpu::RenderPipeline>,
 }
 
 impl Pipelines {
-    pub fn get(&self, pass: Pass) -> &wgpu::RenderPipeline {
-        match pass {
-            Pass::Opaque => &self.opaque,
-            Pass::OpaqueMirrored => &self.opaque_mirrored,
-            Pass::OpaqueDoubleSided => &self.opaque_double_sided,
-            Pass::Lines => &self.lines,
-            Pass::Blend => &self.blend,
-            Pass::BlendMirrored => &self.blend_mirrored,
-            Pass::BlendDoubleSided => &self.blend_double_sided,
-        }
+    /// A pipeline `Layouts::prepare` made before the pass was encoded.
+    pub fn get(&self, pass: Pass, features: Features) -> &wgpu::RenderPipeline {
+        &self.world[&(features, pass)]
     }
 }
 
-/// Depth-only caster pipelines, by face culling: single-sided parts render
-/// their back faces, mirrored parts wind the
-/// other way, double-sided parts render both.
+/// Depth-only caster pipelines by caster features and face culling:
+/// single-sided parts render their back faces, mirrored parts wind the other
+/// way, double-sided parts render both.
+#[derive(Default)]
 pub(crate) struct ShadowPipelines {
-    pub back_faces: wgpu::RenderPipeline,
-    pub back_faces_mirrored: wgpu::RenderPipeline,
-    pub both_faces: wgpu::RenderPipeline,
+    pipelines: HashMap<(Features, Option<wgpu::Face>), wgpu::RenderPipeline>,
 }
 
 impl ShadowPipelines {
     /// Caster lists only hold the opaque passes.
-    pub fn get(&self, pass: Pass) -> &wgpu::RenderPipeline {
+    fn cull(pass: Pass) -> Option<wgpu::Face> {
         match pass {
-            Pass::OpaqueMirrored | Pass::BlendMirrored => &self.back_faces_mirrored,
-            Pass::OpaqueDoubleSided | Pass::BlendDoubleSided => &self.both_faces,
-            Pass::Opaque | Pass::Blend | Pass::Lines => &self.back_faces,
+            Pass::OpaqueMirrored | Pass::BlendMirrored => Some(wgpu::Face::Back),
+            Pass::OpaqueDoubleSided | Pass::BlendDoubleSided => None,
+            Pass::Opaque | Pass::Blend | Pass::Lines => Some(wgpu::Face::Front),
         }
+    }
+
+    /// A pipeline `Layouts::prepare_caster` made before the pass was encoded.
+    pub fn get(&self, pass: Pass, features: Features) -> &wgpu::RenderPipeline {
+        &self.pipelines[&(features.caster(), Self::cull(pass))]
     }
 }
 
@@ -150,7 +155,8 @@ impl Layouts {
         });
         let casters = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("render-wgpu casters"),
-            entries: &[storage_entry(0), storage_entry(1), storage_entry(2)],
+            // parts, instances and shadow views at their `rusty::view` numbers.
+            entries: &[storage_entry(1), storage_entry(3), storage_entry(6)],
         });
         let shadow_layer = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("render-wgpu shadow layer"),
@@ -200,11 +206,13 @@ impl Layouts {
             bind_group_layouts: &[Some(&frame), Some(&sky)],
             immediate_size: 0,
         });
-        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("render-wgpu world"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("world.wgsl").into()),
+        let shadow_pipeline = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("render-wgpu shadow"),
+            bind_group_layouts: &[Some(&casters), Some(&material), Some(&shadow_layer)],
+            immediate_size: 0,
         });
-        let shadow = ShadowPipelines::new(device, &casters, &material, &shadow_layer);
+        let mut shaders = Shaders::new();
+        let sky_shader = shaders.module(device, Entry::Sky, Features::default());
         Self {
             frame,
             material,
@@ -213,63 +221,27 @@ impl Layouts {
             shadow_layer,
             world,
             sky_pipeline,
-            shader,
-            shadow,
+            shadow_pipeline,
+            shaders,
+            sky_shader,
+            world_shaders: HashMap::new(),
+            shadow_shaders: HashMap::new(),
+            shadow: ShadowPipelines::default(),
         }
     }
 
+    /// Feature sets compiled for the world and caster passes.
+    pub fn shader_variants(&self) -> usize {
+        self.world_shaders.len() + self.shadow_shaders.len()
+    }
+
+    /// A target's pipeline set, before any world pipeline is prepared.
     pub fn pipelines(&self, device: &wgpu::Device, target: ColorTarget) -> Pipelines {
-        let format = target.format;
-        let world = |label, topology, cull_mode, front_face, blend: bool| {
-            let attributes = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x2, 3 => Float32x4];
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some(label),
-                layout: Some(&self.world),
-                vertex: wgpu::VertexState {
-                    module: &self.shader,
-                    entry_point: Some("vs_world"),
-                    compilation_options: Default::default(),
-                    buffers: &[Some(wgpu::VertexBufferLayout {
-                        array_stride: (VERTEX_FLOATS * 4) as u64,
-                        step_mode: wgpu::VertexStepMode::Vertex,
-                        attributes: &attributes,
-                    })],
-                },
-                primitive: wgpu::PrimitiveState {
-                    topology,
-                    cull_mode,
-                    front_face,
-                    ..Default::default()
-                },
-                depth_stencil: Some(wgpu::DepthStencilState {
-                    format: DEPTH_FORMAT,
-                    depth_write_enabled: Some(!blend),
-                    depth_compare: Some(wgpu::CompareFunction::LessEqual),
-                    stencil: Default::default(),
-                    bias: Default::default(),
-                }),
-                multisample: target.multisample(),
-                fragment: Some(wgpu::FragmentState {
-                    module: &self.shader,
-                    entry_point: Some("fs_world"),
-                    compilation_options: Default::default(),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format,
-                        blend: blend.then_some(wgpu::BlendState::ALPHA_BLENDING),
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
-                }),
-                multiview_mask: None,
-                cache: None,
-            })
-        };
-        let triangles = wgpu::PrimitiveTopology::TriangleList;
-        let back = Some(wgpu::Face::Back);
         let sky = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("render-wgpu sky"),
             layout: Some(&self.sky_pipeline),
             vertex: wgpu::VertexState {
-                module: &self.shader,
+                module: &self.sky_shader,
                 entry_point: Some("vs_sky"),
                 compilation_options: Default::default(),
                 buffers: &[],
@@ -284,101 +256,154 @@ impl Layouts {
             }),
             multisample: target.multisample(),
             fragment: Some(wgpu::FragmentState {
-                module: &self.shader,
+                module: &self.sky_shader,
                 entry_point: Some("fs_sky"),
                 compilation_options: Default::default(),
-                targets: &[Some(format.into())],
+                targets: &[Some(target.format.into())],
             }),
             multiview_mask: None,
             cache: None,
         });
-        let (ccw, cw) = (wgpu::FrontFace::Ccw, wgpu::FrontFace::Cw);
         Pipelines {
             target,
-            opaque: world("render-wgpu opaque", triangles, back, ccw, false),
-            opaque_mirrored: world("render-wgpu opaque mirrored", triangles, back, cw, false),
-            opaque_double_sided: world(
-                "render-wgpu opaque double-sided",
-                triangles,
-                None,
-                ccw,
-                false,
-            ),
-            blend: world("render-wgpu blend", triangles, back, ccw, true),
-            blend_mirrored: world("render-wgpu blend mirrored", triangles, back, cw, true),
-            blend_double_sided: world("render-wgpu blend double-sided", triangles, None, ccw, true),
-            lines: world(
-                "render-wgpu lines",
-                wgpu::PrimitiveTopology::LineList,
-                None,
-                ccw,
-                false,
-            ),
             sky,
+            world: HashMap::new(),
         }
     }
-}
 
-impl ShadowPipelines {
-    fn new(
+    /// Make the world pipeline drawing `features` in `pass` on `pipelines`'
+    /// target, compiling the feature set's shader if it is new. Returns
+    /// whether it was made now.
+    pub fn prepare(
+        &mut self,
         device: &wgpu::Device,
-        casters: &wgpu::BindGroupLayout,
-        material: &wgpu::BindGroupLayout,
-        layer: &wgpu::BindGroupLayout,
-    ) -> Self {
-        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("render-wgpu shadow"),
-            bind_group_layouts: &[Some(casters), Some(material), Some(layer)],
-            immediate_size: 0,
+        pipelines: &mut Pipelines,
+        features: Features,
+        pass: Pass,
+    ) -> bool {
+        if pipelines.world.contains_key(&(features, pass)) {
+            return false;
+        }
+        let shader = self
+            .world_shaders
+            .entry(features)
+            .or_insert_with(|| self.shaders.module(device, Entry::World, features));
+        let (topology, cull_mode, front_face, blend) = match pass {
+            Pass::Opaque => (TRIANGLES, BACK, CCW, false),
+            Pass::OpaqueMirrored => (TRIANGLES, BACK, CW, false),
+            Pass::OpaqueDoubleSided => (TRIANGLES, None, CCW, false),
+            Pass::Lines => (wgpu::PrimitiveTopology::LineList, None, CCW, false),
+            Pass::Blend => (TRIANGLES, BACK, CCW, true),
+            Pass::BlendMirrored => (TRIANGLES, BACK, CW, true),
+            Pass::BlendDoubleSided => (TRIANGLES, None, CCW, true),
+        };
+        let attributes = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x2, 3 => Float32x4];
+        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("render-wgpu world"),
+            layout: Some(&self.world),
+            vertex: wgpu::VertexState {
+                module: shader,
+                entry_point: Some("vs_world"),
+                compilation_options: Default::default(),
+                buffers: &[Some(wgpu::VertexBufferLayout {
+                    array_stride: (VERTEX_FLOATS * 4) as u64,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &attributes,
+                })],
+            },
+            primitive: wgpu::PrimitiveState {
+                topology,
+                cull_mode,
+                front_face,
+                ..Default::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: DEPTH_FORMAT,
+                depth_write_enabled: Some(!blend),
+                depth_compare: Some(wgpu::CompareFunction::LessEqual),
+                stencil: Default::default(),
+                bias: Default::default(),
+            }),
+            multisample: pipelines.target.multisample(),
+            fragment: Some(wgpu::FragmentState {
+                module: shader,
+                entry_point: Some("fs_world"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: pipelines.target.format,
+                    blend: blend.then_some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            multiview_mask: None,
+            cache: None,
         });
-        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        pipelines.world.insert((features, pass), pipeline);
+        true
+    }
+
+    /// Make the caster pipeline drawing `features` in `pass` (opaque passes
+    /// only select the culling). Casters without an alpha mask write depth
+    /// with no fragment stage. Returns whether it was made now.
+    pub fn prepare_caster(
+        &mut self,
+        device: &wgpu::Device,
+        features: Features,
+        pass: Pass,
+    ) -> bool {
+        let (features, cull_mode) = (features.caster(), ShadowPipelines::cull(pass));
+        if self.shadow.pipelines.contains_key(&(features, cull_mode)) {
+            return false;
+        }
+        let shader = self
+            .shadow_shaders
+            .entry(features)
+            .or_insert_with(|| self.shaders.module(device, Entry::Shadow, features));
+        let attributes = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x2, 3 => Float32x4];
+        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("render-wgpu shadow"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shadow.wgsl").into()),
-        });
-        let pipeline = |label, cull_mode| {
-            let attributes = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x2, 3 => Float32x4];
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some(label),
-                layout: Some(&layout),
-                vertex: wgpu::VertexState {
-                    module: &shader,
-                    entry_point: Some("vs_shadow"),
-                    compilation_options: Default::default(),
-                    buffers: &[Some(wgpu::VertexBufferLayout {
-                        array_stride: (VERTEX_FLOATS * 4) as u64,
-                        step_mode: wgpu::VertexStepMode::Vertex,
-                        attributes: &attributes,
-                    })],
-                },
-                primitive: wgpu::PrimitiveState {
-                    cull_mode,
-                    ..Default::default()
-                },
-                depth_stencil: Some(wgpu::DepthStencilState {
-                    format: DEPTH_FORMAT,
-                    depth_write_enabled: Some(true),
-                    depth_compare: Some(wgpu::CompareFunction::LessEqual),
-                    stencil: Default::default(),
-                    bias: Default::default(),
-                }),
-                multisample: Default::default(),
-                fragment: Some(wgpu::FragmentState {
-                    module: &shader,
+            layout: Some(&self.shadow_pipeline),
+            vertex: wgpu::VertexState {
+                module: shader,
+                entry_point: Some("vs_shadow"),
+                compilation_options: Default::default(),
+                buffers: &[Some(wgpu::VertexBufferLayout {
+                    array_stride: (VERTEX_FLOATS * 4) as u64,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &attributes,
+                })],
+            },
+            primitive: wgpu::PrimitiveState {
+                cull_mode,
+                ..Default::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: DEPTH_FORMAT,
+                depth_write_enabled: Some(true),
+                depth_compare: Some(wgpu::CompareFunction::LessEqual),
+                stencil: Default::default(),
+                bias: Default::default(),
+            }),
+            multisample: Default::default(),
+            fragment: features
+                .contains(Features::MASK)
+                .then(|| wgpu::FragmentState {
+                    module: shader,
                     entry_point: Some("fs_shadow"),
                     compilation_options: Default::default(),
                     targets: &[],
                 }),
-                multiview_mask: None,
-                cache: None,
-            })
-        };
-        Self {
-            back_faces: pipeline("render-wgpu shadow back faces", Some(wgpu::Face::Front)),
-            back_faces_mirrored: pipeline(
-                "render-wgpu shadow back faces mirrored",
-                Some(wgpu::Face::Back),
-            ),
-            both_faces: pipeline("render-wgpu shadow both faces", None),
-        }
+            multiview_mask: None,
+            cache: None,
+        });
+        self.shadow
+            .pipelines
+            .insert((features, cull_mode), pipeline);
+        true
     }
 }
+
+const TRIANGLES: wgpu::PrimitiveTopology = wgpu::PrimitiveTopology::TriangleList;
+const BACK: Option<wgpu::Face> = Some(wgpu::Face::Back);
+const CCW: wgpu::FrontFace = wgpu::FrontFace::Ccw;
+const CW: wgpu::FrontFace = wgpu::FrontFace::Cw;

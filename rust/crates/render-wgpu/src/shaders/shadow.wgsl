@@ -1,41 +1,15 @@
-// Shadow caster pass: parts drawn into one shadow layer's depth, with mask
-// materials discarding below their cutoff (voxel surfaces remapped as in
-// world.wgsl).
+// Shadow caster pass: parts drawn into one shadow layer's depth. Only MASK
+// materials have a fragment stage, discarding below their cutoff (voxel
+// surfaces remapped as in the world pass).
 
-struct Part {
-    model: mat4x4<f32>,
-    normal0: vec4<f32>,
-    normal1: vec4<f32>,
-    normal2: vec4<f32>,
-    color: vec4<f32>,
-    emission: vec4<f32>,
-};
-
-struct MaterialUniform {
-    roughness: f32,
-    alpha_cutoff: f32,
-    flags: u32,
-    metalness: f32,
-    tile: vec4<f32>,
-    sample_rect: vec4<f32>,
-    // The base colour slot's uv transform (world.wgsl).
-    base_uv0: vec4<f32>,
-    base_uv1: vec4<f32>,
-};
+#import rusty::view::{parts, instances, shadow_views}
+#import rusty::material::{material, albedo, albedo_sampler}
+#import rusty::surface::{transform_uv, voxel_uv}
 
 struct Layer {
     index: u32,
 };
 
-const FLAG_MASK: u32 = 2u;
-const FLAG_VOXEL_SURFACE: u32 = 4u;
-
-@group(0) @binding(0) var<storage, read> parts: array<Part>;
-@group(0) @binding(1) var<storage, read> instances: array<u32>;
-@group(0) @binding(2) var<storage, read> shadow_views: array<mat4x4<f32>>;
-@group(1) @binding(0) var<uniform> material: MaterialUniform;
-@group(1) @binding(1) var albedo: texture_2d<f32>;
-@group(1) @binding(2) var albedo_sampler: sampler;
 @group(2) @binding(0) var<uniform> layer: Layer;
 
 struct VsOut {
@@ -62,22 +36,18 @@ fn vs_shadow(
     return out;
 }
 
+#ifdef MASK
 @fragment
 fn fs_shadow(in: VsOut) {
-    if (material.flags & FLAG_MASK) == 0u {
-        return;
-    }
-    var uv = in.uv;
-    if (material.flags & FLAG_VOXEL_SURFACE) != 0u {
-        let repeated = fract((uv - material.tile.zw) / material.tile.xy);
-        uv = mix(material.sample_rect.xy, material.sample_rect.zw, repeated);
-    }
-    let base_uv = vec2<f32>(
-        dot(material.base_uv0.xyz, vec3<f32>(uv, 1.0)),
-        dot(material.base_uv1.xyz, vec3<f32>(uv, 1.0)),
-    );
+#ifdef VOXEL_SURFACE
+    let uv = voxel_uv(in.uv, material.tile, material.sample_rect);
+#else
+    let uv = in.uv;
+#endif
+    let base_uv = transform_uv(material.base_uv_u, material.base_uv_v, uv);
     let alpha = parts[in.part].color.a * in.alpha * textureSampleLevel(albedo, albedo_sampler, base_uv, 0.0).a;
     if alpha < material.alpha_cutoff {
         discard;
     }
 }
+#endif

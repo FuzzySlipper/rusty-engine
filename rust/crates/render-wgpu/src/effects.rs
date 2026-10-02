@@ -195,7 +195,11 @@ fn sampler_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
 }
 
 impl Effects {
-    pub fn new(device: &wgpu::Device, frame_layout: &wgpu::BindGroupLayout) -> Self {
+    pub fn new(
+        device: &wgpu::Device,
+        frame_layout: &wgpu::BindGroupLayout,
+        shader: wgpu::ShaderModule,
+    ) -> Self {
         let sprite_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("render-wgpu sprite"),
             entries: &[
@@ -219,14 +223,7 @@ impl Effects {
         use wgpu::util::DeviceExt;
         let corners: [f32; 8] = [0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 1.0];
         Self {
-            shader: device.create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: Some("render-wgpu effects"),
-                source: wgpu::ShaderSource::Wgsl(
-                    [include_str!("world.wgsl"), include_str!("effects.wgsl")]
-                        .concat()
-                        .into(),
-                ),
-            }),
+            shader,
             sprite_pipeline_layout: pipeline_layout(
                 "render-wgpu sprite",
                 &[Some(frame_layout), Some(&sprite_layout)],

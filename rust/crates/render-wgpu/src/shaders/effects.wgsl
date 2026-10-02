@@ -1,6 +1,9 @@
-// Sprites and particles. Compiled appended to world.wgsl: they share the
-// frame uniform, the light rows and `standard_radiance`. Bindings in group 1
-// start at 10 so they never collide with the world and sky materials.
+// Sprites and particles, lit by the world pass's light rows. Sprite bindings
+// in group 1 start at 10 and particle bindings at 20, so the two layouts never
+// collide in this module.
+
+#import rusty::view::frame
+#import rusty::lighting::standard_radiance
 
 // Sprite: one instanced quad. Rows are built per view pass (billboard
 // orientation, pixel size and viewport placement depend on the camera).
@@ -136,7 +139,7 @@ struct ParticleIn {
     @location(1) center: vec4<f32>,
     @location(2) color: vec4<f32>,
     // x: half height in clip units; y: frame; z: frame count.
-    @location(3) frame: vec4<f32>,
+    @location(3) flipbook: vec4<f32>,
 };
 
 struct ParticleOut {
@@ -151,12 +154,12 @@ struct ParticleOut {
 @vertex
 fn vs_particle(in: ParticleIn) -> ParticleOut {
     var clip = frame.view_proj * vec4<f32>(in.center.xyz, 1.0);
-    let offset = (in.corner * 2.0 - 1.0) * vec2<f32>(in.center.w, in.frame.x);
+    let offset = (in.corner * 2.0 - 1.0) * vec2<f32>(in.center.w, in.flipbook.x);
     clip = vec4<f32>(clip.xy + offset * clip.w, clip.zw);
     var out: ParticleOut;
     out.clip = clip;
-    let count = max(in.frame.z, 1.0);
-    let frame_index = clamp(floor(in.frame.y + 0.5), 0.0, count - 1.0);
+    let count = max(in.flipbook.z, 1.0);
+    let frame_index = clamp(floor(in.flipbook.y + 0.5), 0.0, count - 1.0);
     out.uv = vec2<f32>((frame_index + in.corner.x) / count, 1.0 - in.corner.y);
     out.color = in.color;
     return out;

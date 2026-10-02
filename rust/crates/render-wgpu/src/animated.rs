@@ -1342,9 +1342,7 @@ impl Renderer {
         let mut params = MaterialParams::of(&descriptor, texture.map(|texture| texture.size));
         params.metalness = metalness;
         params.maps = maps;
-        if unlit {
-            params.flags |= crate::apply::FLAG_UNLIT;
-        }
+        params.unlit = unlit;
         self.insert_material(descriptor, &params);
     }
 }

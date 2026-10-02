@@ -668,3 +668,107 @@ fn static_mesh_vertex_colours_multiply_the_material_and_payloads_ignore_them() {
         "the payload ignores its vertex colours: {payload:?}"
     );
 }
+
+#[test]
+fn materials_share_a_pipeline_per_feature_set_made_when_the_material_is_defined() {
+    let mut harness = Harness::new(RendererOptions::default());
+    let masked = |id: &str, color| RenderMaterialDescriptor {
+        alpha_mode: MaterialAlphaModeDescriptor::Mask { cutoff: 0.5 },
+        ..material(id, color, None)
+    };
+    let mut ops = vec![
+        RenderDiff::DefineMaterial {
+            material: material("material/red", [0.8, 0.2, 0.2, 1.0], None),
+        },
+        RenderDiff::DefineMaterial {
+            material: material("material/green", [0.2, 0.8, 0.2, 1.0], None),
+        },
+        RenderDiff::DefineMaterial {
+            material: masked("material/blue", [0.2, 0.2, 0.8, 1.0]),
+        },
+    ];
+    for (handle, (asset, material)) in [
+        ("mesh/red", "material/red"),
+        ("mesh/blue", "material/blue"),
+        ("mesh/green", "material/green"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        ops.push(static_mesh(
+            asset,
+            box_mesh([-0.4, 0.0, -0.4], [0.4, 0.8, 0.4], |_| 0),
+            material,
+        ));
+        let x = handle as f32 * 1.2 - 1.2;
+        ops.push(instance(
+            handle as u64 + 1,
+            None,
+            asset,
+            transform([x, 0.0, 0.0], 0.0, [1.0; 3]),
+        ));
+    }
+    harness.apply(ops);
+    let view = camera([0.0, 1.5, 4.0], 0.0, -15.0);
+
+    // Red and green compile no features and share one pipeline; blue's alpha
+    // mask is a second. The target is new, so both are made for this frame.
+    let (first, _) = harness.render(&view);
+    assert_eq!(
+        (first.draws, first.pipeline_binds, first.pipelines_created),
+        (3, 2, 2)
+    );
+
+    // Another masked material reuses blue's pipeline; a voxel surface is a
+    // new feature set, compiled when it is defined rather than when drawn.
+    harness.apply(vec![
+        RenderDiff::DefineMaterial {
+            material: masked("material/yellow", [0.8, 0.8, 0.2, 1.0]),
+        },
+        RenderDiff::DefineMaterial {
+            material: voxel_material(
+                9,
+                [0.6, 0.6, 0.6, 1.0],
+                None,
+                Some(VoxelSurfaceMappingDescriptor::Repeat {
+                    texture: String::new(),
+                    texture_version: 0,
+                    texture_content_hash: String::new(),
+                    tile_scale_cells: [1.0, 1.0],
+                    tile_origin_cells: [0.0, 0.0],
+                }),
+            ),
+        },
+        static_mesh(
+            "mesh/yellow",
+            box_mesh([-0.4, 0.0, -0.4], [0.4, 0.8, 0.4], |_| 0),
+            "material/yellow",
+        ),
+        static_mesh(
+            "mesh/stone",
+            box_mesh([-0.4, 0.0, -0.4], [0.4, 0.8, 0.4], |_| 0),
+            "voxel-material/9",
+        ),
+        instance(
+            10,
+            None,
+            "mesh/yellow",
+            transform([0.0, 1.0, 0.0], 0.0, [1.0; 3]),
+        ),
+        instance(
+            11,
+            None,
+            "mesh/stone",
+            transform([0.0, -1.0, 0.0], 0.0, [1.0; 3]),
+        ),
+    ]);
+    let (second, _) = harness.render(&view);
+    assert_eq!(
+        (
+            second.draws,
+            second.pipeline_binds,
+            second.pipelines_created
+        ),
+        (5, 3, 0)
+    );
+}

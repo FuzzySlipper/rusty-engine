@@ -16,6 +16,7 @@ use crate::apply::light_row;
 use crate::batch::{self, DrawList, Frustum};
 use crate::camera::CameraMatrices;
 use crate::effects::EffectsPass;
+use crate::shaders::Features;
 use crate::shadows::{self, ShadowMaps};
 use crate::tables::{Builtin, Environment, MaterialRef, NodeKind, PART_ROW_FLOATS};
 use crate::target::{ColorTarget, TargetView};
@@ -51,6 +52,12 @@ pub struct FrameStats {
     pub sprite_candidates: u32,
     /// A playing video clip covered the primary target.
     pub video: bool,
+    /// Pipelines bound for part draws across view passes and shadow layers:
+    /// one per run of draws sharing a pass and material features.
+    pub pipeline_binds: u32,
+    /// World and caster pipelines compiled while rendering; 0 when every
+    /// material's pipelines were made at its definition.
+    pub pipelines_created: u32,
 }
 
 /// What one view pass drew.
@@ -61,6 +68,8 @@ pub(crate) struct ViewStats {
     pub instances_uploaded: u32,
     pub shadow_draws: u32,
     pub sprite_candidates: u32,
+    pub pipeline_binds: u32,
+    pub pipelines_created: u32,
 }
 
 impl Add for ViewStats {
@@ -73,6 +82,8 @@ impl Add for ViewStats {
             instances_uploaded: self.instances_uploaded + other.instances_uploaded,
             shadow_draws: self.shadow_draws + other.shadow_draws,
             sprite_candidates: self.sprite_candidates + other.sprite_candidates,
+            pipeline_binds: self.pipeline_binds + other.pipeline_binds,
+            pipelines_created: self.pipelines_created + other.pipelines_created,
         }
     }
 }
@@ -84,6 +95,22 @@ impl AddAssign<ViewStats> for FrameStats {
         self.instances_uploaded += view.instances_uploaded;
         self.shadow_draws += view.shadow_draws;
         self.sprite_candidates += view.sprite_candidates;
+        self.pipeline_binds += view.pipeline_binds;
+        self.pipelines_created += view.pipelines_created;
+    }
+}
+
+/// What a run of batches encoded.
+#[derive(Clone, Copy, Default)]
+struct Encoded {
+    draws: u32,
+    pipeline_binds: u32,
+}
+
+impl AddAssign for Encoded {
+    fn add_assign(&mut self, other: Self) {
+        self.draws += other.draws;
+        self.pipeline_binds += other.pipeline_binds;
     }
 }
 
@@ -520,13 +547,21 @@ impl Renderer {
     }
 
     /// Render every shadow layer's casters when a light or part changed since
-    /// the maps were drawn. Returns the caster draws.
-    fn encode_shadows(&mut self, encoder: &mut wgpu::CommandEncoder) -> u32 {
+    /// the maps were drawn. Returns what the casters encoded and the caster
+    /// pipelines compiled for them.
+    fn encode_shadows(&mut self, encoder: &mut wgpu::CommandEncoder) -> (Encoded, u32) {
         if !self.shadows.stale || self.shadows.layers == 0 {
-            return 0;
+            return Default::default();
         }
         self.shadows.stale = false;
-        let mut draws = 0;
+        let mut created = 0;
+        for (features, pass) in self.batch_variants(&self.casters.batches) {
+            created += u32::from(
+                self.layouts
+                    .prepare_caster(&self.gpu.device, features, pass),
+            );
+        }
+        let mut encoded = Encoded::default();
         for layer in 0..self.shadows.layers {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("render-wgpu shadow"),
@@ -549,23 +584,52 @@ impl Renderer {
                 &self.shadows.layer_bind_group,
                 &[ShadowMaps::layer_offset(layer)],
             );
-            draws += self.draw_batches(&mut pass, &self.casters.batches, |pass| {
-                self.layouts.shadow.get(pass)
+            encoded += self.draw_batches(&mut pass, &self.casters.batches, |pass, features| {
+                self.layouts.shadow.get(pass, features)
             });
         }
-        draws
+        (encoded, created)
     }
 
-    /// Encode a draw list's batches with the pipeline each pass selects.
-    /// Returns the draw calls made.
+    /// The bind group and features a part's material draws with; a released
+    /// material draws as the lit fallback.
+    fn part_material(&self, material: &MaterialRef) -> (&wgpu::BindGroup, Features) {
+        let fallback = (&self.lit_fallback_material, Features::default());
+        match material {
+            MaterialRef::Retained(id) => self
+                .tables
+                .materials
+                .get(*id)
+                .map_or(fallback, |row| (&row.bind_group, row.features)),
+            MaterialRef::Unlit => (&self.unlit_material, Features::UNLIT),
+            MaterialRef::LitFallback => fallback,
+        }
+    }
+
+    /// The (features, pass) pairs a draw list's batches draw with.
+    fn batch_variants(&self, batches: &[batch::Batch]) -> Vec<(Features, batch::Pass)> {
+        let mut variants: Vec<(Features, batch::Pass)> = batches
+            .iter()
+            .filter_map(|draw| {
+                let part = self.tables.parts.meta[draw.part as usize].as_ref()?;
+                Some((self.part_material(&part.material).1, draw.pass))
+            })
+            .collect();
+        variants.sort_unstable();
+        variants.dedup();
+        variants
+    }
+
+    /// Encode a draw list's batches with the pipeline each pass and material
+    /// feature set selects.
     fn draw_batches<'a>(
         &'a self,
         pass: &mut wgpu::RenderPass<'_>,
         batches: &[batch::Batch],
-        pipeline: impl Fn(batch::Pass) -> &'a wgpu::RenderPipeline,
-    ) -> u32 {
-        let mut current: Option<batch::Pass> = None;
-        let mut draws = 0;
+        pipeline: impl Fn(batch::Pass, Features) -> &'a wgpu::RenderPipeline,
+    ) -> Encoded {
+        let mut current: Option<(batch::Pass, Features)> = None;
+        let mut encoded = Encoded::default();
         for draw in batches {
             let Some(part) = self.tables.parts.meta[draw.part as usize].as_ref() else {
                 continue;
@@ -573,19 +637,12 @@ impl Renderer {
             let Some(mesh) = self.mesh(&part.mesh) else {
                 continue;
             };
-            if current != Some(draw.pass) {
-                pass.set_pipeline(pipeline(draw.pass));
-                current = Some(draw.pass);
+            let (material, features) = self.part_material(&part.material);
+            if current != Some((draw.pass, features)) {
+                pass.set_pipeline(pipeline(draw.pass, features));
+                current = Some((draw.pass, features));
+                encoded.pipeline_binds += 1;
             }
-            let material = match &part.material {
-                MaterialRef::Retained(id) => self
-                    .tables
-                    .materials
-                    .get(*id)
-                    .map_or(&self.lit_fallback_material, |row| &row.bind_group),
-                MaterialRef::Unlit => &self.unlit_material,
-                MaterialRef::LitFallback => &self.lit_fallback_material,
-            };
             // A wireframe part draws its triangles' edges: two edge indices
             // per triangle index.
             let (indices, range) = if part.wireframe {
@@ -606,9 +663,9 @@ impl Renderer {
                 0,
                 draw.first_instance..draw.first_instance + draw.instances,
             );
-            draws += 1;
+            encoded.draws += 1;
         }
-        draws
+        encoded
     }
 
     /// Blended parts and blended sprites in one order: render order (parts
@@ -622,13 +679,13 @@ impl Renderer {
         parts: &[batch::Batch],
         effects: &EffectsPass,
         eye: Vec3,
-        pipeline: impl Fn(batch::Pass) -> &'a wgpu::RenderPipeline + Copy,
-    ) -> u32 {
+        pipeline: impl Fn(batch::Pass, Features) -> &'a wgpu::RenderPipeline + Copy,
+    ) -> Encoded {
         let part_depth = |batch: &batch::Batch| {
             let bounds = &self.tables.parts.state[batch.part as usize].world_bounds;
             ((bounds.min + bounds.max) * 0.5).distance_squared(eye)
         };
-        let (mut part, mut sprite, mut draws) = (0, 0, 0);
+        let (mut part, mut sprite, mut encoded) = (0, 0, Encoded::default());
         loop {
             let part_first = match (parts.get(part), effects.blended_key(sprite)) {
                 (None, None) => break,
@@ -639,7 +696,7 @@ impl Renderer {
                 }
             };
             if part_first {
-                draws += self.draw_batches(pass, &parts[part..part + 1], pipeline);
+                encoded += self.draw_batches(pass, &parts[part..part + 1], pipeline);
                 part += 1;
             } else {
                 self.effects
@@ -647,7 +704,7 @@ impl Renderer {
                 sprite += 1;
             }
         }
-        draws
+        encoded
     }
 
     fn rebuild_sky(&mut self) {
@@ -767,6 +824,22 @@ impl Renderer {
                 self.pipelines.len() - 1
             }
         };
+        let variants = self.batch_variants(
+            &self.views[slot]
+                .as_ref()
+                .expect("view list is current")
+                .list
+                .batches,
+        );
+        let mut pipelines_created = 0;
+        for (features, pass) in variants {
+            pipelines_created += u32::from(self.layouts.prepare(
+                &self.gpu.device,
+                &mut self.pipelines[format_index],
+                features,
+                pass,
+            ));
+        }
         let whole = view.start == PassStart::Target;
         if !whole {
             self.compose.prepare_clear(&self.gpu, format, view.clear);
@@ -797,17 +870,17 @@ impl Renderer {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("render-wgpu view"),
             });
-        let shadow_draws = if world_layer {
+        let (shadows, casters_created) = if world_layer {
             self.encode_shadows(&mut encoder)
         } else {
-            0
+            Default::default()
         };
         let pipelines = &self.pipelines[format_index];
         let list = &self.views[slot]
             .as_ref()
             .expect("view list is current")
             .list;
-        let draws;
+        let parts;
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some(if world_layer {
@@ -863,21 +936,22 @@ impl Renderer {
                 .iter()
                 .position(|batch| batch.pass >= batch::Pass::Blend)
                 .unwrap_or(batches.len());
-            let mut part_draws = self.draw_batches(&mut pass, &batches[..blend_start], |pass| {
-                pipelines.get(pass)
-            });
+            let mut encoded =
+                self.draw_batches(&mut pass, &batches[..blend_start], |pass, features| {
+                    pipelines.get(pass, features)
+                });
             if world_layer {
-                part_draws += self.draw_ghost_plates(&mut pass, format);
+                encoded.draws += self.draw_ghost_plates(&mut pass, format);
                 pass.set_bind_group(0, &self.frame_bind_group, &[]);
             }
             self.effects.draw_solid_sprites(&mut pass, format, &effects);
-            part_draws += self.draw_blended(
+            encoded += self.draw_blended(
                 &mut pass,
                 format,
                 &batches[blend_start..],
                 &effects,
                 eye,
-                |pass| pipelines.get(pass),
+                |pass, features| pipelines.get(pass, features),
             );
             self.effects.draw_particles(
                 &mut pass,
@@ -885,15 +959,17 @@ impl Renderer {
                 &effects,
                 self.builtins.get(&Builtin::Cube),
             );
-            draws = part_draws + effects.draws();
+            parts = encoded;
         }
         self.gpu.queue.submit([encoder.finish()]);
         ViewStats {
-            draws,
+            draws: parts.draws + effects.draws(),
             instances: list.instances(),
             instances_uploaded,
-            shadow_draws,
+            shadow_draws: shadows.draws,
             sprite_candidates: effects.sprite_candidates,
+            pipeline_binds: parts.pipeline_binds + shadows.pipeline_binds,
+            pipelines_created: pipelines_created + casters_created,
         }
     }
 }
@@ -977,15 +1053,15 @@ pub(crate) fn caster_bind_group(
         layout,
         entries: &[
             wgpu::BindGroupEntry {
-                binding: 0,
+                binding: 1,
                 resource: parts.as_entire_binding(),
             },
             wgpu::BindGroupEntry {
-                binding: 1,
+                binding: 3,
                 resource: instances.as_entire_binding(),
             },
             wgpu::BindGroupEntry {
-                binding: 2,
+                binding: 6,
                 resource: shadows.matrices_buffer.as_entire_binding(),
             },
         ],

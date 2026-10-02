@@ -3,21 +3,7 @@
 // selected sector's capture by their original capture-space position.
 // Unlit and opaque.
 
-struct Frame {
-    view_proj: mat4x4<f32>,
-    inv_view_proj: mat4x4<f32>,
-    camera: vec4<f32>,
-    counts: vec4<u32>,
-};
-
-struct Part {
-    model: mat4x4<f32>,
-    normal0: vec4<f32>,
-    normal1: vec4<f32>,
-    normal2: vec4<f32>,
-    color: vec4<f32>,
-    emission: vec4<f32>,
-};
+#import rusty::view::{frame, parts}
 
 struct Ghost {
     // Capture camera space to world, through the plate placement.
@@ -32,8 +18,6 @@ struct Ghost {
     shell: vec4<f32>,
 };
 
-@group(0) @binding(0) var<uniform> frame: Frame;
-@group(0) @binding(1) var<storage, read> parts: array<Part>;
 @group(1) @binding(0) var<uniform> ghost: Ghost;
 @group(1) @binding(1) var capture_color: texture_2d<f32>;
 @group(1) @binding(2) var capture_depth: texture_depth_2d;

@@ -81,7 +81,10 @@ fn run() -> Result<(), String> {
         snapshot.metadata.state.into(),
     );
     let apply_ms = ms(applied);
+    // The first frame on a new target also compiles its pipelines.
+    let captured = Instant::now();
     let capture = driver.capture(Some((width, height)));
+    let capture_ms = ms(captured);
     std::fs::write(out, encode_png(width, height, &capture.rgba)?)
         .map_err(|error| format!("{}: {error}", out.display()))?;
 
@@ -117,6 +120,7 @@ fn run() -> Result<(), String> {
         "resources": snapshot.resource_count(),
         "openMs": open_ms,
         "applyMs": apply_ms,
+        "captureMs": capture_ms,
         "tables": format!("{tables:?}"),
         "meshMemory": format!("{memory:?}"),
         "skippedOps": skipped,
