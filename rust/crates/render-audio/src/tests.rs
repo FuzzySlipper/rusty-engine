@@ -62,7 +62,8 @@ fn descriptor(hash: &str, looping: bool) -> AudioSourceDescriptor {
         pitch: 1.0,
         looping,
         spatial_blend: 0.0,
-        attenuation: 1.0,
+        max_distance: 1.0,
+        rolloff: render_presentation::AudioRolloff::Linear,
         pan: 0.0,
         emitter: AudioEmitter::Global2d,
     }
@@ -322,7 +323,7 @@ fn spatial_emitters_play_and_unresolved_entities_are_diagnosed() {
         position: [3.0, 0.0, -2.0],
     };
     world.spatial_blend = 1.0;
-    world.attenuation = 20.0;
+    world.max_distance = 20.0;
     let mut attached = world.clone();
     attached.emitter = AudioEmitter::EntityAttached {
         entity: 12,
@@ -472,7 +473,7 @@ fn rebuilding_a_paused_voice_keeps_it_paused_at_its_cursor() {
             AudioProjectionOp::Update {
                 handle: AudioHandle::new(1),
                 patch: AudioSourcePatch {
-                    attenuation: Some(2.0),
+                    max_distance: Some(2.0),
                     ..Default::default()
                 },
             },
@@ -527,7 +528,8 @@ fn stop_all_silences_one_shots_and_voices() {
 fn spatial(hash: &str, emitter: AudioEmitter, looping: bool) -> AudioSourceDescriptor {
     AudioSourceDescriptor {
         spatial_blend: 1.0,
-        attenuation: 20.0,
+        max_distance: 20.0,
+        rolloff: render_presentation::AudioRolloff::Linear,
         emitter,
         ..descriptor(hash, looping)
     }
@@ -662,4 +664,84 @@ fn a_video_soundtrack_plays_pauses_with_the_runtime_and_stops() {
     realizer.set_suspended(false);
     realizer.stop_soundtrack();
     assert_eq!(realizer.soundtrack_position(), None);
+}
+
+/// The device plays a spatial voice at the descriptor's rolloff of its
+/// distance, silent at and beyond its maximum distance, and follows a range
+/// change through an ordinary voice update.
+#[test]
+fn spatial_voices_fall_off_to_silence_at_their_maximum_distance() {
+    let tone = |realizer: &mut AudioRealizer<CaptureBackend>,
+                distance: f32,
+                max_distance: f32,
+                rolloff: render_presentation::AudioRolloff| {
+        let mut source = descriptor("sha256:wav", true);
+        source.volume = 1.0;
+        source.max_distance = max_distance;
+        source.rolloff = rolloff;
+        if distance > 0.0 {
+            source.emitter = AudioEmitter::World3d {
+                position: [0.0, 0.0, -distance],
+            };
+        }
+        realizer.apply(
+            &[restore(1, source, AudioVoiceDesiredState::Playing, 0.0)],
+            &Clips::fixtures(),
+            &NoEntityPositions,
+        );
+        realizer.backend_mut().render_peak(0.05);
+        realizer.backend_mut().render_peak(0.2)
+    };
+    let fresh = capture_realizer;
+    use render_presentation::AudioRolloff::{Linear, LinearDecibels};
+
+    let full = tone(&mut fresh(), 0.0, 16.0, Linear);
+    assert!(full > 0.1, "the tone did not play: {full}");
+    let level = |distance, max_distance, rolloff| {
+        tone(&mut fresh(), distance, max_distance, rolloff) / full
+    };
+    let close = |actual: f32, expected: f32| (actual - expected).abs() < 0.01;
+    // Full volume within the reference distance, min(1, max / 2).
+    assert!(close(level(0.5, 16.0, Linear), 1.0));
+    // Linear: amplitude halves halfway from the reference to the maximum.
+    assert!(close(level(8.5, 16.0, Linear), 0.5));
+    // LinearDecibels: -30 dB there.
+    assert!(close(level(8.5, 16.0, LinearDecibels), 10.0_f32.powf(-1.5)));
+    for rolloff in [Linear, LinearDecibels] {
+        assert_eq!(
+            level(16.0, 16.0, rolloff),
+            0.0,
+            "{rolloff:?} at the maximum"
+        );
+        assert_eq!(
+            level(20.0, 16.0, rolloff),
+            0.0,
+            "{rolloff:?} beyond the maximum"
+        );
+    }
+
+    // A voice 20 m away: silent at 16 m, audible once its range is 24 m, and
+    // silent again when the range goes back.
+    let mut realizer = fresh();
+    assert_eq!(tone(&mut realizer, 20.0, 16.0, Linear), 0.0);
+    let range = |realizer: &mut AudioRealizer<CaptureBackend>, max_distance| {
+        realizer.apply(
+            &[op(
+                3,
+                AudioProjectionOp::Update {
+                    handle: AudioHandle::new(1),
+                    patch: AudioSourcePatch {
+                        max_distance: Some(max_distance),
+                        ..Default::default()
+                    },
+                },
+            )],
+            &Clips::fixtures(),
+            &NoEntityPositions,
+        );
+        realizer.backend_mut().render_peak(0.05);
+        realizer.backend_mut().render_peak(0.2) / full
+    };
+    assert!(close(range(&mut realizer, 24.0), 1.0 - 19.0 / 23.0));
+    assert_eq!(range(&mut realizer, 16.0), 0.0);
 }

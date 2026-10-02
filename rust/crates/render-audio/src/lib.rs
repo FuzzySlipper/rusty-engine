@@ -10,6 +10,7 @@
 //! Only this crate depends on kira and cpal.
 
 mod opus;
+mod rolloff;
 mod soundtrack;
 
 use std::collections::{BTreeMap, HashMap};
@@ -40,9 +41,6 @@ pub use kira::DefaultBackend;
 /// takes one sub-track; each bus plays every non-spatial sound directly.
 const SUB_TRACK_CAPACITY: usize = 1024;
 const BUS_SOUND_CAPACITY: usize = 1024;
-/// Emitters within this distance play at full volume, as the browser
-/// panner's reference distance of 1.
-const SPATIAL_REFERENCE_DISTANCE: f32 = 1.0;
 /// Changes apply at once; any fade is the product's decision.
 const IMMEDIATE: Tween = Tween {
     start_time: StartTime::Immediate,
@@ -672,10 +670,11 @@ impl<B: Backend> AudioRealizer<B> {
         let Some(playback) = voice.playback.as_mut() else {
             return Ok(());
         };
-        // A spatial track's distances and emitter kind are fixed when it is
-        // built; changing them replays the voice from its cursor on a new one.
+        // A spatial track's range, rolloff and emitter kind are fixed when it
+        // is built; changing them replays the voice from its cursor on a new one.
         let rebuild = is_spatial(&previous) != is_spatial(&voice.descriptor)
-            || previous.attenuation != voice.descriptor.attenuation
+            || previous.max_distance != voice.descriptor.max_distance
+            || previous.rolloff != voice.descriptor.rolloff
             || (is_spatial(&previous) && patch.emitter.is_some());
         if !rebuild {
             playback.apply(&voice.descriptor);
@@ -804,9 +803,12 @@ impl<B: Backend> AudioRealizer<B> {
                 AudioProjectionDiagnosticCode::HostFailure,
                 "entity-attached audio source has no projected position".to_owned(),
             ))?;
-            let reference = SPATIAL_REFERENCE_DISTANCE.min(descriptor.attenuation * 0.5);
             let builder = SpatialTrackBuilder::new()
-                .distances((reference, descriptor.attenuation))
+                .attenuation_function(None)
+                .with_effect(rolloff::DistanceRolloff::new(
+                    descriptor.max_distance,
+                    descriptor.rolloff,
+                ))
                 .spatialization_strength(descriptor.spatial_blend)
                 .persist_until_sounds_finish(true);
             let listener = self.listener.id();
@@ -975,8 +977,11 @@ fn patched(
     if let Some(value) = patch.spatial_blend {
         descriptor.spatial_blend = value;
     }
-    if let Some(value) = patch.attenuation {
-        descriptor.attenuation = value;
+    if let Some(value) = patch.max_distance {
+        descriptor.max_distance = value;
+    }
+    if let Some(value) = patch.rolloff {
+        descriptor.rolloff = value;
     }
     if let Some(value) = patch.pan {
         descriptor.pan = value;

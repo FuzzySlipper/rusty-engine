@@ -62,8 +62,23 @@ output gain. Its output matches libopus for the fixtures, and seeks decode
 primary view in the committed view composition, and an entity-attached voice
 follows the committed graphics node published for its entity
 (`source_entity`, as `EntityGraphicsProjection` publishes it) plus its offset.
-An entity with no published node reports `HostFailure`. Spatial voices use
-kira's linear distance falloff from `min(1, attenuation / 2)` to `attenuation`.
+An entity with no published node reports `HostFailure`.
+
+## Spatial range
+
+A `World3d` or `EntityAttached` source's `AudioSourceDescriptor.MaxDistance`
+is its audible range in world units, and `Rolloff` is how its level falls
+with its distance from the listener. It plays at its full volume within the
+reference distance, `min(1, MaxDistance / 2)`, and is silent at and beyond
+`MaxDistance`; a voice that moves across that bound reaches silence within one
+128-frame audio block (2.7 ms at 48 kHz). Between the two, `AudioRolloff.Linear`
+lowers the amplitude linearly, and `LinearDecibels` lowers the level linearly
+in decibels to -60 dB. `MaxDistance` must be positive and finite, or the call
+refuses with `CSHARP_AUDIO_PROJECTION`. The range applies whatever the
+`SpatialBlend`, which only sets how strongly the source pans; a `Global2d`
+source has no range. To change a retained voice's range, `UpdateVoice` with the
+new descriptor: the device replays it from its cursor with the new range. The
+product chooses a source's range and any rule that scales it.
 
 See [fixture provenance](../fixtures/audio-containers/README.md). Product code
 chooses tracks, loops, crossfades and music policy.

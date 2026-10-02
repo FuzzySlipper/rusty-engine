@@ -13,7 +13,8 @@ fn audio() -> AudioSourceDescriptor {
         pitch: 1.0,
         looping: false,
         spatial_blend: 0.0,
-        attenuation: 10.0,
+        max_distance: 10.0,
+        rolloff: AudioRolloff::Linear,
         pan: 0.0,
         emitter: AudioEmitter::Global2d,
     }

@@ -36,7 +36,8 @@ fn audio_descriptor() -> AudioSourceDescriptor {
         pitch: 1.0,
         looping: true,
         spatial_blend: 1.0,
-        attenuation: 12.0,
+        max_distance: 12.0,
+        rolloff: AudioRolloff::Linear,
         pan: 0.0,
         emitter: AudioEmitter::World3d {
             position: [1.0, 2.0, 3.0],

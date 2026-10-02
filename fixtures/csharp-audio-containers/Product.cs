@@ -10,7 +10,7 @@ public sealed class Product(ProductCreateContext context) : IEngineProduct, IDeb
     private readonly List<AudioVoice> voices = [];
     private readonly List<AudioVoice> spatialVoices = [];
     private const ulong EmitterEntity = 900;
-    private const float SpatialAttenuation = 20;
+    private const float SpatialMaxDistance = 20;
     private static readonly Vector3 WorldEmitter = new(3, 0, 0);
     private Camera? camera;
     private Appearance? marker;
@@ -34,7 +34,7 @@ public sealed class Product(ProductCreateContext context) : IEngineProduct, IDeb
     private static CameraDescriptor CameraAt(float yawDegrees) => new(new CameraPose(Vector3.Zero, 0, yawDegrees), CameraBasisMode.Derived, default,
         new CameraProjection(CameraProjectionKind.Perspective, 60, 0, 0.1f, 100), CameraViewports.Full);
     private AudioSourceDescriptor Spatial(AudioEmitterKind kind, Vector3 position, ulong entity) =>
-        new(clips[0], AudioBus.Ambient, 0.5f, 1, true, 1, SpatialAttenuation, 0, kind, position, entity, Vector3.Zero);
+        new(clips[0], AudioBus.Ambient, 0.5f, 1, true, 1, SpatialMaxDistance, AudioRolloff.Linear, 0, kind, position, entity, Vector3.Zero);
     [DebugCommand("audio.proof.face", Description = "Turn the active camera (the audio listener) to a yaw in degrees; 0 faces -Z, 90 faces +X.")]
     public string Face(float yawDegrees)
     {
@@ -61,7 +61,7 @@ public sealed class Product(ProductCreateContext context) : IEngineProduct, IDeb
         Stop();
         for (int index = 0; index < clips.Count; index++)
         {
-            AudioSourceDescriptor descriptor = new(clips[index], AudioBus.Ambient, 0.08f, 1, true, 0, 1, 0, AudioEmitterKind.Global2d, Vector3.Zero, 0, Vector3.Zero);
+            AudioSourceDescriptor descriptor = new(clips[index], AudioBus.Ambient, 0.08f, 1, true, 0, 1, AudioRolloff.Linear, 0, AudioEmitterKind.Global2d, Vector3.Zero, 0, Vector3.Zero);
             voices.Add(context.Engine.Audio.CreateVoice(descriptor));
             context.Engine.Audio.Emit(new($"container-{nextSignalId++}", descriptor with { Looping = false }));
         }

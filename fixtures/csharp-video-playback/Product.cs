@@ -24,7 +24,7 @@ public sealed class Product(ProductCreateContext context) : IEngineProduct, IDeb
     {
         using AudioClip unknownClip = new(new(ulong.MaxValue), static () => { });
         AudioSourceDescriptor source = new(unknownClip, AudioBus.Ambient, 1, 1, false,
-            0, 1, 0, AudioEmitterKind.Global2d, Vector3.Zero, 0, Vector3.Zero);
+            0, 1, AudioRolloff.Linear, 0, AudioEmitterKind.Global2d, Vector3.Zero, 0, Vector3.Zero);
         Check(() => context.Engine.Audio.CreateVoice(source), "Audio", "CSHARP_AUDIO_CLIP_HANDLE");
         Check(() => context.Engine.Graphics.OpenResource(new("content/missing.png", TextureFilter.Nearest, TextureWrap.Clamp)), "Graphics", "CSHARP_RENDER_RESOURCE_UNKNOWN");
         return "diagnostics validated";

@@ -40,6 +40,18 @@ pub enum NativeAudioEmitterKind {
     EntityAttached = 3,
 }
 
+/// How a spatial source's level falls between the reference distance
+/// (`min(1, max_distance / 2)`, where it plays at full volume) and
+/// `max_distance`, at and beyond which it is silent.
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativeAudioRolloff {
+    /// Amplitude falls linearly to zero.
+    Linear = 1,
+    /// Level falls linearly in decibels, to -60 dB (silence).
+    LinearDecibels = 2,
+}
+
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NativeAudioVoiceControl {
@@ -128,7 +140,10 @@ pub struct NativeAudioSourceDescriptor {
     pub pitch: f32,
     pub looping: bool,
     pub spatial_blend: f32,
-    pub attenuation: f32,
+    /// The audible range of a spatial source, in world units: silent at and
+    /// beyond it. Positive and finite.
+    pub max_distance: f32,
+    pub rolloff: NativeAudioRolloff,
     pub pan: f32,
     pub emitter_kind: NativeAudioEmitterKind,
     pub position: NativeVec3,

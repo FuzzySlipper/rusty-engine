@@ -9,7 +9,7 @@ use csharp_engine_abi::*;
 use render_model::{RenderAssetKind, ResolvedRenderAsset, JSON_SAFE_U64_MAX};
 use render_presentation::{
     AudioBus, AudioBusControl, AudioEmitter, AudioHandle, AudioProjectionDiagnosticCode,
-    AudioProjectionOp, AudioProjector, AudioSourceDescriptor, AudioVoiceControl,
+    AudioProjectionOp, AudioProjector, AudioRolloff, AudioSourceDescriptor, AudioVoiceControl,
     AudioVoiceDesiredState, PresentationFrameDiff, PresentationOp, PresentationOpMeta,
 };
 
@@ -660,7 +660,11 @@ impl RuntimeAudioBridge {
             pitch: value.pitch,
             looping: value.looping,
             spatial_blend: value.spatial_blend,
-            attenuation: value.attenuation,
+            max_distance: value.max_distance,
+            rolloff: match value.rolloff {
+                NativeAudioRolloff::Linear => AudioRolloff::Linear,
+                NativeAudioRolloff::LinearDecibels => AudioRolloff::LinearDecibels,
+            },
             pan: value.pan,
             emitter,
         })
@@ -795,7 +799,8 @@ impl RuntimeAudioBridge {
                 pitch: Some(descriptor.pitch),
                 looping: Some(descriptor.looping),
                 spatial_blend: Some(descriptor.spatial_blend),
-                attenuation: Some(descriptor.attenuation),
+                max_distance: Some(descriptor.max_distance),
+                rolloff: Some(descriptor.rolloff),
                 pan: Some(descriptor.pan),
                 emitter,
             },
@@ -1704,7 +1709,8 @@ mod tests {
             pitch: 1.0,
             looping: false,
             spatial_blend: 0.0,
-            attenuation: 32.0,
+            max_distance: 32.0,
+            rolloff: NativeAudioRolloff::Linear,
             pan: 0.0,
             emitter_kind: NativeAudioEmitterKind::Global2d,
             position: NativeVec3::default(),
@@ -2019,6 +2025,75 @@ mod tests {
         bridge
             .destroy_clip(clip)
             .expect("no phantom voice keeps the clip in use");
+    }
+
+    #[test]
+    fn carries_spatial_range_and_rolloff_to_the_projection_and_refuses_invalid_ranges() {
+        let mut content = BTreeMap::new();
+        content.insert("audio/trial.wav".to_owned(), wav());
+        let mut bridge = RuntimeAudioBridge::new(content);
+        bridge.begin_call();
+        let path = b"content/audio/trial.wav";
+        let clip = bridge
+            .open_clip(&NativeAudioClipRequest {
+                path: NativeUtf8Slice {
+                    bytes: path.as_ptr(),
+                    len: path.len(),
+                },
+            })
+            .expect("admitted WAV clip");
+        let world = NativeAudioSourceDescriptor {
+            spatial_blend: 1.0,
+            max_distance: 16.0,
+            rolloff: NativeAudioRolloff::Linear,
+            emitter_kind: NativeAudioEmitterKind::World3d,
+            position: NativeVec3 {
+                x: 3.0,
+                y: 0.0,
+                z: -4.0,
+            },
+            ..descriptor(clip, NativeAudioBus::Sfx)
+        };
+        let voice = bridge.create_voice(world).expect("retained voice");
+        bridge
+            .update_voice(NativeAudioVoiceUpdateRequest {
+                voice,
+                descriptor: NativeAudioSourceDescriptor {
+                    max_distance: 20.0,
+                    rolloff: NativeAudioRolloff::LinearDecibels,
+                    ..world
+                },
+            })
+            .expect("range change");
+        for max_distance in [0.0, -1.0, f32::NAN, f32::INFINITY] {
+            let refused = bridge
+                .create_voice(NativeAudioSourceDescriptor {
+                    max_distance,
+                    ..world
+                })
+                .expect_err("an invalid range is refused");
+            assert_eq!(refused.code(), "CSHARP_AUDIO_PROJECTION");
+        }
+
+        let staged = bridge.take_staged_call().expect("staged voice");
+        let ops = staged.frame.expect("audio frame").ops;
+        let audio = ops
+            .iter()
+            .filter_map(|op| match op {
+                PresentationOp::Audio { op, .. } => Some(op),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert!(matches!(
+            audio.as_slice(),
+            [
+                AudioProjectionOp::Create { descriptor, .. },
+                AudioProjectionOp::Update { patch, .. },
+            ] if descriptor.max_distance == 16.0
+                && descriptor.rolloff == AudioRolloff::Linear
+                && patch.max_distance == Some(20.0)
+                && patch.rolloff == Some(AudioRolloff::LinearDecibels)
+        ));
     }
 
     #[test]

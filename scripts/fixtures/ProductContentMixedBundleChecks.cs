@@ -149,6 +149,7 @@ public sealed class ProductContentMixedBundleChecks : IDisposable
             true,
             0,
             1,
+            AudioRolloff.Linear,
             0,
             AudioEmitterKind.Global2d,
             Vector3.Zero,

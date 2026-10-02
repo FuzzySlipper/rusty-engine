@@ -80,9 +80,22 @@ pub struct AudioSourceDescriptor {
     pub pitch: f32,
     pub looping: bool,
     pub spatial_blend: f32,
-    pub attenuation: f32,
+    /// Silent at and beyond this distance from the listener.
+    pub max_distance: f32,
+    pub rolloff: AudioRolloff,
     pub pan: f32,
     pub emitter: AudioEmitter,
+}
+
+/// How a spatial source's level falls from full volume at the reference
+/// distance, `min(1, max_distance / 2)`, to silence at `max_distance`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AudioRolloff {
+    /// Amplitude falls linearly.
+    Linear,
+    /// Level falls linearly in decibels, to -60 dB.
+    LinearDecibels,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -92,7 +105,8 @@ pub struct AudioSourcePatch {
     pub pitch: Option<f32>,
     pub looping: Option<bool>,
     pub spatial_blend: Option<f32>,
-    pub attenuation: Option<f32>,
+    pub max_distance: Option<f32>,
+    pub rolloff: Option<AudioRolloff>,
     pub pan: Option<f32>,
     pub emitter: Option<AudioEmitter>,
 }
@@ -524,8 +538,8 @@ fn validate_descriptor(
         || !in_range(descriptor.pitch, 0.25, 4.0)
         || !in_range(descriptor.spatial_blend, 0.0, 1.0)
         || !in_range(descriptor.pan, -1.0, 1.0)
-        || !descriptor.attenuation.is_finite()
-        || descriptor.attenuation <= 0.0
+        || !descriptor.max_distance.is_finite()
+        || descriptor.max_distance <= 0.0
         || !emitter_is_finite(&descriptor.emitter)
         || descriptor.clip.content_hash.is_empty()
         || descriptor
@@ -560,8 +574,11 @@ fn apply_patch(
     if let Some(value) = patch.spatial_blend {
         descriptor.spatial_blend = value;
     }
-    if let Some(value) = patch.attenuation {
-        descriptor.attenuation = value;
+    if let Some(value) = patch.max_distance {
+        descriptor.max_distance = value;
+    }
+    if let Some(value) = patch.rolloff {
+        descriptor.rolloff = value;
     }
     if let Some(value) = patch.pan {
         descriptor.pan = value;
