@@ -18,14 +18,16 @@ public sealed class EngineTestHostOptions
         new Dictionary<string, ReadOnlyMemory<byte>>();
 
     /// <summary>
-    /// The test host library. By default a test project uses the one its build recorded
-    /// (<c>RustyEngineTestHostLibrary</c>): the pinned pair's runtime pack.
+    /// The test host library. By default a test project or tool uses the one its build recorded
+    /// (<c>RustyEngineTestHostLibrary</c>): the pinned pair's runtime pack. A relative path
+    /// is resolved against the application's base directory.
     /// </summary>
     public string? LibraryPath { get; init; }
 }
 
 /// <summary>
-/// The Engine's real services, in process and headless, for a product's unit tests. They
+/// The Engine's real services, in process and headless, for a product's unit tests and
+/// tool executables (<c>RustyEngineToolHost</c>). They
 /// apply the same ownership, admission and handle rules as a running product and refuse
 /// with the same <see cref="EngineCallException"/> codes. Nothing is rendered, shown or
 /// played. Make Engine calls inside <see cref="Call"/>, which stands for one product
@@ -153,7 +155,9 @@ public sealed unsafe class EngineTestHost : IDisposable
         path ??= AppContext.GetData(LibraryConfigurationKey) as string;
         if (string.IsNullOrEmpty(path))
             throw new InvalidOperationException(
-                "No Rusty Engine test host library is configured. A test project (IsTestProject) that uses the Rusty.Engine package records the pinned pair's; run `rusty install`, or set RustyEngineTestHostLibrary or EngineTestHostOptions.LibraryPath.");
+                "No Rusty Engine test host library is configured. A test project (IsTestProject) or tool (RustyEngineToolHost) that uses the Rusty.Engine package records the pinned pair's; run `rusty install`, or set RustyEngineTestHostLibrary or EngineTestHostOptions.LibraryPath.");
+        // A tool records the library's file name; the build copied it beside the tool.
+        path = Path.GetFullPath(path, AppContext.BaseDirectory);
         lock (s_libraries)
         {
             // Loaded once and kept for the process, like a product module.

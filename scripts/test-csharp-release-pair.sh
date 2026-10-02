@@ -204,6 +204,41 @@ grep -Fx 'engine test host checks passed' "$work/test-host.log" >/dev/null || {
     exit 1
 }
 
+# A tool executable (RustyEngineToolHost) that references only the package
+# carries the pinned pair's test host library in its published output and
+# draws Engine Random without naming the library.
+tool="$work/consumer-tool"
+mkdir -p "$tool"
+cp "$consumer/NuGet.Config" "$tool/NuGet.Config"
+cat > "$tool/ConsumerTool.csproj" <<EOF
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <Nullable>enable</Nullable>
+    <RustyEngineToolHost>true</RustyEngineToolHost>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Rusty.Engine" Version="$version" />
+  </ItemGroup>
+</Project>
+EOF
+cat > "$tool/Program.cs" <<'EOF'
+ToolHostRandomChecks.Run();
+System.Console.WriteLine("engine tool host checks passed");
+EOF
+cp "$repo_root/scripts/fixtures/ToolHostRandomChecks.cs" "$tool/ToolHostRandomChecks.cs"
+(
+    cd "$tool"
+    DOTNET_CLI_HOME="$consumer_home" NUGET_PACKAGES="$consumer_packages" \
+        dotnet publish ConsumerTool.csproj -p:RustyEngineCache="$work/cache" --output "$work/consumer-tool-published"
+)
+(cd "$work" && dotnet consumer-tool-published/ConsumerTool.dll) | tee "$work/tool-host.log"
+grep -Fx 'engine tool host checks passed' "$work/tool-host.log" >/dev/null || {
+    echo "RUSTY_ENGINE_PAIR_TEST_TOOL_HOST: the published consumer tool did not complete the Engine tool host checks" >&2
+    exit 1
+}
+
 host_log="$work/runtime-host.log"
 "$runtime/bin/rusty" dev --help > "$work/rusty-dev-help.log" 2>&1 || {
     echo "RUSTY_ENGINE_PAIR_TEST_RUNTIME: extracted rusty dev --help failed" >&2

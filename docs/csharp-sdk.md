@@ -115,6 +115,41 @@ names another. A library from a different pair refuses with
 `CSHARP_TEST_HOST_ABI`. Content bundles, input and product lifecycle are not
 part of the test host; drive those through `rusty dev` or the host exercise.
 
+## Tools
+
+A product's own command-line tool (an authoring or simulation CLI, for
+example) uses the same in-process service set through `EngineTestHost`. This
+is a supported dependency for a shipped tool, not only for tests: the
+services, their results and their refusals are the ones a running product
+gets, so a tool and the product draw the same `Random` values for the same
+seed and scope. Set `RustyEngineToolHost` in the tool's executable project:
+
+```xml
+<PropertyGroup>
+  <OutputType>Exe</OutputType>
+  <RustyEngineToolHost>true</RustyEngineToolHost>
+</PropertyGroup>
+<ItemGroup>
+  <PackageReference Include="Rusty.Engine" Version="[$(RustyEnginePackageVersion)]" />
+</ItemGroup>
+```
+
+```csharp
+using var host = EngineTestHost.Create();
+ulong roll = host.Call(engine =>
+{
+    using Rng dice = engine.Random.CreateScoped(new(seed, "combat"));
+    return engine.Random.NextBoundedU32(new(dice, 20)).Value + 1;
+});
+```
+
+The build copies the pinned pair's `librusty_engine_test_host.so` beside the
+tool's build and publish output, so `dotnet run` and a published
+(framework-dependent, Linux x64) tool need no `LibraryPath` and no installed
+pair on the machine that runs it. The ABI check is the test host's. A tool
+gets the services the test host has: no renderer, audio, input or product
+lifecycle.
+
 ## Update
 
 ```bash

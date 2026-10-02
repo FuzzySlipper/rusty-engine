@@ -33,19 +33,29 @@
                       Condition="'$(RustyEngineProductEntryType)' != ''" />
   </ItemGroup>
 
-  <!-- A test project (IsTestProject) runs the Engine's services in process
-       through Rusty.Engine.Testing.EngineTestHost. The library comes from the
-       pinned pair's runtime pack, or the source override's pack, and is
-       recorded in the test's runtimeconfig. -->
-  <PropertyGroup Condition="'$(IsTestProject)' == 'true' and '$(RustyEngineTestHostLibrary)' == ''">
+  <!-- A test project (IsTestProject) or a tool executable (RustyEngineToolHost)
+       runs the Engine's services in process through
+       Rusty.Engine.Testing.EngineTestHost. The library comes from the pinned
+       pair's runtime pack, or the source override's pack. A test records its
+       path in the runtimeconfig; a tool copies it beside its build and publish
+       output and records the file name, so the published tool carries it. -->
+  <PropertyGroup Condition="('$(IsTestProject)' == 'true' or '$(RustyEngineToolHost)' == 'true') and '$(RustyEngineTestHostLibrary)' == ''">
     <_RustyEngineTestHostCache>$(RustyEngineCache)</_RustyEngineTestHostCache>
     <_RustyEngineTestHostCache Condition="'$(_RustyEngineTestHostCache)' == '' and '$(XDG_CACHE_HOME)' != ''">$(XDG_CACHE_HOME)/rusty-engine</_RustyEngineTestHostCache>
     <_RustyEngineTestHostCache Condition="'$(_RustyEngineTestHostCache)' == ''">$(HOME)/.cache/rusty-engine</_RustyEngineTestHostCache>
     <RustyEngineTestHostLibrary Condition="'$(RustyEngineUseSourceDevelopment)' == 'true'">$(RustyEngineSourceDevelopmentPath)/target/runtime-pack/linux-x64/lib/librusty_engine_test_host.so</RustyEngineTestHostLibrary>
     <RustyEngineTestHostLibrary Condition="'$(RustyEngineUseSourceDevelopment)' != 'true'">$(_RustyEngineTestHostCache)/pairs/$(RustyEngineSdkPackageVersion)/runtime-pack/lib/librusty_engine_test_host.so</RustyEngineTestHostLibrary>
   </PropertyGroup>
-  <ItemGroup Condition="'$(RustyEngineTestHostLibrary)' != ''">
+  <ItemGroup Condition="'$(RustyEngineTestHostLibrary)' != '' and '$(RustyEngineToolHost)' != 'true'">
     <RuntimeHostConfigurationOption Include="Rusty.Engine.TestHostLibrary" Value="$(RustyEngineTestHostLibrary)" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(RustyEngineTestHostLibrary)' != '' and '$(RustyEngineToolHost)' == 'true'">
+    <RuntimeHostConfigurationOption Include="Rusty.Engine.TestHostLibrary" Value="$([System.IO.Path]::GetFileName('$(RustyEngineTestHostLibrary)'))" />
+    <None Include="$(RustyEngineTestHostLibrary)"
+          Link="$([System.IO.Path]::GetFileName('$(RustyEngineTestHostLibrary)'))"
+          CopyToOutputDirectory="PreserveNewest"
+          CopyToPublishDirectory="PreserveNewest"
+          Visible="false" />
   </ItemGroup>
 
   <!-- Defaults that derive from the product's own paths are set here, after
