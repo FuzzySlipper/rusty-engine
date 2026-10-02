@@ -2135,39 +2135,21 @@ mod tests {
             materials: textured.as_ptr(),
             materials_len: 1,
         };
-        assert!(bridge.project_scene(request).is_err());
-        assert!(bridge
-            .staged
-            .as_ref()
-            .unwrap()
-            .state
-            .presentations
-            .is_empty());
+        // A reconstructed surface carries box-projected uvs, so a textured
+        // material projects onto it as onto cubes.
+        let retained = bridge.project_scene(request).unwrap();
         let plain = [NativeVoxelSceneMaterialBinding {
             material_slot: 1,
             material: super::tests::material(&mut appearance),
         }];
-        let retained = bridge
-            .project_scene(NativeProjectVoxelSceneRequest {
-                materials: plain.as_ptr(),
-                ..request
-            })
-            .unwrap();
-        assert_eq!(
-            retained.value, 1,
-            "failed projection does not retain a candidate or consume its identity"
-        );
-        assert!(bridge
+        bridge
             .update(NativeUpdateVoxelScenePresentationRequest {
                 presentation: retained,
-                materials: textured.as_ptr(),
-                materials_len: 1
+                materials: plain.as_ptr(),
+                materials_len: 1,
             })
-            .is_err());
-        assert!(
-            bridge.refresh(retained).is_ok(),
-            "failed replacement preserves the original untextured material"
-        );
+            .unwrap();
+        bridge.refresh(retained).unwrap();
         bridge.destroy(retained).unwrap();
 
         let api = super::api(&mut bridge, &mut appearance);

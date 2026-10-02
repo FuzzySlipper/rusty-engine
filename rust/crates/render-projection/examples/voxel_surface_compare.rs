@@ -99,7 +99,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             SurfaceMode::MarchingCubes,
             SurfaceMode::DualContouring,
         ] {
-            if model.texture.is_some() && !mode.supports_voxel_tile_coordinates() {
+            if false {
                 entries.push(ComparisonEntry {
                     model: model.label.clone(),
                     source_path: model.path.display().to_string(),

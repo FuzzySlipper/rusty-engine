@@ -33,11 +33,16 @@ pub struct ChunkVersion(pub u64);
 
 /// A deterministic content fingerprint of a chunk (FNV-1a over dims + values).
 ///
-/// Covers chunk *shape and voxel values only* — not version, dirty state, or grid
+/// Covers chunk *shape, voxel values and densities only* — not version, dirty state, or grid
 /// id — so two independently-built chunks with the same shape and contents hash
 /// equal (useful for dedup/snapshot), and a no-op edit leaves the hash unchanged.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ChunkHash(pub u64);
+
+/// The density magnitude of a voxel without an explicit density: a solid
+/// voxel reads `-0.5` and an empty one `+0.5`, which places a reconstructed
+/// surface exactly on the cube face between them.
+pub const DEFAULT_DENSITY_MAGNITUDE: f32 = 0.5;
 
 /// A bounded access failed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -47,6 +52,8 @@ pub enum VolumeError {
         local: LocalVoxelCoord,
         dims: ChunkDims,
     },
+    /// A density was not finite, or a density array did not match the chunk.
+    InvalidDensity,
 }
 
 impl core::fmt::Display for VolumeError {
@@ -58,6 +65,10 @@ impl core::fmt::Display for VolumeError {
                 local.to_array(),
                 dims.to_array()
             ),
+            VolumeError::InvalidDensity => write!(
+                f,
+                "voxel densities must be finite and match the chunk's cell count"
+            ),
         }
     }
 }
@@ -68,14 +79,37 @@ impl std::error::Error for VolumeError {}
 ///
 /// The backing array is private; its element type and layout are an
 /// implementation detail behind the get/set/fill/iter API.
+///
+/// A chunk may also carry one density per voxel, negative inside, which
+/// reconstructed surfaces use to place the surface between samples. Solidity
+/// stays authoritative: [`density`](Self::density) returns the stored
+/// magnitude with the sign of the voxel's solidity, so the two never disagree.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VoxelChunk {
     grid_id: GridId,
     dims: ChunkDims,
     cells: Vec<VoxelValue>,
+    densities: Option<Densities>,
     version: ChunkVersion,
     dirty: bool,
 }
+
+/// Per-voxel densities, compared bit for bit so a chunk stays `Eq`.
+#[derive(Debug, Clone)]
+struct Densities(Box<[f32]>);
+
+impl PartialEq for Densities {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.len() == other.0.len()
+            && self
+                .0
+                .iter()
+                .zip(other.0.iter())
+                .all(|(left, right)| left.to_bits() == right.to_bits())
+    }
+}
+
+impl Eq for Densities {}
 
 impl VoxelChunk {
     /// A new chunk of `dims`, all [`VoxelValue::Empty`], at version 0 and clean.
@@ -89,6 +123,7 @@ impl VoxelChunk {
             grid_id,
             dims,
             cells: vec![value; dims.volume() as usize],
+            densities: None,
             version: ChunkVersion(0),
             dirty: false,
         }
@@ -118,6 +153,7 @@ impl VoxelChunk {
             grid_id,
             dims,
             cells: values.to_vec(),
+            densities: None,
             version: ChunkVersion(0),
             dirty: false,
         })
@@ -259,6 +295,80 @@ impl VoxelChunk {
             .map(|(i, &v)| (self.delinearize(i), v))
     }
 
+    /// The signed density at `local`: the stored magnitude (or
+    /// [`DEFAULT_DENSITY_MAGNITUDE`]) negated for a solid voxel.
+    pub fn density(&self, local: LocalVoxelCoord) -> Option<f32> {
+        let index = self.index(local)?;
+        Some(self.density_at(index))
+    }
+
+    fn density_at(&self, index: usize) -> f32 {
+        let magnitude = self
+            .densities
+            .as_ref()
+            .map_or(DEFAULT_DENSITY_MAGNITUDE, |values| values.0[index].abs());
+        if self.cells[index].is_empty() {
+            magnitude
+        } else {
+            -magnitude
+        }
+    }
+
+    /// Whether any voxel carries an explicit density.
+    pub fn has_densities(&self) -> bool {
+        self.densities.is_some()
+    }
+
+    /// Every signed density in storage order, or `None` when the chunk uses
+    /// the default magnitude everywhere.
+    pub fn densities(&self) -> Option<Vec<f32>> {
+        self.densities
+            .as_ref()
+            .map(|_| (0..self.cells.len()).map(|i| self.density_at(i)).collect())
+    }
+
+    /// Replace every density (storage order), or drop them with `None`.
+    /// Only magnitudes are kept; signs follow solidity.
+    pub fn set_densities(&mut self, values: Option<&[f32]>) -> Result<bool, VolumeError> {
+        let next = match values {
+            Some(values) => {
+                if values.len() != self.cells.len() || !values.iter().all(|v| v.is_finite()) {
+                    return Err(VolumeError::InvalidDensity);
+                }
+                Some(Densities(values.iter().map(|v| v.abs()).collect()))
+            }
+            None => None,
+        };
+        if next == self.densities {
+            return Ok(false);
+        }
+        self.densities = next;
+        self.bump();
+        Ok(true)
+    }
+
+    /// Set one voxel's density magnitude. The first explicit density gives
+    /// every other voxel the default magnitude.
+    pub fn set_density(&mut self, local: LocalVoxelCoord, value: f32) -> Result<bool, VolumeError> {
+        let index = self.index(local).ok_or(VolumeError::OutOfBounds {
+            local,
+            dims: self.dims,
+        })?;
+        if !value.is_finite() {
+            return Err(VolumeError::InvalidDensity);
+        }
+        let magnitude = value.abs();
+        let values = self.densities.get_or_insert_with(|| {
+            Densities(vec![DEFAULT_DENSITY_MAGNITUDE; self.cells.len()].into_boxed_slice())
+        });
+        if values.0[index].to_bits() == magnitude.to_bits() {
+            return Ok(false);
+        }
+        values.0[index] = magnitude;
+        self.bump();
+        Ok(true)
+    }
+
     /// `true` if every cell is [`VoxelValue::Empty`].
     pub fn is_empty(&self) -> bool {
         self.cells.iter().all(|v| v.is_empty())
@@ -320,6 +430,11 @@ impl VoxelChunk {
         }
         for cell in &self.cells {
             feed(cell.to_encoded());
+        }
+        if let Some(densities) = &self.densities {
+            for value in densities.0.iter() {
+                feed(value.to_bits());
+            }
         }
         ChunkHash(h)
     }

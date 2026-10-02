@@ -232,7 +232,7 @@ fn shared_canonical_asset_can_render_distinct_surface_modes_per_instance() {
 }
 
 #[test]
-fn reconstructed_meshes_pack_as_uv_free_v1_and_reject_textured_materials() {
+fn reconstructed_meshes_pack_box_projected_uvs_and_accept_textured_materials() {
     let marching = admitted_with_surface(SurfaceMode::MarchingCubes);
     let instances = [instance(&marching, 0)];
     let packed = VoxelObjectRenderProjector::with_packed_mesh_resources()
@@ -250,27 +250,20 @@ fn reconstructed_meshes_pack_as_uv_free_v1_and_reject_textured_materials() {
     assert!(asset.meshes.iter().all(|mesh| matches!(
         mesh.payload.source,
         MeshPayloadSource::Resource {
-            encoding: render_model::MeshResourceEncoding::PackedStreamsLeV1,
-            uvs_byte_offset: None,
+            encoding: render_model::MeshResourceEncoding::PackedStreamsLeV2,
+            uvs_byte_offset: Some(_),
             ..
         }
     )));
 
     let mut textured = material("material/runner", [0.8, 0.2, 0.1, 1.0]);
     textured.texture = Some("texture/runner-tile".to_string());
-    let error = VoxelObjectRenderProjector::new()
+    VoxelObjectRenderProjector::new()
         .project(
             &instances,
             &BTreeMap::from([(textured.id.clone(), textured)]),
         )
-        .unwrap_err();
-    assert!(matches!(
-        error,
-        render_projection::VoxelObjectProjectionError::TexturedSurfaceUnsupported {
-            surface_mode: SurfaceMode::MarchingCubes,
-            ..
-        }
-    ));
+        .unwrap();
 }
 
 #[test]

@@ -19,7 +19,9 @@ mod occlusion;
 mod perception;
 mod physics;
 mod rigid_body;
+mod surface_collision;
 mod trigger;
+mod voxel_density;
 mod voxel_edit;
 mod voxel_picking;
 mod voxel_primitive;
@@ -88,7 +90,14 @@ pub use svc_collision::{
     StaticMeshCollisionError, StaticMeshCollisionReceipt, StaticMeshHit, StaticMeshInstanceId,
     StaticMeshTransform,
 };
-pub use svc_mesh::{SurfaceMeshLimits, SurfaceMeshOptions, SurfaceMode};
+pub use svc_mesh::{
+    MaterialSurface, MeshError as SurfaceMeshError, SurfaceCharacter, SurfaceMaterials,
+    SurfaceMeshLimits, SurfaceMeshOptions, SurfaceMode, VertexPlacement,
+};
+pub use voxel_density::{
+    VoxelDensityApplyError, VoxelDensityEdit, VoxelDensityEditService, VoxelDensityOperation,
+    VoxelDensityReceipt, VoxelDensityRejection, VoxelDensityShape, MAX_DENSITY_EDIT_VOXELS,
+};
 pub use voxel_edit::{
     validate_material_voxel, validate_voxel_address, validate_voxel_material_slot,
     VoxelAuthorityValidationError, VoxelEdit, VoxelEditApplyError, VoxelEditFact, VoxelEditReceipt,
@@ -161,7 +170,10 @@ pub struct MaterialVoxel {
 pub struct VoxelMeshGroup {
     pub state: u16,
     pub material_slot: u16,
+    /// The cube face of a greedy run, or the box-projection face of a
+    /// reconstructed run.
     pub direction: Option<core_space::Direction6>,
+    pub surface_mode: SurfaceMode,
     pub start: u32,
     pub count: u32,
 }
@@ -182,6 +194,9 @@ pub struct VoxelMeshChunk {
     pub tile_coordinates: Vec<f32>,
     pub indices: Vec<u32>,
     pub groups: Vec<VoxelMeshGroup>,
+    /// The chunk-local storage index (x-fastest) of the voxel owning each
+    /// triangle. Collision maps a reconstructed triangle to its voxel.
+    pub triangle_owners: Vec<u32>,
     pub bounds_min: [f32; 3],
     pub bounds_max: [f32; 3],
     pub vertices: u32,
@@ -204,6 +219,9 @@ pub struct VoxelChunkMeshUpdate {
     pub rebuilt_chunks: usize,
     pub reused_chunks: usize,
     pub removed_chunks: usize,
+    /// Time spent meshing the rebuilt chunks, summed over chunks (chunks may
+    /// mesh in parallel, so wall time can be shorter).
+    pub mesh_microseconds: u64,
 }
 
 /// Static collision authority plus its query-optimized derived projection.
@@ -561,14 +579,19 @@ impl VoxelCollisionScene {
                 authority_hash = authority_hash.wrapping_add(voxel_hash(voxel));
             }
         }
-        let mesh_chunks = build_mesh_chunks(&voxel_world, mesh_options)?;
+        let (mesh_chunks, mesh_microseconds) = build_mesh_chunks(&voxel_world, &mesh_options)?;
         let dirty_chunks = voxel_world
             .resident_chunks()
             .map(|(coordinate, _)| coordinate.to_array())
             .collect();
         let rebuilt_chunks = mesh_chunks.len();
+        let projection = if mesh_options.all_greedy() {
+            CollisionProjection::build(&voxel_world)
+        } else {
+            CollisionProjection::build(&VoxelWorld::new(grid))
+        };
         let mut scene = Self {
-            projection: CollisionProjection::build(&voxel_world),
+            projection,
             navigation: NavProjection::from_walkable_cells(grid, []),
             voxel_world,
             voxel_size,
@@ -576,7 +599,6 @@ impl VoxelCollisionScene {
             solid_voxel_count,
             noncollidable_materials: BTreeSet::new(),
             mesh_chunks,
-            mesh_options,
             mesh_update: VoxelChunkMeshUpdate {
                 source_revision: revisions.source,
                 previous_mesh_state: None,
@@ -585,13 +607,23 @@ impl VoxelCollisionScene {
                 rebuilt_chunks,
                 reused_chunks: 0,
                 removed_chunks: 0,
+                mesh_microseconds,
             },
+            mesh_options,
             mesh_state: next_mesh_state(),
             source_revision: revisions.source,
             authority_hash,
             world_origin: revisions.world_origin,
             rebase_revision: revisions.rebase,
         };
+        if !scene.mesh_options.all_greedy() {
+            let coordinates: Vec<_> = scene
+                .voxel_world
+                .resident_chunks()
+                .map(|(coordinate, _)| coordinate)
+                .collect();
+            scene.install_surface_colliders(coordinates);
+        }
         scene.rebuild_navigation();
         Ok(scene)
     }
@@ -633,6 +665,16 @@ impl VoxelCollisionScene {
         voxels
     }
 
+    /// The signed density at `address` (negative inside, in voxel units),
+    /// or `None` outside the resident chunks. A voxel without an explicit
+    /// density reads -0.5 when solid and 0.5 when empty.
+    pub fn density(&self, address: [i64; 3]) -> Option<f32> {
+        let grid = self.voxel_world.grid();
+        let (coordinate, local) =
+            grid.voxel_to_chunk_local(VoxelCoord::new(address[0], address[1], address[2]));
+        self.voxel_world.get(coordinate)?.density(local)
+    }
+
     /// The voxel at `address`, if solid.
     pub fn material_voxel(&self, address: [i64; 3]) -> Option<MaterialVoxel> {
         let grid = self.voxel_world.grid();
@@ -647,8 +689,8 @@ impl VoxelCollisionScene {
         self.mesh_chunks.values().map(|chunk| chunk.as_ref())
     }
 
-    pub const fn mesh_options(&self) -> SurfaceMeshOptions {
-        self.mesh_options
+    pub const fn mesh_options(&self) -> &SurfaceMeshOptions {
+        &self.mesh_options
     }
 
     /// The mesh of one chunk, if it has one.
@@ -713,7 +755,7 @@ impl VoxelCollisionScene {
                 world_origin: target,
                 rebase: rebase_revision,
             },
-            self.mesh_options,
+            self.mesh_options.clone(),
         )?;
         if !self.noncollidable_materials.is_empty() {
             candidate.set_noncollidable_materials(self.noncollidable_materials.clone());
@@ -1014,6 +1056,16 @@ impl VoxelCollisionScene {
 
     pub fn set_noncollidable_materials(&mut self, materials: BTreeSet<u16>) {
         self.noncollidable_materials = materials;
+        if !self.mesh_options.all_greedy() {
+            let coordinates: Vec<_> = self
+                .voxel_world
+                .resident_chunks()
+                .map(|(coordinate, _)| coordinate)
+                .collect();
+            self.install_surface_colliders(coordinates);
+            self.rebuild_navigation();
+            return;
+        }
         let mut projection = CollisionProjection::build(&self.voxel_world);
         projection.copy_static_meshes_from(&self.projection);
         let filtered: Vec<_> = self
@@ -1059,21 +1111,51 @@ impl VoxelCollisionScene {
     pub(crate) fn build_meshes(
         &self,
         dirty: &BTreeSet<ChunkCoord>,
-    ) -> Result<BTreeMap<ChunkCoord, Option<Arc<VoxelMeshChunk>>>, CollisionSceneError> {
-        dirty
+    ) -> Result<ChunkMeshes, CollisionSceneError> {
+        let meshed: Vec<_> = dirty
             .iter()
-            .map(|coordinate| {
-                let mesh = match self.voxel_world.get(*coordinate) {
-                    Some(chunk) if !chunk.is_empty() => Some(Arc::new(build_mesh_chunk(
-                        &self.voxel_world,
-                        *coordinate,
-                        self.mesh_options,
-                    )?)),
-                    _ => None,
-                };
-                Ok((*coordinate, mesh))
+            .copied()
+            .filter(|coordinate| {
+                self.voxel_world
+                    .get(*coordinate)
+                    .is_some_and(|chunk| !chunk.is_empty())
             })
-            .collect()
+            .collect();
+        let (meshes, microseconds) =
+            surface_collision::mesh_chunks(&self.voxel_world, &meshed, &self.mesh_options)?;
+        let mut built: BTreeMap<_, _> =
+            dirty.iter().map(|coordinate| (*coordinate, None)).collect();
+        for (coordinate, mesh) in meshed.into_iter().zip(meshes) {
+            built.insert(coordinate, Some(mesh));
+        }
+        Ok(ChunkMeshes {
+            meshes: built,
+            microseconds,
+        })
+    }
+
+    /// Replace the colliders of `coordinates` with what their reconstructed
+    /// meshes draw. Sessions with any reconstructed material only.
+    fn install_surface_colliders(&mut self, coordinates: impl IntoIterator<Item = ChunkCoord>) {
+        for coordinate in coordinates {
+            let (cubes, surface) = surface_collision::collider_parts(
+                &self.voxel_world,
+                &self.noncollidable_materials,
+                &self.mesh_options,
+                coordinate,
+                self.mesh_chunks.get(&coordinate).map(|mesh| mesh.as_ref()),
+            );
+            match self.voxel_world.get(coordinate) {
+                Some(chunk) => self.projection.set_chunk_parts(
+                    coordinate,
+                    chunk.content_hash().0,
+                    &cubes,
+                    surface,
+                ),
+                None => self.projection.remove_chunk(coordinate),
+            }
+        }
+        self.projection.touch();
     }
 
     /// Chunks whose mesh depends on voxels in `owner`: the owner and its
@@ -1095,7 +1177,7 @@ impl VoxelCollisionScene {
                 chunks.push(candidate);
             }
         };
-        if self.mesh_options.mode == SurfaceMode::GreedyCubes {
+        if self.mesh_options.all_greedy() {
             FACES.into_iter().for_each(&mut consider);
         } else {
             for x in -1..=1 {
@@ -1138,7 +1220,7 @@ impl VoxelCollisionScene {
                 chunks.push(candidate);
             }
         };
-        if self.mesh_options.mode == SurfaceMode::GreedyCubes {
+        if self.mesh_options.all_greedy() {
             xs.iter().skip(1).for_each(|x| consider(*x, 0, 0));
             ys.iter().skip(1).for_each(|y| consider(0, *y, 0));
             zs.iter().skip(1).for_each(|z| consider(0, 0, *z));
@@ -1200,12 +1282,12 @@ impl VoxelCollisionScene {
         &mut self,
         changed: &BTreeSet<ChunkCoord>,
         dirty: &BTreeSet<ChunkCoord>,
-        meshes: BTreeMap<ChunkCoord, Option<Arc<VoxelMeshChunk>>>,
+        meshes: ChunkMeshes,
         navigation_cells: BTreeSet<VoxelCoord>,
     ) {
         let mut rebuilt_chunks = 0;
         let mut removed_chunks = 0;
-        for (coordinate, mesh) in meshes {
+        for (coordinate, mesh) in meshes.meshes {
             match mesh {
                 Some(mesh) => {
                     self.mesh_chunks.insert(coordinate, mesh);
@@ -1218,24 +1300,30 @@ impl VoxelCollisionScene {
                 }
             }
         }
-        let colliders: Vec<_> = changed
-            .iter()
-            .map(|coordinate| {
-                (
-                    *coordinate,
-                    collision_chunk(
-                        &self.voxel_world,
-                        &self.noncollidable_materials,
-                        *coordinate,
-                    ),
-                )
-            })
-            .collect();
-        self.projection.reconcile_chunks(
-            colliders
+        if self.mesh_options.all_greedy() {
+            let colliders: Vec<_> = changed
                 .iter()
-                .map(|(coordinate, chunk)| (*coordinate, chunk.as_deref())),
-        );
+                .map(|coordinate| {
+                    (
+                        *coordinate,
+                        collision_chunk(
+                            &self.voxel_world,
+                            &self.noncollidable_materials,
+                            *coordinate,
+                        ),
+                    )
+                })
+                .collect();
+            self.projection.reconcile_chunks(
+                colliders
+                    .iter()
+                    .map(|(coordinate, chunk)| (*coordinate, chunk.as_deref())),
+            );
+        } else {
+            // A reconstructed chunk's collider depends on its neighbours as
+            // its mesh does, so every chunk whose mesh was rebuilt changes.
+            self.install_surface_colliders(changed.union(dirty).copied().collect::<Vec<_>>());
+        }
         let (world, noncollidable) = (&self.voxel_world, &self.noncollidable_materials);
         self.navigation
             .refresh_cells(SCENE_NAVIGATION, navigation_cells, |cell| {
@@ -1254,6 +1342,7 @@ impl VoxelCollisionScene {
             rebuilt_chunks,
             reused_chunks: self.mesh_chunks.len() - rebuilt_chunks,
             removed_chunks,
+            mesh_microseconds: meshes.microseconds,
         };
     }
 
@@ -1297,26 +1386,29 @@ impl VoxelCollisionScene {
     }
 }
 
-fn build_mesh_chunks(
-    world: &VoxelWorld,
-    options: SurfaceMeshOptions,
-) -> Result<BTreeMap<ChunkCoord, Arc<VoxelMeshChunk>>, CollisionSceneError> {
-    world
-        .resident_chunks()
-        .filter(|(_, chunk)| !chunk.is_empty())
-        .map(|(coordinate, _)| {
-            Ok((
-                coordinate,
-                Arc::new(build_mesh_chunk(world, coordinate, options)?),
-            ))
-        })
-        .collect()
+/// Meshes of `dirty` chunks (`None` removes one) and their summed meshing time.
+pub(crate) struct ChunkMeshes {
+    pub(crate) meshes: BTreeMap<ChunkCoord, Option<Arc<VoxelMeshChunk>>>,
+    pub(crate) microseconds: u64,
 }
 
-fn build_mesh_chunk(
+fn build_mesh_chunks(
+    world: &VoxelWorld,
+    options: &SurfaceMeshOptions,
+) -> Result<(BTreeMap<ChunkCoord, Arc<VoxelMeshChunk>>, u64), CollisionSceneError> {
+    let coordinates: Vec<_> = world
+        .resident_chunks()
+        .filter(|(_, chunk)| !chunk.is_empty())
+        .map(|(coordinate, _)| coordinate)
+        .collect();
+    let (meshes, microseconds) = surface_collision::mesh_chunks(world, &coordinates, options)?;
+    Ok((coordinates.into_iter().zip(meshes).collect(), microseconds))
+}
+
+pub(crate) fn build_mesh_chunk(
     world: &VoxelWorld,
     coordinate: ChunkCoord,
-    options: SurfaceMeshOptions,
+    options: &SurfaceMeshOptions,
 ) -> Result<VoxelMeshChunk, CollisionSceneError> {
     let grid = world.grid();
     let chunk = world.get(coordinate).expect("resident coordinate");
@@ -1327,6 +1419,8 @@ fn build_mesh_chunk(
     Ok(voxel_mesh_chunk(
         coordinate,
         origin,
+        grid.chunk_origin_voxel(coordinate).to_array(),
+        grid.chunk_dims().to_array(),
         chunk.content_hash().0,
         mesh,
     ))
@@ -1392,10 +1486,22 @@ fn collision_solid(
 fn voxel_mesh_chunk(
     coordinate: ChunkCoord,
     origin: WorldPos,
+    origin_voxel: [i64; 3],
+    size: [u32; 3],
     source_chunk_hash: u64,
     mesh: svc_mesh::MeshPayload,
 ) -> VoxelMeshChunk {
     let content_hash = mesh_payload_hash(&mesh);
+    let size = size.map(i64::from);
+    let triangle_owners = mesh
+        .triangle_owners
+        .iter()
+        .map(|owner| {
+            let local: [i64; 3] = std::array::from_fn(|axis| owner[axis] - origin_voxel[axis]);
+            debug_assert!((0..3).all(|axis| (0..size[axis]).contains(&local[axis])));
+            ((local[2] * size[1] + local[1]) * size[0] + local[0]) as u32
+        })
+        .collect();
     VoxelMeshChunk {
         chunk: coordinate.to_array(),
         content_hash,
@@ -1413,10 +1519,12 @@ fn voxel_mesh_chunk(
                 state: group.state,
                 material_slot: group.material_slot,
                 direction: group.direction,
+                surface_mode: group.surface_mode,
                 start: group.start,
                 count: group.count,
             })
             .collect(),
+        triangle_owners,
         bounds_min: mesh.bounds.min,
         bounds_max: mesh.bounds.max,
         vertices: mesh.stats.vertices,
@@ -1451,6 +1559,8 @@ fn mesh_payload_hash(mesh: &svc_mesh::MeshPayload) -> u64 {
     for group in &mesh.groups {
         feed(&group.material_slot.to_le_bytes());
         feed(&group.state.to_le_bytes());
+        feed(group.surface_mode.as_str().as_bytes());
+        feed(&[group.direction.map_or(u8::MAX, |direction| direction as u8)]);
         feed(&group.start.to_le_bytes());
         feed(&group.count.to_le_bytes());
     }

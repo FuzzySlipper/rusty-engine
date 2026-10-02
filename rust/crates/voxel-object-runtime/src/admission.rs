@@ -284,6 +284,7 @@ impl<'a> AdmissionBuilder<'a> {
                         max_temporary_field_bytes: self.options.limits.max_temporary_field_bytes,
                         max_material_partitions: remaining_material_partitions,
                     },
+                    ..SurfaceMeshOptions::default()
                 },
             )
             .map_err(|error| match error {

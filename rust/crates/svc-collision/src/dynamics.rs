@@ -794,11 +794,14 @@ impl CollisionProjection {
     fn dynamics_shapes(&self) -> Vec<SharedShape> {
         let mut shapes =
             Vec::with_capacity(self.chunks.len() + self.static_meshes.instance_count());
-        shapes.extend(
-            self.chunks
-                .values()
-                .map(|chunk| SharedShape(chunk.shape.clone())),
-        );
+        for chunk in self.chunks.values() {
+            if let Some(cubes) = &chunk.cubes {
+                shapes.push(SharedShape(cubes.clone()));
+            }
+            if let Some(surface) = &chunk.surface {
+                shapes.push(SharedShape(surface.shape.clone()));
+            }
+        }
         shapes.extend(self.static_meshes.dynamics_shapes());
         shapes
     }

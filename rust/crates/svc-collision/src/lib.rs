@@ -67,10 +67,12 @@ use svc_volume::VoxelChunk;
 
 use parry3d_f64::math::{Pose, Real, Vector};
 use parry3d_f64::query::{
-    cast_shapes, contact, intersection_test, Contact, Ray as ParryRay, ShapeCastHit,
-    ShapeCastOptions, ShapeCastStatus,
+    cast_shapes, contact, intersection_test, Contact, PointQueryWithLocation, Ray as ParryRay,
+    ShapeCastHit, ShapeCastOptions, ShapeCastStatus,
 };
-use parry3d_f64::shape::{Capsule, CompositeShapeRef, Compound, Cuboid, Shape, SharedShape};
+use parry3d_f64::shape::{
+    Capsule, CompositeShapeRef, Compound, Cuboid, Shape, SharedShape, TriMesh, TriMeshFlags,
+};
 
 /// How a voxel value participates in collision. Derived from the value/material;
 /// per-material collision kinds (decision 1) are deferred behind this enum.
@@ -210,23 +212,59 @@ impl CollisionHit {
 
 // ── Projection ─────────────────────────────────────────────────────────────────
 
-/// The collision projection of a single resident chunk.
+/// The collision projection of a single resident chunk. A chunk with no
+/// collidable part has no collider entry.
 #[derive(Clone)]
 struct ChunkCollider {
     /// `content_hash` of the `VoxelChunk` this was built from — the staleness key.
     source_hash: u64,
-    /// World-positioned solid cuboids. A chunk with no solids has no collider entry.
-    shape: Arc<Compound>,
+    /// World-positioned solid cuboids.
+    cubes: Option<Arc<Compound>>,
     /// The canonical voxel owning each Compound child, in the same order as
-    /// `shape.shapes()`. Ray queries need this rather than reconstructing a
+    /// `cubes.shapes()`. Ray queries need this rather than reconstructing a
     /// cell from an impact point: a ray may strike a top face precisely at an
     /// adjacent sparse-cell boundary.
     voxels: Vec<VoxelCoord>,
+    /// The reconstructed surface drawn for this chunk, when its materials are
+    /// not drawn as cubes.
+    surface: Option<ChunkSurfacePart>,
     /// Conservatively cached world-space bounds for outer character-query
     /// pruning. `None` deliberately means "unknown": queries fail open to
     /// the established full scan instead of risking a false negative.
     bounds: Option<WorldAabb>,
 }
+
+#[derive(Clone)]
+struct ChunkSurfacePart {
+    /// Oriented, so a point near the surface can be classified inside or out.
+    shape: Arc<TriMesh>,
+    /// The voxel owning each triangle.
+    owners: Vec<VoxelCoord>,
+}
+
+impl ChunkCollider {
+    fn shapes(&self) -> impl Iterator<Item = &dyn Shape> {
+        self.cubes.iter().map(|cubes| &**cubes as &dyn Shape).chain(
+            self.surface
+                .iter()
+                .map(|surface| &*surface.shape as &dyn Shape),
+        )
+    }
+}
+
+/// One chunk's reconstructed surface in collision space: world-positioned
+/// triangles (vertices may repeat) and the voxel owning each triangle.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ChunkSurfaceCollider {
+    pub positions: Vec<[f64; 3]>,
+    pub triangles: Vec<[u32; 3]>,
+    pub owners: Vec<VoxelCoord>,
+}
+
+/// How far from a reconstructed surface [`CollisionProjection::contains_point`]
+/// looks for it, in voxels. Solid voxels deeper than this are covered by the
+/// interior cuboids the owner supplies with the surface.
+const SURFACE_CONTAINMENT_REACH_VOXELS: f64 = 2.0;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct WorldAabb {
@@ -649,22 +687,25 @@ impl CollisionProjection {
                 continue;
             }
             stats.voxel_candidates = stats.voxel_candidates.saturating_add(1);
-            stats.voxel_narrow_phase_queries = stats.voxel_narrow_phase_queries.saturating_add(1);
-            let hit = cast_shapes(
-                &moving_pose,
-                velocity,
-                &moving_shape,
-                &obstacle_pose,
-                Vector::ZERO,
-                &*collider.shape,
-                options,
-            )
-            .map_err(|_| CharacterCollisionQueryError::UnsupportedBackendQuery)?;
-            keep_nearest_character_hit(
-                &mut best,
-                CharacterCollisionSource::VoxelChunk(*coord),
-                hit,
-            );
+            for shape in collider.shapes() {
+                stats.voxel_narrow_phase_queries =
+                    stats.voxel_narrow_phase_queries.saturating_add(1);
+                let hit = cast_shapes(
+                    &moving_pose,
+                    velocity,
+                    &moving_shape,
+                    &obstacle_pose,
+                    Vector::ZERO,
+                    shape,
+                    options,
+                )
+                .map_err(|_| CharacterCollisionQueryError::UnsupportedBackendQuery)?;
+                keep_nearest_character_hit(
+                    &mut best,
+                    CharacterCollisionSource::VoxelChunk(*coord),
+                    hit,
+                );
+            }
         }
         for (instance, asset, geometry_hash, shape, bounds) in self.static_meshes.character_shapes()
         {
@@ -730,20 +771,17 @@ impl CollisionProjection {
                 continue;
             }
             stats.voxel_candidates = stats.voxel_candidates.saturating_add(1);
-            stats.voxel_narrow_phase_queries = stats.voxel_narrow_phase_queries.saturating_add(1);
-            let result = contact(
-                &capsule_pose,
-                &capsule_shape,
-                &obstacle_pose,
-                &*collider.shape,
-                0.0,
-            )
-            .map_err(|_| CharacterCollisionQueryError::UnsupportedBackendQuery)?;
-            keep_deepest_character_overlap(
-                &mut best,
-                CharacterCollisionSource::VoxelChunk(*coord),
-                result,
-            );
+            for shape in collider.shapes() {
+                stats.voxel_narrow_phase_queries =
+                    stats.voxel_narrow_phase_queries.saturating_add(1);
+                let result = contact(&capsule_pose, &capsule_shape, &obstacle_pose, shape, 0.0)
+                    .map_err(|_| CharacterCollisionQueryError::UnsupportedBackendQuery)?;
+                keep_deepest_character_overlap(
+                    &mut best,
+                    CharacterCollisionSource::VoxelChunk(*coord),
+                    result,
+                );
+            }
         }
         for (instance, asset, geometry_hash, shape, bounds) in self.static_meshes.character_shapes()
         {
@@ -794,21 +832,23 @@ impl CollisionProjection {
         let obstacle_pose = identity();
         let mut best = None;
         for (coord, collider) in &self.chunks {
-            let hit = cast_shapes(
-                &moving_pose,
-                velocity,
-                &moving_shape,
-                &obstacle_pose,
-                Vector::ZERO,
-                &*collider.shape,
-                options,
-            )
-            .map_err(|_| CharacterCollisionQueryError::UnsupportedBackendQuery)?;
-            keep_nearest_character_hit(
-                &mut best,
-                CharacterCollisionSource::VoxelChunk(*coord),
-                hit,
-            );
+            for shape in collider.shapes() {
+                let hit = cast_shapes(
+                    &moving_pose,
+                    velocity,
+                    &moving_shape,
+                    &obstacle_pose,
+                    Vector::ZERO,
+                    shape,
+                    options,
+                )
+                .map_err(|_| CharacterCollisionQueryError::UnsupportedBackendQuery)?;
+                keep_nearest_character_hit(
+                    &mut best,
+                    CharacterCollisionSource::VoxelChunk(*coord),
+                    hit,
+                );
+            }
         }
         for (instance, asset, geometry_hash, shape, _) in self.static_meshes.character_shapes() {
             let hit = cast_shapes(
@@ -944,8 +984,9 @@ impl CollisionProjection {
                     coord,
                     ChunkCollider {
                         source_hash: chunk.content_hash().0,
-                        shape: Arc::new(shape),
+                        cubes: Some(Arc::new(shape)),
                         voxels,
+                        surface: None,
                         bounds,
                     },
                 );
@@ -1001,6 +1042,102 @@ impl CollisionProjection {
         self.version += 1;
     }
 
+    /// Replace one chunk's collider with explicit parts: a cuboid for each of
+    /// `cubes` and the reconstructed `surface` drawn for the chunk. Used for
+    /// chunks whose materials are drawn as reconstructed surfaces, so
+    /// collision follows what is drawn; the owner supplies cuboids only for
+    /// cube materials and for solid voxels deep enough that no surface passes
+    /// through them. Does not bump the version; call [`Self::touch`] after a
+    /// batch.
+    pub fn set_chunk_parts(
+        &mut self,
+        coord: ChunkCoord,
+        source_hash: u64,
+        cube_voxels: &[VoxelCoord],
+        surface: Option<ChunkSurfaceCollider>,
+    ) {
+        let half: Real = self.grid.voxel_size() * 0.5;
+        let cubes = (!cube_voxels.is_empty()).then(|| {
+            let parts = cube_voxels
+                .iter()
+                .map(|voxel| {
+                    let center = self.grid.voxel_center_world(*voxel) + self.world_offset;
+                    (
+                        Pose::translation(center.x, center.y, center.z),
+                        SharedShape::cuboid(half, half, half),
+                    )
+                })
+                .collect();
+            Arc::new(Compound::new(parts))
+        });
+        let surface = surface
+            .filter(|surface| !surface.triangles.is_empty())
+            .and_then(|surface| {
+                let offset = self.world_offset;
+                let vertices = surface
+                    .positions
+                    .iter()
+                    .map(|p| Vector::new(p[0] + offset.x, p[1] + offset.y, p[2] + offset.z))
+                    .collect();
+                let flags = TriMeshFlags::ORIENTED | TriMeshFlags::MERGE_DUPLICATE_VERTICES;
+                let shape = TriMesh::with_flags(vertices, surface.triangles, flags).ok()?;
+                debug_assert_eq!(shape.indices().len(), surface.owners.len());
+                Some(ChunkSurfacePart {
+                    shape: Arc::new(shape),
+                    owners: surface.owners,
+                })
+            });
+        if cubes.is_none() && surface.is_none() {
+            self.chunks.remove(&coord);
+            return;
+        }
+        let bounds = match (&cubes, &surface) {
+            (Some(cubes), Some(surface)) => {
+                match (
+                    shape_world_aabb(&**cubes),
+                    shape_world_aabb(&*surface.shape),
+                ) {
+                    (Some(left), Some(right)) => Some(WorldAabb {
+                        min: WorldPos::new(
+                            left.min.x.min(right.min.x),
+                            left.min.y.min(right.min.y),
+                            left.min.z.min(right.min.z),
+                        ),
+                        max: WorldPos::new(
+                            left.max.x.max(right.max.x),
+                            left.max.y.max(right.max.y),
+                            left.max.z.max(right.max.z),
+                        ),
+                    }),
+                    _ => None,
+                }
+            }
+            (Some(cubes), None) => shape_world_aabb(&**cubes),
+            (None, Some(surface)) => shape_world_aabb(&*surface.shape),
+            (None, None) => unreachable!("an empty collider was removed"),
+        };
+        self.chunks.insert(
+            coord,
+            ChunkCollider {
+                source_hash,
+                cubes,
+                voxels: cube_voxels.to_vec(),
+                surface,
+                bounds,
+            },
+        );
+    }
+
+    /// Drop one chunk's collider. Does not bump the version.
+    pub fn remove_chunk(&mut self, coord: ChunkCoord) {
+        self.chunks.remove(&coord);
+    }
+
+    /// Mark a batch of [`Self::set_chunk_parts`] changes with one version bump.
+    pub fn touch(&mut self) {
+        self.version += 1;
+    }
+
     /// Whether the projection for `chunk` no longer matches `world`'s current data
     /// (content changed, a chunk gained its first solids, or a collider's chunk is
     /// gone). The basis for coordinated, version-checked rebuilds.
@@ -1023,16 +1160,48 @@ impl CollisionProjection {
     pub fn contains_point(&self, p: WorldPos) -> bool {
         let voxel = self.grid.world_to_voxel(p - self.world_offset);
         let chunk = self.grid.voxel_to_chunk(voxel);
-        let Some(collider) = self.chunks.get(&chunk) else {
-            return false;
-        };
         let point = world_to_point(p);
-        // Each part is already world-positioned; test against the part transforms.
-        collider
-            .shape
-            .shapes()
-            .iter()
-            .any(|(pose, shape)| shape.contains_point(pose, point))
+        if let Some(cubes) = self.chunks.get(&chunk).and_then(|c| c.cubes.as_ref()) {
+            // Each part is already world-positioned; test against the part transforms.
+            if cubes
+                .shapes()
+                .iter()
+                .any(|(pose, shape)| shape.contains_point(pose, point))
+            {
+                return true;
+            }
+        }
+        self.surface_contains(chunk, point)
+    }
+
+    /// Whether `point` lies behind the nearest reconstructed surface
+    /// triangle of its chunk and the chunks around it, within reach.
+    fn surface_contains(&self, chunk: ChunkCoord, point: Vector) -> bool {
+        let reach = self.grid.voxel_size() * SURFACE_CONTAINMENT_REACH_VOXELS;
+        let mut nearest: Option<(Real, bool)> = None;
+        for dz in -1..=1 {
+            for dy in -1..=1 {
+                for dx in -1..=1 {
+                    let candidate = ChunkCoord::new(chunk.x + dx, chunk.y + dy, chunk.z + dz);
+                    let Some(surface) =
+                        self.chunks.get(&candidate).and_then(|c| c.surface.as_ref())
+                    else {
+                        continue;
+                    };
+                    let Some((projection, _)) = surface
+                        .shape
+                        .project_local_point_and_get_location_with_max_dist(point, true, reach)
+                    else {
+                        continue;
+                    };
+                    let distance = (projection.point - point).length();
+                    if nearest.is_none_or(|(best, _)| distance < best) {
+                        nearest = Some((distance, projection.is_inside));
+                    }
+                }
+            }
+        }
+        nearest.is_some_and(|(_, inside)| inside)
     }
 
     /// Cast a ray against the projection and return the nearest authoritative hit
@@ -1051,15 +1220,32 @@ impl CollisionProjection {
         let parry_ray = ParryRay::new(world_to_point(ray.origin), Vector::new(dir.x, dir.y, dir.z));
         let mut best: Option<(Real, Vector, VoxelCoord)> = None;
         for collider in self.chunks.values() {
-            if let Some((primitive, hit)) = CompositeShapeRef(&*collider.shape)
-                .cast_local_ray_and_get_normal(&parry_ray, max_distance, true)
-            {
+            if let Some((primitive, hit)) = collider.cubes.as_ref().and_then(|cubes| {
+                CompositeShapeRef(&**cubes).cast_local_ray_and_get_normal(
+                    &parry_ray,
+                    max_distance,
+                    true,
+                )
+            }) {
                 let Some(&voxel) = collider.voxels.get(primitive as usize) else {
                     debug_assert!(false, "compound ray primitive must retain a voxel owner");
                     continue;
                 };
                 if best.is_none_or(|(t, _, _)| hit.time_of_impact < t) {
                     best = Some((hit.time_of_impact, hit.normal, voxel));
+                }
+            }
+            if let Some(surface) = &collider.surface {
+                if let Some((triangle, hit)) = CompositeShapeRef(&*surface.shape)
+                    .cast_local_ray_and_get_normal(&parry_ray, max_distance, true)
+                {
+                    let Some(&voxel) = surface.owners.get(triangle as usize) else {
+                        debug_assert!(false, "surface triangle must retain a voxel owner");
+                        continue;
+                    };
+                    if best.is_none_or(|(t, _, _)| hit.time_of_impact < t) {
+                        best = Some((hit.time_of_impact, hit.normal, voxel));
+                    }
                 }
             }
         }
@@ -1117,7 +1303,6 @@ impl CollisionProjection {
             (lo.y + hi.y) * 0.5,
             (lo.z + hi.z) * 0.5,
         ));
-        let id = identity();
         // Chunk span the AABB covers (inclusive); `hi` is on a boundary so step in.
         let vmin = self.grid.world_to_voxel(lo - self.world_offset);
         let vmax = self.grid.world_to_voxel(hi - self.world_offset);
@@ -1125,12 +1310,8 @@ impl CollisionProjection {
             let c = self.grid.voxel_to_chunk(vmax);
             ChunkCoord::new(c.x + 1, c.y + 1, c.z + 1)
         });
-        for chunk in span.iter() {
-            if let Some(collider) = self.chunks.get(&chunk) {
-                if intersection_test(&pose, &cuboid, &id, &*collider.shape) == Ok(true) {
-                    return true;
-                }
-            }
+        if self.aabb_overlaps_chunks(span, &pose, &cuboid) {
+            return true;
         }
         self.static_meshes.aabb_overlaps(lo, hi)
     }
@@ -1200,18 +1381,37 @@ impl CollisionProjection {
             (lo.y + hi.y) * 0.5,
             (lo.z + hi.z) * 0.5,
         ));
-        let id = identity();
         let vmin = self.grid.world_to_voxel(lo - self.world_offset);
         let vmax = self.grid.world_to_voxel(hi - self.world_offset);
         let span = ChunkRegion::new(self.grid.voxel_to_chunk(vmin), {
             let c = self.grid.voxel_to_chunk(vmax);
             ChunkCoord::new(c.x + 1, c.y + 1, c.z + 1)
         });
-        span.iter().any(|chunk| {
-            self.chunks.get(&chunk).is_some_and(|collider| {
-                intersection_test(&pose, &cuboid, &id, &*collider.shape) == Ok(true)
-            })
-        })
+        self.aabb_overlaps_chunks(span, &pose, &cuboid)
+    }
+
+    /// A box overlaps a chunk's solid when it meets a cuboid or surface
+    /// triangle, or lies wholly behind a reconstructed surface.
+    fn aabb_overlaps_chunks(&self, span: ChunkRegion, pose: &Pose, cuboid: &Cuboid) -> bool {
+        let id = identity();
+        let mut surfaces = false;
+        for chunk in span.iter() {
+            if let Some(collider) = self.chunks.get(&chunk) {
+                surfaces |= collider.surface.is_some();
+                if collider
+                    .shapes()
+                    .any(|shape| intersection_test(pose, cuboid, &id, shape) == Ok(true))
+                {
+                    return true;
+                }
+            }
+        }
+        surfaces
+            && self.contains_point(WorldPos::new(
+                pose.translation.x,
+                pose.translation.y,
+                pose.translation.z,
+            ))
     }
 }
 
@@ -1450,8 +1650,8 @@ mod tests {
         let mut projection = CollisionProjection::build(&world);
         let snapshot = projection.clone();
         assert!(Arc::ptr_eq(
-            &projection.chunks[&coord].shape,
-            &snapshot.chunks[&coord].shape
+            projection.chunks[&coord].cubes.as_ref().unwrap(),
+            snapshot.chunks[&coord].cubes.as_ref().unwrap()
         ));
         // Replacing a chunk must leave the prior snapshot intact.
         world
@@ -1461,11 +1661,27 @@ mod tests {
             .unwrap();
         projection.rebuild_chunk(&world, coord);
         assert!(!Arc::ptr_eq(
-            &projection.chunks[&coord].shape,
-            &snapshot.chunks[&coord].shape
+            projection.chunks[&coord].cubes.as_ref().unwrap(),
+            snapshot.chunks[&coord].cubes.as_ref().unwrap()
         ));
-        assert_eq!(snapshot.chunks[&coord].shape.shapes().len(), 1);
-        assert_eq!(projection.chunks[&coord].shape.shapes().len(), 2);
+        assert_eq!(
+            snapshot.chunks[&coord]
+                .cubes
+                .as_ref()
+                .unwrap()
+                .shapes()
+                .len(),
+            1
+        );
+        assert_eq!(
+            projection.chunks[&coord]
+                .cubes
+                .as_ref()
+                .unwrap()
+                .shapes()
+                .len(),
+            2
+        );
     }
 
     #[test]

@@ -10,8 +10,9 @@
 #![forbid(unsafe_code)]
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
-use core_space::{ChunkCoord, Direction6, VoxelCoord, VoxelGridSpec};
+use core_space::{ChunkCoord, Direction6, LocalVoxelCoord, VoxelCoord, VoxelGridSpec};
 use svc_spatial::VoxelWorld;
 use svc_volume::VoxelChunk;
 use texture_mapping::{project_voxel_surface_tile_point, VoxelTextureMappingError};
@@ -22,9 +23,9 @@ pub mod texture_mapping;
 /// Renderer-neutral derived presentation selected for canonical voxel facts.
 ///
 /// Omission at every public caller remains [`GreedyCubes`](Self::GreedyCubes).
-/// Neither reconstructed mode changes voxel storage, collision, navigation, or
+/// A mode selects how voxels are drawn; it never changes voxel storage or
 /// edit semantics.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum SurfaceMode {
     #[default]
     GreedyCubes,
@@ -41,8 +42,103 @@ impl SurfaceMode {
         }
     }
 
-    pub const fn supports_voxel_tile_coordinates(self) -> bool {
-        matches!(self, Self::GreedyCubes)
+    /// Whether this mode reconstructs a smooth surface from samples.
+    pub const fn is_reconstructed(self) -> bool {
+        !matches!(self, Self::GreedyCubes)
+    }
+}
+
+/// How a reconstructed material places the vertex of each surface cell.
+///
+/// Where materials meet in one cell the sharper placement wins
+/// (`Smooth` < `Sharp` < `Blocky` < a cube material).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum VertexPlacement {
+    /// The mean of the cell's edge crossings: rounded, blob-like surfaces.
+    Smooth,
+    /// The QEF minimizer of the crossings and interpolated gradients: keeps
+    /// corners and edges at any angle.
+    #[default]
+    Sharp,
+    /// The QEF minimizer with crossing normals snapped to the crossing edge's
+    /// axis: a cube of material meshes as a cube.
+    Blocky,
+}
+
+/// Per-material character of a reconstructed surface.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SurfaceCharacter {
+    pub placement: VertexPlacement,
+    /// The largest angle between a facet and its vertex's interpolated
+    /// normal at which the vertex is shaded smooth; beyond it the facet is
+    /// shaded flat. 180 shades everything smooth, 0 everything flat.
+    pub crease_angle_degrees: f32,
+    /// Deterministic per-cell vertex displacement, as a fraction of a cell
+    /// (0 to 0.5). The displacement depends only on the global cell, so
+    /// independently meshed regions agree.
+    pub roughness: f32,
+}
+
+impl Default for SurfaceCharacter {
+    fn default() -> Self {
+        Self {
+            placement: VertexPlacement::Sharp,
+            crease_angle_degrees: 180.0,
+            roughness: 0.0,
+        }
+    }
+}
+
+impl SurfaceCharacter {
+    pub fn validate(&self) -> Result<(), MeshError> {
+        if !(0.0..=180.0).contains(&self.crease_angle_degrees)
+            || !(0.0..=0.5).contains(&self.roughness)
+        {
+            return Err(MeshError::InvalidSurfaceCharacter);
+        }
+        Ok(())
+    }
+}
+
+/// How one material slot is surfaced.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct MaterialSurface {
+    /// Voxel data only; scalar volumes are always dual contoured.
+    pub mode: SurfaceMode,
+    pub character: SurfaceCharacter,
+}
+
+/// Material slots whose surface differs from the default: the session mode
+/// with the default character. Cheap to clone.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct SurfaceMaterials(Arc<[(u16, MaterialSurface)]>);
+
+impl SurfaceMaterials {
+    pub fn new(
+        entries: impl IntoIterator<Item = (u16, MaterialSurface)>,
+    ) -> Result<Self, MeshError> {
+        let mut entries: Vec<_> = entries.into_iter().collect();
+        entries.sort_by_key(|(slot, _)| *slot);
+        for window in entries.windows(2) {
+            if window[0].0 == window[1].0 {
+                return Err(MeshError::DuplicateMaterialSurface { slot: window[0].0 });
+            }
+        }
+        for (_, surface) in &entries {
+            surface.character.validate()?;
+        }
+        Ok(Self(entries.into()))
+    }
+
+    pub fn get(&self, slot: u16) -> Option<&MaterialSurface> {
+        self.0
+            .binary_search_by_key(&slot, |(entry, _)| *entry)
+            .ok()
+            .map(|index| &self.0[index].1)
+    }
+
+    pub fn entries(&self) -> &[(u16, MaterialSurface)] {
+        &self.0
     }
 }
 
@@ -70,10 +166,55 @@ impl Default for SurfaceMeshLimits {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+/// The session mode, limits and per-material surfaces of one voxel mesh.
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct SurfaceMeshOptions {
+    /// The mode of every material without its own surface.
     pub mode: SurfaceMode,
     pub limits: SurfaceMeshLimits,
+    pub materials: SurfaceMaterials,
+}
+
+impl SurfaceMeshOptions {
+    pub fn with_mode(mode: SurfaceMode) -> Self {
+        Self {
+            mode,
+            ..Self::default()
+        }
+    }
+
+    /// The surface of one material slot.
+    pub fn surface(&self, slot: u16) -> MaterialSurface {
+        self.materials
+            .get(slot)
+            .copied()
+            .unwrap_or(MaterialSurface {
+                mode: self.mode,
+                character: SurfaceCharacter::default(),
+            })
+    }
+
+    /// Whether any material may surface with `mode`.
+    pub fn uses_mode(&self, mode: SurfaceMode) -> bool {
+        self.mode == mode
+            || self
+                .materials
+                .entries()
+                .iter()
+                .any(|(_, surface)| surface.mode == mode)
+    }
+
+    /// Whether every material is drawn as cubes.
+    pub fn all_greedy(&self) -> bool {
+        !self.uses_mode(SurfaceMode::MarchingCubes) && !self.uses_mode(SurfaceMode::DualContouring)
+    }
+
+    fn characters(&self) -> surface::Characters<'_> {
+        surface::Characters {
+            materials: &self.materials,
+            default_mode: self.mode,
+        }
+    }
 }
 
 /// One contiguous run of indices sharing a material slot: one draw range of
@@ -82,9 +223,11 @@ pub struct SurfaceMeshOptions {
 pub struct MeshGroup {
     pub state: u16,
     pub material_slot: u16,
-    /// Canonical cube face for greedy output. Reconstructed surfaces have no
-    /// face identity and therefore retain `None`.
+    /// The cube face of greedy output, or the box-projection face of
+    /// reconstructed output. Scalar volumes have none.
     pub direction: Option<Direction6>,
+    /// How this run was surfaced.
+    pub surface_mode: SurfaceMode,
     /// First index (into `indices`) of the run.
     pub start: u32,
     /// Number of indices in the run (a multiple of 3).
@@ -138,8 +281,13 @@ pub struct MeshPayload {
     pub tile_coordinates: Vec<f32>,
     /// 3 `u32` per triangle.
     pub indices: Vec<u32>,
-    /// Groups in ascending `material_slot` order; their `count`s tile `indices`.
+    /// Groups whose `count`s tile `indices`.
     pub groups: Vec<MeshGroup>,
+    /// The voxel (or scalar sample) that owns each triangle, in absolute
+    /// coordinates: the inside endpoint of a dual-contoured edge, the first
+    /// inside corner of a marched cell, or the first cell of a cube face.
+    /// Collision maps a reconstructed triangle to its voxel through it.
+    pub triangle_owners: Vec<[i64; 3]>,
     pub bounds: MeshBounds,
     pub stats: MeshStats,
 }
@@ -158,6 +306,10 @@ pub struct MeshVoxelCell {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MeshError {
     StateRequiresGreedyCubes,
+    InvalidSurfaceCharacter,
+    DuplicateMaterialSurface {
+        slot: u16,
+    },
     /// The chunk would emit more vertices than a `u32` index can address.
     TooManyVertices {
         vertices: u64,
@@ -207,6 +359,13 @@ impl core::fmt::Display for MeshError {
         match self {
             MeshError::StateRequiresGreedyCubes => {
                 write!(f, "cell orientation and variant require GreedyCubes")
+            }
+            MeshError::InvalidSurfaceCharacter => write!(
+                f,
+                "a surface character needs a crease angle of 0 to 180 degrees and a roughness of 0 to 0.5"
+            ),
+            MeshError::DuplicateMaterialSurface { slot } => {
+                write!(f, "material slot {slot} has more than one surface")
             }
             MeshError::TooManyVertices { vertices } => {
                 write!(
@@ -419,10 +578,16 @@ pub fn mesh_chunk_standalone(
     coord: ChunkCoord,
     chunk: &VoxelChunk,
 ) -> Result<MeshPayload, MeshError> {
-    mesh_core(spec, coord, chunk, |v| {
-        let (c, l) = spec.voxel_to_chunk_local(v);
-        c == coord && chunk.get(l).is_some_and(|x| x.is_opaque())
-    })
+    mesh_core(
+        spec,
+        coord,
+        chunk,
+        |_| true,
+        |v| {
+            let (c, l) = spec.voxel_to_chunk_local(v);
+            c == coord && chunk.get(l).is_some_and(|x| x.is_opaque())
+        },
+    )
 }
 
 /// Mesh a complete local-space cell arrangement around an explicit pivot.
@@ -466,17 +631,248 @@ pub fn mesh_scalar_samples(
     isovalue: f32,
     limits: SurfaceMeshLimits,
 ) -> Result<MeshPayload, MeshError> {
-    if !origin.iter().all(|value| value.is_finite()) {
+    let surface = mesh_scalar_surface(
+        ScalarVolume {
+            origin,
+            spacing,
+            dimensions,
+            samples,
+            materials: None,
+            isovalue,
+        },
+        &SurfaceMaterials::default(),
+        None,
+        limits,
+    )?;
+    let mut lanes = BTreeMap::<u16, Vec<u32>>::new();
+    for (triangle, slot) in surface.triangles.iter().zip(&surface.slots) {
+        lanes.entry(*slot).or_default().extend_from_slice(triangle);
+    }
+    let mut indices = Vec::with_capacity(surface.triangles.len() * 3);
+    let mut groups = Vec::with_capacity(lanes.len());
+    for (slot, lane) in lanes {
+        let start = indices.len() as u32;
+        indices.extend(lane);
+        groups.push(MeshGroup {
+            state: 0,
+            material_slot: slot,
+            direction: None,
+            surface_mode: SurfaceMode::DualContouring,
+            start,
+            count: indices.len() as u32 - start,
+        });
+    }
+    let bounds = bounds_of(surface.positions.iter().copied());
+    Ok(MeshPayload {
+        surface_mode: SurfaceMode::DualContouring,
+        positions: surface.positions.into_iter().flatten().collect(),
+        normals: surface.normals.into_iter().flatten().collect(),
+        tile_coordinates: Vec::new(),
+        indices,
+        groups,
+        triangle_owners: surface.owners,
+        bounds,
+        stats: surface.stats,
+    })
+}
+
+/// A dense scalar lattice: `origin + [x, y, z] * spacing` in x-fastest order.
+/// Values below `isovalue` are inside. Each sample may carry a material slot;
+/// without them every sample is slot zero.
+#[derive(Debug, Clone, Copy)]
+pub struct ScalarVolume<'a> {
+    pub origin: [f64; 3],
+    pub spacing: f64,
+    pub dimensions: [usize; 3],
+    pub samples: &'a [f32],
+    pub materials: Option<&'a [u16]>,
+    pub isovalue: f32,
+}
+
+/// The samples `[min, max)` of a scalar volume whose surface one extraction
+/// owns: a quad belongs to the region holding its edge's inside sample.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ScalarRegion {
+    pub min: [usize; 3],
+    pub max: [usize; 3],
+}
+
+/// Dual-contoured scalar geometry with a material slot per triangle, before
+/// render attributes. Positions are in the volume's world space.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ScalarSurface {
+    pub positions: Vec<[f32; 3]>,
+    /// Per-vertex normals averaged from the cell's Hermite data.
+    pub normals: Vec<[f32; 3]>,
+    pub triangles: Vec<[u32; 3]>,
+    /// The material slot of each triangle: its edge's inside sample.
+    pub slots: Vec<u16>,
+    /// The inside sample (lattice coordinate) of each triangle's edge.
+    pub owners: Vec<[i64; 3]>,
+    /// Triangles one sample beyond a requested region. They share the
+    /// region's border vertices, so normals computed over every triangle
+    /// agree with the neighbouring region; drop them before drawing.
+    pub halo: Vec<bool>,
+    pub stats: MeshStats,
+}
+
+/// Dual-contour a scalar volume, or one region of it with a one-sample halo
+/// ring. A region's geometry is identical to the same triangles of the whole
+/// volume, so regions meshed independently meet without seams. Each
+/// material's [`SurfaceCharacter`] places the vertices of its cells.
+pub fn mesh_scalar_surface(
+    volume: ScalarVolume<'_>,
+    materials: &SurfaceMaterials,
+    region: Option<ScalarRegion>,
+    limits: SurfaceMeshLimits,
+) -> Result<ScalarSurface, MeshError> {
+    if !volume.origin.iter().all(|value| value.is_finite()) {
         return Err(MeshError::InvalidScalarOrigin);
     }
-    if !spacing.is_finite() || spacing <= 0.0 {
+    if !volume.spacing.is_finite() || volume.spacing <= 0.0 {
         return Err(MeshError::InvalidCellSize);
     }
-    let pivot = origin.map(|value| 0.5 - value / spacing);
+    let pivot = volume.origin.map(|value| 0.5 - value / volume.spacing);
     if !pivot.iter().all(|value| value.is_finite()) {
         return Err(MeshError::InvalidPivot);
     }
-    surface::mesh_scalar_samples(spacing, pivot, dimensions, samples, isovalue, limits)
+    let dims = volume.dimensions;
+    if dims.iter().any(|dimension| *dimension < 2) {
+        return Err(MeshError::InvalidSampleDimensions { dimensions: dims });
+    }
+    let count = surface::checked_product(dims)?;
+    if volume.samples.len() != count {
+        return Err(MeshError::InvalidSampleCount {
+            expected: count,
+            actual: volume.samples.len(),
+        });
+    }
+    if let Some(materials) = volume.materials {
+        if materials.len() != count {
+            return Err(MeshError::InvalidSampleCount {
+                expected: count,
+                actual: materials.len(),
+            });
+        }
+    }
+    let characters = surface::Characters {
+        materials,
+        default_mode: SurfaceMode::DualContouring,
+    };
+    let mut reconstruction = surface::Reconstruction::default();
+    match region {
+        None => {
+            let lattice = surface::Lattice::scalar(
+                [0; 3],
+                dims,
+                volume.samples.iter().copied(),
+                volume.materials.map(<[u16]>::to_vec),
+                volume.isovalue,
+                limits,
+            )?;
+            let owner = surface::Owner {
+                min: [0; 3],
+                max: dims.map(|value| value as i64),
+            };
+            surface::dual_contour(
+                &lattice,
+                characters,
+                owner,
+                false,
+                limits,
+                &mut reconstruction,
+            )?;
+        }
+        Some(region) => {
+            if (0..3)
+                .any(|axis| region.min[axis] >= region.max[axis] || region.max[axis] > dims[axis])
+            {
+                return Err(MeshError::CoordinateRangeTooLarge);
+            }
+            // The owned samples, their one-sample halo ring, and the samples
+            // of every cell those quads use.
+            let low: [usize; 3] = std::array::from_fn(|axis| region.min[axis].saturating_sub(2));
+            let high: [usize; 3] =
+                std::array::from_fn(|axis| (region.max[axis] + 2).min(dims[axis]));
+            let sub_dims: [usize; 3] = std::array::from_fn(|axis| high[axis] - low[axis]);
+            let index = |x: usize, y: usize, z: usize| (z * dims[1] + y) * dims[0] + x;
+            let mut samples = Vec::with_capacity(surface::checked_product(sub_dims)?);
+            let mut sub_materials = volume
+                .materials
+                .map(|_| Vec::with_capacity(samples.capacity()));
+            for z in low[2]..high[2] {
+                for y in low[1]..high[1] {
+                    let row = index(low[0], y, z)..index(high[0], y, z);
+                    samples.extend_from_slice(&volume.samples[row.clone()]);
+                    if let (Some(target), Some(source)) = (&mut sub_materials, volume.materials) {
+                        target.extend_from_slice(&source[row]);
+                    }
+                }
+            }
+            let lattice = surface::Lattice::scalar(
+                low.map(|value| value as i64),
+                sub_dims,
+                samples.into_iter(),
+                sub_materials,
+                volume.isovalue,
+                limits,
+            )?;
+            let owner = surface::Owner {
+                min: region.min.map(|value| value as i64),
+                max: region.max.map(|value| value as i64),
+            };
+            surface::dual_contour(
+                &lattice,
+                characters,
+                owner,
+                true,
+                limits,
+                &mut reconstruction,
+            )?;
+        }
+    }
+    let mut positions = Vec::with_capacity(reconstruction.positions.len());
+    let mut normals = Vec::with_capacity(reconstruction.positions.len());
+    for (point, normal) in reconstruction.positions.iter().zip(&reconstruction.normals) {
+        let mut position = [0.0_f32; 3];
+        let mut rendered_normal = [0.0_f32; 3];
+        for axis in 0..3 {
+            let value = (point[axis] - pivot[axis]) * volume.spacing;
+            position[axis] = value as f32;
+            rendered_normal[axis] = normal[axis] as f32;
+            if !value.is_finite()
+                || !position[axis].is_finite()
+                || !rendered_normal[axis].is_finite()
+            {
+                return Err(MeshError::PositionOutOfRange);
+            }
+        }
+        positions.push(position);
+        normals.push(rendered_normal);
+    }
+    let triangles = reconstruction.triangles.len() as u32;
+    let kept = reconstruction.halo.iter().filter(|halo| !**halo).count() as u32;
+    Ok(ScalarSurface {
+        stats: MeshStats {
+            surface_mode: SurfaceMode::DualContouring,
+            vertices: positions.len() as u32,
+            indices: triangles * 3,
+            triangles,
+            quads: kept / 2,
+            faces_emitted: kept,
+            source_faces: kept / 2,
+            faces_culled: 0,
+            sampled_cells: reconstruction.sampled_cells,
+            qef_rank_deficient: reconstruction.rank_deficient,
+            qef_fallbacks: reconstruction.fallbacks,
+        },
+        positions,
+        normals,
+        triangles: reconstruction.triangles,
+        slots: reconstruction.slots,
+        owners: reconstruction.owners,
+        halo: reconstruction.halo,
+    })
 }
 
 /// Mesh a complete local-space cell arrangement with an explicit derived
@@ -507,57 +903,262 @@ pub fn mesh_cells_standalone_with_options(
         }
     }
 
-    if !matches!(options.mode, SurfaceMode::GreedyCubes) {
-        return surface::mesh_reconstructed_cells(cell_size, pivot, &occupied, options);
-    }
-
-    let mut faces = Vec::new();
-    let mut faces_culled = 0_u32;
-    for (&coordinate, &slot) in &occupied {
-        for dir in Direction6::ALL {
-            let normal = dir.normal();
-            let neighbour = [
-                coordinate[0]
-                    .checked_add(normal.x as i64)
-                    .ok_or(MeshError::PositionOutOfRange)?,
-                coordinate[1]
-                    .checked_add(normal.y as i64)
-                    .ok_or(MeshError::PositionOutOfRange)?,
-                coordinate[2]
-                    .checked_add(normal.z as i64)
-                    .ok_or(MeshError::PositionOutOfRange)?,
-            ];
-            if occupied.contains_key(&neighbour) {
-                faces_culled = faces_culled.saturating_add(1);
-            } else {
-                let face_count = faces.len() as u64 + 1;
-                if face_count > options.limits.max_source_faces {
-                    return Err(MeshError::TooManyFaces {
-                        faces: face_count,
-                        limit: options.limits.max_source_faces,
+    let greedy_faces = |include: &dyn Fn(u16) -> bool,
+                        occluder: &dyn Fn(u16) -> bool|
+     -> Result<(Vec<Face>, u32), MeshError> {
+        let mut faces = Vec::new();
+        let mut faces_culled = 0_u32;
+        for (&coordinate, &slot) in &occupied {
+            if !include(slot) {
+                continue;
+            }
+            for dir in Direction6::ALL {
+                let normal = dir.normal();
+                let neighbour = [
+                    coordinate[0]
+                        .checked_add(normal.x as i64)
+                        .ok_or(MeshError::PositionOutOfRange)?,
+                    coordinate[1]
+                        .checked_add(normal.y as i64)
+                        .ok_or(MeshError::PositionOutOfRange)?,
+                    coordinate[2]
+                        .checked_add(normal.z as i64)
+                        .ok_or(MeshError::PositionOutOfRange)?,
+                ];
+                if occupied
+                    .get(&neighbour)
+                    .is_some_and(|neighbour| occluder(*neighbour))
+                {
+                    faces_culled = faces_culled.saturating_add(1);
+                } else {
+                    let face_count = faces.len() as u64 + 1;
+                    if face_count > options.limits.max_source_faces {
+                        return Err(MeshError::TooManyFaces {
+                            faces: face_count,
+                            limit: options.limits.max_source_faces,
+                        });
+                    }
+                    faces.push(Face {
+                        state: 0,
+                        slot,
+                        coordinate,
+                        dir,
                     });
                 }
-                faces.push(Face {
-                    state: 0,
-                    slot,
-                    coordinate,
-                    dir,
-                });
             }
         }
+        Ok((faces, faces_culled))
+    };
+
+    if options.all_greedy() {
+        let (faces, faces_culled) = greedy_faces(&|_| true, &|_| true)?;
+        let source_faces = faces.len() as u32;
+        let quads = greedy_merge_faces(faces)?;
+        return emit_quads(
+            &quads,
+            cell_size,
+            pivot,
+            [0; 3],
+            source_faces,
+            faces_culled,
+            options.limits,
+        );
     }
 
-    let source_faces = faces.len() as u32;
-    let quads = greedy_merge_faces(faces)?;
-    emit_quads(
-        &quads,
-        cell_size,
-        pivot,
-        [0; 3],
-        source_faces,
-        faces_culled,
-        options.limits,
-    )
+    // Every face a solid voxel exposes to empty space: the work charged
+    // to reconstructed admission, whichever mode draws it.
+    let (exposed, _) = greedy_faces(&|_| true, &|_| true)?;
+    let Some((&first, _)) = occupied.first_key_value() else {
+        return Ok(empty_payload(options.mode));
+    };
+    let mut minimum = first;
+    let mut maximum = first;
+    for coordinate in occupied.keys() {
+        for axis in 0..3 {
+            minimum[axis] = minimum[axis].min(coordinate[axis]);
+            maximum[axis] = maximum[axis].max(coordinate[axis]);
+        }
+    }
+    let mut low = [0_i64; 3];
+    let mut dims = [0_usize; 3];
+    for axis in 0..3 {
+        low[axis] = minimum[axis]
+            .checked_sub(1)
+            .ok_or(MeshError::CoordinateRangeTooLarge)?;
+        let high = maximum[axis]
+            .checked_add(2)
+            .ok_or(MeshError::CoordinateRangeTooLarge)?;
+        dims[axis] =
+            usize::try_from(high - low[axis]).map_err(|_| MeshError::CoordinateRangeTooLarge)?;
+    }
+    let mut lattice = surface::Lattice::voxels(low, dims, options.limits)?;
+    for (&coordinate, &slot) in &occupied {
+        lattice.set_voxel(
+            coordinate,
+            Some(slot),
+            -svc_volume::DEFAULT_DENSITY_MAGNITUDE,
+        );
+    }
+    let owner = surface::Owner {
+        min: minimum,
+        max: maximum.map(|value| value + 1),
+    };
+    let smooth = reconstruct(&lattice, &options, owner, cell_size, pivot)?;
+    let greedy = |slot: u16| options.surface(slot).mode == SurfaceMode::GreedyCubes;
+    let (faces, faces_culled) = greedy_faces(&greedy, &greedy)?;
+    let mut payload = if faces.is_empty() {
+        smooth
+    } else {
+        let source_faces = faces.len() as u32;
+        let quads = greedy_merge_faces(faces)?;
+        let cubes = emit_quads(
+            &quads,
+            cell_size,
+            pivot,
+            [0; 3],
+            source_faces,
+            faces_culled,
+            options.limits,
+        )?;
+        merge_payloads(cubes, smooth, options.mode, options.limits)?
+    };
+    payload.stats.source_faces = exposed.len() as u32;
+    Ok(payload)
+}
+
+/// Reconstruct the owned surface of a voxel lattice in every reconstructed
+/// mode its materials use.
+fn reconstruct(
+    lattice: &surface::Lattice,
+    options: &SurfaceMeshOptions,
+    owner: surface::Owner,
+    cell_size: f64,
+    pivot: [f64; 3],
+) -> Result<MeshPayload, MeshError> {
+    let characters = options.characters();
+    let mut reconstruction = surface::Reconstruction::default();
+    if options.uses_mode(SurfaceMode::DualContouring) {
+        surface::dual_contour(
+            lattice,
+            characters,
+            owner,
+            false,
+            options.limits,
+            &mut reconstruction,
+        )?;
+    }
+    if options.uses_mode(SurfaceMode::MarchingCubes) {
+        surface::march(
+            lattice,
+            characters,
+            owner,
+            options.limits,
+            &mut reconstruction,
+        )?;
+    }
+    surface::voxel_payload(reconstruction, characters, cell_size, pivot, options.limits)
+}
+
+/// Append `second` to `first`: offset indices, concatenate groups.
+fn merge_payloads(
+    mut first: MeshPayload,
+    second: MeshPayload,
+    mode: SurfaceMode,
+    limits: SurfaceMeshLimits,
+) -> Result<MeshPayload, MeshError> {
+    if second.indices.is_empty() {
+        first.surface_mode = mode;
+        first.stats.surface_mode = mode;
+        return Ok(first);
+    }
+    let vertex_base = (first.positions.len() / 3) as u32;
+    let index_base = first.indices.len() as u32;
+    surface::check_output_growth(
+        u64::from(vertex_base),
+        u64::from(index_base),
+        (second.positions.len() / 3) as u64,
+        second.indices.len() as u64,
+        limits,
+    )?;
+    let had_first = !first.indices.is_empty();
+    first.positions.extend(second.positions);
+    first.normals.extend(second.normals);
+    first.tile_coordinates.extend(second.tile_coordinates);
+    first
+        .indices
+        .extend(second.indices.into_iter().map(|index| index + vertex_base));
+    first
+        .groups
+        .extend(second.groups.into_iter().map(|group| MeshGroup {
+            start: group.start + index_base,
+            ..group
+        }));
+    first.triangle_owners.extend(second.triangle_owners);
+    first.bounds = if had_first {
+        MeshBounds {
+            min: std::array::from_fn(|axis| first.bounds.min[axis].min(second.bounds.min[axis])),
+            max: std::array::from_fn(|axis| first.bounds.max[axis].max(second.bounds.max[axis])),
+        }
+    } else {
+        second.bounds
+    };
+    let stats = &mut first.stats;
+    stats.surface_mode = mode;
+    stats.vertices += second.stats.vertices;
+    stats.indices += second.stats.indices;
+    stats.triangles += second.stats.triangles;
+    stats.quads += second.stats.quads;
+    stats.faces_emitted += second.stats.faces_emitted;
+    stats.faces_culled += second.stats.faces_culled;
+    stats.sampled_cells += second.stats.sampled_cells;
+    stats.qef_rank_deficient += second.stats.qef_rank_deficient;
+    stats.qef_fallbacks += second.stats.qef_fallbacks;
+    first.surface_mode = mode;
+    Ok(first)
+}
+
+fn bounds_of(points: impl Iterator<Item = [f32; 3]>) -> MeshBounds {
+    let mut minimum = [f32::INFINITY; 3];
+    let mut maximum = [f32::NEG_INFINITY; 3];
+    let mut any = false;
+    for point in points {
+        any = true;
+        for axis in 0..3 {
+            minimum[axis] = minimum[axis].min(point[axis]);
+            maximum[axis] = maximum[axis].max(point[axis]);
+        }
+    }
+    if any {
+        MeshBounds {
+            min: minimum,
+            max: maximum,
+        }
+    } else {
+        MeshBounds {
+            min: [0.0; 3],
+            max: [0.0; 3],
+        }
+    }
+}
+
+fn empty_payload(mode: SurfaceMode) -> MeshPayload {
+    MeshPayload {
+        surface_mode: mode,
+        positions: Vec::new(),
+        normals: Vec::new(),
+        tile_coordinates: Vec::new(),
+        indices: Vec::new(),
+        groups: Vec::new(),
+        triangle_owners: Vec::new(),
+        bounds: MeshBounds {
+            min: [0.0; 3],
+            max: [0.0; 3],
+        },
+        stats: MeshStats {
+            surface_mode: mode,
+            ..MeshStats::default()
+        },
+    }
 }
 
 /// Mesh a resident chunk using its **resident neighbour chunks** for border
@@ -569,82 +1170,143 @@ pub fn mesh_chunk_in_world(
 ) -> Option<Result<MeshPayload, MeshError>> {
     let chunk = world.get(coord)?;
     let spec = world.grid();
-    Some(mesh_core(&spec, coord, chunk, |v| {
-        let (c, l) = spec.voxel_to_chunk_local(v);
-        world
-            .get(c)
-            .and_then(|ch| ch.get(l))
-            .is_some_and(|x| x.is_opaque())
-    }))
-}
-
-/// Mesh one resident chunk with an explicit reconstructed surface mode.
-///
-/// Reconstructed cells sample the complete resident one-chunk halo, then a
-/// primitive is assigned to the chunk containing its lexicographically first
-/// occupied sample (Marching Cubes) or its occupied crossing endpoint (Dual
-/// Contouring). Adjacent chunk calls therefore make identical face decisions
-/// without duplicating a primitive. Returned positions remain local to
-/// `coord`, matching the existing chunk transform contract.
-pub fn mesh_chunk_in_world_with_options(
-    world: &VoxelWorld,
-    coord: ChunkCoord,
-    options: SurfaceMeshOptions,
-) -> Option<Result<MeshPayload, MeshError>> {
-    if matches!(options.mode, SurfaceMode::GreedyCubes) {
-        return mesh_chunk_in_world(world, coord);
-    }
-    world.get(coord)?;
-    if world
-        .resident_chunks()
-        .any(|(_, chunk)| chunk.iter().any(|(_, value)| value.state().raw() != 0))
-    {
-        return Some(Err(MeshError::StateRequiresGreedyCubes));
-    }
-    let spec = world.grid();
-    let origin = spec.chunk_origin_voxel(coord).to_array();
-    let dimensions = spec.chunk_dims().to_array().map(i64::from);
-    let maximum = match [
-        origin[0].checked_add(dimensions[0]),
-        origin[1].checked_add(dimensions[1]),
-        origin[2].checked_add(dimensions[2]),
-    ] {
-        [Some(x), Some(y), Some(z)] => [x, y, z],
-        _ => return Some(Err(MeshError::CoordinateRangeTooLarge)),
-    };
-    let mut occupied = BTreeMap::new();
-    for (resident_coord, chunk) in world.resident_chunks() {
-        if resident_coord.x.abs_diff(coord.x) > 1
-            || resident_coord.y.abs_diff(coord.y) > 1
-            || resident_coord.z.abs_diff(coord.z) > 1
-        {
-            continue;
-        }
-        for (local, value) in chunk.iter() {
-            let Some(material) = value.material() else {
-                continue;
-            };
-            occupied.insert(
-                spec.chunk_local_to_voxel(resident_coord, local).to_array(),
-                material.raw(),
-            );
-        }
-    }
-    Some(surface::mesh_reconstructed_cells_owned(
-        spec.voxel_size(),
-        origin.map(|value| value as f64),
-        &occupied,
-        options,
-        Some((origin, maximum)),
+    Some(mesh_core(
+        &spec,
+        coord,
+        chunk,
+        |_| true,
+        |v| {
+            let (c, l) = spec.voxel_to_chunk_local(v);
+            world
+                .get(c)
+                .and_then(|ch| ch.get(l))
+                .is_some_and(|x| x.is_opaque())
+        },
     ))
 }
 
-/// Core mesher: `occupied(world_voxel)` answers whether a voxel is opaque (used
-/// for face culling). The current chunk's solid voxels drive emission.
+/// Mesh one resident chunk with its materials' surface modes.
+///
+/// Reconstructed materials sample the chunk and a one-voxel halo of its
+/// resident neighbours (absent neighbours read as empty), including their
+/// densities. A dual-contoured quad belongs to the chunk holding its edge's
+/// solid endpoint and a marched polygon to the chunk holding its cell's first
+/// solid corner, so adjacent chunk calls make identical decisions without
+/// duplicating a primitive. Cube materials keep their greedy faces; a cube
+/// face against a reconstructed material is kept, since that material's
+/// surface may not cover it. Returned positions remain local to `coord`,
+/// matching the existing chunk transform contract.
+pub fn mesh_chunk_in_world_with_options(
+    world: &VoxelWorld,
+    coord: ChunkCoord,
+    options: &SurfaceMeshOptions,
+) -> Option<Result<MeshPayload, MeshError>> {
+    if options.all_greedy() {
+        return mesh_chunk_in_world(world, coord);
+    }
+    let chunk = world.get(coord)?;
+    Some(mesh_chunk_reconstructed(world, coord, chunk, options))
+}
+
+fn mesh_chunk_reconstructed(
+    world: &VoxelWorld,
+    coord: ChunkCoord,
+    chunk: &VoxelChunk,
+    options: &SurfaceMeshOptions,
+) -> Result<MeshPayload, MeshError> {
+    let greedy = |slot: u16| options.surface(slot).mode == SurfaceMode::GreedyCubes;
+    if chunk.iter().any(|(_, value)| {
+        value.state().raw() != 0 && value.material().is_some_and(|m| !greedy(m.raw()))
+    }) {
+        return Err(MeshError::StateRequiresGreedyCubes);
+    }
+    let spec = world.grid();
+    let origin = spec.chunk_origin_voxel(coord).to_array();
+    let size = spec.chunk_dims().to_array().map(i64::from);
+    let mut maximum = [0_i64; 3];
+    let mut low = [0_i64; 3];
+    for axis in 0..3 {
+        maximum[axis] = origin[axis]
+            .checked_add(size[axis])
+            .ok_or(MeshError::CoordinateRangeTooLarge)?;
+        low[axis] = origin[axis]
+            .checked_sub(1)
+            .ok_or(MeshError::CoordinateRangeTooLarge)?;
+    }
+    let dims = size.map(|value| value as usize + 2);
+    let mut lattice = surface::Lattice::voxels(low, dims, options.limits)?;
+    let high: [i64; 3] = std::array::from_fn(|axis| low[axis] + dims[axis] as i64);
+    for dz in -1..=1_i64 {
+        for dy in -1..=1_i64 {
+            for dx in -1..=1_i64 {
+                let neighbour = ChunkCoord::new(coord.x + dx, coord.y + dy, coord.z + dz);
+                let Some(source) = world.get(neighbour) else {
+                    continue;
+                };
+                let neighbour_origin = spec.chunk_origin_voxel(neighbour).to_array();
+                let mut from = [0_u32; 3];
+                let mut to = [0_u32; 3];
+                for axis in 0..3 {
+                    let start = low[axis].max(neighbour_origin[axis]);
+                    let end = high[axis].min(neighbour_origin[axis] + size[axis]);
+                    from[axis] = (start - neighbour_origin[axis]) as u32;
+                    to[axis] =
+                        (end - neighbour_origin[axis]).max(start - neighbour_origin[axis]) as u32;
+                }
+                for z in from[2]..to[2] {
+                    for y in from[1]..to[1] {
+                        for x in from[0]..to[0] {
+                            let local = LocalVoxelCoord::new(x, y, z);
+                            let value = source.get(local).expect("local within chunk");
+                            let density = source.density(local).expect("local within chunk");
+                            lattice.set_voxel(
+                                [
+                                    neighbour_origin[0] + i64::from(x),
+                                    neighbour_origin[1] + i64::from(y),
+                                    neighbour_origin[2] + i64::from(z),
+                                ],
+                                value.material().map(|material| material.raw()),
+                                density,
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let owner = surface::Owner {
+        min: origin,
+        max: maximum,
+    };
+    let smooth = reconstruct(
+        &lattice,
+        options,
+        owner,
+        spec.voxel_size(),
+        origin.map(|value| value as f64),
+    )?;
+    if !options.uses_mode(SurfaceMode::GreedyCubes) {
+        return Ok(smooth);
+    }
+    let cubes = mesh_core(&spec, coord, chunk, greedy, |voxel| {
+        let (c, l) = spec.voxel_to_chunk_local(voxel);
+        world
+            .get(c)
+            .and_then(|chunk| chunk.get(l))
+            .and_then(|value| value.material())
+            .is_some_and(|material| greedy(material.raw()))
+    })?;
+    merge_payloads(cubes, smooth, options.mode, options.limits)
+}
+
+/// Core mesher: `occupied(world_voxel)` answers whether a voxel occludes a
+/// face. The current chunk's solid voxels of `include`d materials drive
+/// emission.
 fn mesh_core(
     spec: &VoxelGridSpec,
     coord: ChunkCoord,
     chunk: &VoxelChunk,
+    include: impl Fn(u16) -> bool,
     occupied: impl Fn(VoxelCoord) -> bool,
 ) -> Result<MeshPayload, MeshError> {
     // Collect visible faces in deterministic order, with culling stats.
@@ -654,6 +1316,9 @@ fn mesh_core(
         let Some(material) = value.material() else {
             continue;
         };
+        if !include(material.raw()) {
+            continue;
+        }
         let world_voxel = spec.chunk_local_to_voxel(coord, local);
         for dir in Direction6::ALL {
             if occupied(world_voxel.neighbor(dir)) {
@@ -760,6 +1425,7 @@ fn emit_quads(
     let mut normals: Vec<f32> = Vec::with_capacity(quads.len() * 12);
     let mut tile_coordinates: Vec<f32> = Vec::with_capacity(quads.len() * 8);
     let mut indices: Vec<u32> = Vec::with_capacity(quads.len() * 6);
+    let mut triangle_owners: Vec<[i64; 3]> = Vec::with_capacity(quads.len() * 2);
     let mut groups: Vec<MeshGroup> = Vec::new();
     let mut bmin = [f32::INFINITY; 3];
     let mut bmax = [f32::NEG_INFINITY; 3];
@@ -774,6 +1440,7 @@ fn emit_quads(
                     state,
                     material_slot: slot,
                     direction: Some(direction),
+                    surface_mode: SurfaceMode::GreedyCubes,
                     start: group_start,
                     count: indices.len() as u32 - group_start,
                 });
@@ -810,12 +1477,17 @@ fn emit_quads(
         }
         // Two CCW triangles of the quad: (0,1,2) (0,2,3).
         indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+        let owner = std::array::from_fn(|axis| {
+            quad.coordinate[axis].saturating_add(texture_coordinate_origin[axis])
+        });
+        triangle_owners.extend_from_slice(&[owner, owner]);
     }
     if let Some((slot, state, direction)) = cur_group {
         groups.push(MeshGroup {
             state,
             material_slot: slot,
             direction: Some(direction),
+            surface_mode: SurfaceMode::GreedyCubes,
             start: group_start,
             count: indices.len() as u32 - group_start,
         });
@@ -852,6 +1524,7 @@ fn emit_quads(
         tile_coordinates,
         indices,
         groups,
+        triangle_owners,
         bounds,
         stats,
     })
@@ -1131,7 +1804,11 @@ mod tests {
     fn assert_valid_reconstructed(mesh: &MeshPayload, mode: SurfaceMode) {
         assert_eq!(mesh.surface_mode, mode);
         assert_eq!(mesh.stats.surface_mode, mode);
-        assert!(mesh.tile_coordinates.is_empty());
+        assert_eq!(
+            mesh.tile_coordinates.len(),
+            mesh.stats.vertices as usize * 2
+        );
+        assert_eq!(mesh.triangle_owners.len(), mesh.indices.len() / 3);
         assert_eq!(mesh.positions.len(), mesh.stats.vertices as usize * 3);
         assert_eq!(mesh.normals.len(), mesh.stats.vertices as usize * 3);
         assert_eq!(mesh.indices.len(), mesh.stats.indices as usize);
@@ -1412,7 +2089,7 @@ mod tests {
         ];
         assert_eq!(
             actual,
-            ["4b47c7382d4377e3", "9921ac6f9a29b267", "f9323127d86a2e2a",]
+            ["4b47c7382d4377e3", "8ba5fdd72bee82c0", "443126b87c391206"]
         );
     }
 
@@ -1521,6 +2198,7 @@ mod tests {
                     max_sampled_cells: 1_000,
                     ..SurfaceMeshLimits::default()
                 },
+                ..SurfaceMeshOptions::default()
             },
         )
         .unwrap_err();
@@ -1536,6 +2214,7 @@ mod tests {
                     max_vertices: 1,
                     ..SurfaceMeshLimits::default()
                 },
+                ..SurfaceMeshOptions::default()
             },
         )
         .unwrap_err();
@@ -1594,13 +2273,15 @@ mod tests {
                 ..SurfaceMeshOptions::default()
             };
             let global =
-                mesh_cells_standalone_with_options(1.0, [0.0; 3], &global_cells, options).unwrap();
-            let left = mesh_chunk_in_world_with_options(&world, ChunkCoord::new(0, 0, 0), options)
+                mesh_cells_standalone_with_options(1.0, [0.0; 3], &global_cells, options.clone())
+                    .unwrap();
+            let left = mesh_chunk_in_world_with_options(&world, ChunkCoord::new(0, 0, 0), &options)
                 .unwrap()
                 .unwrap();
-            let right = mesh_chunk_in_world_with_options(&world, ChunkCoord::new(1, 0, 0), options)
-                .unwrap()
-                .unwrap();
+            let right =
+                mesh_chunk_in_world_with_options(&world, ChunkCoord::new(1, 0, 0), &options)
+                    .unwrap()
+                    .unwrap();
             let mut partitioned = triangle_positions(&left, [0.0; 3]);
             partitioned.extend(triangle_positions(&right, [4.0, 0.0, 0.0]));
             partitioned.sort_unstable();

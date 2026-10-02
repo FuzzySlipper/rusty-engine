@@ -331,12 +331,7 @@ fn validate_and_snapshot<'a>(
             .map(|binding| binding.material_slot)
             .collect::<BTreeSet<_>>();
         for binding in &instance.object.source().material_palette {
-            collect_material(
-                &binding.material_asset_id,
-                materials,
-                &mut used_materials,
-                instance.object.surface_mode(),
-            )?;
+            collect_material(&binding.material_asset_id, materials, &mut used_materials)?;
         }
         if let Some(slot) = instance
             .material_overrides
@@ -350,12 +345,7 @@ fn validate_and_snapshot<'a>(
             });
         }
         for binding in &instance.material_overrides {
-            collect_material(
-                &binding.material,
-                materials,
-                &mut used_materials,
-                instance.object.surface_mode(),
-            )?;
+            collect_material(&binding.material, materials, &mut used_materials)?;
         }
         if snapshots
             .insert(
@@ -389,7 +379,6 @@ fn collect_material(
     asset_id: &str,
     materials: &BTreeMap<String, RenderMaterialDescriptor>,
     used_materials: &mut BTreeMap<String, RenderMaterialDescriptor>,
-    surface_mode: SurfaceMode,
 ) -> Result<(), VoxelObjectProjectionError> {
     let material =
         materials
@@ -407,12 +396,6 @@ fn collect_material(
         return Err(VoxelObjectProjectionError::MaterialIdMismatch {
             expected: asset_id.to_string(),
             actual: material.id.clone(),
-        });
-    }
-    if !surface_mode.supports_voxel_tile_coordinates() && material.texture.is_some() {
-        return Err(VoxelObjectProjectionError::TexturedSurfaceUnsupported {
-            material: asset_id.to_string(),
-            surface_mode,
         });
     }
     used_materials.insert(material.id.clone(), material.clone());
@@ -630,10 +613,6 @@ pub enum VoxelObjectProjectionError {
     },
     ChangedMaterialOverrides {
         instance: String,
-    },
-    TexturedSurfaceUnsupported {
-        material: String,
-        surface_mode: SurfaceMode,
     },
     InvalidMesh(MeshDescriptorError),
     Handle(HandleAllocationError),

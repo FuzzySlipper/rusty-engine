@@ -548,13 +548,16 @@ fn unit_chunks_dirty_both_signed_seam_neighbors() {
 
 #[test]
 fn incremental_mesh_build_failure_leaves_authority_and_chunks_unchanged() {
+    // One dual-contoured voxel draws 24 vertices: its 8 cell vertices, one
+    // copy per box-projection face.
     let limits = SurfaceMeshLimits {
-        max_vertices: 8,
+        max_vertices: 24,
         ..SurfaceMeshLimits::default()
     };
     let options = SurfaceMeshOptions {
         mode: SurfaceMode::DualContouring,
         limits,
+        ..SurfaceMeshOptions::default()
     };
     let mut scene =
         VoxelCollisionScene::from_solid_voxels_with_mesh_options(1.0, 8, [[0, 0, 0]], options)

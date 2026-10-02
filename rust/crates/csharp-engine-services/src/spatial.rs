@@ -701,7 +701,7 @@ impl RuntimeSpatialBridge {
                 address: cell.coordinate,
                 material_slot: cell.material_slot,
             }),
-            scene_before.mesh_options(),
+            scene_before.mesh_options().clone(),
         )
         .map_err(|error| {
             CsharpEngineServicesError::new("CSHARP_VOXEL_ASSET_SPATIAL_BUILD", error.to_string())

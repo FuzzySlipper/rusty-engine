@@ -76,13 +76,19 @@ impl VoxelChunkContentHash {
 ///
 /// Slot zero is empty. Positive slots name semantic-neutral material entries and
 /// are validated against [`MAX_VOXEL_MATERIAL_SLOT`] before candidate creation.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct VoxelChunkPayload {
     pub dimensions: [u32; 3],
     pub material_slots: Vec<u16>,
     /// Empty means default state for every cell; otherwise exactly one entry per slot.
     pub states: Vec<u16>,
+    /// Empty means the default density for every cell; otherwise one signed
+    /// density per slot (negative inside, in voxel units), negative exactly
+    /// where the slot is solid. Reconstructed surfaces cross between samples
+    /// where the densities say.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub densities: Vec<f32>,
 }
 
 impl VoxelChunkPayload {
@@ -91,6 +97,7 @@ impl VoxelChunkPayload {
             dimensions,
             material_slots,
             states: Vec::new(),
+            densities: Vec::new(),
         }
     }
 
@@ -104,7 +111,7 @@ impl VoxelChunkPayload {
 
 /// One resident-set operation. Admit and Replace both make the chunk hold the
 /// payload; Evict of a non-resident chunk changes nothing.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum VoxelChunkResidencyOperation {
     Admit {
         chunk: VoxelChunkIdentity,
@@ -146,6 +153,11 @@ impl ResidentVoxelChunk {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VoxelChunkResidencyRejection {
     InvalidCellStates {
+        operation_index: usize,
+    },
+    /// Densities must be finite, one per slot, and negative exactly where the
+    /// slot is solid.
+    InvalidDensities {
         operation_index: usize,
     },
     ChunkCoordinateOutOfBounds {
@@ -255,7 +267,8 @@ impl VoxelChunkResidencyService {
     ) -> Result<VoxelChunkResidencyReceipt, VoxelChunkResidencyApplyError> {
         let chunk_size = scene.chunk_size;
         let grid_id = scene.voxel_world.grid().id();
-        let smooth = scene.mesh_options.mode != SurfaceMode::GreedyCubes;
+        let options = scene.mesh_options.clone();
+        let reconstructed = |slot: u16| options.surface(slot).mode != SurfaceMode::GreedyCubes;
         let mut validated = Vec::with_capacity(operations.len());
         for (operation_index, operation) in operations.iter().enumerate() {
             let identity = operation.chunk();
@@ -280,7 +293,7 @@ impl VoxelChunkResidencyService {
                     identity,
                     chunk_size,
                     grid_id,
-                    smooth,
+                    &reconstructed,
                     payload,
                 )?),
                 VoxelChunkResidencyOperation::Evict { .. } => None,
@@ -393,7 +406,7 @@ fn validate_payload(
     identity: VoxelChunkIdentity,
     chunk_size: u32,
     grid_id: core_space::GridId,
-    smooth: bool,
+    reconstructed: &dyn Fn(u16) -> bool,
     payload: &VoxelChunkPayload,
 ) -> Result<VoxelChunk, VoxelChunkResidencyApplyError> {
     let expected_dimensions = [chunk_size; 3];
@@ -427,7 +440,7 @@ fn validate_payload(
             .any(|(state, material)| {
                 // Only greedy cube surfaces can mesh voxel states.
                 core_voxel::VoxelState::from_raw(*state).is_none()
-                    || (*state != 0 && (*material == 0 || smooth))
+                    || (*state != 0 && (*material == 0 || reconstructed(*material)))
             })
     {
         return Err(VoxelChunkResidencyApplyError::Rejected(
@@ -462,8 +475,28 @@ fn validate_payload(
             }
         })
         .collect::<Result<_, _>>()?;
-    Ok(VoxelChunk::from_values(grid_id, dimensions, &values)
-        .expect("validated payload length exactly matches dimensions"))
+    if !payload.densities.is_empty()
+        && (payload.densities.len() != expected_slot_count
+            || payload
+                .densities
+                .iter()
+                .zip(&payload.material_slots)
+                .any(|(density, material)| {
+                    !density.is_finite() || (*density < 0.0) != (*material != 0)
+                }))
+    {
+        return Err(VoxelChunkResidencyApplyError::Rejected(
+            VoxelChunkResidencyRejection::InvalidDensities { operation_index },
+        ));
+    }
+    let mut chunk = VoxelChunk::from_values(grid_id, dimensions, &values)
+        .expect("validated payload length exactly matches dimensions");
+    if !payload.densities.is_empty() {
+        chunk
+            .set_densities(Some(&payload.densities))
+            .expect("validated densities match the chunk");
+    }
+    Ok(chunk)
 }
 
 fn validate_chunk_identity(

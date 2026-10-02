@@ -42,14 +42,14 @@ fn measure(mode: SurfaceMode, scenario: &str, edits: &[VoxelEdit]) {
     };
     let materials = BTreeMap::from([(1, material())]);
 
-    let full_scene = fixture(options);
+    let full_scene = fixture(options.clone());
     let mut full_projector = VoxelRenderProjector::with_publication_stream(format!(
         "benchmark:{}:{scenario}:full",
         mode.as_str()
     ));
     let full_base = project(&mut full_projector, &full_scene, "terrain-v1", &materials);
     let full_started = Instant::now();
-    let full_candidate = edited_fixture(options, edits);
+    let full_candidate = edited_fixture(options.clone(), edits);
     let full = project(
         &mut full_projector,
         &full_candidate,

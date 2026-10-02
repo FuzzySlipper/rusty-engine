@@ -1,7 +1,7 @@
 use std::collections::{btree_map::Entry, BTreeMap};
 
 use core_space::Direction6;
-use engine_spatial::{SurfaceMode, VoxelCollisionScene, VoxelMeshChunk};
+use engine_spatial::{VoxelCollisionScene, VoxelMeshChunk};
 use render_model::{
     Geometry, Material, MeshAttribute, MeshAttributeKind, MeshAttributeName, MeshBoundsDescriptor,
     MeshBufferLayout, MeshGroupDescriptor, MeshIndexWidth, MeshPayloadDescriptor,
@@ -498,8 +498,7 @@ fn voxel_publication_stream<'a>(instances: impl Iterator<Item = &'a String>) -> 
     }
 }
 
-/// Every group of these chunks must resolve to a defined material, and a
-/// reconstructed (non-cube) surface has no tile coordinates for a texture.
+/// Every group of these chunks must resolve to a defined material.
 fn check_chunks<'a>(
     instance: &VoxelProjectionInstance<'_>,
     slots: &VoxelMaterialSlotMapping,
@@ -509,21 +508,10 @@ fn check_chunks<'a>(
     for chunk in chunks {
         for group in &chunk.groups {
             let slot = slots.renderer_slot(group.material_slot, group.state, group.direction);
-            let material =
-                materials
-                    .get(&slot)
-                    .ok_or_else(|| VoxelProjectionError::MissingMaterial {
-                        instance: instance.instance_id.clone(),
-                        slot,
-                    })?;
-            if chunk.surface_mode != SurfaceMode::GreedyCubes
-                && (material.texture.is_some() || material.voxel_surface.is_some())
-            {
-                return Err(VoxelProjectionError::TexturedReconstructedSurface {
+            if !materials.contains_key(&slot) {
+                return Err(VoxelProjectionError::MissingMaterial {
                     instance: instance.instance_id.clone(),
-                    chunk: chunk.chunk,
                     slot,
-                    mode: chunk.surface_mode,
                 });
             }
         }
@@ -604,13 +592,13 @@ fn voxel_mesh_payload_with_material_slots(
             kind: MeshAttributeKind::F32,
         },
     ];
-    if chunk.surface_mode.supports_voxel_tile_coordinates() {
-        attributes.push(MeshAttribute {
-            name: MeshAttributeName::Uv,
-            components: 2,
-            kind: MeshAttributeKind::F32,
-        });
-    }
+    // Cube faces carry face tile coordinates and reconstructed surfaces
+    // box-projected ones, so every chunk carries uvs.
+    attributes.push(MeshAttribute {
+        name: MeshAttributeName::Uv,
+        components: 2,
+        kind: MeshAttributeKind::F32,
+    });
     MeshPayloadDescriptor {
         layout: MeshBufferLayout {
             vertex_count: chunk.vertices,
@@ -638,10 +626,7 @@ fn voxel_mesh_payload_with_material_slots(
         source: MeshPayloadSource::Inline {
             positions: chunk.positions.clone(),
             normals: chunk.normals.clone(),
-            uvs: chunk
-                .surface_mode
-                .supports_voxel_tile_coordinates()
-                .then(|| chunk.tile_coordinates.clone()),
+            uvs: Some(chunk.tile_coordinates.clone()),
             colors: None,
             indices: chunk.indices.clone(),
         },
@@ -670,22 +655,14 @@ pub struct VoxelProjectionReadout {
 /// exhaustion (2^40 handles) is not recoverable.
 #[derive(Debug, Clone, PartialEq)]
 pub enum VoxelProjectionError {
-    MissingMaterial {
-        instance: String,
-        slot: u16,
-    },
-    TexturedReconstructedSurface {
-        instance: String,
-        chunk: [i64; 3],
-        slot: u16,
-        mode: SurfaceMode,
-    },
+    MissingMaterial { instance: String, slot: u16 },
     Handle(HandleAllocationError),
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use engine_spatial::SurfaceMode;
     use engine_spatial::{
         MaterialVoxel, SurfaceMeshOptions, VoxelChunkIdentity, VoxelChunkPayload,
         VoxelChunkResidencyOperation, VoxelChunkResidencyService, VoxelEdit, VoxelEditService,
@@ -968,7 +945,7 @@ mod tests {
     }
 
     #[test]
-    fn textured_reconstructed_surface_rejects_without_projector_mutation() {
+    fn textured_reconstructed_surface_projects_with_box_projected_uvs() {
         let scene = VoxelCollisionScene::from_material_voxels_with_mesh_options(
             1.0,
             16,
@@ -986,8 +963,8 @@ mod tests {
         let mut textured = material(1);
         textured.texture = Some("texture/voxel-atlas".to_string());
         let mut projector = VoxelRenderProjector::new();
-        assert!(matches!(
-            projector.project(
+        let result = projector
+            .project(
                 &[VoxelProjectionInstance {
                     instance_id: "room".to_string(),
                     asset_id: "voxel-object/room".to_string(),
@@ -995,15 +972,22 @@ mod tests {
                     scene: &scene,
                 }],
                 &BTreeMap::from([(1, textured)]),
-            ),
-            Err(VoxelProjectionError::TexturedReconstructedSurface {
-                chunk: [0, 0, 0],
-                slot: 1,
-                mode: SurfaceMode::MarchingCubes,
-                ..
+            )
+            .unwrap();
+        let uvs = result
+            .frame
+            .ops
+            .iter()
+            .find_map(|operation| match operation {
+                RenderDiff::ReplaceMeshPayload { payload, .. } => match &payload.source {
+                    MeshPayloadSource::Inline { uvs, .. } => uvs.clone(),
+                    _ => None,
+                },
+                _ => None,
             })
-        ));
-        assert_eq!(projector.root_handle("room"), None);
+            .expect("the chunk payload carries uvs");
+        let vertices = scene.mesh_chunk([0, 0, 0]).unwrap().vertices as usize;
+        assert_eq!(uvs.len(), vertices * 2);
     }
 
     #[test]

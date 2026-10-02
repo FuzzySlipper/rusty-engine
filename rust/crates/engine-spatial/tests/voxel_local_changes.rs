@@ -302,7 +302,7 @@ fn assert_reconstructed_meshes_match(scene: &VoxelCollisionScene, context: &str)
         scene.voxel_size(),
         scene.chunk_size(),
         scene.material_voxels(),
-        scene.mesh_options(),
+        scene.mesh_options().clone(),
     )
     .unwrap();
     let meshes = |scene: &VoxelCollisionScene| {

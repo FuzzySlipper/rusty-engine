@@ -258,10 +258,12 @@ impl VoxelEditService {
         scene: &mut VoxelCollisionScene,
         edits: &[VoxelEdit],
     ) -> Result<VoxelEditReceipt, VoxelEditApplyError> {
-        let smooth = scene.mesh_options.mode != SurfaceMode::GreedyCubes;
+        let options = scene.mesh_options.clone();
+        let reconstructed = |slot: u16| options.surface(slot).mode != SurfaceMode::GreedyCubes;
         let mut canonical = BTreeMap::new();
         for (edit_index, edit) in edits.iter().copied().enumerate() {
-            validate_edit(edit_index, edit, smooth).map_err(VoxelEditApplyError::Rejected)?;
+            validate_edit(edit_index, edit, &reconstructed)
+                .map_err(VoxelEditApplyError::Rejected)?;
             canonical.insert(edit.address(), edit);
         }
         let changes: Vec<_> = canonical
@@ -366,7 +368,7 @@ impl VoxelEditService {
 fn validate_edit(
     edit_index: usize,
     edit: VoxelEdit,
-    smooth: bool,
+    reconstructed: &dyn Fn(u16) -> bool,
 ) -> Result<(), VoxelEditRejection> {
     let address = edit.address();
     if let Err(VoxelAuthorityValidationError::CoordinateOutOfBounds { axis, limit, .. }) =
@@ -390,9 +392,14 @@ fn validate_edit(
             });
         }
     }
-    if let VoxelEdit::SetState { state, .. } = edit {
+    if let VoxelEdit::SetState {
+        state,
+        material_slot,
+        ..
+    } = edit
+    {
         // Only greedy cube surfaces can mesh voxel states.
-        if VoxelState::from_raw(state).is_none() || (smooth && state != 0) {
+        if VoxelState::from_raw(state).is_none() || (reconstructed(material_slot) && state != 0) {
             return Err(VoxelEditRejection::InvalidState { edit_index, state });
         }
     }
