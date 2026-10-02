@@ -482,6 +482,35 @@ pub(super) unsafe extern "C" fn open_container(
     ABI_OK
 }
 
+pub(super) unsafe extern "C" fn pack_container(
+    context: *mut c_void,
+    request: *const NativeContentContainerPackRequest,
+    error: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    clear_receipt(error);
+    if context.is_null() || request.is_null() {
+        return 0;
+    }
+    let request = unsafe { &*request };
+    let paths = unsafe {
+        borrowed_utf8(request.directory.bytes, request.directory.len, "directory").and_then(
+            |directory| {
+                borrowed_utf8(request.output.bytes, request.output.len, "output")
+                    .map(|output| (directory, output))
+            },
+        )
+    };
+    let (directory, output) = match paths {
+        Ok(paths) => paths,
+        Err(refusal) => return refuse(&refusal, error),
+    };
+    match product_container::pack_content(Path::new(directory), Path::new(output), request.compress)
+    {
+        Ok(_) => ABI_OK,
+        Err(failure) => refuse(&container_error(&failure), error),
+    }
+}
+
 pub(super) unsafe extern "C" fn read_bundle_identity(
     context: *mut c_void,
     bundle: NativeContentBundleHandle,
@@ -866,10 +895,26 @@ mod tests {
                 .then_some(bundle)
                 .ok_or_else(|| diagnostic_code(receipt))
         };
+        let pack = |out: &Path, compress: bool| {
+            let mut receipt: NativeOperationErrorReceipt = unsafe { std::mem::zeroed() };
+            let request = NativeContentContainerPackRequest {
+                directory: text(module.to_str().unwrap()),
+                output: text(out.to_str().unwrap()),
+                compress,
+            };
+            let status = unsafe { pack_container(context, &request, &mut receipt) };
+            (status == ABI_OK)
+                .then_some(())
+                .ok_or_else(|| diagnostic_code(receipt))
+        };
+        assert_eq!(
+            pack(&module.join("inside.rpak"), false).unwrap_err().0,
+            "PRODUCT_PACK_OVERLAP"
+        );
         let mut identities = Vec::new();
         for compress in [false, true] {
             let out = directory.path().join(format!("walls-{compress}.rpak"));
-            product_container::pack_content(&module, &out, compress).unwrap();
+            pack(&out, compress).unwrap();
             let bundle = open(&out).unwrap();
             let mut identity = NativeContentSha256::default();
             assert_eq!(

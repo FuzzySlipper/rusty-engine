@@ -293,8 +293,16 @@ directory's files, with no manifest, UI or code. Pack one with:
 rusty pack-content modules/srd-ruleset --output library/srd-ruleset.rpak --compress
 ```
 
+A product or its tool packs the same container in process, with no `rusty` to
+find:
+
+```csharp
+ProductContentBundle.PackContainer(engine.Content, "modules/srd-ruleset", "library/srd-ruleset.rpak", compress: true);
+```
+
 Every file keeps its directory-relative path, length and SHA-256; `--compress`
-works as for `--pack`. The file appears by rename once complete, so replace an
+(`compress`) works as for `--pack`. An output inside the directory throws
+`EngineCallException` with `PRODUCT_PACK_OVERLAP`. The file appears by rename once complete, so replace an
 installed container by packing or copying a new file and renaming it into
 place, never by rewriting it while a product has it open.
 
@@ -327,8 +335,8 @@ the product itself runs loose under `rusty dev` or from a release container.
 
 What a module is, its ID, version and requirements, which containers to open
 and in what order are the product's: the Engine knows only containers and their
-identities. A product's own tool opens containers the same way, through
-`ProductContentBundle.OpenContainer(host.Engine.Content, path)` inside an
+identities. A product's own tool packs and opens containers the same way, through
+`ProductContentBundle.PackContainer` and `OpenContainer(host.Engine.Content, …)` inside an
 `EngineTestHost` call (see [tools](csharp-sdk.md#tools)).
 
 ### Live content from product-owned sources

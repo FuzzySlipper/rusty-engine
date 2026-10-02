@@ -156,9 +156,10 @@ tool's build and publish output, so `dotnet run` and a published
 (framework-dependent, Linux x64) tool need no `LibraryPath` and no installed
 pair on the machine that runs it. The ABI check is the test host's. A tool
 gets the services the test host has: no renderer, audio, input or product
-lifecycle. It has no build bundles, but it opens installed
+lifecycle. It has no build bundles, but it packs and opens
 [content containers](csharp-product-project.md#content-containers-installed-beside-the-product)
-with `ProductContentBundle.OpenContainer(engine.Content, path)`.
+with `ProductContentBundle.PackContainer(engine.Content, directory, output)` and
+`ProductContentBundle.OpenContainer(engine.Content, path)`.
 
 ## Update
 

@@ -1407,6 +1407,7 @@ pub struct NativeContentApi {
     pub list_bundles: NativeListContentBundles,
     pub open_bundle: NativeOpenContentBundle,
     pub open_container: NativeOpenContentContainer,
+    pub pack_container: NativePackContentContainer,
     pub read_bundle_identity: NativeReadContentBundleIdentity,
     pub destroy_bundle: NativeDestroyContentBundle,
     pub read_bundle_files: NativeReadContentBundleFiles,

@@ -249,6 +249,7 @@ pub(crate) fn api(bridge: &mut RuntimeContentBridge) -> NativeContentApi {
         list_bundles: bundles::list_bundles,
         open_bundle: bundles::open_bundle,
         open_container: bundles::open_container,
+        pack_container: bundles::pack_container,
         read_bundle_identity: bundles::read_bundle_identity,
         destroy_bundle: bundles::destroy_bundle,
         read_bundle_files: bundles::read_bundle_files,

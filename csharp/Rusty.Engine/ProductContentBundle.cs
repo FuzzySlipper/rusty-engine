@@ -46,6 +46,24 @@ public sealed class ProductContentBundle : IDisposable
         catch { handle.Dispose(); throw; }
     }
 
+    /// <summary>
+    /// Pack every file under <paramref name="directory"/>, at its directory-relative path, into one
+    /// content container at <paramref name="output"/>: the container <c>rusty pack-content</c>
+    /// writes, which <see cref="OpenContainer"/> opens with the same <see cref="Identity"/> as the
+    /// files. With <paramref name="compress"/>, files zstd shrinks by at least a tenth are stored
+    /// compressed. The file appears at <paramref name="output"/> by rename once complete. An output
+    /// inside the directory throws <see cref="EngineCallException"/> with
+    /// <c>PRODUCT_PACK_OVERLAP</c>; an unreadable directory or file, <c>PRODUCT_SOURCE_IO</c>.
+    /// Tools use it through an <c>EngineTestHost</c>'s <c>Content</c>.
+    /// </summary>
+    public static void PackContainer(IContentService content, string directory, string output, bool compress = false)
+    {
+        ArgumentNullException.ThrowIfNull(content);
+        ArgumentNullException.ThrowIfNull(directory);
+        ArgumentNullException.ThrowIfNull(output);
+        content.PackContainer(new(directory, output, compress));
+    }
+
     /// <summary>The bundle ID, or the path a container was opened from.</summary>
     public string Id { get; }
 

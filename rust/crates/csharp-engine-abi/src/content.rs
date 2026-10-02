@@ -138,6 +138,21 @@ pub struct NativeContentContainerOpenRequest {
     pub path: NativeUtf8Slice,
 }
 
+/// Packs every file under `directory`, at its directory-relative path, into
+/// one content container at `output`: what `rusty pack-content` writes, with
+/// the same identity as the files. With `compress`, files zstd shrinks enough
+/// are stored compressed. The file appears at `output` by rename once
+/// complete; `output` must lie outside `directory`.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeContentContainerPackRequest {
+    /// A filesystem path, absolute or relative to the process directory.
+    pub directory: NativeUtf8Slice,
+    /// A filesystem path, absolute or relative to the process directory.
+    pub output: NativeUtf8Slice,
+    pub compress: bool,
+}
+
 pub type NativeListContentBundles =
     unsafe extern "C" fn(*mut c_void, *mut NativeContentBundleInfoResult) -> i32;
 pub type NativeOpenContentBundle = unsafe extern "C" fn(
@@ -149,6 +164,11 @@ pub type NativeOpenContentContainer = unsafe extern "C" fn(
     *mut c_void,
     *const NativeContentContainerOpenRequest,
     *mut NativeContentBundleHandle,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
+pub type NativePackContentContainer = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeContentContainerPackRequest,
     *mut crate::NativeOperationErrorReceipt,
 ) -> i32;
 /// The bundle's identity: SHA-256 over each file's bundle-relative path and

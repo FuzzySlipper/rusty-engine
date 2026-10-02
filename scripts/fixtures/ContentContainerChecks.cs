@@ -59,6 +59,8 @@ internal static class ContentContainerChecks
             using (ProductContentBundle reopened = ProductContentBundle.OpenContainer(engine.Content, assetsPath))
                 Require(reopened.Identity.Equals(identity), "a reopened container changed identity");
 
+            PackInProcess(engine, ruleset);
+
             string notes = Path.Combine(library, "notes.txt");
             try
             {
@@ -91,6 +93,41 @@ internal static class ContentContainerChecks
         finally
         {
             foreach (ProductContentBundle module in modules.Values) module.Dispose();
+        }
+    }
+
+    // The srd module's files (as make-content-modules.sh writes them), packed
+    // in process, give the container `rusty pack-content` made from them.
+    private static void PackInProcess(IEngineContext engine, ProductContentBundle packedByRusty)
+    {
+        string root = Directory.CreateTempSubdirectory("rusty-pack-content-").FullName;
+        try
+        {
+            string module = Path.Combine(root, "srd");
+            Directory.CreateDirectory(Path.Combine(module, "rules"));
+            File.WriteAllText(Path.Combine(module, ModuleManifest), "{\"id\":\"srd\",\"requires\":[\"walls\"]}");
+            File.WriteAllText(Path.Combine(module, "rules", "classes.json"),
+                "{\"fighter\":{\"portrait\":\"portraits/fighter.png\",\"model\":\"models/character.glb\"}}");
+            foreach (bool compress in new[] { false, true })
+            {
+                string output = Path.Combine(root, $"srd-{compress}.rpak");
+                ProductContentBundle.PackContainer(engine.Content, module, output, compress);
+                using ProductContentBundle packed = ProductContentBundle.OpenContainer(engine.Content, output);
+                Require(packed.Identity.Equals(packedByRusty.Identity), "an in-process pack differs from rusty pack-content's");
+            }
+            try
+            {
+                ProductContentBundle.PackContainer(engine.Content, module, Path.Combine(module, "inside.rpak"));
+                throw new InvalidOperationException("a container packed into its own directory");
+            }
+            catch (EngineCallException refusal) when (refusal.Diagnostics.Length == 1
+                && refusal.Diagnostics.Span[0].Code == "PRODUCT_PACK_OVERLAP")
+            {
+            }
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
         }
     }
 
