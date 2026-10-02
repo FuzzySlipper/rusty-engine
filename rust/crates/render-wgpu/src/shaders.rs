@@ -28,14 +28,18 @@ impl Features {
     pub const NORMAL_MAP: Self = Self(8);
     pub const EMISSIVE_MAP: Self = Self(16);
     pub const OCCLUSION_MAP: Self = Self(32);
+    /// The mesh's second stream: tangents and a second uv set (a mesh
+    /// feature, not a material one).
+    pub const VERTEX_TANGENTS: Self = Self(64);
 
-    const DEFS: [(Self, &'static str); 6] = [
+    const DEFS: [(Self, &'static str); 7] = [
         (Self::UNLIT, "UNLIT"),
         (Self::MASK, "MASK"),
         (Self::VOXEL_SURFACE, "VOXEL_SURFACE"),
         (Self::NORMAL_MAP, "NORMAL_MAP"),
         (Self::EMISSIVE_MAP, "EMISSIVE_MAP"),
         (Self::OCCLUSION_MAP, "OCCLUSION_MAP"),
+        (Self::VERTEX_TANGENTS, "VERTEX_TANGENTS"),
     ];
 
     pub fn contains(self, other: Self) -> bool {
@@ -168,7 +172,7 @@ mod tests {
     #[test]
     fn every_entry_composes_under_every_feature_set() {
         let mut shaders = Shaders::new();
-        let all = (0..64).map(Features);
+        let all = (0..128).map(Features);
         let mut compose = |entry: Entry, features: Features| {
             let (path, source) = entry.source();
             if let Err(error) = shaders.composer.make_naga_module(NagaModuleDescriptor {

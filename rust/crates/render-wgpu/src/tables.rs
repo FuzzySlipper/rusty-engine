@@ -95,6 +95,19 @@ pub(crate) struct GpuMesh {
     /// Line-list indices for wireframe parts, built on first use: every
     /// triangle's three edges.
     pub edges: std::sync::OnceLock<wgpu::Buffer>,
+    /// A second vertex stream, tangent (xyz, handedness w) and `TEXCOORD_1`
+    /// per vertex: only GLB primitives whose material reads them.
+    pub extra: Option<wgpu::Buffer>,
+}
+
+impl GpuMesh {
+    /// The standard shader features the mesh's vertex streams need.
+    pub fn features(&self) -> crate::shaders::Features {
+        crate::shaders::Features::default().with(
+            crate::shaders::Features::VERTEX_TANGENTS,
+            self.extra.is_some(),
+        )
+    }
 }
 
 #[derive(Default)]

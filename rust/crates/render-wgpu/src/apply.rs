@@ -34,8 +34,8 @@ pub struct ApplyIssue {
 /// `MaterialUniform` size (`rusty::types`): roughness, cutoff, metalness,
 /// normal scale; the voxel surface's tile scale, tile origin and sample rect;
 /// the base, emissive, normal and occlusion uv transforms (two rows each); the
-/// occlusion strength.
-const MATERIAL_UNIFORM_BYTES: usize = 192;
+/// occlusion strength; each slot's uv set.
+const MATERIAL_UNIFORM_BYTES: usize = 208;
 /// Anisotropic filtering of mipmapped material textures.
 const MATERIAL_ANISOTROPY: u16 = 16;
 /// Payload groups without a voxel material are fully rough.
@@ -731,6 +731,7 @@ impl Renderer {
                 MaterialRef::Unlit => (None, Features::UNLIT),
                 MaterialRef::LitFallback => (None, Features::default()),
             };
+            let features = features | mesh.map_or(Features::default(), |mesh| mesh.features());
             let class = PartClass {
                 blend: row.color[3] < 1.0 || descriptor.is_some_and(blends),
                 double_sided: descriptor.is_some_and(|descriptor| descriptor.double_sided),
@@ -879,7 +880,7 @@ impl Renderer {
 
     /// Make a material's pipelines on every target so far and for the shadow
     /// casters, so its first draw does not compile them.
-    fn prepare_material(&mut self, features: Features, blend: bool, double_sided: bool) {
+    pub(crate) fn prepare_material(&mut self, features: Features, blend: bool, double_sided: bool) {
         let passes: &[Pass] = match (blend, double_sided) {
             (false, false) => &[Pass::Opaque, Pass::OpaqueMirrored],
             (false, true) => &[Pass::OpaqueDoubleSided],
@@ -910,6 +911,7 @@ impl Renderer {
         let params = MaterialParams {
             maps: MaterialMaps {
                 base: params.maps.base,
+                base_tex_coord: params.maps.base_tex_coord,
                 emissive: params.maps.emissive.clone().filter(retained),
                 normal: params.maps.normal.clone().filter(|(map, _)| retained(map)),
                 occlusion: params
@@ -1039,6 +1041,7 @@ impl Renderer {
                 indices: indices.to_vec(),
             }),
             edges: Default::default(),
+            extra: None,
             vertices: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some(label),
                 contents: bytemuck::cast_slice(vertices),
@@ -1153,6 +1156,8 @@ pub(crate) struct MaterialParams {
 #[derive(Clone, Default)]
 pub(crate) struct MaterialMaps {
     pub base: Option<UvTransform>,
+    /// The uv set (0 or 1) the base colour texture reads.
+    pub base_tex_coord: u32,
     /// Multiplies the part's emission.
     pub emissive: Option<MapSlot>,
     /// With the normal scale.
@@ -1167,6 +1172,8 @@ pub(crate) struct MaterialMaps {
 pub(crate) struct MapSlot {
     pub texture: String,
     pub transform: UvTransform,
+    /// The uv set (0 or 1) it reads.
+    pub tex_coord: u32,
 }
 
 impl MaterialParams {
@@ -1259,6 +1266,23 @@ pub(crate) fn material_bind_group(
         let start = 12 + slot * 8;
         floats[start..start + 3].copy_from_slice(&[a, b, c]);
         floats[start + 4..start + 7].copy_from_slice(&[d, e, f]);
+    }
+    let sets = [
+        params.maps.base_tex_coord,
+        params.maps.emissive.as_ref().map_or(0, |map| map.tex_coord),
+        params
+            .maps
+            .normal
+            .as_ref()
+            .map_or(0, |(map, _)| map.tex_coord),
+        params
+            .maps
+            .occlusion
+            .as_ref()
+            .map_or(0, |(map, _)| map.tex_coord),
+    ];
+    for (slot, set) in sets.into_iter().enumerate() {
+        floats[48 + slot] = f32::from_bits(set);
     }
     floats[44] = params
         .maps

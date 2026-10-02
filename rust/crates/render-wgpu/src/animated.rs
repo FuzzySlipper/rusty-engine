@@ -24,7 +24,7 @@
 //! contributing clip, later clips mix in by `w / (Σw + w)` (slerp for
 //! rotations), and a total weight below 1 mixes toward the rest pose.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use glam::{Mat4, Quat, Vec3};
 use render_model::{
@@ -38,7 +38,7 @@ use render_presentation::{AnimationControllerProjectionState, AnimationProjectio
 
 use crate::apply::{MapSlot, MaterialMaps, MaterialParams};
 use crate::glb::{self, GlbAlpha, GlbClip, GlbModel, Path, Trs};
-use crate::pipelines::VERTEX_FLOATS;
+use crate::pipelines::{EXTRA_VERTEX_FLOATS, VERTEX_FLOATS};
 use crate::resources::ResourceSource;
 use crate::tables::{Aabb, GpuMesh, MaterialRef, NodeKind, Topology};
 use crate::Renderer;
@@ -454,18 +454,21 @@ impl Renderer {
                 .map(|slot| textures[slot.texture].clone());
             let maps = MaterialMaps {
                 base: material.base_color_texture.map(|slot| slot.transform),
+                base_tex_coord: material.base_color_texture.map_or(0, |slot| slot.tex_coord),
                 emissive: material
                     .emissive_texture
                     .filter(|slot| decoded(slot))
                     .map(|slot| MapSlot {
                         texture: textures[slot.texture].clone(),
                         transform: slot.transform,
+                        tex_coord: slot.tex_coord,
                     }),
                 normal: material.normal_texture.and_then(|(slot, scale)| {
                     Some((
                         MapSlot {
                             texture: linear_textures.get(&slot.texture)?.clone(),
                             transform: slot.transform,
+                            tex_coord: slot.tex_coord,
                         },
                         scale,
                     ))
@@ -475,6 +478,7 @@ impl Renderer {
                         MapSlot {
                             texture: linear_textures.get(&slot.texture)?.clone(),
                             transform: slot.transform,
+                            tex_coord: slot.tex_coord,
                         },
                         strength,
                     ))
@@ -509,7 +513,7 @@ impl Renderer {
                     continue;
                 }
                 let vertices = interleave(primitive, &primitive.positions, &primitive.normals);
-                let mesh = self.upload_vertices(
+                let mut mesh = self.upload_vertices(
                     &format!("{label} mesh {mesh_index}/{primitive_index}"),
                     &vertices,
                     &primitive.indices,
@@ -517,7 +521,35 @@ impl Renderer {
                     vec![(0, 0, primitive.indices.len() as u32)],
                     BTreeMap::new(),
                 );
+                mesh.extra = extra_stream(&model, primitive, primitive.tangents.as_deref())
+                    .map(|extra| self.vertex_buffer(&format!("{label} tangents"), &extra, false));
                 rigid.insert((mesh_index as u32, primitive_index as u32), mesh);
+            }
+        }
+        // A material drawn with the second stream needs its own pipelines:
+        // make them now rather than at its first draw.
+        let streamed: BTreeSet<usize> = model
+            .meshes
+            .iter()
+            .flatten()
+            .filter(|primitive| extra_stream(&model, primitive, None).is_some())
+            .filter_map(|primitive| primitive.material)
+            .collect();
+        for index in streamed {
+            let prepared = crate::tables::named(
+                &self.tables.names,
+                &self.tables.materials,
+                &materials[index],
+            )
+            .map(|(_, row)| {
+                (
+                    row.features | crate::shaders::Features::VERTEX_TANGENTS,
+                    crate::apply::blends(&row.descriptor),
+                    row.descriptor.double_sided,
+                )
+            });
+            if let Some((features, blend, double_sided)) = prepared {
+                self.prepare_material(features, blend, double_sided);
             }
         }
         let joints = joint_nodes(&model);
@@ -990,6 +1022,8 @@ impl Renderer {
                 };
                 let mut positions = Vec::with_capacity(primitive.positions.len());
                 let mut normals = Vec::with_capacity(primitive.positions.len());
+                let mut tangents =
+                    Vec::with_capacity(primitive.tangents.as_ref().map_or(0, Vec::len));
                 for (vertex, position) in primitive.positions.iter().enumerate() {
                     let mut matrix = Mat4::ZERO;
                     for influence in 0..4 {
@@ -1010,12 +1044,26 @@ impl Renderer {
                         .transform_vector3(crate::convert::vec3(primitive.normals[vertex]))
                         .normalize_or(Vec3::Y);
                     normals.push(normal.to_array());
+                    if let Some([x, y, z, w]) =
+                        primitive.tangents.as_ref().map(|tangents| tangents[vertex])
+                    {
+                        let [x, y, z] = matrix
+                            .transform_vector3(Vec3::new(x, y, z))
+                            .normalize_or(Vec3::X)
+                            .to_array();
+                        tangents.push([x, y, z, w]);
+                    }
                 }
                 let vertices = interleave(primitive, &positions, &normals);
-                updates.push(((node_index as u32, primitive_index as u32), vertices));
+                let extra = extra_stream(
+                    &asset.model,
+                    primitive,
+                    (!tangents.is_empty()).then_some(tangents.as_slice()),
+                );
+                updates.push(((node_index as u32, primitive_index as u32), vertices, extra));
             }
         }
-        for (key, vertices) in updates {
+        for (key, vertices, extra) in updates {
             let exists = self
                 .tables
                 .animated
@@ -1027,6 +1075,11 @@ impl Renderer {
                 self.gpu
                     .queue
                     .write_buffer(&mesh.vertices, 0, bytemuck::cast_slice(&vertices));
+                if let (Some(buffer), Some(extra)) = (&mesh.extra, &extra) {
+                    self.gpu
+                        .queue
+                        .write_buffer(buffer, 0, bytemuck::cast_slice(extra));
+                }
                 let bounds = vertex_bounds(&vertices);
                 if let Some(mesh) = self
                     .tables
@@ -1051,11 +1104,9 @@ impl Renderer {
                 let primitive = &asset.model.meshes[node.mesh.expect("skinned node has a mesh")]
                     [key.1 as usize];
                 let indices = primitive.indices.clone();
-                let mesh = self.upload_dynamic_vertices(
-                    &format!("animated {} skin {}/{}", handle.raw(), key.0, key.1),
-                    &vertices,
-                    &indices,
-                );
+                let label = format!("animated {} skin {}/{}", handle.raw(), key.0, key.1);
+                let mut mesh = self.upload_dynamic_vertices(&label, &vertices, &indices);
+                mesh.extra = extra.map(|extra| self.vertex_buffer(&label, &extra, true));
                 if let Some(instance) = self.tables.animated.get_mut(&handle) {
                     instance.skinned.insert(key, mesh);
                 }
@@ -1283,6 +1334,23 @@ impl Renderer {
     }
 
     /// Upload a vertex buffer the CPU rewrites (skinned primitives).
+    /// A vertex buffer holding `data`, rewritable when `dynamic`.
+    fn vertex_buffer(&self, label: &str, data: &[f32], dynamic: bool) -> wgpu::Buffer {
+        use wgpu::util::DeviceExt;
+        let usage = if dynamic {
+            wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST
+        } else {
+            wgpu::BufferUsages::VERTEX
+        };
+        self.gpu
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some(label),
+                contents: bytemuck::cast_slice(data),
+                usage,
+            })
+    }
+
     fn upload_dynamic_vertices(&self, label: &str, vertices: &[f32], indices: &[u32]) -> GpuMesh {
         use wgpu::util::DeviceExt;
         let device = &self.gpu.device;
@@ -1293,6 +1361,7 @@ impl Renderer {
                 indices: indices.to_vec(),
             }),
             edges: Default::default(),
+            extra: None,
             vertices: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some(label),
                 contents: bytemuck::cast_slice(vertices),
@@ -1571,6 +1640,44 @@ fn decode_clips(model: &GlbModel) -> Vec<Option<GlbClip>> {
             })
         })
         .collect()
+}
+
+/// The second vertex stream a primitive draws with, when its material reads
+/// tangents (a normal map) or `TEXCOORD_1`: tangent (xyz, handedness) and
+/// uv1 per vertex. Without TANGENT a normal-mapped primitive has MikkTSpace
+/// tangents (`glb::decode`); a vertex without one gets +X.
+fn extra_stream(
+    model: &GlbModel,
+    primitive: &glb::GlbPrimitive,
+    tangents: Option<&[[f32; 4]]>,
+) -> Option<Vec<f32>> {
+    let material = model.materials.get(primitive.material?)?;
+    let sets = [
+        material.base_color_texture.map(|slot| slot.tex_coord),
+        material.emissive_texture.map(|slot| slot.tex_coord),
+        material.normal_texture.map(|(slot, _)| slot.tex_coord),
+        material.occlusion_texture.map(|(slot, _)| slot.tex_coord),
+    ];
+    let second_set = sets.contains(&Some(1)) && primitive.uvs1.is_some();
+    if material.normal_texture.is_none() && !second_set {
+        return None;
+    }
+    let mut extra = Vec::with_capacity(primitive.positions.len() * EXTRA_VERTEX_FLOATS);
+    for vertex in 0..primitive.positions.len() {
+        let tangent = tangents
+            .and_then(|tangents| tangents.get(vertex))
+            .copied()
+            .unwrap_or([1.0, 0.0, 0.0, 1.0]);
+        extra.extend_from_slice(&tangent);
+        let uv = primitive
+            .uvs1
+            .as_ref()
+            .and_then(|uvs| uvs.get(vertex))
+            .copied()
+            .unwrap_or([0.0, 0.0]);
+        extra.extend_from_slice(&uv);
+    }
+    Some(extra)
 }
 
 /// Interleave a primitive's streams into the renderer's vertex layout.

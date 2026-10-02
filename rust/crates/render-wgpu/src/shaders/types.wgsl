@@ -61,6 +61,8 @@ struct MaterialUniform {
     occlusion_uv_v: vec4<f32>,
     // x: occlusion strength.
     occlusion: vec4<f32>,
+    // The uv set (0 or 1) each slot reads: base, emissive, normal, occlusion.
+    tex_coords: vec4<u32>,
 };
 
 const PI: f32 = 3.141592653589793;

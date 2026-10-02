@@ -574,9 +574,10 @@ meshes alike:
 - the base color factor and texture;
 - metallic and roughness factors;
 - the emissive color times its strength, masked by the emissive texture;
-- the normal texture with its `scale`, in a tangent frame built per pixel from
-  the texture's uv and the surface position (as glTF viewers do for a mesh
-  without tangents);
+- the normal texture with its `scale`, in the mesh's `TANGENT` frame
+  (bitangent `cross(normal, tangent) × w`, so mirrored uv layouts shade
+  correctly). A normal-mapped mesh without `TANGENT` gets MikkTSpace tangents
+  over the normal map's uv set at load, the space exporters bake in;
 - the occlusion texture with its `strength`, on ambient and hemisphere light
   only;
 - alpha mode and unlit.
@@ -584,10 +585,12 @@ meshes alike:
 Embedded PNG, JPEG and WebP images decode. A texture's `EXT_texture_webp`
 image is used in preference to its core source, which may be absent. Each
 texture's `KHR_texture_transform` (offset, rotation, scale) applies to its
-own slot. Specular and volume data are admitted but not drawn. Textures are
-read from `TEXCOORD_0`: a `texCoord` naming another set, a mesh's own
-`TANGENT` attribute, and mirrored uv layouts (whose normal maps need the
-tangent's handedness) are admitted but not applied.
+own slot. Each texture reads the uv set its `texCoord` names, or the
+transform's `texCoord` when it gives one: `TEXCOORD_0` or `TEXCOORD_1`. A
+later set reads `TEXCOORD_0`. Shadow casting reads the base colour's alpha
+mask from `TEXCOORD_0`. Tangents and the second uv set are uploaded only for
+primitives whose material reads them. Specular and volume data are admitted
+but not drawn.
 
 ### Checking a GLB before publishing it
 

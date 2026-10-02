@@ -26,10 +26,28 @@ fn pair(left: [u8; 4], right: [u8; 4]) -> Vec<u8> {
     encode_png(2, 1, &[left, right].concat()).expect("encode fixture map")
 }
 
+/// The plane's standard `TEXCOORD_0`: u along +X, v down the image.
+const UPRIGHT_UVS: [f32; 8] = [0.0, 1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0];
+/// u mirrored: u along -X, v still down the image.
+const MIRRORED_UVS: [f32; 8] = [1.0, 1.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0];
+
+/// Optional plane streams beyond the defaults.
+#[derive(Default)]
+struct Streams {
+    uvs: Option<[f32; 8]>,
+    uvs1: Option<[f32; 8]>,
+    /// One TANGENT for all four vertices.
+    tangent: Option<[f32; 4]>,
+}
+
 /// A GLB with one plane facing +Z (x and y in -1..1, uv's v down the image
 /// as glTF has it), `material`, and `images` embedded as textures 0, 1, …
 /// sampled nearest with repeat.
 fn plane_glb(material: Value, images: &[Vec<u8>]) -> Vec<u8> {
+    plane_glb_with(material, images, Streams::default())
+}
+
+fn plane_glb_with(material: Value, images: &[Vec<u8>], streams: Streams) -> Vec<u8> {
     let floats: Vec<f32> = [
         // positions
         [
@@ -39,7 +57,7 @@ fn plane_glb(material: Value, images: &[Vec<u8>]) -> Vec<u8> {
         // normals
         &[0.0, 0.0, 1.0].repeat(4),
         // uvs
-        &[0.0, 1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0],
+        &streams.uvs.unwrap_or(UPRIGHT_UVS),
     ]
     .concat();
     let mut bin: Vec<u8> = bytemuck_floats(&floats);
@@ -52,6 +70,29 @@ fn plane_glb(material: Value, images: &[Vec<u8>]) -> Vec<u8> {
         json!({"buffer": 0, "byteOffset": 96, "byteLength": 32}),
         json!({"buffer": 0, "byteOffset": 128, "byteLength": 12}),
     ];
+    let mut accessors = vec![
+        json!({"bufferView": 0, "componentType": 5126, "count": 4, "type": "VEC3",
+               "min": [-1.0, -1.0, 0.0], "max": [1.0, 1.0, 0.0]}),
+        json!({"bufferView": 1, "componentType": 5126, "count": 4, "type": "VEC3"}),
+        json!({"bufferView": 2, "componentType": 5126, "count": 4, "type": "VEC2"}),
+        json!({"bufferView": 3, "componentType": 5123, "count": 6, "type": "SCALAR"}),
+    ];
+    let mut attributes = json!({"POSITION": 0, "NORMAL": 1, "TEXCOORD_0": 2});
+    let mut stream = |floats: &[f32], kind: &str, name: &str| {
+        bin.resize(bin.len().next_multiple_of(4), 0);
+        views.push(json!({"buffer": 0, "byteOffset": bin.len(), "byteLength": floats.len() * 4}));
+        bin.extend(bytemuck_floats(floats));
+        accessors.push(
+            json!({"bufferView": views.len() - 1, "componentType": 5126, "count": 4, "type": kind}),
+        );
+        attributes[name] = json!(accessors.len() - 1);
+    };
+    if let Some(uvs1) = streams.uvs1 {
+        stream(&uvs1, "VEC2", "TEXCOORD_1");
+    }
+    if let Some(tangent) = streams.tangent {
+        stream(&tangent.repeat(4), "VEC4", "TANGENT");
+    }
     let mut image_values = Vec::new();
     for image in images {
         bin.resize(bin.len().next_multiple_of(4), 0);
@@ -74,17 +115,11 @@ fn plane_glb(material: Value, images: &[Vec<u8>]) -> Vec<u8> {
         "scenes": [{"nodes": [0]}],
         "nodes": [{"mesh": 0}],
         "meshes": [{"primitives": [{
-            "attributes": {"POSITION": 0, "NORMAL": 1, "TEXCOORD_0": 2},
+            "attributes": attributes,
             "indices": 3,
             "material": 0,
         }]}],
-        "accessors": [
-            {"bufferView": 0, "componentType": 5126, "count": 4, "type": "VEC3",
-             "min": [-1.0, -1.0, 0.0], "max": [1.0, 1.0, 0.0]},
-            {"bufferView": 1, "componentType": 5126, "count": 4, "type": "VEC3"},
-            {"bufferView": 2, "componentType": 5126, "count": 4, "type": "VEC2"},
-            {"bufferView": 3, "componentType": 5123, "count": 6, "type": "SCALAR"},
-        ],
+        "accessors": accessors,
         "bufferViews": views,
         "buffers": [{"byteLength": bin.len()}],
         "images": image_values,
@@ -350,5 +385,103 @@ fn the_base_colour_tiles_and_shifts_through_its_texture_transform() {
             Vec::new()
         )),
         ['g', 'r', 'g', 'r']
+    );
+}
+
+/// A normal map tilted up the image (+Y), lit from above or below.
+fn up_tilted(streams: Streams) -> (u32, u32) {
+    let glb = || {
+        plane_glb_with(
+            json!({
+                "pbrMetallicRoughness": {"baseColorFactor": [1.0, 1.0, 1.0, 1.0],
+                                         "metallicFactor": 0.0, "roughnessFactor": 1.0},
+                "normalTexture": {"index": 0},
+            }),
+            &[pair(encoded([0.0, 0.6, 0.8]), encoded([0.0, 0.6, 0.8]))],
+            Streams { ..streams },
+        )
+    };
+    let from_above = render(glb(), vec![directional([0.0, -1.0, -1.0])]);
+    let from_below = render(glb(), vec![directional([0.0, 1.0, -1.0])]);
+    (luminance(&from_above, LEFT), luminance(&from_below, LEFT))
+}
+
+#[test]
+fn authored_tangents_and_their_handedness_orient_the_normal_map() {
+    // u mirrored: the authored tangent follows -X with handedness -1, so the
+    // bitangent cross(N, T)·w is still +Y, up the image.
+    let (above, below) = up_tilted(Streams {
+        uvs: Some(MIRRORED_UVS),
+        tangent: Some([-1.0, 0.0, 0.0, -1.0]),
+        ..Streams::default()
+    });
+    assert!(
+        above > below + 60,
+        "mirrored handedness: above {above}, below {below}"
+    );
+    // The same mirrored layout without TANGENT: generated tangents carry the
+    // flipped handedness too.
+    let (above, below) = up_tilted(Streams {
+        uvs: Some(MIRRORED_UVS),
+        ..Streams::default()
+    });
+    assert!(
+        above > below + 60,
+        "generated handedness: above {above}, below {below}"
+    );
+    // An authored tangent is used as given, not regenerated: claiming +u
+    // runs along +Y turns the texture's +X tilt toward world +Y.
+    let sideways = plane_glb_with(
+        json!({
+            "pbrMetallicRoughness": {"baseColorFactor": [1.0, 1.0, 1.0, 1.0],
+                                     "metallicFactor": 0.0, "roughnessFactor": 1.0},
+            "normalTexture": {"index": 0},
+        }),
+        &[pair(encoded([0.6, 0.0, 0.8]), encoded([0.6, 0.0, 0.8]))],
+        Streams {
+            tangent: Some([0.0, 1.0, 0.0, 1.0]),
+            ..Streams::default()
+        },
+    );
+    let glb = sideways.clone();
+    let from_above = render(glb, vec![directional([0.0, -1.0, -1.0])]);
+    let from_below = render(sideways, vec![directional([0.0, 1.0, -1.0])]);
+    assert!(luminance(&from_above, LEFT) > luminance(&from_below, LEFT) + 60);
+}
+
+#[test]
+fn each_slot_reads_the_uv_set_its_tex_coord_names() {
+    const RED: [u8; 4] = [255, 0, 0, 255];
+    const GREEN: [u8; 4] = [0, 255, 0, 255];
+    let unlit = |texture: Value| {
+        plane_glb_with(
+            json!({
+                "pbrMetallicRoughness": {"baseColorTexture": texture},
+                "extensions": {"KHR_materials_unlit": {}},
+            }),
+            &[pair(RED, GREEN)],
+            // TEXCOORD_1 mirrors u, so red and green swap sides.
+            Streams {
+                uvs1: Some(MIRRORED_UVS),
+                ..Streams::default()
+            },
+        )
+    };
+    let sides = |glb: Vec<u8>| {
+        let frame = render(glb, Vec::new());
+        (pixel(&frame, LEFT), pixel(&frame, RIGHT))
+    };
+    let red_green = ([255, 0, 0], [0, 255, 0]);
+    let green_red = ([0, 255, 0], [255, 0, 0]);
+    assert_eq!(sides(unlit(json!({"index": 0}))), red_green);
+    assert_eq!(sides(unlit(json!({"index": 0, "texCoord": 1}))), green_red);
+    // KHR_texture_transform's texCoord overrides the reference's.
+    assert_eq!(
+        sides(unlit(json!({
+            "index": 0,
+            "texCoord": 0,
+            "extensions": {"KHR_texture_transform": {"texCoord": 1}},
+        }))),
+        green_red
     );
 }

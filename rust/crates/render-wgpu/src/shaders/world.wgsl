@@ -16,7 +16,7 @@
     occlusion_map,
     occlusion_sampler,
 }
-#import rusty::surface::{transform_uv, voxel_uv, voxel_lod, perturb_normal}
+#import rusty::surface::{transform_uv, voxel_uv, voxel_lod, perturb_normal, tangent_normal}
 #import rusty::lighting::standard_radiance
 #import rusty::finish::finish
 
@@ -27,7 +27,21 @@ struct VsOut {
     @location(2) uv: vec2<f32>,
     @location(3) @interpolate(flat) part: u32,
     @location(4) color: vec4<f32>,
+#ifdef VERTEX_TANGENTS
+    // World tangent; w: handedness, flipped under a mirroring model matrix.
+    @location(5) tangent: vec4<f32>,
+    @location(6) uv1: vec2<f32>,
+#endif
 };
+
+// The uv set (0 or 1) a slot reads; without the second stream, set 0.
+fn slot_uv(in: VsOut, uv_set: u32) -> vec2<f32> {
+#ifdef VERTEX_TANGENTS
+    return select(in.uv, in.uv1, uv_set == 1u);
+#else
+    return in.uv;
+#endif
+}
 
 @vertex
 fn vs_world(
@@ -35,6 +49,10 @@ fn vs_world(
     @location(1) normal: vec3<f32>,
     @location(2) uv: vec2<f32>,
     @location(3) color: vec4<f32>,
+#ifdef VERTEX_TANGENTS
+    @location(4) tangent: vec4<f32>,
+    @location(5) uv1: vec2<f32>,
+#endif
     @builtin(instance_index) instance: u32,
 ) -> VsOut {
     let part = instances[instance];
@@ -47,6 +65,11 @@ fn vs_world(
     out.uv = uv;
     out.part = part;
     out.color = color;
+#ifdef VERTEX_TANGENTS
+    let model = mat3x3<f32>(row.model[0].xyz, row.model[1].xyz, row.model[2].xyz);
+    out.tangent = vec4<f32>(model * tangent.xyz, tangent.w * sign(determinant(model)));
+    out.uv1 = uv1;
+#endif
     return out;
 }
 
@@ -59,7 +82,7 @@ fn fs_world(in: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<
     let texture_color = textureSampleLevel(albedo, albedo_sampler,
         transform_uv(material.base_uv_u, material.base_uv_v, uv), lod);
 #else
-    let uv = in.uv;
+    let uv = slot_uv(in, material.tex_coords.x);
     let texture_color = textureSample(albedo, albedo_sampler,
         transform_uv(material.base_uv_u, material.base_uv_v, uv));
 #endif
@@ -75,22 +98,26 @@ fn fs_world(in: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<
     // Every map is sampled, and every derivative taken, before the discard.
 #ifdef EMISSIVE_MAP
     let emissive = textureSample(emissive_map, emissive_sampler,
-        transform_uv(material.emissive_uv_u, material.emissive_uv_v, in.uv)).rgb;
+        transform_uv(material.emissive_uv_u, material.emissive_uv_v, slot_uv(in, material.tex_coords.y))).rgb;
 #else
     let emissive = vec3<f32>(1.0);
 #endif
 #ifdef OCCLUSION_MAP
     let occlusion_sample = textureSample(occlusion_map, occlusion_sampler,
-        transform_uv(material.occlusion_uv_u, material.occlusion_uv_v, in.uv)).r;
+        transform_uv(material.occlusion_uv_u, material.occlusion_uv_v, slot_uv(in, material.tex_coords.w))).r;
     let occlusion = 1.0 + material.occlusion.x * (occlusion_sample - 1.0);
 #else
     let occlusion = 1.0;
 #endif
     let geometric = normalize(in.normal);
 #ifdef NORMAL_MAP
-    let normal_uv = transform_uv(material.normal_uv_u, material.normal_uv_v, in.uv);
+    let normal_uv = transform_uv(material.normal_uv_u, material.normal_uv_v, slot_uv(in, material.tex_coords.z));
     let normal_sample = textureSample(normal_map, normal_sampler, normal_uv).rgb;
+#ifdef VERTEX_TANGENTS
+    var normal = tangent_normal(geometric, in.tangent, normal_sample, material.normal_scale);
+#else
     var normal = perturb_normal(geometric, in.world_position, normal_uv, normal_sample, material.normal_scale);
+#endif
 #else
     var normal = geometric;
 #endif

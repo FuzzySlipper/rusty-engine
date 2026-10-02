@@ -616,7 +616,11 @@ impl Renderer {
             .iter()
             .filter_map(|draw| {
                 let part = self.tables.parts.meta[draw.part as usize].as_ref()?;
-                Some((self.part_material(&part.material).1, draw.pass))
+                let mesh = self.mesh(&part.mesh)?;
+                Some((
+                    self.part_material(&part.material).1 | mesh.features(),
+                    draw.pass,
+                ))
             })
             .collect();
         variants.sort_unstable();
@@ -642,6 +646,7 @@ impl Renderer {
                 continue;
             };
             let (material, features) = self.part_material(&part.material);
+            let features = features | mesh.features();
             if current != Some((draw.pass, features)) {
                 pass.set_pipeline(pipeline(draw.pass, features));
                 current = Some((draw.pass, features));
@@ -661,6 +666,9 @@ impl Renderer {
             };
             pass.set_bind_group(1, material, &[]);
             pass.set_vertex_buffer(0, mesh.vertices.slice(..));
+            if let Some(extra) = &mesh.extra {
+                pass.set_vertex_buffer(1, extra.slice(..));
+            }
             pass.set_index_buffer(indices.slice(..), wgpu::IndexFormat::Uint32);
             pass.draw_indexed(
                 range,

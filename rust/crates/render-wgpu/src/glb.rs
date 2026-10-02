@@ -48,6 +48,10 @@ pub struct GlbPrimitive {
     pub positions: Vec<[f32; 3]>,
     pub normals: Vec<[f32; 3]>,
     pub uvs: Option<Vec<[f32; 2]>>,
+    /// `TEXCOORD_1`.
+    pub uvs1: Option<Vec<[f32; 2]>>,
+    /// `TANGENT`: xyz and the bitangent's handedness (w = ±1).
+    pub tangents: Option<Vec<[f32; 4]>>,
     pub colors: Option<Vec<[f32; 4]>>,
     pub joints: Option<Vec<[u16; 4]>>,
     /// Normalized to sum 1 (a zero sum becomes `(1, 0, 0, 0)`).
@@ -119,12 +123,14 @@ pub struct GlbMaterial {
     pub unlit: bool,
 }
 
-/// A material's use of one texture: which texture, and the map from the
-/// primitive's `TEXCOORD_0` to the texture's uv (`KHR_texture_transform`).
+/// A material's use of one texture: which texture, the primitive's uv set it
+/// reads (`texCoord`, which `KHR_texture_transform` may override), and the
+/// map from that set to the texture's uv (`KHR_texture_transform`).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct GlbTextureSlot {
     pub texture: usize,
     pub transform: UvTransform,
+    pub tex_coord: u32,
 }
 
 /// An affine uv map, two rows: `u' = a·u + b·v + c`, `v' = d·u + e·v + f`.
@@ -287,6 +293,10 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<GlbModel, String> {
                 uvs: reader
                     .read_tex_coords(0)
                     .map(|uvs| uvs.into_f32().collect()),
+                uvs1: reader
+                    .read_tex_coords(1)
+                    .map(|uvs| uvs.into_f32().collect()),
+                tangents: reader.read_tangents().map(Iterator::collect),
                 colors: reader
                     .read_colors(0)
                     .map(|colors| colors.into_rgba_f32().collect()),
@@ -362,7 +372,7 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<GlbModel, String> {
         });
     }
 
-    let materials = document
+    let materials: Vec<GlbMaterial> = document
         .materials()
         .map(|material| {
             let pbr = material.pbr_metallic_roughness();
@@ -374,6 +384,18 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<GlbModel, String> {
                     .map_or(UvTransform::IDENTITY, |transform| {
                         UvTransform::of(transform.offset(), transform.rotation(), transform.scale())
                     }),
+                tex_coord: info
+                    .texture_transform()
+                    .and_then(|transform| transform.tex_coord())
+                    .unwrap_or(info.tex_coord()),
+            };
+            // Normal and occlusion references expose KHR_texture_transform
+            // only as raw JSON.
+            let ext_tex_coord = |value: Option<&gltf::json::Value>, own: u32| {
+                value
+                    .and_then(|value| value.get("texCoord"))
+                    .and_then(gltf::json::Value::as_u64)
+                    .map_or(own, |set| set as u32)
             };
             GlbMaterial {
                 base_color: pbr.base_color_factor(),
@@ -383,25 +405,23 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<GlbModel, String> {
                 emissive: material.emissive_factor().map(|value| value * strength),
                 emissive_texture: material.emissive_texture().map(slot),
                 normal_texture: material.normal_texture().map(|normal| {
-                    let transform = UvTransform::from_extension(
-                        normal.extension_value("KHR_texture_transform"),
-                    );
+                    let extension = normal.extension_value("KHR_texture_transform");
                     (
                         GlbTextureSlot {
                             texture: normal.texture().index(),
-                            transform,
+                            transform: UvTransform::from_extension(extension),
+                            tex_coord: ext_tex_coord(extension, normal.tex_coord()),
                         },
                         normal.scale(),
                     )
                 }),
                 occlusion_texture: material.occlusion_texture().map(|occlusion| {
-                    let transform = UvTransform::from_extension(
-                        occlusion.extension_value("KHR_texture_transform"),
-                    );
+                    let extension = occlusion.extension_value("KHR_texture_transform");
                     (
                         GlbTextureSlot {
                             texture: occlusion.texture().index(),
-                            transform,
+                            transform: UvTransform::from_extension(extension),
+                            tex_coord: ext_tex_coord(extension, occlusion.tex_coord()),
                         },
                         occlusion.strength(),
                     )
@@ -463,6 +483,19 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<GlbModel, String> {
             }
         })
         .collect();
+
+    // A normal-mapped primitive without TANGENT gets MikkTSpace tangents
+    // over the normal map's uv set, the space exporters bake normal maps in.
+    for primitive in meshes.iter_mut().flatten() {
+        let normal_set = primitive
+            .material
+            .and_then(|material| materials.get(material))
+            .and_then(|material| material.normal_texture)
+            .map(|(slot, _)| slot.tex_coord);
+        if let (Some(set), None) = (normal_set, &primitive.tangents) {
+            primitive.tangents = generated_tangents(primitive, set);
+        }
+    }
 
     Ok(GlbModel {
         nodes,
@@ -557,6 +590,73 @@ impl Channel {
     }
 }
 
+/// MikkTSpace tangents over uv set `set`, or None without that set (or for
+/// geometry MikkTSpace cannot process). A vertex the algorithm leaves out
+/// keeps +X.
+fn generated_tangents(primitive: &GlbPrimitive, set: u32) -> Option<Vec<[f32; 4]>> {
+    struct Faces<'a> {
+        primitive: &'a GlbPrimitive,
+        uvs: &'a [[f32; 2]],
+        tangents: Vec<[f32; 4]>,
+    }
+    impl Faces<'_> {
+        fn vertex(&self, face: usize, corner: usize) -> usize {
+            self.primitive.indices[face * 3 + corner] as usize
+        }
+    }
+    impl bevy_mikktspace::Geometry for Faces<'_> {
+        fn num_faces(&self) -> usize {
+            self.primitive.indices.len() / 3
+        }
+        fn num_vertices_of_face(&self, _face: usize) -> usize {
+            3
+        }
+        fn position(&self, face: usize, corner: usize) -> [f32; 3] {
+            self.primitive.positions[self.vertex(face, corner)]
+        }
+        fn normal(&self, face: usize, corner: usize) -> [f32; 3] {
+            self.primitive.normals[self.vertex(face, corner)]
+        }
+        // MikkTSpace takes v upward (Blender's convention, where glTF
+        // exporters compute their tangents); glTF's v points down the image.
+        fn tex_coord(&self, face: usize, corner: usize) -> [f32; 2] {
+            let [u, v] = self.uvs[self.vertex(face, corner)];
+            [u, 1.0 - v]
+        }
+        fn set_tangent(
+            &mut self,
+            tangent: Option<bevy_mikktspace::TangentSpace>,
+            face: usize,
+            corner: usize,
+        ) {
+            if let Some(tangent) = tangent {
+                let vertex = self.vertex(face, corner);
+                self.tangents[vertex] = tangent.tangent_encoded();
+            }
+        }
+    }
+    let uvs = match set {
+        0 => primitive.uvs.as_ref(),
+        1 => primitive.uvs1.as_ref(),
+        _ => None,
+    }?;
+    if uvs.len() != primitive.positions.len()
+        || primitive
+            .indices
+            .iter()
+            .any(|&index| index as usize >= uvs.len())
+    {
+        return None;
+    }
+    let mut faces = Faces {
+        primitive,
+        uvs,
+        tangents: vec![[1.0, 0.0, 0.0, 1.0]; primitive.positions.len()],
+    };
+    bevy_mikktspace::generate_tangents(&mut faces).ok()?;
+    Some(faces.tangents)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -599,6 +699,44 @@ mod tests {
         bytes
     }
 
+    /// A quad facing +Z with u along +X and v down the image (glTF): the
+    /// standard layout has tangent +X and handedness +1 (bitangent
+    /// cross(N, T) = +Y, up the image, as glTF normal maps expect); with u
+    /// mirrored the tangent follows -X and the handedness flips.
+    #[test]
+    fn generated_tangents_follow_gltf_uv_conventions() {
+        let quad = |u: [f32; 4]| GlbPrimitive {
+            positions: vec![
+                [0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [1.0, 1.0, 0.0],
+                [0.0, 1.0, 0.0],
+            ],
+            normals: vec![[0.0, 0.0, 1.0]; 4],
+            uvs: Some(vec![[u[0], 1.0], [u[1], 1.0], [u[2], 0.0], [u[3], 0.0]]),
+            uvs1: None,
+            tangents: None,
+            colors: None,
+            joints: None,
+            weights: None,
+            indices: vec![0, 1, 2, 0, 2, 3],
+            material: None,
+        };
+        for tangent in generated_tangents(&quad([0.0, 1.0, 1.0, 0.0]), 0).unwrap() {
+            assert!(
+                (tangent[0] - 1.0).abs() < 1e-5 && tangent[3] == 1.0,
+                "{tangent:?}"
+            );
+        }
+        for tangent in generated_tangents(&quad([1.0, 0.0, 0.0, 1.0]), 0).unwrap() {
+            assert!(
+                (tangent[0] + 1.0).abs() < 1e-5 && tangent[3] == -1.0,
+                "{tangent:?}"
+            );
+        }
+        assert!(generated_tangents(&quad([0.0, 1.0, 1.0, 0.0]), 1).is_none());
+    }
+
     #[test]
     fn webp_textures_decode_from_the_extension_source_or_a_webp_core_source() {
         let rgba: Vec<u8> = (0..64u8)
@@ -639,7 +777,8 @@ mod tests {
                 model.materials[0].base_color_texture,
                 Some(GlbTextureSlot {
                     texture: 0,
-                    transform: UvTransform::IDENTITY
+                    transform: UvTransform::IDENTITY,
+                    tex_coord: 0,
                 })
             );
             let image = model.textures[0]

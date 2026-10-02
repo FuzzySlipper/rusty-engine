@@ -14,6 +14,9 @@ use crate::target::{ColorTarget, DEPTH_FORMAT};
 /// white unless a static mesh supplies vertex colours).
 pub const VERTEX_FLOATS: usize = 12;
 
+/// The optional second stream (`GpuMesh::extra`): tangent (4), uv1 (2).
+pub const EXTRA_VERTEX_FLOATS: usize = 6;
+
 pub(crate) struct Layouts {
     pub frame: wgpu::BindGroupLayout,
     pub material: wgpu::BindGroupLayout,
@@ -298,6 +301,24 @@ impl Layouts {
             Pass::BlendDoubleSided => (TRIANGLES, None, CCW, true),
         };
         let attributes = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x2, 3 => Float32x4];
+        let extra_attributes = wgpu::vertex_attr_array![4 => Float32x4, 5 => Float32x2];
+        let buffers = [
+            Some(wgpu::VertexBufferLayout {
+                array_stride: (VERTEX_FLOATS * 4) as u64,
+                step_mode: wgpu::VertexStepMode::Vertex,
+                attributes: &attributes,
+            }),
+            Some(wgpu::VertexBufferLayout {
+                array_stride: (EXTRA_VERTEX_FLOATS * 4) as u64,
+                step_mode: wgpu::VertexStepMode::Vertex,
+                attributes: &extra_attributes,
+            }),
+        ];
+        let streams = if features.contains(Features::VERTEX_TANGENTS) {
+            2
+        } else {
+            1
+        };
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("render-wgpu world"),
             layout: Some(&self.world),
@@ -305,11 +326,7 @@ impl Layouts {
                 module: shader,
                 entry_point: Some("vs_world"),
                 compilation_options: Default::default(),
-                buffers: &[Some(wgpu::VertexBufferLayout {
-                    array_stride: (VERTEX_FLOATS * 4) as u64,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &attributes,
-                })],
+                buffers: &buffers[..streams],
             },
             primitive: wgpu::PrimitiveState {
                 topology,

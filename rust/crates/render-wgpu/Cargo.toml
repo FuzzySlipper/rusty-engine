@@ -20,6 +20,8 @@ png.workspace = true
 jpeg-decoder = { version = "0.3.2", default-features = false }
 # GLB EXT_texture_webp images.
 image-webp = "0.2.4"
+# Tangents for normal-mapped GLB primitives that do not carry them.
+bevy_mikktspace = "1.0.0"
 # Animated mesh GLBs (the runtime admits them; this crate only reads them).
 gltf = { workspace = true, features = ["extensions"] }
 bytemuck.workspace = true

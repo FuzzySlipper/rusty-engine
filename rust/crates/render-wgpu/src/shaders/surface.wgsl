@@ -29,10 +29,17 @@ fn voxel_lod(uv: vec2<f32>, tile: vec4<f32>, sample_rect: vec4<f32>, size: vec2<
     return clamp(lod, 0.0, max(log2(min(texels.x, texels.y)) - 2.0, 0.0));
 }
 
-// The surface normal under a tangent-space normal map sample, with the
-// tangent frame from the screen-space derivatives of the map's uv and the
-// position (as glTF viewers do for a mesh without tangents): the tangent
-// follows +u, the bitangent completes a right-handed frame with the normal.
+// A tangent-space normal map sample (x right, y up the image, z out; glTF)
+// in the frame of `tangent`, `bitangent` and `normal`.
+fn mapped_normal(normal: vec3<f32>, tangent: vec3<f32>, bitangent: vec3<f32>, sample: vec3<f32>, scale: f32) -> vec3<f32> {
+    let mapped = vec3<f32>((sample.xy * 2.0 - 1.0) * scale, sample.z * 2.0 - 1.0);
+    return normalize(tangent * mapped.x + bitangent * mapped.y + normal * mapped.z);
+}
+
+// The surface normal under a normal map sample, with the tangent frame from
+// the screen-space derivatives of the map's uv and the position (as glTF
+// viewers do for a mesh without tangents). The tangent follows +u; the
+// bitangent points up the image (-v), so a mirrored uv layout flips it.
 fn perturb_normal(normal: vec3<f32>, world_position: vec3<f32>, uv: vec2<f32>, sample: vec3<f32>, scale: f32) -> vec3<f32> {
     let dp_dx = dpdx(world_position);
     let dp_dy = dpdy(world_position);
@@ -40,12 +47,25 @@ fn perturb_normal(normal: vec3<f32>, world_position: vec3<f32>, uv: vec2<f32>, s
     let duv_dy = dpdy(uv);
     let determinant = duv_dx.x * duv_dy.y - duv_dy.x * duv_dx.y;
     let along_u = (duv_dy.y * dp_dx - duv_dx.y * dp_dy) * sign(determinant);
+    let along_v = (duv_dx.x * dp_dy - duv_dy.x * dp_dx) * sign(determinant);
     let tangent_length = length(along_u - normal * dot(normal, along_u));
     if abs(determinant) < 1e-12 || tangent_length < 1e-12 {
         return normal;
     }
     let tangent = (along_u - normal * dot(normal, along_u)) / tangent_length;
-    let bitangent = cross(normal, tangent);
-    let mapped = vec3<f32>((sample.xy * 2.0 - 1.0) * scale, sample.z * 2.0 - 1.0);
-    return normalize(tangent * mapped.x + bitangent * mapped.y + normal * mapped.z);
+    let crossed = cross(normal, tangent);
+    let bitangent = crossed * select(-1.0, 1.0, dot(crossed, along_v) <= 0.0);
+    return mapped_normal(normal, tangent, bitangent, sample, scale);
+}
+
+// The surface normal under a normal map sample in the mesh's own tangent
+// frame: glTF's bitangent is cross(normal, tangent) times its handedness w.
+fn tangent_normal(normal: vec3<f32>, tangent: vec4<f32>, sample: vec3<f32>, scale: f32) -> vec3<f32> {
+    let along = tangent.xyz - normal * dot(normal, tangent.xyz);
+    let length_along = length(along);
+    if length_along < 1e-12 {
+        return normal;
+    }
+    let unit = along / length_along;
+    return mapped_normal(normal, unit, cross(normal, unit) * tangent.w, sample, scale);
 }
