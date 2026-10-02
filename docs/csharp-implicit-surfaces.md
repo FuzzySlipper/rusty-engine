@@ -547,6 +547,27 @@ Textures are drawn with `TEXCOORD_0`. A texture's `texCoord` selection and its
 `KHR_texture_transform` are admitted (a transform may name sets 0 through 3)
 but not applied.
 
+### Checking a GLB before publishing it
+
+A producer that writes GLBs outside a product (an exporter, a converter) checks
+each one against this admission with the runtime pack's `rusty`:
+
+```bash
+rusty asset check exports/knight.glb
+```
+
+It runs what a product's `Content.AdmitReference` and
+`Animation.OpenAnimatedMeshFromContent` run on a GLB with no companion files,
+including the extension list above, embedded-only resources, image types and
+the topology and finite-value checks, and prints one JSON object:
+`{"path", "admitted", "diagnostics": [{"severity", "code", "locus", "message",
+"remedy"}]}`, with the importer's codes (`externalResource`,
+`unsupportedFeature`, `invalidContainer`, ...) and the GLB JSON member each
+names. It never writes the file. It exits 0 when admitted, 1 when refused and
+2 when the file cannot be read. The rules are those of the `rusty` that runs,
+so run the pinned pair's `runtime-pack/bin/rusty` to check against the pair a
+product pins.
+
 ### GLB inspection and displayed-pose bounds
 
 `Animation.SetMeshInspection(new(appearance, wireframe, matte, wholeVoxelNormals,

@@ -253,6 +253,21 @@ grep -F 'usage: rusty dev --project' "$work/rusty-dev-help.log" >/dev/null || {
     echo "RUSTY_ENGINE_PAIR_TEST_RUNTIME: extracted runtime pack did not expose rusty dev" >&2
     exit 1
 }
+# The pack's `rusty asset check` runs the runtime's GLB admission on its own.
+"$runtime/bin/rusty" asset check "$repo_root/fixtures/render/assets/kenney-retro-character/character-medium.glb" \
+    | jq -e '.admitted == true and .diagnostics == []' >/dev/null || {
+    echo "RUSTY_ENGINE_PAIR_TEST_ASSET_CHECK: the pack's rusty did not admit the fixture GLB" >&2
+    exit 1
+}
+head -c 64 "$repo_root/fixtures/render/assets/kenney-retro-character/character-medium.glb" > "$work/truncated.glb"
+if "$runtime/bin/rusty" asset check "$work/truncated.glb" > "$work/asset-check.json"; then
+    echo "RUSTY_ENGINE_PAIR_TEST_ASSET_CHECK: the pack's rusty admitted a truncated GLB" >&2
+    exit 1
+fi
+jq -e '.admitted == false and .diagnostics[0].code == "invalidContainer"' "$work/asset-check.json" >/dev/null || {
+    echo "RUSTY_ENGINE_PAIR_TEST_ASSET_CHECK: a truncated GLB did not report invalidContainer" >&2
+    exit 1
+}
 loaders=(coreclr)
 if [[ "$run_aot" == --aot ]]; then
     loaders+=(nativeaot)

@@ -5,6 +5,7 @@
 //! Product configuration: the SDK evaluates and stages that truth, and the
 //! pinned runtime pack supplies the exact host that `rusty dev` starts.
 
+mod asset;
 mod pair;
 
 use std::{
@@ -86,6 +87,7 @@ fn run() -> Result<ExitCode, String> {
         CommandName::Update(options) => update(&options),
         CommandName::Status(options) => status(&options),
         CommandName::PackContent(options) => pack_content(&options),
+        CommandName::AssetCheck(path) => asset_check(&path),
     }
 }
 
@@ -475,6 +477,7 @@ enum CommandName {
     Update(UpdateOptions),
     Status(StatusOptions),
     PackContent(PackContentOptions),
+    AssetCheck(PathBuf),
 }
 
 #[derive(Debug)]
@@ -574,6 +577,20 @@ impl Arguments {
             "status" => match help(status_usage) {
                 Some(help) => return Ok(help),
                 None => CommandName::Status(parse_status(rest, "status", status_usage)?),
+            },
+            "asset" => match help(asset_usage) {
+                Some(help) => return Ok(help),
+                None => match rest.as_slice() {
+                    [check, path] if check == "check" => {
+                        CommandName::AssetCheck(PathBuf::from(path))
+                    }
+                    _ => {
+                        return Err(format!(
+                            "RUSTY_ARGUMENT: rusty asset needs `check <file.glb>`\n\n{}",
+                            asset_usage()
+                        ))
+                    }
+                },
             },
             "pack-content" => match help(pack_content_usage) {
                 Some(help) => return Ok(help),
@@ -841,6 +858,7 @@ commands:
   build     restore, build and stage the product; --aot also publishes NativeAOT
   dev       build and run the product on its pinned runtime, rebuilding on source changes
   pack-content  pack one content directory into a container a product opens at run time
+  asset     check a GLB against the Engine's admission, as JSON, without changing it
 
 Run `rusty <command> --help` for a command's options.
 
@@ -941,6 +959,47 @@ at <file> by rename once complete; the output must lie outside <directory>.
 Example:
   rusty pack-content modules/srd-ruleset --output library/srd-ruleset.rpak --compress"
         .to_owned()
+}
+
+fn asset_usage() -> String {
+    "usage: rusty asset check <file.glb>
+
+Runs the admission a running product applies to a standalone GLB (Content.AdmitReference, then
+Animation.OpenAnimatedMeshFromContent) and prints one JSON object:
+
+  {\"path\": \"<file.glb>\", \"admitted\": true|false,
+   \"diagnostics\": [{\"severity\", \"code\", \"locus\", \"message\", \"remedy\"}, ...]}
+
+Codes are the asset importer's (externalResource, unsupportedFeature, invalidContainer, ...); the
+locus names the GLB JSON member. The file is read and never written. It exits 0 when admitted, 1
+when refused, and 2 when the file cannot be read. The rules are those of the `rusty` that runs:
+run the pinned pair's `runtime-pack/bin/rusty` (under the cache `rusty status` shows) to check
+against the pair a product pins.
+
+Example:
+  rusty asset check exports/knight.glb"
+        .to_owned()
+}
+
+fn asset_check(path: &Path) -> Result<ExitCode, String> {
+    let bytes = match fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            eprintln!("RUSTY_ASSET_READ: `{}`: {error}", path.display());
+            return Ok(ExitCode::from(2));
+        }
+    };
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("source.glb");
+    let (admitted, diagnostics) = asset::check_glb(file_name, bytes);
+    println!("{}", asset::report(path, admitted, &diagnostics));
+    Ok(if admitted {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::from(1)
+    })
 }
 
 fn pack_content(options: &PackContentOptions) -> Result<ExitCode, String> {
