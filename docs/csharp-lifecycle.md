@@ -163,6 +163,13 @@ refused call changes nothing. Changing an appearance in place, such as its
 materials or sprite frame, updates the objects showing it without republishing
 them. `EntityGraphicsProjection` also accepts an optional parent `EntityId`.
 
+A light created with `Graphics.CreateLight` and a parent object shows while
+that object is in the published scene. Create it before or after the publish
+that first shows its parent, in the same callback. A publish that removes the
+parent takes the light out with it, and a later publish that brings the
+parent back shows the light again. Dispose the light when the product is done
+with it.
+
 - Attached equipment: publish the actor and equipment as ordinary facts, with
   the equipment parent naming the actor. Product code selects equipment and
   local placement; Engine owns hierarchy and resource realization.

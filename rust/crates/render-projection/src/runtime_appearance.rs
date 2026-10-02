@@ -225,15 +225,39 @@ impl RuntimeAppearanceProjector {
         &mut self,
         facts: &[RuntimeAppearanceFact<'_>],
     ) -> Result<RenderFrameDiff, AppearanceProjectionError> {
+        let removals = self.omitted_objects(facts);
+        self.apply(facts, &removals)
+    }
+
+    /// [`Self::apply`] (or, with no removal list, [`Self::project`]) and
+    /// [`Self::apply_lights`] as one batch, validated against the state after
+    /// both: a light may name a parent object created in the same batch, and
+    /// a removed object's lights may be removed with it.
+    pub fn change_with_lights(
+        &mut self,
+        facts: &[RuntimeAppearanceFact<'_>],
+        removals: Option<&[u64]>,
+        light_facts: &[RuntimeLightFact],
+        light_removals: &[u64],
+    ) -> Result<RenderFrameDiff, AppearanceProjectionError> {
+        match removals {
+            Some(removals) => self.change(facts, removals, light_facts, light_removals),
+            None => {
+                let removals = self.omitted_objects(facts);
+                self.change(facts, &removals, light_facts, light_removals)
+            }
+        }
+    }
+
+    /// Retained objects that `facts`, taken as the complete object set, omit.
+    fn omitted_objects(&self, facts: &[RuntimeAppearanceFact<'_>]) -> Vec<u64> {
         let mut present: Vec<u64> = facts.iter().map(|fact| fact.object_id).collect();
         present.sort_unstable();
-        let removals: Vec<u64> = self
-            .objects
+        self.objects
             .keys()
             .copied()
             .filter(|id| present.binary_search(id).is_err())
-            .collect();
-        self.apply(facts, &removals)
+            .collect()
     }
 
     /// Creates or updates the given lights and removes the given light identities.
@@ -1259,6 +1283,21 @@ mod tests {
         let frame = projector.apply(&[fact(2)], &[1]).unwrap();
         assert_eq!(kinds(&frame), ["destroy", "destroy", "create"]);
         assert_eq!(projector.retained_objects(), 1);
+    }
+
+    #[test]
+    fn one_batch_creates_a_parent_with_its_light_and_removes_them_together() {
+        let mut projector = projector();
+        let frame = projector
+            .change_with_lights(&[fact(1)], None, &[ambient_light(5, Some(1))], &[])
+            .unwrap();
+        assert_eq!(kinds(&frame), ["create", "create-light"]);
+        assert_eq!(projector.retained_lights(), 1);
+        // The complete object set omits the parent; its light leaves with it.
+        let frame = projector.change_with_lights(&[], None, &[], &[5]).unwrap();
+        assert_eq!(projector.retained_objects(), 0);
+        assert_eq!(projector.retained_lights(), 0);
+        assert!(!frame.ops.is_empty());
     }
 
     #[test]

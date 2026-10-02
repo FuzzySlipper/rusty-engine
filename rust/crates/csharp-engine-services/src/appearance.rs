@@ -1120,6 +1120,9 @@ pub(crate) struct RuntimeAppearanceData {
     pub(crate) generated_meshes: GeneratedMeshes,
     mesh_appearances: BTreeMap<u64, u64>,
     lights: BTreeMap<u64, RuntimeLightFact>,
+    /// Live lights whose parent object is not in the published scene: they
+    /// are not projected and show once a snapshot publishes the parent.
+    pending_lights: BTreeSet<u64>,
     next_light: u64,
     materials: BTreeMap<u64, String>,
     appearance_materials: BTreeMap<u64, BTreeSet<u64>>,
@@ -1362,6 +1365,7 @@ impl RuntimeAppearanceBridge {
             generated_meshes: GeneratedMeshes::default(),
             mesh_appearances: BTreeMap::new(),
             lights: BTreeMap::new(),
+            pending_lights: BTreeSet::new(),
             next_light: 1,
             materials: BTreeMap::new(),
             appearance_materials: BTreeMap::new(),
@@ -3013,8 +3017,7 @@ impl RuntimeAppearanceBridge {
         let next_light = handle.checked_add(1).ok_or_else(|| {
             CsharpEngineServicesError::new("CSHARP_LIGHT_HANDLE", "light handle overflow")
         })?;
-        project_light_change(staged, std::slice::from_ref(&fact), &[])?;
-        staged.state.lights.insert(handle, fact);
+        set_light(staged, None, handle, fact)?;
         staged.state.next_light = next_light;
         Ok(NativeLightHandle { value: handle })
     }
@@ -3025,13 +3028,12 @@ impl RuntimeAppearanceBridge {
     ) -> Result<(), CsharpEngineServicesError> {
         let replacement = runtime_light_fact(request.replacement)?;
         let staged = self.staged_mut()?;
-        let Some(previous) = staged.state.lights.get(&request.light.value) else {
+        if !staged.state.lights.contains_key(&request.light.value) {
             return Err(CsharpEngineServicesError::new(
                 "CSHARP_LIGHT_HANDLE",
                 "light handle is not live",
             ));
-        };
-        let previous = previous.light_id;
+        }
         if staged.state.lights.iter().any(|(handle, candidate)| {
             *handle != request.light.value && candidate.light_id == replacement.light_id
         }) {
@@ -3040,14 +3042,12 @@ impl RuntimeAppearanceBridge {
                 "logical light id is already owned by a different live light",
             ));
         }
-        let removals: &[u64] = if previous == replacement.light_id {
-            &[]
-        } else {
-            &[previous]
-        };
-        project_light_change(staged, std::slice::from_ref(&replacement), removals)?;
-        staged.state.lights.insert(request.light.value, replacement);
-        Ok(())
+        set_light(
+            staged,
+            Some(request.light.value),
+            request.light.value,
+            replacement,
+        )
     }
 
     fn replace_light(
@@ -3056,11 +3056,6 @@ impl RuntimeAppearanceBridge {
     ) -> Result<NativeLightHandle, CsharpEngineServicesError> {
         let replacement = runtime_light_fact(request.replacement)?;
         let staged = self.staged_mut()?;
-        let previous = staged
-            .state
-            .lights
-            .get(&request.light.value)
-            .map(|light| light.light_id);
         if staged.state.lights.iter().any(|(handle, candidate)| {
             *handle != request.light.value && candidate.light_id == replacement.light_id
         }) {
@@ -3073,13 +3068,12 @@ impl RuntimeAppearanceBridge {
         let next_light = handle.checked_add(1).ok_or_else(|| {
             CsharpEngineServicesError::new("CSHARP_LIGHT_HANDLE", "light handle overflow")
         })?;
-        let removals: Vec<u64> = previous
-            .filter(|previous| *previous != replacement.light_id)
-            .into_iter()
-            .collect();
-        project_light_change(staged, std::slice::from_ref(&replacement), &removals)?;
-        staged.state.lights.remove(&request.light.value);
-        staged.state.lights.insert(handle, replacement);
+        let previous = staged
+            .state
+            .lights
+            .contains_key(&request.light.value)
+            .then_some(request.light.value);
+        set_light(staged, previous, handle, replacement)?;
         staged.state.next_light = next_light;
         Ok(NativeLightHandle { value: handle })
     }
@@ -3088,8 +3082,11 @@ impl RuntimeAppearanceBridge {
         let staged = self.staged_mut()?;
         if let Some(fact) = staged.state.lights.get(&light.value) {
             let id = fact.light_id;
-            project_light_change(staged, &[], &[id])?;
+            if !staged.state.pending_lights.contains(&light.value) {
+                project_light_change(staged, &[], &[id])?;
+            }
             staged.state.lights.remove(&light.value);
+            staged.state.pending_lights.remove(&light.value);
         }
         // A successful replacement turns the prior generated owner into a
         // tombstone, so a later IDisposable release is ordinary teardown.
@@ -6606,10 +6603,37 @@ impl RuntimeAppearanceBridge {
             }
         }
 
-        let projected = match removals {
-            None => state.projector.project(&owned),
-            Some(removals) => state.projector.apply(&owned, removals),
+        // Parented lights follow their parent in and out of the scene.
+        let present = |object: u64| {
+            owned.iter().any(|fact| fact.object_id == object)
+                || removals.is_some_and(|removals| {
+                    !removals.contains(&object) && state.projector.object_handle(object).is_some()
+                })
         };
+        let mut light_puts = Vec::new();
+        let mut light_removals = Vec::new();
+        let mut waiting = BTreeSet::new();
+        for (handle, light) in &state.lights {
+            let Some(parent) = light.parent_object_id else {
+                continue;
+            };
+            let pending = state.pending_lights.contains(handle);
+            match (pending, present(parent)) {
+                (true, true) => light_puts.push(light.clone()),
+                (true, false) => {
+                    waiting.insert(*handle);
+                }
+                (false, false) => {
+                    light_removals.push(light.light_id);
+                    waiting.insert(*handle);
+                }
+                (false, true) => {}
+            }
+        }
+        let projected =
+            state
+                .projector
+                .change_with_lights(&owned, removals, &light_puts, &light_removals);
         let frame = projected.map_err(|error| match error {
             AppearanceProjectionError::JointAttachment { id, joint, problem } => {
                 CsharpEngineServicesError::new(
@@ -6619,6 +6643,7 @@ impl RuntimeAppearanceBridge {
             }
             error => CsharpEngineServicesError::new("CSHARP_VISUAL_SNAPSHOT", format!("{error:?}")),
         })?;
+        staged.state.pending_lights = waiting;
         detach_retargeted_controllers(staged)?;
         append_projection_frame(staged, frame)?;
         self.flush_all_animations()?;
@@ -6982,6 +7007,51 @@ fn project_light_change(
             CsharpEngineServicesError::new("CSHARP_LIGHT_PROJECTION", format!("{error:?}"))
         })?;
     append_projection_frame(staged, frame)
+}
+
+/// Makes `fact` the light under `handle`, replacing the live light under
+/// `previous` (the same handle for an update). A light whose parent object is
+/// not in the published scene waits, unprojected, for a snapshot that
+/// publishes it; a refused change leaves the lights as they were.
+fn set_light(
+    staged: &mut RuntimeAppearanceCall,
+    previous: Option<u64>,
+    handle: u64,
+    fact: RuntimeLightFact,
+) -> Result<(), CsharpEngineServicesError> {
+    let state = &staged.state;
+    let ready = fact
+        .parent_object_id
+        .is_none_or(|parent| state.projector.object_handle(parent).is_some());
+    // A shown previous light leaves the scene when the replacement waits or
+    // takes another logical id; otherwise the replacement updates it.
+    let removals: Vec<u64> = previous
+        .filter(|previous| !state.pending_lights.contains(previous))
+        .and_then(|previous| state.lights.get(&previous))
+        .map(|shown| shown.light_id)
+        .filter(|id| !ready || *id != fact.light_id)
+        .into_iter()
+        .collect();
+    // The descriptor was validated on entry, so a waiting light cannot fail
+    // the publish that shows it.
+    let puts = if ready {
+        std::slice::from_ref(&fact)
+    } else {
+        &[]
+    };
+    if !puts.is_empty() || !removals.is_empty() {
+        project_light_change(staged, puts, &removals)?;
+    }
+    let state = &mut staged.state;
+    if let Some(previous) = previous {
+        state.lights.remove(&previous);
+        state.pending_lights.remove(&previous);
+    }
+    if !ready {
+        state.pending_lights.insert(handle);
+    }
+    state.lights.insert(handle, fact);
+    Ok(())
 }
 
 /// Detaches every projected animation controller whose target the projector
@@ -10534,21 +10604,56 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn refused_light_projection_does_not_retain_the_light_or_poison_later_lights() {
+    fn a_parented_light_shows_while_its_parent_is_in_the_published_scene() {
         let mut bridge =
             RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), BTreeMap::new());
         bridge.begin_call();
-        let error = bridge
-            .create_light(point_light_request(91, Some(7)))
-            .expect_err("parent object 7 is not in the snapshot");
-        assert_eq!(error.code(), "CSHARP_LIGHT_PROJECTION");
+        let appearance = bridge.create_primitive(primitive_request()).unwrap();
+        // Created before the publish that first shows its parent: it waits.
         let light = bridge
+            .create_light(point_light_request(91, Some(7)))
+            .expect("a light may name a parent that is not published yet");
+        assert_eq!(bridge.read_light(light).unwrap().parent_object_id, 7);
+        let unparented = bridge
             .create_light(point_light_request(92, None))
-            .expect("a later light is unaffected by the refusal");
+            .expect("an unparented light shows at once");
+        let mut invalid = point_light_request(93, Some(7));
+        invalid.descriptor.intensity = -1.0;
+        assert_eq!(
+            bridge.create_light(invalid).unwrap_err().code(),
+            "CSHARP_LIGHT_DESCRIPTOR",
+            "a waiting light is still validated when created"
+        );
+        let fact = appearance_fact(appearance);
+        unsafe { bridge.stage_snapshot(&fact, 1) }.unwrap();
         let staged = bridge.take_staged_call();
-        assert_eq!(staged.state.lights.len(), 1);
-        assert!(staged.state.lights.contains_key(&light.value));
+        assert_eq!(staged.state.projector.retained_lights(), 2);
+        assert!(staged.state.pending_lights.is_empty());
+        bridge.commit(staged);
+
+        // A snapshot without the parent takes its light out of the scene; a
+        // later one with it shows the light again.
+        bridge.begin_call();
+        unsafe { bridge.stage_snapshot(std::ptr::null(), 0) }
+            .expect("removing a parent does not need its lights disposed first");
+        let staged = bridge.take_staged_call();
         assert_eq!(staged.state.projector.retained_lights(), 1);
+        assert!(staged.state.pending_lights.contains(&light.value));
+        bridge.commit(staged);
+        bridge.begin_call();
+        unsafe { bridge.stage_snapshot(&fact, 1) }.unwrap();
+        let staged = bridge.take_staged_call();
+        assert_eq!(staged.state.projector.retained_lights(), 2);
+        bridge.commit(staged);
+
+        // Disposing a waiting light needs no projection.
+        bridge.begin_call();
+        unsafe { bridge.stage_snapshot(std::ptr::null(), 0) }.unwrap();
+        bridge.destroy_light(light).unwrap();
+        bridge.destroy_light(unparented).unwrap();
+        let staged = bridge.take_staged_call();
+        assert_eq!(staged.state.projector.retained_lights(), 0);
+        assert!(staged.state.lights.is_empty() && staged.state.pending_lights.is_empty());
     }
 
     #[test]
