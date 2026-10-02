@@ -72,6 +72,25 @@ internal static class SpatialArtifactChecks
         CheckQueries(engine, session);
         SpatialContentArtifactReplaceReceipt retry = engine.Spatial.ReplaceContentArtifact(request);
         Require(retry.NavigationRevision > admitted.NavigationRevision, "session did not accept a later valid artifact");
+        CheckPlacedArtifacts(engine, session, valid);
+    }
+
+    // The same 3-cell floor placed twice beside the base one: one navigation
+    // across all three, and each placement leaves under its own identity.
+    private static void CheckPlacedArtifacts(IEngineContext engine, SpatialSession session, ContentReference floor)
+    {
+        SpatialContentArtifactResidencyReceipt placed = engine.Spatial.ApplyContentArtifactResidency(new(session,
+            new SpatialContentArtifactInstance[] { new(11, floor, 3, 0, 0), new(12, floor, 6, 0, 0) },
+            ReadOnlyMemory<ulong>.Empty, NavigationGridId, ChunkSize, MaximumStepCells));
+        Require(placed.InstanceCount == 2 && placed.NavigationCellCount == 9, "placed artifacts did not compose");
+        NavigationStepResult across = engine.Spatial.EvaluateNavigationStep(new(session,
+            new Vector3(0.5f, 0, 0.5f), new Vector3(8.5f, 0, 0.5f), 0.5f, 64));
+        Require(across.Outcome == NavigationPathOutcome.Reached, "navigation did not cross placed artifacts");
+        SpatialContentArtifactResidencyReceipt removed = engine.Spatial.ApplyContentArtifactResidency(new(session,
+            ReadOnlyMemory<SpatialContentArtifactInstance>.Empty, new ulong[] { 11 },
+            NavigationGridId, ChunkSize, MaximumStepCells));
+        Require(removed.InstanceCount == 1 && removed.NavigationCellCount == 6, "a placement did not leave alone");
+        CheckQueries(engine, session);
     }
 
     private static void CheckQueries(IEngineContext engine, SpatialSession session)

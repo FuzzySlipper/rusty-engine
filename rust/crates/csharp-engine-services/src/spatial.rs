@@ -130,6 +130,50 @@ struct SpatialContentIdentity {
     navigation_projection_hash: u64,
 }
 
+/// An admitted artifact's walkable cells in its own grid, with their support
+/// heights.
+struct ContentNavigationCells {
+    cell_size: f64,
+    level_quantum: f64,
+    cells: Vec<(VoxelCoord, f64)>,
+}
+
+/// A placed artifact: its collision is the static-mesh instance under its
+/// product identity, of the asset its content digest names.
+struct PlacedContentArtifact {
+    asset: Option<StaticMeshAssetId>,
+    offset: [i64; 3],
+    navigation: Arc<ContentNavigationCells>,
+}
+
+/// The artifacts that make up a session's planar navigation: the base one
+/// `ReplaceContentArtifact` installed and those placed beside it. Replacing
+/// collision or navigation another way ends it.
+#[derive(Default)]
+struct SpatialContentComposition {
+    base: Option<(SpatialContentIdentity, Arc<ContentNavigationCells>)>,
+    placed: BTreeMap<u64, PlacedContentArtifact>,
+}
+
+impl SpatialContentComposition {
+    fn is_active(&self) -> bool {
+        self.base.is_some() || !self.placed.is_empty()
+    }
+
+    /// Whether `id` names a static-mesh instance or asset this composition
+    /// owns.
+    fn owns_collision(&self, id: u64) -> bool {
+        self.placed.contains_key(&id)
+            || self
+                .placed
+                .values()
+                .any(|placed| placed.asset == Some(StaticMeshAssetId(id)))
+            || self.base.as_ref().is_some_and(|(identity, _)| {
+                spatial_content_asset_id(identity.content_sha256) == id
+            })
+    }
+}
+
 /// Engine-owned collision/navigation mechanisms. Player and game state never
 /// live here: character and ray queries read the call's typed facts directly.
 pub(crate) struct RuntimeSpatialBridge {
@@ -157,7 +201,7 @@ pub(crate) struct SpatialSession {
     /// The last collision-derived publication's columns and edges, kept so
     /// the next one derives only what moved or changed.
     collision_navigation: Option<CollisionNavigationCache>,
-    content_artifact: Option<SpatialContentIdentity>,
+    content: SpatialContentComposition,
     controller: CharacterControllerService,
     last_character_receipt: Option<CharacterControllerReceipt>,
     last_character_config: Option<NativeCharacterControllerConfig>,
@@ -630,7 +674,7 @@ impl RuntimeSpatialBridge {
                 navigation: None,
                 navigation_revision: 0,
                 collision_navigation: None,
-                content_artifact: None,
+                content: SpatialContentComposition::default(),
                 controller: CharacterControllerService::default(),
                 last_character_receipt: None,
                 last_character_config: None,
@@ -856,6 +900,22 @@ impl RuntimeSpatialBridge {
             .collect::<Vec<_>>();
         let (scene, receipt) = {
             let session = self.session_mut(request.session)?;
+            if removed.is_some() {
+                // Placed artifacts' collision changes only with their navigation.
+                let owned = removed
+                    .into_iter()
+                    .flat_map(|(assets, instances)| assets.iter().chain(instances))
+                    .copied()
+                    .chain(admitted.iter().map(|asset| asset.id.0))
+                    .chain(instances.iter().map(|instance| instance.id.0))
+                    .find(|id| session.content.owns_collision(*id));
+                if let Some(id) = owned {
+                    return Err(CsharpEngineServicesError::new(
+                        "CSHARP_COLLISION_CONTENT_OWNED",
+                        format!("collision identity {id} belongs to an admitted spatial content artifact; change it through its content residency"),
+                    ));
+                }
+            }
             let mut candidate = (*session.scene).clone();
             let receipt = if let Some((removed_assets, removed_instances)) = removed {
                 candidate.apply_static_mesh_residency(
@@ -872,7 +932,9 @@ impl RuntimeSpatialBridge {
             })?;
             let candidate = Arc::new(candidate);
             session.scene = Arc::clone(&candidate);
-            session.content_artifact = None;
+            if removed.is_none() {
+                session.content = SpatialContentComposition::default();
+            }
             (candidate, receipt)
         };
         self.collision_source.publish_scene(request.session, scene);
@@ -955,6 +1017,7 @@ impl RuntimeSpatialBridge {
         let navigation_cell_count = navigation_projection.walkable_len() as u64;
         let navigation_projection_hash = navigation_projection.projection_hash();
         let navigation_traversal = NavTraversalOverlay::empty(&navigation_projection);
+        let base_cells = Arc::new(content_navigation_cells(&artifact));
         let navigation_vertical_mapping = NavigationVerticalMapping {
             level_quantum: artifact.navigation.config.level_quantum,
             support_heights: artifact
@@ -1038,7 +1101,10 @@ impl RuntimeSpatialBridge {
             session.scene = Arc::clone(&scene);
             session.navigation_revision = navigation_revision;
             session.navigation = Some(navigation);
-            session.content_artifact = Some(identity);
+            session.content = SpatialContentComposition {
+                base: Some((identity, base_cells)),
+                placed: BTreeMap::new(),
+            };
             (scene, identity, collision.revision_before)
         };
         self.collision_source.publish_scene(request.session, scene);
@@ -1056,12 +1122,259 @@ impl RuntimeSpatialBridge {
         })
     }
 
+    /// Admits and removes placed artifacts; see
+    /// `NativeSpatialContentArtifactResidencyRequest`. A refusal changes nothing.
+    fn apply_content_artifact_residency(
+        &mut self,
+        request: &NativeSpatialContentArtifactResidencyRequest,
+    ) -> Result<NativeSpatialContentArtifactResidencyReceipt, CsharpEngineServicesError> {
+        let admitted = unsafe {
+            borrowed_slice(
+                request.admitted,
+                request.admitted_len,
+                "admitted spatial content artifacts",
+            )
+        }?;
+        let removed = unsafe {
+            borrowed_slice(
+                request.removed,
+                request.removed_len,
+                "removed spatial content artifacts",
+            )
+        }?;
+        let content_owner = self.content.ok_or_else(|| {
+            CsharpEngineServicesError::new(
+                "CSHARP_SPATIAL_CONTENT_OWNER",
+                "Spatial has no Engine Content owner",
+            )
+        })?;
+        // Read every artifact before changing anything.
+        let mut arrivals = Vec::with_capacity(admitted.len());
+        for placement in admitted {
+            // SAFETY: EngineServiceSet binds this pointer to its boxed Content
+            // owner; the retained entry is cloned before Spatial changes.
+            let content = unsafe { &*content_owner }
+                .retained_content(placement.content)
+                .ok_or_else(|| {
+                    CsharpEngineServicesError::new(
+                        "CSHARP_SPATIAL_CONTENT_REFERENCE",
+                        "unknown or stale content reference",
+                    )
+                })?;
+            let artifact = parse_spatial_content_artifact(&content.path, &content.bytes)?;
+            let asset_id = StaticMeshAssetId(spatial_content_asset_id(content.sha256()));
+            let asset = (!artifact.collision.positions.is_empty())
+                .then(|| {
+                    StaticMeshColliderAsset::new(
+                        asset_id,
+                        artifact.collision.positions.clone(),
+                        artifact.collision.triangles.clone(),
+                    )
+                    .map_err(|error| {
+                        CsharpEngineServicesError::new(
+                            "CSHARP_SPATIAL_CONTENT_COLLISION",
+                            format!("{error:?}"),
+                        )
+                    })
+                })
+                .transpose()?;
+            arrivals.push((
+                placement,
+                asset,
+                Arc::new(content_navigation_cells(&artifact)),
+            ));
+        }
+        let max_step_cells = u8::try_from(request.navigation_max_step_cells).map_err(|_| {
+            CsharpEngineServicesError::new(
+                "CSHARP_NAVIGATION_CONFIG",
+                "maximum navigation step exceeded u8",
+            )
+        })?;
+
+        let (scene, receipt) = {
+            let session = self.session_mut(request.session)?;
+            let composing = session.content.is_active();
+            // A first placement starts a composition on the current frame.
+            let grid_origin = match (&session.navigation, composing) {
+                (Some(navigation), true) => navigation.grid_origin,
+                _ => [0.0; 3],
+            };
+            let mut placed: BTreeMap<u64, &PlacedContentArtifact> = session
+                .content
+                .placed
+                .iter()
+                .filter(|(id, _)| !removed.contains(id))
+                .map(|(id, placed)| (*id, placed))
+                .collect();
+            let removed_instances: Vec<StaticMeshInstanceId> = removed
+                .iter()
+                .filter(|id| session.content.placed.contains_key(id))
+                .map(|id| StaticMeshInstanceId(*id))
+                .collect();
+            let mut arriving = BTreeMap::new();
+            for (placement, asset, navigation) in &arrivals {
+                let id = placement.id;
+                let product_owned = session
+                    .scene
+                    .static_mesh_instance(StaticMeshInstanceId(id))
+                    .is_some()
+                    && !session.content.placed.contains_key(&id);
+                if placed.contains_key(&id) || arriving.contains_key(&id) || product_owned {
+                    return Err(CsharpEngineServicesError::new(
+                        "CSHARP_SPATIAL_CONTENT_IDENTITY",
+                        format!("spatial content identity {id} is already resident"),
+                    ));
+                }
+                arriving.insert(
+                    id,
+                    PlacedContentArtifact {
+                        asset: asset.as_ref().map(|asset| asset.id),
+                        offset: [
+                            placement.column_offset,
+                            placement.level_offset,
+                            placement.row_offset,
+                        ],
+                        navigation: Arc::clone(navigation),
+                    },
+                );
+            }
+            placed.extend(arriving.iter().map(|(id, placed)| (*id, placed)));
+
+            // Assets: add the ones no resident instance has, drop the ones
+            // nothing uses any more.
+            let base_asset = session.content.base.as_ref().map(|(identity, _)| {
+                StaticMeshAssetId(spatial_content_asset_id(identity.content_sha256))
+            });
+            let in_use: BTreeSet<StaticMeshAssetId> = placed
+                .values()
+                .filter_map(|placed| placed.asset)
+                .chain(base_asset)
+                .collect();
+            let resident: BTreeSet<StaticMeshAssetId> = session
+                .content
+                .placed
+                .values()
+                .filter_map(|placed| placed.asset)
+                .chain(base_asset)
+                .collect();
+            let mut new_assets = BTreeMap::new();
+            for (_, asset, _) in &arrivals {
+                if let Some(asset) = asset {
+                    if !resident.contains(&asset.id) {
+                        new_assets.insert(asset.id, asset.clone());
+                    }
+                }
+            }
+            let removed_assets: Vec<StaticMeshAssetId> =
+                resident.difference(&in_use).copied().collect();
+            let instances: Vec<StaticMeshColliderInstance> = arriving
+                .iter()
+                .filter_map(|(id, placed)| {
+                    let asset = placed.asset?;
+                    let [column, level, row] = placed.offset;
+                    Some(StaticMeshColliderInstance {
+                        id: StaticMeshInstanceId(*id),
+                        asset,
+                        transform: StaticMeshTransform {
+                            translation: [
+                                grid_origin[0] + column as f64 * placed.navigation.cell_size,
+                                grid_origin[1] + level as f64 * placed.navigation.level_quantum,
+                                grid_origin[2] + row as f64 * placed.navigation.cell_size,
+                            ],
+                            ..StaticMeshTransform::IDENTITY
+                        },
+                    })
+                })
+                .collect();
+
+            let base_cells = session.content.base.as_ref().map(|(_, cells)| cells);
+            // The grid is the artifacts' own; compose_content_navigation
+            // refuses any that differ.
+            let cell_size = base_cells
+                .map(|cells| cells.cell_size)
+                .or_else(|| {
+                    placed
+                        .values()
+                        .next()
+                        .map(|placed| placed.navigation.cell_size)
+                })
+                .unwrap_or(1.0);
+            let grid = navigation_grid(NativePlanarNavConfig {
+                grid_id: request.navigation_grid_id,
+                cell_size,
+                chunk_size: request.navigation_chunk_size,
+                max_step_cells: request.navigation_max_step_cells,
+            })?;
+            let (projection, vertical_mapping) =
+                compose_content_navigation(grid, base_cells, placed.values().copied())?;
+            let navigation_cell_count = projection.walkable_len() as u64;
+            let navigation_projection_hash = projection.projection_hash();
+
+            let mut candidate = (*session.scene).clone();
+            let collision = candidate
+                .apply_static_mesh_residency(
+                    new_assets.into_values(),
+                    instances,
+                    removed_assets,
+                    removed_instances,
+                )
+                .map_err(|error| {
+                    CsharpEngineServicesError::new(
+                        "CSHARP_SPATIAL_CONTENT_COLLISION",
+                        format!("{error:?}"),
+                    )
+                })?;
+            let navigation_revision = next_navigation_revision(session.navigation_revision)?;
+            let instance_count = placed.len() as u64;
+
+            // Commit.
+            for id in removed {
+                session.content.placed.remove(id);
+            }
+            session.content.placed.extend(arriving);
+            let scene = Arc::new(candidate);
+            session.scene = Arc::clone(&scene);
+            session.navigation_revision = navigation_revision;
+            session.navigation = Some(NavigationState {
+                source: NavigationSource::HostWalkableCells,
+                traversal: NavTraversalOverlay::empty(&projection),
+                projection,
+                projection_hash: navigation_projection_hash,
+                policy: PlanarNavNeighborPolicy {
+                    max_step_cells,
+                    diagonal: false,
+                },
+                edge_admission: None,
+                agent_height_voxels: 0,
+                require_solid_floor: false,
+                volumetric_traversal: VolumetricNavTraversalOverlay::empty(),
+                vertical_mapping: Some(vertical_mapping),
+                revision: navigation_revision,
+                grid_origin,
+            });
+            (
+                scene,
+                NativeSpatialContentArtifactResidencyReceipt {
+                    collision_revision_before: collision.revision_before,
+                    collision_revision_after: collision.revision_after,
+                    navigation_revision,
+                    instance_count,
+                    navigation_cell_count,
+                    collision_projection_hash: collision.projection_hash,
+                    navigation_projection_hash,
+                },
+            )
+        };
+        self.collision_source.publish_scene(request.session, scene);
+        Ok(receipt)
+    }
+
     fn read_content_artifact(
         &mut self,
         request: NativeSpatialContentArtifactReadRequest,
     ) -> Result<NativeSpatialContentArtifactReadout, CsharpEngineServicesError> {
         let session = self.session_mut(request.session)?;
-        let Some(identity) = session.content_artifact else {
+        let Some((identity, _)) = &session.content.base else {
             return Ok(NativeSpatialContentArtifactReadout::default());
         };
         Ok(NativeSpatialContentArtifactReadout {
@@ -1141,7 +1454,7 @@ impl RuntimeSpatialBridge {
             revision: navigation_revision,
             grid_origin: [0.0; 3],
         });
-        session.content_artifact = None;
+        session.content = SpatialContentComposition::default();
         Ok(receipt)
     }
 
@@ -1213,7 +1526,7 @@ impl RuntimeSpatialBridge {
             revision: navigation_revision,
             grid_origin: [0.0; 3],
         });
-        session.content_artifact = None;
+        session.content = SpatialContentComposition::default();
         Ok(receipt)
     }
 
@@ -1371,7 +1684,7 @@ impl RuntimeSpatialBridge {
             revision: navigation_revision,
             grid_origin: [0.0; 3],
         });
-        session.content_artifact = None;
+        session.content = SpatialContentComposition::default();
         Ok(receipt)
     }
 
@@ -1827,7 +2140,7 @@ impl RuntimeSpatialBridge {
         let session = self.session_mut(request.session)?;
         session.navigation_revision = next_navigation_revision(session.navigation_revision)?;
         session.navigation = None;
-        session.content_artifact = None;
+        session.content = SpatialContentComposition::default();
         Ok(())
     }
 
@@ -3840,6 +4153,26 @@ unsafe extern "C" fn replace_spatial_content_artifact(
     }
 }
 
+unsafe extern "C" fn apply_spatial_content_artifact_residency(
+    context: *mut c_void,
+    request: *const NativeSpatialContentArtifactResidencyRequest,
+    output: *mut NativeSpatialContentArtifactResidencyReceipt,
+    error: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    clear_receipt(error);
+    if context.is_null() || request.is_null() || output.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeSpatialBridge>() };
+    match bridge.apply_content_artifact_residency(unsafe { &*request }) {
+        Ok(value) => {
+            unsafe { *output = value };
+            ABI_OK
+        }
+        Err(refusal) => refuse(&refusal, error),
+    }
+}
+
 unsafe extern "C" fn read_spatial_content_artifact(
     context: *mut c_void,
     request: NativeSpatialContentArtifactReadRequest,
@@ -4573,6 +4906,7 @@ pub(crate) fn api(bridge: &mut RuntimeSpatialBridge) -> NativeSpatialApi {
         apply_collision_residency,
         replace_content_artifact: replace_spatial_content_artifact,
         read_content_artifact: read_spatial_content_artifact,
+        apply_content_artifact_residency: apply_spatial_content_artifact_residency,
         replace_navigation: replace_spatial_navigation,
         replace_voxel_navigation: replace_spatial_voxel_navigation,
         replace_collision_navigation: replace_spatial_collision_navigation,
@@ -4774,6 +5108,75 @@ fn validate_spatial_content_id(value: &str, label: &str) -> Result<(), CsharpEng
         ));
     }
     Ok(())
+}
+
+/// An artifact's walkable cells and their support heights.
+fn content_navigation_cells(artifact: &SpatialContentArtifact) -> ContentNavigationCells {
+    ContentNavigationCells {
+        cell_size: artifact.navigation.config.cell_size,
+        level_quantum: artifact.navigation.config.level_quantum,
+        cells: artifact
+            .navigation
+            .cells
+            .iter()
+            .filter(|cell| cell.walkable)
+            .map(|cell| {
+                (
+                    VoxelCoord::new(cell.column, cell.level, cell.row),
+                    cell.support_height,
+                )
+            })
+            .collect(),
+    }
+}
+
+/// One planar projection over the base artifact's cells and every placed
+/// artifact's, moved by its offset. A cell two artifacts both declare takes the
+/// higher support. All must share the grid's cell size and one level quantum.
+fn compose_content_navigation<'a>(
+    grid: VoxelGridSpec,
+    base: Option<&'a Arc<ContentNavigationCells>>,
+    placed: impl IntoIterator<Item = &'a PlacedContentArtifact>,
+) -> Result<(NavProjection, NavigationVerticalMapping), CsharpEngineServicesError> {
+    let mut supports: BTreeMap<VoxelCoord, f64> = BTreeMap::new();
+    let mut level_quantum = None;
+    let layers = base
+        .map(|cells| (cells.as_ref(), [0; 3]))
+        .into_iter()
+        .chain(
+            placed
+                .into_iter()
+                .map(|placed| (placed.navigation.as_ref(), placed.offset)),
+        );
+    for (cells, [column, level, row]) in layers {
+        if cells.cell_size != grid.voxel_size()
+            || level_quantum.is_some_and(|quantum| quantum != cells.level_quantum)
+        {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_SPATIAL_CONTENT_NAVIGATION_GRID",
+                "composed spatial artifacts must share one navigation cell size and level quantum",
+            ));
+        }
+        level_quantum = Some(cells.level_quantum);
+        let rise = level as f64 * cells.level_quantum;
+        for (cell, support) in &cells.cells {
+            let at = VoxelCoord::new(cell.x + column, cell.y + level, cell.z + row);
+            let support = support + rise;
+            supports
+                .entry(at)
+                .and_modify(|current| *current = current.max(support))
+                .or_insert(support);
+        }
+    }
+    let projection = NavProjection::from_walkable_cells(grid, supports.keys().copied());
+    Ok((
+        projection,
+        NavigationVerticalMapping {
+            level_quantum: level_quantum.unwrap_or(1.0),
+            support_heights: supports,
+            snap: None,
+        },
+    ))
 }
 
 fn spatial_content_asset_id(digest: NativeContentSha256) -> u64 {

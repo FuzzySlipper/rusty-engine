@@ -1942,6 +1942,355 @@ mod tests {
         let _ = services.finish_call();
     }
 
+    /// Placed spatial artifacts compose with each other, the session's own
+    /// static collision and world-origin commits, and each comes and goes
+    /// under its identity without touching the rest.
+    #[test]
+    fn placed_content_artifacts_compose_and_unload_independently() {
+        // A strip of `columns` walkable 1 m cells at height 0, floored by two
+        // collision triangles.
+        let strip = |name: &str, columns: usize| {
+            let cells: Vec<String> = (0..columns)
+                .map(|column| {
+                    format!(r#"{{"column":{column},"row":0,"level":0,"supportHeight":0.0,"walkable":true}}"#)
+                })
+                .collect();
+            format!(
+                r#"{{"schemaVersion":1,"staticMeshArtifactId":"mesh/{name}","bounds":{{"min":[0.0,-1.0,0.0],"max":[{columns}.0,1.0,1.0]}},"collision":{{"positions":[[0.0,0.0,0.0],[{columns}.0,0.0,0.0],[0.0,0.0,1.0],[{columns}.0,0.0,1.0]],"triangles":[[0,1,2],[1,3,2]]}},"navigation":{{"id":"navigation/{name}","config":{{"schemaVersion":1,"cellSize":1.0,"levelQuantum":0.25,"maximumSlopeDegrees":45.0,"requiredHeadroom":1.0,"supportProbeDrop":0.1}},"cells":[{}]}}}}"#,
+                cells.join(",")
+            )
+        };
+        let mut content = BTreeMap::new();
+        for (path, bytes) in [
+            ("spatial/west.json", strip("west", 3)),
+            ("spatial/east.json", strip("east", 2)),
+            ("spatial/broken.json", "{\"schemaVersion\":1}".to_owned()),
+        ] {
+            content.insert(path.to_owned(), Arc::<[u8]>::from(bytes.as_bytes()));
+        }
+        let mut services = EngineServiceSet::new(
+            parse_runtime_appearance_catalog(None).expect("default catalog"),
+            content,
+            None,
+            RuntimeDiagnosticsSink::new(Default::default()).unwrap(),
+        )
+        .expect("service set");
+        services.begin_call(binding());
+        let api = services.api();
+        let mut session = NativeSpatialSessionHandle::default();
+        assert_eq!(
+            unsafe {
+                (api.spatial.create_session)(
+                    api.spatial.context,
+                    NativeSpatialSessionConfig {
+                        collision_voxel_size: 1.0,
+                        collision_chunk_size: 8,
+                        voxel_surface_mode: NativeVoxelSurfaceMode::GreedyCubes,
+                    },
+                    &mut session,
+                    std::ptr::null_mut(),
+                )
+            },
+            ABI_OK
+        );
+        let open = |path: &str| {
+            let mut reference = NativeContentReferenceHandle::default();
+            assert_eq!(
+                unsafe {
+                    (api.content.open_reference)(
+                        api.content.context,
+                        &NativeContentOpenRequest {
+                            path: NativeUtf8Slice {
+                                bytes: path.as_ptr(),
+                                len: path.len(),
+                            },
+                        },
+                        &mut reference,
+                        std::ptr::null_mut(),
+                    )
+                },
+                ABI_OK
+            );
+            reference
+        };
+        let (west, east, broken) = (
+            open("spatial/west.json"),
+            open("spatial/east.json"),
+            open("spatial/broken.json"),
+        );
+        let place = |id, content, column_offset| NativeSpatialContentArtifactInstance {
+            id,
+            content,
+            column_offset,
+            level_offset: 0,
+            row_offset: 0,
+        };
+        let residency = |admitted: &[NativeSpatialContentArtifactInstance], removed: &[u64]| {
+            let mut receipt = NativeSpatialContentArtifactResidencyReceipt::default();
+            let mut error: NativeOperationErrorReceipt = unsafe { std::mem::zeroed() };
+            let status = unsafe {
+                (api.spatial.apply_content_artifact_residency)(
+                    api.spatial.context,
+                    &NativeSpatialContentArtifactResidencyRequest {
+                        session,
+                        admitted: admitted.as_ptr(),
+                        admitted_len: admitted.len(),
+                        removed: removed.as_ptr(),
+                        removed_len: removed.len(),
+                        navigation_grid_id: 7,
+                        navigation_chunk_size: 8,
+                        navigation_max_step_cells: 1,
+                    },
+                    &mut receipt,
+                    &mut error,
+                )
+            };
+            if status == ABI_OK {
+                Ok(receipt)
+            } else {
+                assert_eq!(error.diagnostics_len, 1);
+                let diagnostic = unsafe { *error.diagnostics };
+                Err(unsafe {
+                    std::str::from_utf8(std::slice::from_raw_parts(
+                        diagnostic.code.bytes,
+                        diagnostic.code.len,
+                    ))
+                    .unwrap()
+                    .to_owned()
+                })
+            }
+        };
+        let step = |from: [f32; 3], target: [f32; 3]| {
+            let vec3 = |[x, y, z]: [f32; 3]| NativeVec3 { x, y, z };
+            let mut step = NativeNavigationStepResult::default();
+            assert_eq!(
+                unsafe {
+                    (api.spatial.evaluate_navigation_step)(
+                        api.spatial.context,
+                        NativeNavigationStepRequest {
+                            session,
+                            from: vec3(from),
+                            target: vec3(target),
+                            max_step_units: 0.5,
+                            max_visited: 64,
+                        },
+                        &mut step,
+                        std::ptr::null_mut(),
+                    )
+                },
+                ABI_OK
+            );
+            step
+        };
+        let floor_below = |services: &EngineServiceSet, [x, z]: [f32; 2]| {
+            matches!(
+                services.spatial.sessions[&session.value]
+                    .scene
+                    .raycast_world([f64::from(x), 5.0, f64::from(z)], [0.0, -1.0, 0.0], 50.0),
+                Some(engine_spatial::SpatialCollisionHit::StaticMesh(_))
+            )
+        };
+        let has_instance = |services: &EngineServiceSet, id: u64| {
+            services.spatial.sessions[&session.value]
+                .scene
+                .static_mesh_instance(engine_spatial::StaticMeshInstanceId(id))
+                .is_some()
+        };
+
+        // The session's own static collision: a terrain tile far away.
+        let terrain_vertices = [
+            NativeVec3 {
+                x: 20.0,
+                y: 0.0,
+                z: 0.0,
+            },
+            NativeVec3 {
+                x: 22.0,
+                y: 0.0,
+                z: 0.0,
+            },
+            NativeVec3 {
+                x: 20.0,
+                y: 0.0,
+                z: 2.0,
+            },
+        ];
+        let terrain_triangle = [NativeTriangle { a: 0, b: 1, c: 2 }];
+        let terrain_asset = [NativeStaticMeshAsset {
+            id: 500,
+            mesh_resource: NativeMeshResourceReference { value: 0 },
+            first_vertex: 0,
+            vertex_count: 3,
+            first_triangle: 0,
+            triangle_count: 1,
+        }];
+        let identity = NativeTransform {
+            translation: NativeVec3::default(),
+            rotation: NativeQuat {
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+                w: 1.0,
+            },
+            scale: NativeVec3 {
+                x: 1.0,
+                y: 1.0,
+                z: 1.0,
+            },
+        };
+        let terrain_instance = [NativeStaticMeshInstance {
+            id: 500,
+            asset: 500,
+            transform: identity,
+        }];
+        let collision_residency = |removed_instances: &[u64]| {
+            let mut receipt = NativeCollisionReplaceReceipt::default();
+            let mut error: NativeOperationErrorReceipt = unsafe { std::mem::zeroed() };
+            let adding = removed_instances.is_empty();
+            unsafe {
+                (api.spatial.apply_collision_residency)(
+                    api.spatial.context,
+                    &NativeCollisionResidencyRequest {
+                        session,
+                        assets: terrain_asset.as_ptr(),
+                        assets_len: usize::from(adding),
+                        vertices: terrain_vertices.as_ptr(),
+                        vertices_len: terrain_vertices.len(),
+                        triangles: terrain_triangle.as_ptr(),
+                        triangles_len: terrain_triangle.len(),
+                        instances: terrain_instance.as_ptr(),
+                        instances_len: usize::from(adding),
+                        removed_assets: std::ptr::null(),
+                        removed_assets_len: 0,
+                        removed_instances: removed_instances.as_ptr(),
+                        removed_instances_len: removed_instances.len(),
+                    },
+                    &mut receipt,
+                    &mut error,
+                )
+            }
+        };
+        assert_eq!(collision_residency(&[]), ABI_OK);
+
+        // Two closures side by side: one navigation across their boundary.
+        let receipt = residency(&[place(1, west, 0), place(2, east, 3)], &[]).unwrap();
+        assert_eq!(
+            (receipt.instance_count, receipt.navigation_cell_count),
+            (2, 5)
+        );
+        let across = step([0.5, 0.0, 0.5], [4.5, 0.0, 0.5]);
+        assert_eq!(across.outcome, NativeNavigationPathOutcome::Reached);
+        assert!(floor_below(&services, [1.5, 0.5]) && floor_below(&services, [4.5, 0.5]));
+        assert!(
+            has_instance(&services, 500),
+            "the session's own collision stays"
+        );
+
+        // Conflicts and malformed artifacts refuse and change nothing.
+        let revision = across.navigation_revision;
+        assert_eq!(
+            residency(&[place(1, west, 6)], &[]).unwrap_err(),
+            "CSHARP_SPATIAL_CONTENT_IDENTITY"
+        );
+        assert_eq!(
+            residency(&[place(500, west, 6)], &[]).unwrap_err(),
+            "CSHARP_SPATIAL_CONTENT_IDENTITY"
+        );
+        assert_eq!(
+            residency(&[place(3, west, 6), place(4, broken, 9)], &[]).unwrap_err(),
+            "CSHARP_SPATIAL_CONTENT_SCHEMA"
+        );
+        assert_ne!(
+            collision_residency(&[1]),
+            ABI_OK,
+            "a placed artifact's collision is its own"
+        );
+        let unchanged = step([0.5, 0.0, 0.5], [4.5, 0.0, 0.5]);
+        assert_eq!(unchanged.navigation_revision, revision);
+        assert!(!has_instance(&services, 3) && has_instance(&services, 1));
+
+        // Unload one closure; the other and the terrain stay.
+        let receipt = residency(&[], &[1]).unwrap();
+        assert_eq!(
+            (receipt.instance_count, receipt.navigation_cell_count),
+            (1, 2)
+        );
+        assert!(
+            !has_instance(&services, 1)
+                && has_instance(&services, 2)
+                && has_instance(&services, 500)
+        );
+        assert!(!floor_below(&services, [1.5, 0.5]) && floor_below(&services, [4.5, 0.5]));
+        assert_eq!(
+            step([0.5, 0.0, 0.5], [4.5, 0.0, 0.5]).outcome,
+            NativeNavigationPathOutcome::StartNotWalkable
+        );
+        // Reload it under the same identity.
+        let receipt = residency(&[place(1, west, 0)], &[]).unwrap();
+        assert_eq!(
+            (receipt.instance_count, receipt.navigation_cell_count),
+            (2, 5)
+        );
+        assert!(floor_below(&services, [1.5, 0.5]));
+
+        // A world-origin commit moves every closure; a later placement lands
+        // on the same grid.
+        let mut prepared = NativeWorldOriginPreparedHandle::default();
+        assert_eq!(
+            unsafe {
+                (api.world_origin.prepare)(
+                    api.world_origin.context,
+                    &NativeWorldOriginPrepareRequest {
+                        session,
+                        target_cell_x: 10,
+                        target_cell_y: 0,
+                        target_cell_z: 0,
+                        entities: std::ptr::null(),
+                        entities_len: 0,
+                    },
+                    &mut prepared,
+                    std::ptr::null_mut(),
+                )
+            },
+            ABI_OK
+        );
+        let mut commit = NativeWorldOriginCommitReceipt::default();
+        assert_eq!(
+            unsafe {
+                (api.world_origin.commit)(
+                    api.world_origin.context,
+                    NativeWorldOriginCommitRequest { prepared },
+                    &mut commit,
+                    std::ptr::null_mut(),
+                )
+            },
+            ABI_OK
+        );
+        assert_eq!(
+            step([-9.5, 0.0, 0.5], [-5.5, 0.0, 0.5]).outcome,
+            NativeNavigationPathOutcome::Reached
+        );
+        assert!(floor_below(&services, [-5.5, 0.5]));
+        let receipt = residency(&[place(4, east, 5)], &[]).unwrap();
+        assert_eq!(
+            (receipt.instance_count, receipt.navigation_cell_count),
+            (3, 7)
+        );
+        assert_eq!(
+            step([-9.5, 0.0, 0.5], [-3.5, 0.0, 0.5]).outcome,
+            NativeNavigationPathOutcome::Reached
+        );
+        assert!(floor_below(&services, [-3.5, 0.5]));
+
+        let receipt = residency(&[], &[1, 2, 4]).unwrap();
+        assert_eq!(
+            (receipt.instance_count, receipt.navigation_cell_count),
+            (0, 0)
+        );
+        assert!(has_instance(&services, 500));
+        let _ = services.finish_call();
+    }
+
     fn assert_spatial_admission_diagnostic(error: NativeOperationErrorReceipt, expected: &str) {
         assert_eq!(error.diagnostics_len, 1);
         let diagnostic = unsafe { *error.diagnostics };

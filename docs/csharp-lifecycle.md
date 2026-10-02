@@ -732,6 +732,50 @@ A truncated or otherwise malformed binary file is refused with
 `CSHARP_SPATIAL_CONTENT_NAVIGATION` or `CSHARP_SPATIAL_CONTENT_SCHEMA`.
 An unknown or disposed reference reports `CSHARP_SPATIAL_CONTENT_REFERENCE`.
 
+### Placed artifacts side by side
+
+To stream several precompiled closures (sites, cells, dungeon blocks) into one
+session, place them with `Spatial.ApplyContentArtifactResidency`. Each
+`SpatialContentArtifactInstance` names an artifact by `ContentReference` under
+a stable product `Id` and places it, unrotated, by whole cells of the
+navigation grid: `ColumnOffset` (x), `LevelOffset` (y, in the artifact's level
+quantum) and `RowOffset` (z).
+
+```csharp
+SpatialContentArtifactResidencyReceipt resident = engine.Spatial.ApplyContentArtifactResidency(
+    new(session,
+        new SpatialContentArtifactInstance[] { new(siteId, siteArtifact, 64, 0, 32) },
+        new ulong[] { leavingSiteId },
+        7, 8, 1));
+```
+
+- **Composition.** Removals apply first, so one request can also replace an
+  identity. Each placed artifact's collision joins the session's static
+  collision as the static-mesh instance under its `Id`. Planar navigation
+  becomes one projection over the base artifact's cells
+  (`ReplaceContentArtifact`) and every placed artifact's. Paths cross between
+  neighbouring closures as within one. A cell two artifacts both declare is
+  walkable, at the higher support.
+- **Grid.** All of them must share one cell size and level quantum
+  (`CSHARP_SPATIAL_CONTENT_NAVIGATION_GRID`). The grid is the base artifact's,
+  or, with no base, the local frame when the first artifact was placed. A
+  world-origin commit moves every placed artifact with it, and later
+  placements land on the same grid.
+- **What else stays.** Removing one placement leaves the others, the base
+  artifact and collision added through `ApplyCollisionResidency`.
+- **Ending the composition.** `ReplaceContentArtifact`,
+  `ReplaceCollision`, `ReplaceNavigation`, `ReplaceVoxelNavigation`,
+  `ReplaceCollisionNavigation` and `ClearNavigation` end it. Artifact
+  collision then stays as ordinary static collision.
+- **Refusals.** An `Id` that is already resident, placed or the session's own
+  static collision, is refused with `CSHARP_SPATIAL_CONTENT_IDENTITY`.
+  `ApplyCollisionResidency` refuses to change a placed artifact's collision
+  (`CSHARP_COLLISION_CONTENT_OWNED`). Any refusal, including a malformed
+  artifact, changes nothing.
+- **Lifetime.** Placed artifacts with the same content share one collider
+  asset, released with the last of them. The content references are read
+  during the call and can be disposed afterwards.
+
 Products own generation recipes and artifact semantics: required connected
 regions, portal/socket pairing, keys, gates and provenance policy. The Procgen
 floor document is a product/generator format and must be converted to this

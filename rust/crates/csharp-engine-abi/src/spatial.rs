@@ -471,6 +471,51 @@ pub struct NativeCollisionReplaceReceipt {
     pub projection_hash: u64,
 }
 
+/// One spatial content artifact placed beside the session's others, under a
+/// stable product identity. It is placed by whole navigation cells from the
+/// session's navigation grid (columns along x, levels of the artifact's level
+/// quantum along y, rows along z), unrotated.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeSpatialContentArtifactInstance {
+    pub id: u64,
+    pub content: NativeContentReferenceHandle,
+    pub column_offset: i64,
+    pub level_offset: i64,
+    pub row_offset: i64,
+}
+
+/// Admits and removes placed spatial artifacts in one session: their
+/// collision joins the session's static collision, and planar navigation
+/// becomes the union of the base artifact's cells and every placed one's.
+/// Removals apply first, so one request can replace an identity. The
+/// content references are borrowed for this call.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeSpatialContentArtifactResidencyRequest {
+    pub session: NativeSpatialSessionHandle,
+    pub admitted: *const NativeSpatialContentArtifactInstance,
+    pub admitted_len: usize,
+    pub removed: *const u64,
+    pub removed_len: usize,
+    pub navigation_grid_id: u64,
+    pub navigation_chunk_size: u32,
+    pub navigation_max_step_cells: u32,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct NativeSpatialContentArtifactResidencyReceipt {
+    pub collision_revision_before: u64,
+    pub collision_revision_after: u64,
+    pub navigation_revision: u64,
+    /// Placed artifacts now resident, not counting the base.
+    pub instance_count: u64,
+    pub navigation_cell_count: u64,
+    pub collision_projection_hash: u64,
+    pub navigation_projection_hash: u64,
+}
+
 /// Replaces retained collision and planar navigation from one immutable
 /// Engine-admitted spatial artifact. The content reference is borrowed for
 /// this call; the resulting Spatial state retains copied mechanism facts and
