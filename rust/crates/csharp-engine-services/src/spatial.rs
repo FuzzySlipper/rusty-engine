@@ -1614,6 +1614,7 @@ impl RuntimeSpatialBridge {
             max_z: max_cell.z,
         };
         let session = self.session_mut(request.session)?;
+        let started = std::time::Instant::now();
         let delta = derive_collision_navigation(
             &session.scene,
             grid,
@@ -1625,7 +1626,11 @@ impl RuntimeSpatialBridge {
         .map_err(|error| {
             CsharpEngineServicesError::new("CSHARP_COLLISION_NAVIGATION_PROJECTION", error.code())
         })?;
-        let (derived_columns, reused_columns) = (delta.derived_columns(), delta.reused_columns());
+        let (derived_columns, reused_columns, edge_tests) = (
+            delta.derived_columns(),
+            delta.reused_columns(),
+            delta.edge_tests(),
+        );
         // The installed navigation is updated in place when it is the one the
         // cache describes; nothing below can fail.
         let previous = session.collision_navigation.take();
@@ -1663,6 +1668,9 @@ impl RuntimeSpatialBridge {
             navigation_revision,
             derived_column_count: derived_columns,
             reused_column_count: reused_columns,
+            edge_test_count: edge_tests,
+            derivation_microseconds: u64::try_from(started.elapsed().as_micros())
+                .unwrap_or(u64::MAX),
         };
         cache.set_installed(navigation_revision);
         session.collision_navigation = Some(cache);

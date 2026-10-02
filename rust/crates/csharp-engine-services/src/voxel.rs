@@ -342,7 +342,7 @@ impl RuntimeSpatialBridge {
 }
 
 /// World bounds of an inclusive voxel address range.
-fn voxel_box(
+pub(crate) fn voxel_box(
     scene: &engine_spatial::VoxelCollisionScene,
     min: [i64; 3],
     max_inclusive: [i64; 3],
@@ -359,7 +359,7 @@ fn voxel_box(
 
 /// A changed box grown by the reach of a reconstructed surface: its
 /// triangles move with the samples within two voxels of them.
-fn collision_reach(
+pub(crate) fn collision_reach(
     scene: &engine_spatial::VoxelCollisionScene,
     (min, max): ([f64; 3], [f64; 3]),
 ) -> ([f64; 3], [f64; 3]) {

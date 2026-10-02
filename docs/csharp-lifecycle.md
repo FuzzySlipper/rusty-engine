@@ -571,6 +571,13 @@ the result is the same as a full derivation. A republish updates the installed
 navigation in place, so its cost follows the derived columns and their
 neighbours, not the box: one that derives nothing costs microseconds.
 
+The receipt also reports the cost: `EdgeTestCount` is the support-to-support
+edges tested with capsule casts, and `DerivationMicroseconds` the time the
+publication took. Columns and edges are derived across the machine's cores.
+Reconstructed surfaces cost more than cubes because each capsule cast meets
+triangles rather than boxes, and rough facets send more level edges through the
+step solver.
+
 ### Collision navigation coordinates
 
 `ReplaceCollisionNavigation` uses a **world-aligned grid with origin (0, 0, 0)**

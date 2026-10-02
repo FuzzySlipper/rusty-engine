@@ -363,11 +363,16 @@ pub(super) struct CollisionNavigationDelta {
     removed: Vec<Column>,
     edge_columns: BTreeSet<Column>,
     edges: Vec<(VoxelCoord, Vec<VoxelCoord>)>,
+    edge_tests: u64,
 }
 
 impl CollisionNavigationDelta {
     pub(super) fn derived_columns(&self) -> u64 {
         self.derived.len() as u64
+    }
+
+    pub(super) fn edge_tests(&self) -> u64 {
+        self.edge_tests
     }
 
     pub(super) fn reused_columns(&self) -> u64 {
@@ -502,12 +507,13 @@ pub(super) fn derive_collision_navigation(
         }
         None => to_derive.extend(bounds.columns()),
     }
+    let to_derive: Vec<Column> = to_derive.into_iter().collect();
+    let samples = in_parallel(&to_derive, |&(x, z)| {
+        sample_column(scene, grid, world_y, &policy, x, z, None).map(|(supports, _)| supports)
+    });
     let mut derived = BTreeMap::new();
-    for (x, z) in to_derive {
-        derived.insert(
-            (x, z),
-            sample_column(scene, grid, world_y, &policy, x, z, None)?.0,
-        );
+    for (column, supports) in to_derive.into_iter().zip(samples) {
+        derived.insert(column, supports?);
     }
     let supports_of = |column: Column| -> &[(VoxelCoord, f64)] {
         match derived.get(&column) {
@@ -529,15 +535,20 @@ pub(super) fn derive_collision_navigation(
             edge_columns.insert((x + dx, z + dz));
         }
     }
-    let mut edges = Vec::new();
-    for &column in edge_columns
+    let sources: Vec<(VoxelCoord, f64)> = edge_columns
         .iter()
         .filter(|&&column| bounds.contains(column))
-    {
-        for &(from, from_y) in supports_of(column) {
-            let targets = derive_edges(scene, grid, &policy, &support, from, from_y)?;
-            edges.push((from, targets));
-        }
+        .flat_map(|&column| supports_of(column).iter().copied())
+        .collect();
+    let targets = in_parallel(&sources, |&(from, from_y)| {
+        derive_edges(scene, grid, &policy, &support, from, from_y)
+    });
+    let mut edges = Vec::with_capacity(sources.len());
+    let mut edge_tests = 0;
+    for ((from, _), derived) in sources.into_iter().zip(targets) {
+        let (targets, tested) = derived?;
+        edge_tests += tested;
+        edges.push((from, targets));
     }
     Ok(CollisionNavigationDelta {
         key,
@@ -548,7 +559,51 @@ pub(super) fn derive_collision_navigation(
         removed,
         edge_columns,
         edges,
+        edge_tests,
     })
+}
+
+/// Below this many items a derivation step runs on the calling thread.
+const PARALLEL_MINIMUM: usize = 64;
+
+/// `work` over every item, in order, spread across the machine's cores in
+/// small runs taken as each thread frees up (columns of rock cost less than
+/// columns of rough floor). Each item reads the published scene only, so the
+/// result does not depend on the split.
+fn in_parallel<T: Sync, R: Send>(items: &[T], work: impl Fn(&T) -> R + Sync) -> Vec<R> {
+    let threads = std::thread::available_parallelism().map_or(1, usize::from);
+    if threads <= 1 || items.len() < PARALLEL_MINIMUM {
+        return items.iter().map(work).collect();
+    }
+    let runs: Vec<&[T]> = items.chunks(PARALLEL_MINIMUM / 4).collect();
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let (work, runs, next) = (&work, &runs, &next);
+    let mut done: Vec<(usize, Vec<R>)> = std::thread::scope(|scope| {
+        let handles: Vec<_> = (0..threads.min(runs.len()))
+            .map(|_| {
+                scope.spawn(move || {
+                    let mut done = Vec::new();
+                    loop {
+                        let index = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        let Some(run) = runs.get(index) else {
+                            return done;
+                        };
+                        done.push((index, run.iter().map(work).collect::<Vec<_>>()));
+                    }
+                })
+            })
+            .collect();
+        handles
+            .into_iter()
+            .flat_map(|handle| {
+                handle
+                    .join()
+                    .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+            })
+            .collect()
+    });
+    done.sort_unstable_by_key(|(index, _)| *index);
+    done.into_iter().flat_map(|(_, results)| results).collect()
 }
 
 /// The columns of `bounds` within one cell of a changed world region.
@@ -710,19 +765,21 @@ fn derive_edges(
     support: &dyn Fn(VoxelCoord) -> Option<f64>,
     from: VoxelCoord,
     from_y: f64,
-) -> Result<Vec<VoxelCoord>, CharacterControllerError> {
+) -> Result<(Vec<VoxelCoord>, u64), CharacterControllerError> {
     let mut targets = Vec::new();
+    let mut tested = 0;
     for to in collision_navigation_neighbors(from, policy) {
         let Some(to_y) = support(to) else {
             continue;
         };
+        tested += 1;
         if edge_outcome(scene, grid, policy, (from, from_y), (to, to_y))?
             == CharacterEdgeOutcome::Traversable
         {
             targets.push(to);
         }
     }
-    Ok(targets)
+    Ok((targets, tested))
 }
 
 pub(super) fn edge_outcome(
@@ -2224,6 +2281,79 @@ mod tests {
         );
     }
 
+    /// A density edit on a reconstructed surface re-derives only the columns
+    /// near it, and the result is what a fresh derivation gives.
+    #[test]
+    fn a_density_edit_on_a_reconstructed_floor_rederives_only_nearby_columns() {
+        use engine_spatial::{
+            MaterialSurface, SurfaceCharacter, SurfaceMaterials, SurfaceMeshOptions, SurfaceMode,
+            VertexPlacement, VoxelDensityEdit, VoxelDensityEditService, VoxelDensityOperation,
+            VoxelDensityShape,
+        };
+        let mut voxels = Vec::new();
+        for x in -8..WIDTH + 8 {
+            for z in -8..WIDTH + 8 {
+                for y in 0..3 {
+                    voxels.push([x, y, z]);
+                }
+            }
+        }
+        let options = SurfaceMeshOptions {
+            mode: SurfaceMode::DualContouring,
+            materials: SurfaceMaterials::new([(
+                1,
+                MaterialSurface {
+                    mode: SurfaceMode::DualContouring,
+                    character: SurfaceCharacter {
+                        placement: VertexPlacement::Sharp,
+                        crease_angle_degrees: 40.0,
+                        roughness: 0.1,
+                    },
+                },
+            )])
+            .unwrap(),
+            ..SurfaceMeshOptions::default()
+        };
+        let (mut bridge, session) = bridge_with(Arc::new(
+            VoxelCollisionScene::from_solid_voxels_with_mesh_options(1.0, 16, voxels, options)
+                .unwrap(),
+        ));
+        let publish = request(session, 0.0);
+        let first = bridge.replace_collision_navigation(&publish).unwrap();
+        assert_eq!(first.derived_column_count, (WIDTH * WIDTH) as u64);
+        let scene = &mut bridge.sessions.get_mut(&session.value).unwrap();
+        scene.change_collision(|scene| {
+            let receipt = VoxelDensityEditService::apply(
+                scene,
+                &[VoxelDensityEdit::Brush {
+                    shape: VoxelDensityShape::Sphere {
+                        center: [16.0, 3.0, 16.0],
+                        radius: 1.5,
+                    },
+                    operation: VoxelDensityOperation::Subtract,
+                    material_slot: 1,
+                }],
+            )
+            .unwrap();
+            let changed = crate::voxel::collision_reach(
+                scene,
+                crate::voxel::voxel_box(scene, receipt.changed_min, receipt.changed_max_inclusive),
+            );
+            ((), vec![changed])
+        });
+        let edited = bridge.replace_collision_navigation(&publish).unwrap();
+        assert!(
+            edited.derived_column_count < (WIDTH * WIDTH / 4) as u64,
+            "an edit near one column re-derived {} of {} columns",
+            edited.derived_column_count,
+            WIDTH * WIDTH
+        );
+        assert_eq!(
+            published(&bridge, session),
+            from_scratch(&bridge, session, publish)
+        );
+    }
+
     /// The downstream shape (#8999): a 64 x 64 x 32 box over relief of about
     /// ±16 cells, then a 12 m shift and an edit inside one chunk. Run with
     /// `cargo test --release -p csharp-engine-services --lib measure_ -- --ignored --nocapture`.
@@ -2300,5 +2430,141 @@ mod tests {
             "one-chunk edit: {edit:?} derived {} reused {}",
             receipt.derived_column_count, receipt.reused_column_count
         );
+    }
+}
+
+/// Publication cost over a carved dungeon, as cubes and as reconstructed
+/// surfaces. Run with
+/// `cargo test --release -p csharp-engine-services --lib measure_dungeon -- --ignored --nocapture`.
+#[cfg(test)]
+mod cost {
+    use super::*;
+    use engine_spatial::{
+        MaterialSurface, SurfaceCharacter, SurfaceMaterials, SurfaceMeshOptions, SurfaceMode,
+        VertexPlacement,
+    };
+
+    const SIZE: i64 = 96;
+    const HEIGHT: i64 = 40;
+
+    /// Solid rock with a 4 × 4 grid of rooms at different floor heights,
+    /// joined by corridors, in `scale` voxels per metre.
+    fn dungeon(scale: i64) -> Vec<[i64; 3]> {
+        let room = |x: i64, z: i64| -> Option<i64> {
+            let (cx, cz) = (x / 24, z / 24);
+            let (lx, lz) = (x % 24, z % 24);
+            let floor = 8 + (cx * 3 + cz * 5) % 7;
+            let in_room = (4..20).contains(&lx) && (4..20).contains(&lz);
+            let corridor_x = (10..13).contains(&lz) && !(4..20).contains(&lx);
+            let corridor_z = (10..13).contains(&lx) && !(4..20).contains(&lz);
+            if in_room {
+                Some(floor)
+            } else if corridor_x || corridor_z {
+                Some(8)
+            } else {
+                None
+            }
+        };
+        let mut voxels = Vec::new();
+        for x in 0..SIZE * scale {
+            for z in 0..SIZE * scale {
+                let open = room(x / scale, z / scale);
+                for y in 0..HEIGHT * scale {
+                    let metres = y / scale;
+                    let carved = open.is_some_and(|floor| metres >= floor && metres < floor + 5);
+                    if !carved {
+                        voxels.push([x, y, z]);
+                    }
+                }
+            }
+        }
+        voxels
+    }
+
+    fn scene(mode: SurfaceMode, roughness: f32, scale: i64) -> VoxelCollisionScene {
+        let options = SurfaceMeshOptions {
+            mode,
+            materials: SurfaceMaterials::new([(
+                1,
+                MaterialSurface {
+                    mode,
+                    character: SurfaceCharacter {
+                        placement: VertexPlacement::Sharp,
+                        crease_angle_degrees: 40.0,
+                        roughness,
+                    },
+                },
+            )])
+            .unwrap(),
+            ..SurfaceMeshOptions::default()
+        };
+        VoxelCollisionScene::from_solid_voxels_with_mesh_options(
+            1.0 / scale as f64,
+            16,
+            dungeon(scale),
+            options,
+        )
+        .unwrap()
+    }
+
+    fn publish(scene: VoxelCollisionScene) -> (f64, NativeCollisionNavigationReplaceReceipt) {
+        let mut bridge = RuntimeSpatialBridge::new();
+        let session = bridge
+            .create(NativeSpatialSessionConfig {
+                collision_voxel_size: 1.0,
+                collision_chunk_size: 16,
+                voxel_surface_mode: NativeVoxelSurfaceMode::GreedyCubes,
+            })
+            .unwrap();
+        bridge.sessions.get_mut(&session.value).unwrap().scene = Arc::new(scene);
+        let mut config = flat_config(1.0, 1, 0.3, 1.6, 45.0);
+        config.maximum_cells = 1 << 20;
+        config.vertical_search_cells = 3;
+        let request = NativeCollisionNavigationReplaceRequest {
+            session,
+            world_min: NativeVec3 {
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+            },
+            world_max: NativeVec3 {
+                x: SIZE as f32,
+                y: HEIGHT as f32,
+                z: SIZE as f32,
+            },
+            config,
+        };
+        let started = std::time::Instant::now();
+        let receipt = bridge.replace_collision_navigation(&request).unwrap();
+        (started.elapsed().as_secs_f64() * 1000.0, receipt)
+    }
+
+    #[test]
+    #[ignore = "a measurement, not a check"]
+    fn measure_dungeon_publication_cost() {
+        let only =
+            std::env::args().find_map(|argument| argument.strip_prefix("case=").map(str::to_owned));
+        for (name, mode, roughness, scale) in [
+            ("cubes", SurfaceMode::GreedyCubes, 0.0, 1),
+            ("faceted", SurfaceMode::DualContouring, 0.0, 1),
+            ("faceted-rough", SurfaceMode::DualContouring, 0.1, 1),
+            ("faceted-half-metre", SurfaceMode::DualContouring, 0.0, 2),
+        ] {
+            if only.as_deref().is_some_and(|only| only != name) {
+                continue;
+            }
+            let built = std::time::Instant::now();
+            let scene = scene(mode, roughness, scale);
+            let build_ms = built.elapsed().as_secs_f64() * 1000.0;
+            let (ms, receipt) = publish(scene);
+            println!(
+                "{name}: build {build_ms:.0} ms, publish {ms:.0} ms ({} us in the receipt), {} walkable, {} derived, {} edge tests, hash {:016x}",
+                receipt.derivation_microseconds,
+                receipt.walkable_cell_count,
+                receipt.derived_column_count,
+                receipt.edge_test_count,
+                receipt.projection_hash
+            );
+        }
     }
 }

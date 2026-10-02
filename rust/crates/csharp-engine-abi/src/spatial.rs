@@ -884,6 +884,9 @@ pub struct NativeCollisionNavigationReplaceRequest {
 /// A collision-derived publication keeps the previous one's columns wherever
 /// neither the box, the policy, the vertical range nor the collision there
 /// changed; the counts show how many columns were derived and how many kept.
+/// `edge_test_count` is the support-to-support edges tested with capsule
+/// casts, and `derivation_microseconds` the time deriving and installing took,
+/// for budgeting a republish.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct NativeCollisionNavigationReplaceReceipt {
@@ -892,6 +895,8 @@ pub struct NativeCollisionNavigationReplaceReceipt {
     pub navigation_revision: u64,
     pub derived_column_count: u64,
     pub reused_column_count: u64,
+    pub edge_test_count: u64,
+    pub derivation_microseconds: u64,
 }
 
 #[repr(C)]
