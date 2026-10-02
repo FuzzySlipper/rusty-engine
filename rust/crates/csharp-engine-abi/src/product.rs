@@ -1396,6 +1396,8 @@ pub struct NativeContentApi {
     pub admit_reference: NativeAdmitContentReference,
     pub list_bundles: NativeListContentBundles,
     pub open_bundle: NativeOpenContentBundle,
+    pub open_container: NativeOpenContentContainer,
+    pub read_bundle_identity: NativeReadContentBundleIdentity,
     pub destroy_bundle: NativeDestroyContentBundle,
     pub read_bundle_files: NativeReadContentBundleFiles,
     pub open_bundle_reference: NativeOpenContentBundleReference,

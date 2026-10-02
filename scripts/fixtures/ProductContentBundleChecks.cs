@@ -9,7 +9,7 @@ internal static class ProductContentBundleChecks
     {
         ProductContent content = context.Content;
         // trial.txt plus the three spatial artifacts and particle texture.
-        Require(content.Files.Length == 5 && content.ReadText("trial.txt").Contains("package-only"), "legacy snapshot excludes bundle bodies and inventory");
+        Require(content.Files.Length == 6 && content.ReadText("trial.txt").Contains("package-only"), "legacy snapshot excludes bundle bodies and inventory");
         Require(content.ListBundles().ToArray().Single(bundle => bundle.Id == "rules").Id == "rules", "rules metadata discovery");
         try { content.OpenBundle("missing"); throw new Exception("missing bundle accepted"); }
         catch (IOException) { }

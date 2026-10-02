@@ -225,15 +225,20 @@ cat > "$tool/ConsumerTool.csproj" <<EOF
 EOF
 cat > "$tool/Program.cs" <<'EOF'
 ToolHostRandomChecks.Run();
+using (var host = Rusty.Engine.Testing.EngineTestHost.Create())
+    host.Call(engine => ContentContainerChecks.Run(engine, args[0]));
 System.Console.WriteLine("engine tool host checks passed");
 EOF
 cp "$repo_root/scripts/fixtures/ToolHostRandomChecks.cs" "$tool/ToolHostRandomChecks.cs"
+cp "$repo_root/scripts/fixtures/ContentContainerChecks.cs" "$tool/ContentContainerChecks.cs"
+# The tool opens content modules packed by the pair's own `rusty`.
+"$repo_root/scripts/fixtures/make-content-modules.sh" "$work/module-library" "$runtime/bin/rusty"
 (
     cd "$tool"
     DOTNET_CLI_HOME="$consumer_home" NUGET_PACKAGES="$consumer_packages" \
         dotnet publish ConsumerTool.csproj -p:RustyEngineCache="$work/cache" --output "$work/consumer-tool-published"
 )
-(cd "$work" && dotnet consumer-tool-published/ConsumerTool.dll) | tee "$work/tool-host.log"
+(cd "$work" && dotnet consumer-tool-published/ConsumerTool.dll "$work/module-library") | tee "$work/tool-host.log"
 grep -Fx 'engine tool host checks passed' "$work/tool-host.log" >/dev/null || {
     echo "RUSTY_ENGINE_PAIR_TEST_TOOL_HOST: the published consumer tool did not complete the Engine tool host checks" >&2
     exit 1

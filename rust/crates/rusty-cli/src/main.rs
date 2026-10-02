@@ -85,6 +85,7 @@ fn run() -> Result<ExitCode, String> {
         CommandName::Install(options) => install(&options),
         CommandName::Update(options) => update(&options),
         CommandName::Status(options) => status(&options),
+        CommandName::PackContent(options) => pack_content(&options),
     }
 }
 
@@ -473,6 +474,14 @@ enum CommandName {
     Install(InstallOptions),
     Update(UpdateOptions),
     Status(StatusOptions),
+    PackContent(PackContentOptions),
+}
+
+#[derive(Debug)]
+struct PackContentOptions {
+    directory: PathBuf,
+    output: PathBuf,
+    compress: bool,
 }
 
 #[derive(Debug)]
@@ -565,6 +574,10 @@ impl Arguments {
             "status" => match help(status_usage) {
                 Some(help) => return Ok(help),
                 None => CommandName::Status(parse_status(rest, "status", status_usage)?),
+            },
+            "pack-content" => match help(pack_content_usage) {
+                Some(help) => return Ok(help),
+                None => CommandName::PackContent(parse_pack_content(rest)?),
             },
             other => {
                 return Err(format!(
@@ -717,6 +730,29 @@ fn parse_build(values: Vec<String>) -> Result<BuildOptions, String> {
     })
 }
 
+fn parse_pack_content(values: Vec<String>) -> Result<PackContentOptions, String> {
+    let mut values = values.into_iter();
+    let mut directory = None;
+    let mut output = None;
+    let mut compress = false;
+    while let Some(value) = values.next() {
+        match value.as_str() {
+            "--output" => output = Some(PathBuf::from(required_value(&mut values, "--output")?)),
+            "--compress" => compress = true,
+            _ if !value.starts_with('-') && directory.is_none() => {
+                directory = Some(PathBuf::from(value))
+            }
+            _ => return Err(unknown_argument("pack-content", &value, pack_content_usage)),
+        }
+    }
+    Ok(PackContentOptions {
+        directory: directory
+            .ok_or("RUSTY_ARGUMENT: rusty pack-content needs a content directory")?,
+        output: output.ok_or("RUSTY_ARGUMENT: rusty pack-content needs --output <file>")?,
+        compress,
+    })
+}
+
 fn parse_install(values: Vec<String>) -> Result<InstallOptions, String> {
     let mut values = values.into_iter();
     let mut options = InstallOptions {
@@ -804,6 +840,7 @@ commands:
   update    move the pin to a newer published pair, install it, and list what changed
   build     restore, build and stage the product; --aot also publishes NativeAOT
   dev       build and run the product on its pinned runtime, rebuilding on source changes
+  pack-content  pack one content directory into a container a product opens at run time
 
 Run `rusty <command> --help` for a command's options.
 
@@ -890,6 +927,33 @@ Examples:
   rusty build --project src/Game/Game.csproj --pack release
   rusty build --project src/Game/Game.csproj --pack release --compress"
         .to_owned()
+}
+
+fn pack_content_usage() -> String {
+    "usage: rusty pack-content <directory> --output <file> [--compress]
+
+Packs every file under <directory>, at its directory-relative path, into one content container: the
+format `rusty build --pack` writes, with each file's length and SHA-256, and no product manifest,
+UI or code. A running product opens it with `Content.OpenContainer(path)` as an ordinary content
+bundle. --compress stores each file zstd shrinks by at least a tenth compressed. The file appears
+at <file> by rename once complete; the output must lie outside <directory>.
+
+Example:
+  rusty pack-content modules/srd-ruleset --output library/srd-ruleset.rpak --compress"
+        .to_owned()
+}
+
+fn pack_content(options: &PackContentOptions) -> Result<ExitCode, String> {
+    let report =
+        product_container::pack_content(&options.directory, &options.output, options.compress)
+            .map_err(|error| format!("RUSTY_PACK_CONTENT: {error}"))?;
+    println!(
+        "Packed {} files ({} bytes) into {}",
+        report.entries,
+        report.bytes,
+        options.output.display()
+    );
+    Ok(ExitCode::SUCCESS)
 }
 
 fn install_usage() -> String {

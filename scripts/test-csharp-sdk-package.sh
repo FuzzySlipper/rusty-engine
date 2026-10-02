@@ -158,6 +158,7 @@ cp "$repo_root/scripts/fixtures/ImplicitAuditChecks.cs" "$consumer_dir/ImplicitA
 cp "$repo_root/scripts/fixtures/DynamicsResultChecks.cs" "$consumer_dir/DynamicsResultChecks.cs"
 cp "$repo_root/scripts/fixtures/ProductContentBundleChecks.cs" "$consumer_dir/ProductContentBundleChecks.cs"
 cp "$repo_root/scripts/fixtures/ProductContentMixedBundleChecks.cs" "$consumer_dir/ProductContentMixedBundleChecks.cs"
+cp "$repo_root/scripts/fixtures/ContentContainerChecks.cs" "$consumer_dir/ContentContainerChecks.cs"
 cp "$repo_root/fixtures/csharp-spatial-artifact/SpatialArtifactChecks.cs" "$consumer_dir/SpatialArtifactChecks.cs"
 cp "$repo_root/fixtures/csharp-navigation-mapping/NavigationMappingChecks.cs" "$consumer_dir/NavigationMappingChecks.cs"
 cp "$repo_root/fixtures/csharp-particle-emission/ParticleEmissionChecks.cs" "$consumer_dir/ParticleEmissionChecks.cs"
@@ -187,6 +188,7 @@ public sealed class Product : IEngineProduct
         ImplicitAuditChecks.Run(context.Engine);
         DynamicsResultChecks.Run(context.Engine);
         ProductContentBundleChecks.Run(context);
+        ContentContainerChecks.Run(context.Engine, context.Content.ReadText("module-library.txt").Trim());
         _mixedBundleChecks = new ProductContentMixedBundleChecks(context);
         _engine = context.Engine;
         _stream = _engine.Ui.OpenStream(new UiStreamRequest("sdk-package", "sdk.package.smoke"));
@@ -330,6 +332,13 @@ PY
 # source-format test and is not substituted for this runtime asset contract.
 cp "$repo_root/fixtures/csharp-static-mesh/triangle.static-mesh.json" \
   "$repo_root/fixtures/csharp-static-mesh/triangle.rstatmsh" "$consumer_dir/content/mixed/"
+
+# Two content modules packed on their own into a library outside the product,
+# which the product names in its own content.
+module_library="$work_dir/module-library"
+"$repo_root/scripts/fixtures/make-content-modules.sh" "$module_library" \
+    cargo run --quiet --manifest-path "$repo_root/Cargo.toml" -p rusty-cli --bin rusty --locked --
+printf '%s\n' "$module_library" > "$consumer_dir/content/module-library.txt"
 
 # The only available package source is the fresh local feed. The SDK's source
 # tree is not an input to restore or build; consumer assets must not name it.

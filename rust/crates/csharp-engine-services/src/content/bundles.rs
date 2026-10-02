@@ -2,8 +2,10 @@
 //! each open owns an immutable collection, and references own independent Arc
 //! clones.
 use super::*;
-use product_container::{join, ProductSource};
+use crate::composition::CsharpEngineServicesError;
+use product_container::{join, Container, Entry, ProductSource};
 use serde::Deserialize;
+use std::{path::Path, sync::Mutex};
 
 pub const INDEX: &str = ".rusty-bundles.json";
 
@@ -116,7 +118,7 @@ impl ProductContentBundles {
                 .any(|b| path.starts_with(&format!("{}/", b.root)))
     }
 
-    fn load(&self, id: &str) -> Option<BTreeMap<String, AdmittedContent>> {
+    fn load(&self, id: &str) -> Option<OpenBundle> {
         let bundle = self.bundles.iter().find(|b| b.id == id)?;
         let mut bodies = BTreeMap::new();
         let mut hashes = BTreeMap::new();
@@ -141,27 +143,34 @@ impl ProductContentBundles {
                 Arc::<[u8]>::from(bytes.as_ref()),
             );
         }
-        let bodies = Arc::new(bodies);
-        Some(
-            bundle
-                .files
-                .iter()
-                .map(|file| {
-                    let path = format!("{}/{}", bundle.root, file.path);
-                    let bytes = Arc::clone(&bodies[&path]);
-                    (
-                        file.path.clone(),
-                        AdmittedContent {
-                            path,
-                            identity: super::ContentIdentity::known(hashes[file.path.as_str()]),
-                            bytes,
-                            transient: false,
-                            files: Arc::clone(&bodies),
-                        },
-                    )
-                })
-                .collect(),
-        )
+        let identities = bundle
+            .files
+            .iter()
+            .map(|file| Some((file.path.as_str(), hex_digest(&file.sha256)?)))
+            .collect::<Option<Vec<_>>>()?;
+        let bodies = super::ContentFiles::snapshot(bodies);
+        let files = bundle
+            .files
+            .iter()
+            .map(|file| {
+                let path = format!("{}/{}", bundle.root, file.path);
+                let bytes = bodies.get(&path).expect("read above");
+                (
+                    file.path.clone(),
+                    AdmittedContent {
+                        path,
+                        identity: super::ContentIdentity::known(hashes[file.path.as_str()]),
+                        bytes,
+                        transient: false,
+                        files: bodies.clone(),
+                    },
+                )
+            })
+            .collect();
+        Some(OpenBundle {
+            identity: collection_identity(identities),
+            files: OpenFiles::Snapshot(files),
+        })
     }
 }
 
@@ -203,10 +212,124 @@ fn packed_definitions(
         .collect()
 }
 
+/// An open content container. Opening checked its header and inventory; each
+/// file's bytes are read once, when first used, and shared from then on.
+/// References keep it (and its read-only map) alive after its bundle closes.
+pub(crate) struct ContainerFiles {
+    container: Container,
+    read: Mutex<BTreeMap<String, Arc<[u8]>>>,
+}
+
+impl ContainerFiles {
+    pub(crate) fn bytes(&self, path: &str) -> Option<Arc<[u8]>> {
+        let mut read = self
+            .read
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        if let Some(bytes) = read.get(path) {
+            return Some(Arc::clone(bytes));
+        }
+        let bytes: Arc<[u8]> = Arc::from(self.container.get(path).ok()?.as_ref());
+        read.insert(path.to_owned(), Arc::clone(&bytes));
+        Some(bytes)
+    }
+
+    fn content(self: &Arc<Self>, entry: &Entry) -> Option<AdmittedContent> {
+        Some(AdmittedContent {
+            path: entry.path.clone(),
+            identity: super::ContentIdentity::known(sha256_words(&hex_digest(&entry.sha256)?)),
+            bytes: self.bytes(&entry.path)?,
+            transient: false,
+            files: super::ContentFiles::Container(Arc::clone(self)),
+        })
+    }
+}
+
+/// One open bundle: a build bundle read whole, or a container read on use.
+struct OpenBundle {
+    identity: NativeContentSha256,
+    files: OpenFiles,
+}
+
+enum OpenFiles {
+    Snapshot(BTreeMap<String, AdmittedContent>),
+    Container(Arc<ContainerFiles>),
+}
+
+impl OpenBundle {
+    fn container(container: Container) -> Option<Self> {
+        let identities = container
+            .entries()
+            .iter()
+            .map(|entry| Some((entry.path.as_str(), hex_digest(&entry.sha256)?)))
+            .collect::<Option<Vec<_>>>()?;
+        Some(Self {
+            identity: collection_identity(identities),
+            files: OpenFiles::Container(Arc::new(ContainerFiles {
+                container,
+                read: Mutex::default(),
+            })),
+        })
+    }
+
+    /// Path, SHA-256 and length of every file, in path order.
+    fn entries(&self) -> Vec<(String, NativeContentSha256, u64)> {
+        match &self.files {
+            OpenFiles::Snapshot(files) => files
+                .iter()
+                .map(|(path, file)| (path.clone(), file.sha256(), file.bytes.len() as u64))
+                .collect(),
+            OpenFiles::Container(files) => files
+                .container
+                .entries()
+                .iter()
+                .filter_map(|entry| {
+                    let sha256 = sha256_words(&hex_digest(&entry.sha256)?);
+                    Some((entry.path.clone(), sha256, entry.byte_length))
+                })
+                .collect(),
+        }
+    }
+
+    fn reference(&self, path: &str) -> Option<AdmittedContent> {
+        match &self.files {
+            OpenFiles::Snapshot(files) => files.get(path).cloned(),
+            OpenFiles::Container(files) => files.content(files.container.entry(path)?),
+        }
+    }
+
+    fn resolve(&self, path: &str, hash: NativeContentSha256) -> Option<AdmittedContent> {
+        match &self.files {
+            OpenFiles::Snapshot(files) => files
+                .values()
+                .find(|file| file.path == path && file.sha256() == hash)
+                .cloned(),
+            OpenFiles::Container(files) => {
+                let entry = files.container.entry(path)?;
+                (hex_digest(&entry.sha256).map(|digest| sha256_words(&digest)) == Some(hash))
+                    .then(|| files.content(entry))?
+            }
+        }
+    }
+}
+
+/// A collection's identity: SHA-256 over each file's path and SHA-256 digest
+/// in path order, so it follows the files and not how they are stored.
+fn collection_identity(mut files: Vec<(&str, [u8; 32])>) -> NativeContentSha256 {
+    files.sort_unstable();
+    let mut hasher = Sha256::new();
+    for (path, digest) in files {
+        hasher.update(path.as_bytes());
+        hasher.update([0]);
+        hasher.update(digest);
+    }
+    sha256_words(&hasher.finalize())
+}
+
 #[derive(Default)]
 pub(super) struct BundleState {
     pub(super) source: ProductContentBundles,
-    open: BTreeMap<u64, BTreeMap<String, AdmittedContent>>,
+    open: BTreeMap<u64, OpenBundle>,
     next: u64,
 }
 
@@ -214,9 +337,7 @@ impl BundleState {
     pub(super) fn resolve(&self, path: &str, hash: NativeContentSha256) -> Option<AdmittedContent> {
         self.open
             .values()
-            .flat_map(|files| files.values())
-            .find(|file| file.path == path && file.sha256() == hash)
-            .cloned()
+            .find_map(|bundle| bundle.resolve(path, hash))
     }
 
     fn next(&mut self) -> Option<u64> {
@@ -275,16 +396,73 @@ pub(super) unsafe extern "C" fn open_bundle(
         return 0;
     };
     let bridge = unsafe { &mut *context.cast::<RuntimeContentBridge>() };
-    let Some(files) = bridge.bundles.source.load(id) else {
+    let Some(bundle) = bridge.bundles.source.load(id) else {
         return 0;
     };
     let Some(value) = bridge.bundles.next() else {
         return 0;
     };
-    bridge.bundles.open.insert(value, files);
+    bridge.bundles.open.insert(value, bundle);
     unsafe {
         *result = NativeContentBundleHandle { value };
     }
+    ABI_OK
+}
+
+pub(super) unsafe extern "C" fn open_container(
+    context: *mut c_void,
+    request: *const NativeContentContainerOpenRequest,
+    result: *mut NativeContentBundleHandle,
+    error: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    clear_receipt(error);
+    if context.is_null() || request.is_null() || result.is_null() {
+        return 0;
+    }
+    let request = unsafe { &*request };
+    let path =
+        match unsafe { borrowed_utf8(request.path.bytes, request.path.len, "container path") } {
+            Ok(path) => path,
+            Err(refusal) => return refuse(&refusal, error),
+        };
+    let bundle = Container::open(Path::new(path))
+        .map_err(|failure| CsharpEngineServicesError::new(failure.code(), failure.to_string()))
+        .and_then(|container| {
+            OpenBundle::container(container).ok_or_else(|| {
+                CsharpEngineServicesError::new(
+                    "PRODUCT_CONTAINER_CORRUPT",
+                    format!("`{path}`: an entry has an invalid SHA-256"),
+                )
+            })
+        });
+    let bundle = match bundle {
+        Ok(bundle) => bundle,
+        Err(refusal) => return refuse(&refusal, error),
+    };
+    let bridge = unsafe { &mut *context.cast::<RuntimeContentBridge>() };
+    let Some(value) = bridge.bundles.next() else {
+        return 0;
+    };
+    bridge.bundles.open.insert(value, bundle);
+    unsafe {
+        *result = NativeContentBundleHandle { value };
+    }
+    ABI_OK
+}
+
+pub(super) unsafe extern "C" fn read_bundle_identity(
+    context: *mut c_void,
+    bundle: NativeContentBundleHandle,
+    result: *mut NativeContentSha256,
+) -> i32 {
+    if context.is_null() || result.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeContentBridge>() };
+    let Some(bundle) = bridge.bundles.open.get(&bundle.value) else {
+        return 0;
+    };
+    unsafe { *result = bundle.identity };
     ABI_OK
 }
 
@@ -312,13 +490,10 @@ pub(super) unsafe extern "C" fn read_bundle_files(
         return 0;
     }
     let bridge = unsafe { &mut *context.cast::<RuntimeContentBridge>() };
-    let Some(files) = bridge.bundles.open.get(&bundle.value) else {
+    let Some(bundle) = bridge.bundles.open.get(&bundle.value) else {
         return 0;
     };
-    let entries = files
-        .iter()
-        .map(|(path, file)| (path.clone(), file.sha256(), file.bytes.len() as u64))
-        .collect();
+    let entries = bundle.entries();
     let Some(value) = bridge.retain_info(entries) else {
         return 0;
     };
@@ -346,8 +521,7 @@ pub(super) unsafe extern "C" fn open_bundle_reference(
         .bundles
         .open
         .get(&request.bundle.value)
-        .and_then(|b| b.get(path))
-        .cloned()
+        .and_then(|bundle| bundle.reference(path))
     else {
         return 0;
     };
@@ -423,7 +597,12 @@ mod tests {
             ABI_OK
         );
         assert_eq!(bridge.bundles.open.len(), 1);
-        let weak = Arc::downgrade(&bridge.bundles.open[&bundle.value]["a.json"].bytes);
+        let weak = Arc::downgrade(
+            &bridge.bundles.open[&bundle.value]
+                .reference("a.json")
+                .unwrap()
+                .bytes,
+        );
         let mut reference = NativeContentReferenceHandle::default();
         assert_eq!(
             unsafe {
@@ -528,12 +707,15 @@ mod tests {
         let source = ProductContentBundles::admit(&loose(directory.path()), "").unwrap();
         let actors = source.load("actors").unwrap();
         let other = source.load("other").unwrap();
-        let retained = actors["model.glb"].clone();
-        let dependency = Arc::downgrade(&retained.files["actors/skin.png"]);
+        let retained = actors.reference("model.glb").unwrap();
+        let dependency = Arc::downgrade(&retained.files.get("actors/skin.png").unwrap());
         drop(actors);
         drop(other);
-        assert_eq!(retained.files["actors/skin.png"].as_ref(), b"actors");
-        assert!(!retained.files.contains_key("other/skin.png"));
+        assert_eq!(
+            retained.files.get("actors/skin.png").unwrap().as_ref(),
+            b"actors"
+        );
+        assert!(retained.files.get("other/skin.png").is_none());
         assert!(dependency.upgrade().is_some());
         drop(retained);
         assert!(dependency.upgrade().is_none());
@@ -573,12 +755,146 @@ mod tests {
         let loose = ProductContentBundles::admit(&loose(directory.path()), "").unwrap();
         assert!(packed.owns_path("rules/a.json") && !packed.owns_path("loose.txt"));
         let (packed, loose) = (packed.load("rules").unwrap(), loose.load("rules").unwrap());
-        assert_eq!(packed["a.json"].path, "rules/a.json");
+        assert_eq!(packed.reference("a.json").unwrap().path, "rules/a.json");
         assert_eq!(
-            packed["a.json"].bytes.as_ref(),
-            loose["a.json"].bytes.as_ref()
+            packed.reference("a.json").unwrap().bytes.as_ref(),
+            loose.reference("a.json").unwrap().bytes.as_ref()
         );
-        assert_eq!(packed["a.json"].sha256(), loose["a.json"].sha256());
+        assert_eq!(
+            packed.reference("a.json").unwrap().sha256(),
+            loose.reference("a.json").unwrap().sha256()
+        );
+    }
+
+    fn diagnostic_code(receipt: NativeOperationErrorReceipt) -> (String, String) {
+        assert_eq!(receipt.diagnostics_len, 1);
+        let diagnostic = unsafe { *receipt.diagnostics };
+        let text = |value: NativeUtf8Slice| unsafe {
+            String::from_utf8(std::slice::from_raw_parts(value.bytes, value.len).to_vec()).unwrap()
+        };
+        (text(diagnostic.code), text(diagnostic.message))
+    }
+
+    /// A content directory packed on its own opens at run time as a bundle:
+    /// text, bytes and a GLB whose relative image resolves in the same
+    /// container, with the same identity raw or compressed; references outlive
+    /// the bundle; unreadable containers refuse with codes naming the file.
+    #[test]
+    fn a_packed_content_container_opens_as_a_bundle_and_bad_containers_refuse() {
+        use crate::appearance::tests::RGBA_PNG;
+        use crate::render_resources::{tests::external_image_glb, RenderResourceImports};
+        let directory = tempfile::tempdir().unwrap();
+        let module = directory.path().join("module");
+        fs::create_dir_all(module.join("models")).unwrap();
+        fs::write(module.join("module.json"), b"{\"id\":\"walls\"}").unwrap();
+        fs::write(module.join("general.bin"), [0_u8, 1, 255]).unwrap();
+        let character = include_bytes!(
+            "../../../../../fixtures/render/assets/kenney-retro-character/character-medium.glb"
+        );
+        fs::write(
+            module.join("models/character.glb"),
+            external_image_glb(character, "skin.png"),
+        )
+        .unwrap();
+        fs::write(module.join("models/skin.png"), RGBA_PNG).unwrap();
+
+        let mut bridge = RuntimeContentBridge::new(BTreeMap::new());
+        let context = (&mut bridge as *mut RuntimeContentBridge).cast();
+        let open = |path: &Path| {
+            let path = path.to_str().unwrap();
+            let mut bundle = NativeContentBundleHandle::default();
+            let mut receipt: NativeOperationErrorReceipt = unsafe { std::mem::zeroed() };
+            let status = unsafe {
+                open_container(
+                    context,
+                    &NativeContentContainerOpenRequest { path: text(path) },
+                    &mut bundle,
+                    &mut receipt,
+                )
+            };
+            (status == ABI_OK)
+                .then_some(bundle)
+                .ok_or_else(|| diagnostic_code(receipt))
+        };
+        let mut identities = Vec::new();
+        for compress in [false, true] {
+            let out = directory.path().join(format!("walls-{compress}.rpak"));
+            product_container::pack_content(&module, &out, compress).unwrap();
+            let bundle = open(&out).unwrap();
+            let mut identity = NativeContentSha256::default();
+            assert_eq!(
+                unsafe { read_bundle_identity(context, bundle, &mut identity) },
+                ABI_OK
+            );
+            identities.push(identity);
+            let mut files = NativeContentReferenceInfoResult {
+                references: std::ptr::null(),
+                references_len: 0,
+            };
+            assert_eq!(
+                unsafe { read_bundle_files(context, bundle, &mut files) },
+                ABI_OK
+            );
+            assert_eq!(files.references_len, 4);
+            let reference = |path: &str| {
+                let mut reference = NativeContentReferenceHandle::default();
+                assert_eq!(
+                    unsafe {
+                        open_bundle_reference(
+                            context,
+                            &NativeContentBundleReferenceRequest {
+                                bundle,
+                                path: text(path),
+                            },
+                            &mut reference,
+                        )
+                    },
+                    ABI_OK,
+                    "{path}"
+                );
+                reference
+            };
+            let manifest = reference("module.json");
+            let general = reference("general.bin");
+            let model = reference("models/character.glb");
+            assert_eq!(unsafe { destroy_bundle(context, bundle) }, ABI_OK);
+            assert_eq!(
+                bridge.retained_bytes(manifest).unwrap().as_ref(),
+                b"{\"id\":\"walls\"}"
+            );
+            assert_eq!(
+                bridge.retained_bytes(general).unwrap().as_ref(),
+                [0, 1, 255]
+            );
+            let model = bridge.retained_content(model).unwrap();
+            assert_eq!(model.path, "models/character.glb");
+            RenderResourceImports::default()
+                .animated(model, false)
+                .expect("the GLB's relative image resolves in its container");
+        }
+        assert_eq!(
+            identities[0], identities[1],
+            "compression changed the identity"
+        );
+
+        let packed = fs::read(directory.path().join("walls-false.rpak")).unwrap();
+        let truncated = directory.path().join("truncated.rpak");
+        fs::write(&truncated, &packed[..packed.len() - 10]).unwrap();
+        let corrupt = directory.path().join("corrupt.rpak");
+        fs::write(&corrupt, [packed.as_slice(), b"x"].concat()).unwrap();
+        let text_file = directory.path().join("notes.txt");
+        fs::write(&text_file, b"not a container").unwrap();
+        for (path, code) in [
+            (&truncated, "PRODUCT_CONTAINER_TRUNCATED"),
+            (&corrupt, "PRODUCT_CONTAINER_CORRUPT"),
+            (&text_file, "PRODUCT_CONTAINER_NOT_A_CONTAINER"),
+            (&directory.path().join("absent.rpak"), "PRODUCT_SOURCE_IO"),
+        ] {
+            let (actual, message) = open(path).unwrap_err();
+            assert_eq!(actual, code);
+            assert!(message.contains(path.to_str().unwrap()), "{message}");
+        }
+        assert!(bridge.bundles.open.is_empty());
     }
 
     #[test]

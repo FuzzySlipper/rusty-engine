@@ -128,6 +128,16 @@ pub struct NativeContentBundleReferenceRequest {
     pub path: NativeUtf8Slice,
 }
 
+/// Opens a content container the product located (packed with `rusty
+/// pack-content`, or any container) read-only as a bundle. Opening checks its
+/// header and inventory; each file's bytes are read once, when first used.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeContentContainerOpenRequest {
+    /// A filesystem path, absolute or relative to the process directory.
+    pub path: NativeUtf8Slice,
+}
+
 pub type NativeListContentBundles =
     unsafe extern "C" fn(*mut c_void, *mut NativeContentBundleInfoResult) -> i32;
 pub type NativeOpenContentBundle = unsafe extern "C" fn(
@@ -135,6 +145,16 @@ pub type NativeOpenContentBundle = unsafe extern "C" fn(
     *const NativeContentBundleOpenRequest,
     *mut NativeContentBundleHandle,
 ) -> i32;
+pub type NativeOpenContentContainer = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeContentContainerOpenRequest,
+    *mut NativeContentBundleHandle,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
+/// The bundle's identity: SHA-256 over each file's bundle-relative path and
+/// SHA-256 in path order, from the inventory alone.
+pub type NativeReadContentBundleIdentity =
+    unsafe extern "C" fn(*mut c_void, NativeContentBundleHandle, *mut NativeContentSha256) -> i32;
 pub type NativeDestroyContentBundle =
     unsafe extern "C" fn(*mut c_void, NativeContentBundleHandle) -> i32;
 pub type NativeReadContentBundleFiles = unsafe extern "C" fn(

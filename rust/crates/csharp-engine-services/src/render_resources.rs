@@ -777,7 +777,7 @@ impl RenderResourceImports {
                         content
                             .files
                             .get(path)
-                            .is_some_and(|current| Arc::ptr_eq(current, bytes))
+                            .is_some_and(|current| Arc::ptr_eq(&current, bytes))
                     })
             });
             if !matches_source {
@@ -1372,7 +1372,7 @@ struct PackedAnimatedSource {
 fn pack_animated_glb_closure(
     root_path: &str,
     root_bytes: &[u8],
-    content_resources: &BTreeMap<String, Arc<[u8]>>,
+    content_resources: &crate::content::ContentFiles,
 ) -> Result<PackedAnimatedSource, CsharpEngineServicesError> {
     let resource_uris = glb_relative_resource_uris(root_bytes).map_err(|diagnostic| {
         CsharpEngineServicesError::new(
@@ -1401,11 +1401,12 @@ fn pack_animated_glb_closure(
                     format!("animated GLB dependency `{content_path}` is missing"),
                 )
             })?;
-            dependencies.push((content_path, Arc::clone(bytes)));
-            Ok(GltfResource {
+            let resource = GltfResource {
                 uri,
                 bytes: bytes.to_vec(),
-            })
+            };
+            dependencies.push((content_path, bytes));
+            Ok(resource)
         })
         .collect::<Result<Vec<_>, CsharpEngineServicesError>>()?;
     admit_glb_source(&GlbSourceClosure {
@@ -1648,8 +1649,12 @@ pub(crate) mod tests {
     fn animated_embedded_image_is_packed_without_external_dependencies() {
         let embedded = external_image_glb(CHARACTER_GLB,
             "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLttAAAAABJRU5ErkJggg==");
-        let packed = pack_animated_glb_closure("character.glb", &embedded, &BTreeMap::new())
-            .expect("embedded image is packed without companion files");
+        let packed = pack_animated_glb_closure(
+            "character.glb",
+            &embedded,
+            &crate::content::ContentFiles::snapshot(BTreeMap::new()),
+        )
+        .expect("embedded image is packed without companion files");
         assert!(packed.dependencies.is_empty());
         assert_ne!(packed.bytes, embedded);
         let imported = asset_import::import_animated_glb_asset(
@@ -1658,8 +1663,12 @@ pub(crate) mod tests {
             &asset_import::ImportContext::default(),
         );
         assert!(!imported.has_errors(), "{:?}", imported.diagnostics);
-        let unchanged =
-            pack_animated_glb_closure("character.glb", CHARACTER_GLB, &BTreeMap::new()).unwrap();
+        let unchanged = pack_animated_glb_closure(
+            "character.glb",
+            CHARACTER_GLB,
+            &crate::content::ContentFiles::snapshot(BTreeMap::new()),
+        )
+        .unwrap();
         assert_eq!(unchanged.bytes, CHARACTER_GLB);
     }
 
@@ -1669,7 +1678,7 @@ pub(crate) mod tests {
             identity: Default::default(),
             bytes: Arc::from(bytes),
             transient: false,
-            files: Arc::default(),
+            files: crate::content::ContentFiles::snapshot(BTreeMap::new()),
         }
     }
 
@@ -1830,7 +1839,7 @@ pub(crate) mod tests {
             identity: Default::default(),
             bytes: Arc::clone(&files["character.glb"]),
             transient: false,
-            files: Arc::new(files.clone()),
+            files: crate::content::ContentFiles::snapshot(files.clone()),
         };
         let mut imports = RenderResourceImports::default();
         let mut registry = RenderResourceRegistry::default();

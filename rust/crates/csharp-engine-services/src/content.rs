@@ -34,13 +34,34 @@ impl ContentIdentity {
     }
 }
 
+/// The immutable files a source's relative dependencies resolve in: a
+/// snapshot, or an open container whose bodies are read once, when first used.
+#[derive(Clone)]
+pub(crate) enum ContentFiles {
+    Snapshot(Arc<BTreeMap<String, Arc<[u8]>>>),
+    Container(Arc<bundles::ContainerFiles>),
+}
+
+impl ContentFiles {
+    pub(crate) fn snapshot(files: BTreeMap<String, Arc<[u8]>>) -> Self {
+        Self::Snapshot(Arc::new(files))
+    }
+
+    pub(crate) fn get(&self, path: &str) -> Option<Arc<[u8]>> {
+        match self {
+            Self::Snapshot(files) => files.get(path).cloned(),
+            Self::Container(container) => container.bytes(path),
+        }
+    }
+}
+
 #[derive(Clone)]
 struct AdmittedContent {
     path: String,
     identity: ContentIdentity,
     bytes: Arc<[u8]>,
     transient: bool,
-    files: Arc<BTreeMap<String, Arc<[u8]>>>,
+    files: ContentFiles,
 }
 
 impl AdmittedContent {
@@ -56,7 +77,7 @@ pub(crate) struct RetainedContent {
     pub(crate) bytes: Arc<[u8]>,
     pub(crate) transient: bool,
     /// Immutable dependency context of this source, never other open bundles.
-    pub(crate) files: Arc<BTreeMap<String, Arc<[u8]>>>,
+    pub(crate) files: ContentFiles,
 }
 
 impl RetainedContent {
@@ -77,7 +98,7 @@ pub(crate) struct RuntimeContentBridge {
 
 impl RuntimeContentBridge {
     pub(crate) fn new(content_resources: BTreeMap<String, Arc<[u8]>>) -> Self {
-        let files = Arc::new(content_resources.clone());
+        let files = ContentFiles::snapshot(content_resources.clone());
         let catalog = content_resources
             .into_iter()
             .map(|(path, bytes)| {
@@ -88,7 +109,7 @@ impl RuntimeContentBridge {
                         identity: ContentIdentity::default(),
                         bytes,
                         transient: false,
-                        files: Arc::clone(&files),
+                        files: files.clone(),
                     },
                 )
             })
@@ -133,7 +154,7 @@ impl RuntimeContentBridge {
                 identity: content.identity.clone(),
                 bytes: Arc::clone(&content.bytes),
                 transient: content.transient,
-                files: Arc::clone(&content.files),
+                files: content.files.clone(),
             })
     }
 
@@ -148,7 +169,7 @@ impl RuntimeContentBridge {
             identity: content.identity.clone(),
             bytes: Arc::clone(&content.bytes),
             transient: content.transient,
-            files: Arc::clone(&content.files),
+            files: content.files.clone(),
         })
     }
 
@@ -222,6 +243,8 @@ pub(crate) fn api(bridge: &mut RuntimeContentBridge) -> NativeContentApi {
         context: (bridge as *mut RuntimeContentBridge).cast(),
         list_bundles: bundles::list_bundles,
         open_bundle: bundles::open_bundle,
+        open_container: bundles::open_container,
+        read_bundle_identity: bundles::read_bundle_identity,
         destroy_bundle: bundles::destroy_bundle,
         read_bundle_files: bundles::read_bundle_files,
         open_bundle_reference: bundles::open_bundle_reference,
@@ -283,7 +306,7 @@ pub(crate) unsafe extern "C" fn admit_reference(
         identity: ContentIdentity::default(),
         bytes,
         transient: true,
-        files: Arc::new(files),
+        files: ContentFiles::snapshot(files),
     };
     let bridge = unsafe { &mut *context.cast::<RuntimeContentBridge>() };
     let Some(handle) = bridge.retain(content) else {
@@ -505,7 +528,7 @@ mod tests {
         assert_eq!(source, [99, 2, 3]);
         let retained = bridge.retained_content(handle).unwrap();
         assert_eq!(&*retained.bytes, &[1, 2, 3]);
-        assert_eq!(&*retained.files["model/texture.png"], &[4, 5]);
+        assert_eq!(&*retained.files.get("model/texture.png").unwrap(), &[4, 5]);
         assert!(retained.transient);
         assert!(bridge.catalog.is_empty());
         let weak = Arc::downgrade(&retained.bytes);

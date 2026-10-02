@@ -18,7 +18,7 @@ mod pack;
 mod source;
 
 pub use container::{write, Body, Bundle, Container, Entry, NewEntry, WriteReport};
-pub use pack::{pack_product, PackReport, CONTAINER_NAME};
+pub use pack::{pack_content, pack_product, PackReport, CONTAINER_NAME};
 pub use source::ProductSource;
 
 use std::{fmt, io, path::PathBuf};
@@ -49,7 +49,7 @@ pub enum Error {
     NotRegular(String),
     /// A path is not relative, `/`-separated and normalized.
     InvalidPath(String),
-    /// The release directory is the staged Product, inside it, or contains it.
+    /// The output is the directory being packed, inside it, or contains it.
     Overlap {
         staged: PathBuf,
         release: PathBuf,
@@ -103,7 +103,7 @@ impl fmt::Display for Error {
             }
             Self::Overlap { staged, release } => write!(
                 f,
-                "release directory `{}` overlaps the staged Product `{}`; choose a directory outside it",
+                "output `{}` overlaps `{}`, the directory being packed; choose an output outside it",
                 release.display(),
                 staged.display()
             ),

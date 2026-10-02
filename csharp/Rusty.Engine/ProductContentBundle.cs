@@ -2,7 +2,7 @@ using System.Text;
 
 namespace Rusty.Engine;
 
-/// <summary>An independently loaded immutable build-content collection.</summary>
+/// <summary>An independently loaded immutable content collection: a build bundle or an opened container.</summary>
 /// <remarks>
 /// File paths are bundle-relative. Reads copy requested bytes into managed memory;
 /// enumeration of Entries copies metadata only. Dispose releases the collection's
@@ -23,11 +23,38 @@ public sealed class ProductContentBundle : IDisposable
         this.service = service;
         this.handle = handle;
         entries = service.ReadBundleFiles(handle);
+        Identity = service.ReadBundleIdentity(handle);
         files = new(StringComparer.Ordinal);
         foreach (var file in entries.Span) files.Add(file.Path, file);
     }
 
+    /// <summary>
+    /// Open a content container at a filesystem path the product chose (packed with
+    /// <c>rusty pack-content</c>) as a bundle with this same surface. Opening checks the
+    /// container's header and inventory; each file's bytes are read when first used. A missing,
+    /// truncated or corrupt container throws <see cref="EngineCallException"/> with
+    /// <c>PRODUCT_SOURCE_IO</c>, <c>PRODUCT_CONTAINER_TRUNCATED</c>, <c>PRODUCT_CONTAINER_CORRUPT</c>
+    /// or <c>PRODUCT_CONTAINER_NOT_A_CONTAINER</c>. Tools use it through an
+    /// <c>EngineTestHost</c>'s <c>Content</c>.
+    /// </summary>
+    public static ProductContentBundle OpenContainer(IContentService content, string path)
+    {
+        ArgumentNullException.ThrowIfNull(content);
+        ArgumentNullException.ThrowIfNull(path);
+        ContentBundle handle = content.OpenContainer(new(path));
+        try { return new ProductContentBundle(path, content, handle); }
+        catch { handle.Dispose(); throw; }
+    }
+
+    /// <summary>The bundle ID, or the path a container was opened from.</summary>
     public string Id { get; }
+
+    /// <summary>
+    /// The collection's identity: SHA-256 over each file's bundle-relative path and SHA-256, in
+    /// path order. It follows the files, not how they are stored, so a container packed from a
+    /// directory has the identity of a build bundle with the same files.
+    /// </summary>
+    public ContentSha256 Identity { get; }
 
     /// <summary>File inventory in Engine UTF-8 path order; accessing it does not copy file bodies.</summary>
     public ReadOnlyMemory<ContentReferenceInfo> Entries { get { ThrowIfDisposed(); return entries; } }

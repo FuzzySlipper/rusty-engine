@@ -1469,7 +1469,7 @@ impl RuntimeAppearanceBridge {
             identity: Default::default(),
             bytes,
             transient: false,
-            files: Arc::new(self.content_resources.clone()),
+            files: crate::content::ContentFiles::snapshot(self.content_resources.clone()),
         })
     }
 
@@ -11240,8 +11240,10 @@ pub(super) mod tests {
         assert!(bridge
             .admit_animated_mesh(external_content.clone())
             .is_err());
-        Arc::make_mut(&mut external_content.files)
-            .insert("texture.png".into(), Arc::from(RGBA_PNG));
+        external_content.files = crate::content::ContentFiles::snapshot(BTreeMap::from([(
+            "texture.png".into(),
+            Arc::from(RGBA_PNG),
+        )]));
         let external_resource = bridge.admit_animated_mesh(external_content).unwrap();
         assert!(asset_import::glb_relative_resource_uris(
             bridge.resource(external_resource.value).unwrap().bytes()

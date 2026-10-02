@@ -50,6 +50,14 @@ public sealed class ProductContent
         catch { handle.Dispose(); throw; }
     }
 
+    /// <summary>
+    /// Open a content container the product located (packed with <c>rusty pack-content</c>) as
+    /// an ordinary bundle. Dispose it when its collection is no longer needed.
+    /// </summary>
+    public ProductContentBundle OpenContainer(string path) => service is null
+        ? throw new FileNotFoundException($"Content container was not opened: {path}", path)
+        : ProductContentBundle.OpenContainer(service, path);
+
     /// <summary>Find an optional file by its exact content-relative path.</summary>
     public bool TryReadFile(string path, out ProductContentFile file) => byPath.TryGetValue(path, out file);
 

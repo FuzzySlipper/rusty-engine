@@ -6,7 +6,7 @@ use std::{
 
 use serde::Deserialize;
 
-use crate::{join, write, Body, Bundle, Error, NewEntry, ProductSource};
+use crate::{join, write, Body, Bundle, Error, NewEntry, ProductSource, WriteReport};
 
 /// The container's file name in a release directory.
 pub const CONTAINER_NAME: &str = "product.rpak";
@@ -141,6 +141,34 @@ pub fn pack_product(staged: &Path, release: &Path, compress: bool) -> Result<Pac
     })
 }
 
+/// Packs one content directory into a standalone container at `out`: every
+/// file at its directory-relative path, with no manifest and no bundles. The
+/// output must lie outside the directory. With `compress`, files that zstd
+/// shrinks enough are stored compressed (see [`write`]).
+pub fn pack_content(directory: &Path, out: &Path, compress: bool) -> Result<WriteReport, Error> {
+    let source = ProductSource::open(directory)?;
+    let ProductSource::Directory(root) = &source else {
+        return Err(Error::NotRegular(directory.display().to_string()));
+    };
+    let resolved = resolve(out)?;
+    if resolved.starts_with(root) {
+        return Err(Error::Overlap {
+            staged: root.clone(),
+            release: resolved,
+        });
+    }
+    let entries = source
+        .files("")?
+        .into_iter()
+        .map(|path| NewEntry {
+            body: Body::File(root.join(&path)),
+            path,
+            bundle: None,
+        })
+        .collect();
+    write(out, entries, Vec::new(), compress)
+}
+
 /// `path` made absolute with symlinks and `..` resolved, also when its
 /// trailing directories do not exist yet.
 fn resolve(path: &Path) -> Result<PathBuf, Error> {
@@ -225,6 +253,45 @@ mod tests {
             Some("rules")
         );
         assert_eq!(container.entry("content/loose.txt").unwrap().bundle, None);
+    }
+
+    #[test]
+    fn packs_a_content_directory_alone_and_refuses_an_output_inside_it() {
+        let directory = tempfile::tempdir().unwrap();
+        let module = directory.path().join("module");
+        fs::create_dir_all(module.join("rules")).unwrap();
+        fs::write(module.join("module.json"), b"{\"id\":\"rules\"}").unwrap();
+        fs::write(module.join("rules/classes.json"), "[1,2,3],".repeat(512)).unwrap();
+        for compress in [false, true] {
+            let out = directory.path().join(format!("rules-{compress}.rpak"));
+            let report = pack_content(&module, &out, compress).unwrap();
+            assert_eq!(report.entries, 2);
+            let source = ProductSource::open(&out).unwrap();
+            let container = source.container().unwrap();
+            assert!(container.bundles().is_empty());
+            assert_eq!(
+                source.files("").unwrap(),
+                ["module.json", "rules/classes.json"]
+            );
+            assert_eq!(
+                container
+                    .entry("rules/classes.json")
+                    .unwrap()
+                    .zstd_length
+                    .is_some(),
+                compress
+            );
+            assert_eq!(
+                source.read("rules/classes.json").unwrap().as_ref(),
+                fs::read(module.join("rules/classes.json")).unwrap()
+            );
+        }
+        let inside = module.join("rules.rpak");
+        assert!(matches!(
+            pack_content(&module, &inside, false),
+            Err(Error::Overlap { .. })
+        ));
+        assert!(!inside.exists());
     }
 
     #[test]

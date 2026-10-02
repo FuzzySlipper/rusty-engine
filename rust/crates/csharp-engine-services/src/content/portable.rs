@@ -77,7 +77,7 @@ fn build(source: AdmittedContent, selected: String) -> Result<Asset, String> {
                 AdmittedContent {
                     path: full,
                     identity: ContentIdentity::default(),
-                    bytes: bytes.clone(),
+                    bytes,
                     transient: source.transient,
                     files: source.files.clone(),
                 },
@@ -396,7 +396,7 @@ mod tests {
     fn source(prefix: &str) -> AdmittedContent {
         let body: Arc<[u8]> = Arc::from(br#"{"schemaVersion":1,"assets":[{"id":"body","kind":"model","path":"body.glb","clips":{"idle":"Idle"}},{"id":"draft-no-kind"},{"id":"draft-required-field","kind":"attachment"}]}"#.as_slice());
         let path = format!("{prefix}asset.json");
-        let files = Arc::new(BTreeMap::from([
+        let files = super::ContentFiles::snapshot(BTreeMap::from([
             (path.clone(), body.clone()),
             (
                 format!("{prefix}body.glb"),
@@ -469,7 +469,7 @@ mod tests {
     #[test]
     fn reference_context_does_not_fall_back_to_unrelated_catalog_files() {
         let mut isolated = source("bundle/");
-        isolated.files = Arc::new(BTreeMap::new());
+        isolated.files = super::ContentFiles::snapshot(BTreeMap::new());
         let error = match build(isolated, "body".into()) {
             Ok(_) => panic!("missing member accepted"),
             Err(e) => e,
