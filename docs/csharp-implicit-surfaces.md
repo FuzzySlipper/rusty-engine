@@ -581,7 +581,9 @@ meshes alike:
   only;
 - alpha mode and unlit.
 
-Each texture's `KHR_texture_transform` (offset, rotation, scale) applies to its
+Embedded PNG, JPEG and WebP images decode. A texture's `EXT_texture_webp`
+image is used in preference to its core source, which may be absent. Each
+texture's `KHR_texture_transform` (offset, rotation, scale) applies to its
 own slot. Specular and volume data are admitted but not drawn. Textures are
 read from `TEXCOORD_0`: a `texCoord` naming another set, a mesh's own
 `TANGENT` attribute, and mirrored uv layouts (whose normal maps need the

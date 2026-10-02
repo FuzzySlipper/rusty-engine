@@ -8,7 +8,7 @@ use gltf::animation::util::ReadOutputs;
 use gltf::animation::{Interpolation, Property};
 
 use crate::convert;
-use crate::resources::{decode_jpeg, decode_png, DecodedImage};
+use crate::resources::{decode_jpeg, decode_png, decode_webp, DecodedImage};
 
 pub struct GlbNode {
     pub name: Option<String>,
@@ -419,19 +419,29 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<GlbModel, String> {
     let textures = document
         .textures()
         .map(|texture| {
-            let image = match texture.source().map(|image| image.source()) {
-                Some(gltf::image::Source::View { view, mime_type }) => {
-                    let buffer = data(view.buffer());
-                    buffer
-                        .and_then(|bytes| bytes.get(view.offset()..view.offset() + view.length()))
-                        .and_then(|bytes| match mime_type {
+            // EXT_texture_webp names its own image, preferred over the core
+            // source (a fallback, or absent) as the extension specifies.
+            let webp = texture
+                .extensions()
+                .and_then(|extensions| extensions.get("EXT_texture_webp"))
+                .and_then(|extension| extension.get("source"))
+                .and_then(|source| source.as_u64())
+                .and_then(|index| document.images().nth(index as usize));
+            let image = webp
+                .or_else(|| texture.source())
+                .and_then(|image| match image.source() {
+                    gltf::image::Source::View { view, mime_type } => {
+                        let bytes = data(view.buffer())?
+                            .get(view.offset()..view.offset() + view.length())?;
+                        match mime_type {
                             "image/png" => decode_png(bytes).ok(),
                             "image/jpeg" => decode_jpeg(bytes).ok(),
+                            "image/webp" => decode_webp(bytes).ok(),
                             _ => None,
-                        })
-                }
-                _ => None,
-            };
+                        }
+                    }
+                    gltf::image::Source::Uri { .. } => None,
+                });
             let sampler = texture.sampler();
             GlbTexture {
                 image,
@@ -542,11 +552,17 @@ mod tests {
     use super::*;
 
     fn textured_glb(image: &[u8], mime_type: &str) -> Vec<u8> {
+        glb_with_texture(image, mime_type, r#"{"source":0}"#)
+    }
+
+    /// One embedded image and one texture (`texture`, as JSON) on a material.
+    fn glb_with_texture(image: &[u8], mime_type: &str, texture: &str) -> Vec<u8> {
         let json = format!(
-            r#"{{"asset":{{"version":"2.0"}},"scene":0,"scenes":[{{"nodes":[]}}],"buffers":[{{"byteLength":{}}}],"bufferViews":[{{"buffer":0,"byteLength":{}}}],"images":[{{"bufferView":0,"mimeType":"{}"}}],"textures":[{{"source":0}}],"materials":[{{"pbrMetallicRoughness":{{"baseColorTexture":{{"index":0}}}}}}]}}"#,
+            r#"{{"asset":{{"version":"2.0"}},"extensionsUsed":["EXT_texture_webp"],"scene":0,"scenes":[{{"nodes":[]}}],"buffers":[{{"byteLength":{}}}],"bufferViews":[{{"buffer":0,"byteLength":{}}}],"images":[{{"bufferView":0,"mimeType":"{}"}}],"textures":[{}],"materials":[{{"pbrMetallicRoughness":{{"baseColorTexture":{{"index":0}}}}}}]}}"#,
             image.len(),
             image.len(),
-            mime_type
+            mime_type,
+            texture
         );
         let mut json = json.into_bytes();
         while !json.len().is_multiple_of(4) {
@@ -571,6 +587,31 @@ mod tests {
         bytes.extend_from_slice(&0x004e_4942u32.to_le_bytes());
         bytes.extend(bin);
         bytes
+    }
+
+    #[test]
+    fn webp_textures_decode_from_the_extension_source_or_a_webp_core_source() {
+        let rgba: Vec<u8> = (0..64u8)
+            .flat_map(|index| [index * 4, 255 - index * 4, 90, 255 - index])
+            .collect();
+        let mut webp = Vec::new();
+        image_webp::WebPEncoder::new(&mut webp)
+            .encode(&rgba, 8, 8, image_webp::ColorType::Rgba8)
+            .unwrap();
+        for texture in [
+            // The extension's own source, with no core source.
+            r#"{"extensions":{"EXT_texture_webp":{"source":0}}}"#,
+            // A core source whose image is WebP.
+            r#"{"source":0}"#,
+        ] {
+            let model = decode(&glb_with_texture(&webp, "image/webp", texture)).unwrap();
+            let image = model.textures[0]
+                .image
+                .as_ref()
+                .unwrap_or_else(|| panic!("{texture}: webp image decoded"));
+            assert_eq!((image.width, image.height), (8, 8));
+            assert_eq!(image.rgba, rgba, "{texture}: lossless pixels");
+        }
     }
 
     #[test]

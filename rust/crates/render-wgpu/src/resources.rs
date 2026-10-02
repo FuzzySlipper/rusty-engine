@@ -99,6 +99,28 @@ pub(crate) fn decode_jpeg(bytes: &[u8]) -> Result<DecodedImage, String> {
     })
 }
 
+/// A lossy or lossless WebP image (GLB `EXT_texture_webp`), as RGBA.
+pub(crate) fn decode_webp(bytes: &[u8]) -> Result<DecodedImage, String> {
+    let mut decoder = image_webp::WebPDecoder::new(std::io::Cursor::new(bytes))
+        .map_err(|error| error.to_string())?;
+    let (width, height) = decoder.dimensions();
+    let size = decoder.output_buffer_size().ok_or("webp is too large")?;
+    let mut pixels = vec![0; size];
+    decoder
+        .read_image(&mut pixels)
+        .map_err(|error| error.to_string())?;
+    let rgba = if decoder.has_alpha() {
+        pixels
+    } else {
+        expand(&pixels, 3, |p| [p[0], p[1], p[2], 255])
+    };
+    Ok(DecodedImage {
+        width,
+        height,
+        rgba,
+    })
+}
+
 /// Vertex streams ready for upload. Colours (RGBA) are drawn only for static
 /// meshes; the other families clear them before upload.
 pub struct MeshStreams {

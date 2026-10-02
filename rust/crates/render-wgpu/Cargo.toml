@@ -18,6 +18,8 @@ naga_oil = { version = "0.23", default-features = false }
 glam.workspace = true
 png.workspace = true
 jpeg-decoder = { version = "0.3.2", default-features = false }
+# GLB EXT_texture_webp images.
+image-webp = "0.2.4"
 # Animated mesh GLBs (the runtime admits them; this crate only reads them).
 gltf = { workspace = true, features = ["extensions"] }
 bytemuck.workspace = true
