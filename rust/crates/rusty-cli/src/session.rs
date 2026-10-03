@@ -1,6 +1,6 @@
 //! `rusty dev start|stop|status`: one background `rusty dev` per product
-//! project, found through files under the repository's `.runtime/dev/<project
-//! file>/` instead of process names.
+//! project, found through files in the repository's `.runtime/dev/`, one
+//! directory per project path, instead of process names.
 //!
 //! The supervisor holds an exclusive lock on `lock` for its whole life, so a
 //! record whose lock is free belongs to a supervisor that died and is cleared.
@@ -36,17 +36,22 @@ pub struct SessionPaths {
 }
 
 impl SessionPaths {
+    /// The session of the project at `project`: equivalent spellings of one
+    /// project file (relative, `..`, symlinks) name the same session, and
+    /// distinct project files in one repository name distinct ones.
     pub fn for_project(project: &Path) -> Result<Self, String> {
         let project = super::absolute(project)?;
-        let name = project.file_name().ok_or_else(|| {
-            format!(
+        let project = fs::canonicalize(&project).unwrap_or(project);
+        let runtime = super::development_runtime_root(&project)?;
+        let owner = runtime.parent().unwrap_or(&runtime);
+        let relative = project.strip_prefix(owner).unwrap_or(&project);
+        if relative.file_name().is_none() {
+            return Err(format!(
                 "RUSTY_DEV_PROJECT: `{}` names no project file",
                 project.display()
-            )
-        })?;
-        let directory = super::development_runtime_root(&project)?
-            .join("dev")
-            .join(name);
+            ));
+        }
+        let directory = runtime.join("dev").join(session_key(relative));
         Ok(Self {
             record: directory.join("session.json"),
             lock: directory.join("lock"),
@@ -87,6 +92,16 @@ impl SessionPaths {
         let lines: Vec<&str> = text.lines().collect();
         lines[lines.len().saturating_sub(LOG_TAIL_LINES)..].join("\n")
     }
+}
+
+/// One directory name per project path within the repository: `/` and `%`
+/// are escaped, so `a/b.csproj` and `a%2Fb.csproj` stay distinct.
+fn session_key(relative: &Path) -> String {
+    relative
+        .components()
+        .map(|component| component.as_os_str().to_string_lossy().replace('%', "%25"))
+        .collect::<Vec<_>>()
+        .join("%2F")
 }
 
 /// The supervisor's side: the lock it holds and the record it keeps current.
@@ -360,6 +375,31 @@ fn detach(command: &mut Command) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn same_named_projects_have_their_own_sessions() {
+        let root = std::env::temp_dir().join(format!("rusty-session-names-{}", std::process::id()));
+        for directory in ["a", "b", "c"] {
+            fs::create_dir_all(root.join(directory)).unwrap();
+            fs::write(root.join(directory).join("Game.csproj"), "").unwrap();
+        }
+        fs::create_dir_all(root.join(".git")).unwrap();
+        let (a, b) = (root.join("a/Game.csproj"), root.join("b/Game.csproj"));
+        let session = Session::claim(&a, &root.join(".runtime/persistence")).unwrap();
+        let (paths_a, paths_b) = (
+            SessionPaths::for_project(&a).unwrap(),
+            SessionPaths::for_project(&b).unwrap(),
+        );
+        assert_ne!(paths_a.directory, paths_b.directory);
+        assert!(paths_a.running().unwrap().is_some());
+        assert!(paths_b.running().unwrap().is_none());
+        let other = Session::claim(&b, &root.join(".runtime/persistence")).unwrap();
+        // Another spelling of a's project names a's session.
+        let spelled = SessionPaths::for_project(&root.join("c/../a/./Game.csproj")).unwrap();
+        assert_eq!(spelled.directory, paths_a.directory);
+        drop((session, other));
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn a_record_without_its_supervisor_is_cleared() {

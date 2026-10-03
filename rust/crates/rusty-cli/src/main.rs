@@ -956,7 +956,7 @@ edits replace the runtime.
 product serves and prints {url, port, pid, runtimeInstanceId, persistenceRoot, log} as JSON, or exits
 nonzero with the log's tail if staging or startup failed. `rusty dev stop` ends that project's session
 and disposes the product as Ctrl+C would; `rusty dev status` reports it. The session's record and log
-live in the repository's .runtime/dev/<project file>/.
+live in the repository's .runtime/dev/, one directory per project path.
 
 The runtime is the pair pinned in the product's Directory.Build.props, installed by `rusty install`.
 `rusty dev` runs that pair's own copy of this command, so the supervisor always matches its host;

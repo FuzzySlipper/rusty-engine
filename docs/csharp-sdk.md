@@ -65,8 +65,8 @@ Scripts and agents run it in the background, one session per project:
 and prints `{url, port, pid, runtimeInstanceId, persistenceRoot, log}` as JSON,
 or exits nonzero with the log's tail. `rusty dev stop --project …` disposes the
 product as Ctrl+C would, and `rusty dev status --project …` reports the
-session. Both find it through `.runtime/dev/<project file>/`, so they never
-need `kill` or `pkill`. `start` needs a pinned pair that has it.
+session. Both find it through `.runtime/dev/`, which has one directory per
+project path in the repository, so they never need `kill` or `pkill`. `start` needs a pinned pair that has it.
 
 The runtime renders the world itself with `render-wgpu`. By default it streams
 frames to the browser shell page that `rusty dev` serves. The product runs
