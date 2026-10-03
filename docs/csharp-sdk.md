@@ -8,8 +8,10 @@ capability references.
 
 ## Start
 
-Prerequisites: Linux x64, the .NET 10 SDK, `curl` and `tar` (with `xz` for
-window mode). Get `rusty` once (rerun to refresh it):
+Prerequisites: Linux x64 or Windows x64, the .NET 10 SDK, `curl` and `tar`
+(with `xz` for window mode). On Windows set `HOME`: the CLI and the feed
+declaration below find the shared cache at `$(HOME)/.cache/rusty-engine`. Get
+`rusty` once (rerun to refresh it):
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/FuzzySlipper/rusty-engine/main/scripts/install-rusty.sh | bash

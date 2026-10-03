@@ -136,6 +136,10 @@ full guide.
 - Prefer file-scoped namespaces, nullable reference types, `internal` and
   `sealed` defaults, records/value types for small immutable data, and explicit
   composition. Keep unsafe/PInvoke out of ordinary product projects.
+- Products build and run on Windows and Linux. A UI build command, `Exec` or
+  README step before `rusty dev` runs under both `cmd.exe` and `/bin/sh`: one
+  `npm`/`pnpm`/`node` invocation, MSBuild `Copy` for files, no `bash` or shell
+  utilities. Linux-only tooling stays off that path and is named as such.
 - Never bury numeric or string tuning/identities in behavior. At minimum give a
   local value a named `const` or `static readonly` declaration; prefer typed
   definitions or product-owned configuration adapters for values that need

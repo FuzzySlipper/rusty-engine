@@ -522,6 +522,18 @@ data. `@rusty-engine/live-debug` is resolved at run time by the shell's import
 map. Add the file to `RustyEngineProductUiInput` so a pair move rebuilds the
 UI.
 
+The SDK runs the command with MSBuild `Exec`: under `cmd.exe` on Windows and
+`/bin/sh` on Linux. Keep it one invocation both run, such as `npm exec -- tsc`,
+`pnpm exec tsc` or `node <script>.mjs`, with quoted paths and no shell utilities,
+globs or `bash`. Copy files (the pair's declarations, stylesheets) with MSBuild
+`Copy` in a target that runs `BeforeTargets="BuildRustyEngineProductUi"`:
+
+```xml
+<Target Name="CopyEngineUiTypes" BeforeTargets="BuildRustyEngineProductUi">
+  <Copy SourceFiles="$(RustyEngineProductUiTypes)" DestinationFolder="$(MSBuildProjectDirectory)/../ui/engine-types" SkipUnchangedFiles="true" />
+</Target>
+```
+
 Do not hook a UI compiler onto the SDK's staging or validation targets
 yourself; that reruns it on every C# edit. `--bind-host`, `--port`, and
 `--live-debug` override the corresponding staging properties for a development
