@@ -956,6 +956,12 @@ fn edge_outcome(
         if descent.y >= 0.0 {
             return Ok(CharacterEdgeOutcome::Traversable);
         }
+        // Lowered along its own axis by no more than its cylinder, the capsule
+        // sweeps only where it stood above (clear: the forward sweep ended
+        // there) and where it lands (clear: tested above or by the caller).
+        if -descent.y <= 2.0 * capsule(end).half_height {
+            return Ok(CharacterEdgeOutcome::Traversable);
+        }
         let horizontal_end = WorldPos::new(end.x, start.y, end.z);
         let landed = cast_world(
             &scene.projection,
@@ -1166,9 +1172,9 @@ pub fn character_jump_outcome(
 
 /// Walk a capsule from `start` to `end` (centres) over ground the way the
 /// controller slides along a walkable slope: in segments up to the capsule's
-/// radius long, each sweeping forward while rising what a slope at the
-/// maximum rises over it (never more than the step height), then landing on
-/// standable ground no farther down than such a slope falls. A riser higher than that blocks the sweep,
+/// width long, each sweeping forward while rising what a slope at the maximum
+/// rises over it, then landing on standable ground no farther down than such
+/// a slope falls. A riser higher than that blocks the sweep,
 /// and a cliff or gap leaves nothing to land on.
 fn walk_slope(
     projection: &svc_collision::CollisionProjection,
@@ -1181,12 +1187,11 @@ fn walk_slope(
     const MAXIMUM_SEGMENTS: f64 = 64.0;
     let skin = f64::from(config.shape.contact_skin);
     let grade = f64::from(config.surface.maximum_slope_radians).tan();
-    let step = f64::from(config.surface.maximum_step_height);
     let run = (end.x - start.x).hypot(end.z - start.z);
-    let mut segment = f64::from(config.shape.radius);
-    if grade > 0.0 {
-        segment = segment.min(step / grade);
-    }
+    // Each rising sweep follows the steepest walkable grade, so a riser
+    // steeper than that blocks it at any segment length; a segment as long
+    // as the capsule is wide still lands on every tread it could stand on.
+    let segment = 2.0 * f64::from(config.shape.radius);
     let segments = (run / segment).ceil().clamp(1.0, MAXIMUM_SEGMENTS);
     let advance = WorldVec::new(
         (end.x - start.x) / segments,
