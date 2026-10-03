@@ -41,6 +41,12 @@ impl SessionPaths {
     /// distinct project files in one repository name distinct ones.
     pub fn for_project(project: &Path) -> Result<Self, String> {
         let project = super::absolute(project)?;
+        // Windows canonicalizes a mapped drive to its UNC share
+        // (`P:\x` to `\\?\UNC\server\share\x`), which would key the session
+        // apart from the dev state `rusty status` reports for `P:`.
+        #[cfg(windows)]
+        let project = std::path::absolute(&project).unwrap_or(project);
+        #[cfg(not(windows))]
         let project = fs::canonicalize(&project).unwrap_or(project);
         let roots = super::DevelopmentRoots::of(&project)?;
         let relative = project.strip_prefix(&roots.checkout).unwrap_or(&project);
@@ -364,11 +370,32 @@ fn detach(command: &mut Command) {
 }
 
 #[cfg(windows)]
+#[allow(unsafe_code)]
 fn detach(command: &mut Command) {
-    use std::os::windows::process::CommandExt;
+    use std::os::windows::{io::AsRawHandle, process::CommandExt};
     const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    const HANDLE_FLAG_INHERIT: u32 = 0x0000_0001;
+    unsafe extern "system" {
+        fn SetHandleInformation(
+            handle: std::os::windows::io::RawHandle,
+            mask: u32,
+            flags: u32,
+        ) -> i32;
+    }
     command.creation_flags(CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW);
+    // Windows hands a child every inheritable handle, so the supervisor would
+    // otherwise hold this process's own output pipe open, and a caller that
+    // reads `rusty dev start` to its end would wait until the session ends.
+    for handle in [
+        std::io::stdin().as_raw_handle(),
+        std::io::stdout().as_raw_handle(),
+        std::io::stderr().as_raw_handle(),
+    ] {
+        // SAFETY: the process's own standard handles, valid for its lifetime;
+        // a failure only leaves the handle inheritable.
+        unsafe { SetHandleInformation(handle, HANDLE_FLAG_INHERIT, 0) };
+    }
 }
 
 #[cfg(test)]

@@ -17,5 +17,8 @@ asset-import.workspace = true
 [target.'cfg(unix)'.dependencies]
 signal-hook = "0.3"
 
-[lints]
-workspace = true
+# The workspace forbids unsafe code; this crate denies it instead so the one
+# Windows call in session.rs that keeps the dev supervisor off the caller's
+# pipe can allow it where it is.
+[lints.rust]
+unsafe_code = "deny"

@@ -158,6 +158,7 @@ fn dev(mut options: DevOptions) -> Result<(), String> {
     let mut watches = initial.watches;
     let mut asset_roots = initial.asset_roots;
     let mut snapshot = FileSnapshot::capture(&watches)?;
+    let mut last_capture = Duration::ZERO;
     let mut child = Some(SupervisedHost::start(
         &runtime.host,
         &staged,
@@ -250,8 +251,14 @@ fn dev(mut options: DevOptions) -> Result<(), String> {
                 }
             }
         }
-        thread::sleep(POLL_INTERVAL);
-        let next = match FileSnapshot::capture(&watches) {
+        // Rest three times as long as the last look took, so a watch over a
+        // network share (a second or more per look) spends at most a quarter
+        // of its time walking it; a local tree stays at the poll interval.
+        thread::sleep(POLL_INTERVAL.max(last_capture * 3));
+        let capture_started = std::time::Instant::now();
+        let captured = FileSnapshot::capture(&watches);
+        last_capture = capture_started.elapsed();
+        let next = match captured {
             Ok(snapshot) => snapshot,
             Err(error) => {
                 diagnostic(
@@ -2494,7 +2501,20 @@ fn capture_path(path: &Path, files: &mut BTreeMap<PathBuf, FileStamp>) -> Result
             if ignored_watch_directory(&child) {
                 continue;
             }
-            capture_path(&child, files)?;
+            // The listing's own metadata: Windows has it from the directory
+            // read, so a share is not asked again for every file.
+            match entry.metadata() {
+                Ok(metadata) if metadata.is_file() => {
+                    files.insert(
+                        child,
+                        FileStamp {
+                            modified: metadata.modified().ok(),
+                            bytes: metadata.len(),
+                        },
+                    );
+                }
+                _ => capture_path(&child, files)?,
+            }
         }
     }
     Ok(())
