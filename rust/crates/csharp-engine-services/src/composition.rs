@@ -2311,6 +2311,13 @@ mod tests {
             (0, 0)
         );
         assert!(has_instance(&services, 500));
+        // Unloading every closure keeps the rebased grid for the next one.
+        residency(&[place(1, west, 0)], &[]).unwrap();
+        assert!(floor_below(&services, [-8.5, 0.5]) && !floor_below(&services, [1.5, 0.5]));
+        assert_eq!(
+            step([-9.5, 0.0, 0.5], [-8.5, 0.0, 0.5]).outcome,
+            NativeNavigationPathOutcome::Reached
+        );
         let _ = services.finish_call();
     }
 

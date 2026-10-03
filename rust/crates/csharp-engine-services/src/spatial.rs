@@ -151,18 +151,16 @@ struct PlacedContentArtifact {
 
 /// The artifacts that make up a session's planar navigation: the base one
 /// `ReplaceContentArtifact` installed and those placed beside it. Replacing
-/// collision or navigation another way ends it.
+/// collision or navigation another way ends it; unloading every artifact
+/// does not, so a later placement keeps the composition's grid.
 #[derive(Default)]
 struct SpatialContentComposition {
+    active: bool,
     base: Option<(SpatialContentIdentity, Arc<ContentNavigationCells>)>,
     placed: BTreeMap<u64, PlacedContentArtifact>,
 }
 
 impl SpatialContentComposition {
-    fn is_active(&self) -> bool {
-        self.base.is_some() || !self.placed.is_empty()
-    }
-
     /// Whether `id` names a static-mesh instance or asset this composition
     /// owns.
     fn owns_collision(&self, id: u64) -> bool {
@@ -1144,6 +1142,7 @@ impl RuntimeSpatialBridge {
             session.navigation_revision = navigation_revision;
             session.navigation = Some(navigation);
             session.content = SpatialContentComposition {
+                active: true,
                 base: Some((identity, base_cells)),
                 placed: BTreeMap::new(),
             };
@@ -1235,7 +1234,7 @@ impl RuntimeSpatialBridge {
 
         let (scene, receipt) = {
             let session = self.session_mut(request.session)?;
-            let composing = session.content.is_active();
+            let composing = session.content.active;
             // A first placement starts a composition on the current frame.
             let grid_origin = match (&session.navigation, composing) {
                 (Some(navigation), true) => navigation.grid_origin,
@@ -1376,6 +1375,7 @@ impl RuntimeSpatialBridge {
                 session.content.placed.remove(id);
             }
             session.content.placed.extend(arriving);
+            session.content.active = true;
             let scene = Arc::new(candidate);
             session.scene = Arc::clone(&scene);
             session.navigation_revision = navigation_revision;
