@@ -57,7 +57,7 @@ pub use static_mesh::{
     StaticMeshHit, StaticMeshInstanceId, StaticMeshTransform,
 };
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use core_space::{ChunkCoord, ChunkRegion, Face, VoxelCoord, VoxelGridSpec, WorldPos, WorldVec};
@@ -316,6 +316,9 @@ pub struct CollisionProjection {
     /// A reconstructed surface has been installed: its triangles may reach up
     /// to a cell past their chunk, so box queries look one cell further.
     has_surfaces: bool,
+    /// Chunks whose collider bounds could not be computed. Character queries
+    /// scan every chunk while any exist rather than risk missing one.
+    unbounded: BTreeSet<ChunkCoord>,
     static_meshes: StaticMeshCollisionProjection,
     /// Bumped on every (re)build so downstream can cheaply detect projection changes.
     version: u64,
@@ -608,6 +611,7 @@ impl CollisionProjection {
             world_offset,
             chunks: BTreeMap::new(),
             has_surfaces: false,
+            unbounded: BTreeSet::new(),
             static_meshes: StaticMeshCollisionProjection::default(),
             version: 0,
         };
@@ -707,7 +711,7 @@ impl CollisionProjection {
         let mut best = None;
         let query_bounds = swept_capsule_bounds(capsule, translation, contact_skin);
         let mut stats = CharacterCollisionQueryStats::default();
-        for (coord, collider) in &self.chunks {
+        for (coord, collider) in self.character_candidates(query_bounds) {
             if !character_query_may_intersect(query_bounds, collider.bounds) {
                 continue;
             }
@@ -791,7 +795,7 @@ impl CollisionProjection {
         let mut best = None;
         let query_bounds = swept_capsule_bounds(capsule, WorldVec::ZERO, 0.0);
         let mut stats = CharacterCollisionQueryStats::default();
-        for (coord, collider) in &self.chunks {
+        for (coord, collider) in self.character_candidates(query_bounds) {
             if !character_query_may_intersect(query_bounds, collider.bounds) {
                 continue;
             }
@@ -1005,6 +1009,7 @@ impl CollisionProjection {
         match build_chunk_shape(&self.grid, self.world_offset, coord, chunk) {
             Some((shape, voxels)) => {
                 let bounds = shape_world_aabb(&shape);
+                self.note_bounds(coord, bounds);
                 let boxes = voxels.into_iter().map(VoxelBox::single).collect();
                 self.chunks.insert(
                     coord,
@@ -1018,7 +1023,7 @@ impl CollisionProjection {
                 );
             }
             None => {
-                self.chunks.remove(&coord);
+                self.drop_collider(coord);
             }
         }
     }
@@ -1029,7 +1034,7 @@ impl CollisionProjection {
         match world.get(coord) {
             Some(chunk) => self.set_chunk(coord, chunk),
             None => {
-                self.chunks.remove(&coord);
+                self.drop_collider(coord);
             }
         }
         self.version += 1;
@@ -1042,7 +1047,7 @@ impl CollisionProjection {
             match world.get(coord) {
                 Some(chunk) => self.set_chunk(coord, chunk),
                 None => {
-                    self.chunks.remove(&coord);
+                    self.drop_collider(coord);
                 }
             }
         }
@@ -1061,7 +1066,7 @@ impl CollisionProjection {
             match chunk {
                 Some(chunk) => self.set_chunk(coord, chunk),
                 None => {
-                    self.chunks.remove(&coord);
+                    self.drop_collider(coord);
                 }
             }
         }
@@ -1144,7 +1149,7 @@ impl CollisionProjection {
         });
         self.has_surfaces |= surface.is_some();
         if cubes.is_none() && surface.is_none() {
-            self.chunks.remove(&coord);
+            self.drop_collider(coord);
             return;
         }
         let bounds = match (&cubes, &surface) {
@@ -1172,6 +1177,7 @@ impl CollisionProjection {
             (None, Some(surface)) => shape_world_aabb(&*surface.shape),
             (None, None) => unreachable!("an empty collider was removed"),
         };
+        self.note_bounds(coord, bounds);
         self.chunks.insert(
             coord,
             ChunkCollider {
@@ -1186,7 +1192,55 @@ impl CollisionProjection {
 
     /// Drop one chunk's collider. Does not bump the version.
     pub fn remove_chunk(&mut self, coord: ChunkCoord) {
+        self.drop_collider(coord);
+    }
+
+    fn drop_collider(&mut self, coord: ChunkCoord) {
         self.chunks.remove(&coord);
+        self.unbounded.remove(&coord);
+    }
+
+    fn note_bounds(&mut self, coord: ChunkCoord, bounds: Option<WorldAabb>) {
+        if bounds.is_some() {
+            self.unbounded.remove(&coord);
+        } else {
+            self.unbounded.insert(coord);
+        }
+    }
+
+    /// The chunk colliders a character query sweeping through `bounds` can
+    /// touch, in chunk order: those in the chunks the bounds cover (one cell
+    /// wider with reconstructed surfaces, as for box queries), or every chunk
+    /// when the bounds or a collider's bounds are unknown.
+    fn character_candidates(
+        &self,
+        bounds: Option<WorldAabb>,
+    ) -> Vec<(&ChunkCoord, &ChunkCollider)> {
+        // A box spanning more chunk cells than there are colliders is
+        // cheaper to answer by scanning them; this also keeps far or unbounded
+        // queries out of the chunk arithmetic.
+        let chunk_extent = |low: f64, high: f64, cells: u32| {
+            (high - low) / (self.grid.voxel_size() * f64::from(cells)) + 3.0
+        };
+        let dims = self.grid.chunk_dims();
+        let compact = |bounds: &WorldAabb| {
+            let cells = chunk_extent(bounds.min.x, bounds.max.x, dims.x())
+                * chunk_extent(bounds.min.y, bounds.max.y, dims.y())
+                * chunk_extent(bounds.min.z, bounds.max.z, dims.z());
+            cells.is_finite() && cells < self.chunks.len() as f64
+        };
+        match bounds {
+            Some(bounds) if self.unbounded.is_empty() && compact(&bounds) => {
+                let span = self.chunk_span(bounds.min, bounds.max);
+                let mut candidates: Vec<_> = span
+                    .iter()
+                    .filter_map(|chunk| self.chunks.get_key_value(&chunk))
+                    .collect();
+                candidates.sort_unstable_by_key(|(chunk, _)| **chunk);
+                candidates
+            }
+            _ => self.chunks.iter().collect(),
+        }
     }
 
     /// Mark a batch of [`Self::set_chunk_parts`] changes with one version bump.
@@ -1265,8 +1319,8 @@ impl CollisionProjection {
     /// within `max_distance`, or `None` on a miss. The shared picking/camera/
     /// placement query — there is no separate renderer-owned authoritative raycast.
     ///
-    /// Note: scans all collider chunks and keeps the nearest; a chunk-walk
-    /// acceleration is a deferred optimisation, not a separate query system.
+    /// Tests the chunks whose colliders meet the ray's segment and keeps the
+    /// nearest hit.
     pub fn raycast(&self, ray: Ray, max_distance: f64) -> Option<VoxelHit> {
         let len = ray.dir.length();
         if !len.is_finite() || len <= 0.0 || !max_distance.is_finite() || max_distance <= 0.0 {
@@ -1275,8 +1329,28 @@ impl CollisionProjection {
         let inv = 1.0 / len;
         let dir = WorldVec::new(ray.dir.x * inv, ray.dir.y * inv, ray.dir.z * inv);
         let parry_ray = ParryRay::new(world_to_point(ray.origin), Vector::new(dir.x, dir.y, dir.z));
+        let end = WorldPos::new(
+            ray.origin.x + dir.x * max_distance,
+            ray.origin.y + dir.y * max_distance,
+            ray.origin.z + dir.z * max_distance,
+        );
+        let segment = Some(WorldAabb {
+            min: WorldPos::new(
+                ray.origin.x.min(end.x),
+                ray.origin.y.min(end.y),
+                ray.origin.z.min(end.z),
+            ),
+            max: WorldPos::new(
+                ray.origin.x.max(end.x),
+                ray.origin.y.max(end.y),
+                ray.origin.z.max(end.z),
+            ),
+        });
         let mut best: Option<(Real, Vector, VoxelCoord)> = None;
-        for collider in self.chunks.values() {
+        for (_, collider) in self.character_candidates(segment) {
+            if !character_query_may_intersect(segment, collider.bounds) {
+                continue;
+            }
             if let Some((primitive, hit)) = collider.cubes.as_ref().and_then(|cubes| {
                 CompositeShapeRef(&**cubes).cast_local_ray_and_get_normal(
                     &parry_ray,
