@@ -125,6 +125,9 @@ The share and the product's packages must also serve both machines:
 - A Samba share needs `oplocks = no` and `level2 oplocks = no`. Edits made on
   the Linux side do not break the leases Samba otherwise grants, so Windows
   keeps stale file times and never reloads them.
+- Windows does not run or load programs from a Samba share whose files carry
+  no execute permission. Keep build output local (`localOutput` above, or
+  `-p:ArtifactsPath=<local dir>` for a tool a product runs with `dotnet run`).
 - One package install serves both systems only when its packages are plain
   JavaScript or carry both platforms' native builds. pnpm's
   `supportedArchitectures` (`os: [current, win32]`) fetches both. pnpm's
