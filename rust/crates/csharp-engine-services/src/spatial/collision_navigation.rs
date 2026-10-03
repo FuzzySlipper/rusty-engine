@@ -2014,6 +2014,20 @@ mod tests {
     }
 
     #[test]
+    fn a_jump_capped_by_the_terminal_rise_speed_does_not_reach_the_ledge() {
+        let mut config = jumper(true, 0);
+        let mut character = character_config(config.character).unwrap();
+        character.vertical.terminal_rise_speed = 1.0;
+        character.surface.maximum_step_height = 0.1;
+        character.validate().unwrap();
+        config.character = native_character_config(character);
+        let (mut bridge, session) =
+            publish_over(ledge(false), config, [0.0, -2.0, 0.0], [8.0, 12.0, 4.0]);
+        let result = edge(&mut bridge, session, [3, 1, 2], [4, 2, 2]);
+        assert!(!result.1, "{result:?}");
+    }
+
+    #[test]
     fn a_ledge_over_the_step_height_is_a_jump_up_and_a_drop_down() {
         let (low, high) = ([3, 1, 2], [4, 2, 2]);
         let (mut bridge, session) = publish_over(

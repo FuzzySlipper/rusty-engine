@@ -561,8 +561,9 @@ the nearest retained support (see below).
 
 **Jumps.** Navigation walks by default. Two configuration switches add jump
 edges, using the body's own jump: it leaves the ground at
-`Character.Vertical.JumpSpeed` under `Gravity`, peaking `JumpSpeed² / 2
-Gravity` above the start. It moves across at `Character.Air.MaximumSpeed` as
+`Character.Vertical.JumpSpeed`, capped at `TerminalRiseSpeed`, under
+`Gravity`, peaking `speed² / 2 Gravity` above the start, and falls back no
+faster than `TerminalFallSpeed`. It moves across at `Character.Air.MaximumSpeed` as
 late as still lands it on the target.
 
 - `JumpLedges` connects a neighbour too high to step onto when the capsule can

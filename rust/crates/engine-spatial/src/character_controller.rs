@@ -989,9 +989,10 @@ pub enum CharacterJumpOutcome {
 }
 
 /// Evaluate one directed jump from `start_support` to `end_support` with the
-/// character's own jump: it leaves the ground at `vertical.jump_speed` under
-/// `vertical.gravity`, peaking `jump_speed² / (2 gravity)` above the start,
-/// and moves across at `air.maximum_speed` as late as still lands it on the
+/// character's own jump: it leaves the ground at `vertical.jump_speed`, no
+/// faster than `vertical.terminal_rise_speed`, slows under `vertical.gravity`
+/// to a peak `speed² / (2 gravity)` above the start, falls back no faster
+/// than `vertical.terminal_fall_speed`, and moves across at `air.maximum_speed` as late as still lands it on the
 /// end support as it falls back, so it rises clear of a ledge before moving
 /// over it. The capsule must rise clear to the peak above the start and sweep
 /// clear along that path.
@@ -1006,11 +1007,29 @@ pub fn character_jump_outcome(
     maximum_drop: f64,
 ) -> Result<CharacterJumpOutcome, CharacterControllerError> {
     let gravity = f64::from(config.vertical.gravity);
-    let launch = f64::from(config.vertical.jump_speed);
-    if gravity <= 0.0 || launch <= 0.0 {
+    // The controller caps vertical speed from the step after the launch on.
+    let launch = f64::from(
+        config
+            .vertical
+            .jump_speed
+            .min(config.vertical.terminal_rise_speed),
+    );
+    let fall = f64::from(config.vertical.terminal_fall_speed);
+    if gravity <= 0.0 || launch <= 0.0 || fall <= 0.0 {
         return Ok(CharacterJumpOutcome::RiseOverJump);
     }
     let peak = launch * launch / (2.0 * gravity);
+    // Height above the start `t` seconds after the launch: a parabola until
+    // the fall reaches its terminal speed, then a straight fall.
+    let terminal_time = (launch + fall) / gravity;
+    let terminal_height = launch * terminal_time - 0.5 * gravity * terminal_time * terminal_time;
+    let height_at = |t: f64| {
+        if t <= terminal_time {
+            launch * t - 0.5 * gravity * t * t
+        } else {
+            terminal_height - fall * (t - terminal_time)
+        }
+    };
     let nudge = f64::from(config.recovery.normal_nudge);
     let margin = f64::from(config.shape.contact_skin) + nudge;
     let rise = end_support.y - start_support.y;
@@ -1020,9 +1039,12 @@ pub fn character_jump_outcome(
     if -rise > maximum_drop + nudge {
         return Ok(CharacterJumpOutcome::DropOverMaximum);
     }
-    // The fall back through `rise` lands at the later root of
-    // launch·t − gravity·t²/2 = rise.
-    let airtime = (launch + (launch * launch - 2.0 * gravity * rise).max(0.0).sqrt()) / gravity;
+    // It lands as the fall passes back through `rise`.
+    let airtime = if rise >= terminal_height {
+        (launch + (launch * launch - 2.0 * gravity * rise).max(0.0).sqrt()) / gravity
+    } else {
+        terminal_time + (terminal_height - rise) / fall
+    };
     let across = (end_support.x - start_support.x).hypot(end_support.z - start_support.z);
     let air_speed = f64::from(config.air.maximum_speed);
     if across > air_speed * airtime {
@@ -1076,7 +1098,7 @@ pub fn character_jump_outcome(
         };
         WorldPos::new(
             start.x + (end.x - start.x) * share,
-            start.y + launch * t - 0.5 * gravity * t * t,
+            start.y + height_at(t),
             start.z + (end.z - start.z) * share,
         )
     };
