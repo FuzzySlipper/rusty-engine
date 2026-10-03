@@ -1231,7 +1231,11 @@ impl CollisionProjection {
         };
         match bounds {
             Some(bounds) if self.unbounded.is_empty() && compact(&bounds) => {
-                let span = self.chunk_span(bounds.min, bounds.max);
+                // A query touching a chunk boundary meets the voxel faces on
+                // both sides of it, so the span reaches one voxel further.
+                let voxel = self.grid.voxel_size();
+                let margin = WorldVec::new(voxel, voxel, voxel);
+                let span = self.chunk_span(bounds.min - margin, bounds.max + margin);
                 let mut candidates: Vec<_> = span
                     .iter()
                     .filter_map(|chunk| self.chunks.get_key_value(&chunk))
@@ -2284,6 +2288,25 @@ mod tests {
             )
             .unwrap();
         assert_eq!(hit.voxel, VoxelCoord::new(2, 0, 0)); // nearer one
+    }
+
+    #[test]
+    fn a_boundary_hit_survives_distant_residency() {
+        // Enough distant chunks switch the ray to its compact chunk lookup,
+        // which must still include the chunk whose face the ray touches.
+        let mut world = world_with(ChunkCoord::new(0, 0, 0), &[LocalVoxelCoord::new(7, 3, 6)]);
+        let ray = Ray::new(WorldPos::new(8.0, 5.0, 7.0), WorldVec::new(0.0, -1.0, 0.0));
+        let before = CollisionProjection::build(&world).raycast(ray, 10.0);
+        assert!(before.is_some());
+        for i in 10..110 {
+            let mut chunk = VoxelChunk::from_spec(&spec());
+            chunk
+                .set(LocalVoxelCoord::new(0, 0, 0), VoxelValue::solid_raw(1))
+                .unwrap();
+            world.insert(ChunkCoord::new(i, 0, 0), chunk);
+        }
+        let after = CollisionProjection::build(&world).raycast(ray, 10.0);
+        assert_eq!(after, before);
     }
 
     #[test]
