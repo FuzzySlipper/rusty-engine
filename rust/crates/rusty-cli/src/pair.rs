@@ -205,7 +205,8 @@ fn element_value_range(text: &str, element: &str) -> Result<Option<(usize, usize
 /// restore (plain `dotnet` included) finds exactly the pinned SDK in the shared
 /// cache and an uninstalled pin fails with the fix instead of NU1301.
 pub const FEED_DECLARATION: &str = r#"    <RustyEngineCache Condition="'$(RustyEngineCache)' == '' and '$(XDG_CACHE_HOME)' != ''">$(XDG_CACHE_HOME)/rusty-engine</RustyEngineCache>
-    <RustyEngineCache Condition="'$(RustyEngineCache)' == ''">$(HOME)/.cache/rusty-engine</RustyEngineCache>
+    <RustyEngineCache Condition="'$(RustyEngineCache)' == '' and '$(HOME)' != ''">$(HOME)/.cache/rusty-engine</RustyEngineCache>
+    <RustyEngineCache Condition="'$(RustyEngineCache)' == ''">$(USERPROFILE)/.cache/rusty-engine</RustyEngineCache>
     <RestoreAdditionalProjectSources>$(RestoreAdditionalProjectSources);$(RustyEngineCache)/pairs/$(RustyEnginePackageVersion)/sdk-feed</RestoreAdditionalProjectSources>
   </PropertyGroup>
   <Target Name="RequireRustyEnginePair" BeforeTargets="Restore;_GenerateRestoreGraph" Condition="!Exists('$(RustyEngineCache)/pairs/$(RustyEnginePackageVersion)/sdk-feed')">
@@ -453,8 +454,11 @@ pub fn cache_root() -> Result<PathBuf, String> {
     if let Some(root) = env::var_os("XDG_CACHE_HOME").filter(|value| !value.is_empty()) {
         return Ok(PathBuf::from(root).join("rusty-engine"));
     }
+    // Windows sets USERPROFILE rather than HOME; the feed declaration falls
+    // back the same way.
     env::var_os("HOME")
         .filter(|value| !value.is_empty())
+        .or_else(|| env::var_os("USERPROFILE").filter(|value| !value.is_empty()))
         .map(|home| PathBuf::from(home).join(".cache/rusty-engine"))
         .ok_or_else(|| "RUSTY_CACHE: set HOME or XDG_CACHE_HOME".to_owned())
 }

@@ -9,12 +9,18 @@ capability references.
 ## Start
 
 Prerequisites: Linux x64 or Windows x64, the .NET 10 SDK, `curl` and `tar`
-(with `xz` for window mode). On Windows set `HOME`: the CLI and the feed
-declaration below find the shared cache at `$(HOME)/.cache/rusty-engine`. Get
-`rusty` once (rerun to refresh it):
+(with `xz` for window mode). The CLI and the feed declaration below find the
+shared cache at `.cache/rusty-engine` under `HOME`, or `USERPROFILE` on
+Windows. Get `rusty` once (rerun to refresh it):
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/FuzzySlipper/rusty-engine/main/scripts/install-rusty.sh | bash
+```
+
+On Windows, in PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/FuzzySlipper/rusty-engine/main/scripts/install-rusty.ps1 | iex
 ```
 
 Start a new product from [rusty-template](https://github.com/FuzzySlipper/rusty-template),
@@ -26,7 +32,8 @@ declaration in `Directory.Build.props` and exact package references:
   <PropertyGroup>
     <RustyEnginePackageVersion>0.1.0-dev.abc123def456</RustyEnginePackageVersion>
     <RustyEngineCache Condition="'$(RustyEngineCache)' == '' and '$(XDG_CACHE_HOME)' != ''">$(XDG_CACHE_HOME)/rusty-engine</RustyEngineCache>
-    <RustyEngineCache Condition="'$(RustyEngineCache)' == ''">$(HOME)/.cache/rusty-engine</RustyEngineCache>
+    <RustyEngineCache Condition="'$(RustyEngineCache)' == '' and '$(HOME)' != ''">$(HOME)/.cache/rusty-engine</RustyEngineCache>
+    <RustyEngineCache Condition="'$(RustyEngineCache)' == ''">$(USERPROFILE)/.cache/rusty-engine</RustyEngineCache>
     <RestoreAdditionalProjectSources>$(RestoreAdditionalProjectSources);$(RustyEngineCache)/pairs/$(RustyEnginePackageVersion)/sdk-feed</RestoreAdditionalProjectSources>
   </PropertyGroup>
   <Target Name="RequireRustyEnginePair" BeforeTargets="Restore;_GenerateRestoreGraph" Condition="!Exists('$(RustyEngineCache)/pairs/$(RustyEnginePackageVersion)/sdk-feed')">

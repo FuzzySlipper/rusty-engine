@@ -42,7 +42,8 @@
   <PropertyGroup Condition="('$(IsTestProject)' == 'true' or '$(RustyEngineToolHost)' == 'true') and '$(RustyEngineTestHostLibrary)' == ''">
     <_RustyEngineTestHostCache>$(RustyEngineCache)</_RustyEngineTestHostCache>
     <_RustyEngineTestHostCache Condition="'$(_RustyEngineTestHostCache)' == '' and '$(XDG_CACHE_HOME)' != ''">$(XDG_CACHE_HOME)/rusty-engine</_RustyEngineTestHostCache>
-    <_RustyEngineTestHostCache Condition="'$(_RustyEngineTestHostCache)' == ''">$(HOME)/.cache/rusty-engine</_RustyEngineTestHostCache>
+    <_RustyEngineTestHostCache Condition="'$(_RustyEngineTestHostCache)' == '' and '$(HOME)' != ''">$(HOME)/.cache/rusty-engine</_RustyEngineTestHostCache>
+    <_RustyEngineTestHostCache Condition="'$(_RustyEngineTestHostCache)' == ''">$(USERPROFILE)/.cache/rusty-engine</_RustyEngineTestHostCache>
     <RustyEngineTestHostLibrary Condition="'$(RustyEngineUseSourceDevelopment)' == 'true'">$(RustyEngineSourceDevelopmentPath)/target/runtime-pack/linux-x64/lib/librusty_engine_test_host.so</RustyEngineTestHostLibrary>
     <RustyEngineTestHostLibrary Condition="'$(RustyEngineUseSourceDevelopment)' != 'true'">$(_RustyEngineTestHostCache)/pairs/$(RustyEngineSdkPackageVersion)/runtime-pack/lib/librusty_engine_test_host.so</RustyEngineTestHostLibrary>
   </PropertyGroup>

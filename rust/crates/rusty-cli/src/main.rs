@@ -39,8 +39,12 @@ const UI_ROOT_PROPERTY: &str = "RustyEngineProductUiRoot";
 const CONTENT_ROOT_PROPERTY: &str = "RustyEngineProductContentRoot";
 const CONTENT_BUNDLE_ITEM: &str = "RustyEngineContentBundle";
 const REQUIRED_DOTNET_MAJOR: u32 = 10;
-const BOOTSTRAP_URL: &str =
-    "https://raw.githubusercontent.com/FuzzySlipper/rusty-engine/main/scripts/install-rusty.sh";
+#[cfg(not(windows))]
+const BOOTSTRAP: &str =
+    "curl -fsSL https://raw.githubusercontent.com/FuzzySlipper/rusty-engine/main/scripts/install-rusty.sh | bash";
+#[cfg(windows)]
+const BOOTSTRAP: &str =
+    "irm https://raw.githubusercontent.com/FuzzySlipper/rusty-engine/main/scripts/install-rusty.ps1 | iex";
 const POLL_INTERVAL: Duration = Duration::from_millis(250);
 const UNEXPECTED_EXIT_RESTART_BACKOFF: Duration = Duration::from_millis(100);
 const MAX_UNEXPECTED_EXITS_PER_ARTIFACT: u8 = 2;
@@ -972,12 +976,12 @@ Nothing moves it except `rusty update`. Installed pairs live in {cache}
 {{\"releases\": \"<url>\"}}.
 
 Get or refresh this command:
-  curl -fsSL {bootstrap} | bash",
+  {bootstrap}",
         pin = pair::PIN_ELEMENT,
         pin_file = pair::PIN_FILE,
         cache = pair::cache_root().map_or_else(|error| error, |root| root.display().to_string()),
         config = pair::CONFIG_FILE,
-        bootstrap = BOOTSTRAP_URL,
+        bootstrap = BOOTSTRAP,
     )
 }
 

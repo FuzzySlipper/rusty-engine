@@ -209,7 +209,8 @@ draws: `stream` (the default) streams frames to the browser shell, and
 launch. No environment variable selects Engine behaviour:
 `scripts/test_architecture_checks.py` refuses new reads in the runtime, host,
 renderer, shell and CLI crates beyond the platform's own (`PATH`, `HOME`,
-`XDG_CACHE_HOME`, `DOTNET_ROOT`, `WAYLAND_DISPLAY`, `WGPU_BACKEND`).
+`USERPROFILE`, `XDG_CACHE_HOME`, `DOTNET_ROOT`, `WAYLAND_DISPLAY`,
+`WGPU_BACKEND`).
 
 - **Runtime.** Each finished product call's frame, presentation and view
   composition publications are applied to the renderer as they are committed,

@@ -265,6 +265,7 @@ ENVIRONMENT_CHECKED_CRATES = (
 ALLOWED_ENVIRONMENT_READS = {
     "PATH": "finding executables (dotnet, Chromium)",
     "HOME": "the default cache location",
+    "USERPROFILE": "the default cache location on Windows, which sets no HOME",
     "XDG_CACHE_HOME": "the platform's cache location",
     "DOTNET_ROOT": ".NET's own convention for locating its runtime",
     "WAYLAND_DISPLAY": "which display server the window opens on",

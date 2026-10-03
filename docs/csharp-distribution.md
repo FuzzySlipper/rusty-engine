@@ -19,9 +19,17 @@ Get it once, then refresh it the same way:
 curl -fsSL https://raw.githubusercontent.com/FuzzySlipper/rusty-engine/main/scripts/install-rusty.sh | bash
 ```
 
+On Windows, `scripts/install-rusty.ps1` does the same from PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/FuzzySlipper/rusty-engine/main/scripts/install-rusty.ps1 | iex
+```
+
 The bootstrap downloads the newest pair, checks its SHA-256, puts that pair's
-`rusty` in `~/.local/bin` (`RUSTY_BIN_DIR`), and installs the pair into the
-shared cache. Service managers and Den brokers that start commands with their
+`rusty` in `~/.local/bin` (`--bin-dir`; `-BinDir` on Windows, which also adds
+it to the user PATH), and installs the pair into the shared cache. On Windows
+the newest pair may not have its Windows archive yet (see
+[Windows](#windows)); the script then says so. Service managers and Den brokers that start commands with their
 own `PATH` may not include `~/.local/bin`; launch configurations use
 `PATH="$HOME/.local/bin:$PATH" exec rusty dev --project …`.
 
@@ -35,7 +43,8 @@ can resolve a different dev pair from `~/.nuget/packages`):
   <PropertyGroup>
     <RustyEnginePackageVersion>0.1.0-dev.abc123def456</RustyEnginePackageVersion>
     <RustyEngineCache Condition="'$(RustyEngineCache)' == '' and '$(XDG_CACHE_HOME)' != ''">$(XDG_CACHE_HOME)/rusty-engine</RustyEngineCache>
-    <RustyEngineCache Condition="'$(RustyEngineCache)' == ''">$(HOME)/.cache/rusty-engine</RustyEngineCache>
+    <RustyEngineCache Condition="'$(RustyEngineCache)' == '' and '$(HOME)' != ''">$(HOME)/.cache/rusty-engine</RustyEngineCache>
+    <RustyEngineCache Condition="'$(RustyEngineCache)' == ''">$(USERPROFILE)/.cache/rusty-engine</RustyEngineCache>
     <RestoreAdditionalProjectSources>$(RestoreAdditionalProjectSources);$(RustyEngineCache)/pairs/$(RustyEnginePackageVersion)/sdk-feed</RestoreAdditionalProjectSources>
   </PropertyGroup>
   <Target Name="RequireRustyEnginePair" BeforeTargets="Restore;_GenerateRestoreGraph" Condition="!Exists('$(RustyEngineCache)/pairs/$(RustyEnginePackageVersion)/sdk-feed')">
@@ -146,8 +155,9 @@ same source revision.
 
 Latest only makes an update available. A product keeps its explicit pin until
 someone runs `rusty update`. To use another copy of this releases layout,
-bootstrap with `install-rusty.sh --releases <url>`: it records the mirror in
-the cache's `config.json` (`{"releases": "<url>"}`), which the CLI reads.
+bootstrap with `install-rusty.sh --releases <url>` (`-Releases` on Windows):
+it records the mirror in the cache's `config.json` (`{"releases": "<url>"}`),
+which the CLI reads.
 
 ## What changed in a pair
 
