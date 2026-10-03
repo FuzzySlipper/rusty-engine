@@ -560,20 +560,27 @@ Use the live foot position for `EvaluateNavigationStep` so it can reconcile to
 the nearest retained support (see below).
 
 **Jumps.** Navigation walks by default. Two configuration switches add jump
-edges, using the body's own jump: it leaves the ground at
-`Character.Vertical.JumpSpeed`, capped at `TerminalRiseSpeed`, under
-`Gravity`, peaking `speed² / 2 Gravity` above the start, and falls back no
-faster than `TerminalFallSpeed`. It moves across at `Character.Air.MaximumSpeed` as
-late as still lands it on the target.
+edges, using the body's own jump from a standstill at the start's column
+centre: it leaves the ground at `Character.Vertical.JumpSpeed`, capped at
+`TerminalRiseSpeed`, under `Gravity`, peaking `speed² / 2 Gravity` above the
+start, and falls back no faster than `TerminalFallSpeed`. It lands as it
+falls to the target, or to `Surface.FloorSnapDistance` above it when falling
+no faster than `FloorSnapSpeedLimit`. It holds toward the target as late as
+still lands it there, gaining speed as the controller does in the air,
+`Air.Acceleration × LateralControl × wish` each second, where the wish is
+`Ground.ForwardSpeed` capped by `Air.WishSpeedCap`, up to `Air.MaximumSpeed`
+(`Air.Drag` is not modelled). A mover that stops at the start, jumps and
+holds toward the target from no later than that makes the jump.
 
 - `JumpLedges` connects a neighbour too high to step onto when the capsule can
   rise straight up to the peak (`JumpHeadroomBlocked` otherwise) and sweep
   clear over to it (`JumpArcBlocked`). The rise must stay below the peak less
   the contact skin and recovery nudge (`RiseOverJump`).
-- `JumpGapCells` connects a support straight along X or Z across up to that
-  many columns. Those columns must hold no support within `VerticalSearchCells`
-  of the start, and the jump must carry the distance (`GapTooWide`) and land
-  no farther down than `MaximumDrop`.
+- `JumpGapCells` connects a support straight along X or Z, and with
+  `DiagonalNeighbors` also diagonally, across up to that many columns. Those
+  columns must hold no support within `VerticalSearchCells` of the start, and
+  the jump must carry the distance (`GapTooWide`), sweep clear
+  (`JumpArcBlocked`), and land no farther down than `MaximumDrop`.
 - Path, weighted path and step results list each path cell's `Edges` (`Walk`,
   `Drop` for a fall below the step height, or `Jump`). A step result's
   `NextEdgeKind` tells a mover to jump now.

@@ -759,12 +759,14 @@ pub struct NativeCollisionNavigationConfig {
     /// support may be taken from; zero keeps the containing cell only.
     pub snap_across: f64,
     /// Also connect a neighbour too high to step onto when the character's
-    /// own jump (`character.vertical.jump_speed` and `gravity`, moving
-    /// across at no more than `character.air.maximum_speed`) clears it.
+    /// own standing jump (`character.vertical.jump_speed` and `gravity`,
+    /// moving across with the controller's air acceleration up to
+    /// `character.air.maximum_speed`) clears it.
     pub jump_ledges: bool,
-    /// Also connect supports straight across a gap of up to this many cells
-    /// with no support near the jump's height, when the same jump carries
-    /// there; zero for none.
+    /// Also connect supports straight across a gap of up to this many cells,
+    /// along X or Z or, with `diagonal_neighbors`, diagonally, with no
+    /// support near the jump's height, when the same jump carries there;
+    /// zero for none.
     pub jump_gap_cells: u32,
     /// What a weighted path pays for a jump edge beyond its destination
     /// cell's cost, so a planner can prefer walking.

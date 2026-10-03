@@ -2,11 +2,12 @@ use core_ids::EntityId;
 use core_math::{Vec2, Vec3};
 use core_space::{WorldPos, WorldVec};
 use engine_spatial::{
-    character_edge_is_traversable, CharacterBlockKind, CharacterContactKind,
-    CharacterControllerCommand, CharacterControllerConfig, CharacterControllerError,
-    CharacterControllerService, CharacterMeshInstance, CharacterStepColliders, StaticMeshAssetId,
-    StaticMeshColliderAsset, StaticMeshColliderInstance, StaticMeshInstanceId, StaticMeshTransform,
-    VoxelCollisionScene, VoxelEdit, VoxelEditService,
+    character_edge_is_traversable, character_jump_outcome, CharacterBlockKind,
+    CharacterContactKind, CharacterControllerCommand, CharacterControllerConfig,
+    CharacterControllerError, CharacterControllerService, CharacterJumpOutcome,
+    CharacterMeshInstance, CharacterStepColliders, StaticMeshAssetId, StaticMeshColliderAsset,
+    StaticMeshColliderInstance, StaticMeshInstanceId, StaticMeshTransform, VoxelCollisionScene,
+    VoxelEdit, VoxelEditService,
 };
 use entity_state::{
     CharacterMotionComponent, CharacterStance, EntityDefinition, EntityState, EntityTransform, Quat,
@@ -1573,6 +1574,78 @@ fn buffered_jump_fires_after_landing_and_coyote_jump_fires_once() {
         .step(&mut state, &ledge_scene, entity, &config, held)
         .unwrap();
     assert!(after.motion_after.controlled_velocity.y < jumped.motion_after.controlled_velocity.y);
+}
+
+/// A standing jump across a gap gains air speed at the controller's air
+/// acceleration and lands when the floor snap reaches the floor: 7 m/s under
+/// 20 m/s² is 0.7 s back to the floor, which at an instant 5 m/s would carry
+/// 3.5 m, but it snaps onto the floor from 0.25 m above 0.66 s in, and gaining
+/// 60 m/s each second it carries 3.1 m by then. The controller makes the jump
+/// it admits at any step rate.
+#[test]
+fn a_standing_jump_carries_only_what_air_acceleration_reaches() {
+    // Floors 1 m high from z = 0 to 4 and from z = -8 to -2.
+    let scene = VoxelCollisionScene::from_solid_voxels(
+        1.0,
+        8,
+        (-2..=2).flat_map(|x| {
+            (-8..=3)
+                .filter(|z| !(-2..0).contains(z))
+                .map(move |z| [x, 0, z])
+        }),
+    )
+    .unwrap();
+    let config = CharacterControllerConfig::default();
+    let start = WorldPos::new(0.5, 1.0, 0.5);
+    let near = WorldPos::new(0.5, 1.0, -2.5);
+    let far = WorldPos::new(0.5, 1.0, -2.7);
+    assert_eq!(
+        character_jump_outcome(&scene, &config, start, far, 1.0).unwrap(),
+        CharacterJumpOutcome::GapTooWide
+    );
+    assert_eq!(
+        character_jump_outcome(&scene, &config, start, near, 1.0).unwrap(),
+        CharacterJumpOutcome::Traversable
+    );
+
+    // It jumps standing still and holds toward the landing from the step that
+    // ends after the model's departure, the landing less (3 / 5 + 1 / 24) s.
+    let landing = (7.0 + (49.0f32 - 10.0).sqrt()) / 20.0;
+    let departure = landing - (3.0 / 5.0 + 1.0 / 24.0);
+    for hz in [30.0f32, 60.0, 240.0] {
+        let dt = 1.0 / hz;
+        let (entity, mut state) = character_at(Vec3::new(0.5, 1.92, 0.5));
+        let mut service = CharacterControllerService::default();
+        let mut step = |state: &mut EntityState, sequence: u64, intent: Vec2, jump: bool| {
+            let input = CharacterControllerCommand {
+                planar_intent: intent,
+                jump_pressed: jump,
+                ..CharacterControllerCommand::idle(dt, sequence)
+            };
+            service.step(state, &scene, entity, &config, input).unwrap()
+        };
+        assert!(step(&mut state, 1, Vec2::ZERO, false).motion_after.grounded);
+        assert!(!step(&mut state, 2, Vec2::ZERO, true).motion_after.grounded);
+        let mut landed = None;
+        for tick in 1..(3.0 * hz) as u64 {
+            let ends = (tick + 1) as f32 * dt;
+            let intent = if ends > departure {
+                Vec2::new(0.0, 1.0)
+            } else {
+                Vec2::ZERO
+            };
+            let receipt = step(&mut state, tick + 2, intent, false);
+            if receipt.motion_after.grounded {
+                landed = Some(receipt.transform_after.translation);
+                break;
+            }
+        }
+        let landed = landed.unwrap_or_else(|| panic!("{hz} Hz: never landed"));
+        assert!(
+            landed.y > 1.9 && f64::from(landed.z) <= near.z,
+            "{hz} Hz: landed at {landed:?}"
+        );
+    }
 }
 
 #[test]

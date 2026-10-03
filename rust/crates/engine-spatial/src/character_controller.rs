@@ -1036,13 +1036,24 @@ pub enum CharacterJumpOutcome {
 }
 
 /// Evaluate one directed jump from `start_support` to `end_support` with the
-/// character's own jump: it leaves the ground at `vertical.jump_speed`, no
-/// faster than `vertical.terminal_rise_speed`, slows under `vertical.gravity`
-/// to a peak `speed² / (2 gravity)` above the start, falls back no faster
-/// than `vertical.terminal_fall_speed`, and moves across at `air.maximum_speed` as late as still lands it on the
-/// end support as it falls back, so it rises clear of a ledge before moving
-/// over it. The capsule must rise clear to the peak above the start and sweep
-/// clear along that path.
+/// character's own jump: it leaves the ground standing still at
+/// `vertical.jump_speed`, no faster than `vertical.terminal_rise_speed`,
+/// slows under `vertical.gravity` to a peak `speed² / (2 gravity)` above the
+/// start, and falls back no faster than `vertical.terminal_fall_speed`. It
+/// lands as it falls to the end support, or, falling no faster than
+/// `surface.floor_snap_speed_limit`, to `surface.floor_snap_distance` above
+/// it, where the controller snaps it down. Across, it holds toward the landing
+/// as late as still lands it on the end support, so it rises clear of a ledge
+/// before moving over it. The controller's air control then gains
+/// `air.acceleration × air.lateral_control × wish` metres per second each
+/// second up to the wish speed `ground.forward_speed` capped by
+/// `air.wish_speed_cap`, and no faster than `air.maximum_speed`. `air.drag`
+/// is not modelled. The capsule must rise clear to the peak above the start
+/// and sweep clear along that path.
+///
+/// Moving across no later than that, the controller, which moves each step
+/// at the velocity it ends with, goes at least as high and as far as this
+/// continuous arc.
 ///
 /// A geometry query like [`character_edge_outcome`]: it owns no entity state
 /// and does not advance time. Callers prove both supports are standable.
@@ -1086,22 +1097,54 @@ pub fn character_jump_outcome(
     if -rise > maximum_drop + nudge {
         return Ok(CharacterJumpOutcome::DropOverMaximum);
     }
-    // It lands as the fall passes back through `rise`.
-    let airtime = if rise >= terminal_height {
-        (launch + (launch * launch - 2.0 * gravity * rise).max(0.0).sqrt()) / gravity
+    // When the fall passes back down through `height` above the start.
+    let falls_to = |height: f64| {
+        if height >= terminal_height {
+            (launch + (launch * launch - 2.0 * gravity * height).max(0.0).sqrt()) / gravity
+        } else {
+            terminal_time + (terminal_height - height) / fall
+        }
+    };
+    // It lands as the fall passes back through `rise`, or, falling no faster
+    // than the floor snap's speed limit, as soon as the floor is within its
+    // distance below, where the controller snaps down onto it.
+    let snapped =
+        falls_to((rise + f64::from(config.surface.floor_snap_distance.max(0.0))).min(peak));
+    let airtime = if (gravity * snapped - launch).min(fall)
+        <= f64::from(config.surface.floor_snap_speed_limit)
+    {
+        snapped
     } else {
-        terminal_time + (terminal_height - rise) / fall
+        falls_to(rise)
     };
     let across = (end_support.x - start_support.x).hypot(end_support.z - start_support.z);
-    let air_speed = f64::from(config.air.maximum_speed);
-    if across > air_speed * airtime {
+    let wish = f64::from(config.ground.forward_speed.min(config.air.wish_speed_cap));
+    let top = wish.min(f64::from(config.air.maximum_speed));
+    let rate = f64::from(config.air.acceleration * config.air.lateral_control) * wish;
+    // Distance covered `u` seconds after it starts moving across from rest:
+    // gaining speed at `rate` until it reaches `top`, then at `top`.
+    let ramp = if rate > 0.0 {
+        top / rate
+    } else {
+        f64::INFINITY
+    };
+    let covered = |u: f64| {
+        if u <= ramp {
+            0.5 * rate * u * u
+        } else {
+            top * (u - 0.5 * ramp)
+        }
+    };
+    if across > 0.0 && (top <= 0.0 || rate <= 0.0 || across > covered(airtime)) {
         return Ok(CharacterJumpOutcome::GapTooWide);
     }
     // When it starts moving across, to arrive as it lands.
-    let departure = if air_speed > 0.0 {
-        (airtime - across / air_speed).max(0.0)
+    let departure = if across <= 0.0 {
+        airtime
+    } else if across <= 0.5 * top * ramp {
+        (airtime - (2.0 * across / rate).sqrt()).max(0.0)
     } else {
-        0.0
+        (airtime - across / top - 0.5 * ramp).max(0.0)
     };
 
     let height = stance_height(config, CharacterStance::Standing);
@@ -1139,7 +1182,7 @@ pub fn character_jump_outcome(
     let at = |step: u32| {
         let t = airtime * f64::from(step) / f64::from(segments);
         let share = if across > 0.0 {
-            ((t - departure) * air_speed / across).clamp(0.0, 1.0)
+            (covered((t - departure).max(0.0)) / across).clamp(0.0, 1.0)
         } else {
             1.0
         };
