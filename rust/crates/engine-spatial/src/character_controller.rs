@@ -840,16 +840,55 @@ pub fn character_edge_outcome(
     end_support: WorldPos,
     maximum_drop: f64,
 ) -> Result<CharacterEdgeOutcome, CharacterControllerError> {
-    let height = stance_height(config, CharacterStance::Standing);
-    let capsule = |center| capsule_at(center, height, config.shape.radius);
+    edge_outcome(
+        scene,
+        config,
+        start_support,
+        end_support,
+        maximum_drop,
+        true,
+    )
+}
+
+/// [`character_edge_outcome`] between two supports where the caller already
+/// knows the standing capsule overlaps nothing (collision-derived navigation
+/// admits only such supports): the same edge without testing either end.
+pub fn character_edge_outcome_between_clear_supports(
+    scene: &VoxelCollisionScene,
+    config: &CharacterControllerConfig,
+    start_support: WorldPos,
+    end_support: WorldPos,
+    maximum_drop: f64,
+) -> Result<CharacterEdgeOutcome, CharacterControllerError> {
+    edge_outcome(
+        scene,
+        config,
+        start_support,
+        end_support,
+        maximum_drop,
+        false,
+    )
+}
+
+/// The standing capsule's centre over `support`.
+fn standing_center(config: &CharacterControllerConfig, height: f32, support: WorldPos) -> WorldPos {
     let center_offset =
         f64::from((height * 0.5).max(config.shape.radius) + config.shape.contact_skin);
-    let start = WorldPos::new(
-        start_support.x,
-        start_support.y + center_offset,
-        start_support.z,
-    );
-    let end = WorldPos::new(end_support.x, end_support.y + center_offset, end_support.z);
+    WorldPos::new(support.x, support.y + center_offset, support.z)
+}
+
+fn edge_outcome(
+    scene: &VoxelCollisionScene,
+    config: &CharacterControllerConfig,
+    start_support: WorldPos,
+    end_support: WorldPos,
+    maximum_drop: f64,
+    test_ends: bool,
+) -> Result<CharacterEdgeOutcome, CharacterControllerError> {
+    let height = stance_height(config, CharacterStance::Standing);
+    let capsule = |center| capsule_at(center, height, config.shape.radius);
+    let start = standing_center(config, height, start_support);
+    let end = standing_center(config, height, end_support);
     let nudge = f64::from(config.recovery.normal_nudge);
     let rise = end_support.y - start_support.y;
     let over_step = rise > f64::from(config.surface.maximum_step_height) + nudge;
@@ -866,11 +905,13 @@ pub fn character_edge_outcome(
     }
 
     let mut stats = CharacterCollisionQueryStats::default();
-    if overlap_world(&scene.projection, &[], capsule(start), &mut stats)?.is_some() {
-        return Ok(CharacterEdgeOutcome::StartOverlap);
-    }
-    if overlap_world(&scene.projection, &[], capsule(end), &mut stats)?.is_some() {
-        return Ok(CharacterEdgeOutcome::EndOverlap);
+    if test_ends {
+        if overlap_world(&scene.projection, &[], capsule(start), &mut stats)?.is_some() {
+            return Ok(CharacterEdgeOutcome::StartOverlap);
+        }
+        if overlap_world(&scene.projection, &[], capsule(end), &mut stats)?.is_some() {
+            return Ok(CharacterEdgeOutcome::EndOverlap);
+        }
     }
 
     let translation = WorldVec::new(end.x - start.x, end.y - start.y, end.z - start.z);
@@ -1124,10 +1165,10 @@ pub fn character_jump_outcome(
 }
 
 /// Walk a capsule from `start` to `end` (centres) over ground the way the
-/// controller slides along a walkable slope: in short segments, each lifting
-/// at most what a slope at the maximum rises over it (and never more than the
-/// step height), sweeping forward, and landing on standable ground no farther
-/// down than such a slope falls. A riser higher than that blocks the sweep,
+/// controller slides along a walkable slope: in segments up to the capsule's
+/// radius long, each sweeping forward while rising what a slope at the
+/// maximum rises over it (never more than the step height), then landing on
+/// standable ground no farther down than such a slope falls. A riser higher than that blocks the sweep,
 /// and a cliff or gap leaves nothing to land on.
 fn walk_slope(
     projection: &svc_collision::CollisionProjection,
@@ -1142,7 +1183,7 @@ fn walk_slope(
     let grade = f64::from(config.surface.maximum_slope_radians).tan();
     let step = f64::from(config.surface.maximum_step_height);
     let run = (end.x - start.x).hypot(end.z - start.z);
-    let mut segment = f64::from(config.shape.radius) * 0.5;
+    let mut segment = f64::from(config.shape.radius);
     if grade > 0.0 {
         segment = segment.min(step / grade);
     }
@@ -1159,15 +1200,14 @@ fn walk_slope(
     let up = WorldVec::new(0.0, allowance, 0.0);
     let down = WorldVec::new(0.0, -2.0 * allowance, 0.0);
     let mut center = start;
+    // Each segment rises and moves forward in one sweep, as along a slope at
+    // the maximum grade, then lands.
+    let rise_ahead = WorldVec::new(advance.x, up.y, advance.z);
     for _ in 0..segments as u32 {
-        if cast_world(projection, &[], capsule(center), up, 0.0, stats)?.is_some() {
+        if cast_world(projection, &[], capsule(center), rise_ahead, 0.0, stats)?.is_some() {
             return Ok(false);
         }
-        let lifted = add_world(center, up);
-        if cast_world(projection, &[], capsule(lifted), advance, 0.0, stats)?.is_some() {
-            return Ok(false);
-        }
-        let ahead = add_world(lifted, advance);
+        let ahead = add_world(center, rise_ahead);
         let Some(ground) = cast_world(projection, &[], capsule(ahead), down, 0.0, stats)? else {
             return Ok(false);
         };

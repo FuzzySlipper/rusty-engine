@@ -21,11 +21,11 @@ use core_math::{Vec2, Vec3};
 use core_space::{ChunkDims, GridId, VoxelCoord, VoxelGridSpec};
 use csharp_engine_abi::*;
 use engine_spatial::{
-    character_edge_outcome, character_jump_outcome, CharacterCapsule, CharacterCollisionQueryStats,
-    CharacterCollisionSource, CharacterContactFact, CharacterContactKind,
-    CharacterControllerCommand, CharacterControllerConfig, CharacterControllerError,
-    CharacterControllerReceipt, CharacterControllerService, CharacterEdgeOutcome,
-    CharacterGroundFact, CharacterJumpOutcome,
+    character_edge_outcome, character_edge_outcome_between_clear_supports, character_jump_outcome,
+    CharacterCapsule, CharacterCollisionQueryStats, CharacterCollisionSource, CharacterContactFact,
+    CharacterContactKind, CharacterControllerCommand, CharacterControllerConfig,
+    CharacterControllerError, CharacterControllerReceipt, CharacterControllerService,
+    CharacterEdgeOutcome, CharacterGroundFact, CharacterJumpOutcome,
     CharacterMeshInstance as SpatialCharacterMeshInstance, CharacterObstacle,
     CharacterStepColliders, CharacterStepSubject, CharacterStepWorld, MaterialVoxel,
     SpatialOcclusionCollider, SpatialOcclusionQuery, SpatialOcclusionService, StaticMeshAssetId,

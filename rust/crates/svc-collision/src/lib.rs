@@ -778,6 +778,40 @@ impl CollisionProjection {
             .map(|(overlap, _)| overlap)
     }
 
+    /// Whether the capsule overlaps any voxel or static-mesh collision, the
+    /// same overlap [`Self::character_capsule_overlap`] finds, stopping at the
+    /// first rather than measuring the deepest.
+    pub fn character_capsule_intersects(
+        &self,
+        capsule: CharacterCapsule,
+    ) -> Result<bool, CharacterCollisionQueryError> {
+        validate_character_query(capsule, WorldVec::ZERO, 0.0)?;
+        let capsule_pose = Pose::translation(capsule.center.x, capsule.center.y, capsule.center.z);
+        let capsule_shape = Capsule::new_y(capsule.half_height, capsule.radius);
+        let obstacle_pose = identity();
+        let query_bounds = swept_capsule_bounds(capsule, WorldVec::ZERO, 0.0);
+        let intersects = |shape: &dyn Shape| {
+            intersection_test(&capsule_pose, &capsule_shape, &obstacle_pose, shape)
+                .map_err(|_| CharacterCollisionQueryError::UnsupportedBackendQuery)
+        };
+        for (_, collider) in self.character_candidates(query_bounds) {
+            if !character_query_may_intersect(query_bounds, collider.bounds) {
+                continue;
+            }
+            for shape in collider.shapes() {
+                if intersects(shape)? {
+                    return Ok(true);
+                }
+            }
+        }
+        for (_, _, _, shape, bounds) in self.static_meshes.character_shapes() {
+            if character_query_may_intersect(query_bounds, bounds) && intersects(shape.as_ref())? {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
     pub fn character_capsule_overlap_with_stats(
         &self,
         capsule: CharacterCapsule,

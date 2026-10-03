@@ -784,33 +784,38 @@ pub(super) fn sample_column(
             cell,
             overlap: None,
         };
-        let overlap = |standing_y: f64| {
-            scene.character_capsule_overlap(collision_navigation_capsule(
+        let overlaps = |standing_y: f64| {
+            scene.character_capsule_intersects(collision_navigation_capsule(
                 center, standing_y, standing,
             ))
         };
-        let mut overlapping = None;
-        if normal_y >= minimum_upward_normal {
-            if let Some(found) = overlap(standing_y)? {
-                // A curved or filleted floor (a reconstructed surface) can
-                // rise under the capsule's rim; rest the capsule on it, as
-                // the character does, within one step of the support.
-                match rest_height(scene, center, standing_y, standing)? {
-                    Some(rest) if overlap(rest)?.is_none() => {
-                        sample.standing_y = rest;
-                        sample.cell = grid
-                            .world_to_voxel(core_space::WorldPos::new(center.x, rest, center.z));
-                    }
-                    _ => overlapping = Some(found),
+        let mut overlapping = false;
+        if normal_y >= minimum_upward_normal && overlaps(standing_y)? {
+            // A curved or filleted floor (a reconstructed surface) can
+            // rise under the capsule's rim; rest the capsule on it, as
+            // the character does, within one step of the support.
+            match rest_height(scene, center, standing_y, standing)? {
+                Some(rest) if !overlaps(rest)? => {
+                    sample.standing_y = rest;
+                    sample.cell =
+                        grid.world_to_voxel(core_space::WorldPos::new(center.x, rest, center.z));
                 }
+                _ => overlapping = true,
             }
         }
         let (standing_y, cell) = (sample.standing_y, sample.cell);
         if normal_y < minimum_upward_normal {
             sample.outcome = NativeCollisionNavigationSampleOutcome::TooSteep;
-        } else if let Some(overlap) = overlapping {
+        } else if overlapping {
             sample.outcome = NativeCollisionNavigationSampleOutcome::CapsuleOverlap;
-            sample.overlap = Some((overlap.source, overlap.point));
+            // Only an explanation reports what the capsule overlaps.
+            if record.is_some() {
+                sample.overlap = scene
+                    .character_capsule_overlap(collision_navigation_capsule(
+                        center, standing_y, standing,
+                    ))?
+                    .map(|overlap| (overlap.source, overlap.point));
+            }
         } else if supports.iter().any(|(existing, _)| *existing == cell) {
             // The first support found for a cell wins, as the highest one.
             sample.outcome = NativeCollisionNavigationSampleOutcome::SameCell;
@@ -852,7 +857,16 @@ fn derive_edges(
             continue;
         };
         tested += 1;
-        match edge_outcome(scene, grid, policy, (from, from_y), (to, to_y))? {
+        // Column sampling admits a support only where the standing capsule
+        // is clear, so the edge need not test either end again.
+        let outcome = character_edge_outcome_between_clear_supports(
+            scene,
+            &policy.character,
+            support_position(grid, from, from_y),
+            support_position(grid, to, to_y),
+            policy.maximum_drop,
+        )?;
+        match outcome {
             CharacterEdgeOutcome::Traversable => targets.push(EdgeTarget { to, jump: false }),
             CharacterEdgeOutcome::RiseOverStep
                 if policy.jump.ledges && jump(to, to_y, &mut tested)? =>
@@ -903,6 +917,12 @@ pub(super) fn jump_outcome(
     )
 }
 
+/// A support's world position: its column's centre at the support height.
+fn support_position(grid: VoxelGridSpec, cell: VoxelCoord, height: f64) -> core_space::WorldPos {
+    let center = grid.voxel_center_world(VoxelCoord::new(cell.x, 0, cell.z));
+    core_space::WorldPos::new(center.x, height, center.z)
+}
+
 pub(super) fn edge_outcome(
     scene: &VoxelCollisionScene,
     grid: VoxelGridSpec,
@@ -935,7 +955,7 @@ fn rest_height(
         return Ok(None);
     }
     let start = collision_navigation_capsule(center, standing_y + lift, config);
-    if scene.character_capsule_overlap(start)?.is_some() {
+    if scene.character_capsule_intersects(start)? {
         return Ok(None);
     }
     let Some(hit) = scene.cast_character_capsule(

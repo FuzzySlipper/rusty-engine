@@ -30,16 +30,17 @@ mod voxel_template;
 mod world_origin;
 
 pub use character_controller::{
-    character_edge_is_traversable, character_edge_outcome, character_jump_outcome,
-    CharacterAirConfig, CharacterBlockKind, CharacterConfigError, CharacterContactFact,
-    CharacterContactKind, CharacterControllerCommand, CharacterControllerConfig,
-    CharacterControllerError, CharacterControllerReadout, CharacterControllerReceipt,
-    CharacterControllerService, CharacterEdgeOutcome, CharacterExternalMotionConfig,
-    CharacterGroundConfig, CharacterGroundFact, CharacterJumpConfig, CharacterJumpOutcome,
-    CharacterMeshInstance, CharacterPlatformConfig, CharacterPlatformFact, CharacterRecoveryConfig,
-    CharacterShapeConfig, CharacterSolverConfig, CharacterStanceFact, CharacterStepColliders,
-    CharacterStepFact, CharacterStepSubject, CharacterStepWorld, CharacterSurfaceConfig,
-    CharacterVerticalConfig, DynamicImpulseProposal, FirstPersonLookCommand, FirstPersonLookConfig,
+    character_edge_is_traversable, character_edge_outcome,
+    character_edge_outcome_between_clear_supports, character_jump_outcome, CharacterAirConfig,
+    CharacterBlockKind, CharacterConfigError, CharacterContactFact, CharacterContactKind,
+    CharacterControllerCommand, CharacterControllerConfig, CharacterControllerError,
+    CharacterControllerReadout, CharacterControllerReceipt, CharacterControllerService,
+    CharacterEdgeOutcome, CharacterExternalMotionConfig, CharacterGroundConfig,
+    CharacterGroundFact, CharacterJumpConfig, CharacterJumpOutcome, CharacterMeshInstance,
+    CharacterPlatformConfig, CharacterPlatformFact, CharacterRecoveryConfig, CharacterShapeConfig,
+    CharacterSolverConfig, CharacterStanceFact, CharacterStepColliders, CharacterStepFact,
+    CharacterStepSubject, CharacterStepWorld, CharacterSurfaceConfig, CharacterVerticalConfig,
+    DynamicImpulseProposal, FirstPersonLookCommand, FirstPersonLookConfig,
     FirstPersonLookDiagnostic, FirstPersonLookError, FirstPersonLookReceipt,
     FirstPersonLookService, FirstPersonLookState, PreparedCharacterControllerStep,
 };
@@ -1437,6 +1438,15 @@ impl VoxelCollisionScene {
         capsule: CharacterCapsule,
     ) -> Result<Option<CharacterCapsuleOverlap>, CharacterCollisionQueryError> {
         self.projection.character_capsule_overlap(capsule)
+    }
+
+    /// Whether the capsule overlaps anything, without finding the deepest
+    /// contact: cheaper where only the answer matters.
+    pub fn character_capsule_intersects(
+        &self,
+        capsule: CharacterCapsule,
+    ) -> Result<bool, CharacterCollisionQueryError> {
+        self.projection.character_capsule_intersects(capsule)
     }
 }
 
