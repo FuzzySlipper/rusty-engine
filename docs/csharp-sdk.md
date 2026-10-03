@@ -120,6 +120,17 @@ command writes its output where the product points `RustyEngineProductUiRoot`;
 pointing it under `$(BaseIntermediateOutputPath)` keeps that output per machine
 too. `rusty dev` runs the pinned pair's own CLI, so the pair must have this.
 
+The share and the product's packages must also serve both machines:
+
+- A Samba share needs `oplocks = no` and `level2 oplocks = no`. Edits made on
+  the Linux side do not break the leases Samba otherwise grants, so Windows
+  keeps stale file times and never reloads them.
+- One package install serves both systems only when its packages are plain
+  JavaScript or carry both platforms' native builds. pnpm's
+  `supportedArchitectures` (`os: [current, win32]`) fetches both. pnpm's
+  symlinked `node_modules` cannot be read from Windows over Samba; such a
+  product uses `nodeLinker: hoisted`.
+
 ## Test
 
 A product's test project exercises its Engine calls against the Engine's own

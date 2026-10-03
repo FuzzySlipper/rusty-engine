@@ -523,14 +523,28 @@ map. Add the file to `RustyEngineProductUiInput` so a pair move rebuilds the
 UI.
 
 The SDK runs the command with MSBuild `Exec`: under `cmd.exe` on Windows and
-`/bin/sh` on Linux. Keep it one invocation both run, such as `npm exec -- tsc`,
-`pnpm exec tsc` or `node <script>.mjs`, with quoted paths and no shell utilities,
-globs or `bash`. Copy files (the pair's declarations, stylesheets) with MSBuild
-`Copy` in a target that runs `BeforeTargets="BuildRustyEngineProductUi"`:
+`/bin/sh` on Linux. Keep it one invocation both run, with quoted paths and no
+shell utilities, globs or `bash`. Run tools through node by path
+(`node "…/node_modules/typescript/bin/tsc"`, `node <script>.mjs`): `npm exec`
+needs the `.cmd` shims only a Windows install writes, so it fails on a checkout
+installed from Linux. Copy files (the pair's declarations, stylesheets) with
+MSBuild in a target that runs `BeforeTargets="BuildRustyEngineProductUi"`. A
+copy into the source tree is made only when its content differs, since two
+machines sharing a checkout see the pair's file with different times:
 
 ```xml
 <Target Name="CopyEngineUiTypes" BeforeTargets="BuildRustyEngineProductUi">
-  <Copy SourceFiles="$(RustyEngineProductUiTypes)" DestinationFolder="$(MSBuildProjectDirectory)/../ui/engine-types" SkipUnchangedFiles="true" />
+  <PropertyGroup>
+    <_EngineUiTypesCopy>$(MSBuildProjectDirectory)/../ui/engine-types/rusty-engine-product-ui.d.ts</_EngineUiTypesCopy>
+  </PropertyGroup>
+  <GetFileHash Files="$(RustyEngineProductUiTypes)">
+    <Output TaskParameter="Hash" PropertyName="_EngineUiTypesHash" />
+  </GetFileHash>
+  <GetFileHash Files="$(_EngineUiTypesCopy)" Condition="Exists('$(_EngineUiTypesCopy)')">
+    <Output TaskParameter="Hash" PropertyName="_EngineUiTypesCopyHash" />
+  </GetFileHash>
+  <Copy SourceFiles="$(RustyEngineProductUiTypes)" DestinationFiles="$(_EngineUiTypesCopy)"
+        Condition="'$(_EngineUiTypesHash)' != '$(_EngineUiTypesCopyHash)'" />
 </Target>
 ```
 
