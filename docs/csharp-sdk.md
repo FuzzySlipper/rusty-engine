@@ -170,7 +170,8 @@ host.Call(engine =>
 
 Each `Call` stands for one product callback; make Engine calls inside one.
 The renderer work a call produces is dropped. The library ships in the pinned
-pair's runtime pack (`lib/librusty_engine_test_host.so`); a project with
+pair's runtime pack (`lib/librusty_engine_test_host.so`, or
+`lib/rusty_engine_test_host.dll` on Windows); a project with
 `IsTestProject` (set by `Microsoft.NET.Test.Sdk`) that references the product
 or `Rusty.Engine` records its path at build time, so `rusty install` is the
 only setup. `RustyEngineTestHostLibrary` or `EngineTestHostOptions.LibraryPath`
@@ -206,10 +207,9 @@ ulong roll = host.Call(engine =>
 });
 ```
 
-The build copies the pinned pair's `librusty_engine_test_host.so` beside the
-tool's build and publish output, so `dotnet run` and a published
-(framework-dependent, Linux x64) tool need no `LibraryPath` and no installed
-pair on the machine that runs it. The ABI check is the test host's. A tool
+The build copies the pinned pair's test host library beside the tool's build
+and publish output, so `dotnet run` and a published (framework-dependent) tool
+need no `LibraryPath` and no installed pair on a machine of the same platform. The ABI check is the test host's. A tool
 gets the services the test host has: no renderer, audio, input or product
 lifecycle. It has no build bundles, but it packs and opens
 [content containers](csharp-product-project.md#content-containers-installed-beside-the-product)

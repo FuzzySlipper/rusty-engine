@@ -44,8 +44,12 @@
     <_RustyEngineTestHostCache Condition="'$(_RustyEngineTestHostCache)' == '' and '$(XDG_CACHE_HOME)' != ''">$(XDG_CACHE_HOME)/rusty-engine</_RustyEngineTestHostCache>
     <_RustyEngineTestHostCache Condition="'$(_RustyEngineTestHostCache)' == '' and '$(HOME)' != ''">$(HOME)/.cache/rusty-engine</_RustyEngineTestHostCache>
     <_RustyEngineTestHostCache Condition="'$(_RustyEngineTestHostCache)' == ''">$(USERPROFILE)/.cache/rusty-engine</_RustyEngineTestHostCache>
-    <RustyEngineTestHostLibrary Condition="'$(RustyEngineUseSourceDevelopment)' == 'true'">$(RustyEngineSourceDevelopmentPath)/target/runtime-pack/linux-x64/lib/librusty_engine_test_host.so</RustyEngineTestHostLibrary>
-    <RustyEngineTestHostLibrary Condition="'$(RustyEngineUseSourceDevelopment)' != 'true'">$(_RustyEngineTestHostCache)/pairs/$(RustyEngineSdkPackageVersion)/runtime-pack/lib/librusty_engine_test_host.so</RustyEngineTestHostLibrary>
+    <_RustyEngineTestHostTarget>linux-x64</_RustyEngineTestHostTarget>
+    <_RustyEngineTestHostTarget Condition="$([MSBuild]::IsOSPlatform('Windows'))">win-x64</_RustyEngineTestHostTarget>
+    <_RustyEngineTestHostFile>librusty_engine_test_host.so</_RustyEngineTestHostFile>
+    <_RustyEngineTestHostFile Condition="$([MSBuild]::IsOSPlatform('Windows'))">rusty_engine_test_host.dll</_RustyEngineTestHostFile>
+    <RustyEngineTestHostLibrary Condition="'$(RustyEngineUseSourceDevelopment)' == 'true'">$(RustyEngineSourceDevelopmentPath)/target/runtime-pack/$(_RustyEngineTestHostTarget)/lib/$(_RustyEngineTestHostFile)</RustyEngineTestHostLibrary>
+    <RustyEngineTestHostLibrary Condition="'$(RustyEngineUseSourceDevelopment)' != 'true'">$(_RustyEngineTestHostCache)/pairs/$(RustyEngineSdkPackageVersion)/runtime-pack/lib/$(_RustyEngineTestHostFile)</RustyEngineTestHostLibrary>
   </PropertyGroup>
   <ItemGroup Condition="'$(RustyEngineTestHostLibrary)' != '' and '$(RustyEngineToolHost)' != 'true'">
     <RuntimeHostConfigurationOption Include="Rusty.Engine.TestHostLibrary" Value="$(RustyEngineTestHostLibrary)" />
