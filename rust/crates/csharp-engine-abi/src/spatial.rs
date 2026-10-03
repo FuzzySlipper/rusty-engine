@@ -1717,8 +1717,12 @@ pub struct NativeNavigationStepResult {
     pub outcome: NativeNavigationPathOutcome,
     pub next_waypoint: NativeVec3,
     pub next_path_cell: NativePlanarNavCell,
-    /// How the next path cell is reached: a jump means the mover jumps now.
+    /// How the next path cell is reached: a jump means the mover jumps now,
+    /// standing at its cell's centre.
     pub next_edge_kind: NativeNavigationEdgeKind,
+    /// For a jump, seconds after it jumps at which the mover starts holding
+    /// toward the next path cell, until it lands; zero otherwise.
+    pub next_jump_departure: f32,
     pub reached: u32,
     pub visited: u32,
     pub navigation_revision: u64,
@@ -1739,6 +1743,7 @@ impl Default for NativeNavigationStepResult {
             edges: std::ptr::null(),
             edges_len: 0,
             next_edge_kind: Default::default(),
+            next_jump_departure: 0.0,
             outcome: Default::default(),
             next_waypoint: Default::default(),
             next_path_cell: Default::default(),

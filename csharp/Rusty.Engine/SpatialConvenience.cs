@@ -97,7 +97,7 @@ public readonly partial record struct NavigationStepResult
         bool nearestPresent,
         PlanarNavCell nearestCell,
         Vector3 nearest)
-        : this(path, ReadOnlyMemory<NavigationPathEdge>.Empty, outcome, nextWaypoint, nextPathCell, NavigationEdgeKind.Walk, reached, visited, navigationRevision, projectionHash, pathHash, nearestPresent, nearestCell, nearest)
+        : this(path, ReadOnlyMemory<NavigationPathEdge>.Empty, outcome, nextWaypoint, nextPathCell, NavigationEdgeKind.Walk, 0f, reached, visited, navigationRevision, projectionHash, pathHash, nearestPresent, nearestCell, nearest)
     {
     }
 }

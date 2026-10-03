@@ -904,12 +904,23 @@ pub(super) fn jump_outcome(
     scene: &VoxelCollisionScene,
     grid: VoxelGridSpec,
     policy: &CollisionNavigationPolicy,
+    from: (VoxelCoord, f64),
+    to: (VoxelCoord, f64),
+) -> Result<CharacterJumpOutcome, CharacterControllerError> {
+    jump_plan(scene, grid, policy, from, to).map(|plan| plan.outcome)
+}
+
+/// [`jump_outcome`] with when the mover holds toward the landing.
+pub(super) fn jump_plan(
+    scene: &VoxelCollisionScene,
+    grid: VoxelGridSpec,
+    policy: &CollisionNavigationPolicy,
     (from, from_y): (VoxelCoord, f64),
     (to, to_y): (VoxelCoord, f64),
-) -> Result<CharacterJumpOutcome, CharacterControllerError> {
+) -> Result<CharacterJumpPlan, CharacterControllerError> {
     let from_center = grid.voxel_center_world(VoxelCoord::new(from.x, 0, from.z));
     let to_center = grid.voxel_center_world(VoxelCoord::new(to.x, 0, to.z));
-    character_jump_outcome(
+    character_jump_plan(
         scene,
         &policy.character,
         core_space::WorldPos::new(from_center.x, from_y, from_center.z),
@@ -1064,7 +1075,7 @@ fn unpublished() -> CsharpEngineServicesError {
     )
 }
 
-fn projection_error(error: CharacterControllerError) -> CsharpEngineServicesError {
+pub(super) fn projection_error(error: CharacterControllerError) -> CsharpEngineServicesError {
     CsharpEngineServicesError::new("CSHARP_COLLISION_NAVIGATION_PROJECTION", error.code())
 }
 
@@ -2145,6 +2156,35 @@ mod tests {
                 .count(),
             1,
             "{kinds:?}"
+        );
+        // A step from the gap's edge jumps now, and holds toward the landing
+        // 4 m on from when the jump still carries it there: 8.5 m/s under
+        // 24 m/s² falls back to the floor snap's 0.25 m in (8.5 + √60.25) / 24
+        // s, and gaining 70 m/s each second up to 7 m/s it covers 4 m in
+        // (4 / 7 + 0.05) s.
+        let step = bridge
+            .evaluate_navigation(NativeNavigationStepRequest {
+                session,
+                from: NativeVec3 {
+                    x: 2.5,
+                    y: 1.0,
+                    z: 2.5,
+                },
+                target: NativeVec3 {
+                    x: 9.5,
+                    y: 1.0,
+                    z: 2.5,
+                },
+                max_step_units: 1.0,
+                max_visited: 256,
+            })
+            .unwrap();
+        assert_eq!(step.next_edge_kind, NativeNavigationEdgeKind::Jump);
+        let departure = (8.5 + 60.25f64.sqrt()) / 24.0 - (4.0 / 7.0 + 0.05);
+        assert!(
+            (f64::from(step.next_jump_departure) - departure).abs() < 1e-4,
+            "{} s, not {departure} s",
+            step.next_jump_departure
         );
 
         // Six metres is beyond the jump's 4.6 m reach from a standstill.

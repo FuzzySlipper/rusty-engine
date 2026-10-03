@@ -21,11 +21,11 @@ use core_math::{Vec2, Vec3};
 use core_space::{ChunkDims, GridId, VoxelCoord, VoxelGridSpec};
 use csharp_engine_abi::*;
 use engine_spatial::{
-    character_edge_outcome, character_edge_outcome_between_clear_supports, character_jump_outcome,
+    character_edge_outcome, character_edge_outcome_between_clear_supports, character_jump_plan,
     CharacterCapsule, CharacterCollisionQueryStats, CharacterCollisionSource, CharacterContactFact,
     CharacterContactKind, CharacterControllerCommand, CharacterControllerConfig,
     CharacterControllerError, CharacterControllerReceipt, CharacterControllerService,
-    CharacterEdgeOutcome, CharacterGroundFact, CharacterJumpOutcome,
+    CharacterEdgeOutcome, CharacterGroundFact, CharacterJumpOutcome, CharacterJumpPlan,
     CharacterMeshInstance as SpatialCharacterMeshInstance, CharacterObstacle,
     CharacterStepColliders, CharacterStepSubject, CharacterStepWorld, MaterialVoxel,
     SpatialOcclusionCollider, SpatialOcclusionQuery, SpatialOcclusionService, StaticMeshAssetId,
@@ -2226,17 +2226,48 @@ impl RuntimeSpatialBridge {
                 ..Default::default()
             });
         };
-        let (mut result, path) = evaluate_navigation_step_facts(navigation, request);
-        let edge_kinds = navigation.path_edge_kinds(&path);
-        let path = native_path(&path);
+        let (mut result, path_cells) = evaluate_navigation_step_facts(navigation, request);
+        let edge_kinds = navigation.path_edge_kinds(&path_cells);
+        let path = native_path(&path_cells);
         result.path = path.as_ptr();
         result.path_len = path.len();
         result.edges = edge_kinds.as_ptr();
         result.edges_len = edge_kinds.len();
         result.next_edge_kind = edge_kinds.get(1).map(|edge| edge.kind).unwrap_or_default();
+        if result.next_edge_kind == NativeNavigationEdgeKind::Jump {
+            result.next_jump_departure = next_jump_departure(session, navigation, &path_cells)?;
+        }
         self.borrowed.hold((path, edge_kinds));
         Ok(result)
     }
+}
+
+/// When the mover, standing at the first path cell's centre, holds toward the
+/// second after jumping, as the derivation's jump model plans it.
+fn next_jump_departure(
+    session: &SpatialSession,
+    navigation: &NavigationState,
+    path: &[VoxelCoord],
+) -> Result<f32, CsharpEngineServicesError> {
+    let (Some(cache), [from, to, ..]) = (session.collision_navigation.as_ref(), path) else {
+        return Ok(0.0);
+    };
+    let height = |cell| {
+        navigation
+            .vertical_mapping
+            .as_ref()
+            .and_then(|vertical| vertical.support_heights.get(cell))
+            .copied()
+    };
+    let (Some(from_y), Some(to_y)) = (height(from), height(to)) else {
+        return Ok(0.0);
+    };
+    let policy = &cache.key().policy;
+    let grid = policy.grid()?;
+    let plan =
+        collision_navigation::jump_plan(&session.scene, grid, policy, (*from, from_y), (*to, to_y))
+            .map_err(collision_navigation::projection_error)?;
+    Ok(plan.departure as f32)
 }
 
 fn evaluate_navigation_step_facts(

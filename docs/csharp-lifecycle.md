@@ -572,9 +572,9 @@ still lands it there, gaining speed as the controller does in the air,
 (`Air.Drag` is not modelled). Where that would bring it back down on the
 start or another floor first, as on a long drop, it holds toward the target
 as late as avoids that, landing past the target's centre but on it; with
-neither, the jump is `JumpArcBlocked`. A mover that stops at the start, jumps
-and holds toward the target from that moment makes the jump; step results do
-not carry the moment yet.
+neither, the jump is `JumpArcBlocked`. A mover that stops at the start's
+centre, jumps and holds toward the target from that moment until it lands
+makes the jump.
 
 - `JumpLedges` connects a neighbour too high to step onto when the capsule can
   rise straight up to the peak (`JumpHeadroomBlocked` otherwise) and sweep
@@ -587,7 +587,8 @@ not carry the moment yet.
   (`JumpArcBlocked`), and land no farther down than `MaximumDrop`.
 - Path, weighted path and step results list each path cell's `Edges` (`Walk`,
   `Drop` for a fall below the step height, or `Jump`). A step result's
-  `NextEdgeKind` tells a mover to jump now.
+  `NextEdgeKind` tells a mover to jump now, and `NextJumpDeparture` is how
+  many seconds after jumping it starts holding toward the next path cell.
 - A weighted path pays `JumpCost` (default 4) on top of a jump's destination
   cost, so it prefers a walk unless the detour is longer.
 
