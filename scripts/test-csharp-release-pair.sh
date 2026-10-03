@@ -251,7 +251,7 @@ host_log="$work/runtime-host.log"
     echo "RUSTY_ENGINE_PAIR_TEST_RUNTIME: extracted rusty dev --help failed" >&2
     exit 1
 }
-grep -F 'usage: rusty dev --project' "$work/rusty-dev-help.log" >/dev/null || {
+grep -F 'usage: rusty dev [--project' "$work/rusty-dev-help.log" >/dev/null || {
     echo "RUSTY_ENGINE_PAIR_TEST_RUNTIME: extracted runtime pack did not expose rusty dev" >&2
     exit 1
 }

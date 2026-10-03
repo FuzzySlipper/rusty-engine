@@ -48,7 +48,16 @@ From the product repository:
 ```bash
 rusty status
 rusty install
-rusty dev --project src/Game/Game.csproj --port 8787
+rusty dev --port 8787
+```
+
+`rusty dev`, `rusty dev start|stop|status` and `rusty build` run the project
+`--project` names, else the repository's default: the nearest
+`Directory.Build.props` at or above the current directory names it, relative to
+itself, beside the pin. Either path separator works on Windows and Linux:
+
+```xml
+<RustyEngineProject>src/Game/Game.csproj</RustyEngineProject>
 ```
 
 `rusty dev` builds and stages the product, runs it on CoreCLR, and watches the
@@ -61,10 +70,10 @@ loose-content edits rebuild and replace the runtime. Useful flags:
 [CoreCLR diagnostics](coreclr-diagnostics.md)) and `--headless`.
 
 Scripts and agents run it in the background, one session per project:
-`rusty dev start --project …` (same options) returns once the product serves
+`rusty dev start` (same options) returns once the product serves
 and prints `{url, port, pid, runtimeInstanceId, persistenceRoot, log}` as JSON,
-or exits nonzero with the log's tail. `rusty dev stop --project …` disposes the
-product as Ctrl+C would, and `rusty dev status --project …` reports the
+or exits nonzero with the log's tail. `rusty dev stop` disposes the
+product as Ctrl+C would, and `rusty dev status` reports the
 session. Both find it through `.runtime/dev/`, which has one directory per
 project path in the repository, so they never need `kill` or `pkill`. `start` needs a pinned pair that has it.
 
@@ -82,7 +91,7 @@ pair's desktop runtime pack into the cache (see
 `device-required` (or `--audio-output device-required`) fails the load when no
 audio device opens.
 
-`rusty build --project …` stages without running; `--aot` also publishes the
+`rusty build` stages without running; `--aot` also publishes the
 NativeAOT product, an explicit fidelity/release check rather than the edit
 loop.
 

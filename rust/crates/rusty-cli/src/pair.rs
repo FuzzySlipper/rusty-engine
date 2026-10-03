@@ -21,6 +21,9 @@ use sha2::{Digest, Sha256};
 
 pub const PIN_FILE: &str = "Directory.Build.props";
 pub const PIN_ELEMENT: &str = "RustyEnginePackageVersion";
+/// The repository's default product project, relative to the
+/// `Directory.Build.props` that declares it.
+pub const PROJECT_ELEMENT: &str = "RustyEngineProject";
 /// The CLI's own settings, beside the installed pairs: `{"releases": <url>}`
 /// names a release mirror (an HTTP base or a `file://` directory) instead of
 /// GitHub. `install-rusty.sh --releases` writes it.
@@ -123,6 +126,37 @@ impl Pin {
     }
 }
 
+/// The product project the nearest `Directory.Build.props` at or above
+/// `start` that declares `<RustyEngineProject>` names. Either separator works,
+/// so one checkout serves Windows and Linux.
+pub fn default_project(start: &Path) -> Result<Option<PathBuf>, String> {
+    for directory in start.ancestors() {
+        let file = directory.join(PIN_FILE);
+        let Ok(text) = fs::read_to_string(&file) else {
+            continue;
+        };
+        let Some((from, to)) = element_value_range(&text, PROJECT_ELEMENT)
+            .map_err(|error| format!("RUSTY_PROJECT: `{}`: {error}", file.display()))?
+        else {
+            continue;
+        };
+        let value = text[from..to].trim();
+        let project = value
+            .split(['/', '\\'])
+            .filter(|part| !part.is_empty())
+            .fold(directory.to_path_buf(), |path, part| path.join(part));
+        if !project.is_file() {
+            return Err(format!(
+                "RUSTY_PROJECT: `{}` names <{PROJECT_ELEMENT}>{value}</{PROJECT_ELEMENT}>, but `{}` is not a file; fix it or pass --project",
+                file.display(),
+                project.display()
+            ));
+        }
+        return Ok(Some(project));
+    }
+    Ok(None)
+}
+
 fn read_pin(text: &str) -> Result<Option<String>, String> {
     let Some((start, end)) = pin_value_range(text)? else {
         return Ok(None);
@@ -138,22 +172,24 @@ fn read_pin(text: &str) -> Result<Option<String>, String> {
 }
 
 fn pin_value_range(text: &str) -> Result<Option<(usize, usize)>, String> {
-    let open = format!("<{PIN_ELEMENT}>");
-    let close = format!("</{PIN_ELEMENT}>");
+    element_value_range(text, PIN_ELEMENT)
+}
+
+fn element_value_range(text: &str, element: &str) -> Result<Option<(usize, usize)>, String> {
+    let open = format!("<{element}>");
+    let close = format!("</{element}>");
     let mut occurrences = text.match_indices(&open);
     let Some((open_at, _)) = occurrences.next() else {
         return Ok(None);
     };
     if occurrences.next().is_some() {
-        return Err(format!(
-            "declares <{PIN_ELEMENT}> more than once; keep one pin"
-        ));
+        return Err(format!("declares <{element}> more than once; keep one"));
     }
     let start = open_at + open.len();
     let end = text[start..]
         .find(&close)
         .map(|offset| start + offset)
-        .ok_or_else(|| format!("<{PIN_ELEMENT}> is not closed"))?;
+        .ok_or_else(|| format!("<{element}> is not closed"))?;
     Ok(Some((start, end)))
 }
 
@@ -871,6 +907,42 @@ mod tests {
         assert!(read_pin(&twice).unwrap_err().contains("more than once"));
         let expression = "<RustyEnginePackageVersion>$(Other)</RustyEnginePackageVersion>";
         assert!(read_pin(expression).unwrap_err().contains("literal"));
+    }
+
+    #[test]
+    fn the_default_project_resolves_beside_its_props_from_nested_directories() {
+        let root = env::temp_dir().join(format!("rusty-default-project-{}", std::process::id()));
+        let game = root.join("src/Game");
+        let tool = root.join("tools/Tool");
+        fs::create_dir_all(&game).unwrap();
+        fs::create_dir_all(&tool).unwrap();
+        fs::write(game.join("Game.csproj"), "<Project/>").unwrap();
+        fs::write(tool.join("Tool.csproj"), "<Project/>").unwrap();
+        assert_eq!(default_project(&tool).unwrap(), None);
+
+        // Either separator names the same project, from any directory below.
+        for value in ["src/Game/Game.csproj", "src\\Game\\Game.csproj"] {
+            fs::write(
+                root.join(PIN_FILE),
+                format!("<Project><PropertyGroup><{PROJECT_ELEMENT}> {value} </{PROJECT_ELEMENT}></PropertyGroup></Project>"),
+            )
+            .unwrap();
+            for start in [&root, &tool] {
+                assert_eq!(
+                    default_project(start).unwrap(),
+                    Some(root.join("src").join("Game").join("Game.csproj"))
+                );
+            }
+        }
+
+        // A stale default is reported, not replaced by another project.
+        fs::remove_file(game.join("Game.csproj")).unwrap();
+        let error = default_project(&tool).unwrap_err();
+        assert!(
+            error.contains("RUSTY_PROJECT") && error.contains("--project"),
+            "{error}"
+        );
+        fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]

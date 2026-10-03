@@ -52,7 +52,7 @@ cd "$WORK"
 "$PACK/bin/rusty-product-host" --version | grep -F 'rusty-product-host' >/dev/null
 test -x "$PACK/bin/rusty"
 "$PACK/bin/rusty" dev --help >"$WORK/rusty-dev-help.log" 2>&1
-grep -F 'usage: rusty dev --project' "$WORK/rusty-dev-help.log" >/dev/null
+grep -F 'usage: rusty dev [--project' "$WORK/rusty-dev-help.log" >/dev/null
 
 RUNTIME_HASH_BEFORE="$(find "$PACK" -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum | sha256sum | awk '{print $1}')"
 

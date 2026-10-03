@@ -585,13 +585,25 @@ impl Arguments {
                     rest.iter()
                         .position(|value| value == "--project")
                         .and_then(|index| rest.get(index + 1))
-                        .map(PathBuf::from),
+                        .map(PathBuf::from)
+                        .or_else(|| configured_project().ok().flatten()),
                 ),
                 None => match rest.first().map(String::as_str) {
                     Some("start") => {
-                        let arguments: Vec<String> = rest[1..].to_vec();
+                        let mut arguments: Vec<String> = rest[1..].to_vec();
+                        let options = parse_dev(arguments.clone())?;
+                        // The session runs the project chosen here.
+                        if !arguments.iter().any(|value| value == "--project") {
+                            arguments.splice(
+                                0..0,
+                                [
+                                    "--project".to_owned(),
+                                    options.project.display().to_string(),
+                                ],
+                            );
+                        }
                         CommandName::DevStart(
-                            parse_dev(arguments.clone())?,
+                            options,
                             arguments.into_iter().map(Into::into).collect(),
                         )
                     }
@@ -737,9 +749,7 @@ fn parse_dev(values: Vec<String>) -> Result<DevOptions, String> {
     if chromium.is_some() && !headless {
         return Err("RUSTY_DEV_ARGUMENT: --chromium selects the --headless browser".to_owned());
     }
-    let project = project.ok_or_else(|| {
-        "RUSTY_DEV_ARGUMENT: --project <ordinary-product.csproj> is required".to_owned()
-    })?;
+    let project = selected_project(project, "rusty dev")?;
     Ok(DevOptions {
         project,
         runtime,
@@ -758,9 +768,32 @@ fn parse_dev(values: Vec<String>) -> Result<DevOptions, String> {
     })
 }
 
+/// The explicit `--project`, else the default the repository around the
+/// current directory names with `<RustyEngineProject>`.
+fn selected_project(project: Option<PathBuf>, command: &str) -> Result<PathBuf, String> {
+    if let Some(project) = project {
+        return Ok(project);
+    }
+    configured_project()?.ok_or_else(|| {
+        format!(
+            "RUSTY_ARGUMENT: {command} needs --project <product.csproj>, or a default named by \
+             <{element}>path/to/Product.csproj</{element}> in the repository's {file}",
+            element = pair::PROJECT_ELEMENT,
+            file = pair::PIN_FILE,
+        )
+    })
+}
+
+fn configured_project() -> Result<Option<PathBuf>, String> {
+    let directory =
+        env::current_dir().map_err(|error| format!("RUSTY_PATH: no current directory: {error}"))?;
+    pair::default_project(&directory)
+}
+
 fn parse_session_project(values: &[String], command: &str) -> Result<PathBuf, String> {
     match values {
         [flag, project] if flag == "--project" => Ok(PathBuf::from(project)),
+        [] => selected_project(None, &format!("rusty dev {command}")),
         _ => Err(format!(
             "RUSTY_DEV_ARGUMENT: rusty dev {command} needs `--project <ordinary-product.csproj>`\n\n{}",
             dev_usage()
@@ -794,7 +827,7 @@ fn parse_build(values: Vec<String>) -> Result<BuildOptions, String> {
         return Err("RUSTY_ARGUMENT: --compress applies to --pack".to_owned());
     }
     Ok(BuildOptions {
-        project: project.ok_or("RUSTY_ARGUMENT: rusty build needs --project <product.csproj>")?,
+        project: selected_project(project, "rusty build")?,
         engine_source,
         aot,
         pack,
@@ -941,12 +974,15 @@ Get or refresh this command:
 }
 
 fn dev_usage() -> String {
-    "usage: rusty dev --project <ordinary-product.csproj> [--port <u16>] [--bind-host <IPv4>] [--live-debug] [--debugger]
+    "usage: rusty dev [--project <ordinary-product.csproj>] [--port <u16>] [--bind-host <IPv4>] [--live-debug] [--debugger]
                  [--headless [--chromium <executable>]] [--output <stream|window>]
                  [--audio-output <device-optional|device-required>] [--cef-switch <name[=value]>]...
                  [--diagnostics-log <file>] [--runtime <runtime-pack> | --engine-source <rusty-engine-source>]
-       rusty dev start --project <ordinary-product.csproj> [the same options]
-       rusty dev stop|status --project <ordinary-product.csproj>
+       rusty dev start [the same options]
+       rusty dev stop|status [--project <ordinary-product.csproj>]
+
+Without --project, the product is the one the nearest Directory.Build.props at or above the current
+directory names, relative to itself, with <RustyEngineProject>src/Game/Game.csproj</RustyEngineProject>.
 
 Builds and stages the product through its SDK, starts it on CoreCLR, and restages when declared
 C#, UI or content inputs change. UI and content-bundle edits reload into the running product; other
@@ -980,6 +1016,7 @@ runtime for the UI) into the cache beside the pair.
 This command never invokes Cargo and never searches for an adjacent Engine checkout.
 
 Examples:
+  rusty dev --output window
   rusty dev --project src/Game/Game.csproj --port 8787
   rusty dev --project src/Game/Game.csproj --live-debug --headless
   rusty dev --project src/Game/Game.csproj --output window
@@ -988,11 +1025,12 @@ Examples:
 }
 
 fn build_usage() -> String {
-    "usage: rusty build --project <product.csproj> [--aot] [--pack <release-dir> [--compress]] [--engine-source <rusty-engine-source>]
+    "usage: rusty build [--project <product.csproj>] [--aot] [--pack <release-dir> [--compress]] [--engine-source <rusty-engine-source>]
 
 Restores against the pinned SDK in the shared cache, builds, and stages the CoreCLR product bundle
 (the SDK target StageRustyEngineCoreClrProduct). --aot runs VerifyRustyEngineAot, which also
 publishes the NativeAOT product. Compiler output and dotnet's exit code are passed through.
+Without --project, it builds the repository's <RustyEngineProject> default, as `rusty dev` does.
 
 --pack then writes the staged Product as a release: <release-dir>/product.rpak holds product.json,
 the UI and the content; the CoreCLR assemblies or NativeAOT module are copied loose beside it.

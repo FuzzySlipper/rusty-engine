@@ -450,6 +450,10 @@ The development command runs the product on the pinned pair's runtime:
 rusty dev --project src/Example.Game/Example.Game.csproj
 ```
 
+With `<RustyEngineProject>src/Example.Game/Example.Game.csproj</RustyEngineProject>`
+in the repository's `Directory.Build.props`, plain `rusty dev` and `rusty build`
+run that project; `--project` still selects another.
+
 It restores, builds and stages the ordinary project in one MSBuild invocation
 with no nested build, then launches the packaged host through CoreCLR. Staging
 copies only changed UI and content, removes deleted files, and writes
