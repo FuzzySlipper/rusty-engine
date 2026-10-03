@@ -32,6 +32,12 @@ public sealed class WorldInteraction(IWorldInteractionScene scene, bool targeted
         InteractionSceneSnapshot snapshot = _scene.ReadInteraction();
         return Focus.Update(snapshot.Candidates.Span, snapshot.Query, cycleDirection);
     }
+    /// <summary>What Update would select from the scene's current facts; Focus does not change.</summary>
+    public InteractionReadout Preview(int cycleDirection = 0)
+    {
+        InteractionSceneSnapshot snapshot = _scene.ReadInteraction();
+        return Focus.Preview(snapshot.Candidates.Span, snapshot.Query, cycleDirection);
+    }
     public WorldInteractionReadout Inspect()
     {
         InteractionSceneSnapshot snapshot = _scene.ReadInteraction();

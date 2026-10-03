@@ -105,7 +105,9 @@ when another target becomes slightly closer. Explicit cycling chooses another
 eligible acquisition target. Selection does not perform an action.
 
 `Observe` returns candidates within release bounds; `Inspect` includes all
-supplied candidates for discovery. Both are read-only. `Revalidate` rechecks
+supplied candidates for discovery. `Preview` reports what `Update` would select
+from the same facts, by the same acquisition, retention and ranking, without
+changing `Selected`. All three are read-only. `Revalidate` rechecks
 ordinary focus with fresh facts. `RevalidateTarget` is explicit target-ID
 assistance: it ignores angular acquisition but retains maximum query distance,
 reach, identity, availability and visibility. `WorldInteraction` composes these

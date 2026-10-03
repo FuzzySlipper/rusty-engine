@@ -11,6 +11,14 @@ Check(focus.Update([A,B], query with { Direction = new(.04f,0,-1) }).Selected ==
 Check(focus.Update([A,B], query, 1).Selected == B.Target, "Explicit cycling");
 Check(focus.Observe([A], query).Selected is null, "Observation does not report stale selection");
 Check(focus.Selected == B.Target, "Observation does not mutate focus");
+// Preview answers what Update would select without moving focus.
+Check(focus.Preview([A,B], query).Selected == B.Target && new InteractionFocus().Preview([A,B], query).Selected == A.Target, "Preview retains the sticky target over a better-ranked one");
+Check(focus.Preview([A], query).Selected == A.Target && focus.Selected == B.Target, "Preview acquires an eligible alternate without moving focus");
+Check(focus.Preview([], query).Reason == InteractionReason.NoCandidate, "Preview of an empty scene");
+Check(focus.Preview([A, B with { Target = new(2,2) }], query).Selected == A.Target, "Preview drops a stale incarnation");
+Check(focus.Preview([B with { Visibility = InteractionVisibility.Occluded }], query).Selected is null, "Preview drops an occluded target");
+Check(focus.Preview([B with { ReachDistance = 1 }], query).Selected is null, "Preview drops an out-of-reach target");
+Check(focus.Preview([A,B], query, 1).Selected == A.Target && focus.Selected == B.Target, "Preview of explicit cycling leaves focus");
 Check(focus.Update([A,B], query with { Direction = Vector3.UnitX }).Selected is null, "Release cone clears focus");
 Check(focus.Observe([], query).Reason == InteractionReason.NoCandidate, "No candidate");
 foreach (var (candidate, expected) in new[] {
@@ -39,6 +47,9 @@ var scene = new TestInteractionScene(A with { Point = new(2,0,0) }, query);
 var world = new WorldInteraction(scene);
 Check(world.Update().Selected is null, "Off-reticle object is not automatically focused");
 Check(world.Inspect().Focus.Candidates.Count == 1, "Discovery retains off-reticle targets");
+scene.Candidate = A;
+Check(world.Preview().Selected == A.Target && world.Focus.Selected is null, "World preview leaves focus and scene unchanged");
+scene.Candidate = A with { Point = new(2,0,0) };
 Check(world.UseTarget(A.Target).Performed && scene.Uses == 1, "Explicit target assistance invokes product use");
 scene.Candidate = scene.Candidate with { Availability = InteractionAvailability.Locked };
 Check(world.UseTarget(A.Target).Reason == InteractionReason.Locked && scene.Uses == 1, "Fresh lock rejects old inspected target");

@@ -41,6 +41,15 @@ public sealed class InteractionFocus
     /// <summary>Updates ordinary human focus. Cycle direction is -1, 0 or +1; cycling is explicit.</summary>
     public InteractionReadout Update(ReadOnlySpan<InteractionCandidate> candidates, InteractionQuery query, int cycleDirection = 0)
     {
+        InteractionReadout readout = Preview(candidates, query, cycleDirection);
+        Selected = readout.Selected;
+        return readout;
+    }
+
+    /// <summary>What Update would select from these facts, by the same acquisition, retention and
+    /// ranking; Selected does not change. Ordinary use still goes through Update and UseFocused.</summary>
+    public InteractionReadout Preview(ReadOnlySpan<InteractionCandidate> candidates, InteractionQuery query, int cycleDirection = 0)
+    {
         if (cycleDirection is < -1 or > 1) throw new ArgumentOutOfRangeException(nameof(cycleDirection));
         List<InteractionObservation> rows = Evaluate(candidates, query);
         int retainedIndex = rows.FindIndex(x => x.Candidate.Target == Selected && x.WithinRelease && x.Reason == InteractionReason.Ready);
@@ -55,7 +64,6 @@ public sealed class InteractionFocus
             next = eligible[chosen].Candidate.Target;
         }
         else if (next is null && eligible.Count > 0) next = eligible[0].Candidate.Target;
-        Selected = next;
         return Readout(rows, next);
     }
 
