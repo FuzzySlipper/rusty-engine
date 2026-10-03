@@ -160,33 +160,84 @@ pub struct PlanarNavNeighborPolicy {
 /// different support heights. Keeping this distinct from cell traversal facts
 /// lets the collision owner retain its geometry authority without teaching the
 /// general pathfinding service about collision shapes.
+///
+/// An admitted edge may also reach past a cell's planar neighbours (a jump
+/// across a gap); searches then offer it as a neighbour too. An edge may carry
+/// an extra cost the weighted search adds to its destination cell's.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NavEdgeAdmission {
     allowed: BTreeSet<(VoxelCoord, VoxelCoord)>,
+    /// Admitted edges reaching past the planar neighbours, by origin.
+    beyond: BTreeMap<VoxelCoord, BTreeSet<VoxelCoord>>,
+    costs: BTreeMap<(VoxelCoord, VoxelCoord), u64>,
     admission_hash: u64,
 }
 
 impl NavEdgeAdmission {
     /// Retain deterministic directed edges from a collision-derived surface.
     pub fn from_allowed_edges(edges: impl IntoIterator<Item = (VoxelCoord, VoxelCoord)>) -> Self {
-        let allowed = edges.into_iter().collect();
-        let admission_hash = hash_edge_admission(&allowed);
-        Self {
-            allowed,
-            admission_hash,
+        let mut admission = Self {
+            allowed: BTreeSet::new(),
+            beyond: BTreeMap::new(),
+            costs: BTreeMap::new(),
+            admission_hash: 0,
+        };
+        for (from, to) in edges {
+            admission.set_allowed(from, to, true);
         }
+        admission
     }
 
     /// Admits (`true`) or withdraws one directed edge, as an owner that keeps
-    /// its admission current applies a local change. The hash follows.
+    /// its admission current applies a local change. Withdrawing drops its
+    /// extra cost. The hash follows.
     pub fn set_allowed(&mut self, from: VoxelCoord, to: VoxelCoord, allowed: bool) {
+        let far = (to.x - from.x).abs() > 1 || (to.z - from.z).abs() > 1;
         if allowed {
             if self.allowed.insert((from, to)) {
                 self.admission_hash = self.admission_hash.wrapping_add(edge_hash(from, to));
+                if far {
+                    self.beyond.entry(from).or_default().insert(to);
+                }
             }
         } else if self.allowed.remove(&(from, to)) {
             self.admission_hash = self.admission_hash.wrapping_sub(edge_hash(from, to));
+            self.set_cost(from, to, 0);
+            if far {
+                if let Some(targets) = self.beyond.get_mut(&from) {
+                    targets.remove(&to);
+                    if targets.is_empty() {
+                        self.beyond.remove(&from);
+                    }
+                }
+            }
         }
+    }
+
+    /// Sets the extra cost the weighted search pays for one admitted edge;
+    /// zero removes it. The hash follows.
+    pub fn set_cost(&mut self, from: VoxelCoord, to: VoxelCoord, cost: u64) {
+        if let Some(previous) = self.costs.remove(&(from, to)) {
+            self.admission_hash = self
+                .admission_hash
+                .wrapping_sub(edge_cost_hash(from, to, previous));
+        }
+        if cost > 0 && self.allowed.contains(&(from, to)) {
+            self.costs.insert((from, to), cost);
+            self.admission_hash = self
+                .admission_hash
+                .wrapping_add(edge_cost_hash(from, to, cost));
+        }
+    }
+
+    /// The extra weighted cost of one edge, zero for most.
+    pub fn extra_cost(&self, from: VoxelCoord, to: VoxelCoord) -> u64 {
+        self.costs.get(&(from, to)).copied().unwrap_or(0)
+    }
+
+    /// Admitted edges from `from` that reach past its planar neighbours.
+    pub fn beyond(&self, from: VoxelCoord) -> impl Iterator<Item = VoxelCoord> + '_ {
+        self.beyond.get(&from).into_iter().flatten().copied()
     }
 
     /// Whether the directed step is admitted by the owning collision policy.
@@ -866,7 +917,11 @@ fn find_path_with_optional_edge_admission(
         if visited.len() > query.max_visited {
             break;
         }
-        for next in planar_nav_neighbors(current, policy) {
+        for next in planar_nav_neighbors(current, policy).chain(
+            edges
+                .into_iter()
+                .flat_map(|admission| admission.beyond(current)),
+        ) {
             if !projection.is_walkable(next)
                 || !edges.is_none_or(|admission| admission.allows(current, next))
                 || visited.contains(&next)
@@ -969,7 +1024,11 @@ fn find_path_with_traversal_and_optional_edge_admission(
         if visited.len() > query.max_visited {
             break;
         }
-        for next in planar_nav_neighbors(current, policy) {
+        for next in planar_nav_neighbors(current, policy).chain(
+            edges
+                .into_iter()
+                .flat_map(|admission| admission.beyond(current)),
+        ) {
             if !projection.is_walkable(next)
                 || !overlay.is_allowed(next)
                 || !edges.is_none_or(|admission| admission.allows(current, next))
@@ -1097,7 +1156,11 @@ fn find_weighted_path_with_optional_edge_admission(
             ));
         }
 
-        for next in planar_nav_neighbors(current, policy) {
+        for next in planar_nav_neighbors(current, policy).chain(
+            edges
+                .into_iter()
+                .flat_map(|admission| admission.beyond(current)),
+        ) {
             if !projection.is_walkable(next)
                 || !overlay.is_allowed(next)
                 || !edges.is_none_or(|admission| admission.allows(current, next))
@@ -1106,6 +1169,11 @@ fn find_weighted_path_with_optional_edge_admission(
             }
             let next_cost = cost
                 .checked_add(overlay.cost_for(next))
+                .and_then(|cost| {
+                    cost.checked_add(
+                        edges.map_or(0, |admission| admission.extra_cost(current, next)),
+                    )
+                })
                 .ok_or(WeightedNavPathError::CostOverflow)?;
             if best_cost
                 .get(&next)
@@ -1654,10 +1722,10 @@ fn cell_hash(coord: VoxelCoord) -> u64 {
 
 /// A sum of per-edge hashes, like the walkable hash, so a local change
 /// updates it without visiting every edge.
-fn hash_edge_admission(edges: &BTreeSet<(VoxelCoord, VoxelCoord)>) -> u64 {
-    edges.iter().fold(0u64, |sum, &(from, to)| {
-        sum.wrapping_add(edge_hash(from, to))
-    })
+fn edge_cost_hash(from: VoxelCoord, to: VoxelCoord, cost: u64) -> u64 {
+    let mut h = edge_hash(from, to);
+    feed_u64(&mut h, cost);
+    h.rotate_left(29)
 }
 
 fn edge_hash(from: VoxelCoord, to: VoxelCoord) -> u64 {
@@ -1953,6 +2021,54 @@ mod tests {
         )
         .expect("explicit drop query");
         assert_eq!(allowed.path, vec![start, goal]);
+    }
+
+    /// An admitted edge across a gap is a neighbour too, and its extra cost
+    /// sends the weighted search the long way round when that is cheaper.
+    #[test]
+    fn far_admitted_edges_are_neighbours_with_their_extra_cost() {
+        let (start, goal) = (VoxelCoord::new(0, 0, 0), VoxelCoord::new(4, 0, 0));
+        // Two islands joined only by the gap edge, and a detour row.
+        let detour: Vec<_> = (0..5).map(|x| VoxelCoord::new(x, 0, 1)).collect();
+        let cells = [start, goal].into_iter().chain(detour.iter().copied());
+        let projection = NavProjection::from_walkable_cells(test_grid(), cells);
+        let policy = PlanarNavNeighborPolicy {
+            max_step_cells: 0,
+            diagonal: false,
+        };
+        let neighbours = |coord: VoxelCoord| {
+            [(1, 0), (-1, 0), (0, 1), (0, -1)]
+                .map(|(dx, dz)| VoxelCoord::new(coord.x + dx, coord.y, coord.z + dz))
+        };
+        let mut edges = NavEdgeAdmission::from_allowed_edges(
+            [start, goal]
+                .into_iter()
+                .chain(detour.iter().copied())
+                .flat_map(|from| neighbours(from).map(move |to| (from, to))),
+        );
+        let without_gap = edges.admission_hash();
+        edges.set_allowed(start, goal, true);
+        assert_ne!(edges.admission_hash(), without_gap);
+        let query = NavPathQuery {
+            start,
+            goal,
+            max_visited: 64,
+        };
+        let path = find_path_with_edge_admission(&projection, &edges, query, policy).unwrap();
+        assert_eq!(path.path, vec![start, goal]);
+
+        let overlay = NavTraversalOverlay::empty(&projection);
+        let weighted = |edges: &NavEdgeAdmission| {
+            find_weighted_path_with_edge_admission(&projection, &overlay, edges, query, policy)
+                .unwrap()
+        };
+        assert_eq!(weighted(&edges).path, vec![start, goal]);
+        edges.set_cost(start, goal, 10);
+        let around = weighted(&edges);
+        assert_eq!(around.path.len(), 7, "{:?}", around.path);
+        // Withdrawing the edge drops its cost and restores the hash.
+        edges.set_allowed(start, goal, false);
+        assert_eq!(edges.admission_hash(), without_gap);
     }
 
     #[test]

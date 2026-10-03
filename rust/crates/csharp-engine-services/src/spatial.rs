@@ -21,11 +21,12 @@ use core_math::{Vec2, Vec3};
 use core_space::{ChunkDims, GridId, VoxelCoord, VoxelGridSpec};
 use csharp_engine_abi::*;
 use engine_spatial::{
-    character_edge_outcome, CharacterCapsule, CharacterCollisionQueryStats,
+    character_edge_outcome, character_jump_outcome, CharacterCapsule, CharacterCollisionQueryStats,
     CharacterCollisionSource, CharacterContactFact, CharacterContactKind,
     CharacterControllerCommand, CharacterControllerConfig, CharacterControllerError,
     CharacterControllerReceipt, CharacterControllerService, CharacterEdgeOutcome,
-    CharacterGroundFact, CharacterMeshInstance as SpatialCharacterMeshInstance, CharacterObstacle,
+    CharacterGroundFact, CharacterJumpOutcome,
+    CharacterMeshInstance as SpatialCharacterMeshInstance, CharacterObstacle,
     CharacterStepColliders, CharacterStepSubject, CharacterStepWorld, MaterialVoxel,
     SpatialOcclusionCollider, SpatialOcclusionQuery, SpatialOcclusionService, StaticMeshAssetId,
     StaticMeshColliderAsset, StaticMeshColliderInstance, StaticMeshInstanceId, StaticMeshTransform,
@@ -334,6 +335,15 @@ struct NavigationState {
     /// frame. A publication's cells, supports and overlays keep their grid;
     /// each world-origin commit moves the grid with the world instead.
     grid_origin: [f64; 3],
+    /// What tells a path's jumps and drops from its walks; collision-derived
+    /// navigation only.
+    edge_kinds: Option<NavigationEdgeKinds>,
+}
+
+struct NavigationEdgeKinds {
+    jumps: BTreeSet<(VoxelCoord, VoxelCoord)>,
+    /// A support lower than this below the one before is a drop.
+    step_height: f64,
 }
 
 struct NavigationVerticalMapping {
@@ -425,6 +435,35 @@ impl NavigationState {
             }
         }
         best.map_or(VoxelCoord::new(x, i64::MIN, z), |(_, _, cell)| cell)
+    }
+
+    /// How each cell of `path` is reached from the one before.
+    fn path_edge_kinds(&self, path: &[VoxelCoord]) -> Box<[NativeNavigationPathEdge]> {
+        let Some(kinds) = &self.edge_kinds else {
+            return vec![NativeNavigationPathEdge::default(); path.len()].into_boxed_slice();
+        };
+        let height = |cell: &VoxelCoord| {
+            self.vertical_mapping
+                .as_ref()
+                .and_then(|vertical| vertical.support_heights.get(cell))
+                .copied()
+        };
+        std::iter::once(NativeNavigationEdgeKind::Walk)
+            .chain(path.windows(2).map(|pair| {
+                if kinds.jumps.contains(&(pair[0], pair[1])) {
+                    NativeNavigationEdgeKind::Jump
+                } else if height(&pair[0])
+                    .zip(height(&pair[1]))
+                    .is_some_and(|(from, to)| from - to > kinds.step_height)
+                {
+                    NativeNavigationEdgeKind::Drop
+                } else {
+                    NativeNavigationEdgeKind::Walk
+                }
+            }))
+            .take(path.len())
+            .map(|kind| NativeNavigationPathEdge { kind })
+            .collect()
     }
 
     fn cell_center(&self, cell: VoxelCoord) -> Vec3 {
@@ -1087,6 +1126,7 @@ impl RuntimeSpatialBridge {
                 vertical_mapping: Some(navigation_vertical_mapping),
                 revision: navigation_revision,
                 grid_origin: [0.0; 3],
+                edge_kinds: None,
             };
             let identity = SpatialContentIdentity {
                 content_reference: request.content,
@@ -1355,6 +1395,7 @@ impl RuntimeSpatialBridge {
                 vertical_mapping: Some(vertical_mapping),
                 revision: navigation_revision,
                 grid_origin,
+                edge_kinds: None,
             });
             (
                 scene,
@@ -1457,6 +1498,7 @@ impl RuntimeSpatialBridge {
             vertical_mapping: None,
             revision: navigation_revision,
             grid_origin: [0.0; 3],
+            edge_kinds: None,
         });
         session.content = SpatialContentComposition::default();
         Ok(receipt)
@@ -1529,6 +1571,7 @@ impl RuntimeSpatialBridge {
             vertical_mapping: None,
             revision: navigation_revision,
             grid_origin: [0.0; 3],
+            edge_kinds: None,
         });
         session.content = SpatialContentComposition::default();
         Ok(receipt)
@@ -1554,6 +1597,7 @@ impl RuntimeSpatialBridge {
         let (navigation_policy, snap) = CollisionNavigationPolicy::from_native(&request.config)?;
         let grid = navigation_policy.grid()?;
         let policy = navigation_policy.neighbor_policy();
+        let step_height = f64::from(navigation_policy.character.surface.maximum_step_height);
         let max_cells = request.config.maximum_cells;
         if max_cells == 0 {
             return Err(CsharpEngineServicesError::new(
@@ -1653,6 +1697,10 @@ impl RuntimeSpatialBridge {
                     projection: navigation.projection,
                     supports: navigation.vertical_mapping?.support_heights,
                     edge_admission: navigation.edge_admission?,
+                    jumps: navigation
+                        .edge_kinds
+                        .map(|kinds| kinds.jumps)
+                        .unwrap_or_default(),
                 })
             });
         let (mut cache, graph) = delta.apply(grid, previous, installed);
@@ -1660,6 +1708,7 @@ impl RuntimeSpatialBridge {
             projection,
             supports: support_heights,
             edge_admission,
+            jumps,
         } = graph;
         let traversal = NavTraversalOverlay::empty(&projection);
         let session = self.session_mut(request.session)?;
@@ -1695,6 +1744,7 @@ impl RuntimeSpatialBridge {
             }),
             revision: navigation_revision,
             grid_origin: [0.0; 3],
+            edge_kinds: Some(NavigationEdgeKinds { jumps, step_height }),
         });
         session.content = SpatialContentComposition::default();
         Ok(receipt)
@@ -1927,10 +1977,13 @@ impl RuntimeSpatialBridge {
             ),
             Err(error) => (navigation_outcome(error), 0, Vec::new(), 0),
         };
+        let edge_kinds = navigation.path_edge_kinds(&path);
         let path = native_path(&path);
         let result = NativeNavigationPathResult {
             path: path.as_ptr(),
             path_len: path.len(),
+            edges: edge_kinds.as_ptr(),
+            edges_len: edge_kinds.len(),
             outcome,
             kind: navigation.kind(),
             visited: u32::try_from(visited).unwrap_or(u32::MAX),
@@ -1938,7 +1991,7 @@ impl RuntimeSpatialBridge {
             projection_hash: navigation.projection_hash(),
             path_hash,
         };
-        self.borrowed.hold(path);
+        self.borrowed.hold((path, edge_kinds));
         Ok(result)
     }
 
@@ -1993,10 +2046,13 @@ impl RuntimeSpatialBridge {
             ),
             Err(error) => (weighted_navigation_outcome(error), 0, 0, Vec::new(), 0),
         };
+        let edge_kinds = navigation.path_edge_kinds(&path);
         let path = native_path(&path);
         let result = NativeNavigationWeightedPathResult {
             path: path.as_ptr(),
             path_len: path.len(),
+            edges: edge_kinds.as_ptr(),
+            edges_len: edge_kinds.len(),
             outcome,
             kind: navigation.kind(),
             visited: u32::try_from(visited).unwrap_or(u32::MAX),
@@ -2006,7 +2062,7 @@ impl RuntimeSpatialBridge {
             traversal_overlay_hash: navigation.traversal.overlay_hash(),
             path_hash,
         };
-        self.borrowed.hold(path);
+        self.borrowed.hold((path, edge_kinds));
         Ok(result)
     }
 
@@ -2057,10 +2113,13 @@ impl RuntimeSpatialBridge {
             ),
             Err(error) => (volumetric_navigation_outcome(error), 0, Vec::new(), 0),
         };
+        let edge_kinds = vec![NativeNavigationPathEdge::default(); path.len()].into_boxed_slice();
         let path = native_path(&path);
         let result = NativeNavigationPathResult {
             path: path.as_ptr(),
             path_len: path.len(),
+            edges: edge_kinds.as_ptr(),
+            edges_len: edge_kinds.len(),
             outcome,
             kind,
             visited: u32::try_from(visited).unwrap_or(u32::MAX),
@@ -2068,7 +2127,7 @@ impl RuntimeSpatialBridge {
             projection_hash,
             path_hash,
         };
-        self.borrowed.hold(path);
+        self.borrowed.hold((path, edge_kinds));
         Ok(result)
     }
 
@@ -2168,10 +2227,14 @@ impl RuntimeSpatialBridge {
             });
         };
         let (mut result, path) = evaluate_navigation_step_facts(navigation, request);
+        let edge_kinds = navigation.path_edge_kinds(&path);
         let path = native_path(&path);
         result.path = path.as_ptr();
         result.path_len = path.len();
-        self.borrowed.hold(path);
+        result.edges = edge_kinds.as_ptr();
+        result.edges_len = edge_kinds.len();
+        result.next_edge_kind = edge_kinds.get(1).map(|edge| edge.kind).unwrap_or_default();
+        self.borrowed.hold((path, edge_kinds));
         Ok(result)
     }
 }

@@ -969,6 +969,138 @@ pub fn character_edge_outcome(
     })
 }
 
+/// What a jump from one support to another meets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CharacterJumpOutcome {
+    Traversable,
+    /// The landing is higher than the jump's peak, less the contact skin and
+    /// recovery nudge.
+    RiseOverJump,
+    /// The landing is farther down than the maximum drop.
+    DropOverMaximum,
+    /// The landing is farther than the arc carries at the maximum air speed.
+    GapTooWide,
+    StartOverlap,
+    EndOverlap,
+    /// The capsule cannot rise straight up to the jump's peak.
+    HeadroomBlocked,
+    /// The capsule meets collision along the arc.
+    ArcBlocked,
+}
+
+/// Evaluate one directed jump from `start_support` to `end_support` with the
+/// character's own jump: it leaves the ground at `vertical.jump_speed` under
+/// `vertical.gravity`, peaking `jump_speed² / (2 gravity)` above the start,
+/// and moves across at `air.maximum_speed` as late as still lands it on the
+/// end support as it falls back, so it rises clear of a ledge before moving
+/// over it. The capsule must rise clear to the peak above the start and sweep
+/// clear along that path.
+///
+/// A geometry query like [`character_edge_outcome`]: it owns no entity state
+/// and does not advance time. Callers prove both supports are standable.
+pub fn character_jump_outcome(
+    scene: &VoxelCollisionScene,
+    config: &CharacterControllerConfig,
+    start_support: WorldPos,
+    end_support: WorldPos,
+    maximum_drop: f64,
+) -> Result<CharacterJumpOutcome, CharacterControllerError> {
+    let gravity = f64::from(config.vertical.gravity);
+    let launch = f64::from(config.vertical.jump_speed);
+    if gravity <= 0.0 || launch <= 0.0 {
+        return Ok(CharacterJumpOutcome::RiseOverJump);
+    }
+    let peak = launch * launch / (2.0 * gravity);
+    let nudge = f64::from(config.recovery.normal_nudge);
+    let margin = f64::from(config.shape.contact_skin) + nudge;
+    let rise = end_support.y - start_support.y;
+    if rise > peak - margin {
+        return Ok(CharacterJumpOutcome::RiseOverJump);
+    }
+    if -rise > maximum_drop + nudge {
+        return Ok(CharacterJumpOutcome::DropOverMaximum);
+    }
+    // The fall back through `rise` lands at the later root of
+    // launch·t − gravity·t²/2 = rise.
+    let airtime = (launch + (launch * launch - 2.0 * gravity * rise).max(0.0).sqrt()) / gravity;
+    let across = (end_support.x - start_support.x).hypot(end_support.z - start_support.z);
+    let air_speed = f64::from(config.air.maximum_speed);
+    if across > air_speed * airtime {
+        return Ok(CharacterJumpOutcome::GapTooWide);
+    }
+    // When it starts moving across, to arrive as it lands.
+    let departure = if air_speed > 0.0 {
+        (airtime - across / air_speed).max(0.0)
+    } else {
+        0.0
+    };
+
+    let height = stance_height(config, CharacterStance::Standing);
+    let capsule = |center| capsule_at(center, height, config.shape.radius);
+    let center_offset =
+        f64::from((height * 0.5).max(config.shape.radius) + config.shape.contact_skin);
+    let start = WorldPos::new(
+        start_support.x,
+        start_support.y + center_offset,
+        start_support.z,
+    );
+    let end = WorldPos::new(end_support.x, end_support.y + center_offset, end_support.z);
+    let mut stats = CharacterCollisionQueryStats::default();
+    if overlap_world(&scene.projection, &[], capsule(start), &mut stats)?.is_some() {
+        return Ok(CharacterJumpOutcome::StartOverlap);
+    }
+    if overlap_world(&scene.projection, &[], capsule(end), &mut stats)?.is_some() {
+        return Ok(CharacterJumpOutcome::EndOverlap);
+    }
+    if cast_world(
+        &scene.projection,
+        &[],
+        capsule(start),
+        WorldVec::new(0.0, peak, 0.0),
+        0.0,
+        &mut stats,
+    )?
+    .is_some()
+    {
+        return Ok(CharacterJumpOutcome::HeadroomBlocked);
+    }
+    // The arc in short straight sweeps, about one every twentieth of a second.
+    const SWEEP_SECONDS: f64 = 0.05;
+    let segments = (airtime / SWEEP_SECONDS).ceil().clamp(4.0, 64.0) as u32;
+    let at = |step: u32| {
+        let t = airtime * f64::from(step) / f64::from(segments);
+        let share = if across > 0.0 {
+            ((t - departure) * air_speed / across).clamp(0.0, 1.0)
+        } else {
+            1.0
+        };
+        WorldPos::new(
+            start.x + (end.x - start.x) * share,
+            start.y + launch * t - 0.5 * gravity * t * t,
+            start.z + (end.z - start.z) * share,
+        )
+    };
+    let mut from = start;
+    for step in 1..=segments {
+        let to = if step == segments { end } else { at(step) };
+        let sweep = WorldVec::new(to.x - from.x, to.y - from.y, to.z - from.z);
+        if cast_world(
+            &scene.projection,
+            &[],
+            capsule(from),
+            sweep,
+            0.0,
+            &mut stats,
+        )?
+        .is_some()
+        {
+            return Ok(CharacterJumpOutcome::ArcBlocked);
+        }
+        from = to;
+    }
+    Ok(CharacterJumpOutcome::Traversable)
+}
+
 /// Walk a capsule from `start` to `end` (centres) over ground the way the
 /// controller slides along a walkable slope: in short segments, each lifting
 /// at most what a slope at the maximum rises over it (and never more than the

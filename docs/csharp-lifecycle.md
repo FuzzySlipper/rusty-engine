@@ -549,13 +549,35 @@ To see why navigation hangs up, ask it:
 - `ExplainCollisionNavigationEdge(session, from, to)` evaluates one directed
   edge: `Traversable`, `FromNotSupport`, `ToNotSupport`, `NotNeighbor`,
   `RiseOverStep`, `DropOverMaximum`, `StartOverlap`, `EndOverlap`,
-  `HorizontalSweepBlocked`, `DescentBlocked` or `StepManeuverFailed`, with
-  both support heights and whether the installed navigation holds the edge.
+  `HorizontalSweepBlocked`, `DescentBlocked` or `StepManeuverFailed` (or,
+  with jumps on, `JumpTraversable`, `RiseOverJump`, `JumpHeadroomBlocked`,
+  `JumpArcBlocked` or `GapTooWide`), with both support heights and whether
+  the installed navigation holds the edge.
 - A `NoPath` step result carries `Visited` and the visited cell nearest the
   goal (`NearestCell`, standing at `Nearest`).
 
 Use the live foot position for `EvaluateNavigationStep` so it can reconcile to
 the nearest retained support (see below).
+
+**Jumps.** Navigation walks by default. Two configuration switches add jump
+edges, using the body's own jump: it leaves the ground at
+`Character.Vertical.JumpSpeed` under `Gravity`, peaking `JumpSpeed² / 2
+Gravity` above the start. It moves across at `Character.Air.MaximumSpeed` as
+late as still lands it on the target.
+
+- `JumpLedges` connects a neighbour too high to step onto when the capsule can
+  rise straight up to the peak (`JumpHeadroomBlocked` otherwise) and sweep
+  clear over to it (`JumpArcBlocked`). The rise must stay below the peak less
+  the contact skin and recovery nudge (`RiseOverJump`).
+- `JumpGapCells` connects a support straight along X or Z across up to that
+  many columns. Those columns must hold no support within `VerticalSearchCells`
+  of the start, and the jump must carry the distance (`GapTooWide`) and land
+  no farther down than `MaximumDrop`.
+- Path, weighted path and step results list each path cell's `Edges` (`Walk`,
+  `Drop` for a fall below the step height, or `Jump`). A step result's
+  `NextEdgeKind` tells a mover to jump now.
+- A weighted path pays `JumpCost` (default 4) on top of a jump's destination
+  cost, so it prefers a walk unless the detour is longer.
 
 Republishing is incremental. The session keeps the previous collision-derived
 publication's columns and connections, and a new one derives only the X/Z

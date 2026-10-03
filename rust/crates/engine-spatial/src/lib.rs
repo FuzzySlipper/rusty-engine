@@ -30,11 +30,12 @@ mod voxel_template;
 mod world_origin;
 
 pub use character_controller::{
-    character_edge_is_traversable, character_edge_outcome, CharacterAirConfig, CharacterBlockKind,
-    CharacterConfigError, CharacterContactFact, CharacterContactKind, CharacterControllerCommand,
-    CharacterControllerConfig, CharacterControllerError, CharacterControllerReadout,
-    CharacterControllerReceipt, CharacterControllerService, CharacterEdgeOutcome,
-    CharacterExternalMotionConfig, CharacterGroundConfig, CharacterGroundFact, CharacterJumpConfig,
+    character_edge_is_traversable, character_edge_outcome, character_jump_outcome,
+    CharacterAirConfig, CharacterBlockKind, CharacterConfigError, CharacterContactFact,
+    CharacterContactKind, CharacterControllerCommand, CharacterControllerConfig,
+    CharacterControllerError, CharacterControllerReadout, CharacterControllerReceipt,
+    CharacterControllerService, CharacterEdgeOutcome, CharacterExternalMotionConfig,
+    CharacterGroundConfig, CharacterGroundFact, CharacterJumpConfig, CharacterJumpOutcome,
     CharacterMeshInstance, CharacterPlatformConfig, CharacterPlatformFact, CharacterRecoveryConfig,
     CharacterShapeConfig, CharacterSolverConfig, CharacterStanceFact, CharacterStepColliders,
     CharacterStepFact, CharacterStepSubject, CharacterStepWorld, CharacterSurfaceConfig,

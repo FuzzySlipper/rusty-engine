@@ -758,6 +758,38 @@ pub struct NativeCollisionNavigationConfig {
     /// How far beyond the footprint of the cell containing a query point a
     /// support may be taken from; zero keeps the containing cell only.
     pub snap_across: f64,
+    /// Also connect a neighbour too high to step onto when the character's
+    /// own jump (`character.vertical.jump_speed` and `gravity`, moving
+    /// across at no more than `character.air.maximum_speed`) clears it.
+    pub jump_ledges: bool,
+    /// Also connect supports straight across a gap of up to this many cells
+    /// with no support near the jump's height, when the same jump carries
+    /// there; zero for none.
+    pub jump_gap_cells: u32,
+    /// What a weighted path pays for a jump edge beyond its destination
+    /// cell's cost, so a planner can prefer walking.
+    pub jump_cost: u32,
+}
+
+/// How a path reaches one of its cells from the one before.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct NativeNavigationPathEdge {
+    pub kind: NativeNavigationEdgeKind,
+}
+
+/// How a path reaches one of its cells from the one before.
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum NativeNavigationEdgeKind {
+    /// Walking, stepping up or down within the step height, or along a slope;
+    /// also the path's first cell.
+    #[default]
+    Walk = 0,
+    /// Falling to a support lower than the step height.
+    Drop = 1,
+    /// The character's jump, up a ledge or across a gap.
+    Jump = 2,
 }
 
 /// Why one surface a collision-navigation column sampled is or is not a
@@ -849,6 +881,16 @@ pub enum NativeCollisionNavigationEdgeOutcome {
     DescentBlocked = 9,
     /// The rise-forward-drop step manoeuvre found no landing on the target.
     StepManeuverFailed = 10,
+    /// Too high to step onto, but the character's jump clears it.
+    JumpTraversable = 11,
+    /// Too high for the jump's peak.
+    RiseOverJump = 12,
+    /// The capsule cannot rise straight up to the jump's peak.
+    JumpHeadroomBlocked = 13,
+    /// The capsule meets collision along the jump's arc.
+    JumpArcBlocked = 14,
+    /// Farther than the jump carries at the maximum air speed.
+    GapTooWide = 15,
 }
 
 #[repr(C)]
@@ -943,6 +985,10 @@ pub struct NativeNavigationPathRequest {
 pub struct NativeNavigationPathResult {
     pub path: *const NativePlanarNavCell,
     pub path_len: usize,
+    /// How each path cell is reached from the one before, borrowed like
+    /// `path` and as long.
+    pub edges: *const NativeNavigationPathEdge,
+    pub edges_len: usize,
     pub outcome: NativeNavigationPathOutcome,
     pub kind: NativeNavigationProjectionKind,
     pub visited: u32,
@@ -956,6 +1002,8 @@ impl Default for NativeNavigationPathResult {
         Self {
             path: std::ptr::null(),
             path_len: 0,
+            edges: std::ptr::null(),
+            edges_len: 0,
             outcome: Default::default(),
             kind: Default::default(),
             visited: 0,
@@ -984,6 +1032,10 @@ pub struct NativeNavigationWeightedPathRequest {
 pub struct NativeNavigationWeightedPathResult {
     pub path: *const NativePlanarNavCell,
     pub path_len: usize,
+    /// How each path cell is reached from the one before, borrowed like
+    /// `path` and as long.
+    pub edges: *const NativeNavigationPathEdge,
+    pub edges_len: usize,
     pub outcome: NativeNavigationPathOutcome,
     pub kind: NativeNavigationProjectionKind,
     pub visited: u32,
@@ -999,6 +1051,8 @@ impl Default for NativeNavigationWeightedPathResult {
         Self {
             path: std::ptr::null(),
             path_len: 0,
+            edges: std::ptr::null(),
+            edges_len: 0,
             outcome: Default::default(),
             kind: Default::default(),
             visited: 0,
@@ -1654,9 +1708,15 @@ pub struct NativeNavigationStepRequest {
 pub struct NativeNavigationStepResult {
     pub path: *const NativePlanarNavCell,
     pub path_len: usize,
+    /// How each path cell is reached from the one before, borrowed like
+    /// `path` and as long.
+    pub edges: *const NativeNavigationPathEdge,
+    pub edges_len: usize,
     pub outcome: NativeNavigationPathOutcome,
     pub next_waypoint: NativeVec3,
     pub next_path_cell: NativePlanarNavCell,
+    /// How the next path cell is reached: a jump means the mover jumps now.
+    pub next_edge_kind: NativeNavigationEdgeKind,
     pub reached: u32,
     pub visited: u32,
     pub navigation_revision: u64,
@@ -1674,6 +1734,9 @@ impl Default for NativeNavigationStepResult {
         Self {
             path: std::ptr::null(),
             path_len: 0,
+            edges: std::ptr::null(),
+            edges_len: 0,
+            next_edge_kind: Default::default(),
             outcome: Default::default(),
             next_waypoint: Default::default(),
             next_path_cell: Default::default(),

@@ -92,6 +92,21 @@ internal static class NavigationMappingChecks
         Require(searched.Outcome == CollisionNavigationEdgeOutcome.RiseOverStep && !searched.Admitted,
             $"a deeper search changed the step: {searched}");
 
+        // The body's own jump (a 1.2-unit peak) clears the wall it cannot step.
+        engine.Spatial.ReplaceCollisionNavigation(new(session, worldMin, worldMax, config with { JumpLedges = true, MaximumDrop = 1 }));
+        CollisionNavigationEdgeReadout jumped = engine.Spatial.ExplainCollisionNavigationEdge(new(session, beforeWall, wallTop));
+        Require(jumped.Outcome == CollisionNavigationEdgeOutcome.JumpTraversable && jumped.Admitted,
+            $"the wall was not a jump: {jumped}");
+        NavigationStepResult over = engine.Spatial.EvaluateNavigationStep(new(session, west, east, (float)CellSize, MaximumVisited));
+        bool jumps = false, drops = false;
+        foreach (NavigationPathEdge edge in over.Edges.Span)
+        {
+            jumps |= edge.Kind == NavigationEdgeKind.Jump;
+            drops |= edge.Kind == NavigationEdgeKind.Drop;
+        }
+        Require(over.Outcome == NavigationPathOutcome.Reached && over.Edges.Length == over.Path.Length && jumps && drops,
+            $"the route over the wall did not report its jump and drop: {over}");
+
         // A one-unit step and drop cross the wall.
         config = config with
         {

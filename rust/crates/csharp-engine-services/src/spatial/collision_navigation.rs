@@ -25,6 +25,22 @@ pub(super) struct CollisionNavigationPolicy {
     pub(super) vertical_search_cells: u8,
     pub(super) supports_per_column: u32,
     pub(super) diagonal: bool,
+    pub(super) jump: JumpPolicy,
+}
+
+/// Which jump edges a publication derives, from the character's own jump.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(super) struct JumpPolicy {
+    pub(super) ledges: bool,
+    pub(super) gap_cells: u8,
+    pub(super) cost: u32,
+}
+
+/// One admitted edge's destination, and whether it is a jump.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct EdgeTarget {
+    pub(super) to: VoxelCoord,
+    pub(super) jump: bool,
 }
 
 /// How far a query point may be from a support and still stand on it.
@@ -70,6 +86,8 @@ impl CollisionNavigationPolicy {
         }
         let vertical_search_cells = u8::try_from(config.vertical_search_cells)
             .map_err(|_| invalid("collision navigation searches at most 255 cell levels"))?;
+        let gap_cells = u8::try_from(config.jump_gap_cells)
+            .map_err(|_| invalid("collision navigation jumps gaps of at most 255 cells"))?;
         let policy = Self {
             grid_id: config.grid_id,
             cell_size: config.cell_size,
@@ -79,6 +97,11 @@ impl CollisionNavigationPolicy {
             vertical_search_cells,
             supports_per_column: config.supports_per_column,
             diagonal: config.diagonal_neighbors,
+            jump: JumpPolicy {
+                ledges: config.jump_ledges,
+                gap_cells,
+                cost: config.jump_cost,
+            },
         };
         Ok((policy, snap))
     }
@@ -203,7 +226,7 @@ pub(super) struct CollisionNavigationCache {
     scene: SceneRevisions,
     bounds: ColumnBounds,
     columns: BTreeMap<Column, Vec<(VoxelCoord, f64)>>,
-    edges: BTreeMap<VoxelCoord, Vec<VoxelCoord>>,
+    edges: BTreeMap<VoxelCoord, Vec<EdgeTarget>>,
     /// World-space `[min_x, min_z, max_x, max_z]` of changes since; `None`
     /// when too many were recorded.
     dirty: Option<Vec<[f64; 4]>>,
@@ -219,22 +242,40 @@ pub(super) struct CollisionNavigationGraph {
     pub(super) projection: NavProjection,
     pub(super) supports: BTreeMap<VoxelCoord, f64>,
     pub(super) edge_admission: NavEdgeAdmission,
+    /// The admitted edges that are jumps.
+    pub(super) jumps: BTreeSet<(VoxelCoord, VoxelCoord)>,
 }
 
 impl CollisionNavigationGraph {
     fn from_cache(grid: VoxelGridSpec, cache: &CollisionNavigationCache) -> Self {
         let supports: BTreeMap<VoxelCoord, f64> =
             cache.columns.values().flatten().copied().collect();
-        Self {
+        let mut graph = Self {
             projection: NavProjection::from_walkable_cells(grid, supports.keys().copied()),
             supports,
-            edge_admission: NavEdgeAdmission::from_allowed_edges(
-                cache
-                    .edges
-                    .iter()
-                    .flat_map(|(&from, targets)| targets.iter().map(move |&to| (from, to))),
-            ),
+            edge_admission: NavEdgeAdmission::from_allowed_edges(std::iter::empty()),
+            jumps: BTreeSet::new(),
+        };
+        for (&from, targets) in &cache.edges {
+            for &target in targets {
+                graph.admit(from, target, cache.key.policy.jump.cost);
+            }
         }
+        graph
+    }
+
+    fn admit(&mut self, from: VoxelCoord, target: EdgeTarget, jump_cost: u32) {
+        self.edge_admission.set_allowed(from, target.to, true);
+        if target.jump {
+            self.jumps.insert((from, target.to));
+            self.edge_admission
+                .set_cost(from, target.to, u64::from(jump_cost));
+        }
+    }
+
+    fn withdraw(&mut self, from: VoxelCoord, target: EdgeTarget) {
+        self.edge_admission.set_allowed(from, target.to, false);
+        self.jumps.remove(&(from, target.to));
     }
 }
 
@@ -301,7 +342,16 @@ impl CollisionNavigationCache {
             .collect();
         self.edges = std::mem::take(&mut self.edges)
             .into_iter()
-            .map(|(from, targets)| (moved(from), targets.into_iter().map(moved).collect()))
+            .map(|(from, targets)| {
+                let targets = targets
+                    .into_iter()
+                    .map(|target| EdgeTarget {
+                        to: moved(target.to),
+                        ..target
+                    })
+                    .collect();
+                (moved(from), targets)
+            })
             .collect();
         if let Some(dirty) = &mut self.dirty {
             for region in dirty {
@@ -341,7 +391,7 @@ impl CollisionNavigationCache {
     pub(super) fn admits(&self, from: VoxelCoord, to: VoxelCoord) -> bool {
         self.edges
             .get(&from)
-            .is_some_and(|targets| targets.contains(&to))
+            .is_some_and(|targets| targets.iter().any(|target| target.to == to))
     }
 
     fn supports(&self, column: Column) -> &[(VoxelCoord, f64)] {
@@ -362,7 +412,7 @@ pub(super) struct CollisionNavigationDelta {
     derived: BTreeMap<Column, Vec<(VoxelCoord, f64)>>,
     removed: Vec<Column>,
     edge_columns: BTreeSet<Column>,
-    edges: Vec<(VoxelCoord, Vec<VoxelCoord>)>,
+    edges: Vec<(VoxelCoord, Vec<EdgeTarget>)>,
     edge_tests: u64,
 }
 
@@ -405,6 +455,7 @@ impl CollisionNavigationDelta {
                     projection: NavProjection::from_walkable_cells(grid, std::iter::empty()),
                     supports: BTreeMap::new(),
                     edge_admission: NavEdgeAdmission::from_allowed_edges(std::iter::empty()),
+                    jumps: BTreeSet::new(),
                 }),
             ),
         };
@@ -417,8 +468,8 @@ impl CollisionNavigationDelta {
                     continue;
                 };
                 if let Some(graph) = &mut graph {
-                    for to in targets {
-                        graph.edge_admission.set_allowed(from, to, false);
+                    for target in targets {
+                        graph.withdraw(from, target);
                     }
                 }
             }
@@ -440,10 +491,11 @@ impl CollisionNavigationDelta {
             }
             cache.columns.insert(column, supports);
         }
+        let jump_cost = self.key.policy.jump.cost;
         for (from, targets) in self.edges {
             if let Some(graph) = &mut graph {
-                for &to in &targets {
-                    graph.edge_admission.set_allowed(from, to, true);
+                for &target in &targets {
+                    graph.admit(from, target, jump_cost);
                 }
             }
             cache.edges.insert(from, targets);
@@ -528,11 +580,22 @@ pub(super) fn derive_collision_navigation(
             .find(|(support, _)| *support == cell)
             .map(|&(_, height)| height)
     };
+    // An edge depends on the columns it joins, and a gap jump also on the
+    // columns it crosses, so a changed column changes the edges of every
+    // support that far from it.
+    let gap_reach = i64::from(policy.jump.gap_cells) + 1;
     let mut edge_columns = BTreeSet::new();
     for &(x, z) in derived.keys().chain(&removed) {
         edge_columns.insert((x, z));
         for (dx, dz) in planar_nav_offsets(policy.diagonal) {
             edge_columns.insert((x + dx, z + dz));
+        }
+        if policy.jump.gap_cells > 0 {
+            for reach in 2..=gap_reach {
+                for (dx, dz) in planar_nav_offsets(false) {
+                    edge_columns.insert((x + dx * reach, z + dz * reach));
+                }
+            }
         }
     }
     let sources: Vec<(VoxelCoord, f64)> = edge_columns
@@ -540,8 +603,14 @@ pub(super) fn derive_collision_navigation(
         .filter(|&&column| bounds.contains(column))
         .flat_map(|&column| supports_of(column).iter().copied())
         .collect();
+    let reach = i64::from(policy.reach_cells());
+    let near_level = |column: Column, level: i64| {
+        supports_of(column)
+            .iter()
+            .any(|(cell, _)| (cell.y - level).abs() <= reach)
+    };
     let targets = in_parallel(&sources, |&(from, from_y)| {
-        derive_edges(scene, grid, &policy, &support, from, from_y)
+        derive_edges(scene, grid, &policy, &support, &near_level, from, from_y)
     });
     let mut edges = Vec::with_capacity(sources.len());
     let mut edge_tests = 0;
@@ -758,28 +827,80 @@ pub(super) fn sample_column(
     Ok((supports, exhausted))
 }
 
+/// The admitted edges from one support: walking edges to its neighbours,
+/// and with jumps on, jumps up a ledge too high to step onto and straight
+/// across a gap whose columns have no support within the vertical reach of
+/// the start. Also how many edges were tested.
 fn derive_edges(
     scene: &VoxelCollisionScene,
     grid: VoxelGridSpec,
     policy: &CollisionNavigationPolicy,
-    support: &dyn Fn(VoxelCoord) -> Option<f64>,
+    support: &(dyn Fn(VoxelCoord) -> Option<f64> + Sync),
+    near_level: &(dyn Fn(Column, i64) -> bool + Sync),
     from: VoxelCoord,
     from_y: f64,
-) -> Result<(Vec<VoxelCoord>, u64), CharacterControllerError> {
+) -> Result<(Vec<EdgeTarget>, u64), CharacterControllerError> {
     let mut targets = Vec::new();
     let mut tested = 0;
+    let jump = |to: VoxelCoord, to_y: f64, tested: &mut u64| {
+        *tested += 1;
+        jump_outcome(scene, grid, policy, (from, from_y), (to, to_y))
+            .map(|outcome| outcome == CharacterJumpOutcome::Traversable)
+    };
     for to in collision_navigation_neighbors(from, policy) {
         let Some(to_y) = support(to) else {
             continue;
         };
         tested += 1;
-        if edge_outcome(scene, grid, policy, (from, from_y), (to, to_y))?
-            == CharacterEdgeOutcome::Traversable
-        {
-            targets.push(to);
+        match edge_outcome(scene, grid, policy, (from, from_y), (to, to_y))? {
+            CharacterEdgeOutcome::Traversable => targets.push(EdgeTarget { to, jump: false }),
+            CharacterEdgeOutcome::RiseOverStep
+                if policy.jump.ledges && jump(to, to_y, &mut tested)? =>
+            {
+                targets.push(EdgeTarget { to, jump: true });
+            }
+            _ => {}
+        }
+    }
+    let reach = i64::from(policy.reach_cells());
+    for (dx, dz) in planar_nav_offsets(false) {
+        for distance in 2..=i64::from(policy.jump.gap_cells) + 1 {
+            let crossed = (from.x + dx * (distance - 1), from.z + dz * (distance - 1));
+            if near_level(crossed, from.y) {
+                break;
+            }
+            for dy in -reach..=reach {
+                let to =
+                    VoxelCoord::new(from.x + dx * distance, from.y + dy, from.z + dz * distance);
+                let Some(to_y) = support(to) else {
+                    continue;
+                };
+                if jump(to, to_y, &mut tested)? {
+                    targets.push(EdgeTarget { to, jump: true });
+                }
+            }
         }
     }
     Ok((targets, tested))
+}
+
+/// A jump between two supports, from their columns' centres.
+pub(super) fn jump_outcome(
+    scene: &VoxelCollisionScene,
+    grid: VoxelGridSpec,
+    policy: &CollisionNavigationPolicy,
+    (from, from_y): (VoxelCoord, f64),
+    (to, to_y): (VoxelCoord, f64),
+) -> Result<CharacterJumpOutcome, CharacterControllerError> {
+    let from_center = grid.voxel_center_world(VoxelCoord::new(from.x, 0, from.z));
+    let to_center = grid.voxel_center_world(VoxelCoord::new(to.x, 0, to.z));
+    character_jump_outcome(
+        scene,
+        &policy.character,
+        core_space::WorldPos::new(from_center.x, from_y, from_center.z),
+        core_space::WorldPos::new(to_center.x, to_y, to_center.z),
+        policy.maximum_drop,
+    )
 }
 
 pub(super) fn edge_outcome(
@@ -877,6 +998,10 @@ fn collision_navigation_support(
     }
 }
 
+/// A weighted path's extra cost for a jump edge by default: a jump is
+/// preferred only over a detour of more than this many cells.
+const DEFAULT_JUMP_COST: u32 = 4;
+
 /// A query point may lie this far above or below a support: a tenth of a
 /// metre, plus the derivation's own rounding allowance.
 const DEFAULT_SNAP: f64 = 0.1 + COLLISION_NAVIGATION_EPSILON;
@@ -902,6 +1027,9 @@ pub(super) unsafe extern "C" fn default_config(
         snap_above: DEFAULT_SNAP,
         snap_below: DEFAULT_SNAP,
         snap_across: 0.0,
+        jump_ledges: false,
+        jump_gap_cells: 0,
+        jump_cost: DEFAULT_JUMP_COST,
     };
     // SAFETY: the caller owns the output for this direct call.
     unsafe { *config = value };
@@ -947,6 +1075,23 @@ fn native_sample(sample: ColumnSample) -> NativeCollisionNavigationSample {
         };
     }
     value
+}
+
+fn native_jump_outcome(outcome: CharacterJumpOutcome) -> NativeCollisionNavigationEdgeOutcome {
+    match outcome {
+        CharacterJumpOutcome::Traversable => NativeCollisionNavigationEdgeOutcome::JumpTraversable,
+        CharacterJumpOutcome::RiseOverJump => NativeCollisionNavigationEdgeOutcome::RiseOverJump,
+        CharacterJumpOutcome::DropOverMaximum => {
+            NativeCollisionNavigationEdgeOutcome::DropOverMaximum
+        }
+        CharacterJumpOutcome::GapTooWide => NativeCollisionNavigationEdgeOutcome::GapTooWide,
+        CharacterJumpOutcome::StartOverlap => NativeCollisionNavigationEdgeOutcome::StartOverlap,
+        CharacterJumpOutcome::EndOverlap => NativeCollisionNavigationEdgeOutcome::EndOverlap,
+        CharacterJumpOutcome::HeadroomBlocked => {
+            NativeCollisionNavigationEdgeOutcome::JumpHeadroomBlocked
+        }
+        CharacterJumpOutcome::ArcBlocked => NativeCollisionNavigationEdgeOutcome::JumpArcBlocked,
+    }
 }
 
 fn native_edge_outcome(outcome: CharacterEdgeOutcome) -> NativeCollisionNavigationEdgeOutcome {
@@ -1037,22 +1182,77 @@ impl RuntimeSpatialBridge {
         let (from, to) = (nav_cell(request.from), nav_cell(request.to));
         let from_y = support(from).map_err(projection_error)?;
         let to_y = support(to).map_err(projection_error)?;
+        let jump = |from_y, to_y| {
+            jump_outcome(
+                &session.scene,
+                grid,
+                &key.policy,
+                (from, from_y),
+                (to, to_y),
+            )
+            .map(native_jump_outcome)
+            .map_err(projection_error)
+        };
         let outcome = match (from_y, to_y) {
             (None, _) => NativeCollisionNavigationEdgeOutcome::FromNotSupport,
             (_, None) => NativeCollisionNavigationEdgeOutcome::ToNotSupport,
-            _ if !collision_navigation_neighbors(from, &key.policy).any(|cell| cell == to) => {
-                NativeCollisionNavigationEdgeOutcome::NotNeighbor
-            }
-            (Some(from_y), Some(to_y)) => native_edge_outcome(
-                edge_outcome(
+            (Some(from_y), Some(to_y))
+                if collision_navigation_neighbors(from, &key.policy).any(|cell| cell == to) =>
+            {
+                match edge_outcome(
                     &session.scene,
                     grid,
                     &key.policy,
                     (from, from_y),
                     (to, to_y),
                 )
-                .map_err(projection_error)?,
-            ),
+                .map_err(projection_error)?
+                {
+                    CharacterEdgeOutcome::RiseOverStep if key.policy.jump.ledges => {
+                        jump(from_y, to_y)?
+                    }
+                    walk => native_edge_outcome(walk),
+                }
+            }
+            (Some(from_y), Some(to_y)) => {
+                // A gap jump goes straight along X or Z over columns with no
+                // support within reach of the start's level.
+                let (dx, dz) = (to.x - from.x, to.z - from.z);
+                let distance = dx.abs().max(dz.abs());
+                let reach = i64::from(key.policy.reach_cells());
+                let straight = (dx == 0) != (dz == 0)
+                    && (2..=i64::from(key.policy.jump.gap_cells) + 1).contains(&distance)
+                    && (to.y - from.y).abs() <= reach;
+                let mut open = straight;
+                for step in 1..distance {
+                    if !open {
+                        break;
+                    }
+                    let crossed = VoxelCoord::new(
+                        from.x + dx.signum() * step,
+                        from.y,
+                        from.z + dz.signum() * step,
+                    );
+                    let (supports, _) = sample_column(
+                        &session.scene,
+                        grid,
+                        world_y,
+                        &key.policy,
+                        crossed.x,
+                        crossed.z,
+                        None,
+                    )
+                    .map_err(projection_error)?;
+                    open = !supports
+                        .iter()
+                        .any(|(cell, _)| (cell.y - from.y).abs() <= reach);
+                }
+                if open {
+                    jump(from_y, to_y)?
+                } else {
+                    NativeCollisionNavigationEdgeOutcome::NotNeighbor
+                }
+            }
         };
         Ok(NativeCollisionNavigationEdgeReadout {
             outcome,
@@ -1136,6 +1336,9 @@ pub(super) fn flat_config(
         snap_above: snap,
         snap_below: snap,
         snap_across: 0.0,
+        jump_ledges: false,
+        jump_gap_cells: 0,
+        jump_cost: 0,
     }
 }
 
@@ -1741,6 +1944,238 @@ mod tests {
         config.character = native_character_config(character);
         config.maximum_drop = f64::from(step);
         config
+    }
+
+    /// The downstream body: a 1.05 m step, a jump of 8.5 m/s under 24 m/s²
+    /// (a 1.5 m peak), 7 m/s through the air, and a 2 m drop.
+    fn jumper(ledges: bool, gap_cells: u32) -> NativeCollisionNavigationConfig {
+        let mut config = walker(1.05);
+        let mut character = character_config(config.character).unwrap();
+        character.vertical.jump_speed = 8.5;
+        character.vertical.gravity = 24.0;
+        character.air.maximum_speed = 7.0;
+        config.character = native_character_config(character);
+        config.maximum_drop = 2.0;
+        config.jump_ledges = ledges;
+        config.jump_gap_cells = gap_cells;
+        config
+    }
+
+    /// Floor 1 m high in 0.1 m voxels, 2.2 m from x = 4, optionally under a
+    /// ceiling 2.5 m over the low floor.
+    fn ledge(ceiling: bool) -> VoxelCollisionScene {
+        let mut voxels = Vec::new();
+        for x in 0..80 {
+            for z in 0..40 {
+                let top = if x >= 40 { 22 } else { 10 };
+                voxels.extend((0..top).map(|y| [x, y, z]));
+                if ceiling && x < 40 {
+                    voxels.extend((35..40).map(|y| [x, y, z]));
+                }
+            }
+        }
+        VoxelCollisionScene::from_solid_voxels(0.1, 16, voxels).unwrap()
+    }
+
+    /// Floor 1 m high in 1 m voxels along x = 0..12, with `gap` columns
+    /// missing from x = 3.
+    fn gap(gap: i64) -> VoxelCollisionScene {
+        let voxels = (0..12)
+            .filter(|x| !(3..3 + gap).contains(x))
+            .flat_map(|x| (0..4).map(move |z| [x, 0, z]));
+        VoxelCollisionScene::from_solid_voxels(1.0, 16, voxels).unwrap()
+    }
+
+    fn path_kinds(
+        bridge: &mut RuntimeSpatialBridge,
+        session: NativeSpatialSessionHandle,
+        start: [i64; 3],
+        goal: [i64; 3],
+    ) -> (NativeNavigationPathOutcome, Vec<NativeNavigationEdgeKind>) {
+        let cell = |[x, y, z]: [i64; 3]| NativePlanarNavCell { x, y, z };
+        let result = bridge
+            .request_navigation_path(NativeNavigationPathRequest {
+                session,
+                start: cell(start),
+                goal: cell(goal),
+                max_visited: 256,
+            })
+            .unwrap();
+        assert_eq!(result.edges_len, result.path_len);
+        let kinds = if result.edges_len == 0 {
+            Vec::new()
+        } else {
+            unsafe { std::slice::from_raw_parts(result.edges, result.edges_len) }
+                .iter()
+                .map(|edge| edge.kind)
+                .collect()
+        };
+        (result.outcome, kinds)
+    }
+
+    #[test]
+    fn a_ledge_over_the_step_height_is_a_jump_up_and_a_drop_down() {
+        let (low, high) = ([3, 1, 2], [4, 2, 2]);
+        let (mut bridge, session) = publish_over(
+            ledge(false),
+            jumper(false, 0),
+            [0.0, -2.0, 0.0],
+            [8.0, 12.0, 4.0],
+        );
+        assert_eq!(
+            edge(&mut bridge, session, low, high),
+            (NativeCollisionNavigationEdgeOutcome::RiseOverStep, false),
+            "with jumps off a 1.2 m ledge is no edge"
+        );
+
+        let (mut bridge, session) = publish_over(
+            ledge(false),
+            jumper(true, 0),
+            [0.0, -2.0, 0.0],
+            [8.0, 12.0, 4.0],
+        );
+        assert_eq!(
+            edge(&mut bridge, session, low, high),
+            (NativeCollisionNavigationEdgeOutcome::JumpTraversable, true)
+        );
+        assert_eq!(
+            edge(&mut bridge, session, high, low),
+            (NativeCollisionNavigationEdgeOutcome::Traversable, true)
+        );
+        let (outcome, up) = path_kinds(&mut bridge, session, [0, 1, 2], [7, 2, 2]);
+        assert_eq!(outcome, NativeNavigationPathOutcome::Reached);
+        assert_eq!(
+            up.iter()
+                .filter(|kind| **kind == NativeNavigationEdgeKind::Jump)
+                .count(),
+            1,
+            "{up:?}"
+        );
+        let (_, down) = path_kinds(&mut bridge, session, [7, 2, 2], [0, 1, 2]);
+        assert!(down.contains(&NativeNavigationEdgeKind::Drop), "{down:?}");
+        assert!(!down.contains(&NativeNavigationEdgeKind::Jump), "{down:?}");
+
+        // A ceiling 2.5 m over the low floor leaves no room to jump.
+        let (mut bridge, session) = publish_over(
+            ledge(true),
+            jumper(true, 0),
+            [0.0, -2.0, 0.0],
+            [8.0, 12.0, 4.0],
+        );
+        assert_eq!(
+            edge(&mut bridge, session, low, high),
+            (
+                NativeCollisionNavigationEdgeOutcome::JumpHeadroomBlocked,
+                false
+            )
+        );
+    }
+
+    #[test]
+    fn a_gap_is_jumped_only_with_gap_jumps_on_and_within_the_jump() {
+        let (from, to) = ([2, 1, 2], [6, 1, 2]);
+        let (mut bridge, session) =
+            publish_over(gap(3), jumper(true, 0), [0.0, -2.0, 0.0], [12.0, 12.0, 4.0]);
+        assert_eq!(
+            edge(&mut bridge, session, from, to),
+            (NativeCollisionNavigationEdgeOutcome::NotNeighbor, false)
+        );
+        assert_eq!(
+            path_kinds(&mut bridge, session, [0, 1, 2], [9, 1, 2]).0,
+            NativeNavigationPathOutcome::NoPath
+        );
+
+        let (mut bridge, session) = publish_over(
+            gap(3),
+            jumper(false, 3),
+            [0.0, -2.0, 0.0],
+            [12.0, 12.0, 4.0],
+        );
+        assert_eq!(
+            edge(&mut bridge, session, from, to),
+            (NativeCollisionNavigationEdgeOutcome::JumpTraversable, true)
+        );
+        let (outcome, kinds) = path_kinds(&mut bridge, session, [0, 1, 2], [9, 1, 2]);
+        assert_eq!(outcome, NativeNavigationPathOutcome::Reached);
+        assert_eq!(
+            kinds
+                .iter()
+                .filter(|kind| **kind == NativeNavigationEdgeKind::Jump)
+                .count(),
+            1,
+            "{kinds:?}"
+        );
+
+        // Six metres at 7 m/s is beyond the jump's airtime.
+        let (mut bridge, session) = publish_over(
+            gap(5),
+            jumper(false, 6),
+            [0.0, -2.0, 0.0],
+            [12.0, 12.0, 4.0],
+        );
+        assert_eq!(
+            edge(&mut bridge, session, [2, 1, 2], [8, 1, 2]),
+            (NativeCollisionNavigationEdgeOutcome::GapTooWide, false)
+        );
+    }
+
+    /// A block hung over the middle of a gap blocks the jumps across it; the
+    /// republish re-derives the edges of supports up to the gap away and
+    /// matches a fresh derivation.
+    #[test]
+    fn an_edit_over_a_gap_rederives_the_jumps_across_it() {
+        let (mut bridge, session) = bridge_with(Arc::new(gap(3)));
+        let publish = NativeCollisionNavigationReplaceRequest {
+            session,
+            world_min: NativeVec3 {
+                x: 0.0,
+                y: -2.0,
+                z: 0.0,
+            },
+            world_max: NativeVec3 {
+                x: 12.0,
+                y: 12.0,
+                z: 4.0,
+            },
+            config: jumper(false, 3),
+        };
+        bridge.replace_collision_navigation(&publish).unwrap();
+        assert!(edge(&mut bridge, session, [2, 1, 2], [6, 1, 2]).1);
+        let edits = [NativeVoxelEdit {
+            state: 1,
+            kind: NativeVoxelEditKind::Set,
+            address: NativeVoxelAddress { x: 4, y: 3, z: 2 },
+            material_slot: 1,
+        }];
+        let voxel = crate::voxel::api(&mut bridge);
+        let mut edited = NativeVoxelEditReceipt::default();
+        let mut refusal = crate::operation_diagnostics::empty_receipt();
+        let status = unsafe {
+            (voxel.apply_edits)(
+                voxel.context,
+                &NativeVoxelEditTransaction {
+                    session,
+                    edits: edits.as_ptr(),
+                    edits_len: edits.len(),
+                },
+                &mut edited,
+                &mut refusal,
+            )
+        };
+        assert_eq!(status, ABI_OK);
+        let receipt = bridge.replace_collision_navigation(&publish).unwrap();
+        assert!(
+            receipt.reused_column_count > 0,
+            "the republish was incremental"
+        );
+        assert_eq!(
+            edge(&mut bridge, session, [2, 1, 2], [6, 1, 2]),
+            (NativeCollisionNavigationEdgeOutcome::JumpArcBlocked, false)
+        );
+        assert_eq!(
+            published(&bridge, session),
+            from_scratch(&bridge, session, publish)
+        );
     }
 
     /// Routes from the first to the last column of row z = 2 and back.
