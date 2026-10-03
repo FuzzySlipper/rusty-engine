@@ -2024,6 +2024,7 @@ mod tests {
             column_offset,
             level_offset: 0,
             row_offset: 0,
+            quarter_turns: 0,
         };
         let residency = |admitted: &[NativeSpatialContentArtifactInstance], removed: &[u64]| {
             let mut receipt = NativeSpatialContentArtifactResidencyReceipt::default();
@@ -2232,6 +2233,28 @@ mod tests {
             (2, 5)
         );
         assert!(floor_below(&services, [1.5, 0.5]));
+
+        // A quarter turn takes the east strip from +X to -Z: its cells run
+        // north from the west strip's first one, and so does its floor.
+        let turned = NativeSpatialContentArtifactInstance {
+            quarter_turns: 1,
+            ..place(9, east, 0)
+        };
+        let receipt = residency(&[turned], &[]).unwrap();
+        assert_eq!(
+            (receipt.instance_count, receipt.navigation_cell_count),
+            (3, 7)
+        );
+        assert_eq!(
+            step([0.5, 0.0, 0.5], [0.5, 0.0, -1.5]).outcome,
+            NativeNavigationPathOutcome::Reached
+        );
+        assert!(floor_below(&services, [0.5, -1.5]) && !floor_below(&services, [1.5, -0.5]));
+        let receipt = residency(&[], &[9]).unwrap();
+        assert_eq!(
+            (receipt.instance_count, receipt.navigation_cell_count),
+            (2, 5)
+        );
 
         // A world-origin commit moves every closure; a later placement lands
         // on the same grid.

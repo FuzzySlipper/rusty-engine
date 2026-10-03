@@ -744,14 +744,16 @@ An unknown or disposed reference reports `CSHARP_SPATIAL_CONTENT_REFERENCE`.
 To stream several precompiled closures (sites, cells, dungeon blocks) into one
 session, place them with `Spatial.ApplyContentArtifactResidency`. Each
 `SpatialContentArtifactInstance` names an artifact by `ContentReference` under
-a stable product `Id` and places it, unrotated, by whole cells of the
-navigation grid: `ColumnOffset` (x), `LevelOffset` (y, in the artifact's level
-quantum) and `RowOffset` (z).
+a stable product `Id`. It turns the artifact `QuarterTurns` times 90° about +Y
+around its own origin (a quarter turn takes +X to −Z), then moves it by whole
+cells of the navigation grid: `ColumnOffset` (x), `LevelOffset` (y, in the
+artifact's level quantum) and `RowOffset` (z). Other angles would take its
+cells off the grid, so placements turn by quarter turns only.
 
 ```csharp
 SpatialContentArtifactResidencyReceipt resident = engine.Spatial.ApplyContentArtifactResidency(
     new(session,
-        new SpatialContentArtifactInstance[] { new(siteId, siteArtifact, 64, 0, 32) },
+        new SpatialContentArtifactInstance[] { new(siteId, siteArtifact, 64, 0, 32, QuarterTurns: 1) },
         new ulong[] { leavingSiteId },
         7, 8, 1));
 ```

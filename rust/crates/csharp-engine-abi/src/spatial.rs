@@ -472,9 +472,11 @@ pub struct NativeCollisionReplaceReceipt {
 }
 
 /// One spatial content artifact placed beside the session's others, under a
-/// stable product identity. It is placed by whole navigation cells from the
-/// session's navigation grid (columns along x, levels of the artifact's level
-/// quantum along y, rows along z), unrotated.
+/// stable product identity. It turns `quarter_turns` times 90 degrees about +Y
+/// around its own origin (a quarter turn takes +X to -Z; four is a full turn),
+/// then moves by whole navigation cells from the session's navigation grid
+/// (columns along x, levels of the artifact's level quantum along y, rows
+/// along z).
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeSpatialContentArtifactInstance {
@@ -483,6 +485,7 @@ pub struct NativeSpatialContentArtifactInstance {
     pub column_offset: i64,
     pub level_offset: i64,
     pub row_offset: i64,
+    pub quarter_turns: u32,
 }
 
 /// Admits and removes placed spatial artifacts in one session: their

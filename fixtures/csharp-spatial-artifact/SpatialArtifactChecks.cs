@@ -90,6 +90,14 @@ internal static class SpatialArtifactChecks
             ReadOnlyMemory<SpatialContentArtifactInstance>.Empty, new ulong[] { 11 },
             NavigationGridId, ChunkSize, MaximumStepCells));
         Require(removed.InstanceCount == 1 && removed.NavigationCellCount == 6, "a placement did not leave alone");
+        // Turned a quarter, the floor runs from the base's first cell toward -Z.
+        SpatialContentArtifactResidencyReceipt turned = engine.Spatial.ApplyContentArtifactResidency(new(session,
+            new SpatialContentArtifactInstance[] { new(13, floor, 0, 0, 0, 1) },
+            ReadOnlyMemory<ulong>.Empty, NavigationGridId, ChunkSize, MaximumStepCells));
+        Require(turned.InstanceCount == 2 && turned.NavigationCellCount == 9, "a turned placement did not compose");
+        NavigationStepResult north = engine.Spatial.EvaluateNavigationStep(new(session,
+            new Vector3(0.5f, 0, 0.5f), new Vector3(0.5f, 0, -2.5f), 0.5f, 64));
+        Require(north.Outcome == NavigationPathOutcome.Reached, "navigation did not follow a turned placement");
         CheckQueries(engine, session);
     }
 

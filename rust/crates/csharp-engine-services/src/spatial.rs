@@ -143,6 +143,8 @@ struct ContentNavigationCells {
 struct PlacedContentArtifact {
     asset: Option<StaticMeshAssetId>,
     offset: [i64; 3],
+    /// Quarter turns about +Y, 0 to 3.
+    turns: u8,
     navigation: Arc<ContentNavigationCells>,
 }
 
@@ -1234,6 +1236,7 @@ impl RuntimeSpatialBridge {
                             placement.level_offset,
                             placement.row_offset,
                         ],
+                        turns: (placement.quarter_turns % 4) as u8,
                         navigation: Arc::clone(navigation),
                     },
                 );
@@ -1281,6 +1284,7 @@ impl RuntimeSpatialBridge {
                                 grid_origin[1] + level as f64 * placed.navigation.level_quantum,
                                 grid_origin[2] + row as f64 * placed.navigation.cell_size,
                             ],
+                            rotation: quarter_turn_rotation(placed.turns),
                             ..StaticMeshTransform::IDENTITY
                         },
                     })
@@ -5118,6 +5122,23 @@ fn validate_spatial_content_id(value: &str, label: &str) -> Result<(), CsharpEng
     Ok(())
 }
 
+/// The rotation `turns` quarter turns about +Y, as a quaternion.
+fn quarter_turn_rotation(turns: u8) -> [f64; 4] {
+    let half = f64::from(turns) * std::f64::consts::FRAC_PI_4;
+    [0.0, half.sin(), 0.0, half.cos()]
+}
+
+/// The cell `[column, row]` of an artifact turned `turns` quarter turns about
+/// +Y around its origin, where a quarter turn takes (x, z) to (z, -x).
+fn quarter_turned_cell([column, row]: [i64; 2], turns: u8) -> [i64; 2] {
+    match turns {
+        1 => [row, -column - 1],
+        2 => [-column - 1, -row - 1],
+        3 => [-row - 1, column],
+        _ => [column, row],
+    }
+}
+
 /// An artifact's walkable cells and their support heights.
 fn content_navigation_cells(artifact: &SpatialContentArtifact) -> ContentNavigationCells {
     ContentNavigationCells {
@@ -5149,14 +5170,14 @@ fn compose_content_navigation<'a>(
     let mut supports: BTreeMap<VoxelCoord, f64> = BTreeMap::new();
     let mut level_quantum = None;
     let layers = base
-        .map(|cells| (cells.as_ref(), [0; 3]))
+        .map(|cells| (cells.as_ref(), [0; 3], 0))
         .into_iter()
         .chain(
             placed
                 .into_iter()
-                .map(|placed| (placed.navigation.as_ref(), placed.offset)),
+                .map(|placed| (placed.navigation.as_ref(), placed.offset, placed.turns)),
         );
-    for (cells, [column, level, row]) in layers {
+    for (cells, [column, level, row], turns) in layers {
         if cells.cell_size != grid.voxel_size()
             || level_quantum.is_some_and(|quantum| quantum != cells.level_quantum)
         {
@@ -5168,7 +5189,8 @@ fn compose_content_navigation<'a>(
         level_quantum = Some(cells.level_quantum);
         let rise = level as f64 * cells.level_quantum;
         for (cell, support) in &cells.cells {
-            let at = VoxelCoord::new(cell.x + column, cell.y + level, cell.z + row);
+            let [x, z] = quarter_turned_cell([cell.x, cell.z], turns);
+            let at = VoxelCoord::new(x + column, cell.y + level, z + row);
             let support = support + rise;
             supports
                 .entry(at)
