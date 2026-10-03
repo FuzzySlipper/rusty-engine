@@ -508,7 +508,7 @@ internal static class Emit
         {
             IEnumerable<string> collections = ResultPointers(copied).Select(pointer => $"ReadOnlyMemory<{SafeType(model, BindingModel.Bare(pointer.Type))}> {Pascal(pointer.Name)}");
             IEnumerable<string> metadata = ResultMetadataFields(copied).Select(field => $"{SafeResultMetadataType(model, field)} {Pascal(field.Name)}");
-            output.Append($"public readonly record struct {ResultReceiptType(copied)}(")
+            output.Append($"public readonly partial record struct {ResultReceiptType(copied)}(")
                 .Append(string.Join(", ", collections.Concat(metadata)))
                 .AppendLine(");")
                 .AppendLine();
