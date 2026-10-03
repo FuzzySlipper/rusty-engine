@@ -50,22 +50,30 @@ pub fn releases_base() -> String {
 /// The release mirror `config.json` names, if any. A config that cannot be
 /// read as JSON is reported and ignored.
 fn configured_releases() -> Option<String> {
+    config_string("releases")
+}
+
+fn config_string(key: &str) -> Option<String> {
     let path = cache_root().ok()?.join(CONFIG_FILE);
     let bytes = fs::read(&path).ok()?;
     match serde_json::from_slice::<serde_json::Value>(&bytes) {
-        Ok(config) => config["releases"]
+        Ok(config) => config[key]
             .as_str()
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .map(str::to_owned),
         Err(error) => {
-            eprintln!(
-                "rusty: ignoring `{}`: {error}; using the default releases",
-                path.display()
-            );
+            eprintln!("rusty: ignoring `{}`: {error}", path.display());
             None
         }
     }
+}
+
+/// The directory `config.json` names as `{"localOutput": <dir>}`: this
+/// machine keeps each checkout's build output and development state there
+/// rather than in the checkout.
+pub fn local_output() -> Option<PathBuf> {
+    config_string("localOutput").map(PathBuf::from)
 }
 
 #[derive(Debug, Clone)]

@@ -95,6 +95,29 @@ audio device opens.
 NativeAOT product, an explicit fidelity/release check rather than the edit
 loop.
 
+### One checkout on two machines
+
+A machine that runs a checkout another machine also builds (Windows on a
+network drive such as `P:` while Linux edits it) keeps its own output out of
+the checkout. In that machine's cache `config.json` (beside `pairs/`; `rusty
+status` prints the cache):
+
+```json
+{"localOutput": "C:/rusty-local"}
+```
+
+`rusty dev`, `rusty dev start|stop|status` and `rusty build` then keep this
+checkout's session records, logs and persistence in
+`<localOutput>/<checkout>/runtime` and pass MSBuild
+`ArtifactsPath=<localOutput>/<checkout>/artifacts`, so restore, `bin`, `obj`
+and the staged product of the project and every project it references go
+there. `rusty status` prints both locations. Source, content and UI sources
+stay in the checkout and edits from either machine reload as usual. A plain
+`dotnet build` there needs `--artifacts-path` with that directory. A UI build
+command writes its output where the product points `RustyEngineProductUiRoot`;
+pointing it under `$(BaseIntermediateOutputPath)` keeps that output per machine
+too. `rusty dev` runs the pinned pair's own CLI, so the pair must have this.
+
 ## Test
 
 A product's test project exercises its Engine calls against the Engine's own

@@ -42,16 +42,15 @@ impl SessionPaths {
     pub fn for_project(project: &Path) -> Result<Self, String> {
         let project = super::absolute(project)?;
         let project = fs::canonicalize(&project).unwrap_or(project);
-        let runtime = super::development_runtime_root(&project)?;
-        let owner = runtime.parent().unwrap_or(&runtime);
-        let relative = project.strip_prefix(owner).unwrap_or(&project);
+        let roots = super::DevelopmentRoots::of(&project)?;
+        let relative = project.strip_prefix(&roots.checkout).unwrap_or(&project);
         if relative.file_name().is_none() {
             return Err(format!(
                 "RUSTY_DEV_PROJECT: `{}` names no project file",
                 project.display()
             ));
         }
-        let directory = runtime.join("dev").join(session_key(relative));
+        let directory = roots.runtime.join("dev").join(session_key(relative));
         Ok(Self {
             record: directory.join("session.json"),
             lock: directory.join("lock"),

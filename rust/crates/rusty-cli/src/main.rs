@@ -139,7 +139,8 @@ fn dev(mut options: DevOptions) -> Result<(), String> {
             }
         }
     }
-    let persistence_root = development_persistence_root(&options.project)?;
+    let roots = DevelopmentRoots::of(&options.project)?;
+    let persistence_root = roots.persistence();
     let session = if options.session {
         Some(Session::claim(&options.project, &persistence_root)?)
     } else {
@@ -992,7 +993,8 @@ edits replace the runtime.
 product serves and prints {url, port, pid, runtimeInstanceId, persistenceRoot, log} as JSON, or exits
 nonzero with the log's tail if staging or startup failed. `rusty dev stop` ends that project's session
 and disposes the product as Ctrl+C would; `rusty dev status` reports it. The session's record and log
-live in the repository's .runtime/dev/, one directory per project path.
+live in the repository's .runtime/dev/, one directory per project path, or under this machine's
+localOutput when its config.json names one (`rusty status` shows where).
 
 The runtime is the pair pinned in the product's Directory.Build.props, installed by `rusty install`.
 `rusty dev` runs that pair's own copy of this command, so the supervisor always matches its host;
@@ -1648,6 +1650,7 @@ fn build(options: &BuildOptions) -> Result<ExitCode, String> {
         ),
     ];
     arguments.extend(source_properties(options.engine_source.as_deref())?);
+    arguments.extend(DevelopmentRoots::of(&project)?.msbuild_properties()?);
     let result_file =
         env::temp_dir().join(format!("rusty-build-stage-{}.json", std::process::id()));
     if options.pack.is_some() {
@@ -1846,6 +1849,18 @@ fn status(options: &StatusOptions) -> Result<ExitCode, String> {
                 pair::PIN_FILE
             ));
         }
+    }
+    match pair::default_project(&start) {
+        Ok(Some(project)) => println!("project        {}", project.display()),
+        Ok(None) => println!("project        none named; pass --project"),
+        Err(error) => problems.push(error),
+    }
+    // Any file in `start` finds the same checkout as a project there would.
+    let roots = DevelopmentRoots::of(&start.join(pair::PIN_FILE))?;
+    println!("dev state      {}", roots.runtime.display());
+    match &roots.artifacts {
+        Some(artifacts) => println!("build output   {}", artifacts.display()),
+        None => println!("build output   bin/ and obj/ beside each project"),
     }
     let cache = pair::cache_root()?;
     let versions = pair::installed_versions()?;
@@ -2080,6 +2095,7 @@ fn source_properties(engine_source: Option<&Path>) -> Result<Vec<String>, String
 
 fn stage_properties(options: &DevOptions) -> Result<Vec<String>, String> {
     let mut properties = source_properties(options.engine_source.as_deref())?;
+    properties.extend(DevelopmentRoots::of(&options.project)?.msbuild_properties()?);
     if let Some(bind_host) = &options.bind_host {
         properties.push(format!("-p:RustyEngineProductBindHost={bind_host}"));
     }
@@ -2122,28 +2138,85 @@ fn verify_staged_product(staged: &Path) -> Result<(), String> {
     }
 }
 
-fn development_persistence_root(project: &Path) -> Result<PathBuf, String> {
-    Ok(development_runtime_root(project)?.join("persistence"))
+/// Where a product's development state lives. Ordinarily the runtime state
+/// is `.runtime/` in the product's repository and MSBuild writes its usual
+/// `bin/` and `obj/`. With `localOutput` set in the CLI's `config.json`, this
+/// machine keeps both under `<localOutput>/<checkout>/` instead, so machines
+/// sharing one checkout (a network drive) never write each other's files.
+struct DevelopmentRoots {
+    /// The repository holding the project: the `.git` ancestor, or the
+    /// project's own directory.
+    checkout: PathBuf,
+    /// Session records, logs and persistence.
+    runtime: PathBuf,
+    /// The MSBuild `ArtifactsPath` for this machine's build output.
+    artifacts: Option<PathBuf>,
 }
 
-fn development_runtime_root(project: &Path) -> Result<PathBuf, String> {
-    let project = absolute(project)?;
-    let project_directory = project.parent().ok_or_else(|| {
-        format!(
-            "RUSTY_DEV_PROJECT: ordinary product project `{}` has no containing directory",
-            project.display()
-        )
-    })?;
-    // Keep developer state beside the Product repository when one is
-    // discoverable. This matches the ordinary `.runtime` lane used by
-    // downstream products and avoids writing state beneath a source project
-    // directory that may not ignore generated files. A loose project still
-    // gets a stable root beside its project file.
-    let product_root = project_directory
-        .ancestors()
-        .find(|candidate| candidate.join(".git").exists())
-        .unwrap_or(project_directory);
-    Ok(product_root.join(".runtime"))
+impl DevelopmentRoots {
+    fn of(project: &Path) -> Result<Self, String> {
+        Self::with_local_output(project, pair::local_output().as_deref())
+    }
+
+    fn with_local_output(project: &Path, local_output: Option<&Path>) -> Result<Self, String> {
+        let project = absolute(project)?;
+        let project_directory = project.parent().ok_or_else(|| {
+            format!(
+                "RUSTY_DEV_PROJECT: ordinary product project `{}` has no containing directory",
+                project.display()
+            )
+        })?;
+        // A loose project still gets a stable root beside its project file.
+        let checkout = project_directory
+            .ancestors()
+            .find(|candidate| candidate.join(".git").exists())
+            .unwrap_or(project_directory)
+            .to_path_buf();
+        Ok(match local_output {
+            None => Self {
+                runtime: checkout.join(".runtime"),
+                artifacts: None,
+                checkout,
+            },
+            Some(local_output) => {
+                let local = absolute(local_output)?.join(checkout_key(&checkout));
+                Self {
+                    runtime: local.join("runtime"),
+                    artifacts: Some(local.join("artifacts")),
+                    checkout,
+                }
+            }
+        })
+    }
+
+    fn persistence(&self) -> PathBuf {
+        self.runtime.join("persistence")
+    }
+
+    /// `-p:ArtifactsPath=…` when this machine keeps build output locally.
+    fn msbuild_properties(&self) -> Result<Vec<String>, String> {
+        let Some(artifacts) = &self.artifacts else {
+            return Ok(Vec::new());
+        };
+        let artifacts = artifacts
+            .to_str()
+            .ok_or("RUSTY_LOCAL_OUTPUT: localOutput must be a UTF-8 path")?;
+        Ok(vec![format!("-p:ArtifactsPath={artifacts}")])
+    }
+}
+
+/// A readable directory name for a checkout path: `P:\dev\game` and
+/// `/home/me/dev/game` become `P_dev_game` and `home_me_dev_game`.
+fn checkout_key(checkout: &Path) -> String {
+    let mut key = String::new();
+    for character in checkout.to_string_lossy().chars() {
+        if character.is_ascii_alphanumeric() || matches!(character, '-' | '.') {
+            key.push(character);
+        } else if !key.is_empty() && !key.ends_with('_') {
+            key.push('_');
+        }
+    }
+    key.trim_end_matches('_').to_owned()
 }
 
 struct SupervisedHost {
@@ -2644,8 +2717,10 @@ mod tests {
 
     #[test]
     fn development_runtime_roots_are_repository_local_and_absolute() {
-        let persistence_root = development_persistence_root(Path::new("src/Product.csproj"))
-            .expect("development persistence root");
+        let persistence_root =
+            DevelopmentRoots::with_local_output(Path::new("src/Product.csproj"), None)
+                .expect("development roots")
+                .persistence();
         let current_directory = env::current_dir().expect("current directory");
         let repository_root = current_directory
             .ancestors()
@@ -2661,9 +2736,12 @@ mod tests {
 
     #[test]
     fn development_runtime_roots_for_a_loose_project_do_not_follow_staged_output() {
-        let persistence_root =
-            development_persistence_root(Path::new("/workspace/Product/Product.csproj"))
-                .expect("development persistence root");
+        let persistence_root = DevelopmentRoots::with_local_output(
+            Path::new("/workspace/Product/Product.csproj"),
+            None,
+        )
+        .expect("development roots")
+        .persistence();
         let staged_product = Path::new("/workspace/Product/obj/RustyEngineProduct");
 
         assert_eq!(
@@ -2673,6 +2751,39 @@ mod tests {
         assert_ne!(
             persistence_root,
             staged_product.join(".runtime/persistence")
+        );
+    }
+
+    #[test]
+    fn local_output_keeps_each_checkouts_state_and_build_output_apart() {
+        let local = Path::new("/local/rusty");
+        let roots = |project: &str| {
+            DevelopmentRoots::with_local_output(Path::new(project), Some(local)).unwrap()
+        };
+        let game = roots("/mnt/share/dev/game/Game.csproj");
+        assert_eq!(game.checkout, PathBuf::from("/mnt/share/dev/game"));
+        assert_eq!(
+            game.persistence(),
+            local.join("mnt_share_dev_game/runtime/persistence")
+        );
+        assert_eq!(
+            game.msbuild_properties().unwrap(),
+            ["-p:ArtifactsPath=/local/rusty/mnt_share_dev_game/artifacts"]
+        );
+        assert_ne!(
+            roots("/mnt/share/dev/other/Game.csproj").runtime,
+            game.runtime
+        );
+        assert_eq!(
+            checkout_key(Path::new(r"\\?\P:\dev\rusty-dagger")),
+            "P_dev_rusty-dagger"
+        );
+        assert!(
+            DevelopmentRoots::with_local_output(Path::new("/p/Game.csproj"), None)
+                .unwrap()
+                .msbuild_properties()
+                .unwrap()
+                .is_empty()
         );
     }
 
