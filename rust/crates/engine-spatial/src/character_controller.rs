@@ -1313,7 +1313,9 @@ pub fn character_jump_plan(
         if on_time {
             return Ok(Flight::Lands);
         }
-        // Past the end support's centre, it must still come down on it.
+        // Leaving sooner than on time carries it past the end support's
+        // centre; wherever that is, it must come down on ground at the end's
+        // height.
         Ok(
             match cast_world(
                 &scene.projection,

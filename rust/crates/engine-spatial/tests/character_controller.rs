@@ -1700,11 +1700,16 @@ fn a_long_drop_moves_across_soon_enough_to_leave_the_start() {
         panic!("{hz} Hz: never landed");
     };
     for hz in [30.0f32, 60.0, 240.0] {
-        let back = fly(hz, late);
-        assert!(
-            back.y > 1.5,
-            "{hz} Hz: holding from {late} landed at {back:?}"
-        );
+        // Landing short of the end's centre would take holding from later
+        // still, which only keeps it over the start longer.
+        for later in [0.0, 0.05, 0.1, 0.2] {
+            let back = fly(hz, late + later);
+            assert!(
+                back.y > 1.5,
+                "{hz} Hz: holding from {} landed at {back:?}",
+                late + later
+            );
+        }
         let landed = fly(hz, plan.departure);
         assert!(
             landed.y < -3.0 && landed.z < -1.0,
