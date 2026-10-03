@@ -31,18 +31,19 @@ mod world_origin;
 
 pub use character_controller::{
     character_edge_is_traversable, character_edge_outcome,
-    character_edge_outcome_between_clear_supports, character_jump_outcome, CharacterAirConfig,
-    CharacterBlockKind, CharacterConfigError, CharacterContactFact, CharacterContactKind,
-    CharacterControllerCommand, CharacterControllerConfig, CharacterControllerError,
-    CharacterControllerReadout, CharacterControllerReceipt, CharacterControllerService,
-    CharacterEdgeOutcome, CharacterExternalMotionConfig, CharacterGroundConfig,
-    CharacterGroundFact, CharacterJumpConfig, CharacterJumpOutcome, CharacterMeshInstance,
-    CharacterPlatformConfig, CharacterPlatformFact, CharacterRecoveryConfig, CharacterShapeConfig,
-    CharacterSolverConfig, CharacterStanceFact, CharacterStepColliders, CharacterStepFact,
-    CharacterStepSubject, CharacterStepWorld, CharacterSurfaceConfig, CharacterVerticalConfig,
-    DynamicImpulseProposal, FirstPersonLookCommand, FirstPersonLookConfig,
-    FirstPersonLookDiagnostic, FirstPersonLookError, FirstPersonLookReceipt,
-    FirstPersonLookService, FirstPersonLookState, PreparedCharacterControllerStep,
+    character_edge_outcome_between_clear_supports, character_jump_outcome, character_jump_plan,
+    CharacterAirConfig, CharacterBlockKind, CharacterConfigError, CharacterContactFact,
+    CharacterContactKind, CharacterControllerCommand, CharacterControllerConfig,
+    CharacterControllerError, CharacterControllerReadout, CharacterControllerReceipt,
+    CharacterControllerService, CharacterEdgeOutcome, CharacterExternalMotionConfig,
+    CharacterGroundConfig, CharacterGroundFact, CharacterJumpConfig, CharacterJumpOutcome,
+    CharacterJumpPlan, CharacterMeshInstance, CharacterPlatformConfig, CharacterPlatformFact,
+    CharacterRecoveryConfig, CharacterShapeConfig, CharacterSolverConfig, CharacterStanceFact,
+    CharacterStepColliders, CharacterStepFact, CharacterStepSubject, CharacterStepWorld,
+    CharacterSurfaceConfig, CharacterVerticalConfig, DynamicImpulseProposal,
+    FirstPersonLookCommand, FirstPersonLookConfig, FirstPersonLookDiagnostic, FirstPersonLookError,
+    FirstPersonLookReceipt, FirstPersonLookService, FirstPersonLookState,
+    PreparedCharacterControllerStep,
 };
 pub use core_space::{GlobalPosition, WorldOrigin};
 pub use entity_motion::{

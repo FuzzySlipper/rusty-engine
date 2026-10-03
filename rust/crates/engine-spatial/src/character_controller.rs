@@ -1031,7 +1031,8 @@ pub enum CharacterJumpOutcome {
     EndOverlap,
     /// The capsule cannot rise straight up to the jump's peak.
     HeadroomBlocked,
-    /// The capsule meets collision along the arc.
+    /// The capsule meets collision along the arc, or comes down on the start
+    /// or another floor before the landing however soon it moves across.
     ArcBlocked,
 }
 
@@ -1044,7 +1045,10 @@ pub enum CharacterJumpOutcome {
 /// `surface.floor_snap_speed_limit`, to `surface.floor_snap_distance` above
 /// it, where the controller snaps it down. Across, it holds toward the landing
 /// as late as still lands it on the end support, so it rises clear of a ledge
-/// before moving over it. The controller's air control then gains
+/// before moving over it. If that would land it back on the start or on
+/// another floor on the way, it holds toward the landing as late as avoids
+/// that instead, overshooting the end support's centre but landing on it.
+/// The controller's air control then gains
 /// `air.acceleration × air.lateral_control × wish` metres per second each
 /// second up to the wish speed `ground.forward_speed` capped by
 /// `air.wish_speed_cap`, and no faster than `air.maximum_speed`. `air.drag`
@@ -1064,6 +1068,36 @@ pub fn character_jump_outcome(
     end_support: WorldPos,
     maximum_drop: f64,
 ) -> Result<CharacterJumpOutcome, CharacterControllerError> {
+    character_jump_plan(scene, config, start_support, end_support, maximum_drop)
+        .map(|plan| plan.outcome)
+}
+
+/// A jump [`character_jump_outcome`] evaluates, and when its character
+/// starts holding toward the landing.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CharacterJumpPlan {
+    pub outcome: CharacterJumpOutcome,
+    /// Seconds after the launch; meaningful when the jump is traversable.
+    pub departure: f64,
+}
+
+impl CharacterJumpPlan {
+    fn refused(outcome: CharacterJumpOutcome) -> Self {
+        Self {
+            outcome,
+            departure: 0.0,
+        }
+    }
+}
+
+/// [`character_jump_outcome`] with the departure a mover follows.
+pub fn character_jump_plan(
+    scene: &VoxelCollisionScene,
+    config: &CharacterControllerConfig,
+    start_support: WorldPos,
+    end_support: WorldPos,
+    maximum_drop: f64,
+) -> Result<CharacterJumpPlan, CharacterControllerError> {
     let gravity = f64::from(config.vertical.gravity);
     // The controller caps vertical speed from the step after the launch on.
     let launch = f64::from(
@@ -1074,7 +1108,9 @@ pub fn character_jump_outcome(
     );
     let fall = f64::from(config.vertical.terminal_fall_speed);
     if gravity <= 0.0 || launch <= 0.0 || fall <= 0.0 {
-        return Ok(CharacterJumpOutcome::RiseOverJump);
+        return Ok(CharacterJumpPlan::refused(
+            CharacterJumpOutcome::RiseOverJump,
+        ));
     }
     let peak = launch * launch / (2.0 * gravity);
     // Height above the start `t` seconds after the launch: a parabola until
@@ -1092,10 +1128,14 @@ pub fn character_jump_outcome(
     let margin = f64::from(config.shape.contact_skin) + nudge;
     let rise = end_support.y - start_support.y;
     if rise > peak - margin {
-        return Ok(CharacterJumpOutcome::RiseOverJump);
+        return Ok(CharacterJumpPlan::refused(
+            CharacterJumpOutcome::RiseOverJump,
+        ));
     }
     if -rise > maximum_drop + nudge {
-        return Ok(CharacterJumpOutcome::DropOverMaximum);
+        return Ok(CharacterJumpPlan::refused(
+            CharacterJumpOutcome::DropOverMaximum,
+        ));
     }
     // When the fall passes back down through `height` above the start.
     let falls_to = |height: f64| {
@@ -1136,10 +1176,10 @@ pub fn character_jump_outcome(
         }
     };
     if across > 0.0 && (top <= 0.0 || rate <= 0.0 || across > covered(airtime)) {
-        return Ok(CharacterJumpOutcome::GapTooWide);
+        return Ok(CharacterJumpPlan::refused(CharacterJumpOutcome::GapTooWide));
     }
     // When it starts moving across, to arrive as it lands.
-    let departure = if across <= 0.0 {
+    let late = if across <= 0.0 {
         airtime
     } else if across <= 0.5 * top * ramp {
         (airtime - (2.0 * across / rate).sqrt()).max(0.0)
@@ -1159,10 +1199,12 @@ pub fn character_jump_outcome(
     let end = WorldPos::new(end_support.x, end_support.y + center_offset, end_support.z);
     let mut stats = CharacterCollisionQueryStats::default();
     if overlap_world(&scene.projection, &[], capsule(start), &mut stats)?.is_some() {
-        return Ok(CharacterJumpOutcome::StartOverlap);
+        return Ok(CharacterJumpPlan::refused(
+            CharacterJumpOutcome::StartOverlap,
+        ));
     }
     if overlap_world(&scene.projection, &[], capsule(end), &mut stats)?.is_some() {
-        return Ok(CharacterJumpOutcome::EndOverlap);
+        return Ok(CharacterJumpPlan::refused(CharacterJumpOutcome::EndOverlap));
     }
     if cast_world(
         &scene.projection,
@@ -1174,43 +1216,164 @@ pub fn character_jump_outcome(
     )?
     .is_some()
     {
-        return Ok(CharacterJumpOutcome::HeadroomBlocked);
+        return Ok(CharacterJumpPlan::refused(
+            CharacterJumpOutcome::HeadroomBlocked,
+        ));
     }
+    let snap_distance = f64::from(config.surface.floor_snap_distance.max(0.0));
+    let snap_speed = f64::from(config.surface.floor_snap_speed_limit);
+    let skin = f64::from(config.shape.contact_skin);
+    let (toward_x, toward_z) = if across > 0.0 {
+        ((end.x - start.x) / across, (end.z - start.z) / across)
+    } else {
+        (0.0, 0.0)
+    };
     // The arc in short straight sweeps, about one every twentieth of a second.
     const SWEEP_SECONDS: f64 = 0.05;
     let segments = (airtime / SWEEP_SECONDS).ceil().clamp(4.0, 64.0) as u32;
-    let at = |step: u32| {
-        let t = airtime * f64::from(step) / f64::from(segments);
-        let share = if across > 0.0 {
-            (covered((t - departure).max(0.0)) / across).clamp(0.0, 1.0)
-        } else {
-            1.0
+    // Fly the arc holding toward the landing from `departure`.
+    let mut fly = |departure: f64| -> Result<Flight, CharacterControllerError> {
+        let on_time = departure >= late;
+        let carried = |t: f64| {
+            let carried = covered((t - departure).max(0.0));
+            if on_time {
+                carried.min(across)
+            } else {
+                carried
+            }
         };
-        WorldPos::new(
-            start.x + (end.x - start.x) * share,
-            start.y + height_at(t),
-            start.z + (end.z - start.z) * share,
+        let at = |t: f64| {
+            let carried = carried(t);
+            WorldPos::new(
+                start.x + toward_x * carried,
+                start.y + height_at(t),
+                start.z + toward_z * carried,
+            )
+        };
+        let landing = if on_time {
+            end
+        } else {
+            WorldPos::new(at(airtime).x, end.y, at(airtime).z)
+        };
+        // A floor it comes down on is the end support when it is at the end's
+        // height and the character is past halfway; any other floor stops the
+        // jump short.
+        let lands_on = |floor: f64, t: f64| {
+            if (floor - end_support.y).abs() <= snap_distance && 2.0 * carried(t) >= across {
+                Flight::Lands
+            } else {
+                Flight::LandsShort
+            }
+        };
+        let mut from = start;
+        for step in 1..=segments {
+            let t = airtime * f64::from(step) / f64::from(segments);
+            let to = if step == segments { landing } else { at(t) };
+            let sweep = WorldVec::new(to.x - from.x, to.y - from.y, to.z - from.z);
+            if let Some(hit) = cast_world(
+                &scene.projection,
+                &[],
+                capsule(from),
+                sweep,
+                0.0,
+                &mut stats,
+            )? {
+                return Ok(
+                    if sweep.y < 0.0 && standable(vec3_from_world(hit.normal)?, config) {
+                        lands_on(hit.point.y, t)
+                    } else {
+                        Flight::Blocked
+                    },
+                );
+            }
+            // Falling slowly enough, the controller snaps down onto a floor
+            // within its reach below the path.
+            let falling = gravity * airtime * f64::from(step - 1) / f64::from(segments) - launch;
+            if sweep.y < 0.0
+                && falling >= 0.0
+                && falling.min(fall) <= snap_speed
+                && snap_distance > 0.0
+            {
+                let below = WorldPos::new(from.x, from.y - snap_distance, from.z);
+                if let Some(hit) = cast_world(
+                    &scene.projection,
+                    &[],
+                    capsule(below),
+                    sweep,
+                    skin,
+                    &mut stats,
+                )? {
+                    if standable(vec3_from_world(hit.normal)?, config) {
+                        return Ok(lands_on(hit.point.y, t));
+                    }
+                }
+            }
+            from = to;
+        }
+        if on_time {
+            return Ok(Flight::Lands);
+        }
+        // Past the end support's centre, it must still come down on it.
+        Ok(
+            match cast_world(
+                &scene.projection,
+                &[],
+                capsule(landing),
+                WorldVec::new(0.0, -snap_distance, 0.0),
+                skin,
+                &mut stats,
+            )? {
+                Some(hit) if standable(vec3_from_world(hit.normal)?, config) => {
+                    lands_on(hit.point.y, airtime)
+                }
+                _ => Flight::Blocked,
+            },
         )
     };
-    let mut from = start;
-    for step in 1..=segments {
-        let to = if step == segments { end } else { at(step) };
-        let sweep = WorldVec::new(to.x - from.x, to.y - from.y, to.z - from.z);
-        if cast_world(
-            &scene.projection,
-            &[],
-            capsule(from),
-            sweep,
-            0.0,
-            &mut stats,
-        )?
-        .is_some()
-        {
-            return Ok(CharacterJumpOutcome::ArcBlocked);
+    let landed = |departure| CharacterJumpPlan {
+        outcome: CharacterJumpOutcome::Traversable,
+        departure,
+    };
+    match fly(late)? {
+        Flight::Lands => return Ok(landed(late)),
+        Flight::Blocked => {
+            return Ok(CharacterJumpPlan::refused(CharacterJumpOutcome::ArcBlocked));
         }
-        from = to;
+        Flight::LandsShort => {}
     }
-    Ok(CharacterJumpOutcome::Traversable)
+    // Holding toward the landing sooner carries it off the start before it
+    // comes back down; find about the latest departure that does.
+    const SEARCH_STEPS: u32 = 8;
+    let mut sooner = 0.0;
+    let mut flight = fly(sooner)?;
+    if flight == Flight::LandsShort {
+        return Ok(CharacterJumpPlan::refused(CharacterJumpOutcome::ArcBlocked));
+    }
+    let mut short = late;
+    for _ in 0..SEARCH_STEPS {
+        let middle = 0.5 * (sooner + short);
+        match fly(middle)? {
+            Flight::LandsShort => short = middle,
+            other => {
+                sooner = middle;
+                flight = other;
+            }
+        }
+    }
+    Ok(if flight == Flight::Lands {
+        landed(sooner)
+    } else {
+        CharacterJumpPlan::refused(CharacterJumpOutcome::ArcBlocked)
+    })
+}
+
+/// How one planned jump arc ends.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Flight {
+    Lands,
+    /// It comes down on the start or another floor before the end support.
+    LandsShort,
+    Blocked,
 }
 
 /// Walk a capsule from `start` to `end` (centres) over ground the way the

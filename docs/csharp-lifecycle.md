@@ -569,8 +569,12 @@ no faster than `FloorSnapSpeedLimit`. It holds toward the target as late as
 still lands it there, gaining speed as the controller does in the air,
 `Air.Acceleration × LateralControl × wish` each second, where the wish is
 `Ground.ForwardSpeed` capped by `Air.WishSpeedCap`, up to `Air.MaximumSpeed`
-(`Air.Drag` is not modelled). A mover that stops at the start, jumps and
-holds toward the target from no later than that makes the jump.
+(`Air.Drag` is not modelled). Where that would bring it back down on the
+start or another floor first, as on a long drop, it holds toward the target
+as late as avoids that, landing past the target's centre but on it; with
+neither, the jump is `JumpArcBlocked`. A mover that stops at the start, jumps
+and holds toward the target from that moment makes the jump; step results do
+not carry the moment yet.
 
 - `JumpLedges` connects a neighbour too high to step onto when the capsule can
   rise straight up to the peak (`JumpHeadroomBlocked` otherwise) and sweep

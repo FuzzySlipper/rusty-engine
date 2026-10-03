@@ -2,7 +2,7 @@ use core_ids::EntityId;
 use core_math::{Vec2, Vec3};
 use core_space::{WorldPos, WorldVec};
 use engine_spatial::{
-    character_edge_is_traversable, character_jump_outcome, CharacterBlockKind,
+    character_edge_is_traversable, character_jump_outcome, character_jump_plan, CharacterBlockKind,
     CharacterContactKind, CharacterControllerCommand, CharacterControllerConfig,
     CharacterControllerError, CharacterControllerService, CharacterJumpOutcome,
     CharacterMeshInstance, CharacterStepColliders, StaticMeshAssetId, StaticMeshColliderAsset,
@@ -1644,6 +1644,72 @@ fn a_standing_jump_carries_only_what_air_acceleration_reaches() {
         assert!(
             landed.y > 1.9 && f64::from(landed.z) <= near.z,
             "{hz} Hz: landed at {landed:?}"
+        );
+    }
+}
+
+#[test]
+fn a_long_drop_moves_across_soon_enough_to_leave_the_start() {
+    // A floor 1 m high from z = 0 to 4, and one 5 m lower from z = -8 to -1.
+    let scene = VoxelCollisionScene::from_solid_voxels(
+        1.0,
+        8,
+        (-2..=2).flat_map(|x| {
+            (0..4)
+                .map(move |z| [x, 0, z])
+                .chain((-8..-1).map(move |z| [x, -5, z]))
+        }),
+    )
+    .unwrap();
+    let config = CharacterControllerConfig::default();
+    let start = WorldPos::new(0.5, 1.0, 0.5);
+    let end = WorldPos::new(0.5, -4.0, -1.5);
+    let plan = character_jump_plan(&scene, &config, start, end, 5.5).unwrap();
+    assert_eq!(plan.outcome, CharacterJumpOutcome::Traversable);
+    // Arriving over the end as it lands means holding toward it from when it
+    // falls 5 m, less (2 / 5 + 1 / 24) s: after it is back down at the start.
+    let late = (7.0 + 249.0f64.sqrt()) / 20.0 - (2.0 / 5.0 + 1.0 / 24.0);
+    assert!(plan.departure < late, "{plan:?}");
+
+    let fly = |hz: f32, departure: f64| {
+        let dt = 1.0 / hz;
+        let (entity, mut state) = character_at(Vec3::new(0.5, 1.92, 0.5));
+        let mut service = CharacterControllerService::default();
+        let mut step = |state: &mut EntityState, sequence: u64, intent: Vec2, jump: bool| {
+            let input = CharacterControllerCommand {
+                planar_intent: intent,
+                jump_pressed: jump,
+                ..CharacterControllerCommand::idle(dt, sequence)
+            };
+            service.step(state, &scene, entity, &config, input).unwrap()
+        };
+        assert!(step(&mut state, 1, Vec2::ZERO, false).motion_after.grounded);
+        assert!(!step(&mut state, 2, Vec2::ZERO, true).motion_after.grounded);
+        for tick in 1..(3.0 * hz) as u64 {
+            let ends = f64::from((tick + 1) as f32 * dt);
+            let intent = if ends > departure {
+                Vec2::new(0.0, 1.0)
+            } else {
+                Vec2::ZERO
+            };
+            let receipt = step(&mut state, tick + 2, intent, false);
+            if receipt.motion_after.grounded {
+                return receipt.transform_after.translation;
+            }
+        }
+        panic!("{hz} Hz: never landed");
+    };
+    for hz in [30.0f32, 60.0, 240.0] {
+        let back = fly(hz, late);
+        assert!(
+            back.y > 1.5,
+            "{hz} Hz: holding from {late} landed at {back:?}"
+        );
+        let landed = fly(hz, plan.departure);
+        assert!(
+            landed.y < -3.0 && landed.z < -1.0,
+            "{hz} Hz: holding from {} landed at {landed:?}",
+            plan.departure
         );
     }
 }
