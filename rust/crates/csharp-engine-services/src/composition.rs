@@ -415,9 +415,9 @@ impl EngineServiceSet {
         })
     }
 
-    /// The PNGs the product granted its UI, which the product host serves.
-    pub fn ui_images(&self) -> Arc<crate::UiImages> {
-        self.ui.images()
+    /// The images and fonts the product granted its UI, which the product host serves.
+    pub fn ui_files(&self) -> Arc<crate::UiFiles> {
+        self.ui.files()
     }
 
     pub fn api(&mut self) -> NativeEngineApi {

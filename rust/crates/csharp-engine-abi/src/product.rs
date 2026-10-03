@@ -1121,6 +1121,17 @@ pub type NativeDestroyUiImage = unsafe extern "C" fn(
     NativeUiImageHandle,
     *mut crate::NativeOperationErrorReceipt,
 ) -> i32;
+pub type NativeOpenUiFont = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeUiFontRequest,
+    *mut NativeUiFontHandle,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeDestroyUiFont = unsafe extern "C" fn(
+    *mut c_void,
+    NativeUiFontHandle,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
 pub type NativePublishUiProjection = unsafe extern "C" fn(
     *mut c_void,
     *const NativeUiProjection,
@@ -1335,6 +1346,8 @@ pub struct NativeUiApi {
     pub publish_projection: NativePublishUiProjection,
     pub open_image: NativeOpenUiImage,
     pub destroy_image: NativeDestroyUiImage,
+    pub open_font: NativeOpenUiFont,
+    pub destroy_font: NativeDestroyUiFont,
 }
 
 #[repr(C)]

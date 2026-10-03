@@ -16,18 +16,37 @@ use crate::{
 
 const PNG_SIGNATURE: &[u8] = b"\x89PNG\r\n\x1a\n";
 
-/// The PNGs the product granted its UI, by image ID. The product host serves
-/// them to the page until the product releases them.
-#[derive(Default)]
-pub struct UiImages(Mutex<BTreeMap<u64, Arc<[u8]>>>);
+/// One file the product granted its UI: its bytes and the content type the
+/// host serves them as.
+#[derive(Clone)]
+pub struct UiFile {
+    pub content_type: &'static str,
+    pub bytes: Arc<[u8]>,
+}
 
-impl UiImages {
-    pub fn png(&self, id: u64) -> Option<Arc<[u8]>> {
+/// The images and fonts the product granted its UI, by ID. The product host
+/// serves them to the page until the product releases them.
+#[derive(Default)]
+pub struct UiFiles(Mutex<BTreeMap<u64, UiFile>>);
+
+impl UiFiles {
+    pub fn get(&self, id: u64) -> Option<UiFile> {
         self.lock().get(&id).cloned()
     }
 
-    fn lock(&self) -> std::sync::MutexGuard<'_, BTreeMap<u64, Arc<[u8]>>> {
+    fn lock(&self) -> std::sync::MutexGuard<'_, BTreeMap<u64, UiFile>> {
         self.0.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+/// The CSS font content type of a TrueType, OpenType, WOFF or WOFF2 file.
+fn font_content_type(bytes: &[u8]) -> Option<&'static str> {
+    match bytes.get(..4)? {
+        b"\0\x01\0\0" | b"true" => Some("font/ttf"),
+        b"OTTO" => Some("font/otf"),
+        b"wOFF" => Some("font/woff"),
+        b"wOF2" => Some("font/woff2"),
+        _ => None,
     }
 }
 
@@ -38,8 +57,8 @@ pub(crate) struct RuntimeUiBridge {
     binding: Option<RuntimeUiRuntimeBinding>,
     streams: BTreeMap<u64, RuntimeUiStream>,
     next_stream: u64,
-    images: Arc<UiImages>,
-    next_image: u64,
+    files: Arc<UiFiles>,
+    next_file: u64,
     content: Option<*const RuntimeContentBridge>,
     operation_diagnostics: crate::operation_diagnostics::OperationDiagnostics,
 }
@@ -62,8 +81,8 @@ impl RuntimeUiBridge {
             binding: None,
             streams: BTreeMap::new(),
             next_stream: 1,
-            images: Arc::default(),
-            next_image: 1,
+            files: Arc::default(),
+            next_file: 1,
             content: None,
             operation_diagnostics: Default::default(),
         }
@@ -73,8 +92,46 @@ impl RuntimeUiBridge {
         self.content = Some(content as *const RuntimeContentBridge);
     }
 
-    pub(crate) fn images(&self) -> Arc<UiImages> {
-        Arc::clone(&self.images)
+    pub(crate) fn files(&self) -> Arc<UiFiles> {
+        Arc::clone(&self.files)
+    }
+
+    fn content(
+        &self,
+        reference: NativeContentReferenceHandle,
+        code: &'static str,
+        kind: &str,
+    ) -> Result<crate::content::RetainedContent, CsharpEngineServicesError> {
+        // SAFETY: the content bridge is boxed by the service set, which outlives this bridge.
+        self.content
+            .and_then(|content| unsafe { &*content }.retained_content(reference))
+            .ok_or_else(|| {
+                CsharpEngineServicesError::new(
+                    code,
+                    format!("C# UI {kind} named a content reference that is not open"),
+                )
+            })
+    }
+
+    fn grant(&mut self, file: UiFile) -> u64 {
+        let value = self.next_file;
+        self.next_file += 1;
+        self.files.lock().insert(value, file);
+        value
+    }
+
+    fn release(
+        &mut self,
+        value: u64,
+        code: &'static str,
+        kind: &str,
+    ) -> Result<(), CsharpEngineServicesError> {
+        self.files.lock().remove(&value).map(|_| ()).ok_or_else(|| {
+            CsharpEngineServicesError::new(
+                code,
+                format!("C# UI {kind} handle was unknown or already released"),
+            )
+        })
     }
 
     fn open_image(
@@ -90,16 +147,7 @@ impl RuntimeUiBridge {
         }
         // SAFETY: pointers are valid for this synchronous callback.
         let request = unsafe { *request };
-        // SAFETY: the content bridge is boxed by the service set, which outlives this bridge.
-        let content = self
-            .content
-            .and_then(|content| unsafe { &*content }.retained_content(request.content))
-            .ok_or_else(|| {
-                CsharpEngineServicesError::new(
-                    "CSHARP_UI_IMAGE_CONTENT",
-                    "C# UI image named a content reference that is not open",
-                )
-            })?;
+        let content = self.content(request.content, "CSHARP_UI_IMAGE_CONTENT", "image")?;
         // The host serves these bytes as image/png.
         if !content.bytes.starts_with(PNG_SIGNATURE) {
             return Err(CsharpEngineServicesError::new(
@@ -107,9 +155,10 @@ impl RuntimeUiBridge {
                 format!("C# UI image `{}` is not a PNG", content.path),
             ));
         }
-        let value = self.next_image;
-        self.next_image += 1;
-        self.images.lock().insert(value, content.bytes);
+        let value = self.grant(UiFile {
+            content_type: "image/png",
+            bytes: content.bytes,
+        });
         // SAFETY: result pointer was checked above and belongs to the immediate direct call.
         unsafe { *handle = NativeUiImageHandle { value } };
         Ok(())
@@ -119,16 +168,47 @@ impl RuntimeUiBridge {
         &mut self,
         handle: NativeUiImageHandle,
     ) -> Result<(), CsharpEngineServicesError> {
-        self.images
-            .lock()
-            .remove(&handle.value)
-            .map(|_| ())
-            .ok_or_else(|| {
-                CsharpEngineServicesError::new(
-                    "CSHARP_UI_IMAGE",
-                    "C# UI image handle was unknown or already released",
-                )
-            })
+        self.release(handle.value, "CSHARP_UI_IMAGE", "image")
+    }
+
+    fn open_font(
+        &mut self,
+        request: *const NativeUiFontRequest,
+        handle: *mut NativeUiFontHandle,
+    ) -> Result<(), CsharpEngineServicesError> {
+        if request.is_null() || handle.is_null() {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_UI_FONT_POINTER",
+                "C# UI font open had a null request or result pointer",
+            ));
+        }
+        // SAFETY: pointers are valid for this synchronous callback.
+        let request = unsafe { *request };
+        let content = self.content(request.content, "CSHARP_UI_FONT_CONTENT", "font")?;
+        // The host serves these bytes with the font's own content type.
+        let content_type = font_content_type(&content.bytes).ok_or_else(|| {
+            CsharpEngineServicesError::new(
+                "CSHARP_UI_FONT_FORMAT",
+                format!(
+                    "C# UI font `{}` is not a TrueType, OpenType, WOFF or WOFF2 font",
+                    content.path
+                ),
+            )
+        })?;
+        let value = self.grant(UiFile {
+            content_type,
+            bytes: content.bytes,
+        });
+        // SAFETY: result pointer was checked above and belongs to the immediate direct call.
+        unsafe { *handle = NativeUiFontHandle { value } };
+        Ok(())
+    }
+
+    fn destroy_font(
+        &mut self,
+        handle: NativeUiFontHandle,
+    ) -> Result<(), CsharpEngineServicesError> {
+        self.release(handle.value, "CSHARP_UI_FONT", "font")
     }
 
     pub(crate) fn begin_call(&mut self, binding: RuntimeUiRuntimeBinding) {
@@ -552,6 +632,51 @@ unsafe extern "C" fn destroy_ui_image(
     }
 }
 
+unsafe extern "C" fn open_ui_font(
+    context: *mut c_void,
+    request: *const NativeUiFontRequest,
+    handle: *mut NativeUiFontHandle,
+    operation_error: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    if !operation_error.is_null() {
+        unsafe { *operation_error = std::mem::zeroed() };
+    }
+    if context.is_null() {
+        return 0;
+    }
+    // SAFETY: `context` is stable for the complete product lifetime.
+    let bridge = unsafe { &mut *context.cast::<RuntimeUiBridge>() };
+    match bridge.open_font(request, handle) {
+        Ok(()) => ABI_OK,
+        Err(error) => {
+            bridge.operation_diagnostics.retain(&error, operation_error);
+            0
+        }
+    }
+}
+
+unsafe extern "C" fn destroy_ui_font(
+    context: *mut c_void,
+    handle: NativeUiFontHandle,
+    operation_error: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    if !operation_error.is_null() {
+        unsafe { *operation_error = std::mem::zeroed() };
+    }
+    if context.is_null() {
+        return 0;
+    }
+    // SAFETY: `context` is stable for the complete product lifetime.
+    let bridge = unsafe { &mut *context.cast::<RuntimeUiBridge>() };
+    match bridge.destroy_font(handle) {
+        Ok(()) => ABI_OK,
+        Err(error) => {
+            bridge.operation_diagnostics.retain(&error, operation_error);
+            0
+        }
+    }
+}
+
 pub(crate) fn api(bridge: &mut RuntimeUiBridge) -> NativeUiApi {
     NativeUiApi {
         context: (bridge as *mut RuntimeUiBridge).cast(),
@@ -560,6 +685,8 @@ pub(crate) fn api(bridge: &mut RuntimeUiBridge) -> NativeUiApi {
         publish_projection: publish_ui_projection,
         open_image: open_ui_image,
         destroy_image: destroy_ui_image,
+        open_font: open_ui_font,
+        destroy_font: destroy_ui_font,
     }
 }
 
@@ -568,10 +695,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn ui_images_serve_granted_pngs_until_released() {
+    fn ui_files_serve_granted_images_and_fonts_until_released() {
         let png: Arc<[u8]> = Arc::from(&b"\x89PNG\r\n\x1a\nportrait"[..]);
+        let woff2: Arc<[u8]> = Arc::from(&b"wOF2body"[..]);
         let mut content = RuntimeContentBridge::new(BTreeMap::from([
             ("portrait.png".to_owned(), Arc::clone(&png)),
+            ("skin.woff2".to_owned(), Arc::clone(&woff2)),
+            ("skin.ttf".to_owned(), Arc::from(&b"\0\x01\0\0body"[..])),
             ("notes.txt".to_owned(), Arc::from(&b"text"[..])),
         ]));
         let content_api = crate::content::api(&mut content);
@@ -596,27 +726,58 @@ mod tests {
         };
         let mut bridge = RuntimeUiBridge::new();
         bridge.bind_content(&content);
-        let images = bridge.images();
-        let mut grant = |content| {
-            let mut handle = NativeUiImageHandle::default();
+        let files = bridge.files();
+        let served = |id| files.get(id).map(|file| (file.content_type, file.bytes));
+
+        let mut handle = NativeUiImageHandle::default();
+        let image = |bridge: &mut RuntimeUiBridge, content, handle: &mut NativeUiImageHandle| {
             bridge
-                .open_image(&NativeUiImageRequest { content }, &mut handle)
-                .map(|()| handle)
+                .open_image(&NativeUiImageRequest { content }, handle)
                 .map_err(|error| error.code().to_owned())
         };
-        let portrait = grant(open("portrait.png")).unwrap();
-        assert_eq!(images.png(portrait.value).as_deref(), Some(&*png));
+        image(&mut bridge, open("portrait.png"), &mut handle).unwrap();
+        let portrait = handle;
         assert_eq!(
-            grant(open("notes.txt")).unwrap_err(),
+            served(portrait.value),
+            Some(("image/png", Arc::clone(&png)))
+        );
+        assert_eq!(
+            image(&mut bridge, open("notes.txt"), &mut handle).unwrap_err(),
             "CSHARP_UI_IMAGE_NOT_PNG"
         );
         assert_eq!(
-            grant(NativeContentReferenceHandle { value: 999 }).unwrap_err(),
+            image(
+                &mut bridge,
+                NativeContentReferenceHandle { value: 999 },
+                &mut handle
+            )
+            .unwrap_err(),
             "CSHARP_UI_IMAGE_CONTENT"
         );
+
+        let font = |bridge: &mut RuntimeUiBridge, content| {
+            let mut handle = NativeUiFontHandle::default();
+            bridge
+                .open_font(&NativeUiFontRequest { content }, &mut handle)
+                .map(|()| handle)
+                .map_err(|error| error.code().to_owned())
+        };
+        let skin = font(&mut bridge, open("skin.woff2")).unwrap();
+        assert_eq!(served(skin.value), Some(("font/woff2", Arc::clone(&woff2))));
+        let ttf = font(&mut bridge, open("skin.ttf")).unwrap();
+        assert_eq!(served(ttf.value).unwrap().0, "font/ttf");
+        assert_eq!(
+            font(&mut bridge, open("portrait.png")).unwrap_err(),
+            "CSHARP_UI_FONT_FORMAT"
+        );
+
         bridge.destroy_image(portrait).unwrap();
-        assert!(images.png(portrait.value).is_none());
+        bridge.destroy_font(skin).unwrap();
+        assert!(served(portrait.value).is_none());
+        assert!(served(skin.value).is_none());
         assert!(bridge.destroy_image(portrait).is_err());
+        assert!(bridge.destroy_font(skin).is_err());
+        assert!(served(ttf.value).is_some());
     }
     use runtime_lifecycle::{RuntimeControlRevision, RuntimeGeneration, RuntimeInstanceId};
 

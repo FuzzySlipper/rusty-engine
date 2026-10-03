@@ -20,6 +20,23 @@ pub struct NativeUiImageRequest {
     pub content: crate::NativeContentReferenceHandle,
 }
 
+/// A font the product UI may name in a CSS `@font-face` `src`, served by the
+/// host at `/__rusty/product/runtime/ui-fonts/<value>` until it is destroyed.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct NativeUiFontHandle {
+    pub value: u64,
+}
+
+/// Grants the product UI the TrueType, OpenType, WOFF or WOFF2 font a content
+/// reference names. The font keeps its bytes, so the reference may be
+/// released afterwards.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeUiFontRequest {
+    pub content: crate::NativeContentReferenceHandle,
+}
+
 /// One borrowed UTF-8 identity. It is valid only for the immediate direct
 /// service call that accepts it.
 #[repr(C)]

@@ -16,6 +16,7 @@ internal static class EngineTestHostChecks
             Content = new Dictionary<string, ReadOnlyMemory<byte>>
             {
                 ["textures/atlas.png"] = png,
+                ["fonts/skin.woff2"] = "wOF2body"u8.ToArray(),
                 ["shaders/tint.wgsl"] = System.Text.Encoding.UTF8.GetBytes(TintShader),
                 ["shaders/broken.wgsl"] = System.Text.Encoding.UTF8.GetBytes(TintShader.Replace("surface.base", "missing")),
             },
@@ -116,6 +117,16 @@ internal static class EngineTestHostChecks
             }, new uint[] { 1 }, 0, "state"u8.ToArray());
             engine.Ui.PublishProjection(new(stream, 1, value));
             ExpectRefusal(() => engine.Ui.PublishProjection(new(stream, 1, value)), "CSHARP_UI_SEQUENCE");
+        });
+
+        host.Call(engine =>
+        {
+            // The UI gets a font file for @font-face; a picture is not a font.
+            using ContentReference skin = engine.Content.OpenReference(new("fonts/skin.woff2"));
+            using UiFont font = engine.Ui.OpenFont(new(skin));
+            Require(font.Url().StartsWith("/__rusty/product/runtime/ui-fonts/", StringComparison.Ordinal), "A UI font had no font URL.");
+            using ContentReference atlas = engine.Content.OpenReference(new("textures/atlas.png"));
+            ExpectRefusal(() => engine.Ui.OpenFont(new(atlas)), "CSHARP_UI_FONT_FORMAT");
         });
     }
 

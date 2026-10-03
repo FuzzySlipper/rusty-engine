@@ -403,7 +403,7 @@ do not match its staged inventory fails to open; rebuild/restage it. Bundles
 are directories in a staged Product and inventory entries in a [release
 container](#release-container); both open the same way. Closing a collection does not
 free independent GPU resources or force managed garbage collection. Bundle
-discovery does not produce URLs for DOM images.
+discovery does not produce URLs for DOM images or fonts.
 
 To show a bundle's or container's PNG in DOM UI (a portrait, an item icon),
 grant it to the UI: `UiImage image = engine.Ui.OpenImage(new
@@ -413,6 +413,12 @@ bundle may be released. `image.Url()` is a same-origin URL the product puts in
 its projection for an `<img src>`; the host serves the PNG there until the
 product disposes the image, and answers 404 afterwards. The UI never receives
 image bytes through a projection.
+
+A font for DOM UI (a skin's TTF, OTF, WOFF or WOFF2) is granted the same way:
+`UiFont font = engine.Ui.OpenFont(new UiFontRequest(reference))` refuses
+anything else with `CSHARP_UI_FONT_FORMAT`, and `font.Url()` is a same-origin
+URL for a CSS `@font-face` `src`, served with the font's content type until
+the font is disposed.
 
 ### Binary static meshes
 

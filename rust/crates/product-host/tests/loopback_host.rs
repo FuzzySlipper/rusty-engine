@@ -1741,11 +1741,12 @@ fn input_http_framing_remains_host_owned() {
 }
 
 #[test]
-fn granted_ui_images_are_served_as_png_until_released() {
-    let granted = Arc::new(std::sync::Mutex::new(Some(Arc::<[u8]>::from(
-        &b"png body"[..],
-    ))));
-    let images = Arc::clone(&granted);
+fn granted_ui_files_are_served_with_their_content_type_until_released() {
+    let granted = Arc::new(std::sync::Mutex::new(vec![
+        (7, "image/png", Arc::<[u8]>::from(&b"png body"[..])),
+        (9, "font/woff2", Arc::<[u8]>::from(&b"font body"[..])),
+    ]));
+    let files = Arc::clone(&granted);
     let bundle = ProductHostBundle::new(vec![ProductHostBundleEntry::new(
         "index.html",
         "text/html; charset=utf-8",
@@ -1755,8 +1756,13 @@ fn granted_ui_images_are_served_as_png_until_released() {
     .unwrap();
     let host = ProductHost::start(
         FixtureRuntime::default(),
-        ProductHostConfig::new(0, bundle).with_ui_images(Arc::new(move |id| {
-            (id == 7).then(|| images.lock().unwrap().clone()).flatten()
+        ProductHostConfig::new(0, bundle).with_ui_files(Arc::new(move |id| {
+            files
+                .lock()
+                .unwrap()
+                .iter()
+                .find(|(granted, _, _)| *granted == id)
+                .map(|(_, content_type, bytes)| (*content_type, Arc::clone(bytes)))
         })),
     )
     .unwrap();
@@ -1767,16 +1773,22 @@ fn granted_ui_images_are_served_as_png_until_released() {
             &format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"),
         )
     };
-    let served = get("/__rusty/product/runtime/ui-images/7");
-    assert!(served.starts_with("HTTP/1.1 200 OK\r\n"), "{served}");
-    assert!(served.contains("Content-Type: image/png\r\n"));
-    assert!(served.ends_with("body"));
+    let image = get("/__rusty/product/runtime/ui-images/7");
+    assert!(image.starts_with("HTTP/1.1 200 OK\r\n"), "{image}");
+    assert!(image.contains("Content-Type: image/png\r\n"));
+    assert!(image.ends_with("png body"));
+    let font = get("/__rusty/product/runtime/ui-fonts/9");
+    assert!(font.starts_with("HTTP/1.1 200 OK\r\n"), "{font}");
+    assert!(font.contains("Content-Type: font/woff2\r\n"));
+    assert!(font.ends_with("font body"));
     for path in [
         "/__rusty/product/runtime/ui-images/8",
         "/__rusty/product/runtime/ui-images/x",
+        "/__rusty/product/runtime/ui-fonts/8",
     ] {
         assert!(get(path).starts_with("HTTP/1.1 404"), "{path}");
     }
-    granted.lock().unwrap().take();
+    granted.lock().unwrap().clear();
     assert!(get("/__rusty/product/runtime/ui-images/7").starts_with("HTTP/1.1 404"));
+    assert!(get("/__rusty/product/runtime/ui-fonts/9").starts_with("HTTP/1.1 404"));
 }

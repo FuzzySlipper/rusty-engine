@@ -58,13 +58,15 @@ pub struct ProductHostConfig {
     listener: Option<Arc<TcpListener>>,
     frames: Option<Arc<ProductHostFrameStream>>,
     capture: Option<crate::ProductHostFrameCapture>,
-    ui_images: Option<ProductHostUiImages>,
+    ui_files: Option<ProductHostUiFiles>,
 }
 
-/// The PNG the runtime granted its product UI under an image ID, if any.
-pub type ProductHostUiImages = Arc<dyn Fn(u64) -> Option<Arc<[u8]>> + Send + Sync>;
+/// The content type and bytes of the image or font the runtime granted its
+/// product UI under an ID, if any.
+pub type ProductHostUiFiles = Arc<dyn Fn(u64) -> Option<(&'static str, Arc<[u8]>)> + Send + Sync>;
 
 const UI_IMAGES_PATH: &str = "/__rusty/product/runtime/ui-images/";
+const UI_FONTS_PATH: &str = "/__rusty/product/runtime/ui-fonts/";
 
 impl ProductHostConfig {
     pub fn new(port: u16, bundle: ProductHostBundle) -> Self {
@@ -79,14 +81,14 @@ impl ProductHostConfig {
             listener: None,
             frames: None,
             capture: None,
-            ui_images: None,
+            ui_files: None,
         }
     }
 
-    /// Serve the images the runtime granted its product UI at
-    /// `/__rusty/product/runtime/ui-images/<id>`.
-    pub fn with_ui_images(mut self, images: ProductHostUiImages) -> Self {
-        self.ui_images = Some(images);
+    /// Serve the images and fonts the runtime granted its product UI at
+    /// `/__rusty/product/runtime/ui-images/<id>` and `.../ui-fonts/<id>`.
+    pub fn with_ui_files(mut self, files: ProductHostUiFiles) -> Self {
+        self.ui_files = Some(files);
         self
     }
 
@@ -191,7 +193,7 @@ impl ProductHost {
             published_readout: Mutex::new(None),
             frames: config.frames,
             capture: config.capture,
-            ui_images: config.ui_images,
+            ui_files: config.ui_files,
         });
         let handler_threads = Arc::new(Mutex::new(Vec::new()));
         let listener_state = Arc::clone(&state);
@@ -382,7 +384,7 @@ struct HostState<R> {
     published_readout: Mutex<Option<crate::ProductHostRuntimeReadout>>,
     frames: Option<Arc<ProductHostFrameStream>>,
     capture: Option<crate::ProductHostFrameCapture>,
-    ui_images: Option<ProductHostUiImages>,
+    ui_files: Option<ProductHostUiFiles>,
 }
 
 /// Small process-local observation state. It intentionally has no runtime
@@ -1259,18 +1261,22 @@ fn dispatch_request<R: ProductHostRuntime>(
             }
             return invoke_debug_catalog(state);
         }
-        if let Some(id) = request.path.strip_prefix(UI_IMAGES_PATH) {
-            let png = state
-                .ui_images
+        if let Some(id) = request
+            .path
+            .strip_prefix(UI_IMAGES_PATH)
+            .or_else(|| request.path.strip_prefix(UI_FONTS_PATH))
+        {
+            let file = state
+                .ui_files
                 .as_ref()
                 .zip(id.parse().ok())
-                .and_then(|(images, id)| images(id));
-            return match png {
-                Some(png) => HttpResponse::bytes(200, "image/png", png),
+                .and_then(|(files, id)| files(id));
+            return match file {
+                Some((content_type, bytes)) => HttpResponse::bytes(200, content_type, bytes),
                 None => HttpResponse::error(
                     404,
-                    "PRODUCT_HOST_UI_IMAGE_NOT_FOUND",
-                    "no UI image is granted under this ID",
+                    "PRODUCT_HOST_UI_FILE_NOT_FOUND",
+                    "no UI image or font is granted under this ID",
                 ),
             };
         }
@@ -2650,6 +2656,7 @@ mod tests {
         "outputs/fresh",
         "timeline-completion",
         "ui-images/",
+        "ui-fonts/",
     ];
     /// Answered only with `--live-debug`.
     const LIVE_DEBUG_ROUTES: &[&str] = &["debug/catalog", "debug/execute", "diagnostics/read"];
@@ -3315,7 +3322,7 @@ mod tests {
             published_readout: Mutex::new(None),
             frames: None,
             capture: None,
-            ui_images: None,
+            ui_files: None,
         };
         // Held time: nothing ticks, so the key waits in the mailbox.
         let queued = invoke_input(&state, br#"{"batch":[{"runtime":{"instanceId":"41","generation":"1","controlRevision":"1"},"sequence":"14","context":"gameplay.default","fact":{"kind":"key","code":"key-w","edge":"pressed"}}]}"#);
@@ -3361,7 +3368,7 @@ mod tests {
             published_readout: Mutex::new(None),
             frames: None,
             capture: None,
-            ui_images: None,
+            ui_files: None,
         });
         let (held, held_ready) = std::sync::mpsc::channel();
         let (release, release_owner) = std::sync::mpsc::channel();

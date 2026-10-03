@@ -2483,10 +2483,10 @@ impl CsharpProductRuntime {
         }
     }
 
-    /// The PNGs the product granted its UI, which the host serves to the page.
-    pub fn ui_images(&self) -> product_host::ProductHostUiImages {
-        let images = self.services.ui_images();
-        Arc::new(move |id| images.png(id))
+    /// The images and fonts the product granted its UI, which the host serves to the page.
+    pub fn ui_files(&self) -> product_host::ProductHostUiFiles {
+        let files = self.services.ui_files();
+        Arc::new(move |id| files.get(id).map(|file| (file.content_type, file.bytes)))
     }
 
     /// The host serves these frames when this process streams the world.
