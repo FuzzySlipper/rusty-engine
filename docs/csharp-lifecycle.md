@@ -162,6 +162,47 @@ With `UpdateCameraSample`, sample at world time
 holds, each new look sample shares that time, replaces the history and
 presents at once, and interpolation resumes when world time does.
 
+#### Adopting gameplay time
+
+A movement-driven-time product, such as a first-person game where the world
+moves only as the player does, needs one update method. This is the shape of
+`fixtures/csharp-gameplay-time`:
+
+```csharp
+public Product(ProductCreateContext context)
+{
+    engine = context.Engine;
+    engine.GameplayTime.Hold(); // opt in: every observation now updates
+}
+
+public ProductUpdateResult Update(ProductUpdate update)
+{
+    ProductUpdateFacts facts = update.Facts;
+    // Controls and look every update, in host time.
+    FpsInputFrame frame = input.Consume(update.Input, (float)facts.HostElapsedSeconds);
+    look = input.IntegrateLook(look, frame).After;
+    // The world only per admitted step (zero while held).
+    for (uint i = 0; i < facts.AdmittedStepCount; i++)
+        world.Step(facts.FixedDeltaSeconds, frame.Movement);
+    scheduler.Advance(update);
+    // Product policy picks the next rate: an attack buys its duration once,
+    // movement buys time in proportion, standing still holds.
+    if (frame.AttackPressed && world.AttackReady)
+        engine.GameplayTime.Advance(world.Attack());
+    else if (facts.GameplayAdvanceRemainingSteps == 0)
+        engine.GameplayTime.SetRate(Math.Min(frame.Movement.Length(), 1));
+    PublishWorldAndCamera(); // every update, so look shows while held
+    return ProductUpdateResult.None;
+}
+```
+
+The product owns which controls cost time, the rate curve and its idle floor
+(exactly zero, or a crawl), action durations and eligibility, cooldowns in
+world steps, camera limits, and any buffering of an action. The Engine owns
+admission, the clock, input delivery, world presentation time and their
+lifecycle: pause, inspection and restart compose with the product's choice as
+listed above, and nothing is left to clean up beyond the product's own state.
+
 ### Particle bursts
 
 `Presentation.EmitParticles` does not need signal registration, an appearance,
