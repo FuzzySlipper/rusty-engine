@@ -255,8 +255,40 @@ declare module "@rusty-engine/product-ui" {
     export interface RustyApplicationUiIntentsPort {
         readonly claim: (intent: string, value: RustyApplicationUiIntentValue) => void;
     }
+    /** The Engine runtime's lifecycle state, as its readout reports it. */
+    export type RustyApplicationRuntimeState = 'created' | 'running' | 'paused' | 'faulted' | 'shutdown';
+    /** The Engine's answer to one pause or resume request. */
+    export interface RustyApplicationUiLifecycleResult {
+        readonly accepted: boolean;
+        /** The runtime state after the request, as last reported by the Engine. */
+        readonly state: RustyApplicationRuntimeState | null;
+        /** The Engine's rejection code, such as a request for a replaced runtime or the wrong state. */
+        readonly code?: string;
+        readonly diagnostic?: string;
+    }
+    /**
+     * Pauses and resumes the Engine runtime. Pause stops simulation admission and
+     * clears held and pending gameplay input; resume continues in the same
+     * runtime without replaying paused wall time or input. State follows the
+     * Engine, so a pause from elsewhere (a tool or another page) is observed too.
+     */
+    export interface RustyApplicationUiLifecyclePort {
+        /** The last reported runtime state, or null before the first report. */
+        readonly state: () => RustyApplicationRuntimeState | null;
+        /** Subscribe to state changes; returns an unsubscribe function. */
+        readonly subscribe: (listener: (state: RustyApplicationRuntimeState | null) => void) => () => void;
+        /**
+         * Request a pause of the current runtime. Rejects when the host has failed
+         * or is disposed, or the request's outcome is unknown.
+         */
+        readonly pause: () => Promise<RustyApplicationUiLifecycleResult>;
+        /** Request a resume of the current runtime; rejects as `pause` does. */
+        readonly resume: () => Promise<RustyApplicationUiLifecycleResult>;
+    }
     export interface RustyApplicationUiContext {
         readonly ui: RustyApplicationUiPort;
+        /** Engine runtime pause and resume, present when a runtime host mounts the UI. */
+        readonly lifecycle?: RustyApplicationUiLifecyclePort;
         /** Read-only current Product UI projection and subscription view. */
         readonly projection?: RustyApplicationUiProjectionView;
         /** Claim-only adapter for the shared ordered Engine input lane. */

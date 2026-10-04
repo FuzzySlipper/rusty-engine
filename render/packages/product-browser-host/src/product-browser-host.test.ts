@@ -11,6 +11,7 @@ import {
   type ProductBrowserRuntimeTerminalFailureListener,
 } from './product-browser-host.js';
 import { ProductBrowserLocalTransportError } from './local-transport.js';
+import type { RustyApplicationUiLifecyclePort } from '@rusty-engine/application-host';
 
 const ACCEPTED_FAULT = { code: 'PRODUCT_HOST_ACCEPTED', disposition: 'accepted' } as const;
 const RUNNING = { instanceId: '7', generation: '1', controlRevision: '2' } as const;
@@ -178,6 +179,81 @@ test('a rebinding output rebinds input and the host stays ready', async () => {
     });
     assert.equal(host.readout().state, 'ready');
     await host.dispose();
+  });
+});
+
+test('mounted UI pauses and resumes the runtime it is bound to and follows its reported state', async () => {
+  await withFakeRoot(async (root) => {
+    const PAUSED = { ...RUNNING, controlRevision: '3' } as const;
+    const readout = (runtime: typeof RUNNING | typeof PAUSED, state: 'running' | 'paused') => ({
+      artifact: 'rusty.product.runtime-readout' as const,
+      runtime, mode: 'realtime' as const, state,
+      admittedSimulationSteps: '1', admittedPresentations: '1', droppedRealtimeSteps: '0',
+      clockRegressions: '0', scaledRemainder: 0, lastObservedTimeNs: null, fault: null,
+    });
+    const requests: unknown[] = [];
+    let emit: ProductBrowserRuntimeOutputBatchListener | null = null;
+    let lifecycle: RustyApplicationUiLifecyclePort | undefined;
+    const host = await mountProductBrowserHostWithApplication({
+      root,
+      transport: {
+        ...adapter,
+        lifecycle: async (operation) => {
+          requests.push(operation);
+          if (operation.kind === 'pause') {
+            return {
+              accepted: true, ...ACCEPTED_FAULT, operation: 'pause' as const,
+              binding: PAUSED, nextInputSequence: '9', readout: readout(PAUSED, 'paused'),
+            };
+          }
+          // A resume naming a binding that no longer holds the runtime.
+          return {
+            accepted: false, code: 'CSHARP_CONTROL_BINDING', disposition: 'rejected-recoverable' as const,
+            operation: operation.kind, diagnostic: 'lifecycle control does not name the current runtime binding',
+          };
+        },
+        subscribeOutputBatches: (listener) => {
+          emit = listener;
+          return () => { emit = null; };
+        },
+      },
+      lifecycleMode: 'realtime',
+      realtimeAdvanceOwner: 'rust-host',
+      mountUi: async () => undefined,
+      autoStart: false,
+    }, async (options) => {
+      lifecycle = options.lifecycle;
+      return fakeApplication({ bindRuntime: () => undefined }) as never;
+    });
+    assert.ok(lifecycle !== undefined);
+    const publish = emit as unknown as ProductBrowserRuntimeOutputBatchListener;
+    const observed: unknown[] = [];
+    lifecycle.subscribe((state) => { observed.push(state); });
+    assert.equal(lifecycle.state(), null);
+    publish([
+      { kind: 'binding', runtime: RUNNING, nextInputSequence: '4' },
+      { kind: 'runtime-readout', readout: readout(RUNNING, 'running') },
+    ], { epoch: 1, baseline: false, recovery: 'none' });
+    assert.equal(lifecycle.state(), 'running');
+
+    assert.deepEqual(await lifecycle.pause(), { accepted: true, state: 'paused' });
+    assert.deepEqual(requests[0], { kind: 'pause', runtime: RUNNING });
+
+    const rejected = await lifecycle.resume();
+    assert.equal(rejected.accepted, false);
+    assert.equal(rejected.state, 'paused');
+    assert.equal(rejected.code, 'CSHARP_CONTROL_BINDING');
+    assert.deepEqual(requests[1], { kind: 'resume', runtime: PAUSED });
+
+    // A pause or resume from elsewhere reaches the UI through the output stream.
+    publish([{ kind: 'runtime-readout', readout: readout(PAUSED, 'running') }], {
+      epoch: 1, baseline: false, recovery: 'none',
+    });
+    assert.deepEqual(observed, ['running', 'paused', 'running']);
+    assert.equal(host.readout().state, 'ready');
+
+    await host.dispose();
+    await assert.rejects(lifecycle.pause(), { code: 'disposed' });
   });
 });
 

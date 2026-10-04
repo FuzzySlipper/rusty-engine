@@ -16,7 +16,8 @@ export function mountProductUi(root, context) {
   close.style.margin = '12px 0 0';
   contents.style.margin = '8px 0 0';
   panel.append(title, contents, close);
-  root.append(label, reticle, panel);
+  const lifecycle = createLifecycleControls(context);
+  root.append(label, reticle, panel, lifecycle.element);
 
   const unsubscribe = context.projection?.subscribe((projection) => {
     if (projection?.contract !== 'controller-interaction.panel.v1' || !isContainerPanel(projection.value)) return;
@@ -25,7 +26,52 @@ export function mountProductUi(root, context) {
     contents.textContent = `Contents: ${projection.value.contents}`;
   }) ?? (() => {});
 
-  return { dispose() { unsubscribe(); panel.remove(); label.remove(); reticle.remove(); } };
+  return { dispose() { unsubscribe(); lifecycle.dispose(); panel.remove(); label.remove(); reticle.remove(); } };
+}
+
+// Pause and Resume ask the Engine; the label and button show the state the
+// Engine reports, not what was last clicked.
+function createLifecycleControls(context) {
+  const element = document.createElement('div');
+  element.style.cssText = 'position:absolute;left:8px;bottom:8px;display:flex;gap:8px;align-items:center;color:white;font:14px system-ui,sans-serif';
+  const toggle = document.createElement('button');
+  toggle.dataset.fixtureLifecycle = 'toggle';
+  const status = document.createElement('span');
+  status.dataset.fixtureLifecycle = 'state';
+  status.setAttribute('aria-live', 'polite');
+  element.append(toggle, status);
+  const lifecycle = context.lifecycle;
+  if (lifecycle === undefined) {
+    toggle.disabled = true;
+    toggle.textContent = 'Pause';
+    status.textContent = 'No runtime lifecycle';
+    return { element, dispose() { element.remove(); } };
+  }
+  const show = (state) => {
+    toggle.textContent = state === 'paused' ? 'Resume' : 'Pause';
+    toggle.disabled = state !== 'running' && state !== 'paused';
+    status.textContent = `Engine: ${state ?? 'unknown'}`;
+  };
+  const unsubscribe = lifecycle.subscribe(show);
+  show(lifecycle.state());
+  toggle.addEventListener('click', async () => {
+    const resuming = lifecycle.state() === 'paused';
+    if (!resuming) context.ui.setInteractionMode('interface');
+    toggle.disabled = true;
+    try {
+      const result = await (resuming ? lifecycle.resume() : lifecycle.pause());
+      if (!result.accepted) status.textContent = `Engine: ${result.state ?? 'unknown'} (${result.code})`;
+      if (resuming && result.accepted) {
+        context.ui.setInteractionMode('gameplay');
+        context.ui.focusGameplay();
+      }
+    } catch (error) {
+      status.textContent = `Engine unavailable: ${error.message}`;
+    } finally {
+      toggle.disabled = !['running', 'paused'].includes(lifecycle.state());
+    }
+  });
+  return { element, dispose() { unsubscribe(); element.remove(); } };
 }
 
 function isContainerPanel(value) {

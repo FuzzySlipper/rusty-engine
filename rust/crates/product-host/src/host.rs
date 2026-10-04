@@ -2072,6 +2072,25 @@ fn record_update_attribution<R: ProductHostRuntime>(
     }
 }
 
+/// A route result whose readout, when it changes what a browser shows, is
+/// published to every attached page: a lifecycle change made by one client
+/// must reach the others.
+trait RouteResultReadout {
+    fn route_readout(&self) -> Option<&crate::ProductHostRuntimeReadout> {
+        None
+    }
+}
+
+impl RouteResultReadout for ProductHostOperationResult {
+    fn route_readout(&self) -> Option<&crate::ProductHostRuntimeReadout> {
+        self.readout()
+    }
+}
+
+impl RouteResultReadout for crate::ProductHostInputResult {}
+
+impl RouteResultReadout for crate::ProductHostTimelineCompletionResult {}
+
 fn call_runtime<R, T, F, E>(
     state: &HostState<R>,
     operation: ProductHostOperationKind,
@@ -2080,7 +2099,7 @@ fn call_runtime<R, T, F, E>(
 ) -> HttpResponse
 where
     R: ProductHostRuntime,
-    T: Serialize,
+    T: Serialize + RouteResultReadout,
     F: FnOnce(&mut R) -> Result<crate::ProductHostRuntimeReceipt<T>, ProductHostRuntimeError>,
     E: FnOnce(ProductHostRuntimeError) -> Result<T, ProductHostError>,
 {
@@ -2134,7 +2153,7 @@ where
                 return Ok((HttpResponse::error(500, error.code(), error.detail()), runtime.take_update_attribution()));
             }
         };
-        let (_result, outputs) = match receipt.into_wire_parts() {
+        let (result, mut outputs) = match receipt.into_wire_parts() {
             Ok(parts) => parts,
             Err(error) => {
                 publish_host_diagnostic(
@@ -2149,6 +2168,9 @@ where
                     .with_settled_resync_required(), runtime.take_update_attribution()));
             }
         };
+        if let Some(readout) = changed_readout(state, result.route_readout()) {
+            outputs.push(readout);
+        }
         let output_through = match push_host_outputs(state, outputs) {
             Ok(output_through) => output_through,
             Err(error) => {
@@ -3333,7 +3355,22 @@ mod tests {
             crate::ProductHostRuntimeReceipt<crate::ProductHostOperationResult>,
             crate::ProductHostRuntimeError,
         > {
-            Err(blocking_runtime_error())
+            let paused = crate::ProductHostRuntimeReadout::new(
+                binding(),
+                crate::ProductHostRuntimeMode::Realtime,
+                crate::ProductHostRuntimeState::Paused,
+            );
+            crate::ProductHostRuntimeReceipt::new(
+                crate::ProductHostOperationResult::accepted(
+                    ProductHostOperationKind::Pause,
+                    binding(),
+                    CanonicalU64::new(1),
+                    paused,
+                )
+                .unwrap(),
+                Vec::new(),
+            )
+            .map_err(|error| crate::ProductHostRuntimeError::new(error.code(), error.detail()))
         }
 
         fn input(
@@ -3454,6 +3491,56 @@ mod tests {
             ["input 1", "engine.time.advance 500"],
             "the steps the command runs must see the key pressed before it"
         );
+    }
+
+    #[test]
+    fn a_lifecycle_request_publishes_the_changed_readout_to_every_page() {
+        let state = HostState {
+            bundle: Arc::new(RwLock::new(
+                ProductHostBundle::new(vec![crate::ProductHostBundleEntry::new(
+                    "index.html",
+                    "text/html; charset=utf-8",
+                    Vec::new(),
+                )
+                .unwrap()])
+                .unwrap(),
+            )),
+            runtime: Arc::new(ProductHostOperationOwner::new(HeldRealtimeRuntime(
+                Arc::new(Mutex::new(Vec::new())),
+            ))),
+            input_mailbox: Arc::new(HostInputMailbox::default()),
+            telemetry: Arc::new(Mutex::new(HostTelemetry::default())),
+            realtime_scheduler_enabled: true,
+            outputs: Arc::new(Mutex::new(OutputBus::default())),
+            output_wake: Arc::new(OutputWake::default()),
+            shutdown: Arc::new(AtomicBool::new(false)),
+            scheduler_wake: Arc::new(SchedulerWake::default()),
+            bind_host: Ipv4Addr::LOCALHOST,
+            expected_port: 0,
+            live_debug_enabled: false,
+            diagnostics: ProductHostLog::new(Default::default()).unwrap(),
+            connections: AtomicUsize::new(0),
+            subscribers: AtomicUsize::new(0),
+            published_readout: Mutex::new(None),
+            frames: None,
+            audio: None,
+            audio_listeners: AtomicUsize::new(0),
+            presentation: None,
+            capture: None,
+            ui_files: None,
+        };
+        let response = invoke_lifecycle(
+            &state,
+            br#"{"runtime":{"instanceId":"7","generation":"1","controlRevision":"2"}}"#,
+            crate::ProductHostLifecycleOperation::Pause,
+        );
+        assert_eq!(response.status, 200);
+        assert!(
+            response.output_through.is_some(),
+            "the readout is a published output"
+        );
+        let published = state.published_readout.lock().unwrap().clone();
+        assert_eq!(serde_json::to_value(published).unwrap()["state"], "paused");
     }
 
     #[test]

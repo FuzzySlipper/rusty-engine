@@ -563,7 +563,10 @@ export function createProductBrowserLocalHttpAdapter(
   };
 
   const lifecycle = (operation: ProductBrowserLifecycleOperation): Promise<ProductHostOperationResult> =>
-    post<ProductHostLifecycleRequest, ProductHostOperationResult>(ROUTES.lifecycle[operation.kind], {});
+    post<ProductHostLifecycleRequest, ProductHostOperationResult>(
+      ROUTES.lifecycle[operation.kind],
+      'runtime' in operation ? { runtime: operation.runtime } : {},
+    );
 
   const replaceControl = (
     runtime: RustyApplicationRuntimeIdentity,

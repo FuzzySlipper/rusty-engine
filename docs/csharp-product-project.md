@@ -649,6 +649,21 @@ for a downstream repository's launch topology.
 under `name` to a UI element, and `context.ui.scale()`/`setScale()` read and
 set the UI scale ([views that follow the product UI](csharp-lifecycle.md#views-that-follow-the-product-ui)).
 
+### Pause and resume from product UI
+
+`context.lifecycle` pauses and resumes the Engine runtime. `pause()` and
+`resume()` resolve to the Engine's answer, `{ accepted, state, code?,
+diagnostic? }`. A request for a runtime that has since been restarted or
+replaced is not accepted. They reject when the host has failed or is disposed.
+`state()` and `subscribe(listener)` follow the state the Engine reports
+(`'running'`, `'paused'` and so on), including a pause made elsewhere, so a
+pause menu shows what the Engine did rather than what was clicked. Pause stops
+simulation and the product's `Update` and runs `Pause`. Held and pending
+gameplay input is cleared and is not replayed on resume, and paused time does
+not catch up. To return to play after `resume()`, call
+`context.ui.setInteractionMode('gameplay')` and `context.ui.focusGameplay()`.
+`fixtures/csharp-controller-interaction` has a minimal Pause/Resume control.
+
 ### Controller input in product menus
 
 With selected-controller input enabled, `mountUi` receives an optional

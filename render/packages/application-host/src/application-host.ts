@@ -35,6 +35,7 @@ import type {
   RustyApplicationUiIntentsPort,
   RustyApplicationUiContext,
   RustyApplicationUiInputPort,
+  RustyApplicationUiLifecyclePort,
   RustyApplicationUiOwner,
   RustyApplicationUiMount,
   RustyApplicationUiViewportPort,
@@ -46,6 +47,9 @@ export type {
   RustyApplicationUiIntentsPort,
   RustyApplicationUiContext,
   RustyApplicationUiInputPort,
+  RustyApplicationUiLifecyclePort,
+  RustyApplicationUiLifecycleResult,
+  RustyApplicationRuntimeState,
   RustyApplicationUiOwner,
   RustyApplicationUiMount,
   RustyApplicationUiViewportPort,
@@ -74,6 +78,8 @@ export interface RustyApplicationHostOptions {
   readonly runtimeInput?: RustyApplicationRuntimeInputOptions;
   /** Optional strict Product UI projection channel. */
   readonly uiProjection?: RustyApplicationUiProjectionOptions;
+  /** The runtime host's pause and resume, passed to the mounted UI unchanged. */
+  readonly lifecycle?: RustyApplicationUiLifecyclePort;
 }
 
 export interface RustyApplicationHostReadout {
@@ -278,6 +284,7 @@ export async function mountRustyApplication(
     const uiContext: RustyApplicationUiContext = Object.freeze({
       ui,
       viewport: Object.freeze({ anchor: presentation.anchor }),
+      ...(options.lifecycle === undefined ? {} : { lifecycle: options.lifecycle }),
       ...(projectionView === null ? {} : { projection: projectionView }),
       ...(intents === null ? {} : { intents }),
       ...(input === null ? {} : { input: Object.freeze({

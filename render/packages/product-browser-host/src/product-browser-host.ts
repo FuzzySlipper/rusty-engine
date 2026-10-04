@@ -5,6 +5,9 @@ import {
   type RustyApplicationHostReadout,
   type RustyApplicationRuntimeIdentity,
   type RustyApplicationRuntimeInputOptions,
+  type RustyApplicationRuntimeState,
+  type RustyApplicationUiLifecyclePort,
+  type RustyApplicationUiLifecycleResult,
   type RustyApplicationUiMount,
   type RustyApplicationUiProjectionOptions,
   type RustyApplicationPresentationAspectBounds,
@@ -45,8 +48,8 @@ export type ProductBrowserRealtimeAdvanceOwner = 'browser' | 'rust-host';
  */
 export type ProductBrowserLifecycleOperation =
   | { readonly kind: 'start' }
-  | { readonly kind: 'pause' }
-  | { readonly kind: 'resume' }
+  | { readonly kind: 'pause'; readonly runtime: RustyApplicationRuntimeIdentity }
+  | { readonly kind: 'resume'; readonly runtime: RustyApplicationRuntimeIdentity }
   | { readonly kind: 'restart' }
   | { readonly kind: 'shutdown' }
   | { readonly kind: 'report-fault' };
@@ -304,6 +307,15 @@ export async function mountProductBrowserHostWithApplication(
   const queue = createOperationQueue();
   let state: ProductBrowserHostReadout['state'] = 'starting';
   let runtimeReadout: ProductHostRuntimeReadout | null = null;
+  const lifecycleListeners = new Set<(state: RustyApplicationRuntimeState | null) => void>();
+  const observeReadout = (readout: ProductHostRuntimeReadout): void => {
+    const previous = runtimeReadout?.state ?? null;
+    runtimeReadout = readout;
+    if (readout.state === previous) return;
+    for (const listener of [...lifecycleListeners]) {
+      if (lifecycleListeners.has(listener)) listener(readout.state);
+    }
+  };
   let application: RustyApplicationHost | null = null;
   let unsubscribeOutputs: (() => void) | null = null;
   let unsubscribeTerminalFailures: (() => void) | null = null;
@@ -616,7 +628,7 @@ export async function mountProductBrowserHostWithApplication(
         const result = await transport.replaceControl!(current.uncertainBinding);
         if (result.binding !== undefined && result.nextInputSequence !== undefined
           && completeInputRecovery(result.binding, result.nextInputSequence)) {
-          if (result.readout !== undefined) runtimeReadout = result.readout;
+          if (result.readout !== undefined) observeReadout(result.readout);
           return;
         }
         if (!result.accepted
@@ -728,7 +740,7 @@ export async function mountProductBrowserHostWithApplication(
           host.uiProjection.ingest(output.envelope);
           return;
         case 'runtime-readout':
-          runtimeReadout = output.readout;
+          observeReadout(output.readout);
           return;
         default:
           assertNever(output);
@@ -937,6 +949,40 @@ export async function mountProductBrowserHostWithApplication(
     ? undefined
     : ({ ...options.uiProjection } as RustyApplicationUiProjectionOptions);
 
+  // Pause and resume name the binding this page holds, so a request made
+  // against a runtime that was since restarted or replaced is rejected.
+  const requestLifecycle = (kind: 'pause' | 'resume'): Promise<RustyApplicationUiLifecycleResult> => {
+    try { requireReady(); } catch (cause) { return Promise.reject(cause); }
+    return queue.enqueue(async () => {
+      requireReady();
+      const runtime = currentInputBinding ?? runtimeReadout?.runtime;
+      if (runtime === undefined) {
+        throw new ProductBrowserHostError('transport_failed', `${kind} has no runtime binding to name`);
+      }
+      const result = await transport.lifecycle({ kind, runtime });
+      const accepted = applyOperationResult(result);
+      return Object.freeze({
+        accepted,
+        state: runtimeReadout?.state ?? null,
+        ...(accepted ? {} : { code: result.code }),
+        ...(accepted || result.diagnostic === undefined ? {} : { diagnostic: result.diagnostic }),
+      });
+    }).catch((cause: unknown) => {
+      if (isRecoveryGateError(cause)) throw cause;
+      throw recoverOrClose(cause, 'transport_failed');
+    });
+  };
+  const lifecycle: RustyApplicationUiLifecyclePort = Object.freeze({
+    state: () => runtimeReadout?.state ?? null,
+    subscribe: (listener: (state: RustyApplicationRuntimeState | null) => void) => {
+      if (state === 'disposed') return () => undefined;
+      lifecycleListeners.add(listener);
+      return () => { lifecycleListeners.delete(listener); };
+    },
+    pause: () => requestLifecycle('pause'),
+    resume: () => requestLifecycle('resume'),
+  });
+
   try {
     unsubscribeTerminalFailures = transport.subscribeTerminalFailures?.(applyTerminalFailure) ?? null;
     unsubscribeOutputs = transport.subscribeOutputBatches?.(applyOutputBatch)
@@ -944,6 +990,7 @@ export async function mountProductBrowserHostWithApplication(
     application = await mountApplication({
       root: options.root,
       mountUi: options.mountUi,
+      lifecycle,
       ...(options.output === undefined ? {} : { output: options.output }),
       onCadence: (timeMs) => cadence?.enqueue(timeMs),
       ...(options.presentationAspectBounds === undefined
@@ -1096,6 +1143,7 @@ export async function mountProductBrowserHostWithApplication(
     disposal = (async () => {
       if (state === 'disposed') return;
       state = 'disposed';
+      lifecycleListeners.clear();
       started = false;
       transportClosed = true;
       publishHealth();

@@ -19,6 +19,8 @@ its revision. E/X opens a reachable visible chest through the shared interaction
 handler and publishes its product-owned title and contents in the container panel.
 Escape closes that panel through the declared `container.close` keyboard mapping.
 Green is focused; blue is opened. Debug is optional for gameplay.
+The Pause/Resume button at the bottom left pauses and resumes the Engine
+runtime through `context.lifecycle`. Its label shows the state the Engine reports.
 
 The read-only `interaction.query` command returns reticle candidates including
 identity/revision, target point, distance, angle, visibility, unknown walking
