@@ -30,7 +30,7 @@ use naga_oil::compose::{
 /// contains, and the product shader (if any) that shades it.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Features {
-    bits: u8,
+    bits: u16,
     /// `Shaders::product` id; 0 for the standard shade stage.
     product: u32,
 }
@@ -46,8 +46,17 @@ impl Features {
     /// feature, not a material one).
     pub const VERTEX_TANGENTS: Self = Self::bit(64);
     pub const TRIPLANAR: Self = Self::bit(128);
+    /// Blend up to three more base textures and normal maps over the
+    /// material's own by the mesh's layer weights.
+    pub const TERRAIN_LAYERS: Self = Self::bit(256);
+    /// The mesh's vertex colours are terrain layer weights, not a tint (a
+    /// mesh feature, not a material one).
+    pub const LAYER_WEIGHTS: Self = Self::bit(512);
+    /// Every standard feature's bit.
+    #[cfg(test)]
+    const ALL_BITS: u16 = 1023;
 
-    const DEFS: [(Self, &'static str); 8] = [
+    const DEFS: [(Self, &'static str); 10] = [
         (Self::UNLIT, "UNLIT"),
         (Self::MASK, "MASK"),
         (Self::VOXEL_SURFACE, "VOXEL_SURFACE"),
@@ -56,9 +65,11 @@ impl Features {
         (Self::OCCLUSION_MAP, "OCCLUSION_MAP"),
         (Self::VERTEX_TANGENTS, "VERTEX_TANGENTS"),
         (Self::TRIPLANAR, "TRIPLANAR"),
+        (Self::TERRAIN_LAYERS, "TERRAIN_LAYERS"),
+        (Self::LAYER_WEIGHTS, "LAYER_WEIGHTS"),
     ];
 
-    const fn bit(bits: u8) -> Self {
+    const fn bit(bits: u16) -> Self {
         Self { bits, product: 0 }
     }
 
@@ -85,12 +96,17 @@ impl Features {
         self.product
     }
 
-    /// What the shadow caster pass compiles: only the alpha mask and the
-    /// voxel uv remap and triplanar planes it samples through, and a product
-    /// shader that defines a caster stage.
+    /// What the shadow caster pass compiles: only the alpha mask, the voxel
+    /// uv remap and triplanar planes it samples through and whether vertex
+    /// colours are layer weights rather than alpha, and a product shader that
+    /// defines a caster stage.
     pub fn caster(self) -> Self {
         Self {
-            bits: self.bits & (Self::MASK.bits | Self::VOXEL_SURFACE.bits | Self::TRIPLANAR.bits),
+            bits: self.bits
+                & (Self::MASK.bits
+                    | Self::VOXEL_SURFACE.bits
+                    | Self::TRIPLANAR.bits
+                    | Self::LAYER_WEIGHTS.bits),
             product: if self.product & PRODUCT_CASTS != 0 {
                 self.product
             } else {
@@ -355,7 +371,7 @@ mod tests {
     #[test]
     fn every_entry_composes_under_every_feature_set() {
         let mut shaders = Shaders::new();
-        let all = (0..=u8::MAX).map(Features::bit);
+        let all = (0..=Features::ALL_BITS).map(Features::bit);
         let mut compose = |entry: Entry, features: Features| {
             let (path, source) = entry.source();
             if let Err(error) = shaders.composer.make_naga_module(NagaModuleDescriptor {
@@ -416,7 +432,7 @@ fn shade(surface: Surface) -> vec4<f32> {
             rim,
             "one id for one shader"
         );
-        for features in (0..=u8::MAX).map(Features::bit) {
+        for features in (0..=Features::ALL_BITS).map(Features::bit) {
             if let Err(error) = shaders.compose(Entry::World, features.with_product(rim)) {
                 panic!("{features:?}: {error}");
             }
@@ -510,7 +526,7 @@ fn cast_shadow(caster: Caster) {
             Features::MASK,
             "no caster stage"
         );
-        for bits in (0..=u8::MAX).map(Features::bit) {
+        for bits in (0..=Features::ALL_BITS).map(Features::bit) {
             for product in [dissolve, plain] {
                 let features = bits.with_product(product);
                 if let Err(error) = shaders.compose(Entry::World, features) {

@@ -35,8 +35,9 @@ pub struct ApplyIssue {
 /// normal scale; the voxel surface's tile scale, tile origin and sample rect;
 /// the base, emissive, normal and occlusion uv transforms (two rows each); the
 /// occlusion strength and triplanar sharpness; each slot's uv set; a
-/// product shader's 16 parameters.
-const MATERIAL_UNIFORM_BYTES: usize = 272;
+/// product shader's 16 parameters; terrain layers 1 to 3's tilings, sample
+/// rects and normal scales, and the layer contrast.
+const MATERIAL_UNIFORM_BYTES: usize = 384;
 /// Anisotropic filtering of mipmapped material textures.
 const MATERIAL_ANISOTROPY: u16 = 16;
 /// Payload groups without a voxel material are fully rough.
@@ -304,8 +305,13 @@ impl Renderer {
             }
             RenderDiff::ReplaceMeshPayload { handle, payload } => {
                 let mut streams = resources::mesh_streams(payload, resources)?;
-                // Uploaded payloads draw without vertex colours.
-                streams.colors = None;
+                // Uploaded payloads draw without vertex colours. A voxel
+                // chunk's are its terrain layer weights.
+                let layer_weights = payload.provenance == render_model::MeshProvenance::VoxelChunk
+                    && streams.colors.is_some();
+                if !layer_weights {
+                    streams.colors = None;
+                }
                 let mut mesh = self.upload_mesh(
                     &format!("payload {}", handle.raw()),
                     &streams,
@@ -318,6 +324,7 @@ impl Renderer {
                     BTreeMap::new(),
                 );
                 mesh.texture_space = payload.texture_space;
+                mesh.layer_weights = layer_weights;
                 self.tables.payload_meshes.insert(*handle, mesh);
                 if let NodeKind::Primitive { has_payload, .. } = &mut self.node_mut(*handle)?.kind {
                     *has_payload = true;
@@ -842,7 +849,12 @@ impl Renderer {
             .texture
             .as_ref()
             .and_then(|id| self.tables.textures.get(id));
-        let params = MaterialParams::of(&descriptor, texture.map(|texture| texture.size));
+        let mut params = MaterialParams::of(&descriptor, texture.map(|texture| texture.size));
+        params.terrain_layers = descriptor.terrain_layers.as_ref().map(|layers| {
+            TerrainLayerParams::of(layers, |id| {
+                self.tables.textures.get(id).map(|texture| texture.size)
+            })
+        });
         self.insert_material(descriptor, &params)
     }
 
@@ -994,6 +1006,13 @@ impl Renderer {
             },
             voxel_surface: params.voxel_surface,
             product_textures: params.product_textures.clone(),
+            // Layers blend only once every layer's texture is retained.
+            terrain_layers: params.terrain_layers.clone().filter(|layers| {
+                layers
+                    .layers
+                    .iter()
+                    .all(|layer| self.tables.textures.contains_key(&layer.texture))
+            }),
             ..*params
         };
         let lookup = |map: Option<&MapSlot>| {
@@ -1014,6 +1033,23 @@ impl Renderer {
                     texture
                         .as_ref()
                         .and_then(|id| self.tables.textures.get(id))
+                        .unwrap_or(&self.white)
+                }),
+                layers: std::array::from_fn(|index| {
+                    params
+                        .terrain_layers
+                        .as_ref()
+                        .and_then(|layers| layers.layers.get(index))
+                        .and_then(|layer| self.tables.textures.get(&layer.texture))
+                        .unwrap_or(&self.white)
+                }),
+                layer_normals: std::array::from_fn(|index| {
+                    params
+                        .terrain_layers
+                        .as_ref()
+                        .and_then(|layers| layers.layers.get(index))
+                        .and_then(|layer| layer.normal.as_ref())
+                        .and_then(|(texture, _)| self.tables.textures.get(texture))
                         .unwrap_or(&self.white)
                 }),
             },
@@ -1122,6 +1158,7 @@ impl Renderer {
             edges: Default::default(),
             extra: None,
             texture_space: None,
+            layer_weights: false,
             vertices: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some(label),
                 contents: bytemuck::cast_slice(vertices),
@@ -1235,6 +1272,50 @@ pub(crate) struct MaterialParams {
     /// A product shader's own textures (`product_map_a`, `product_map_b`).
     pub product_textures: [Option<String>; 2],
     pub maps: MaterialMaps,
+    /// Terrain layers 1 to 3 over the material's own (a voxel surface's).
+    pub terrain_layers: Option<TerrainLayerParams>,
+}
+
+/// A material's terrain layers 1 to 3 and their weight contrast.
+#[derive(Clone)]
+pub(crate) struct TerrainLayerParams {
+    pub layers: Vec<TerrainLayerSlot>,
+    pub contrast: f32,
+}
+
+#[derive(Clone)]
+pub(crate) struct TerrainLayerSlot {
+    pub texture: String,
+    pub surface: VoxelSurfaceUniform,
+    /// The normal map's texture and scale.
+    pub normal: Option<(String, f32)>,
+}
+
+impl TerrainLayerParams {
+    /// Each layer's tiling resolved against its texture's size, if retained.
+    pub(crate) fn of(
+        layers: &render_model::MaterialTerrainLayersDescriptor,
+        texture_size: impl Fn(&str) -> Option<(u32, u32)>,
+    ) -> Self {
+        Self {
+            layers: layers
+                .layers
+                .iter()
+                .map(|layer| TerrainLayerSlot {
+                    texture: layer.voxel_surface.texture().to_owned(),
+                    surface: VoxelSurfaceUniform::resolve(
+                        &layer.voxel_surface,
+                        texture_size(layer.voxel_surface.texture()),
+                    ),
+                    normal: layer
+                        .normal_map
+                        .as_ref()
+                        .map(|map| (map.texture.clone(), map.scale)),
+                })
+                .collect(),
+            contrast: layers.contrast,
+        }
+    }
 }
 
 /// A GLB material's texture maps beyond its base colour, and each slot's uv
@@ -1296,6 +1377,7 @@ impl MaterialParams {
                 .shader
                 .as_ref()
                 .map_or([None, None], |shader| shader.textures.clone()),
+            terrain_layers: None,
             maps: MaterialMaps {
                 normal: descriptor.normal_map.as_ref().map(|map| {
                     (
@@ -1322,9 +1404,19 @@ impl MaterialParams {
         if self.unlit {
             return base | Features::UNLIT;
         }
-        base.with(Features::NORMAL_MAP, self.maps.normal.is_some())
-            .with(Features::EMISSIVE_MAP, self.maps.emissive.is_some())
-            .with(Features::OCCLUSION_MAP, self.maps.occlusion.is_some())
+        let layers = self
+            .terrain_layers
+            .as_ref()
+            .filter(|_| self.voxel_surface.is_some());
+        let layer_normals =
+            layers.is_some_and(|layers| layers.layers.iter().any(|layer| layer.normal.is_some()));
+        base.with(
+            Features::NORMAL_MAP,
+            self.maps.normal.is_some() || layer_normals,
+        )
+        .with(Features::EMISSIVE_MAP, self.maps.emissive.is_some())
+        .with(Features::OCCLUSION_MAP, self.maps.occlusion.is_some())
+        .with(Features::TERRAIN_LAYERS, layers.is_some())
     }
 }
 
@@ -1344,6 +1436,9 @@ pub(crate) struct MapTextures<'a> {
     pub normal: &'a GpuTexture,
     pub occlusion: &'a GpuTexture,
     pub product: [&'a GpuTexture; 2],
+    /// Terrain layers 1 to 3's base textures and normal maps.
+    pub layers: [&'a GpuTexture; 3],
+    pub layer_normals: [&'a GpuTexture; 3],
 }
 
 pub(crate) fn material_bind_group(
@@ -1358,7 +1453,18 @@ pub(crate) fn material_bind_group(
     floats[0] = params.roughness;
     floats[1] = params.alpha_cutoff.unwrap_or(0.0);
     floats[2] = params.metalness;
-    floats[3] = params.maps.normal.as_ref().map_or(1.0, |(_, scale)| *scale);
+    // Under layers with normal maps, a material without its own reads a flat
+    // normal from white at scale 0.
+    let flat_scale = if params.terrain_layers.is_some() {
+        0.0
+    } else {
+        1.0
+    };
+    floats[3] = params
+        .maps
+        .normal
+        .as_ref()
+        .map_or(flat_scale, |(_, scale)| *scale);
     if let Some(surface) = &params.voxel_surface {
         floats[4..6].copy_from_slice(&surface.tile_scale);
         floats[6..8].copy_from_slice(&surface.tile_origin);
@@ -1402,6 +1508,24 @@ pub(crate) fn material_bind_group(
     floats[45] = params.triplanar.unwrap_or(1.0);
     for (row, values) in params.parameters.iter().enumerate() {
         floats[52 + row * 4..56 + row * 4].copy_from_slice(values);
+    }
+    // An unused layer keeps a unit tiling: its share is 0, but a zero scale
+    // would make its normal NaN, which no share can cancel.
+    for index in 0..3 {
+        floats[68 + index * 4..70 + index * 4].copy_from_slice(&[1.0, 1.0]);
+        floats[82 + index * 4..84 + index * 4].copy_from_slice(&[1.0, 1.0]);
+    }
+    if let Some(layers) = &params.terrain_layers {
+        for (index, layer) in layers.layers.iter().enumerate() {
+            let tile = 68 + index * 4;
+            floats[tile..tile + 2].copy_from_slice(&layer.surface.tile_scale);
+            floats[tile + 2..tile + 4].copy_from_slice(&layer.surface.tile_origin);
+            let rect = 80 + index * 4;
+            floats[rect..rect + 2].copy_from_slice(&layer.surface.uv_min);
+            floats[rect + 2..rect + 4].copy_from_slice(&layer.surface.uv_max);
+            floats[92 + index] = layer.normal.as_ref().map_or(0.0, |(_, scale)| *scale);
+        }
+        floats[95] = layers.contrast;
     }
     let uniform: &[u8] = bytemuck::cast_slice(&floats);
     let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -1465,6 +1589,36 @@ pub(crate) fn material_bind_group(
                 binding: 12,
                 resource: wgpu::BindingResource::Sampler(maps.product[1].material_binding().1),
             },
+            wgpu::BindGroupEntry {
+                binding: 13,
+                resource: wgpu::BindingResource::TextureView(maps.layers[0].material_binding().0),
+            },
+            wgpu::BindGroupEntry {
+                binding: 14,
+                resource: wgpu::BindingResource::TextureView(maps.layers[1].material_binding().0),
+            },
+            wgpu::BindGroupEntry {
+                binding: 15,
+                resource: wgpu::BindingResource::TextureView(maps.layers[2].material_binding().0),
+            },
+            wgpu::BindGroupEntry {
+                binding: 16,
+                resource: wgpu::BindingResource::TextureView(
+                    maps.layer_normals[0].material_binding().0,
+                ),
+            },
+            wgpu::BindGroupEntry {
+                binding: 17,
+                resource: wgpu::BindingResource::TextureView(
+                    maps.layer_normals[1].material_binding().0,
+                ),
+            },
+            wgpu::BindGroupEntry {
+                binding: 18,
+                resource: wgpu::BindingResource::TextureView(
+                    maps.layer_normals[2].material_binding().0,
+                ),
+            },
         ],
     })
 }
@@ -1490,6 +1644,7 @@ pub(crate) fn builtin_materials(
                 parameters: [[0.0; 4]; 4],
                 product_textures: [None, None],
                 maps: MaterialMaps::default(),
+                terrain_layers: None,
             },
             white,
             &MapTextures {
@@ -1497,6 +1652,8 @@ pub(crate) fn builtin_materials(
                 normal: white,
                 occlusion: white,
                 product: [white; 2],
+                layers: [white; 3],
+                layer_normals: [white; 3],
             },
         ),
         material_bind_group(
@@ -1513,6 +1670,7 @@ pub(crate) fn builtin_materials(
                 parameters: [[0.0; 4]; 4],
                 product_textures: [None, None],
                 maps: MaterialMaps::default(),
+                terrain_layers: None,
             },
             white,
             &MapTextures {
@@ -1520,6 +1678,8 @@ pub(crate) fn builtin_materials(
                 normal: white,
                 occlusion: white,
                 product: [white; 2],
+                layers: [white; 3],
+                layer_normals: [white; 3],
             },
         ),
     )

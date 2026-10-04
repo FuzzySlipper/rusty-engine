@@ -600,6 +600,15 @@ fn voxel_mesh_payload_with_material_slots(
         components: 2,
         kind: MeshAttributeKind::F32,
     });
+    // Terrain layer weights travel as the chunk's vertex colours.
+    let layer_weights = (!chunk.layer_weights.is_empty()).then(|| chunk.layer_weights.clone());
+    if layer_weights.is_some() {
+        attributes.push(MeshAttribute {
+            name: MeshAttributeName::Color,
+            components: 4,
+            kind: MeshAttributeKind::F32,
+        });
+    }
     MeshPayloadDescriptor {
         layout: MeshBufferLayout {
             vertex_count: chunk.vertices,
@@ -628,7 +637,7 @@ fn voxel_mesh_payload_with_material_slots(
             positions: chunk.positions.clone(),
             normals: chunk.normals.clone(),
             uvs: Some(chunk.tile_coordinates.clone()),
-            colors: None,
+            colors: layer_weights,
             indices: chunk.indices.clone(),
         },
         provenance: MeshProvenance::VoxelChunk,
@@ -715,6 +724,7 @@ mod tests {
 
     fn material(slot: u16) -> RenderMaterialDescriptor {
         RenderMaterialDescriptor {
+            terrain_layers: None,
             shader: None,
             id: voxel_material_id(slot),
             color: [0.4, 0.5, 0.6, 1.0],

@@ -265,6 +265,7 @@ pub fn coloured_mesh(
     vec![
         RenderDiff::DefineMaterial {
             material: RenderMaterialDescriptor {
+                terrain_layers: None,
                 shader: None,
                 id: material.clone(),
                 color,

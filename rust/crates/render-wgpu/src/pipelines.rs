@@ -191,7 +191,8 @@ impl Layouts {
         let material = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("render-wgpu material"),
             // Uniform, albedo; then emissive, normal and occlusion maps; then
-            // a product shader's two maps.
+            // a product shader's two maps; then terrain layers 1 to 3's base
+            // textures and normal maps.
             entries: &[
                 uniform_entry(0),
                 texture_entry(1),
@@ -206,6 +207,12 @@ impl Layouts {
                 sampler_entry(10),
                 texture_entry(11),
                 sampler_entry(12),
+                texture_entry(13),
+                texture_entry(14),
+                texture_entry(15),
+                texture_entry(16),
+                texture_entry(17),
+                texture_entry(18),
             ],
         });
         let sky = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {

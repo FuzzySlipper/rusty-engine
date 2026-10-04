@@ -963,6 +963,7 @@ mod tests {
 
     fn material() -> RenderMaterialDescriptor {
         RenderMaterialDescriptor {
+            terrain_layers: None,
             shader: None,
             id: "material/plain".to_string(),
             color: [0.4, 0.5, 0.6, 1.0],

@@ -44,7 +44,12 @@ fn vs_shadow(
     out.world_position = world.xyz;
     out.uv = uv;
     out.part = part;
+#ifdef LAYER_WEIGHTS
+    // The vertex colour holds layer weights.
+    out.alpha = 1.0;
+#else
     out.alpha = color.a;
+#endif
 #ifdef TRIPLANAR
     out.texture_position = texture_space_position(parts[part], position);
     out.texture_normal = normal;

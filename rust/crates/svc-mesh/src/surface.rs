@@ -22,9 +22,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use core_space::Direction6;
 
 use super::{
-    texture_mapping::voxel_surface_texture_basis, MaterialSurface, MeshBounds, MeshError,
-    MeshGroup, MeshPayload, MeshStats, SurfaceMaterials, SurfaceMeshLimits, SurfaceMode,
-    VertexPlacement,
+    terrain_layers::LayerField, texture_mapping::voxel_surface_texture_basis, MaterialSurface,
+    MeshBounds, MeshError, MeshGroup, MeshPayload, MeshStats, SurfaceMaterials, SurfaceMeshLimits,
+    SurfaceMode, VertexPlacement,
 };
 
 const CORNERS: [[usize; 3]; 8] = [
@@ -902,6 +902,7 @@ pub(super) fn voxel_payload(
     cell_size: f64,
     pivot: [f64; 3],
     limits: SurfaceMeshLimits,
+    layers: Option<&LayerField<'_>>,
 ) -> Result<MeshPayload, MeshError> {
     let mut lanes = BTreeMap::<(u16, Direction6), Vec<usize>>::new();
     for (triangle, (&slot, &direction)) in reconstruction
@@ -923,6 +924,7 @@ pub(super) fn voxel_payload(
     let mut positions = Vec::new();
     let mut normals = Vec::new();
     let mut tile_coordinates = Vec::new();
+    let mut layer_weights = Vec::new();
     let mut indices = Vec::new();
     let mut groups = Vec::with_capacity(lanes.len());
     let mut owners = Vec::new();
@@ -981,6 +983,9 @@ pub(super) fn voxel_payload(
                         };
                         tile_coordinates.push(project(basis.u));
                         tile_coordinates.push(project(basis.v));
+                        if let Some(field) = layers {
+                            layer_weights.extend(field.weights_or_slot(point, slot));
+                        }
                         emitted.insert(key, index);
                         index
                     }
@@ -1026,6 +1031,7 @@ pub(super) fn voxel_payload(
         positions,
         normals,
         tile_coordinates,
+        layer_weights,
         indices,
         groups,
         triangle_owners: owners,

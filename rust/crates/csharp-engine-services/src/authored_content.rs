@@ -3592,6 +3592,7 @@ mod tests {
             },
             ABI_OK
         );
+        let mut handles = Vec::new();
         for material_id in [b"material/repeat".as_slice(), b"material/atlas".as_slice()] {
             let atlas = material_id == b"material/atlas";
             let request = NativeAuthoredMaterialAppearanceRequest {
@@ -3622,7 +3623,37 @@ mod tests {
                 },
                 ABI_OK
             );
+            handles.push(material);
         }
+        // The atlas material as terrain layer 1 over the repeat material.
+        let layered = |layers: &[NativeMaterialHandle], contrast: f32| {
+            let mut material = NativeMaterialHandle::default();
+            let mut error = unsafe { std::mem::zeroed::<NativeOperationErrorReceipt>() };
+            let status = unsafe {
+                crate::appearance::create_terrain_layer_material(
+                    context,
+                    &NativeTerrainLayerMaterialRequest {
+                        base: handles[0],
+                        layers: layers.as_ptr(),
+                        layers_len: layers.len(),
+                        contrast,
+                    },
+                    &mut material,
+                    &mut error,
+                )
+            };
+            (status, material)
+        };
+        for (layers, contrast) in [
+            (Vec::new(), 1.0),
+            (vec![handles[1]; 4], 1.0),
+            (vec![handles[1]], 0.5),
+            (vec![NativeMaterialHandle { value: 999 }], 1.0),
+        ] {
+            assert_eq!(layered(&layers, contrast).0, 0, "{layers:?} {contrast}");
+        }
+        let (status, _) = layered(&[handles[1]], 4.0);
+        assert_eq!(status, ABI_OK);
         assert_eq!(
             unsafe {
                 crate::appearance::publish_appearance_snapshot(
@@ -3659,7 +3690,22 @@ mod tests {
                 _ => None,
             })
             .collect::<Vec<_>>();
-        assert_eq!((textures.len(), materials.len()), (3, 2));
+        assert_eq!((textures.len(), materials.len()), (3, 3));
+        let layers = materials
+            .iter()
+            .find_map(|material| material.terrain_layers.as_ref())
+            .expect("the terrain layer material");
+        assert_eq!(layers.contrast, 4.0);
+        assert!(matches!(
+            &layers.layers[..],
+            [layer] if matches!(layer.voxel_surface.mapping,
+                render_model::VoxelSurfaceMappingDescriptor::Atlas { .. })
+                && layer.normal_map.as_ref().is_some_and(|map| map.scale == 0.75)
+        ));
+        let materials = materials
+            .into_iter()
+            .filter(|material| material.terrain_layers.is_none())
+            .collect::<Vec<_>>();
         let mapped = materials
             .iter()
             .find_map(|material| material.normal_map.as_ref())

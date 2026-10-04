@@ -76,6 +76,12 @@ struct MaterialUniform {
     tex_coords: vec4<u32>,
     // A product shader's own values (`MaterialShaderDescriptor::parameters`).
     parameters: array<vec4<f32>, 4>,
+    // Terrain layers 1 to 3 (TERRAIN_LAYERS): each one's `tile` and
+    // `sample_rect`; layer_factors xyz: each one's normal scale, w: the
+    // weight contrast.
+    layer_tile: array<vec4<f32>, 3>,
+    layer_rect: array<vec4<f32>, 3>,
+    layer_factors: vec4<f32>,
 };
 
 // What the standard surface stages make of a world fragment, which the shade

@@ -417,6 +417,7 @@ fn materials() -> BTreeMap<String, RenderMaterialDescriptor> {
 
 fn material(id: &str, color: [f32; 4]) -> RenderMaterialDescriptor {
     RenderMaterialDescriptor {
+        terrain_layers: None,
         shader: None,
         id: id.to_string(),
         color,

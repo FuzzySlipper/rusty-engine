@@ -1401,3 +1401,301 @@ fn an_ambient_light_requesting_shadows_leaves_a_cave_darker_than_open_ground() {
     );
     assert_screenshot("scene_ambient_sky_cave_mouth", &sky);
 }
+
+/// Sand (slot 1) west of x = 0 and rock (slot 2) east of it on a gentle
+/// dual-contoured slope, with a strip of stone (slot 3) outside the layer set
+/// along its near edge.
+fn sand_and_rock(transition_cells: Option<u8>) -> VoxelCollisionScene {
+    let voxels = (-12..12).flat_map(|x: i64| {
+        (-16..-2).flat_map(move |z: i64| {
+            (-3..(x + 12) / 8 - 1).map(move |y| MaterialVoxel {
+                state: 0,
+                address: [x, y, z],
+                material_slot: if z == -3 {
+                    3
+                } else if x < 0 {
+                    1
+                } else {
+                    2
+                },
+            })
+        })
+    });
+    VoxelCollisionScene::from_material_voxels_with_mesh_options(
+        1.0,
+        CHUNK_CELLS,
+        voxels,
+        SurfaceMeshOptions {
+            terrain_layers: transition_cells
+                .map(|cells| engine_spatial::TerrainLayers::new(vec![1, 2], cells).unwrap()),
+            ..SurfaceMeshOptions::with_mode(engine_spatial::SurfaceMode::DualContouring)
+        },
+    )
+    .expect("sand and rock slope")
+}
+
+#[test]
+fn terrain_layers_blend_sand_into_rock_over_the_chosen_width() {
+    const SAND: [u8; 4] = [230, 200, 80, 255];
+    const ROCK: [u8; 4] = [70, 80, 110, 255];
+    const STONE: [u8; 4] = [255, 255, 255, 255];
+    // `mapped`: triplanar planes and flat normal maps on every layer, which
+    // must draw as the plain surface does; `lit`: a raking sun as well, which
+    // shows any normal change.
+    let render_with = |transition_cells: Option<u8>, contrast: f32, mapped: bool, lit: bool| {
+        let mut harness = Harness::new(RendererOptions {
+            default_world_lights: false,
+            ..RendererOptions::default()
+        });
+        let mut plain = |id: &str, color: [u8; 4]| {
+            harness
+                .resources
+                .texture(id, 4, 4, &image(4, 4, |_, _| color), TextureWrap::Repeat)
+        };
+        let (sand, rock, stone) = (
+            plain("texture/sand", SAND),
+            plain("texture/rock", ROCK),
+            plain("texture/stone", STONE),
+        );
+        let mut flat = plain("texture/flat", [128, 128, 255, 255]);
+        if let Some(payload) = flat.payload.as_mut() {
+            payload.color_space = TextureColorSpace::Linear;
+        }
+        let flat_map = mapped.then(|| MaterialNormalMapDescriptor {
+            texture: flat.id.clone(),
+            scale: 1.0,
+        });
+        let repeat = |texture: &TextureDescriptor| VoxelSurfaceMappingDescriptor::Repeat {
+            texture: texture.id.clone(),
+            texture_version: texture.version,
+            texture_content_hash: texture.content_hash.clone().unwrap(),
+            tile_scale_cells: [2.0, 2.0],
+            tile_origin_cells: [0.0, 0.0],
+        };
+        let surface = |slot: u16, texture: &TextureDescriptor| {
+            voxel_material(slot, [1.0; 4], Some(texture), Some(repeat(texture)))
+        };
+        let mut materials = BTreeMap::from([
+            (1, surface(1, &sand)),
+            (2, surface(2, &rock)),
+            (3, surface(3, &stone)),
+        ]);
+        if transition_cells.is_some() {
+            // Both layer slots draw one blend: sand, then rock.
+            let rock_layer = MaterialTerrainLayerDescriptor {
+                voxel_surface: materials[&2].voxel_surface.clone().unwrap(),
+                normal_map: flat_map.clone(),
+            };
+            for slot in [1, 2] {
+                let mut blend = surface(slot, &sand);
+                blend.terrain_layers = Some(MaterialTerrainLayersDescriptor {
+                    layers: vec![rock_layer.clone()],
+                    contrast,
+                });
+                blend.normal_map = flat_map.clone();
+                blend.triplanar = mapped.then_some(MaterialTriplanarDescriptor { sharpness: 4.0 });
+                materials.insert(slot, blend);
+            }
+        }
+        let mut ops = vec![
+            RenderDiff::DefineTexture { texture: flat },
+            RenderDiff::DefineTexture { texture: sand },
+            RenderDiff::DefineTexture { texture: rock },
+            RenderDiff::DefineTexture { texture: stone },
+            // Ambient π: the surface shows exactly its texture.
+            RenderDiff::CreateLight {
+                handle: RenderHandle::new(90),
+                parent: None,
+                light: LightDescriptor::Ambient {
+                    color: [1.0; 3],
+                    intensity: std::f32::consts::PI,
+                    enabled: true,
+                    shadow_intent: LightShadowIntent::Disabled,
+                },
+            },
+        ];
+        if lit {
+            ops.push(RenderDiff::CreateLight {
+                handle: RenderHandle::new(91),
+                parent: None,
+                light: LightDescriptor::Directional {
+                    color: [1.0; 3],
+                    intensity: 3.0,
+                    enabled: true,
+                    direction: [-0.8, -0.4, 0.3],
+                    shadow_intent: LightShadowIntent::Disabled,
+                },
+            });
+        }
+        let mut projector = VoxelRenderProjector::new();
+        ops.extend(project(
+            &mut projector,
+            &sand_and_rock(transition_cells),
+            &materials,
+        ));
+        harness.apply(ops);
+        harness.render(&camera([0.0, 9.0, 1.0], 0.0, -55.0)).1
+    };
+    let render = |transition_cells: Option<u8>, contrast: f32| {
+        render_with(transition_cells, contrast, false, false)
+    };
+    let pixel = |rgba: &[u8], x: u32, y: u32| -> [u8; 4] {
+        rgba[((y * WIDTH + x) * 4) as usize..][..4]
+            .try_into()
+            .unwrap()
+    };
+    // How far each pixel of the middle row is from sand toward rock.
+    let row = |rgba: &[u8]| -> Vec<f32> {
+        (0..WIDTH)
+            .map(|x| {
+                let p = pixel(rgba, x, HEIGHT / 2);
+                let along = (0..3)
+                    .map(|c| {
+                        (f32::from(p[c]) - f32::from(SAND[c]))
+                            * (f32::from(ROCK[c]) - f32::from(SAND[c]))
+                    })
+                    .sum::<f32>();
+                let length = (0..3)
+                    .map(|c| (f32::from(ROCK[c]) - f32::from(SAND[c])).powi(2))
+                    .sum::<f32>();
+                along / length
+            })
+            .collect()
+    };
+    let mixed = |rgba: &[u8]| row(rgba).iter().filter(|t| **t > 0.1 && **t < 0.9).count();
+    let hard = render(None, 1.0);
+    let narrow = render(Some(1), 1.0);
+    let broad = render(Some(3), 1.0);
+    let sharpened = render(Some(3), 8.0);
+    let (hard_mixed, narrow_mixed, broad_mixed, sharpened_mixed) = (
+        mixed(&hard),
+        mixed(&narrow),
+        mixed(&broad),
+        mixed(&sharpened),
+    );
+    // Both ends of the row stay pure sand and pure rock.
+    for rgba in [&hard, &narrow, &broad, &sharpened] {
+        let t = row(rgba);
+        assert!(
+            t[WIDTH as usize / 10].abs() < 0.05,
+            "sand end {}",
+            t[WIDTH as usize / 10]
+        );
+        assert!((t[WIDTH as usize * 9 / 10] - 1.0).abs() < 0.05, "rock end");
+    }
+    assert!(
+        hard_mixed <= 2,
+        "unlayered materials meet at an edge: {hard_mixed}"
+    );
+    assert!(narrow_mixed > hard_mixed, "{narrow_mixed}");
+    assert!(
+        broad_mixed > 2 * narrow_mixed,
+        "{broad_mixed} vs {narrow_mixed}"
+    );
+    assert!(
+        sharpened_mixed < broad_mixed,
+        "contrast narrows a transition: {sharpened_mixed} vs {broad_mixed}"
+    );
+    assert_screenshot("scene_terrain_layers_broad", &broad);
+    // The stone strip outside the set is untinted by its layer weights.
+    let near = (0..WIDTH)
+        .map(|x| pixel(&broad, x, HEIGHT * 3 / 4))
+        .filter(|p| p[..3] == STONE[..3])
+        .count();
+    assert!(near > WIDTH as usize / 2, "stone keeps its colour: {near}");
+    // Flat normal maps leave the blend's shading as it was, and triplanar
+    // planes of a uniform texture sample the same colours.
+    let (plain_lit, mapped) = (
+        render_with(Some(3), 1.0, false, true),
+        render_with(Some(3), 1.0, true, true),
+    );
+    assert_ne!(plain_lit, broad, "the sun shades the slope");
+    let differing = plain_lit
+        .chunks(4)
+        .zip(mapped.chunks(4))
+        .filter(|(a, b)| (0..3).any(|c| a[c].abs_diff(b[c]) > 6))
+        .count();
+    assert!(
+        differing < (WIDTH * HEIGHT / 200) as usize,
+        "{differing} pixels differ with normal maps and triplanar planes"
+    );
+}
+
+#[test]
+fn a_terrain_layer_normal_map_shades_its_layer_as_its_own_material_does() {
+    // White surfaces lit by a raking sun; only rock has a tilted normal map.
+    let render = |layered: bool| {
+        let mut harness = Harness::new(RendererOptions {
+            default_world_lights: false,
+            ..RendererOptions::default()
+        });
+        let white = harness.resources.texture(
+            "texture/white",
+            4,
+            4,
+            &image(4, 4, |_, _| [255; 4]),
+            TextureWrap::Repeat,
+        );
+        let tilted = tilted_normal_map(&mut harness, "texture/tilted", TextureWrap::Repeat);
+        let repeat = VoxelSurfaceMappingDescriptor::Repeat {
+            texture: white.id.clone(),
+            texture_version: white.version,
+            texture_content_hash: white.content_hash.clone().unwrap(),
+            tile_scale_cells: [2.0, 2.0],
+            tile_origin_cells: [0.0, 0.0],
+        };
+        let surface =
+            |slot: u16| voxel_material(slot, [1.0; 4], Some(&white), Some(repeat.clone()));
+        let tilt = MaterialNormalMapDescriptor {
+            texture: tilted.id.clone(),
+            scale: 1.0,
+        };
+        let mut rock = surface(2);
+        rock.normal_map = Some(tilt.clone());
+        let mut materials = BTreeMap::from([(1, surface(1)), (2, rock), (3, surface(3))]);
+        if layered {
+            for slot in [1, 2] {
+                let mut blend = surface(slot);
+                blend.terrain_layers = Some(MaterialTerrainLayersDescriptor {
+                    layers: vec![MaterialTerrainLayerDescriptor {
+                        voxel_surface: blend.voxel_surface.clone().unwrap(),
+                        normal_map: Some(tilt.clone()),
+                    }],
+                    contrast: 8.0,
+                });
+                materials.insert(slot, blend);
+            }
+        }
+        let mut ops = vec![
+            RenderDiff::DefineTexture { texture: white },
+            RenderDiff::DefineTexture { texture: tilted },
+            sun([-0.8, -0.4, 0.3]),
+        ];
+        let mut projector = VoxelRenderProjector::new();
+        ops.extend(project(
+            &mut projector,
+            &sand_and_rock(layered.then_some(1)),
+            &materials,
+        ));
+        harness.apply(ops);
+        harness.render(&camera([0.0, 9.0, 1.0], 0.0, -55.0)).1
+    };
+    let (separate, layered) = (render(false), render(true));
+    let luminance = |rgba: &[u8], x: u32| {
+        let at = ((HEIGHT / 2 * WIDTH + x) * 4) as usize;
+        u32::from(rgba[at]) + u32::from(rgba[at + 1]) + u32::from(rgba[at + 2])
+    };
+    let (sand_x, rock_x) = (WIDTH / 10, WIDTH * 9 / 10);
+    assert!(
+        luminance(&separate, sand_x).abs_diff(luminance(&separate, rock_x)) > 30,
+        "the tilted map shades rock differently from flat sand"
+    );
+    for x in [sand_x, rock_x] {
+        assert!(
+            luminance(&separate, x).abs_diff(luminance(&layered, x)) <= 9,
+            "layered shading at {x}: {} vs {}",
+            luminance(&layered, x),
+            luminance(&separate, x)
+        );
+    }
+}

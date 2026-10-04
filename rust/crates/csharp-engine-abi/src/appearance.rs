@@ -632,6 +632,23 @@ pub struct NativeAuthoredMaterialAppearanceRequest {
     pub shader: NativeMaterialShader,
 }
 
+/// A material blending voxel surface materials by a voxel mesh's terrain
+/// layer weights (`Voxel.ConfigureTerrainLayers`): `base` is layer 0 and
+/// `layers` (1 to 3) the next ones. Each layer takes its material's texture,
+/// tiling and normal map as they are now; the new material keeps them while
+/// it lives. Every material must be a voxel surface material; `base` gives
+/// the rest, triplanar sharpness included.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeTerrainLayerMaterialRequest {
+    pub base: NativeMaterialHandle,
+    pub layers: *const NativeMaterialHandle,
+    pub layers_len: usize,
+    /// The weights are raised to this power (1 or more) before they are
+    /// normalized: 1 blends them as they are, higher narrows each transition.
+    pub contrast: f32,
+}
+
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeMaterialUpdateRequest {

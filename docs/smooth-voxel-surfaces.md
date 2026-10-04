@@ -85,6 +85,48 @@ direction-specific material on a smooth surface is chosen by the polygon's
 dominant axis as before, then blended across its planes. On a retained mesh
 the planes run over its object-space positions in metres.
 
+## Blending terrain layers
+
+Where two materials meet on a reconstructed surface their textures change at
+a polygon edge. To blend them instead, name up to four material slots as
+terrain layers and draw them with one terrain layer material:
+
+```csharp
+engine.Voxel.ConfigureTerrainLayers(new VoxelTerrainLayerRequest(
+    session, new uint[] { SandSlot, RockSlot }, TransitionCells: 2));
+Material terrain = engine.Graphics.CreateTerrainLayerMaterial(
+    new TerrainLayerMaterialRequest(sand, new[] { rock }, Contrast: 2));
+// Bind `terrain` to both SandSlot and RockSlot in the voxel scene presentation.
+```
+
+The product still decides which material each voxel is (biome, slope, height
+or noise); the Engine only blends what it chose:
+
+- **Weights.** Each reconstructed vertex weighs the solid voxels of the layer
+  slots within `TransitionCells` voxels of it (1 to 4, and less than the chunk
+  size less one), nearer ones more. The weights come from absolute voxel
+  positions and the voxels on both sides of a chunk seam, so a seam vertex has
+  the same weights in both chunks, and a world-origin rebase changes none. An
+  edit within reach of a chunk border remeshes the neighbour as well. A vertex
+  with no layer voxel in reach, and every cube face, takes its own slot's
+  layer whole. No slots removes the weights.
+- **Material.** `CreateTerrainLayerMaterial` takes the base material as layer 0
+  and 1 to 3 more (`Layers`), all voxel surface materials. Each layer keeps
+  its own texture, repeat or atlas tiling and normal map, as they are when the
+  material is made; the base gives the rest, triplanar sharpness included. The
+  material keeps those textures while it lives. `Contrast` (1 or more) raises
+  the weights to that power before normalizing them: 1 blends them as they
+  are, higher narrows each transition toward the dominant layer. Width comes
+  from `TransitionCells`, sharpness from `Contrast`, and texture scale and
+  triplanar sharpness from the layer materials, each independently.
+- **What stays.** Geometry, groups, material slots, collision and navigation
+  are unchanged: blending is drawn only. A slot outside the layers, bound to an
+  ordinary material, draws as before.
+- **Cost.** Meshing reads up to (2 × `TransitionCells`)³ voxels per vertex.
+  The material samples every layer's texture and normal map (four layers: 4×
+  the samples, 12× with triplanar planes), in a shader variant only terrain
+  layer materials compile. Layer materials are opaque.
+
 ## Densities
 
 A density is signed, negative inside, in voxel units. A voxel without one

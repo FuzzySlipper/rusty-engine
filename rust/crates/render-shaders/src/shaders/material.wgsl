@@ -2,7 +2,9 @@
 
 // Group 1 of the world and shadow caster passes (`Layouts::material`). Maps a
 // material lacks bind white and are only read under their feature. The
-// product maps are a product shader's own textures (white when unset).
+// product maps are a product shader's own textures (white when unset). The
+// layer maps are terrain layers 1 to 3 (TERRAIN_LAYERS), sampled with the
+// albedo and normal samplers.
 
 #import rusty::types::MaterialUniform
 
@@ -19,3 +21,9 @@
 @group(1) @binding(10) var product_sampler_a: sampler;
 @group(1) @binding(11) var product_map_b: texture_2d<f32>;
 @group(1) @binding(12) var product_sampler_b: sampler;
+@group(1) @binding(13) var layer_albedo_1: texture_2d<f32>;
+@group(1) @binding(14) var layer_albedo_2: texture_2d<f32>;
+@group(1) @binding(15) var layer_albedo_3: texture_2d<f32>;
+@group(1) @binding(16) var layer_normal_1: texture_2d<f32>;
+@group(1) @binding(17) var layer_normal_2: texture_2d<f32>;
+@group(1) @binding(18) var layer_normal_3: texture_2d<f32>;

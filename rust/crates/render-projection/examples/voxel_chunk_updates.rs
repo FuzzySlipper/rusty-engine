@@ -226,6 +226,7 @@ fn print_row(
 
 fn material() -> RenderMaterialDescriptor {
     RenderMaterialDescriptor {
+        terrain_layers: None,
         shader: None,
         id: "voxel-material/1".to_string(),
         color: [0.45, 0.7, 0.35, 1.0],

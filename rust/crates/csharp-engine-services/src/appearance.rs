@@ -3297,6 +3297,94 @@ impl RuntimeAppearanceBridge {
         Ok(NativeMaterialHandle { value: handle })
     }
 
+    fn create_terrain_layer_material(
+        &mut self,
+        request: NativeTerrainLayerMaterialRequest,
+    ) -> Result<NativeMaterialHandle, CsharpEngineServicesError> {
+        let invalid = |message: &str| {
+            CsharpEngineServicesError::new("CSHARP_TERRAIN_LAYER_MATERIAL", message.to_owned())
+        };
+        let staged = self.staged_mut()?;
+        let state = &*staged.state;
+        let surface_material = |handle: NativeMaterialHandle| {
+            let id = state
+                .materials
+                .get(&handle.value)
+                .ok_or_else(|| invalid("a layer material handle is not live"))?;
+            let descriptor = state
+                .projector
+                .resources()
+                .materials
+                .iter()
+                .find(|candidate| candidate.id == *id)
+                .ok_or_else(|| invalid("a layer material descriptor is not retained"))?;
+            if descriptor.voxel_surface.is_none() || descriptor.terrain_layers.is_some() {
+                return Err(invalid(
+                    "every layer must be a voxel surface material without layers of its own",
+                ));
+            }
+            Ok(descriptor.clone())
+        };
+        let mut material = surface_material(request.base)?;
+        let handles = unsafe {
+            crate::composition::borrowed_slice(
+                request.layers,
+                request.layers_len,
+                "terrain layer materials",
+            )
+        }?;
+        if !(1..=render_model::MAX_MATERIAL_TERRAIN_LAYERS).contains(&handles.len()) {
+            return Err(invalid("name 1 to 3 layer materials"));
+        }
+        let layers = handles
+            .iter()
+            .map(|handle| {
+                surface_material(*handle).map(|layer| {
+                    render_model::MaterialTerrainLayerDescriptor {
+                        voxel_surface: layer.voxel_surface.expect("checked above"),
+                        normal_map: layer.normal_map,
+                    }
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        // The layers' textures stay live while this material holds them.
+        let resources = std::iter::once(request.base)
+            .chain(handles.iter().copied())
+            .flat_map(|handle| {
+                state
+                    .material_resources
+                    .get(&handle.value)
+                    .into_iter()
+                    .flatten()
+                    .copied()
+            })
+            .collect();
+        let handle = state.next_material;
+        let next_material = handle.checked_add(1).ok_or_else(|| {
+            CsharpEngineServicesError::new("CSHARP_MATERIAL_HANDLE", "material handle overflow")
+        })?;
+        material.id = runtime_material_id(handle);
+        material.terrain_layers = Some(render_model::MaterialTerrainLayersDescriptor {
+            layers,
+            contrast: request.contrast,
+        });
+        material.validate().map_err(|error| {
+            invalid(&format!(
+                "the terrain layer material is invalid ({error:?}): the contrast must be finite and 1 or more"
+            ))
+        })?;
+        staged.state.next_material = next_material;
+        staged
+            .state
+            .projector
+            .resources_mut()
+            .materials
+            .push(material.clone());
+        staged.state.materials.insert(handle, material.id);
+        staged.state.material_resources.insert(handle, resources);
+        Ok(NativeMaterialHandle { value: handle })
+    }
+
     fn update_material(
         &mut self,
         request: NativeMaterialUpdateRequest,
@@ -7976,6 +8064,23 @@ pub(crate) unsafe extern "C" fn create_material(
     })
 }
 
+pub(crate) unsafe extern "C" fn create_terrain_layer_material(
+    context: *mut c_void,
+    request: *const NativeTerrainLayerMaterialRequest,
+    result: *mut NativeMaterialHandle,
+    operation_error: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    appearance_operation(context, operation_error, || {
+        if request.is_null() {
+            return 0;
+        }
+        let request = unsafe { *request };
+        material_result(context, result, |bridge| {
+            bridge.create_terrain_layer_material(request)
+        })
+    })
+}
+
 pub(crate) unsafe extern "C" fn create_authored_material(
     context: *mut c_void,
     request: *const NativeAuthoredMaterialAppearanceRequest,
@@ -9059,6 +9164,7 @@ fn sprite_texture_descriptor(
 
 fn render_material(id: String, color: NativeColor) -> RenderMaterialDescriptor {
     RenderMaterialDescriptor {
+        terrain_layers: None,
         shader: None,
         id,
         color: native_color(color),
@@ -9198,6 +9304,7 @@ fn material_descriptor(
     };
     let normal_map = normal_map_descriptor(resources, request.normal_map, request.normal_scale)?;
     let descriptor = RenderMaterialDescriptor {
+        terrain_layers: None,
         id,
         color: native_color(request.color),
         texture,

@@ -283,6 +283,28 @@ pub type NativeConfigureVoxelMaterialSurfaces = unsafe extern "C" fn(
     *mut NativeOperationErrorReceipt,
 ) -> i32;
 
+/// Give a session's reconstructed voxel surfaces terrain layer weights:
+/// `slots` (1 to 4 material slots) are layers 0 to 3 of the terrain layer
+/// material bound to them, and each vertex weighs the solid voxels of those
+/// slots within `transition_cells` voxels (1 to 4, less than the chunk size).
+/// No slots removes the weights. Every chunk is remeshed; geometry, material
+/// slots and collision are unchanged.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeVoxelTerrainLayerRequest {
+    pub session: NativeSpatialSessionHandle,
+    pub slots: *const u32,
+    pub slots_len: usize,
+    pub transition_cells: u32,
+}
+
+pub type NativeConfigureVoxelTerrainLayers = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeVoxelTerrainLayerRequest,
+    *mut NativeVoxelSceneReadout,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum NativeVoxelDensityEditKind {
@@ -471,6 +493,7 @@ pub struct NativeVoxelApi {
     pub configure_material_surfaces: NativeConfigureVoxelMaterialSurfaces,
     pub apply_density_edits: NativeApplyVoxelDensityEdits,
     pub read_densities: NativeReadVoxelDensities,
+    pub configure_terrain_layers: NativeConfigureVoxelTerrainLayers,
 }
 
 /// Samples direct incident light at address + offset (in voxel units). Descriptors

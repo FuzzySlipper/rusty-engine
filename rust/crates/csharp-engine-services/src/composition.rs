@@ -146,6 +146,7 @@ fn engine_api(
             read_light,
             read_presentation,
             create_authored_material: crate::appearance::create_authored_material,
+            create_terrain_layer_material: crate::appearance::create_terrain_layer_material,
         },
         presentation: NativePresentationApi {
             context: (appearance_bridge as *mut RuntimeAppearanceBridge).cast(),

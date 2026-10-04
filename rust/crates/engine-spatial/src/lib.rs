@@ -95,7 +95,8 @@ pub use svc_collision::{
 };
 pub use svc_mesh::{
     MaterialSurface, MeshError as SurfaceMeshError, SurfaceCharacter, SurfaceMaterials,
-    SurfaceMeshLimits, SurfaceMeshOptions, SurfaceMode, VertexPlacement,
+    SurfaceMeshLimits, SurfaceMeshOptions, SurfaceMode, TerrainLayers, VertexPlacement,
+    MAX_TERRAIN_LAYERS, MAX_TERRAIN_TRANSITION_CELLS,
 };
 pub use svc_volume::DEFAULT_DENSITY_MAGNITUDE;
 pub use voxel_density::{
@@ -201,6 +202,9 @@ pub struct VoxelMeshChunk {
     pub positions: Vec<f32>,
     pub normals: Vec<f32>,
     pub tile_coordinates: Vec<f32>,
+    /// Four terrain layer weights per vertex when the session has terrain
+    /// layers (`svc_mesh::MeshPayload::layer_weights`); empty otherwise.
+    pub layer_weights: Vec<f32>,
     pub indices: Vec<u32>,
     pub groups: Vec<VoxelMeshGroup>,
     /// The chunk-local storage index (x-fastest) of the voxel owning each
@@ -577,6 +581,15 @@ impl VoxelCollisionScene {
         let grid = voxel_world.grid();
         debug_assert_eq!(grid.voxel_size(), voxel_size);
         debug_assert_eq!(grid.chunk_dims().to_array(), [chunk_size; 3]);
+        // An edit remeshes only the chunks next to its own, so a transition
+        // must stay within one chunk.
+        if mesh_options
+            .terrain_layers
+            .as_ref()
+            .is_some_and(|layers| u32::from(layers.transition_cells()) + 1 >= chunk_size)
+        {
+            return Err(CollisionSceneError::Mesh(MeshError::InvalidTerrainLayers));
+        }
         let mut solid_voxel_count = 0usize;
         let mut authority_hash = 0u64;
         for (coordinate, chunk) in voxel_world.resident_chunks() {
@@ -1249,17 +1262,25 @@ impl VoxelCollisionScene {
 
     /// Chunks whose mesh depends on the voxel at `voxel`: its own chunk, plus
     /// a resident neighbour only when the voxel lies on their shared boundary
-    /// (edges and corners too for reconstructed surfaces).
+    /// (edges and corners too for reconstructed surfaces), or within terrain
+    /// layers' reach of it.
     pub(crate) fn mesh_neighbourhood_of_voxel(&self, voxel: VoxelCoord) -> Vec<ChunkCoord> {
         let grid = self.voxel_world.grid();
         let [width, height, depth] = grid.chunk_dims().to_array();
         let (owner, local) = grid.voxel_to_chunk_local(voxel);
+        // A neighbour's vertices lie within a voxel of this chunk and weigh
+        // the voxels within a transition of them (one more for margin).
+        let reach = self
+            .mesh_options
+            .terrain_layers
+            .as_ref()
+            .map_or(1, |layers| 1 + u32::from(layers.transition_cells()));
         let offsets = |at: u32, extent: u32| {
             let mut offsets = vec![0i64];
-            if at == 0 {
+            if at < reach {
                 offsets.push(-1);
             }
-            if at + 1 == extent {
+            if at + reach >= extent {
                 offsets.push(1);
             }
             offsets
@@ -1580,6 +1601,7 @@ fn voxel_mesh_chunk(
         positions: mesh.positions,
         normals: mesh.normals,
         tile_coordinates: mesh.tile_coordinates,
+        layer_weights: mesh.layer_weights,
         indices: mesh.indices,
         groups: mesh
             .groups
@@ -1620,6 +1642,9 @@ fn mesh_payload_hash(mesh: &svc_mesh::MeshPayload) -> u64 {
         feed(&value.to_bits().to_le_bytes());
     }
     for value in &mesh.tile_coordinates {
+        feed(&value.to_bits().to_le_bytes());
+    }
+    for value in &mesh.layer_weights {
         feed(&value.to_bits().to_le_bytes());
     }
     for value in &mesh.indices {

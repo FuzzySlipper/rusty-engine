@@ -19,7 +19,10 @@ use svc_volume::VoxelChunk;
 use texture_mapping::{project_voxel_surface_tile_point, VoxelTextureMappingError};
 
 mod surface;
+mod terrain_layers;
 pub mod texture_mapping;
+
+pub use terrain_layers::{TerrainLayers, MAX_TERRAIN_LAYERS, MAX_TERRAIN_TRANSITION_CELLS};
 
 /// Renderer-neutral derived presentation selected for canonical voxel facts.
 ///
@@ -179,6 +182,8 @@ pub struct SurfaceMeshOptions {
     /// Material slots that do not hide a neighbour's cube face, such as water
     /// or glass. Two voxels of one such slot still hide their shared face.
     pub non_occluding: BTreeSet<u16>,
+    /// Give every vertex weights for these layers ([`MeshPayload::layer_weights`]).
+    pub terrain_layers: Option<TerrainLayers>,
 }
 
 impl SurfaceMeshOptions {
@@ -290,6 +295,11 @@ pub struct MeshPayload {
     /// 2 signed `f32` cell-space coordinates per vertex. World chunks use
     /// absolute voxel coordinates; voxel objects use object-local coordinates.
     pub tile_coordinates: Vec<f32>,
+    /// With [`SurfaceMeshOptions::terrain_layers`], 4 `f32` per vertex: each
+    /// layer's weight, summing to 1. A reconstructed vertex blends the layers
+    /// of the voxels around it; a cube face takes its own slot's layer.
+    /// Empty otherwise.
+    pub layer_weights: Vec<f32>,
     /// 3 `u32` per triangle.
     pub indices: Vec<u32>,
     /// Groups whose `count`s tile `indices`.
@@ -318,6 +328,9 @@ pub struct MeshVoxelCell {
 pub enum MeshError {
     StateRequiresGreedyCubes,
     InvalidSurfaceCharacter,
+    /// A terrain layer set needs 1 to 4 distinct slots and a transition of 1
+    /// to 4 voxels.
+    InvalidTerrainLayers,
     DuplicateMaterialSurface {
         slot: u16,
     },
@@ -371,6 +384,10 @@ impl core::fmt::Display for MeshError {
             MeshError::StateRequiresGreedyCubes => {
                 write!(f, "cell orientation and variant require GreedyCubes")
             }
+            MeshError::InvalidTerrainLayers => write!(
+                f,
+                "a terrain layer set needs 1 to {MAX_TERRAIN_LAYERS} distinct material slots and a transition of 1 to {MAX_TERRAIN_TRANSITION_CELLS} voxels"
+            ),
             MeshError::InvalidSurfaceCharacter => write!(
                 f,
                 "a surface character needs a crease angle of 0 to 180 degrees and a roughness of 0 to 0.5"
@@ -679,6 +696,7 @@ pub fn mesh_scalar_samples(
         positions: surface.positions.into_iter().flatten().collect(),
         normals: surface.normals.into_iter().flatten().collect(),
         tile_coordinates: Vec::new(),
+        layer_weights: Vec::new(),
         indices,
         groups,
         triangle_owners: surface.owners,
@@ -1015,7 +1033,7 @@ pub fn mesh_cells_standalone_with_options(
         min: minimum,
         max: maximum.map(|value| value + 1),
     };
-    let smooth = reconstruct(&lattice, &options, owner, cell_size, pivot)?;
+    let smooth = reconstruct(&lattice, &options, owner, cell_size, pivot, None)?;
     let greedy = |slot: u16| options.surface(slot).mode == SurfaceMode::GreedyCubes;
     let (faces, faces_culled) = greedy_faces(&greedy, &|slot, neighbour| {
         greedy(neighbour) && options.hides(slot, neighbour)
@@ -1048,6 +1066,7 @@ fn reconstruct(
     owner: surface::Owner,
     cell_size: f64,
     pivot: [f64; 3],
+    layers: Option<&terrain_layers::LayerField<'_>>,
 ) -> Result<MeshPayload, MeshError> {
     let characters = options.characters();
     let mut reconstruction = surface::Reconstruction::default();
@@ -1071,7 +1090,14 @@ fn reconstruct(
             }
         }
     }
-    surface::voxel_payload(reconstruction, characters, cell_size, pivot, options.limits)
+    surface::voxel_payload(
+        reconstruction,
+        characters,
+        cell_size,
+        pivot,
+        options.limits,
+        layers,
+    )
 }
 
 /// Append the surfaces of every reconstructed mode in use.
@@ -1116,6 +1142,7 @@ fn merge_payloads(
     first.positions.extend(second.positions);
     first.normals.extend(second.normals);
     first.tile_coordinates.extend(second.tile_coordinates);
+    first.layer_weights.extend(second.layer_weights);
     first
         .indices
         .extend(second.indices.into_iter().map(|index| index + vertex_base));
@@ -1179,6 +1206,7 @@ fn empty_payload(mode: SurfaceMode) -> MeshPayload {
         positions: Vec::new(),
         normals: Vec::new(),
         tile_coordinates: Vec::new(),
+        layer_weights: Vec::new(),
         indices: Vec::new(),
         groups: Vec::new(),
         triangle_owners: Vec::new(),
@@ -1223,15 +1251,23 @@ pub fn mesh_chunk_in_world_with_options(
     let chunk = world.get(coord)?;
     if options.all_greedy() {
         let spec = world.grid();
-        return Some(mesh_core(
-            &spec,
-            coord,
-            chunk,
-            |_| true,
-            |slot, voxel| {
-                neighbour_slot(world, &spec, voxel).is_some_and(|n| options.hides(slot, n))
-            },
-        ));
+        return Some(
+            mesh_core(
+                &spec,
+                coord,
+                chunk,
+                |_| true,
+                |slot, voxel| {
+                    neighbour_slot(world, &spec, voxel).is_some_and(|n| options.hides(slot, n))
+                },
+            )
+            .map(|mut cubes| {
+                if let Some(layers) = &options.terrain_layers {
+                    cube_layer_weights(&mut cubes, layers);
+                }
+                cubes
+            }),
+        );
     }
     Some(mesh_chunk_reconstructed(world, coord, chunk, options))
 }
@@ -1316,20 +1352,41 @@ fn mesh_chunk_reconstructed(
         min: origin,
         max: maximum,
     };
+    let field = options
+        .terrain_layers
+        .as_ref()
+        .map(|layers| terrain_layers::LayerField::around_chunk(world, &spec, layers, origin, size));
     let smooth = reconstruct(
         &lattice,
         options,
         owner,
         spec.voxel_size(),
         origin.map(|value| value as f64),
+        field.as_ref(),
     )?;
     if !options.uses_mode(SurfaceMode::GreedyCubes) {
         return Ok(smooth);
     }
-    let cubes = mesh_core(&spec, coord, chunk, greedy, |slot, voxel| {
+    let mut cubes = mesh_core(&spec, coord, chunk, greedy, |slot, voxel| {
         neighbour_slot(world, &spec, voxel).is_some_and(|n| greedy(n) && options.hides(slot, n))
     })?;
+    if let Some(layers) = &options.terrain_layers {
+        cube_layer_weights(&mut cubes, layers);
+    }
     merge_payloads(cubes, smooth, options.mode, options.limits)
+}
+
+/// Gives each cube face vertex all of its slot's layer weight: cube faces
+/// keep their block look.
+fn cube_layer_weights(cubes: &mut MeshPayload, layers: &TerrainLayers) {
+    let mut weights = vec![[1.0, 0.0, 0.0, 0.0]; cubes.positions.len() / 3];
+    for group in &cubes.groups {
+        let range = group.start as usize..(group.start + group.count) as usize;
+        for &vertex in &cubes.indices[range] {
+            weights[vertex as usize] = layers.one_hot(group.material_slot);
+        }
+    }
+    cubes.layer_weights = weights.into_iter().flatten().collect();
 }
 
 /// Core mesher: `hides(slot, world_voxel)` answers whether a voxel hides the
@@ -1555,6 +1612,7 @@ fn emit_quads(
         positions,
         normals,
         tile_coordinates,
+        layer_weights: Vec::new(),
         indices,
         groups,
         triangle_owners,

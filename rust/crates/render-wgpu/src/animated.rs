@@ -488,6 +488,7 @@ impl Renderer {
                 }),
             };
             let descriptor = RenderMaterialDescriptor {
+                terrain_layers: None,
                 id: id.clone(),
                 color: material.base_color,
                 texture,
@@ -1374,6 +1375,7 @@ impl Renderer {
             edges: Default::default(),
             extra: None,
             texture_space: None,
+            layer_weights: false,
             vertices: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some(label),
                 contents: bytemuck::cast_slice(vertices),

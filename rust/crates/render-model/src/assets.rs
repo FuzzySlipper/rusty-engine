@@ -334,6 +334,10 @@ impl VoxelSurfaceDescriptor {
     }
 
     pub fn texture(&self) -> &str {
+        self.texture_id()
+    }
+
+    fn texture_id(&self) -> &String {
         match &self.mapping {
             VoxelSurfaceMappingDescriptor::Repeat { texture, .. }
             | VoxelSurfaceMappingDescriptor::Atlas { texture, .. } => texture,
@@ -416,6 +420,34 @@ pub struct RenderMaterialDescriptor {
     /// shade stage, with its parameters.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shader: Option<MaterialShaderDescriptor>,
+    /// More voxel surface textures blended over this one by a voxel mesh's
+    /// terrain layer weights: this material's own texture, normal map and
+    /// tiling are layer 0. Only a voxel surface material has layers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terrain_layers: Option<MaterialTerrainLayersDescriptor>,
+}
+
+/// How many layers a material blends over its own.
+pub const MAX_MATERIAL_TERRAIN_LAYERS: usize = 3;
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MaterialTerrainLayersDescriptor {
+    /// Layers 1 to 3, in the order of the mesh's weights.
+    pub layers: Vec<MaterialTerrainLayerDescriptor>,
+    /// The weights are raised to this power (1 or more) before they are
+    /// normalized: 1 blends them as they are, higher narrows each transition
+    /// toward the dominant layer.
+    pub contrast: f32,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MaterialTerrainLayerDescriptor {
+    /// The layer's texture and its tiling.
+    pub voxel_surface: VoxelSurfaceDescriptor,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub normal_map: Option<MaterialNormalMapDescriptor>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -485,7 +517,7 @@ fn is_zero(value: &f32) -> bool {
 
 impl RenderMaterialDescriptor {
     /// Every texture the material reads: its base texture, then its normal
-    /// map's.
+    /// map's, a product shader's and its terrain layers'.
     pub fn textures(&self) -> impl Iterator<Item = &String> {
         self.texture
             .iter()
@@ -494,6 +526,15 @@ impl RenderMaterialDescriptor {
                 self.shader
                     .iter()
                     .flat_map(|shader| shader.textures.iter().flatten()),
+            )
+            .chain(
+                self.terrain_layers
+                    .iter()
+                    .flat_map(|layers| &layers.layers)
+                    .flat_map(|layer| {
+                        std::iter::once(layer.voxel_surface.texture_id())
+                            .chain(layer.normal_map.iter().map(|map| &map.texture))
+                    }),
             )
     }
 
@@ -564,6 +605,22 @@ impl RenderMaterialDescriptor {
                 return Err(MaterialDescriptorError::VoxelTextureMismatch);
             }
         }
+        if let Some(layers) = &self.terrain_layers {
+            let valid = self.voxel_surface.is_some()
+                && (1..=MAX_MATERIAL_TERRAIN_LAYERS).contains(&layers.layers.len())
+                && layers.contrast.is_finite()
+                && layers.contrast >= 1.0
+                && layers.layers.iter().all(|layer| {
+                    layer.voxel_surface.validate().is_ok()
+                        && layer.normal_map.as_ref().is_none_or(|map| {
+                            validate_asset_id(&map.texture, RenderAssetKind::Texture).is_ok()
+                                && map.scale.is_finite()
+                        })
+                });
+            if !valid {
+                return Err(MaterialDescriptorError::InvalidTerrainLayers);
+            }
+        }
         Ok(())
     }
 }
@@ -582,6 +639,9 @@ pub enum MaterialDescriptorError {
     InvalidAlphaCutoff,
     InvalidVoxelSurface(VoxelSurfaceDescriptorError),
     VoxelTextureMismatch,
+    /// Terrain layers need a voxel surface material, 1 to 3 valid layers and
+    /// a contrast of 1 or more.
+    InvalidTerrainLayers,
 }
 
 /// One node's values for one material slot, over the slot's material. The
@@ -1593,6 +1653,7 @@ mod tests {
         };
         assert_eq!(surface.validate(), Ok(()));
         let material = RenderMaterialDescriptor {
+            terrain_layers: None,
             shader: None,
             id: "material/stone".to_string(),
             color: [1.0; 4],
@@ -1645,6 +1706,7 @@ mod tests {
     #[test]
     fn generic_material_alpha_and_sidedness_are_explicit_and_bounded() {
         let material = RenderMaterialDescriptor {
+            terrain_layers: None,
             shader: None,
             id: "material/generic-alpha-test".to_string(),
             color: [1.0; 4],

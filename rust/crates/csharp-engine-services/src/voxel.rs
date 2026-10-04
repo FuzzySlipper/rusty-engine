@@ -9,8 +9,8 @@ use std::{ffi::c_void, sync::Arc, time::Instant};
 use crate::operation_diagnostics::{clear_receipt, refuse};
 use csharp_engine_abi::*;
 use engine_spatial::{
-    MaterialSurface, SurfaceCharacter, SurfaceMaterials, SurfaceMeshOptions, VertexPlacement,
-    VoxelChunkIdentity, VoxelChunkPayload, VoxelChunkResidencyApplyError,
+    MaterialSurface, SurfaceCharacter, SurfaceMaterials, SurfaceMeshOptions, TerrainLayers,
+    VertexPlacement, VoxelChunkIdentity, VoxelChunkPayload, VoxelChunkResidencyApplyError,
     VoxelChunkResidencyOperation, VoxelChunkResidencyRejection, VoxelChunkResidencyService,
     VoxelDensityApplyError, VoxelDensityEdit, VoxelDensityEditService, VoxelDensityOperation,
     VoxelDensityRejection, VoxelDensityShape, VoxelEdit, VoxelEditApplyError, VoxelEditRejection,
@@ -88,6 +88,54 @@ impl RuntimeSpatialBridge {
         };
         // The surface hash in the collision navigation key changes, so the
         // next collision navigation publication derives everything.
+        self.edit_scene(request.session, |session| {
+            Arc::make_mut(&mut session.scene).set_mesh_options(options)
+        })?
+        .map_err(|error| invalid(&error.to_string()))?;
+        self.read_voxel_scene(NativeVoxelSceneReadRequest {
+            session: request.session,
+        })
+    }
+
+    fn configure_voxel_terrain_layers(
+        &mut self,
+        request: &NativeVoxelTerrainLayerRequest,
+    ) -> Result<NativeVoxelSceneReadout, CsharpEngineServicesError> {
+        let slots = unsafe {
+            crate::composition::borrowed_slice(
+                request.slots,
+                request.slots_len,
+                "voxel terrain layer slots",
+            )
+        }?;
+        let invalid = |message: &str| voxel_error("CSHARP_VOXEL_TERRAIN_LAYERS", message);
+        let terrain_layers = if slots.is_empty() {
+            None
+        } else {
+            let slots = slots
+                .iter()
+                .map(|slot| {
+                    u16::try_from(*slot).map_err(|_| invalid("material slot must be in 0..=65535"))
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            let cells = u8::try_from(request.transition_cells)
+                .map_err(|_| invalid("transition must be 1 to 4 voxels"))?;
+            Some(TerrainLayers::new(slots, cells).map_err(|error| invalid(&error.to_string()))?)
+        };
+        let session = self.session_mut(request.session)?;
+        let chunk_size = session.scene.chunk_size();
+        if terrain_layers
+            .as_ref()
+            .is_some_and(|layers| u32::from(layers.transition_cells()) + 1 >= chunk_size)
+        {
+            return Err(invalid(
+                "a transition must be shorter than the chunk size less one voxel",
+            ));
+        }
+        let options = SurfaceMeshOptions {
+            terrain_layers,
+            ..session.scene.mesh_options().clone()
+        };
         self.edit_scene(request.session, |session| {
             Arc::make_mut(&mut session.scene).set_mesh_options(options)
         })?
@@ -870,6 +918,7 @@ pub(crate) fn api(bridge: &mut RuntimeSpatialBridge) -> NativeVoxelApi {
         configure_material_surfaces,
         apply_density_edits,
         read_densities,
+        configure_terrain_layers,
     }
 }
 
@@ -889,6 +938,33 @@ unsafe extern "C" fn configure_material_surfaces(
     }
     let bridge = unsafe { &mut *context.cast::<RuntimeSpatialBridge>() };
     match bridge.configure_voxel_material_surfaces(unsafe { &*request }) {
+        Ok(value) => {
+            unsafe { *output = value };
+            ABI_OK
+        }
+        Err(error) => {
+            bridge.operation_diagnostics.retain(&error, receipt);
+            0
+        }
+    }
+}
+
+unsafe extern "C" fn configure_terrain_layers(
+    context: *mut c_void,
+    request: *const NativeVoxelTerrainLayerRequest,
+    output: *mut NativeVoxelSceneReadout,
+    receipt: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    if receipt.is_null() {
+        return 0;
+    }
+    // SAFETY: this borrowed receipt starts empty for every direct callback.
+    unsafe { *receipt = std::mem::zeroed() };
+    if context.is_null() || request.is_null() || output.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeSpatialBridge>() };
+    match bridge.configure_voxel_terrain_layers(unsafe { &*request }) {
         Ok(value) => {
             unsafe { *output = value };
             ABI_OK
@@ -1238,6 +1314,96 @@ mod tests {
         // The declaration survives later edits.
         assert_eq!(edit(&mut bridge, 0, 3, 11), 11);
         assert_eq!(configure(&mut bridge, true), 10);
+    }
+
+    #[test]
+    fn terrain_layers_weigh_reconstructed_vertices_and_leave_geometry() {
+        let mut bridge = RuntimeSpatialBridge::new();
+        let session = create_session(&mut bridge);
+        let api = api(&mut bridge);
+        // Sand (1) then rock (2) across a 16 x 2 x 16 floor, dual contoured.
+        let floor: Vec<_> = (0..16)
+            .flat_map(|x| (0..16).flat_map(move |z| (0..2).map(move |y| (x, y, z))))
+            .map(|(x, y, z)| set(NativeVoxelAddress { x, y, z }, if x < 8 { 1 } else { 2 }))
+            .collect();
+        bridge
+            .apply_voxel_edits(&NativeVoxelEditTransaction {
+                session,
+                edits: floor.as_ptr(),
+                edits_len: floor.len(),
+            })
+            .unwrap();
+        let mut readout = NativeVoxelSceneReadout::default();
+        let mut receipt: NativeOperationErrorReceipt = unsafe { std::mem::zeroed() };
+        assert_eq!(
+            unsafe {
+                (api.configure_material_surfaces)(
+                    api.context,
+                    &NativeVoxelMaterialSurfaceRequest {
+                        session,
+                        mode: NativeVoxelSurfaceMode::DualContouring,
+                        materials: std::ptr::null(),
+                        materials_len: 0,
+                    },
+                    &mut readout,
+                    &mut receipt,
+                )
+            },
+            ABI_OK
+        );
+        let meshes = |bridge: &mut RuntimeSpatialBridge| {
+            bridge
+                .session_mut(session)
+                .unwrap()
+                .scene
+                .mesh_chunks()
+                .cloned()
+                .collect::<Vec<_>>()
+        };
+        let plain = meshes(&mut bridge);
+        let configure = |slots: &[u32], transition_cells: u32| {
+            let mut receipt: NativeOperationErrorReceipt = unsafe { std::mem::zeroed() };
+            unsafe {
+                (api.configure_terrain_layers)(
+                    api.context,
+                    &NativeVoxelTerrainLayerRequest {
+                        session,
+                        slots: slots.as_ptr(),
+                        slots_len: slots.len(),
+                        transition_cells,
+                    },
+                    &mut NativeVoxelSceneReadout::default(),
+                    &mut receipt,
+                )
+            }
+        };
+        // Malformed sets and a transition as long as the 8-voxel chunk are
+        // refused, leaving the meshes as they were.
+        for (slots, cells) in [
+            (vec![1, 2, 3, 4, 5], 1),
+            (vec![1, 1], 1),
+            (vec![1, 2], 0),
+            (vec![1, 2], 7),
+            (vec![70_000], 1),
+        ] {
+            assert_eq!(configure(&slots, cells), 0, "{slots:?} {cells}");
+        }
+        assert_eq!(meshes(&mut bridge), plain);
+        assert_eq!(configure(&[1, 2], 2), ABI_OK);
+        let layered = meshes(&mut bridge);
+        for (plain, layered) in plain.iter().zip(&layered) {
+            assert_eq!(plain.positions, layered.positions);
+            assert_eq!(plain.indices, layered.indices);
+            assert_eq!(plain.groups, layered.groups);
+            assert_eq!(layered.layer_weights.len(), layered.positions.len() / 3 * 4);
+        }
+        assert!(layered
+            .iter()
+            .flat_map(|chunk| chunk.layer_weights.chunks(4))
+            .any(|weights| weights[0] > 0.0 && weights[1] > 0.0));
+        // No slots removes the weights.
+        assert_eq!(configure(&[], 0), ABI_OK);
+        assert_eq!(meshes(&mut bridge), plain);
     }
 
     #[test]

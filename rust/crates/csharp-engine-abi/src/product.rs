@@ -570,6 +570,12 @@ pub type NativeCreateAuthoredMaterial = unsafe extern "C" fn(
     *mut NativeMaterialHandle,
     *mut crate::NativeOperationErrorReceipt,
 ) -> i32;
+pub type NativeCreateTerrainLayerMaterial = unsafe extern "C" fn(
+    *mut c_void,
+    *const crate::NativeTerrainLayerMaterialRequest,
+    *mut NativeMaterialHandle,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
 pub type NativeUpdateMaterial = unsafe extern "C" fn(
     *mut c_void,
     NativeMaterialUpdateRequest,
@@ -1424,6 +1430,7 @@ pub struct NativeGraphicsApi {
     pub read_light: NativeReadLight,
     pub read_presentation: NativeReadPresentation,
     pub create_authored_material: NativeCreateAuthoredMaterial,
+    pub create_terrain_layer_material: NativeCreateTerrainLayerMaterial,
 }
 
 /// Named renderer-neutral facts. Handles identify product-owned billboard and

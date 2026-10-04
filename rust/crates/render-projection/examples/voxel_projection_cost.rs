@@ -127,6 +127,7 @@ fn project(
 
 fn material() -> RenderMaterialDescriptor {
     RenderMaterialDescriptor {
+        terrain_layers: None,
         shader: None,
         id: voxel_material_id(1),
         color: [0.45, 0.7, 0.35, 1.0],

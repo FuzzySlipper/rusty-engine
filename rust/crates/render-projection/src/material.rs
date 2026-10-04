@@ -57,6 +57,7 @@ pub fn project_catalog_material(
         .map(project_surface)
         .transpose()?;
     let mut descriptor = RenderMaterialDescriptor {
+        terrain_layers: None,
         shader: None,
         id: entry.0.id.as_str().to_string(),
         color: rgba(entry.1.style.color),

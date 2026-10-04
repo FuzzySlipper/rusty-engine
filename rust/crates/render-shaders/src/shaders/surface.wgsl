@@ -29,6 +29,21 @@ fn voxel_lod(uv: vec2<f32>, tile: vec4<f32>, sample_rect: vec4<f32>, size: vec2<
     return clamp(lod, 0.0, max(log2(min(texels.x, texels.y)) - 2.0, 0.0));
 }
 
+// A voxel surface texture at tile coordinates `uv`, through `tile` and
+// `sample_rect` as `voxel_uv` and `voxel_lod` place it.
+fn tiled_texture(map: texture_2d<f32>, map_sampler: sampler, uv: vec2<f32>, tile: vec4<f32>, sample_rect: vec4<f32>) -> vec4<f32> {
+    return textureSampleLevel(map, map_sampler, voxel_uv(uv, tile, sample_rect),
+        voxel_lod(uv, tile, sample_rect, vec2<f32>(textureDimensions(map, 0))));
+}
+
+// Terrain layer shares from a mesh's layer weights: each to the contrast
+// power, normalized; all on layer 0 without any weight.
+fn layer_shares(weights: vec4<f32>, contrast: f32) -> vec4<f32> {
+    let raised = pow(max(weights, vec4<f32>(0.0)), vec4<f32>(contrast));
+    let total = raised.x + raised.y + raised.z + raised.w;
+    return select(vec4<f32>(1.0, 0.0, 0.0, 0.0), raised / total, total > 1e-6);
+}
+
 // A tangent-space normal map sample (x right, y up the image, z out; glTF)
 // in the frame of `tangent`, `bitangent` and `normal`.
 fn mapped_normal(normal: vec3<f32>, tangent: vec3<f32>, bitangent: vec3<f32>, sample: vec3<f32>, scale: f32) -> vec3<f32> {

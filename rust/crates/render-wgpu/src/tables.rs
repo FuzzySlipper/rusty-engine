@@ -100,15 +100,20 @@ pub(crate) struct GpuMesh {
     pub extra: Option<wgpu::Buffer>,
     /// The payload's texture space, for triplanar materials.
     pub texture_space: Option<render_model::MeshTextureSpace>,
+    /// Its vertex colours are terrain layer weights, not a tint: a voxel
+    /// chunk meshed with terrain layers.
+    pub layer_weights: bool,
 }
 
 impl GpuMesh {
     /// The standard shader features the mesh's vertex streams need.
     pub fn features(&self) -> crate::shaders::Features {
-        crate::shaders::Features::default().with(
-            crate::shaders::Features::VERTEX_TANGENTS,
-            self.extra.is_some(),
-        )
+        crate::shaders::Features::default()
+            .with(
+                crate::shaders::Features::VERTEX_TANGENTS,
+                self.extra.is_some(),
+            )
+            .with(crate::shaders::Features::LAYER_WEIGHTS, self.layer_weights)
     }
 }
 
