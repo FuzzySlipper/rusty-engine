@@ -23,5 +23,6 @@
     <PackageReference Include="Rusty.Engine" Version="$(RustyEngineFixtureSdkVersion)">
       <ExcludeAssets Condition="'$(RustyEngineUseSourceDevelopment)' == 'true'">compile;runtime</ExcludeAssets>
     </PackageReference>
+    <RustyEngineProductInputIntent Include="gameplay-time.clear" Value="payload:gameplay-time.clear.v1" />
   </ItemGroup>
 </Project>

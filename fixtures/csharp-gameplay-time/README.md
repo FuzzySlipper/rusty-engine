@@ -31,7 +31,8 @@ dotnet restore CsharpGameplayTime.csproj --source /path/to/pair/sdk-feed
   world time. All of them stop while the world holds and slow with it.
 - Pause/Resume at the bottom left is the menu pause (`context.lifecycle`): no
   update runs and gameplay input is discarded. Resume continues the product's
-  time choice.
+  time choice. Clear hits beside it claims `gameplay-time.clear`; the product
+  clears the count running (`Update`) or paused (`HandlePausedIntents`).
 
 The HUD shows the rate (`HELD`, `ACTION` during a shot's advance), the step,
 the cooldown and hits. `gameplay.observe` (live-debug) reads the same state

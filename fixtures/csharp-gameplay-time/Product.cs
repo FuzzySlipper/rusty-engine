@@ -44,6 +44,7 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     // Object ids.
     private const ulong FloorId = 1, TurretId = 2, RunnerId = 3, DroneIdBase = 10, ProjectileIdBase = 1000;
     private const int DroneCount = 3;
+    private const string ClearIntent = "gameplay-time.clear";
 
     private readonly IEngineContext engine;
     private readonly Camera camera;
@@ -67,6 +68,7 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     private bool crawl;
     private bool realtime;
     private int hits;
+    private int pausedClears;
     private Vector3 lastHit;
     private int shots;
     private ProductUpdateFacts lastFacts;
@@ -124,6 +126,8 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
             crawl = !crawl;
         bool fire = input.Physical.Pressed(PointerButton.Primary) || input.Physical.Pressed(ControllerButton.Button5);
         bool wait = input.Physical.Pressed(KeyboardControl.KeyB) || input.Physical.Pressed(ControllerButton.Button4);
+        foreach (ProductInputEvent intent in update.Input)
+            if (IsClear(intent)) hits = 0;
 
         // The world, once per admitted step.
         if (!turretScheduled && facts.AdmittedStepCount > 0)
@@ -307,6 +311,7 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         writer.Bool("crawl", crawl);
         writer.Bool("realtime", realtime);
         writer.Number("hits", hits);
+        writer.Number("pausedClears", pausedClears);
         engine.Ui.PublishProjection(new UiProjection(hud, ++hudSequence, writer.Value()));
     }
 
@@ -328,10 +333,27 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         cooldownSteps = cooldownReadyStep > simulationStep ? cooldownReadyStep - simulationStep : 0,
         shots,
         hits,
+        pausedClears,
         lastHit = new[] { lastHit.X, lastHit.Y, lastHit.Z },
         crawl,
         realtime,
     });
+
+    // The HUD's Clear button claims gameplay-time.clear: running it arrives in
+    // Update, during a menu pause here; the rule is the same.
+    public void HandlePausedIntents(ReadOnlySpan<ProductInputEvent> intents)
+    {
+        foreach (ProductInputEvent intent in intents)
+        {
+            if (!IsClear(intent)) continue;
+            hits = 0;
+            pausedClears++;
+        }
+        PublishHud();
+    }
+
+    private static bool IsClear(ProductInputEvent intent) =>
+        intent.Kind == InputEventKind.DirectProductPayload && intent.Intent.Span.SequenceEqual(Encoding.UTF8.GetBytes(ClearIntent));
 
     public void Start() { }
     // A menu pause keeps no held controls for resume.

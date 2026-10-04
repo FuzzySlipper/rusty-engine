@@ -10,6 +10,14 @@ export function mountProductUi(root, context) {
   hud.setAttribute('aria-live', 'polite');
   hud.style.cssText = 'position:absolute;right:12px;top:8px;color:white;font:14px ui-monospace,monospace;text-align:right;pointer-events:none';
   const lifecycle = createLifecycleControls(context);
+  // Works running or paused: the product applies the same rule either way.
+  const clear = document.createElement('button');
+  clear.textContent = 'Clear hits';
+  clear.dataset.fixtureClear = 'hits';
+  clear.addEventListener('click', () => context.intents?.claim('gameplay-time.clear', {
+    kind: 'product-payload', contract: 'gameplay-time.clear.v1', data: {},
+  }));
+  lifecycle.element.append(clear);
   root.append(help, reticle, hud, lifecycle.element);
 
   const unsubscribe = context.projection?.subscribe((projection) => {
@@ -20,7 +28,7 @@ export function mountProductUi(root, context) {
       `time ${time}`,
       `step ${value.step}`,
       `cooldown ${value.cooldownSteps}`,
-      `hits ${value.hits}`,
+      `hits ${value.hits} (cleared while paused ${value.pausedClears ?? 0}×)`,
       `${value.crawl ? 'crawl' : 'stop'} when idle${value.realtime ? ' · realtime' : ''}`,
     ].join('\n');
     hud.style.whiteSpace = 'pre';
