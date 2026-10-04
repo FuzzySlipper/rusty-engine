@@ -82,14 +82,18 @@ public sealed class FpsInput
     public FpsInputConfig Config { get; }
     public PhysicalInputState Physical { get; }
 
-    /// <summary>Consumes raw physical facts then reads the selected FPS controls for this simulation step.</summary>
+    /// <summary>
+    /// Consumes raw physical facts then reads the selected FPS controls for this update.
+    /// Pass the update's simulation seconds, or its <see cref="ProductUpdateFacts.HostElapsedSeconds"/>
+    /// when look must keep its speed while gameplay time holds or slows the world.
+    /// </summary>
     public FpsInputFrame Consume(ReadOnlySpan<ProductInputEvent> events, float simulationDeltaSeconds)
     {
         Physical.Consume(events);
         return Read(simulationDeltaSeconds);
     }
 
-    /// <summary>Reads retained controls. Controller look is integrated by simulation seconds; pointer input is not.</summary>
+    /// <summary>Reads retained controls. Controller look is integrated by the supplied seconds; pointer input is not.</summary>
     public FpsInputFrame Read(float simulationDeltaSeconds)
     {
         if (!float.IsFinite(simulationDeltaSeconds) || simulationDeltaSeconds < 0f)

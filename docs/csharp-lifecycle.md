@@ -121,6 +121,34 @@ Composition with the other owners of time:
   `Restart` callback may select again. A request in the constructor or `Start`
   applies from the first observation.
 
+#### Looking and controls while held
+
+A gameplay hold is not a pause: the lifecycle keeps running, so ordinary input
+(pointer lock, keys, buttons, sticks, focus and UI capture) is admitted as
+usual and reaches the next update, step or no step. Each update consumes
+input exactly once: pointer and wheel deltas and press/release edges arrive in
+the one update after they happen, and held mappings (a held key, a stick)
+are reported again in every update, so a held stick keeps turning without new
+axis events. A focus loss or control change clears held state as it does
+while running. Lifecycle pause, by contrast, still discards gameplay input and
+runs no update ([actions while paused](#actions-while-paused)).
+
+The product classifies controls. Integrate look and other presentation that
+must not slow with the world by `ProductUpdateFacts.HostElapsedSeconds`
+(unscaled host seconds since the previous update, 0 after a new baseline);
+integrate the body, AI, projectiles and cooldowns per admitted step at
+`FixedDeltaSeconds`. Publish the player camera every update. Movement that
+costs time chooses a rate (`SetRate`) from the movement it reads; an action
+such as an attack takes its press once, applies it, and buys its duration
+with `Advance`. Buffering an action until the next step is the product's own
+state. A time control such as resume is an ordinary binding the product reads
+in the zero-step update.
+
+With `UpdateCameraSample`, sample at world time
+(`(SimulationStep + AdmittedStepCount) * FixedDeltaSeconds`): while the world
+holds, each new look sample shares that time, replaces the history and
+presents at once, and interpolation resumes when world time does.
+
 ### Particle bursts
 
 `Presentation.EmitParticles` does not need signal registration, an appearance,
@@ -276,8 +304,9 @@ triggers) arrive independently as `ControllerButtonValue`, with `X` in `[0, 1]`;
 trigger input, just as `controller-axis:axis-0` maps the left stick's X axis.
 The runtime retains these scalar values between samples and clears them with
 the input lane. Products own dead zones, movement meaning, and stick look speed;
-integrate a held stick's angular rate using admitted simulation time, rather
-than treating each input sample as a mouse displacement.
+integrate a held stick's angular rate over time (admitted simulation time, or
+`HostElapsedSeconds` for look that ignores [gameplay time](#gameplay-time)),
+rather than treating each input sample as a mouse displacement.
 
 ### Runtime-generated geometry
 

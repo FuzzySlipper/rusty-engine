@@ -614,6 +614,7 @@ impl PresentationAdmission {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RealtimeAdvance {
     observed_time: HostMonotonicTime,
+    elapsed_nanoseconds: Option<u64>,
     simulation: Option<SimulationAdmission>,
     dropped_steps: u128,
     scaled_remainder: u32,
@@ -622,16 +623,25 @@ pub struct RealtimeAdvance {
 impl RealtimeAdvance {
     pub(crate) const fn new(
         observed_time: HostMonotonicTime,
+        elapsed_nanoseconds: Option<u64>,
         simulation: Option<SimulationAdmission>,
         dropped_steps: u128,
         scaled_remainder: u32,
     ) -> Self {
         Self {
             observed_time,
+            elapsed_nanoseconds,
             simulation,
             dropped_steps,
             scaled_remainder,
         }
+    }
+
+    /// Unscaled host time since the previous observation, whatever the
+    /// gameplay rate; `None` when this observation only set a new baseline
+    /// (after start, resume or an explicit reset).
+    pub const fn elapsed_nanoseconds(self) -> Option<u64> {
+        self.elapsed_nanoseconds
     }
 
     pub const fn observed_time(self) -> HostMonotonicTime {

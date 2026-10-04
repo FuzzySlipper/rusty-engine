@@ -65,6 +65,11 @@ pub struct NativeProductUpdateFacts {
     pub gameplay_time_selected: bool,
     pub gameplay_rate: f64,
     pub gameplay_advance_remaining_steps: u32,
+    /// Unscaled host seconds since the previous update, whatever the gameplay
+    /// rate: for look, camera smoothing and other presentation that must not
+    /// slow with the world. Zero after a new baseline (start, resume, restart,
+    /// an inspection change) and for inspection's manual steps.
+    pub host_elapsed_seconds: f64,
 }
 
 /// Selects how fast realtime gameplay simulation follows host time: 0 holds

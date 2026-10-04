@@ -341,6 +341,43 @@ impl RuntimeInputLane {
         {
             return Err(RuntimeInputError::SnapshotOutOfOrder);
         }
+        let snapshot = self.take_snapshot(simulation_step)?;
+        self.last_snapshot_step = Some(simulation_step.value());
+        Ok(snapshot)
+    }
+
+    /// Forms one snapshot for an update that admitted no simulation step, as
+    /// a product holding gameplay time receives. It is the same snapshot a
+    /// step would take: edges, pointer and wheel deltas and pending intents
+    /// are consumed here once, and held mappings (a held key, a stick) are
+    /// emitted again, so a held stick keeps turning without new axis events.
+    /// Its envelopes carry `next_step`, the step the world is waiting on,
+    /// which a later step snapshot may still take.
+    pub fn snapshot_without_step(
+        &mut self,
+        lifecycle: &RuntimeLifecycle,
+    ) -> Result<(InputFrame, Vec<RuntimeIntentEnvelope>), RuntimeInputError> {
+        if self.disposed {
+            return Err(RuntimeInputError::Disposed);
+        }
+        let readout = lifecycle.readout();
+        if readout.state() != runtime_lifecycle::RuntimeState::Running {
+            return Err(RuntimeInputError::LifecycleValidation);
+        }
+        if readout.instance_id() != self.binding.instance_id()
+            || readout.generation() != self.binding.generation()
+            || readout.control_revision() != self.binding.control_revision()
+        {
+            self.clear_state();
+            return Err(RuntimeInputError::BindingMismatch);
+        }
+        self.take_snapshot(SimulationStep::new(readout.admitted_simulation_steps()))
+    }
+
+    fn take_snapshot(
+        &mut self,
+        simulation_step: SimulationStep,
+    ) -> Result<(InputFrame, Vec<RuntimeIntentEnvelope>), RuntimeInputError> {
         let frame = self.frame(simulation_step);
         let mut paired =
             Vec::with_capacity(self.pending_intents.len() + self.mappings.mappings().len());
@@ -370,7 +407,6 @@ impl RuntimeInputLane {
             .collect::<Vec<_>>();
         self.pending_intents.clear();
         self.clear_transient();
-        self.last_snapshot_step = Some(simulation_step.value());
         Ok((frame, envelopes))
     }
 

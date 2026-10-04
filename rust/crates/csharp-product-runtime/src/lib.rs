@@ -723,6 +723,9 @@ pub struct CsharpProductRuntime {
     /// The gameplay time the last product call selected, settled onto the
     /// lifecycle once that call's own transition (if any) has applied.
     staged_gameplay_time: Option<csharp_engine_services::GameplayTimeRequest>,
+    /// Unscaled host time observed since the last realtime update, which the
+    /// next one reports as `host_elapsed_seconds`.
+    host_elapsed_ns: u64,
     /// Present when audio plays on this process's output device.
     audio_output: Option<audio_output::AudioOutput>,
     /// The renderer, when the configuration selected an output: absent only
@@ -1003,6 +1006,7 @@ impl CsharpProductRuntime {
             diagnostics: config.diagnostics,
             pending_update_attribution: None,
             staged_gameplay_time: initial_gameplay_time,
+            host_elapsed_ns: 0,
             audio_output,
             frame_output,
             presentation,
@@ -1887,14 +1891,25 @@ impl CsharpProductRuntime {
         if self.append_pending_inputs(mapped)? == PendingInputAdmission::Resynchronized {
             return Ok(Vec::new());
         }
+        let host_elapsed = self.take_host_elapsed(observed_host_time_nanoseconds);
         let facts = update_facts(
             &self.lifecycle,
             kind,
             observed_host_time_nanoseconds,
             (admission.first_step().value(), admission.step_count()),
             dropped_step_count,
+            host_elapsed,
         )?;
         self.update(facts)
+    }
+
+    /// The host time a realtime update reports; an update without a host
+    /// observation (an inspection step) reports none and leaves it.
+    fn take_host_elapsed(&mut self, observed_host_time_nanoseconds: Option<u64>) -> f64 {
+        if observed_host_time_nanoseconds.is_none() {
+            return 0.0;
+        }
+        std::mem::take(&mut self.host_elapsed_ns) as f64 / 1e9
     }
 
     /// The update a product that selected gameplay time receives for a host
@@ -1904,13 +1919,29 @@ impl CsharpProductRuntime {
         &mut self,
         observed_host_time_nanoseconds: u64,
     ) -> Result<Vec<RuntimePublication>, CsharpProductRuntimeError> {
+        // The same input owner and snapshot as a step: edges and deltas are
+        // consumed once, here, and held state is reported again.
+        let (_, envelopes) = self
+            .input_lane
+            .snapshot_without_step(&self.lifecycle)
+            .map_err(input_error)?;
+        let context = self.input_lane.context().clone();
+        let mapped = envelopes
+            .iter()
+            .map(|envelope| native_intent_event(envelope, &context))
+            .collect::<Vec<_>>();
+        if self.append_pending_inputs(mapped)? == PendingInputAdmission::Resynchronized {
+            return Ok(Vec::new());
+        }
         let next_step = self.lifecycle.readout().admitted_simulation_steps();
+        let host_elapsed = self.take_host_elapsed(Some(observed_host_time_nanoseconds));
         let facts = update_facts(
             &self.lifecycle,
             REALTIME_UPDATE_MODE,
             Some(observed_host_time_nanoseconds),
             (next_step, 0),
             0,
+            host_elapsed,
         )?;
         self.update(facts)
     }
@@ -3253,6 +3284,10 @@ impl ProductHostRuntime for CsharpProductRuntime {
             .map_err(|error| self.lifecycle_runtime_error(error))?;
         // A bounded advance counts down (and ends in a hold) here.
         self.settle_gameplay_time();
+        self.host_elapsed_ns = match admission.elapsed_nanoseconds() {
+            Some(elapsed) => self.host_elapsed_ns.saturating_add(elapsed),
+            None => 0,
+        };
         let outputs = match admission.simulation() {
             // The lifecycle owns admission and its readout counters. Runtime
             // Input snapshots once with the last admitted phase token; the
@@ -3713,6 +3748,7 @@ fn update_facts(
     observed_host_time_nanoseconds: Option<u64>,
     (simulation_step, admitted_step_count): (u64, u32),
     dropped_step_count: u128,
+    host_elapsed_seconds: f64,
 ) -> Result<NativeProductUpdateFacts, CsharpProductRuntimeError> {
     let readout = lifecycle.readout();
     let gameplay = lifecycle.gameplay_time();
@@ -3745,6 +3781,7 @@ fn update_facts(
         gameplay_time_selected: gameplay.selected(),
         gameplay_rate: csharp_engine_services::gameplay_rate_value(gameplay.rate()),
         gameplay_advance_remaining_steps: gameplay.advance_remaining_steps(),
+        host_elapsed_seconds,
     })
 }
 
@@ -7944,6 +7981,248 @@ mod tests {
         assert_eq!(batch.len(), 1);
         assert_eq!(batch[0].admitted_step_count, 2);
         assert_eq!(run.observe(5)[0].admitted_step_count, 0);
+
+        drop(run);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    /// One event as the gameplay-input fixture product saw it.
+    #[derive(Debug, Clone, PartialEq)]
+    struct SeenEvent {
+        kind: NativeInputEventKind,
+        intent: Vec<u8>,
+        x: f32,
+    }
+
+    static GAMEPLAY_INPUT_EVENTS: Mutex<Vec<Vec<SeenEvent>>> = Mutex::new(Vec::new());
+
+    unsafe extern "C" fn gameplay_input_fixture_update(
+        handle: *mut c_void,
+        args: *const NativeProductUpdateArgs,
+        result: *mut NativeProductUpdateResult,
+    ) -> i32 {
+        // SAFETY: the runtime supplies live update arguments for this call.
+        let args = unsafe { &*args };
+        let events = unsafe { std::slice::from_raw_parts(args.events, args.event_count) };
+        GAMEPLAY_INPUT_EVENTS
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(
+                events
+                    .iter()
+                    .map(|event| SeenEvent {
+                        kind: event.kind,
+                        intent: unsafe { copy_callback_bytes(event.intent, event.intent_len) },
+                        x: event.x,
+                    })
+                    .collect(),
+            );
+        unsafe { gameplay_time_fixture_update(handle, args, result) }
+    }
+
+    fn gameplay_input_run(label: &str) -> (GameplayTimeRun, PathBuf) {
+        let root = content_fixture_root(label);
+        fs::create_dir_all(&root).expect("gameplay input fixture content root");
+        let content = CsharpProductContent::admit(&root).expect("gameplay input fixture content");
+        let attack = DirectInputIntentDescriptor::new("fixture.attack", IntentValueKind::Digital)
+            .expect("attack descriptor");
+        let look = DirectInputIntentDescriptor::new("fixture.look", IntentValueKind::Axis)
+            .expect("look descriptor");
+        let mappings = vec![
+            RuntimeInputMapping::new(
+                "attack-e",
+                "fixture.attack",
+                RuntimeInputTrigger::Key {
+                    code: runtime_input_model::KeyboardControl::KeyE,
+                    edge: InputEdge::Pressed,
+                    chord: Vec::new(),
+                    context: None,
+                },
+            )
+            .expect("attack mapping"),
+            RuntimeInputMapping::new(
+                "look-stick",
+                "fixture.look",
+                RuntimeInputTrigger::ControllerAxis {
+                    axis: runtime_input_model::ControllerAxis::Axis2,
+                    context: None,
+                },
+            )
+            .expect("look mapping"),
+        ];
+        let mut runtime = CsharpProductRuntime::load_admitted_with(
+            content,
+            CsharpProductRuntimeConfig::new(
+                RuntimeInstanceId::new(1),
+                RuntimeLifecycleConfig::Realtime(
+                    RealtimeLifecycleConfig::new(30, 2).expect("realtime fixture config"),
+                ),
+                vec![attack, look],
+            )
+            .with_physical_mappings(mappings),
+            || Ok(drop_fixture_api()),
+        )
+        .expect("gameplay input fixture runtime");
+        runtime.api.update = gameplay_input_fixture_update;
+        GAMEPLAY_FIXTURE_STATUS
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clear();
+        runtime
+            .lifecycle(ProductHostLifecycleOperation::Start)
+            .unwrap();
+        runtime.advance_realtime(CanonicalU64::new(0)).unwrap();
+        (
+            GameplayTimeRun {
+                runtime,
+                observed: 0,
+            },
+            root,
+        )
+    }
+
+    fn physical(
+        binding: RuntimeInputBinding,
+        sequence: u64,
+        fact: RuntimeInputFact,
+    ) -> RuntimeInputEvent {
+        RuntimeInputEvent::Physical(RuntimeInputIngress::new(
+            binding,
+            sequence,
+            standard_input_context(),
+            fact,
+        ))
+    }
+
+    fn take_seen() -> Vec<Vec<SeenEvent>> {
+        std::mem::take(
+            &mut *GAMEPLAY_INPUT_EVENTS
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner),
+        )
+    }
+
+    fn mapped(updates: &[Vec<SeenEvent>], intent: &[u8]) -> Vec<f32> {
+        updates
+            .iter()
+            .flatten()
+            .filter(|event| event.intent == intent)
+            .map(|event| event.x)
+            .collect()
+    }
+
+    #[test]
+    fn held_gameplay_time_delivers_look_and_controls_once_without_steps() {
+        let _guard = DROP_FIXTURE_GATE
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let (mut run, root) = gameplay_input_run("gameplay-input");
+        run.request(FixtureTimeRequest::Rate(0.0));
+        run.observe(1);
+        let held_at = run.admitted();
+        take_seen();
+
+        // Aim and attack while held: a mouse turn, a stick pushed and held,
+        // and one press.
+        let binding = input_binding(&run.runtime.lifecycle);
+        let axis = |value| AxisValue::new(value).unwrap();
+        run.runtime
+            .input(ProductHostInputBatch::new(vec![
+                physical(
+                    binding,
+                    1,
+                    RuntimeInputFact::PointerDelta {
+                        x: axis(12.0),
+                        y: axis(-3.0),
+                    },
+                ),
+                physical(
+                    binding,
+                    2,
+                    RuntimeInputFact::ControllerAxis {
+                        axis: runtime_input_model::ControllerAxis::Axis2,
+                        value: axis(0.8),
+                    },
+                ),
+                physical(
+                    binding,
+                    3,
+                    RuntimeInputFact::Key {
+                        code: runtime_input_model::KeyboardControl::KeyE,
+                        edge: runtime_input::PhysicalEdge::Pressed,
+                    },
+                ),
+            ]))
+            .unwrap();
+        let facts = run.observe(1);
+        assert_eq!(facts.len(), 1);
+        assert_eq!(facts[0].admitted_step_count, 0);
+        assert!((facts[0].host_elapsed_seconds - 1.0 / 30.0).abs() < 1e-6);
+        let first = take_seen();
+        assert_eq!(first.len(), 1);
+        let kinds = first[0].iter().map(|event| event.kind).collect::<Vec<_>>();
+        for kind in [
+            NativeInputEventKind::PointerDelta,
+            NativeInputEventKind::ControllerAxis,
+            NativeInputEventKind::Key,
+        ] {
+            assert_eq!(
+                kinds.iter().filter(|seen| **seen == kind).count(),
+                1,
+                "{kind:?}"
+            );
+        }
+        assert_eq!(mapped(&first, b"fixture.attack").len(), 1);
+        assert!(mapped(&first, b"fixture.look").contains(&0.8));
+
+        // Held a second of host time with no new events: the stick keeps
+        // reporting every update, the press and the mouse turn do not repeat,
+        // and the world stays at its step.
+        for _ in 0..30 {
+            let facts = run.observe(1);
+            assert_eq!(facts[0].admitted_step_count, 0);
+        }
+        let held = take_seen();
+        assert_eq!(held.len(), 30);
+        assert!(held
+            .iter()
+            .all(|update| mapped(std::slice::from_ref(update), b"fixture.look") == [0.8]));
+        assert!(mapped(&held, b"fixture.attack").is_empty());
+        assert!(held
+            .iter()
+            .flatten()
+            .all(|event| event.kind != NativeInputEventKind::PointerDelta));
+        assert_eq!(run.admitted(), held_at);
+
+        // A physical control resumes (product policy picks the rate); the
+        // attack consumed while held is not replayed by the steps.
+        run.request(FixtureTimeRequest::Rate(1.0));
+        run.observe(1);
+        take_seen();
+        for _ in 0..3 {
+            run.observe(1);
+        }
+        let resumed = take_seen();
+        assert!(run.admitted() > held_at);
+        assert!(mapped(&resumed, b"fixture.attack").is_empty());
+
+        // Focus loss clears what was held: the stick stops reporting.
+        let binding = input_binding(&run.runtime.lifecycle);
+        run.runtime
+            .input(ProductHostInputBatch::new(vec![physical(
+                binding,
+                4,
+                RuntimeInputFact::Clear {
+                    reason: InputClearReason::FocusLoss,
+                },
+            )]))
+            .unwrap();
+        run.request(FixtureTimeRequest::Rate(0.0));
+        run.observe(1);
+        run.observe(1);
+        assert!(mapped(&take_seen(), b"fixture.look")
+            .iter()
+            .all(|value| *value == 0.0));
 
         drop(run);
         fs::remove_dir_all(root).unwrap();

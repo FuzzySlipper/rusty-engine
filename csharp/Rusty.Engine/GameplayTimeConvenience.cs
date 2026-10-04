@@ -65,7 +65,7 @@ public readonly partial record struct ProductUpdateFacts
         double fixedDeltaSeconds)
         : this(mode, lifecycleState, generation, controlRevision, observedHostTimeNanoseconds, simulationStep,
             fixedStepHz, admittedStepCount, droppedStepCount, fixedDeltaSeconds, false,
-            GameplayTimeConvenience.RealtimeRate, 0)
+            GameplayTimeConvenience.RealtimeRate, 0, fixedDeltaSeconds * admittedStepCount)
     {
     }
 }

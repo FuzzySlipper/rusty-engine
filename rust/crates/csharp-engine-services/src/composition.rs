@@ -1061,6 +1061,7 @@ mod tests {
                     gameplay_time_selected: false,
                     gameplay_rate: 1.0,
                     gameplay_advance_remaining_steps: 0,
+                    host_elapsed_seconds: 0.0,
                 },
             );
             services.finish_call().unwrap();

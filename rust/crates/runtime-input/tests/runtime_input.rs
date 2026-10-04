@@ -1227,3 +1227,71 @@ fn wire_decoder_does_not_inherit_an_http_hosts_byte_budget() {
         assert_eq!(payload.data(), &serde_json::Value::String(data.clone()));
     }
 }
+
+#[test]
+fn a_snapshot_without_a_step_consumes_edges_once_and_repeats_held_state() {
+    let (mut lifecycle, binding) = lifecycle_and_binding();
+    let mut lane = RuntimeInputLane::new(compiled_mappings(), binding, context());
+    lane.ingest(physical(
+        binding,
+        0,
+        RuntimeInputFact::Key {
+            code: KeyboardControl::KeyW,
+            edge: PhysicalEdge::Pressed,
+        },
+    ))
+    .unwrap();
+    lane.ingest(physical(
+        binding,
+        1,
+        RuntimeInputFact::ControllerAxis {
+            axis: ControllerAxis::Axis0,
+            value: axis(0.75),
+        },
+    ))
+    .unwrap();
+    let intents = |envelopes: &[runtime_input::RuntimeIntentEnvelope]| {
+        envelopes
+            .iter()
+            .map(|entry| {
+                (
+                    entry.simulation_step().value(),
+                    entry.intent().to_owned(),
+                    entry.phase(),
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+
+    // No step admitted: the press and the stick arrive labelled with the
+    // step the world is waiting on.
+    let (frame, first) = lane.snapshot_without_step(&lifecycle).unwrap();
+    assert!(frame.keyboard().iter().any(|button| button.pressed()));
+    assert!(first
+        .iter()
+        .all(|entry| entry.simulation_step().value() == 0));
+    assert!(intents(&first).contains(&(0, "move.forward".to_owned(), IntentPhase::Pressed)));
+    // Again: the held key and stick repeat, the press does not.
+    let (frame, second) = lane.snapshot_without_step(&lifecycle).unwrap();
+    assert!(frame.keyboard().iter().all(|button| !button.pressed()));
+    assert!(!intents(&second).contains(&(0, "move.forward".to_owned(), IntentPhase::Pressed)));
+    assert!(second.iter().any(|entry| {
+        entry.intent() == "look.horizontal"
+            && entry.value() == RuntimeIntentValue::Axis { value: axis(0.75) }
+    }));
+    assert!(second.iter().any(|entry| entry.intent() == "move.forward"));
+
+    // The step the world was waiting on can still take its snapshot.
+    let (_, stepped) = snapshot(&mut lane, &mut lifecycle).unwrap();
+    assert!(stepped
+        .iter()
+        .all(|entry| entry.simulation_step().value() == 0));
+    assert!(!intents(&stepped).contains(&(0, "move.forward".to_owned(), IntentPhase::Pressed)));
+
+    // A paused lifecycle has no step-less snapshot either.
+    lifecycle.pause().unwrap();
+    assert_eq!(
+        lane.snapshot_without_step(&lifecycle).unwrap_err(),
+        RuntimeInputError::LifecycleValidation
+    );
+}

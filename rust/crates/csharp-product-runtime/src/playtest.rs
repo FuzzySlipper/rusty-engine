@@ -26,6 +26,7 @@ impl CsharpProductRuntime {
                     _ => return time_error("mode must be realtime, manual or action-driven"),
                 };
                 self.lifecycle.reset_realtime_baseline();
+                self.host_elapsed_ns = 0;
                 self.playtest_time = mode;
                 self.follow_simulation_with_frames();
             }

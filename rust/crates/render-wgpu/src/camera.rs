@@ -350,6 +350,30 @@ mod tests {
     }
 
     #[test]
+    fn looking_around_a_held_world_presents_each_new_view_at_once() {
+        // World time stops at 1.1 (gameplay held) while the player keeps
+        // turning: each new sample shares the source time, so it replaces
+        // the history and presents now, without waiting for a world step or
+        // easing back toward an earlier view.
+        let mut motion = CameraMotion::default();
+        motion.receive(&camera([0.0; 3], 0.0, Some(("a", 1.0))), 10.0);
+        motion.receive(&camera([2.0, 0.0, 0.0], 0.0, Some(("b", 1.1))), 10.1);
+        for (index, yaw) in [30.0, 60.0, 90.0].into_iter().enumerate() {
+            let arrival = 10.2 + index as f64 * 0.016;
+            let id = format!("held-{index}");
+            motion.receive(&camera([2.0, 0.0, 0.0], yaw, Some((&id, 1.1))), arrival);
+            let pose = motion.pose(arrival).unwrap();
+            let expected = descriptor_pose(&camera([2.0, 0.0, 0.0], yaw, None));
+            assert!(pose.orientation.angle_between(expected.orientation) < 1e-4);
+            assert!((pose.position.x - 2.0).abs() < 1e-6);
+        }
+        // World time resumes: interpolation continues from the held view.
+        motion.receive(&camera([4.0, 0.0, 0.0], 90.0, Some(("c", 1.2))), 10.3);
+        let resumed = motion.pose(10.35).unwrap();
+        assert!(resumed.position.x >= 2.0 && resumed.position.x <= 4.0);
+    }
+
+    #[test]
     fn a_camera_without_motion_presents_its_latest_pose() {
         let mut motion = CameraMotion::default();
         motion.receive(&camera([1.0, 2.0, 3.0], 0.0, None), 0.0);

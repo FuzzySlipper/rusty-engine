@@ -156,9 +156,12 @@ deadzones, pointer/stick look and configurable bindings. `Standard` provides
 WASD/left-stick movement, mouse/right-stick look, Space/A jump, Control/B crouch,
 Shift/left-stick-click sprint and E/X use. Products select fire/cycling bindings.
 
-Call `Consume(update.Input, simulationSeconds)` every admitted update, including
-empty batches. Pointer sensitivity is radians per pointer unit; controller look
-is radians per simulation second at full deflection. `IntegrateLook` composes
+Call `Consume(update.Input, seconds)` every update, including empty batches,
+with the update's simulation seconds (`FixedDeltaSeconds * AdmittedStepCount`),
+or its `HostElapsedSeconds` when look must keep its speed while
+[gameplay time](csharp-lifecycle.md#gameplay-time) holds or slows the world.
+Pointer sensitivity is radians per pointer unit; controller look
+is radians per second at full deflection. `IntegrateLook` composes
 them separately. Positive raw browser Y is down; the standard config inverts
 look Y to positive-up pitch. Apply one-shot presses once, and character movement
 once per admitted fixed step. Clear input/focus when disabling gameplay.

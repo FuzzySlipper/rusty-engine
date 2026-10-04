@@ -231,6 +231,7 @@ impl RuntimeLifecycle {
             return Ok(RealtimeAdvance::new(
                 observed_time,
                 None,
+                None,
                 0,
                 scaled_remainder_u32(realtime.scaled_remainder),
             ));
@@ -293,6 +294,7 @@ impl RuntimeLifecycle {
         }
         Ok(RealtimeAdvance::new(
             observed_time,
+            Some(elapsed_nanoseconds),
             simulation,
             dropped_steps,
             scaled_remainder_u32(scaled_remainder),
