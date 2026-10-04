@@ -1406,6 +1406,11 @@ fn an_ambient_light_requesting_shadows_leaves_a_cave_darker_than_open_ground() {
 /// dual-contoured slope, with a strip of stone (slot 3) outside the layer set
 /// along its near edge.
 fn sand_and_rock(transition_cells: Option<u8>) -> VoxelCollisionScene {
+    sand_and_rock_layers(transition_cells.map(|cells| (vec![1, 2], cells)))
+}
+
+/// [`sand_and_rock`] with its terrain layers' slots and transition.
+fn sand_and_rock_layers(layers: Option<(Vec<u16>, u8)>) -> VoxelCollisionScene {
     let voxels = (-12..12).flat_map(|x: i64| {
         (-16..-2).flat_map(move |z: i64| {
             (-3..(x + 12) / 8 - 1).map(move |y| MaterialVoxel {
@@ -1426,8 +1431,8 @@ fn sand_and_rock(transition_cells: Option<u8>) -> VoxelCollisionScene {
         CHUNK_CELLS,
         voxels,
         SurfaceMeshOptions {
-            terrain_layers: transition_cells
-                .map(|cells| engine_spatial::TerrainLayers::new(vec![1, 2], cells).unwrap()),
+            terrain_layers: layers
+                .map(|(slots, cells)| engine_spatial::TerrainLayers::new(slots, cells).unwrap()),
             ..SurfaceMeshOptions::with_mode(engine_spatial::SurfaceMode::DualContouring)
         },
     )
@@ -1698,4 +1703,115 @@ fn a_terrain_layer_normal_map_shades_its_layer_as_its_own_material_does() {
             luminance(&separate, x)
         );
     }
+}
+
+#[test]
+fn a_high_contrast_keeps_a_blend_between_non_base_layers() {
+    // Layer 0 is a red slot no voxel uses; sand and rock are layers 1 and 2.
+    const SAND: [u8; 4] = [230, 200, 80, 255];
+    const ROCK: [u8; 4] = [70, 80, 110, 255];
+    const RED: [u8; 4] = [255, 0, 0, 255];
+    let render = |contrast: f32| {
+        let mut harness = Harness::new(RendererOptions {
+            default_world_lights: false,
+            ..RendererOptions::default()
+        });
+        let mut plain = |id: &str, color: [u8; 4]| {
+            harness
+                .resources
+                .texture(id, 4, 4, &image(4, 4, |_, _| color), TextureWrap::Repeat)
+        };
+        let (red, sand, rock) = (
+            plain("texture/red", RED),
+            plain("texture/sand", SAND),
+            plain("texture/rock", ROCK),
+        );
+        let repeat = |texture: &TextureDescriptor| VoxelSurfaceMappingDescriptor::Repeat {
+            texture: texture.id.clone(),
+            texture_version: texture.version,
+            texture_content_hash: texture.content_hash.clone().unwrap(),
+            tile_scale_cells: [2.0, 2.0],
+            tile_origin_cells: [0.0, 0.0],
+        };
+        let layer = |texture: &TextureDescriptor| MaterialTerrainLayerDescriptor {
+            voxel_surface: voxel_material(0, [1.0; 4], Some(texture), Some(repeat(texture)))
+                .voxel_surface
+                .unwrap(),
+            normal_map: None,
+        };
+        let mut materials = BTreeMap::new();
+        for slot in [1, 2, 3] {
+            let mut blend = voxel_material(slot, [1.0; 4], Some(&red), Some(repeat(&red)));
+            blend.terrain_layers = Some(MaterialTerrainLayersDescriptor {
+                layers: vec![layer(&sand), layer(&rock)],
+                contrast,
+            });
+            materials.insert(slot, blend);
+        }
+        let mut ops = vec![
+            RenderDiff::DefineTexture { texture: red },
+            RenderDiff::DefineTexture { texture: sand },
+            RenderDiff::DefineTexture { texture: rock },
+            RenderDiff::CreateLight {
+                handle: RenderHandle::new(90),
+                parent: None,
+                light: LightDescriptor::Ambient {
+                    color: [1.0; 3],
+                    intensity: std::f32::consts::PI,
+                    enabled: true,
+                    shadow_intent: LightShadowIntent::Disabled,
+                },
+            },
+        ];
+        let mut projector = VoxelRenderProjector::new();
+        ops.extend(project(
+            &mut projector,
+            &sand_and_rock_layers(Some((vec![9, 1, 2], 3))),
+            &materials,
+        ));
+        harness.apply(ops);
+        harness.render(&camera([0.0, 9.0, 1.0], 0.0, -55.0)).1
+    };
+    let row = |rgba: &[u8]| -> Vec<[u8; 4]> {
+        (0..WIDTH)
+            .map(|x| {
+                rgba[((HEIGHT / 2 * WIDTH + x) * 4) as usize..][..4]
+                    .try_into()
+                    .unwrap()
+            })
+            .collect()
+    };
+    let reddish = |pixels: &[[u8; 4]]| {
+        pixels
+            .iter()
+            .filter(|p| p[0] > 200 && p[1] < 100 && p[2] < 100)
+            .count()
+    };
+    let mixed = |pixels: &[[u8; 4]]| {
+        pixels
+            .iter()
+            .filter(|p| {
+                let along = (0..3)
+                    .map(|c| {
+                        (f32::from(p[c]) - f32::from(SAND[c]))
+                            * (f32::from(ROCK[c]) - f32::from(SAND[c]))
+                    })
+                    .sum::<f32>()
+                    / (0..3)
+                        .map(|c| (f32::from(ROCK[c]) - f32::from(SAND[c])).powi(2))
+                        .sum::<f32>();
+                along > 0.1 && along < 0.9
+            })
+            .count()
+    };
+    let (gentle, sharp) = (row(&render(1.0)), row(&render(32.0)));
+    assert_eq!(reddish(&gentle), 0, "an absent layer shows at contrast 1");
+    assert_eq!(reddish(&sharp), 0, "an absent layer shows at contrast 32");
+    assert!(mixed(&gentle) > 0);
+    assert!(
+        mixed(&sharp) < mixed(&gentle),
+        "contrast narrows the sand-rock transition: {} vs {}",
+        mixed(&sharp),
+        mixed(&gentle)
+    );
 }

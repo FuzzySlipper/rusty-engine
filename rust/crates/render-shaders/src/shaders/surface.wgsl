@@ -37,11 +37,17 @@ fn tiled_texture(map: texture_2d<f32>, map_sampler: sampler, uv: vec2<f32>, tile
 }
 
 // Terrain layer shares from a mesh's layer weights: each to the contrast
-// power, normalized; all on layer 0 without any weight.
+// power, normalized; all on layer 0 without any weight. Dividing by the
+// largest weight first keeps the largest raised share 1, so a high contrast
+// cannot shrink the total away; an absent layer stays absent.
 fn layer_shares(weights: vec4<f32>, contrast: f32) -> vec4<f32> {
-    let raised = pow(max(weights, vec4<f32>(0.0)), vec4<f32>(contrast));
-    let total = raised.x + raised.y + raised.z + raised.w;
-    return select(vec4<f32>(1.0, 0.0, 0.0, 0.0), raised / total, total > 1e-6);
+    let present = max(weights, vec4<f32>(0.0));
+    let largest = max(max(present.x, present.y), max(present.z, present.w));
+    if largest <= 0.0 {
+        return vec4<f32>(1.0, 0.0, 0.0, 0.0);
+    }
+    let raised = pow(present / largest, vec4<f32>(contrast));
+    return raised / (raised.x + raised.y + raised.z + raised.w);
 }
 
 // A tangent-space normal map sample (x right, y up the image, z out; glTF)
