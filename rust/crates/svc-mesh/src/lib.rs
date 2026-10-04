@@ -1051,26 +1051,44 @@ fn reconstruct(
 ) -> Result<MeshPayload, MeshError> {
     let characters = options.characters();
     let mut reconstruction = surface::Reconstruction::default();
-    if options.uses_mode(SurfaceMode::DualContouring) {
-        surface::dual_contour(
-            lattice,
-            characters,
-            owner,
-            false,
-            options.limits,
-            &mut reconstruction,
-        )?;
-    }
-    if options.uses_mode(SurfaceMode::MarchingCubes) {
-        surface::march(
-            lattice,
-            characters,
-            owner,
-            options.limits,
-            &mut reconstruction,
-        )?;
+    let present = lattice.materials_inside(&options.non_occluding);
+    if present.is_empty() {
+        extract(lattice, options, owner, &mut reconstruction)?;
+    } else {
+        // One layer of occluding materials, which meet water as they meet
+        // air, and one per non-occluding material, which keeps only its own
+        // surface: against air and other non-occluding materials.
+        for kept in std::iter::once(None).chain(present.into_iter().map(Some)) {
+            let layer = lattice.layer(&options.non_occluding, kept);
+            let first = reconstruction.triangles.len();
+            extract(&layer, options, owner, &mut reconstruction)?;
+            if let Some(kept) = kept {
+                for triangle in first..reconstruction.triangles.len() {
+                    if reconstruction.slots[triangle] != kept {
+                        reconstruction.halo[triangle] = true;
+                    }
+                }
+            }
+        }
     }
     surface::voxel_payload(reconstruction, characters, cell_size, pivot, options.limits)
+}
+
+/// Append the surfaces of every reconstructed mode in use.
+fn extract(
+    lattice: &surface::Lattice,
+    options: &SurfaceMeshOptions,
+    owner: surface::Owner,
+    out: &mut surface::Reconstruction,
+) -> Result<(), MeshError> {
+    let characters = options.characters();
+    if options.uses_mode(SurfaceMode::DualContouring) {
+        surface::dual_contour(lattice, characters, owner, false, options.limits, out)?;
+    }
+    if options.uses_mode(SurfaceMode::MarchingCubes) {
+        surface::march(lattice, characters, owner, options.limits, out)?;
+    }
+    Ok(())
 }
 
 /// Append `second` to `first`: offset indices, concatenate groups.

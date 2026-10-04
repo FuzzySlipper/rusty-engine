@@ -68,10 +68,11 @@ pub(crate) fn mesh_chunks(
 }
 
 /// The cuboid voxels of one chunk of a session with reconstructed materials:
-/// cube materials, and reconstructed voxels no surface passes through.
+/// cube materials, and reconstructed voxels no surface passes through: none
+/// touches empty space or a different non-occluding material.
 /// Noncollidable materials contribute nothing; a reconstructed voxel beside a
-/// noncollidable solid keeps its cuboid, since no surface is drawn between
-/// them.
+/// noncollidable solid that occludes keeps its cuboid, since no surface is
+/// drawn between them.
 pub(crate) fn collider_cubes(
     world: &VoxelWorld,
     noncollidable: &BTreeSet<u16>,
@@ -150,7 +151,10 @@ pub(crate) fn collider_cubes(
             for dy in 0..3 {
                 for dx in 0..3 {
                     let neighbour = materials[index(x + dx - 1, y + dy - 1, z + dz - 1)];
-                    if neighbour == EMPTY {
+                    // The surface also meets a different non-occluding material.
+                    let see_through =
+                        neighbour != slot && options.non_occluding.contains(&neighbour);
+                    if neighbour == EMPTY || see_through {
                         interior = false;
                     } else if noncollidable.contains(&neighbour)
                         && [dx, dy, dz].iter().filter(|offset| **offset != 1).count() == 1

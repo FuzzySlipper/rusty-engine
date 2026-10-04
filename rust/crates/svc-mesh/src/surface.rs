@@ -17,7 +17,7 @@
 //! cell, the sharper placement and the smaller roughness place the shared
 //! vertex.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use core_space::Direction6;
 
@@ -178,6 +178,43 @@ impl Lattice {
                 self.materials[index] = slot;
             }
             None => self.values[index] = -magnitude,
+        }
+    }
+
+    /// The materials of `slots` that some inside sample holds.
+    pub(super) fn materials_inside(&self, slots: &BTreeSet<u16>) -> BTreeSet<u16> {
+        if slots.is_empty() {
+            return BTreeSet::new();
+        }
+        self.values
+            .iter()
+            .zip(&self.materials)
+            .filter(|(value, slot)| **value > 0.0 && slots.contains(slot))
+            .map(|(_, slot)| *slot)
+            .collect()
+    }
+
+    /// The lattice with every sample of `emptied` except `kept` read as
+    /// empty at the same magnitude, so surfaces meet it as they meet air.
+    pub(super) fn layer(&self, emptied: &BTreeSet<u16>, kept: Option<u16>) -> Self {
+        let values = self
+            .values
+            .iter()
+            .zip(&self.materials)
+            .map(|(&value, slot)| {
+                if value > 0.0 && Some(*slot) != kept && emptied.contains(slot) {
+                    -value
+                } else {
+                    value
+                }
+            })
+            .collect();
+        Self {
+            origin: self.origin,
+            dims: self.dims,
+            values,
+            materials: self.materials.clone(),
+            explicit: self.explicit,
         }
     }
 

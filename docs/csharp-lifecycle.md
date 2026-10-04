@@ -452,9 +452,11 @@ inside the water as well as from above. Configuring again
 replaces the declarations and remeshes every chunk; the session keeps them
 through edits, residency, surface-mode changes and origin rebases.
 
-A reconstructed (marching-cubes or dual-contoured) material surfaces where
-its density meets empty space, so it does not yet show through a
-non-occluding neighbour; the declaration applies to cube faces.
+A reconstructed (marching-cubes or dual-contoured) material meets a
+different non-occluding material as it meets empty space, and a
+non-occluding reconstructed material draws only its surface against empty
+space and other non-occluding materials. Collision follows the drawn
+surface under passable water too.
 
 A multi-cell edit may legitimately fill the space occupied by a character.
 The edit and character step are separate operations. If bounded penetration

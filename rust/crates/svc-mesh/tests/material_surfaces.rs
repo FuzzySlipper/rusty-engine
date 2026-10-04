@@ -644,3 +644,55 @@ fn non_occluding_materials_show_the_faces_behind_them_but_not_their_own_inner_fa
     assert_eq!(face_area(&mesh, WATER, Direction6::NegY), 0.0);
     assert_eq!(face_area(&mesh, WATER, Direction6::PosY), 4.0);
 }
+
+#[test]
+fn a_reconstructed_bed_shows_under_a_non_occluding_material() {
+    // A dual-contoured stone floor two voxels deep under one layer of water.
+    let world = world_with(|[_, y, _]| match y {
+        0 | 1 => Some((STONE, -0.5)),
+        2 => Some((WATER, -0.5)),
+        _ => None,
+    });
+    let heights = |mesh: &MeshPayload, slot: u16| {
+        let p = positions(mesh);
+        mesh.groups
+            .iter()
+            .filter(|group| group.material_slot == slot)
+            .flat_map(|group| {
+                mesh.indices[group.start as usize..(group.start + group.count) as usize].iter()
+            })
+            .map(|index| p[*index as usize])
+            // Away from the world's sides, where absent chunks read as empty.
+            // and above the floor's underside, where the world ends.
+            .filter(|point| (1.0..=3.0).contains(&point[0]) && (1.0..=3.0).contains(&point[2]))
+            .filter(|point| point[1] > 1.0)
+            .map(|point| point[1])
+            .collect::<Vec<_>>()
+    };
+    let mesh = |non_occluding: BTreeSet<u16>| {
+        let options = SurfaceMeshOptions {
+            non_occluding,
+            ..SurfaceMeshOptions::with_mode(SurfaceMode::DualContouring)
+        };
+        mesh_chunk_in_world_with_options(&world, ChunkCoord::new(0, 0, 0), &options)
+            .unwrap()
+            .unwrap()
+    };
+
+    // Undeclared, the water hides the floor: only the water's top surfaces.
+    let hidden = mesh(BTreeSet::new());
+    assert!(heights(&hidden, STONE).is_empty());
+    assert!(heights(&hidden, WATER)
+        .iter()
+        .all(|y| (y - 3.0).abs() < 1.0e-4));
+
+    // Declared, the floor meets the water as it meets air, and the water
+    // draws only its own top, never a face against the floor.
+    let shown = mesh(BTreeSet::from([WATER]));
+    let floor = heights(&shown, STONE);
+    assert!(!floor.is_empty());
+    assert!(floor.iter().all(|y| (y - 2.0).abs() < 1.0e-4), "{floor:?}");
+    let water = heights(&shown, WATER);
+    assert!(!water.is_empty());
+    assert!(water.iter().all(|y| (y - 3.0).abs() < 1.0e-4), "{water:?}");
+}

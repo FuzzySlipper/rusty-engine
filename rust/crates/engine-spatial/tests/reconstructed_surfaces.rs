@@ -429,6 +429,68 @@ fn a_noncollidable_material_change_removes_retained_surface_collision() {
 }
 
 #[test]
+fn rays_meet_the_drawn_slope_under_passable_water_that_does_not_occlude() {
+    const WATER: u16 = 3;
+    const LEVEL: i64 = 6;
+    let mut scene = slope_scene(dual_contoured(SurfaceMaterials::default()));
+    // Fill the air below `LEVEL` with water whose densities continue the
+    // slope's field, so emptied water reads exactly as the air did.
+    let mut densities = Vec::new();
+    let mut materials = Vec::new();
+    for z in 0..DEPTH {
+        for y in 0..HEIGHT {
+            for _ in 0..WIDTH {
+                let distance = (y as f64 + 0.5 - slope_height(z as f64 + 0.5)) as f32;
+                let (density, material) = if distance < 0.0 {
+                    (distance, STONE)
+                } else if y < LEVEL {
+                    (-distance.max(1.0e-3), WATER)
+                } else {
+                    (distance, 0)
+                };
+                densities.push(density);
+                materials.push(material);
+            }
+        }
+    }
+    VoxelDensityEditService::apply(
+        &mut scene,
+        &[VoxelDensityEdit::Region {
+            min: [0, 0, 0],
+            size: [WIDTH as u32, HEIGHT as u32, DEPTH as u32],
+            densities,
+            materials,
+        }],
+    )
+    .unwrap();
+    scene.set_noncollidable_materials(BTreeSet::from([WATER]));
+    // Water that occludes hides the slope, so the voxels under it collide
+    // as cuboids.
+    let (x, z) = (5.3, 17.1);
+    assert!(slope_height(z) < LEVEL as f64);
+    assert_eq!(down(&scene, x, z).point[1].fract(), 0.0);
+    // Declared non-occluding, the slope is drawn under the water and rays
+    // meet it there.
+    scene
+        .set_mesh_options(SurfaceMeshOptions {
+            non_occluding: BTreeSet::from([WATER]),
+            ..scene.mesh_options().clone()
+        })
+        .unwrap();
+    let hit = down(&scene, x, z);
+    assert!(
+        (hit.point[1] - slope_height(z)).abs() < 1.0e-3,
+        "hit {:?} should be at {}",
+        hit.point,
+        slope_height(z)
+    );
+    assert_eq!(
+        scene.material_voxel(hit.voxel).unwrap().material_slot,
+        STONE
+    );
+}
+
+#[test]
 fn box_queries_reach_surface_triangles_past_their_owning_chunk() {
     let mut scene = dual_contoured_slab();
     // Softened densities bulge the surface past x = 0, the chunk's edge.
