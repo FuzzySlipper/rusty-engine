@@ -2,6 +2,9 @@ use std::fmt;
 
 pub(crate) const SCALED_NANOSECONDS_PER_SECOND: u128 = 1_000_000_000;
 
+/// Parts per million of realtime: a gameplay rate's unit.
+pub const GAMEPLAY_RATE_REALTIME_PPM: u32 = 1_000_000;
+
 /// Highest fixed-step rate accepted by the reusable runtime lifecycle.
 /// Products may choose to apply a stricter policy at their own edge.
 pub const MAX_REALTIME_HZ: u32 = 240;
@@ -253,6 +256,7 @@ pub enum LifecycleOperation {
     AdmitPresentation,
     ValidateSimulationToken,
     ValidatePresentationToken,
+    SelectGameplayTime,
 }
 
 /// One transport-neutral change to the controller currently admitted to a
@@ -648,6 +652,75 @@ impl RealtimeAdvance {
     }
 }
 
+/// How fast realtime gameplay simulation follows host time, in parts per
+/// million: 0 holds the world, `GAMEPLAY_RATE_REALTIME_PPM` is realtime.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct GameplayRate(u32);
+
+impl GameplayRate {
+    pub const HOLD: Self = Self(0);
+    pub const REALTIME: Self = Self(GAMEPLAY_RATE_REALTIME_PPM);
+
+    /// A rate from zero through realtime; faster than realtime is `None`.
+    pub const fn from_parts_per_million(value: u32) -> Option<Self> {
+        if value <= GAMEPLAY_RATE_REALTIME_PPM {
+            Some(Self(value))
+        } else {
+            None
+        }
+    }
+
+    pub const fn parts_per_million(self) -> u32 {
+        self.0
+    }
+}
+
+/// The gameplay time a product selected for the current generation.
+///
+/// `selected` turns true at the product's first selection and stays true until
+/// a new generation; hosts use it to tell a product that controls gameplay
+/// time from one that never asked. While `advance_remaining_steps` is nonzero
+/// the world runs at `rate` for that many more whole steps and then holds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GameplayTime {
+    pub(crate) selected: bool,
+    pub(crate) rate: GameplayRate,
+    pub(crate) advance_remaining_steps: u32,
+}
+
+impl Default for GameplayTime {
+    /// Realtime, as a product that never selected gameplay time runs.
+    fn default() -> Self {
+        Self::DEFAULT
+    }
+}
+
+impl GameplayTime {
+    pub(crate) const DEFAULT: Self = Self {
+        selected: false,
+        rate: GameplayRate::REALTIME,
+        advance_remaining_steps: 0,
+    };
+
+    pub const fn selected(self) -> bool {
+        self.selected
+    }
+
+    /// The rate realtime admission uses now (during an advance, its rate).
+    pub const fn rate(self) -> GameplayRate {
+        self.rate
+    }
+
+    pub const fn advance_remaining_steps(self) -> u32 {
+        self.advance_remaining_steps
+    }
+
+    /// Whether host time admits no simulation now.
+    pub const fn held(self) -> bool {
+        self.rate.0 == 0
+    }
+}
+
 /// Bounded readout from one lifecycle instance. It is observation only.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RuntimeLifecycleReadout {
@@ -744,6 +817,8 @@ pub enum RuntimeLifecycleError {
     UnknownPresentation {
         sequence: u64,
     },
+    /// A bounded gameplay advance needs a positive rate to make progress.
+    GameplayAdvanceWithoutRate,
     CounterExhausted,
 }
 

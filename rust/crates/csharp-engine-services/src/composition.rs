@@ -52,6 +52,7 @@ use crate::render_resources::{
 )]
 fn engine_api(
     input_bridge: &mut crate::input::RuntimeInputBridge,
+    gameplay_time_bridge: &mut crate::gameplay_time::RuntimeGameplayTimeBridge,
     diagnostics_bridge: &mut crate::diagnostics::RuntimeDiagnosticsBridge,
     appearance_bridge: &mut RuntimeAppearanceBridge,
     content_bridge: &mut RuntimeContentBridge,
@@ -74,6 +75,7 @@ fn engine_api(
     spatial_bridge.bind_appearance(appearance_bridge);
     NativeEngineApi {
         input: crate::input::api(input_bridge),
+        gameplay_time: crate::gameplay_time::api(gameplay_time_bridge),
         implicit_surfaces: crate::implicit_surfaces::api(implicit_bridge, appearance_bridge),
         diagnostics: crate::diagnostics::api(diagnostics_bridge),
         dynamics: crate::dynamics::api(dynamics_bridge),
@@ -276,6 +278,7 @@ pub struct EngineServiceSet {
     call_elapsed_seconds: f64,
     presentation_world: render_presentation::PresentationWorld,
     input: crate::input::RuntimeInputBridge,
+    gameplay_time: crate::gameplay_time::RuntimeGameplayTimeBridge,
     diagnostics: crate::diagnostics::RuntimeDiagnosticsBridge,
     appearance: RuntimeAppearanceBridge,
     content: Box<RuntimeContentBridge>,
@@ -299,6 +302,7 @@ pub struct EngineServiceSet {
 /// replacement it selected. Every service already holds the call's changes.
 pub struct CsharpEngineCall {
     input_mapping_replacement: Option<runtime_input::CompiledInputMappings>,
+    gameplay_time_request: Option<crate::GameplayTimeRequest>,
     output: CsharpEngineCallOutput,
 }
 
@@ -399,6 +403,7 @@ impl EngineServiceSet {
             call_elapsed_seconds: 0.0,
             presentation_world: render_presentation::PresentationWorld::default(),
             input: crate::input::RuntimeInputBridge::new(direct_intents),
+            gameplay_time: crate::gameplay_time::RuntimeGameplayTimeBridge::new(),
             diagnostics: crate::diagnostics::RuntimeDiagnosticsBridge::new(diagnostics_sink),
             appearance,
             content,
@@ -427,6 +432,7 @@ impl EngineServiceSet {
     pub fn api(&mut self) -> NativeEngineApi {
         engine_api(
             &mut self.input,
+            &mut self.gameplay_time,
             &mut self.diagnostics,
             &mut self.appearance,
             &mut self.content,
@@ -472,6 +478,17 @@ impl EngineServiceSet {
 
     pub fn renderer_diagnostics_json(&self) -> Option<&str> {
         self.diagnostics.renderer_json()
+    }
+
+    /// The lifecycle's gameplay time selection, which `GameplayTime.Read`
+    /// answers and requests build on. `fixed_step_hz` is `None` for a runtime
+    /// without a realtime rate.
+    pub fn set_gameplay_time(
+        &mut self,
+        fixed_step_hz: Option<u32>,
+        effective: runtime_lifecycle::GameplayTime,
+    ) {
+        self.gameplay_time.set(fixed_step_hz, effective);
     }
 
     pub fn begin_call(&mut self, ui_binding: RuntimeUiRuntimeBinding) {
@@ -552,6 +569,7 @@ impl EngineServiceSet {
             None => self.appearance.begin_call(),
         }
         self.input.begin_call(accepts_input_replacement);
+        self.gameplay_time.begin_call();
         self.audio.begin_call();
         if update.is_some() {
             self.audio.advance_elapsed(self.call_elapsed_seconds);
@@ -642,6 +660,7 @@ impl EngineServiceSet {
             ));
         }
         let input_mapping_replacement = self.input.take_call();
+        let gameplay_time_request = self.gameplay_time.take_call();
         let mut calls = ServiceCalls {
             implicit: self.implicit.take_call()?,
             presentation_world: std::mem::take(&mut self.presentation_world),
@@ -667,6 +686,7 @@ impl EngineServiceSet {
             .commit_call(calls.voxel_scene_presentation);
         Ok(CsharpEngineCall {
             input_mapping_replacement,
+            gameplay_time_request,
             output: output?,
         })
     }
@@ -867,6 +887,11 @@ impl CsharpEngineCall {
         std::mem::take(&mut self.output)
     }
 
+    /// The gameplay time the call selected last, for the runtime to settle.
+    pub fn take_gameplay_time_request(&mut self) -> Option<crate::GameplayTimeRequest> {
+        self.gameplay_time_request.take()
+    }
+
     pub fn take_input_mapping_replacement(
         &mut self,
     ) -> Option<runtime_input::CompiledInputMappings> {
@@ -1033,6 +1058,9 @@ mod tests {
                     admitted_step_count: 1,
                     dropped_step_count: 0,
                     fixed_delta_seconds: 1.0 / 60.0,
+                    gameplay_time_selected: false,
+                    gameplay_rate: 1.0,
+                    gameplay_advance_remaining_steps: 0,
                 },
             );
             services.finish_call().unwrap();

@@ -128,6 +128,24 @@ internal static class EngineTestHostChecks
             using ContentReference atlas = engine.Content.OpenReference(new("textures/atlas.png"));
             ExpectRefusal(() => engine.Ui.OpenFont(new(atlas)), "CSHARP_UI_FONT_FORMAT");
         });
+
+        host.Call(engine =>
+        {
+            // Gameplay time answers as the standard 60 Hz realtime runtime: a
+            // request reads back within its call, and a refusal keeps the last
+            // valid one.
+            Require(!engine.GameplayTime.Read().Selected, "Gameplay time was selected before any request.");
+            GameplayTimeReadout held = engine.GameplayTime.Hold();
+            Require(held.Selected && held.Held && held.FixedStepHz == 60, "A hold did not read back held.");
+            Require(engine.GameplayTime.SetRate(0.1).Rate == 0.1, "A tenth of realtime did not read back.");
+            ExpectRefusal(() => engine.GameplayTime.SetRate(1.5), "CSHARP_GAMEPLAY_TIME_RATE");
+            ExpectRefusal(() => engine.GameplayTime.SetRate(double.NaN), "CSHARP_GAMEPLAY_TIME_RATE");
+            Require(engine.GameplayTime.Read().Rate == 0.1, "A refused rate replaced the staged one.");
+            GameplayTimeReadout advance = engine.GameplayTime.Advance(0.1);
+            Require(advance.AdvanceRemainingSteps == 6 && advance.Rate == 1.0, "A 0.1 s advance was not six 60 Hz steps.");
+            ExpectRefusal(() => engine.GameplayTime.Advance(0), "CSHARP_GAMEPLAY_TIME_ADVANCE");
+            ExpectRefusal(() => engine.GameplayTime.Advance(1, 0), "CSHARP_GAMEPLAY_TIME_RATE");
+        });
     }
 
     private const string TintShader = """

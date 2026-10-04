@@ -8,6 +8,7 @@ mod composition;
 mod content;
 mod diagnostics;
 mod dynamics;
+mod gameplay_time;
 mod implicit_surfaces;
 mod input;
 mod kinematic;
@@ -34,6 +35,7 @@ pub use composition::{
     parse_runtime_appearance_catalog, CsharpAppearanceCallOutput, CsharpAppearanceCatalog,
     CsharpEngineCallOutput, CsharpEngineServicesError, EngineServiceSet,
 };
+pub use gameplay_time::{rate_value as gameplay_rate_value, GameplayTimeRequest};
 pub use render_output::RenderOutputWork;
 pub use render_resources::{CsharpRenderResource, CsharpRenderResourceKind};
 pub use video::VideoRealizationFact;

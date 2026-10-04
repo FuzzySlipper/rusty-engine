@@ -16,6 +16,9 @@ use runtime_lifecycle::{RuntimeControlRevision, RuntimeGeneration, RuntimeInstan
 use runtime_ui::RuntimeUiRuntimeBinding;
 
 const ABI_OK: i32 = 1;
+/// The standard realtime runtime's fixed-step rate, which gameplay time
+/// requests convert their durations at.
+const STANDARD_REALTIME_HZ: u32 = 60;
 
 /// The one product runtime a test host stands for.
 const BINDING: RuntimeUiRuntimeBinding = RuntimeUiRuntimeBinding::new(
@@ -166,6 +169,12 @@ unsafe fn create(
         persistence_root,
         diagnostics,
     )?);
+    // Gameplay time answers as in the standard realtime runtime; a request
+    // stages and reads back within its call, with no lifecycle to settle it.
+    services.set_gameplay_time(
+        Some(STANDARD_REALTIME_HZ),
+        runtime_lifecycle::GameplayTime::default(),
+    );
     let engine = services.api();
     let host = Box::new(TestHost {
         services,

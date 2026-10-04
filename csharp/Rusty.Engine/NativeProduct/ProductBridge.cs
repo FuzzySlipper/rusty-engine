@@ -11,6 +11,7 @@ internal sealed class EngineContext : IEngineContext
     internal EngineContext(NativeEngineApi native)
     {
         Input = new InputServiceImplementation(native.input);
+        GameplayTime = new GameplayTimeServiceImplementation(native.gameplay_time);
         Diagnostics = new DiagnosticsServiceImplementation(native.diagnostics);
         Audio = new AudioServiceImplementation(native.audio);
         Video = new VideoServiceImplementation(native.video);
@@ -37,6 +38,7 @@ internal sealed class EngineContext : IEngineContext
     }
 
     public IInputService Input { get; }
+    public IGameplayTimeService GameplayTime { get; }
     public IDiagnosticsService Diagnostics { get; }
     public IAudioService Audio { get; }
     public IVideoService Video { get; }

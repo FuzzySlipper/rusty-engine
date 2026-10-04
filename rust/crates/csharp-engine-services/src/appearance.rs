@@ -537,6 +537,9 @@ fn realtime_sprite_update(step: u64, delta: f64) -> NativeProductUpdateFacts {
         admitted_step_count: 1,
         dropped_step_count: 0,
         fixed_delta_seconds: delta,
+        gameplay_time_selected: false,
+        gameplay_rate: 1.0,
+        gameplay_advance_remaining_steps: 0,
     }
 }
 

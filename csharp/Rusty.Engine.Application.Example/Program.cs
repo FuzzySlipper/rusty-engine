@@ -212,6 +212,7 @@ static void Require(bool condition, string message)
 sealed class ExampleEngineContext : IEngineContext
 {
     public IInputService Input => throw new NotSupportedException();
+    public IGameplayTimeService GameplayTime => throw new NotSupportedException();
     public IImplicitSurfacesService ImplicitSurfaces => throw new NotSupportedException();
     public IDiagnosticsService Diagnostics => throw new NotSupportedException();
     public IAudioService Audio => throw new NotSupportedException();

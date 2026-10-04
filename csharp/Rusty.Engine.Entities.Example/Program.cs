@@ -813,6 +813,7 @@ sealed class GraphicsServiceFake : IGraphicsService
 sealed class PersistenceEngineContext(IPersistenceService persistence) : IEngineContext
 {
     public IInputService Input => throw new NotSupportedException();
+    public IGameplayTimeService GameplayTime => throw new NotSupportedException();
     public IDiagnosticsService Diagnostics => throw new NotSupportedException();
     public IDynamicsService Dynamics => throw new NotSupportedException();
     public IMotionService Motion => throw new NotSupportedException();

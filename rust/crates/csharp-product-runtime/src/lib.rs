@@ -675,6 +675,28 @@ struct FinishedProductCall {
     failure: Option<CsharpProductRuntimeError>,
 }
 
+/// The fixed-step rate of a runtime that has a gameplay rate.
+fn gameplay_cadence(lifecycle: &RuntimeLifecycle) -> Option<u32> {
+    match lifecycle.configuration() {
+        RuntimeLifecycleConfig::Realtime(config) => Some(config.fixed_step_hz()),
+        RuntimeLifecycleConfig::Demand | RuntimeLifecycleConfig::External => None,
+    }
+}
+
+fn apply_gameplay_time(
+    lifecycle: &mut RuntimeLifecycle,
+    request: csharp_engine_services::GameplayTimeRequest,
+) -> Result<runtime_lifecycle::GameplayTime, runtime_lifecycle::RuntimeLifecycleError> {
+    match request {
+        csharp_engine_services::GameplayTimeRequest::Rate(rate) => {
+            lifecycle.select_gameplay_rate(rate)
+        }
+        csharp_engine_services::GameplayTimeRequest::Advance { steps, rate } => {
+            lifecycle.begin_gameplay_advance(steps, rate)
+        }
+    }
+}
+
 pub struct CsharpProductRuntime {
     playtest_time: playtest::TimeMode,
     api: LoadedProductApi,
@@ -698,6 +720,9 @@ pub struct CsharpProductRuntime {
     shutdown_called: bool,
     diagnostics: ProductHostLog,
     pending_update_attribution: Option<ProductHostUpdateAttribution>,
+    /// The gameplay time the last product call selected, settled onto the
+    /// lifecycle once that call's own transition (if any) has applied.
+    staged_gameplay_time: Option<csharp_engine_services::GameplayTimeRequest>,
     /// Present when audio plays on this process's output device.
     audio_output: Option<audio_output::AudioOutput>,
     /// The renderer, when the configuration selected an output: absent only
@@ -904,6 +929,7 @@ impl CsharpProductRuntime {
             engine: services.api(),
         };
         let mut handle = ptr::null_mut();
+        services.set_gameplay_time(gameplay_cadence(&lifecycle), lifecycle.gameplay_time());
         services.begin_create_call(ui_binding(&lifecycle));
         let created = call_create(&api, &args, &mut handle).and_then(|()| {
             if handle.is_null() {
@@ -916,20 +942,25 @@ impl CsharpProductRuntime {
             // Convert once and retain the owned create output for the first Start.
             let initial_output = call_outputs(&render_outputs, call.take_output())?;
             services.seal_resource_selection();
-            Ok((initial_output, call.take_input_mapping_replacement()))
+            Ok((
+                initial_output,
+                call.take_input_mapping_replacement(),
+                call.take_gameplay_time_request(),
+            ))
         });
-        let (initial_output, initial_input_mapping_replacement) = match created {
-            Ok(created) => created,
-            Err(error) => {
-                let _ = services.finish_call();
-                if !handle.is_null() {
-                    // SAFETY: a failing create may still have returned an owned
-                    // handle; releasing it is part of the fixed ownership ABI.
-                    unsafe { (api.destroy)(handle) };
+        let (initial_output, initial_input_mapping_replacement, initial_gameplay_time) =
+            match created {
+                Ok(created) => created,
+                Err(error) => {
+                    let _ = services.finish_call();
+                    if !handle.is_null() {
+                        // SAFETY: a failing create may still have returned an owned
+                        // handle; releasing it is part of the fixed ownership ABI.
+                        unsafe { (api.destroy)(handle) };
+                    }
+                    return Err(error);
                 }
-                return Err(error);
-            }
-        };
+            };
         let mut initial_output = initial_output;
         if audio_output.is_some() {
             // Retained voices from create reach the device in the Start
@@ -971,6 +1002,7 @@ impl CsharpProductRuntime {
             shutdown_called: false,
             diagnostics: config.diagnostics,
             pending_update_attribution: None,
+            staged_gameplay_time: initial_gameplay_time,
             audio_output,
             frame_output,
             presentation,
@@ -1791,6 +1823,7 @@ impl CsharpProductRuntime {
         // The callback consumed its input whatever happened inside it.
         self.pending_inputs.clear();
         let finished = self.finish_product_call(callback_result.as_ref().err().cloned());
+        self.settle_gameplay_time();
         if !events.is_empty() {
             let step = self.lifecycle.readout().admitted_simulation_steps();
             if let Some(frames) = &mut self.frame_output {
@@ -1858,8 +1891,26 @@ impl CsharpProductRuntime {
             &self.lifecycle,
             kind,
             observed_host_time_nanoseconds,
-            admission,
+            (admission.first_step().value(), admission.step_count()),
             dropped_step_count,
+        )?;
+        self.update(facts)
+    }
+
+    /// The update a product that selected gameplay time receives for a host
+    /// observation that admitted no step: its input and a chance to present
+    /// and choose, with no world time.
+    fn update_without_step(
+        &mut self,
+        observed_host_time_nanoseconds: u64,
+    ) -> Result<Vec<RuntimePublication>, CsharpProductRuntimeError> {
+        let next_step = self.lifecycle.readout().admitted_simulation_steps();
+        let facts = update_facts(
+            &self.lifecycle,
+            REALTIME_UPDATE_MODE,
+            Some(observed_host_time_nanoseconds),
+            (next_step, 0),
+            0,
         )?;
         self.update(facts)
     }
@@ -1887,6 +1938,7 @@ impl CsharpProductRuntime {
         self.services.begin_call(ui_binding(&self.lifecycle));
         let callback_result = call_paused_intents(&self.api, self.handle, &events);
         let finished = self.finish_product_call(callback_result.err());
+        self.settle_gameplay_time();
         let mut outputs = finished.outputs;
         let Some(failure) = finished.failure else {
             return Ok((outputs, false));
@@ -1915,6 +1967,9 @@ impl CsharpProductRuntime {
         match self.services.finish_call() {
             Ok(mut call) => {
                 finished.input_mapping_replacement = call.take_input_mapping_replacement();
+                if let Some(request) = call.take_gameplay_time_request() {
+                    self.staged_gameplay_time = Some(request);
+                }
                 match call_outputs(&self.render_outputs, call.take_output()) {
                     Ok(mut outputs) => {
                         if let Some(audio) = &mut self.audio_output {
@@ -1939,6 +1994,22 @@ impl CsharpProductRuntime {
         }
         self.follow_simulation_with_frames();
         finished
+    }
+
+    /// Applies the gameplay time the last call selected to the lifecycle and
+    /// tells the service what is now in force. It applies from the next host
+    /// observation: steps the current update already admitted are delivered.
+    fn settle_gameplay_time(&mut self) {
+        if let Some(request) = self.staged_gameplay_time.take() {
+            if let Err(error) = apply_gameplay_time(&mut self.lifecycle, request) {
+                let error = self.lifecycle_runtime_error(error);
+                self.publish_diagnostic(&error);
+            }
+        }
+        self.services.set_gameplay_time(
+            gameplay_cadence(&self.lifecycle),
+            self.lifecycle.gameplay_time(),
+        );
     }
 
     /// Stops simulation after a product exception, an Engine failure while
@@ -2105,6 +2176,9 @@ impl CsharpProductRuntime {
         // The product's own lifecycle callback ran (or threw); the transition
         // still applies, so a failure lands in the lifecycle's new state.
         transition(&mut self.lifecycle).map_err(lifecycle_error)?;
+        // After the transition, so that a Restart callback chooses the new
+        // generation's gameplay time.
+        self.settle_gameplay_time();
         self.follow_lifecycle_with_audio();
         if let Some(failure) = finished.failure {
             self.fault_after_call(
@@ -3119,6 +3193,7 @@ impl ProductHostRuntime for CsharpProductRuntime {
         self.services.begin_call(ui_binding(&self.lifecycle));
         let callback_result = call_debug(execute, release, self.handle, command);
         let finished = self.finish_product_call(callback_result.as_ref().err().cloned());
+        self.settle_gameplay_time();
         match (callback_result, finished.failure) {
             (Ok(result), None) => {
                 ProductHostRuntimeReceipt::new(result, finished.outputs).map_err(host_runtime_error)
@@ -3176,6 +3251,8 @@ impl ProductHostRuntime for CsharpProductRuntime {
             .lifecycle
             .advance_realtime(HostMonotonicTime::from_nanoseconds(observed_time_ns.get()))
             .map_err(|error| self.lifecycle_runtime_error(error))?;
+        // A bounded advance counts down (and ends in a hold) here.
+        self.settle_gameplay_time();
         let outputs = match admission.simulation() {
             // The lifecycle owns admission and its readout counters. Runtime
             // Input snapshots once with the last admitted phase token; the
@@ -3192,6 +3269,17 @@ impl ProductHostRuntime for CsharpProductRuntime {
                     return self.resync_operation(ProductHostOperationKind::AdvanceRealtime, error);
                 }
             },
+            // A product that selected gameplay time updates at every
+            // observation, so it can look, present and choose while held.
+            None if self.lifecycle.gameplay_time().selected() => {
+                match self.update_without_step(observed_time_ns.get()) {
+                    Ok(outputs) => outputs,
+                    Err(error) => {
+                        return self
+                            .resync_operation(ProductHostOperationKind::AdvanceRealtime, error);
+                    }
+                }
+            }
             None => Vec::new(),
         };
         match self.receipt(ProductHostOperationKind::AdvanceRealtime, outputs) {
@@ -3623,10 +3711,11 @@ fn update_facts(
     lifecycle: &RuntimeLifecycle,
     mode: NativeProductUpdateMode,
     observed_host_time_nanoseconds: Option<u64>,
-    admission: runtime_lifecycle::SimulationAdmission,
+    (simulation_step, admitted_step_count): (u64, u32),
     dropped_step_count: u128,
 ) -> Result<NativeProductUpdateFacts, CsharpProductRuntimeError> {
     let readout = lifecycle.readout();
+    let gameplay = lifecycle.gameplay_time();
     let (observed_host_time_nanoseconds, fixed_step_hz, fixed_delta_seconds) =
         match lifecycle.configuration() {
             RuntimeLifecycleConfig::Realtime(config) => (
@@ -3648,11 +3737,14 @@ fn update_facts(
         generation: readout.generation().value(),
         control_revision: readout.control_revision().value(),
         observed_host_time_nanoseconds,
-        simulation_step: admission.first_step().value(),
+        simulation_step,
         fixed_step_hz,
-        admitted_step_count: admission.step_count(),
+        admitted_step_count,
         dropped_step_count,
         fixed_delta_seconds,
+        gameplay_time_selected: gameplay.selected(),
+        gameplay_rate: csharp_engine_services::gameplay_rate_value(gameplay.rate()),
+        gameplay_advance_remaining_steps: gameplay.advance_remaining_steps(),
     })
 }
 
@@ -3746,6 +3838,9 @@ fn lifecycle_error_code(error: &runtime_lifecycle::RuntimeLifecycleError) -> &'s
         }
         RuntimeLifecycleError::UnknownPresentation { .. } => {
             "CSHARP_LIFECYCLE_UNKNOWN_PRESENTATION"
+        }
+        RuntimeLifecycleError::GameplayAdvanceWithoutRate => {
+            "CSHARP_LIFECYCLE_GAMEPLAY_ADVANCE_WITHOUT_RATE"
         }
         RuntimeLifecycleError::CounterExhausted => "CSHARP_LIFECYCLE_COUNTER_EXHAUSTED",
     }
@@ -5040,6 +5135,12 @@ mod tests {
     static FIXTURE_UI_CONTEXT: AtomicUsize = AtomicUsize::new(0);
     static FIXTURE_UI_OPEN: AtomicUsize = AtomicUsize::new(0);
     static FIXTURE_UI_PUBLISH: AtomicUsize = AtomicUsize::new(0);
+    /// The gameplay time table from the last fixture create.
+    struct FixtureGameplayTime(NativeGameplayTimeApi);
+    // SAFETY: tests serialize fixture products with DROP_FIXTURE_GATE and use
+    // the table only inside that product's callbacks.
+    unsafe impl Send for FixtureGameplayTime {}
+    static FIXTURE_GAMEPLAY_TIME: Mutex<Option<FixtureGameplayTime>> = Mutex::new(None);
     static VOXEL_FAILURE_ENABLED: AtomicBool = AtomicBool::new(false);
     static VOXEL_FAILURE_SESSION: AtomicU64 = AtomicU64::new(0);
     static VOXEL_FAILURE_PRESENTATION: AtomicU64 = AtomicU64::new(0);
@@ -5366,6 +5467,10 @@ mod tests {
         let diagnostics = unsafe { (*args).engine.diagnostics };
         FIXTURE_DIAGNOSTICS_CONTEXT.store(diagnostics.context as usize, Ordering::SeqCst);
         FIXTURE_DIAGNOSTICS_PUBLISH.store(diagnostics.publish as usize, Ordering::SeqCst);
+        *FIXTURE_GAMEPLAY_TIME
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) =
+            Some(FixtureGameplayTime(unsafe { (*args).engine.gameplay_time }));
         let ui = unsafe { (*args).engine.ui };
         FIXTURE_UI_CONTEXT.store(ui.context as usize, Ordering::SeqCst);
         FIXTURE_UI_OPEN.store(ui.open_stream as usize, Ordering::SeqCst);
@@ -7643,6 +7748,279 @@ mod tests {
                 .all(|pair| pair[1].simulation_step > pair[0].simulation_step));
         }
         drop(runtime);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    /// What the gameplay-time fixture product asks for in its next update.
+    #[derive(Clone, Copy)]
+    enum FixtureTimeRequest {
+        Rate(f64),
+        Advance(f64, f64),
+    }
+
+    static GAMEPLAY_FIXTURE_REQUEST: Mutex<Option<FixtureTimeRequest>> = Mutex::new(None);
+    static GAMEPLAY_FIXTURE_STATUS: Mutex<Vec<(i32, NativeGameplayTimeReadout)>> =
+        Mutex::new(Vec::new());
+
+    /// Records its facts like the manual-time fixture, then makes the one
+    /// scripted gameplay time request through the generated service table,
+    /// as product policy would from live state.
+    unsafe extern "C" fn gameplay_time_fixture_update(
+        handle: *mut c_void,
+        args: *const NativeProductUpdateArgs,
+        result: *mut NativeProductUpdateResult,
+    ) -> i32 {
+        unsafe { manual_time_fixture_update(handle, args, result) };
+        let request = GAMEPLAY_FIXTURE_REQUEST
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
+        let Some(request) = request else {
+            return ABI_OK;
+        };
+        let api = FIXTURE_GAMEPLAY_TIME
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .as_ref()
+            .expect("fixture gameplay time table")
+            .0;
+        let mut readout = NativeGameplayTimeReadout::default();
+        let mut error = unsafe { std::mem::zeroed::<NativeOperationErrorReceipt>() };
+        // SAFETY: the table and its context are live for this product call.
+        let status = unsafe {
+            match request {
+                FixtureTimeRequest::Rate(rate) => (api.select_rate)(
+                    api.context,
+                    &NativeGameplayTimeRateRequest { rate },
+                    &mut readout,
+                    &mut error,
+                ),
+                FixtureTimeRequest::Advance(seconds, rate) => (api.advance)(
+                    api.context,
+                    &NativeGameplayTimeAdvanceRequest { seconds, rate },
+                    &mut readout,
+                    &mut error,
+                ),
+            }
+        };
+        GAMEPLAY_FIXTURE_STATUS
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push((status, readout));
+        ABI_OK
+    }
+
+    /// The host observation at which a 30 Hz realtime run owes `steps` steps.
+    fn at_30_hz(steps: u64) -> u64 {
+        (steps * 1_000_000_000).div_ceil(30)
+    }
+
+    struct GameplayTimeRun {
+        runtime: CsharpProductRuntime,
+        observed: u64,
+    }
+
+    impl GameplayTimeRun {
+        fn request(&self, request: FixtureTimeRequest) {
+            *GAMEPLAY_FIXTURE_REQUEST
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner) = Some(request);
+        }
+
+        /// Observes host time `steps` 30 Hz steps later and returns the
+        /// updates the product received.
+        fn observe(&mut self, steps: u64) -> Vec<NativeProductUpdateFacts> {
+            MANUAL_UPDATE_FACTS
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .clear();
+            self.observed += steps;
+            self.runtime
+                .advance_realtime(CanonicalU64::new(at_30_hz(self.observed)))
+                .unwrap();
+            MANUAL_UPDATE_FACTS
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .clone()
+        }
+
+        fn admitted(&self) -> u64 {
+            self.runtime.lifecycle.readout().admitted_simulation_steps()
+        }
+    }
+
+    fn gameplay_time_run(label: &str) -> (GameplayTimeRun, PathBuf) {
+        let (mut runtime, root) = realtime_drop_fixture_runtime(label);
+        runtime.api.update = gameplay_time_fixture_update;
+        GAMEPLAY_FIXTURE_STATUS
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clear();
+        runtime
+            .lifecycle(ProductHostLifecycleOperation::Start)
+            .unwrap();
+        runtime.advance_realtime(CanonicalU64::new(0)).unwrap();
+        (
+            GameplayTimeRun {
+                runtime,
+                observed: 0,
+            },
+            root,
+        )
+    }
+
+    #[test]
+    fn product_gameplay_time_holds_slows_and_advances_without_wall_time_debt() {
+        let _guard = DROP_FIXTURE_GATE
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let (mut run, root) = gameplay_time_run("gameplay-time");
+
+        // A product that has not selected gameplay time updates only with steps.
+        let first = run.observe(1);
+        assert_eq!(first.len(), 1);
+        assert_eq!(first[0].admitted_step_count, 1);
+        assert!(!first[0].gameplay_time_selected);
+        assert_eq!(first[0].gameplay_rate, 1.0);
+
+        // The product holds the world from an ordinary update. The request
+        // applies from the next observation.
+        run.request(FixtureTimeRequest::Rate(0.0));
+        assert_eq!(run.observe(1)[0].admitted_step_count, 1);
+        let held_at = run.admitted();
+        // Ten seconds held: an update per observation, no step and no debt.
+        for _ in 0..300 {
+            let updates = run.observe(1);
+            assert_eq!(updates.len(), 1, "one update per observation while held");
+            assert_eq!(updates[0].admitted_step_count, 0);
+            assert_eq!(updates[0].simulation_step, held_at);
+            assert!(updates[0].gameplay_time_selected);
+            assert_eq!(updates[0].gameplay_rate, 0.0);
+        }
+        assert_eq!(run.admitted(), held_at);
+
+        // A tenth of realtime: three steps a second, still an update per
+        // observation.
+        run.request(FixtureTimeRequest::Rate(0.1));
+        run.observe(1);
+        let slow_from = run.admitted();
+        let mut updates = 0;
+        for _ in 0..30 {
+            updates += run.observe(1).len();
+        }
+        assert_eq!(updates, 30);
+        assert_eq!(run.admitted() - slow_from, 3);
+
+        // A bounded half-second advance: exactly fifteen steps, then held.
+        run.request(FixtureTimeRequest::Advance(0.5, 1.0));
+        run.observe(1);
+        let advance_from = run.admitted();
+        let mut last = None;
+        for _ in 0..20 {
+            last = run.observe(1).last().copied();
+        }
+        assert_eq!(run.admitted() - advance_from, 15);
+        let last = last.unwrap();
+        assert_eq!(last.gameplay_rate, 0.0);
+        assert_eq!(last.gameplay_advance_remaining_steps, 0);
+        let (status, receipt) = GAMEPLAY_FIXTURE_STATUS.lock().unwrap()[2];
+        assert_eq!(status, ABI_OK);
+        assert_eq!(receipt.advance_remaining_steps, 15);
+        assert_eq!(receipt.fixed_step_hz, 30);
+
+        // An invalid request is refused to the product and changes nothing.
+        run.request(FixtureTimeRequest::Rate(2.0));
+        run.observe(1);
+        assert_eq!(GAMEPLAY_FIXTURE_STATUS.lock().unwrap()[3].0, 0);
+        assert!(run.runtime.lifecycle.gameplay_time().held());
+
+        // Back to realtime; a request inside a multi-step update leaves that
+        // update's steps alone and holds from the next observation.
+        // (Three steps of host time admit the fixture's catch-up cap of two.)
+        run.request(FixtureTimeRequest::Rate(1.0));
+        run.observe(1);
+        run.request(FixtureTimeRequest::Rate(0.0));
+        let batch = run.observe(3);
+        assert_eq!(batch.len(), 1);
+        assert_eq!(batch[0].admitted_step_count, 2);
+        assert_eq!(run.observe(5)[0].admitted_step_count, 0);
+
+        drop(run);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn gameplay_time_composes_with_pause_inspection_and_restart() {
+        let _guard = DROP_FIXTURE_GATE
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let (mut run, root) = gameplay_time_run("gameplay-time-lifecycle");
+        run.request(FixtureTimeRequest::Rate(0.5));
+        run.observe(1);
+        assert!(run.runtime.lifecycle.gameplay_time().selected());
+
+        // A lifecycle pause stops every update and keeps the product's rate;
+        // resuming owes none of the paused wall time.
+        run.runtime
+            .lifecycle(ProductHostLifecycleOperation::Pause)
+            .unwrap();
+        assert_eq!(
+            run.runtime.realtime_schedule_state(),
+            ProductHostRuntimeScheduleState::Paused
+        );
+        run.observed += 600;
+        run.runtime
+            .lifecycle(ProductHostLifecycleOperation::Resume)
+            .unwrap();
+        let resumed_at = run.admitted();
+        run.observed += 6000;
+        run.runtime
+            .advance_realtime(CanonicalU64::new(at_30_hz(run.observed)))
+            .unwrap();
+        assert_eq!(run.admitted(), resumed_at, "a fresh baseline after resume");
+        for _ in 0..4 {
+            run.observe(1);
+        }
+        assert_eq!(run.admitted() - resumed_at, 2, "half of four steps");
+
+        // Inspection holds everything and keeps the product's choice.
+        run.runtime
+            .execute_time_debug("engine.time.mode manual")
+            .unwrap();
+        assert_eq!(
+            run.runtime.realtime_schedule_state(),
+            ProductHostRuntimeScheduleState::Held
+        );
+        assert!(run.observe(30).is_empty());
+        let inspected_at = run.admitted();
+        run.runtime
+            .execute_time_debug("engine.time.advance 100")
+            .unwrap();
+        assert_eq!(run.admitted() - inspected_at, 3);
+        run.runtime
+            .execute_time_debug("engine.time.mode realtime")
+            .unwrap();
+        assert_eq!(
+            run.runtime.lifecycle.gameplay_time().rate(),
+            runtime_lifecycle::GameplayRate::from_parts_per_million(500_000).unwrap()
+        );
+
+        // A restart returns the new generation to realtime, step-only updates.
+        run.request(FixtureTimeRequest::Rate(0.0));
+        run.observe(1);
+        run.runtime
+            .lifecycle(ProductHostLifecycleOperation::Restart)
+            .unwrap();
+        assert!(!run.runtime.lifecycle.gameplay_time().selected());
+        run.runtime
+            .advance_realtime(CanonicalU64::new(at_30_hz(run.observed)))
+            .unwrap();
+        let after = run.observe(1);
+        assert_eq!(after.len(), 1);
+        assert_eq!(after[0].admitted_step_count, 1);
+        assert!(!after[0].gameplay_time_selected);
+
+        drop(run);
         fs::remove_dir_all(root).unwrap();
     }
 

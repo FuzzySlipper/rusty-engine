@@ -1638,6 +1638,36 @@ pub struct NativePersistenceApi {
     pub read_blob_bytes: NativeReadPersistenceBlobBytes,
 }
 
+pub type NativeSelectGameplayRate = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeGameplayTimeRateRequest,
+    *mut NativeGameplayTimeReadout,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeAdvanceGameplayTime = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeGameplayTimeAdvanceRequest,
+    *mut NativeGameplayTimeReadout,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeReadGameplayTime = unsafe extern "C" fn(
+    *mut c_void,
+    *mut NativeGameplayTimeReadout,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+
+/// Gameplay simulation speed for a realtime product: hold, slow motion,
+/// realtime and bounded advances. Engine admits the steps; a request settles
+/// when its callback returns and applies from the next host observation.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeGameplayTimeApi {
+    pub context: *mut c_void,
+    pub select_rate: NativeSelectGameplayRate,
+    pub advance: NativeAdvanceGameplayTime,
+    pub read: NativeReadGameplayTime,
+}
+
 pub type NativeReplaceInputMappings = unsafe extern "C" fn(
     *mut c_void,
     *const NativeInputMapping,
@@ -1661,6 +1691,7 @@ pub struct NativeInputApi {
 #[derive(Debug, Clone, Copy)]
 pub struct NativeEngineApi {
     pub input: NativeInputApi,
+    pub gameplay_time: NativeGameplayTimeApi,
     pub implicit_surfaces: NativeImplicitSurfacesApi,
     pub diagnostics: NativeDiagnosticsApi,
     pub dynamics: NativeDynamicsApi,

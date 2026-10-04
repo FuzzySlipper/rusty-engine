@@ -1,7 +1,9 @@
+use std::num::NonZeroU32;
+
 use runtime_lifecycle::{
-    validate_runtime_identity, ExternalStep, HostMonotonicTime, RealtimeLifecycleConfig,
-    RuntimeFault, RuntimeInstanceId, RuntimeLifecycle, RuntimeLifecycleConfig,
-    RuntimeLifecycleConfigError, RuntimeMode, RuntimePhase, RuntimeState,
+    validate_runtime_identity, ExternalStep, GameplayRate, HostMonotonicTime,
+    RealtimeLifecycleConfig, RuntimeFault, RuntimeInstanceId, RuntimeLifecycle,
+    RuntimeLifecycleConfig, RuntimeLifecycleConfigError, RuntimeMode, RuntimePhase, RuntimeState,
     MAX_RUNTIME_IDENTITY_BYTES,
 };
 
@@ -451,4 +453,187 @@ fn explicit_forward_steps_keep_realtime_cadence_and_discard_pause_wall_time() {
         .unwrap();
     assert!(resumed.simulation().is_none());
     assert_eq!(runtime.readout().admitted_simulation_steps(), 1);
+}
+
+const SECOND_NS: u64 = 1_000_000_000;
+
+fn steps_at(lifecycle: &mut RuntimeLifecycle, observed_ns: u64) -> u32 {
+    lifecycle
+        .advance_realtime(HostMonotonicTime::from_nanoseconds(observed_ns))
+        .unwrap()
+        .simulation()
+        .map_or(0, |simulation| simulation.step_count())
+}
+
+fn rate(ppm: u32) -> GameplayRate {
+    GameplayRate::from_parts_per_million(ppm).unwrap()
+}
+
+#[test]
+fn gameplay_rate_scales_host_time_from_hold_through_realtime() {
+    let mut lifecycle = realtime(60, 16);
+    lifecycle.start().unwrap();
+    assert!(!lifecycle.gameplay_time().selected());
+    assert_eq!(lifecycle.gameplay_time().rate(), GameplayRate::REALTIME);
+    steps_at(&mut lifecycle, 0);
+
+    // Held: a minute of host time admits no simulation and owes none.
+    let held = lifecycle.select_gameplay_rate(GameplayRate::HOLD).unwrap();
+    assert!(held.selected() && held.held());
+    for second in 1..=60 {
+        assert_eq!(steps_at(&mut lifecycle, second * SECOND_NS), 0);
+    }
+    assert_eq!(lifecycle.readout().admitted_simulation_steps(), 0);
+    assert_eq!(lifecycle.readout().scaled_remainder(), Some(0));
+
+    // A tenth of realtime: one second of host time is six 60 Hz steps.
+    lifecycle.select_gameplay_rate(rate(100_000)).unwrap();
+    let mut slow = 0;
+    for frame in 1..=60 {
+        slow += steps_at(&mut lifecycle, 60 * SECOND_NS + frame * SECOND_NS / 60);
+    }
+    assert_eq!(slow, 6);
+
+    // Realtime again: a tenth of a second is six steps and no burst of the
+    // held minute.
+    lifecycle
+        .select_gameplay_rate(GameplayRate::REALTIME)
+        .unwrap();
+    assert_eq!(steps_at(&mut lifecycle, 61 * SECOND_NS + SECOND_NS / 10), 6);
+    assert_eq!(lifecycle.readout().admitted_simulation_steps(), 12);
+    assert_eq!(lifecycle.readout().dropped_realtime_steps(), 0);
+}
+
+#[test]
+fn rate_changes_keep_the_owed_fraction_without_loss_or_burst() {
+    // 50 Hz keeps every step boundary a whole nanosecond count.
+    let mut lifecycle = realtime(50, 16);
+    lifecycle.start().unwrap();
+    steps_at(&mut lifecycle, 0);
+    // Half a step owed at realtime...
+    assert_eq!(steps_at(&mut lifecycle, SECOND_NS / 100), 0);
+    assert_eq!(lifecycle.readout().scaled_remainder(), Some(500_000_000));
+    // ...is still owed through a hold of any length...
+    lifecycle.select_gameplay_rate(GameplayRate::HOLD).unwrap();
+    assert_eq!(steps_at(&mut lifecycle, 10 * SECOND_NS), 0);
+    assert_eq!(lifecycle.readout().scaled_remainder(), Some(500_000_000));
+    // ...and a half-rate half step completes it.
+    lifecycle.select_gameplay_rate(rate(500_000)).unwrap();
+    assert_eq!(steps_at(&mut lifecycle, 10 * SECOND_NS + SECOND_NS / 50), 1);
+    assert_eq!(lifecycle.readout().scaled_remainder(), Some(0));
+}
+
+#[test]
+fn a_bounded_advance_admits_exactly_its_steps_then_holds() {
+    let mut lifecycle = realtime(60, 4);
+    lifecycle.start().unwrap();
+    steps_at(&mut lifecycle, 0);
+    lifecycle.select_gameplay_rate(GameplayRate::HOLD).unwrap();
+    assert_eq!(steps_at(&mut lifecycle, 5 * SECOND_NS), 0);
+
+    let advance = lifecycle
+        .begin_gameplay_advance(NonZeroU32::new(10).unwrap(), GameplayRate::REALTIME)
+        .unwrap();
+    assert_eq!(advance.advance_remaining_steps(), 10);
+    assert!(!advance.held());
+    // Observations a step and a half apart: 1, 2, 1, 2, ... until 10.
+    let mut admitted = Vec::new();
+    let mut now = 5 * SECOND_NS;
+    while lifecycle.gameplay_time().advance_remaining_steps() > 0 {
+        now += SECOND_NS / 40;
+        admitted.push(steps_at(&mut lifecycle, now));
+    }
+    assert_eq!(admitted.iter().sum::<u32>(), 10);
+    assert_eq!(admitted, [1, 2, 1, 2, 1, 2, 1]);
+    assert!(lifecycle.gameplay_time().held());
+    assert_eq!(lifecycle.readout().scaled_remainder(), Some(0));
+    assert_eq!(steps_at(&mut lifecycle, now + SECOND_NS), 0);
+    assert_eq!(lifecycle.readout().admitted_simulation_steps(), 10);
+
+    // A long stall cannot overshoot the budget, and a slow advance counts
+    // only admitted steps.
+    lifecycle
+        .begin_gameplay_advance(NonZeroU32::new(3).unwrap(), rate(250_000))
+        .unwrap();
+    assert_eq!(steps_at(&mut lifecycle, now + 61 * SECOND_NS), 3);
+    assert_eq!(lifecycle.readout().dropped_realtime_steps(), 0);
+    assert!(lifecycle.gameplay_time().held());
+
+    assert_eq!(
+        lifecycle.begin_gameplay_advance(NonZeroU32::new(1).unwrap(), GameplayRate::HOLD),
+        Err(runtime_lifecycle::RuntimeLifecycleError::GameplayAdvanceWithoutRate)
+    );
+    assert!(
+        lifecycle.gameplay_time().held(),
+        "a refusal changes nothing"
+    );
+}
+
+#[test]
+fn a_rate_selection_replaces_a_running_advance() {
+    let mut lifecycle = realtime(60, 4);
+    lifecycle.start().unwrap();
+    steps_at(&mut lifecycle, 0);
+    lifecycle
+        .begin_gameplay_advance(NonZeroU32::new(30).unwrap(), GameplayRate::REALTIME)
+        .unwrap();
+    assert_eq!(steps_at(&mut lifecycle, SECOND_NS.div_ceil(60)), 1);
+    let selected = lifecycle.select_gameplay_rate(rate(200_000)).unwrap();
+    assert_eq!(selected.advance_remaining_steps(), 0);
+    assert_eq!(selected.rate(), rate(200_000));
+}
+
+#[test]
+fn gameplay_time_survives_pause_and_faults_and_resets_with_a_new_generation() {
+    let mut lifecycle = realtime(60, 4);
+    lifecycle.start().unwrap();
+    steps_at(&mut lifecycle, 0);
+    lifecycle.select_gameplay_rate(rate(100_000)).unwrap();
+    lifecycle.pause().unwrap();
+    // A paused product may still choose (from a paused callback).
+    lifecycle.select_gameplay_rate(GameplayRate::HOLD).unwrap();
+    lifecycle.resume().unwrap();
+    assert!(lifecycle.gameplay_time().held());
+    // Resume needs a fresh baseline; paused wall time is never owed.
+    assert_eq!(steps_at(&mut lifecycle, 100 * SECOND_NS), 0);
+    lifecycle.report_fault(RuntimeFault::OwnerReported).unwrap();
+    lifecycle.resume().unwrap();
+    assert!(lifecycle.gameplay_time().selected());
+    assert!(lifecycle.gameplay_time().held());
+
+    lifecycle.restart().unwrap();
+    assert!(!lifecycle.gameplay_time().selected());
+    assert_eq!(lifecycle.gameplay_time().rate(), GameplayRate::REALTIME);
+
+    lifecycle.shutdown().unwrap();
+    assert!(matches!(
+        lifecycle.select_gameplay_rate(GameplayRate::HOLD),
+        Err(runtime_lifecycle::RuntimeLifecycleError::WrongState { .. })
+    ));
+}
+
+#[test]
+fn manual_inspection_steps_ignore_and_keep_the_gameplay_rate() {
+    let mut lifecycle = realtime(60, 4);
+    lifecycle.start().unwrap();
+    lifecycle.select_gameplay_rate(GameplayRate::HOLD).unwrap();
+    lifecycle.admit_manual_step().unwrap();
+    lifecycle.admit_manual_step().unwrap();
+    assert_eq!(lifecycle.readout().admitted_simulation_steps(), 2);
+    lifecycle.reset_realtime_baseline();
+    assert!(lifecycle.gameplay_time().held());
+    steps_at(&mut lifecycle, 0);
+    assert_eq!(steps_at(&mut lifecycle, SECOND_NS), 0);
+}
+
+#[test]
+fn only_realtime_lifecycles_have_a_gameplay_rate() {
+    for mut lifecycle in [demand(), external()] {
+        lifecycle.start().unwrap();
+        assert!(matches!(
+            lifecycle.select_gameplay_rate(GameplayRate::HOLD),
+            Err(runtime_lifecycle::RuntimeLifecycleError::WrongMode { .. })
+        ));
+    }
+    assert_eq!(GameplayRate::from_parts_per_million(1_000_001), None);
 }

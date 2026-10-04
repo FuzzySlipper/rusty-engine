@@ -56,6 +56,7 @@ to force a rerun.
 | `Persistence` | Read and write bounded Engine persistence blobs and stores. |
 | `Ui` | Publish bounded product UI projections through the Engine host. |
 | `Input` | Replace the product's physical input mappings at runtime. |
+| `GameplayTime` | Hold simulation, run it slower than realtime, or advance it a bounded amount and hold, in a realtime product ([gameplay time](csharp-lifecycle.md#gameplay-time)). |
 | `Diagnostics` | Publish product diagnostics and read renderer statistics. |
 
 The generated contracts are authoritative when this table and source

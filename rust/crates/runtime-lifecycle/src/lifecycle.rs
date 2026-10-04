@@ -1,10 +1,15 @@
 use crate::model::{
-    ExternalStep, HostMonotonicTime, LifecycleOperation, LifecycleReceipt, PresentationAdmission,
-    PresentationToken, RealtimeAdvance, RuntimeControlOperation, RuntimeControlRevision,
-    RuntimeFault, RuntimeGeneration, RuntimeInstanceId, RuntimeLifecycleConfig,
-    RuntimeLifecycleError, RuntimeLifecycleReadout, RuntimeMode, RuntimePhaseToken, RuntimeState,
-    SimulationAdmission, SimulationStep, SimulationToken, SCALED_NANOSECONDS_PER_SECOND,
+    ExternalStep, GameplayRate, GameplayTime, HostMonotonicTime, LifecycleOperation,
+    LifecycleReceipt, PresentationAdmission, PresentationToken, RealtimeAdvance,
+    RuntimeControlOperation, RuntimeControlRevision, RuntimeFault, RuntimeGeneration,
+    RuntimeInstanceId, RuntimeLifecycleConfig, RuntimeLifecycleError, RuntimeLifecycleReadout,
+    RuntimeMode, RuntimePhaseToken, RuntimeState, SimulationAdmission, SimulationStep,
+    SimulationToken, GAMEPLAY_RATE_REALTIME_PPM, SCALED_NANOSECONDS_PER_SECOND,
 };
+/// Realtime debt is kept in `nanoseconds * hertz * rate ppm`, so one whole
+/// step is this many units and a rate change keeps the fraction exactly.
+const SCALED_STEP: u128 = SCALED_NANOSECONDS_PER_SECOND * GAMEPLAY_RATE_REALTIME_PPM as u128;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct RealtimeState {
     last_observed_time: Option<HostMonotonicTime>,
@@ -44,6 +49,7 @@ pub struct RuntimeLifecycle {
     dropped_realtime_steps: u128,
     clock_regressions: u64,
     realtime: Option<RealtimeState>,
+    gameplay: GameplayTime,
     fault: Option<RuntimeFault>,
 }
 
@@ -65,6 +71,7 @@ impl RuntimeLifecycle {
             dropped_realtime_steps: 0,
             clock_regressions: 0,
             realtime,
+            gameplay: GameplayTime::DEFAULT,
             fault: None,
         }
     }
@@ -241,15 +248,27 @@ impl RuntimeLifecycle {
         }
 
         let elapsed_nanoseconds = observed_time.nanoseconds() - previous.nanoseconds();
-        let elapsed_scaled = u128::from(elapsed_nanoseconds) * u128::from(config.fixed_step_hz());
+        // The gameplay rate scales host time before it becomes step debt, so
+        // a held world accrues none and slow time keeps its fraction.
+        let elapsed_scaled = u128::from(elapsed_nanoseconds)
+            * u128::from(config.fixed_step_hz())
+            * u128::from(self.gameplay.rate.parts_per_million());
         let scaled_total = match realtime.scaled_remainder.checked_add(elapsed_scaled) {
             Some(value) => value,
             None => return self.counter_exhausted(),
         };
-        let due_steps = scaled_total / SCALED_NANOSECONDS_PER_SECOND;
-        let scaled_remainder = scaled_total % SCALED_NANOSECONDS_PER_SECOND;
-        let admitted_count = due_steps.min(u128::from(config.max_catch_up_steps())) as u32;
-        let dropped_steps = due_steps - u128::from(admitted_count);
+        let due_steps = scaled_total / SCALED_STEP;
+        let mut scaled_remainder = scaled_total % SCALED_STEP;
+        let mut admitted_count = due_steps.min(u128::from(config.max_catch_up_steps())) as u32;
+        let mut dropped_steps = due_steps - u128::from(admitted_count);
+        let advancing = self.gameplay.advance_remaining_steps;
+        if advancing > 0 && admitted_count >= advancing {
+            // The advance ends on its last step and the world holds. Time
+            // past it belongs to the hold, so nothing more is owed.
+            admitted_count = advancing;
+            dropped_steps = 0;
+            scaled_remainder = 0;
+        }
 
         let next_dropped = match self.dropped_realtime_steps.checked_add(dropped_steps) {
             Some(value) => value,
@@ -266,6 +285,12 @@ impl RuntimeLifecycle {
             scaled_remainder,
         });
         self.dropped_realtime_steps = next_dropped;
+        if advancing > 0 {
+            self.gameplay.advance_remaining_steps = advancing - admitted_count;
+            if self.gameplay.advance_remaining_steps == 0 {
+                self.gameplay.rate = GameplayRate::HOLD;
+            }
+        }
         Ok(RealtimeAdvance::new(
             observed_time,
             simulation,
@@ -283,6 +308,58 @@ impl RuntimeLifecycle {
         )?;
         self.clear_realtime_baseline();
         self.prepare_simulation_admission(1)
+    }
+
+    /// Selects how fast realtime admission follows host time from the next
+    /// observation, ending any bounded advance. Debt already accrued keeps its
+    /// fraction, so a change neither loses nor bursts time. Only a realtime
+    /// lifecycle has a rate; it survives pause, resume and faults, and a new
+    /// generation returns to realtime.
+    pub fn select_gameplay_rate(
+        &mut self,
+        rate: GameplayRate,
+    ) -> Result<GameplayTime, RuntimeLifecycleError> {
+        self.require_gameplay_time()?;
+        self.gameplay = GameplayTime {
+            selected: true,
+            rate,
+            advance_remaining_steps: 0,
+        };
+        Ok(self.gameplay)
+    }
+
+    /// Runs the world at `rate` for exactly `steps` more admitted steps from
+    /// the next observation, then holds. A later selection replaces it.
+    pub fn begin_gameplay_advance(
+        &mut self,
+        steps: std::num::NonZeroU32,
+        rate: GameplayRate,
+    ) -> Result<GameplayTime, RuntimeLifecycleError> {
+        self.require_gameplay_time()?;
+        if rate == GameplayRate::HOLD {
+            return Err(RuntimeLifecycleError::GameplayAdvanceWithoutRate);
+        }
+        self.gameplay = GameplayTime {
+            selected: true,
+            rate,
+            advance_remaining_steps: steps.get(),
+        };
+        Ok(self.gameplay)
+    }
+
+    pub const fn gameplay_time(&self) -> GameplayTime {
+        self.gameplay
+    }
+
+    fn require_gameplay_time(&self) -> Result<(), RuntimeLifecycleError> {
+        self.require_mode(
+            LifecycleOperation::SelectGameplayTime,
+            RuntimeMode::Realtime,
+        )?;
+        self.require_not_state(
+            LifecycleOperation::SelectGameplayTime,
+            RuntimeState::Shutdown,
+        )
     }
 
     /// Discards wall time accumulated while an external controller held time.
@@ -435,6 +512,11 @@ impl RuntimeLifecycle {
         self.dropped_realtime_steps = 0;
         self.clock_regressions = 0;
         self.fault = None;
+        // A product may select gameplay time before its first start (while
+        // created); a restart returns the new generation to realtime.
+        if operation == LifecycleOperation::Restart {
+            self.gameplay = GameplayTime::DEFAULT;
+        }
         self.reset_realtime_progress();
         Ok(self.receipt(operation))
     }
@@ -585,9 +667,10 @@ impl RuntimeLifecycle {
     }
 }
 
+/// The fraction of a step owed, in the readout's `nanoseconds * hertz` units.
 fn scaled_remainder_u32(value: u128) -> u32 {
-    debug_assert!(value < SCALED_NANOSECONDS_PER_SECOND);
-    value as u32
+    debug_assert!(value < SCALED_STEP);
+    (value / u128::from(GAMEPLAY_RATE_REALTIME_PPM)) as u32
 }
 
 #[cfg(test)]

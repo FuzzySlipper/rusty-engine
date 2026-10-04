@@ -58,7 +58,7 @@ presentation during ordinary lifecycle calls and updates. See
 for what a rebuild keeps and what it does not replay.
 
 `IEngineContext` has one property per named service family in the ABI's
-`NativeEngineApi`: `Input`, `ImplicitSurfaces`, `Diagnostics`, `Dynamics`,
+`NativeEngineApi`: `Input`, `GameplayTime`, `ImplicitSurfaces`, `Diagnostics`, `Dynamics`,
 `Motion`, `Kinematic`, `Spatial`, `Perception`, `WorldOrigin`, `Voxel`,
 `VoxelContent`, `VoxelScenePresentation`, `Content`, `AuthoredContent`,
 `Graphics`, `Presentation`, `Animation`, `Audio`, `Video`, `RenderOutput`,
@@ -67,6 +67,59 @@ generated `Rusty.Engine` output. Mechanics, resolution, and state machines are
 ordinary managed helpers, not native context services. See the
 [capability map](csharp-capabilities.md) and do not assume a Rust API is
 callable from C# simply because its crate is public.
+
+### Gameplay time
+
+A realtime product can stop its world, slow it, or run it a bounded amount,
+for realtime-with-pause and movement-driven time. The Engine keeps the fixed
+step and admits whole steps; `GameplayTime` only changes how fast host time
+becomes steps. The product decides when and by how much
+(`GameplayTimeConvenience`):
+
+- `SetRate(rate)`: from `0` (held) through slow motion to `1` (realtime).
+  Faster than realtime is refused (`CSHARP_GAMEPLAY_TIME_RATE`).
+- `Hold()` and `RunRealtime()` are `SetRate(0)` and `SetRate(1)`.
+- `Advance(seconds, rate = 1)`: run `seconds` of world time, rounded up to
+  whole fixed steps, at `rate` (above 0), then hold. The returned
+  `AdvanceRemainingSteps` is the number of steps it will admit; an update's
+  `GameplayAdvanceRemainingSteps` counts them down.
+- `Read()`: the selection in force from the next observation.
+
+A request settles when its callback returns and applies from the next host
+observation; steps the current update already admitted are still delivered,
+and the last request in one callback wins. A rate change keeps the fraction of
+a step already owed, so slowing, holding and resuming neither loses nor
+bursts time, and a held world owes nothing for the wall time it sat still.
+An advance admits exactly its steps: time past its end belongs to the hold.
+A demand or external runtime has no rate and refuses
+(`CSHARP_GAMEPLAY_TIME_MODE`). The product's own rules decide what costs time
+(movement, an attack's duration, a cooldown); the Engine does not classify
+input.
+
+Once a product makes any gameplay-time request, every realtime host
+observation delivers one `Update`. One that admits no step has
+`AdmittedStepCount` zero and `SimulationStep` the next step to be admitted:
+read input, aim, present and choose there, and advance the world only per
+admitted step (`SimulationScheduler.Advance` already does). Animation, audio
+and other Engine time advance only with admitted steps. A product that never
+asks keeps step-only updates. `ProductUpdateFacts.GameplayTimeSelected`,
+`GameplayRate` and `GameplayAdvanceRemainingSteps` report the selection in
+force after the update's admission, so an update that ends an advance already
+reads held.
+
+Composition with the other owners of time:
+
+- Lifecycle pause is the menu pause. It stops every update and discards
+  gameplay input; UI claims reach `HandlePausedIntents`, which may itself
+  select gameplay time. Resume continues the product's selection, as does
+  resuming after a fault. Neither pause nor fault can be bypassed by a
+  gameplay request.
+- [Playtest inspection](playtest-inspection.md) holds everything, gameplay
+  time included, and its manual advance admits steps regardless of the rate.
+  Leaving it continues the product's selection.
+- Restart returns the new generation to realtime, step-only updates; a
+  `Restart` callback may select again. A request in the constructor or `Start`
+  applies from the first observation.
 
 ### Particle bursts
 

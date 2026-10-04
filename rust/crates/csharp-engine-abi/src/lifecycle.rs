@@ -44,6 +44,11 @@ pub enum NativeProductLifecycleState {
 /// `admitted_step_count` describes the complete batch. Dropped steps are the
 /// whole steps dropped from this realtime observation, not a product-owned
 /// counter or scheduling command.
+///
+/// Once a product selects gameplay time, every realtime observation delivers
+/// an update, and one that admits no step has `admitted_step_count` zero with
+/// `simulation_step` the next step to be admitted. The `gameplay_*` fields are
+/// the selection this observation was admitted under.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct NativeProductUpdateFacts {
@@ -57,6 +62,40 @@ pub struct NativeProductUpdateFacts {
     pub admitted_step_count: u32,
     pub dropped_step_count: u64,
     pub fixed_delta_seconds: f64,
+    pub gameplay_time_selected: bool,
+    pub gameplay_rate: f64,
+    pub gameplay_advance_remaining_steps: u32,
+}
+
+/// Selects how fast realtime gameplay simulation follows host time: 0 holds
+/// the world, 1 is realtime, and anything between is slow motion. It takes
+/// effect from the next host observation and ends any bounded advance.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct NativeGameplayTimeRateRequest {
+    pub rate: f64,
+}
+
+/// Runs the world for `seconds` of simulation time, rounded up to whole
+/// fixed steps, at `rate` (above 0, at most 1), and then holds it.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct NativeGameplayTimeAdvanceRequest {
+    pub seconds: f64,
+    pub rate: f64,
+}
+
+/// The gameplay time selected for the next host observation. `selected` is
+/// false until the product's first selection in this generation; a held
+/// world has `rate` 0. `advance_remaining_steps` counts the whole steps a
+/// bounded advance still has to admit.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct NativeGameplayTimeReadout {
+    pub selected: bool,
+    pub rate: f64,
+    pub advance_remaining_steps: u32,
+    pub fixed_step_hz: u32,
 }
 
 /// Rust-owned lifecycle facts published only after a host transition commits.
