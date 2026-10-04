@@ -20,6 +20,11 @@ const BOUNDARY: i64 = 13;
 
 /// A slope rising east across three chunks, sand then rock.
 fn slope() -> VoxelWorld {
+    slope_of(|vx, _| if vx < BOUNDARY { SAND } else { ROCK })
+}
+
+/// The same slope with each voxel's slot chosen from its x and y.
+fn slope_of(slot_at: impl Fn(i64, i64) -> u16) -> VoxelWorld {
     let grid =
         VoxelGridSpec::new(GridId::new(0), 0.5, ChunkDims::cubic(SIZE as u32).unwrap()).unwrap();
     let mut world = VoxelWorld::new(grid);
@@ -32,7 +37,7 @@ fn slope() -> VoxelWorld {
                     let local = LocalVoxelCoord::new(x, y, z);
                     let [vx, vy, _] = grid.chunk_local_to_voxel(coord, local).to_array();
                     if vy < 2 + vx / 6 {
-                        let slot = if vx < BOUNDARY { SAND } else { ROCK };
+                        let slot = slot_at(vx, vy);
                         chunk
                             .set(local, VoxelValue::solid(VoxelMaterialId::new(slot)))
                             .unwrap();
@@ -169,6 +174,133 @@ fn a_vertex_beyond_the_set_takes_its_own_layer() {
     };
     for (_, weights) in vertices(&world, &options) {
         assert_eq!(weights, [1.0, 0.0, 0.0, 0.0]);
+    }
+}
+
+// Six physical slots drawn as four layers.
+const GRASS: u16 = 10;
+const DIRT: u16 = 11;
+const STONE: u16 = 12;
+const DUNE: u16 = 13;
+const SNOW: u16 = 14;
+const GRAVEL: u16 = 15;
+
+/// Grass over dirt, stone, dune sand, then snow over gravel, west to east.
+fn six_slot_slope() -> VoxelWorld {
+    slope_of(|vx, vy| {
+        let top = vy + 1 == 2 + vx / 6;
+        match vx {
+            0..6 if top => GRASS,
+            0..6 => DIRT,
+            6..12 => STONE,
+            12..18 => DUNE,
+            _ if top => SNOW,
+            _ => GRAVEL,
+        }
+    })
+}
+
+fn six_slot_layers(transition_cells: u8) -> SurfaceMeshOptions {
+    SurfaceMeshOptions {
+        terrain_layers: Some(
+            TerrainLayers::mapped(
+                vec![GRASS, DIRT, STONE, DUNE, SNOW, GRAVEL],
+                vec![0, 0, 1, 2, 3, 3],
+                transition_cells,
+            )
+            .unwrap(),
+        ),
+        ..SurfaceMeshOptions::with_mode(SurfaceMode::DualContouring)
+    }
+}
+
+#[test]
+fn slots_sharing_a_layer_weigh_as_one_material() {
+    // The six-slot slope weighs exactly as the same slope with each layer's
+    // slots replaced by one, under the plain one-slot-per-layer set.
+    let collapsed = slope_of(|vx, _| match vx {
+        0..6 => GRASS,
+        6..12 => STONE,
+        12..18 => DUNE,
+        _ => SNOW,
+    });
+    let one_per_layer = SurfaceMeshOptions {
+        terrain_layers: Some(TerrainLayers::new(vec![GRASS, STONE, DUNE, SNOW], 2).unwrap()),
+        ..SurfaceMeshOptions::with_mode(SurfaceMode::DualContouring)
+    };
+    let world = six_slot_slope();
+    // More slots split more groups, so vertices are matched by position.
+    let key = |position: [f32; 3]| position.map(|value| (value * 1024.0).round() as i64);
+    let expected: BTreeMap<_, _> = vertices(&collapsed, &one_per_layer)
+        .into_iter()
+        .map(|(position, weights)| (key(position), weights.map(f32::to_bits)))
+        .collect();
+    let mapped = vertices(&world, &six_slot_layers(2));
+    for (position, weights) in &mapped {
+        assert_eq!(
+            Some(&weights.map(f32::to_bits)),
+            expected.get(&key(*position)),
+            "{position:?}"
+        );
+    }
+    // Every layer is reached, and grass/dirt blends into stone.
+    for layer in 0..4 {
+        assert!(mapped.iter().any(|(_, weights)| weights[layer] == 1.0));
+    }
+    assert!(mapped
+        .iter()
+        .any(|(_, weights)| weights[0] > 0.0 && weights[1] > 0.0));
+    // Geometry and physical slots are those of the unlayered surface.
+    for cx in 0..CHUNKS {
+        let plain = mesh(
+            &world,
+            cx,
+            &SurfaceMeshOptions::with_mode(SurfaceMode::DualContouring),
+        );
+        let layered = mesh(&world, cx, &six_slot_layers(2));
+        assert_eq!(plain.positions, layered.positions);
+        assert_eq!(plain.indices, layered.indices);
+        assert_eq!(plain.groups, layered.groups);
+        assert_eq!(plain.triangle_owners, layered.triangle_owners);
+    }
+}
+
+#[test]
+fn a_cube_face_takes_its_slots_mapped_layer() {
+    // Cube faces take their own slot's layer whole: dirt and gravel draw as
+    // the layers they are mapped to, not by their place in the list.
+    let world = six_slot_slope();
+    let options = SurfaceMeshOptions {
+        mode: SurfaceMode::GreedyCubes,
+        ..six_slot_layers(1)
+    };
+    let mut seen = [false; 4];
+    for cx in 0..CHUNKS {
+        let payload = mesh(&world, cx, &options);
+        for weights in payload.layer_weights.chunks(4) {
+            let layer = weights.iter().position(|weight| *weight == 1.0).unwrap();
+            assert_eq!(weights.iter().sum::<f32>(), 1.0, "{weights:?}");
+            seen[layer] = true;
+        }
+    }
+    assert_eq!(seen, [true; 4]);
+}
+
+#[test]
+fn malformed_mappings_are_refused() {
+    let many: Vec<u16> = (1..=17).collect();
+    for (slots, layers) in [
+        (vec![], vec![]),
+        (vec![1, 2, 1], vec![0, 1, 0]),
+        (vec![1, 2, 1], vec![0, 1, 1]),
+        (vec![1, 2], vec![0, 4]),
+        (vec![1, 2], vec![0]),
+        (many.clone(), vec![0; many.len()]),
+    ] {
+        assert_eq!(
+            TerrainLayers::mapped(slots, layers, 1),
+            Err(MeshError::InvalidTerrainLayers)
+        );
     }
 }
 

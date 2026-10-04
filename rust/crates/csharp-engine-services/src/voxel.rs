@@ -108,8 +108,15 @@ impl RuntimeSpatialBridge {
                 "voxel terrain layer slots",
             )
         }?;
+        let layers = unsafe {
+            crate::composition::borrowed_slice(
+                request.layers,
+                request.layers_len,
+                "voxel terrain layer indices",
+            )
+        }?;
         let invalid = |message: &str| voxel_error("CSHARP_VOXEL_TERRAIN_LAYERS", message);
-        let terrain_layers = if slots.is_empty() {
+        let terrain_layers = if slots.is_empty() && layers.is_empty() {
             None
         } else {
             let slots = slots
@@ -120,7 +127,16 @@ impl RuntimeSpatialBridge {
                 .collect::<Result<Vec<_>, _>>()?;
             let cells = u8::try_from(request.transition_cells)
                 .map_err(|_| invalid("transition must be 1 to 4 voxels"))?;
-            Some(TerrainLayers::new(slots, cells).map_err(|error| invalid(&error.to_string()))?)
+            let terrain_layers = if layers.is_empty() {
+                TerrainLayers::new(slots, cells)
+            } else {
+                let layers = layers
+                    .iter()
+                    .map(|layer| u8::try_from(*layer).map_err(|_| invalid("layer must be 0 to 3")))
+                    .collect::<Result<Vec<_>, _>>()?;
+                TerrainLayers::mapped(slots, layers, cells)
+            };
+            Some(terrain_layers.map_err(|error| invalid(&error.to_string()))?)
         };
         let session = self.session_mut(request.session)?;
         let chunk_size = session.scene.chunk_size();
@@ -1361,7 +1377,7 @@ mod tests {
                 .collect::<Vec<_>>()
         };
         let plain = meshes(&mut bridge);
-        let configure = |slots: &[u32], transition_cells: u32| {
+        let configure_mapped = |slots: &[u32], layers: &[u32], transition_cells: u32| {
             let mut receipt: NativeOperationErrorReceipt = unsafe { std::mem::zeroed() };
             unsafe {
                 (api.configure_terrain_layers)(
@@ -1371,12 +1387,16 @@ mod tests {
                         slots: slots.as_ptr(),
                         slots_len: slots.len(),
                         transition_cells,
+                        layers: layers.as_ptr(),
+                        layers_len: layers.len(),
                     },
                     &mut NativeVoxelSceneReadout::default(),
                     &mut receipt,
                 )
             }
         };
+        let configure =
+            |slots: &[u32], transition_cells: u32| configure_mapped(slots, &[], transition_cells);
         // Malformed sets and a transition as long as the 8-voxel chunk are
         // refused, leaving the meshes as they were.
         for (slots, cells) in [
@@ -1387,6 +1407,24 @@ mod tests {
             (vec![70_000], 1),
         ] {
             assert_eq!(configure(&slots, cells), 0, "{slots:?} {cells}");
+        }
+        // So are duplicate or conflicting slot mappings, a layer past 3, a
+        // layer count that does not match the slots, and too many slots.
+        let many: Vec<u32> = (1..=17).collect();
+        for (slots, layers) in [
+            (vec![1, 2, 1], vec![0, 1, 0]),
+            (vec![1, 2, 1], vec![0, 1, 1]),
+            (vec![1, 2], vec![0, 4]),
+            (vec![1, 2], vec![0, 256]),
+            (vec![1, 2], vec![0]),
+            (vec![], vec![0]),
+            (many.clone(), vec![0; many.len()]),
+        ] {
+            assert_eq!(
+                configure_mapped(&slots, &layers, 1),
+                0,
+                "{slots:?} {layers:?}"
+            );
         }
         assert_eq!(meshes(&mut bridge), plain);
         assert_eq!(configure(&[1, 2], 2), ABI_OK);
@@ -1401,6 +1439,21 @@ mod tests {
             .iter()
             .flat_map(|chunk| chunk.layer_weights.chunks(4))
             .any(|weights| weights[0] > 0.0 && weights[1] > 0.0));
+        // Sand and an unused slot 3 mapped onto layer 1, rock onto layer 3:
+        // the same blend lands on layers 1 and 3, geometry still unchanged.
+        assert_eq!(configure_mapped(&[1, 3, 2], &[1, 1, 3], 2), ABI_OK);
+        let mapped = meshes(&mut bridge);
+        for (layered, mapped) in layered.iter().zip(&mapped) {
+            assert_eq!(layered.positions, mapped.positions);
+            assert_eq!(layered.groups, mapped.groups);
+            for (layered, mapped) in layered
+                .layer_weights
+                .chunks(4)
+                .zip(mapped.layer_weights.chunks(4))
+            {
+                assert_eq!([0.0, layered[0], 0.0, layered[1]], mapped);
+            }
+        }
         // No slots removes the weights.
         assert_eq!(configure(&[], 0), ABI_OK);
         assert_eq!(meshes(&mut bridge), plain);

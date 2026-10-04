@@ -1,13 +1,14 @@
 //! Per-vertex terrain layer weights for reconstructed voxel surfaces.
 //!
-//! A terrain layer set names up to four material slots, in layer order. Each
-//! reconstructed vertex gets one weight per layer: the share, under a tent
-//! filter `transition_cells` voxels wide around the vertex, of the solid
-//! voxels of that layer's slot. Weights come from absolute voxel positions
-//! and the same voxels on both sides of a chunk seam, so neighbouring chunks
-//! give a shared vertex the same weights, and a world-origin rebase changes
-//! none. They only colour the surface: geometry, material slots and
-//! collision are unchanged.
+//! A terrain layer set maps material slots to up to four layers; several
+//! slots may share a layer, so physically distinct materials (grass and the
+//! dirt under it) draw as one texture. Each reconstructed vertex gets one
+//! weight per layer: the share, under a tent filter `transition_cells` voxels
+//! wide around the vertex, of the solid voxels of the slots mapped to that
+//! layer. Weights come from absolute voxel positions and the same voxels on
+//! both sides of a chunk seam, so neighbouring chunks give a shared vertex
+//! the same weights, and a world-origin rebase changes none. They only colour
+//! the surface: geometry, material slots and collision are unchanged.
 
 use core_space::{ChunkCoord, LocalVoxelCoord, VoxelCoord, VoxelGridSpec};
 use svc_spatial::VoxelWorld;
@@ -16,30 +17,53 @@ use crate::MeshError;
 
 /// The most layers one set blends.
 pub const MAX_TERRAIN_LAYERS: usize = 4;
+/// The most material slots one set maps onto its layers. Meshing looks each
+/// voxel's slot up in the set, so the set stays short.
+pub const MAX_TERRAIN_LAYER_SLOTS: usize = 16;
 /// The widest transition, in voxels on each side of a vertex.
 pub const MAX_TERRAIN_TRANSITION_CELLS: u8 = 4;
 
 const NO_LAYER: u8 = u8::MAX;
 
-/// The material slots a terrain layer material blends, in layer order, and
-/// how far a transition reaches.
+/// The material slots a terrain layer material blends, the layer each draws
+/// as, and how far a transition reaches.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TerrainLayers {
     slots: Vec<u16>,
+    layers: Vec<u8>,
     transition_cells: u8,
 }
 
 impl TerrainLayers {
-    /// One to [`MAX_TERRAIN_LAYERS`] distinct slots and a transition of 1 to
-    /// [`MAX_TERRAIN_TRANSITION_CELLS`] voxels. A transition of 1 blends
-    /// across the one voxel between two materials; wider ones blend further.
+    /// One to [`MAX_TERRAIN_LAYERS`] distinct slots, in layer order, and a
+    /// transition of 1 to [`MAX_TERRAIN_TRANSITION_CELLS`] voxels. A
+    /// transition of 1 blends across the one voxel between two materials;
+    /// wider ones blend further.
     pub fn new(slots: Vec<u16>, transition_cells: u8) -> Result<Self, MeshError> {
+        if slots.len() > MAX_TERRAIN_LAYERS {
+            return Err(MeshError::InvalidTerrainLayers);
+        }
+        let layers = (0..slots.len() as u8).collect();
+        Self::mapped(slots, layers, transition_cells)
+    }
+
+    /// One to [`MAX_TERRAIN_LAYER_SLOTS`] distinct slots, each drawn as the
+    /// layer (below [`MAX_TERRAIN_LAYERS`]) at the same index of `layers`.
+    pub fn mapped(
+        slots: Vec<u16>,
+        layers: Vec<u8>,
+        transition_cells: u8,
+    ) -> Result<Self, MeshError> {
         let distinct = slots
             .iter()
             .enumerate()
             .all(|(index, slot)| !slots[..index].contains(slot));
         if slots.is_empty()
-            || slots.len() > MAX_TERRAIN_LAYERS
+            || slots.len() > MAX_TERRAIN_LAYER_SLOTS
+            || layers.len() != slots.len()
+            || layers
+                .iter()
+                .any(|layer| usize::from(*layer) >= MAX_TERRAIN_LAYERS)
             || !distinct
             || !(1..=MAX_TERRAIN_TRANSITION_CELLS).contains(&transition_cells)
         {
@@ -47,6 +71,7 @@ impl TerrainLayers {
         }
         Ok(Self {
             slots,
+            layers,
             transition_cells,
         })
     }
@@ -55,19 +80,27 @@ impl TerrainLayers {
         &self.slots
     }
 
+    /// The layer of each of [`Self::slots`].
+    pub fn layers(&self) -> &[u8] {
+        &self.layers
+    }
+
     pub const fn transition_cells(&self) -> u8 {
         self.transition_cells
     }
 
-    fn layer(&self, slot: u16) -> Option<usize> {
-        self.slots.iter().position(|candidate| *candidate == slot)
+    fn layer(&self, slot: u16) -> Option<u8> {
+        self.slots
+            .iter()
+            .position(|candidate| *candidate == slot)
+            .map(|index| self.layers[index])
     }
 
     /// All weight on `slot`'s layer: a vertex with no layer voxel in reach,
     /// or a cube face. A slot outside the set reads layer 0.
     pub(crate) fn one_hot(&self, slot: u16) -> [f32; 4] {
         let mut weights = [0.0; 4];
-        weights[self.layer(slot).unwrap_or(0)] = 1.0;
+        weights[usize::from(self.layer(slot).unwrap_or(0))] = 1.0;
         weights
     }
 }
@@ -131,7 +164,7 @@ impl<'a> LayerField<'a> {
                                         + (y - low[1]) as usize)
                                         * dims[0]
                                         + (x - low[0]) as usize;
-                                    cells[index] = layer as u8;
+                                    cells[index] = layer;
                                 }
                             }
                         }

@@ -22,7 +22,9 @@ mod surface;
 mod terrain_layers;
 pub mod texture_mapping;
 
-pub use terrain_layers::{TerrainLayers, MAX_TERRAIN_LAYERS, MAX_TERRAIN_TRANSITION_CELLS};
+pub use terrain_layers::{
+    TerrainLayers, MAX_TERRAIN_LAYERS, MAX_TERRAIN_LAYER_SLOTS, MAX_TERRAIN_TRANSITION_CELLS,
+};
 
 /// Renderer-neutral derived presentation selected for canonical voxel facts.
 ///
@@ -328,8 +330,8 @@ pub struct MeshVoxelCell {
 pub enum MeshError {
     StateRequiresGreedyCubes,
     InvalidSurfaceCharacter,
-    /// A terrain layer set needs 1 to 4 distinct slots and a transition of 1
-    /// to 4 voxels.
+    /// A terrain layer set needs 1 to 16 distinct slots, each on a layer
+    /// below 4, and a transition of 1 to 4 voxels.
     InvalidTerrainLayers,
     DuplicateMaterialSurface {
         slot: u16,
@@ -386,7 +388,7 @@ impl core::fmt::Display for MeshError {
             }
             MeshError::InvalidTerrainLayers => write!(
                 f,
-                "a terrain layer set needs 1 to {MAX_TERRAIN_LAYERS} distinct material slots and a transition of 1 to {MAX_TERRAIN_TRANSITION_CELLS} voxels"
+                "a terrain layer set needs 1 to {MAX_TERRAIN_LAYER_SLOTS} distinct material slots, each on a layer below {MAX_TERRAIN_LAYERS}, and a transition of 1 to {MAX_TERRAIN_TRANSITION_CELLS} voxels"
             ),
             MeshError::InvalidSurfaceCharacter => write!(
                 f,

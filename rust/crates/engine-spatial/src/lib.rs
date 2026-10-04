@@ -96,7 +96,7 @@ pub use svc_collision::{
 pub use svc_mesh::{
     MaterialSurface, MeshError as SurfaceMeshError, SurfaceCharacter, SurfaceMaterials,
     SurfaceMeshLimits, SurfaceMeshOptions, SurfaceMode, TerrainLayers, VertexPlacement,
-    MAX_TERRAIN_LAYERS, MAX_TERRAIN_TRANSITION_CELLS,
+    MAX_TERRAIN_LAYERS, MAX_TERRAIN_LAYER_SLOTS, MAX_TERRAIN_TRANSITION_CELLS,
 };
 pub use svc_volume::DEFAULT_DENSITY_MAGNITUDE;
 pub use voxel_density::{

@@ -41,6 +41,13 @@ public readonly partial record struct VoxelDensityTransaction
         : this(Session, Edits, default, default) { }
 }
 
+public readonly partial record struct VoxelTerrainLayerRequest
+{
+    /// <summary>One to four slots, drawn as layers 0 to 3 in order.</summary>
+    public VoxelTerrainLayerRequest(SpatialSession Session, ReadOnlyMemory<uint> Slots, uint TransitionCells)
+        : this(Session, Slots, TransitionCells, default) { }
+}
+
 public readonly partial record struct SampledVolumeCreateRequest
 {
     /// <summary>Holds at most 8,000,000 samples.</summary>

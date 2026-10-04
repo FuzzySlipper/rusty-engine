@@ -99,6 +99,19 @@ Material terrain = engine.Graphics.CreateTerrainLayerMaterial(
 // Bind `terrain` to both SandSlot and RockSlot in the voxel scene presentation.
 ```
 
+Several physical slots can draw as one layer, so grass and the dirt under it
+keep their own identities and still blend as one texture. `Layers` gives the
+layer (0 to 3) of each slot at the same index, for up to 16 distinct slots:
+
+```csharp
+engine.Voxel.ConfigureTerrainLayers(new VoxelTerrainLayerRequest(
+    session,
+    Slots: new uint[] { GrassSlot, DirtSlot, StoneSlot, SandSlot, SnowSlot, GravelSlot },
+    TransitionCells: 2,
+    Layers: new uint[] { 0, 0, 1, 2, 3, 3 }));
+// Bind the four-layer material to all six slots.
+```
+
 The product still decides which material each voxel is (biome, slope, height
 or noise); the Engine only blends what it chose:
 
@@ -109,7 +122,9 @@ or noise); the Engine only blends what it chose:
   the same weights in both chunks, and a world-origin rebase changes none. An
   edit within reach of a chunk border remeshes the neighbour as well. A vertex
   with no layer voxel in reach, and every cube face, takes its own slot's
-  layer whole. No slots removes the weights.
+  layer whole. Without `Layers`, the slots are layers 0 to 3 in order. A
+  duplicate slot, a layer past 3, or `Layers` of another length than `Slots`
+  is refused and the previous layers stay. No slots removes the weights.
 - **Material.** `CreateTerrainLayerMaterial` takes the base material as layer 0
   and 1 to 3 more (`Layers`), all voxel surface materials. Each layer keeps
   its own texture, repeat or atlas tiling and normal map, as they are when the
@@ -119,10 +134,11 @@ or noise); the Engine only blends what it chose:
   are, higher narrows each transition toward the dominant layer. Width comes
   from `TransitionCells`, sharpness from `Contrast`, and texture scale and
   triplanar sharpness from the layer materials, each independently.
-- **What stays.** Geometry, groups, material slots, collision and navigation
-  are unchanged: blending is drawn only. A slot outside the layers, bound to an
+- **What stays.** Geometry, groups, material slots, collision, navigation and
+  voxel readouts are unchanged: blending is drawn only. A slot outside the layers, bound to an
   ordinary material, draws as before.
-- **Cost.** Meshing reads up to (2 × `TransitionCells`)³ voxels per vertex.
+- **Cost.** Meshing reads up to (2 × `TransitionCells`)³ voxels per vertex
+  and looks each voxel's slot up in the set.
   The material samples every layer's texture and normal map (four layers: 4×
   the samples, 12× with triplanar planes), in a shader variant only terrain
   layer materials compile. Layer materials are opaque.

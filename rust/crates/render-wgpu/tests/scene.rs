@@ -1411,7 +1411,30 @@ fn sand_and_rock(transition_cells: Option<u8>) -> VoxelCollisionScene {
 
 /// [`sand_and_rock`] with its terrain layers' slots and transition.
 fn sand_and_rock_layers(layers: Option<(Vec<u16>, u8)>) -> VoxelCollisionScene {
+    sand_and_rock_scene(
+        layers.map(|(slots, cells)| engine_spatial::TerrainLayers::new(slots, cells).unwrap()),
+        false,
+    )
+}
+
+/// [`sand_and_rock`] with every odd column of sand made dirt (slot 4) and of
+/// rock gravel (slot 5), mapped onto the sand and rock layers.
+fn sand_and_rock_aliased(transition_cells: Option<u8>) -> VoxelCollisionScene {
+    sand_and_rock_scene(
+        transition_cells.map(|cells| {
+            engine_spatial::TerrainLayers::mapped(vec![1, 4, 2, 5], vec![0, 0, 1, 1], cells)
+                .unwrap()
+        }),
+        true,
+    )
+}
+
+fn sand_and_rock_scene(
+    terrain_layers: Option<engine_spatial::TerrainLayers>,
+    aliased: bool,
+) -> VoxelCollisionScene {
     let voxels = (-12..12).flat_map(|x: i64| {
+        let alias = if aliased && x % 2 != 0 { 3 } else { 0 };
         (-16..-2).flat_map(move |z: i64| {
             (-3..(x + 12) / 8 - 1).map(move |y| MaterialVoxel {
                 state: 0,
@@ -1419,9 +1442,9 @@ fn sand_and_rock_layers(layers: Option<(Vec<u16>, u8)>) -> VoxelCollisionScene {
                 material_slot: if z == -3 {
                     3
                 } else if x < 0 {
-                    1
+                    1 + alias
                 } else {
-                    2
+                    2 + alias
                 },
             })
         })
@@ -1431,8 +1454,7 @@ fn sand_and_rock_layers(layers: Option<(Vec<u16>, u8)>) -> VoxelCollisionScene {
         CHUNK_CELLS,
         voxels,
         SurfaceMeshOptions {
-            terrain_layers: layers
-                .map(|(slots, cells)| engine_spatial::TerrainLayers::new(slots, cells).unwrap()),
+            terrain_layers,
             ..SurfaceMeshOptions::with_mode(engine_spatial::SurfaceMode::DualContouring)
         },
     )
@@ -1447,99 +1469,107 @@ fn terrain_layers_blend_sand_into_rock_over_the_chosen_width() {
     // `mapped`: triplanar planes and flat normal maps on every layer, which
     // must draw as the plain surface does; `lit`: a raking sun as well, which
     // shows any normal change.
-    let render_with = |transition_cells: Option<u8>, contrast: f32, mapped: bool, lit: bool| {
-        let mut harness = Harness::new(RendererOptions {
-            default_world_lights: false,
-            ..RendererOptions::default()
-        });
-        let mut plain = |id: &str, color: [u8; 4]| {
-            harness
-                .resources
-                .texture(id, 4, 4, &image(4, 4, |_, _| color), TextureWrap::Repeat)
-        };
-        let (sand, rock, stone) = (
-            plain("texture/sand", SAND),
-            plain("texture/rock", ROCK),
-            plain("texture/stone", STONE),
-        );
-        let mut flat = plain("texture/flat", [128, 128, 255, 255]);
-        if let Some(payload) = flat.payload.as_mut() {
-            payload.color_space = TextureColorSpace::Linear;
-        }
-        let flat_map = mapped.then(|| MaterialNormalMapDescriptor {
-            texture: flat.id.clone(),
-            scale: 1.0,
-        });
-        let repeat = |texture: &TextureDescriptor| VoxelSurfaceMappingDescriptor::Repeat {
-            texture: texture.id.clone(),
-            texture_version: texture.version,
-            texture_content_hash: texture.content_hash.clone().unwrap(),
-            tile_scale_cells: [2.0, 2.0],
-            tile_origin_cells: [0.0, 0.0],
-        };
-        let surface = |slot: u16, texture: &TextureDescriptor| {
-            voxel_material(slot, [1.0; 4], Some(texture), Some(repeat(texture)))
-        };
-        let mut materials = BTreeMap::from([
-            (1, surface(1, &sand)),
-            (2, surface(2, &rock)),
-            (3, surface(3, &stone)),
-        ]);
-        if transition_cells.is_some() {
-            // Both layer slots draw one blend: sand, then rock.
-            let rock_layer = MaterialTerrainLayerDescriptor {
-                voxel_surface: materials[&2].voxel_surface.clone().unwrap(),
-                normal_map: flat_map.clone(),
-            };
-            for slot in [1, 2] {
-                let mut blend = surface(slot, &sand);
-                blend.terrain_layers = Some(MaterialTerrainLayersDescriptor {
-                    layers: vec![rock_layer.clone()],
-                    contrast,
-                });
-                blend.normal_map = flat_map.clone();
-                blend.triplanar = mapped.then_some(MaterialTriplanarDescriptor { sharpness: 4.0 });
-                materials.insert(slot, blend);
-            }
-        }
-        let mut ops = vec![
-            RenderDiff::DefineTexture { texture: flat },
-            RenderDiff::DefineTexture { texture: sand },
-            RenderDiff::DefineTexture { texture: rock },
-            RenderDiff::DefineTexture { texture: stone },
-            // Ambient π: the surface shows exactly its texture.
-            RenderDiff::CreateLight {
-                handle: RenderHandle::new(90),
-                parent: None,
-                light: LightDescriptor::Ambient {
-                    color: [1.0; 3],
-                    intensity: std::f32::consts::PI,
-                    enabled: true,
-                    shadow_intent: LightShadowIntent::Disabled,
-                },
-            },
-        ];
-        if lit {
-            ops.push(RenderDiff::CreateLight {
-                handle: RenderHandle::new(91),
-                parent: None,
-                light: LightDescriptor::Directional {
-                    color: [1.0; 3],
-                    intensity: 3.0,
-                    enabled: true,
-                    direction: [-0.8, -0.4, 0.3],
-                    shadow_intent: LightShadowIntent::Disabled,
-                },
+    let render_scene =
+        |transition_cells: Option<u8>, contrast: f32, mapped: bool, lit: bool, aliased: bool| {
+            let mut harness = Harness::new(RendererOptions {
+                default_world_lights: false,
+                ..RendererOptions::default()
             });
-        }
-        let mut projector = VoxelRenderProjector::new();
-        ops.extend(project(
-            &mut projector,
-            &sand_and_rock(transition_cells),
-            &materials,
-        ));
-        harness.apply(ops);
-        harness.render(&camera([0.0, 9.0, 1.0], 0.0, -55.0)).1
+            let mut plain = |id: &str, color: [u8; 4]| {
+                harness
+                    .resources
+                    .texture(id, 4, 4, &image(4, 4, |_, _| color), TextureWrap::Repeat)
+            };
+            let (sand, rock, stone) = (
+                plain("texture/sand", SAND),
+                plain("texture/rock", ROCK),
+                plain("texture/stone", STONE),
+            );
+            let mut flat = plain("texture/flat", [128, 128, 255, 255]);
+            if let Some(payload) = flat.payload.as_mut() {
+                payload.color_space = TextureColorSpace::Linear;
+            }
+            let flat_map = mapped.then(|| MaterialNormalMapDescriptor {
+                texture: flat.id.clone(),
+                scale: 1.0,
+            });
+            let repeat = |texture: &TextureDescriptor| VoxelSurfaceMappingDescriptor::Repeat {
+                texture: texture.id.clone(),
+                texture_version: texture.version,
+                texture_content_hash: texture.content_hash.clone().unwrap(),
+                tile_scale_cells: [2.0, 2.0],
+                tile_origin_cells: [0.0, 0.0],
+            };
+            let surface = |slot: u16, texture: &TextureDescriptor| {
+                voxel_material(slot, [1.0; 4], Some(texture), Some(repeat(texture)))
+            };
+            let mut materials = BTreeMap::from([
+                (1, surface(1, &sand)),
+                (2, surface(2, &rock)),
+                (3, surface(3, &stone)),
+                (4, surface(4, &sand)),
+                (5, surface(5, &rock)),
+            ]);
+            if transition_cells.is_some() {
+                // Every layer slot draws one blend: sand, then rock.
+                let rock_layer = MaterialTerrainLayerDescriptor {
+                    voxel_surface: materials[&2].voxel_surface.clone().unwrap(),
+                    normal_map: flat_map.clone(),
+                };
+                for slot in [1, 2, 4, 5] {
+                    let mut blend = surface(slot, &sand);
+                    blend.terrain_layers = Some(MaterialTerrainLayersDescriptor {
+                        layers: vec![rock_layer.clone()],
+                        contrast,
+                    });
+                    blend.normal_map = flat_map.clone();
+                    blend.triplanar =
+                        mapped.then_some(MaterialTriplanarDescriptor { sharpness: 4.0 });
+                    materials.insert(slot, blend);
+                }
+            }
+            let mut ops = vec![
+                RenderDiff::DefineTexture { texture: flat },
+                RenderDiff::DefineTexture { texture: sand },
+                RenderDiff::DefineTexture { texture: rock },
+                RenderDiff::DefineTexture { texture: stone },
+                // Ambient π: the surface shows exactly its texture.
+                RenderDiff::CreateLight {
+                    handle: RenderHandle::new(90),
+                    parent: None,
+                    light: LightDescriptor::Ambient {
+                        color: [1.0; 3],
+                        intensity: std::f32::consts::PI,
+                        enabled: true,
+                        shadow_intent: LightShadowIntent::Disabled,
+                    },
+                },
+            ];
+            if lit {
+                ops.push(RenderDiff::CreateLight {
+                    handle: RenderHandle::new(91),
+                    parent: None,
+                    light: LightDescriptor::Directional {
+                        color: [1.0; 3],
+                        intensity: 3.0,
+                        enabled: true,
+                        direction: [-0.8, -0.4, 0.3],
+                        shadow_intent: LightShadowIntent::Disabled,
+                    },
+                });
+            }
+            let mut projector = VoxelRenderProjector::new();
+            let scene = if aliased {
+                sand_and_rock_aliased(transition_cells)
+            } else {
+                sand_and_rock(transition_cells)
+            };
+            ops.extend(project(&mut projector, &scene, &materials));
+            harness.apply(ops);
+            harness.render(&camera([0.0, 9.0, 1.0], 0.0, -55.0)).1
+        };
+    let render_with = |transition_cells: Option<u8>, contrast: f32, mapped: bool, lit: bool| {
+        render_scene(transition_cells, contrast, mapped, lit, false)
     };
     let render = |transition_cells: Option<u8>, contrast: f32| {
         render_with(transition_cells, contrast, false, false)
@@ -1602,6 +1632,16 @@ fn terrain_layers_blend_sand_into_rock_over_the_chosen_width() {
         "contrast narrows a transition: {sharpened_mixed} vs {broad_mixed}"
     );
     assert_screenshot("scene_terrain_layers_broad", &broad);
+    // Dirt and gravel columns mapped onto the sand and rock layers draw the
+    // same blend as plain sand and rock: the weights count every slot of a
+    // layer as that layer.
+    let aliased = render_scene(Some(3), 1.0, false, false, true);
+    let differing = broad
+        .chunks(4)
+        .zip(aliased.chunks(4))
+        .filter(|(a, b)| (0..3).any(|c| a[c].abs_diff(b[c]) > 2))
+        .count();
+    assert_eq!(differing, 0, "aliased slots blend as their layers");
     // The stone strip outside the set is untinted by its layer weights.
     let near = (0..WIDTH)
         .map(|x| pixel(&broad, x, HEIGHT * 3 / 4))

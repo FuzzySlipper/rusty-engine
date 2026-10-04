@@ -683,7 +683,8 @@ colour atlas texel for texel. `TriplanarSharpness` blends the material's
 texture from three planes on smooth surfaces
 ([textures on reconstructed surfaces](smooth-voxel-surfaces.md#textures-on-reconstructed-surfaces)).
 `Graphics.CreateTerrainLayerMaterial` blends up to four such materials by
-`Voxel.ConfigureTerrainLayers` weights
+`Voxel.ConfigureTerrainLayers` weights, which can map several slots to one
+layer
 ([blending terrain layers](smooth-voxel-surfaces.md#blending-terrain-layers)).
 An atlas reference must keep the catalog's pinned version/hash. Structural
 class does not select a scene atlas or replace canonical voxel state.
