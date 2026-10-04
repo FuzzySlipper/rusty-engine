@@ -107,7 +107,20 @@ pub(crate) fn run(args: Arguments) -> Result<(), String> {
     // failure pauses until source restaging supplies a new product; no
     // request is replayed in either case.
     let mut automatic_restart_used = false;
+    let mut reported = None;
     let reason = loop {
+        // `rusty dev` records the process groups to signal if it must force
+        // a stop; they change when the runtime restarts or the browser opens.
+        let processes = (
+            runtime.as_ref().map(|runtime| runtime.child.id()),
+            headless_browser
+                .as_ref()
+                .map(headless_browser::HeadlessBrowser::id),
+        );
+        if reported != Some(processes) {
+            report_processes(processes);
+            reported = Some(processes);
+        }
         if termination.load(Ordering::Relaxed) {
             break "termination-signal";
         }
@@ -241,6 +254,15 @@ fn ephemeral_port_range() -> Option<(u16, u16)> {
     let range = std::fs::read_to_string("/proc/sys/net/ipv4/ip_local_port_range").ok()?;
     let mut bounds = range.split_whitespace().map(str::parse::<u16>);
     Some((bounds.next()?.ok()?, bounds.next()?.ok()?))
+}
+
+/// The runtime and browser each lead their own process group, so their pid
+/// is the group id. `rusty dev` reads this line.
+fn report_processes((runtime, browser): (Option<u32>, Option<u32>)) {
+    crate::print_line(&format!(
+        "RUSTY_HOST processes={}",
+        serde_json::json!({ "runtime": runtime, "browser": browser })
+    ));
 }
 
 fn start_or_pause(

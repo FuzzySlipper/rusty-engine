@@ -118,6 +118,11 @@ impl HeadlessBrowser {
         })
     }
 
+    /// The browser's pid, which also names its process group.
+    pub(crate) fn id(&self) -> u32 {
+        self.child.id()
+    }
+
     pub(crate) fn shutdown(mut self) -> Result<(), String> {
         self.stop().map_err(|error| {
             format!(

@@ -3,8 +3,12 @@
 //! (`<rusty cache>/sessions/<id>/`), whatever checkout or pair it runs, so
 //! `rusty dev list` shows every product host on the machine and
 //! `rusty dev stop <id|port>` stops one without searching processes.
-//! A background session also has its project's `.runtime/dev/<project>/`
-//! directory, which keeps one per project and holds its log.
+//! Each also holds its project's `.runtime/dev/<project>[#<instance>]/`
+//! lock, so one project runs one session unless `--instance` names others
+//! (crew playtest runs one host per playtest session); a background session
+//! keeps its log there. A session that ends for a reason a caller must see
+//! (idle expiry, an unusable port, a removed project) leaves its record,
+//! shown by `rusty dev list --all` for a day.
 //!
 //! Each running `rusty dev` holds an exclusive lock on its `lock` files for
 //! its whole life, so a directory whose lock is free belongs to one that died
@@ -30,6 +34,9 @@ const STOP_TIMEOUT: Duration = Duration::from_secs(300);
 const LOG_TAIL_LINES: usize = 40;
 /// What the product host prints once it serves.
 const LISTENING: &str = " product host listening at ";
+/// What the product-host supervisor prints when its runtime or headless
+/// browser starts: `{"runtime": <pgid>, "browser": <pgid>}`.
+const PROCESSES: &str = "RUSTY_HOST processes=";
 
 pub struct SessionPaths {
     directory: PathBuf,
@@ -43,7 +50,7 @@ impl SessionPaths {
     /// The session of the project at `project`: equivalent spellings of one
     /// project file (relative, `..`, symlinks) name the same session, and
     /// distinct project files in one repository name distinct ones.
-    pub fn for_project(project: &Path) -> Result<Self, String> {
+    pub fn for_project(project: &Path, instance: Option<&str>) -> Result<Self, String> {
         let project = super::absolute(project)?;
         // Windows canonicalizes a mapped drive to its UNC share
         // (`P:\x` to `\\?\UNC\server\share\x`), which would key the session
@@ -60,7 +67,11 @@ impl SessionPaths {
                 project.display()
             ));
         }
-        let directory = roots.runtime.join("dev").join(session_key(relative));
+        let mut key = session_key(relative);
+        if let Some(instance) = instance {
+            key = format!("{key}%23{instance}");
+        }
+        let directory = roots.runtime.join("dev").join(key);
         Ok(Self {
             record: directory.join("session.json"),
             lock: directory.join("lock"),
@@ -146,8 +157,9 @@ impl EntryPaths {
             .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
             .unwrap_or_else(|| json!({ "state": "starting" }));
         record["keep"] = self.keep.exists().into();
-        if let Some(idle) = self.idle() {
-            record["idleSeconds"] = idle.as_secs().into();
+        if let Ok(used) = fs::metadata(&self.activity).and_then(|metadata| metadata.modified()) {
+            record["lastActivity"] = epoch_seconds(used).into();
+            record["idleSeconds"] = used.elapsed().unwrap_or_default().as_secs().into();
         }
         record
     }
@@ -175,7 +187,15 @@ impl Registry {
     /// The running sessions, oldest first, and how many dead ones were
     /// removed on the way.
     fn live(&self) -> (Vec<(EntryPaths, Value)>, usize) {
+        let scan = self.scan();
+        (scan.live, scan.removed)
+    }
+
+    /// Running sessions, sessions that ended with a reason to report (kept
+    /// for [`ENDED_RETENTION`]), and how many dead entries were removed.
+    fn scan(&self) -> Scan {
         let mut live = Vec::new();
+        let mut ended = Vec::new();
         let mut removed = 0;
         for entry in fs::read_dir(&self.root).into_iter().flatten().flatten() {
             let paths = EntryPaths::new(entry.path());
@@ -200,7 +220,15 @@ impl Registry {
             match lock.try_lock() {
                 Ok(()) => {
                     drop(lock);
-                    if fs::remove_dir_all(&paths.directory).is_ok() {
+                    let record = paths.record();
+                    let ended_at = record["endedAt"].as_u64();
+                    let recent = ended_at.is_some_and(|ended| {
+                        epoch_seconds(std::time::SystemTime::now()).saturating_sub(ended)
+                            < ENDED_RETENTION.as_secs()
+                    });
+                    if recent {
+                        ended.push(record);
+                    } else if fs::remove_dir_all(&paths.directory).is_ok() {
                         removed += 1;
                     }
                 }
@@ -212,7 +240,12 @@ impl Registry {
             }
         }
         live.sort_by_key(|(_, record)| record["startedAt"].as_u64().unwrap_or(0));
-        (live, removed)
+        ended.sort_by_key(|record| record["endedAt"].as_u64().unwrap_or(0));
+        Scan {
+            live,
+            ended,
+            removed,
+        }
     }
 
     /// The running session named by its id or the port it serves on.
@@ -233,8 +266,24 @@ impl Registry {
     }
 }
 
-/// A short readable id: the project file's name and the `rusty dev` pid.
-fn session_id(project: &Path) -> String {
+struct Scan {
+    live: Vec<(EntryPaths, Value)>,
+    ended: Vec<Value>,
+    removed: usize,
+}
+
+/// How long the record of a session that ended for a reason stays listed.
+const ENDED_RETENTION: Duration = Duration::from_secs(24 * 3600);
+
+fn epoch_seconds(time: std::time::SystemTime) -> u64 {
+    time.duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
+/// A short readable id: the project file's name, its instance and the
+/// `rusty dev` pid.
+fn session_id(project: &Path, instance: Option<&str>) -> String {
     let stem: String = project
         .file_stem()
         .map(|stem| stem.to_string_lossy().to_ascii_lowercase())
@@ -248,7 +297,11 @@ fn session_id(project: &Path) -> String {
             }
         })
         .collect();
-    format!("{}-{}", stem.trim_matches('-'), std::process::id())
+    let stem = stem.trim_matches('-');
+    match instance {
+        Some(instance) => format!("{stem}.{instance}-{}", std::process::id()),
+        None => format!("{stem}-{}", std::process::id()),
+    }
 }
 
 /// One directory name per project path within the repository: `/` and `%`
@@ -265,8 +318,12 @@ fn session_key(relative: &Path) -> String {
 pub struct Registration<'a> {
     pub project: &'a Path,
     pub persistence_root: &'a Path,
-    /// Started by `rusty dev start`: one per project, with its log in the
-    /// project's `.runtime/dev/`.
+    /// Another concurrent session of the same project (`--instance`).
+    pub instance: Option<&'a str>,
+    /// The checkout the project is in.
+    pub checkout: &'a Path,
+    /// Started by `rusty dev start`, with its log in the project's
+    /// `.runtime/dev/`.
     pub background: bool,
     pub label: Option<&'a str>,
     pub keep: bool,
@@ -276,8 +333,10 @@ pub struct Registration<'a> {
 /// in the registry and, for a background session, its project directory.
 pub struct Session {
     entry: EntryPaths,
-    project: Option<SessionPaths>,
+    project: SessionPaths,
     record: Mutex<Map<String, Value>>,
+    /// Ended for a reason a caller must see: the record stays.
+    retained: std::sync::atomic::AtomicBool,
     _locks: Vec<File>,
 }
 
@@ -290,21 +349,18 @@ impl Session {
         let Registration {
             project,
             persistence_root,
+            instance,
+            checkout,
             background,
             label,
             keep,
         } = *registration;
         let mut locks = Vec::new();
-        let project_paths = if background {
-            let (paths, lock) = claim_project(project)?;
-            locks.push(lock);
-            Some(paths)
-        } else {
-            None
-        };
+        let (project_paths, project_lock) = claim_project(project, instance)?;
+        locks.push(project_lock);
         // Dead sessions are cleared whenever one starts.
         let _ = registry.live();
-        let entry = EntryPaths::new(registry.root.join(session_id(project)));
+        let entry = EntryPaths::new(registry.root.join(session_id(project, instance)));
         fs::create_dir_all(&entry.directory).map_err(|error| {
             format!(
                 "RUSTY_DEV_SESSION: could not create `{}`: {error}",
@@ -339,6 +395,7 @@ impl Session {
             "id": entry.directory.file_name().map(|name| name.to_string_lossy().into_owned()),
             "state": "starting",
             "project": project,
+            "checkout": checkout,
             "pid": std::process::id(),
             "startedAt": started_at,
             "background": background,
@@ -347,13 +404,17 @@ impl Session {
         if let Some(label) = label {
             record["label"] = label.into();
         }
-        if let Some(paths) = &project_paths {
-            record["log"] = json!(paths.log);
+        if let Some(instance) = instance {
+            record["instance"] = instance.into();
+        }
+        if background {
+            record["log"] = json!(project_paths.log);
         }
         let session = Self {
             entry,
             project: project_paths,
             record: Mutex::new(record.as_object().cloned().unwrap_or_default()),
+            retained: std::sync::atomic::AtomicBool::new(false),
             _locks: locks,
         };
         session.write();
@@ -381,6 +442,25 @@ impl Session {
         self.entry.keep.exists()
     }
 
+    /// The runtime pack the session runs (its pair).
+    pub fn uses_runtime(&self, pack: &Path) {
+        self.update(|record| {
+            record.insert("pair".into(), json!(pack));
+        });
+    }
+
+    /// Ends the session for a reason its record keeps, so `rusty dev list
+    /// --all` and callers can tell it from a crash or a stop.
+    pub fn finish(&self, reason: &str) {
+        self.retained
+            .store(true, std::sync::atomic::Ordering::Release);
+        let ended_at = epoch_seconds(std::time::SystemTime::now());
+        self.update(|record| {
+            record.insert("state".into(), reason.into());
+            record.insert("endedAt".into(), ended_at.into());
+        });
+    }
+
     /// Records the idle limit, or why there is none.
     pub fn idle_limit(&self, limit: &Result<Duration, &'static str>) {
         self.update(|record| match limit {
@@ -394,19 +474,30 @@ impl Session {
         });
     }
 
-    /// The `rusty-product-host` this session runs, for a forced stop.
+    /// The `rusty-product-host` supervisor this session runs.
     pub fn host_started(&self, pid: u32) {
         self.update(|record| {
-            record.insert("hostPid".into(), pid.into());
+            record.insert("supervisorPid".into(), pid.into());
+            record.remove("runtimePgid");
+            record.remove("browserPgid");
+        });
+    }
+
+    /// The process groups the supervisor reports for its runtime and
+    /// headless browser, which a forced stop signals.
+    fn processes(&self, report: &Value) {
+        self.update(|record| {
+            for (key, field) in [("runtime", "runtimePgid"), ("browser", "browserPgid")] {
+                match report[key].as_u64() {
+                    Some(pid) => record.insert(field.into(), pid.into()),
+                    None => record.remove(field),
+                };
+            }
         });
     }
 
     pub fn stop_requested(&self) -> bool {
-        self.entry.stop.exists()
-            || self
-                .project
-                .as_ref()
-                .is_some_and(|paths| paths.stop.exists())
+        self.entry.stop.exists() || self.project.stop.exists()
     }
 
     /// Copies a host's output to this supervisor's own and records where it
@@ -426,6 +517,11 @@ impl Session {
                 let text = String::from_utf8_lossy(&line);
                 if let Some((_, url)) = text.split_once(LISTENING) {
                     session.serving(url.trim(), runtime_instance_id);
+                }
+                if let Some(report) = text.trim_end().strip_prefix(PROCESSES) {
+                    if let Ok(report) = serde_json::from_str::<Value>(report) {
+                        session.processes(&report);
+                    }
                 }
                 line.clear();
             }
@@ -468,9 +564,7 @@ impl Session {
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .clone(),
         );
-        let records = std::iter::once(&self.entry.record)
-            .chain(self.project.as_ref().map(|paths| &paths.record));
-        for path in records {
+        for path in [&self.entry.record, &self.project.record] {
             let next = path.with_extension("json.next");
             let written =
                 fs::write(&next, record.to_string()).and_then(|()| fs::rename(&next, path));
@@ -486,18 +580,23 @@ impl Session {
 
 impl Drop for Session {
     fn drop(&mut self) {
-        if let Some(paths) = &self.project {
-            let _ = fs::remove_file(&paths.record);
-            let _ = fs::remove_file(&paths.stop);
+        let _ = fs::remove_file(&self.project.record);
+        let _ = fs::remove_file(&self.project.stop);
+        if self.retained.load(std::sync::atomic::Ordering::Acquire) {
+            // The record stays for `rusty dev list --all`; its lock is free
+            // once this process exits.
+            let _ = fs::remove_file(&self.entry.stop);
+            let _ = fs::remove_file(&self.entry.keep);
+        } else {
+            // Windows keeps an open lock file; `rusty dev list` removes what is left.
+            let _ = fs::remove_dir_all(&self.entry.directory);
         }
-        // Windows keeps an open lock file; `rusty dev list` removes what is left.
-        let _ = fs::remove_dir_all(&self.entry.directory);
     }
 }
 
-/// Takes the project's background-session lock, one per project.
-fn claim_project(project: &Path) -> Result<(SessionPaths, File), String> {
-    let paths = SessionPaths::for_project(project)?;
+/// Takes the project's lock: one session per project, or per instance.
+fn claim_project(project: &Path, instance: Option<&str>) -> Result<(SessionPaths, File), String> {
+    let paths = SessionPaths::for_project(project, instance)?;
     fs::create_dir_all(&paths.directory).map_err(|error| {
         format!(
             "RUSTY_DEV_SESSION: could not create `{}`: {error}",
@@ -514,8 +613,7 @@ fn claim_project(project: &Path) -> Result<(SessionPaths, File), String> {
         Ok(()) => {}
         Err(TryLockError::WouldBlock) => {
             return Err(format!(
-                "RUSTY_DEV_SESSION_RUNNING: a session for `{}` is already running; `rusty dev stop --project {}` ends it",
-                project.display(),
+                "RUSTY_DEV_SESSION_RUNNING: a session for `{}` is already running; `rusty dev list` shows it and `rusty dev stop <id>` ends it, or `--instance <name>` runs another",
                 project.display()
             ))
         }
@@ -532,8 +630,12 @@ fn claim_project(project: &Path) -> Result<(SessionPaths, File), String> {
 
 /// Starts `rusty dev <arguments> --session` in the background and returns
 /// once it serves, printing its record.
-pub fn start(project: &Path, arguments: &[OsString]) -> Result<ExitCode, String> {
-    let paths = SessionPaths::for_project(project)?;
+pub fn start(
+    project: &Path,
+    instance: Option<&str>,
+    arguments: &[OsString],
+) -> Result<ExitCode, String> {
+    let paths = SessionPaths::for_project(project, instance)?;
     if let Some(record) = paths.running()? {
         return Err(format!(
             "RUSTY_DEV_SESSION_RUNNING: a session for `{}` is already running: {record}",
@@ -598,8 +700,8 @@ pub fn start(project: &Path, arguments: &[OsString]) -> Result<ExitCode, String>
     }
 }
 
-pub fn stop(project: &Path) -> Result<ExitCode, String> {
-    let paths = SessionPaths::for_project(project)?;
+pub fn stop(project: &Path, instance: Option<&str>) -> Result<ExitCode, String> {
+    let paths = SessionPaths::for_project(project, instance)?;
     let stopped = stop_session(&paths)?;
     println!(
         "{}",
@@ -608,8 +710,8 @@ pub fn stop(project: &Path) -> Result<ExitCode, String> {
     Ok(ExitCode::SUCCESS)
 }
 
-pub fn status(project: &Path) -> Result<ExitCode, String> {
-    let paths = SessionPaths::for_project(project)?;
+pub fn status(project: &Path, instance: Option<&str>) -> Result<ExitCode, String> {
+    let paths = SessionPaths::for_project(project, instance)?;
     let session = paths.running()?;
     println!(
         "{}",
@@ -645,15 +747,15 @@ fn stop_session(paths: &SessionPaths) -> Result<Option<Value>, String> {
     Ok(Some(record))
 }
 
-/// `rusty dev list`: every running session on this machine.
-pub fn list(machine_readable: bool) -> Result<ExitCode, String> {
+/// `rusty dev list`: every running session on this machine; with `all`,
+/// also those that ended for a reason in the last day.
+pub fn list(machine_readable: bool, all: bool) -> Result<ExitCode, String> {
     let registry = Registry::machine()?;
-    let sessions: Vec<Value> = registry
-        .live()
-        .0
-        .into_iter()
-        .map(|(_, record)| record)
-        .collect();
+    let scan = registry.scan();
+    let mut sessions: Vec<Value> = scan.live.into_iter().map(|(_, record)| record).collect();
+    if all {
+        sessions.extend(scan.ended);
+    }
     if machine_readable {
         println!("{}", Value::Array(sessions));
         return Ok(ExitCode::SUCCESS);
@@ -721,22 +823,22 @@ pub fn stop_target(target: &str) -> Result<ExitCode, String> {
         }
         true
     };
-    let pids: Vec<u64> = ["pid", "hostPid"]
-        .iter()
-        .filter_map(|key| record[*key].as_u64())
-        .collect();
     let mut forced = false;
     if !stopped_within(GRACEFUL_STOP) {
         forced = true;
-        signal(&pids[..1.min(pids.len())], false);
+        // `rusty dev` stops its host and the host its runtime and browser.
+        let targets = kill_targets(&paths.record());
+        signal(&targets[..1.min(targets.len())], false);
+        stopped_within(TERMINATE_GRACE);
+        // Whatever is left of the recorded processes goes, whether or not
+        // `rusty dev` itself has exited.
+        let targets = kill_targets(&paths.record());
+        signal(&targets, true);
         if !stopped_within(TERMINATE_GRACE) {
-            signal(&pids, true);
-            if !stopped_within(TERMINATE_GRACE) {
-                return Err(format!(
-                    "RUSTY_DEV_STOP_TIMEOUT: session `{}` (pids {pids:?}) did not stop",
-                    record["id"].as_str().unwrap_or(target)
-                ));
-            }
+            return Err(format!(
+                "RUSTY_DEV_STOP_TIMEOUT: session `{}` ({targets:?}) did not stop",
+                record["id"].as_str().unwrap_or(target)
+            ));
         }
     }
     let _ = fs::remove_dir_all(&paths.directory);
@@ -788,22 +890,54 @@ fn duration_text(seconds: u64) -> String {
     }
 }
 
-/// Sends SIGTERM, or SIGKILL when `kill`, to `pids`.
-fn signal(pids: &[u64], kill: bool) {
-    for pid in pids {
+/// A recorded process a forced stop signals.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum KillTarget {
+    Process(u64),
+    /// A process group the supervisor reported (its runtime or browser).
+    Group(u64),
+}
+
+/// The session's own processes, `rusty dev` first: its supervisor, then the
+/// process groups of its runtime and headless browser.
+fn kill_targets(record: &Value) -> Vec<KillTarget> {
+    [
+        ("pid", KillTarget::Process as fn(u64) -> KillTarget),
+        ("supervisorPid", KillTarget::Process),
+        ("runtimePgid", KillTarget::Group),
+        ("browserPgid", KillTarget::Group),
+    ]
+    .into_iter()
+    .filter_map(|(key, target)| record[key].as_u64().filter(|pid| *pid > 1).map(target))
+    .collect()
+}
+
+/// Sends SIGTERM, or SIGKILL when `kill`, to `targets`.
+fn signal(targets: &[KillTarget], kill: bool) {
+    for target in targets {
         #[cfg(unix)]
-        let _ = Command::new("kill")
-            .args([if kill { "-KILL" } else { "-TERM" }, &pid.to_string()])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
+        {
+            let id = match target {
+                KillTarget::Process(pid) => pid.to_string(),
+                KillTarget::Group(pgid) => format!("-{pgid}"),
+            };
+            let _ = Command::new("kill")
+                .args([if kill { "-KILL" } else { "-TERM" }, "--", &id])
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status();
+        }
+        // Windows has no process groups to report; the tree kill covers
+        // `rusty dev`'s descendants.
         #[cfg(windows)]
-        let _ = Command::new("taskkill")
-            .args(["/PID", &pid.to_string(), "/T"])
-            .args(kill.then_some("/F"))
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
+        if let KillTarget::Process(pid) = target {
+            let _ = Command::new("taskkill")
+                .args(["/PID", &pid.to_string(), "/T"])
+                .args(kill.then_some("/F"))
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status();
+        }
     }
 }
 
@@ -848,6 +982,19 @@ fn detach(command: &mut Command) {
 mod tests {
     use super::*;
 
+    /// Another test thread's fork can hold a released lock's file until its
+    /// exec, so a check that a lock is free waits briefly.
+    fn eventually(mut check: impl FnMut() -> bool) -> bool {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !check() {
+            if Instant::now() >= deadline {
+                return false;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        true
+    }
+
     fn registry(root: &Path) -> Registry {
         Registry {
             root: root.join("registry"),
@@ -859,11 +1006,22 @@ mod tests {
         project: &Path,
         background: bool,
     ) -> Result<Arc<Session>, String> {
+        claim_instance(registry, project, background, None)
+    }
+
+    fn claim_instance(
+        registry: &Registry,
+        project: &Path,
+        background: bool,
+        instance: Option<&str>,
+    ) -> Result<Arc<Session>, String> {
         Session::claim_in(
             registry,
             &Registration {
                 project,
                 persistence_root: Path::new("/persistence"),
+                instance,
+                checkout: project.parent().unwrap(),
                 background,
                 label: Some("test"),
                 keep: false,
@@ -883,14 +1041,14 @@ mod tests {
         let (a, b) = (root.join("a/Game.csproj"), root.join("b/Game.csproj"));
         let session = claim(&registry, &a, true).unwrap();
         let (paths_a, paths_b) = (
-            SessionPaths::for_project(&a).unwrap(),
-            SessionPaths::for_project(&b).unwrap(),
+            SessionPaths::for_project(&a, None).unwrap(),
+            SessionPaths::for_project(&b, None).unwrap(),
         );
         assert_ne!(paths_a.directory, paths_b.directory);
         assert!(paths_a.running().unwrap().is_some());
         assert!(paths_b.running().unwrap().is_none());
         // Another spelling of a's project names a's session.
-        let spelled = SessionPaths::for_project(&root.join("c/../a/./Game.csproj")).unwrap();
+        let spelled = SessionPaths::for_project(&root.join("c/../a/./Game.csproj"), None).unwrap();
         assert_eq!(spelled.directory, paths_a.directory);
         drop(session);
         fs::remove_dir_all(root).unwrap();
@@ -903,7 +1061,7 @@ mod tests {
         fs::create_dir_all(&root).unwrap();
         let registry = registry(&root);
         let session = claim(&registry, &project, true).unwrap();
-        let paths = SessionPaths::for_project(&project).unwrap();
+        let paths = SessionPaths::for_project(&project, None).unwrap();
         assert_eq!(paths.running().unwrap().unwrap()["state"], "starting");
         assert!(claim(&registry, &project, true).is_err());
         session.serving("http://127.0.0.1:8787", 7);
@@ -937,8 +1095,6 @@ mod tests {
         fs::create_dir_all(root.join(".git")).unwrap();
         let registry = registry(&root);
         let (game, tool) = (root.join("Game.csproj"), root.join("Tool.csproj"));
-        // A foreground run and a background session, and no project lock for
-        // the foreground one: playtest runs several hosts of one project.
         let foreground = claim(&registry, &game, false).unwrap();
         let background = claim(&registry, &tool, true).unwrap();
         foreground.serving("http://127.0.0.1:30301", 1);
@@ -985,6 +1141,109 @@ mod tests {
         assert!(!ended.exists());
         drop(background);
         assert!(registry.live().0.is_empty());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn one_project_runs_one_session_unless_instances_name_others() {
+        let root = std::env::temp_dir().join(format!("rusty-instances-{}", std::process::id()));
+        fs::create_dir_all(root.join(".git")).unwrap();
+        let registry = registry(&root);
+        let game = root.join("Game.csproj");
+        let first = claim(&registry, &game, false).unwrap();
+        // A second foreground run of the project, or a background one, is refused.
+        let refused = claim(&registry, &game, false).err().unwrap();
+        assert!(
+            refused.starts_with("RUSTY_DEV_SESSION_RUNNING"),
+            "{refused}"
+        );
+        assert!(claim(&registry, &game, true).is_err());
+        // The foreground run is found through its project, as `start` is.
+        let paths = SessionPaths::for_project(&game, None).unwrap();
+        assert!(paths.running().unwrap().is_some());
+        // Named instances each have their own lock.
+        let a = claim_instance(&registry, &game, false, Some("playtest-a")).unwrap();
+        let b = claim_instance(&registry, &game, false, Some("playtest-b")).unwrap();
+        assert!(claim_instance(&registry, &game, false, Some("playtest-a")).is_err());
+        assert_eq!(registry.live().0.len(), 3);
+        drop((first, a, b));
+        assert!(eventually(|| claim(&registry, &game, false).is_ok()));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn the_record_names_what_a_forced_stop_signals() {
+        let root = std::env::temp_dir().join(format!("rusty-record-{}", std::process::id()));
+        fs::create_dir_all(root.join(".git")).unwrap();
+        let registry = registry(&root);
+        let session = claim(&registry, &root.join("Game.csproj"), true).unwrap();
+        session.uses_runtime(Path::new("/cache/pairs/0.1.0-dev.x/runtime-pack"));
+        session.host_started(4101);
+        session.processes(&json!({ "runtime": 4102, "browser": 4103 }));
+        session.serving("http://127.0.0.1:30301", 9);
+        let (_, record) = registry.find("30301").unwrap();
+        for key in [
+            "id",
+            "state",
+            "project",
+            "checkout",
+            "pair",
+            "pid",
+            "supervisorPid",
+            "runtimePgid",
+            "browserPgid",
+            "url",
+            "port",
+            "label",
+            "startedAt",
+            "lastActivity",
+            "idleSeconds",
+            "keep",
+            "log",
+            "persistenceRoot",
+        ] {
+            assert!(!record[key].is_null(), "the record lacks `{key}`: {record}");
+        }
+        assert_eq!(
+            kill_targets(&record),
+            [
+                KillTarget::Process(u64::from(std::process::id())),
+                KillTarget::Process(4101),
+                KillTarget::Group(4102),
+                KillTarget::Group(4103),
+            ]
+        );
+        // A restarted runtime with no browser replaces the groups.
+        session.processes(&json!({ "runtime": 4200, "browser": null }));
+        let (_, record) = registry.find("30301").unwrap();
+        assert!(record["browserPgid"].is_null());
+        assert_eq!(kill_targets(&record).last(), Some(&KillTarget::Group(4200)));
+        drop(session);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_session_that_ends_for_a_reason_keeps_its_record() {
+        let root = std::env::temp_dir().join(format!("rusty-ended-{}", std::process::id()));
+        fs::create_dir_all(root.join(".git")).unwrap();
+        let registry = registry(&root);
+        let expired = claim(&registry, &root.join("Game.csproj"), false).unwrap();
+        let stopped = claim(&registry, &root.join("Tool.csproj"), false).unwrap();
+        expired.finish("idle-expired");
+        drop((expired, stopped));
+        let mut scan = registry.scan();
+        assert!(eventually(|| {
+            scan = registry.scan();
+            scan.live.is_empty()
+        }));
+        // The expired one is listed as ended; the plain stop leaves nothing,
+        // as a crash would.
+        assert_eq!(scan.ended.len(), 1);
+        assert_eq!(scan.ended[0]["state"], "idle-expired");
+        assert!(scan.ended[0]["endedAt"].as_u64().is_some());
+        assert!(registry
+            .find(scan.ended[0]["id"].as_str().unwrap())
+            .is_err());
         fs::remove_dir_all(root).unwrap();
     }
 }

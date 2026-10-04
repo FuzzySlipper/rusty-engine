@@ -92,13 +92,16 @@ fn run() -> Result<ExitCode, String> {
             Ok(ExitCode::SUCCESS)
         }
         CommandName::Dev(options) => dev(options).map(|()| ExitCode::SUCCESS),
-        CommandName::DevStart(options, arguments) => session::start(&options.project, &arguments),
-        CommandName::DevStop(project) => session::stop(&project),
+        CommandName::DevStart(options, arguments) => {
+            check_port(&options)?;
+            session::start(&options.project, options.instance.as_deref(), &arguments)
+        }
+        CommandName::DevStop(project, instance) => session::stop(&project, instance.as_deref()),
         CommandName::DevStopTarget(target) => session::stop_target(&target),
-        CommandName::DevList { json } => session::list(json),
+        CommandName::DevList { json, all } => session::list(json, all),
         CommandName::DevKeep { target, keep } => session::keep(&target, keep),
         CommandName::DevPrune => session::prune(),
-        CommandName::DevStatus(project) => session::status(&project),
+        CommandName::DevStatus(project, instance) => session::status(&project, instance.as_deref()),
         CommandName::Build(options) => build(&options),
         CommandName::Install(options) => install(&options),
         CommandName::Update(options) => update(&options),
@@ -151,11 +154,14 @@ fn dev(mut options: DevOptions) -> Result<(), String> {
             }
         }
     }
+    check_port(&options)?;
     let roots = DevelopmentRoots::of(&options.project)?;
     let persistence_root = roots.persistence();
     let session = Session::claim(&Registration {
         project: &options.project,
         persistence_root: &persistence_root,
+        instance: options.instance.as_deref(),
+        checkout: &roots.checkout,
         background: options.session,
         label: options.label.as_deref(),
         keep: options.keep,
@@ -164,6 +170,9 @@ fn dev(mut options: DevOptions) -> Result<(), String> {
     let termination = install_termination_signal_hook()?;
     let runtime = RuntimePack::resolve(&options)?;
     runtime.verify()?;
+    if let Some(session) = session {
+        session.uses_runtime(&runtime.root);
+    }
 
     let initial = stage_product(&options)?;
     let mut staged = initial.directory;
@@ -220,6 +229,7 @@ fn dev(mut options: DevOptions) -> Result<(), String> {
                 if let Some(mut active_child) = child.take() {
                     active_child.shutdown()?;
                 }
+                session.finish("idle-expired");
                 diagnostic(
                     "stopped",
                     serde_json::json!({
@@ -240,6 +250,9 @@ fn dev(mut options: DevOptions) -> Result<(), String> {
                 let exited_child = child.take().expect("observed child is present");
                 if status.code() == Some(HOST_BIND_FAILURE_EXIT_CODE) {
                     // Restarting cannot free the port; the host printed why.
+                    if let Some(session) = session {
+                        session.finish("port-unavailable");
+                    }
                     diagnostic(
                         "stopped",
                         serde_json::json!({ "reason": "port-unavailable" }),
@@ -316,6 +329,9 @@ fn dev(mut options: DevOptions) -> Result<(), String> {
                     // session through it, so it ends here.
                     if let Some(mut active_child) = child.take() {
                         active_child.shutdown()?;
+                    }
+                    if let Some(session) = session {
+                        session.finish("project-removed");
                     }
                     diagnostic(
                         "stopped",
@@ -568,18 +584,20 @@ enum CommandName {
     Dev(DevOptions),
     /// `rusty dev start`: the options, checked, and the arguments that name them.
     DevStart(DevOptions, Vec<std::ffi::OsString>),
-    DevStop(PathBuf),
+    /// `rusty dev stop --project <p> [--instance <name>]`.
+    DevStop(PathBuf, Option<String>),
     /// `rusty dev stop <id|port>`: a session in the machine registry.
     DevStopTarget(String),
     DevList {
         json: bool,
+        all: bool,
     },
     DevKeep {
         target: String,
         keep: bool,
     },
     DevPrune,
-    DevStatus(PathBuf),
+    DevStatus(PathBuf, Option<String>),
     Build(BuildOptions),
     Install(InstallOptions),
     Update(UpdateOptions),
@@ -624,6 +642,10 @@ struct DevOptions {
     keep: bool,
     /// Minutes unused before the session stops itself; 0 never.
     idle_timeout: Option<u64>,
+    /// Another concurrent session of the same project, with its own lock.
+    instance: Option<String>,
+    /// Accept a fixed --port inside the machine's ephemeral range.
+    allow_ephemeral_port: bool,
 }
 
 #[derive(Debug)]
@@ -701,11 +723,33 @@ impl Arguments {
                         [target] if !target.starts_with('-') => {
                             CommandName::DevStopTarget(target.clone())
                         }
-                        values => CommandName::DevStop(parse_session_project(values, "stop")?),
+                        values => {
+                            let (project, instance) = parse_session_project(values, "stop")?;
+                            CommandName::DevStop(project, instance)
+                        }
                     },
-                    Some("list") => match &rest[1..] {
-                        [] => CommandName::DevList { json: false },
-                        [flag] if flag == "--json" => CommandName::DevList { json: true },
+                    Some("list") => match rest[1..]
+                        .iter()
+                        .map(String::as_str)
+                        .collect::<Vec<_>>()
+                        .as_slice()
+                    {
+                        [] => CommandName::DevList {
+                            json: false,
+                            all: false,
+                        },
+                        ["--json"] => CommandName::DevList {
+                            json: true,
+                            all: false,
+                        },
+                        ["--all"] => CommandName::DevList {
+                            json: false,
+                            all: true,
+                        },
+                        ["--json", "--all"] | ["--all", "--json"] => CommandName::DevList {
+                            json: true,
+                            all: true,
+                        },
                         _ => {
                             return Err(unknown_argument(
                                 "dev list",
@@ -732,7 +776,8 @@ impl Arguments {
                     },
                     Some("prune") if rest.len() == 1 => CommandName::DevPrune,
                     Some("status") => {
-                        CommandName::DevStatus(parse_session_project(&rest[1..], "status")?)
+                        let (project, instance) = parse_session_project(&rest[1..], "status")?;
+                        CommandName::DevStatus(project, instance)
                     }
                     _ => CommandName::Dev(parse_dev(rest)?),
                 },
@@ -807,6 +852,8 @@ fn parse_dev(values: Vec<String>) -> Result<DevOptions, String> {
     let mut label = None;
     let mut keep = false;
     let mut idle_timeout = None;
+    let mut instance = None;
+    let mut allow_ephemeral_port = false;
     while let Some(value) = values.next() {
         match value.as_str() {
             "--project" => project = Some(PathBuf::from(required_value(&mut values, "--project")?)),
@@ -876,6 +923,10 @@ fn parse_dev(values: Vec<String>) -> Result<DevOptions, String> {
                 label = Some(value);
             }
             "--keep" => keep = true,
+            "--instance" => {
+                instance = Some(instance_name(required_value(&mut values, "--instance")?)?)
+            }
+            "--allow-ephemeral-port" => allow_ephemeral_port = true,
             "--idle-timeout" => {
                 idle_timeout = Some(
                     required_value(&mut values, "--idle-timeout")?
@@ -913,6 +964,8 @@ fn parse_dev(values: Vec<String>) -> Result<DevOptions, String> {
         label,
         keep,
         idle_timeout,
+        instance,
+        allow_ephemeral_port,
     })
 }
 
@@ -938,14 +991,46 @@ fn configured_project() -> Result<Option<PathBuf>, String> {
     pair::default_project(&directory)
 }
 
-fn parse_session_project(values: &[String], command: &str) -> Result<PathBuf, String> {
-    match values {
-        [flag, project] if flag == "--project" => Ok(PathBuf::from(project)),
-        [] => selected_project(None, &format!("rusty dev {command}")),
-        _ => Err(format!(
-            "RUSTY_DEV_ARGUMENT: rusty dev {command} needs `--project <ordinary-product.csproj>`\n\n{}",
+fn parse_session_project(
+    values: &[String],
+    command: &str,
+) -> Result<(PathBuf, Option<String>), String> {
+    let refused = || {
+        format!(
+            "RUSTY_DEV_ARGUMENT: rusty dev {command} needs `[--project <ordinary-product.csproj>] [--instance <name>]`\n\n{}",
             dev_usage()
-        )),
+        )
+    };
+    let mut project = None;
+    let mut instance = None;
+    let mut values = values.iter().cloned();
+    while let Some(value) = values.next() {
+        match value.as_str() {
+            "--project" => project = Some(PathBuf::from(values.next().ok_or_else(refused)?)),
+            "--instance" => instance = Some(instance_name(values.next().ok_or_else(refused)?)?),
+            _ => return Err(refused()),
+        }
+    }
+    Ok((
+        selected_project(project, &format!("rusty dev {command}"))?,
+        instance,
+    ))
+}
+
+/// An instance name keys a lock directory: letters, digits, `.`, `_`, `-`.
+fn instance_name(value: String) -> Result<String, String> {
+    let valid = !value.is_empty()
+        && value.len() <= 64
+        && value.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '.' | '_' | '-')
+        });
+    if valid {
+        Ok(value)
+    } else {
+        Err(
+            "RUSTY_DEV_ARGUMENT: --instance must be 1 to 64 letters, digits, `.`, `_` or `-`"
+                .to_owned(),
+        )
     }
 }
 
@@ -1099,7 +1184,8 @@ commands:
   dev start     the same in the background, one per project; prints where it serves
   dev status    whether the project's background session runs
   dev stop      stop a session: the project's (--project) or any one by `<id|port>`
-  dev list      every dev session on this machine, with its id, URL, idle time and label
+  dev list      every dev session on this machine, with its id, URL, idle time and label;
+                --all adds those that ended for a reason (such as idle expiry) in the last day
   dev keep      keep a session from stopping when idle (`<id|port>`, `--off` to undo)
   dev prune     clear the records of sessions that ended without cleaning up
   pack-content  pack one content directory into a container a product opens at run time
@@ -1120,13 +1206,14 @@ with <{project}>src/Game/Game.csproj</{project}>, so --project can be left out:
   rusty update
   rusty build --aot
 
-Dev sessions: every `rusty dev` is listed by `rusty dev list`. Stop one with `rusty dev stop`,
-never by killing rusty or rusty-product-host processes: on a shared machine they belong to other
-sessions. A session unused for {idle} minutes (no input, control, live-debug command, page
-attaching or restage; a page that only watches does not count) stops itself. `--keep` or
-`rusty dev keep <id>` keeps one; `--idle-timeout <minutes>` or devIdleMinutes in {config} sets
-the limit (0 never). Leave out --port: a free port is chosen and printed. A fixed port inside the
-machine's ephemeral range (often 32768-60999) can be taken by outgoing connections.
+Dev sessions: every `rusty dev` is listed by `rusty dev list`, one per project unless
+`--instance <name>` runs another. Stop one with `rusty dev stop`, never by killing rusty or
+rusty-product-host processes: on a shared machine they belong to other sessions. A session unused
+for {idle} minutes (no input, control, live-debug command, page attaching or restage; a page that
+only watches does not count) stops itself. `--keep` or `rusty dev keep <id>` keeps one;
+`--idle-timeout <minutes>` or devIdleMinutes in {config} sets the limit (0 never). Leave out
+--port: a free port is chosen and printed. A fixed port inside the machine's ephemeral range
+(often 32768-60999) is refused, because outgoing connections borrow those ports.
 
 Development state is disposable. Everything under a product's .runtime/ (dev logs, session
 records, saves and other persistence from test runs) may be deleted, reset or made unreadable by
@@ -1158,12 +1245,13 @@ fn dev_usage() -> String {
     format!("usage: rusty dev [--project <ordinary-product.csproj>] [--port <u16>] [--bind-host <IPv4>] [--live-debug] [--debugger]
                  [--headless [--chromium <executable>]] [--output <stream|window>]
                  [--audio-output <stream|device-optional|device-required>] [--cef-switch <name[=value]>]...
-                 [--diagnostics-log <file>] [--label <text>] [--keep | --idle-timeout <minutes>]
+                 [--diagnostics-log <file>] [--label <text>] [--keep] [--idle-timeout <minutes>]
+                 [--instance <name>] [--allow-ephemeral-port]
                  [--runtime <runtime-pack> | --engine-source <rusty-engine-source>]
        rusty dev start [the same options]
-       rusty dev stop|status [--project <ordinary-product.csproj>]
+       rusty dev stop|status [--project <ordinary-product.csproj>] [--instance <name>]
        rusty dev stop <id|port>
-       rusty dev list [--json]
+       rusty dev list [--json] [--all]
        rusty dev keep <id|port> [--off]
        rusty dev prune
 
@@ -1174,7 +1262,11 @@ Builds and stages the product through its SDK, starts it on CoreCLR, and restage
 C#, UI or content inputs change. UI and content-bundle edits reload into the running product; other
 edits replace the runtime.
 
-`rusty dev start` runs the same session in the background, one per project: it returns once the
+One session runs per project, foreground or background: a second is refused while one runs.
+`--instance <name>` runs another beside it under its own name (crew playtest runs one host per
+playtest session this way); stop and status take the same --instance.
+
+`rusty dev start` runs the same session in the background: it returns once the
 product serves and prints {{id, url, port, pid, runtimeInstanceId, persistenceRoot, log}} as JSON, or exits
 nonzero with the log's tail if staging or startup failed. `rusty dev stop` ends that project's session
 and disposes the product as Ctrl+C would; `rusty dev status` reports it. The session's log lives in
@@ -1183,18 +1275,23 @@ localOutput when its config.json names one (`rusty status` shows where).
 
 Every `rusty dev`, foreground or background, is in this machine's session list (`rusty dev list`;
 `--json` for the records). `rusty dev stop <id|port>` stops any of them gracefully, then signals
-only that session's own processes. Never stop a host by killing processes by name: on a shared
-machine they belong to other sessions. `--label` says who or what a session is for.
+only the processes its record names: `rusty dev`, its host supervisor, and the process groups of
+its runtime and headless browser. Never stop a host by killing processes by name: on a shared
+machine they belong to other sessions. `--label` says who or what a session is for. A session that
+ends for a reason a caller must see (idle-expired, port-unavailable, project-removed) keeps its
+record for a day, listed by `rusty dev list --all`; a session that stopped or crashed leaves none.
 
 A session unused for {idle} minutes stops itself. Use is input, a control or lifecycle call, a live-debug
 command, a page attaching or a restage; a page or browser that only watches is not use. `--keep` or
-`rusty dev keep <id|port>` keeps a session (an owner's long-running host); `--idle-timeout <minutes>`
-or {{\"devIdleMinutes\": <minutes>}} in config.json sets the limit, 0 for never. Window output never
-expires: the window is someone's.
+`rusty dev keep <id|port>` keeps a session (an owner's long-running host) until `--off`;
+`--idle-timeout <minutes>` or {{\"devIdleMinutes\": <minutes>}} in config.json sets the limit, 0 for
+never. Window output never expires: the window is someone's.
 
 Leave out --port and a free port is chosen and printed. A fixed port inside this machine's
-ephemeral range (often 32768-60999) can be taken by outgoing connections with nothing listening; the
-host then stops at once with PRODUCT_HOST_BIND.
+ephemeral range (often 32768-60999) is refused before anything starts: outgoing connections borrow
+those ports, so one can be taken with nothing listening. Choose one below the range, or pass
+--allow-ephemeral-port to keep a port deliberately. A port that is taken stops the host at once
+with PRODUCT_HOST_BIND.
 
 Everything under .runtime/ is disposable test state (logs, records, saves) that a pair update,
 restage or clean may delete or invalidate, and nothing migrates it. Copy a save that must be kept
@@ -1220,6 +1317,8 @@ runtime for the UI) into the cache beside the pair.
   --label              who or what the session is for, shown by `rusty dev list`
   --keep               never stop this session for being idle
   --idle-timeout       minutes unused before the session stops itself (0 never)
+  --instance           run another session of a project that already has one, under this name
+  --allow-ephemeral-port  accept a fixed --port inside the machine's ephemeral range
   --runtime            Engine contributors: use this runtime pack instead of the pin
   --engine-source      Engine contributors: build the SDK and runtime from this checkout
 
@@ -2767,17 +2866,37 @@ fn diagnostic(event: &str, detail: Value) {
     );
 }
 
+/// A fixed `--port` inside the machine's ephemeral range can be taken by an
+/// outgoing connection's local port with nothing listening, so it is refused
+/// unless `--allow-ephemeral-port` says it was chosen on purpose.
+fn check_port(options: &DevOptions) -> Result<(), String> {
+    match (options.port, ephemeral_port_range()) {
+        (Some(port), Some((low, high)))
+            if port != 0 && (low..=high).contains(&port) && !options.allow_ephemeral_port =>
+        {
+            Err(format!(
+                "RUSTY_DEV_PORT: --port {port} is in this machine's ephemeral range {low}-{high}, which outgoing connections borrow, so it can be taken with nothing listening. Leave out --port (a free one is chosen and printed), choose one below {low} (30300-30450 is den-serve's range), or pass --allow-ephemeral-port to keep this one"
+            ))
+        }
+        _ => Ok(()),
+    }
+}
+
+fn ephemeral_port_range() -> Option<(u16, u16)> {
+    let range = fs::read_to_string("/proc/sys/net/ipv4/ip_local_port_range").ok()?;
+    let mut bounds = range.split_whitespace().map(str::parse::<u16>);
+    Some((bounds.next()?.ok()?, bounds.next()?.ok()?))
+}
+
 /// Minutes a dev session may go unused before it stops itself, unless
 /// `config.json` (`devIdleMinutes`) or `--idle-timeout` say otherwise.
 const DEFAULT_IDLE_MINUTES: u64 = 30;
 
-/// How long the session may go unused, or why it never expires: kept, a
-/// desktop window (someone's screen; its input bypasses the host's routes),
-/// or a limit of 0.
+/// How long the session may go unused, or why it never expires: a desktop
+/// window (someone's screen; its input bypasses the host's routes) or a limit
+/// of 0. Keep is separate: `rusty dev keep` sets and clears it while the
+/// session runs, so the loop reads it each time.
 fn idle_limit(options: &DevOptions, window: bool) -> Result<Duration, &'static str> {
-    if options.keep {
-        return Err("kept");
-    }
     if window {
         return Err("window-output");
     }
@@ -2832,30 +2951,73 @@ mod tests {
 
     #[test]
     fn the_top_level_help_names_every_command() {
-        let help = usage();
-        let top_level = [
-            "status",
-            "install",
-            "update",
-            "build",
-            "dev",
-            "pack-content",
-            "asset",
-        ];
-        for command in top_level {
-            // Each is dispatched: its own help parses, an unknown word does not.
-            assert!(Arguments::parse([command.to_owned(), "--help".to_owned()]).is_ok());
+        // The commands are read from `Arguments::parse`'s own dispatch arms,
+        // so a new command or dev subcommand cannot skip this check.
+        let source = include_str!("main.rs");
+        let start = source
+            .find("    fn parse(values: impl IntoIterator<Item = String>)")
+            .unwrap();
+        let end = start + source[start..].find("    const fn help(").unwrap();
+        let mut commands = Vec::new();
+        for line in source[start..end].lines().map(str::trim_start) {
+            let (prefix, arm) = if let Some(arm) = line.strip_prefix("Some(\"") {
+                ("dev ", arm)
+            } else if let Some(arm) = line.strip_prefix('"') {
+                ("", arm)
+            } else {
+                continue;
+            };
+            if let Some((name, rest)) = arm.split_once('"') {
+                let rest = rest.trim_start_matches(')').trim_start();
+                if (rest.starts_with("=>") || rest.starts_with("if ")) && name != "help" {
+                    commands.push(format!("{prefix}{name}"));
+                }
+            }
         }
-        assert!(Arguments::parse(["bogus".to_owned()]).is_err());
-        let listed = top_level.iter().map(|command| (*command).to_owned()).chain(
-            ["start", "status", "stop", "list", "keep", "prune"].map(|sub| format!("dev {sub}")),
-        );
-        for command in listed {
+        for expected in [
+            "dev",
+            "dev start",
+            "dev list",
+            "dev prune",
+            "asset",
+            "build",
+        ] {
+            assert!(
+                commands.iter().any(|command| command == expected),
+                "{commands:?}"
+            );
+        }
+        let help = usage();
+        for command in &commands {
             assert!(
                 help.lines()
-                    .any(|line| line.trim_start().starts_with(&command)),
-                "`rusty {command}` is missing from `rusty --help`"
+                    .any(|line| line.trim_start().starts_with(command.as_str())),
+                "`rusty {command}` is dispatched but missing from `rusty --help`"
             );
+        }
+    }
+
+    #[test]
+    fn a_fixed_port_in_the_ephemeral_range_is_refused_unless_allowed() {
+        let Some((low, high)) = ephemeral_port_range() else {
+            return;
+        };
+        let options = |arguments: &[String]| {
+            let mut values = vec!["--project".to_owned(), "P.csproj".to_owned()];
+            values.extend(arguments.iter().cloned());
+            parse_dev(values).unwrap()
+        };
+        let port = |port: u16| vec!["--port".to_owned(), port.to_string()];
+        let refused = check_port(&options(&port(high))).unwrap_err();
+        assert!(refused.contains(&format!("{low}-{high}")), "{refused}");
+        assert!(check_port(&options(&port(low))).is_err());
+        let mut allowed = port(low);
+        allowed.push("--allow-ephemeral-port".to_owned());
+        assert!(check_port(&options(&allowed)).is_ok());
+        assert!(check_port(&options(&[])).is_ok());
+        assert!(check_port(&options(&port(0))).is_ok());
+        if low > 1 {
+            assert!(check_port(&options(&port(low - 1))).is_ok());
         }
     }
 
@@ -2870,7 +3032,11 @@ mod tests {
             idle_limit(&options(&["--idle-timeout", "5"]), false),
             Ok(Duration::from_secs(300))
         );
-        assert_eq!(idle_limit(&options(&["--keep"]), false), Err("kept"));
+        // Keep does not remove the limit: clearing it re-enables expiry.
+        assert_eq!(
+            idle_limit(&options(&["--keep", "--idle-timeout", "5"]), false),
+            Ok(Duration::from_secs(300))
+        );
         assert_eq!(idle_limit(&options(&[]), true), Err("window-output"));
         assert_eq!(
             idle_limit(&options(&["--idle-timeout", "0"]), false),
@@ -3045,6 +3211,8 @@ mod tests {
             label: None,
             keep: false,
             idle_timeout: None,
+            instance: None,
+            allow_ephemeral_port: false,
         };
 
         let properties = stage_properties(&options).expect("source properties");

@@ -94,14 +94,24 @@ list in the rusty cache (`<cache>/sessions/`, whatever checkout or pair it
 runs). The list and its commands:
 
 - `rusty dev list` (`--json` for the records) shows each session's id, URL,
-  idle time and limit, keep flag, label and project.
+  idle time and limit, keep flag, label and project. A record also holds its
+  checkout, pair, last activity, `rusty dev` pid, host supervisor pid, and the
+  process groups of its runtime and headless browser.
+- `rusty dev list --all` adds sessions that ended in the last day for a
+  reason a caller must see: `idle-expired`, `port-unavailable` or
+  `project-removed`. A session that was stopped or crashed leaves no record.
 - `rusty dev stop <id|port>` stops one gracefully. If it does not stop, it
-  signals only that session's recorded processes.
+  signals only the processes and process groups its record names.
 - `rusty dev keep <id|port> [--off]` keeps a session from expiring.
 - `rusty dev prune` clears the records of sessions that ended without
   cleaning up. Every start and list does this too.
 - `--label <text>` on `rusty dev` or `start` says who or what a session is
   for.
+
+One session runs per project, foreground or background; a second is refused
+while one runs. `--instance <name>` runs another session of the project under
+its own lock (crew playtest runs one host per playtest session), and
+`rusty dev stop|status --project <p> --instance <name>` address it.
 
 Never stop a host by killing `rusty` or `rusty-product-host` processes by
 name: on a shared machine they belong to other sessions. Sessions from a pair
@@ -123,10 +133,11 @@ An expired session logs `{"event":"stopped","reason":"idle-expired"}` and exits
 0.
 
 Leave out `--port` and a free port is chosen and printed. A fixed port inside
-the machine's ephemeral range (`ip_local_port_range`, often 32768-60999) can
-be taken by an outgoing connection with nothing listening. The host then
-stops at once with `PRODUCT_HOST_BIND` and names the range, instead of
-restarting. Pick fixed ports below that range.
+the machine's ephemeral range (`ip_local_port_range`, often 32768-60999) is
+refused before anything starts, because an outgoing connection can hold it
+with nothing listening. Pick a fixed port below that range, or pass
+`--allow-ephemeral-port` to keep one deliberately. A port that is taken stops
+the host at once with `PRODUCT_HOST_BIND`, without restarting.
 
 #### Development state is disposable
 
