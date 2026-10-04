@@ -100,9 +100,22 @@ Once a product makes any gameplay-time request, every realtime host
 observation delivers one `Update`. One that admits no step has
 `AdmittedStepCount` zero and `SimulationStep` the next step to be admitted:
 read input, aim, present and choose there, and advance the world only per
-admitted step (`SimulationScheduler.Advance` already does). Animation, audio
-and other Engine time advance only with admitted steps. A product that never
-asks keeps step-only updates. `ProductUpdateFacts.GameplayTimeSelected`,
+admitted step (`SimulationScheduler.Advance` already does). A product that
+never asks keeps step-only updates.
+
+The Engine's world presentation follows the same steps: each update adds
+`FixedDeltaSeconds * AdmittedStepCount` to world time, exactly once however
+the steps arrive (one at a time, in catch-up batches, or as a bounded
+advance), and drawing never adds any. Particles (bursts and emitters, flipbook
+frames), GLB clip and controller animation, sprite playback, the shader time
+value and shadows, video pictures and audio cursors all read that world time,
+so a held world keeps its moment while the player looks around, and slow time
+slows them all together. Device audio plays at the gameplay rate and holds
+while the world holds ([recorded audio](recorded-audio.md#realization)).
+Appearances show their last published transforms (nothing is extrapolated
+between steps), and camera samples are presentation (see below). Anything a
+product drives from `HostElapsedSeconds` is its own presentation and keeps
+moving while held. `ProductUpdateFacts.GameplayTimeSelected`,
 `GameplayRate` and `GameplayAdvanceRemainingSteps` report the selection in
 force after the update's admission, so an update that ends an advance already
 reads held.

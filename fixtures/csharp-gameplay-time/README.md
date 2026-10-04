@@ -21,11 +21,14 @@ dotnet restore CsharpGameplayTime.csproj --source /path/to/pair/sdk-feed
 - **A shot buys its own duration.** Click or RB fires once per press and
   advances the world 0.35 s (21 steps at 60 Hz), then holds. The shot has a
   one-second world-time cooldown, so it cannot be repeated while held.
+- **B / LB** waits: the world runs a bounded 2 s (120 steps), then holds.
 - **G / X** sets the idle rate to a 0.05 crawl instead of zero, to show look
   staying smooth at a very low positive rate. **T / Y** runs at realtime.
 - The turret fires a slow blue orb every 1.5 s of world time
-  (`SimulationScheduler`), the red drones orbit, and projectiles fly, all per
-  admitted step, so all of them stop while the world holds.
+  (`SimulationScheduler`), the red drones orbit, the runner patrols, and
+  projectiles fly, all per admitted step. The runner's GLB clip, the turret's
+  smoke and the sparks a hit throws are Engine animation and particles on
+  world time. All of them stop while the world holds and slow with it.
 - Pause/Resume at the bottom left is the menu pause (`context.lifecycle`): no
   update runs and gameplay input is discarded. Resume continues the product's
   time choice.

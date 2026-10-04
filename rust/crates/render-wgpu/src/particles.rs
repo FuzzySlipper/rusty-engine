@@ -654,6 +654,51 @@ mod tests {
     }
 
     #[test]
+    fn a_two_second_advance_ages_effects_fully() {
+        // A two-second advance arrives as 120 admitted 60 Hz steps (an
+        // inspection advance, or a bounded gameplay advance) or as one long
+        // update; either way every particle ages the full duration and a
+        // continuous emitter spawns for all of it.
+        let run = |deltas: &[f32]| {
+            let mut particles = Particles::default();
+            emit(&mut particles, burst(16)).unwrap();
+            let mut descriptor = burst(0);
+            descriptor.rate_per_second = 4.0;
+            descriptor.lifetime_seconds = [10.0, 10.0];
+            particles
+                .apply(
+                    &ParticleProjectionOp::Create {
+                        handle: ParticleEmitterHandle::new(5),
+                        descriptor,
+                    },
+                    None,
+                    NO_ENTITIES,
+                )
+                .unwrap();
+            for delta in deltas {
+                particles.advance(*delta, NO_ENTITIES);
+            }
+            let mut ages = particles
+                .particles
+                .iter()
+                .map(|p| p.age)
+                .collect::<Vec<_>>();
+            ages.sort_by(f32::total_cmp);
+            ages
+        };
+        let stepped = run(&[1.0 / 60.0; 120]);
+        let whole = run(&[2.0]);
+        // Every burst particle (lifetime at most 2 s) is gone in both, and
+        // the emitter spawned its eight. Stepped, their ages spread over the
+        // advance as they were spawned through it, the oldest nearly 2 s.
+        assert_eq!(stepped.len(), 8);
+        assert_eq!(whole.len(), 8);
+        let oldest = stepped.last().copied().unwrap();
+        assert!((1.7..=2.0 + 1e-3).contains(&oldest), "oldest {oldest}");
+        assert!(stepped.first().copied().unwrap() < 0.3);
+    }
+
+    #[test]
     fn continuous_emitters_spawn_on_their_rate_and_respect_their_bound() {
         let mut particles = Particles::default();
         let mut descriptor = burst(0);

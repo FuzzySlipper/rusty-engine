@@ -1084,6 +1084,54 @@ mod tests {
     }
 
     #[test]
+    fn world_presentation_time_advances_only_with_admitted_steps() {
+        let mut services = EngineServiceSet::new(
+            parse_runtime_appearance_catalog(None).unwrap(),
+            BTreeMap::new(),
+            None,
+            RuntimeDiagnosticsSink::new(Default::default()).unwrap(),
+        )
+        .unwrap();
+        let update = |services: &mut EngineServiceSet, step: u64, steps: u32| {
+            services.begin_update_call(
+                binding(),
+                NativeProductUpdateFacts {
+                    mode: NativeProductUpdateMode::Realtime,
+                    lifecycle_state: NativeProductLifecycleState::Running,
+                    generation: 1,
+                    control_revision: 1,
+                    observed_host_time_nanoseconds: 0,
+                    simulation_step: step,
+                    fixed_step_hz: 60,
+                    admitted_step_count: steps,
+                    dropped_step_count: 0,
+                    fixed_delta_seconds: 1.0 / 60.0,
+                    gameplay_time_selected: true,
+                    gameplay_rate: 0.0,
+                    gameplay_advance_remaining_steps: 0,
+                    host_elapsed_seconds: 1.0 / 60.0,
+                },
+            );
+            services.finish_call().unwrap();
+        };
+        // Held: updates without steps, however much host time passes, add
+        // no world time (animation, particles, shader time, audio cursors).
+        for _ in 0..600 {
+            update(&mut services, 0, 0);
+        }
+        assert_eq!(services.presentation_elapsed_seconds(), 0.0);
+        // A two-second advance, step by step and in catch-up batches,
+        // counts every admitted step exactly once.
+        for step in 0..60 {
+            update(&mut services, step, 1);
+        }
+        for batch in 0..15 {
+            update(&mut services, 60 + batch * 4, 4);
+        }
+        assert!((services.presentation_elapsed_seconds() - 2.0).abs() < 1e-9);
+    }
+
+    #[test]
     fn refused_audio_and_graphics_calls_retain_their_own_reason_until_exact_release() {
         let mut services = EngineServiceSet::new(
             parse_runtime_appearance_catalog(None).unwrap(),

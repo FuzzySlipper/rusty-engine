@@ -41,9 +41,16 @@ bytes.
 
 One realizer (`render-audio`, kira) plays the committed audio wherever the
 manifest's `audio.output` says. Audio ops are taken out of each call's
-publications before anything else sees them. The realizer follows the runtime:
-it plays only while the product runs, a binding change (Start, Restart, fault)
-replays the committed baseline, and Shutdown stops every voice. Natural
+publications before anything else sees them. The realizer follows world time:
+it plays only while it moves (the product runs, playtest inspection does not
+hold it, and [gameplay time](csharp-lifecycle.md#gameplay-time) is not held),
+and plays every voice and the video soundtrack at the gameplay rate times its
+own pitch, so device positions keep pace with the Engine cursors in slow
+motion. That resamples (pitch falls with the rate); there is no time stretch.
+All four buses are world audio, `Ui` included: a sound that must play while
+the world holds belongs to the product UI page. A binding change (Start,
+Restart, fault) replays the committed baseline, and Shutdown stops every
+voice. Natural
 completions and realization diagnostics become realization facts the product
 reads through `Audio`. It also plays a playing video clip's Opus soundtrack
 (demuxed by `render-video`) from the clip's start, outside the Engine buses.

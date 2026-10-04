@@ -316,6 +316,39 @@ fn suspension_holds_playback_position() {
 }
 
 #[test]
+fn playback_keeps_pace_with_a_slowed_world() {
+    let mut realizer = realizer();
+    let mut looped = descriptor("sha256:wav", true);
+    looped.clip.duration_seconds = Some(1.0);
+    apply(
+        &mut realizer,
+        &[restore(1, looped, AudioVoiceDesiredState::Playing, 0.0)],
+    );
+    // A tenth of realtime: half a second of device time is 0.05 s of world
+    // time, as the Engine cursor advances.
+    realizer.set_world_rate(0.1);
+    run(&mut realizer, 0.02);
+    let from = realizer.voice_cursor(AudioHandle::new(1)).expect("voice");
+    run(&mut realizer, 0.5);
+    let slow = realizer.voice_cursor(AudioHandle::new(1)).expect("voice") - from;
+    assert!((slow - 0.05).abs() < 0.01, "slowed cursor moved {slow}");
+    // A voice started while slowed starts slowed too.
+    apply(
+        &mut realizer,
+        &[emit(2, 7, descriptor("sha256:wav", false))],
+    );
+    realizer.set_world_rate(1.0);
+    run(&mut realizer, 0.02);
+    let from = realizer.voice_cursor(AudioHandle::new(1)).expect("voice");
+    run(&mut realizer, 0.3);
+    let realtime = realizer.voice_cursor(AudioHandle::new(1)).expect("voice") - from;
+    assert!(
+        (realtime - 0.3).abs() < 0.02,
+        "realtime cursor moved {realtime}"
+    );
+}
+
+#[test]
 fn spatial_emitters_play_and_unresolved_entities_are_diagnosed() {
     let mut realizer = realizer();
     let mut world = descriptor("sha256:wav", false);

@@ -1,6 +1,6 @@
 export function mountProductUi(root, context) {
   const help = document.createElement('div');
-  help.textContent = 'Time moves when you move. WASD / left stick move · mouse / right stick look (free) · click / RB shoot (buys 0.35 s) · G / X crawl floor · T / Y realtime';
+  help.textContent = 'Time moves when you move. WASD / left stick move · mouse / right stick look (free) · click / RB shoot (buys 0.35 s) · B / LB wait 2 s · G / X crawl floor · T / Y realtime';
   help.style.cssText = 'position:absolute;top:8px;left:8px;color:white;pointer-events:none;max-width:640px;font:14px system-ui,sans-serif';
   const reticle = document.createElement('div');
   reticle.textContent = '+';

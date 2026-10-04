@@ -20,6 +20,7 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     private const double IdleRate = 0.0;
     private const double CrawlRate = 0.05;
     private const double ShotAdvanceSeconds = 0.35;
+    private const double WaitAdvanceSeconds = 2.0;
     private const ulong ShotCooldownSteps = 60;
     private const float MovementForRealtime = 1f;
     // World.
@@ -34,14 +35,26 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     private const ulong TurretPeriodSteps = 90;
     private const float ProjectileLifetimeSeconds = 4f;
     private static readonly Vector3 TurretPosition = new(0, 1.2f, -8);
+    private const float RunnerSpeed = 2.5f;
+    private const float RunnerLane = 6f;
+    private const float RunnerScale = 1f;
+    private const float SparkLifetimeSeconds = 2f;
+    private const uint SparkCount = 60;
+    private const float SmokePerSecond = 8f;
     // Object ids.
-    private const ulong FloorId = 1, TurretId = 2, DroneIdBase = 10, ProjectileIdBase = 1000;
+    private const ulong FloorId = 1, TurretId = 2, RunnerId = 3, DroneIdBase = 10, ProjectileIdBase = 1000;
     private const int DroneCount = 3;
 
     private readonly IEngineContext engine;
     private readonly Camera camera;
     private readonly UiStream hud;
     private readonly Appearance floorLook, turretLook, droneLook, shotLook, orbLook;
+    private readonly RenderResource runnerMesh;
+    private readonly Appearance runnerLook;
+    private readonly AnimationInstance runnerAnimation;
+    private readonly PresentationEmitter smoke;
+    private float runnerX = -RunnerLane;
+    private float runnerDirection = 1;
     private readonly FpsInput input = new(FpsInputConfig.Standard);
     private readonly SimulationScheduler scheduler = new();
     private readonly List<Projectile> projectiles = new();
@@ -54,6 +67,7 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     private bool crawl;
     private bool realtime;
     private int hits;
+    private Vector3 lastHit;
     private int shots;
     private ProductUpdateFacts lastFacts;
     private ulong hudSequence;
@@ -78,6 +92,16 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         orbLook = Primitive(PrimitiveGeometry.Sphere, new Color(.3f, .6f, 1f, 1));
         for (int index = 0; index < DroneCount; index++)
             droneAngles[index] = index * MathF.Tau / DroneCount;
+        // The runner's clip, the turret's smoke and the hit sparks all play
+        // on Engine world time: they hold with the world and slow with it.
+        using (ContentReference runner = engine.Content.OpenReference(new("runner.glb")))
+            runnerMesh = engine.Animation.OpenAnimatedMeshFromContent(new(runner));
+        runnerLook = engine.Animation.CreateAnimatedMeshAppearance(new(runnerMesh));
+        PublishWorld();
+        runnerAnimation = engine.Animation.CreateInstance(new(runnerLook, RunnerId));
+        string clip = engine.Animation.ReadClips(runnerMesh).Span[0].Name;
+        engine.Animation.SetPlayback(new(runnerAnimation, AnimationPlaybackKind.Play, clip, AnimationLoopMode.Repeat, 1, 1, true, 0, false, 0));
+        smoke = engine.Presentation.CreateEmitter(Smoke());
         camera = engine.CameraView.CreateCamera(CameraDescriptor());
         engine.CameraView.SetActiveCamera(camera);
         hud = engine.Ui.OpenStream(new UiStreamRequest("gameplay-time", "gameplay-time.hud.v1"));
@@ -99,6 +123,7 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         if (input.Physical.Pressed(KeyboardControl.KeyG) || input.Physical.Pressed(ControllerButton.Button2))
             crawl = !crawl;
         bool fire = input.Physical.Pressed(PointerButton.Primary) || input.Physical.Pressed(ControllerButton.Button5);
+        bool wait = input.Physical.Pressed(KeyboardControl.KeyB) || input.Physical.Pressed(ControllerButton.Button4);
 
         // The world, once per admitted step.
         if (!turretScheduled && facts.AdmittedStepCount > 0)
@@ -116,6 +141,11 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         {
             Shoot();
             engine.GameplayTime.Advance(ShotAdvanceSeconds);
+        }
+        else if (wait)
+        {
+            // Let the world run two seconds, then hold again.
+            engine.GameplayTime.Advance(WaitAdvanceSeconds);
         }
         else
         {
@@ -146,6 +176,12 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         body = Vector3.Clamp(body, new(-ArenaHalfSize, 0, -ArenaHalfSize), new(ArenaHalfSize, 0, ArenaHalfSize));
         for (int index = 0; index < DroneCount; index++)
             droneAngles[index] += DroneAngularSpeed * dt;
+        runnerX += runnerDirection * RunnerSpeed * dt;
+        if (MathF.Abs(runnerX) > RunnerLane)
+        {
+            runnerX = Math.Clamp(runnerX, -RunnerLane, RunnerLane);
+            runnerDirection = -runnerDirection;
+        }
         foreach (Projectile projectile in projectiles)
         {
             projectile.Position += projectile.Velocity * dt;
@@ -161,6 +197,8 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         {
             if (Vector3.Distance(projectile.Position, DronePosition(index)) > HitRadius) continue;
             hits++;
+            lastHit = DronePosition(index);
+            Sparks(lastHit);
             droneAngles[index] += MathF.PI;
             return true;
         }
@@ -187,12 +225,57 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         1.5f + .5f * MathF.Sin(droneAngles[index] * 2),
         -2 + MathF.Sin(droneAngles[index]) * DroneOrbitRadius);
 
+    private void Sparks(Vector3 at) => engine.Presentation.EmitParticles(new PresentationParticleDescriptor
+    {
+        SignalId = "gameplay-time.spark",
+        Visible = true,
+        Anchor = new() { Kind = PresentationAnchorKind.World, Position = at },
+        Visual = PresentationParticleVisual.Cube,
+        BurstCount = SparkCount,
+        MaxParticles = SparkCount,
+        LifetimeMinSeconds = SparkLifetimeSeconds * .75f,
+        LifetimeMaxSeconds = SparkLifetimeSeconds,
+        VelocityMin = new(-3, 1, -3),
+        VelocityMax = new(3, 5, 3),
+        Acceleration = new(0, -6, 0),
+        Seed = (ulong)hits,
+        SizeCurve = new PresentationParticleScalarKey[] { new(0, .3f), new(1, .05f) },
+        ColorCurve = new PresentationParticleColorKey[] { new(0, new Color(1, .85f, .3f, 1)), new(1, new Color(1, .2f, 0, 0)) },
+    });
+
+    private PresentationParticleDescriptor Smoke() => new()
+    {
+        LogicalId = TurretId,
+        SignalId = "gameplay-time.smoke",
+        Visible = true,
+        Anchor = new() { Kind = PresentationAnchorKind.World, Position = TurretPosition + Vector3.UnitY * .5f },
+        Visual = PresentationParticleVisual.Cube,
+        RatePerSecond = SmokePerSecond,
+        MaxParticles = 64,
+        LifetimeMinSeconds = 2.5f,
+        LifetimeMaxSeconds = 3.5f,
+        VelocityMin = new(-.2f, .6f, -.2f),
+        VelocityMax = new(.2f, 1f, .2f),
+        Seed = TurretId,
+        SizeCurve = new PresentationParticleScalarKey[] { new(0, .12f), new(1, .4f) },
+        ColorCurve = new PresentationParticleColorKey[] { new(0, new Color(.6f, .6f, .6f, .9f)), new(1, new Color(.3f, .3f, .3f, 0)) },
+    };
+
     private void Publish()
+    {
+        PublishWorld();
+        engine.CameraView.UpdateCamera(new(camera, CameraDescriptor()));
+        PublishHud();
+    }
+
+    private void PublishWorld()
     {
         List<AppearanceFact> facts =
         [
             Fact(FloorId, floorLook, new(0, -.05f, 0), new(ArenaHalfSize * 2, .1f, ArenaHalfSize * 2)),
             Fact(TurretId, turretLook, TurretPosition, new(.8f, .8f, .8f)),
+            new(RunnerId, false, 0, new Transform(new(runnerX, 0, -4),
+                Quaternion.CreateFromAxisAngle(Vector3.UnitY, runnerDirection * MathF.PI / 2), new(RunnerScale)), runnerLook, true, RenderLayer.Scene),
         ];
         for (int index = 0; index < DroneCount; index++)
             facts.Add(Fact(DroneIdBase + (ulong)index, droneLook, DronePosition(index), new(.7f, .7f, .7f)));
@@ -200,8 +283,6 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
             facts.Add(Fact(projectile.Id, projectile.FromPlayer ? shotLook : orbLook, projectile.Position,
                 projectile.FromPlayer ? new(.15f, .15f, .15f) : new(.35f, .35f, .35f)));
         engine.Graphics.PublishSnapshot(facts.ToArray());
-        engine.CameraView.UpdateCamera(new(camera, CameraDescriptor()));
-        PublishHud();
     }
 
     private static AppearanceFact Fact(ulong id, Appearance appearance, Vector3 position, Vector3 scale) =>
@@ -242,10 +323,12 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         yaw = look.YawRadians,
         pitch = look.PitchRadians,
         drones = Enumerable.Range(0, DroneCount).Select(index => { Vector3 p = DronePosition(index); return new[] { p.X, p.Y, p.Z }; }),
+        runner = runnerX,
         projectiles = projectiles.Select(p => new { id = p.Id, player = p.FromPlayer, position = new[] { p.Position.X, p.Position.Y, p.Position.Z } }),
         cooldownSteps = cooldownReadyStep > simulationStep ? cooldownReadyStep - simulationStep : 0,
         shots,
         hits,
+        lastHit = new[] { lastHit.X, lastHit.Y, lastHit.Z },
         crawl,
         realtime,
     });
@@ -259,7 +342,11 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
 
     public void Dispose()
     {
+        smoke.Dispose();
+        runnerAnimation.Dispose();
         engine.Graphics.PublishSnapshot([]);
+        runnerLook.Dispose();
+        runnerMesh.Dispose();
         hud.Dispose();
         camera.Dispose();
         floorLook.Dispose();

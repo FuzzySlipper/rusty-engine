@@ -163,6 +163,8 @@ struct Playback {
     sound: Sound,
     spatial: Option<SpatialTrackHandle>,
     duration: Option<f64>,
+    /// The descriptor's own rate, before the world rate scales it.
+    pitch: f64,
 }
 
 impl Playback {
@@ -194,10 +196,17 @@ impl Playback {
         }
     }
 
+    /// Plays at the descriptor's rate scaled by the world's.
+    fn follow_world(&mut self, world_rate: f64) {
+        let rate = PlaybackRate(self.pitch * world_rate);
+        each_sound!(&mut self.sound, handle => handle.set_playback_rate(rate, IMMEDIATE));
+    }
+
     /// Applies the descriptor fields a playing sound can change in place.
-    fn apply(&mut self, descriptor: &AudioSourceDescriptor) {
+    fn apply(&mut self, descriptor: &AudioSourceDescriptor, world_rate: f64) {
+        self.pitch = f64::from(descriptor.pitch);
         let volume = amplitude_to_decibels(descriptor.volume);
-        let rate = PlaybackRate(f64::from(descriptor.pitch));
+        let rate = PlaybackRate(self.pitch * world_rate);
         let pan = Panning(descriptor.pan);
         let region = loop_region(descriptor.looping);
         each_sound!(&mut self.sound, handle => {
@@ -265,6 +274,9 @@ pub struct AudioRealizer<B: Backend = DefaultBackend> {
     facts: Vec<RealizedAudioFact>,
     /// The playing video's own sound, outside the Engine buses.
     soundtrack: Option<StreamingSoundHandle<FromFileError>>,
+    /// How fast world time runs against realtime; every sound plays at this
+    /// multiple of its own rate (see [`AudioRealizer::set_world_rate`]).
+    world_rate: f64,
 }
 
 impl AudioRealizer<DefaultBackend> {
@@ -323,6 +335,7 @@ impl<B: Backend> AudioRealizer<B> {
             released_one_shots: Vec::new(),
             facts: Vec::new(),
             soundtrack: None,
+            world_rate: 1.0,
         })
     }
 
@@ -433,6 +446,31 @@ impl<B: Backend> AudioRealizer<B> {
         }
     }
 
+    /// Plays every sound, and the video soundtrack, at `rate` times its own
+    /// rate, so device cursors keep pace with the Engine's when gameplay time
+    /// runs slower than realtime. This resamples (pitch falls with the rate);
+    /// it is not a time stretch. A held world (rate 0) is suspended instead.
+    pub fn set_world_rate(&mut self, rate: f64) {
+        if !rate.is_finite() || rate <= 0.0 || rate == self.world_rate {
+            return;
+        }
+        self.world_rate = rate;
+        for voice in self.voices.values_mut() {
+            if let Some(playback) = voice.playback.as_mut() {
+                playback.follow_world(rate);
+            }
+        }
+        for one_shot in &mut self.one_shots {
+            one_shot.playback.follow_world(rate);
+        }
+        for playback in &mut self.released_one_shots {
+            playback.follow_world(rate);
+        }
+        if let Some(soundtrack) = &mut self.soundtrack {
+            soundtrack.set_playback_rate(PlaybackRate(rate), IMMEDIATE);
+        }
+    }
+
     /// Play a WebM video clip's own sound from its start, replacing any
     /// other. A clip without an Opus track plays silently. The browser's
     /// video element played it outside the Engine buses; so does this.
@@ -446,7 +484,10 @@ impl<B: Backend> AudioRealizer<B> {
             soundtrack::SoundtrackDecoder::new(clip).map_err(|error| error.to_string())?;
         let handle = self
             .manager
-            .play(StreamingSoundData::from_decoder(decoder))
+            .play(
+                StreamingSoundData::from_decoder(decoder)
+                    .playback_rate(PlaybackRate(self.world_rate)),
+            )
             .map_err(|error| error.to_string())?;
         self.soundtrack = Some(handle);
         Ok(())
@@ -694,6 +735,7 @@ impl<B: Backend> AudioRealizer<B> {
         clips: &impl AudioClipSource,
         entities: &impl AudioEntityPositions,
     ) -> Result<(), OpError> {
+        let world_rate = self.world_rate;
         let voice = self.voices.get_mut(&handle).ok_or_else(unknown_handle)?;
         let next = patched(voice.descriptor.clone(), patch);
         let previous = std::mem::replace(&mut voice.descriptor, next);
@@ -708,7 +750,7 @@ impl<B: Backend> AudioRealizer<B> {
             || previous.rolloff != voice.descriptor.rolloff
             || (is_spatial(&previous) && patch.emitter.is_some());
         if !rebuild {
-            playback.apply(&voice.descriptor);
+            playback.apply(&voice.descriptor, world_rate);
             return Ok(());
         }
         let cursor = playback.cursor(previous.looping);
@@ -852,7 +894,8 @@ impl<B: Backend> AudioRealizer<B> {
             None
         };
         let volume = amplitude_to_decibels(descriptor.volume);
-        let rate = PlaybackRate(f64::from(descriptor.pitch));
+        let pitch = f64::from(descriptor.pitch);
+        let rate = PlaybackRate(pitch * self.world_rate);
         let pan = Panning(descriptor.pan);
         let region = loop_region(descriptor.looping);
         let (sound, duration) = match data {
@@ -899,6 +942,7 @@ impl<B: Backend> AudioRealizer<B> {
             sound,
             spatial,
             duration,
+            pitch,
         })
     }
 }

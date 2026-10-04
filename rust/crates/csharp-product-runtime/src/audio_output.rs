@@ -39,6 +39,8 @@ const MAX_FACTS_PER_REPORT: usize = 128;
 pub(crate) struct AudioOutput {
     realizer: Realizer,
     next_fact_id: u64,
+    /// Whether world time is held and how fast it runs, as last followed.
+    world: Option<(bool, f64)>,
 }
 
 /// The one realizer, on a device or mixing for the stream.
@@ -71,6 +73,7 @@ impl Realizer {
         fn play_soundtrack(&mut self, clip: &[u8]) -> Result<(), String>;
         fn set_listener_pose(&mut self, position: [f32; 3], forward: [f32; 3], up: [f32; 3]);
         fn set_suspended(&mut self, suspended: bool);
+        fn set_world_rate(&mut self, rate: f64);
         fn take_facts(&mut self) -> Vec<RealizedAudioFact>;
         fn retain_clips(&mut self, admitted: impl Fn(&str) -> bool);
     }
@@ -126,6 +129,7 @@ impl AudioOutput {
         Ok(Some(Self {
             realizer,
             next_fact_id: 1,
+            world: None,
         }))
     }
 
@@ -241,8 +245,16 @@ impl AudioOutput {
         }
     }
 
-    pub(crate) fn set_suspended(&mut self, suspended: bool) {
-        self.realizer.set_suspended(suspended);
+    /// Plays world audio only while world time moves, at its rate: the
+    /// Engine's audio cursors advance with admitted steps, so the device
+    /// holds while the world does and slows with it.
+    pub(crate) fn follow_world(&mut self, held: bool, rate: f64) {
+        if self.world == Some((held, rate)) {
+            return;
+        }
+        self.world = Some((held, rate));
+        self.realizer.set_suspended(held);
+        self.realizer.set_world_rate(rate);
     }
 
     pub(crate) fn silence(&mut self) {

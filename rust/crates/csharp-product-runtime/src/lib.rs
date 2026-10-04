@@ -2041,6 +2041,7 @@ impl CsharpProductRuntime {
             gameplay_cadence(&self.lifecycle),
             self.lifecycle.gameplay_time(),
         );
+        self.follow_world_time();
     }
 
     /// Stops simulation after a product exception, an Engine failure while
@@ -2210,7 +2211,7 @@ impl CsharpProductRuntime {
         // After the transition, so that a Restart callback chooses the new
         // generation's gameplay time.
         self.settle_gameplay_time();
-        self.follow_lifecycle_with_audio();
+        self.follow_world_time();
         if let Some(failure) = finished.failure {
             self.fault_after_call(
                 operation_name(operation),
@@ -2569,28 +2570,40 @@ impl CsharpProductRuntime {
             audio.rebaseline(&self.services)?;
         }
         self.rebaseline_frames();
-        self.follow_lifecycle_with_audio();
+        self.follow_world_time();
         self.services.reset_animation_realization_owner();
         self.services.reset_ghost_plate_realization_owner();
         Ok(())
     }
 
-    /// Device audio plays only while the product runs: Engine cursors do not
-    /// advance otherwise, so the device holds its position. Shutdown ends
-    /// every voice.
-    fn follow_lifecycle_with_audio(&mut self) {
+    /// Whether host time becomes world time now: the runtime runs, playtest
+    /// inspection does not hold it, and the product's gameplay time is not
+    /// held.
+    fn world_time_moves(&self) -> bool {
+        self.lifecycle.state() == RuntimeState::Running
+            && self.playtest_time == playtest::TimeMode::Realtime
+            && !self.lifecycle.gameplay_time().held()
+    }
+
+    /// Device audio plays only while world time moves, and at its rate:
+    /// Engine cursors advance only with admitted steps, so the device holds
+    /// and slows with them. Shutdown ends every voice.
+    pub(crate) fn follow_world_time(&mut self) {
         self.follow_simulation_with_frames();
+        let moves = self.world_time_moves();
+        let rate =
+            csharp_engine_services::gameplay_rate_value(self.lifecycle.gameplay_time().rate());
         let Some(audio) = &mut self.audio_output else {
             return;
         };
         match self.lifecycle.state() {
             RuntimeState::Shutdown => audio.silence(),
-            state => audio.set_suspended(state != RuntimeState::Running),
+            _ => audio.follow_world(!moves, rate),
         }
     }
 
-    /// Streamed frames are drawn continuously only while simulation time
-    /// moves: a paused product or held inspection time draws once per change.
+    /// Tells the renderer the step it shows and whether world time is held,
+    /// which its frame and capture readouts report.
     pub(crate) fn follow_simulation_with_frames(&self) {
         if let Some(frames) = &self.frame_output {
             frames.follow_simulation(self.frame_simulation());
@@ -2639,8 +2652,7 @@ impl CsharpProductRuntime {
 
     fn frame_simulation(&self) -> frame_output::Simulation {
         frame_output::Simulation {
-            held: self.lifecycle.state() != RuntimeState::Running
-                || self.playtest_time != playtest::TimeMode::Realtime,
+            held: !self.world_time_moves(),
             step: self.lifecycle.readout().admitted_simulation_steps(),
         }
     }
@@ -7935,11 +7947,16 @@ mod tests {
             assert_eq!(updates[0].gameplay_rate, 0.0);
         }
         assert_eq!(run.admitted(), held_at);
+        assert!(
+            run.runtime.frame_simulation().held,
+            "frames report the hold"
+        );
 
         // A tenth of realtime: three steps a second, still an update per
         // observation.
         run.request(FixtureTimeRequest::Rate(0.1));
         run.observe(1);
+        assert!(!run.runtime.frame_simulation().held, "slow time moves");
         let slow_from = run.admitted();
         let mut updates = 0;
         for _ in 0..30 {
