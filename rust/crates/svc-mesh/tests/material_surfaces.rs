@@ -3,7 +3,7 @@
 
 use std::collections::BTreeSet;
 
-use core_space::{ChunkCoord, ChunkDims, GridId, LocalVoxelCoord, VoxelGridSpec};
+use core_space::{ChunkCoord, ChunkDims, Direction6, GridId, LocalVoxelCoord, VoxelGridSpec};
 use core_voxel::{VoxelMaterialId, VoxelValue};
 use svc_mesh::{
     mesh_cells_standalone_with_options, mesh_chunk_in_world_with_options, mesh_scalar_samples,
@@ -535,4 +535,112 @@ fn a_blocky_brick_box_in_smooth_rock_is_planar_and_closed_against_it() {
         assert_eq!(a[axis].fract(), 0.5, "on a face between samples");
     }
     assert!(faces > 0);
+}
+
+const WATER: u16 = 3;
+const GLASS: u16 = 4;
+
+/// The area of `slot`'s cube faces looking along `direction`.
+fn face_area(mesh: &MeshPayload, slot: u16, direction: Direction6) -> f32 {
+    let p = positions(mesh);
+    mesh.groups
+        .iter()
+        .filter(|group| group.material_slot == slot && group.direction == Some(direction))
+        .flat_map(|group| {
+            mesh.indices[group.start as usize..(group.start + group.count) as usize].chunks(3)
+        })
+        .map(|t| {
+            let [a, b, c] = [p[t[0] as usize], p[t[1] as usize], p[t[2] as usize]];
+            let u = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+            let v = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
+            let n = [
+                u[1] * v[2] - u[2] * v[1],
+                u[2] * v[0] - u[0] * v[2],
+                u[0] * v[1] - u[1] * v[0],
+            ];
+            (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt() / 2.0
+        })
+        .sum()
+}
+
+#[test]
+fn non_occluding_materials_show_the_faces_behind_them_but_not_their_own_inner_faces() {
+    // A stone bed under two layers of water spanning both chunks, with one
+    // glass voxel on the water at the world's corner.
+    let world = world_with(|[x, y, z]| match y {
+        0 => Some((STONE, -1.0)),
+        1 | 2 => Some((WATER, -1.0)),
+        3 if [x, z] == [0, 0] => Some((GLASS, -1.0)),
+        _ => None,
+    });
+    let non_occluding = BTreeSet::from([WATER, GLASS]);
+    let greedy = SurfaceMeshOptions {
+        non_occluding: non_occluding.clone(),
+        ..SurfaceMeshOptions::default()
+    };
+    // A reconstructed material elsewhere takes the mixed path.
+    let mixed = SurfaceMeshOptions {
+        materials: SurfaceMaterials::new([(
+            BRICK,
+            MaterialSurface {
+                mode: SurfaceMode::DualContouring,
+                character: SurfaceCharacter::default(),
+            },
+        )])
+        .unwrap(),
+        non_occluding,
+        ..SurfaceMeshOptions::default()
+    };
+    for options in [greedy, mixed] {
+        let mesh = mesh_chunk_in_world_with_options(&world, ChunkCoord::new(0, 0, 0), &options)
+            .unwrap()
+            .unwrap();
+        // The bed is seen through the water; water never draws against stone.
+        assert_eq!(face_area(&mesh, STONE, Direction6::PosY), 16.0);
+        assert_eq!(face_area(&mesh, WATER, Direction6::NegY), 0.0);
+        // One water surface, and no faces between water voxels, including
+        // across the chunk border.
+        assert_eq!(face_area(&mesh, WATER, Direction6::PosY), 16.0);
+        assert_eq!(face_area(&mesh, WATER, Direction6::PosX), 0.0);
+        assert_eq!(face_area(&mesh, WATER, Direction6::NegX), 8.0);
+        // Different non-occluding materials both draw their shared face.
+        assert_eq!(face_area(&mesh, GLASS, Direction6::NegY), 1.0);
+    }
+
+    // Undeclared, every material hides its neighbours.
+    let mesh = mesh_chunk_in_world_with_options(
+        &world,
+        ChunkCoord::new(0, 0, 0),
+        &SurfaceMeshOptions::default(),
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(face_area(&mesh, STONE, Direction6::PosY), 0.0);
+    assert_eq!(face_area(&mesh, WATER, Direction6::PosY), 15.0);
+
+    // Standalone cells follow the same declaration.
+    let mut cells = cube(0, 2, STONE);
+    cells.retain(|cell| cell.coordinate[1] == 0);
+    cells.extend(
+        cube(0, 2, WATER)
+            .into_iter()
+            .filter(|cell| cell.coordinate[1] == 1)
+            .map(|cell| MeshVoxelCell {
+                coordinate: [cell.coordinate[0], 1, cell.coordinate[2]],
+                ..cell
+            }),
+    );
+    let mesh = mesh_cells_standalone_with_options(
+        1.0,
+        [0.0; 3],
+        &cells,
+        SurfaceMeshOptions {
+            non_occluding: BTreeSet::from([WATER]),
+            ..SurfaceMeshOptions::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(face_area(&mesh, STONE, Direction6::PosY), 4.0);
+    assert_eq!(face_area(&mesh, WATER, Direction6::NegY), 0.0);
+    assert_eq!(face_area(&mesh, WATER, Direction6::PosY), 4.0);
 }

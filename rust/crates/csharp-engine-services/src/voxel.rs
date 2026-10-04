@@ -744,6 +744,60 @@ unsafe extern "C" fn configure_material_collision(
     }
 }
 
+unsafe extern "C" fn configure_material_occlusion(
+    context: *mut c_void,
+    request: *const NativeVoxelMaterialOcclusionRequest,
+    receipt: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    if receipt.is_null() {
+        return 0;
+    }
+    unsafe { *receipt = std::mem::zeroed() };
+    if context.is_null() || request.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeSpatialBridge>() };
+    let request = unsafe { &*request };
+    let result = (|| {
+        let materials = unsafe {
+            crate::composition::borrowed_slice(
+                request.materials,
+                request.materials_len,
+                "voxel material occlusion declarations",
+            )
+        }?;
+        let mut non_occluding = std::collections::BTreeSet::new();
+        for material in materials.iter().filter(|material| !material.occludes) {
+            non_occluding.insert(u16::try_from(material.material_slot).map_err(|_| {
+                voxel_error(
+                    "CSHARP_VOXEL_MATERIAL_OCCLUSION",
+                    "material slot must be in 0..=65535",
+                )
+            })?);
+        }
+        let options = SurfaceMeshOptions {
+            non_occluding,
+            ..bridge
+                .session_mut(request.session)?
+                .scene
+                .mesh_options()
+                .clone()
+        };
+        bridge
+            .edit_scene(request.session, |session| {
+                Arc::make_mut(&mut session.scene).set_mesh_options(options)
+            })?
+            .map_err(|error| voxel_error("CSHARP_VOXEL_MATERIAL_OCCLUSION", error.to_string()))
+    })();
+    match result {
+        Ok(()) => ABI_OK,
+        Err(error) => {
+            bridge.operation_diagnostics.retain(&error, receipt);
+            0
+        }
+    }
+}
+
 unsafe extern "C" fn apply_edits(
     context: *mut c_void,
     request: *const NativeVoxelEditTransaction,
@@ -806,6 +860,7 @@ pub(crate) fn api(bridge: &mut RuntimeSpatialBridge) -> NativeVoxelApi {
     NativeVoxelApi {
         context: (bridge as *mut RuntimeSpatialBridge).cast(),
         configure_material_collision,
+        configure_material_occlusion,
         read_scene,
         read,
         sample_direct_lighting,
@@ -1125,6 +1180,64 @@ mod tests {
                 .voxel,
             [0, 1, 0]
         );
+    }
+
+    #[test]
+    fn material_occlusion_shows_the_bed_under_water_through_edits() {
+        let mut bridge = RuntimeSpatialBridge::new();
+        let session = create_session(&mut bridge);
+        let api = api(&mut bridge);
+        let mut receipt: NativeOperationErrorReceipt = unsafe { std::mem::zeroed() };
+        let mut configure = |bridge: &mut RuntimeSpatialBridge, occludes| {
+            let materials = [NativeVoxelMaterialOcclusion {
+                material_slot: 11,
+                occludes,
+            }];
+            let request = NativeVoxelMaterialOcclusionRequest {
+                session,
+                materials: materials.as_ptr(),
+                materials_len: materials.len(),
+            };
+            assert_eq!(
+                unsafe { (api.configure_material_occlusion)(api.context, &request, &mut receipt) },
+                ABI_OK
+            );
+            bridge
+                .session_mut(session)
+                .unwrap()
+                .scene
+                .mesh_chunks()
+                .map(|chunk| chunk.quads)
+                .sum::<u32>()
+        };
+        let edit = |bridge: &mut RuntimeSpatialBridge, x, y, material_slot| {
+            let edits = [set(NativeVoxelAddress { x, y, z: 0 }, material_slot)];
+            bridge
+                .apply_voxel_edits(&NativeVoxelEditTransaction {
+                    session,
+                    edits: edits.as_ptr(),
+                    edits_len: edits.len(),
+                })
+                .unwrap();
+            bridge
+                .session_mut(session)
+                .unwrap()
+                .scene
+                .mesh_chunks()
+                .map(|chunk| chunk.quads)
+                .sum::<u32>()
+        };
+        // Stone under two water voxels: five stone and five water quads,
+        // the stone top hidden.
+        edit(&mut bridge, 0, 0, 1);
+        edit(&mut bridge, 0, 1, 11);
+        assert_eq!(edit(&mut bridge, 0, 2, 11), 10);
+        // Declared non-occluding, the water shows the stone top but still
+        // hides its own inner face and draws nothing against the stone.
+        assert_eq!(configure(&mut bridge, false), 11);
+        // The declaration survives later edits.
+        assert_eq!(edit(&mut bridge, 0, 3, 11), 11);
+        assert_eq!(configure(&mut bridge, true), 10);
     }
 
     #[test]

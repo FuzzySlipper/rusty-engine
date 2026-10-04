@@ -38,6 +38,8 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         scene=engine.Spatial.CreateSession(new(1, 8, VoxelSurfaceMode.GreedyCubes));
         engine.Voxel.ConfigureMaterialCollision(new(scene,
             Enumerable.Range(0,Count).Select(i=>new VoxelMaterialCollision((uint)i+1,i!=10)).ToArray()));
+        engine.Voxel.ConfigureMaterialOcclusion(new(scene,
+            Enumerable.Range(0,Count).Select(i=>new VoxelMaterialOcclusion((uint)i+1,i!=10)).ToArray()));
         config=engine.Spatial.DefaultCharacterControllerConfig();
         texture=engine.Graphics.OpenResource(new("tiles.png")).Handle;
         catalog=engine.AuthoredContent.AdmitCatalogPayload(Payload());

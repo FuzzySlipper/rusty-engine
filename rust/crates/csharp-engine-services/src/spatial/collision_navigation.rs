@@ -180,6 +180,12 @@ impl SceneRevisions {
                 mix(hash, u64::from(character.roughness.to_bits()))
             },
         );
+        let surface = options
+            .non_occluding
+            .iter()
+            .fold(mix(surface, u64::MAX), |hash, slot| {
+                mix(hash, u64::from(*slot))
+            });
         Self {
             voxel: scene.source_revision().raw(),
             static_mesh: scene.static_mesh_collision_revision(),

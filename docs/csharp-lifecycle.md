@@ -435,9 +435,26 @@ retains the declarations through edits, residency and origin rebases.
 Collision has no dependency on Graphics resources or a browser. Authored
 `Solid`, `Collidable`, and `Occludes` metadata on a rendered material alone
 does not configure a Spatial session: pass the same product-owned
-`Collidable` values to Voxel. Occlusion and transparency remain separate
-rendering concerns. See `fixtures/csharp-voxel-collision` for a packaged
-water-over-floor and multi-cell update-loop exercise.
+`Collidable` and `Occludes` values to Voxel. See
+`fixtures/csharp-voxel-collision` for a packaged water-over-floor and
+multi-cell update-loop exercise.
+
+### Voxel material occlusion
+
+`Voxel.ConfigureMaterialOcclusion(new(session, declarations))` takes
+`VoxelMaterialOcclusion(slot, occludes)` values. Unlisted slots occlude. A
+cube face next to a non-occluding slot, such as water, glass or leaves, is
+drawn, so a riverbed shows through the water above it. Two voxels of the
+same non-occluding slot still hide their shared face, so a water volume
+draws only its outer surface. A voxel scene presentation draws a
+non-occluding slot's faces from both sides, so that surface is seen from
+inside the water as well as from above. Configuring again
+replaces the declarations and remeshes every chunk; the session keeps them
+through edits, residency, surface-mode changes and origin rebases.
+
+A reconstructed (marching-cubes or dual-contoured) material surfaces where
+its density meets empty space, so it does not yet show through a
+non-occluding neighbour; the declaration applies to cube faces.
 
 A multi-cell edit may legitimately fill the space occupied by a character.
 The edit and character step are separate operations. If bounded penetration

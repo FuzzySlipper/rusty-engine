@@ -9,6 +9,7 @@ use runtime_diagnostics::RuntimeUpdateAttribution;
 use std::{
     collections::{BTreeMap, BTreeSet},
     ffi::c_void,
+    sync::Arc,
     time::Instant,
 };
 
@@ -750,7 +751,7 @@ fn project_all_presentations(
             )
         })
         .collect::<BTreeMap<_, _>>();
-    let materials = renderer_materials(&state.presentations)?;
+    let materials = renderer_materials(&state.presentations, &scenes)?;
     let textures = presentation_textures(&state.presentations);
     let result = state
         .projector
@@ -847,34 +848,45 @@ fn presentation_instance_id(handle: u64) -> String {
     format!("csharp-voxel-scene-presentation-{handle}")
 }
 
+/// Each presentation's renderer materials. A non-occluding slot draws both
+/// sides of its faces, so a water surface is seen from inside the water too.
 fn renderer_materials(
     presentations: &BTreeMap<u64, RetainedVoxelScenePresentation>,
+    scenes: &[(u64, NativeSpatialSessionHandle, Arc<VoxelCollisionScene>)],
 ) -> Result<BTreeMap<u16, RenderMaterialDescriptor>, CsharpEngineServicesError> {
     presentations
-        .values()
-        .flat_map(|presentation| {
+        .iter()
+        .flat_map(|(handle, presentation)| {
+            let non_occluding = scenes
+                .iter()
+                .find(|(scene_handle, _, _)| scene_handle == handle)
+                .map(|(_, _, scene)| &scene.mesh_options().non_occluding);
+            let both_sides =
+                move |slot: &u16| non_occluding.is_some_and(|slots| slots.contains(slot));
             presentation
                 .base_materials
                 .iter()
-                .map(|(source_slot, descriptor)| {
+                .map(move |(source_slot, descriptor)| {
                     (
                         presentation.base_renderer_slots.get(source_slot).copied(),
                         descriptor,
+                        both_sides(source_slot),
                     )
                 })
                 .chain(
                     presentation
                         .face_materials
                         .iter()
-                        .map(|(source_slot, descriptor)| {
+                        .map(move |(source_slot, descriptor)| {
                             (
                                 presentation.face_renderer_slots.get(source_slot).copied(),
                                 descriptor,
+                                both_sides(&source_slot.0),
                             )
                         }),
                 )
         })
-        .map(|(renderer_slot, descriptor)| {
+        .map(|(renderer_slot, descriptor, both_sides)| {
             let slot = renderer_slot.ok_or_else(|| {
                 CsharpEngineServicesError::new(
                     "CSHARP_VOXEL_SCENE_PRESENTATION_MATERIAL_SLOTS",
@@ -883,6 +895,7 @@ fn renderer_materials(
             })?;
             let mut descriptor = descriptor.clone();
             descriptor.id = voxel_material_id(slot);
+            descriptor.double_sided |= both_sides;
             Ok((slot, descriptor))
         })
         .collect()
@@ -1387,6 +1400,68 @@ mod tests {
             })
             .is_err());
         assert_eq!(bridge.refresh(projection).unwrap().material_count, 1);
+    }
+
+    #[test]
+    fn a_non_occluding_slot_draws_both_sides_of_its_faces() {
+        let mut spatial = RuntimeSpatialBridge::new();
+        let session = session_with_voxel(&mut spatial);
+        let voxel_api = crate::voxel::api(&mut spatial);
+        let occlusion = [NativeVoxelMaterialOcclusion {
+            material_slot: 1,
+            occludes: false,
+        }];
+        assert_eq!(
+            unsafe {
+                (voxel_api.configure_material_occlusion)(
+                    voxel_api.context,
+                    &NativeVoxelMaterialOcclusionRequest {
+                        session,
+                        materials: occlusion.as_ptr(),
+                        materials_len: occlusion.len(),
+                    },
+                    &mut std::mem::zeroed::<NativeOperationErrorReceipt>(),
+                )
+            },
+            ABI_OK
+        );
+        let mut bridge = RuntimeVoxelScenePresentationBridge::new(spatial.collision_source());
+        let mut appearance =
+            RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), BTreeMap::new());
+        appearance.begin_call();
+        bridge.begin_call();
+        let material = material(&mut appearance);
+        let api = super::api(&mut bridge, &mut appearance);
+        let bindings = [NativeVoxelSceneMaterialBinding {
+            material_slot: 1,
+            material,
+        }];
+        assert_eq!(
+            unsafe {
+                (api.project_scene)(
+                    api.context,
+                    &NativeProjectVoxelSceneRequest {
+                        session,
+                        materials: bindings.as_ptr(),
+                        materials_len: bindings.len(),
+                    },
+                    &mut NativeVoxelScenePresentationHandle::default(),
+                    &mut std::mem::zeroed::<NativeOperationErrorReceipt>(),
+                )
+            },
+            ABI_OK
+        );
+        let staged = bridge.take_staged_call().expect("staged projection");
+        let defined = staged
+            .frames
+            .iter()
+            .flat_map(|frame| frame.ops.iter())
+            .filter_map(|operation| match operation {
+                RenderDiff::DefineMaterial { material } => Some(material.double_sided),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(defined, [true]);
     }
 
     #[test]

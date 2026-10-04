@@ -19,8 +19,8 @@
 //!
 //! 1. **`Empty` is a distinct variant**, not material id 0 — a material id and
 //!    "no voxel here" are different kinds of thing, and material 0 stays usable.
-//! 2. **Transparency is deferred**: every `Solid` is opaque today ([`VoxelValue::is_opaque`]),
-//!    with room for a `VoxelOpacity` axis later without changing storage.
+//! 2. **Opacity is not stored**: every `Solid` is opaque here ([`VoxelValue::is_opaque`]);
+//!    meshing takes per-material occlusion from its options, not from the cell.
 //! 3. **Non-cubic shapes deferred**: values classify occupancy, not geometry.
 //! 4. Cells carry fifteen state bits. Rich object behavior remains product-owned.
 //! 5. Materials are **Rust-validated** via [`MaterialCatalog`]; a TS catalog may
@@ -29,7 +29,7 @@
 //!    silent fallback — callers decide recovery.
 //!
 //! Deferred expansion hooks (intentionally not implemented): `VoxelFlags`,
-//! `VoxelOpacity`, `VoxelCollisionKind`, `VoxelRenderKind`, `VoxelGridKind`.
+//! `VoxelCollisionKind`, `VoxelRenderKind`, `VoxelGridKind`.
 
 #![forbid(unsafe_code)]
 
@@ -140,9 +140,8 @@ impl VoxelValue {
 
     /// Whether this cell blocks sight for face-culling purposes.
     ///
-    /// Today: solids are opaque, empty is not. Transparency is deferred (decision
-    /// 2); when a `VoxelOpacity` axis lands this becomes material-driven without
-    /// touching storage.
+    /// Solids are opaque, empty is not. Per-material occlusion belongs to the
+    /// mesher's options (decision 2).
     pub const fn is_opaque(self) -> bool {
         self.is_solid()
     }

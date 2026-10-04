@@ -228,6 +228,32 @@ pub type NativeConfigureVoxelMaterialCollision = unsafe extern "C" fn(
     *mut NativeOperationErrorReceipt,
 ) -> i32;
 
+/// Whether one occupied material slot hides its neighbours' cube faces.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct NativeVoxelMaterialOcclusion {
+    pub material_slot: u32,
+    pub occludes: bool,
+}
+
+/// Configure a session's product-owned material occlusion declarations.
+/// Unlisted slots occlude. Two voxels of one non-occluding slot still hide
+/// their shared face. Configuring again replaces the declarations and
+/// remeshes every chunk.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeVoxelMaterialOcclusionRequest {
+    pub session: NativeSpatialSessionHandle,
+    pub materials: *const NativeVoxelMaterialOcclusion,
+    pub materials_len: usize,
+}
+
+pub type NativeConfigureVoxelMaterialOcclusion = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeVoxelMaterialOcclusionRequest,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+
 /// How one voxel material slot is surfaced.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
@@ -435,6 +461,7 @@ pub type NativeApplyVoxelResidency = unsafe extern "C" fn(
 pub struct NativeVoxelApi {
     pub context: *mut c_void,
     pub configure_material_collision: NativeConfigureVoxelMaterialCollision,
+    pub configure_material_occlusion: NativeConfigureVoxelMaterialOcclusion,
     pub read_scene: NativeReadVoxelScene,
     pub read: NativeReadVoxel,
     pub sample_direct_lighting: NativeSampleVoxelDirectLighting,

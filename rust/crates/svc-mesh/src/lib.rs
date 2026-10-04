@@ -1,8 +1,9 @@
 //! Deterministic greedy visible-surface voxel mesher → [`MeshPayload`].
 //!
-//! Every solid voxel contributes faces whose neighbour is non-opaque; internal
-//! faces and resident-neighbour seams are culled. Remaining coplanar faces with
-//! the same material and normal are merged into deterministic rectangles.
+//! Every solid voxel contributes faces whose neighbour does not hide them;
+//! internal faces and resident-neighbour seams are culled. Remaining coplanar
+//! faces with the same material and normal are merged into deterministic
+//! rectangles.
 //! Positions, normals, tile coordinates, indices, material groups, and bounds
 //! form a renderer-neutral mesh payload. Vertices are chunk-local; callers own
 //! world placement and renderer integration.
@@ -175,6 +176,9 @@ pub struct SurfaceMeshOptions {
     pub mode: SurfaceMode,
     pub limits: SurfaceMeshLimits,
     pub materials: SurfaceMaterials,
+    /// Material slots that do not hide a neighbour's cube face, such as water
+    /// or glass. Two voxels of one such slot still hide their shared face.
+    pub non_occluding: BTreeSet<u16>,
 }
 
 impl SurfaceMeshOptions {
@@ -204,6 +208,11 @@ impl SurfaceMeshOptions {
                 .entries()
                 .iter()
                 .any(|(_, surface)| surface.mode == mode)
+    }
+
+    /// Whether a `neighbour` voxel hides the cube face a `slot` voxel shows it.
+    fn hides(&self, slot: u16, neighbour: u16) -> bool {
+        neighbour == slot || !self.non_occluding.contains(&neighbour)
     }
 
     /// Whether every material is drawn as cubes.
@@ -585,7 +594,7 @@ pub fn mesh_chunk_standalone(
         coord,
         chunk,
         |_| true,
-        |v| {
+        |_, v| {
             let (c, l) = spec.voxel_to_chunk_local(v);
             c == coord && chunk.get(l).is_some_and(|x| x.is_opaque())
         },
@@ -906,7 +915,7 @@ pub fn mesh_cells_standalone_with_options(
     }
 
     let greedy_faces = |include: &dyn Fn(u16) -> bool,
-                        occluder: &dyn Fn(u16) -> bool|
+                        hides: &dyn Fn(u16, u16) -> bool|
      -> Result<(Vec<Face>, u32), MeshError> {
         let mut faces = Vec::new();
         let mut faces_culled = 0_u32;
@@ -929,7 +938,7 @@ pub fn mesh_cells_standalone_with_options(
                 ];
                 if occupied
                     .get(&neighbour)
-                    .is_some_and(|neighbour| occluder(*neighbour))
+                    .is_some_and(|neighbour| hides(slot, *neighbour))
                 {
                     faces_culled = faces_culled.saturating_add(1);
                 } else {
@@ -953,7 +962,8 @@ pub fn mesh_cells_standalone_with_options(
     };
 
     if options.all_greedy() {
-        let (faces, faces_culled) = greedy_faces(&|_| true, &|_| true)?;
+        let (faces, faces_culled) =
+            greedy_faces(&|_| true, &|slot, neighbour| options.hides(slot, neighbour))?;
         let source_faces = faces.len() as u32;
         let quads = greedy_merge_faces(faces)?;
         return emit_quads(
@@ -969,7 +979,7 @@ pub fn mesh_cells_standalone_with_options(
 
     // Every face a solid voxel exposes to empty space: the work charged
     // to reconstructed admission, whichever mode draws it.
-    let (exposed, _) = greedy_faces(&|_| true, &|_| true)?;
+    let (exposed, _) = greedy_faces(&|_| true, &|_, _| true)?;
     let Some((&first, _)) = occupied.first_key_value() else {
         return Ok(empty_payload(options.mode));
     };
@@ -1007,7 +1017,9 @@ pub fn mesh_cells_standalone_with_options(
     };
     let smooth = reconstruct(&lattice, &options, owner, cell_size, pivot)?;
     let greedy = |slot: u16| options.surface(slot).mode == SurfaceMode::GreedyCubes;
-    let (faces, faces_culled) = greedy_faces(&greedy, &greedy)?;
+    let (faces, faces_culled) = greedy_faces(&greedy, &|slot, neighbour| {
+        greedy(neighbour) && options.hides(slot, neighbour)
+    })?;
     let mut payload = if faces.is_empty() {
         smooth
     } else {
@@ -1170,21 +1182,7 @@ pub fn mesh_chunk_in_world(
     world: &VoxelWorld,
     coord: ChunkCoord,
 ) -> Option<Result<MeshPayload, MeshError>> {
-    let chunk = world.get(coord)?;
-    let spec = world.grid();
-    Some(mesh_core(
-        &spec,
-        coord,
-        chunk,
-        |_| true,
-        |v| {
-            let (c, l) = spec.voxel_to_chunk_local(v);
-            world
-                .get(c)
-                .and_then(|ch| ch.get(l))
-                .is_some_and(|x| x.is_opaque())
-        },
-    ))
+    mesh_chunk_in_world_with_options(world, coord, &SurfaceMeshOptions::default())
 }
 
 /// Mesh one resident chunk with its materials' surface modes.
@@ -1196,18 +1194,38 @@ pub fn mesh_chunk_in_world(
 /// solid corner, so adjacent chunk calls make identical decisions without
 /// duplicating a primitive. Cube materials keep their greedy faces; a cube
 /// face against a reconstructed material is kept, since that material's
-/// surface may not cover it. Returned positions remain local to `coord`,
+/// surface may not cover it, and so is a face against a different
+/// non-occluding material. Returned positions remain local to `coord`,
 /// matching the existing chunk transform contract.
 pub fn mesh_chunk_in_world_with_options(
     world: &VoxelWorld,
     coord: ChunkCoord,
     options: &SurfaceMeshOptions,
 ) -> Option<Result<MeshPayload, MeshError>> {
-    if options.all_greedy() {
-        return mesh_chunk_in_world(world, coord);
-    }
     let chunk = world.get(coord)?;
+    if options.all_greedy() {
+        let spec = world.grid();
+        return Some(mesh_core(
+            &spec,
+            coord,
+            chunk,
+            |_| true,
+            |slot, voxel| {
+                neighbour_slot(world, &spec, voxel).is_some_and(|n| options.hides(slot, n))
+            },
+        ));
+    }
     Some(mesh_chunk_reconstructed(world, coord, chunk, options))
+}
+
+/// The material slot of a resident voxel, if solid.
+fn neighbour_slot(world: &VoxelWorld, spec: &VoxelGridSpec, voxel: VoxelCoord) -> Option<u16> {
+    let (chunk, local) = spec.voxel_to_chunk_local(voxel);
+    world
+        .get(chunk)
+        .and_then(|chunk| chunk.get(local))
+        .and_then(|value| value.material())
+        .map(|material| material.raw())
 }
 
 fn mesh_chunk_reconstructed(
@@ -1290,26 +1308,21 @@ fn mesh_chunk_reconstructed(
     if !options.uses_mode(SurfaceMode::GreedyCubes) {
         return Ok(smooth);
     }
-    let cubes = mesh_core(&spec, coord, chunk, greedy, |voxel| {
-        let (c, l) = spec.voxel_to_chunk_local(voxel);
-        world
-            .get(c)
-            .and_then(|chunk| chunk.get(l))
-            .and_then(|value| value.material())
-            .is_some_and(|material| greedy(material.raw()))
+    let cubes = mesh_core(&spec, coord, chunk, greedy, |slot, voxel| {
+        neighbour_slot(world, &spec, voxel).is_some_and(|n| greedy(n) && options.hides(slot, n))
     })?;
     merge_payloads(cubes, smooth, options.mode, options.limits)
 }
 
-/// Core mesher: `occupied(world_voxel)` answers whether a voxel occludes a
-/// face. The current chunk's solid voxels of `include`d materials drive
-/// emission.
+/// Core mesher: `hides(slot, world_voxel)` answers whether a voxel hides the
+/// face a `slot` voxel shows it. The current chunk's solid voxels of
+/// `include`d materials drive emission.
 fn mesh_core(
     spec: &VoxelGridSpec,
     coord: ChunkCoord,
     chunk: &VoxelChunk,
     include: impl Fn(u16) -> bool,
-    occupied: impl Fn(VoxelCoord) -> bool,
+    hides: impl Fn(u16, VoxelCoord) -> bool,
 ) -> Result<MeshPayload, MeshError> {
     // Collect visible faces in deterministic order, with culling stats.
     let mut faces: Vec<Face> = Vec::new();
@@ -1323,7 +1336,7 @@ fn mesh_core(
         }
         let world_voxel = spec.chunk_local_to_voxel(coord, local);
         for dir in Direction6::ALL {
-            if occupied(world_voxel.neighbor(dir)) {
+            if hides(material.raw(), world_voxel.neighbor(dir)) {
                 faces_culled += 1;
             } else {
                 faces.push(Face {
