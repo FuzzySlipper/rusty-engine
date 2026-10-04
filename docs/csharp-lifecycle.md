@@ -7,7 +7,9 @@ The product lifecycle and the Engine services a product calls during it, plus va
 The generated `IEngineProduct` contract has lifecycle callbacks for `Start`,
 `Update`, `Pause`, `Resume`, `Restart`, `Shutdown`, and `Dispose`. Its optional
 `CompleteTimeline` callback receives copied completion data and lets product
-code accept or reject the product-owned ticket meaning.
+code accept or reject the product-owned ticket meaning. Its optional
+`HandlePausedIntents` callback receives the product UI's claims while the
+runtime is paused ([actions while paused](#actions-while-paused)).
 
 - The constructor receives `ProductCreateContext`, including `IEngineContext`,
   admitted product content, and input configuration.
@@ -24,6 +26,26 @@ code accept or reject the product-owned ticket meaning.
   running product binding. Correlation, outcome, and provenance values arrive
   as copied managed data. A product that does not own timeline tickets may
   leave the default rejecting implementation in place.
+
+### Actions while paused
+
+A paused runtime admits no simulation step, so `Update` does not run. A claim
+the product UI makes with `context.intents.claim` while paused (an inventory
+item use, a slot move, a menu choice) reaches
+`HandlePausedIntents(ReadOnlySpan<ProductInputEvent> intents)` instead, once,
+in claim order, as the same direct events `Update` would have received. Do the
+product's own rule there and publish the result, such as a UI projection;
+Engine services work as in any callback, except that physical mapping
+replacement is `Unavailable`. Simulation step and time do not move.
+
+The Engine still owns admission and order. Physical input, held keys and the
+intents mapped from them are discarded while paused, and a claim delivered
+here is not replayed on resume. A claim named for an earlier binding (before
+the pause, a restart or a control change) is dropped as stale, and a disposed
+runtime admits none. An exception faults the runtime as from any callback.
+The default implementation ignores the claims. Products that act the same
+running or paused can route both callbacks to one method, as
+`fixtures/csharp-controller-interaction` does for its container Take buttons.
 
 A product callback is not a transaction: each Engine operation takes effect
 when it returns, and an exception rewinds nothing. See

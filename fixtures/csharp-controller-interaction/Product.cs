@@ -13,8 +13,12 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
 {
     private const float Reach = 2.7f, Acquire = .35f, Release = .5f, QueryDistance = 15, EyeHeight = .65f;
     private const uint UiRootNode = 0;
-    private const string UiKeys = "opentitlecontents";
-    private static readonly string[] ContainerContents = ["Brass compass and survey note.", "Field ration and signal flare.", "Occluded test crate contents."];
+    private const string UiKeys = "opentitlecontentstaken";
+    private const string TakeIntent = "container.take";
+    private const char ItemSeparator = '\n';
+    private readonly List<string>[] containerContents = [["Brass compass", "Survey note"], ["Field ration", "Signal flare"], ["Occluded test crate"]];
+    private readonly List<string> taken = new();
+    private int pausedTakes;
     private readonly IEngineContext engine;
     private readonly SpatialSession spatial;
     private readonly Camera camera;
@@ -52,6 +56,8 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         look = input.IntegrateLook(look,frame).After;
         if (input.Physical.Pressed(KeyboardControl.KeyK)) { locked = !locked; revisions[0]++; sceneRevision++; }
         if (input.Physical.Pressed(KeyboardControl.Escape)) CloseContainerPanel();
+        foreach (ProductInputEvent intent in update.Input)
+            if (IsTake(intent)) TakeItem(intent);
         for (uint admitted=0; admitted<update.Facts.AdmittedStepCount; admitted++)
         {
             bool jump = frame.JumpPressed && admitted==0;
@@ -138,6 +144,28 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         engine.Ui.PublishProjection(new UiProjection(uiStream,++uiSequence,UiValue()));
     }
 
+    // The panel's Take buttons claim container.take. While the Engine is
+    // paused the claim arrives here instead of Update; both run the same rule.
+    public void HandlePausedIntents(ReadOnlySpan<ProductInputEvent> intents)
+    {
+        foreach (ProductInputEvent intent in intents)
+            if (IsTake(intent) && TakeItem(intent)) pausedTakes++;
+        PublishContainerPanel();
+    }
+
+    private static bool IsTake(ProductInputEvent intent) =>
+        intent.Kind == InputEventKind.DirectProductPayload && intent.Intent.Span.SequenceEqual(Encoding.UTF8.GetBytes(TakeIntent));
+
+    private bool TakeItem(ProductInputEvent intent)
+    {
+        if (openPanelChest < 0) return false;
+        using JsonDocument payload = JsonDocument.Parse(intent.PayloadData);
+        if (!payload.RootElement.TryGetProperty("item", out JsonElement item) || !containerContents[openPanelChest].Remove(item.GetString() ?? string.Empty))
+            return false;
+        taken.Add(item.GetString()!);
+        return true;
+    }
+
     private void CloseContainerPanel()
     {
         if (openPanelChest < 0) return;
@@ -149,18 +177,21 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     {
         bool open = openPanelChest >= 0;
         string title = open ? ContainerTitle(openPanelChest) : "Container";
-        string contents = open ? ContainerContents[openPanelChest] : string.Empty;
+        string contents = open ? string.Join(ItemSeparator, containerContents[openPanelChest]) : string.Empty;
+        string takenItems = string.Join(ItemSeparator, taken);
         uint titleOffset = (uint)Encoding.UTF8.GetByteCount(UiKeys);
         uint contentsOffset = titleOffset + (uint)Encoding.UTF8.GetByteCount(title);
-        byte[] utf8 = Encoding.UTF8.GetBytes(UiKeys + title + contents);
+        uint takenOffset = contentsOffset + (uint)Encoding.UTF8.GetByteCount(contents);
+        byte[] utf8 = Encoding.UTF8.GetBytes(UiKeys + title + contents + takenItems);
         StructuredValueNode[] nodes =
         [
-            new(StructuredValueKind.Object,0,0,0,0,0,0,0,3),
+            new(StructuredValueKind.Object,0,0,0,0,0,0,0,4),
             new(StructuredValueKind.Bool,open ? 1u : 0u,0,0,4,0,0,0,0),
             new(StructuredValueKind.String,0,0,4,5,titleOffset,(uint)Encoding.UTF8.GetByteCount(title),0,0),
             new(StructuredValueKind.String,0,0,9,8,contentsOffset,(uint)Encoding.UTF8.GetByteCount(contents),0,0),
+            new(StructuredValueKind.String,0,0,17,5,takenOffset,(uint)Encoding.UTF8.GetByteCount(takenItems),0,0),
         ];
-        return new UiValue(nodes,new uint[]{1,2,3},UiRootNode,utf8);
+        return new UiValue(nodes,new uint[]{1,2,3,4},UiRootNode,utf8);
     }
     [DebugCommand("viewpoint.visit",Description="Visit a product-owned inspection pose: entrance, near, or side. This explicitly moves the player; it is not ordinary-input evidence.")]
     public string Visit(string name)
@@ -187,6 +218,8 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     public void RegisterDebugCommands(IDebugCommandModuleRegistrar registrar) { registrar.Register(this); registrar.Register(interactionDebug); }
     [DebugCommand("interaction.query",Description="Read-only reticle candidates; semantic targeting enabled, look assistance disabled.")]
     public string Observe() => Format(interaction.Focus.Observe(Candidates(),Reticle),"reticle");
+    [DebugCommand("inventory.read",Description="Read-only: items taken from containers, and how many were taken while the Engine was paused.")]
+    public string Inventory() => JsonSerializer.Serialize(new { taken, pausedTakes, openChest = openPanelChest });
     [DebugCommand("interaction.cursor",Description="Read-only free-cursor query: viewport-local bottom-left normalized x/y and explicit viewport width/height aspect. Does not turn camera or change focus.")]
     public string Cursor(float x,float y,double aspect)
     {

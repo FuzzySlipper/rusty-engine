@@ -805,7 +805,6 @@ impl HostInputMailbox {
         }
     }
 
-    #[cfg(test)]
     fn len(&self) -> usize {
         self.state
             .lock()
@@ -841,7 +840,14 @@ fn scheduler_loop<R: ProductHostRuntime>(state: Arc<HostState<R>>, wake: Arc<Sch
                 continue;
             }
             crate::ProductHostRuntimeScheduleState::Shutdown => break,
+            // A paused runtime admits no step, but the claims its UI makes
+            // reach the product now rather than waiting in the mailbox.
+            crate::ProductHostRuntimeScheduleState::Paused if state.input_mailbox.len() > 0 => {
+                deliver_paused_input(&state);
+                continue;
+            }
             crate::ProductHostRuntimeScheduleState::Created
+            | crate::ProductHostRuntimeScheduleState::Held
             | crate::ProductHostRuntimeScheduleState::Paused
             | crate::ProductHostRuntimeScheduleState::Faulted => {
                 // Resume from a lifecycle transition at the next admitted
@@ -956,6 +962,32 @@ fn disposition_for_runtime_error(error: &ProductHostRuntimeError) -> ProductHost
             ProductHostLogDisposition::ResyncRequired
         }
         crate::ProductHostFaultDisposition::Terminal => ProductHostLogDisposition::Terminal,
+    }
+}
+
+fn deliver_paused_input<R: ProductHostRuntime>(state: &HostState<R>) {
+    let errors = state.runtime.session().with_locked_timed(
+        || begin_telemetry(state, ProductHostOperationKind::Input),
+        |runtime| {
+            crate::scheduler::deliver_queued_input(
+                runtime,
+                state.input_mailbox.drain(),
+                &mut |receipt| publish_scheduled_input_receipt(state, receipt),
+                &mut |receipt| publish_scheduled_receipt(state, receipt),
+            )
+        },
+        || finish_telemetry(state, ProductHostOperationKind::Input),
+    );
+    let errors = errors.unwrap_or_else(|_| vec![crate::session::runtime_poisoned()]);
+    for error in errors {
+        publish_host_diagnostic(
+            &state.diagnostics,
+            ProductHostLogSeverity::Warning,
+            disposition_for_runtime_error(&error),
+            error.code(),
+            error.diagnostic(),
+            [],
+        );
     }
 }
 
@@ -3370,13 +3402,17 @@ mod tests {
         assert_eq!(overflow_wire["result"]["disposition"], "resync-required");
     }
 
-    /// A realtime runtime whose playtest time is held: the scheduler idles, so
-    /// only debug commands advance it. It records the order of its calls.
-    struct HeldRealtimeRuntime(Arc<Mutex<Vec<String>>>);
+    /// A realtime runtime whose playtest time is held (or that is paused): the
+    /// scheduler admits no step, so only debug commands advance it. It records
+    /// the order of its calls.
+    struct HeldRealtimeRuntime(
+        Arc<Mutex<Vec<String>>>,
+        crate::ProductHostRuntimeScheduleState,
+    );
 
     impl crate::ProductHostRuntime for HeldRealtimeRuntime {
         fn realtime_schedule_state(&self) -> crate::ProductHostRuntimeScheduleState {
-            crate::ProductHostRuntimeScheduleState::Paused
+            self.1
         }
 
         fn realtime_schedule_interval(&self) -> Option<Duration> {
@@ -3492,6 +3528,7 @@ mod tests {
             )),
             runtime: Arc::new(ProductHostOperationOwner::new(HeldRealtimeRuntime(
                 Arc::clone(&calls),
+                crate::ProductHostRuntimeScheduleState::Held,
             ))),
             input_mailbox: Arc::new(HostInputMailbox::default()),
             telemetry: Arc::new(Mutex::new(HostTelemetry::default())),
@@ -3529,6 +3566,77 @@ mod tests {
         );
     }
 
+    fn held_realtime_state(
+        calls: &Arc<Mutex<Vec<String>>>,
+        schedule: crate::ProductHostRuntimeScheduleState,
+    ) -> Arc<HostState<HeldRealtimeRuntime>> {
+        Arc::new(HostState {
+            bundle: Arc::new(RwLock::new(
+                ProductHostBundle::new(vec![crate::ProductHostBundleEntry::new(
+                    "index.html",
+                    "text/html; charset=utf-8",
+                    Vec::new(),
+                )
+                .unwrap()])
+                .unwrap(),
+            )),
+            runtime: Arc::new(ProductHostOperationOwner::new(HeldRealtimeRuntime(
+                Arc::clone(calls),
+                schedule,
+            ))),
+            input_mailbox: Arc::new(HostInputMailbox::default()),
+            telemetry: Arc::new(Mutex::new(HostTelemetry::default())),
+            realtime_scheduler_enabled: true,
+            outputs: Arc::new(Mutex::new(OutputBus::default())),
+            output_wake: Arc::new(OutputWake::default()),
+            shutdown: Arc::new(AtomicBool::new(false)),
+            scheduler_wake: Arc::new(SchedulerWake::default()),
+            bind_host: Ipv4Addr::LOCALHOST,
+            expected_port: 0,
+            live_debug_enabled: false,
+            diagnostics: ProductHostLog::new(Default::default()).unwrap(),
+            connections: AtomicUsize::new(0),
+            subscribers: AtomicUsize::new(0),
+            published_readout: Mutex::new(None),
+            frames: None,
+            audio: None,
+            audio_listeners: AtomicUsize::new(0),
+            presentation: None,
+            capture: None,
+            ui_files: None,
+            activity: None,
+        })
+    }
+
+    #[test]
+    fn a_paused_runtime_takes_queued_input_and_held_time_keeps_it() {
+        for (schedule, expected) in [
+            (crate::ProductHostRuntimeScheduleState::Paused, 0),
+            (crate::ProductHostRuntimeScheduleState::Held, 1),
+        ] {
+            let calls = Arc::new(Mutex::new(Vec::new()));
+            let state = held_realtime_state(&calls, schedule);
+            let scheduler = {
+                let state = Arc::clone(&state);
+                let wake = Arc::clone(&state.scheduler_wake);
+                thread::spawn(move || scheduler_loop(state, wake))
+            };
+            let queued = invoke_input(&state, br#"{"batch":[{"runtime":{"instanceId":"41","generation":"1","controlRevision":"1"},"sequence":"1","context":"gameplay.default","intent":"menu.use","value":{"kind":"digital","active":true}}]}"#);
+            assert_eq!(queued.status, 200);
+            let deadline = Instant::now() + Duration::from_secs(2);
+            while state.input_mailbox.len() != expected && Instant::now() < deadline {
+                thread::sleep(Duration::from_millis(5));
+            }
+            // Give a held scheduler time to (wrongly) drain it.
+            thread::sleep(Duration::from_millis(50));
+            assert_eq!(state.input_mailbox.len(), expected, "{schedule:?}");
+            assert_eq!(calls.lock().unwrap().len(), 1 - expected, "{schedule:?}");
+            state.shutdown.store(true, Ordering::Release);
+            state.scheduler_wake.notify();
+            scheduler.join().unwrap();
+        }
+    }
+
     #[test]
     fn only_driving_the_product_is_activity() {
         for path in [
@@ -3564,6 +3672,7 @@ mod tests {
             )),
             runtime: Arc::new(ProductHostOperationOwner::new(HeldRealtimeRuntime(
                 Arc::new(Mutex::new(Vec::new())),
+                crate::ProductHostRuntimeScheduleState::Held,
             ))),
             input_mailbox: Arc::new(HostInputMailbox::default()),
             telemetry: Arc::new(Mutex::new(HostTelemetry::default())),

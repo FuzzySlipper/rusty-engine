@@ -265,11 +265,34 @@ impl RuntimeInputLane {
         )))
     }
 
-    /// Drops every held, pending and transient fact but keeps the binding
-    /// and cursor: what a paused runtime admits is consumed, not kept for a
-    /// later step.
-    pub fn discard_admitted(&mut self) {
+    /// Takes the direct product UI claims a paused runtime admitted, in
+    /// sequence order, and drops every other held, pending and transient fact
+    /// while keeping the binding and cursor. Nothing admitted while paused is
+    /// kept for a later step, and physical facts and their mapped intents are
+    /// never returned. No step is admitted while paused, so the claims carry
+    /// the last snapshot step.
+    pub fn take_paused_direct_intents(&mut self) -> Vec<RuntimeIntentEnvelope> {
+        let step = SimulationStep::new(self.last_snapshot_step.unwrap_or(0));
+        // Claims are appended at ingest, so they are already in sequence order.
+        let direct = std::mem::take(&mut self.pending_intents)
+            .into_iter()
+            .filter(|pending| pending.provenance == IntentProvenance::DirectUi)
+            .collect::<Vec<_>>();
         self.clear_state();
+        direct
+            .into_iter()
+            .map(|pending| {
+                RuntimeIntentEnvelope::new(
+                    self.binding,
+                    step,
+                    pending.sequence,
+                    pending.descriptor,
+                    pending.value,
+                    pending.phase,
+                    pending.provenance,
+                )
+            })
+            .collect()
     }
 
     /// Terminally disposes this instance-owned lane. No queued, held, edge,

@@ -251,7 +251,11 @@ declare module "@rusty-engine/product-ui" {
         readonly contract: string;
         readonly data: unknown;
     };
-    /** Mounted DOM UI can emit a claim, but cannot drain or bind the input lane. */
+    /**
+     * Mounted DOM UI can emit a claim, but cannot drain or bind the input lane.
+     * A claim made while the runtime is paused reaches the product's
+     * `HandlePausedIntents` once instead of `Update`.
+     */
     export interface RustyApplicationUiIntentsPort {
         readonly claim: (intent: string, value: RustyApplicationUiIntentValue) => void;
     }

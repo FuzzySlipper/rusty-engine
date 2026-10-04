@@ -24,6 +24,7 @@
       <ExcludeAssets Condition="'$(RustyEngineUseSourceDevelopment)' == 'true'">compile;runtime</ExcludeAssets>
     </PackageReference>
     <RustyEngineProductInputIntent Include="container.close" Value="digital" />
+    <RustyEngineProductInputIntent Include="container.take" Value="payload:controller-interaction.take.v1" />
     <RustyEngineProductInputMapping Include="container.close.escape" Intent="container.close" Trigger="key:escape:pressed" />
   </ItemGroup>
 </Project>

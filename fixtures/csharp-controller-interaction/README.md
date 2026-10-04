@@ -21,6 +21,10 @@ Escape closes that panel through the declared `container.close` keyboard mapping
 Green is focused; blue is opened. Debug is optional for gameplay.
 The Pause/Resume button at the bottom left pauses and resumes the Engine
 runtime through `context.lifecycle`. Its label shows the state the Engine reports.
+Each item in the container panel has a Take button that claims
+`container.take`. The product moves the item to its taken list and publishes the
+panel again, whether running (`Update`) or paused (`HandlePausedIntents`);
+`inventory.read` reports the taken items and how many were taken while paused.
 
 The read-only `interaction.query` command returns reticle candidates including
 identity/revision, target point, distance, angle, visibility, unknown walking

@@ -108,8 +108,8 @@ physical mappings while leaving direct intents available.
 it then throws. The last valid replacement in that callback wins.
 `InvalidMappings` leaves the current mapping set and any earlier valid
 replacement unchanged. `Unavailable` reports a call
-outside those supported callbacks (such as Attach, Shutdown, debug or timeline
-completion). Duplicate mapping IDs, unknown intents, incompatible value kinds,
+outside those supported callbacks (such as Attach, Shutdown, debug, timeline
+completion or paused intents). Duplicate mapping IDs, unknown intents, incompatible value kinds,
 and unsupported controls are invalid. Distinct mapping IDs may deliberately share a physical trigger.
 
 At runtime, a successful replacement uses the lifecycle transition or advances
@@ -681,7 +681,10 @@ replaced is not accepted. They reject when the host has failed or is disposed.
 pause menu shows what the Engine did rather than what was clicked. Pause stops
 simulation and the product's `Update` and runs `Pause`. Held and pending
 gameplay input is cleared and is not replayed on resume, and paused time does
-not catch up. To return to play after `resume()`, call
+not catch up. A `context.intents.claim` made while paused reaches the
+product's `HandlePausedIntents` once
+([actions while paused](csharp-lifecycle.md#actions-while-paused)), so a pause
+or inventory menu can act and show the product's answer. To return to play after `resume()`, call
 `context.ui.setInteractionMode('gameplay')` and `context.ui.focusGameplay()`.
 `fixtures/csharp-controller-interaction` has a minimal Pause/Resume control.
 

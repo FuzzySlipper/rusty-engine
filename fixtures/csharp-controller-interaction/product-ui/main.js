@@ -10,12 +10,16 @@ export function mountProductUi(root, context) {
   panel.setAttribute('aria-live', 'polite');
   panel.style.cssText = 'position:absolute;right:16px;top:16px;max-width:330px;padding:14px 16px;border:1px solid #79b7ff;border-radius:8px;color:#eff8ff;background:#102944ee;font:15px system-ui,sans-serif';
   const title = document.createElement('strong');
-  const contents = document.createElement('p');
+  const contents = document.createElement('ul');
+  contents.dataset.fixtureContainer = 'contents';
+  const taken = document.createElement('p');
+  taken.dataset.fixtureContainer = 'taken';
   const close = document.createElement('p');
-  close.textContent = 'Press Escape to close.';
+  close.textContent = 'Press Escape to close. Take works while paused.';
   close.style.margin = '12px 0 0';
-  contents.style.margin = '8px 0 0';
-  panel.append(title, contents, close);
+  contents.style.cssText = 'margin:8px 0 0;padding-left:18px';
+  taken.style.margin = '8px 0 0';
+  panel.append(title, contents, taken, close);
   const lifecycle = createLifecycleControls(context);
   root.append(label, reticle, panel, lifecycle.element);
 
@@ -23,7 +27,21 @@ export function mountProductUi(root, context) {
     if (projection?.contract !== 'controller-interaction.panel.v1' || !isContainerPanel(projection.value)) return;
     panel.hidden = !projection.value.open;
     title.textContent = projection.value.title;
-    contents.textContent = `Contents: ${projection.value.contents}`;
+    // Take works paused or running: the product applies its own rule and
+    // publishes the panel again.
+    contents.replaceChildren(...items(projection.value.contents).map((item) => {
+      const entry = document.createElement('li');
+      const take = document.createElement('button');
+      take.textContent = 'Take';
+      take.dataset.fixtureTake = item;
+      take.style.marginLeft = '8px';
+      take.addEventListener('click', () => context.intents?.claim('container.take', {
+        kind: 'product-payload', contract: 'controller-interaction.take.v1', data: { item },
+      }));
+      entry.append(item, take);
+      return entry;
+    }));
+    taken.textContent = `Taken: ${items(projection.value.taken).join(', ') || 'nothing'}`;
   }) ?? (() => {});
 
   return { dispose() { unsubscribe(); lifecycle.dispose(); panel.remove(); label.remove(); reticle.remove(); } };
@@ -78,5 +96,10 @@ function isContainerPanel(value) {
   return typeof value === 'object' && value !== null
     && typeof value.open === 'boolean'
     && typeof value.title === 'string'
-    && typeof value.contents === 'string';
+    && typeof value.contents === 'string'
+    && typeof value.taken === 'string';
+}
+
+function items(list) {
+  return list === '' ? [] : list.split('\n');
 }

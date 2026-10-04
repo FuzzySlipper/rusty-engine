@@ -1722,6 +1722,11 @@ pub type NativeProductUpdate = unsafe extern "C" fn(
 ) -> i32;
 pub type NativeProductCompleteTimeline =
     unsafe extern "C" fn(*mut c_void, *const NativeProductTimelineCompletion, *mut u8) -> i32;
+/// Delivers the direct product UI claims admitted while the runtime is paused,
+/// once and in sequence order. The events borrow Rust storage for this call
+/// only; the product copies anything it keeps.
+pub type NativeProductPausedIntents =
+    unsafe extern "C" fn(*mut c_void, *const NativeInputEvent, usize) -> i32;
 /// Copies the Rust-owned lifecycle state after a host transition has committed.
 /// It is notification-only and cannot influence the committed transition.
 pub type NativeProductObserveRuntime =
@@ -1812,6 +1817,8 @@ pub struct NativeProductApi {
     pub complete_timeline: Option<
         unsafe extern "C" fn(*mut c_void, *const NativeProductTimelineCompletion, *mut u8) -> i32,
     >,
+    pub paused_intents:
+        Option<unsafe extern "C" fn(*mut c_void, *const NativeInputEvent, usize) -> i32>,
     pub execute_debug: Option<
         unsafe extern "C" fn(
             *mut c_void,

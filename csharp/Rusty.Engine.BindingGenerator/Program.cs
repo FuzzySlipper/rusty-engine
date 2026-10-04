@@ -477,6 +477,7 @@ internal static class Emit
         output.AppendLine("    void Restart();");
         output.AppendLine("    void Shutdown();");
         output.AppendLine("    bool CompleteTimeline(ProductTimelineCompletion completion) => false;");
+        output.AppendLine("    void HandlePausedIntents(ReadOnlySpan<ProductInputEvent> intents) { }");
         output.AppendLine("}");
         return output.ToString();
     }

@@ -183,6 +183,7 @@ public static unsafe class ProductBridge
             shutdown = &Shutdown,
             destroy = &Destroy,
             complete_timeline = &CompleteTimeline,
+            paused_intents = &PausedIntents,
             execute_debug = &ExecuteDebug,
             describe_debug = &DescribeDebug,
             release_debug_result = &ReleaseDebugResult,
@@ -306,6 +307,22 @@ public static unsafe class ProductBridge
                 CopyBytes(completion->provenance_correlation.bytes, completion->provenance_correlation.len),
                 CopyOptionalBytes(completion->provenance_detail.bytes, completion->provenance_detail.len));
             *accepted = Get(handle).Product.CompleteTimeline(value) ? (byte)1 : (byte)0;
+            return 1;
+        }
+        catch (Exception exception)
+        {
+            RecordCallError(handle, exception);
+            return 99;
+        }
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static int PausedIntents(void* handle, NativeInputEvent* events, nuint count)
+    {
+        try
+        {
+            if (count != 0 && events is null) return 2;
+            Get(handle).Product.HandlePausedIntents(CopyInput(events, count));
             return 1;
         }
         catch (Exception exception)

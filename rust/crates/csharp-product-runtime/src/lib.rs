@@ -350,6 +350,7 @@ struct LoadedProductApi {
     start: NativeProductAction,
     update: NativeProductUpdate,
     complete_timeline: NativeProductCompleteTimeline,
+    paused_intents: NativeProductPausedIntents,
     pause: NativeProductAction,
     resume: NativeProductAction,
     restart: NativeProductAction,
@@ -496,6 +497,7 @@ impl LoadedProductApi {
             start: required_function(product.start, "start")?,
             update: required_function(product.update, "update")?,
             complete_timeline: required_function(product.complete_timeline, "complete_timeline")?,
+            paused_intents: required_function(product.paused_intents, "paused_intents")?,
             pause: required_function(product.pause, "pause")?,
             resume: required_function(product.resume, "resume")?,
             restart: required_function(product.restart, "restart")?,
@@ -1862,6 +1864,42 @@ impl CsharpProductRuntime {
         self.update(facts)
     }
 
+    /// Hands the direct UI claims a paused runtime admitted to the product in
+    /// one call. Simulation stays paused: no step, time or Update is
+    /// admitted. A product failure faults the runtime as any callback does;
+    /// the second value says whether it did.
+    fn deliver_paused_intents(
+        &mut self,
+        intents: Vec<RuntimeIntentEnvelope>,
+    ) -> Result<(Vec<RuntimePublication>, bool), CsharpProductRuntimeError> {
+        if intents.is_empty() {
+            return Ok((Vec::new(), false));
+        }
+        let context = self.input_lane.context().clone();
+        let owned = intents
+            .iter()
+            .map(|envelope| native_intent_event(envelope, &context))
+            .collect::<Vec<_>>();
+        let events = owned
+            .iter()
+            .map(NativeInputOwned::as_native)
+            .collect::<Vec<_>>();
+        self.services.begin_call(ui_binding(&self.lifecycle));
+        let callback_result = call_paused_intents(&self.api, self.handle, &events);
+        let finished = self.finish_product_call(callback_result.err());
+        let mut outputs = finished.outputs;
+        let Some(failure) = finished.failure else {
+            return Ok((outputs, false));
+        };
+        self.fault_after_call(
+            "paused_intents",
+            Some(&failure),
+            finished.input_mapping_replacement,
+            &mut outputs,
+        )?;
+        Ok((outputs, true))
+    }
+
     /// Finishes the product call. Engine services keep everything the call
     /// did; nothing is rolled back. The failure is the product's exception,
     /// or an Engine error while settling the call's renderer work.
@@ -2695,14 +2733,14 @@ impl ProductHostRuntime for CsharpProductRuntime {
     }
 
     fn realtime_schedule_state(&self) -> ProductHostRuntimeScheduleState {
-        if self.playtest_time != playtest::TimeMode::Realtime {
-            return ProductHostRuntimeScheduleState::Paused;
-        }
         if !matches!(self.lifecycle.mode(), RuntimeMode::Realtime) {
             return ProductHostRuntimeScheduleState::Unsupported;
         }
         match self.lifecycle.state() {
             RuntimeState::Created => ProductHostRuntimeScheduleState::Created,
+            RuntimeState::Running if self.playtest_time != playtest::TimeMode::Realtime => {
+                ProductHostRuntimeScheduleState::Held
+            }
             RuntimeState::Running => ProductHostRuntimeScheduleState::Running,
             RuntimeState::Paused => ProductHostRuntimeScheduleState::Paused,
             RuntimeState::Faulted => ProductHostRuntimeScheduleState::Faulted,
@@ -2934,8 +2972,9 @@ impl ProductHostRuntime for CsharpProductRuntime {
             claim.renewed = std::time::Instant::now();
         }
         // A page keeps sending input while the product is paused (a menu's
-        // clears, say). It is admitted for the page's cursor and dropped:
-        // resume rebinds input, so the product never sees the paused interval.
+        // clears, say). It is admitted for the page's cursor; physical input
+        // is dropped, and resume rebinds input, so Update never sees the
+        // paused interval. Direct UI claims reach the product once, now.
         let paused = self.lifecycle.state() == RuntimeState::Paused;
         if !paused && self.lifecycle.state() != RuntimeState::Running {
             return Err(ProductHostRuntimeError::new_not_applied(
@@ -2970,11 +3009,13 @@ impl ProductHostRuntime for CsharpProductRuntime {
                 .with_runtime(self.binding()),
             );
         }
-        if paused {
-            // Consume the cursor only: no mapped intent or held key from the
-            // paused interval is kept for a later step.
-            self.input_lane.discard_admitted();
-        }
+        // No mapped intent or held key from the paused interval is kept for
+        // a later step.
+        let paused_intents = if paused {
+            self.input_lane.take_paused_direct_intents()
+        } else {
+            Vec::new()
+        };
         let native = if paused {
             Vec::new()
         } else {
@@ -3003,8 +3044,13 @@ impl ProductHostRuntime for CsharpProductRuntime {
             )
             .map_err(host_runtime_error);
         }
+        let (outputs, faulted) = self
+            .deliver_paused_intents(paused_intents)
+            .map_err(|error| self.runtime_error(error))?;
+        // A product failure rebinds input, so the lane's cursor is current.
         let next_input_sequence = receipt
             .next_sequence()
+            .filter(|_| !faulted)
             .map(CanonicalU64::new)
             .unwrap_or_else(|| self.next_input_sequence());
         let result = ProductHostInputResult::with_progress(
@@ -3018,7 +3064,7 @@ impl ProductHostRuntime for CsharpProductRuntime {
             self.readout(),
         )
         .map_err(host_runtime_error)?;
-        ProductHostRuntimeReceipt::new(result, Vec::new()).map_err(host_runtime_error)
+        ProductHostRuntimeReceipt::new(result, outputs).map_err(host_runtime_error)
     }
 
     fn recover_input_overflow(
@@ -4020,6 +4066,20 @@ fn call_complete_timeline(
             format!("C# product returned invalid timeline acceptance value {value}"),
         )),
     }
+}
+
+fn call_paused_intents(
+    api: &LoadedProductApi,
+    handle: *mut c_void,
+    events: &[NativeInputEvent],
+) -> Result<(), CsharpProductRuntimeError> {
+    // SAFETY: each event borrows owned storage that outlives this call; the
+    // C# product copies anything it retains.
+    let status = unsafe { (api.paused_intents)(handle, events.as_ptr(), events.len()) };
+    if let Err(fallback) = checked_status(status, "paused_intents") {
+        return Err(read_product_call_error(api, handle).unwrap_or(fallback));
+    }
+    Ok(())
 }
 
 fn observe_product_runtime(
@@ -5155,10 +5215,45 @@ mod tests {
         // SAFETY: the runtime supplies valid callback arguments for this
         // immediate generated-boundary fixture invocation.
         let args = unsafe { args.as_ref().expect("direct-input update arguments") };
-        // SAFETY: `events` is borrowed for this callback and has the declared
-        // count; the fixture copies fields and pointed-to bytes before return.
-        let events = unsafe { std::slice::from_raw_parts(args.events, args.event_count) };
-        let captured = events
+        DIRECT_INPUT_CALLBACK_EVENTS
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            // SAFETY: `events` is borrowed for this callback with the declared
+            // count.
+            .push(unsafe { capture_callback_events(args.events, args.event_count) });
+        // SAFETY: the fixture owns the callback result pointer.
+        unsafe { *result = NativeProductUpdateResult::None };
+        ABI_OK
+    }
+
+    static PAUSED_INTENT_CALLBACK_EVENTS: Mutex<Vec<Vec<DirectInputCallbackEvent>>> =
+        Mutex::new(Vec::new());
+    static PAUSED_INTENT_CALLBACK_STATUS: AtomicI32 = AtomicI32::new(ABI_OK);
+
+    unsafe extern "C" fn paused_intent_fixture(
+        _handle: *mut c_void,
+        events: *const NativeInputEvent,
+        count: usize,
+    ) -> i32 {
+        PAUSED_INTENT_CALLBACK_EVENTS
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            // SAFETY: `events` is borrowed for this callback with the declared
+            // count.
+            .push(unsafe { capture_callback_events(events, count) });
+        PAUSED_INTENT_CALLBACK_STATUS.load(Ordering::SeqCst)
+    }
+
+    /// # Safety
+    /// `events` points to `count` events whose byte slices stay valid for the
+    /// call; the fixture copies them before returning.
+    unsafe fn capture_callback_events(
+        events: *const NativeInputEvent,
+        count: usize,
+    ) -> Vec<DirectInputCallbackEvent> {
+        // SAFETY: guaranteed by the caller.
+        let events = unsafe { std::slice::from_raw_parts(events, count) };
+        events
             .iter()
             .map(|event| DirectInputCallbackEvent {
                 kind: event.kind,
@@ -5176,14 +5271,7 @@ mod tests {
                     copy_callback_bytes(event.payload_data, event.payload_data_len)
                 },
             })
-            .collect();
-        DIRECT_INPUT_CALLBACK_EVENTS
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .push(captured);
-        // SAFETY: the fixture owns the callback result pointer.
-        unsafe { *result = NativeProductUpdateResult::None };
-        ABI_OK
+            .collect()
     }
 
     unsafe extern "C" fn remapping_callback_fixture_create(
@@ -5594,6 +5682,7 @@ mod tests {
             start: drop_fixture_action,
             update: drop_fixture_update,
             complete_timeline: drop_fixture_timeline,
+            paused_intents: paused_intent_fixture,
             pause: drop_fixture_action,
             resume: drop_fixture_action,
             restart: drop_fixture_action,
@@ -7656,7 +7745,7 @@ mod tests {
     }
 
     #[test]
-    fn input_while_paused_is_admitted_and_never_reaches_the_product() {
+    fn physical_input_while_paused_is_admitted_and_never_reaches_the_product() {
         let _guard = DROP_FIXTURE_GATE
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
@@ -7690,6 +7779,164 @@ mod tests {
         assert_eq!(
             runtime.pending_inputs[0].clear_reason,
             NativeInputClearReason::ControlRevisionChange
+        );
+        drop(runtime);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    fn payload_callback_event(sequence: u64) -> DirectInputCallbackEvent {
+        DirectInputCallbackEvent {
+            kind: NativeInputEventKind::DirectProductPayload,
+            provenance: NativeInputProvenance::DirectUi,
+            phase: NativeInputPhase::DirectUi,
+            sequence,
+            intent: b"fixture.product.payload".to_vec(),
+            payload_contract: b"fixture.product.payload.v1".to_vec(),
+            payload_data: br#"{"exercise":true}"#.to_vec(),
+        }
+    }
+
+    #[test]
+    fn paused_direct_claims_reach_the_product_once_and_never_replay() {
+        let _guard = DIRECT_INPUT_FIXTURE_GATE
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let _drop_guard = DROP_FIXTURE_GATE
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let (mut runtime, root) = direct_input_fixture_runtime("paused-direct-claims");
+        runtime
+            .lifecycle(ProductHostLifecycleOperation::Start)
+            .unwrap();
+        runtime.admit_demand_step().unwrap();
+        let running_binding = input_binding(&runtime.lifecycle);
+        runtime
+            .lifecycle(ProductHostLifecycleOperation::Pause)
+            .unwrap();
+        DIRECT_INPUT_CALLBACK_EVENTS.lock().unwrap().clear();
+        PAUSED_INTENT_CALLBACK_EVENTS.lock().unwrap().clear();
+        let paused_readout = runtime.lifecycle.readout();
+        let pending_before = runtime.pending_inputs.len();
+
+        // One batch: a held key (gameplay input) and two claims around it.
+        let binding = input_binding(&runtime.lifecycle);
+        let key = RuntimeInputEvent::Physical(RuntimeInputIngress::new(
+            binding,
+            2,
+            standard_input_context(),
+            RuntimeInputFact::Key {
+                code: runtime_input_model::KeyboardControl::KeyW,
+                edge: runtime_input::PhysicalEdge::Pressed,
+            },
+        ));
+        let receipt = runtime
+            .input(ProductHostInputBatch::new(vec![
+                payload_intent(
+                    binding,
+                    1,
+                    "fixture.product.payload",
+                    "fixture.product.payload.v1",
+                )
+                .unwrap(),
+                key,
+                payload_intent(
+                    binding,
+                    3,
+                    "fixture.product.payload",
+                    "fixture.product.payload.v1",
+                )
+                .unwrap(),
+            ]))
+            .expect("paused claims are admitted");
+        assert!(receipt.result().is_accepted());
+        assert_eq!(
+            PAUSED_INTENT_CALLBACK_EVENTS.lock().unwrap().as_slice(),
+            &[vec![payload_callback_event(1), payload_callback_event(3)]],
+            "one call with the claims in order and no physical fact"
+        );
+        assert!(DIRECT_INPUT_CALLBACK_EVENTS.lock().unwrap().is_empty());
+        assert_eq!(
+            runtime.pending_inputs.len(),
+            pending_before,
+            "nothing queued for Update"
+        );
+        let readout = runtime.lifecycle.readout();
+        assert_eq!(readout.state(), RuntimeState::Paused);
+        assert_eq!(
+            readout.admitted_simulation_steps(),
+            paused_readout.admitted_simulation_steps()
+        );
+        assert_eq!(
+            readout.control_revision(),
+            paused_readout.control_revision()
+        );
+
+        // A claim from before the pause is stale: dropped, never delivered.
+        let stale = runtime
+            .input(ProductHostInputBatch::new(vec![payload_intent(
+                running_binding,
+                9,
+                "fixture.product.payload",
+                "fixture.product.payload.v1",
+            )
+            .unwrap()]))
+            .expect("a stale claim is answered");
+        assert_eq!(
+            serde_json::to_value(stale.result()).unwrap()["droppedCount"],
+            1
+        );
+        assert_eq!(PAUSED_INTENT_CALLBACK_EVENTS.lock().unwrap().len(), 1);
+
+        // Resume: Update sees only the clear, not the claims or the key.
+        runtime
+            .lifecycle(ProductHostLifecycleOperation::Resume)
+            .unwrap();
+        runtime.admit_demand_step().unwrap();
+        let updates = DIRECT_INPUT_CALLBACK_EVENTS.lock().unwrap().clone();
+        assert_eq!(updates.len(), 1);
+        assert!(updates[0]
+            .iter()
+            .all(|event| event.kind == NativeInputEventKind::Clear));
+        assert_eq!(PAUSED_INTENT_CALLBACK_EVENTS.lock().unwrap().len(), 1);
+        drop(runtime);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_failed_paused_claim_faults_the_runtime_with_a_fresh_input_binding() {
+        let _guard = DIRECT_INPUT_FIXTURE_GATE
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let _drop_guard = DROP_FIXTURE_GATE
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let (mut runtime, root) = direct_input_fixture_runtime("paused-claim-failure");
+        runtime
+            .lifecycle(ProductHostLifecycleOperation::Start)
+            .unwrap();
+        runtime
+            .lifecycle(ProductHostLifecycleOperation::Pause)
+            .unwrap();
+        let binding = input_binding(&runtime.lifecycle);
+        PAUSED_INTENT_CALLBACK_STATUS.store(99, Ordering::SeqCst);
+        let receipt = runtime.input(ProductHostInputBatch::new(vec![payload_intent(
+            binding,
+            1,
+            "fixture.product.payload",
+            "fixture.product.payload.v1",
+        )
+        .unwrap()]));
+        PAUSED_INTENT_CALLBACK_STATUS.store(ABI_OK, Ordering::SeqCst);
+        let receipt = receipt.expect("the claim was admitted before the product failed");
+        assert_eq!(runtime.lifecycle.state(), RuntimeState::Faulted);
+        let rebound = input_binding(&runtime.lifecycle);
+        assert_ne!(rebound, binding);
+        // The cursor is the rebound lane's, not the faulted binding's.
+        let result = serde_json::to_value(receipt.result()).unwrap();
+        assert_eq!(result["nextInputSequence"], "1");
+        assert_eq!(
+            result["binding"]["controlRevision"],
+            serde_json::to_value(runtime.binding().control_revision).unwrap()
         );
         drop(runtime);
         fs::remove_dir_all(root).unwrap();

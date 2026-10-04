@@ -566,6 +566,9 @@ pub enum ProductHostRuntimeScheduleState {
     Unsupported,
     Created,
     Running,
+    /// Running, with playtest time held: only debug commands advance it, and
+    /// queued input waits for the command that steps it.
+    Held,
     Paused,
     Faulted,
     Shutdown,
