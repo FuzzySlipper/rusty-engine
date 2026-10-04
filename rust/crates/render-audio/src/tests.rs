@@ -366,7 +366,7 @@ fn world_time_advanced_while_suspended_moves_every_sound_on() {
     run(&mut realizer, 0.05);
     let held = realizer.voice_cursor(AudioHandle::new(1)).expect("voice");
     // ...and the inspection advance runs 0.4 s of world time.
-    realizer.advance_held(0.4);
+    realizer.advance_held(0.4, &Clips::fixtures(), &NoEntityPositions);
     run(&mut realizer, 0.05);
     let advanced = realizer.voice_cursor(AudioHandle::new(1)).expect("voice");
     assert!(
@@ -375,7 +375,7 @@ fn world_time_advanced_while_suspended_moves_every_sound_on() {
     );
     // A further 1 s carries the one-shot (about 1 s long) past its end: it
     // completes at that world moment, while the device is still held.
-    realizer.advance_held(1.0);
+    realizer.advance_held(1.0, &Clips::fixtures(), &NoEntityPositions);
     run(&mut realizer, 0.05);
     realizer.refresh(&NoEntityPositions);
     assert_eq!(
@@ -399,6 +399,68 @@ fn world_time_advanced_while_suspended_moves_every_sound_on() {
         "resumed at {resumed}, expected about {}",
         looped_on + 0.1
     );
+}
+
+/// Renders after resume until `cursor` moves clearly past `from`, checking
+/// at every block that it never plays from before `from` (stale buffered or
+/// restarted audio) and never runs ahead of the audio rendered since. The
+/// decoder threads set the pace, so this waits for movement rather than for a
+/// fixed amount of it.
+fn plays_on_from(
+    realizer: &mut AudioRealizer<MockBackend>,
+    from: f64,
+    cursor: impl Fn(&AudioRealizer<MockBackend>) -> f64,
+    label: &str,
+) {
+    let mut rendered = 0.0;
+    let mut now = from;
+    while now < from + 0.1 && rendered < 10.0 {
+        run(realizer, 0.02);
+        rendered += 0.02;
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        now = cursor(realizer);
+        assert!(
+            now >= from - 1e-3 && now <= from + rendered + 0.03,
+            "{label}: at {now} after {rendered} s rendered from {from}"
+        );
+    }
+    assert!(
+        now >= from + 0.1,
+        "{label}: never resumed from {from} ({now})"
+    );
+}
+
+#[test]
+fn a_streaming_voice_resumes_from_its_held_advance_without_stale_audio() {
+    for hash in ["sha256:wav", "sha256:ogg", "sha256:opus"] {
+        let mut realizer = realizer();
+        let mut looped = descriptor(hash, true);
+        looped.clip.duration_seconds = Some(1.0);
+        apply(
+            &mut realizer,
+            &[restore(1, looped, AudioVoiceDesiredState::Playing, 0.0)],
+        );
+        for _ in 0..4 {
+            run(&mut realizer, 0.05);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        realizer.set_suspended(true);
+        run(&mut realizer, 0.05);
+        let held = realizer.voice_cursor(AudioHandle::new(1)).expect("voice");
+        realizer.advance_held(0.5, &Clips::fixtures(), &NoEntityPositions);
+        let target = realizer.voice_cursor(AudioHandle::new(1)).expect("voice");
+        assert!(
+            (target - (held + 0.5) % 1.0).abs() < 1e-6,
+            "{hash}: {held} -> {target}"
+        );
+        realizer.set_suspended(false);
+        plays_on_from(
+            &mut realizer,
+            target,
+            |realizer| realizer.voice_cursor(AudioHandle::new(1)).expect("voice"),
+            hash,
+        );
+    }
 }
 
 #[test]
@@ -799,13 +861,20 @@ fn a_soundtrack_started_while_held_waits_at_the_world_moment() {
     let started = position(&mut realizer, 0.5);
     assert!(started < 1e-6, "a held soundtrack does not play: {started}");
     // The inspection advance then admits 0.3 s of world time.
-    realizer.advance_held(0.3);
+    realizer.advance_held(0.3, &Clips::fixtures(), &NoEntityPositions);
     let advanced = position(&mut realizer, 0.3);
     assert!((advanced - 0.3).abs() < 1e-6, "{advanced}");
-    // Resumed, it plays on from that world moment.
+    // Resumed, it plays on from that world moment: forward from 0.3, never
+    // back to its start, and no further than the audio rendered since. The
+    // decoder thread sets the pace, so wait for movement rather than for a
+    // fixed amount of it.
     realizer.set_suspended(false);
-    let resumed = position(&mut realizer, 0.5);
-    assert!((0.5..1.0).contains(&resumed), "resumed at {resumed}");
+    plays_on_from(
+        &mut realizer,
+        advanced,
+        |realizer| realizer.soundtrack_position().expect("not stopped"),
+        "soundtrack",
+    );
     realizer.stop_soundtrack();
 }
 

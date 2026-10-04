@@ -76,7 +76,6 @@ impl Realizer {
         fn set_listener_pose(&mut self, position: [f32; 3], forward: [f32; 3], up: [f32; 3]);
         fn set_suspended(&mut self, suspended: bool);
         fn set_world_rate(&mut self, rate: f64);
-        fn advance_held(&mut self, world_seconds: f64);
         fn take_facts(&mut self) -> Vec<RealizedAudioFact>;
         fn retain_clips(&mut self, admitted: impl Fn(&str) -> bool);
     }
@@ -172,7 +171,14 @@ impl AudioOutput {
         let world_seconds = services.presentation_elapsed_seconds();
         let advanced = world_seconds - std::mem::replace(&mut self.world_seconds, world_seconds);
         if advanced > 0.0 && self.world.is_some_and(|(held, _)| held) {
-            self.realizer.advance_held(advanced);
+            let clips = |hash: &str| services.audio_clip_bytes(hash);
+            let entities = EngineEntities(services);
+            match &mut self.realizer {
+                Realizer::Device(realizer) => realizer.advance_held(advanced, &clips, &entities),
+                Realizer::Stream { realizer, .. } => {
+                    realizer.advance_held(advanced, &clips, &entities)
+                }
+            }
         }
         for output in outputs.iter() {
             if let RuntimePublication::ViewComposition(composition) = output {
