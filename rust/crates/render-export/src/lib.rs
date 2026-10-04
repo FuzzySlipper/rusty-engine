@@ -833,11 +833,15 @@ impl<'a> Writer<'a> {
                 descriptor.id
             ));
         }
+        let base = parameters
+            .and_then(|p| p.base_color)
+            .unwrap_or(descriptor.color);
         let texture_tint = parameters.map_or(descriptor.texture_tint, |p| p.texture_tint);
-        let emission_color = parameters.map_or(descriptor.emission_color, |p| p.emission_color);
-        let emission_intensity =
-            parameters.map_or(descriptor.emission_intensity, |p| p.emission_intensity);
-        let color = mul(mul(descriptor.color, texture_tint), tint);
+        let (emission_color, emission_intensity) = parameters.and_then(|p| p.emission).map_or(
+            (descriptor.emission_color, descriptor.emission_intensity),
+            |emission| (emission.color, emission.intensity),
+        );
+        let color = mul(mul(base, texture_tint), tint);
         let blend =
             matches!(descriptor.alpha_mode, MaterialAlphaModeDescriptor::Blend) || color[3] < 1.0;
         let mut material = json!({
@@ -1001,7 +1005,12 @@ impl<'a> Writer<'a> {
                                         [1.0; 4],
                                     )?
                                 }
-                                None => self.embedded_material(&model, asset, source),
+                                None => self.embedded_material(
+                                    &model,
+                                    asset,
+                                    source,
+                                    slot.and_then(|slot| parameters.get(&slot)),
+                                ),
                             };
                             materials.insert(source, written);
                             Some(written)
@@ -1092,17 +1101,31 @@ impl<'a> Writer<'a> {
         self.document.skins.len() - 1
     }
 
-    fn embedded_material(&mut self, model: &GlbModel, asset: &str, source: usize) -> usize {
+    /// An embedded material, with the node's instance parameters for its slot.
+    fn embedded_material(
+        &mut self,
+        model: &GlbModel,
+        asset: &str,
+        source: usize,
+        parameters: Option<&MaterialInstanceParameters>,
+    ) -> usize {
         let material = &model.materials[source];
+        let base = parameters
+            .and_then(|p| p.base_color)
+            .unwrap_or(material.base_color);
+        let color = parameters.map_or(base, |p| mul(base, p.texture_tint));
         let mut value = json!({
             "pbrMetallicRoughness": {
-                "baseColorFactor": material.base_color,
+                "baseColorFactor": color,
                 "metallicFactor": material.metallic,
                 "roughnessFactor": material.roughness,
             },
-            "emissiveFactor": material.emissive,
             "doubleSided": material.double_sided,
         });
+        match parameters.and_then(|p| p.emission) {
+            Some(emission) => self.emission(&mut value, emission.color, emission.intensity),
+            None => value["emissiveFactor"] = json!(material.emissive),
+        }
         match material.alpha {
             GlbAlpha::Opaque => {}
             GlbAlpha::Mask(cutoff) => {

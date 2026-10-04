@@ -3,6 +3,8 @@
 //! occlusion map darkens indirect light, and `KHR_texture_transform` tiles
 //! and shifts each slot. Each fixture is a camera-facing plane whose maps are
 //! two texels wide (left half, right half), admitted as the runtime admits it.
+//! Instance parameters (#9367) replace a slot's base colour and emission per
+//! instance while its textures still apply.
 
 mod support;
 
@@ -484,4 +486,135 @@ fn each_slot_reads_the_uv_set_its_tex_coord_names() {
         }))),
         green_red
     );
+}
+
+/// Two instances of one admitted plane GLB, side by side, each with its own
+/// instance parameters for the plane's material slot 0. Returns the frame.
+fn render_pair(
+    glb: Vec<u8>,
+    left: Option<MaterialInstanceParameters>,
+    right: Option<MaterialInstanceParameters>,
+) -> Vec<u8> {
+    let mut harness = Harness::new(RendererOptions {
+        default_world_lights: false,
+        ..RendererOptions::default()
+    });
+    let imported = import_animated_glb_asset(
+        &SourceUri::RelativePath("plane.glb".to_owned()),
+        &glb,
+        &ImportContext::default(),
+    );
+    let imported = imported
+        .assets
+        .unwrap_or_else(|| panic!("the fixture plane is admitted: {:?}", imported.diagnostics));
+    let asset = imported.animated_mesh;
+    assert_eq!(asset.embedded_material_slots[0].slot, 0);
+    let hash = asset.content_hash.clone().expect("content hash");
+    harness.resources.insert(
+        &format!(
+            "animated-mesh-resource/{}",
+            hash.trim_start_matches("sha256:")
+        ),
+        imported.runtime_resource_bytes,
+    );
+    let mut ops = vec![RenderDiff::DefineAnimatedMesh {
+        asset: asset.clone(),
+    }];
+    for (handle, x, parameters) in [(PLANE, -1.1, left), (PLANE + 10, 1.1, right)] {
+        ops.push(RenderDiff::CreateAnimatedMeshInstance {
+            handle: RenderHandle::new(handle),
+            parent: None,
+            instance: AnimatedMeshInstanceDescriptor {
+                inspection: AnimatedMeshInspection::default(),
+                asset: asset.asset.clone(),
+                transform: Transform {
+                    translation: [x, 0.0, 0.0],
+                    ..Transform::IDENTITY
+                },
+                visible: true,
+                material_overrides: Vec::new(),
+                playback: None,
+                metadata: RenderMetadata::default(),
+                layer: RenderLayer::Scene,
+            },
+        });
+        ops.push(RenderDiff::SetMaterialInstanceParameters {
+            handle: RenderHandle::new(handle),
+            slot: 0,
+            parameters,
+        });
+    }
+    harness.apply(ops);
+    harness.render(&camera([0.0, 0.0, 5.0], 0.0, 0.0)).1
+}
+
+/// `render_pair` columns over each plane's white (left) and black (right)
+/// texel.
+const PAIR_LEFT_WHITE: usize = 110;
+const PAIR_LEFT_BLACK: usize = 141;
+const PAIR_RIGHT_WHITE: usize = 178;
+const PAIR_RIGHT_BLACK: usize = 209;
+
+fn factors(
+    base_color: Option<[f32; 4]>,
+    emission: Option<([f32; 3], f32)>,
+) -> MaterialInstanceParameters {
+    MaterialInstanceParameters {
+        base_color,
+        texture_tint: [1.0; 4],
+        emission: emission.map(|(color, intensity)| MaterialInstanceEmission { color, intensity }),
+    }
+}
+
+#[test]
+fn instances_of_one_glb_replace_its_base_colour_factor_and_keep_its_texture() {
+    // Unlit, so the frame shows base colour times texture exactly.
+    let glb = plane_glb(
+        json!({
+            "pbrMetallicRoughness": {"baseColorFactor": [0.5, 0.5, 0.5, 1.0], "baseColorTexture": {"index": 0}},
+            "extensions": {"KHR_materials_unlit": {}},
+        }),
+        &[pair(WHITE, BLACK)],
+    );
+    let own = render_pair(glb.clone(), None, None);
+    let grey = pixel(&own, PAIR_LEFT_WHITE);
+    assert!(
+        grey.iter().all(|channel| (100..=200).contains(channel)),
+        "{grey:?}"
+    );
+
+    let frame = render_pair(
+        glb,
+        Some(factors(Some([1.0, 0.0, 0.0, 1.0]), None)),
+        Some(factors(Some([0.0, 1.0, 0.0, 1.0]), None)),
+    );
+    // Each instance draws its own colour where the texture is white...
+    assert_eq!(pixel(&frame, PAIR_LEFT_WHITE), [255, 0, 0]);
+    assert_eq!(pixel(&frame, PAIR_RIGHT_WHITE), [0, 255, 0]);
+    // ...and the texture's black texel still darkens it.
+    assert_eq!(pixel(&frame, PAIR_LEFT_BLACK), [0, 0, 0]);
+    assert_eq!(pixel(&frame, PAIR_RIGHT_BLACK), [0, 0, 0]);
+}
+
+#[test]
+fn instances_of_one_glb_replace_its_emission_and_keep_its_emissive_texture() {
+    let glb = plane_glb(
+        json!({
+            "pbrMetallicRoughness": {"baseColorFactor": [0.0, 0.0, 0.0, 1.0]},
+            "emissiveFactor": [1.0, 0.0, 0.0],
+            "emissiveTexture": {"index": 0},
+        }),
+        &[pair(WHITE, BLACK)],
+    );
+    // The left instance turns blue at full strength; the right keeps the
+    // GLB's red.
+    let frame = render_pair(glb, Some(factors(None, Some(([0.0, 0.0, 1.0], 1.0)))), None);
+    let blue = pixel(&frame, PAIR_LEFT_WHITE);
+    assert!(blue[2] > 240 && blue[0] < 10, "{blue:?}");
+    let red = pixel(&frame, PAIR_RIGHT_WHITE);
+    assert!(red[0] > 240 && red[2] < 10, "{red:?}");
+    // The emissive texture's black texel still masks both.
+    for x in [PAIR_LEFT_BLACK, PAIR_RIGHT_BLACK] {
+        assert!(luminance(&frame, x) < 30, "{:?}", pixel(&frame, x));
+    }
 }

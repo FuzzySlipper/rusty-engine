@@ -3605,43 +3605,8 @@ impl RuntimeAppearanceBridge {
             "animated mesh material bindings",
         )?;
         let staged = self.staged_mut()?;
-        let identity = staged
-            .state
-            .appearances
-            .get(&request.appearance.value)
-            .cloned()
-            .ok_or_else(|| {
-                CsharpEngineServicesError::new(
-                    "CSHARP_APPEARANCE_HANDLE",
-                    "appearance handle is not live",
-                )
-            })?;
-        let resource_handle = staged
-            .state
-            .animated_appearances
-            .get(&request.appearance.value)
-            .copied()
-            .ok_or_else(|| {
-                CsharpEngineServicesError::new(
-                    "CSHARP_ANIMATED_MESH_APPEARANCE",
-                    "material bindings require a live animated mesh appearance",
-                )
-            })?;
-        let embedded_slots = staged
-            .state
-            .render_resources
-            .get(resource_handle)
-            .and_then(CsharpRenderResource::animated_mesh)
-            .ok_or_else(|| {
-                CsharpEngineServicesError::new(
-                    "CSHARP_ANIMATION_RESOURCE_KIND",
-                    "animated appearance no longer has its admitted mesh resource",
-                )
-            })?
-            .embedded_material_slots
-            .iter()
-            .map(|binding| binding.slot)
-            .collect::<BTreeSet<_>>();
+        let (identity, embedded_slots) =
+            animated_appearance_slots(staged, request.appearance, "material bindings")?;
         let mut slots = BTreeSet::new();
         let mut material_overrides = Vec::with_capacity(bindings.len());
         let mut material_handles = BTreeSet::new();
@@ -3697,6 +3662,73 @@ impl RuntimeAppearanceBridge {
             .appearance_materials
             .insert(request.appearance.value, material_handles);
         Ok(())
+    }
+
+    /// Replaces the factor overrides of an animated appearance's embedded
+    /// material slots.
+    unsafe fn update_animated_mesh_material_factors(
+        &mut self,
+        request: &NativeAnimatedMeshMaterialFactorsRequest,
+    ) -> Result<(), CsharpEngineServicesError> {
+        let factors = borrowed_slice(
+            request.factors,
+            request.factors_len,
+            "animated mesh material factors",
+        )?;
+        let staged = self.staged_mut()?;
+        let (identity, embedded_slots) =
+            animated_appearance_slots(staged, request.appearance, "material factors")?;
+        let mut parameters = BTreeMap::new();
+        for factor in factors {
+            let slot = u16::try_from(factor.material_slot)
+                .ok()
+                .filter(|slot| embedded_slots.contains(slot))
+                .ok_or_else(|| {
+                    CsharpEngineServicesError::new(
+                        "CSHARP_ANIMATED_MESH_SLOT",
+                        "animated mesh material factors name an unbound embedded slot",
+                    )
+                })?;
+            let base = factor.base_color;
+            let emissive = factor.emissive_factor;
+            let value = MaterialInstanceParameters {
+                base_color: factor
+                    .override_base_color
+                    .then_some([base.r, base.g, base.b, base.a]),
+                texture_tint: [1.0; 4],
+                emission: factor
+                    .override_emission
+                    .then_some(MaterialInstanceEmission {
+                        color: [emissive.x, emissive.y, emissive.z],
+                        intensity: factor.emissive_strength,
+                    }),
+            };
+            value.validate().map_err(|_| {
+                CsharpEngineServicesError::new(
+                    "CSHARP_ANIMATED_MESH_FACTORS",
+                    "base colour and emissive factor channels are 0 to 1 and emissive strength is finite and not negative",
+                )
+            })?;
+            if parameters.insert(slot, value).is_some() {
+                return Err(CsharpEngineServicesError::new(
+                    "CSHARP_ANIMATED_MESH_SLOT",
+                    "animated mesh material factors must not repeat a slot",
+                ));
+            }
+        }
+        match staged.state.projector.appearance_mut(&identity) {
+            Some(Appearance::AnimatedMesh {
+                material_parameters: current,
+                ..
+            }) => {
+                *current = parameters;
+                Ok(())
+            }
+            _ => Err(CsharpEngineServicesError::new(
+                "CSHARP_ANIMATED_MESH_APPEARANCE",
+                "material factors require a live animated mesh appearance",
+            )),
+        }
     }
 
     fn create_primitive(
@@ -5191,6 +5223,7 @@ impl RuntimeAppearanceBridge {
             asset: asset.asset,
             material_overrides: Vec::new(),
             playback: None,
+            material_parameters: BTreeMap::new(),
         })?;
         self.staged_mut()?
             .state
@@ -8295,6 +8328,53 @@ pub(crate) unsafe extern "C" fn set_mesh_inspection(
         })
     })
 }
+/// The projector identity and embedded material slots of a live animated
+/// mesh appearance; `purpose` names the request in the refusal.
+fn animated_appearance_slots(
+    staged: &RuntimeAppearanceCall,
+    appearance: NativeAppearanceHandle,
+    purpose: &str,
+) -> Result<(String, BTreeSet<u16>), CsharpEngineServicesError> {
+    let identity = staged
+        .state
+        .appearances
+        .get(&appearance.value)
+        .cloned()
+        .ok_or_else(|| {
+            CsharpEngineServicesError::new(
+                "CSHARP_APPEARANCE_HANDLE",
+                "appearance handle is not live",
+            )
+        })?;
+    let resource_handle = staged
+        .state
+        .animated_appearances
+        .get(&appearance.value)
+        .copied()
+        .ok_or_else(|| {
+            CsharpEngineServicesError::new(
+                "CSHARP_ANIMATED_MESH_APPEARANCE",
+                format!("{purpose} require a live animated mesh appearance"),
+            )
+        })?;
+    let embedded_slots = staged
+        .state
+        .render_resources
+        .get(resource_handle)
+        .and_then(CsharpRenderResource::animated_mesh)
+        .ok_or_else(|| {
+            CsharpEngineServicesError::new(
+                "CSHARP_ANIMATION_RESOURCE_KIND",
+                "animated appearance no longer has its admitted mesh resource",
+            )
+        })?
+        .embedded_material_slots
+        .iter()
+        .map(|binding| binding.slot)
+        .collect();
+    Ok((identity, embedded_slots))
+}
+
 pub(crate) unsafe extern "C" fn update_animated_mesh_materials(
     context: *mut c_void,
     request: *const NativeAnimatedMeshMaterialUpdateRequest,
@@ -8306,6 +8386,20 @@ pub(crate) unsafe extern "C" fn update_animated_mesh_materials(
         }
         animation_void(context, |bridge| unsafe {
             bridge.update_animated_mesh_materials(&*request)
+        })
+    })
+}
+pub(crate) unsafe extern "C" fn update_animated_mesh_material_factors(
+    context: *mut c_void,
+    request: *const NativeAnimatedMeshMaterialFactorsRequest,
+    operation_error: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    appearance_operation(context, operation_error, || {
+        if context.is_null() || request.is_null() {
+            return 0;
+        }
+        animation_void(context, |bridge| unsafe {
+            bridge.update_animated_mesh_material_factors(&*request)
         })
     })
 }
@@ -8578,6 +8672,7 @@ pub(crate) fn animation_api(bridge: &mut RuntimeAppearanceBridge) -> NativeAnima
         replace_animated_mesh_appearance,
         set_mesh_inspection,
         update_animated_mesh_materials,
+        update_animated_mesh_material_factors,
         destroy_appearance: destroy_animated_mesh_appearance,
         create_instance: create_animation_instance,
         destroy_instance: destroy_animation_instance,
@@ -12162,6 +12257,64 @@ fn shade(surface: Surface) -> vec4<f32> {
         bridge
             .destroy_material(material)
             .expect("cleared material is releasable");
+
+        let factor = |material_slot, base: f32| NativeMeshMaterialFactors {
+            material_slot,
+            override_base_color: true,
+            base_color: NativeColor {
+                r: base,
+                g: 0.25,
+                b: 0.0,
+                a: 1.0,
+            },
+            override_emission: false,
+            emissive_factor: NativeVec3::default(),
+            emissive_strength: 0.0,
+        };
+        let update = |bridge: &mut RuntimeAppearanceBridge,
+                      factors: &[NativeMeshMaterialFactors]| unsafe {
+            bridge.update_animated_mesh_material_factors(
+                &NativeAnimatedMeshMaterialFactorsRequest {
+                    appearance,
+                    factors: factors.as_ptr(),
+                    factors_len: factors.len(),
+                },
+            )
+        };
+        update(&mut bridge, &[factor(0, 0.75)]).expect("slot 0 factors");
+        let identity = bridge.staged_ref().unwrap().state.appearances[&appearance.value].clone();
+        let parameters = match bridge
+            .staged_ref()
+            .unwrap()
+            .state
+            .projector
+            .appearance(&identity)
+        {
+            Some(Appearance::AnimatedMesh {
+                material_parameters,
+                ..
+            }) => material_parameters.clone(),
+            _ => panic!("animated appearance"),
+        };
+        assert_eq!(parameters[&0].base_color, Some([0.75, 0.25, 0.0, 1.0]));
+        assert_eq!(
+            parameters[&0].emission, None,
+            "the GLB's own emission stays"
+        );
+        for (factors, code) in [
+            (vec![factor(1, 0.5)], "CSHARP_ANIMATED_MESH_SLOT"),
+            (vec![factor(0, 1.5)], "CSHARP_ANIMATED_MESH_FACTORS"),
+            (
+                vec![factor(0, 0.5), factor(0, 0.5)],
+                "CSHARP_ANIMATED_MESH_SLOT",
+            ),
+        ] {
+            assert_eq!(
+                update(&mut bridge, &factors).expect_err("refused").code(),
+                code
+            );
+        }
+        update(&mut bridge, &[]).expect("clear factors");
     }
 
     #[test]

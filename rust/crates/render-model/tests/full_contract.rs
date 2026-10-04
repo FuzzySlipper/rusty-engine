@@ -248,9 +248,12 @@ fn every_retained_operation_frame() -> RenderFrameDiff {
             handle: RenderHandle::new(3),
             slot: 0,
             parameters: Some(MaterialInstanceParameters {
+                base_color: None,
                 texture_tint: [1.0, 0.5, 0.5, 1.0],
-                emission_color: [1.0, 0.0, 0.0],
-                emission_intensity: 0.5,
+                emission: Some(MaterialInstanceEmission {
+                    color: [1.0, 0.0, 0.0],
+                    intensity: 0.5,
+                }),
             }),
         },
         RenderDiff::CreateAnimatedMeshInstance {

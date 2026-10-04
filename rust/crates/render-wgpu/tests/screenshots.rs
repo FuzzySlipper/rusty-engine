@@ -455,9 +455,12 @@ fn textured_static_meshes_take_the_neutral_rig_and_instance_parameters() {
             handle: RenderHandle::new(12),
             slot: 0,
             parameters: Some(MaterialInstanceParameters {
+                base_color: None,
                 texture_tint: [0.3, 0.3, 1.0, 1.0],
-                emission_color: [0.1, 0.1, 0.6],
-                emission_intensity: 1.0,
+                emission: Some(MaterialInstanceEmission {
+                    color: [0.1, 0.1, 0.6],
+                    intensity: 1.0,
+                }),
             }),
         },
     ]);

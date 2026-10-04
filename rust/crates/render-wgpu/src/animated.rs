@@ -30,8 +30,8 @@ use glam::{Mat4, Quat, Vec3};
 use render_model::{
     AnimatedMeshAsset, AnimatedMeshClipPose, AnimatedMeshInspection,
     AnimatedMeshInstanceDescriptor, AnimatedMeshPlaybackCommand, AnimatedMeshPlaybackTimeline,
-    AnimationLoopMode, MaterialAlphaModeDescriptor, MaterialUvStrategy, RenderHandle,
-    RenderMaterialDescriptor,
+    AnimationLoopMode, MaterialAlphaModeDescriptor, MaterialInstanceParameters, MaterialUvStrategy,
+    RenderHandle, RenderMaterialDescriptor,
 };
 
 use render_presentation::{AnimationControllerProjectionState, AnimationProjectionOp};
@@ -216,6 +216,9 @@ pub(crate) struct AnimatedInstance {
     skinned: HashMap<(u32, u32), GpuMesh>,
     /// The GLB node each of the node row's parts draws, in part order.
     part_nodes: Vec<usize>,
+    /// Per material slot values over the slot's material
+    /// (`SetMaterialInstanceParameters`).
+    pub(crate) parameters: BTreeMap<u16, MaterialInstanceParameters>,
 }
 
 /// Resource identity of an admitted GLB (`sha256:<hex>` names `<kind>/<hex>`).
@@ -663,6 +666,7 @@ impl Renderer {
                 posed_at: f64::NAN,
                 skinned: HashMap::new(),
                 part_nodes: Vec::new(),
+                parameters: BTreeMap::new(),
             },
         );
         if let Some(playback) = &descriptor.playback {
@@ -1247,10 +1251,11 @@ impl Renderer {
 
     /// The parts of an animated instance's node, in draw order: each GLB node
     /// with a mesh, each primitive, with its material binding.
+    /// Each drawn primitive's mesh, index count, material and material slot.
     pub(crate) fn animated_parts(
         &mut self,
         handle: RenderHandle,
-    ) -> Vec<(crate::tables::MeshRef, u32, MaterialRef)> {
+    ) -> Vec<(crate::tables::MeshRef, u32, MaterialRef, Option<u16>)> {
         let Some(instance) = self.tables.animated.get(&handle) else {
             return Vec::new();
         };
@@ -1287,13 +1292,16 @@ impl Renderer {
                         primitive_index as u32,
                     )
                 };
+                let slot = primitive.material.and_then(|glb_material| {
+                    asset
+                        .slots
+                        .iter()
+                        .find(|(_, source)| **source == glb_material)
+                        .map(|(slot, _)| *slot)
+                });
                 let material = match primitive.material {
                     Some(glb_material) => {
-                        let overridden = asset
-                            .slots
-                            .iter()
-                            .find(|(_, source)| **source == glb_material)
-                            .and_then(|(slot, _)| overrides.get(slot));
+                        let overridden = slot.and_then(|slot| overrides.get(&slot));
                         let id = overridden
                             .cloned()
                             .unwrap_or_else(|| asset.materials[glb_material].clone());
@@ -1307,7 +1315,7 @@ impl Renderer {
                     }
                     None => MaterialRef::LitFallback,
                 };
-                parts.push((mesh_ref, primitive.indices.len() as u32, material));
+                parts.push((mesh_ref, primitive.indices.len() as u32, material, slot));
                 part_nodes.push(node_index);
             }
         }

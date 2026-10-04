@@ -14,9 +14,9 @@ use render_model::{
 use serde::Deserialize;
 
 use crate::appearance::{
-    append_node_updates, changed_shared_ids, create_node, light_kind, requires_recreate,
-    resource_diffs, validate_appearance, validate_resources, NodeUpdate, NodeValues,
-    ResourceSnapshot,
+    append_material_parameters, append_node_updates, changed_shared_ids, create_node, light_kind,
+    requires_recreate, resource_diffs, validate_appearance, validate_resources, NodeUpdate,
+    NodeValues, ResourceSnapshot,
 };
 use crate::{
     Appearance, AppearanceProjectionError, AppearanceResources, HandleAllocationError,
@@ -751,6 +751,18 @@ impl RuntimeAppearanceProjector {
                 object.values(),
                 object_metadata(id, &object.appearance_id),
             ));
+            if let Appearance::AnimatedMesh {
+                material_parameters,
+                ..
+            } = &object.values().appearance
+            {
+                append_material_parameters(
+                    &mut operations,
+                    handle,
+                    &BTreeMap::new(),
+                    material_parameters,
+                );
+            }
             if let Some(joint) = &object.joint {
                 joints.push(RenderDiff::SetParentJoint {
                     handle,
@@ -1094,6 +1106,7 @@ mod tests {
                         asset: "mesh-animation/character".to_owned(),
                         material_overrides: Vec::new(),
                         playback: None,
+                        material_parameters: BTreeMap::new(),
                     },
                 ),
             ]),
@@ -1157,6 +1170,11 @@ mod tests {
                 RenderDiff::UpdateLight { .. } => "update-light",
                 RenderDiff::SetParentJoint { .. } => "joint",
                 RenderDiff::SetAnimatedMeshInspection { .. } => "inspection",
+                RenderDiff::SetMaterialInstanceParameters {
+                    parameters: Some(_),
+                    ..
+                } => "parameters",
+                RenderDiff::SetMaterialInstanceParameters { .. } => "clear-parameters",
                 RenderDiff::DefineMaterial { .. } => "define-material",
                 RenderDiff::DefineStaticMesh { .. } => "define-mesh",
                 RenderDiff::DefineAnimatedMesh { .. } => "define-animated",
@@ -1463,6 +1481,46 @@ mod tests {
             .retain(|mesh| mesh.asset != "mesh/triangle");
         assert_eq!(kinds(&projector.reconcile().unwrap()), ["release-mesh"]);
         assert!(projector.reconcile().unwrap().is_empty());
+    }
+
+    #[test]
+    fn material_parameters_follow_creation_and_update_in_place() {
+        let parameters = |red: f32| render_model::MaterialInstanceParameters {
+            base_color: Some([red, 0.0, 0.0, 1.0]),
+            texture_tint: [1.0; 4],
+            emission: None,
+        };
+        let mut projector = projector();
+        if let Some(Appearance::AnimatedMesh {
+            material_parameters,
+            ..
+        }) = projector.appearance_mut(BODY)
+        {
+            material_parameters.insert(0, parameters(1.0));
+        }
+        let body = RuntimeAppearanceFact {
+            appearance: BODY,
+            ..fact(1)
+        };
+        // A new instance takes the appearance's parameters after it exists.
+        let frame = projector.apply(&[body], &[]).unwrap();
+        assert_eq!(kinds(&frame), ["create-animated", "parameters"]);
+        let handle = projector.object_handle(1);
+
+        let set = |projector: &mut RuntimeAppearanceProjector, value| {
+            if let Some(Appearance::AnimatedMesh {
+                material_parameters,
+                ..
+            }) = projector.appearance_mut(BODY)
+            {
+                *material_parameters = value;
+            }
+        };
+        set(&mut projector, BTreeMap::from([(0, parameters(0.5))]));
+        assert_eq!(kinds(&projector.reconcile().unwrap()), ["parameters"]);
+        set(&mut projector, BTreeMap::new());
+        assert_eq!(kinds(&projector.reconcile().unwrap()), ["clear-parameters"]);
+        assert_eq!(projector.object_handle(1), handle, "updated in place");
     }
 
     #[test]

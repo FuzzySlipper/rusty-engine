@@ -8,10 +8,10 @@ use std::{
 
 use render_model::{
     AnimatedMeshAsset, AnimatedMeshInstanceDescriptor, AnimatedMeshPlaybackCommand, Geometry,
-    LightDescriptor, Material, MeshMaterialSlot, RenderDiff, RenderHandle, RenderLayer,
-    RenderMaterialDescriptor, RenderMetadata, RenderNode, ShaderDescriptor, SpriteAtlasDescriptor,
-    SpriteInstanceDescriptor, StaticMeshAsset, StaticMeshInstanceDescriptor, TextureDescriptor,
-    Transform,
+    LightDescriptor, Material, MaterialInstanceParameters, MeshMaterialSlot, RenderDiff,
+    RenderHandle, RenderLayer, RenderMaterialDescriptor, RenderMetadata, RenderNode,
+    ShaderDescriptor, SpriteAtlasDescriptor, SpriteInstanceDescriptor, StaticMeshAsset,
+    StaticMeshInstanceDescriptor, TextureDescriptor, Transform,
 };
 
 use crate::HandleAllocationError;
@@ -42,6 +42,10 @@ pub enum Appearance {
         asset: String,
         material_overrides: Vec<MeshMaterialSlot>,
         playback: Option<AnimatedMeshPlaybackCommand>,
+        /// Per embedded material slot values over the slot's material. A
+        /// change updates the instance in place.
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        material_parameters: BTreeMap<u16, MaterialInstanceParameters>,
     },
     Sprite {
         sprite: SpriteInstanceDescriptor,
@@ -276,6 +280,7 @@ pub(crate) fn validate_appearance(
             material_overrides,
             playback,
             inspection,
+            material_parameters,
         } => {
             if !resources.animated_meshes.contains_key(asset) {
                 return Err(AppearanceProjectionError::MissingAnimatedMesh {
@@ -284,6 +289,12 @@ pub(crate) fn validate_appearance(
                 });
             }
             validate_material_references(asset, material_overrides, &resources.materials)?;
+            if let Some((&slot, _)) = material_parameters
+                .iter()
+                .find(|(_, parameters)| parameters.validate().is_err())
+            {
+                return Err(AppearanceProjectionError::InvalidMaterialParameters { id, slot });
+            }
             AnimatedMeshInstanceDescriptor {
                 inspection: inspection.clone(),
                 asset: asset.clone(),
@@ -515,6 +526,7 @@ pub(crate) fn create_node(
             material_overrides,
             playback,
             inspection,
+            ..
         } => RenderDiff::CreateAnimatedMeshInstance {
             handle,
             parent,
@@ -540,6 +552,32 @@ pub(crate) fn create_node(
                 parent,
                 sprite,
             }
+        }
+    }
+}
+
+/// The parameter operations that take a node's material slots from
+/// `previous` to `next`.
+pub(crate) fn append_material_parameters(
+    operations: &mut Vec<RenderDiff>,
+    handle: RenderHandle,
+    previous: &BTreeMap<u16, MaterialInstanceParameters>,
+    next: &BTreeMap<u16, MaterialInstanceParameters>,
+) {
+    for slot in previous.keys().filter(|slot| !next.contains_key(slot)) {
+        operations.push(RenderDiff::SetMaterialInstanceParameters {
+            handle,
+            slot: *slot,
+            parameters: None,
+        });
+    }
+    for (slot, parameters) in next {
+        if previous.get(slot) != Some(parameters) {
+            operations.push(RenderDiff::SetMaterialInstanceParameters {
+                handle,
+                slot: *slot,
+                parameters: Some(*parameters),
+            });
         }
     }
 }
@@ -583,12 +621,14 @@ pub(crate) fn append_node_updates(
                 material_overrides: old_slots,
                 playback: old_playback,
                 inspection: old_inspection,
+                material_parameters: old_parameters,
                 ..
             },
             Appearance::AnimatedMesh {
                 material_overrides: new_slots,
                 playback: new_playback,
                 inspection: new_inspection,
+                material_parameters: new_parameters,
                 ..
             },
         ) => {
@@ -611,6 +651,7 @@ pub(crate) fn append_node_updates(
                     inspection: new_inspection.clone(),
                 });
             }
+            append_material_parameters(operations, handle, old_parameters, new_parameters);
             if old_playback != new_playback {
                 operations.push(RenderDiff::SetAnimatedMeshPlayback {
                     handle,
@@ -764,6 +805,10 @@ pub enum AppearanceProjectionError {
         id: u64,
         source: render_model::AnimatedMeshInstanceError,
     },
+    InvalidMaterialParameters {
+        id: u64,
+        slot: u16,
+    },
     InvalidSprite {
         id: u64,
         source: render_model::SpriteError,
@@ -811,6 +856,7 @@ mod tests {
                 material_overrides: Vec::new(),
                 playback: None,
                 inspection: Default::default(),
+                material_parameters: BTreeMap::new(),
             },
         ];
         for appearance in &meshes {

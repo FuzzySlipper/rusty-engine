@@ -903,6 +903,11 @@ pub type NativeUpdateAnimatedMeshMaterials = unsafe extern "C" fn(
     *const NativeAnimatedMeshMaterialUpdateRequest,
     *mut crate::NativeOperationErrorReceipt,
 ) -> i32;
+pub type NativeUpdateAnimatedMeshMaterialFactors = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeAnimatedMeshMaterialFactorsRequest,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
 pub type NativeCreateAnimationInstance = unsafe extern "C" fn(
     *mut c_void,
     *const NativeAnimationInstanceRequest,
@@ -1507,6 +1512,7 @@ pub struct NativeAnimationApi {
     pub replace_animated_mesh_appearance: NativeReplaceAnimatedMeshAppearance,
     pub set_mesh_inspection: NativeSetAnimatedMeshInspection,
     pub update_animated_mesh_materials: NativeUpdateAnimatedMeshMaterials,
+    pub update_animated_mesh_material_factors: NativeUpdateAnimatedMeshMaterialFactors,
     pub destroy_appearance: NativeDestroyAppearance,
     pub create_instance: NativeCreateAnimationInstance,
     pub destroy_instance: NativeDestroyAnimationInstance,

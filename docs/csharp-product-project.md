@@ -367,7 +367,28 @@ re-admit current bytes when restoring an editor selection.
 The animated-mesh path preserves materials, textures, skins and clips;
 `Animation.ReadMeshInfo(resource)` exposes admitted bounds and
 material/joint/clip counts; `ReadClips(resource)` copies each clip ID, name and
-duration. Use the ordinary instance/playback APIs for animation. Dispose
+duration.
+
+`Animation.UpdateAnimatedMeshMaterialFactors` gives one appearance its own
+factors for embedded material slots, keeping the slots' textures, maps and
+texture transforms. Each `MeshMaterialFactors` names a slot and replaces its
+`baseColorFactor` (linear RGBA, 0 to 1) and/or its `emissiveFactor` (0 to 1)
+and emissive strength (0 or more). The textures still multiply them. Several
+appearances of one resource each carry their own set, so one GLB can take
+every palette a level uses without a second decoded copy. Each call replaces
+the appearance's whole set; an empty set restores the GLB's own factors. A
+change updates the drawn instance in place. A slot marked
+`KHR_materials_unlit` draws no emission, overridden or not.
+
+```csharp
+engine.Animation.UpdateAnimatedMeshMaterialFactors(new(appearance, new MeshMaterialFactors[]
+{
+    new(MaterialSlot: 0, OverrideBaseColor: true, BaseColor: new(0.8f, 0.3f, 0.2f, 1),
+        OverrideEmission: true, EmissiveFactor: new(1, 0.6f, 0.2f), EmissiveStrength: 2),
+}));
+```
+
+Use the ordinary instance/playback APIs for animation. Dispose
 instances, publish the snapshot without their appearances, then dispose
 appearances and resources. Direct-instance teardown also accepts an already
 published removal snapshot and sends no stop to that removed target. The source

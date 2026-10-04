@@ -5,7 +5,8 @@
 //! renderer stays an implementation detail behind the generated API.
 
 use crate::{
-    NativeAppearanceHandle, NativeMeshMaterialBinding, NativeRenderResourceHandle, NativeUtf8Slice,
+    NativeAppearanceHandle, NativeColor, NativeMeshMaterialBinding, NativeRenderResourceHandle,
+    NativeUtf8Slice, NativeVec3,
 };
 
 #[repr(C)]
@@ -188,9 +189,6 @@ pub struct NativeAnimatedMeshAppearanceRequest {
     pub resource: NativeRenderResourceHandle,
 }
 
-/// Replaces the complete Engine-owned material selection for one animated
-/// appearance. Bindings name importer-derived embedded GLB slots and retain
-/// the selected Engine material handles for ordinary lifetime checks.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeAnimatedMeshInspectionRequest {
@@ -201,12 +199,45 @@ pub struct NativeAnimatedMeshInspectionRequest {
     pub bounds_request: u32,
 }
 
+/// Replaces the complete Engine-owned material selection for one animated
+/// appearance. Bindings name importer-derived embedded GLB slots and retain
+/// the selected Engine material handles for ordinary lifetime checks.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeAnimatedMeshMaterialUpdateRequest {
     pub appearance: NativeAppearanceHandle,
     pub bindings: *const NativeMeshMaterialBinding,
     pub bindings_len: usize,
+}
+
+/// New factors for one embedded GLB material slot of one appearance. The
+/// slot keeps its textures, maps and texture transforms: its base-colour
+/// texture multiplies `base_color`, and its emissive texture multiplies the
+/// emission.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeMeshMaterialFactors {
+    pub material_slot: u32,
+    /// Replace the slot's `baseColorFactor` with `base_color` (linear RGBA,
+    /// each 0 to 1).
+    pub override_base_color: bool,
+    pub base_color: NativeColor,
+    /// Replace the slot's `emissiveFactor` (each 0 to 1) and emissive
+    /// strength (finite, not negative).
+    pub override_emission: bool,
+    pub emissive_factor: NativeVec3,
+    pub emissive_strength: f32,
+}
+
+/// Replaces the complete set of factor overrides for one animated (GLB)
+/// appearance; an empty set restores the GLB's own factors. Appearances of
+/// one resource each carry their own set.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeAnimatedMeshMaterialFactorsRequest {
+    pub appearance: NativeAppearanceHandle,
+    pub factors: *const NativeMeshMaterialFactors,
+    pub factors_len: usize,
 }
 
 /// Retained instance identity tied to one product object and one animated

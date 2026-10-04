@@ -584,20 +584,45 @@ pub enum MaterialDescriptorError {
     VoxelTextureMismatch,
 }
 
+/// One node's values for one material slot, over the slot's material. The
+/// material's textures and maps stay as they are.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct MaterialInstanceParameters {
+    /// Replaces the material's colour (for an embedded glTF material, its
+    /// `baseColorFactor`). The base-colour texture still multiplies it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_color: Option<[f32; 4]>,
+    /// Multiplies the colour, after `base_color`.
     pub texture_tint: [f32; 4],
-    pub emission_color: [f32; 3],
-    pub emission_intensity: f32,
+    /// Replaces the material's emission (for an embedded glTF material, its
+    /// `emissiveFactor` and emissive strength). The emissive texture still
+    /// multiplies it. `None` keeps the material's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub emission: Option<MaterialInstanceEmission>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MaterialInstanceEmission {
+    pub color: [f32; 3],
+    pub intensity: f32,
 }
 
 impl MaterialInstanceParameters {
     pub fn validate(self) -> Result<(), MaterialParametersError> {
-        if !valid_color(self.texture_tint) || !valid_color(self.emission_color) {
+        if !valid_color(self.texture_tint)
+            || !self.base_color.is_none_or(valid_color)
+            || !self
+                .emission
+                .is_none_or(|emission| valid_color(emission.color))
+        {
             return Err(MaterialParametersError::InvalidColor);
         }
-        if !self.emission_intensity.is_finite() || self.emission_intensity < 0.0 {
+        if self
+            .emission
+            .is_some_and(|emission| !emission.intensity.is_finite() || emission.intensity < 0.0)
+        {
             return Err(MaterialParametersError::InvalidEmissionIntensity);
         }
         Ok(())

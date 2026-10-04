@@ -329,10 +329,18 @@ impl Renderer {
                 slot,
                 parameters,
             } => {
-                if let NodeKind::StaticMesh {
-                    parameters: table, ..
-                } = &mut self.node_mut(*handle)?.kind
-                {
+                let table = match &mut self.node_mut(*handle)?.kind {
+                    NodeKind::StaticMesh {
+                        parameters: table, ..
+                    } => Some(table),
+                    NodeKind::AnimatedMesh(_) => self
+                        .tables
+                        .animated
+                        .get_mut(handle)
+                        .map(|instance| &mut instance.parameters),
+                    _ => None,
+                };
+                if let Some(table) = table {
                     match parameters {
                         Some(parameters) => table.insert(*slot, *parameters),
                         None => table.remove(slot),
@@ -599,19 +607,9 @@ impl Renderer {
                             crate::tables::named(&self.tables.names, &self.tables.materials, id)
                         }) {
                             Some((id, row)) => {
-                                let descriptor = &row.descriptor;
-                                let override_ = parameters.get(slot);
-                                let tint =
-                                    override_.map_or(descriptor.texture_tint, |p| p.texture_tint);
-                                let (emission_color, intensity) = override_.map_or(
-                                    (descriptor.emission_color, descriptor.emission_intensity),
-                                    |p| (p.emission_color, p.emission_intensity),
-                                );
-                                (
-                                    MaterialRef::Retained(id),
-                                    mul(descriptor.color, tint),
-                                    emission(emission_color, intensity),
-                                )
+                                let (color, emission) =
+                                    instance_colors(&row.descriptor, parameters.get(slot));
+                                (MaterialRef::Retained(id), color, emission)
                             }
                             None => (MaterialRef::LitFallback, slot_color(*slot), [0.0; 3]),
                         };
@@ -679,15 +677,18 @@ impl Renderer {
                     .animated
                     .get(&handle)
                     .is_some_and(|instance| instance.inspection.wireframe);
-                for (mesh, index_count, material) in animated_parts {
+                let parameters = self
+                    .tables
+                    .animated
+                    .get(&handle)
+                    .map(|instance| &instance.parameters);
+                for (mesh, index_count, material, slot) in animated_parts {
                     let (color, emission) = match &material {
                         MaterialRef::Retained(id) => match self.tables.materials.get(*id) {
-                            Some(row) => (
-                                mul(row.descriptor.color, row.descriptor.texture_tint),
-                                emission(
-                                    row.descriptor.emission_color,
-                                    row.descriptor.emission_intensity,
-                                ),
+                            Some(row) => instance_colors(
+                                &row.descriptor,
+                                slot.zip(parameters)
+                                    .and_then(|(slot, table)| table.get(&slot)),
                             ),
                             None => ([1.0; 4], [0.0; 3]),
                         },
@@ -1660,6 +1661,23 @@ fn mul(a: [f32; 4], b: [f32; 4]) -> [f32; 4] {
 
 fn emission(color: [f32; 3], intensity: f32) -> [f32; 3] {
     color.map(|component| component * intensity)
+}
+
+/// A part's colour and emission: its material's, with a node's instance
+/// parameters for the slot over them.
+fn instance_colors(
+    descriptor: &RenderMaterialDescriptor,
+    parameters: Option<&render_model::MaterialInstanceParameters>,
+) -> ([f32; 4], [f32; 3]) {
+    let base = parameters
+        .and_then(|p| p.base_color)
+        .unwrap_or(descriptor.color);
+    let tint = parameters.map_or(descriptor.texture_tint, |p| p.texture_tint);
+    let (color, intensity) = parameters.and_then(|p| p.emission).map_or(
+        (descriptor.emission_color, descriptor.emission_intensity),
+        |emission| (emission.color, emission.intensity),
+    );
+    (mul(base, tint), emission(color, intensity))
 }
 
 /// The deterministic fallback hue for an unbound slot (golden angle,
