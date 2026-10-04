@@ -789,8 +789,12 @@ export async function mountProductBrowserHostWithApplication(
     readonly nextInputSequence?: string;
     readonly readout?: ProductHostRuntimeReadout;
   }): ProductHostRuntimeOutput[] => {
+    // A response can settle after the output stream has already delivered a
+    // later change (another page or a tool paused or resumed meanwhile); its
+    // older binding and readout must not rewind what the page shows.
     const outputs: ProductHostRuntimeOutput[] = [];
-    if (result.binding !== undefined && result.nextInputSequence !== undefined) {
+    if (result.binding !== undefined && result.nextInputSequence !== undefined
+      && !isOlderRuntimeBinding(result.binding, currentInputBinding)) {
       outputs.push({
         kind: 'binding',
         runtime: result.binding,
@@ -801,7 +805,10 @@ export async function mountProductBrowserHostWithApplication(
         ...(inputClaim === null ? {} : { inputClaim }),
       });
     }
-    if (result.readout !== undefined) outputs.push({ kind: 'runtime-readout', readout: result.readout });
+    if (result.readout !== undefined
+      && !isOlderRuntimeBinding(result.readout.runtime, runtimeReadout?.runtime ?? null)) {
+      outputs.push({ kind: 'runtime-readout', readout: result.readout });
+    }
     return outputs;
   };
 
@@ -1187,6 +1194,17 @@ export async function mountProductBrowserHostWithApplication(
     ),
     dispose,
   });
+}
+
+/** True when `candidate` is an earlier binding of the same runtime instance than `current`. */
+function isOlderRuntimeBinding(
+  candidate: RustyApplicationRuntimeIdentity,
+  current: RustyApplicationRuntimeIdentity | null,
+): boolean {
+  if (current === null || candidate.instanceId !== current.instanceId) return false;
+  const generation = BigInt(candidate.generation) - BigInt(current.generation);
+  return generation < 0n
+    || (generation === 0n && BigInt(candidate.controlRevision) < BigInt(current.controlRevision));
 }
 
 function sameRuntimeBinding(

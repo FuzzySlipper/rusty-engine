@@ -257,6 +257,78 @@ test('mounted UI pauses and resumes the runtime it is bound to and follows its r
   });
 });
 
+test('a lifecycle response that settles after a newer published change does not rewind it', async () => {
+  await withFakeRoot(async (root) => {
+    const PAUSED = { ...RUNNING, controlRevision: '3' } as const;
+    const RESUMED = { ...RUNNING, controlRevision: '4' } as const;
+    const readout = (runtime: typeof RUNNING | typeof PAUSED | typeof RESUMED, state: 'running' | 'paused') => ({
+      artifact: 'rusty.product.runtime-readout' as const,
+      runtime, mode: 'realtime' as const, state,
+      admittedSimulationSteps: '1', admittedPresentations: '1', droppedRealtimeSteps: '0',
+      clockRegressions: '0', scaledRemainder: 0, lastObservedTimeNs: null, fault: null,
+    });
+    const requests: unknown[] = [];
+    let emit: ProductBrowserRuntimeOutputBatchListener | null = null;
+    let lifecycle: RustyApplicationUiLifecyclePort | undefined;
+    const publish = (outputs: ProductHostRuntimeOutput[]): void => {
+      (emit as unknown as ProductBrowserRuntimeOutputBatchListener)(outputs, {
+        epoch: 1, baseline: false, recovery: 'none',
+      });
+    };
+    const host = await mountProductBrowserHostWithApplication({
+      root,
+      transport: {
+        ...adapter,
+        lifecycle: async (operation) => {
+          requests.push(operation);
+          if (operation.kind === 'pause') {
+            // The pause's own publication, then a resume made elsewhere,
+            // both reach the page before this response settles.
+            publish([
+              { kind: 'binding', runtime: PAUSED, nextInputSequence: '5' },
+              { kind: 'runtime-readout', readout: readout(PAUSED, 'paused') },
+            ]);
+            publish([
+              { kind: 'binding', runtime: RESUMED, nextInputSequence: '6' },
+              { kind: 'runtime-readout', readout: readout(RESUMED, 'running') },
+            ]);
+            return {
+              accepted: true, ...ACCEPTED_FAULT, operation: 'pause' as const,
+              binding: PAUSED, nextInputSequence: '5', readout: readout(PAUSED, 'paused'),
+            };
+          }
+          return {
+            accepted: true, ...ACCEPTED_FAULT, operation: operation.kind,
+            binding: RESUMED, nextInputSequence: '6', readout: readout(RESUMED, 'running'),
+          };
+        },
+        subscribeOutputBatches: (listener) => {
+          emit = listener;
+          return () => { emit = null; };
+        },
+      },
+      lifecycleMode: 'realtime',
+      realtimeAdvanceOwner: 'rust-host',
+      mountUi: async () => undefined,
+      autoStart: false,
+    }, async (options) => {
+      lifecycle = options.lifecycle;
+      return fakeApplication({ bindRuntime: () => undefined }) as never;
+    });
+    assert.ok(lifecycle !== undefined);
+    publish([
+      { kind: 'binding', runtime: RUNNING, nextInputSequence: '4' },
+      { kind: 'runtime-readout', readout: readout(RUNNING, 'running') },
+    ]);
+
+    assert.deepEqual(await lifecycle.pause(), { accepted: true, state: 'running' });
+    assert.equal(lifecycle.state(), 'running');
+    await lifecycle.resume();
+    assert.deepEqual(requests[1], { kind: 'resume', runtime: RESUMED });
+    await host.dispose();
+  });
+});
+
 test('while a harness holds input the page sends none and shows the claim', async () => {
   await withFakeRoot(async (root) => {
     const claimed = { ...RUNNING, controlRevision: '3' } as const;
