@@ -476,7 +476,9 @@ pub struct NativeCollisionReplaceReceipt {
 /// around its own origin (a quarter turn takes +X to -Z; four is a full turn),
 /// then moves by whole navigation cells from the session's navigation grid
 /// (columns along x, levels of the artifact's level quantum along y, rows
-/// along z).
+/// along z), followed by the finite continuous `translation` in world units.
+/// Rotation is about the artifact origin; the continuous translation is
+/// applied after the integer placement and rotation.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeSpatialContentArtifactInstance {
@@ -486,6 +488,7 @@ pub struct NativeSpatialContentArtifactInstance {
     pub level_offset: i64,
     pub row_offset: i64,
     pub quarter_turns: u32,
+    pub translation: NativeVec3,
 }
 
 /// Admits and removes placed spatial artifacts in one session: their

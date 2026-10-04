@@ -146,6 +146,8 @@ struct PlacedContentArtifact {
     offset: [i64; 3],
     /// Quarter turns about +Y, 0 to 3.
     turns: u8,
+    /// Continuous world-unit translation after the integer offset and turn.
+    translation: [f64; 3],
     navigation: Arc<ContentNavigationCells>,
 }
 
@@ -347,6 +349,13 @@ struct NavigationEdgeKinds {
 struct NavigationVerticalMapping {
     level_quantum: f64,
     support_heights: BTreeMap<VoxelCoord, f64>,
+    /// Continuous X/Z centers for composed authored cells. The integer
+    /// projection remains the topology; these centers keep path waypoints and
+    /// position admission on the same transform as collision.
+    cell_centers: BTreeMap<VoxelCoord, [f64; 2]>,
+    /// Whether any authored cell moved off the integer navigation grid in X/Z.
+    /// The position lookup can stay column-indexed for the common aligned case.
+    has_continuous_horizontal_translation: bool,
     /// Collision-derived navigation maps a point to a nearby support; an
     /// admitted artifact maps it to the level its height rounds to.
     snap: Option<SupportSnap>,
@@ -390,6 +399,33 @@ impl NavigationState {
         let Some(vertical) = &self.vertical_mapping else {
             return base;
         };
+        if vertical.has_continuous_horizontal_translation {
+            let cell_size = self.projection.grid().voxel_size();
+            let half_cell = cell_size * 0.5;
+            let mut best: Option<(f64, f64, VoxelCoord)> = None;
+            for (&cell, &[center_x, center_z]) in &vertical.cell_centers {
+                let across_x = (center_x - half_cell - px)
+                    .max(px - (center_x + half_cell))
+                    .max(0.0);
+                let across_z = (center_z - half_cell - pz)
+                    .max(pz - (center_z + half_cell))
+                    .max(0.0);
+                let across = across_x.hypot(across_z);
+                if across > f64::EPSILON {
+                    continue;
+                }
+                let Some(&support) = vertical.support_heights.get(&cell) else {
+                    continue;
+                };
+                let key = (across, (y - support).abs());
+                if best.is_none_or(|(best_across, best_rise, _)| key < (best_across, best_rise)) {
+                    best = Some((key.0, key.1, cell));
+                }
+            }
+            if let Some((_, _, cell)) = best {
+                return cell;
+            }
+        }
         let [x, _, z] = base.to_array();
         let Some(snap) = vertical.snap else {
             // The column's nearest support at any height, else the level the
@@ -472,7 +508,11 @@ impl NavigationState {
             .and_then(|vertical| vertical.support_heights.get(&cell))
             .copied()
             .unwrap_or(center.y);
-        let [x, y, z] = [center.x, y, center.z];
+        let [x, z] = self
+            .vertical_mapping
+            .as_ref()
+            .and_then(|vertical| vertical.cell_centers.get(&cell).copied())
+            .unwrap_or([center.x, center.z]);
         let [ox, oy, oz] = self.grid_origin;
         Vec3::new((x + ox) as f32, (y + oy) as f32, (z + oz) as f32)
     }
@@ -1071,6 +1111,22 @@ impl RuntimeSpatialBridge {
                     )
                 })
                 .collect(),
+            cell_centers: artifact
+                .navigation
+                .cells
+                .iter()
+                .filter(|cell| cell.walkable)
+                .map(|cell| {
+                    (
+                        VoxelCoord::new(cell.column, cell.level, cell.row),
+                        [
+                            (cell.column as f64 + 0.5) * artifact.navigation.config.cell_size,
+                            (cell.row as f64 + 0.5) * artifact.navigation.config.cell_size,
+                        ],
+                    )
+                })
+                .collect(),
+            has_continuous_horizontal_translation: false,
             snap: None,
         };
 
@@ -1192,6 +1248,13 @@ impl RuntimeSpatialBridge {
         // Read every artifact before changing anything.
         let mut arrivals = Vec::with_capacity(admitted.len());
         for placement in admitted {
+            let translation = native_vec3_value(placement.translation);
+            if !finite_vec3(translation) {
+                return Err(CsharpEngineServicesError::new(
+                    "CSHARP_SPATIAL_CONTENT_TRANSFORM",
+                    "continuous spatial content translation must be finite",
+                ));
+            }
             // SAFETY: EngineServiceSet binds this pointer to its boxed Content
             // owner; the retained entry is cloned before Spatial changes.
             let content = unsafe { &*content_owner }
@@ -1223,6 +1286,7 @@ impl RuntimeSpatialBridge {
                 placement,
                 asset,
                 Arc::new(content_navigation_cells(&artifact)),
+                translation,
             ));
         }
         let max_step_cells = u8::try_from(request.navigation_max_step_cells).map_err(|_| {
@@ -1253,7 +1317,7 @@ impl RuntimeSpatialBridge {
                 .map(|id| StaticMeshInstanceId(*id))
                 .collect();
             let mut arriving = BTreeMap::new();
-            for (placement, asset, navigation) in &arrivals {
+            for (placement, asset, navigation, translation) in &arrivals {
                 let id = placement.id;
                 let product_owned = session
                     .scene
@@ -1276,6 +1340,11 @@ impl RuntimeSpatialBridge {
                             placement.row_offset,
                         ],
                         turns: (placement.quarter_turns % 4) as u8,
+                        translation: [
+                            f64::from(translation.x),
+                            f64::from(translation.y),
+                            f64::from(translation.z),
+                        ],
                         navigation: Arc::clone(navigation),
                     },
                 );
@@ -1300,7 +1369,7 @@ impl RuntimeSpatialBridge {
                 .chain(base_asset)
                 .collect();
             let mut new_assets = BTreeMap::new();
-            for (_, asset, _) in &arrivals {
+            for (_, asset, _, _) in &arrivals {
                 if let Some(asset) = asset {
                     if !resident.contains(&asset.id) {
                         new_assets.insert(asset.id, asset.clone());
@@ -1319,9 +1388,15 @@ impl RuntimeSpatialBridge {
                         asset,
                         transform: StaticMeshTransform {
                             translation: [
-                                grid_origin[0] + column as f64 * placed.navigation.cell_size,
-                                grid_origin[1] + level as f64 * placed.navigation.level_quantum,
-                                grid_origin[2] + row as f64 * placed.navigation.cell_size,
+                                grid_origin[0]
+                                    + column as f64 * placed.navigation.cell_size
+                                    + placed.translation[0],
+                                grid_origin[1]
+                                    + level as f64 * placed.navigation.level_quantum
+                                    + placed.translation[1],
+                                grid_origin[2]
+                                    + row as f64 * placed.navigation.cell_size
+                                    + placed.translation[2],
                             ],
                             rotation: quarter_turn_rotation(placed.turns),
                             ..StaticMeshTransform::IDENTITY
@@ -1740,6 +1815,8 @@ impl RuntimeSpatialBridge {
             vertical_mapping: Some(NavigationVerticalMapping {
                 level_quantum: request.config.cell_size,
                 support_heights,
+                cell_centers: BTreeMap::new(),
+                has_continuous_horizontal_translation: false,
                 snap: Some(snap),
             }),
             revision: navigation_revision,
@@ -5233,6 +5310,19 @@ fn quarter_turned_cell([column, row]: [i64; 2], turns: u8) -> [i64; 2] {
     }
 }
 
+/// The continuous center of a cell turned `turns` quarter turns about +Y.
+/// This is the same transform as [`quarter_turned_cell`] without the integer
+/// cell-boundary adjustment, so authored navigation and collision agree when a
+/// placement also carries a fractional translation.
+fn quarter_turned_point([x, z]: [f64; 2], turns: u8) -> [f64; 2] {
+    match turns {
+        1 => [z, -x],
+        2 => [-x, -z],
+        3 => [-z, x],
+        _ => [x, z],
+    }
+}
+
 /// An artifact's walkable cells and their support heights.
 fn content_navigation_cells(artifact: &SpatialContentArtifact) -> ContentNavigationCells {
     ContentNavigationCells {
@@ -5262,16 +5352,23 @@ fn compose_content_navigation<'a>(
     placed: impl IntoIterator<Item = &'a PlacedContentArtifact>,
 ) -> Result<(NavProjection, NavigationVerticalMapping), CsharpEngineServicesError> {
     let mut supports: BTreeMap<VoxelCoord, f64> = BTreeMap::new();
+    let mut cell_centers: BTreeMap<VoxelCoord, [f64; 2]> = BTreeMap::new();
+    let mut has_continuous_horizontal_translation = false;
     let mut level_quantum = None;
     let layers = base
-        .map(|cells| (cells.as_ref(), [0; 3], 0))
+        .map(|cells| (cells.as_ref(), [0; 3], 0, [0.0; 3]))
         .into_iter()
-        .chain(
-            placed
-                .into_iter()
-                .map(|placed| (placed.navigation.as_ref(), placed.offset, placed.turns)),
-        );
-    for (cells, [column, level, row], turns) in layers {
+        .chain(placed.into_iter().map(|placed| {
+            (
+                placed.navigation.as_ref(),
+                placed.offset,
+                placed.turns,
+                placed.translation,
+            )
+        }));
+    for (cells, [column, level, row], turns, [translation_x, translation_y, translation_z]) in
+        layers
+    {
         if cells.cell_size != grid.voxel_size()
             || level_quantum.is_some_and(|quantum| quantum != cells.level_quantum)
         {
@@ -5281,15 +5378,28 @@ fn compose_content_navigation<'a>(
             ));
         }
         level_quantum = Some(cells.level_quantum);
-        let rise = level as f64 * cells.level_quantum;
+        let rise = level as f64 * cells.level_quantum + translation_y;
         for (cell, support) in &cells.cells {
             let [x, z] = quarter_turned_cell([cell.x, cell.z], turns);
             let at = VoxelCoord::new(x + column, cell.y + level, z + row);
+            let local_center = [
+                (cell.x as f64 + 0.5) * cells.cell_size,
+                (cell.z as f64 + 0.5) * cells.cell_size,
+            ];
+            let [turned_center_x, turned_center_z] = quarter_turned_point(local_center, turns);
+            let center = [
+                turned_center_x + column as f64 * cells.cell_size + translation_x,
+                turned_center_z + row as f64 * cells.cell_size + translation_z,
+            ];
+            let grid_center = grid.voxel_center_world(at);
+            has_continuous_horizontal_translation |= (center[0] - grid_center.x).abs()
+                > f64::EPSILON
+                || (center[1] - grid_center.z).abs() > f64::EPSILON;
             let support = support + rise;
-            supports
-                .entry(at)
-                .and_modify(|current| *current = current.max(support))
-                .or_insert(support);
+            if supports.get(&at).is_none_or(|current| support > *current) {
+                supports.insert(at, support);
+                cell_centers.insert(at, center);
+            }
         }
     }
     let projection = NavProjection::from_walkable_cells(grid, supports.keys().copied());
@@ -5298,6 +5408,8 @@ fn compose_content_navigation<'a>(
         NavigationVerticalMapping {
             level_quantum: level_quantum.unwrap_or(1.0),
             support_heights: supports,
+            cell_centers,
+            has_continuous_horizontal_translation,
             snap: None,
         },
     ))

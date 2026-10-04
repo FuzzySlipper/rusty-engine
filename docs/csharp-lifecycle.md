@@ -845,13 +845,16 @@ session, place them with `Spatial.ApplyContentArtifactResidency`. Each
 a stable product `Id`. It turns the artifact `QuarterTurns` times 90° about +Y
 around its own origin (a quarter turn takes +X to −Z), then moves it by whole
 cells of the navigation grid: `ColumnOffset` (x), `LevelOffset` (y, in the
-artifact's level quantum) and `RowOffset` (z). Other angles would take its
-cells off the grid, so placements turn by quarter turns only.
+artifact's level quantum) and `RowOffset` (z). It then applies the finite
+world-unit `Translation` after that integer placement and rotation. Collision,
+authored navigation support heights, and navigation waypoints use the same
+translation. Other angles would take an artifact's authored cells off the
+integer topology, so placements turn by quarter turns only.
 
 ```csharp
 SpatialContentArtifactResidencyReceipt resident = engine.Spatial.ApplyContentArtifactResidency(
     new(session,
-        new SpatialContentArtifactInstance[] { new(siteId, siteArtifact, 64, 0, 32, QuarterTurns: 1) },
+        new SpatialContentArtifactInstance[] { new(siteId, siteArtifact, 64, 0, 32, QuarterTurns: 1, Translation: new Vector3(0.25f, 0.375f, -0.1f)) },
         new ulong[] { leavingSiteId },
         7, 8, 1));
 ```
@@ -864,10 +867,13 @@ SpatialContentArtifactResidencyReceipt resident = engine.Spatial.ApplyContentArt
   neighbouring closures as within one. A cell two artifacts both declare is
   walkable, at the higher support.
 - **Grid.** All of them must share one cell size and level quantum
-  (`CSHARP_SPATIAL_CONTENT_NAVIGATION_GRID`). The grid is the base artifact's,
-  or, with no base, the local frame when the first artifact was placed. A
-  world-origin commit moves every placed artifact with it, and later
-  placements land on the same grid.
+- **Grid.** All of them must share one cell size and level quantum
+  (`CSHARP_SPATIAL_CONTENT_NAVIGATION_GRID`). The integer topology is the base
+  artifact's, or, with no base, the local frame when the first artifact was
+  placed. A continuous translation may move authored cell centers between
+  integer boundaries while retaining that topology; queries and waypoints use
+  those translated centers. A world-origin commit moves every placed artifact
+  with it, and later placements land on the same grid.
 - **What else stays.** Removing one placement leaves the others, the base
   artifact and collision added through `ApplyCollisionResidency`.
 - **Ending the composition.** `ReplaceContentArtifact`,

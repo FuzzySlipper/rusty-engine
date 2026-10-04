@@ -6,7 +6,28 @@ public readonly partial record struct SpatialContentArtifactInstance
 {
     /// <summary>An unrotated placement.</summary>
     public SpatialContentArtifactInstance(ulong id, ContentReference content, long columnOffset, long levelOffset, long rowOffset)
-        : this(id, content, columnOffset, levelOffset, rowOffset, 0)
+        : this(id, content, columnOffset, levelOffset, rowOffset, 0, Vector3.Zero)
+    {
+    }
+
+    /// <summary>A placement with an integer quarter-turn rotation.</summary>
+    public SpatialContentArtifactInstance(ulong id, ContentReference content, long columnOffset, long levelOffset, long rowOffset, uint quarterTurns)
+        : this(id, content, columnOffset, levelOffset, rowOffset, quarterTurns, Vector3.Zero)
+    {
+    }
+
+    /// <summary>
+    /// A placement with a continuous world-unit translation applied after the
+    /// integer offsets and quarter-turn rotation.
+    /// </summary>
+    public SpatialContentArtifactInstance(
+        ulong id,
+        ContentReference content,
+        long columnOffset,
+        long levelOffset,
+        long rowOffset,
+        Vector3 translation)
+        : this(id, content, columnOffset, levelOffset, rowOffset, 0, translation)
     {
     }
 }

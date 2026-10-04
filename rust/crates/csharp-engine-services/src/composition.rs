@@ -2039,7 +2039,13 @@ mod tests {
             level_offset: 0,
             row_offset: 0,
             quarter_turns: 0,
+            translation: NativeVec3::default(),
         };
+        let translated =
+            |id, content, column_offset, translation| NativeSpatialContentArtifactInstance {
+                translation,
+                ..place(id, content, column_offset)
+            };
         let residency = |admitted: &[NativeSpatialContentArtifactInstance], removed: &[u64]| {
             let mut receipt = NativeSpatialContentArtifactResidencyReceipt::default();
             let mut error: NativeOperationErrorReceipt = unsafe { std::mem::zeroed() };
@@ -2097,14 +2103,17 @@ mod tests {
             );
             step
         };
-        let floor_below = |services: &EngineServiceSet, [x, z]: [f32; 2]| {
-            matches!(
-                services.spatial.sessions[&session.value]
-                    .scene
-                    .raycast_world([f64::from(x), 5.0, f64::from(z)], [0.0, -1.0, 0.0], 50.0),
-                Some(engine_spatial::SpatialCollisionHit::StaticMesh(_))
-            )
+        let floor_height = |services: &EngineServiceSet, [x, z]: [f32; 2]| match services
+            .spatial
+            .sessions[&session.value]
+            .scene
+            .raycast_world([f64::from(x), 5.0, f64::from(z)], [0.0, -1.0, 0.0], 50.0)
+        {
+            Some(engine_spatial::SpatialCollisionHit::StaticMesh(hit)) => Some(hit.point.y),
+            _ => None,
         };
+        let floor_below =
+            |services: &EngineServiceSet, point| floor_height(services, point).is_some();
         let has_instance = |services: &EngineServiceSet, id: u64| {
             services.spatial.sessions[&session.value]
                 .scene
@@ -2188,13 +2197,35 @@ mod tests {
         assert_eq!(collision_residency(&[]), ABI_OK);
 
         // Two closures side by side: one navigation across their boundary.
-        let receipt = residency(&[place(1, west, 0), place(2, east, 3)], &[]).unwrap();
+        let translated_west = NativeVec3 {
+            x: 0.25,
+            y: 0.375,
+            z: 0.25,
+        };
+        let translated_east = NativeVec3 {
+            x: 0.1,
+            y: 0.125,
+            z: 0.2,
+        };
+        let receipt = residency(
+            &[
+                translated(1, west, 0, translated_west),
+                translated(2, east, 3, translated_east),
+            ],
+            &[],
+        )
+        .unwrap();
         assert_eq!(
             (receipt.instance_count, receipt.navigation_cell_count),
             (2, 5)
         );
         let across = step([0.5, 0.0, 0.5], [4.5, 0.0, 0.5]);
         assert_eq!(across.outcome, NativeNavigationPathOutcome::Reached);
+        let expected_waypoint_y =
+            0.375 * 0.5 / (1.25f32.powi(2) + 0.375f32.powi(2) + 0.25f32.powi(2)).sqrt();
+        assert!((across.next_waypoint.y - expected_waypoint_y).abs() < 1.0e-3);
+        assert!((floor_height(&services, [1.5, 0.5]).unwrap() - 0.375).abs() < 1.0e-9);
+        assert!((floor_height(&services, [4.5, 0.5]).unwrap() - 0.125).abs() < 1.0e-9);
         assert!(floor_below(&services, [1.5, 0.5]) && floor_below(&services, [4.5, 0.5]));
         assert!(
             has_instance(&services, 500),
@@ -2214,6 +2245,20 @@ mod tests {
         assert_eq!(
             residency(&[place(3, west, 6), place(4, broken, 9)], &[]).unwrap_err(),
             "CSHARP_SPATIAL_CONTENT_SCHEMA"
+        );
+        let malformed_translation = translated(
+            3,
+            west,
+            6,
+            NativeVec3 {
+                x: f32::NAN,
+                y: 0.0,
+                z: 0.0,
+            },
+        );
+        assert_eq!(
+            residency(&[malformed_translation], &[]).unwrap_err(),
+            "CSHARP_SPATIAL_CONTENT_TRANSFORM"
         );
         assert_ne!(
             collision_residency(&[1]),
@@ -2241,7 +2286,7 @@ mod tests {
             NativeNavigationPathOutcome::StartNotWalkable
         );
         // Reload it under the same identity.
-        let receipt = residency(&[place(1, west, 0)], &[]).unwrap();
+        let receipt = residency(&[translated(1, west, 0, translated_west)], &[]).unwrap();
         assert_eq!(
             (receipt.instance_count, receipt.navigation_cell_count),
             (2, 5)
@@ -2308,6 +2353,7 @@ mod tests {
             NativeNavigationPathOutcome::Reached
         );
         assert!(floor_below(&services, [-5.5, 0.5]));
+        assert!((floor_height(&services, [-5.5, 0.5]).unwrap() - 0.125).abs() < 1.0e-9);
         let receipt = residency(&[place(4, east, 5)], &[]).unwrap();
         assert_eq!(
             (receipt.instance_count, receipt.navigation_cell_count),
@@ -2326,8 +2372,9 @@ mod tests {
         );
         assert!(has_instance(&services, 500));
         // Unloading every closure keeps the rebased grid for the next one.
-        residency(&[place(1, west, 0)], &[]).unwrap();
+        residency(&[translated(1, west, 0, translated_west)], &[]).unwrap();
         assert!(floor_below(&services, [-8.5, 0.5]) && !floor_below(&services, [1.5, 0.5]));
+        assert!((floor_height(&services, [-8.5, 0.5]).unwrap() - 0.375).abs() < 1.0e-9);
         assert_eq!(
             step([-9.5, 0.0, 0.5], [-8.5, 0.0, 0.5]).outcome,
             NativeNavigationPathOutcome::Reached
