@@ -319,7 +319,7 @@ impl FrameOutput {
     pub(crate) fn watching(&self) -> bool {
         self.stream
             .as_ref()
-            .is_none_or(|(_, route)| route.wanted_size().is_some())
+            .is_none_or(|(_, route)| route.watching())
     }
 
     /// Reports what the renderer observed since the last call, drawn or not.

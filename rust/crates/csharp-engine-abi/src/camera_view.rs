@@ -189,8 +189,8 @@ pub enum NativeCameraInterpolation {
 /// every change, so a product notices a resize by comparing it.
 ///
 /// `watching` is false only in stream output while no page pulls frames: it
-/// turns false two to three seconds after the last watching page leaves and
-/// true as soon as one asks for a frame. In window output, and with no render
+/// turns false within 1.25 seconds of the last watching page leaving and true
+/// as soon as one asks for a frame. In window output, and with no render
 /// output, it is always true. It is not part of `revision`.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default, PartialEq)]

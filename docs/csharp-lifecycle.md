@@ -309,8 +309,8 @@ its `--rusty-ui-scale` property follow it, so rem-sized UI scales while layout
 units keep their meaning. Streamed frames render at device pixels.
 `Watching` on the same readout says whether anyone watches the product now. It
 is false only in stream output while no page pulls frames. It turns false
-two to three seconds after the last page leaves (the stream's two-second viewer
-grace, plus up to a second while a frame request is still waiting) and true as soon as a page asks
+within 1.25 seconds of the last page leaving (a watching page starts a frame
+request at least once a second, even while no frames change) and true as soon as a page asks
 for a frame. In window output, and with no render output, it is always true.
 The Engine keeps stepping either way; a product that should not play to an
 empty room, such as one whose hunger or world clock runs on step time, holds

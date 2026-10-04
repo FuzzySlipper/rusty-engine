@@ -77,6 +77,10 @@ const MAX_FRAME_SIDE: u32 = 4096;
 const DEFAULT_FRAME_SIZE: (u32, u32) = (1280, 720);
 /// A viewer is still watching this long after its last request ended.
 const VIEWER_GRACE: Duration = Duration::from_secs(2);
+/// A page that watches starts a frame request at least once per
+/// [`FRAME_REQUEST_WAIT`], since a request with no newer frame ends then and
+/// the page asks again. This leaves room for the round trip.
+const WATCHING_WINDOW: Duration = Duration::from_millis(1250);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProductHostFrameFormat {
@@ -115,6 +119,7 @@ struct FrameState {
     pixel_ratio: Option<f32>,
     waiting: usize,
     last_request: Option<Instant>,
+    last_request_started: Option<Instant>,
 }
 
 impl FrameState {
@@ -143,6 +148,16 @@ impl ProductHostFrameStream {
         state
             .watched()
             .then(|| state.size.unwrap_or(DEFAULT_FRAME_SIZE))
+    }
+
+    /// Whether a page watches now: one started a frame request within
+    /// [`WATCHING_WINDOW`]. Unlike [`Self::wanted_size`], which keeps drawing
+    /// through the viewer grace, this turns false at most that long after the
+    /// last page leaves, so a product can stop play promptly.
+    pub fn watching(&self) -> bool {
+        self.state()
+            .last_request_started
+            .is_some_and(|started| started.elapsed() < WATCHING_WINDOW)
     }
 
     /// The most recent viewer's device pixel ratio; 1 until one states it.
@@ -189,6 +204,7 @@ impl ProductHostFrameStream {
             state.size = size;
         }
         state.waiting += 1;
+        state.last_request_started = Some(Instant::now());
         if demand_changed {
             drop(state);
             if let Some(waker) = &*self.demand_waker.lock().expect("frame waker lock") {
@@ -468,6 +484,18 @@ mod tests {
         // Watching already, at the same size: no second wake.
         assert!(stream.next_after(1, None, Duration::ZERO).is_none());
         assert_eq!(woken.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn watching_ends_one_window_after_the_last_request_started() {
+        let stream = ProductHostFrameStream::new();
+        assert!(!stream.watching());
+        assert!(stream.next_after(0, None, Duration::ZERO).is_none());
+        assert!(stream.watching());
+        std::thread::sleep(WATCHING_WINDOW + Duration::from_millis(50));
+        assert!(!stream.watching(), "no request started within the window");
+        // The renderer's demand keeps its longer grace.
+        assert!(stream.wanted_size().is_some());
     }
 
     #[test]
