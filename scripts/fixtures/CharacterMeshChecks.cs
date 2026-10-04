@@ -1,6 +1,7 @@
 using System;
 using System.Numerics;
 using Rusty.Engine;
+using Rusty.Engine.Entities;
 
 internal static class CharacterMeshChecks
 {
@@ -51,6 +52,73 @@ internal static class CharacterMeshChecks
         ExerciseMovingMeshCarry(engine, config);
         ExerciseEnclosingBoundsHole(engine, config);
         ExerciseStaticMeshCollisionOnly(engine, config);
+        ExerciseFirstEntityAsObstacleAndSupport(engine, config);
+    }
+
+    // Two real actors from one EntityStore: the first (identity 1) is a box
+    // body the second walks into and stands on. Identity 1 is the product's;
+    // no proposal reserves it.
+    private static void ExerciseFirstEntityAsObstacleAndSupport(
+        IEngineContext engine,
+        CharacterControllerConfig config)
+    {
+        using EntityStore entities = new();
+        EntityId player = entities.Create();
+        EntityId enemy = entities.Create();
+        Require(player.Value == 1 && enemy.Value == 2, "an EntityStore allocates 1 first");
+        using SpatialSession session = engine.Spatial.CreateSession(
+            new SpatialSessionConfig(1, 16, VoxelSurfaceMode.GreedyCubes));
+        CharacterObstacle Body(Vector3 at) => new(
+            player.Value,
+            IdentityTransform(at),
+            new Vector3(-0.5f, -1, -0.5f),
+            new Vector3(0.5f, 1, 0.5f),
+            true,
+            Vector3.Zero,
+            Vector3.Zero);
+        CharacterStepReceipt Step(Vector3 position, CharacterMotion motion, CharacterSupport support,
+            CharacterObstacle body, Vector2 intent, ulong sequence) =>
+            engine.Spatial.ProposeCharacterStep(new CharacterStepRequest(
+                session, position, motion, support, new[] { body },
+                ReadOnlyMemory<CharacterMeshInstance>.Empty, config,
+                Idle(sequence) with { PlanarIntent = intent }));
+
+        // Standing on the player's body: support is entity 1, through
+        // continuation as well.
+        CharacterObstacle under = Body(new Vector3(0, 1, 0));
+        CharacterStepReceipt landed = Step(new Vector3(0, 2.95f, 0), InitialMotion(2.95f),
+            NoSupport(), under, Vector2.Zero, 1);
+        Require(landed.Ground.Present && landed.Ground.SourceEntity == player.Value
+            && landed.Motion.SupportEntityPresent && landed.Motion.SupportEntity == player.Value
+            && landed.Entity == 0,
+            "the first EntityStore entity did not support the other actor");
+        CharacterStepReceipt continued = Step(landed.Transform.Translation, landed.Motion,
+            new CharacterSupport(true, CharacterSupportLifecycle.Active, player.Value, under.Transform),
+            under, Vector2.Zero, 2);
+        Require(continued.Motion.SupportEntity == player.Value,
+            "support on entity 1 did not continue");
+
+        // Walking into the player's body from either side stops at it.
+        bool blocked = false;
+        foreach (float direction in new[] { 1f, -1f })
+        {
+            CharacterObstacle wall = Body(new Vector3(0, 0, 0));
+            Vector3 position = new(-1.5f * direction, 0.95f, 0);
+            CharacterMotion motion = InitialMotion(position.Y);
+            // It meets the body within 10 steps and is still beside it
+            // (falling, with no ground) after 20.
+            for (ulong sequence = 1; sequence <= 20; sequence++)
+            {
+                CharacterStepReceipt step = Step(position, motion, NoSupport(), wall,
+                    new Vector2(direction, 0), sequence);
+                blocked |= step.Contact.Present && step.Contact.SourceEntity == player.Value;
+                position = step.Transform.Translation;
+                motion = step.Motion;
+            }
+            Require(MathF.Abs(position.X) > 0.5f,
+                "the other actor passed through entity 1's body");
+        }
+        Require(blocked, "no step met entity 1's body");
     }
 
     private static void ExerciseMovingMeshCarry(

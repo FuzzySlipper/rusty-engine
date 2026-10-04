@@ -2473,7 +2473,7 @@ impl RuntimeSpatialBridge {
         let position = native_vec3_value(request.position);
         let motion = character_motion(request.motion)?;
         let subject = CharacterStepSubject {
-            entity: CHARACTER_PROPOSAL_ENTITY,
+            entity: call_local_character(obstacle_values, mesh_values, request.motion),
             transform: TransformComponent::from_transform(EntityTransform::at(position)),
             motion,
         };
@@ -3425,9 +3425,32 @@ fn character_motion(
     })
 }
 
-/// The call-local identity of the proposed character. Product obstacle,
-/// mesh, and support identities must not reuse it.
-const CHARACTER_PROPOSAL_ENTITY: EntityId = EntityId::new(1);
+/// The proposed character's identity for one call: the smallest one no
+/// obstacle, mesh or support of the call uses, so every product identity,
+/// the first one an EntityStore allocates included, stays the product's.
+/// The controller only uses it to leave the character out of its own
+/// obstacles; it reaches no receipt or collision identity.
+fn call_local_character(
+    obstacles: &[NativeCharacterObstacle],
+    meshes: &[NativeCharacterMeshInstance],
+    motion: NativeCharacterMotion,
+) -> EntityId {
+    let used = obstacles
+        .iter()
+        .map(|obstacle| obstacle.entity)
+        .chain(meshes.iter().map(|mesh| mesh.entity))
+        .chain(
+            motion
+                .support_entity_present
+                .then_some(motion.support_entity),
+        )
+        .collect::<BTreeSet<_>>();
+    EntityId::new(
+        (1..)
+            .find(|candidate| !used.contains(candidate))
+            .expect("a call names finitely many entities"),
+    )
+}
 
 /// Entity poses one character proposal supplies. Box obstacles reach the
 /// controller as [`CharacterStepColliders`], so only poses are looked up here.
@@ -3478,12 +3501,6 @@ fn apply_character_support(
             "C# support context did not match character continuation",
         ));
     }
-    if entity == CHARACTER_PROPOSAL_ENTITY {
-        return Err(CsharpEngineServicesError::new(
-            "CSHARP_CHARACTER_SUPPORT",
-            "C# support entity conflicted with the call-local character",
-        ));
-    }
     match support.lifecycle {
         NativeCharacterSupportLifecycle::Destroyed => {
             poses.retain(|(candidate, _)| *candidate != entity);
@@ -3511,10 +3528,7 @@ fn character_mesh_instances(
     let mut poses = Vec::with_capacity(values.len());
     let mut admitted = Vec::with_capacity(values.len());
     for value in values {
-        if value.instance == 0
-            || value.entity == 0
-            || value.entity == CHARACTER_PROPOSAL_ENTITY.raw()
-        {
+        if value.instance == 0 || value.entity == 0 {
             return Err(CsharpEngineServicesError::new(
                 "CSHARP_CHARACTER_MESH_INSTANCE",
                 "C# mesh admission used an invalid instance or entity identity",
@@ -3582,12 +3596,6 @@ fn character_obstacles(
     let mut poses = Vec::with_capacity(values.len());
     let mut obstacles = Vec::with_capacity(values.len());
     for value in values {
-        if value.entity == CHARACTER_PROPOSAL_ENTITY.raw() {
-            return Err(CsharpEngineServicesError::new(
-                "CSHARP_CHARACTER_OBSTACLE",
-                "C# obstacle entity conflicted with the call-local character",
-            ));
-        }
         let transform = native_entity_transform(value.transform);
         if transform.scale != Vec3::ONE {
             return Err(CsharpEngineServicesError::new(
@@ -4183,7 +4191,9 @@ fn native_character_receipt(
         },
         tether: native_character_tether_fact(receipt.tether),
         generation: receipt.generation,
-        entity: receipt.entity.raw(),
+        // The product owns its character's identity; the proposal's own is
+        // call-local and not reported.
+        entity: 0,
         command_sequence: receipt.command_sequence,
         transform_before: NativeTransform {
             translation: native_vec3(receipt.transform_before.translation),
@@ -8155,8 +8165,9 @@ mod tests {
             })
             .expect("character session creates");
         let config = bridge.default_character_controller_config();
+        // Entity 1, the first an EntityStore allocates, is the product's.
         let platform = |x| NativeCharacterObstacle {
-            entity: 2,
+            entity: 1,
             transform: NativeTransform {
                 translation: NativeVec3 { x, y: 0.75, z: 0.0 },
                 rotation: NativeQuat {
@@ -8226,9 +8237,9 @@ mod tests {
             })
             .expect("first proposal lands on the borrowed platform");
         assert!(first.ground.present);
-        assert_eq!(first.ground.source_entity, 2);
+        assert_eq!(first.ground.source_entity, 1);
         assert!(first.motion.support_entity_present);
-        assert_eq!(first.motion.support_entity, 2);
+        assert_eq!(first.motion.support_entity, 1);
         assert!((first.motion.support_point_velocity.x - 12.0).abs() < 1.0e-4);
         // One borrowed result carries the last proposal's contacts; copy it
         // before the next call, as generated C# does.
@@ -8255,7 +8266,7 @@ mod tests {
                 support: NativeCharacterSupport {
                     present: true,
                     lifecycle: NativeCharacterSupportLifecycle::Active,
-                    entity: 2,
+                    entity: 1,
                     transform: second_obstacles[0].transform,
                 },
                 obstacles: second_obstacles.as_ptr(),
@@ -8278,7 +8289,7 @@ mod tests {
             })
             .expect("second proposal carries with the moved obstacle");
         assert!(second.platform.present);
-        assert_eq!(second.platform.entity, 2);
+        assert_eq!(second.platform.entity, 1);
         assert!(!second.platform.departed);
         assert!((second.platform.carried_displacement.x - 0.2).abs() < 1.0e-4);
         assert!(second.displacement.x > 0.19);
@@ -8294,7 +8305,7 @@ mod tests {
                 support: NativeCharacterSupport {
                     present: true,
                     lifecycle: NativeCharacterSupportLifecycle::Destroyed,
-                    entity: 2,
+                    entity: 1,
                     transform: second_obstacles[0].transform,
                 },
                 obstacles: std::ptr::null(),
@@ -8317,9 +8328,107 @@ mod tests {
             })
             .expect("a destroyed support departs");
         assert!(departed.platform.present);
-        assert_eq!(departed.platform.entity, 2);
+        assert_eq!(departed.platform.entity, 1);
         assert!(departed.platform.departed);
         assert!(!departed.motion.support_entity_present);
+    }
+
+    #[test]
+    fn a_body_with_the_first_entity_identity_blocks_a_proposal() {
+        let mut bridge = RuntimeSpatialBridge::new();
+        let session = bridge
+            .create(NativeSpatialSessionConfig {
+                collision_voxel_size: 1.0,
+                collision_chunk_size: 16,
+                voxel_surface_mode: NativeVoxelSurfaceMode::GreedyCubes,
+            })
+            .unwrap();
+        let mut config = bridge.default_character_controller_config();
+        config.ground.strafe_speed = 20.0;
+        let wall = [NativeCharacterObstacle {
+            entity: 1,
+            transform: NativeTransform {
+                rotation: NativeQuat {
+                    x: 0.0,
+                    y: 0.0,
+                    z: 0.0,
+                    w: 1.0,
+                },
+                scale: NativeVec3 {
+                    x: 1.0,
+                    y: 1.0,
+                    z: 1.0,
+                },
+                ..Default::default()
+            },
+            bounds_min: NativeVec3 {
+                x: -0.5,
+                y: -1.0,
+                z: -0.5,
+            },
+            bounds_max: NativeVec3 {
+                x: 0.5,
+                y: 1.0,
+                z: 0.5,
+            },
+            collision_enabled: true,
+            ..Default::default()
+        }];
+        // From either side, the proposal stops at entity 1's body.
+        for direction in [1.0f32, -1.0] {
+            let mut position = NativeVec3 {
+                x: -1.5 * direction,
+                y: 0.95,
+                z: 0.0,
+            };
+            let mut motion = NativeCharacterMotion {
+                stance: NativeCharacterStance::Standing,
+                fall_origin_y: 0.95,
+                peak_y: 0.95,
+                ..Default::default()
+            };
+            let mut blocked = false;
+            for sequence in 1..=20 {
+                let step = bridge
+                    .propose_character(NativeCharacterStepRequest {
+                        tether: NativeCharacterTetherRequest::default(),
+                        session,
+                        position,
+                        motion,
+                        support: NativeCharacterSupport::default(),
+                        obstacles: wall.as_ptr(),
+                        obstacles_len: 1,
+                        mesh_instances: std::ptr::null(),
+                        mesh_instances_len: 0,
+                        config,
+                        command: NativeCharacterControllerCommand {
+                            movement: Default::default(),
+                            planar_intent: NativeVec2 {
+                                x: direction,
+                                y: 0.0,
+                            },
+                            heading_yaw_radians: 0.0,
+                            jump_pressed: false,
+                            jump_held: false,
+                            crouch_requested: false,
+                            external_velocity: NativeVec3::default(),
+                            external_impulse: NativeVec3::default(),
+                            step_seconds: 1.0 / 60.0,
+                            sequence,
+                        },
+                    })
+                    .unwrap();
+                position = step.transform.translation;
+                motion = step.motion;
+                blocked |= step.contact.present && step.contact.source_entity == 1;
+            }
+            assert!(blocked, "met entity 1's body moving {direction}");
+            assert!(
+                position.x.abs() > 0.5,
+                "passed entity 1's body: {}",
+                position.x
+            );
+        }
     }
 
     /// What product-held character motion needs after a far world-origin

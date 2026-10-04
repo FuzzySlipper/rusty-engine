@@ -1675,6 +1675,9 @@ pub struct NativeCharacterStepReceipt {
     pub movement: NativeCharacterMovementFact,
     pub tether: NativeCharacterTetherFact,
     pub generation: u64,
+    /// Always 0: a proposal names no character entity. The product owns its
+    /// character's identity, and every obstacle, mesh and support identity
+    /// it supplies is its own.
     pub entity: u64,
     pub command_sequence: u64,
     pub transform_before: NativeTransform,

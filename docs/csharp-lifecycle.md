@@ -939,7 +939,9 @@ the Engine uses them for the one controller proposal and returns ordinary
 `CharacterMotion`, `CharacterSupport`, and platform facts. Resubmit the
 current support transform and obstacle list on later steps so Engine-owned
 support/carry continuation can apply; the session never retains product
-entities or collider records. Collision uses translation-offset AABBs with
+entities or collider records. Every identity is the product's, the first an
+`EntityStore` allocates (1) included: the proposal names no character entity,
+and its receipt's `Entity` is 0. Collision uses translation-offset AABBs with
 unit scale; obstacle rotation participates in platform carry but does not
 rotate the collider volume.
 
