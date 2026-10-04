@@ -2231,6 +2231,14 @@ mod tests {
             has_instance(&services, 500),
             "the session's own collision stays"
         );
+        // The translated west artifact begins at x=.25. A position in its
+        // old integer cell but outside that translated footprint must fail
+        // both collision and navigation instead of falling back to cell 0.
+        assert!(floor_height(&services, [0.05, 0.5]).is_none());
+        assert_eq!(
+            step([0.05, 0.0, 0.5], [1.5, 0.0, 0.5]).outcome,
+            NativeNavigationPathOutcome::StartNotWalkable
+        );
 
         // Conflicts and malformed artifacts refuse and change nothing.
         let revision = across.navigation_revision;

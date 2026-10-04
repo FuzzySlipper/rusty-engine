@@ -425,6 +425,11 @@ impl NavigationState {
             if let Some((_, _, cell)) = best {
                 return cell;
             }
+            // A translated artifact owns only its translated footprint. Do
+            // not fall back to the integer cell here: that would admit a
+            // position through navigation after collision has correctly
+            // rejected it outside the authored placement.
+            return VoxelCoord::new(base.x, i64::MIN, base.z);
         }
         let [x, _, z] = base.to_array();
         let Some(snap) = vertical.snap else {
