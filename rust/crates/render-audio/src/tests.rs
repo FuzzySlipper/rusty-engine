@@ -792,3 +792,51 @@ fn the_music_bus_silences_music_and_leaves_ambience_playing() {
     let ambience = peak(&mut realizer);
     assert!(ambience > music * 0.5, "ambience still plays: {ambience}");
 }
+
+#[test]
+fn a_streamed_mix_carries_a_one_shot_in_real_time_and_reports_it_complete() {
+    let peak = Arc::new(std::sync::Mutex::new((0_usize, 0.0_f32)));
+    let sink = Arc::clone(&peak);
+    let opened = std::time::Instant::now();
+    let mut realizer = AudioRealizer::open_stream(
+        SAMPLE_RATE,
+        Arc::new(move |block: &[f32]| {
+            let mut state = sink.lock().unwrap();
+            state.0 += block.len() / 2;
+            state.1 = block
+                .iter()
+                .fold(state.1, |peak, sample| peak.max(sample.abs()));
+        }),
+    )
+    .expect("a stream needs no device");
+    realizer.apply(
+        &[emit(1, 7, descriptor("sha256:wav", false))],
+        &Clips::fixtures(),
+        &NoEntityPositions,
+    );
+    let started = std::time::Instant::now();
+    let completed = loop {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        realizer.refresh(&NoEntityPositions);
+        if let Some(fact) = realizer.take_facts().into_iter().next() {
+            break fact;
+        }
+        assert!(
+            started.elapsed().as_secs() < 5,
+            "the one-shot never completed"
+        );
+    };
+    assert_eq!(
+        completed,
+        RealizedAudioFact::OneShotCompleted {
+            sequence: 1,
+            signal_handle: AudioSignalHandle::new(7),
+        }
+    );
+    let (frames, peak) = *peak.lock().unwrap();
+    // The mix renders whole 10 ms blocks only as they fall due.
+    let elapsed = opened.elapsed().as_secs_f64() * f64::from(SAMPLE_RATE);
+    assert_eq!(frames % 480, 0);
+    assert!((frames as f64) <= elapsed, "{frames} frames in {elapsed}");
+    assert!(peak > 0.01, "the tone reached the stream: peak {peak}");
+}

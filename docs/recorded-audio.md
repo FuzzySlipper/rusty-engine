@@ -37,23 +37,34 @@ sample-accurate, gapless-loop guarantee. Release, reset and disposal stop the
 voice and release its decoder; dropping clip ownership releases the clip's
 bytes.
 
-## Device realization
+## Realization
 
-The runtime process plays committed audio on its default output device
-(`render-audio`, kira over cpal; on Linux the host links `libasound.so.2`),
-for streamed frames and the desktop window alike. The device opens when the
-runtime loads and closes when it drops. With the manifest's `audio.output` at
-its default, `device-optional`, a machine with no output device (a CI runner, a
-headless server) runs silent after one warning: its audio ops are dropped and
-report no completions. `device-required` (`RustyEngineProductAudioOutput`, or
-`rusty dev --audio-output device-required`) fails the load without one.
-Audio ops are taken out of each call's publications before anything else sees
-them. The device follows the runtime: it plays only while the product runs, a
-binding change (Start, Restart, fault) replays the committed baseline, and
-Shutdown stops every voice. Natural completions and device diagnostics become
-realization facts the product reads through `Audio`. The device also plays a
-playing video clip's Opus soundtrack (demuxed by `render-video`) from the
-clip's start, outside the Engine buses.
+One realizer (`render-audio`, kira) plays the committed audio wherever the
+manifest's `audio.output` says. Audio ops are taken out of each call's
+publications before anything else sees them. The realizer follows the runtime:
+it plays only while the product runs, a binding change (Start, Restart, fault)
+replays the committed baseline, and Shutdown stops every voice. Natural
+completions and realization diagnostics become realization facts the product
+reads through `Audio`. It also plays a playing video clip's Opus soundtrack
+(demuxed by `render-video`) from the clip's start, outside the Engine buses.
+
+- `stream`, the default with streamed frames: the runtime opens no device. It
+  mixes in real time, in 10 ms blocks, and the host serves the mix at
+  `GET /__rusty/product/runtime/audio` as one long response of interleaved
+  stereo 16-bit little-endian PCM at 48 kHz. The shell page starts listening on
+  its first pointer press or key press, since a browser lets a page play sound
+  only after a gesture, and plays from a 60 ms jitter buffer that it trims
+  whenever more than 250 ms pile up. Every watching page that has had a gesture
+  plays the same mix; a page that falls behind skips ahead rather than queueing
+  sound. Voices advance and complete on the runtime's clock whether or not a
+  page listens, so completion facts read the same with no page watching.
+- `device-optional`, the default with window output: the runtime plays on its
+  default output device (on Linux the host links `libasound.so.2`). The device
+  opens when the runtime loads and closes when it drops. A machine with no
+  output device (a CI runner, a headless server) runs silent after one warning:
+  its audio ops are dropped and report no completions.
+- `device-required` (`RustyEngineProductAudioOutput`, or `rusty dev
+  --audio-output device-required`) fails the load without a device.
 
 Every voice plays on one of four buses, `Sfx`, `Ambient`, `Ui` and `Music`,
 each with its own volume and mute (`Audio.SetBusVolume`, `SetBusMuted`,

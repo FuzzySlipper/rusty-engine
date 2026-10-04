@@ -153,11 +153,14 @@ mechanisms admit their state; the ABI adapter supplies their copied snapshots.
 
 Playback cursors advance from admitted Engine update facts. Audio baselines
 resume loops and preserve paused or completed voices; direct sounds and emitter
-creation bursts are not replayed. `render-audio` plays audio on the runtime's
-output device ([recorded audio](recorded-audio.md#device-realization)). A
-machine with no output device runs silent after one warning, with no
-completions reported; `audio.output: device-required` in `product.json`
-(`RustyEngineProductAudioOutput`) requires the device instead.
+creation bursts are not replayed. `render-audio` realizes audio where the
+frames go ([recorded audio](recorded-audio.md#realization)): with streamed
+frames it mixes in real time and the host streams the mix to the watching
+pages; with a window, or `audio.output` `device-optional` or
+`device-required` in `product.json` (`RustyEngineProductAudioOutput`), it
+plays on the runtime's output device. A machine with no device then runs
+silent after one warning, with no completions reported, unless the device is
+required.
 Continuous emitters restart their cosmetic simulation from their retained
 descriptor. Animation baselines carry playback cursors and per-clip controller
 phases, suppressing historical completion callbacks. A ghost plate

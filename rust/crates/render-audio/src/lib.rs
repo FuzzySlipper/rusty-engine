@@ -12,6 +12,7 @@
 mod opus;
 mod rolloff;
 mod soundtrack;
+mod stream;
 
 use std::collections::{BTreeMap, HashMap};
 use std::io::Cursor;
@@ -36,6 +37,7 @@ use render_presentation::{
 
 pub use kira::backend::mock::{MockBackend, MockBackendSettings};
 pub use kira::DefaultBackend;
+pub use stream::{AudioBlockSink, StreamBackend, StreamBackendSettings};
 
 /// kira preallocates its realtime arenas. Each spatial voice or one-shot
 /// takes one sub-track; each bus plays every non-spatial sound directly.
@@ -270,6 +272,13 @@ impl AudioRealizer<DefaultBackend> {
     /// default-device changes itself; dropping the realizer closes the stream.
     pub fn open_default_device() -> Result<Self, String> {
         Self::with_backend_settings(Default::default())
+    }
+}
+
+impl AudioRealizer<StreamBackend> {
+    /// Mixes in real time into `sink` at `sample_rate`, with no device.
+    pub fn open_stream(sample_rate: u32, sink: AudioBlockSink) -> Result<Self, String> {
+        Self::with_backend_settings(StreamBackendSettings { sample_rate, sink })
     }
 }
 

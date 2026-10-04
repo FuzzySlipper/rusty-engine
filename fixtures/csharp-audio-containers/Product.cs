@@ -67,7 +67,14 @@ public sealed class Product(ProductCreateContext context) : IEngineProduct, IDeb
         }
         return Inspect();
     }
-    [DebugCommand("audio.proof.inspect", Description = "Read admission and browser realization facts.")]
+    [DebugCommand("audio.proof.bus", Description = "Set the Ambient bus, which every proof voice plays on: volume 0 to 1, and muted.")]
+    public string Bus(float volume, bool muted)
+    {
+        context.Engine.Audio.SetBusVolume(new(AudioBus.Ambient, volume));
+        context.Engine.Audio.SetBusMuted(new(AudioBus.Ambient, muted));
+        return context.Engine.Audio.ReadBus(new(AudioBus.Ambient)).ToString();
+    }
+    [DebugCommand("audio.proof.inspect", Description = "Read admission and realization facts.")]
     public string Inspect()
     {
         AudioRealizationResult realization = context.Engine.Audio.ReadRealization();

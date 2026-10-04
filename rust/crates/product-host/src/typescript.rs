@@ -111,12 +111,26 @@ export const FRAME_STREAM_HEADER = {{
     )
 }
 
+fn audio_stream_constants() -> String {
+    format!(
+        "/** Where the page listens to the audio the runtime mixes. */
+export const AUDIO_STREAM_PATH = {path:?};
+
+/** The streamed audio: interleaved signed 16-bit little-endian PCM. */
+export const AUDIO_STREAM_FORMAT = {{ sampleRate: {rate}, channels: {channels} }} as const;",
+        path = crate::PRODUCT_HOST_AUDIO_PATH,
+        rate = crate::PRODUCT_HOST_AUDIO_SAMPLE_RATE,
+        channels = crate::PRODUCT_HOST_AUDIO_CHANNELS,
+    )
+}
+
 fn packages() -> Vec<(&'static str, String)> {
     vec![
         (
             "application-host",
             Contracts::default()
                 .constant(frame_stream_constants())
+                .constant(audio_stream_constants())
                 .with::<runtime_input::RuntimeInputWireEvent>()
                 .with::<runtime_ui::RuntimeUiProjectionWire>()
                 .with::<ProductHostRenderOutput>()

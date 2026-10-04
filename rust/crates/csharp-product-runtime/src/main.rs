@@ -175,6 +175,9 @@ fn main() -> Result<(), String> {
         .with_live_debug(args.live_debug())
         .with_diagnostics(diagnostics)
         .with_ui_files(runtime.ui_files());
+    if let Some(audio) = runtime.audio_stream() {
+        config = config.with_audio_stream(audio);
+    }
     if let Some(frames) = runtime.frame_stream() {
         config = config.with_frame_stream(frames);
     }
@@ -801,7 +804,7 @@ impl Arguments {
                 .with_input_cursor_mode(product.input_cursor_mode.native())
                 .with_default_lights(world_lights, viewmodel_lights)
                 .with_scene_shadows(product.shadows_enabled())
-                .with_audio_device_required(product.audio_device_required)
+                .with_audio_output(product.audio_output)
                 .with_product(&product.id, &product.title);
         }
         if let Some(root) = &self.persistence_root {

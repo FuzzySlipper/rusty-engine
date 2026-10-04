@@ -92,8 +92,11 @@
          to a native window (the pair's desktop pack). The rusty dev output
          option sets it for one launch. -->
     <RustyEngineProductRenderOutput Condition="'$(RustyEngineProductRenderOutput)' == ''">stream</RustyEngineProductRenderOutput>
-    <!-- Whether a missing audio output device fails the load or runs silent.
-         The rusty dev audio-output option sets it for one launch. -->
+    <!-- Where the sound plays: streamed to the pages watching the frames, or
+         on the runtime's output device, optional or required. It follows the
+         render output unless set. The rusty dev audio-output option sets it
+         for one launch. -->
+    <RustyEngineProductAudioOutput Condition="'$(RustyEngineProductAudioOutput)' == '' and '$(RustyEngineProductRenderOutput)' == 'stream'">stream</RustyEngineProductAudioOutput>
     <RustyEngineProductAudioOutput Condition="'$(RustyEngineProductAudioOutput)' == ''">device-optional</RustyEngineProductAudioOutput>
   </PropertyGroup>
 
@@ -123,8 +126,10 @@
            Text="RustyEngineProductInputCursorMode must be pointer-lock or unlocked." />
     <Error Condition="!$([System.Text.RegularExpressions.Regex]::IsMatch('$(RustyEngineProductRenderOutput)', '\A(stream|window)\z'))"
            Text="RustyEngineProductRenderOutput must be stream or window." />
-    <Error Condition="!$([System.Text.RegularExpressions.Regex]::IsMatch('$(RustyEngineProductAudioOutput)', '\A(device-optional|device-required)\z'))"
-           Text="RustyEngineProductAudioOutput must be device-optional or device-required." />
+    <Error Condition="!$([System.Text.RegularExpressions.Regex]::IsMatch('$(RustyEngineProductAudioOutput)', '\A(stream|device-optional|device-required)\z'))"
+           Text="RustyEngineProductAudioOutput must be stream, device-optional or device-required." />
+    <Error Condition="'$(RustyEngineProductAudioOutput)' == 'stream' and '$(RustyEngineProductRenderOutput)' != 'stream'"
+           Text="RustyEngineProductAudioOutput stream needs RustyEngineProductRenderOutput stream; a window plays on its device." />
   </Target>
 
   <!-- The stamp lists the files the last UI build produced. When any of them

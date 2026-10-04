@@ -50,8 +50,8 @@ pub(super) struct ProductBundle {
     renderer_lighting: ProductRendererLighting,
     /// Where the runtime draws (`renderer.output`).
     pub(super) render_output: csharp_product_runtime::RenderOutput,
-    /// A missing audio device fails the load (`audio.output`).
-    pub(super) audio_device_required: bool,
+    /// Where committed audio plays (`audio.output`).
+    pub(super) audio_output: csharp_product_runtime::AudioOutputSelection,
     pub(super) lifecycle: RuntimeLifecycleConfig,
     pub(super) lifecycle_mode: ProductHostRuntimeMode,
     pub(super) direct_intents: Vec<DirectInputIntentDescriptor>,
@@ -131,13 +131,26 @@ impl ProductBundle {
             Some("window") => csharp_product_runtime::RenderOutput::Window,
             Some(_) => return Err(field_error("renderer.output", "must be stream or window")),
         };
-        let audio_device_required = match manifest.audio.output.as_deref() {
-            None | Some("device-optional") => false,
-            Some("device-required") => true,
-            Some(_) => {
+        // Sound goes where the frames go unless the product chooses.
+        use csharp_product_runtime::{AudioOutputSelection, RenderOutput};
+        let audio_output = match (manifest.audio.output.as_deref(), render_output) {
+            (None, RenderOutput::Stream) | (Some("stream"), RenderOutput::Stream) => {
+                AudioOutputSelection::Stream
+            }
+            (Some("stream"), RenderOutput::Window) => {
                 return Err(field_error(
                     "audio.output",
-                    "must be device-optional or device-required",
+                    "stream needs renderer.output stream; a window plays on its device",
+                ))
+            }
+            (None, RenderOutput::Window) | (Some("device-optional"), _) => {
+                AudioOutputSelection::Device { required: false }
+            }
+            (Some("device-required"), _) => AudioOutputSelection::Device { required: true },
+            (Some(_), _) => {
+                return Err(field_error(
+                    "audio.output",
+                    "must be stream, device-optional or device-required",
                 ))
             }
         };
@@ -164,7 +177,7 @@ impl ProductBundle {
             ui_projection,
             renderer_lighting,
             render_output,
-            audio_device_required,
+            audio_output,
             lifecycle,
             lifecycle_mode,
             direct_intents,
@@ -886,7 +899,10 @@ mod tests {
             bundle.render_output,
             csharp_product_runtime::RenderOutput::Stream
         );
-        assert!(!bundle.audio_device_required);
+        assert_eq!(
+            bundle.audio_output,
+            csharp_product_runtime::AudioOutputSelection::Stream
+        );
 
         let manifest_path = root.join(PRODUCT_MANIFEST_NAME);
         let original = fs::read_to_string(&manifest_path).unwrap();
@@ -902,7 +918,20 @@ mod tests {
             bundle.render_output,
             csharp_product_runtime::RenderOutput::Window
         );
-        assert!(bundle.audio_device_required);
+        assert_eq!(
+            bundle.audio_output,
+            csharp_product_runtime::AudioOutputSelection::Device { required: true }
+        );
+        fs::write(&manifest_path, with("stream", "device-optional")).unwrap();
+        assert_eq!(
+            read(&root)
+                .expect("a streamed product may keep the device")
+                .audio_output,
+            csharp_product_runtime::AudioOutputSelection::Device { required: false }
+        );
+        fs::write(&manifest_path, with("window", "stream")).unwrap();
+        let error = read(&root).expect_err("a window does not stream audio");
+        assert!(error.contains("product.json:audio.output"));
 
         fs::write(&manifest_path, with("tv", "device-required")).unwrap();
         let error = read(&root).expect_err("unknown output rejects");

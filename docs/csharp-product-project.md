@@ -172,9 +172,11 @@ select where, and are carried in `product.json` as `renderer.output` and
 
 `RustyEngineProductRenderOutput` is `stream` (the default: frames streamed to
 the browser shell page) or `window` (a native [desktop window](desktop-shell.md)).
-`RustyEngineProductAudioOutput` is `device-optional` (the default: a machine
-with no audio device runs silent) or `device-required` (the load fails without
-one). `rusty dev --output` and `--audio-output` set them for one launch.
+`RustyEngineProductAudioOutput` is `stream` (the default with `stream`
+output: the pages watching the frames play the sound), `device-optional` (the
+default with `window` output: the runtime's audio device plays it, and a
+machine without one runs silent) or `device-required` (the load fails without
+a device). `stream` needs `stream` output. `rusty dev --output` and `--audio-output` set them for one launch.
 Invalid values reject staging.
 
 ## Read bundled product files

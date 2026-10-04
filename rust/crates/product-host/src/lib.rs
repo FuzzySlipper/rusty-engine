@@ -32,6 +32,7 @@
 
 #![forbid(unsafe_code)]
 
+mod audio;
 mod bundle;
 mod engine_debug;
 mod error;
@@ -46,6 +47,10 @@ mod timeline;
 #[cfg(test)]
 mod typescript;
 
+pub use audio::{
+    ProductHostAudioStream, PRODUCT_HOST_AUDIO_CHANNELS, PRODUCT_HOST_AUDIO_PATH,
+    PRODUCT_HOST_AUDIO_SAMPLE_RATE,
+};
 pub use bundle::{
     ProductHostBootstrapInput, ProductHostBootstrapLifecycle, ProductHostBootstrapProduct,
     ProductHostBootstrapRenderer, ProductHostBootstrapUi, ProductHostBootstrapUiProjection,

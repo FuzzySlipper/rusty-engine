@@ -1,14 +1,19 @@
-//! Audio realized on this process's output device.
+//! Audio realized for the product: on this process's output device, or mixed
+//! for the pages that watch its frames.
 //!
-//! The runtime opens the default output device when it loads and closes it
-//! when it drops. Committed audio ops play here: they are taken out of the
-//! call's publications. Natural completions and device diagnostics reach the
+//! The runtime opens its audio output when it loads and closes it when it
+//! drops. Committed audio ops play here: they are taken out of the call's
+//! publications. Natural completions and realization diagnostics reach the
 //! Engine as realization facts.
 //!
-//! With the manifest's `audio.output` at `device-optional` (the default), a
-//! machine with no output device (a CI runner, a headless server) runs silent
-//! after one warning: its audio ops are dropped and report no completions.
-//! `device-required` fails the load without one.
+//! With the manifest's `audio.output` at `stream` (the default for streamed
+//! frames), the same realizer mixes in real time with no device and the host
+//! streams each mixed block to every watching page; voices complete on time
+//! whether or not a page listens. `device-optional` (the default for window
+//! output) plays on the default output device, and a machine without one (a
+//! CI runner, a headless server) runs silent after one warning: its audio ops
+//! are dropped and report no completions. `device-required` fails the load
+//! without one.
 //!
 //! The listener follows the camera of the primary view in the committed view
 //! composition, and entity-attached emitters follow the committed graphics
@@ -17,37 +22,118 @@
 
 use csharp_engine_services::{AudioRealizationFact, EngineServiceSet};
 use product_host::RuntimePublication;
-use render_audio::{AudioEntityPositions, AudioRealizer, RealizedAudioFact};
+use std::sync::Arc;
+
+use product_host::{ProductHostAudioStream, PRODUCT_HOST_AUDIO_SAMPLE_RATE};
+use render_audio::{
+    AudioClipSource, AudioEntityPositions, AudioRealizer, RealizedAudioFact, StreamBackend,
+};
 use render_host_contracts::{RendererViewComposition, RendererViewTarget};
 use render_presentation::{PresentationFrameDiff, PresentationOp, VideoProjectionOp};
 
-use crate::{native_audio_diagnostic_code, CsharpProductRuntimeError};
+use crate::{native_audio_diagnostic_code, AudioOutputSelection, CsharpProductRuntimeError};
 
 /// The Engine's realization feedback admits this many facts per report.
 const MAX_FACTS_PER_REPORT: usize = 128;
 
 pub(crate) struct AudioOutput {
-    realizer: AudioRealizer,
+    realizer: Realizer,
     next_fact_id: u64,
 }
 
-impl AudioOutput {
-    /// Opens the default output device. `None` when none opens and the
-    /// device was not `required` (the manifest's `audio.output`).
-    pub(crate) fn open(required: bool) -> Result<Option<Self>, CsharpProductRuntimeError> {
-        match AudioRealizer::open_default_device() {
-            Ok(realizer) => Ok(Some(Self {
-                realizer,
-                next_fact_id: 1,
-            })),
-            Err(message) if required => Err(CsharpProductRuntimeError::new(
-                "CSHARP_AUDIO_OUTPUT",
-                message,
-            )),
-            Err(message) => {
-                eprintln!("rusty: {message}; the product runs silent");
-                Ok(None)
+/// The one realizer, on a device or mixing for the stream.
+enum Realizer {
+    Device(AudioRealizer),
+    Stream {
+        realizer: AudioRealizer<StreamBackend>,
+        stream: Arc<ProductHostAudioStream>,
+    },
+}
+
+/// Forwards each call to whichever realizer plays.
+macro_rules! forward {
+    ($(fn $name:ident(&mut self $(, $arg:ident: $type:ty)*) $(-> $output:ty)?;)*) => {
+        $(fn $name(&mut self $(, $arg: $type)*) $(-> $output)? {
+            match self {
+                Realizer::Device(realizer) => realizer.$name($($arg),*),
+                Realizer::Stream { realizer, .. } => realizer.$name($($arg),*),
             }
+        })*
+    };
+}
+
+impl Realizer {
+    forward! {
+        fn refresh(&mut self, entities: &impl AudioEntityPositions);
+        fn reset(&mut self);
+        fn stop_all(&mut self);
+        fn stop_soundtrack(&mut self);
+        fn play_soundtrack(&mut self, clip: &[u8]) -> Result<(), String>;
+        fn set_listener_pose(&mut self, position: [f32; 3], forward: [f32; 3], up: [f32; 3]);
+        fn set_suspended(&mut self, suspended: bool);
+        fn take_facts(&mut self) -> Vec<RealizedAudioFact>;
+        fn retain_clips(&mut self, admitted: impl Fn(&str) -> bool);
+    }
+
+    fn apply(
+        &mut self,
+        ops: &[PresentationOp],
+        clips: &impl AudioClipSource,
+        entities: &impl AudioEntityPositions,
+    ) {
+        match self {
+            Realizer::Device(realizer) => realizer.apply(ops, clips, entities),
+            Realizer::Stream { realizer, .. } => realizer.apply(ops, clips, entities),
+        }
+    }
+}
+
+impl AudioOutput {
+    /// Opens the selected output. `None` when no device opens and the
+    /// device was not `required` (the manifest's `audio.output`).
+    pub(crate) fn open(
+        selection: AudioOutputSelection,
+    ) -> Result<Option<Self>, CsharpProductRuntimeError> {
+        let realizer = match selection {
+            AudioOutputSelection::Stream => {
+                let stream = ProductHostAudioStream::new();
+                let sink = Arc::clone(&stream);
+                let realizer = AudioRealizer::open_stream(
+                    PRODUCT_HOST_AUDIO_SAMPLE_RATE,
+                    Arc::new(move |block: &[f32]| sink.publish(block)),
+                )
+                .map_err(|message| {
+                    CsharpProductRuntimeError::new("CSHARP_AUDIO_OUTPUT", message)
+                })?;
+                Realizer::Stream { realizer, stream }
+            }
+            AudioOutputSelection::Device { required } => {
+                match AudioRealizer::open_default_device() {
+                    Ok(realizer) => Realizer::Device(realizer),
+                    Err(message) if required => {
+                        return Err(CsharpProductRuntimeError::new(
+                            "CSHARP_AUDIO_OUTPUT",
+                            message,
+                        ))
+                    }
+                    Err(message) => {
+                        eprintln!("rusty: {message}; the product runs silent");
+                        return Ok(None);
+                    }
+                }
+            }
+        };
+        Ok(Some(Self {
+            realizer,
+            next_fact_id: 1,
+        }))
+    }
+
+    /// The mixed audio for the watching pages, when it streams.
+    pub(crate) fn stream(&self) -> Option<Arc<ProductHostAudioStream>> {
+        match &self.realizer {
+            Realizer::Device(_) => None,
+            Realizer::Stream { stream, .. } => Some(Arc::clone(stream)),
         }
     }
 

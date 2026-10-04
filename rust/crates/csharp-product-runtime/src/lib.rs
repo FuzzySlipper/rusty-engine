@@ -159,6 +159,16 @@ pub struct CsharpProductRuntimeError {
     detail: String,
 }
 
+/// Where committed audio plays: the manifest's `audio.output`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AudioOutputSelection {
+    /// This process's default output device. `required` fails the load
+    /// without one; otherwise the product runs silent.
+    Device { required: bool },
+    /// Mixed in real time and streamed to the pages watching the frames.
+    Stream,
+}
+
 /// Explicit standard-runtime configuration. Lifecycle selection, direct input
 /// descriptors, and physical mappings are Engine-owned host configuration,
 /// not product policy.
@@ -179,9 +189,8 @@ pub struct CsharpProductRuntimeConfig {
     renderer_options: render_wgpu::RendererOptions,
     /// Where the runtime's renderer draws; `None` builds no renderer.
     render_output: Option<RenderOutput>,
-    /// A missing audio output device fails the load instead of running
-    /// silent.
-    audio_device_required: bool,
+    /// Where committed audio plays.
+    audio_output: AudioOutputSelection,
     /// The desktop shell's device, for window output.
     window_gpu: Option<render_wgpu::Gpu>,
     /// The Product a scene snapshot names.
@@ -205,7 +214,7 @@ impl CsharpProductRuntimeConfig {
                 .expect("fixed diagnostic defaults"),
             renderer_options: render_wgpu::RendererOptions::default(),
             render_output: None,
-            audio_device_required: false,
+            audio_output: AudioOutputSelection::Device { required: false },
             window_gpu: None,
             product: None,
         }
@@ -227,10 +236,10 @@ impl CsharpProductRuntimeConfig {
         self
     }
 
-    /// The manifest's `audio.output`: whether a missing output device fails
-    /// the load (`device-required`) or the product runs silent.
-    pub fn with_audio_device_required(mut self, required: bool) -> Self {
-        self.audio_device_required = required;
+    /// The manifest's `audio.output`: the watching pages, or this process's
+    /// device and whether a missing one fails the load.
+    pub fn with_audio_output(mut self, output: AudioOutputSelection) -> Self {
+        self.audio_output = output;
         self
     }
 
@@ -784,7 +793,7 @@ impl CsharpProductRuntime {
             .transpose()?;
         // The process that draws the world plays its sound.
         let audio_output = match frame_output {
-            Some(_) => audio_output::AudioOutput::open(config.audio_device_required)?,
+            Some(_) => audio_output::AudioOutput::open(config.audio_output)?,
             None => None,
         };
         let render_outputs = render_output::OutputExecutor::start(config.renderer_options)
@@ -2490,6 +2499,14 @@ impl CsharpProductRuntime {
     }
 
     /// The host serves these frames when this process streams the world.
+    /// The mixed audio the watching pages play, when audio output is
+    /// `stream`.
+    pub fn audio_stream(&self) -> Option<Arc<product_host::ProductHostAudioStream>> {
+        self.audio_output
+            .as_ref()
+            .and_then(audio_output::AudioOutput::stream)
+    }
+
     pub fn frame_stream(&self) -> Option<Arc<product_host::ProductHostFrameStream>> {
         self.frame_output
             .as_ref()

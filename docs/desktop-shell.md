@@ -41,8 +41,8 @@ TypeScript UI is composited over it.
   draws video into its frames and shows those frames above the page
   ([architecture](architecture.md#runtime-rendered-output)).
 - **Audio.** The runtime plays audio on the output device, video
-  soundtracks included, as it does for streamed frames (see
-  [recorded audio](recorded-audio.md#device-realization)).
+  soundtracks included; streamed frames instead stream their sound to the
+  watching pages (see [recorded audio](recorded-audio.md#realization)).
 - **Live debug.** `rusty-live-debug --origin http://127.0.0.1:<port>`
   reaches the runtime's HTTP host over loopback, as in streaming mode.
   `rusty dev --cef-switch name[=value]` (repeatable, forwarded to

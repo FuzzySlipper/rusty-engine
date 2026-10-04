@@ -28,6 +28,7 @@ use crate::{
     MAX_SUBSCRIBER_QUEUE_EVENTS,
 };
 
+use crate::audio::ProductHostAudioStream;
 use crate::frames::ProductHostFrameStream;
 use crate::session::ProductHostOperationOwner;
 
@@ -57,6 +58,7 @@ pub struct ProductHostConfig {
     accept_decision_hook: Option<AcceptDecisionHook>,
     listener: Option<Arc<TcpListener>>,
     frames: Option<Arc<ProductHostFrameStream>>,
+    audio: Option<Arc<ProductHostAudioStream>>,
     capture: Option<crate::ProductHostFrameCapture>,
     ui_files: Option<ProductHostUiFiles>,
 }
@@ -80,6 +82,7 @@ impl ProductHostConfig {
             accept_decision_hook: None,
             listener: None,
             frames: None,
+            audio: None,
             capture: None,
             ui_files: None,
         }
@@ -105,6 +108,12 @@ impl ProductHostConfig {
     /// Serve the runtime's rendered frames at `/__rusty/product/runtime/frames`.
     pub fn with_frame_stream(mut self, frames: Arc<ProductHostFrameStream>) -> Self {
         self.frames = Some(frames);
+        self
+    }
+
+    /// Serve the runtime's mixed audio at `/__rusty/product/runtime/audio`.
+    pub fn with_audio_stream(mut self, audio: Arc<ProductHostAudioStream>) -> Self {
+        self.audio = Some(audio);
         self
     }
 
@@ -192,6 +201,8 @@ impl ProductHost {
             subscribers: AtomicUsize::new(0),
             published_readout: Mutex::new(None),
             frames: config.frames,
+            audio: config.audio,
+            audio_listeners: AtomicUsize::new(0),
             capture: config.capture,
             ui_files: config.ui_files,
         });
@@ -383,6 +394,8 @@ struct HostState<R> {
     /// only when they change what a browser shows, not every tick.
     published_readout: Mutex<Option<crate::ProductHostRuntimeReadout>>,
     frames: Option<Arc<ProductHostFrameStream>>,
+    audio: Option<Arc<ProductHostAudioStream>>,
+    audio_listeners: AtomicUsize,
     capture: Option<crate::ProductHostFrameCapture>,
     ui_files: Option<ProductHostUiFiles>,
 }
@@ -1169,6 +1182,10 @@ fn handle_connection<R: ProductHostRuntime>(mut stream: TcpStream, state: Arc<Ho
     }
     if request.method == "GET" && request.path == "/__rusty/product/runtime/outputs/fresh" {
         handle_sse(stream, state, request);
+        return;
+    }
+    if request.method == "GET" && request.path == crate::audio::PRODUCT_HOST_AUDIO_PATH {
+        handle_audio(stream, &state);
         return;
     }
     if request.method == "GET"
@@ -2176,6 +2193,61 @@ fn handle_frames<R: ProductHostRuntime>(
     let _ = write_response(&mut stream, response);
 }
 
+/// One watching page's audio: the mixed blocks from now on, until the page
+/// closes the request or the host stops.
+fn handle_audio<R: ProductHostRuntime>(mut stream: TcpStream, state: &HostState<R>) {
+    let Some(audio) = &state.audio else {
+        let _ = write_response(
+            &mut stream,
+            HttpResponse::error(
+                404,
+                "PRODUCT_HOST_AUDIO",
+                "this runtime does not stream its audio",
+            ),
+        );
+        return;
+    };
+    if !try_acquire(&state.audio_listeners, MAX_SSE_SUBSCRIBERS) {
+        let _ = write_response(
+            &mut stream,
+            HttpResponse::error(
+                503,
+                "PRODUCT_HOST_AUDIO_BOUNDS",
+                "audio listener limit reached",
+            ),
+        );
+        return;
+    }
+    let _listener = CounterGuard::new(&state.audio_listeners);
+    let headers = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: {}\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nConnection: close\r\n\r\n",
+        crate::audio::PRODUCT_HOST_AUDIO_CONTENT_TYPE
+    );
+    if stream.set_nodelay(true).is_err()
+        || stream.set_write_timeout(Some(SOCKET_TIMEOUT)).is_err()
+        || stream.write_all(headers.as_bytes()).is_err()
+        || stream.flush().is_err()
+    {
+        return;
+    }
+    let mut from = audio.start();
+    while !state.shutdown.load(Ordering::Acquire) {
+        let (blocks, next) = audio.blocks_from(from, AUDIO_WAIT);
+        from = next;
+        for block in blocks {
+            if stream.write_all(&block).is_err() {
+                return;
+            }
+        }
+        if stream.flush().is_err() {
+            return;
+        }
+    }
+}
+
+/// How long an audio listener waits for a block before checking shutdown.
+const AUDIO_WAIT: Duration = Duration::from_millis(250);
+
 /// A tool's capture: one frame drawn at its own size, never a viewer. The
 /// drawn cameras ride in `X-Rusty-Frame-Cameras`.
 fn capture_response<R: ProductHostRuntime>(
@@ -2640,6 +2712,7 @@ mod tests {
         "admit-demand-step",
         "admit-external-step",
         "advance-realtime",
+        "audio",
         "browser-diagnostics",
         "control/claim",
         "control/release",
@@ -2664,7 +2737,11 @@ mod tests {
     #[test]
     fn every_runtime_route_is_listed_as_shipped_or_live_debug() {
         let mut found = std::collections::BTreeSet::new();
-        for source in [include_str!("host.rs"), include_str!("frames.rs")] {
+        for source in [
+            include_str!("host.rs"),
+            include_str!("frames.rs"),
+            include_str!("audio.rs"),
+        ] {
             let tests = source.find("#[cfg(test)]\nmod tests {");
             let code = &source[..tests.unwrap_or(source.len())];
             for literal in code.split('"').skip(1).step_by(2) {
@@ -3321,6 +3398,8 @@ mod tests {
             subscribers: AtomicUsize::new(0),
             published_readout: Mutex::new(None),
             frames: None,
+            audio: None,
+            audio_listeners: AtomicUsize::new(0),
             capture: None,
             ui_files: None,
         };
@@ -3367,6 +3446,8 @@ mod tests {
             subscribers: AtomicUsize::new(0),
             published_readout: Mutex::new(None),
             frames: None,
+            audio: None,
+            audio_listeners: AtomicUsize::new(0),
             capture: None,
             ui_files: None,
         });

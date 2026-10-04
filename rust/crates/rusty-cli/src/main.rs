@@ -536,7 +536,8 @@ struct DevOptions {
     headless: bool,
     /// `stream` or `window`, for this launch (`RustyEngineProductRenderOutput`).
     output: Option<String>,
-    /// `device-optional` or `device-required` (`RustyEngineProductAudioOutput`).
+    /// `stream`, `device-optional` or `device-required`
+    /// (`RustyEngineProductAudioOutput`).
     audio_output: Option<String>,
     /// Chromium switches for the window's UI page, `name[=value]`.
     cef_switches: Vec<String>,
@@ -731,9 +732,12 @@ fn parse_dev(values: Vec<String>) -> Result<DevOptions, String> {
             }
             "--audio-output" => {
                 let value = required_value(&mut values, "--audio-output")?;
-                if !matches!(value.as_str(), "device-optional" | "device-required") {
+                if !matches!(
+                    value.as_str(),
+                    "stream" | "device-optional" | "device-required"
+                ) {
                     return Err(
-                        "RUSTY_DEV_ARGUMENT: --audio-output must be device-optional or device-required"
+                        "RUSTY_DEV_ARGUMENT: --audio-output must be stream, device-optional or device-required"
                             .to_owned(),
                     );
                 }
@@ -988,7 +992,7 @@ Get or refresh this command:
 fn dev_usage() -> String {
     "usage: rusty dev [--project <ordinary-product.csproj>] [--port <u16>] [--bind-host <IPv4>] [--live-debug] [--debugger]
                  [--headless [--chromium <executable>]] [--output <stream|window>]
-                 [--audio-output <device-optional|device-required>] [--cef-switch <name[=value]>]...
+                 [--audio-output <stream|device-optional|device-required>] [--cef-switch <name[=value]>]...
                  [--diagnostics-log <file>] [--runtime <runtime-pack> | --engine-source <rusty-engine-source>]
        rusty dev start [the same options]
        rusty dev stop|status [--project <ordinary-product.csproj>]
@@ -1020,7 +1024,8 @@ runtime for the UI) into the cache beside the pair.
   --headless           run unattended: a headless Chromium page keeps the world drawing and the UI mounted
   --chromium           the Chromium executable --headless opens (else one on PATH)
   --output             stream (the default) or window, for this launch
-  --audio-output       device-required fails the load without an audio device; device-optional runs silent
+  --audio-output       stream plays in the watching pages (the default with stream output); device-required
+                       fails the load without an audio device; device-optional runs silent
   --cef-switch         a Chromium switch for the window's UI page, e.g. remote-debugging-port=9333
   --diagnostics-log    write the host's NDJSON diagnostics to this file
   --runtime            Engine contributors: use this runtime pack instead of the pin

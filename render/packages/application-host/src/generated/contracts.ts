@@ -14,6 +14,12 @@ export const FRAME_STREAM_HEADER = {
   flags: { held: 1, video: 2 },
 } as const;
 
+/** Where the page listens to the audio the runtime mixes. */
+export const AUDIO_STREAM_PATH = "/__rusty/product/runtime/audio";
+
+/** The streamed audio: interleaved signed 16-bit little-endian PCM. */
+export const AUDIO_STREAM_FORMAT = { sampleRate: 48000, channels: 2 } as const;
+
 export type ControllerAxis = "axis-0" | "axis-1" | "axis-2" | "axis-3";
 
 export type ControllerButton = "button-0" | "button-1" | "button-2" | "button-3" | "button-4" | "button-5" | "button-6" | "button-7" | "button-8" | "button-9" | "button-10" | "button-11" | "button-12" | "button-13" | "button-14" | "button-15";

@@ -7,11 +7,14 @@
  * With `window` the desktop shell presents the world to its native window
  * under this page, so the canvas stays transparent. Either way the canvas
  * stays the application's focus, pointer-lock and input target, and this view
- * runs the one page cadence the application samples input on.
+ * runs the one page cadence the application samples input on. A streamed
+ * view also plays the sound the runtime mixes for its viewers
+ * (`audio-stream.ts`).
  *
  * Wire format: `rust/crates/product-host/src/frames.rs`, whose header
  * layout is emitted as `FRAME_STREAM_HEADER`.
  */
+import { mountRustyApplicationAudioStream } from './audio-stream.js';
 import { FRAME_STREAM_HEADER, FRAME_STREAM_PATH, type ProductHostRenderOutput } from './generated/contracts.js';
 
 /** Above the product UI while a video clip covers the frame. */
@@ -207,6 +210,7 @@ export function mountRustyApplicationFrameView(
     animationFrame = window.requestAnimationFrame(onAnimationFrame);
   };
 
+  const audio = streamed ? mountRustyApplicationAudioStream(window) : null;
   if (streamed) {
     resize();
     pull();
@@ -218,6 +222,7 @@ export function mountRustyApplicationFrameView(
       if (disposed) return;
       disposed = true;
       pulling.abort();
+      audio?.dispose();
       if (animationFrame !== null) window.cancelAnimationFrame(animationFrame);
       animationFrame = null;
       resizeObserver?.disconnect();

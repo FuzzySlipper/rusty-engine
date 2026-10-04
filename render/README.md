@@ -18,6 +18,9 @@ it: change the Rust type and run `scripts/generate-typescript-contracts.sh`.
 The world, audio and video are rendered in the runtime process by Rust
 (`render-wgpu`, `render-audio`); see the
 [architecture overview](../docs/architecture.md#runtime-rendered-output).
+With streamed output the page shows the runtime's frames and plays its mixed
+sound (`application-host/src/audio-stream.ts`); it renders and mixes nothing
+itself.
 It is an Engine-private workspace, not a package graph for ordinary downstream
 games.
 

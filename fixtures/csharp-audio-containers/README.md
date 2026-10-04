@@ -8,10 +8,13 @@ This explicit Engine fixture consumes the shared synthesized bodies in
 Start opens WAV/Vorbis/Opus/MP3/FLAC through both `OpenClip` and
 `OpenClipFromContent`, checks deduplicated handle identity, and releases the
 second owner. Execute `audio.proof.play` with `rusty-live-debug`. It creates
-five looping voices and five one-shot emissions, played on the runtime's
-output device. After the tones complete, `audio.proof.inspect` should report
+five looping voices and five one-shot emissions. With the default `stream`
+output they play in the page watching the frames after its first click or key
+press; with `device-optional` or `device-required` on the runtime's output
+device. After the tones complete, `audio.proof.inspect` should report
 five admitted clips/five active voices and natural completion facts.
-`audio.proof.stop` releases loops. Product logic has no format decoder,
+`audio.proof.stop` releases loops. `audio.proof.bus <volume> <muted>` sets
+the Ambient bus every proof voice plays on. Product logic has no format decoder,
 resampler or audio device control.
 
 Spatial proof: `audio.proof.face <yaw>` turns the active camera (the device
