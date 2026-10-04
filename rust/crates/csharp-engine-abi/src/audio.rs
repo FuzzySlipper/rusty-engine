@@ -2,6 +2,9 @@
 //!
 //! Audio clips are immutable Engine-admitted product resources. Callers may
 //! release an acquired clip after dependent voices and one-shots are terminal.
+//! A product that ends a one-shot early can call the safe `RetireOneShot`
+//! operation with the signal returned by `Emit`; the Engine then ends that
+//! playback and releases its pending clip owner.
 
 use crate::{NativeContentReferenceHandle, NativeUtf8Slice, NativeVec3};
 

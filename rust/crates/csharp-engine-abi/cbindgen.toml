@@ -565,6 +565,7 @@ include = [
     "NativeOpenRenderResource",
     "NativeOpenAudioClip",
     "NativeEmitAudio",
+    "NativeRetireAudioOneShot",
     "NativeCreateAudioVoice",
     "NativeUpdateAudioVoice",
     "NativeReplaceAudioVoice",

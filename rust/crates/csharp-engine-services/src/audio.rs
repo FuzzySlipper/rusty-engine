@@ -748,6 +748,31 @@ impl RuntimeAudioBridge {
         Ok(signal_handle)
     }
 
+    fn retire_one_shot(
+        &mut self,
+        signal_handle: NativeAudioSignalHandle,
+    ) -> Result<(), CsharpEngineServicesError> {
+        let pending = self
+            .staged_mut()?
+            .state
+            .one_shot_clips
+            .contains_key(&signal_handle.value);
+        if !pending {
+            // Natural completion, a terminal diagnostic, and repeated
+            // retirement all leave no pending Engine owner. Keep the safe
+            // cancellation operation idempotent for those states.
+            return Ok(());
+        }
+        self.stage_op(AudioProjectionOp::Retire {
+            signal_handle: render_presentation::AudioSignalHandle::new(signal_handle.value),
+        })?;
+        self.staged_mut()?
+            .state
+            .one_shot_clips
+            .remove(&signal_handle.value);
+        Ok(())
+    }
+
     fn create_voice(
         &mut self,
         descriptor: NativeAudioSourceDescriptor,
@@ -1294,6 +1319,28 @@ pub(crate) unsafe extern "C" fn emit_audio(
         }
     }
 }
+
+pub(crate) unsafe extern "C" fn retire_audio_one_shot(
+    context: *mut c_void,
+    signal_handle: NativeAudioSignalHandle,
+    operation_error: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    if !operation_error.is_null() {
+        unsafe { *operation_error = std::mem::zeroed() };
+    }
+    if context.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeAudioBridge>() };
+    match bridge.retire_one_shot(signal_handle) {
+        Ok(()) => ABI_OK,
+        Err(error) => {
+            bridge.operation_diagnostics.retain(&error, operation_error);
+            0
+        }
+    }
+}
+
 pub(crate) unsafe extern "C" fn create_audio_voice(
     context: *mut c_void,
     request: *const NativeAudioSourceDescriptor,
@@ -1587,6 +1634,7 @@ pub(crate) fn api(bridge: &mut RuntimeAudioBridge) -> NativeAudioApi {
         destroy_clip: destroy_audio_clip,
         preload_optional: preload_optional_audio_clip,
         emit: emit_audio,
+        retire_one_shot: retire_audio_one_shot,
         create_voice: create_audio_voice,
         update_voice: update_audio_voice,
         replace_voice: replace_audio_voice,
@@ -2380,6 +2428,107 @@ mod tests {
             .destroy_clip(clip)
             .expect("completed signal releases clip");
         let call = bridge.take_staged_call().expect("release call");
+        bridge.commit(call);
+        assert_eq!(bridge.render_resources().count(), 0);
+    }
+
+    #[test]
+    fn retires_pending_one_shot_before_releasing_final_clip_owner() {
+        let mut resources = BTreeMap::new();
+        resources.insert("audio/trial.wav".to_owned(), wav());
+        let mut bridge = RuntimeAudioBridge::new(resources);
+        bridge.begin_call();
+        let path = b"content/audio/trial.wav";
+        let clip = bridge
+            .open_clip(&NativeAudioClipRequest {
+                path: NativeUtf8Slice {
+                    bytes: path.as_ptr(),
+                    len: path.len(),
+                },
+            })
+            .expect("clip");
+        let signal = bridge
+            .emit(NativeAudioEmitRequest {
+                signal_id: NativeUtf8Slice {
+                    bytes: b"retire-before-release".as_ptr(),
+                    len: b"retire-before-release".len(),
+                },
+                descriptor: descriptor(clip, NativeAudioBus::Ui),
+            })
+            .expect("one-shot");
+        bridge.end_call();
+
+        bridge.begin_call();
+        bridge
+            .retire_one_shot(signal)
+            .expect("pending one-shot retires");
+        bridge
+            .retire_one_shot(signal)
+            .expect("repeated retirement is idempotent");
+        bridge
+            .destroy_clip(clip)
+            .expect("retirement releases the pending clip owner");
+        let call = bridge.take_staged_call().expect("retirement call");
+        let frame = call.frame.as_ref().expect("retirement projection");
+        assert!(matches!(
+            frame.ops.as_slice(),
+            [PresentationOp::Audio {
+                op: AudioProjectionOp::Retire { signal_handle },
+                ..
+            }] if signal_handle.raw() == signal.value
+        ));
+        bridge.commit(call);
+        assert_eq!(bridge.render_resources().count(), 0);
+    }
+
+    #[test]
+    fn retiring_completed_one_shot_is_idempotent() {
+        let mut resources = BTreeMap::new();
+        resources.insert("audio/trial.wav".to_owned(), wav());
+        let mut bridge = RuntimeAudioBridge::new(resources);
+        bridge.begin_call();
+        let path = b"content/audio/trial.wav";
+        let clip = bridge
+            .open_clip(&NativeAudioClipRequest {
+                path: NativeUtf8Slice {
+                    bytes: path.as_ptr(),
+                    len: path.len(),
+                },
+            })
+            .expect("clip");
+        let signal = bridge
+            .emit(NativeAudioEmitRequest {
+                signal_id: NativeUtf8Slice {
+                    bytes: b"retire-after-completion".as_ptr(),
+                    len: b"retire-after-completion".len(),
+                },
+                descriptor: descriptor(clip, NativeAudioBus::Ui),
+            })
+            .expect("one-shot");
+        bridge.end_call();
+        bridge
+            .ingest_realized_feedback(
+                false,
+                0,
+                [AudioRealizationFact::NaturalCompletionOneShot {
+                    fact_id: 1,
+                    sequence: 0,
+                    signal_handle: signal.value,
+                }],
+            )
+            .expect("completion feedback");
+        bridge.begin_call();
+        bridge
+            .retire_one_shot(signal)
+            .expect("completed one-shot is already retired");
+        bridge
+            .destroy_clip(clip)
+            .expect("completed signal releases clip");
+        let call = bridge.take_staged_call().expect("release call");
+        assert!(
+            call.frame.is_none(),
+            "no operation is needed after completion"
+        );
         bridge.commit(call);
         assert_eq!(bridge.render_resources().count(), 0);
     }

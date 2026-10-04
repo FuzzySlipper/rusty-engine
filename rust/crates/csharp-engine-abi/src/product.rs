@@ -499,6 +499,11 @@ pub type NativeEmitAudio = unsafe extern "C" fn(
     *mut NativeAudioSignalHandle,
     *mut NativeOperationErrorReceipt,
 ) -> i32;
+pub type NativeRetireAudioOneShot = unsafe extern "C" fn(
+    *mut c_void,
+    NativeAudioSignalHandle,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
 pub type NativeCreateAudioVoice = unsafe extern "C" fn(
     *mut c_void,
     *const NativeAudioSourceDescriptor,
@@ -1551,6 +1556,7 @@ pub struct NativeAudioApi {
     pub destroy_clip: NativeDestroyAudioClip,
     pub preload_optional: NativePreloadOptionalAudioClip,
     pub emit: NativeEmitAudio,
+    pub retire_one_shot: NativeRetireAudioOneShot,
     pub create_voice: NativeCreateAudioVoice,
     pub update_voice: NativeUpdateAudioVoice,
     pub replace_voice: NativeReplaceAudioVoice,

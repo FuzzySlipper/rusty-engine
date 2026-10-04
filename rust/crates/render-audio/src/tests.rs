@@ -525,6 +525,36 @@ fn stop_all_silences_one_shots_and_voices() {
     );
 }
 
+#[test]
+fn retiring_one_shot_silences_it_without_completion() {
+    let mut realizer = capture_realizer();
+    realizer.apply(
+        &[emit(1, 7, descriptor("sha256:wav", false))],
+        &Clips::fixtures(),
+        &NoEntityPositions,
+    );
+    assert!(realizer.backend_mut().render_peak(0.1) > 0.01);
+
+    realizer.apply(
+        &[op(
+            2,
+            AudioProjectionOp::Retire {
+                signal_handle: AudioSignalHandle::new(7),
+            },
+        )],
+        &Clips::fixtures(),
+        &NoEntityPositions,
+    );
+    realizer.backend_mut().render_peak(0.05);
+    assert!(
+        realizer.backend_mut().render_peak(0.1) < 1e-5,
+        "retired one-shot kept rendering"
+    );
+    realizer.refresh(&NoEntityPositions);
+    assert_eq!(realizer.take_facts(), [], "retirement is not completion");
+    assert_eq!(realizer.readout().one_shots, 0);
+}
+
 fn spatial(hash: &str, emitter: AudioEmitter, looping: bool) -> AudioSourceDescriptor {
     AudioSourceDescriptor {
         spatial_blend: 1.0,

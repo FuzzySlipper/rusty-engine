@@ -134,8 +134,8 @@ impl PresentationFrameDiff {
         Ok(())
     }
 
-    /// Events newly emitted by the current operation may accompany its full
-    /// baseline once. They are never copied into retained recovery state.
+    /// Transient audio events from the current operation may accompany its
+    /// full baseline once. They are never copied into retained recovery state.
     pub fn transient_events(&self) -> Self {
         let mut ops = Vec::new();
         for op in &self.ops {
@@ -143,6 +143,15 @@ impl PresentationFrameDiff {
             match op {
                 PresentationOp::Audio {
                     op: op @ AudioProjectionOp::Emit { .. },
+                    ..
+                } => {
+                    ops.push(PresentationOp::Audio {
+                        meta,
+                        op: op.clone(),
+                    });
+                }
+                PresentationOp::Audio {
+                    op: op @ AudioProjectionOp::Retire { .. },
                     ..
                 } => {
                     ops.push(PresentationOp::Audio {
@@ -207,6 +216,9 @@ fn validate_json_safe_integers(
             } => {
                 json_safe(signal_handle.raw(), sequence, "audio.signalHandle")?;
                 validate_audio(descriptor, sequence)
+            }
+            AudioProjectionOp::Retire { signal_handle } => {
+                json_safe(signal_handle.raw(), sequence, "audio.signalHandle")
             }
             AudioProjectionOp::Create { handle, descriptor } => {
                 json_safe(handle.raw(), sequence, "audio.handle")?;

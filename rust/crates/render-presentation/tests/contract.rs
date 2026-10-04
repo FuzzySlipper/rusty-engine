@@ -290,6 +290,36 @@ fn particle_patch_distinguishes_omitted_collision_from_explicit_clear() {
 }
 
 #[test]
+fn retired_audio_signals_cross_a_rebind_as_transient_events() {
+    let frame = PresentationFrameDiff::try_from_ops(vec![
+        PresentationOp::Audio {
+            meta: PresentationOpMeta::new(0),
+            op: AudioProjectionOp::Emit {
+                signal_handle: AudioSignalHandle::new(1),
+                signal_id: "pulse".into(),
+                descriptor: audio(),
+            },
+        },
+        PresentationOp::Audio {
+            meta: PresentationOpMeta::new(1),
+            op: AudioProjectionOp::Retire {
+                signal_handle: AudioSignalHandle::new(1),
+            },
+        },
+    ])
+    .expect("retirement frame validates");
+    let transient = frame.transient_events();
+    assert_eq!(transient.ops.len(), 2);
+    assert!(matches!(
+        transient.ops[1],
+        PresentationOp::Audio {
+            op: AudioProjectionOp::Retire { signal_handle },
+            ..
+        } if signal_handle.raw() == 1
+    ));
+}
+
+#[test]
 fn frame_rejects_sequence_gaps() {
     let error = PresentationFrameDiff::try_from_ops(vec![PresentationOp::Audio {
         meta: PresentationOpMeta::new(1),

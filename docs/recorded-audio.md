@@ -48,6 +48,14 @@ completions and realization diagnostics become realization facts the product
 reads through `Audio`. It also plays a playing video clip's Opus soundtrack
 (demuxed by `render-video`) from the clip's start, outside the Engine buses.
 
+`Audio.Emit` returns an Engine signal handle for each one-shot, including
+repeated signal labels. A product that ends that playback early may call
+`Audio.RetireOneShot` with the handle. Retirement stops the active device
+playback, releases the pending clip owner, and produces no natural-completion
+fact; repeated or already-completed retirement is harmless. Shutdown silences
+the output and clears these pending realization owners before product disposal,
+so products can release their final clip references in `Dispose`.
+
 - `stream`, the default with streamed frames: the runtime opens no device. It
   mixes in real time, in 10 ms blocks, and the host serves the mix at
   `GET /__rusty/product/runtime/audio` as one long response of interleaved

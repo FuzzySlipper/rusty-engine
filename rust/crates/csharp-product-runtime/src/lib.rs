@@ -3412,6 +3412,11 @@ impl Drop for CsharpProductRuntime {
                 self.shutdown_called = true;
             }
         }
+        // Shutdown silences the host's output, but a one-shot has no terminal
+        // feedback after that silence. Clear the Engine-side realization
+        // owner before Product Dispose gets its ordinary call so a product
+        // can release its final clip references during disposal.
+        self.services.reset_audio_realization_owner();
         // Product Dispose may release Engine resources, which it does inside
         // an ordinary call like any other.
         self.services.begin_call(ui_binding(&self.lifecycle));
@@ -5050,6 +5055,12 @@ mod tests {
     static VOXEL_FAILURE_REFRESH_STATUS: AtomicI32 = AtomicI32::new(0);
     static FIXTURE_DIAGNOSTICS_CONTEXT: AtomicUsize = AtomicUsize::new(0);
     static FIXTURE_DIAGNOSTICS_PUBLISH: AtomicUsize = AtomicUsize::new(0);
+    static AUDIO_DISPOSE_FIXTURE_ENABLED: AtomicBool = AtomicBool::new(false);
+    static AUDIO_DISPOSE_FIXTURE_ACTIVE: AtomicBool = AtomicBool::new(false);
+    static AUDIO_DISPOSE_AUDIO_CONTEXT: AtomicUsize = AtomicUsize::new(0);
+    static AUDIO_DISPOSE_AUDIO_DESTROY: AtomicUsize = AtomicUsize::new(0);
+    static AUDIO_DISPOSE_CLIP: AtomicU64 = AtomicU64::new(0);
+    static AUDIO_DISPOSE_DESTROY_STATUS: AtomicI32 = AtomicI32::new(-1);
     static DROP_EVENTS: Mutex<Vec<&'static str>> = Mutex::new(Vec::new());
     static PRODUCT_ERROR_RELEASES: AtomicUsize = AtomicUsize::new(0);
     static DIRECT_INPUT_FIXTURE_GATE: Mutex<()> = Mutex::new(());
@@ -5359,6 +5370,65 @@ mod tests {
         FIXTURE_UI_CONTEXT.store(ui.context as usize, Ordering::SeqCst);
         FIXTURE_UI_OPEN.store(ui.open_stream as usize, Ordering::SeqCst);
         FIXTURE_UI_PUBLISH.store(ui.publish_projection as usize, Ordering::SeqCst);
+        let audio = unsafe { (*args).engine.audio };
+        AUDIO_DISPOSE_AUDIO_CONTEXT.store(audio.context as usize, Ordering::SeqCst);
+        AUDIO_DISPOSE_AUDIO_DESTROY.store(audio.destroy_clip as usize, Ordering::SeqCst);
+        if AUDIO_DISPOSE_FIXTURE_ENABLED.swap(false, Ordering::SeqCst) {
+            let path = b"content/audio/dispose.wav";
+            let request = NativeAudioClipRequest {
+                path: NativeUtf8Slice {
+                    bytes: path.as_ptr(),
+                    len: path.len(),
+                },
+            };
+            let open: NativeOpenAudioClip =
+                unsafe { std::mem::transmute(audio.open_clip as usize) };
+            let mut clip = NativeAudioClipHandle::default();
+            let mut operation_error = unsafe { std::mem::zeroed() };
+            let open_status =
+                unsafe { open(audio.context, &request, &mut clip, &mut operation_error) };
+            if open_status != ABI_OK {
+                return open_status;
+            }
+            let signal_id = b"dispose-one-shot";
+            let emit: NativeEmitAudio = unsafe { std::mem::transmute(audio.emit as usize) };
+            let mut signal = NativeAudioSignalHandle::default();
+            let mut operation_error = unsafe { std::mem::zeroed() };
+            let emit_status = unsafe {
+                emit(
+                    audio.context,
+                    &NativeAudioEmitRequest {
+                        signal_id: NativeUtf8Slice {
+                            bytes: signal_id.as_ptr(),
+                            len: signal_id.len(),
+                        },
+                        descriptor: NativeAudioSourceDescriptor {
+                            clip,
+                            bus: NativeAudioBus::Sfx,
+                            volume: 0.5,
+                            pitch: 1.0,
+                            looping: false,
+                            spatial_blend: 0.0,
+                            max_distance: 1.0,
+                            rolloff: NativeAudioRolloff::Linear,
+                            pan: 0.0,
+                            emitter_kind: NativeAudioEmitterKind::Global2d,
+                            position: NativeVec3::default(),
+                            entity: 0,
+                            offset: NativeVec3::default(),
+                        },
+                    },
+                    &mut signal,
+                    &mut operation_error,
+                )
+            };
+            if emit_status != ABI_OK {
+                return emit_status;
+            }
+            AUDIO_DISPOSE_CLIP.store(clip.value, Ordering::SeqCst);
+            AUDIO_DISPOSE_DESTROY_STATUS.store(-1, Ordering::SeqCst);
+            AUDIO_DISPOSE_FIXTURE_ACTIVE.store(true, Ordering::SeqCst);
+        }
         // SAFETY: the fixture provides a non-null opaque value which is never
         // dereferenced by its callbacks.
         unsafe { *handle = std::ptr::NonNull::<u8>::dangling().as_ptr().cast() };
@@ -5570,6 +5640,21 @@ mod tests {
     }
 
     unsafe extern "C" fn drop_fixture_destroy(_handle: *mut c_void) {
+        if AUDIO_DISPOSE_FIXTURE_ACTIVE.swap(false, Ordering::SeqCst) {
+            let destroy: NativeDestroyAudioClip =
+                unsafe { std::mem::transmute(AUDIO_DISPOSE_AUDIO_DESTROY.load(Ordering::SeqCst)) };
+            let mut operation_error = unsafe { std::mem::zeroed() };
+            let status = unsafe {
+                destroy(
+                    AUDIO_DISPOSE_AUDIO_CONTEXT.load(Ordering::SeqCst) as *mut c_void,
+                    NativeAudioClipHandle {
+                        value: AUDIO_DISPOSE_CLIP.load(Ordering::SeqCst),
+                    },
+                    &mut operation_error,
+                )
+            };
+            AUDIO_DISPOSE_DESTROY_STATUS.store(status, Ordering::SeqCst);
+        }
         record_drop_event("destroy");
     }
 
@@ -5719,6 +5804,39 @@ mod tests {
 
     fn drop_fixture_runtime(label: &str) -> (CsharpProductRuntime, PathBuf) {
         drop_fixture_runtime_with_config(label, RuntimeLifecycleConfig::Demand)
+    }
+
+    fn audio_disposal_fixture_runtime(label: &str) -> (CsharpProductRuntime, PathBuf) {
+        let root = content_fixture_root(label);
+        fs::create_dir_all(root.join("audio")).expect("audio fixture content root");
+        let mut wav = vec![0_u8; 44];
+        wav[..4].copy_from_slice(b"RIFF");
+        wav[4..8].copy_from_slice(&36_u32.to_le_bytes());
+        wav[8..12].copy_from_slice(b"WAVE");
+        wav[12..16].copy_from_slice(b"fmt ");
+        wav[16..20].copy_from_slice(&16_u32.to_le_bytes());
+        wav[20..22].copy_from_slice(&1_u16.to_le_bytes());
+        wav[22..24].copy_from_slice(&1_u16.to_le_bytes());
+        wav[24..28].copy_from_slice(&4_u32.to_le_bytes());
+        wav[28..32].copy_from_slice(&4_u32.to_le_bytes());
+        wav[32..34].copy_from_slice(&2_u16.to_le_bytes());
+        wav[34..36].copy_from_slice(&16_u16.to_le_bytes());
+        wav[36..40].copy_from_slice(b"data");
+        wav[40..44].copy_from_slice(&0_u32.to_le_bytes());
+        fs::write(root.join("audio/dispose.wav"), wav).expect("audio fixture WAV");
+        let content = CsharpProductContent::admit(&root).expect("audio fixture content");
+        AUDIO_DISPOSE_FIXTURE_ENABLED.store(true, Ordering::SeqCst);
+        let runtime = CsharpProductRuntime::load_admitted_with(
+            content,
+            CsharpProductRuntimeConfig::new(
+                RuntimeInstanceId::new(1),
+                RuntimeLifecycleConfig::Demand,
+                Vec::new(),
+            ),
+            || Ok(drop_fixture_api()),
+        )
+        .expect("audio disposal fixture runtime");
+        (runtime, root)
     }
 
     fn realtime_drop_fixture_runtime(label: &str) -> (CsharpProductRuntime, PathBuf) {
@@ -6695,6 +6813,33 @@ mod tests {
             ["shutdown", "destroy"],
         );
         fs::remove_dir_all(root).expect("remove drop fixture content");
+    }
+
+    #[test]
+    fn shutdown_releases_silenced_one_shot_before_product_disposal() {
+        let _guard = DROP_FIXTURE_GATE
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        DROP_CALLBACK_STATUS.store(ABI_OK, Ordering::SeqCst);
+        AUDIO_DISPOSE_FIXTURE_ENABLED.store(false, Ordering::SeqCst);
+        AUDIO_DISPOSE_FIXTURE_ACTIVE.store(false, Ordering::SeqCst);
+        AUDIO_DISPOSE_DESTROY_STATUS.store(-1, Ordering::SeqCst);
+        DROP_EVENTS
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clear();
+        let (runtime, root) = audio_disposal_fixture_runtime("audio-disposal-shutdown");
+
+        drop(runtime);
+        assert_eq!(AUDIO_DISPOSE_DESTROY_STATUS.load(Ordering::SeqCst), ABI_OK);
+        assert_eq!(
+            DROP_EVENTS
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .as_slice(),
+            ["shutdown", "destroy"],
+        );
+        fs::remove_dir_all(root).expect("remove audio disposal fixture content");
     }
 
     #[test]

@@ -174,6 +174,12 @@ pub enum AudioProjectionOp {
         signal_id: String,
         descriptor: AudioSourceDescriptor,
     },
+    /// End a pending one-shot without fabricating a realization completion.
+    /// The service owner releases the matching clip reference at admission;
+    /// the realizer stops any currently playing signal idempotently.
+    Retire {
+        signal_handle: AudioSignalHandle,
+    },
     Create {
         handle: AudioHandle,
         descriptor: AudioSourceDescriptor,
@@ -437,6 +443,7 @@ impl AudioProjector {
                 self.referenced_clips.insert(descriptor.clip.asset.clone());
                 self.emitted_signals = self.emitted_signals.saturating_add(1);
             }
+            AudioProjectionOp::Retire { .. } => {}
             AudioProjectionOp::Create { handle, descriptor } => {
                 if self.active.contains_key(handle) {
                     return Err(AudioProjectionDiagnosticCode::DuplicateHandle);
@@ -618,6 +625,7 @@ fn emitter_is_finite(emitter: &AudioEmitter) -> bool {
 fn operation_handle(op: &AudioProjectionOp) -> Option<AudioHandle> {
     match op {
         AudioProjectionOp::Emit { .. } => None,
+        AudioProjectionOp::Retire { .. } => None,
         AudioProjectionOp::Create { handle, .. }
         | AudioProjectionOp::Restore { handle, .. }
         | AudioProjectionOp::Update { handle, .. }

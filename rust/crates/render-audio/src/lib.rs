@@ -345,6 +345,7 @@ impl<B: Backend> AudioRealizer<B> {
             if let Err((code, message)) = self.apply_op(meta.sequence, op, clips, entities) {
                 let (handle, signal_handle) = match op {
                     AudioProjectionOp::Emit { signal_handle, .. } => (None, Some(*signal_handle)),
+                    AudioProjectionOp::Retire { .. } => (None, None),
                     AudioProjectionOp::Create { handle, .. }
                     | AudioProjectionOp::Restore { handle, .. }
                     | AudioProjectionOp::Update { handle, .. }
@@ -396,6 +397,21 @@ impl<B: Backend> AudioRealizer<B> {
             playback.stop();
         }
         self.released_one_shots.clear();
+    }
+
+    /// Stops one active one-shot and forgets its realization identity without
+    /// reporting a natural completion. The Engine service releases the
+    /// product's pending clip owner when it admits the matching operation;
+    /// unknown and already-completed signals are intentionally idempotent.
+    pub fn retire_one_shot(&mut self, signal_handle: AudioSignalHandle) {
+        self.one_shots.retain_mut(|one_shot| {
+            if one_shot.signal_handle == signal_handle {
+                one_shot.playback.stop();
+                false
+            } else {
+                true
+            }
+        });
     }
 
     /// Follows the runtime lifecycle: a paused runtime advances no Engine
@@ -579,6 +595,7 @@ impl<B: Backend> AudioRealizer<B> {
                     playback,
                 });
             }
+            AudioProjectionOp::Retire { signal_handle } => self.retire_one_shot(*signal_handle),
             AudioProjectionOp::Create { handle, descriptor } => self.insert_voice(
                 *handle,
                 sequence,
