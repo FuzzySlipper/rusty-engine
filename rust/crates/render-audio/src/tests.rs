@@ -782,6 +782,33 @@ fn a_video_soundtrack_plays_pauses_with_the_runtime_and_stops() {
     assert_eq!(realizer.soundtrack_position(), None);
 }
 
+#[test]
+fn a_soundtrack_started_while_held_waits_at_the_world_moment() {
+    let clip = include_bytes!("../../render-video/tests/fixtures/testsrc.webm");
+    let mut realizer = realizer();
+    let position = |realizer: &mut AudioRealizer<MockBackend>, seconds: f64| {
+        for _ in 0..(seconds / 0.05) as usize {
+            run(realizer, 0.05);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        realizer.soundtrack_position().expect("not stopped")
+    };
+    // The world holds (an inspection hold) before an update starts the clip.
+    realizer.set_suspended(true);
+    realizer.play_soundtrack(clip).expect("plays");
+    let started = position(&mut realizer, 0.5);
+    assert!(started < 1e-6, "a held soundtrack does not play: {started}");
+    // The inspection advance then admits 0.3 s of world time.
+    realizer.advance_held(0.3);
+    let advanced = position(&mut realizer, 0.3);
+    assert!((advanced - 0.3).abs() < 1e-6, "{advanced}");
+    // Resumed, it plays on from that world moment.
+    realizer.set_suspended(false);
+    let resumed = position(&mut realizer, 0.5);
+    assert!((0.5..1.0).contains(&resumed), "resumed at {resumed}");
+    realizer.stop_soundtrack();
+}
+
 /// The device plays a spatial voice at the descriptor's rolloff of its
 /// distance, silent at and beyond its maximum distance, and follows a range
 /// change through an ordinary voice update.

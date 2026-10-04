@@ -302,6 +302,9 @@ pub struct AudioRealizer<B: Backend = DefaultBackend> {
     facts: Vec<RealizedAudioFact>,
     /// The playing video's own sound, outside the Engine buses.
     soundtrack: Option<StreamingSoundHandle<FromFileError>>,
+    /// The soundtrack's own track, suspended with the buses, so a soundtrack
+    /// that starts while the world holds holds at its start.
+    soundtrack_track: TrackHandle,
     /// The soundtrack's position after a held advance, until it resumes.
     soundtrack_held_at: Option<f64>,
     /// How fast world time runs against realtime; every sound plays at this
@@ -354,6 +357,9 @@ impl<B: Backend> AudioRealizer<B> {
                 .map_err(|error| error.to_string())
         };
         let buses = [bus()?, bus()?, bus()?, bus()?];
+        let soundtrack_track = manager
+            .add_sub_track(TrackBuilder::new())
+            .map_err(|error| error.to_string())?;
         Ok(Self {
             manager,
             listener,
@@ -365,6 +371,7 @@ impl<B: Backend> AudioRealizer<B> {
             released_one_shots: Vec::new(),
             facts: Vec::new(),
             soundtrack: None,
+            soundtrack_track,
             soundtrack_held_at: None,
             world_rate: 1.0,
         })
@@ -468,12 +475,10 @@ impl<B: Backend> AudioRealizer<B> {
                 bus.resume(IMMEDIATE);
             }
         }
-        if let Some(soundtrack) = &mut self.soundtrack {
-            if suspended {
-                soundtrack.pause(IMMEDIATE);
-            } else {
-                soundtrack.resume(IMMEDIATE);
-            }
+        if suspended {
+            self.soundtrack_track.pause(IMMEDIATE);
+        } else {
+            self.soundtrack_track.resume(IMMEDIATE);
         }
         if !suspended {
             // Resumed tracks apply the held seeks; kira's positions are
@@ -564,7 +569,7 @@ impl<B: Backend> AudioRealizer<B> {
         let decoder =
             soundtrack::SoundtrackDecoder::new(clip).map_err(|error| error.to_string())?;
         let handle = self
-            .manager
+            .soundtrack_track
             .play(
                 StreamingSoundData::from_decoder(decoder)
                     .playback_rate(PlaybackRate(self.world_rate)),
