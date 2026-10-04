@@ -307,6 +307,18 @@ page reports. The UI sets the UI scale with `context.ui.setScale(scale)` (0.25
 to 4) and reads it with `context.ui.scale()`; the document root's font size and
 its `--rusty-ui-scale` property follow it, so rem-sized UI scales while layout
 units keep their meaning. Streamed frames render at device pixels.
+`Watching` on the same readout says whether anyone watches the product now. It
+is false only in stream output while no page pulls frames. It turns false
+two to three seconds after the last page leaves (the stream's two-second viewer
+grace, plus up to a second while a frame request is still waiting) and true as soon as a page asks
+for a frame. In window output, and with no render output, it is always true.
+The Engine keeps stepping either way; a product that should not play to an
+empty room, such as one whose hunger or world clock runs on step time, holds
+its own clock and rules while `Watching` is false. Live-debug commands and a
+harness's input claim are not watchers. A lane that drives such a product
+without a page runs `rusty dev --headless`, whose page watches, or gives the
+product its own setting to ignore `Watching`.
+
 `CameraView.ReadViewportAnchor(new("hero"))` reads the rect of the element
 anchored under `"hero"` from the same report. The rect is normalized to the
 surface with a bottom-left origin, like a camera viewport, and clipped to it.

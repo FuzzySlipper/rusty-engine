@@ -1730,10 +1730,15 @@ impl CsharpProductRuntime {
         if let Some(frames) = &mut self.frame_output {
             frames.report(&mut self.services);
         }
-        if let Some(layout) = self.presentation.layout() {
-            self.services.ingest_camera_surface(
+        let watching = self
+            .frame_output
+            .as_ref()
+            .is_none_or(frame_output::FrameOutput::watching);
+        let (surface, anchors) = match self.presentation.layout() {
+            Some(layout) => (
                 NativeCameraSurfaceReadout {
                     reported: true,
+                    watching,
                     css_width: layout.css_width,
                     css_height: layout.css_height,
                     device_width: layout.css_width * layout.device_pixel_ratio,
@@ -1743,8 +1748,16 @@ impl CsharpProductRuntime {
                     revision: layout.revision,
                 },
                 layout.anchors,
-            );
-        }
+            ),
+            None => (
+                NativeCameraSurfaceReadout {
+                    watching,
+                    ..Default::default()
+                },
+                Default::default(),
+            ),
+        };
+        self.services.ingest_camera_surface(surface, anchors);
         self.services
             .begin_update_call(ui_binding(&self.lifecycle), facts);
         let callback_started = Instant::now();

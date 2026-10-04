@@ -96,7 +96,11 @@ impl RuntimeCameraViewBridge {
                 next_camera: 1,
                 next_target: 1,
             },
-            surface: NativeCameraSurfaceReadout::default(),
+            // Until the runtime reports otherwise, assume someone watches.
+            surface: NativeCameraSurfaceReadout {
+                watching: true,
+                ..Default::default()
+            },
             viewport_anchors: BTreeMap::new(),
             staged: None,
             operation_diagnostics: Default::default(),
@@ -1777,6 +1781,7 @@ mod tests {
 
         let surface = NativeCameraSurfaceReadout {
             reported: true,
+            watching: true,
             css_width: 800.0,
             css_height: 600.0,
             device_width: 1600.0,

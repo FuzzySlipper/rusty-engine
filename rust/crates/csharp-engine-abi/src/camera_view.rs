@@ -187,10 +187,16 @@ pub enum NativeCameraInterpolation {
 /// page showing the product last reported it, in stream and window output
 /// alike. `reported` is false until a page reports. `revision` changes with
 /// every change, so a product notices a resize by comparing it.
+///
+/// `watching` is false only in stream output while no page pulls frames: it
+/// turns false two to three seconds after the last watching page leaves and
+/// true as soon as one asks for a frame. In window output, and with no render
+/// output, it is always true. It is not part of `revision`.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct NativeCameraSurfaceReadout {
     pub reported: bool,
+    pub watching: bool,
     pub css_width: f64,
     pub css_height: f64,
     /// The surface in device pixels: its CSS size times the pixel ratio.

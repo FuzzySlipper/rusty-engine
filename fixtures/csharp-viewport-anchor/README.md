@@ -18,5 +18,8 @@ SDK feed, and launch with that pair's `rusty dev --project ... --live-debug`.
   hero panel's rect normalized to the surface, and how many changes Update
   has seen. Widening the side panel in the page changes it without changing
   the surface.
+- `viewport.proof.watching` reads `CameraSurfaceReadout.Watching`: whether a
+  page watches the stream now, how often that changed, and how many updates
+  ran while none did. Close the page to see it turn false.
 - `window.rustyFixtureUi.setScale(1.5)` in the page sets the UI scale, which
   the next readout reports.

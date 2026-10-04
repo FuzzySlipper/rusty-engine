@@ -21,6 +21,9 @@ public sealed class Product(ProductCreateContext context) : IEngineProduct, IDeb
     private int surfaceChanges;
     private CameraViewportAnchorReadout hero;
     private int heroChanges;
+    private bool watching = true;
+    private int watchingChanges;
+    private int unwatchedUpdates;
 
     public void Start()
     {
@@ -38,6 +41,9 @@ public sealed class Product(ProductCreateContext context) : IEngineProduct, IDeb
     [DebugCommand("viewport.proof.surface", Description = "Read the presented surface and how often Update saw it change.")]
     public string Surface() => $"{surface};changes={surfaceChanges}";
 
+    [DebugCommand("viewport.proof.watching", Description = "Whether a page watches, how often that changed, and how many updates ran unwatched.")]
+    public string Watching() => $"watching={watching};changes={watchingChanges};unwatchedUpdates={unwatchedUpdates}";
+
     [DebugCommand("viewport.proof.hero", Description = "Read the hero panel's rect and how often Update saw it change.")]
     public string Hero() => $"{hero};changes={heroChanges}";
 
@@ -53,6 +59,15 @@ public sealed class Product(ProductCreateContext context) : IEngineProduct, IDeb
     public ProductUpdateResult Update(ProductUpdate update)
     {
         CameraSurfaceReadout current = context.Engine.CameraView.ReadSurface();
+        if (current.Watching != watching)
+        {
+            watching = current.Watching;
+            watchingChanges++;
+        }
+        if (!watching)
+        {
+            unwatchedUpdates++;
+        }
         if (current.Revision != surface.Revision)
         {
             surface = current;

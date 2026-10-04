@@ -314,6 +314,14 @@ impl FrameOutput {
         self.driver.set_simulation(simulation.held, simulation.step);
     }
 
+    /// Whether anyone watches what this output presents: a page pulling
+    /// streamed frames, or always for a window.
+    pub(crate) fn watching(&self) -> bool {
+        self.stream
+            .as_ref()
+            .is_none_or(|(_, route)| route.wanted_size().is_some())
+    }
+
     /// Reports what the renderer observed since the last call, drawn or not.
     /// Call between product calls.
     pub(crate) fn report(&mut self, services: &mut EngineServiceSet) {
