@@ -46,7 +46,11 @@ it plays only while it moves (the product runs, playtest inspection does not
 hold it, and [gameplay time](csharp-lifecycle.md#gameplay-time) is not held),
 and plays every voice and the video soundtrack at the gameplay rate times its
 own pitch, so device positions keep pace with the Engine cursors in slow
-motion. That resamples (pitch falls with the rate); there is no time stretch.
+motion. That resamples (pitch falls with the rate); there is no time stretch. World time
+admitted while the device holds (a playtest inspection advance) moves every
+held sound, one-shot and soundtrack on by that much, so they resume at the
+world moment the advance reached, and a one-shot it carries past its end
+completes then.
 All four buses are world audio, `Ui` included: a sound that must play while
 the world holds belongs to the product UI page. A binding change (Start,
 Restart, fault) replays the committed baseline, and Shutdown stops every

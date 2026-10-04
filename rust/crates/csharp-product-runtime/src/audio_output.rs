@@ -41,6 +41,8 @@ pub(crate) struct AudioOutput {
     next_fact_id: u64,
     /// Whether world time is held and how fast it runs, as last followed.
     world: Option<(bool, f64)>,
+    /// The Engine world time the device last caught up with.
+    world_seconds: f64,
 }
 
 /// The one realizer, on a device or mixing for the stream.
@@ -74,6 +76,7 @@ impl Realizer {
         fn set_listener_pose(&mut self, position: [f32; 3], forward: [f32; 3], up: [f32; 3]);
         fn set_suspended(&mut self, suspended: bool);
         fn set_world_rate(&mut self, rate: f64);
+        fn advance_held(&mut self, world_seconds: f64);
         fn take_facts(&mut self) -> Vec<RealizedAudioFact>;
         fn retain_clips(&mut self, admitted: impl Fn(&str) -> bool);
     }
@@ -88,6 +91,20 @@ impl Realizer {
             Realizer::Device(realizer) => realizer.apply(ops, clips, entities),
             Realizer::Stream { realizer, .. } => realizer.apply(ops, clips, entities),
         }
+    }
+}
+
+#[cfg(test)]
+impl AudioOutput {
+    fn voice_cursor(&self, handle: render_presentation::AudioHandle) -> Option<f64> {
+        match &self.realizer {
+            Realizer::Device(realizer) => realizer.voice_cursor(handle),
+            Realizer::Stream { realizer, .. } => realizer.voice_cursor(handle),
+        }
+    }
+
+    fn take_facts(&mut self) -> Vec<RealizedAudioFact> {
+        self.realizer.take_facts()
     }
 }
 
@@ -130,6 +147,7 @@ impl AudioOutput {
             realizer,
             next_fact_id: 1,
             world: None,
+            world_seconds: 0.0,
         }))
     }
 
@@ -148,6 +166,14 @@ impl AudioOutput {
         services: &EngineServiceSet,
         outputs: &mut [RuntimePublication],
     ) {
+        // World time this call admitted while the device held (a playtest
+        // inspection advance) moves the held sounds on, before the call's own
+        // new sounds start at its end.
+        let world_seconds = services.presentation_elapsed_seconds();
+        let advanced = world_seconds - std::mem::replace(&mut self.world_seconds, world_seconds);
+        if advanced > 0.0 && self.world.is_some_and(|(held, _)| held) {
+            self.realizer.advance_held(advanced);
+        }
         for output in outputs.iter() {
             if let RuntimePublication::ViewComposition(composition) = output {
                 self.follow_camera(composition);
@@ -178,6 +204,7 @@ impl AudioOutput {
         services: &EngineServiceSet,
     ) -> Result<(), CsharpProductRuntimeError> {
         let baseline = services.audio_snapshot_frame()?;
+        self.world_seconds = services.presentation_elapsed_seconds();
         self.follow_camera(&services.view_composition()?);
         self.realizer.reset();
         // A fresh realization plays an active clip from its start, as the
@@ -386,6 +413,141 @@ mod tests {
     };
 
     use super::*;
+    use csharp_engine_abi::*;
+    use render_audio::RealizedAudioFact;
+    use render_presentation::AudioHandle;
+
+    const TONE: &[u8] = include_bytes!("../../../../fixtures/audio-containers/tone.wav");
+    const OK: i32 = 1;
+
+    fn utf8(text: &'static str) -> NativeUtf8Slice {
+        NativeUtf8Slice {
+            bytes: text.as_ptr(),
+            len: text.len(),
+        }
+    }
+
+    fn source(clip: NativeAudioClipHandle, looping: bool) -> NativeAudioSourceDescriptor {
+        NativeAudioSourceDescriptor {
+            clip,
+            bus: NativeAudioBus::Sfx,
+            volume: 1.0,
+            pitch: 1.0,
+            looping,
+            spatial_blend: 0.0,
+            max_distance: 1.0,
+            rolloff: NativeAudioRolloff::Linear,
+            pan: 0.0,
+            emitter_kind: NativeAudioEmitterKind::Global2d,
+            position: NativeVec3::default(),
+            entity: 0,
+            offset: NativeVec3::default(),
+        }
+    }
+
+    fn one_step(services: &mut EngineServiceSet, step: u64) {
+        services.begin_update_call(
+            runtime_ui::RuntimeUiRuntimeBinding::new(
+                runtime_lifecycle::RuntimeInstanceId::new(1),
+                runtime_lifecycle::RuntimeGeneration::ZERO,
+                runtime_lifecycle::RuntimeControlRevision::ZERO,
+            ),
+            NativeProductUpdateFacts {
+                mode: NativeProductUpdateMode::Realtime,
+                lifecycle_state: NativeProductLifecycleState::Running,
+                generation: 1,
+                control_revision: 1,
+                observed_host_time_nanoseconds: 0,
+                simulation_step: step,
+                fixed_step_hz: 60,
+                admitted_step_count: 1,
+                dropped_step_count: 0,
+                fixed_delta_seconds: 1.0 / 60.0,
+                gameplay_time_selected: false,
+                gameplay_rate: 1.0,
+                gameplay_advance_remaining_steps: 0,
+                host_elapsed_seconds: 0.0,
+            },
+        );
+        services.finish_call().expect("update call");
+    }
+
+    #[test]
+    fn an_inspection_advance_moves_held_device_audio_to_the_world_moment() {
+        let mut services = EngineServiceSet::new(
+            csharp_engine_services::parse_runtime_appearance_catalog(None).unwrap(),
+            [("tone.wav".to_owned(), std::sync::Arc::<[u8]>::from(TONE))].into(),
+            None,
+            product_host::ProductHostLog::new(Default::default())
+                .unwrap()
+                .handle(),
+        )
+        .unwrap();
+        let mut output = AudioOutput::open(AudioOutputSelection::Stream)
+            .unwrap()
+            .expect("stream output");
+        // The product starts a looping voice and a one-second one-shot.
+        services.begin_call(runtime_ui::RuntimeUiRuntimeBinding::new(
+            runtime_lifecycle::RuntimeInstanceId::new(1),
+            runtime_lifecycle::RuntimeGeneration::ZERO,
+            runtime_lifecycle::RuntimeControlRevision::ZERO,
+        ));
+        let api = services.api().audio;
+        let mut clip = NativeAudioClipHandle::default();
+        let mut voice = NativeAudioVoiceHandle::default();
+        let mut signal = NativeAudioSignalHandle::default();
+        let mut error = unsafe { std::mem::zeroed::<NativeOperationErrorReceipt>() };
+        unsafe {
+            let request = NativeAudioClipRequest {
+                path: utf8("tone.wav"),
+            };
+            assert_eq!(
+                (api.open_clip)(api.context, &request, &mut clip, &mut error),
+                OK
+            );
+            let looped = source(clip, true);
+            assert_eq!(
+                (api.create_voice)(api.context, &looped, &mut voice, &mut error),
+                OK
+            );
+            let emit = NativeAudioEmitRequest {
+                signal_id: utf8("shot"),
+                descriptor: source(clip, false),
+            };
+            assert_eq!((api.emit)(api.context, &emit, &mut signal, &mut error), OK);
+        }
+        let mut call = services.finish_call().expect("product call");
+        let mut outputs = crate::service_outputs(call.take_output()).expect("outputs");
+        output.realize(&services, &mut outputs);
+        // Playtest inspection holds the world: the device holds too.
+        output.follow_world(true, 1.0);
+        let held = output
+            .voice_cursor(AudioHandle::new(voice.value))
+            .expect("voice");
+        // A 0.25 s inspection advance: fifteen admitted steps.
+        for step in 0..15 {
+            one_step(&mut services, step);
+            output.realize(&services, &mut []);
+        }
+        let moved = output
+            .voice_cursor(AudioHandle::new(voice.value))
+            .expect("voice");
+        assert!(
+            (moved - held - 0.25).abs() < 0.02,
+            "the voice stands at the world moment: {held} -> {moved}"
+        );
+        // A further second carries the one-shot past its end: it completes
+        // at that world moment, while the world is still held.
+        for step in 15..75 {
+            one_step(&mut services, step);
+            output.realize(&services, &mut []);
+        }
+        assert!(output.take_facts().iter().any(|fact| matches!(
+            fact,
+            RealizedAudioFact::OneShotCompleted { signal_handle, .. }
+                if signal_handle.raw() == signal.value
+        )));
+    }
 
     fn composition(views: serde_json::Value) -> RendererViewComposition {
         let camera = |id: &str, yaw: f64, pitch: f64| {

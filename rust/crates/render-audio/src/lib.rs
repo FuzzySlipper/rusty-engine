@@ -165,16 +165,25 @@ struct Playback {
     duration: Option<f64>,
     /// The descriptor's own rate, before the world rate scales it.
     pitch: f64,
+    /// Where world time moved the sound while the device was suspended. kira
+    /// applies the seek when its track resumes; until then this is the cursor.
+    held_at: Option<f64>,
+    /// World time carried the sound past its end while suspended.
+    ended: bool,
 }
 
 impl Playback {
     fn finished(&self) -> bool {
-        each_sound!(&self.sound, handle => handle.state()) == PlaybackState::Stopped
+        self.ended || each_sound!(&self.sound, handle => handle.state()) == PlaybackState::Stopped
+    }
+
+    fn position(&self) -> f64 {
+        self.held_at
+            .unwrap_or_else(|| each_sound!(&self.sound, handle => handle.position()))
     }
 
     fn cursor(&self, looping: bool) -> f64 {
-        let position = each_sound!(&self.sound, handle => handle.position());
-        normalize_cursor(position, self.duration, looping)
+        normalize_cursor(self.position(), self.duration, looping)
     }
 
     fn pause(&mut self) {
@@ -194,6 +203,25 @@ impl Playback {
             Sound::Static(_) => None,
             Sound::Streaming(handle) => handle.pop_error().map(|error| error.to_string()),
         }
+    }
+
+    /// Moves the suspended sound on by `world_seconds` of world time at its
+    /// own rate. Past the end of a non-looping sound it ends there.
+    fn advance(&mut self, world_seconds: f64, looping: bool) {
+        if self.ended {
+            return;
+        }
+        let target = self.position() + world_seconds * self.pitch;
+        if let Some(duration) = self.duration.filter(|duration| *duration > 0.0) {
+            if !looping && target >= duration {
+                self.stop();
+                self.ended = true;
+                return;
+            }
+        }
+        let target = normalize_cursor(target, self.duration, looping);
+        each_sound!(&mut self.sound, handle => handle.seek_to(target));
+        self.held_at = Some(target);
     }
 
     /// Plays at the descriptor's rate scaled by the world's.
@@ -274,6 +302,8 @@ pub struct AudioRealizer<B: Backend = DefaultBackend> {
     facts: Vec<RealizedAudioFact>,
     /// The playing video's own sound, outside the Engine buses.
     soundtrack: Option<StreamingSoundHandle<FromFileError>>,
+    /// The soundtrack's position after a held advance, until it resumes.
+    soundtrack_held_at: Option<f64>,
     /// How fast world time runs against realtime; every sound plays at this
     /// multiple of its own rate (see [`AudioRealizer::set_world_rate`]).
     world_rate: f64,
@@ -335,6 +365,7 @@ impl<B: Backend> AudioRealizer<B> {
             released_one_shots: Vec::new(),
             facts: Vec::new(),
             soundtrack: None,
+            soundtrack_held_at: None,
             world_rate: 1.0,
         })
     }
@@ -444,6 +475,22 @@ impl<B: Backend> AudioRealizer<B> {
                 soundtrack.resume(IMMEDIATE);
             }
         }
+        if !suspended {
+            // Resumed tracks apply the held seeks; kira's positions are
+            // current again from here.
+            self.soundtrack_held_at = None;
+            let voices = self
+                .voices
+                .values_mut()
+                .filter_map(|voice| voice.playback.as_mut());
+            let one_shots = self
+                .one_shots
+                .iter_mut()
+                .map(|one_shot| &mut one_shot.playback);
+            for playback in voices.chain(one_shots).chain(&mut self.released_one_shots) {
+                playback.held_at = None;
+            }
+        }
     }
 
     /// Plays every sound, and the video soundtrack, at `rate` times its own
@@ -471,6 +518,40 @@ impl<B: Backend> AudioRealizer<B> {
         }
     }
 
+    /// Moves every playing sound and the video soundtrack on by `world_seconds`
+    /// of world time that passed while the device was suspended (a playtest
+    /// inspection advance runs world steps with the world held), so the device
+    /// stands where the Engine's cursors do. A one-shot moved past its end
+    /// completes as it would have.
+    pub fn advance_held(&mut self, world_seconds: f64) {
+        if !world_seconds.is_finite() || world_seconds <= 0.0 {
+            return;
+        }
+        for voice in self.voices.values_mut() {
+            if voice.state != RealizedVoiceState::Playing {
+                continue;
+            }
+            if let Some(playback) = voice.playback.as_mut() {
+                playback.advance(world_seconds, voice.descriptor.looping);
+            }
+        }
+        // One-shots never loop.
+        for one_shot in &mut self.one_shots {
+            one_shot.playback.advance(world_seconds, false);
+        }
+        for playback in &mut self.released_one_shots {
+            playback.advance(world_seconds, false);
+        }
+        if let Some(soundtrack) = &mut self.soundtrack {
+            let target = self
+                .soundtrack_held_at
+                .unwrap_or_else(|| soundtrack.position())
+                + world_seconds;
+            soundtrack.seek_to(target);
+            self.soundtrack_held_at = Some(target);
+        }
+    }
+
     /// Play a WebM video clip's own sound from its start, replacing any
     /// other. A clip without an Opus track plays silently. The browser's
     /// video element played it outside the Engine buses; so does this.
@@ -490,10 +571,12 @@ impl<B: Backend> AudioRealizer<B> {
             )
             .map_err(|error| error.to_string())?;
         self.soundtrack = Some(handle);
+        self.soundtrack_held_at = None;
         Ok(())
     }
 
     pub fn stop_soundtrack(&mut self) {
+        self.soundtrack_held_at = None;
         if let Some(mut soundtrack) = self.soundtrack.take() {
             soundtrack.stop(IMMEDIATE);
         }
@@ -504,7 +587,10 @@ impl<B: Backend> AudioRealizer<B> {
         self.soundtrack
             .as_ref()
             .filter(|soundtrack| soundtrack.state() != PlaybackState::Stopped)
-            .map(StreamingSoundHandle::position)
+            .map(|soundtrack| {
+                self.soundtrack_held_at
+                    .unwrap_or_else(|| soundtrack.position())
+            })
     }
 
     /// Drops decoded data for clips the Engine no longer owns, unless a
@@ -943,6 +1029,8 @@ impl<B: Backend> AudioRealizer<B> {
             spatial,
             duration,
             pitch,
+            held_at: None,
+            ended: false,
         })
     }
 }

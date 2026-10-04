@@ -349,6 +349,59 @@ fn playback_keeps_pace_with_a_slowed_world() {
 }
 
 #[test]
+fn world_time_advanced_while_suspended_moves_every_sound_on() {
+    let mut realizer = realizer();
+    let mut looped = descriptor("sha256:wav", true);
+    looped.clip.duration_seconds = Some(1.0);
+    apply(
+        &mut realizer,
+        &[
+            restore(1, looped, AudioVoiceDesiredState::Playing, 0.0),
+            emit(2, 7, descriptor("sha256:wav", false)),
+        ],
+    );
+    run(&mut realizer, 0.1);
+    // Held (an inspection hold): the device stops where it is...
+    realizer.set_suspended(true);
+    run(&mut realizer, 0.05);
+    let held = realizer.voice_cursor(AudioHandle::new(1)).expect("voice");
+    // ...and the inspection advance runs 0.4 s of world time.
+    realizer.advance_held(0.4);
+    run(&mut realizer, 0.05);
+    let advanced = realizer.voice_cursor(AudioHandle::new(1)).expect("voice");
+    assert!(
+        (advanced - held - 0.4).abs() < 0.02,
+        "voice moved {held} -> {advanced}"
+    );
+    // A further 1 s carries the one-shot (about 1 s long) past its end: it
+    // completes at that world moment, while the device is still held.
+    realizer.advance_held(1.0);
+    run(&mut realizer, 0.05);
+    realizer.refresh(&NoEntityPositions);
+    assert_eq!(
+        realizer.take_facts(),
+        [RealizedAudioFact::OneShotCompleted {
+            sequence: 2,
+            signal_handle: AudioSignalHandle::new(7),
+        }]
+    );
+    let looped_on = realizer.voice_cursor(AudioHandle::new(1)).expect("voice");
+    assert!(
+        (looped_on - (advanced + 1.0) % 1.0).abs() < 0.02,
+        "looping voice wraps: {advanced} -> {looped_on}"
+    );
+    // Resuming plays on from that world moment, not from where it held.
+    realizer.set_suspended(false);
+    run(&mut realizer, 0.1);
+    let resumed = realizer.voice_cursor(AudioHandle::new(1)).expect("voice");
+    assert!(
+        (resumed - (looped_on + 0.1)).abs() < 0.03,
+        "resumed at {resumed}, expected about {}",
+        looped_on + 0.1
+    );
+}
+
+#[test]
 fn spatial_emitters_play_and_unresolved_entities_are_diagnosed() {
     let mut realizer = realizer();
     let mut world = descriptor("sha256:wav", false);
