@@ -7,6 +7,7 @@ import type {
   ProductHostRenderOutput,
   RuntimeInputWireIntentValue,
 } from './generated/contracts.js';
+import { requestPointerLockWhile } from './pointer-lock.js';
 import { createRustyApplicationPresentationReporter } from './presentation-report.js';
 import {
   resolvePresentationFrameGeometry,
@@ -205,7 +206,9 @@ export async function mountRustyApplication(
       throw new RustyApplicationHostError('disposed', 'Rusty Application Host is disposed');
     }
     canvas.focus({ preventScroll: true });
-    if (gameplayCursorMode === 'pointer-lock') requestPointerLock(canvas);
+    if (gameplayCursorMode === 'pointer-lock') {
+      requestPointerLockWhile(canvas, () => interactionMode === 'gameplay' && !closing && !disposed);
+    }
   };
   let uiScale = 1;
   const presentation = createRustyApplicationPresentationReporter(canvas, () => uiScale);
@@ -605,14 +608,6 @@ function isTextEntry(target: EventTarget | null): boolean {
     || target instanceof HTMLTextAreaElement
     || target instanceof HTMLSelectElement
     || (target instanceof HTMLElement && target.isContentEditable);
-}
-
-function requestPointerLock(canvas: HTMLCanvasElement): void {
-  try {
-    void canvas.requestPointerLock().catch(() => undefined);
-  } catch {
-    // Pointer lock can be rejected by host policy or a missing user gesture.
-  }
 }
 
 async function cleanupApplicationOwners(
