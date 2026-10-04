@@ -1565,6 +1565,17 @@ impl RuntimeAppearanceBridge {
         Ok(result)
     }
 
+    /// Makes the open call fail its end-of-call settlement, as a deferred
+    /// resource-release failure does.
+    #[cfg(test)]
+    pub(crate) fn fail_settlement_for_test(&mut self) {
+        self.staged.as_mut().expect("an open call").release_error =
+            Some(CsharpEngineServicesError::new(
+                "CSHARP_RESOURCE_RELEASE",
+                "injected settlement failure",
+            ));
+    }
+
     /// Takes the finished call, with the renderer releases for resources it
     /// released. A release failure is kept on the call for the caller.
     pub(crate) fn take_staged_call(&mut self) -> RuntimeAppearanceCall {

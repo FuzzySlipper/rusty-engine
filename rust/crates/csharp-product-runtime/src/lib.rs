@@ -948,7 +948,7 @@ impl CsharpProductRuntime {
             Ok((
                 initial_output,
                 call.take_input_mapping_replacement(),
-                call.take_gameplay_time_request(),
+                services.take_gameplay_time_request(),
             ))
         });
         let (initial_output, initial_input_mapping_replacement, initial_gameplay_time) =
@@ -1995,12 +1995,14 @@ impl CsharpProductRuntime {
             input_mapping_replacement: None,
             failure: callback_error,
         };
-        match self.services.finish_call() {
+        let call = self.services.finish_call();
+        // Kept even when finishing failed: the product's request succeeded.
+        if let Some(request) = self.services.take_gameplay_time_request() {
+            self.staged_gameplay_time = Some(request);
+        }
+        match call {
             Ok(mut call) => {
                 finished.input_mapping_replacement = call.take_input_mapping_replacement();
-                if let Some(request) = call.take_gameplay_time_request() {
-                    self.staged_gameplay_time = Some(request);
-                }
                 match call_outputs(&self.render_outputs, call.take_output()) {
                     Ok(mut outputs) => {
                         if let Some(audio) = &mut self.audio_output {

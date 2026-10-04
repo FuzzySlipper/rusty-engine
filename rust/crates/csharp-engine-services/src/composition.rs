@@ -302,7 +302,6 @@ pub struct EngineServiceSet {
 /// replacement it selected. Every service already holds the call's changes.
 pub struct CsharpEngineCall {
     input_mapping_replacement: Option<runtime_input::CompiledInputMappings>,
-    gameplay_time_request: Option<crate::GameplayTimeRequest>,
     output: CsharpEngineCallOutput,
 }
 
@@ -491,6 +490,13 @@ impl EngineServiceSet {
         self.gameplay_time.set(fixed_step_hz, effective);
     }
 
+    /// The gameplay time the last call selected, for the runtime to settle
+    /// after `finish_call` whether or not finishing failed: a request the
+    /// product saw succeed is kept, as every other call change is.
+    pub fn take_gameplay_time_request(&mut self) -> Option<crate::GameplayTimeRequest> {
+        self.gameplay_time.take_call()
+    }
+
     pub fn begin_call(&mut self, ui_binding: RuntimeUiRuntimeBinding) {
         self.begin_services(ui_binding, None, false);
     }
@@ -660,7 +666,6 @@ impl EngineServiceSet {
             ));
         }
         let input_mapping_replacement = self.input.take_call();
-        let gameplay_time_request = self.gameplay_time.take_call();
         let mut calls = ServiceCalls {
             implicit: self.implicit.take_call()?,
             presentation_world: std::mem::take(&mut self.presentation_world),
@@ -686,7 +691,6 @@ impl EngineServiceSet {
             .commit_call(calls.voxel_scene_presentation);
         Ok(CsharpEngineCall {
             input_mapping_replacement,
-            gameplay_time_request,
             output: output?,
         })
     }
@@ -887,11 +891,6 @@ impl CsharpEngineCall {
         std::mem::take(&mut self.output)
     }
 
-    /// The gameplay time the call selected last, for the runtime to settle.
-    pub fn take_gameplay_time_request(&mut self) -> Option<crate::GameplayTimeRequest> {
-        self.gameplay_time_request.take()
-    }
-
     pub fn take_input_mapping_replacement(
         &mut self,
     ) -> Option<runtime_input::CompiledInputMappings> {
@@ -1081,6 +1080,41 @@ mod tests {
         services.finish_call().unwrap();
         GRAPHICS_SNAPSHOT_READS.with(|c| assert_eq!(c.get(), 1));
         assert_eq!(billboards(&services), 0);
+    }
+
+    #[test]
+    fn a_gameplay_time_request_survives_a_failed_call_settlement() {
+        let mut services = EngineServiceSet::new(
+            parse_runtime_appearance_catalog(None).unwrap(),
+            BTreeMap::new(),
+            None,
+            RuntimeDiagnosticsSink::new(Default::default()).unwrap(),
+        )
+        .unwrap();
+        services.set_gameplay_time(Some(60), runtime_lifecycle::GameplayTime::default());
+        services.begin_call(binding());
+        let api = services.api();
+        let mut readout = NativeGameplayTimeReadout::default();
+        let mut error = crate::operation_diagnostics::empty_receipt();
+        let status = unsafe {
+            (api.gameplay_time.select_rate)(
+                api.gameplay_time.context,
+                &NativeGameplayTimeRateRequest { rate: 0.0 },
+                &mut readout,
+                &mut error,
+            )
+        };
+        assert_eq!(status, ABI_OK, "the product sees its hold succeed");
+        services.appearance.fail_settlement_for_test();
+        assert!(services.finish_call().is_err());
+        assert_eq!(
+            services.take_gameplay_time_request(),
+            Some(crate::GameplayTimeRequest::Rate(
+                runtime_lifecycle::GameplayRate::HOLD
+            ))
+        );
+        // Taken once; the next call starts with nothing staged.
+        assert_eq!(services.take_gameplay_time_request(), None);
     }
 
     #[test]
