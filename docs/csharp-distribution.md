@@ -65,7 +65,7 @@ From the product repository:
 ```bash
 rusty status
 rusty install
-rusty dev --project src/Game/Game.csproj --port 8787
+rusty dev --project src/Game/Game.csproj
 rusty update --check
 rusty update
 ```

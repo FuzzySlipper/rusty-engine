@@ -27,7 +27,7 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use pair::{InstalledPair, Pin};
-use session::Session;
+use session::{Registration, Session};
 
 const STAGE_TARGET: &str = "StageRustyEngineCoreClrProduct";
 const AOT_TARGET: &str = "VerifyRustyEngineAot";
@@ -47,6 +47,10 @@ const BOOTSTRAP: &str =
     "irm https://raw.githubusercontent.com/FuzzySlipper/rusty-engine/main/scripts/install-rusty.ps1 | iex";
 const POLL_INTERVAL: Duration = Duration::from_millis(250);
 const UNEXPECTED_EXIT_RESTART_BACKOFF: Duration = Duration::from_millis(100);
+/// `rusty-product-host` exits with this code when it cannot bind its port
+/// (`BIND_FAILURE_EXIT_CODE` in csharp-product-runtime's supervisor; the two
+/// ship in one pair).
+const HOST_BIND_FAILURE_EXIT_CODE: i32 = 78;
 const MAX_UNEXPECTED_EXITS_PER_ARTIFACT: u8 = 2;
 const MAX_SUPERVISOR_COMMAND_BYTES: usize = 16 * 1024;
 static NEXT_SUPERVISED_RUNTIME_INSTANCE_ID: AtomicU64 = AtomicU64::new(0);
@@ -90,6 +94,10 @@ fn run() -> Result<ExitCode, String> {
         CommandName::Dev(options) => dev(options).map(|()| ExitCode::SUCCESS),
         CommandName::DevStart(options, arguments) => session::start(&options.project, &arguments),
         CommandName::DevStop(project) => session::stop(&project),
+        CommandName::DevStopTarget(target) => session::stop_target(&target),
+        CommandName::DevList { json } => session::list(json),
+        CommandName::DevKeep { target, keep } => session::keep(&target, keep),
+        CommandName::DevPrune => session::prune(),
         CommandName::DevStatus(project) => session::status(&project),
         CommandName::Build(options) => build(&options),
         CommandName::Install(options) => install(&options),
@@ -145,12 +153,14 @@ fn dev(mut options: DevOptions) -> Result<(), String> {
     }
     let roots = DevelopmentRoots::of(&options.project)?;
     let persistence_root = roots.persistence();
-    let session = if options.session {
-        Some(Session::claim(&options.project, &persistence_root)?)
-    } else {
-        None
-    };
-    let session = session.as_ref();
+    let session = Session::claim(&Registration {
+        project: &options.project,
+        persistence_root: &persistence_root,
+        background: options.session,
+        label: options.label.as_deref(),
+        keep: options.keep,
+    })?;
+    let session = Some(&session);
     let termination = install_termination_signal_hook()?;
     let runtime = RuntimePack::resolve(&options)?;
     runtime.verify()?;
@@ -158,7 +168,12 @@ fn dev(mut options: DevOptions) -> Result<(), String> {
     let initial = stage_product(&options)?;
     let mut staged = initial.directory;
     verify_staged_product(&staged)?;
+    let window = window_output(&staged)?;
     let runtime = window_runtime(runtime, &staged, pinned_selection)?;
+    let idle_limit = idle_limit(&options, window);
+    if let Some(session) = session {
+        session.idle_limit(&idle_limit);
+    }
     let mut watches = initial.watches;
     let mut asset_roots = initial.asset_roots;
     let mut snapshot = FileSnapshot::capture(&watches)?;
@@ -200,9 +215,40 @@ fn dev(mut options: DevOptions) -> Result<(), String> {
             diagnostic("stopped", serde_json::json!({ "reason": reason }));
             return Ok(());
         }
+        if let (Ok(limit), Some(session)) = (&idle_limit, session) {
+            if !session.kept() && session.idle() >= *limit {
+                if let Some(mut active_child) = child.take() {
+                    active_child.shutdown()?;
+                }
+                diagnostic(
+                    "stopped",
+                    serde_json::json!({
+                        "reason": "idle-expired",
+                        "idleTimeoutMinutes": limit.as_secs() / 60,
+                    }),
+                );
+                eprintln!(
+                    "rusty: stopped `{}` after {} minutes unused; `--keep` or `rusty dev keep <id>` keeps a session",
+                    options.project.display(),
+                    limit.as_secs() / 60
+                );
+                return Ok(());
+            }
+        }
         if let Some(active_child) = child.as_mut() {
             if let Some(status) = active_child.try_wait()? {
                 let exited_child = child.take().expect("observed child is present");
+                if status.code() == Some(HOST_BIND_FAILURE_EXIT_CODE) {
+                    // Restarting cannot free the port; the host printed why.
+                    diagnostic(
+                        "stopped",
+                        serde_json::json!({ "reason": "port-unavailable" }),
+                    );
+                    return Err(
+                        "RUSTY_DEV_PORT: the product host could not bind its port (PRODUCT_HOST_BIND above)"
+                            .to_owned(),
+                    );
+                }
                 diagnostic(
                     "child-exited-unexpectedly",
                     serde_json::json!({
@@ -265,6 +311,18 @@ fn dev(mut options: DevOptions) -> Result<(), String> {
         let next = match captured {
             Ok(snapshot) => snapshot,
             Err(error) => {
+                if !options.project.exists() {
+                    // The checkout is gone: nothing can restage or stop this
+                    // session through it, so it ends here.
+                    if let Some(mut active_child) = child.take() {
+                        active_child.shutdown()?;
+                    }
+                    diagnostic(
+                        "stopped",
+                        serde_json::json!({ "reason": "project-removed" }),
+                    );
+                    return Ok(());
+                }
                 diagnostic(
                     "watch-snapshot-failed",
                     serde_json::json!({
@@ -276,6 +334,9 @@ fn dev(mut options: DevOptions) -> Result<(), String> {
             }
         };
         let changed = snapshot.changed_paths(&next);
+        if let (false, Some(session)) = (changed.is_empty(), session) {
+            session.touch_activity();
+        }
         if !record_observed_snapshot(&mut snapshot, next) {
             continue;
         }
@@ -508,6 +569,16 @@ enum CommandName {
     /// `rusty dev start`: the options, checked, and the arguments that name them.
     DevStart(DevOptions, Vec<std::ffi::OsString>),
     DevStop(PathBuf),
+    /// `rusty dev stop <id|port>`: a session in the machine registry.
+    DevStopTarget(String),
+    DevList {
+        json: bool,
+    },
+    DevKeep {
+        target: String,
+        keep: bool,
+    },
+    DevPrune,
     DevStatus(PathBuf),
     Build(BuildOptions),
     Install(InstallOptions),
@@ -547,6 +618,12 @@ struct DevOptions {
     diagnostics_log: Option<PathBuf>,
     /// Run as the background session `rusty dev start` launched.
     session: bool,
+    /// Who or what the session is for, shown by `rusty dev list`.
+    label: Option<String>,
+    /// Keep the session: idle expiry never stops it.
+    keep: bool,
+    /// Minutes unused before the session stops itself; 0 never.
+    idle_timeout: Option<u64>,
 }
 
 #[derive(Debug)]
@@ -620,9 +697,40 @@ impl Arguments {
                             arguments.into_iter().map(Into::into).collect(),
                         )
                     }
-                    Some("stop") => {
-                        CommandName::DevStop(parse_session_project(&rest[1..], "stop")?)
-                    }
+                    Some("stop") => match &rest[1..] {
+                        [target] if !target.starts_with('-') => {
+                            CommandName::DevStopTarget(target.clone())
+                        }
+                        values => CommandName::DevStop(parse_session_project(values, "stop")?),
+                    },
+                    Some("list") => match &rest[1..] {
+                        [] => CommandName::DevList { json: false },
+                        [flag] if flag == "--json" => CommandName::DevList { json: true },
+                        _ => {
+                            return Err(unknown_argument(
+                                "dev list",
+                                &rest[1..].join(" "),
+                                dev_usage,
+                            ))
+                        }
+                    },
+                    Some("keep") => match &rest[1..] {
+                        [target] => CommandName::DevKeep {
+                            target: target.clone(),
+                            keep: true,
+                        },
+                        [target, flag] if flag == "--off" => CommandName::DevKeep {
+                            target: target.clone(),
+                            keep: false,
+                        },
+                        _ => {
+                            return Err(format!(
+                            "RUSTY_DEV_ARGUMENT: rusty dev keep needs `<id|port> [--off]`\n\n{}",
+                            dev_usage()
+                        ))
+                        }
+                    },
+                    Some("prune") if rest.len() == 1 => CommandName::DevPrune,
                     Some("status") => {
                         CommandName::DevStatus(parse_session_project(&rest[1..], "status")?)
                     }
@@ -696,6 +804,9 @@ fn parse_dev(values: Vec<String>) -> Result<DevOptions, String> {
     let mut chromium = None;
     let mut diagnostics_log = None;
     let mut session = false;
+    let mut label = None;
+    let mut keep = false;
+    let mut idle_timeout = None;
     while let Some(value) = values.next() {
         match value.as_str() {
             "--project" => project = Some(PathBuf::from(required_value(&mut values, "--project")?)),
@@ -754,6 +865,24 @@ fn parse_dev(values: Vec<String>) -> Result<DevOptions, String> {
                 )?))
             }
             "--session" => session = true,
+            "--label" => {
+                let value = required_value(&mut values, "--label")?;
+                if value.is_empty() || value.len() > 80 || value.chars().any(char::is_control) {
+                    return Err(
+                        "RUSTY_DEV_ARGUMENT: --label must be 1 to 80 printable characters"
+                            .to_owned(),
+                    );
+                }
+                label = Some(value);
+            }
+            "--keep" => keep = true,
+            "--idle-timeout" => {
+                idle_timeout = Some(
+                    required_value(&mut values, "--idle-timeout")?
+                        .parse()
+                        .map_err(|_| "RUSTY_DEV_ARGUMENT: --idle-timeout must be whole minutes")?,
+                )
+            }
             _ => return Err(unknown_argument("dev", &value, dev_usage)),
         }
     }
@@ -781,6 +910,9 @@ fn parse_dev(values: Vec<String>) -> Result<DevOptions, String> {
         chromium,
         diagnostics_log,
         session,
+        label,
+        keep,
+        idle_timeout,
     })
 }
 
@@ -956,31 +1088,64 @@ fn usage() -> String {
 usage: rusty <command> [options]
 
 commands:
-  status    show the pinned Engine pair, whether it is installed, paths, and missing prerequisites
-  install   install the pinned SDK/runtime pair into the shared cache (once; later use works offline)
-  update    move the pin to a newer published pair, install it, and list what changed
-  build     restore, build and stage the product; --aot also publishes NativeAOT
-  dev       build and run the product on its pinned runtime, rebuilding on source changes
+  status        show the pinned Engine pair, whether it is installed, paths, dev sessions and
+                missing prerequisites
+  install       install the pinned SDK/runtime pair into the shared cache (once; later use works
+                offline); --archive <pair.tar.gz> installs one you already have
+  update        move the pin to a newer published pair, install it, and list what changed
+  build         restore, build and stage the product; --aot also publishes NativeAOT;
+                --pack <release-dir> [--compress] writes a release product.rpak
+  dev           build and run the product on its pinned runtime, rebuilding on source changes
+  dev start     the same in the background, one per project; prints where it serves
+  dev status    whether the project's background session runs
+  dev stop      stop a session: the project's (--project) or any one by `<id|port>`
+  dev list      every dev session on this machine, with its id, URL, idle time and label
+  dev keep      keep a session from stopping when idle (`<id|port>`, `--off` to undo)
+  dev prune     clear the records of sessions that ended without cleaning up
   pack-content  pack one content directory into a container a product opens at run time
-  asset     check a GLB against the Engine's admission, as JSON, without changing it
+  asset check   check a GLB against the Engine's admission, as JSON, without changing it
+                (exit 0 admitted, 1 refused, 2 unreadable)
 
 Run `rusty <command> --help` for a command's options.
 
-Everyday use, from the product repository:
+Everyday use, from the product repository. Its Directory.Build.props names the default project
+with <{project}>src/Game/Game.csproj</{project}>, so --project can be left out:
   rusty status
   rusty install
-  rusty dev --project src/Game/Game.csproj --port 8787
+  rusty dev                           foreground; Ctrl+C stops it
+  rusty dev start --label <who>       background; prints its id and URL
+  rusty dev list
+  rusty dev stop <id|port>
   rusty update --check
   rusty update
-  rusty build --project src/Game/Game.csproj --aot
+  rusty build --aot
+
+Dev sessions: every `rusty dev` is listed by `rusty dev list`. Stop one with `rusty dev stop`,
+never by killing rusty or rusty-product-host processes: on a shared machine they belong to other
+sessions. A session unused for {idle} minutes (no input, control, live-debug command, page
+attaching or restage; a page that only watches does not count) stops itself. `--keep` or
+`rusty dev keep <id>` keeps one; `--idle-timeout <minutes>` or devIdleMinutes in {config} sets
+the limit (0 never). Leave out --port: a free port is chosen and printed. A fixed port inside the
+machine's ephemeral range (often 32768-60999) can be taken by outgoing connections.
+
+Development state is disposable. Everything under a product's .runtime/ (dev logs, session
+records, saves and other persistence from test runs) may be deleted, reset or made unreadable by
+a pair update, a restage or a clean, and is never migrated between versions. Don't spend effort
+preserving or migrating it. If one save or file must be kept, for a reproduction or a test,
+copy it out of .runtime/ to a place the product owns (a committed fixture such as
+tests/fixtures/, or your evidence location), note what it shows and which pair made it, and load
+it from there.
 
 The pin is the one <{pin}> element in the product's {pin_file}.
-Nothing moves it except `rusty update`. Installed pairs live in {cache}
-(under XDG_CACHE_HOME when set); its {config} may name a release mirror as
-{{\"releases\": \"<url>\"}}.
+Nothing moves it except `rusty update`. Installed pairs and the dev session list live in {cache}
+(under XDG_CACHE_HOME when set). Its {config} may set {{\"releases\": \"<url>\"}} (a release mirror),
+{{\"localOutput\": \"<dir>\"}} (keep build output and .runtime state there instead of in each checkout;
+`rusty status` shows where) and {{\"devIdleMinutes\": <minutes>}}.
 
 Get or refresh this command:
   {bootstrap}",
+        project = pair::PROJECT_ELEMENT,
+        idle = DEFAULT_IDLE_MINUTES,
         pin = pair::PIN_ELEMENT,
         pin_file = pair::PIN_FILE,
         cache = pair::cache_root().map_or_else(|error| error, |root| root.display().to_string()),
@@ -990,12 +1155,17 @@ Get or refresh this command:
 }
 
 fn dev_usage() -> String {
-    "usage: rusty dev [--project <ordinary-product.csproj>] [--port <u16>] [--bind-host <IPv4>] [--live-debug] [--debugger]
+    format!("usage: rusty dev [--project <ordinary-product.csproj>] [--port <u16>] [--bind-host <IPv4>] [--live-debug] [--debugger]
                  [--headless [--chromium <executable>]] [--output <stream|window>]
                  [--audio-output <stream|device-optional|device-required>] [--cef-switch <name[=value]>]...
-                 [--diagnostics-log <file>] [--runtime <runtime-pack> | --engine-source <rusty-engine-source>]
+                 [--diagnostics-log <file>] [--label <text>] [--keep | --idle-timeout <minutes>]
+                 [--runtime <runtime-pack> | --engine-source <rusty-engine-source>]
        rusty dev start [the same options]
        rusty dev stop|status [--project <ordinary-product.csproj>]
+       rusty dev stop <id|port>
+       rusty dev list [--json]
+       rusty dev keep <id|port> [--off]
+       rusty dev prune
 
 Without --project, the product is the one the nearest Directory.Build.props at or above the current
 directory names, relative to itself, with <RustyEngineProject>src/Game/Game.csproj</RustyEngineProject>.
@@ -1005,11 +1175,30 @@ C#, UI or content inputs change. UI and content-bundle edits reload into the run
 edits replace the runtime.
 
 `rusty dev start` runs the same session in the background, one per project: it returns once the
-product serves and prints {url, port, pid, runtimeInstanceId, persistenceRoot, log} as JSON, or exits
+product serves and prints {{id, url, port, pid, runtimeInstanceId, persistenceRoot, log}} as JSON, or exits
 nonzero with the log's tail if staging or startup failed. `rusty dev stop` ends that project's session
-and disposes the product as Ctrl+C would; `rusty dev status` reports it. The session's record and log
-live in the repository's .runtime/dev/, one directory per project path, or under this machine's
+and disposes the product as Ctrl+C would; `rusty dev status` reports it. The session's log lives in
+the repository's .runtime/dev/, one directory per project path, or under this machine's
 localOutput when its config.json names one (`rusty status` shows where).
+
+Every `rusty dev`, foreground or background, is in this machine's session list (`rusty dev list`;
+`--json` for the records). `rusty dev stop <id|port>` stops any of them gracefully, then signals
+only that session's own processes. Never stop a host by killing processes by name: on a shared
+machine they belong to other sessions. `--label` says who or what a session is for.
+
+A session unused for {idle} minutes stops itself. Use is input, a control or lifecycle call, a live-debug
+command, a page attaching or a restage; a page or browser that only watches is not use. `--keep` or
+`rusty dev keep <id|port>` keeps a session (an owner's long-running host); `--idle-timeout <minutes>`
+or {{\"devIdleMinutes\": <minutes>}} in config.json sets the limit, 0 for never. Window output never
+expires: the window is someone's.
+
+Leave out --port and a free port is chosen and printed. A fixed port inside this machine's
+ephemeral range (often 32768-60999) can be taken by outgoing connections with nothing listening; the
+host then stops at once with PRODUCT_HOST_BIND.
+
+Everything under .runtime/ is disposable test state (logs, records, saves) that a pair update,
+restage or clean may delete or invalidate, and nothing migrates it. Copy a save that must be kept
+to a place the product owns and load it from there.
 
 The runtime is the pair pinned in the product's Directory.Build.props, installed by `rusty install`.
 `rusty dev` runs that pair's own copy of this command, so the supervisor always matches its host;
@@ -1028,6 +1217,9 @@ runtime for the UI) into the cache beside the pair.
                        fails the load without an audio device; device-optional runs silent
   --cef-switch         a Chromium switch for the window's UI page, e.g. remote-debugging-port=9333
   --diagnostics-log    write the host's NDJSON diagnostics to this file
+  --label              who or what the session is for, shown by `rusty dev list`
+  --keep               never stop this session for being idle
+  --idle-timeout       minutes unused before the session stops itself (0 never)
   --runtime            Engine contributors: use this runtime pack instead of the pin
   --engine-source      Engine contributors: build the SDK and runtime from this checkout
 
@@ -1035,11 +1227,11 @@ This command never invokes Cargo and never searches for an adjacent Engine check
 
 Examples:
   rusty dev --output window
-  rusty dev --project src/Game/Game.csproj --port 8787
   rusty dev --project src/Game/Game.csproj --live-debug --headless
-  rusty dev --project src/Game/Game.csproj --output window
-  rusty dev start --project src/Game/Game.csproj --live-debug && rusty dev stop --project src/Game/Game.csproj"
-        .to_owned()
+  rusty dev start --project src/Game/Game.csproj --live-debug --label agent:reviewer
+  rusty dev list
+  rusty dev stop 30302
+  rusty dev start --keep --bind-host 0.0.0.0 --port 30400", idle = DEFAULT_IDLE_MINUTES)
 }
 
 fn build_usage() -> String {
@@ -1874,6 +2066,12 @@ fn status(options: &StatusOptions) -> Result<ExitCode, String> {
     // Any file in `start` finds the same checkout as a project there would.
     let roots = DevelopmentRoots::of(&start.join(pair::PIN_FILE))?;
     println!("dev state      {}", roots.runtime.display());
+    if let Some((registry, running)) = session::registry_summary() {
+        println!(
+            "dev sessions   {running} running on this machine; `rusty dev list` ({})",
+            registry.display()
+        );
+    }
     match &roots.artifacts {
         Some(artifacts) => println!("build output   {}", artifacts.display()),
         None => println!("build output   bin/ and obj/ beside each project"),
@@ -2250,11 +2448,21 @@ impl SupervisedHost {
         session: Option<&Arc<Session>>,
     ) -> Result<Self, String> {
         let runtime_instance_id = next_supervised_runtime_instance_id()?;
-        let arguments =
+        let mut arguments =
             supervised_host_arguments(product, persistence_root, runtime_instance_id, options)?;
+        if let Some(session) = session {
+            arguments.push("--activity-file".to_owned());
+            arguments.push(
+                session
+                    .activity_file()
+                    .to_str()
+                    .ok_or("RUSTY_DEV_SESSION: the session registry path must be UTF-8")?
+                    .to_owned(),
+            );
+        }
         let mut command = Command::new(host);
         command.args(&arguments).stdin(Stdio::piped());
-        // A background session learns where the host serves from its output.
+        // The session learns where the host serves from its output.
         if session.is_some() {
             command.stdout(Stdio::piped());
         }
@@ -2269,6 +2477,7 @@ impl SupervisedHost {
             .take()
             .ok_or("RUSTY_DEV_CHILD_START: supervised child stdin was unavailable")?;
         if let (Some(session), Some(output)) = (session, child.stdout.take()) {
+            session.host_started(child.id());
             session.forward_host_output(output, runtime_instance_id);
         }
         Ok(Self {
@@ -2294,8 +2503,9 @@ impl SupervisedHost {
                 };
             }
             if Instant::now() >= deadline {
-                let _ = self.child.kill();
-                let _ = self.child.wait();
+                // Ask the host to stop its runtime and browser itself before
+                // forcing it, so neither outlives it holding the port.
+                terminate(&mut self.child, Duration::from_secs(5));
                 return Err("RUSTY_DEV_CHILD_SHUTDOWN_TIMEOUT: host did not finish disposal within 30 seconds".into());
             }
             thread::sleep(Duration::from_millis(25));
@@ -2557,6 +2767,53 @@ fn diagnostic(event: &str, detail: Value) {
     );
 }
 
+/// Minutes a dev session may go unused before it stops itself, unless
+/// `config.json` (`devIdleMinutes`) or `--idle-timeout` say otherwise.
+const DEFAULT_IDLE_MINUTES: u64 = 30;
+
+/// How long the session may go unused, or why it never expires: kept, a
+/// desktop window (someone's screen; its input bypasses the host's routes),
+/// or a limit of 0.
+fn idle_limit(options: &DevOptions, window: bool) -> Result<Duration, &'static str> {
+    if options.keep {
+        return Err("kept");
+    }
+    if window {
+        return Err("window-output");
+    }
+    match options
+        .idle_timeout
+        .or_else(pair::dev_idle_minutes)
+        .unwrap_or(DEFAULT_IDLE_MINUTES)
+    {
+        0 => Err("disabled"),
+        minutes => Ok(Duration::from_secs(minutes.saturating_mul(60))),
+    }
+}
+
+/// SIGTERM, then SIGKILL after `grace`; reaps `child` either way.
+fn terminate(child: &mut Child, grace: Duration) {
+    #[cfg(unix)]
+    {
+        let _ = Command::new("kill")
+            .args(["-TERM", &child.id().to_string()])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+        let deadline = Instant::now() + grace;
+        while Instant::now() < deadline {
+            if matches!(child.try_wait(), Ok(Some(_))) {
+                return;
+            }
+            thread::sleep(Duration::from_millis(25));
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = grace;
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -2572,6 +2829,56 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn the_top_level_help_names_every_command() {
+        let help = usage();
+        let top_level = [
+            "status",
+            "install",
+            "update",
+            "build",
+            "dev",
+            "pack-content",
+            "asset",
+        ];
+        for command in top_level {
+            // Each is dispatched: its own help parses, an unknown word does not.
+            assert!(Arguments::parse([command.to_owned(), "--help".to_owned()]).is_ok());
+        }
+        assert!(Arguments::parse(["bogus".to_owned()]).is_err());
+        let listed = top_level.iter().map(|command| (*command).to_owned()).chain(
+            ["start", "status", "stop", "list", "keep", "prune"].map(|sub| format!("dev {sub}")),
+        );
+        for command in listed {
+            assert!(
+                help.lines()
+                    .any(|line| line.trim_start().starts_with(&command)),
+                "`rusty {command}` is missing from `rusty --help`"
+            );
+        }
+    }
+
+    #[test]
+    fn a_session_expires_unless_kept_windowed_or_disabled() {
+        let options = |arguments: &[&str]| {
+            let mut values = vec!["--project".to_owned(), "P.csproj".to_owned()];
+            values.extend(arguments.iter().map(|value| (*value).to_owned()));
+            parse_dev(values).unwrap()
+        };
+        assert_eq!(
+            idle_limit(&options(&["--idle-timeout", "5"]), false),
+            Ok(Duration::from_secs(300))
+        );
+        assert_eq!(idle_limit(&options(&["--keep"]), false), Err("kept"));
+        assert_eq!(idle_limit(&options(&[]), true), Err("window-output"));
+        assert_eq!(
+            idle_limit(&options(&["--idle-timeout", "0"]), false),
+            Err("disabled")
+        );
+        assert!(parse_dev(vec!["--idle-timeout".to_owned(), "soon".to_owned()]).is_err());
+        assert!(parse_dev(vec!["--label".to_owned(), String::new()]).is_err());
+    }
 
     #[test]
     fn crash_budget_restarts_once_then_pauses_for_the_same_artifact() {
@@ -2735,6 +3042,9 @@ mod tests {
             chromium: None,
             diagnostics_log: None,
             session: false,
+            label: None,
+            keep: false,
+            idle_timeout: None,
         };
 
         let properties = stage_properties(&options).expect("source properties");

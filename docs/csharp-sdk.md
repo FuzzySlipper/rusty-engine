@@ -57,7 +57,7 @@ From the product repository:
 ```bash
 rusty status
 rusty install
-rusty dev --port 8787
+rusty dev
 ```
 
 `rusty dev`, `rusty dev start|stop|status` and `rusty build` run the project
@@ -80,11 +80,77 @@ loose-content edits rebuild and replace the runtime. Useful flags:
 
 Scripts and agents run it in the background, one session per project:
 `rusty dev start` (same options) returns once the product serves
-and prints `{url, port, pid, runtimeInstanceId, persistenceRoot, log}` as JSON,
-or exits nonzero with the log's tail. `rusty dev stop` disposes the
+and prints `{id, url, port, pid, runtimeInstanceId, persistenceRoot, log}` as
+JSON, or exits nonzero with the log's tail. `rusty dev stop` disposes the
 product as Ctrl+C would, and `rusty dev status` reports the
 session. Both find it through `.runtime/dev/`, which has one directory per
-project path in the repository, so they never need `kill` or `pkill`. `start` needs a pinned pair that has it.
+project path in the repository and holds its log. `start` needs a pinned pair
+that has it.
+
+#### Dev sessions on a shared machine
+
+Every `rusty dev`, foreground or background, registers in the machine's session
+list in the rusty cache (`<cache>/sessions/`, whatever checkout or pair it
+runs). The list and its commands:
+
+- `rusty dev list` (`--json` for the records) shows each session's id, URL,
+  idle time and limit, keep flag, label and project.
+- `rusty dev stop <id|port>` stops one gracefully. If it does not stop, it
+  signals only that session's recorded processes.
+- `rusty dev keep <id|port> [--off]` keeps a session from expiring.
+- `rusty dev prune` clears the records of sessions that ended without
+  cleaning up. Every start and list does this too.
+- `--label <text>` on `rusty dev` or `start` says who or what a session is
+  for.
+
+Never stop a host by killing `rusty` or `rusty-product-host` processes by
+name: on a shared machine they belong to other sessions. Sessions from a pair
+older than this list don't appear in it; stop those with
+`rusty dev stop --project`.
+
+A session unused for 30 minutes stops itself:
+- **Use** is input, a control or lifecycle call, a live-debug command, a page
+  attaching (the host marks these), or a restage.
+- **Not use:** a page or headless browser that only watches the stream. So a
+  forgotten `--headless` or playtest browser no longer keeps a host running.
+- **Change the limit** with `--idle-timeout <minutes>` or
+  `{"devIdleMinutes": <minutes>}` in the cache's `config.json`; 0 means never.
+- **Keep a session** with `--keep` or `rusty dev keep <id>`, for an owner's
+  long-running host such as a service unit.
+- **Window output** never expires: a native window is someone's screen.
+
+An expired session logs `{"event":"stopped","reason":"idle-expired"}` and exits
+0.
+
+Leave out `--port` and a free port is chosen and printed. A fixed port inside
+the machine's ephemeral range (`ip_local_port_range`, often 32768-60999) can
+be taken by an outgoing connection with nothing listening. The host then
+stops at once with `PRODUCT_HOST_BIND` and names the range, instead of
+restarting. Pick fixed ports below that range.
+
+#### Development state is disposable
+
+Everything under a product's `.runtime/` (or `<localOutput>/<checkout>/runtime`)
+is test state:
+- dev logs and session records;
+- persistence from dev runs (saves, settings and the like);
+- other files the runtime writes there.
+
+A pair update, a restage, a clean or another agent may delete or reset it, or
+leave it unreadable to a newer product. Nothing migrates it between versions.
+Don't preserve, back up or migrate it, and don't hold work back to keep a test
+save working.
+
+When a particular save or file must survive (a reproduction, a test input,
+evidence):
+1. Copy it out of `.runtime/` to a place the product owns: a committed fixture
+   such as `tests/fixtures/` when a test or reproduction loads it, or your
+   evidence location when it only documents a result.
+2. Note what it shows and which pair produced it.
+3. Load it from there.
+
+A fixture that a newer pair can't read is fixed or replaced like any other
+fixture.
 
 The runtime renders the world itself with `render-wgpu`. By default it streams
 frames to the browser shell page that `rusty dev` serves. The product runs

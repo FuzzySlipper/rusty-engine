@@ -63,6 +63,7 @@ pub struct ProductHostConfig {
     presentation: Option<Arc<ProductHostPresentation>>,
     capture: Option<crate::ProductHostFrameCapture>,
     ui_files: Option<ProductHostUiFiles>,
+    activity: Option<Arc<crate::ProductHostActivity>>,
 }
 
 /// The content type and bytes of the image or font the runtime granted its
@@ -88,6 +89,7 @@ impl ProductHostConfig {
             presentation: None,
             capture: None,
             ui_files: None,
+            activity: None,
         }
     }
 
@@ -109,6 +111,13 @@ impl ProductHostConfig {
     /// the default; `0.0.0.0` is intended for a foreground owner such as
     /// den-serve that publishes the resulting LAN origin.
     /// Serve the runtime's rendered frames at `/__rusty/product/runtime/frames`.
+    /// Marks the host's use (input, control, live debug, a page attaching)
+    /// in `activity`, so `rusty dev` can stop an idle session.
+    pub fn with_activity(mut self, activity: Arc<crate::ProductHostActivity>) -> Self {
+        self.activity = Some(activity);
+        self
+    }
+
     pub fn with_frame_stream(mut self, frames: Arc<ProductHostFrameStream>) -> Self {
         self.frames = Some(frames);
         self
@@ -216,6 +225,7 @@ impl ProductHost {
             presentation: config.presentation,
             capture: config.capture,
             ui_files: config.ui_files,
+            activity: config.activity,
         });
         let handler_threads = Arc::new(Mutex::new(Vec::new()));
         let listener_state = Arc::clone(&state);
@@ -410,6 +420,26 @@ struct HostState<R> {
     presentation: Option<Arc<ProductHostPresentation>>,
     capture: Option<crate::ProductHostFrameCapture>,
     ui_files: Option<ProductHostUiFiles>,
+    activity: Option<Arc<crate::ProductHostActivity>>,
+}
+
+impl<R> HostState<R> {
+    fn touch_activity(&self) {
+        if let Some(activity) = &self.activity {
+            activity.touch();
+        }
+    }
+}
+
+/// Routes a person or an agent drives. A page's own cadence (realtime
+/// advance, presentation, diagnostics, frames) is not activity.
+fn is_activity_route(path: &str) -> bool {
+    path.strip_prefix(crate::PRODUCT_HOST_RUNTIME_BASE_PATH)
+        .is_some_and(|route| {
+            matches!(route, "input" | "debug/execute")
+                || route.starts_with("lifecycle/")
+                || route.starts_with("control/")
+        })
 }
 
 /// Small process-local observation state. It intentionally has no runtime
@@ -1193,6 +1223,8 @@ fn handle_connection<R: ProductHostRuntime>(mut stream: TcpStream, state: Arc<Ho
         return;
     }
     if request.method == "GET" && request.path == "/__rusty/product/runtime/outputs/fresh" {
+        // A page attaching is someone opening the product.
+        state.touch_activity();
         handle_sse(stream, state, request);
         return;
     }
@@ -1333,6 +1365,9 @@ fn dispatch_request<R: ProductHostRuntime>(
             "PRODUCT_HOST_METHOD",
             "route requires its exact admitted method",
         );
+    }
+    if is_activity_route(&request.path) {
+        state.touch_activity();
     }
     if request.path == "/__rusty/product/runtime/debug/execute" {
         if !state.live_debug_enabled {
@@ -3478,6 +3513,7 @@ mod tests {
             presentation: None,
             capture: None,
             ui_files: None,
+            activity: None,
         };
         // Held time: nothing ticks, so the key waits in the mailbox.
         let queued = invoke_input(&state, br#"{"batch":[{"runtime":{"instanceId":"41","generation":"1","controlRevision":"1"},"sequence":"14","context":"gameplay.default","fact":{"kind":"key","code":"key-w","edge":"pressed"}}]}"#);
@@ -3491,6 +3527,27 @@ mod tests {
             ["input 1", "engine.time.advance 500"],
             "the steps the command runs must see the key pressed before it"
         );
+    }
+
+    #[test]
+    fn only_driving_the_product_is_activity() {
+        for path in [
+            "/__rusty/product/runtime/input",
+            "/__rusty/product/runtime/debug/execute",
+            "/__rusty/product/runtime/lifecycle/pause",
+            "/__rusty/product/runtime/control/claim",
+        ] {
+            assert!(is_activity_route(path), "{path}");
+        }
+        // A watching page's own cadence keeps nothing alive.
+        for path in [
+            "/__rusty/product/runtime/advance-realtime",
+            "/__rusty/product/runtime/browser-diagnostics",
+            crate::presentation::PRODUCT_HOST_PRESENTATION_PATH,
+            "/__rusty/product/runtime/frames",
+        ] {
+            assert!(!is_activity_route(path), "{path}");
+        }
     }
 
     #[test]
@@ -3528,6 +3585,7 @@ mod tests {
             presentation: None,
             capture: None,
             ui_files: None,
+            activity: None,
         };
         let response = invoke_lifecycle(
             &state,
@@ -3577,6 +3635,7 @@ mod tests {
             presentation: None,
             capture: None,
             ui_files: None,
+            activity: None,
         });
         let (held, held_ready) = std::sync::mpsc::channel();
         let (release, release_owner) = std::sync::mpsc::channel();

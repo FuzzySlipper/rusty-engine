@@ -182,6 +182,11 @@ fn main() -> Result<(), String> {
     if let Some(frames) = runtime.frame_stream() {
         config = config.with_frame_stream(frames);
     }
+    if let Some(file) = &args.activity_file {
+        config = config.with_activity(Arc::new(product_host::ProductHostActivity::new(
+            file.clone(),
+        )));
+    }
     if let Some(capture) = runtime.frame_capture() {
         config = config.with_frame_capture(capture);
     }
@@ -204,8 +209,18 @@ fn main() -> Result<(), String> {
             print_line("RUSTY_HOST shutdown={\"reason\":\"supervisor-stdin-closed\"}");
             return Ok(());
         }
-        // SAFETY: the supervisor bound this listener, cleared close-on-exec
-        // for it, and hands this process sole use of the descriptor number.
+        // The supervisor cleared close-on-exec so this process could inherit
+        // the listener; set it again so nothing this process starts keeps
+        // the port open.
+        // SAFETY: fcntl on a descriptor this process owns.
+        if unsafe { libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC) } < 0 {
+            return Err(format!(
+                "PRODUCT_HOST_BIND: could not keep the listener private: {}",
+                std::io::Error::last_os_error()
+            ));
+        }
+        // SAFETY: the supervisor bound this listener and hands this process
+        // sole use of the descriptor number.
         config = config.with_listener(unsafe { TcpListener::from_raw_fd(fd) });
     }
     #[cfg(feature = "desktop")]
@@ -644,6 +659,8 @@ struct Arguments {
     cef_switches: Vec<String>,
     /// Where the host writes its NDJSON diagnostics.
     diagnostics_log: Option<PathBuf>,
+    /// The file whose time marks the host's last use (`rusty dev` idle expiry).
+    activity_file: Option<PathBuf>,
     /// The build configuration a `--performance-probe` result names.
     performance_configuration: Option<String>,
     runtime_instance_id: Option<RuntimeInstanceId>,
@@ -770,6 +787,9 @@ impl Arguments {
         }
         if let Some(file) = &self.diagnostics_log {
             arguments.extend(["--diagnostics-log".to_owned(), path(file)?]);
+        }
+        if let Some(file) = &self.activity_file {
+            arguments.extend(["--activity-file".to_owned(), path(file)?]);
         }
         Ok(arguments)
     }
@@ -917,6 +937,7 @@ impl Arguments {
         let mut cef_dir = None;
         let mut cef_switches = Vec::new();
         let mut diagnostics_log = None;
+        let mut activity_file = None;
         let mut performance_configuration = None;
         let mut runtime_instance_id = None;
         let mut serve_listener_fd = None;
@@ -1017,6 +1038,11 @@ impl Arguments {
                         values.next().ok_or("--diagnostics-log requires a file")?,
                     ))
                 }
+                "--activity-file" => {
+                    activity_file = Some(PathBuf::from(
+                        values.next().ok_or("--activity-file requires a file")?,
+                    ))
+                }
                 "--performance-configuration" => {
                     performance_configuration = Some(
                         values
@@ -1046,7 +1072,7 @@ impl Arguments {
                 }
                 "--help" => {
                     return Err(format!(
-                        "usage: rusty-product-host --product <Product-directory|product.rpak> --loader <nativeaot|coreclr> [--supervised] [--debugger] [--headless [--chromium <executable>]] [--cef-dir <directory>] [--cef-switch <name[=value]>]... [--diagnostics-log <file>] [--runtime-instance-id <nonzero-u64>] [--persistence-root <absolute-path>] [--exercise] [--performance-probe <1..=256> [--performance-configuration <label>]]\n\nThe Product directory contains product.json plus its declared managed/native artifacts, UI, and admitted content. A release Product is one container file (`rusty build --pack`) holding product.json, UI and content, with the managed/native artifacts loose beside it. The matched Engine browser shell is discovered beside this runtime-pack binary; Product directories never carry Engine JavaScript. `--loader` chooses one exact optional manifest artifact. `--exercise` runs Engine provider-fixture assertions (voxel/UI/input/timeline/fault behavior), not a general product health check; ordinary products should omit it. See docs/csharp-product-project.md#host-exercise-contract. `--supervised` is the explicit rusty-dev stdin-close shutdown hook. `--debugger` disables the CoreCLR runtime startup deadline for managed debugging; shutdown remains bounded. `--headless` opens the page in headless Chromium after the listener is ready, so an unattended run keeps drawing and mounts the product UI (animation and video completions flow without it), and closes it with the host; `--chromium` selects its executable, else one on `PATH`. The product manifest's `renderer.output` selects stream or window output; in window output `--cef-dir` overrides the runtime pack's `lib/cef` and each `--cef-switch` adds a Chromium switch for the UI page (for example `remote-debugging-port=9333`). `--diagnostics-log` writes the host's NDJSON diagnostics to that file. `--runtime-instance-id` names this host-owned runtime incarnation; direct launches allocate a process-local fallback when it is omitted. Server bind/port and explicit liveDebug opt-in are Product metadata. `--identity` prints machine-readable matched runtime identity; `--version` prints a concise diagnostic identity.\n\n{PHYSICAL_MAPPING_USAGE}"
+                        "usage: rusty-product-host --product <Product-directory|product.rpak> --loader <nativeaot|coreclr> [--supervised] [--debugger] [--headless [--chromium <executable>]] [--cef-dir <directory>] [--cef-switch <name[=value]>]... [--diagnostics-log <file>] [--activity-file <file>] [--runtime-instance-id <nonzero-u64>] [--persistence-root <absolute-path>] [--exercise] [--performance-probe <1..=256> [--performance-configuration <label>]]\n\nThe Product directory contains product.json plus its declared managed/native artifacts, UI, and admitted content. A release Product is one container file (`rusty build --pack`) holding product.json, UI and content, with the managed/native artifacts loose beside it. The matched Engine browser shell is discovered beside this runtime-pack binary; Product directories never carry Engine JavaScript. `--loader` chooses one exact optional manifest artifact. `--exercise` runs Engine provider-fixture assertions (voxel/UI/input/timeline/fault behavior), not a general product health check; ordinary products should omit it. See docs/csharp-product-project.md#host-exercise-contract. `--supervised` is the explicit rusty-dev stdin-close shutdown hook. `--debugger` disables the CoreCLR runtime startup deadline for managed debugging; shutdown remains bounded. `--headless` opens the page in headless Chromium after the listener is ready, so an unattended run keeps drawing and mounts the product UI (animation and video completions flow without it), and closes it with the host; `--chromium` selects its executable, else one on `PATH`. The product manifest's `renderer.output` selects stream or window output; in window output `--cef-dir` overrides the runtime pack's `lib/cef` and each `--cef-switch` adds a Chromium switch for the UI page (for example `remote-debugging-port=9333`). `--diagnostics-log` writes the host's NDJSON diagnostics to that file. `--activity-file` marks the host's last use (input, control, live debug, a page attaching; not frame pulls) in that file's time, which `rusty dev` reads to stop idle sessions. `--runtime-instance-id` names this host-owned runtime incarnation; direct launches allocate a process-local fallback when it is omitted. Server bind/port and explicit liveDebug opt-in are Product metadata. `--identity` prints machine-readable matched runtime identity; `--version` prints a concise diagnostic identity.\n\n{PHYSICAL_MAPPING_USAGE}"
                     ));
                 }
                 _ => return Err(format!("unknown argument `{arg}`")),
@@ -1116,6 +1142,7 @@ impl Arguments {
             cef_dir,
             cef_switches,
             diagnostics_log,
+            activity_file,
             performance_configuration,
             runtime_instance_id,
             serve_listener_fd,

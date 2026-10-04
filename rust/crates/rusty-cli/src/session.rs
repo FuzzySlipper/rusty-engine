@@ -1,12 +1,16 @@
-//! `rusty dev start|stop|status`: one background `rusty dev` per product
-//! project, found through files in the repository's `.runtime/dev/`, one
-//! directory per project path, instead of process names.
+//! Dev sessions. Every `rusty dev`, in the foreground or started with
+//! `rusty dev start`, registers in the machine's session registry
+//! (`<rusty cache>/sessions/<id>/`), whatever checkout or pair it runs, so
+//! `rusty dev list` shows every product host on the machine and
+//! `rusty dev stop <id|port>` stops one without searching processes.
+//! A background session also has its project's `.runtime/dev/<project>/`
+//! directory, which keeps one per project and holds its log.
 //!
-//! The supervisor holds an exclusive lock on `lock` for its whole life, so a
-//! record whose lock is free belongs to a supervisor that died and is cleared.
-//! `stop` asks the supervisor to shut down by creating the `stop` file, which
-//! its watch loop sees; it then closes the host's stdin as Ctrl+C would, so the
-//! product is disposed.
+//! Each running `rusty dev` holds an exclusive lock on its `lock` files for
+//! its whole life, so a directory whose lock is free belongs to one that died
+//! and is removed. Creating its `stop` file asks it to shut down: its watch
+//! loop sees the file and closes the host's stdin as Ctrl+C would, so the
+//! product is disposed. A `keep` file marks a session to be kept.
 
 use std::{
     ffi::OsString,
@@ -99,6 +103,154 @@ impl SessionPaths {
     }
 }
 
+/// How long `rusty dev stop` waits for a graceful stop before signalling.
+const GRACEFUL_STOP: Duration = Duration::from_secs(60);
+/// How long a signalled `rusty dev` gets before it is killed.
+const TERMINATE_GRACE: Duration = Duration::from_secs(15);
+/// A registry directory without its lock yet is a session being claimed.
+const CLAIM_WINDOW: Duration = Duration::from_secs(10);
+
+/// One session's files in the machine registry.
+struct EntryPaths {
+    directory: PathBuf,
+    record: PathBuf,
+    lock: PathBuf,
+    stop: PathBuf,
+    keep: PathBuf,
+    /// Its time is the session's last use (the product host's
+    /// `--activity-file`).
+    activity: PathBuf,
+}
+
+impl EntryPaths {
+    fn new(directory: PathBuf) -> Self {
+        Self {
+            record: directory.join("session.json"),
+            lock: directory.join("lock"),
+            stop: directory.join("stop"),
+            keep: directory.join("keep"),
+            activity: directory.join("activity"),
+            directory,
+        }
+    }
+
+    /// Whether its `rusty dev` still holds the lock.
+    fn alive(&self) -> bool {
+        File::open(&self.lock)
+            .is_ok_and(|lock| matches!(lock.try_lock(), Err(TryLockError::WouldBlock)))
+    }
+
+    fn record(&self) -> Value {
+        let mut record = fs::read(&self.record)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+            .unwrap_or_else(|| json!({ "state": "starting" }));
+        record["keep"] = self.keep.exists().into();
+        if let Some(idle) = self.idle() {
+            record["idleSeconds"] = idle.as_secs().into();
+        }
+        record
+    }
+
+    fn idle(&self) -> Option<Duration> {
+        let used = fs::metadata(&self.activity)
+            .and_then(|metadata| metadata.modified())
+            .ok()?;
+        Some(used.elapsed().unwrap_or_default())
+    }
+}
+
+/// The machine's running dev sessions.
+pub struct Registry {
+    root: PathBuf,
+}
+
+impl Registry {
+    pub fn machine() -> Result<Self, String> {
+        Ok(Self {
+            root: super::pair::cache_root()?.join("sessions"),
+        })
+    }
+
+    /// The running sessions, oldest first, and how many dead ones were
+    /// removed on the way.
+    fn live(&self) -> (Vec<(EntryPaths, Value)>, usize) {
+        let mut live = Vec::new();
+        let mut removed = 0;
+        for entry in fs::read_dir(&self.root).into_iter().flatten().flatten() {
+            let paths = EntryPaths::new(entry.path());
+            if !paths.directory.is_dir() {
+                continue;
+            }
+            let lock = match File::open(&paths.lock) {
+                Ok(lock) => lock,
+                Err(_) => {
+                    let claiming = entry
+                        .metadata()
+                        .and_then(|metadata| metadata.modified())
+                        .is_ok_and(|modified| {
+                            modified.elapsed().unwrap_or_default() < CLAIM_WINDOW
+                        });
+                    if !claiming && fs::remove_dir_all(&paths.directory).is_ok() {
+                        removed += 1;
+                    }
+                    continue;
+                }
+            };
+            match lock.try_lock() {
+                Ok(()) => {
+                    drop(lock);
+                    if fs::remove_dir_all(&paths.directory).is_ok() {
+                        removed += 1;
+                    }
+                }
+                Err(TryLockError::WouldBlock) => {
+                    let record = paths.record();
+                    live.push((paths, record));
+                }
+                Err(TryLockError::Error(_)) => {}
+            }
+        }
+        live.sort_by_key(|(_, record)| record["startedAt"].as_u64().unwrap_or(0));
+        (live, removed)
+    }
+
+    /// The running session named by its id or the port it serves on.
+    fn find(&self, target: &str) -> Result<(EntryPaths, Value), String> {
+        let port = target.parse::<u16>().ok();
+        self.live()
+            .0
+            .into_iter()
+            .find(|(_, record)| {
+                record["id"] == target
+                    || port.is_some_and(|port| record["port"].as_u64() == Some(u64::from(port)))
+            })
+            .ok_or_else(|| {
+                format!(
+                    "RUSTY_DEV_SESSION: no running session has id or port `{target}`; `rusty dev list` shows them"
+                )
+            })
+    }
+}
+
+/// A short readable id: the project file's name and the `rusty dev` pid.
+fn session_id(project: &Path) -> String {
+    let stem: String = project
+        .file_stem()
+        .map(|stem| stem.to_string_lossy().to_ascii_lowercase())
+        .unwrap_or_default()
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || character == '.' {
+                character
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    format!("{}-{}", stem.trim_matches('-'), std::process::id())
+}
+
 /// One directory name per project path within the repository: `/` and `%`
 /// are escaped, so `a/b.csproj` and `a%2Fb.csproj` stay distinct.
 fn session_key(relative: &Path) -> String {
@@ -109,63 +261,152 @@ fn session_key(relative: &Path) -> String {
         .join("%2F")
 }
 
-/// The supervisor's side: the lock it holds and the record it keeps current.
+/// What a `rusty dev` registers about itself.
+pub struct Registration<'a> {
+    pub project: &'a Path,
+    pub persistence_root: &'a Path,
+    /// Started by `rusty dev start`: one per project, with its log in the
+    /// project's `.runtime/dev/`.
+    pub background: bool,
+    pub label: Option<&'a str>,
+    pub keep: bool,
+}
+
+/// The supervisor's side: the locks it holds and the record it keeps current
+/// in the registry and, for a background session, its project directory.
 pub struct Session {
-    paths: SessionPaths,
+    entry: EntryPaths,
+    project: Option<SessionPaths>,
     record: Mutex<Map<String, Value>>,
-    _lock: File,
+    _locks: Vec<File>,
 }
 
 impl Session {
-    pub fn claim(project: &Path, persistence_root: &Path) -> Result<Arc<Self>, String> {
-        let paths = SessionPaths::for_project(project)?;
-        fs::create_dir_all(&paths.directory).map_err(|error| {
+    pub fn claim(registration: &Registration<'_>) -> Result<Arc<Self>, String> {
+        Self::claim_in(&Registry::machine()?, registration)
+    }
+
+    fn claim_in(registry: &Registry, registration: &Registration<'_>) -> Result<Arc<Self>, String> {
+        let Registration {
+            project,
+            persistence_root,
+            background,
+            label,
+            keep,
+        } = *registration;
+        let mut locks = Vec::new();
+        let project_paths = if background {
+            let (paths, lock) = claim_project(project)?;
+            locks.push(lock);
+            Some(paths)
+        } else {
+            None
+        };
+        // Dead sessions are cleared whenever one starts.
+        let _ = registry.live();
+        let entry = EntryPaths::new(registry.root.join(session_id(project)));
+        fs::create_dir_all(&entry.directory).map_err(|error| {
             format!(
                 "RUSTY_DEV_SESSION: could not create `{}`: {error}",
-                paths.directory.display()
+                entry.directory.display()
             )
         })?;
-        let lock = File::create(&paths.lock).map_err(|error| {
-            format!(
-                "RUSTY_DEV_SESSION: could not create `{}`: {error}",
-                paths.lock.display()
-            )
-        })?;
-        match lock.try_lock() {
-            Ok(()) => {}
-            Err(TryLockError::WouldBlock) => {
-                return Err(format!(
-                    "RUSTY_DEV_SESSION_RUNNING: a session for `{}` is already running; `rusty dev stop --project {}` ends it",
-                    project.display(),
-                    project.display()
-                ))
-            }
-            Err(TryLockError::Error(error)) => {
-                return Err(format!(
+        let lock = File::create(&entry.lock)
+            .and_then(|lock| {
+                lock.try_lock()
+                    .map(|()| lock)
+                    .map_err(std::io::Error::other)
+            })
+            .map_err(|error| {
+                format!(
                     "RUSTY_DEV_SESSION: could not lock `{}`: {error}",
-                    paths.lock.display()
-                ))
-            }
+                    entry.lock.display()
+                )
+            })?;
+        locks.push(lock);
+        let _ = fs::remove_file(&entry.stop);
+        if keep {
+            let _ = File::create(&entry.keep);
         }
-        let _ = fs::remove_file(&paths.stop);
-        let record = json!({
+        // Idle time counts from the start until the first use.
+        let _ = File::create(&entry.activity);
+        let project = super::absolute(project)?;
+        let started_at = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let mut record = json!({
+            "id": entry.directory.file_name().map(|name| name.to_string_lossy().into_owned()),
             "state": "starting",
-            "project": super::absolute(project)?,
+            "project": project,
             "pid": std::process::id(),
+            "startedAt": started_at,
+            "background": background,
             "persistenceRoot": persistence_root,
-            "log": paths.log,
         });
+        if let Some(label) = label {
+            record["label"] = label.into();
+        }
+        if let Some(paths) = &project_paths {
+            record["log"] = json!(paths.log);
+        }
         let session = Self {
-            paths,
+            entry,
+            project: project_paths,
             record: Mutex::new(record.as_object().cloned().unwrap_or_default()),
-            _lock: lock,
+            _locks: locks,
         };
         session.write();
         Ok(Arc::new(session))
     }
 
+    /// The file the product host marks its use in.
+    pub fn activity_file(&self) -> &Path {
+        &self.entry.activity
+    }
+
+    /// Records use the host cannot see, such as a restage.
+    pub fn touch_activity(&self) {
+        let _ = File::create(&self.entry.activity)
+            .and_then(|file| file.set_modified(std::time::SystemTime::now()));
+    }
+
+    /// How long since the session was last used.
+    pub fn idle(&self) -> Duration {
+        self.entry.idle().unwrap_or_default()
+    }
+
+    /// Kept sessions never expire; `rusty dev keep` can set this at any time.
+    pub fn kept(&self) -> bool {
+        self.entry.keep.exists()
+    }
+
+    /// Records the idle limit, or why there is none.
+    pub fn idle_limit(&self, limit: &Result<Duration, &'static str>) {
+        self.update(|record| match limit {
+            Ok(limit) => {
+                record.insert("idleTimeoutMinutes".into(), (limit.as_secs() / 60).into());
+            }
+            Err(reason) => {
+                record.insert("idleTimeoutMinutes".into(), Value::Null);
+                record.insert("idleExpiry".into(), (*reason).into());
+            }
+        });
+    }
+
+    /// The `rusty-product-host` this session runs, for a forced stop.
+    pub fn host_started(&self, pid: u32) {
+        self.update(|record| {
+            record.insert("hostPid".into(), pid.into());
+        });
+    }
+
     pub fn stop_requested(&self) -> bool {
-        self.paths.stop.exists()
+        self.entry.stop.exists()
+            || self
+                .project
+                .as_ref()
+                .is_some_and(|paths| paths.stop.exists())
     }
 
     /// Copies a host's output to this supervisor's own and records where it
@@ -227,23 +468,66 @@ impl Session {
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .clone(),
         );
-        let next = self.paths.record.with_extension("json.next");
-        let written = fs::write(&next, record.to_string())
-            .and_then(|()| fs::rename(&next, &self.paths.record));
-        if let Err(error) = written {
-            super::diagnostic(
-                "session-record-failed",
-                json!({ "record": self.paths.record, "error": error.to_string() }),
-            );
+        let records = std::iter::once(&self.entry.record)
+            .chain(self.project.as_ref().map(|paths| &paths.record));
+        for path in records {
+            let next = path.with_extension("json.next");
+            let written =
+                fs::write(&next, record.to_string()).and_then(|()| fs::rename(&next, path));
+            if let Err(error) = written {
+                super::diagnostic(
+                    "session-record-failed",
+                    json!({ "record": path, "error": error.to_string() }),
+                );
+            }
         }
     }
 }
 
 impl Drop for Session {
     fn drop(&mut self) {
-        let _ = fs::remove_file(&self.paths.record);
-        let _ = fs::remove_file(&self.paths.stop);
+        if let Some(paths) = &self.project {
+            let _ = fs::remove_file(&paths.record);
+            let _ = fs::remove_file(&paths.stop);
+        }
+        // Windows keeps an open lock file; `rusty dev list` removes what is left.
+        let _ = fs::remove_dir_all(&self.entry.directory);
     }
+}
+
+/// Takes the project's background-session lock, one per project.
+fn claim_project(project: &Path) -> Result<(SessionPaths, File), String> {
+    let paths = SessionPaths::for_project(project)?;
+    fs::create_dir_all(&paths.directory).map_err(|error| {
+        format!(
+            "RUSTY_DEV_SESSION: could not create `{}`: {error}",
+            paths.directory.display()
+        )
+    })?;
+    let lock = File::create(&paths.lock).map_err(|error| {
+        format!(
+            "RUSTY_DEV_SESSION: could not create `{}`: {error}",
+            paths.lock.display()
+        )
+    })?;
+    match lock.try_lock() {
+        Ok(()) => {}
+        Err(TryLockError::WouldBlock) => {
+            return Err(format!(
+                "RUSTY_DEV_SESSION_RUNNING: a session for `{}` is already running; `rusty dev stop --project {}` ends it",
+                project.display(),
+                project.display()
+            ))
+        }
+        Err(TryLockError::Error(error)) => {
+            return Err(format!(
+                "RUSTY_DEV_SESSION: could not lock `{}`: {error}",
+                paths.lock.display()
+            ))
+        }
+    }
+    let _ = fs::remove_file(&paths.stop);
+    Ok((paths, lock))
 }
 
 /// Starts `rusty dev <arguments> --session` in the background and returns
@@ -361,6 +645,168 @@ fn stop_session(paths: &SessionPaths) -> Result<Option<Value>, String> {
     Ok(Some(record))
 }
 
+/// `rusty dev list`: every running session on this machine.
+pub fn list(machine_readable: bool) -> Result<ExitCode, String> {
+    let registry = Registry::machine()?;
+    let sessions: Vec<Value> = registry
+        .live()
+        .0
+        .into_iter()
+        .map(|(_, record)| record)
+        .collect();
+    if machine_readable {
+        println!("{}", Value::Array(sessions));
+        return Ok(ExitCode::SUCCESS);
+    }
+    if sessions.is_empty() {
+        println!(
+            "no dev sessions are running (registry `{}`)",
+            registry.root.display()
+        );
+        return Ok(ExitCode::SUCCESS);
+    }
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    println!(
+        "{:<34} {:<12} {:<28} {:>8} {:>13} {:<5} {:<24} PROJECT",
+        "ID", "STATE", "URL", "UP", "IDLE/LIMIT", "KEEP", "LABEL"
+    );
+    for record in &sessions {
+        let text = |key: &str| record[key].as_str().unwrap_or("-").to_owned();
+        let up = now.saturating_sub(record["startedAt"].as_u64().unwrap_or(now));
+        let idle = record["idleSeconds"]
+            .as_u64()
+            .map_or("-".to_owned(), duration_text);
+        let limit = if record["keep"] == true {
+            "kept".to_owned()
+        } else {
+            record["idleTimeoutMinutes"]
+                .as_u64()
+                .map_or("none".to_owned(), |minutes| duration_text(minutes * 60))
+        };
+        println!(
+            "{:<34} {:<12} {:<28} {:>8} {:>13} {:<5} {:<24} {}",
+            text("id"),
+            text("state"),
+            text("url"),
+            duration_text(up),
+            format!("{idle}/{limit}"),
+            if record["keep"] == true { "yes" } else { "" },
+            text("label"),
+            text("project"),
+        );
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+/// `rusty dev stop <id|port>`: a graceful stop, then signals to the recorded
+/// processes only, never a search by name.
+pub fn stop_target(target: &str) -> Result<ExitCode, String> {
+    let (paths, record) = Registry::machine()?.find(target)?;
+    File::create(&paths.stop).map_err(|error| {
+        format!(
+            "RUSTY_DEV_SESSION: could not create `{}`: {error}",
+            paths.stop.display()
+        )
+    })?;
+    let stopped_within = |limit: Duration| {
+        let deadline = Instant::now() + limit;
+        while paths.alive() {
+            if Instant::now() >= deadline {
+                return false;
+            }
+            thread::sleep(POLL);
+        }
+        true
+    };
+    let pids: Vec<u64> = ["pid", "hostPid"]
+        .iter()
+        .filter_map(|key| record[*key].as_u64())
+        .collect();
+    let mut forced = false;
+    if !stopped_within(GRACEFUL_STOP) {
+        forced = true;
+        signal(&pids[..1.min(pids.len())], false);
+        if !stopped_within(TERMINATE_GRACE) {
+            signal(&pids, true);
+            if !stopped_within(TERMINATE_GRACE) {
+                return Err(format!(
+                    "RUSTY_DEV_STOP_TIMEOUT: session `{}` (pids {pids:?}) did not stop",
+                    record["id"].as_str().unwrap_or(target)
+                ));
+            }
+        }
+    }
+    let _ = fs::remove_dir_all(&paths.directory);
+    println!(
+        "{}",
+        json!({ "stopped": true, "forced": forced, "session": record })
+    );
+    Ok(ExitCode::SUCCESS)
+}
+
+/// `rusty dev keep <id|port> [--off]`.
+pub fn keep(target: &str, keep: bool) -> Result<ExitCode, String> {
+    let (paths, _) = Registry::machine()?.find(target)?;
+    let result = if keep {
+        File::create(&paths.keep).map(drop)
+    } else {
+        fs::remove_file(&paths.keep).or_else(|error| {
+            if error.kind() == std::io::ErrorKind::NotFound {
+                Ok(())
+            } else {
+                Err(error)
+            }
+        })
+    };
+    result.map_err(|error| format!("RUSTY_DEV_SESSION: `{}`: {error}", paths.keep.display()))?;
+    println!("{}", paths.record());
+    Ok(ExitCode::SUCCESS)
+}
+
+/// `rusty dev prune`: removes the records of sessions that have ended.
+pub fn prune() -> Result<ExitCode, String> {
+    let (live, removed) = Registry::machine()?.live();
+    println!("{}", json!({ "removed": removed, "running": live.len() }));
+    Ok(ExitCode::SUCCESS)
+}
+
+/// Running and recently removed counts for `rusty status`.
+pub fn registry_summary() -> Option<(PathBuf, usize)> {
+    let registry = Registry::machine().ok()?;
+    let running = registry.live().0.len();
+    Some((registry.root, running))
+}
+
+fn duration_text(seconds: u64) -> String {
+    match seconds {
+        0..60 => format!("{seconds}s"),
+        60..3600 => format!("{}m", seconds / 60),
+        _ => format!("{}h{:02}m", seconds / 3600, seconds % 3600 / 60),
+    }
+}
+
+/// Sends SIGTERM, or SIGKILL when `kill`, to `pids`.
+fn signal(pids: &[u64], kill: bool) {
+    for pid in pids {
+        #[cfg(unix)]
+        let _ = Command::new("kill")
+            .args([if kill { "-KILL" } else { "-TERM" }, &pid.to_string()])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+        #[cfg(windows)]
+        let _ = Command::new("taskkill")
+            .args(["/PID", &pid.to_string(), "/T"])
+            .args(kill.then_some("/F"))
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
+}
+
 /// Keeps terminal interrupts and the caller's process group away from the
 /// background supervisor.
 #[cfg(unix)]
@@ -402,6 +848,29 @@ fn detach(command: &mut Command) {
 mod tests {
     use super::*;
 
+    fn registry(root: &Path) -> Registry {
+        Registry {
+            root: root.join("registry"),
+        }
+    }
+
+    fn claim(
+        registry: &Registry,
+        project: &Path,
+        background: bool,
+    ) -> Result<Arc<Session>, String> {
+        Session::claim_in(
+            registry,
+            &Registration {
+                project,
+                persistence_root: Path::new("/persistence"),
+                background,
+                label: Some("test"),
+                keep: false,
+            },
+        )
+    }
+
     #[test]
     fn same_named_projects_have_their_own_sessions() {
         let root = std::env::temp_dir().join(format!("rusty-session-names-{}", std::process::id()));
@@ -410,8 +879,9 @@ mod tests {
             fs::write(root.join(directory).join("Game.csproj"), "").unwrap();
         }
         fs::create_dir_all(root.join(".git")).unwrap();
+        let registry = registry(&root);
         let (a, b) = (root.join("a/Game.csproj"), root.join("b/Game.csproj"));
-        let session = Session::claim(&a, &root.join(".runtime/persistence")).unwrap();
+        let session = claim(&registry, &a, true).unwrap();
         let (paths_a, paths_b) = (
             SessionPaths::for_project(&a).unwrap(),
             SessionPaths::for_project(&b).unwrap(),
@@ -419,11 +889,10 @@ mod tests {
         assert_ne!(paths_a.directory, paths_b.directory);
         assert!(paths_a.running().unwrap().is_some());
         assert!(paths_b.running().unwrap().is_none());
-        let other = Session::claim(&b, &root.join(".runtime/persistence")).unwrap();
         // Another spelling of a's project names a's session.
         let spelled = SessionPaths::for_project(&root.join("c/../a/./Game.csproj")).unwrap();
         assert_eq!(spelled.directory, paths_a.directory);
-        drop((session, other));
+        drop(session);
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -432,10 +901,11 @@ mod tests {
         let root = std::env::temp_dir().join(format!("rusty-session-{}", std::process::id()));
         let project = root.join("Game.csproj");
         fs::create_dir_all(&root).unwrap();
-        let session = Session::claim(&project, &root.join(".runtime/persistence")).unwrap();
+        let registry = registry(&root);
+        let session = claim(&registry, &project, true).unwrap();
         let paths = SessionPaths::for_project(&project).unwrap();
         assert_eq!(paths.running().unwrap().unwrap()["state"], "starting");
-        assert!(Session::claim(&project, &root).is_err());
+        assert!(claim(&registry, &project, true).is_err());
         session.serving("http://127.0.0.1:8787", 7);
         let record = paths.running().unwrap().unwrap();
         assert_eq!(
@@ -458,6 +928,63 @@ mod tests {
         fs::write(&paths.record, record).unwrap();
         not_running();
         assert!(!paths.record.exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn the_registry_lists_every_session_and_clears_ended_ones() {
+        let root = std::env::temp_dir().join(format!("rusty-registry-{}", std::process::id()));
+        fs::create_dir_all(root.join(".git")).unwrap();
+        let registry = registry(&root);
+        let (game, tool) = (root.join("Game.csproj"), root.join("Tool.csproj"));
+        // A foreground run and a background session, and no project lock for
+        // the foreground one: playtest runs several hosts of one project.
+        let foreground = claim(&registry, &game, false).unwrap();
+        let background = claim(&registry, &tool, true).unwrap();
+        foreground.serving("http://127.0.0.1:30301", 1);
+        let (live, _) = registry.live();
+        assert_eq!(live.len(), 2);
+        let id = format!("game-{}", std::process::id());
+        let (paths, record) = registry.find(&id).unwrap();
+        assert_eq!(
+            (record["label"].as_str(), record["background"].as_bool()),
+            (Some("test"), Some(false))
+        );
+        assert_eq!(registry.find("30301").unwrap().1["id"], json!(id));
+        assert!(registry.find("30302").is_err());
+
+        // Idle time is the activity file's age; a touch resets it.
+        let hour_ago = std::time::SystemTime::now() - Duration::from_secs(3600);
+        File::options()
+            .write(true)
+            .open(foreground.activity_file())
+            .unwrap()
+            .set_modified(hour_ago)
+            .unwrap();
+        assert!(foreground.idle() >= Duration::from_secs(3599));
+        assert!(registry.find(&id).unwrap().1["idleSeconds"].as_u64() >= Some(3599));
+        foreground.touch_activity();
+        assert!(foreground.idle() < Duration::from_secs(60));
+
+        assert!(!foreground.kept());
+        File::create(&paths.keep).unwrap();
+        assert!(foreground.kept());
+        assert_eq!(registry.find(&id).unwrap().1["keep"], true);
+        File::create(&paths.stop).unwrap();
+        assert!(foreground.stop_requested());
+
+        // A session that ended without cleaning up leaves its directory; its
+        // lock is free, so it is removed.
+        let ended = registry.root.join("ended-1");
+        fs::create_dir_all(&ended).unwrap();
+        fs::write(ended.join("lock"), "").unwrap();
+        fs::write(ended.join("session.json"), r#"{"id":"ended-1"}"#).unwrap();
+        drop(foreground);
+        let (live, removed) = registry.live();
+        assert_eq!((live.len(), removed), (1, 1));
+        assert!(!ended.exists());
+        drop(background);
+        assert!(registry.live().0.is_empty());
         fs::remove_dir_all(root).unwrap();
     }
 }

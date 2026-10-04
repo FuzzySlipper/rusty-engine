@@ -54,19 +54,34 @@ fn configured_releases() -> Option<String> {
 }
 
 fn config_string(key: &str) -> Option<String> {
+    config_value(key)?
+        .as_str()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+}
+
+fn config_value(key: &str) -> Option<serde_json::Value> {
     let path = cache_root().ok()?.join(CONFIG_FILE);
     let bytes = fs::read(&path).ok()?;
     match serde_json::from_slice::<serde_json::Value>(&bytes) {
-        Ok(config) => config[key]
-            .as_str()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(str::to_owned),
+        Ok(mut config) => Some(config[key].take()).filter(|value| !value.is_null()),
         Err(error) => {
             eprintln!("rusty: ignoring `{}`: {error}", path.display());
             None
         }
     }
+}
+
+/// `{"devIdleMinutes": <minutes>}`: how long a dev session may go unused
+/// before it stops itself; 0 never. Unset, the CLI's default applies.
+pub fn dev_idle_minutes() -> Option<u64> {
+    let value = config_value("devIdleMinutes")?;
+    let minutes = value.as_u64();
+    if minutes.is_none() {
+        eprintln!("rusty: ignoring devIdleMinutes {value}: it must be a whole number of minutes");
+    }
+    minutes
 }
 
 /// The directory `config.json` names as `{"localOutput": <dir>}`: this

@@ -37,6 +37,9 @@ const POLL_INTERVAL: Duration = Duration::from_millis(50);
 /// [`SERVE_COMMAND`] on stdin before it accepts from the shared listener.
 pub(crate) const RUNTIME_READY_LINE: &str = "RUSTY_RUNTIME ready";
 pub(crate) const SERVE_COMMAND: &str = "serve";
+/// The exit code of a host that could not bind its port. `rusty dev` reads it
+/// as a configuration error: restarting cannot help, so it stops at once.
+pub(crate) const BIND_FAILURE_EXIT_CODE: i32 = 78;
 
 /// `rusty dev` writes one command over stdin after each restage: a new
 /// Product directory replaces the runtime, restaged UI or bundle content is
@@ -56,8 +59,16 @@ enum SupervisorCommand {
 pub(crate) fn run(args: Arguments) -> Result<(), String> {
     let termination = install_termination_signal_hook();
     let diagnostics = ProductHostLog::new(args.log_config()).map_err(|error| error.to_string())?;
-    let listener = TcpListener::bind(SocketAddr::from((args.bind_host(), args.port())))
-        .map_err(|error| format!("PRODUCT_HOST_BIND: {error}"))?;
+    let listener = match TcpListener::bind(SocketAddr::from((args.bind_host(), args.port()))) {
+        Ok(listener) => listener,
+        Err(error) => {
+            eprintln!(
+                "PRODUCT_HOST_BIND: {error}{}",
+                ephemeral_port_hint(args.port())
+            );
+            std::process::exit(BIND_FAILURE_EXIT_CODE);
+        }
+    };
     let address = listener
         .local_addr()
         .map_err(|error| format!("PRODUCT_HOST_ADDRESS: {error}"))?;
@@ -211,6 +222,25 @@ pub(crate) fn run(args: Arguments) -> Result<(), String> {
     diagnostics.flush();
     browser_shutdown?;
     runtime_shutdown
+}
+
+/// Why a port can be taken with nothing listening on it: the kernel lends
+/// ports in its ephemeral range to outgoing connections.
+fn ephemeral_port_hint(port: u16) -> String {
+    match ephemeral_port_range() {
+        Some((low, high)) if (low..=high).contains(&port) => format!(
+            "; port {port} is in this machine's ephemeral range {low}-{high}, which outgoing \
+             connections borrow, so it can be taken with nothing listening. Omit --port (any \
+             free port) or choose one outside that range"
+        ),
+        _ => String::new(),
+    }
+}
+
+fn ephemeral_port_range() -> Option<(u16, u16)> {
+    let range = std::fs::read_to_string("/proc/sys/net/ipv4/ip_local_port_range").ok()?;
+    let mut bounds = range.split_whitespace().map(str::parse::<u16>);
+    Some((bounds.next()?.ok()?, bounds.next()?.ok()?))
 }
 
 fn start_or_pause(
@@ -652,6 +682,18 @@ fn escape_html(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_bind_failure_inside_the_ephemeral_range_says_why() {
+        let Some((low, high)) = ephemeral_port_range() else {
+            return;
+        };
+        assert!(ephemeral_port_hint(low).contains("ephemeral range"));
+        assert!(ephemeral_port_hint(high).contains("Omit --port"));
+        if low > 1 {
+            assert_eq!(ephemeral_port_hint(low - 1), "");
+        }
+    }
 
     #[test]
     fn supervisor_frames_decode_replacement_and_report_eof() {

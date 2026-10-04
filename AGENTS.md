@@ -181,6 +181,15 @@ not evidence that physical picking works. Keep product action rules downstream.
   leave the downstream failure visible and report it rather than pinning back.
 - Preserve unrelated work and follow the task's branch and promotion
   instructions.
+- Run products with `rusty dev` or `rusty dev start --label <who>` and leave
+  out `--port`. Find hosts with `rusty dev list` and stop them with
+  `rusty dev stop <id|port>`. Never kill `rusty` or `rusty-product-host`
+  processes by name: other sessions on the machine own them. Unused sessions
+  stop themselves after 30 minutes; keep a long-running one with `--keep`.
+- `.runtime/` in any checkout is disposable test state, saves included. Don't
+  preserve or migrate it across pair updates. Copy a save that must survive
+  into a committed fixture or your evidence location and load it from there
+  ([development state](docs/csharp-sdk.md#development-state-is-disposable)).
 
 ### Playtest warning deltas
 
