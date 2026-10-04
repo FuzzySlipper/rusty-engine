@@ -79,6 +79,7 @@ fn main() -> ExitCode {
 }
 
 fn run() -> Result<ExitCode, String> {
+    session::prune_quietly();
     match Arguments::parse(env::args().skip(1))?.command {
         CommandName::Help(text) => {
             println!("{text}");
@@ -1891,11 +1892,23 @@ fn delegated_arguments(options: &DevOptions) -> Vec<std::ffi::OsString> {
     if let Some(log) = &options.diagnostics_log {
         push("--diagnostics-log", log.clone().into());
     }
+    // The session's identity and lifetime belong to the pair's own session.
+    if let Some(instance) = &options.instance {
+        push("--instance", instance.into());
+    }
+    if let Some(label) = &options.label {
+        push("--label", label.into());
+    }
+    if let Some(minutes) = options.idle_timeout {
+        push("--idle-timeout", minutes.to_string().into());
+    }
     for (enabled, flag) in [
         (options.live_debug, "--live-debug"),
         (options.debugger, "--debugger"),
         (options.headless, "--headless"),
         (options.session, "--session"),
+        (options.keep, "--keep"),
+        (options.allow_ephemeral_port, "--allow-ephemeral-port"),
     ] {
         if enabled {
             arguments.push(flag.into());
@@ -2987,14 +3000,43 @@ mod tests {
                 "{commands:?}"
             );
         }
+        // Each entry of the help's command list, by its exact name column:
+        // `dev start` does not stand in for a missing `dev` line.
+        let listed = |help: &str| -> Vec<String> {
+            help.lines()
+                .skip_while(|line| *line != "commands:")
+                .skip(1)
+                .take_while(|line| !line.is_empty())
+                .filter(|line| line.starts_with("  ") && !line.starts_with("   "))
+                .map(|line| line.trim().split("  ").next().unwrap().to_owned())
+                .collect()
+        };
+        // A command whose subcommands are not dispatched here (`asset`) is
+        // named with them (`asset check`); one with dispatched subcommands
+        // (`dev`) needs its own line besides theirs.
+        let named = |entries: &[String], command: &str| {
+            let subcommands = format!("{command} ");
+            entries.iter().any(|entry| entry == command)
+                || (!commands.iter().any(|other| other.starts_with(&subcommands))
+                    && entries.iter().any(|entry| entry.starts_with(&subcommands)))
+        };
         let help = usage();
+        let entries = listed(&help);
         for command in &commands {
             assert!(
-                help.lines()
-                    .any(|line| line.trim_start().starts_with(command.as_str())),
-                "`rusty {command}` is dispatched but missing from `rusty --help`"
+                named(&entries, command),
+                "`rusty {command}` is dispatched but missing from `rusty --help`: {entries:?}"
             );
         }
+        let without_dev: String = help
+            .lines()
+            .filter(|line| !line.starts_with("  dev           "))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            !named(&listed(&without_dev), "dev"),
+            "a missing standalone `dev` line is noticed"
+        );
     }
 
     #[test]
@@ -3393,6 +3435,16 @@ mod tests {
             "--live-debug",
             "--cef-switch",
             "remote-debugging-port=9333",
+            "--instance",
+            "playtest-2",
+            "--label",
+            "crew-playtest:abc",
+            "--keep",
+            "--idle-timeout",
+            "45",
+            "--port",
+            "40000",
+            "--allow-ephemeral-port",
         ]));
         assert!(!delegated.iter().any(|argument| argument == "--runtime"));
         let delegated = Arguments::parse(
@@ -3411,6 +3463,13 @@ mod tests {
         assert_eq!(delegated.output.as_deref(), Some("window"));
         assert!(delegated.live_debug);
         assert_eq!(delegated.cef_switches, ["remote-debugging-port=9333"]);
+        // Session options survive delegation, so the pair's session has them.
+        assert_eq!(delegated.instance.as_deref(), Some("playtest-2"));
+        assert_eq!(delegated.label.as_deref(), Some("crew-playtest:abc"));
+        assert!(delegated.keep);
+        assert_eq!(delegated.idle_timeout, Some(45));
+        assert_eq!(delegated.port, Some(40000));
+        assert!(delegated.allow_ephemeral_port);
     }
 
     #[test]

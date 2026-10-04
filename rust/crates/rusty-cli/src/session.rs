@@ -875,6 +875,14 @@ pub fn prune() -> Result<ExitCode, String> {
     Ok(ExitCode::SUCCESS)
 }
 
+/// Every `rusty` invocation clears dead session records on the way. Best
+/// effort: a missing or unreadable registry never fails the command.
+pub fn prune_quietly() {
+    if let Ok(registry) = Registry::machine() {
+        registry.scan();
+    }
+}
+
 /// Running and recently removed counts for `rusty status`.
 pub fn registry_summary() -> Option<(PathBuf, usize)> {
     let registry = Registry::machine().ok()?;
