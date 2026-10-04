@@ -39,6 +39,9 @@ export async function startProductBrowserShell(root: HTMLElement): Promise<void>
     },
     output: bootstrap.renderer.output,
     ...(bootstrap.uiProjection === undefined ? {} : { uiProjection: bootstrap.uiProjection }),
+    ...(bootstrap.renderer.presentationAspect === undefined
+      ? {}
+      : { presentationAspectBounds: bootstrap.renderer.presentationAspect }),
     mountUi: (uiRoot, context) => mountUi(uiRoot, context),
   });
 }

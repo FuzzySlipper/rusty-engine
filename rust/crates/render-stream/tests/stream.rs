@@ -167,6 +167,7 @@ fn frames_follow_viewers_and_simulation_time() {
                 height: 1.0,
             },
             order: 0,
+            viewport_anchor: None,
         }],
         presentations: Vec::new(),
     };

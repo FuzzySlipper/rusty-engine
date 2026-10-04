@@ -51,6 +51,8 @@ struct CameraEntry {
     /// Starts at one because zero is never a renderer sample identity. This
     /// identity is retained per live camera, not supplied by the product.
     next_sample_id: u64,
+    /// The product UI element its primary views follow, if any.
+    viewport_anchor: Option<String>,
 }
 
 #[derive(Clone, Copy)]
@@ -74,6 +76,7 @@ pub(crate) struct RuntimeCameraViewCall {
 /// complete active view against the current host surface.
 pub(crate) struct RuntimeCameraViewBridge {
     state: CameraState,
+    surface: NativeCameraSurfaceReadout,
     staged: Option<RuntimeCameraViewCall>,
     operation_diagnostics: crate::operation_diagnostics::OperationDiagnostics,
 }
@@ -91,6 +94,7 @@ impl RuntimeCameraViewBridge {
                 next_camera: 1,
                 next_target: 1,
             },
+            surface: NativeCameraSurfaceReadout::default(),
             staged: None,
             operation_diagnostics: Default::default(),
         }
@@ -184,6 +188,7 @@ impl RuntimeCameraViewBridge {
                 descriptor,
                 motion: None,
                 next_sample_id: 1,
+                viewport_anchor: None,
             },
         );
         stage_composition(staged)?;
@@ -273,6 +278,7 @@ impl RuntimeCameraViewBridge {
                 descriptor: request.replacement,
                 motion: None,
                 next_sample_id: 1,
+                viewport_anchor: None,
             },
         );
         for view in &mut staged.state.views {
@@ -569,6 +575,25 @@ impl RuntimeCameraViewBridge {
         Ok(())
     }
 
+    pub(crate) fn set_surface(&mut self, surface: NativeCameraSurfaceReadout) {
+        self.surface = surface;
+    }
+
+    /// Makes `camera`'s primary views follow the product UI element anchored
+    /// under `anchor`, or their own viewports again with an empty name.
+    fn set_viewport_anchor(
+        &mut self,
+        camera: NativeCameraHandle,
+        anchor: &str,
+    ) -> Result<(), CsharpEngineServicesError> {
+        let staged = self.staged_mut()?;
+        let entry = staged.state.cameras.get_mut(&camera.value).ok_or_else(|| {
+            CsharpEngineServicesError::new("CSHARP_CAMERA_HANDLE", "camera handle is not live")
+        })?;
+        entry.viewport_anchor = (!anchor.is_empty()).then(|| anchor.to_owned());
+        stage_composition(staged)
+    }
+
     fn set_tone_mapping(
         &mut self,
         request: NativeToneMappingRequest,
@@ -608,6 +633,9 @@ fn stage_composition(staged: &mut RuntimeCameraViewCall) -> Result<(), CsharpEng
                 )
             })?;
         let camera_id = format!("csharp-camera-{}", view.camera.value);
+        let viewport_anchor = (view.target.value == 0)
+            .then(|| descriptor.viewport_anchor.clone())
+            .flatten();
         cameras
             .entry(view.camera.value)
             .or_insert(composition_camera(camera_id.clone(), descriptor)?);
@@ -639,6 +667,7 @@ fn stage_composition(staged: &mut RuntimeCameraViewCall) -> Result<(), CsharpEng
             target,
             viewport: viewport(view.viewport),
             order: view.order,
+            viewport_anchor,
         });
     }
     let mut presentations = Vec::with_capacity(staged.state.presentations.len());
@@ -803,6 +832,7 @@ fn validate_descriptor(
                 descriptor,
                 motion: None,
                 next_sample_id: 1,
+                viewport_anchor: None,
             },
         )?],
         targets: Vec::new(),
@@ -812,6 +842,7 @@ fn validate_descriptor(
             target: RendererViewTarget::Primary,
             viewport: viewport(descriptor.viewport),
             order: 0,
+            viewport_anchor: None,
         }],
         presentations: Vec::new(),
     };
@@ -1272,6 +1303,48 @@ pub(crate) unsafe extern "C" fn set_fog(
     }
 }
 
+pub(crate) unsafe extern "C" fn read_surface(
+    context: *mut c_void,
+    output: *mut NativeCameraSurfaceReadout,
+    operation_error: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    if !operation_error.is_null() {
+        unsafe { *operation_error = std::mem::zeroed() };
+    }
+    if context.is_null() || output.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &*context.cast::<RuntimeCameraViewBridge>() };
+    unsafe { *output = bridge.surface };
+    ABI_OK
+}
+
+pub(crate) unsafe extern "C" fn set_viewport_anchor(
+    context: *mut c_void,
+    request: *const NativeCameraViewportAnchorRequest,
+    operation_error: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    if !operation_error.is_null() {
+        unsafe { *operation_error = std::mem::zeroed() };
+    }
+    if context.is_null() || request.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeCameraViewBridge>() };
+    let request = unsafe { *request };
+    let result = unsafe {
+        crate::composition::borrowed_utf8(request.anchor.bytes, request.anchor.len, "anchor")
+    }
+    .and_then(|anchor| bridge.set_viewport_anchor(request.camera, anchor));
+    match result {
+        Ok(()) => ABI_OK,
+        Err(error) => {
+            bridge.operation_diagnostics.retain(&error, operation_error);
+            0
+        }
+    }
+}
+
 pub(crate) unsafe extern "C" fn set_tone_mapping(
     context: *mut c_void,
     request: *const NativeToneMappingRequest,
@@ -1615,6 +1688,67 @@ mod tests {
                 .code(),
             "CSHARP_CAMERA_SAMPLE_ID"
         );
+    }
+
+    #[test]
+    fn a_viewport_anchor_names_the_cameras_primary_views_and_reads_back_the_surface() {
+        let mut bridge = RuntimeCameraViewBridge::new();
+        bridge.begin_call();
+        let quarter = NativeCameraViewport {
+            x: 0.0,
+            y: 0.0,
+            width: 0.25,
+            height: 0.25,
+        };
+        let camera = bridge.create(camera_descriptor(quarter)).expect("camera");
+        bridge.set_active(camera).expect("active");
+        let anchors = |bridge: &RuntimeCameraViewBridge| {
+            let composition = bridge
+                .staged
+                .as_ref()
+                .unwrap()
+                .composition
+                .as_ref()
+                .unwrap();
+            composition
+                .views
+                .iter()
+                .map(|view| (view.viewport_anchor.clone(), view.viewport.width))
+                .collect::<Vec<_>>()
+        };
+        bridge.set_viewport_anchor(camera, "hero").expect("anchor");
+        // The committed viewport stays; the renderer substitutes the rect.
+        assert_eq!(anchors(&bridge), [(Some("hero".to_owned()), 0.25)]);
+        bridge.set_viewport_anchor(camera, "").expect("no anchor");
+        assert_eq!(anchors(&bridge), [(None, 0.25)]);
+        assert!(bridge
+            .set_viewport_anchor(NativeCameraHandle { value: 99 }, "hero")
+            .is_err());
+
+        let surface = NativeCameraSurfaceReadout {
+            reported: true,
+            css_width: 800.0,
+            css_height: 600.0,
+            device_width: 1600.0,
+            device_height: 1200.0,
+            device_pixel_ratio: 2.0,
+            ui_scale: 1.25,
+            revision: 3,
+        };
+        bridge.set_surface(surface);
+        let mut read = NativeCameraSurfaceReadout::default();
+        let mut error = unsafe { std::mem::zeroed::<NativeOperationErrorReceipt>() };
+        assert_eq!(
+            unsafe {
+                read_surface(
+                    (&mut bridge as *mut RuntimeCameraViewBridge).cast(),
+                    &mut read,
+                    &mut error,
+                )
+            },
+            ABI_OK
+        );
+        assert_eq!(read, surface);
     }
 
     #[test]

@@ -156,6 +156,7 @@ pub fn primary_view(
         target: RendererViewTarget::Primary,
         viewport: area,
         order,
+        viewport_anchor: None,
     }
 }
 

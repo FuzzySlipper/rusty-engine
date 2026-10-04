@@ -34,6 +34,8 @@ declare module "@rusty-engine/product-ui/internal/application-host/src/generated
         readonly sampleRate: 48000;
         readonly channels: 2;
     };
+    /** Where the page reports how it presents the product. */
+    export const PRESENTATION_PATH = "/__rusty/product/runtime/presentation";
     export type ControllerAxis = "axis-0" | "axis-1" | "axis-2" | "axis-3";
     export type ControllerButton = "button-0" | "button-1" | "button-2" | "button-3" | "button-4" | "button-5" | "button-6" | "button-7" | "button-8" | "button-9" | "button-10" | "button-11" | "button-12" | "button-13" | "button-14" | "button-15";
     export type JsonValue = number | string | boolean | Array<JsonValue> | {
@@ -46,9 +48,30 @@ declare module "@rusty-engine/product-ui/internal/application-host/src/generated
      */
     export type ProductHostCursorMode = "pointer-lock" | "unlocked";
     /**
+     * What the page reports about its presentation.
+     */
+    export type ProductHostPresentationReport = {
+        cssWidth: number;
+        cssHeight: number;
+        devicePixelRatio: number;
+        uiScale: number;
+        anchors: Array<ProductHostViewportAnchorReport>;
+    };
+    /**
      * Where the runtime presents the frames it renders.
      */
     export type ProductHostRenderOutput = "stream" | "window";
+    /**
+     * One anchored element's rect, normalized to the presentation surface,
+     * bottom-left based.
+     */
+    export type ProductHostViewportAnchorReport = {
+        name: string;
+        x: number;
+        y: number;
+        width: number;
+        height: number;
+    };
     /**
      * The runtime binding an envelope belongs to, as canonical decimal text.
      */
@@ -198,6 +221,24 @@ declare module "@rusty-engine/product-ui" {
         readonly focusGameplay: () => void;
         readonly interactionMode: () => RustyApplicationInteractionMode;
         readonly setInteractionMode: (mode: RustyApplicationInteractionMode) => void;
+        /** The UI scale; 1 until set. The product reads it as `CameraView.ReadSurface().UiScale`. */
+        readonly scale: () => number;
+        /**
+         * Set the UI scale (finite, 0.25 to 4), as a player's UI-scale setting: the
+         * document root's font size and its `--rusty-ui-scale` property follow it,
+         * so rem-sized UI scales.
+         */
+        readonly setScale: (scale: number) => void;
+    }
+    /**
+     * Ties camera views to UI elements. A camera the product anchors under
+     * `name` (`CameraView.SetViewportAnchor`) draws its primary views over the
+     * element anchored under the same name, following it on resize and layout
+     * change with no product code running.
+     */
+    export interface RustyApplicationUiViewportPort {
+        /** Anchor `name` to `element`; returns a function that removes the anchor. */
+        readonly anchor: (name: string, element: Element) => () => void;
     }
     /**
      * A claim's value: a digital or axis value, or a product payload. A
@@ -222,6 +263,8 @@ declare module "@rusty-engine/product-ui" {
         readonly intents?: RustyApplicationUiIntentsPort;
         /** Read-only controller observations owned exclusively by interface mode. */
         readonly input?: RustyApplicationUiInputPort;
+        /** Camera views that follow UI elements. */
+        readonly viewport: RustyApplicationUiViewportPort;
     }
     export interface RustyApplicationUiInputPort {
         /** Synchronous observation on the host cadence; returns an unsubscribe function. */

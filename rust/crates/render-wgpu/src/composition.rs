@@ -26,6 +26,7 @@ use std::collections::HashMap;
 use render_host_contracts::{
     RendererCameraBasis, RendererCameraPose, RendererCompositionCamera, RendererCompositionTarget,
     RendererTargetSampling, RendererViewComposition, RendererViewTarget, RendererViewport,
+    RendererViewportAnchors,
 };
 
 use crate::camera::{self, CameraMatrices, CameraMotion, CameraPose, CameraSampleReadout};
@@ -48,7 +49,13 @@ struct CompositionTarget {
 
 #[derive(Default)]
 pub(crate) struct ViewComposition {
+    /// The installed composition with anchored views at their anchors'
+    /// rects: what frames draw.
     composition: Option<RendererViewComposition>,
+    /// The composition as the product committed it.
+    committed: Option<RendererViewComposition>,
+    /// The rects the product UI reports for anchored views.
+    anchors: RendererViewportAnchors,
     /// Aligned with the composition's targets.
     targets: Vec<CompositionTarget>,
     /// Aligned with the composition's cameras.
@@ -134,6 +141,25 @@ pub struct ViewCompositionReadout {
     pub presentations: usize,
     pub targets: Vec<TargetReadout>,
     pub cameras: Vec<CameraSampleReadout>,
+}
+
+/// `composition` with each anchored view's viewport replaced by its
+/// anchor's rect, where `anchors` has one.
+fn anchored(
+    composition: &RendererViewComposition,
+    anchors: &RendererViewportAnchors,
+) -> RendererViewComposition {
+    let mut effective = composition.clone();
+    for view in &mut effective.views {
+        if let Some(rect) = view
+            .viewport_anchor
+            .as_ref()
+            .and_then(|name| anchors.get(name))
+        {
+            view.viewport = *rect;
+        }
+    }
+    effective
 }
 
 /// A normalized, bottom-left based viewport in pixels, top-left based.
@@ -293,9 +319,28 @@ impl Renderer {
                 motion
             })
             .collect();
-        state.plan = Plan::new(composition);
-        state.composition = Some(composition.clone());
+        let effective = anchored(composition, &state.anchors);
+        state.plan = Plan::new(&effective);
+        state.composition = Some(effective);
+        state.committed = Some(composition.clone());
         state.revision += 1;
+    }
+
+    /// Draw each anchored view at the rect its anchor names, or at its
+    /// committed viewport while `anchors` has none for it. Host
+    /// presentation facts, like the pixel ratio: the product's composition
+    /// and camera motion are unchanged.
+    pub fn set_viewport_anchors(&mut self, anchors: RendererViewportAnchors) {
+        let state = &mut self.composition;
+        if state.anchors == anchors {
+            return;
+        }
+        state.anchors = anchors;
+        if let Some(committed) = &state.committed {
+            let effective = anchored(committed, &state.anchors);
+            state.plan = Plan::new(&effective);
+            state.composition = Some(effective);
+        }
     }
 
     /// Draw every primary view from `pose` instead of its camera's pose, or

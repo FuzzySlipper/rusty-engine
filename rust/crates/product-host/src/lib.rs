@@ -40,6 +40,7 @@ mod frames;
 mod host;
 mod log;
 mod model;
+mod presentation;
 mod publication;
 mod scheduler;
 mod session;
@@ -55,7 +56,7 @@ pub use bundle::{
     ProductHostBootstrapInput, ProductHostBootstrapLifecycle, ProductHostBootstrapProduct,
     ProductHostBootstrapRenderer, ProductHostBootstrapUi, ProductHostBootstrapUiProjection,
     ProductHostBrowserBootstrap, ProductHostBundle, ProductHostBundleEntry, ProductHostCursorMode,
-    PRODUCT_HOST_BOOTSTRAP_PATH, PRODUCT_HOST_INDEX_PATH,
+    ProductHostPresentationAspect, PRODUCT_HOST_BOOTSTRAP_PATH, PRODUCT_HOST_INDEX_PATH,
 };
 pub use engine_debug::{
     ProductHostCameraPose, ProductHostDrawingMode, ProductHostDrawnFrame, ProductHostRenderOutput,
@@ -93,6 +94,10 @@ pub use model::{
     ProductHostTimelineCompletion, ProductHostTimelineCompletionResult,
     ProductHostUpdateAttribution, ProductHostUpdateAttributionSnapshot, PRODUCT_HOST_ARTIFACT,
     PRODUCT_HOST_RUNTIME_BASE_PATH,
+};
+pub use presentation::{
+    ProductHostPresentation, ProductHostPresentationLayout, ProductHostPresentationReport,
+    ProductHostViewportAnchorReport, PRODUCT_HOST_PRESENTATION_PATH,
 };
 pub use publication::{
     RuntimePublication, RuntimePublicationError, RuntimePublicationFrontier, RuntimeReceipt,

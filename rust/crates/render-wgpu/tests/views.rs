@@ -16,7 +16,7 @@ use render_host_contracts::{
     RendererCameraMotion, RendererCameraProjection, RendererCompositionPresentation,
     RendererCompositionTarget, RendererCompositionView, RendererPrimaryDestination,
     RendererPrimaryDestinationKind, RendererTargetColor, RendererTargetDepth,
-    RendererTargetSampling, RendererViewTarget,
+    RendererTargetSampling, RendererViewTarget, RendererViewport,
 };
 use render_model::*;
 use render_presentation::PresentationWorld;
@@ -50,6 +50,7 @@ fn composed_views_split_the_primary_and_present_an_offscreen_target() {
                 },
                 viewport: viewport(0.0, 0.0, 1.0, 1.0),
                 order: 0,
+                viewport_anchor: None,
             },
         ],
     );
@@ -279,6 +280,7 @@ fn drawn_cameras_report_the_sampled_and_observer_poses_each_view_drew_from() {
                     },
                     viewport: viewport(0.0, 0.0, 0.5, 1.0),
                     order: 0,
+                    viewport_anchor: None,
                 },
                 RendererCompositionView {
                     id: "inset-top".to_owned(),
@@ -289,6 +291,7 @@ fn drawn_cameras_report_the_sampled_and_observer_poses_each_view_drew_from() {
                     },
                     viewport: viewport(0.5, 0.0, 0.5, 1.0),
                     order: 1,
+                    viewport_anchor: None,
                 },
             ],
         );
@@ -378,6 +381,45 @@ fn an_observer_pose_replaces_the_primary_view_camera_until_it_is_cleared() {
     harness.renderer.set_observer(None);
     let (_, restored) = harness.composition(0.0);
     assert_eq!(restored, own);
+}
+
+#[test]
+fn an_anchored_view_draws_at_its_anchor_rect_until_the_anchor_goes() {
+    let mut harness = Harness::new(RendererOptions::default());
+    harness.apply(room());
+    let player = camera("player", [0.0, 0.6, 3.0], 0.0, -6.0);
+    let at = |area: RendererViewport, anchor: Option<&str>| {
+        let mut view = primary_view("main", "player", area, 0);
+        view.viewport_anchor = anchor.map(str::to_owned);
+        composition(vec![player.clone()], vec![view])
+    };
+    let left = viewport(0.0, 0.0, 0.5, 1.0);
+    let inset = viewport(0.5, 0.25, 0.4, 0.5);
+    harness.renderer.set_view_composition(&at(inset, None), 0.0);
+    let (_, at_inset) = harness.composition(0.0);
+    harness.renderer.set_view_composition(&at(left, None), 0.0);
+    let (_, at_left) = harness.composition(0.0);
+
+    harness
+        .renderer
+        .set_view_composition(&at(left, Some("hero")), 0.0);
+    let (_, unreported) = harness.composition(0.0);
+    assert_eq!(
+        unreported, at_left,
+        "an unreported anchor keeps the viewport"
+    );
+    harness
+        .renderer
+        .set_viewport_anchors([("hero".to_owned(), inset)].into());
+    let (_, anchored) = harness.composition(0.0);
+    assert_eq!(anchored, at_inset);
+    // A later composition keeps following the anchor.
+    harness
+        .renderer
+        .set_view_composition(&at(left, Some("hero")), 0.0);
+    assert_eq!(harness.composition(0.0).1, at_inset);
+    harness.renderer.set_viewport_anchors(Default::default());
+    assert_eq!(harness.composition(0.0).1, at_left);
 }
 
 fn capture_job(world: &PresentationWorld, operation: RenderOutputOperation) -> RenderOutputJob {

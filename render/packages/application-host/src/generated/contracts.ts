@@ -20,6 +20,9 @@ export const AUDIO_STREAM_PATH = "/__rusty/product/runtime/audio";
 /** The streamed audio: interleaved signed 16-bit little-endian PCM. */
 export const AUDIO_STREAM_FORMAT = { sampleRate: 48000, channels: 2 } as const;
 
+/** Where the page reports how it presents the product. */
+export const PRESENTATION_PATH = "/__rusty/product/runtime/presentation";
+
 export type ControllerAxis = "axis-0" | "axis-1" | "axis-2" | "axis-3";
 
 export type ControllerButton = "button-0" | "button-1" | "button-2" | "button-3" | "button-4" | "button-5" | "button-6" | "button-7" | "button-8" | "button-9" | "button-10" | "button-11" | "button-12" | "button-13" | "button-14" | "button-15";
@@ -36,9 +39,20 @@ export type PointerButton = "primary" | "secondary" | "middle";
 export type ProductHostCursorMode = "pointer-lock" | "unlocked";
 
 /**
+ * What the page reports about its presentation.
+ */
+export type ProductHostPresentationReport = { cssWidth: number, cssHeight: number, devicePixelRatio: number, uiScale: number, anchors: Array<ProductHostViewportAnchorReport>, };
+
+/**
  * Where the runtime presents the frames it renders.
  */
 export type ProductHostRenderOutput = "stream" | "window";
+
+/**
+ * One anchored element's rect, normalized to the presentation surface,
+ * bottom-left based.
+ */
+export type ProductHostViewportAnchorReport = { name: string, x: number, y: number, width: number, height: number, };
 
 /**
  * The runtime binding an envelope belongs to, as canonical decimal text.

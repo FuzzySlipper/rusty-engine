@@ -131,6 +131,11 @@ fn packages() -> Vec<(&'static str, String)> {
             Contracts::default()
                 .constant(frame_stream_constants())
                 .constant(audio_stream_constants())
+                .constant(format!(
+                    "/** Where the page reports how it presents the product. */\nexport const PRESENTATION_PATH = {:?};",
+                    crate::PRODUCT_HOST_PRESENTATION_PATH
+                ))
+                .with::<crate::ProductHostPresentationReport>()
                 .with::<runtime_input::RuntimeInputWireEvent>()
                 .with::<runtime_ui::RuntimeUiProjectionWire>()
                 .with::<ProductHostRenderOutput>()

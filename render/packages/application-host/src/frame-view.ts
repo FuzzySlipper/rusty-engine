@@ -116,11 +116,15 @@ export function mountRustyApplicationFrameView(
   let disposed = false;
   const pulling = new AbortController();
 
-  // One frame pixel per CSS pixel: the development stream's measured size.
-  const backingSize = (): [number, number] => [
-    Math.max(1, Math.round(canvas.clientWidth)),
-    Math.max(1, Math.round(canvas.clientHeight)),
-  ];
+  // One frame pixel per device pixel, so the world stays sharp on a HiDPI
+  // display; the CSS width in each request gives the runtime the ratio.
+  const backingSize = (): [number, number] => {
+    const ratio = window.devicePixelRatio || 1;
+    return [
+      Math.max(1, Math.round(canvas.clientWidth * ratio)),
+      Math.max(1, Math.round(canvas.clientHeight * ratio)),
+    ];
+  };
 
   const showFrame = (frame: RustyApplicationStreamedFrame, bitmap: ImageBitmap): void => {
     latest?.close();
@@ -206,6 +210,8 @@ export function mountRustyApplicationFrameView(
   const onAnimationFrame = (timeMs: number): void => {
     animationFrame = null;
     if (disposed) return;
+    // A pixel-ratio change (another monitor, browser zoom) need not resize.
+    if (streamed) resize();
     onCadence(timeMs);
     animationFrame = window.requestAnimationFrame(onAnimationFrame);
   };

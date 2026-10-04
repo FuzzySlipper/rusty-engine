@@ -12,7 +12,7 @@ pub const PRODUCT_HOST_BOOTSTRAP_PATH: &str = "product-bootstrap.json";
 
 /// What the runtime pack's page needs to mount a product: the product host
 /// writes it from the product's manifest.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[derive(Debug, Clone, PartialEq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ProductHostBrowserBootstrap {
     pub product: ProductHostBootstrapProduct,
@@ -67,12 +67,25 @@ pub struct ProductHostBootstrapUiProjection {
     pub expected_contract: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ProductHostBootstrapRenderer {
     /// The page shows the runtime's frames, or lets the desktop window show
     /// through.
     pub output: ProductHostRenderOutput,
+    /// The width-to-height range the presentation keeps; the page
+    /// letterboxes it beyond. Absent fills the page.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub presentation_aspect: Option<ProductHostPresentationAspect>,
+}
+
+/// An inclusive width-to-height range.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ProductHostPresentationAspect {
+    pub minimum: f64,
+    pub maximum: f64,
 }
 
 fn validate_bundle_entry_metadata(

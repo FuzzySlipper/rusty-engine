@@ -929,6 +929,7 @@ mod tests {
                 target,
                 viewport: whole,
                 order,
+                viewport_anchor: None,
             }
         };
         // A minimap camera listed first, drawn offscreen and earlier.

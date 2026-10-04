@@ -186,6 +186,37 @@ pub enum NativeCameraInterpolation {
 /// One camera descriptor update with an optional renderer sampling contract.
 /// The product supplies its admitted timeline and explicit cuts; the Engine
 /// owns retained metadata and the opaque sample identity.
+/// The presentation surface camera viewports are normalized to, as the
+/// page showing the product last reported it, in stream and window output
+/// alike. `reported` is false until a page reports. `revision` changes with
+/// every change, so a product notices a resize by comparing it.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct NativeCameraSurfaceReadout {
+    pub reported: bool,
+    pub css_width: f64,
+    pub css_height: f64,
+    /// The surface in device pixels: its CSS size times the pixel ratio.
+    pub device_width: f64,
+    pub device_height: f64,
+    pub device_pixel_ratio: f64,
+    /// The scale the product UI applies to itself (`ui.setScale`).
+    pub ui_scale: f64,
+    pub revision: u64,
+}
+
+/// Makes a camera's primary views follow the product UI element the UI
+/// anchors under `anchor` (`viewport.anchor(name, element)` in the UI
+/// context): while the page reports that element's rect, the views draw there
+/// instead of at their viewports, on resize and layout change with no product
+/// call. An empty `anchor` removes it.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeCameraViewportAnchorRequest {
+    pub camera: NativeCameraHandle,
+    pub anchor: crate::NativeUtf8Slice,
+}
+
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeCameraSampleRequest {

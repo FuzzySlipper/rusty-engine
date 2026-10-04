@@ -34,7 +34,12 @@ export type ProductHostBootstrapRenderer = {
  * The page shows the runtime's frames, or lets the desktop window show
  * through.
  */
-output: ProductHostRenderOutput, };
+output: ProductHostRenderOutput, 
+/**
+ * The width-to-height range the presentation keeps; the page
+ * letterboxes it beyond. Absent fills the page.
+ */
+presentationAspect?: ProductHostPresentationAspect, };
 
 export type ProductHostBootstrapUi = { 
 /**
@@ -200,6 +205,11 @@ export type ProductHostOperationResult = { accepted: boolean, code: string, disp
  * but the downstream callback/update could not be completed.
  */
 admittedThrough?: CanonicalU64, readout?: ProductHostRuntimeReadout, diagnostic?: string, };
+
+/**
+ * An inclusive width-to-height range.
+ */
+export type ProductHostPresentationAspect = { minimum: number, maximum: number, };
 
 /**
  * `advance-realtime`: the page's monotonic clock, in nanoseconds.

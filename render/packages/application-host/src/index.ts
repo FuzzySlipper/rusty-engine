@@ -15,6 +15,7 @@ export type {
   RustyApplicationUiMount,
   RustyApplicationUiOwner,
   RustyApplicationUiPort,
+  RustyApplicationUiViewportPort,
 } from './application-host.js';
 export { parseRustyApplicationStreamedFrame } from './frame-view.js';
 export type { RustyApplicationStreamedFrame } from './frame-view.js';

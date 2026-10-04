@@ -32,6 +32,25 @@ export interface RustyApplicationUiPort {
   readonly focusGameplay: () => void;
   readonly interactionMode: () => RustyApplicationInteractionMode;
   readonly setInteractionMode: (mode: RustyApplicationInteractionMode) => void;
+  /** The UI scale; 1 until set. The product reads it as `CameraView.ReadSurface().UiScale`. */
+  readonly scale: () => number;
+  /**
+   * Set the UI scale (finite, 0.25 to 4), as a player's UI-scale setting: the
+   * document root's font size and its `--rusty-ui-scale` property follow it,
+   * so rem-sized UI scales.
+   */
+  readonly setScale: (scale: number) => void;
+}
+
+/**
+ * Ties camera views to UI elements. A camera the product anchors under
+ * `name` (`CameraView.SetViewportAnchor`) draws its primary views over the
+ * element anchored under the same name, following it on resize and layout
+ * change with no product code running.
+ */
+export interface RustyApplicationUiViewportPort {
+  /** Anchor `name` to `element`; returns a function that removes the anchor. */
+  readonly anchor: (name: string, element: Element) => () => void;
 }
 
 /**
@@ -58,6 +77,8 @@ export interface RustyApplicationUiContext {
   readonly intents?: RustyApplicationUiIntentsPort;
   /** Read-only controller observations owned exclusively by interface mode. */
   readonly input?: RustyApplicationUiInputPort;
+  /** Camera views that follow UI elements. */
+  readonly viewport: RustyApplicationUiViewportPort;
 }
 
 export interface RustyApplicationUiInputPort {

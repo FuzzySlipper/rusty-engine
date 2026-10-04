@@ -701,6 +701,9 @@ pub struct CsharpProductRuntime {
     /// The renderer, when the configuration selected an output: absent only
     /// in runtimes built without one (tests).
     frame_output: Option<frame_output::FrameOutput>,
+    /// How the page presents the product: its surface, UI scale and
+    /// anchored rects. The renderer follows the anchors as they arrive.
+    presentation: Arc<product_host::ProductHostPresentation>,
     /// Runs the product's RenderOutput jobs.
     render_outputs: render_output::OutputExecutor,
     /// What a scene snapshot records about the renderer and the Product.
@@ -791,6 +794,13 @@ impl CsharpProductRuntime {
                 )
             })
             .transpose()?;
+        let presentation = product_host::ProductHostPresentation::new();
+        if let Some(frames) = &frame_output {
+            let driver = frames.driver();
+            presentation.set_anchor_listener(move |anchors| {
+                driver.set_viewport_anchors(anchors.clone());
+            });
+        }
         // The process that draws the world plays its sound.
         let audio_output = match frame_output {
             Some(_) => audio_output::AudioOutput::open(config.audio_output)?,
@@ -961,6 +971,7 @@ impl CsharpProductRuntime {
             pending_update_attribution: None,
             audio_output,
             frame_output,
+            presentation,
             render_outputs,
             renderer_options: config.renderer_options,
             product: config.product,
@@ -1718,6 +1729,19 @@ impl CsharpProductRuntime {
         }
         if let Some(frames) = &mut self.frame_output {
             frames.report(&mut self.services);
+        }
+        if let Some(layout) = self.presentation.layout() {
+            self.services
+                .ingest_camera_surface(NativeCameraSurfaceReadout {
+                    reported: true,
+                    css_width: layout.css_width,
+                    css_height: layout.css_height,
+                    device_width: layout.css_width * layout.device_pixel_ratio,
+                    device_height: layout.css_height * layout.device_pixel_ratio,
+                    device_pixel_ratio: layout.device_pixel_ratio,
+                    ui_scale: layout.ui_scale,
+                    revision: layout.revision,
+                });
         }
         self.services
             .begin_update_call(ui_binding(&self.lifecycle), facts);
@@ -2499,6 +2523,11 @@ impl CsharpProductRuntime {
     }
 
     /// The host serves these frames when this process streams the world.
+    /// Where the page reports how it presents the product.
+    pub fn presentation(&self) -> Arc<product_host::ProductHostPresentation> {
+        Arc::clone(&self.presentation)
+    }
+
     /// The mixed audio the watching pages play, when audio output is
     /// `stream`.
     pub fn audio_stream(&self) -> Option<Arc<product_host::ProductHostAudioStream>> {

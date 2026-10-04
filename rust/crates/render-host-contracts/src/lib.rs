@@ -138,7 +138,16 @@ pub struct RendererCompositionView {
     pub target: RendererViewTarget,
     pub viewport: RendererViewport,
     pub order: u64,
+    /// A product UI element this primary view follows: while the page
+    /// reports a rect under this name, the view draws there instead of at
+    /// `viewport`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub viewport_anchor: Option<String>,
 }
+
+/// Named rects the product UI reports for anchored views, normalized to the
+/// presentation surface like [`RendererViewport`].
+pub type RendererViewportAnchors = std::collections::BTreeMap<String, RendererViewport>;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

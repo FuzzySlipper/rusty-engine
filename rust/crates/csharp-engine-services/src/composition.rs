@@ -187,6 +187,8 @@ fn engine_api(
             set_sky_background_blend: crate::camera_view::set_sky_background_blend,
             set_fog: crate::camera_view::set_fog,
             set_tone_mapping: crate::camera_view::set_tone_mapping,
+            set_viewport_anchor: crate::camera_view::set_viewport_anchor,
+            read_surface: crate::camera_view::read_surface,
             clear_sky_background: crate::camera_view::clear_sky_background,
             set_background_color: crate::camera_view::set_background_color,
         },
@@ -441,6 +443,12 @@ impl EngineServiceSet {
             &mut self.persistence,
             &mut self.ui,
         )
+    }
+
+    /// The presentation surface the page last reported, which
+    /// `CameraView.ReadSurface` reads during the next product call.
+    pub fn ingest_camera_surface(&mut self, surface: NativeCameraSurfaceReadout) {
+        self.camera_view.set_surface(surface);
     }
 
     pub fn ingest_renderer_diagnostics(

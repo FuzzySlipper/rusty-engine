@@ -286,6 +286,31 @@ ordinary full, split, and inset normalized rectangles. A composition with any
 primary view owns the primary surface: the renderer draws no separate
 default-camera pass, and area outside every primary view is left cleared.
 
+### Views that follow the product UI
+
+`CameraView.SetViewportAnchor(new(camera, "hero"))` makes the camera's
+primary views follow the UI element the product UI anchors under the same
+name with `context.viewport.anchor("hero", element)`. The shell reports the
+element's rect on every layout change and the renderer draws the views there
+at once, in stream and window output alike, with no product call: a resize
+runs no product code. The camera keeps its own viewport while no page reports
+the anchor, and again after `SetViewportAnchor(new(camera, ""))`. The
+committed composition is unchanged, and the anchor survives later
+compositions and camera updates. An element partly outside the presentation is
+clipped to it.
+
+`CameraView.ReadSurface()` reads the presentation surface viewports are
+normalized to, as the page last reported it: its size in CSS and device pixels,
+the device pixel ratio, the UI scale, and a `Revision` that changes with every
+change, so Update notices a resize by comparing it. `Reported` is false until a
+page reports. The UI sets the UI scale with `context.ui.setScale(scale)` (0.25
+to 4) and reads it with `context.ui.scale()`; the document root's font size and
+its `--rusty-ui-scale` property follow it, so rem-sized UI scales while layout
+units keep their meaning. Streamed frames render at device pixels.
+`RustyEngineProductPresentationAspectMinimum` and `...Maximum` (manifest
+`renderer.presentationAspect`) keep the presentation within a width-to-height
+range, letterboxed beyond it. See `fixtures/csharp-viewport-anchor`.
+
 `SetBackgroundColor(new(new Color(r, g, b, 1)))` selects an opaque retained
 viewport clear color and replaces any selected sky. `SetSkyBackground` replaces
 that color with a retained panorama; `ClearSkyBackground` returns to the Engine

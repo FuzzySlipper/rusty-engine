@@ -737,6 +737,7 @@ fn particles_mark_offscreen_targets_stale_only_when_they_move() {
             },
             viewport: viewport(0.0, 0.0, 1.0, 1.0),
             order: 0,
+            viewport_anchor: None,
         }],
     );
     view.targets.push(RendererCompositionTarget {

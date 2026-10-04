@@ -30,6 +30,7 @@ use crate::{
 
 use crate::audio::ProductHostAudioStream;
 use crate::frames::ProductHostFrameStream;
+use crate::presentation::{ProductHostPresentation, ProductHostPresentationReport};
 use crate::session::ProductHostOperationOwner;
 
 const SOCKET_TIMEOUT: Duration = Duration::from_millis(750);
@@ -59,6 +60,7 @@ pub struct ProductHostConfig {
     listener: Option<Arc<TcpListener>>,
     frames: Option<Arc<ProductHostFrameStream>>,
     audio: Option<Arc<ProductHostAudioStream>>,
+    presentation: Option<Arc<ProductHostPresentation>>,
     capture: Option<crate::ProductHostFrameCapture>,
     ui_files: Option<ProductHostUiFiles>,
 }
@@ -83,6 +85,7 @@ impl ProductHostConfig {
             listener: None,
             frames: None,
             audio: None,
+            presentation: None,
             capture: None,
             ui_files: None,
         }
@@ -114,6 +117,13 @@ impl ProductHostConfig {
     /// Serve the runtime's mixed audio at `/__rusty/product/runtime/audio`.
     pub fn with_audio_stream(mut self, audio: Arc<ProductHostAudioStream>) -> Self {
         self.audio = Some(audio);
+        self
+    }
+
+    /// Accept the page's presentation layout at
+    /// `/__rusty/product/runtime/presentation`.
+    pub fn with_presentation(mut self, presentation: Arc<ProductHostPresentation>) -> Self {
+        self.presentation = Some(presentation);
         self
     }
 
@@ -203,6 +213,7 @@ impl ProductHost {
             frames: config.frames,
             audio: config.audio,
             audio_listeners: AtomicUsize::new(0),
+            presentation: config.presentation,
             capture: config.capture,
             ui_files: config.ui_files,
         });
@@ -396,6 +407,7 @@ struct HostState<R> {
     frames: Option<Arc<ProductHostFrameStream>>,
     audio: Option<Arc<ProductHostAudioStream>>,
     audio_listeners: AtomicUsize,
+    presentation: Option<Arc<ProductHostPresentation>>,
     capture: Option<crate::ProductHostFrameCapture>,
     ui_files: Option<ProductHostUiFiles>,
 }
@@ -1381,6 +1393,9 @@ fn dispatch_request<R: ProductHostRuntime>(
         "/__rusty/product/runtime/browser-diagnostics" => {
             invoke_browser_diagnostics(state, &request.body)
         }
+        crate::presentation::PRODUCT_HOST_PRESENTATION_PATH => {
+            invoke_presentation(state, &request.body)
+        }
         _ => HttpResponse::error(404, "PRODUCT_HOST_ROUTE_NOT_FOUND", "route is not admitted"),
     }
 }
@@ -1795,6 +1810,27 @@ fn telemetry_snapshot<R: ProductHostRuntime>(
         .lock()
         .map(|telemetry| telemetry.snapshot(now_ns, input, transport))
         .unwrap_or_else(|_| HostTelemetry::default().snapshot(now_ns, input, transport))
+}
+
+fn invoke_presentation<R: ProductHostRuntime>(state: &HostState<R>, body: &[u8]) -> HttpResponse {
+    let Some(presentation) = &state.presentation else {
+        return HttpResponse::error(
+            404,
+            "PRODUCT_HOST_PRESENTATION",
+            "this runtime takes no presentation layout",
+        );
+    };
+    let report: ProductHostPresentationReport = match decode_json(body) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    match report.layout() {
+        Ok(layout) => {
+            presentation.report(layout);
+            HttpResponse::bytes(204, "application/json", Vec::new())
+        }
+        Err(detail) => HttpResponse::error(400, "PRODUCT_HOST_PRESENTATION", detail),
+    }
 }
 
 fn invoke_browser_diagnostics<R: ProductHostRuntime>(
@@ -2727,6 +2763,7 @@ mod tests {
         "lifecycle/shutdown",
         "lifecycle/start",
         "outputs/fresh",
+        "presentation",
         "timeline-completion",
         "ui-images/",
         "ui-fonts/",
@@ -2741,6 +2778,7 @@ mod tests {
             include_str!("host.rs"),
             include_str!("frames.rs"),
             include_str!("audio.rs"),
+            include_str!("presentation.rs"),
         ] {
             let tests = source.find("#[cfg(test)]\nmod tests {");
             let code = &source[..tests.unwrap_or(source.len())];
@@ -3400,6 +3438,7 @@ mod tests {
             frames: None,
             audio: None,
             audio_listeners: AtomicUsize::new(0),
+            presentation: None,
             capture: None,
             ui_files: None,
         };
@@ -3448,6 +3487,7 @@ mod tests {
             frames: None,
             audio: None,
             audio_listeners: AtomicUsize::new(0),
+            presentation: None,
             capture: None,
             ui_files: None,
         });

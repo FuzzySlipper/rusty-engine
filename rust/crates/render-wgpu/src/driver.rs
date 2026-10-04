@@ -13,7 +13,7 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
-use render_host_contracts::{RendererCameraPose, RendererViewComposition};
+use render_host_contracts::{RendererCameraPose, RendererViewComposition, RendererViewportAnchors};
 use render_model::RenderFrameDiff;
 use render_presentation::PresentationFrameDiff;
 
@@ -125,6 +125,7 @@ struct Scene {
     /// Counts installed compositions on the current renderer.
     composition_revision: u64,
     observer: Option<RendererCameraPose>,
+    viewport_anchors: RendererViewportAnchors,
 }
 
 impl SceneDriver {
@@ -148,6 +149,7 @@ impl SceneDriver {
                 composition: None,
                 composition_revision: 0,
                 observer: None,
+                viewport_anchors: RendererViewportAnchors::new(),
             }),
             gpu,
             options,
@@ -190,6 +192,8 @@ impl SceneDriver {
         scene.renderer = Renderer::new(&self.gpu, self.options);
         let observer = scene.observer;
         scene.renderer.set_observer(observer);
+        let anchors = scene.viewport_anchors.clone();
+        scene.renderer.set_viewport_anchors(anchors);
         scene.renderer_id += 1;
         scene.composition = None;
         scene.composition_revision = 0;
@@ -222,6 +226,20 @@ impl SceneDriver {
         let mut scene = self.scene();
         scene.observer = pose;
         scene.renderer.set_observer(pose);
+        scene.changed = true;
+        drop(scene);
+        self.wake.notify_all();
+    }
+
+    /// Where the product UI's anchored views draw (see
+    /// [`Renderer::set_viewport_anchors`]); the next frame follows.
+    pub fn set_viewport_anchors(&self, anchors: RendererViewportAnchors) {
+        let mut scene = self.scene();
+        if scene.viewport_anchors == anchors {
+            return;
+        }
+        scene.viewport_anchors = anchors.clone();
+        scene.renderer.set_viewport_anchors(anchors);
         scene.changed = true;
         drop(scene);
         self.wake.notify_all();

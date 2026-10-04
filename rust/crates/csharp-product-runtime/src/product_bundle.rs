@@ -19,7 +19,7 @@ use product_host::{
     ProductHostBootstrapInput, ProductHostBootstrapLifecycle, ProductHostBootstrapProduct,
     ProductHostBootstrapRenderer, ProductHostBootstrapUi, ProductHostBootstrapUiProjection,
     ProductHostBrowserBootstrap, ProductHostBundleEntry, ProductHostCursorMode,
-    ProductHostRuntimeMode, PRODUCT_HOST_BOOTSTRAP_PATH,
+    ProductHostPresentationAspect, ProductHostRuntimeMode, PRODUCT_HOST_BOOTSTRAP_PATH,
 };
 use runtime_input::{CompiledInputMappings, DirectInputIntentDescriptor, RuntimeInputMapping};
 use runtime_lifecycle::{
@@ -50,6 +50,8 @@ pub(super) struct ProductBundle {
     renderer_lighting: ProductRendererLighting,
     /// Where the runtime draws (`renderer.output`).
     pub(super) render_output: csharp_product_runtime::RenderOutput,
+    /// The aspect range the page keeps (`renderer.presentationAspect`).
+    presentation_aspect: Option<ProductHostPresentationAspect>,
     /// Where committed audio plays (`audio.output`).
     pub(super) audio_output: csharp_product_runtime::AudioOutputSelection,
     pub(super) lifecycle: RuntimeLifecycleConfig,
@@ -131,6 +133,23 @@ impl ProductBundle {
             Some("window") => csharp_product_runtime::RenderOutput::Window,
             Some(_) => return Err(field_error("renderer.output", "must be stream or window")),
         };
+        let presentation_aspect = match manifest.renderer.presentation_aspect {
+            None => None,
+            Some(ManifestPresentationAspect { minimum, maximum })
+                if minimum.is_finite()
+                    && maximum.is_finite()
+                    && 0.0 < minimum
+                    && minimum <= maximum =>
+            {
+                Some(ProductHostPresentationAspect { minimum, maximum })
+            }
+            Some(_) => {
+                return Err(field_error(
+                    "renderer.presentationAspect",
+                    "minimum and maximum must be finite, positive and in order",
+                ))
+            }
+        };
         // Sound goes where the frames go unless the product chooses.
         use csharp_product_runtime::{AudioOutputSelection, RenderOutput};
         let audio_output = match (manifest.audio.output.as_deref(), render_output) {
@@ -177,6 +196,7 @@ impl ProductBundle {
             ui_projection,
             renderer_lighting,
             render_output,
+            presentation_aspect,
             audio_output,
             lifecycle,
             lifecycle_mode,
@@ -248,6 +268,7 @@ impl ProductBundle {
             }),
             renderer: ProductHostBootstrapRenderer {
                 output: self.render_output,
+                presentation_aspect: self.presentation_aspect,
             },
         };
         entries.push(
@@ -525,11 +546,19 @@ struct ManifestContent {
     root: String,
 }
 #[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct ManifestRenderer {
     #[serde(default)]
     output: Option<String>,
     #[serde(default)]
+    presentation_aspect: Option<ManifestPresentationAspect>,
+    #[serde(default)]
     lighting: ManifestRendererLighting,
+}
+#[derive(Debug, Clone, Copy, Deserialize)]
+struct ManifestPresentationAspect {
+    minimum: f64,
+    maximum: f64,
 }
 #[derive(Debug, Default, Deserialize)]
 struct ManifestAudio {
@@ -887,6 +916,33 @@ mod tests {
 
         let error = read(&root).expect_err("invalid cursor mode rejects");
         assert!(error.contains("product.json:input.cursorMode"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn the_manifest_declares_the_presentation_aspect_range_for_the_page() {
+        let root = fixture_root("presentation-aspect");
+        write_manifest(&root, "native/product.so");
+        assert_eq!(read(&root).unwrap().presentation_aspect, None);
+        let manifest_path = root.join(PRODUCT_MANIFEST_NAME);
+        let original = fs::read_to_string(&manifest_path).unwrap();
+        let with = |aspect: &str| {
+            original.replace(
+                "\"uiProjection\":{\"expectedStream\":\"fixture.terrain\",\"expectedContract\":\"fixture.terrain.v1\"}",
+                &format!("\"renderer\":{{\"presentationAspect\":{aspect}}}"),
+            )
+        };
+        fs::write(&manifest_path, with("{\"minimum\":1.25,\"maximum\":2.4}")).unwrap();
+        assert_eq!(
+            read(&root).unwrap().presentation_aspect,
+            Some(ProductHostPresentationAspect {
+                minimum: 1.25,
+                maximum: 2.4
+            })
+        );
+        fs::write(&manifest_path, with("{\"minimum\":2,\"maximum\":1}")).unwrap();
+        let error = read(&root).expect_err("an inverted range rejects");
+        assert!(error.contains("product.json:renderer.presentationAspect"));
         fs::remove_dir_all(root).unwrap();
     }
 

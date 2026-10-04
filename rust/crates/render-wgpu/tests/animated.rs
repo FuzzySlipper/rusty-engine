@@ -201,6 +201,7 @@ fn character_composition() -> render_host_contracts::RendererViewComposition {
             },
             viewport: full,
             order: 0,
+            viewport_anchor: None,
         }],
         presentations: vec![RendererCompositionPresentation {
             id: "inset".to_owned(),

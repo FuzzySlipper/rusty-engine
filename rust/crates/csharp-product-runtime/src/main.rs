@@ -175,6 +175,7 @@ fn main() -> Result<(), String> {
         .with_live_debug(args.live_debug())
         .with_diagnostics(diagnostics)
         .with_ui_files(runtime.ui_files());
+    config = config.with_presentation(runtime.presentation());
     if let Some(audio) = runtime.audio_stream() {
         config = config.with_audio_stream(audio);
     }

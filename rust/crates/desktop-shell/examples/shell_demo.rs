@@ -137,6 +137,7 @@ fn composition() -> RendererViewComposition {
                 height: 1.0,
             },
             order: 0,
+            viewport_anchor: None,
         }],
         presentations: Vec::new(),
     }

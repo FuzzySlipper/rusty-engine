@@ -1084,6 +1084,16 @@ pub type NativeSetFog = unsafe extern "C" fn(
     *const NativeFogRequest,
     *mut crate::NativeOperationErrorReceipt,
 ) -> i32;
+pub type NativeReadCameraSurface = unsafe extern "C" fn(
+    *mut c_void,
+    *mut NativeCameraSurfaceReadout,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeSetCameraViewportAnchor = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeCameraViewportAnchorRequest,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
 pub type NativeSetToneMapping = unsafe extern "C" fn(
     *mut c_void,
     *const NativeToneMappingRequest,
@@ -1569,6 +1579,8 @@ pub struct NativeCameraViewApi {
     pub set_background_color: NativeSetBackgroundColor,
     pub set_fog: NativeSetFog,
     pub set_tone_mapping: NativeSetToneMapping,
+    pub set_viewport_anchor: NativeSetCameraViewportAnchor,
+    pub read_surface: NativeReadCameraSurface,
 }
 
 #[repr(C)]

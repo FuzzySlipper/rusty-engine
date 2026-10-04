@@ -7,6 +7,7 @@ import type {
   ProductHostRenderOutput,
   RuntimeInputWireIntentValue,
 } from './generated/contracts.js';
+import { createRustyApplicationPresentationReporter } from './presentation-report.js';
 import {
   resolvePresentationFrameGeometry,
   validatePresentationAspectBounds,
@@ -36,6 +37,7 @@ import type {
   RustyApplicationUiInputPort,
   RustyApplicationUiOwner,
   RustyApplicationUiMount,
+  RustyApplicationUiViewportPort,
 } from './product-ui.js';
 export type {
   RustyApplicationUiIntentValue,
@@ -46,6 +48,7 @@ export type {
   RustyApplicationUiInputPort,
   RustyApplicationUiOwner,
   RustyApplicationUiMount,
+  RustyApplicationUiViewportPort,
 } from './product-ui.js';
 
 export const RUSTY_APPLICATION_HOST_COMPATIBILITY_VERSION =
@@ -198,6 +201,15 @@ export async function mountRustyApplication(
     canvas.focus({ preventScroll: true });
     if (gameplayCursorMode === 'pointer-lock') requestPointerLock(canvas);
   };
+  let uiScale = 1;
+  const presentation = createRustyApplicationPresentationReporter(canvas, () => uiScale);
+  const setScale = (scale: number): void => {
+    if (!Number.isFinite(scale) || scale < MIN_UI_SCALE || scale > MAX_UI_SCALE) {
+      throw new RangeError(`UI scale must be finite, ${MIN_UI_SCALE} to ${MAX_UI_SCALE}`);
+    }
+    uiScale = scale;
+    applyUiScale(document.documentElement, scale);
+  };
   const ui: RustyApplicationUiPort = Object.freeze({
     active: () => !closing && !disposed,
     allowsGameplayInput: (event: Event) =>
@@ -210,13 +222,18 @@ export async function mountRustyApplication(
     focusGameplay,
     interactionMode: () => interactionMode,
     setInteractionMode,
+    scale: () => uiScale,
+    setScale,
   });
 
   try {
     frames = mountRustyApplicationFrameView(
       canvas,
       options.output ?? 'stream',
-      (timeMs) => options.onCadence?.(timeMs),
+      (timeMs) => {
+        presentation.tick();
+        options.onCadence?.(timeMs);
+      },
     );
     if (options.runtimeInput !== undefined) {
       input = createRustyApplicationInputIngress(options.runtimeInput, {
@@ -260,6 +277,7 @@ export async function mountRustyApplication(
     setInteractionMode(interactionMode);
     const uiContext: RustyApplicationUiContext = Object.freeze({
       ui,
+      viewport: Object.freeze({ anchor: presentation.anchor }),
       ...(projectionView === null ? {} : { projection: projectionView }),
       ...(intents === null ? {} : { intents }),
       ...(input === null ? {} : { input: Object.freeze({
@@ -278,6 +296,7 @@ export async function mountRustyApplication(
   } catch (cause) {
     disposed = true;
     interfaceInputObservers.clear();
+    presentation.dispose();
     const cleanupFailures = await cleanupApplicationOwners(
       uiOwner,
       input,
@@ -322,6 +341,7 @@ export async function mountRustyApplication(
       disposal = (async () => {
         disposed = true;
         interfaceInputObservers.clear();
+        presentation.dispose();
         const cleanupFailures = await cleanupApplicationOwners(
           uiOwner,
           input,
@@ -342,6 +362,19 @@ export async function mountRustyApplication(
       return disposal;
     },
   });
+}
+
+const MIN_UI_SCALE = 0.25;
+const MAX_UI_SCALE = 4;
+
+/**
+ * The UI scale as a root factor: `--rusty-ui-scale` on the document root and
+ * its font size, so rem-sized UI follows it and layout units keep their
+ * meaning.
+ */
+function applyUiScale(root: HTMLElement, scale: number): void {
+  root.style.setProperty('--rusty-ui-scale', String(scale));
+  root.style.fontSize = `${String(scale * 100)}%`;
 }
 
 function createLayout(

@@ -643,6 +643,12 @@ The fixtures in this repository are provider proof scaffolding. They are
 useful when changing the ABI/generator/runtime, but they are not a template
 for a downstream repository's launch topology.
 
+### Camera views under UI elements
+
+`context.viewport.anchor(name, element)` ties a camera the product anchors
+under `name` to a UI element, and `context.ui.scale()`/`setScale()` read and
+set the UI scale ([views that follow the product UI](csharp-lifecycle.md#views-that-follow-the-product-ui)).
+
 ### Controller input in product menus
 
 With selected-controller input enabled, `mountUi` receives an optional
