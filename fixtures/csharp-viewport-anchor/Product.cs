@@ -7,7 +7,8 @@ namespace CsharpViewportAnchor;
 /// <summary>
 /// One camera whose view follows the UI's hero panel. The product never
 /// measures the page: the shell reports the panel's rect and the Engine draws
-/// the view there. Update only watches the presented surface change.
+/// the view there. Update only watches the presented surface and the hero's
+/// rect change.
 /// </summary>
 public sealed class Product(ProductCreateContext context) : IEngineProduct, IDebugCommandModuleSource, IDebugCommandModule
 {
@@ -18,6 +19,8 @@ public sealed class Product(ProductCreateContext context) : IEngineProduct, IDeb
     private Appearance? cube;
     private CameraSurfaceReadout surface;
     private int surfaceChanges;
+    private CameraViewportAnchorReadout hero;
+    private int heroChanges;
 
     public void Start()
     {
@@ -35,6 +38,9 @@ public sealed class Product(ProductCreateContext context) : IEngineProduct, IDeb
     [DebugCommand("viewport.proof.surface", Description = "Read the presented surface and how often Update saw it change.")]
     public string Surface() => $"{surface};changes={surfaceChanges}";
 
+    [DebugCommand("viewport.proof.hero", Description = "Read the hero panel's rect and how often Update saw it change.")]
+    public string Hero() => $"{hero};changes={heroChanges}";
+
     [DebugCommand("viewport.proof.anchor", Description = "Anchor the camera to the hero panel (true) or draw at its own quarter viewport (false).")]
     public string Anchor(bool anchored)
     {
@@ -51,6 +57,12 @@ public sealed class Product(ProductCreateContext context) : IEngineProduct, IDeb
         {
             surface = current;
             surfaceChanges++;
+        }
+        CameraViewportAnchorReadout anchor = context.Engine.CameraView.ReadViewportAnchor(new(HeroAnchor));
+        if (anchor != hero)
+        {
+            hero = anchor;
+            heroChanges++;
         }
         return ProductUpdateResult.None;
     }

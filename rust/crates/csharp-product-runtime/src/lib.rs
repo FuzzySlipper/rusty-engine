@@ -1731,8 +1731,8 @@ impl CsharpProductRuntime {
             frames.report(&mut self.services);
         }
         if let Some(layout) = self.presentation.layout() {
-            self.services
-                .ingest_camera_surface(NativeCameraSurfaceReadout {
+            self.services.ingest_camera_surface(
+                NativeCameraSurfaceReadout {
                     reported: true,
                     css_width: layout.css_width,
                     css_height: layout.css_height,
@@ -1741,7 +1741,9 @@ impl CsharpProductRuntime {
                     device_pixel_ratio: layout.device_pixel_ratio,
                     ui_scale: layout.ui_scale,
                     revision: layout.revision,
-                });
+                },
+                layout.anchors,
+            );
         }
         self.services
             .begin_update_call(ui_binding(&self.lifecycle), facts);

@@ -189,6 +189,7 @@ fn engine_api(
             set_tone_mapping: crate::camera_view::set_tone_mapping,
             set_viewport_anchor: crate::camera_view::set_viewport_anchor,
             read_surface: crate::camera_view::read_surface,
+            read_viewport_anchor: crate::camera_view::read_viewport_anchor,
             clear_sky_background: crate::camera_view::clear_sky_background,
             set_background_color: crate::camera_view::set_background_color,
         },
@@ -445,10 +446,15 @@ impl EngineServiceSet {
         )
     }
 
-    /// The presentation surface the page last reported, which
-    /// `CameraView.ReadSurface` reads during the next product call.
-    pub fn ingest_camera_surface(&mut self, surface: NativeCameraSurfaceReadout) {
-        self.camera_view.set_surface(surface);
+    /// The presentation surface and anchored UI rects the page last
+    /// reported, which `CameraView.ReadSurface` and `ReadViewportAnchor` read
+    /// during the next product call.
+    pub fn ingest_camera_surface(
+        &mut self,
+        surface: NativeCameraSurfaceReadout,
+        viewport_anchors: render_host_contracts::RendererViewportAnchors,
+    ) {
+        self.camera_view.set_surface(surface, viewport_anchors);
     }
 
     pub fn ingest_renderer_diagnostics(

@@ -307,6 +307,13 @@ page reports. The UI sets the UI scale with `context.ui.setScale(scale)` (0.25
 to 4) and reads it with `context.ui.scale()`; the document root's font size and
 its `--rusty-ui-scale` property follow it, so rem-sized UI scales while layout
 units keep their meaning. Streamed frames render at device pixels.
+`CameraView.ReadViewportAnchor(new("hero"))` reads the rect of the element
+anchored under `"hero"` from the same report. The rect is normalized to the
+surface with a bottom-left origin, like a camera viewport, and clipped to it.
+Its `Revision` is the surface's, so it changes on a layout change that leaves
+the surface size alone. `Width * CssWidth / (Height * CssHeight)` is the
+anchored view's aspect. `Reported` is false, and the rect zero, while the page
+reports no element under that name.
 `RustyEngineProductPresentationAspectMinimum` and `...Maximum` (manifest
 `renderer.presentationAspect`) keep the presentation within a width-to-height
 range, letterboxed beyond it. See `fixtures/csharp-viewport-anchor`.

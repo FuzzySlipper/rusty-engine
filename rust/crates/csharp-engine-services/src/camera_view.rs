@@ -77,6 +77,8 @@ pub(crate) struct RuntimeCameraViewCall {
 pub(crate) struct RuntimeCameraViewBridge {
     state: CameraState,
     surface: NativeCameraSurfaceReadout,
+    /// The anchored UI rects of the same report as `surface`.
+    viewport_anchors: render_host_contracts::RendererViewportAnchors,
     staged: Option<RuntimeCameraViewCall>,
     operation_diagnostics: crate::operation_diagnostics::OperationDiagnostics,
 }
@@ -95,6 +97,7 @@ impl RuntimeCameraViewBridge {
                 next_target: 1,
             },
             surface: NativeCameraSurfaceReadout::default(),
+            viewport_anchors: BTreeMap::new(),
             staged: None,
             operation_diagnostics: Default::default(),
         }
@@ -575,8 +578,27 @@ impl RuntimeCameraViewBridge {
         Ok(())
     }
 
-    pub(crate) fn set_surface(&mut self, surface: NativeCameraSurfaceReadout) {
+    pub(crate) fn set_surface(
+        &mut self,
+        surface: NativeCameraSurfaceReadout,
+        viewport_anchors: render_host_contracts::RendererViewportAnchors,
+    ) {
         self.surface = surface;
+        self.viewport_anchors = viewport_anchors;
+    }
+
+    fn viewport_anchor(&self, anchor: &str) -> NativeCameraViewportAnchorReadout {
+        self.viewport_anchors.get(anchor).map_or_else(
+            NativeCameraViewportAnchorReadout::default,
+            |rect| NativeCameraViewportAnchorReadout {
+                reported: true,
+                x: rect.x,
+                y: rect.y,
+                width: rect.width,
+                height: rect.height,
+                revision: self.surface.revision,
+            },
+        )
     }
 
     /// Makes `camera`'s primary views follow the product UI element anchored
@@ -1319,6 +1341,34 @@ pub(crate) unsafe extern "C" fn read_surface(
     ABI_OK
 }
 
+pub(crate) unsafe extern "C" fn read_viewport_anchor(
+    context: *mut c_void,
+    request: *const NativeCameraViewportAnchorReadRequest,
+    output: *mut NativeCameraViewportAnchorReadout,
+    operation_error: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    if !operation_error.is_null() {
+        unsafe { *operation_error = std::mem::zeroed() };
+    }
+    if context.is_null() || request.is_null() || output.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeCameraViewBridge>() };
+    let request = unsafe { *request };
+    match unsafe {
+        crate::composition::borrowed_utf8(request.anchor.bytes, request.anchor.len, "anchor")
+    } {
+        Ok(anchor) => {
+            unsafe { *output = bridge.viewport_anchor(anchor) };
+            ABI_OK
+        }
+        Err(error) => {
+            bridge.operation_diagnostics.retain(&error, operation_error);
+            0
+        }
+    }
+}
+
 pub(crate) unsafe extern "C" fn set_viewport_anchor(
     context: *mut c_void,
     request: *const NativeCameraViewportAnchorRequest,
@@ -1735,7 +1785,13 @@ mod tests {
             ui_scale: 1.25,
             revision: 3,
         };
-        bridge.set_surface(surface);
+        let hero = render_host_contracts::RendererViewport {
+            x: 0.1,
+            y: 0.2,
+            width: 0.5,
+            height: 0.6,
+        };
+        bridge.set_surface(surface, BTreeMap::from([("hero".to_owned(), hero)]));
         let mut read = NativeCameraSurfaceReadout::default();
         let mut error = unsafe { std::mem::zeroed::<NativeOperationErrorReceipt>() };
         assert_eq!(
@@ -1749,6 +1805,42 @@ mod tests {
             ABI_OK
         );
         assert_eq!(read, surface);
+
+        let read_anchor = |bridge: &mut RuntimeCameraViewBridge, name: &str| {
+            let mut read = NativeCameraViewportAnchorReadout::default();
+            let mut error = unsafe { std::mem::zeroed::<NativeOperationErrorReceipt>() };
+            let request = NativeCameraViewportAnchorReadRequest {
+                anchor: NativeUtf8Slice {
+                    bytes: name.as_ptr(),
+                    len: name.len(),
+                },
+            };
+            let status = unsafe {
+                read_viewport_anchor(
+                    (bridge as *mut RuntimeCameraViewBridge).cast(),
+                    &request,
+                    &mut read,
+                    &mut error,
+                )
+            };
+            assert_eq!(status, ABI_OK);
+            read
+        };
+        assert_eq!(
+            read_anchor(&mut bridge, "hero"),
+            NativeCameraViewportAnchorReadout {
+                reported: true,
+                x: 0.1,
+                y: 0.2,
+                width: 0.5,
+                height: 0.6,
+                revision: 3,
+            }
+        );
+        assert_eq!(
+            read_anchor(&mut bridge, "minimap"),
+            NativeCameraViewportAnchorReadout::default()
+        );
     }
 
     #[test]

@@ -1089,6 +1089,12 @@ pub type NativeReadCameraSurface = unsafe extern "C" fn(
     *mut NativeCameraSurfaceReadout,
     *mut crate::NativeOperationErrorReceipt,
 ) -> i32;
+pub type NativeReadCameraViewportAnchor = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeCameraViewportAnchorReadRequest,
+    *mut NativeCameraViewportAnchorReadout,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
 pub type NativeSetCameraViewportAnchor = unsafe extern "C" fn(
     *mut c_void,
     *const NativeCameraViewportAnchorRequest,
@@ -1581,6 +1587,7 @@ pub struct NativeCameraViewApi {
     pub set_tone_mapping: NativeSetToneMapping,
     pub set_viewport_anchor: NativeSetCameraViewportAnchor,
     pub read_surface: NativeReadCameraSurface,
+    pub read_viewport_anchor: NativeReadCameraViewportAnchor,
 }
 
 #[repr(C)]

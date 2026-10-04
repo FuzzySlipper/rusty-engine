@@ -183,9 +183,6 @@ pub enum NativeCameraInterpolation {
     Pose = 2,
 }
 
-/// One camera descriptor update with an optional renderer sampling contract.
-/// The product supplies its admitted timeline and explicit cuts; the Engine
-/// owns retained metadata and the opaque sample identity.
 /// The presentation surface camera viewports are normalized to, as the
 /// page showing the product last reported it, in stream and window output
 /// alike. `reported` is false until a page reports. `revision` changes with
@@ -217,6 +214,33 @@ pub struct NativeCameraViewportAnchorRequest {
     pub anchor: crate::NativeUtf8Slice,
 }
 
+/// Names the product UI anchor (`viewport.anchor(name, element)`) to read.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeCameraViewportAnchorReadRequest {
+    pub anchor: crate::NativeUtf8Slice,
+}
+
+/// The rect of the UI element anchored under a name, as the page last
+/// reported it: normalized to the presentation surface with a bottom-left
+/// origin, like a camera viewport, and clipped to the surface. `reported` is
+/// false, and the rect zero, while the page reports no element under the name
+/// or one wholly outside the surface. `revision` is the surface revision of
+/// the report it comes from ([`NativeCameraSurfaceReadout::revision`]).
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct NativeCameraViewportAnchorReadout {
+    pub reported: bool,
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+    pub revision: u64,
+}
+
+/// One camera descriptor update with an optional renderer sampling contract.
+/// The product supplies its admitted timeline and explicit cuts; the Engine
+/// owns retained metadata and the opaque sample identity.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeCameraSampleRequest {

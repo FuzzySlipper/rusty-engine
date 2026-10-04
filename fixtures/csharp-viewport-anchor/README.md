@@ -14,5 +14,9 @@ SDK feed, and launch with that pair's `rusty dev --project ... --live-debug`.
 - `viewport.proof.surface` reads `CameraView.ReadSurface()`: the surface in
   CSS and device pixels, its pixel ratio, the UI scale and how many changes
   Update has seen.
+- `viewport.proof.hero` reads `CameraView.ReadViewportAnchor("hero")`: the
+  hero panel's rect normalized to the surface, and how many changes Update
+  has seen. Widening the side panel in the page changes it without changing
+  the surface.
 - `window.rustyFixtureUi.setScale(1.5)` in the page sets the UI scale, which
   the next readout reports.
