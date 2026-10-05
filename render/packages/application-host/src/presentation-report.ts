@@ -81,10 +81,13 @@ export function createRustyApplicationPresentationReporter(
       headers: { 'Content-Type': 'application/json' },
       body,
       cache: 'no-store',
-    }).then((response) => {
+    }).then(async (response) => {
+      // Reading the empty body finishes the request; left unread, Chromium
+      // reports it as aborted.
+      await response.arrayBuffer();
       // A refused report is sent again on the next change.
       if (response.ok) sent = body;
-    }, () => undefined).finally(() => {
+    }).catch(() => undefined).finally(() => {
       sending = false;
     });
   };
