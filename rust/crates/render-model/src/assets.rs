@@ -416,6 +416,16 @@ pub struct RenderMaterialDescriptor {
     /// (absolute cells on voxel chunks) or else its object-space positions.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub triplanar: Option<MaterialTriplanarDescriptor>,
+    /// Scales then offsets the uv the base texture and normal map read: on
+    /// triplanar planes, repeats per mesh unit. A voxel surface tiles by its
+    /// own mapping instead.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub texture_transform: Option<MaterialTextureTransformDescriptor>,
+    /// Sample the base texture and normal map as randomly offset and rotated
+    /// hexagonal tiles blended together, so a repeating texture shows no
+    /// grid. Not on a voxel surface.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stochastic_tiling: Option<MaterialStochasticTilingDescriptor>,
     /// A product shader that shades this material in place of the standard
     /// shade stage, with its parameters.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -499,6 +509,24 @@ pub struct MaterialTriplanarDescriptor {
     pub sharpness: f32,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MaterialTextureTransformDescriptor {
+    /// Repeats per uv unit (per mesh unit on triplanar planes).
+    pub scale: [f32; 2],
+    /// Added after scaling, in repeats.
+    pub offset: [f32; 2],
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MaterialStochasticTilingDescriptor {
+    /// Tile blend weights are raised to this power (1 or more): 1 blends
+    /// tiles widely, softening the texture; higher keeps each tile crisp,
+    /// with narrower transitions.
+    pub contrast: f32,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct MaterialNormalMapDescriptor {
@@ -562,6 +590,21 @@ impl RenderMaterialDescriptor {
             .is_some_and(|triplanar| !triplanar.sharpness.is_finite() || triplanar.sharpness < 1.0)
         {
             return Err(MaterialDescriptorError::InvalidTriplanar);
+        }
+        if self.texture_transform.is_some_and(|transform| {
+            !transform
+                .scale
+                .iter()
+                .chain(&transform.offset)
+                .all(|value| value.is_finite())
+        }) {
+            return Err(MaterialDescriptorError::InvalidTextureTransform);
+        }
+        if self
+            .stochastic_tiling
+            .is_some_and(|tiling| !tiling.contrast.is_finite() || tiling.contrast < 1.0)
+        {
+            return Err(MaterialDescriptorError::InvalidStochasticTiling);
         }
         if let Some(shader) = &self.shader {
             if validate_asset_id(&shader.shader, RenderAssetKind::Shader).is_err()
@@ -634,6 +677,8 @@ pub enum MaterialDescriptorError {
     InvalidMetalness,
     InvalidNormalMap,
     InvalidTriplanar,
+    InvalidTextureTransform,
+    InvalidStochasticTiling,
     InvalidShader,
     InvalidEmission,
     InvalidAlphaCutoff,
@@ -1653,6 +1698,8 @@ mod tests {
         };
         assert_eq!(surface.validate(), Ok(()));
         let material = RenderMaterialDescriptor {
+            texture_transform: None,
+            stochastic_tiling: None,
             terrain_layers: None,
             shader: None,
             id: "material/stone".to_string(),
@@ -1706,6 +1753,8 @@ mod tests {
     #[test]
     fn generic_material_alpha_and_sidedness_are_explicit_and_bounded() {
         let material = RenderMaterialDescriptor {
+            texture_transform: None,
+            stochastic_tiling: None,
             terrain_layers: None,
             shader: None,
             id: "material/generic-alpha-test".to_string(),

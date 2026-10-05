@@ -257,6 +257,8 @@ pub fn box_mesh(
 
 pub fn material(id: &str, color: [f32; 4], texture: Option<&str>) -> RenderMaterialDescriptor {
     RenderMaterialDescriptor {
+        texture_transform: None,
+        stochastic_tiling: None,
         terrain_layers: None,
         shader: None,
         id: id.to_owned(),

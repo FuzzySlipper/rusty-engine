@@ -1855,3 +1855,297 @@ fn a_high_contrast_keeps_a_blend_between_non_base_layers() {
         mixed(&gentle)
     );
 }
+
+/// Quads in the z = 0 plane facing +Z, one per material slot, each `width`
+/// wide and side by side from x = `-width × count / 2`; uv 0..1 across each.
+fn facing_quads(count: u16, width: f32, height: f32) -> MeshPayloadDescriptor {
+    let (mut positions, mut normals, mut uvs, mut indices) = (vec![], vec![], vec![], vec![]);
+    let left = -width * f32::from(count) / 2.0;
+    for quad in 0..count {
+        let x = left + width * f32::from(quad);
+        let base = (positions.len() / 3) as u32;
+        positions.extend_from_slice(&[
+            x,
+            -height / 2.0,
+            0.0,
+            x + width,
+            -height / 2.0,
+            0.0,
+            x + width,
+            height / 2.0,
+            0.0,
+            x,
+            height / 2.0,
+            0.0,
+        ]);
+        normals.extend_from_slice(&[0.0, 0.0, 1.0].repeat(4));
+        uvs.extend_from_slice(&[0.0, 1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0]);
+        indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+    }
+    let groups: Vec<(u16, u32)> = (0..count).map(|slot| (slot, 6)).collect();
+    payload(positions, normals, uvs, indices, &groups)
+}
+
+/// A static mesh asset binding slot `n` to `materials[n]`.
+fn multi_material_mesh(
+    asset: &str,
+    payload: MeshPayloadDescriptor,
+    materials: &[&str],
+) -> RenderDiff {
+    RenderDiff::DefineStaticMesh {
+        asset: StaticMeshAsset {
+            asset: asset.to_owned(),
+            payload,
+            material_slots: materials
+                .iter()
+                .enumerate()
+                .map(|(slot, material)| MeshMaterialSlot {
+                    slot: slot as u16,
+                    material: (*material).to_owned(),
+                })
+                .collect(),
+            collision: MeshCollisionPolicy::VisualOnly,
+        },
+    }
+}
+
+/// Bright/dark changes along the middle row between pixel columns `from`
+/// and `to`.
+fn row_transitions(rgba: &[u8], from: usize, to: usize) -> usize {
+    let y = HEIGHT as usize / 2;
+    let bright: Vec<bool> = (from..to)
+        .map(|x| rgba[(y * WIDTH as usize + x) * 4 + 1] > 100)
+        .collect();
+    bright.windows(2).filter(|pair| pair[0] != pair[1]).count()
+}
+
+#[test]
+fn texture_transforms_set_each_materials_repeat_on_one_mesh_at_unit_scale() {
+    let mut harness = Harness::new(RendererOptions::default());
+    let checker = harness.resources.texture(
+        "texture/checker",
+        2,
+        2,
+        &checker(2, [240, 240, 240, 255], [10, 10, 10, 255]),
+        TextureWrap::Repeat,
+    );
+    let textured = |id: &str, scale: f32, triplanar: bool| {
+        let mut descriptor = material(id, [1.0; 4], Some("texture/checker"));
+        descriptor.texture_transform = Some(MaterialTextureTransformDescriptor {
+            scale: [scale, scale],
+            offset: [0.25, 0.0],
+        });
+        descriptor.triplanar = triplanar.then_some(MaterialTriplanarDescriptor { sharpness: 4.0 });
+        RenderDiff::DefineMaterial {
+            material: descriptor,
+        }
+    };
+    // Two triplanar materials, 2 and 0.5 repeats per metre, and a uv-mapped
+    // one repeating 3 times across its quad, on 2 m quads of one mesh.
+    harness.apply(vec![
+        RenderDiff::DefineTexture { texture: checker },
+        textured("material/fine", 2.0, true),
+        textured("material/coarse", 0.5, true),
+        textured("material/uv", 3.0, false),
+        multi_material_mesh(
+            "mesh/wall",
+            facing_quads(3, 2.0, 2.0),
+            &["material/fine", "material/coarse", "material/uv"],
+        ),
+        instance(1, None, "mesh/wall", Transform::IDENTITY),
+    ]);
+    let (_, rgba) = harness.render(&camera([0.0, 0.0, 4.0], 0.0, 0.0));
+    // 39 pixels per metre at 4 m: each quad spans about 78 columns.
+    let quad = |index: usize| {
+        let left = WIDTH as usize / 2 - 117 + 78 * index;
+        row_transitions(&rgba, left + 4, left + 74)
+    };
+    // A checker repeat has two cells: 2 m at 2 repeats per metre is 8
+    // cells, at 0.5 is 2, and 3 uv repeats are 6. The quarter-repeat offset
+    // moves every cell edge half a cell off the quad's edges, so each quad
+    // shows as many edges as cells.
+    assert_eq!(
+        [quad(0), quad(1), quad(2)],
+        [8, 2, 6],
+        "cell edges inside each quad"
+    );
+    assert_screenshot("scene_texture_transforms", &rgba);
+}
+
+/// A smooth periodic height field over one texture repeat (u, v in 0..1),
+/// and its slopes along u and v.
+fn bumps(u: f32, v: f32) -> (f32, f32, f32) {
+    use std::f32::consts::TAU;
+    let waves = [(2.0, 1.0, 0.3), (1.0, -3.0, 1.7), (3.0, 2.0, 4.1)];
+    let mut height = 0.5;
+    let (mut along_u, mut along_v) = (0.0, 0.0);
+    for (fu, fv, phase) in waves {
+        let angle = TAU * (fu * u + fv * v) + phase;
+        height += 0.15 * angle.sin();
+        along_u += 0.15 * TAU * fu * angle.cos();
+        along_v += 0.15 * TAU * fv * angle.cos();
+    }
+    (height, along_u, along_v)
+}
+
+/// Pearson correlation of two equal-length series.
+fn correlation(a: &[f32], b: &[f32]) -> f32 {
+    let mean = |s: &[f32]| s.iter().sum::<f32>() / s.len() as f32;
+    let (ma, mb) = (mean(a), mean(b));
+    let (mut ab, mut aa, mut bb) = (0.0, 0.0, 0.0);
+    for (x, y) in a.iter().zip(b) {
+        ab += (x - ma) * (y - mb);
+        aa += (x - ma) * (x - ma);
+        bb += (y - mb) * (y - mb);
+    }
+    ab / (aa * bb).sqrt()
+}
+
+#[test]
+fn stochastic_tiling_hides_a_repeat_without_seams_and_keeps_its_normal_map_with_its_colour() {
+    const SIZE: u32 = 64;
+    // 2 m per repeat at about 39 pixels per metre.
+    const PERIOD_PIXELS: usize = 78;
+    let render = |triplanar: bool, stochastic: bool, normal_map: bool| {
+        let mut harness = Harness::new(RendererOptions {
+            default_world_lights: false,
+            ..RendererOptions::default()
+        });
+        let texel = |x: u32, y: u32| {
+            bumps(
+                (x as f32 + 0.5) / SIZE as f32,
+                (y as f32 + 0.5) / SIZE as f32,
+            )
+        };
+        let mut base = harness.resources.texture(
+            "texture/bumps",
+            SIZE,
+            SIZE,
+            &image(SIZE, SIZE, |x, y| {
+                let grey = (texel(x, y).0 * 255.0) as u8;
+                [grey, grey, grey, 255]
+            }),
+            TextureWrap::Repeat,
+        );
+        base.filter = TextureFilter::Linear;
+        // Tangent space: x along +u, y up the image (-v); the slopes are per
+        // repeat, so a tenth of them keeps the tilt moderate.
+        let mut normals = harness.resources.texture(
+            "texture/bumps-normal",
+            SIZE,
+            SIZE,
+            &image(SIZE, SIZE, |x, y| {
+                let (_, along_u, along_v) = texel(x, y);
+                let tilt = [-along_u * 0.1, along_v * 0.1, 1.0];
+                let length = tilt.iter().map(|c| c * c).sum::<f32>().sqrt();
+                let encode = |c: f32| ((c / length * 0.5 + 0.5) * 255.0).round() as u8;
+                [encode(tilt[0]), encode(tilt[1]), encode(tilt[2]), 255]
+            }),
+            TextureWrap::Repeat,
+        );
+        normals.filter = TextureFilter::Linear;
+        if let Some(payload) = normals.payload.as_mut() {
+            payload.color_space = TextureColorSpace::Linear;
+        }
+        let mut descriptor = material("material/bumps", [1.0; 4], Some("texture/bumps"));
+        descriptor.roughness = 1.0;
+        descriptor.normal_map = normal_map.then(|| MaterialNormalMapDescriptor {
+            texture: normals.id.clone(),
+            scale: 1.0,
+        });
+        // A repeat every 2 m of the 12 × 8 m wall: through its uv, or the
+        // triplanar planes' metres.
+        descriptor.texture_transform = Some(MaterialTextureTransformDescriptor {
+            scale: if triplanar { [0.5, 0.5] } else { [6.0, 4.0] },
+            offset: [0.0, 0.0],
+        });
+        descriptor.triplanar = triplanar.then_some(MaterialTriplanarDescriptor { sharpness: 4.0 });
+        descriptor.stochastic_tiling =
+            stochastic.then_some(MaterialStochasticTilingDescriptor { contrast: 4.0 });
+        harness.apply(vec![
+            RenderDiff::DefineTexture { texture: base },
+            RenderDiff::DefineTexture { texture: normals },
+            RenderDiff::DefineMaterial {
+                material: descriptor,
+            },
+            // A wall wider and taller than the view.
+            static_mesh("mesh/wall", facing_quads(1, 12.0, 8.0), "material/bumps"),
+            instance(1, None, "mesh/wall", Transform::IDENTITY),
+            // From +X, so tilts toward +X brighten.
+            sun([-1.0, 0.0, -1.0]),
+        ]);
+        harness.render(&camera([0.0, 0.0, 4.0], 0.0, 0.0)).1
+    };
+    let green = |rgba: &[u8], x: usize, y: usize| f32::from(rgba[(y * WIDTH as usize + x) * 4 + 1]);
+    let rows = 20..HEIGHT as usize - 20;
+    // Repetition: each pixel against the one a repeat to its right.
+    let repetition = |rgba: &[u8]| {
+        let (mut here, mut there) = (vec![], vec![]);
+        for y in rows.clone() {
+            for x in 4..WIDTH as usize - PERIOD_PIXELS - 4 {
+                here.push(green(rgba, x, y));
+                there.push(green(rgba, x + PERIOD_PIXELS, y));
+            }
+        }
+        correlation(&here, &there)
+    };
+    // Seams: the largest step between neighbouring pixels.
+    let largest_step = |rgba: &[u8]| {
+        let mut largest = 0.0f32;
+        for y in rows.clone() {
+            for x in 4..WIDTH as usize - 5 {
+                largest = largest
+                    .max((green(rgba, x + 1, y) - green(rgba, x, y)).abs())
+                    .max((green(rgba, x, y + 1) - green(rgba, x, y)).abs());
+            }
+        }
+        largest
+    };
+    // Normal map against colour: the shading the map adds should follow the
+    // height's slope toward the light, which the colour's own x step shows.
+    let consistency = |flat: &[u8], mapped: &[u8]| {
+        let (mut slope, mut shading) = (vec![], vec![]);
+        for y in rows.clone() {
+            for x in 4..WIDTH as usize - 5 {
+                slope.push(green(flat, x + 1, y) - green(flat, x, y));
+                shading.push(green(mapped, x, y) / green(flat, x, y).max(1.0));
+            }
+        }
+        correlation(&slope, &shading)
+    };
+    for triplanar in [false, true] {
+        let (plain, plain_mapped) = (
+            render(triplanar, false, false),
+            render(triplanar, false, true),
+        );
+        let (tiled, tiled_mapped) = (
+            render(triplanar, true, false),
+            render(triplanar, true, true),
+        );
+        let path = if triplanar { "triplanar" } else { "uv" };
+        let (plain_repeat, tiled_repeat) = (repetition(&plain), repetition(&tiled));
+        assert!(
+            plain_repeat > 0.99 && tiled_repeat.abs() < 0.3,
+            "{path}: correlation a repeat apart {plain_repeat} plain, {tiled_repeat} tiled"
+        );
+        // Blending patches steepens the texture a little; a seam would jump
+        // by the difference between patches, several times more.
+        let (plain_step, tiled_step) = (largest_step(&plain), largest_step(&tiled));
+        assert!(
+            tiled_step < 3.0 * plain_step,
+            "{path}: largest step {tiled_step} tiled, {plain_step} plain"
+        );
+        // Each patch's normals turn with its colour: without that turn the
+        // shading would not follow the colour at all (about 0).
+        let (plain_follows, tiled_follows) = (
+            consistency(&plain, &plain_mapped),
+            consistency(&tiled, &tiled_mapped),
+        );
+        assert!(
+            plain_follows < -0.9 && tiled_follows < -0.6,
+            "{path}: shading against slope {plain_follows} plain, {tiled_follows} tiled"
+        );
+    }
+    let tiled_mapped = render(false, true, true);
+    assert_screenshot("scene_stochastic_tiling", &tiled_mapped);
+}

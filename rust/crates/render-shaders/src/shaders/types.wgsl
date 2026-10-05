@@ -61,7 +61,8 @@ struct MaterialUniform {
     // Voxel surface: xy sample min, zw sample max (texture uv).
     sample_rect: vec4<f32>,
     // Each texture slot's uv transform, two rows (xyz) applied to (u, v, 1):
-    // identity unless a GLB material sets KHR_texture_transform.
+    // a GLB material's KHR_texture_transform, or an Engine material's texture
+    // transform on its base and normal slots.
     base_uv_u: vec4<f32>,
     base_uv_v: vec4<f32>,
     emissive_uv_u: vec4<f32>,
@@ -70,7 +71,8 @@ struct MaterialUniform {
     normal_uv_v: vec4<f32>,
     occlusion_uv_u: vec4<f32>,
     occlusion_uv_v: vec4<f32>,
-    // x: occlusion strength; y: triplanar sharpness.
+    // x: occlusion strength; y: triplanar sharpness; z: stochastic tiling
+    // contrast.
     factors: vec4<f32>,
     // The uv set (0 or 1) each slot reads: base, emissive, normal, occlusion.
     tex_coords: vec4<u32>,

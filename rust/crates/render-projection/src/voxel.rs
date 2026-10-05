@@ -724,6 +724,8 @@ mod tests {
 
     fn material(slot: u16) -> RenderMaterialDescriptor {
         RenderMaterialDescriptor {
+            texture_transform: None,
+            stochastic_tiling: None,
             terrain_layers: None,
             shader: None,
             id: voxel_material_id(slot),

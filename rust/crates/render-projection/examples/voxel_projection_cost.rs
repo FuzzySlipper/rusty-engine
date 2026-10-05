@@ -127,6 +127,8 @@ fn project(
 
 fn material() -> RenderMaterialDescriptor {
     RenderMaterialDescriptor {
+        texture_transform: None,
+        stochastic_tiling: None,
         terrain_layers: None,
         shader: None,
         id: voxel_material_id(1),

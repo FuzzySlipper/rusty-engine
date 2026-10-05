@@ -34,7 +34,8 @@ pub struct ApplyIssue {
 /// `MaterialUniform` size (`rusty::types`): roughness, cutoff, metalness,
 /// normal scale; the voxel surface's tile scale, tile origin and sample rect;
 /// the base, emissive, normal and occlusion uv transforms (two rows each); the
-/// occlusion strength and triplanar sharpness; each slot's uv set; a
+/// occlusion strength, triplanar sharpness and stochastic tiling contrast;
+/// each slot's uv set; a
 /// product shader's 16 parameters; terrain layers 1 to 3's tilings, sample
 /// rects and normal scales, and the layer contrast.
 const MATERIAL_UNIFORM_BYTES: usize = 384;
@@ -1267,6 +1268,8 @@ pub(crate) struct MaterialParams {
     pub voxel_surface: Option<VoxelSurfaceUniform>,
     /// Triplanar blend sharpness.
     pub triplanar: Option<f32>,
+    /// Stochastic tiling's blend contrast.
+    pub stochastic_tiling: Option<f32>,
     /// A product shader's parameters (`material.parameters`).
     pub parameters: [[f32; 4]; 4],
     /// A product shader's own textures (`product_map_a`, `product_map_b`).
@@ -1362,6 +1365,11 @@ impl MaterialParams {
             .voxel_surface
             .as_ref()
             .map(|surface| VoxelSurfaceUniform::resolve(surface, texture_size));
+        // A voxel surface tiles by its own mapping.
+        let transform = descriptor
+            .texture_transform
+            .filter(|_| voxel_surface.is_none())
+            .map(|transform| UvTransform::of(transform.offset, 0.0, transform.scale));
         Self {
             roughness: descriptor.roughness,
             alpha_cutoff: cutoff,
@@ -1369,6 +1377,10 @@ impl MaterialParams {
             metalness: descriptor.metalness,
             voxel_surface,
             triplanar: descriptor.triplanar.map(|triplanar| triplanar.sharpness),
+            stochastic_tiling: descriptor
+                .stochastic_tiling
+                .filter(|_| voxel_surface.is_none())
+                .map(|tiling| tiling.contrast),
             parameters: descriptor
                 .shader
                 .as_ref()
@@ -1383,12 +1395,13 @@ impl MaterialParams {
                     (
                         MapSlot {
                             texture: map.texture.clone(),
-                            transform: UvTransform::IDENTITY,
+                            transform: transform.unwrap_or(UvTransform::IDENTITY),
                             tex_coord: 0,
                         },
                         map.scale,
                     )
                 }),
+                base: transform,
                 ..MaterialMaps::default()
             },
         }
@@ -1400,7 +1413,11 @@ impl MaterialParams {
         let base = Features::default()
             .with(Features::MASK, self.alpha_cutoff.is_some())
             .with(Features::VOXEL_SURFACE, self.voxel_surface.is_some())
-            .with(Features::TRIPLANAR, self.triplanar.is_some());
+            .with(Features::TRIPLANAR, self.triplanar.is_some())
+            .with(
+                Features::STOCHASTIC_TILING,
+                self.stochastic_tiling.is_some(),
+            );
         if self.unlit {
             return base | Features::UNLIT;
         }
@@ -1506,6 +1523,7 @@ pub(crate) fn material_bind_group(
         .as_ref()
         .map_or(0.0, |(_, strength)| *strength);
     floats[45] = params.triplanar.unwrap_or(1.0);
+    floats[46] = params.stochastic_tiling.unwrap_or(1.0);
     for (row, values) in params.parameters.iter().enumerate() {
         floats[52 + row * 4..56 + row * 4].copy_from_slice(values);
     }
@@ -1641,6 +1659,7 @@ pub(crate) fn builtin_materials(
                 metalness: 0.0,
                 voxel_surface: None,
                 triplanar: None,
+                stochastic_tiling: None,
                 parameters: [[0.0; 4]; 4],
                 product_textures: [None, None],
                 maps: MaterialMaps::default(),
@@ -1667,6 +1686,7 @@ pub(crate) fn builtin_materials(
                 metalness: 0.0,
                 voxel_surface: None,
                 triplanar: None,
+                stochastic_tiling: None,
                 parameters: [[0.0; 4]; 4],
                 product_textures: [None, None],
                 maps: MaterialMaps::default(),

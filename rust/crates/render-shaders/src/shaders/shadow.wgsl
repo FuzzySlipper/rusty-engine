@@ -6,7 +6,7 @@
 #import rusty::types::{texture_space_position, Caster}
 #import rusty::view::{parts, instances, shadow_views}
 #import rusty::material::{material, albedo, albedo_sampler}
-#import rusty::surface::{transform_uv, voxel_uv, triplanar_uvs, triplanar_weights}
+#import rusty::surface::{transform_uv, voxel_uv, triplanar_uvs, triplanar_weights, hex_tiles, hex_texture}
 #ifdef PRODUCT_SHADER
 #import rusty::product::cast_shadow
 #endif
@@ -63,7 +63,12 @@ fn base_alpha(surface_uv: vec2<f32>) -> f32 {
 #else
     let uv = surface_uv;
 #endif
+#ifdef STOCHASTIC_TILING
+    return hex_texture(albedo, albedo_sampler, hex_tiles(transform_uv(material.base_uv_u, material.base_uv_v, uv)),
+        material.factors.z).color.a;
+#else
     return textureSampleLevel(albedo, albedo_sampler, transform_uv(material.base_uv_u, material.base_uv_v, uv), 0.0).a;
+#endif
 }
 
 #ifdef CASTER_FRAGMENT

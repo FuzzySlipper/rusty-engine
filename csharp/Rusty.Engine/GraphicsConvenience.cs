@@ -28,7 +28,10 @@ public readonly partial record struct MaterialRequest
             default,
             1,
             0,
-            default)
+            default,
+            default,
+            default,
+            0)
     {
     }
 
@@ -57,7 +60,10 @@ public readonly partial record struct MaterialRequest
             default,
             1,
             0,
-            default)
+            default,
+            default,
+            default,
+            0)
     {
     }
 
@@ -87,7 +93,10 @@ public readonly partial record struct MaterialRequest
             default,
             1,
             0,
-            default)
+            default,
+            default,
+            default,
+            0)
     {
     }
 
@@ -119,7 +128,10 @@ public readonly partial record struct MaterialRequest
             normalMap,
             normalScale,
             0,
-            default)
+            default,
+            default,
+            default,
+            0)
     {
     }
 
@@ -152,7 +164,47 @@ public readonly partial record struct MaterialRequest
             normalMap,
             normalScale,
             triplanarSharpness,
-            default)
+            default,
+            default,
+            default,
+            0)
+    {
+    }
+
+    /// <summary>A material repeating its texture once per uv unit, without stochastic tiling.</summary>
+    public MaterialRequest(
+        Color color,
+        RenderResourceReference texture,
+        float roughness,
+        Color textureTint,
+        Vector3 emissionColor,
+        float emissionIntensity,
+        bool doubleSided,
+        MaterialAlphaMode alphaMode,
+        float alphaCutoff,
+        float metalness,
+        RenderResourceReference normalMap,
+        float normalScale,
+        float triplanarSharpness,
+        MaterialShader shader)
+        : this(
+            color,
+            texture,
+            roughness,
+            textureTint,
+            emissionColor,
+            emissionIntensity,
+            doubleSided,
+            alphaMode,
+            alphaCutoff,
+            metalness,
+            normalMap,
+            normalScale,
+            triplanarSharpness,
+            shader,
+            default,
+            default,
+            0)
     {
     }
 }

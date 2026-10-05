@@ -293,6 +293,8 @@ fn materials(
                 1.0,
             ];
             let material = RenderMaterialDescriptor {
+                texture_transform: None,
+                stochastic_tiling: None,
                 terrain_layers: None,
                 shader: None,
                 id: binding.material_asset_id.clone(),

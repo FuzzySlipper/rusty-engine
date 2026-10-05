@@ -9,6 +9,9 @@ use std::collections::BTreeMap;
 
 fn opaque_material() -> NativeMaterialRequest {
     NativeMaterialRequest {
+        texture_scale: NativeVec2::default(),
+        texture_offset: NativeVec2::default(),
+        stochastic_tiling: 0.0,
         shader: Default::default(),
         triplanar_sharpness: 0.0,
         color: NativeColor {

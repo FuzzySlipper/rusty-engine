@@ -52,11 +52,14 @@ impl Features {
     /// The mesh's vertex colours are terrain layer weights, not a tint (a
     /// mesh feature, not a material one).
     pub const LAYER_WEIGHTS: Self = Self::bit(512);
+    /// Sample the base texture and normal map as blended, randomly offset
+    /// and rotated hexagonal tiles (`rusty::surface::hex_tiles`).
+    pub const STOCHASTIC_TILING: Self = Self::bit(1024);
     /// Every standard feature's bit.
     #[cfg(test)]
-    const ALL_BITS: u16 = 1023;
+    const ALL_BITS: u16 = 2047;
 
-    const DEFS: [(Self, &'static str); 10] = [
+    const DEFS: [(Self, &'static str); 11] = [
         (Self::UNLIT, "UNLIT"),
         (Self::MASK, "MASK"),
         (Self::VOXEL_SURFACE, "VOXEL_SURFACE"),
@@ -67,6 +70,7 @@ impl Features {
         (Self::TRIPLANAR, "TRIPLANAR"),
         (Self::TERRAIN_LAYERS, "TERRAIN_LAYERS"),
         (Self::LAYER_WEIGHTS, "LAYER_WEIGHTS"),
+        (Self::STOCHASTIC_TILING, "STOCHASTIC_TILING"),
     ];
 
     const fn bit(bits: u16) -> Self {
@@ -97,7 +101,7 @@ impl Features {
     }
 
     /// What the shadow caster pass compiles: only the alpha mask, the voxel
-    /// uv remap and triplanar planes it samples through and whether vertex
+    /// uv remap, triplanar planes and hex tiles it samples through and whether vertex
     /// colours are layer weights rather than alpha, and a product shader that
     /// defines a caster stage.
     pub fn caster(self) -> Self {
@@ -106,6 +110,7 @@ impl Features {
                 & (Self::MASK.bits
                     | Self::VOXEL_SURFACE.bits
                     | Self::TRIPLANAR.bits
+                    | Self::STOCHASTIC_TILING.bits
                     | Self::LAYER_WEIGHTS.bits),
             product: if self.product & PRODUCT_CASTS != 0 {
                 self.product

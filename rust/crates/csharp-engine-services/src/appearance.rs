@@ -9179,6 +9179,8 @@ fn sprite_texture_descriptor(
 
 fn render_material(id: String, color: NativeColor) -> RenderMaterialDescriptor {
     RenderMaterialDescriptor {
+        texture_transform: None,
+        stochastic_tiling: None,
         terrain_layers: None,
         shader: None,
         id,
@@ -9319,6 +9321,15 @@ fn material_descriptor(
     };
     let normal_map = normal_map_descriptor(resources, request.normal_map, request.normal_scale)?;
     let descriptor = RenderMaterialDescriptor {
+        texture_transform: texture_transform_descriptor(
+            request.texture_scale,
+            request.texture_offset,
+        ),
+        stochastic_tiling: (request.stochastic_tiling != 0.0).then_some(
+            render_model::MaterialStochasticTilingDescriptor {
+                contrast: request.stochastic_tiling,
+            },
+        ),
         terrain_layers: None,
         id,
         color: native_color(request.color),
@@ -9498,6 +9509,20 @@ fn retain_shader_descriptor(
     if !shaders.iter().any(|retained| retained.id == shader.id) {
         shaders.push(shader);
     }
+}
+
+/// The texture repeat and offset, or none for one unshifted repeat; a zero
+/// scale component repeats once.
+fn texture_transform_descriptor(
+    scale: NativeVec2,
+    offset: NativeVec2,
+) -> Option<render_model::MaterialTextureTransformDescriptor> {
+    let once = |value: f32| if value == 0.0 { 1.0 } else { value };
+    let transform = render_model::MaterialTextureTransformDescriptor {
+        scale: [once(scale.x), once(scale.y)],
+        offset: [offset.x, offset.y],
+    };
+    (transform.scale != [1.0, 1.0] || transform.offset != [0.0, 0.0]).then_some(transform)
 }
 
 /// Triplanar sampling at this sharpness, or none for 0.
@@ -10152,6 +10177,9 @@ pub(super) mod tests {
         };
         let material = bridge
             .create_material(NativeMaterialRequest {
+                texture_scale: NativeVec2::default(),
+                texture_offset: NativeVec2::default(),
+                stochastic_tiling: 0.0,
                 shader: Default::default(),
                 triplanar_sharpness: 0.0,
                 color,
@@ -10351,6 +10379,9 @@ pub(super) mod tests {
         };
         let material = bridge
             .create_material(NativeMaterialRequest {
+                texture_scale: NativeVec2::default(),
+                texture_offset: NativeVec2::default(),
+                stochastic_tiling: 0.0,
                 shader: Default::default(),
                 triplanar_sharpness: 0.0,
                 color,
@@ -10885,6 +10916,9 @@ pub(super) mod tests {
             a: 1.0,
         };
         let request = NativeMaterialRequest {
+            texture_scale: NativeVec2::default(),
+            texture_offset: NativeVec2::default(),
+            stochastic_tiling: 0.0,
             shader: Default::default(),
             triplanar_sharpness: 0.0,
             color,
@@ -10935,6 +10969,9 @@ pub(super) mod tests {
             a: 1.0,
         };
         let metal = NativeMaterialRequest {
+            texture_scale: NativeVec2::default(),
+            texture_offset: NativeVec2::default(),
+            stochastic_tiling: 0.0,
             shader: Default::default(),
             triplanar_sharpness: 0.0,
             color,
@@ -10961,6 +10998,75 @@ pub(super) mod tests {
                 normal_map: NativeRenderResourceReference::default(),
                 normal_scale: 1.0,
                 ..metal
+            },
+            &resources,
+        )
+        .unwrap_err();
+        assert_eq!(error.code(), "CSHARP_MATERIAL");
+    }
+
+    #[test]
+    fn material_texture_repeat_and_stochastic_tiling_reach_the_descriptor() {
+        let color = NativeColor {
+            r: 1.0,
+            g: 1.0,
+            b: 1.0,
+            a: 1.0,
+        };
+        let plain = NativeMaterialRequest {
+            texture_scale: NativeVec2::default(),
+            texture_offset: NativeVec2::default(),
+            stochastic_tiling: 0.0,
+            shader: Default::default(),
+            triplanar_sharpness: 4.0,
+            color,
+            texture: NativeRenderResourceReference { value: 0 },
+            roughness: 0.9,
+            texture_tint: color,
+            emission_color: NativeVec3::default(),
+            emission_intensity: 0.0,
+            double_sided: false,
+            alpha_mode: NativeMaterialAlphaMode::Opaque,
+            alpha_cutoff: 0.5,
+            metalness: 0.0,
+            normal_map: NativeRenderResourceReference::default(),
+            normal_scale: 1.0,
+        };
+        let resources = RenderResourceRegistry::default();
+        let descriptor = material_descriptor("material/plain".to_owned(), plain, &resources)
+            .expect("plain material");
+        assert_eq!(
+            descriptor.texture_transform, None,
+            "a zero scale repeats once"
+        );
+        assert_eq!(descriptor.stochastic_tiling, None);
+        let floor = NativeMaterialRequest {
+            texture_scale: NativeVec2 {
+                x: 1.0 / 3.0,
+                y: 0.0,
+            },
+            texture_offset: NativeVec2 { x: 0.5, y: 0.25 },
+            stochastic_tiling: 6.0,
+            ..plain
+        };
+        let descriptor = material_descriptor("material/floor".to_owned(), floor, &resources)
+            .expect("floor material");
+        assert_eq!(
+            descriptor.texture_transform,
+            Some(render_model::MaterialTextureTransformDescriptor {
+                scale: [1.0 / 3.0, 1.0],
+                offset: [0.5, 0.25],
+            })
+        );
+        assert_eq!(
+            descriptor.stochastic_tiling,
+            Some(render_model::MaterialStochasticTilingDescriptor { contrast: 6.0 })
+        );
+        let error = material_descriptor(
+            "material/soft".to_owned(),
+            NativeMaterialRequest {
+                stochastic_tiling: 0.5,
+                ..floor
             },
             &resources,
         )
@@ -11033,6 +11139,9 @@ pub(super) mod tests {
             a: 1.0,
         };
         let request = |normal_map: NativeRenderResourceHandle| NativeMaterialRequest {
+            texture_scale: NativeVec2::default(),
+            texture_offset: NativeVec2::default(),
+            stochastic_tiling: 0.0,
             shader: Default::default(),
             triplanar_sharpness: 0.0,
             color: white,
@@ -11115,6 +11224,9 @@ fn shade(surface: Surface) -> vec4<f32> {
         };
         let material = bridge
             .create_material(NativeMaterialRequest {
+                texture_scale: NativeVec2::default(),
+                texture_offset: NativeVec2::default(),
+                stochastic_tiling: 0.0,
                 color: white,
                 texture: NativeRenderResourceReference::default(),
                 roughness: 0.8,
@@ -11221,6 +11333,9 @@ fn shade(surface: Surface) -> vec4<f32> {
             a: 1.0,
         };
         let request = |texture_a: u64, texture_b: u64| NativeMaterialRequest {
+            texture_scale: NativeVec2::default(),
+            texture_offset: NativeVec2::default(),
+            stochastic_tiling: 0.0,
             color: white,
             texture: NativeRenderResourceReference::default(),
             roughness: 0.8,
@@ -11334,6 +11449,9 @@ fn shade(surface: Surface) -> vec4<f32> {
         for resource in [clamp, repeat, linear] {
             bridge
                 .create_material(NativeMaterialRequest {
+                    texture_scale: NativeVec2::default(),
+                    texture_offset: NativeVec2::default(),
+                    stochastic_tiling: 0.0,
                     shader: Default::default(),
                     triplanar_sharpness: 0.0,
                     color: NativeColor {
@@ -11554,6 +11672,9 @@ fn shade(surface: Surface) -> vec4<f32> {
         assert!(bridge.resource(first.handle.value).is_ok());
         bridge
             .create_material(NativeMaterialRequest {
+                texture_scale: NativeVec2::default(),
+                texture_offset: NativeVec2::default(),
+                stochastic_tiling: 0.0,
                 shader: Default::default(),
                 triplanar_sharpness: 0.0,
                 color: NativeColor {
@@ -12304,6 +12425,9 @@ fn shade(surface: Surface) -> vec4<f32> {
             .expect("animated appearance");
         let material = bridge
             .create_material(NativeMaterialRequest {
+                texture_scale: NativeVec2::default(),
+                texture_offset: NativeVec2::default(),
+                stochastic_tiling: 0.0,
                 shader: Default::default(),
                 triplanar_sharpness: 0.0,
                 color: NativeColor {

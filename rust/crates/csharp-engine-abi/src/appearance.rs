@@ -592,6 +592,17 @@ pub struct NativeMaterialRequest {
     /// A product shader shading this material; a zero handle for the
     /// standard shade stage.
     pub shader: NativeMaterialShader,
+    /// Repeats of the base texture and normal map per uv unit, or per mesh
+    /// unit on the triplanar planes; a zero component repeats once.
+    pub texture_scale: NativeVec2,
+    /// Added to the scaled uv, in repeats.
+    pub texture_offset: NativeVec2,
+    /// Hide the texture's repetition by sampling it, and the normal map, as
+    /// randomly offset and rotated hexagonal tiles blended together; 0 for
+    /// ordinary repetition. Tile weights are raised to this power (1 or
+    /// more): 1 blends widely and softens the texture, higher keeps each
+    /// tile crisp with narrower transitions.
+    pub stochastic_tiling: f32,
 }
 
 /// A product shader resource (`.wgsl`, `NativeRenderResourceKind::Shader`),

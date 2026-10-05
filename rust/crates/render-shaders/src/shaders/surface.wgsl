@@ -121,3 +121,107 @@ fn triplanar_normal(n: vec3<f32>, samples: array<vec3<f32>, 3>, weights: vec3<f3
     let z = mapped_normal(n, vec3<f32>(-side.z, 0.0, 0.0), vec3<f32>(0.0, 1.0, 0.0), samples[2], scale);
     return normalize(x * weights.x + y * weights.y + z * weights.z);
 }
+
+// Stochastic tiling (STOCHASTIC_TILING), after Mikkelsen's practical
+// hex-tiling (JCGT 2022): the uv plane is cut into a triangle grid; each
+// vertex carries a random offset and rotation of the texture, so its
+// hexagonal neighbourhood shows a different patch, and a point blends its
+// triangle's three vertices' patches. `rotation` takes uv to each patch's
+// texture; derivatives follow it, so filtering does not jump at tile edges.
+struct HexTiles {
+    uv: array<vec2<f32>, 3>,
+    rotation: array<mat2x2<f32>, 3>,
+    // Barycentric distance to each vertex: 1 at it, 0 on the opposite edge.
+    corner: vec3<f32>,
+    dx: vec2<f32>,
+    dy: vec2<f32>,
+}
+
+// Grid vertices per uv unit, along one axis (2√3): about three tiles per
+// texture repeat.
+const HEX_GRID_SCALE: f32 = 3.4641016;
+// How strongly a patch's luminance raises its share, so bright features
+// stay whole rather than fading into their neighbours.
+const HEX_LUMINANCE_FALLOFF: f32 = 0.6;
+
+// Three uniform values in [0, 1) for a grid vertex (pcg3d).
+fn hex_random(vertex: vec2<i32>) -> vec3<f32> {
+    var v = vec3<u32>(bitcast<u32>(vertex.x), bitcast<u32>(vertex.y), 0x9e3779b9u) * 1664525u + 1013904223u;
+    v.x += v.y * v.z;
+    v.y += v.z * v.x;
+    v.z += v.x * v.y;
+    v ^= v >> vec3<u32>(16u);
+    v.x += v.y * v.z;
+    v.y += v.z * v.x;
+    v.z += v.x * v.y;
+    return vec3<f32>(v >> vec3<u32>(8u)) / 16777216.0;
+}
+
+fn hex_tiles(uv: vec2<f32>) -> HexTiles {
+    let grid = uv * HEX_GRID_SCALE;
+    let skewed = vec2<f32>(grid.x - 0.57735027 * grid.y, 1.15470054 * grid.y);
+    let cell = vec2<i32>(floor(skewed));
+    let local = fract(skewed);
+    let remaining = 1.0 - local.x - local.y;
+    // The cell's upper triangle (1) or lower (0).
+    let upper = select(0.0, 1.0, remaining <= 0.0);
+    let flip = 2.0 * upper - 1.0;
+    let up = i32(upper);
+    var tiles: HexTiles;
+    tiles.corner = vec3<f32>(-remaining * flip, upper - local.y * flip, upper - local.x * flip);
+    let vertices = array<vec2<i32>, 3>(cell + vec2<i32>(up, up), cell + vec2<i32>(up, 1 - up),
+        cell + vec2<i32>(1 - up, up));
+    tiles.dx = dpdx(uv);
+    tiles.dy = dpdy(uv);
+    for (var i = 0u; i < 3u; i++) {
+        let vertex = vec2<f32>(vertices[i]);
+        let center = vec2<f32>(vertex.x + 0.5 * vertex.y, vertex.y / 1.15470054) / HEX_GRID_SCALE;
+        let random = hex_random(vertices[i]);
+        let angle = random.z * 6.2831853;
+        let rotation = mat2x2<f32>(cos(angle), sin(angle), -sin(angle), cos(angle));
+        tiles.rotation[i] = rotation;
+        tiles.uv[i] = rotation * (uv - center) + center + random.xy;
+    }
+    return tiles;
+}
+
+// Patch `i` of `map` at `tiles`.
+fn hex_patch(map: texture_2d<f32>, map_sampler: sampler, tiles: HexTiles, i: u32) -> vec4<f32> {
+    let rotation = tiles.rotation[i];
+    return textureSampleGrad(map, map_sampler, tiles.uv[i], rotation * tiles.dx, rotation * tiles.dy);
+}
+
+// A hex-tiled colour and the share each patch took: their corner distances
+// to the `contrast` power, raised by luminance.
+struct HexSample {
+    color: vec4<f32>,
+    shares: vec3<f32>,
+}
+
+fn hex_texture(map: texture_2d<f32>, map_sampler: sampler, tiles: HexTiles, contrast: f32) -> HexSample {
+    let patches = array<vec4<f32>, 3>(hex_patch(map, map_sampler, tiles, 0u),
+        hex_patch(map, map_sampler, tiles, 1u), hex_patch(map, map_sampler, tiles, 2u));
+    let luma = vec3<f32>(0.299, 0.587, 0.114);
+    let brightness = vec3<f32>(dot(patches[0].rgb, luma), dot(patches[1].rgb, luma),
+        dot(patches[2].rgb, luma));
+    let raised = mix(vec3<f32>(1.0), brightness, HEX_LUMINANCE_FALLOFF)
+        * pow(tiles.corner, vec3<f32>(contrast));
+    var sample: HexSample;
+    sample.shares = raised / max(raised.x + raised.y + raised.z, 1e-6);
+    sample.color = patches[0] * sample.shares.x + patches[1] * sample.shares.y
+        + patches[2] * sample.shares.z;
+    return sample;
+}
+
+// A tangent-space normal map read through the same patches and shares as a
+// colour, as a map sample (0 to 1): each patch's tilt turned back from its
+// rotation into the uv's frame (y up the image mirrors v, so the turn is the
+// patch's own rotation).
+fn hex_normal(map: texture_2d<f32>, map_sampler: sampler, tiles: HexTiles, shares: vec3<f32>) -> vec3<f32> {
+    var blended = vec3<f32>(0.0);
+    for (var i = 0u; i < 3u; i++) {
+        let mapped = hex_patch(map, map_sampler, tiles, i).xyz * 2.0 - 1.0;
+        blended += vec3<f32>(tiles.rotation[i] * mapped.xy, mapped.z) * shares[i];
+    }
+    return blended * 0.5 + 0.5;
+}

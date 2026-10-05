@@ -2,6 +2,8 @@ use render_model::*;
 
 fn material() -> RenderMaterialDescriptor {
     RenderMaterialDescriptor {
+        texture_transform: None,
+        stochastic_tiling: None,
         terrain_layers: None,
         shader: None,
         id: "material/plain".to_string(),

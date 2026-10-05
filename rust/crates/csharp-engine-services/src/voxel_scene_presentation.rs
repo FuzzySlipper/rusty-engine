@@ -1221,6 +1221,9 @@ mod tests {
                 crate::appearance::create_material(
                     (appearance as *mut RuntimeAppearanceBridge).cast(),
                     NativeMaterialRequest {
+                        texture_scale: NativeVec2::default(),
+                        texture_offset: NativeVec2::default(),
+                        stochastic_tiling: 0.0,
                         shader: Default::default(),
                         triplanar_sharpness: 0.0,
                         color,
@@ -2254,6 +2257,9 @@ mod tests {
                 crate::appearance::create_material(
                     (&mut appearance as *mut RuntimeAppearanceBridge).cast(),
                     NativeMaterialRequest {
+                        texture_scale: NativeVec2::default(),
+                        texture_offset: NativeVec2::default(),
+                        stochastic_tiling: 0.0,
                         shader: csharp_engine_abi::NativeMaterialShader {
                             shader: NativeRenderResourceReference { value: tint },
                             ..Default::default()

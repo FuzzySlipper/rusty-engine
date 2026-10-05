@@ -83,7 +83,8 @@ its one plane whole, so cubes and Blocky faces keep their tiles exactly. The
 planes follow the voxel grid, not a block's orientation state, and a
 direction-specific material on a smooth surface is chosen by the polygon's
 dominant axis as before, then blended across its planes. On a retained mesh
-the planes run over its object-space positions in metres.
+the planes run over its object-space positions in metres, repeating once per
+metre unless `MaterialRequest.TextureScale` sets another repeat.
 
 ## Blending terrain layers
 

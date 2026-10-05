@@ -488,6 +488,8 @@ impl Renderer {
                 }),
             };
             let descriptor = RenderMaterialDescriptor {
+                texture_transform: None,
+                stochastic_tiling: None,
                 terrain_layers: None,
                 id: id.clone(),
                 color: material.base_color,
