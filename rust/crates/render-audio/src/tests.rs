@@ -134,17 +134,18 @@ fn one_shots_complete_for_every_decoded_container() {
         realizer.refresh(&NoEntityPositions);
         assert_eq!(realizer.take_facts(), [], "{hash} is still playing");
         // Compressed clips stream from a decoder thread; the mock backend
-        // renders faster than real time, so give that thread time to keep up.
-        let mut facts = Vec::new();
-        for _ in 0..200 {
+        // renders faster than real time, so wait on the fact rather than on a
+        // render budget that a loaded machine's decoder may not meet.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        let facts = loop {
             run(&mut realizer, 0.05);
             realizer.refresh(&NoEntityPositions);
-            facts = realizer.take_facts();
-            if !facts.is_empty() {
-                break;
+            let facts = realizer.take_facts();
+            if !facts.is_empty() || std::time::Instant::now() > deadline {
+                break facts;
             }
             std::thread::sleep(std::time::Duration::from_millis(5));
-        }
+        };
         assert_eq!(
             facts,
             [RealizedAudioFact::OneShotCompleted {
@@ -154,6 +155,9 @@ fn one_shots_complete_for_every_decoded_container() {
             "{hash} completes once"
         );
         assert_eq!(realizer.readout().one_shots, 0);
+        run(&mut realizer, 0.5);
+        realizer.refresh(&NoEntityPositions);
+        assert_eq!(realizer.take_facts(), [], "{hash} completes only once");
     }
 }
 
