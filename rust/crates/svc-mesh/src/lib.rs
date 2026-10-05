@@ -613,7 +613,7 @@ pub fn mesh_chunk_standalone(
         coord,
         chunk,
         |_| true,
-        |_, v| {
+        |_, v, _| {
             let (c, l) = spec.voxel_to_chunk_local(v);
             c == coord && chunk.get(l).is_some_and(|x| x.is_opaque())
         },
@@ -1259,7 +1259,7 @@ pub fn mesh_chunk_in_world_with_options(
                 coord,
                 chunk,
                 |_| true,
-                |slot, voxel| {
+                |slot, voxel, _| {
                     neighbour_slot(world, &spec, voxel).is_some_and(|n| options.hides(slot, n))
                 },
             )
@@ -1369,13 +1369,57 @@ fn mesh_chunk_reconstructed(
     if !options.uses_mode(SurfaceMode::GreedyCubes) {
         return Ok(smooth);
     }
-    let mut cubes = mesh_core(&spec, coord, chunk, greedy, |slot, voxel| {
-        neighbour_slot(world, &spec, voxel).is_some_and(|n| greedy(n) && options.hides(slot, n))
+    let mut cubes = mesh_core(&spec, coord, chunk, greedy, |slot, voxel, dir| {
+        neighbour_slot(world, &spec, voxel).is_some_and(|n| {
+            options.hides(slot, n)
+                && (greedy(n)
+                    || reconstructed_gap_enclosed(world, &spec, options, slot, voxel, dir))
+        })
     })?;
     if let Some(layers) = &options.terrain_layers {
         cube_layer_weights(&mut cubes, layers);
     }
     merge_payloads(cubes, smooth, options.mode, options.limits)
+}
+
+/// Whether a non-occluding cube's face toward a reconstructed solid at
+/// `voxel` (in direction `dir`) can go. Reconstructed surfaces meet a
+/// non-occluding material as they meet air, so the solid's surface lies at or
+/// near the face: exactly on it where both densities are equal, as on a flat
+/// bed under water, where the two would fight in depth. Whatever lies between
+/// them opens only into `voxel`'s neighbours across the face's plane; when
+/// each of those is solid or the cube's own material, nothing but the
+/// material can be seen there and the surface stands in for the face. A
+/// neighbour that is air or another see-through material (a shore) keeps the
+/// face, which may be partly exposed. Occluding cubes keep their faces: no
+/// reconstructed surface meets them.
+fn reconstructed_gap_enclosed(
+    world: &VoxelWorld,
+    spec: &VoxelGridSpec,
+    options: &SurfaceMeshOptions,
+    slot: u16,
+    voxel: VoxelCoord,
+    dir: Direction6,
+) -> bool {
+    if !options.non_occluding.contains(&slot) {
+        return false;
+    }
+    let normal = dir.offset();
+    let [first, second] = match normal.iter().position(|&axis| axis != 0) {
+        Some(0) => [[0, 1, 0], [0, 0, 1]],
+        Some(1) => [[1, 0, 0], [0, 0, 1]],
+        _ => [[1, 0, 0], [0, 1, 0]],
+    };
+    (-1..=1_i64).all(|a| {
+        (-1..=1_i64).all(|b| {
+            let around = VoxelCoord::new(
+                voxel.x + a * first[0] + b * second[0],
+                voxel.y + a * first[1] + b * second[1],
+                voxel.z + a * first[2] + b * second[2],
+            );
+            neighbour_slot(world, spec, around).is_some_and(|n| options.hides(slot, n))
+        })
+    })
 }
 
 /// Gives each cube face vertex all of its slot's layer weight: cube faces
@@ -1391,15 +1435,15 @@ fn cube_layer_weights(cubes: &mut MeshPayload, layers: &TerrainLayers) {
     cubes.layer_weights = weights.into_iter().flatten().collect();
 }
 
-/// Core mesher: `hides(slot, world_voxel)` answers whether a voxel hides the
-/// face a `slot` voxel shows it. The current chunk's solid voxels of
+/// Core mesher: `hides(slot, world_voxel, dir)` answers whether a voxel hides
+/// the face a `slot` voxel shows it in direction `dir`. The current chunk's solid voxels of
 /// `include`d materials drive emission.
 fn mesh_core(
     spec: &VoxelGridSpec,
     coord: ChunkCoord,
     chunk: &VoxelChunk,
     include: impl Fn(u16) -> bool,
-    hides: impl Fn(u16, VoxelCoord) -> bool,
+    hides: impl Fn(u16, VoxelCoord, Direction6) -> bool,
 ) -> Result<MeshPayload, MeshError> {
     // Collect visible faces in deterministic order, with culling stats.
     let mut faces: Vec<Face> = Vec::new();
@@ -1413,7 +1457,7 @@ fn mesh_core(
         }
         let world_voxel = spec.chunk_local_to_voxel(coord, local);
         for dir in Direction6::ALL {
-            if hides(material.raw(), world_voxel.neighbor(dir)) {
+            if hides(material.raw(), world_voxel.neighbor(dir), dir) {
                 faces_culled += 1;
             } else {
                 faces.push(Face {

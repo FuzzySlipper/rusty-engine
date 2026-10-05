@@ -696,3 +696,81 @@ fn a_reconstructed_bed_shows_under_a_non_occluding_material() {
     assert!(!water.is_empty());
     assert!(water.iter().all(|y| (y - 3.0).abs() < 1.0e-4), "{water:?}");
 }
+
+#[test]
+fn greedy_water_on_a_reconstructed_bed_draws_no_face_where_the_bed_lies_but_keeps_its_shore() {
+    // A dual-contoured stone bed (y 0..2, top at y = 2) under one layer of
+    // greedy, non-occluding water (y = 2), with equal densities, so the bed
+    // lies exactly on the water's underside. A step at x = 2 (stone only at
+    // y = 0, water at y = 1 and 2) deepens the bed, and from x = 6 the stone
+    // rises through the water layer to a shore with air above it.
+    let world = world_with(|[x, y, _]| match (x, y) {
+        (2, 0) => Some((STONE, -0.5)),
+        (2, 1 | 2) => Some((WATER, -0.5)),
+        (6.., 0..=2) | (..=5, 0 | 1) => Some((STONE, -0.5)),
+        (..=5, 2) => Some((WATER, -0.5)),
+        _ => None,
+    });
+    let options = SurfaceMeshOptions {
+        materials: SurfaceMaterials::new([(
+            WATER,
+            MaterialSurface {
+                mode: SurfaceMode::GreedyCubes,
+                character: SurfaceCharacter::default(),
+            },
+        )])
+        .unwrap(),
+        non_occluding: BTreeSet::from([WATER]),
+        ..SurfaceMeshOptions::with_mode(SurfaceMode::DualContouring)
+    };
+    // Cube face area away from the world's sides, where absent chunks read
+    // as air. Faces merge along rows, so a face at a side stays out too.
+    let inner_area = |mesh: &MeshPayload, direction: Direction6| {
+        let p = positions(mesh);
+        mesh.groups
+            .iter()
+            .filter(|group| group.material_slot == WATER && group.direction == Some(direction))
+            .flat_map(|group| {
+                mesh.indices[group.start as usize..(group.start + group.count) as usize].chunks(3)
+            })
+            .map(|t| [p[t[0] as usize], p[t[1] as usize], p[t[2] as usize]])
+            .filter(|[a, b, c]| {
+                let z = (a[2] + b[2] + c[2]) / 3.0;
+                let x = (a[0] + b[0] + c[0]) / 3.0;
+                (1.0..3.0).contains(&z) && x > 1.0
+            })
+            .map(|[a, b, c]| {
+                let u = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+                let v = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
+                let n = [
+                    u[1] * v[2] - u[2] * v[1],
+                    u[2] * v[0] - u[0] * v[2],
+                    u[0] * v[1] - u[1] * v[0],
+                ];
+                (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt() / 2.0
+            })
+            .sum::<f32>()
+    };
+    let lake = mesh_chunk_in_world_with_options(&world, ChunkCoord::new(0, 0, 0), &options)
+        .unwrap()
+        .unwrap();
+    let shore = mesh_chunk_in_world_with_options(&world, ChunkCoord::new(1, 0, 0), &options)
+        .unwrap()
+        .unwrap();
+    // The bed and the step under the water are the stone's surface alone,
+    // flat or stepped: no water face beneath it to fight it in depth.
+    for (mesh, name) in [(&lake, "lake"), (&shore, "shore")] {
+        assert_eq!(inner_area(mesh, Direction6::NegY), 0.0, "{name} underside");
+        assert_eq!(inner_area(mesh, Direction6::NegX), 0.0, "{name} step");
+    }
+    assert!(lake.groups.iter().any(|group| group.material_slot == STONE));
+    // The water's whole top stays (x 0..6 by z 0..4).
+    assert_eq!(
+        face_area(&lake, WATER, Direction6::PosY) + face_area(&shore, WATER, Direction6::PosY),
+        24.0
+    );
+    // At the shore, the stone's side meets the water but air lies above it,
+    // so the water's side face toward it stays, where the stone's rounded
+    // edge may leave it exposed.
+    assert_eq!(face_area(&shore, WATER, Direction6::PosX), 4.0);
+}
