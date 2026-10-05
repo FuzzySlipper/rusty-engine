@@ -634,7 +634,10 @@ public static unsafe class ProductBridge
                 CopyBytes(input.mapping_id, input.mapping_id_len),
                 CopyBytes(input.intent, input.intent_len),
                 CopyBytes(input.payload_contract, input.payload_contract_len),
-                CopyBytes(input.payload_data, input.payload_data_len));
+                CopyBytes(input.payload_data, input.payload_data_len))
+            {
+                HasPosition = input.has_position != 0,
+            };
         }
         return events;
     }

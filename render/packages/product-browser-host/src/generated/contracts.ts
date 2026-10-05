@@ -320,7 +320,7 @@ export type RuntimeInputWireEvent = RuntimeInputWirePhysical | RuntimeInputWireI
 /**
  * A physical fact from the closed Engine input catalog.
  */
-export type RuntimeInputWireFact = { "kind": "key", code: KeyboardControl, edge: RuntimeInputWireEdge, } | { "kind": "pointer-button", button: PointerButton, edge: RuntimeInputWireEdge, } | { "kind": "pointer-delta", x: number, y: number, } | { "kind": "wheel", x: number, y: number, } | { "kind": "controller-button", button: ControllerButton, edge: RuntimeInputWireEdge, } | { "kind": "controller-axis", axis: ControllerAxis, value: number, } | { "kind": "controller-button-value", button: ControllerButton, value: number, } | { "kind": "clear", reason: RuntimeInputWireClearReason, };
+export type RuntimeInputWireFact = { "kind": "key", code: KeyboardControl, edge: RuntimeInputWireEdge, } | { "kind": "pointer-button", button: PointerButton, edge: RuntimeInputWireEdge, position?: RuntimeInputWirePointerPosition, } | { "kind": "pointer-delta", x: number, y: number, } | { "kind": "pointer-position", x: number, y: number, } | { "kind": "wheel", x: number, y: number, } | { "kind": "controller-button", button: ControllerButton, edge: RuntimeInputWireEdge, } | { "kind": "controller-axis", axis: ControllerAxis, value: number, } | { "kind": "controller-button-value", button: ControllerButton, value: number, } | { "kind": "clear", reason: RuntimeInputWireClearReason, };
 
 /**
  * A product-declared intent claimed by product UI, in the same ordered lane.
@@ -353,6 +353,12 @@ sequence: string,
  * Product-declared input context.
  */
 context: string, fact: RuntimeInputWireFact, };
+
+/**
+ * A cursor position on the presentation surface, normalized and
+ * bottom-left based like a camera viewport.
+ */
+export type RuntimeInputWirePointerPosition = { x: number, y: number, };
 
 /**
  * The wire shape of a UI projection envelope: what the browser host

@@ -26,6 +26,12 @@ Each item in the container panel has a Take button that claims
 panel again, whether running (`Update`) or paused (`HandlePausedIntents`);
 `inventory.read` reports the taken items and how many were taken while paused.
 
+M switches to a free cursor, as a map or strategy screen would
+(`context.ui.setCursorMode('unlocked')`): pointer lock is released and clicks no
+longer take it. A click on the world then carries its cursor position, and the
+product casts `CameraQueries.Ray` through it to pick the chest under the cursor;
+`interaction.cursor.last` reports that pick. M again returns to mouselook.
+
 The read-only `interaction.query` command returns reticle candidates including
 identity/revision, target point, distance, angle, visibility, unknown walking
 route, availability reason, focus and successful-use count. Approach using

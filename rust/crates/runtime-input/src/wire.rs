@@ -5,9 +5,9 @@ use ts_rs::TS;
 use crate::{
     model::{validate_controller_axis, validate_controller_button_value},
     parse_canonical_u64, AxisValue, ControllerAxis, ControllerButton, InputClearReason,
-    InputContext, KeyboardControl, PhysicalEdge, PointerButton, RuntimeDirectIntentClaim,
-    RuntimeInputBinding, RuntimeInputError, RuntimeInputEvent, RuntimeInputFact,
-    RuntimeInputIngress, RuntimeIntentValue, RuntimeProductPayload,
+    InputContext, KeyboardControl, PhysicalEdge, PointerButton, PointerPosition,
+    RuntimeDirectIntentClaim, RuntimeInputBinding, RuntimeInputError, RuntimeInputEvent,
+    RuntimeInputFact, RuntimeInputIngress, RuntimeIntentValue, RuntimeProductPayload,
 };
 
 /// Maximum normalized physical/direct envelopes accepted in one wire batch.
@@ -144,11 +144,20 @@ pub enum RuntimeInputWireFact {
         code: KeyboardControl,
         edge: RuntimeInputWireEdge,
     },
+    /// `position` is set while the pointer is not locked.
     PointerButton {
         button: PointerButton,
         edge: RuntimeInputWireEdge,
+        #[serde(default)]
+        #[ts(optional)]
+        position: Option<RuntimeInputWirePointerPosition>,
     },
     PointerDelta {
+        x: f32,
+        y: f32,
+    },
+    /// The cursor moved while the pointer is not locked.
+    PointerPosition {
         x: f32,
         y: f32,
     },
@@ -173,6 +182,24 @@ pub enum RuntimeInputWireFact {
     },
 }
 
+/// A cursor position on the presentation surface, normalized and
+/// bottom-left based like a camera viewport.
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeInputWirePointerPosition {
+    pub x: f32,
+    pub y: f32,
+}
+
+impl RuntimeInputWirePointerPosition {
+    fn into_position(self) -> Result<PointerPosition, RuntimeInputError> {
+        Ok(PointerPosition {
+            x: AxisValue::new(self.x)?,
+            y: AxisValue::new(self.y)?,
+        })
+    }
+}
+
 impl RuntimeInputWireFact {
     fn into_fact(self) -> Result<RuntimeInputFact, RuntimeInputError> {
         Ok(match self {
@@ -180,10 +207,18 @@ impl RuntimeInputWireFact {
                 code,
                 edge: edge.into_edge(),
             },
-            Self::PointerButton { button, edge } => RuntimeInputFact::PointerButton {
+            Self::PointerButton {
+                button,
+                edge,
+                position,
+            } => RuntimeInputFact::PointerButton {
                 button,
                 edge: edge.into_edge(),
+                position: position.map(|at| at.into_position()).transpose()?,
             },
+            Self::PointerPosition { x, y } => RuntimeInputFact::PointerPosition(
+                RuntimeInputWirePointerPosition { x, y }.into_position()?,
+            ),
             Self::PointerDelta { x, y } => RuntimeInputFact::PointerDelta {
                 x: AxisValue::new(x)?,
                 y: AxisValue::new(y)?,

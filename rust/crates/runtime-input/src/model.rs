@@ -232,6 +232,15 @@ impl InputContext {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct AxisValue(f32);
 
+/// A cursor position on the presentation surface (the Engine canvas or
+/// window): normalized and bottom-left based like a camera viewport. A
+/// release outside the surface lies outside 0..1.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PointerPosition {
+    pub x: AxisValue,
+    pub y: AxisValue,
+}
+
 impl AxisValue {
     pub fn new(value: f32) -> Result<Self, RuntimeInputError> {
         if !value.is_finite() {
@@ -288,14 +297,18 @@ pub enum RuntimeInputFact {
         code: KeyboardControl,
         edge: PhysicalEdge,
     },
+    /// `position` is where the cursor was, when the pointer is not locked.
     PointerButton {
         button: PointerButton,
         edge: PhysicalEdge,
+        position: Option<PointerPosition>,
     },
     PointerDelta {
         x: AxisValue,
         y: AxisValue,
     },
+    /// The cursor moved while the pointer is not locked.
+    PointerPosition(PointerPosition),
     Wheel {
         x: AxisValue,
         y: AxisValue,

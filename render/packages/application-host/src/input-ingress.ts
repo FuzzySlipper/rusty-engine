@@ -16,6 +16,7 @@ import type {
   RuntimeInputWireIntentClaim,
   RuntimeInputWireIntentValue,
   RuntimeInputWirePhysical,
+  RuntimeInputWirePointerPosition,
 } from './generated/contracts.js';
 
 export const RUSTY_APPLICATION_INPUT_QUEUE_MAXIMUM = 1_024;
@@ -185,13 +186,31 @@ export function createRustyApplicationInputIngress(
     }
     return true;
   };
+  // While the pointer is not locked, pointer facts carry where the cursor
+  // is on the Engine canvas, normalized and bottom-left based like a camera
+  // viewport, so a product can pick with it (a map, a strategy view).
+  let lastPosition: RuntimeInputWirePointerPosition | null = null;
+  const cursorPosition = (event: PointerEvent): RuntimeInputWirePointerPosition | null => {
+    if (environment.usesPointerLock?.() !== false && pointerLocked()) return null;
+    const bounds = environment.canvas().getBoundingClientRect();
+    if (bounds.width <= 0 || bounds.height <= 0) return null;
+    const x = (event.clientX - bounds.left) / bounds.width;
+    const y = (bounds.bottom - event.clientY) / bounds.height;
+    return Number.isFinite(x) && Number.isFinite(y) ? { x, y } : null;
+  };
+  const withPosition = (event: PointerEvent): { position?: RuntimeInputWirePointerPosition } => {
+    const position = cursorPosition(event);
+    if (position === null) return {};
+    lastPosition = position;
+    return { position: Object.freeze(position) };
+  };
   const onPointerDown = (event: PointerEvent): void => {
     if (!admit(event, false)) return;
     const button = normalizePointerButton(event.button);
     if (button === null) return;
     if (!heldPointerButtons.has(button)) {
       heldPointerButtons.add(button);
-      enqueueFact(Object.freeze({ kind: 'pointer-button', button, edge: 'pressed' }));
+      enqueueFact(Object.freeze({ kind: 'pointer-button', button, edge: 'pressed', ...withPosition(event) }));
     }
     if (button === 'primary') environment.focusGameplay();
   };
@@ -199,7 +218,7 @@ export function createRustyApplicationInputIngress(
     if (!admit(event, true)) return;
     const button = normalizePointerButton(event.button);
     if (button === null || !heldPointerButtons.delete(button)) return;
-    enqueueFact(Object.freeze({ kind: 'pointer-button', button, edge: 'released' }));
+    enqueueFact(Object.freeze({ kind: 'pointer-button', button, edge: 'released', ...withPosition(event) }));
   };
   const onPointerCancel = (event: PointerEvent): void => {
     environment.allowsGameplayInput(event);
@@ -207,6 +226,14 @@ export function createRustyApplicationInputIngress(
   };
   const onPointerMove = (event: PointerEvent): void => {
     if (!admit(event, false)) return;
+    const position = cursorPosition(event);
+    if (position !== null) {
+      // Only a change is a fact; a pointer resting over the canvas sends none.
+      if (lastPosition?.x === position.x && lastPosition?.y === position.y) return;
+      lastPosition = position;
+      enqueueFact(Object.freeze({ kind: 'pointer-position', x: position.x, y: position.y }));
+      return;
+    }
     if (environment.usesPointerLock?.() === false || !pointerLocked()) return;
     // Pointer-lock movement is forwarded whole; sensitivity is product policy.
     const x = Number.isFinite(event.movementX) ? event.movementX : 0;

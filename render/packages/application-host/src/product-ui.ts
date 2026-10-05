@@ -32,6 +32,15 @@ export interface RustyApplicationUiPort {
   readonly focusGameplay: () => void;
   readonly interactionMode: () => RustyApplicationInteractionMode;
   readonly setInteractionMode: (mode: RustyApplicationInteractionMode) => void;
+  /** The gameplay cursor mode now: the product's declared mode until set. */
+  readonly cursorMode: () => 'pointer-lock' | 'unlocked';
+  /**
+   * Switch the gameplay cursor at run time, for a map or strategy screen in a
+   * mouselook product. `'unlocked'` releases pointer lock and keeps clicks
+   * from taking it again; clicks and pointer movement then carry the cursor
+   * position. `'pointer-lock'` takes the lock again on the next click.
+   */
+  readonly setCursorMode: (mode: 'pointer-lock' | 'unlocked') => void;
   /** The UI scale; 1 until set. The product reads it as `CameraView.ReadSurface().UiScale`. */
   readonly scale: () => number;
   /**

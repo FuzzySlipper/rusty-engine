@@ -101,8 +101,13 @@ declare module "@rusty-engine/product-ui/internal/application-host/src/generated
         "kind": "pointer-button";
         button: PointerButton;
         edge: RuntimeInputWireEdge;
+        position?: RuntimeInputWirePointerPosition;
     } | {
         "kind": "pointer-delta";
+        x: number;
+        y: number;
+    } | {
+        "kind": "pointer-position";
         x: number;
         y: number;
     } | {
@@ -171,6 +176,14 @@ declare module "@rusty-engine/product-ui/internal/application-host/src/generated
         fact: RuntimeInputWireFact;
     };
     /**
+     * A cursor position on the presentation surface, normalized and
+     * bottom-left based like a camera viewport.
+     */
+    export type RuntimeInputWirePointerPosition = {
+        x: number;
+        y: number;
+    };
+    /**
      * The wire shape of a UI projection envelope: what the browser host
      * receives and passes to the mounted product UI.
      */
@@ -221,6 +234,15 @@ declare module "@rusty-engine/product-ui" {
         readonly focusGameplay: () => void;
         readonly interactionMode: () => RustyApplicationInteractionMode;
         readonly setInteractionMode: (mode: RustyApplicationInteractionMode) => void;
+        /** The gameplay cursor mode now: the product's declared mode until set. */
+        readonly cursorMode: () => 'pointer-lock' | 'unlocked';
+        /**
+         * Switch the gameplay cursor at run time, for a map or strategy screen in a
+         * mouselook product. `'unlocked'` releases pointer lock and keeps clicks
+         * from taking it again; clicks and pointer movement then carry the cursor
+         * position. `'pointer-lock'` takes the lock again on the next click.
+         */
+        readonly setCursorMode: (mode: 'pointer-lock' | 'unlocked') => void;
         /** The UI scale; 1 until set. The product reads it as `CameraView.ReadSurface().UiScale`. */
         readonly scale: () => number;
         /**

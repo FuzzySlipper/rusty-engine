@@ -27,10 +27,10 @@ void test('input ingress normalizes exactly the Engine keyboard catalog', () => 
   assert.equal(normalizeRustyApplicationKeyboardControl('KeyAA'), null);
 });
 
-void test('unlocked gameplay ignores pointer deltas even if another caller holds pointer lock', () => {
+void test('unlocked gameplay reports the cursor position, never pointer deltas, even if another caller holds pointer lock', () => {
   const eventTarget = createListenerTarget();
   const documentTarget = createListenerTarget();
-  const canvas = {} as HTMLCanvasElement;
+  const canvas = { getBoundingClientRect: () => ({ left: 0, top: 0, right: 200, bottom: 100, width: 200, height: 100 }) } as unknown as HTMLCanvasElement;
   const document = {
     ...documentTarget,
     activeElement: canvas,
@@ -49,15 +49,52 @@ void test('unlocked gameplay ignores pointer deltas even if another caller holds
     usesPointerLock: () => false,
   });
 
-  documentTarget.emit('pointermove', { movementX: 48, movementY: -12 } as PointerEvent);
-  assert.deepEqual(ingress.drain(), []);
+  documentTarget.emit('pointermove', { movementX: 48, movementY: -12, clientX: 50, clientY: 25 } as PointerEvent);
+  // The same position again is no new fact.
+  documentTarget.emit('pointermove', { movementX: 0, movementY: 0, clientX: 50, clientY: 25 } as PointerEvent);
+  assert.deepEqual(ingress.drain().map((entry) => 'fact' in entry ? entry.fact : entry), [
+    { kind: 'pointer-position', x: 0.25, y: 0.75 },
+  ]);
+  ingress.dispose();
+});
+
+void test('a click carries its cursor position while the pointer is unlocked, and none while locked', () => {
+  const eventTarget = createListenerTarget();
+  const documentTarget = createListenerTarget();
+  const canvas = { getBoundingClientRect: () => ({ left: 0, top: 0, right: 200, bottom: 100, width: 200, height: 100 }) } as unknown as HTMLCanvasElement;
+  let locked: HTMLCanvasElement | null = null;
+  const document = {
+    ...documentTarget,
+    activeElement: canvas,
+    get pointerLockElement() { return locked; },
+    defaultView: createListenerTarget(),
+  } as unknown as Document;
+  const ingress = createRustyApplicationInputIngress({ binding: INITIAL }, {
+    canvas: () => canvas,
+    eventTarget: eventTarget as unknown as HTMLElement,
+    document,
+    allowsGameplayInput: () => true,
+    interactionMode: () => 'gameplay',
+    active: () => true,
+    focusGameplay: () => undefined,
+    gamepads: () => [],
+  });
+  eventTarget.emit('pointerdown', { button: 0, clientX: 150, clientY: 80 } as PointerEvent);
+  documentTarget.emit('pointerup', { button: 0, clientX: 150, clientY: 80 } as PointerEvent);
+  locked = canvas;
+  eventTarget.emit('pointerdown', { button: 0, clientX: 10, clientY: 10 } as PointerEvent);
+  assert.deepEqual(ingress.drain().map((entry) => 'fact' in entry ? entry.fact : entry), [
+    { kind: 'pointer-button', button: 'primary', edge: 'pressed', position: { x: 0.75, y: 0.2 } },
+    { kind: 'pointer-button', button: 'primary', edge: 'released', position: { x: 0.75, y: 0.2 } },
+    { kind: 'pointer-button', button: 'primary', edge: 'pressed' },
+  ]);
   ingress.dispose();
 });
 
 void test('locked pointer movement reaches the Engine without per-event clipping', () => {
   const eventTarget = createListenerTarget();
   const documentTarget = createListenerTarget();
-  const canvas = {} as HTMLCanvasElement;
+  const canvas = { getBoundingClientRect: () => ({ left: 0, top: 0, right: 200, bottom: 100, width: 200, height: 100 }) } as unknown as HTMLCanvasElement;
   const document = {
     ...documentTarget,
     activeElement: canvas,
@@ -200,7 +237,7 @@ void test('input ingress rebinding and context changes clear with the exact epoc
 void test('managed interface events preserve a claimed product payload while releasing physical input', () => {
   const eventTarget = createListenerTarget();
   const documentTarget = createListenerTarget();
-  const canvas = {} as HTMLCanvasElement;
+  const canvas = { getBoundingClientRect: () => ({ left: 0, top: 0, right: 200, bottom: 100, width: 200, height: 100 }) } as unknown as HTMLCanvasElement;
   const document = {
     ...documentTarget,
     activeElement: canvas,
@@ -295,7 +332,7 @@ void test('input ingress rebaselines held keyboard and pointer state without rep
   const eventTarget = createListenerTarget();
   const documentTarget = createListenerTarget();
   const windowTarget = createListenerTarget();
-  const canvas = {} as HTMLCanvasElement;
+  const canvas = { getBoundingClientRect: () => ({ left: 0, top: 0, right: 200, bottom: 100, width: 200, height: 100 }) } as unknown as HTMLCanvasElement;
   const document = {
     ...documentTarget,
     activeElement: canvas,
@@ -340,7 +377,7 @@ void test('input ingress rebaselines held keyboard and pointer state without rep
 });
 
 void test('controller pressure survives subthreshold changes, neutral, rebaseline and disconnect', () => {
-  const canvas = {} as HTMLCanvasElement;
+  const canvas = { getBoundingClientRect: () => ({ left: 0, top: 0, right: 200, bottom: 100, width: 200, height: 100 }) } as unknown as HTMLCanvasElement;
   const document = {
     ...createListenerTarget(), activeElement: canvas, pointerLockElement: null,
     defaultView: createListenerTarget(),
@@ -397,7 +434,7 @@ void test('controller pressure survives subthreshold changes, neutral, rebaselin
 void test('selected controller disconnect neutralizes held stick, trigger pressure, and button edges', () => {
   const eventTarget = createListenerTarget();
   const windowTarget = createListenerTarget();
-  const canvas = {} as HTMLCanvasElement;
+  const canvas = { getBoundingClientRect: () => ({ left: 0, top: 0, right: 200, bottom: 100, width: 200, height: 100 }) } as unknown as HTMLCanvasElement;
   let connected = true;
   const axes = [0.6, -0.25, 0, 0];
   const buttons = Array.from({ length: 16 }, (_, index) => ({
@@ -479,7 +516,7 @@ void test('selected controller disconnect neutralizes held stick, trigger pressu
 void test('controller sampling clears on focus loss, skips gamepad reads while unfocused, and rebaselines on refocus', () => {
   const eventTarget = createListenerTarget();
   const windowTarget = createListenerTarget();
-  const canvas = {} as HTMLCanvasElement;
+  const canvas = { getBoundingClientRect: () => ({ left: 0, top: 0, right: 200, bottom: 100, width: 200, height: 100 }) } as unknown as HTMLCanvasElement;
   let focused = true;
   let gamepadReads = 0;
   let wakeups = 0;

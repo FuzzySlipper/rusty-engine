@@ -4411,6 +4411,7 @@ struct NativeInputOwned {
     sequence: u64,
     x: f32,
     y: f32,
+    has_position: bool,
     label: Vec<u8>,
     mapping_id: Vec<u8>,
     intent: Vec<u8>,
@@ -4441,6 +4442,7 @@ impl NativeInputOwned {
             },
             x: self.x,
             y: self.y,
+            has_position: self.has_position,
             label: self.label.as_ptr(),
             label_len: self.label.len(),
             mapping_id: self.mapping_id.as_ptr(),
@@ -4567,7 +4569,11 @@ fn native_event(event: &RuntimeInputEvent) -> NativeInputOwned {
                     0.0,
                     format!("{code:?}"),
                 ),
-                runtime_input::RuntimeInputFact::PointerButton { button, edge } => (
+                runtime_input::RuntimeInputFact::PointerButton {
+                    button,
+                    edge,
+                    position,
+                } => (
                     NativeInputEventKind::PointerButton,
                     edge_value(*edge),
                     NativeInputDevice::Pointer,
@@ -4578,9 +4584,24 @@ fn native_event(event: &RuntimeInputEvent) -> NativeInputOwned {
                     NativeControllerButton::None,
                     NativeControllerAxis::None,
                     NativeInputClearReason::None,
-                    0.0,
-                    0.0,
+                    position.map_or(0.0, |at| at.x.value()),
+                    position.map_or(0.0, |at| at.y.value()),
                     format!("{button:?}"),
+                ),
+                runtime_input::RuntimeInputFact::PointerPosition(at) => (
+                    NativeInputEventKind::PointerPosition,
+                    NativeInputEdge::None,
+                    NativeInputDevice::Pointer,
+                    NativeInputChannel::PointerPosition,
+                    NativeInputAxis::None,
+                    NativeKeyboardControl::None,
+                    NativePointerButton::None,
+                    NativeControllerButton::None,
+                    NativeControllerAxis::None,
+                    NativeInputClearReason::None,
+                    at.x.value(),
+                    at.y.value(),
+                    String::new(),
                 ),
                 runtime_input::RuntimeInputFact::PointerDelta { x, y } => (
                     NativeInputEventKind::PointerDelta,
@@ -4685,6 +4706,14 @@ fn native_event(event: &RuntimeInputEvent) -> NativeInputOwned {
             native.clear_reason = clear_reason;
             native.x = x;
             native.y = y;
+            native.has_position = matches!(
+                physical.fact(),
+                runtime_input::RuntimeInputFact::PointerPosition(_)
+                    | runtime_input::RuntimeInputFact::PointerButton {
+                        position: Some(_),
+                        ..
+                    }
+            );
             native.provenance = NativeInputProvenance::Physical;
             native.label = label.into_bytes();
             native
@@ -4832,6 +4861,7 @@ fn input_owned(
         sequence,
         x: 0.0,
         y: 0.0,
+        has_position: false,
         label: Vec::new(),
         mapping_id: Vec::new(),
         intent: Vec::new(),
@@ -8114,6 +8144,49 @@ mod tests {
             standard_input_context(),
             fact,
         ))
+    }
+
+    #[test]
+    fn unlocked_pointer_facts_reach_csharp_with_their_position() {
+        let binding = input_binding(&RuntimeLifecycle::new(
+            RuntimeInstanceId::new(1),
+            RuntimeLifecycleConfig::Demand,
+        ));
+        let axis = |value| AxisValue::new(value).unwrap();
+        let at = runtime_input::PointerPosition {
+            x: axis(0.25),
+            y: axis(0.75),
+        };
+        let click = native_event(&physical(
+            binding,
+            1,
+            RuntimeInputFact::PointerButton {
+                button: runtime_input_model::PointerButton::Primary,
+                edge: runtime_input::PhysicalEdge::Pressed,
+                position: Some(at),
+            },
+        ))
+        .as_native();
+        assert_eq!(click.kind, NativeInputEventKind::PointerButton);
+        assert!(click.has_position);
+        assert_eq!((click.x, click.y), (0.25, 0.75));
+        let moved =
+            native_event(&physical(binding, 2, RuntimeInputFact::PointerPosition(at))).as_native();
+        assert_eq!(moved.kind, NativeInputEventKind::PointerPosition);
+        assert_eq!(moved.channel, NativeInputChannel::PointerPosition);
+        assert!(moved.has_position);
+        let locked = native_event(&physical(
+            binding,
+            3,
+            RuntimeInputFact::PointerButton {
+                button: runtime_input_model::PointerButton::Primary,
+                edge: runtime_input::PhysicalEdge::Released,
+                position: None,
+            },
+        ))
+        .as_native();
+        assert!(!locked.has_position);
+        assert_eq!((locked.x, locked.y), (0.0, 0.0));
     }
 
     fn take_seen() -> Vec<Vec<SeenEvent>> {

@@ -21,7 +21,24 @@ export function mountProductUi(root, context) {
   taken.style.margin = '8px 0 0';
   panel.append(title, contents, taken, close);
   const lifecycle = createLifecycleControls(context);
-  root.append(label, reticle, panel, lifecycle.element);
+  // M toggles a map-style free cursor: the pointer unlocks and clicks on the
+  // world carry the cursor position, which the product picks with.
+  const mapHint = document.createElement('div');
+  mapHint.dataset.fixtureCursor = 'mode';
+  mapHint.style.cssText = 'position:absolute;top:56px;left:8px;color:#ffe08a;pointer-events:none';
+  const showCursorMode = () => {
+    const free = context.ui?.cursorMode?.() === 'unlocked';
+    mapHint.textContent = free ? 'Free cursor (M to return to mouselook): click a chest to pick it.' : 'M: free cursor';
+    reticle.hidden = free;
+  };
+  const onKey = (event) => {
+    if (event.code !== 'KeyM' || event.repeat || context.ui?.setCursorMode === undefined) return;
+    context.ui.setCursorMode(context.ui.cursorMode() === 'unlocked' ? 'pointer-lock' : 'unlocked');
+    showCursorMode();
+  };
+  document.addEventListener('keydown', onKey);
+  showCursorMode();
+  root.append(label, reticle, panel, mapHint, lifecycle.element);
 
   const unsubscribe = context.projection?.subscribe((projection) => {
     if (projection?.contract !== 'controller-interaction.panel.v1' || !isContainerPanel(projection.value)) return;
@@ -44,7 +61,7 @@ export function mountProductUi(root, context) {
     taken.textContent = `Taken: ${items(projection.value.taken).join(', ') || 'nothing'}`;
   }) ?? (() => {});
 
-  return { dispose() { unsubscribe(); lifecycle.dispose(); panel.remove(); label.remove(); reticle.remove(); } };
+  return { dispose() { document.removeEventListener('keydown', onKey); mapHint.remove(); unsubscribe(); lifecycle.dispose(); panel.remove(); label.remove(); reticle.remove(); } };
 }
 
 // Pause and Resume ask the Engine; the label and button show the state the

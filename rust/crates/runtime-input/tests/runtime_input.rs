@@ -1174,6 +1174,54 @@ fn browser_digit_controls_use_the_same_strict_wire_names_as_letters() {
 }
 
 #[test]
+fn unlocked_pointer_facts_carry_a_surface_position() {
+    let decode = |fact: serde_json::Value| {
+        let wire = serde_json::json!({
+            "runtime": {"instanceId": "41", "generation": "1", "controlRevision": "1"},
+            "sequence": "15", "context": "gameplay.default", "fact": fact
+        });
+        runtime_input::decode_runtime_input_wire_event_json(&serde_json::to_vec(&wire).unwrap())
+    };
+    let at = |x, y| runtime_input::PointerPosition {
+        x: axis(x),
+        y: axis(y),
+    };
+    let fact = |event: RuntimeInputEvent| match event {
+        RuntimeInputEvent::Physical(event) => event.fact().clone(),
+        other => panic!("not physical: {other:?}"),
+    };
+    assert_eq!(
+        fact(
+            decode(
+                serde_json::json!({"kind": "pointer-button", "button": "primary", "edge": "pressed",
+            "position": {"x": 0.25, "y": 0.75}})
+            )
+            .unwrap()
+        ),
+        RuntimeInputFact::PointerButton {
+            button: runtime_input::PointerButton::Primary,
+            edge: PhysicalEdge::Pressed,
+            position: Some(at(0.25, 0.75)),
+        }
+    );
+    // A locked click has no position; older shells send none either.
+    assert_eq!(
+        fact(decode(serde_json::json!({"kind": "pointer-button", "button": "primary", "edge": "released"})).unwrap()),
+        RuntimeInputFact::PointerButton {
+            button: runtime_input::PointerButton::Primary,
+            edge: PhysicalEdge::Released,
+            position: None,
+        }
+    );
+    assert_eq!(
+        fact(decode(serde_json::json!({"kind": "pointer-position", "x": 1.2, "y": -0.1})).unwrap()),
+        RuntimeInputFact::PointerPosition(at(1.2, -0.1)),
+        "a release outside the surface lies outside 0..1"
+    );
+    assert!(decode(serde_json::json!({"kind": "pointer-position", "x": 0.5})).is_err());
+}
+
+#[test]
 fn neutral_mapping_construction_validates_identity_and_value_kind() {
     assert_eq!(
         serde_json::to_string(&IntentValueKind::ProductPayload).unwrap(),

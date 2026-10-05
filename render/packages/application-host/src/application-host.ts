@@ -174,7 +174,9 @@ export async function mountRustyApplication(
   let closing = false;
   let disposal: Promise<void> | null = null;
   let interactionMode = options.initialInteractionMode ?? 'interface';
-  const gameplayCursorMode = options.gameplayCursorMode ?? 'pointer-lock';
+  // The product's declared mode, which its UI can switch at run time (a
+  // map or strategy screen in a mouselook game).
+  let gameplayCursorMode: ProductHostCursorMode = options.gameplayCursorMode ?? 'pointer-lock';
   let intents: RustyApplicationUiIntentsPort | null = null;
   const interfaceInputObservers = new Set<(input: RustyApplicationInterfaceInputObservation) => void>();
   const removePresentationResizeListener = installPresentationFrameSizing(
@@ -199,6 +201,13 @@ export async function mountRustyApplication(
       releaseInput();
     }
     if (changed) input?.interactionModeChanged();
+  };
+  const setCursorMode = (mode: ProductHostCursorMode): void => {
+    if (mode !== 'pointer-lock' && mode !== 'unlocked') {
+      throw new RangeError(`cursor mode must be 'pointer-lock' or 'unlocked', not '${String(mode)}'`);
+    }
+    gameplayCursorMode = mode;
+    if (mode === 'unlocked' && document.pointerLockElement === canvas) document.exitPointerLock();
   };
   const focusGameplay = (): void => {
     if (interactionMode !== 'gameplay') return;
@@ -231,6 +240,8 @@ export async function mountRustyApplication(
     focusGameplay,
     interactionMode: () => interactionMode,
     setInteractionMode,
+    cursorMode: () => gameplayCursorMode,
+    setCursorMode,
     scale: () => uiScale,
     setScale,
   });

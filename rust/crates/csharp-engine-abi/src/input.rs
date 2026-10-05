@@ -22,6 +22,9 @@ pub enum NativeInputEventKind {
     MappedAxis = 12,
     MappedProductPayload = 13,
     ControllerButtonValue = 14,
+    /// The cursor moved while the pointer is not locked; `x`/`y` hold the
+    /// position.
+    PointerPosition = 15,
 }
 
 #[repr(u32)]
@@ -55,6 +58,7 @@ pub enum NativeInputChannel {
     Axis = 5,
     Clear = 6,
     Intent = 7,
+    PointerPosition = 8,
 }
 
 #[repr(u32)]
@@ -324,6 +328,10 @@ pub struct NativeInputEvent {
     pub sequence: NativeInputSequence,
     pub x: f32,
     pub y: f32,
+    /// `x`/`y` are a cursor position on the presentation surface, normalized
+    /// and bottom-left based like a camera viewport: on PointerPosition
+    /// events, and on PointerButton events while the pointer is not locked.
+    pub has_position: bool,
     /// Physical control label retained for compatibility and diagnostics.
     pub label: *const u8,
     pub label_len: usize,

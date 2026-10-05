@@ -43,6 +43,8 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     private int uses;
     private int openPanelChest = -1;
     private InteractionReason lastUse = InteractionReason.NoCandidate;
+    private string lastCursorPick = "none";
+    private const double FallbackAspect = 16.0 / 9.0;
     private readonly FpsInput input = new(FpsInputConfig.Standard);
     private readonly Appearance focusedAppearance;
     private readonly Appearance openedAppearance;
@@ -57,7 +59,14 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         if (input.Physical.Pressed(KeyboardControl.KeyK)) { locked = !locked; revisions[0]++; sceneRevision++; }
         if (input.Physical.Pressed(KeyboardControl.Escape)) CloseContainerPanel();
         foreach (ProductInputEvent intent in update.Input)
+        {
             if (IsTake(intent)) TakeItem(intent);
+            // While the pointer is unlocked (after Escape, or with a panel
+            // open) a click carries where the cursor is: pick under it.
+            if (intent.Kind == InputEventKind.PointerButton && intent.Edge == InputEdge.Pressed
+                && intent.PointerButton == PointerButton.Primary && intent.HasPosition)
+                lastCursorPick = PickAt(intent.X, intent.Y);
+        }
         for (uint admitted=0; admitted<update.Facts.AdmittedStepCount; admitted++)
         {
             bool jump = frame.JumpPressed && admitted==0;
@@ -225,6 +234,18 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     {
         CameraRay ray=CameraQueries.Ray(CameraDescriptor(),aspect,new(x,y));
         return Format(interaction.Focus.Observe(Candidates(),Query(ray.Origin,ray.Direction)),"free-cursor");
+    }
+    [DebugCommand("interaction.cursor.last",Description="Read-only: what the last click made while the pointer was unlocked picked, through CameraQueries.Ray at its cursor position.")]
+    public string LastCursorPick() => lastCursorPick;
+    private string PickAt(float x,float y)
+    {
+        CameraSurfaceReadout surface = engine.CameraView.ReadSurface();
+        double aspect = surface.Reported && surface.CssHeight > 0 ? surface.CssWidth / surface.CssHeight : FallbackAspect;
+        CameraRay ray = CameraQueries.Ray(CameraDescriptor(),aspect,new(x,y));
+        InteractionReadout result = interaction.Focus.Observe(Candidates(),Query(ray.Origin,ray.Direction));
+        // What the ray points at, near or far; whether it can be used is the reach rule's answer.
+        string picked = result.Candidates.Where(c=>c.WithinAcquisition).OrderBy(c=>c.AngleRadians).Select(c=>c.Candidate.Label).FirstOrDefault() ?? "nothing";
+        return JsonSerializer.Serialize(new { x, y, aspect, picked, selected=result.Selected?.Id, reason=result.Reason.ToString() });
     }
     private string Format(InteractionReadout result,string mode) => JsonSerializer.Serialize(new {
         mode, viewpoint, semanticTargeting=true,lookAssistance=false,position=new[]{position.X,position.Y,position.Z},yaw=look.YawRadians,pitch=look.PitchRadians,

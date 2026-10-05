@@ -115,7 +115,10 @@ checks with the ordinary handler so callers need not duplicate that sequence.
 
 A reticle uses eye origin and normal look direction. A free cursor uses
 `CameraQueries.Ray` with the product camera and explicit viewport aspect;
-coordinates are viewport-local, normalized and bottom-left based. Use
+coordinates are viewport-local, normalized and bottom-left based. Clicks made
+while the pointer is unlocked carry that position (`HasPosition`, `X`, `Y`; see
+[gameplay cursor mode](csharp-product-project.md#gameplay-cursor-mode)) for a
+camera drawing to the whole canvas. Use
 `InteractionQuery.DistanceOrigin` to measure reach from the player rather than
 an offset orthographic cursor ray. Cursor selection is not mouse-look input.
 

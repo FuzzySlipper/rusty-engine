@@ -507,9 +507,11 @@ impl RuntimeInputLane {
                 self.last_sequence = Some(ingress.sequence());
             }
             RuntimeInputFact::Key { code, edge } => set_button(&mut self.keyboard, *code, *edge),
-            RuntimeInputFact::PointerButton { button, edge } => {
+            RuntimeInputFact::PointerButton { button, edge, .. } => {
                 set_button(&mut self.pointer_buttons, *button, *edge)
             }
+            // A cursor position is an observation, not held state.
+            RuntimeInputFact::PointerPosition(_) => {}
             RuntimeInputFact::ControllerButton { button, edge } => {
                 set_button(&mut self.controller_buttons, *button, *edge)
             }
