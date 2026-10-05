@@ -431,6 +431,47 @@ fn plays_on_from(
 }
 
 #[test]
+fn a_held_advance_keeps_a_streaming_voices_updated_settings() {
+    let mut realizer = realizer();
+    let mut looped = descriptor("sha256:ogg", true);
+    looped.clip.duration_seconds = Some(1.0);
+    apply(
+        &mut realizer,
+        &[restore(1, looped, AudioVoiceDesiredState::Playing, 0.0)],
+    );
+    // An ordinary in-place update changes its pitch and volume.
+    apply(
+        &mut realizer,
+        &[op(
+            2,
+            AudioProjectionOp::Update {
+                handle: AudioHandle::new(1),
+                patch: render_presentation::AudioSourcePatch {
+                    volume: Some(0.25),
+                    pitch: Some(1.5),
+                    ..Default::default()
+                },
+            },
+        )],
+    );
+    run(&mut realizer, 0.05);
+    realizer.set_suspended(true);
+    // The held advance starts the streaming voice again at its target...
+    realizer.advance_held(0.5, &Clips::fixtures(), &NoEntityPositions);
+    realizer.set_suspended(false);
+    run(&mut realizer, 0.05);
+    // ...with the settings it had, not the ones it was created with.
+    let playback = realizer.voices[&AudioHandle::new(1)]
+        .playback
+        .as_ref()
+        .expect("playing");
+    assert!(matches!(playback.sound, Sound::Streaming(_)));
+    assert_eq!(playback.pitch, 1.5);
+    assert_eq!(playback.descriptor.pitch, 1.5);
+    assert_eq!(playback.descriptor.volume, 0.25);
+}
+
+#[test]
 fn a_streaming_voice_resumes_from_its_held_advance_without_stale_audio() {
     for hash in ["sha256:wav", "sha256:ogg", "sha256:opus"] {
         let mut realizer = realizer();

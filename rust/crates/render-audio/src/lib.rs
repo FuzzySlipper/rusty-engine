@@ -236,6 +236,8 @@ impl Playback {
 
     /// Applies the descriptor fields a playing sound can change in place.
     fn apply(&mut self, descriptor: &AudioSourceDescriptor, world_rate: f64) {
+        // A held advance may start the sound again from this descriptor.
+        self.descriptor = descriptor.clone();
         self.pitch = f64::from(descriptor.pitch);
         let volume = amplitude_to_decibels(descriptor.volume);
         let rate = PlaybackRate(self.pitch * world_rate);
@@ -558,9 +560,12 @@ impl<B: Backend> AudioRealizer<B> {
                 continue;
             }
             let looping = voice.descriptor.looping;
-            let Some(playback) = voice.playback.take() else {
+            let Some(mut playback) = voice.playback.take() else {
                 continue;
             };
+            // The voice's descriptor, with every admitted update, is what a
+            // restarted streaming sound plays.
+            playback.descriptor = voice.descriptor.clone();
             let playback = self.advance_playback(playback, world_seconds, looping, clips, entities);
             if let Some(voice) = self.voices.get_mut(&handle) {
                 voice.playback = Some(playback);
