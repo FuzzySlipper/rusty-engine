@@ -11,6 +11,7 @@ members = [
     "rust/crates/csharp-product-runtime",
     "rust/crates/csharp-engine-test-host",
     "rust/crates/svc-http",
+    "rust/crates/svc-session",
     "rust/crates/product-container",
     "rust/crates/runtime-lifecycle",
     "rust/crates/runtime-input",
@@ -99,6 +100,7 @@ svc-implicit = { path = "rust/crates/svc-implicit" }
 svc-spatial = { path = "rust/crates/svc-spatial" }
 svc-volume = { path = "rust/crates/svc-volume" }
 svc-http = { path = "rust/crates/svc-http" }
+svc-session = { path = "rust/crates/svc-session" }
 ryu-js = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["float_roundtrip"] }

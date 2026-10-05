@@ -1715,6 +1715,7 @@ pub struct NativeEngineApi {
     pub rng: NativeRngApi,
     pub persistence: NativePersistenceApi,
     pub http: NativeHttpApi,
+    pub session: NativeSessionApi,
     pub ui: NativeUiApi,
 }
 

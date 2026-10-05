@@ -1,0 +1,21 @@
+# iroh-relay 1.3 for Rusty Engine multiplayer sessions. See
+# docs/multiplayer-sessions.md#running-a-relay. Replace the hostname, the
+# contact and the token before starting it.
+
+# Port 80 answers Let's Encrypt's HTTP challenge; relaying uses HTTPS on 443.
+http_bind_addr = "[::]:80"
+# Lets peers learn their public address over QUIC (UDP 7842), which helps
+# them find a direct path and stop relaying.
+enable_quic_addr_discovery = true
+enable_metrics = false
+
+[tls]
+cert_mode = "LetsEncrypt"
+hostname = "relay.example.org"
+contact = "admin@example.org"
+cert_dir = "/var/lib/iroh-relay/certs"
+
+# Only endpoints presenting one of these tokens may relay. A host passes it as
+# the Session relay token, and its invitations carry it to guests.
+[access]
+shared_token = ["replace-with-a-long-random-token"]

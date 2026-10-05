@@ -32,6 +32,7 @@ svc-spatial.workspace = true
 svc-rng.workspace = true
 svc-implicit.workspace = true
 svc-http.workspace = true
+svc-session.workspace = true
 svc-mesh.workspace = true
 sha2.workspace = true
 product-container.workspace = true

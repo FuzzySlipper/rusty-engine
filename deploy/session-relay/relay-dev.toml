@@ -1,0 +1,8 @@
+# A LAN or test relay: plain HTTP on port 3340, no certificate. Run it with
+# `iroh-relay --dev --config-path relay-dev.toml` and host with the relay URL
+# `http://<this machine's address>:3340` and the token below.
+http_bind_addr = "0.0.0.0:3340"
+enable_metrics = false
+
+[access]
+shared_token = ["party-fixture-token"]

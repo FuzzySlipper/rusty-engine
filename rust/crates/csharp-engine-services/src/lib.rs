@@ -22,6 +22,7 @@ mod presentation;
 mod render_output;
 mod render_resources;
 mod rng;
+mod session;
 mod spatial;
 mod ui;
 mod video;

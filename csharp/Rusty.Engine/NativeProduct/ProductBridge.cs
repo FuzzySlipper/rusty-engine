@@ -35,6 +35,7 @@ internal sealed class EngineContext : IEngineContext
         Random = new RngServiceImplementation(native.rng);
         Persistence = new PersistenceServiceImplementation(native.persistence);
         Http = new HttpServiceImplementation(native.http);
+        Session = new SessionServiceImplementation(native.session);
         Ui = new UiServiceImplementation(native.ui);
     }
 
@@ -63,6 +64,7 @@ internal sealed class EngineContext : IEngineContext
     public IRandomService Random { get; }
     public IPersistenceService Persistence { get; }
     public IHttpService Http { get; }
+    public ISessionService Session { get; }
     public IUiService Ui { get; }
 }
 

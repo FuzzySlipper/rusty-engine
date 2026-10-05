@@ -70,6 +70,7 @@ fn engine_api(
     rng_bridge: &mut RuntimeRngBridge,
     persistence_bridge: &mut RuntimePersistenceBridge,
     http_bridge: &mut crate::http::RuntimeHttpBridge,
+    session_bridge: &mut crate::session::RuntimeSessionBridge,
     ui_bridge: &mut RuntimeUiBridge,
 ) -> NativeEngineApi {
     appearance_bridge.bind_authored_content(authored_content_bridge);
@@ -200,6 +201,7 @@ fn engine_api(
         rng: crate::rng::api(rng_bridge),
         persistence: crate::persistence::api(persistence_bridge),
         http: crate::http::api(http_bridge),
+        session: crate::session::api(session_bridge),
         ui: crate::ui::api(ui_bridge),
     }
 }
@@ -298,6 +300,7 @@ pub struct EngineServiceSet {
     rng: RuntimeRngBridge,
     persistence: RuntimePersistenceBridge,
     http: crate::http::RuntimeHttpBridge,
+    session: crate::session::RuntimeSessionBridge,
     ui: RuntimeUiBridge,
 }
 
@@ -421,6 +424,7 @@ impl EngineServiceSet {
             voxel_scene_presentation,
             implicit: crate::implicit_surfaces::RuntimeImplicitBridge::new(),
             rng: crate::rng::RuntimeRngBridge::new(),
+            session: crate::session::RuntimeSessionBridge::new(persistence_root.clone()),
             persistence: crate::persistence::RuntimePersistenceBridge::new(persistence_root),
             http: crate::http::RuntimeHttpBridge::new(),
             ui,
@@ -453,6 +457,7 @@ impl EngineServiceSet {
             &mut self.rng,
             &mut self.persistence,
             &mut self.http,
+            &mut self.session,
             &mut self.ui,
         )
     }
@@ -588,6 +593,7 @@ impl EngineServiceSet {
         self.video.begin_call();
         self.render_output.begin_call();
         self.http.begin_call();
+        self.session.begin_call();
         self.camera_view.begin_call();
         self.ui.begin_call(ui_binding);
         self.voxel_content.begin_call();
