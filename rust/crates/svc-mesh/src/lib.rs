@@ -1389,7 +1389,7 @@ fn mesh_chunk_reconstructed(
 /// near the face: exactly on it where both densities are equal, as on a flat
 /// bed under water, where the two would fight in depth.
 ///
-/// A Blocky solid without roughness meshes its block exactly, so its surface
+/// A dual-contoured Blocky solid without roughness meshes its block exactly, so its surface
 /// is the face wherever it is drawn and stands in for it. Any other
 /// placement leaves some space between face and surface, which opens only
 /// into `voxel`'s neighbours across the face's plane. When each of those is
@@ -1410,9 +1410,14 @@ fn reconstructed_surface_covers(
     if !options.non_occluding.contains(&slot) {
         return false;
     }
+    // Only dual contouring places Blocky vertices on the block's planes;
+    // marching cubes interpolates its crossings whatever the placement, so a
+    // marching bank is no exact block.
     let block = |slot: u16| {
-        let character = options.surface(slot).character;
-        character.placement == VertexPlacement::Blocky && character.roughness == 0.0
+        let surface = options.surface(slot);
+        surface.mode == SurfaceMode::DualContouring
+            && surface.character.placement == VertexPlacement::Blocky
+            && surface.character.roughness == 0.0
     };
     if neighbour_slot(world, spec, voxel).is_some_and(block) {
         return true;

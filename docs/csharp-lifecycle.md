@@ -676,8 +676,10 @@ neighbour whose cells around that face are all solid or the same material,
 such as a lake bed: the bed's surface stands in for it rather than fighting
 it in depth. Where any of those cells is air or another see-through
 material, as along a shore, the face stays, since a Smooth or Sharp bank
-rounds away from it there. A Blocky bank without roughness is its block
-exactly, so it stands in for the face everywhere.
+rounds away from it there. A dual-contoured Blocky bank without roughness is
+its block exactly, so it stands in for the face everywhere; a marching-cubes
+bank interpolates its surface whatever its placement, so it keeps the shore
+face.
 
 A multi-cell edit may legitimately fill the space occupied by a character.
 The edit and character step are separate operations. If bounded penetration

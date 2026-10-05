@@ -834,14 +834,24 @@ fn a_shore_face_never_lies_on_the_bank_it_is_kept_beside() {
             })
             .sum()
     };
-    for (placement, roughness, bank, water) in [
+    let dual = SurfaceMode::DualContouring;
+    for (mode, placement, roughness, bank, water) in [
         // Rounded or jittered banks leave the face partly exposed and never
         // lie on it, so it stays.
-        (VertexPlacement::Smooth, 0.0, 0.0, 4.0),
-        (VertexPlacement::Sharp, 0.0, 0.0, 4.0),
-        (VertexPlacement::Blocky, 0.3, 0.0, 4.0),
+        (dual, VertexPlacement::Smooth, 0.0, 0.0, 4.0),
+        (dual, VertexPlacement::Sharp, 0.0, 0.0, 4.0),
+        (dual, VertexPlacement::Blocky, 0.3, 0.0, 4.0),
+        // Marching cubes interpolates its crossings whatever the placement:
+        // no exact block, so the exposed face stays.
+        (
+            SurfaceMode::MarchingCubes,
+            VertexPlacement::Blocky,
+            0.0,
+            0.0,
+            4.0,
+        ),
         // An exact block bank is the face, which goes.
-        (VertexPlacement::Blocky, 0.0, 4.0, 0.0),
+        (dual, VertexPlacement::Blocky, 0.0, 4.0, 0.0),
     ] {
         let options = SurfaceMeshOptions {
             materials: SurfaceMaterials::new([
@@ -855,14 +865,14 @@ fn a_shore_face_never_lies_on_the_bank_it_is_kept_beside() {
                 (
                     STONE,
                     MaterialSurface {
-                        mode: SurfaceMode::DualContouring,
+                        mode,
                         character: character(placement, 30.0, roughness),
                     },
                 ),
             ])
             .unwrap(),
             non_occluding: BTreeSet::from([WATER]),
-            ..SurfaceMeshOptions::with_mode(SurfaceMode::DualContouring)
+            ..SurfaceMeshOptions::with_mode(mode)
         };
         let mesh = mesh_chunk_in_world_with_options(&world, ChunkCoord::new(1, 0, 0), &options)
             .unwrap()
@@ -870,7 +880,7 @@ fn a_shore_face_never_lies_on_the_bank_it_is_kept_beside() {
         assert_eq!(
             [in_plane(&mesh, STONE), in_plane(&mesh, WATER)],
             [bank, water],
-            "{placement:?} roughness {roughness}: bank and water area on the shore's plane"
+            "{mode:?} {placement:?} roughness {roughness}: bank and water area on the shore's plane"
         );
     }
 }
