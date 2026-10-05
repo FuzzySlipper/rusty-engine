@@ -1243,7 +1243,7 @@ pub fn mesh_chunk_in_world(
 /// duplicating a primitive. Cube materials keep their greedy faces; a cube
 /// face against a reconstructed material is kept, since that material's
 /// surface may not cover it, unless a non-occluding cube's surroundings
-/// leave nothing else to see there (`reconstructed_gap_enclosed`), and so is
+/// leave nothing else to see there (`reconstructed_surface_covers`), and so is
 /// a face against a different non-occluding material. Returned positions remain local to `coord`,
 /// matching the existing chunk transform contract.
 pub fn mesh_chunk_in_world_with_options(
@@ -1374,7 +1374,7 @@ fn mesh_chunk_reconstructed(
         neighbour_slot(world, &spec, voxel).is_some_and(|n| {
             options.hides(slot, n)
                 && (greedy(n)
-                    || reconstructed_gap_enclosed(world, &spec, options, slot, voxel, dir))
+                    || reconstructed_surface_covers(world, &spec, options, slot, voxel, dir))
         })
     })?;
     if let Some(layers) = &options.terrain_layers {
@@ -1387,14 +1387,19 @@ fn mesh_chunk_reconstructed(
 /// `voxel` (in direction `dir`) can go. Reconstructed surfaces meet a
 /// non-occluding material as they meet air, so the solid's surface lies at or
 /// near the face: exactly on it where both densities are equal, as on a flat
-/// bed under water, where the two would fight in depth. Whatever lies between
-/// them opens only into `voxel`'s neighbours across the face's plane; when
-/// each of those is solid or the cube's own material, nothing but the
-/// material can be seen there and the surface stands in for the face. A
-/// neighbour that is air or another see-through material (a shore) keeps the
-/// face, which may be partly exposed. Occluding cubes keep their faces: no
-/// reconstructed surface meets them.
-fn reconstructed_gap_enclosed(
+/// bed under water, where the two would fight in depth.
+///
+/// A Blocky solid without roughness meshes its block exactly, so its surface
+/// is the face wherever it is drawn and stands in for it. Any other
+/// placement leaves some space between face and surface, which opens only
+/// into `voxel`'s neighbours across the face's plane. When each of those is
+/// solid or the cube's own material, nothing but the material can be seen
+/// there and the surface stands in for the face. A neighbour that is air or
+/// another see-through material (a shore) keeps the face: a Smooth or Sharp
+/// surface rounds away from it there, leaving it partly exposed rather than
+/// lying on it. Occluding cubes keep their faces: no reconstructed surface
+/// meets them.
+fn reconstructed_surface_covers(
     world: &VoxelWorld,
     spec: &VoxelGridSpec,
     options: &SurfaceMeshOptions,
@@ -1404,6 +1409,13 @@ fn reconstructed_gap_enclosed(
 ) -> bool {
     if !options.non_occluding.contains(&slot) {
         return false;
+    }
+    let block = |slot: u16| {
+        let character = options.surface(slot).character;
+        character.placement == VertexPlacement::Blocky && character.roughness == 0.0
+    };
+    if neighbour_slot(world, spec, voxel).is_some_and(block) {
+        return true;
     }
     let normal = dir.offset();
     let [first, second] = match normal.iter().position(|&axis| axis != 0) {

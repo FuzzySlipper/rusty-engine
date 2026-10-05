@@ -774,3 +774,103 @@ fn greedy_water_on_a_reconstructed_bed_draws_no_face_where_the_bed_lies_but_keep
     // edge may leave it exposed.
     assert_eq!(face_area(&shore, WATER, Direction6::PosX), 4.0);
 }
+
+#[test]
+fn a_shore_face_never_lies_on_the_bank_it_is_kept_beside() {
+    // Water (greedy, non-occluding) one voxel deep at y = 2 up to x = 5, on
+    // a stone bed; from x = 6 the stone bank's top is flush with the water's
+    // and air lies above both. Chunks around z = 0 keep the world's sides
+    // away from the measured shore.
+    let grid = VoxelGridSpec::new(GridId::new(0), 1.0, ChunkDims::cubic(4).unwrap()).unwrap();
+    let mut world = VoxelWorld::new(grid);
+    for cx in 0..2 {
+        for cz in -1..2 {
+            let coord = ChunkCoord::new(cx, 0, cz);
+            let mut chunk = VoxelChunk::from_spec(&grid);
+            for x in 0..4 {
+                for y in 0..4 {
+                    for z in 0..4 {
+                        let local = LocalVoxelCoord::new(x, y, z);
+                        let [x, y, _] = grid.chunk_local_to_voxel(coord, local).to_array();
+                        let slot = match (x, y) {
+                            (6.., 0..=2) | (..=5, 0 | 1) => STONE,
+                            (..=5, 2) => WATER,
+                            _ => continue,
+                        };
+                        chunk
+                            .set(local, VoxelValue::solid(VoxelMaterialId::new(slot)))
+                            .unwrap();
+                        chunk.set_density(local, -0.5).unwrap();
+                    }
+                }
+            }
+            world.insert(coord, chunk);
+        }
+    }
+    // Each slot's area lying in the shore's plane, x = 6 (2 in the chunk).
+    let in_plane = |mesh: &MeshPayload, slot: u16| -> f32 {
+        let p = positions(mesh);
+        mesh.groups
+            .iter()
+            .filter(|group| group.material_slot == slot)
+            .flat_map(|group| {
+                mesh.indices[group.start as usize..(group.start + group.count) as usize].chunks(3)
+            })
+            .map(|t| [p[t[0] as usize], p[t[1] as usize], p[t[2] as usize]])
+            .filter(|corners| {
+                corners
+                    .iter()
+                    .all(|corner| (corner[0] - 2.0).abs() < 1.0e-4)
+            })
+            .map(|[a, b, c]| {
+                let u = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+                let v = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
+                let n = [
+                    u[1] * v[2] - u[2] * v[1],
+                    u[2] * v[0] - u[0] * v[2],
+                    u[0] * v[1] - u[1] * v[0],
+                ];
+                (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt() / 2.0
+            })
+            .sum()
+    };
+    for (placement, roughness, bank, water) in [
+        // Rounded or jittered banks leave the face partly exposed and never
+        // lie on it, so it stays.
+        (VertexPlacement::Smooth, 0.0, 0.0, 4.0),
+        (VertexPlacement::Sharp, 0.0, 0.0, 4.0),
+        (VertexPlacement::Blocky, 0.3, 0.0, 4.0),
+        // An exact block bank is the face, which goes.
+        (VertexPlacement::Blocky, 0.0, 4.0, 0.0),
+    ] {
+        let options = SurfaceMeshOptions {
+            materials: SurfaceMaterials::new([
+                (
+                    WATER,
+                    MaterialSurface {
+                        mode: SurfaceMode::GreedyCubes,
+                        character: SurfaceCharacter::default(),
+                    },
+                ),
+                (
+                    STONE,
+                    MaterialSurface {
+                        mode: SurfaceMode::DualContouring,
+                        character: character(placement, 30.0, roughness),
+                    },
+                ),
+            ])
+            .unwrap(),
+            non_occluding: BTreeSet::from([WATER]),
+            ..SurfaceMeshOptions::with_mode(SurfaceMode::DualContouring)
+        };
+        let mesh = mesh_chunk_in_world_with_options(&world, ChunkCoord::new(1, 0, 0), &options)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            [in_plane(&mesh, STONE), in_plane(&mesh, WATER)],
+            [bank, water],
+            "{placement:?} roughness {roughness}: bank and water area on the shore's plane"
+        );
+    }
+}
