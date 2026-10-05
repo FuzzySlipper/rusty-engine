@@ -73,6 +73,13 @@ fn routes(path: &str, stream: &mut TcpStream) {
                 std::thread::sleep(Duration::from_millis(20));
             }
         }
+        // Headers and a little body, then silence on an open connection.
+        "/hang" => {
+            let _ = stream.write_all(
+                b"HTTP/1.1 200 OK\r\ncontent-length: 100000000\r\nconnection: close\r\n\r\nsome bytes",
+            );
+            std::thread::sleep(Duration::from_secs(30));
+        }
         echo if echo.starts_with("/echo\n") => {
             let body = echo["/echo\n".len()..].to_owned();
             respond(stream, "200 OK", "", body.as_bytes());
@@ -304,4 +311,114 @@ fn a_new_download_removes_leftover_partials_of_its_name() {
     partial.release(false);
     assert!(remove_library_file(library.path(), "module.rpak").unwrap());
     assert!(!remove_library_file(library.path(), "module.rpak").unwrap());
+}
+
+fn partials(directory: &Path) -> usize {
+    fs::read_dir(directory)
+        .unwrap()
+        .flatten()
+        .filter(|entry| is_partial(&entry.file_name().to_string_lossy()))
+        .count()
+}
+
+fn until_no_partials(directory: &Path) -> bool {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while partials(directory) != 0 {
+        if Instant::now() > deadline {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    true
+}
+
+fn hanging_download(server: &str, library: &Path) -> Transfer {
+    let transfer = HttpClient::default()
+        .start(
+            &format!("{server}/hang"),
+            Headers::default(),
+            Destination::File {
+                directory: library.to_owned(),
+                file_name: "stuck.rpak".to_owned(),
+            },
+        )
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while transfer.snapshot().received_bytes == 0 && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(partials(library), 1, "the body prefix is in a partial file");
+    transfer
+}
+
+#[test]
+fn a_cancel_frees_a_read_blocked_on_a_silent_server() {
+    let server = serve(routes);
+    let library = tempfile::tempdir().unwrap();
+    let transfer = hanging_download(&server, library.path());
+    transfer.cancel();
+    assert!(
+        until_no_partials(library.path()),
+        "the worker left its partial file"
+    );
+    assert_eq!(transfer.snapshot().state, TransferState::Cancelled);
+    assert!(live_partials()
+        .lock()
+        .unwrap()
+        .iter()
+        .all(|path| !path.starts_with(library.path())));
+}
+
+#[test]
+fn a_stall_frees_its_worker_even_unobserved() {
+    let server = serve(routes);
+    let library = tempfile::tempdir().unwrap();
+    let transfer = hanging_download(&server, library.path());
+    // Nobody reads the transfer; the worker notices the stall itself.
+    assert!(
+        until_no_partials(library.path()),
+        "the worker left its partial file"
+    );
+    let snapshot = transfer.snapshot();
+    assert_eq!(snapshot.state, TransferState::Failed(Failure::Interrupted));
+    assert!(
+        snapshot.diagnostic.contains("no data arrived"),
+        "{}",
+        snapshot.diagnostic
+    );
+    // A restart of the same name starts clean and leaves one partial at most.
+    let again = hanging_download(&server, library.path());
+    again.cancel();
+    assert!(until_no_partials(library.path()));
+}
+
+#[test]
+fn the_interruptible_wrapper_keeps_what_its_connection_reports() {
+    use ureq::unversioned::transport::LazyBuffers;
+    #[derive(Debug)]
+    struct Tls(LazyBuffers);
+    impl Transport for Tls {
+        fn buffers(&mut self) -> &mut dyn Buffers {
+            &mut self.0
+        }
+        fn transmit_output(&mut self, _: usize, _: NextTimeout) -> Result<(), ureq::Error> {
+            Ok(())
+        }
+        fn await_input(&mut self, _: NextTimeout) -> Result<bool, ureq::Error> {
+            Ok(true)
+        }
+        fn is_open(&mut self) -> bool {
+            true
+        }
+        fn is_tls(&self) -> bool {
+            true
+        }
+    }
+    let mut wrapped = InterruptibleTransport {
+        inner: Box::new(Tls(LazyBuffers::new(64, 64))),
+        shared: Arc::new(Shared::new()),
+    };
+    // ureq refuses an https response from a transport that reports no TLS.
+    assert!(wrapped.is_tls());
+    assert!(wrapped.is_open());
 }

@@ -19,9 +19,15 @@ use std::{
 };
 
 use ureq::{
-    config::RedirectAuthHeaders,
+    config::{Config, RedirectAuthHeaders},
     http::Uri,
     tls::{RootCerts, TlsConfig},
+    unversioned::{
+        resolver::DefaultResolver,
+        transport::{
+            Buffers, ConnectionDetails, Connector, DefaultConnector, NextTimeout, Transport,
+        },
+    },
     Agent,
 };
 
@@ -31,10 +37,16 @@ pub const MEMORY_BODY_LIMIT: u64 = 32 * 1024 * 1024;
 /// A running transfer that receives nothing for this long fails as
 /// interrupted. Without it a connection that silently drops (a laptop leaving
 /// Wi-Fi) blocks for as long as the operating system keeps the socket.
+#[cfg(not(test))]
 pub const STALL_TIMEOUT: Duration = Duration::from_secs(60);
+#[cfg(test)]
+pub const STALL_TIMEOUT: Duration = Duration::from_secs(1);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 const RESPONSE_TIMEOUT: Duration = Duration::from_secs(60);
 const CHUNK: usize = 256 * 1024;
+/// How long a blocked read waits before checking for a cancel or stall, so a
+/// stopped transfer frees its thread and partial file within this time.
+const POLL: Duration = Duration::from_millis(250);
 const PARTIAL_SUFFIX: &str = ".partial";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -91,12 +103,12 @@ pub struct RequestError(pub String);
 /// One shared HTTP agent: its connection pool is reused across transfers.
 #[derive(Clone)]
 pub struct HttpClient {
-    agent: Agent,
+    config: Config,
 }
 
 impl Default for HttpClient {
     fn default() -> Self {
-        let agent = Agent::config_builder()
+        let config = Config::builder()
             .http_status_as_error(false)
             .max_redirects(10)
             // GitHub release assets redirect to a CDN host, which must not
@@ -110,9 +122,8 @@ impl Default for HttpClient {
                     .root_certs(RootCerts::PlatformVerifier)
                     .build(),
             )
-            .build()
-            .new_agent();
-        Self { agent }
+            .build();
+        Self { config }
     }
 }
 
@@ -143,8 +154,16 @@ impl HttpClient {
             }
         };
         let shared = Arc::new(Shared::new());
+        // Each transfer's connections watch its own cancel flag.
+        let agent = Agent::with_parts(
+            self.config.clone(),
+            DefaultConnector::new().chain(Interruptible {
+                shared: Arc::clone(&shared),
+            }),
+            DefaultResolver::default(),
+        );
         let worker = Worker {
-            agent: self.agent.clone(),
+            agent,
             uri,
             headers,
             shared: Arc::clone(&shared),
@@ -154,6 +173,94 @@ impl HttpClient {
             .spawn(move || worker.run(destination, partial))
             .map_err(|cause| RequestError(format!("could not start a transfer thread: {cause}")))?;
         Ok(Transfer { shared })
+    }
+}
+
+/// Wraps a transfer's connection so that a blocked read wakes every [`POLL`]
+/// and gives up once the transfer is cancelled or has stalled.
+struct Interruptible {
+    shared: Arc<Shared>,
+}
+
+impl std::fmt::Debug for Interruptible {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("Interruptible")
+    }
+}
+
+impl Connector<Box<dyn Transport>> for Interruptible {
+    type Out = InterruptibleTransport;
+
+    fn connect(
+        &self,
+        _: &ConnectionDetails,
+        chained: Option<Box<dyn Transport>>,
+    ) -> Result<Option<Self::Out>, ureq::Error> {
+        Ok(chained.map(|inner| InterruptibleTransport {
+            inner,
+            shared: Arc::clone(&self.shared),
+        }))
+    }
+}
+
+struct InterruptibleTransport {
+    inner: Box<dyn Transport>,
+    shared: Arc<Shared>,
+}
+
+impl std::fmt::Debug for InterruptibleTransport {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_tuple("InterruptibleTransport")
+            .field(&self.inner)
+            .finish()
+    }
+}
+
+impl Transport for InterruptibleTransport {
+    fn buffers(&mut self) -> &mut dyn Buffers {
+        self.inner.buffers()
+    }
+
+    fn transmit_output(&mut self, amount: usize, timeout: NextTimeout) -> Result<(), ureq::Error> {
+        self.inner.transmit_output(amount, timeout)
+    }
+
+    fn await_input(&mut self, timeout: NextTimeout) -> Result<bool, ureq::Error> {
+        use ureq::unversioned::transport::time::Duration as UreqDuration;
+        let mut remaining = timeout.after;
+        loop {
+            if self.shared.cancelled() || self.shared.stalled() {
+                return Err(ureq::Error::Io(std::io::Error::new(
+                    std::io::ErrorKind::Interrupted,
+                    "the transfer was stopped",
+                )));
+            }
+            let wait = if remaining.is_not_happening() || *remaining > POLL {
+                POLL
+            } else {
+                *remaining
+            };
+            match self.inner.await_input(NextTimeout {
+                after: UreqDuration::from(wait),
+                reason: timeout.reason,
+            }) {
+                Err(ureq::Error::Timeout(_)) if wait == POLL && *remaining != POLL => {
+                    if !remaining.is_not_happening() {
+                        remaining = UreqDuration::from(remaining.saturating_sub(POLL));
+                    }
+                }
+                outcome => return outcome,
+            }
+        }
+    }
+
+    fn is_open(&mut self) -> bool {
+        self.inner.is_open()
+    }
+
+    fn is_tls(&self) -> bool {
+        self.inner.is_tls()
     }
 }
 
@@ -170,10 +277,7 @@ impl Transfer {
             && progress.last_progress.elapsed() >= STALL_TIMEOUT
         {
             self.shared.cancel.store(true, Ordering::Relaxed);
-            progress.finish(
-                TransferState::Failed(Failure::Interrupted),
-                format!("no data arrived for {} s", STALL_TIMEOUT.as_secs()),
-            );
+            progress.finish(TransferState::Failed(Failure::Interrupted), stall_message());
         }
         progress.snapshot()
     }
@@ -220,6 +324,11 @@ impl Shared {
     }
     fn cancelled(&self) -> bool {
         self.cancel.load(Ordering::Relaxed)
+    }
+    /// The worker's own view of a stall, so it stops even when no owner is
+    /// looking.
+    fn stalled(&self) -> bool {
+        self.lock().last_progress.elapsed() >= STALL_TIMEOUT
     }
 }
 
@@ -292,6 +401,10 @@ impl Worker {
             }
             Ok(()) => {
                 progress.finish(TransferState::Cancelled, String::new());
+                false
+            }
+            Err(_) if progress.last_progress.elapsed() >= STALL_TIMEOUT => {
+                progress.finish(TransferState::Failed(Failure::Interrupted), stall_message());
                 false
             }
             Err((failure, message)) => {
@@ -421,6 +534,10 @@ impl Worker {
         }
         Ok(())
     }
+}
+
+fn stall_message() -> String {
+    format!("no data arrived for {} s", STALL_TIMEOUT.as_secs())
 }
 
 /// A download's hidden partial file. Each has a unique name, so a worker that

@@ -70,12 +70,14 @@ Each limit answers one failure:
 | Limit | Value | Why | Cost |
 | --- | --- | --- | --- |
 | GET body | 32 MiB | A GET of a large asset would grow memory without bound. | Larger bodies must be downloaded to a library. |
-| Stall | 60 s without data | A connection that silently drops would otherwise block until the operating system gives up on the socket, often hours. | A transfer that legitimately receives nothing for a minute fails and is restarted. Only checked while product calls run. |
+| Stall | 60 s without data | A connection that silently drops would otherwise block until the operating system gives up on the socket, often hours. | A transfer that legitimately receives nothing for a minute fails and is restarted. |
 | Connect | 30 s | An unreachable host. | |
 | Response headers | 60 s after sending | A server that accepts and never answers. | |
 
-Each running transfer uses one thread. The HTTP client is shared, so
-connections to the same host are reused.
+Each running transfer uses one thread and its own connections. A blocked
+read wakes every 250 ms, so a cancelled or stalled transfer ends its thread
+and removes its partial file within that time, whether or not the product
+is looking.
 
 ## Example
 
