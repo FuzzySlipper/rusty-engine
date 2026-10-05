@@ -196,6 +196,68 @@ session-hours a month is about 30 GB, which the smallest VPS plans (around
 €4–6 a month) carry. The work is the domain, the certificate and uptime, not
 bandwidth. number 0 also sells hosted relays.
 
+## Runtime and content
+
+- **Dependencies.** Nothing beyond the runtime pack, on Linux and Windows
+  alike: QUIC and TLS (rustls with ring) are built into the Engine. A session
+  needs outbound UDP, and HTTPS to its relay when it uses one. NativeAOT and
+  CoreCLR products use the same service.
+- **Offline.** A product that never calls `Host` or `Join` makes no
+  connection and needs no configuration; one that plays alone can always do
+  so.
+- **Content.** The Engine sends no content between players. Every player
+  needs the same game and modules; put a version or content identity
+  (`Content.ReadBundleIdentity`) in the `Application` tag or in the product's
+  first message, and refuse or fetch what differs (the `Http` service can
+  download a missing module, see [HTTP downloads](http-downloads.md)).
+
+## Adopting it in a party RPG
+
+A party game keeps its rules where they are and adds one host loop and one
+guest loop. A sketch for a Gold Box-style game, where the leader walks, the
+party votes in dialogue and each player commands their own character:
+
+```csharp
+// Host: the game the party plays. Rules stay in the product.
+foreach (SessionEvent e in sessions.TakeEvents(session).Span)
+{
+    switch (e.Kind)
+    {
+        case SessionEventKind.MemberJoined or SessionEventKind.MemberRejoined:
+            seats.Seat(e.Member, KeyOf(e.Member));        // product: who plays whom
+            sessions.SendView(new(session, e.Member, Encode(game.Snapshot())));
+            break;
+        case SessionEventKind.MemberLeft:
+            seats.Away(e.Member);                          // product: who leads now, who is waited for
+            break;
+        case SessionEventKind.Message:
+            PartyAction action = Decode(e.Payload);
+            string? refusal = action switch
+            {
+                Move m when e.Member != party.Leader => "only the leader walks",
+                Vote v when v.Phase != dialogue.Phase => "that choice was for an earlier moment",
+                Command c when !seats.Commands(e.Member, c.Character) => "not your character",
+                _ => game.Apply(e.Member, action),
+            };
+            if (refusal is not null) sessions.Send(new(session, e.Member, EncodeNotice(refusal)));
+            break;
+    }
+}
+if (game.Changed) sessions.Broadcast(new(session, Encode(game.Snapshot())));
+
+// Guest: render the latest state the host sent; send choices, never state.
+foreach (SessionEvent e in sessions.TakeEvents(session).Span)
+    if (e.Kind is SessionEventKind.View or SessionEventKind.Message)
+        view = Decode(e.Payload);
+sessions.SendToHost(session, Encode(new Vote(dialogue.Phase, choice)));
+```
+
+The host runs the one simulation; guests draw from its states with their own
+Engine renderer. Saves, the leader, tie-breaks, turn order and what happens
+to an absent player's character are product decisions, and so is whether a
+rejoining key reclaims its character. Chat needs no product code beyond
+showing `ReadChat` and calling `SendChat`.
+
 ## Example
 
 [`fixtures/csharp-multiplayer-party`](../fixtures/csharp-multiplayer-party) is
