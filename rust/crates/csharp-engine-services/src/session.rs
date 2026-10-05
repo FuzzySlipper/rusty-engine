@@ -222,7 +222,11 @@ impl RuntimeSessionBridge {
         &mut self,
         handle: NativeSessionHandle,
     ) -> Result<NativeSessionEventResult, CsharpEngineServicesError> {
-        let events = std::mem::take(&mut self.entry(handle)?.events);
+        let entry = self.entry(handle)?;
+        let events = std::mem::take(&mut entry.events);
+        // Only now has the product the payloads; until then they stay charged
+        // against the session's untaken limit.
+        entry.session.release(events.iter().map(payload_len).sum());
         let values: Vec<NativeSessionEvent> = events.iter().map(native_event).collect();
         let result = NativeSessionEventResult {
             events: values.as_ptr(),
@@ -318,6 +322,13 @@ fn end_reason(reason: Option<EndReason>) -> NativeSessionEndReason {
         Some(EndReason::Refused) => NativeSessionEndReason::Refused,
         Some(EndReason::Unreachable) => NativeSessionEndReason::Unreachable,
         Some(EndReason::Failed) => NativeSessionEndReason::Failed,
+    }
+}
+
+fn payload_len(event: &Event) -> usize {
+    match event {
+        Event::Message { payload, .. } | Event::View { payload, .. } => payload.len(),
+        _ => 0,
     }
 }
 
@@ -705,6 +716,69 @@ mod tests {
             0
         );
         assert_eq!(receipt_codes(&receipt), ["CSHARP_SESSION"]);
+    }
+
+    #[test]
+    fn payload_stays_charged_across_calls_until_taken() {
+        let mut host_bridge = RuntimeSessionBridge::new(None);
+        let mut guest_bridge = RuntimeSessionBridge::new(None);
+        let host = host_bridge
+            .host(&NativeSessionHostRequest {
+                identity: text("host"),
+                application: text("fixture/1"),
+                relay: text(""),
+                relay_token: text(""),
+                relay_only: false,
+            })
+            .unwrap();
+        settle(&mut host_bridge, host, |readout| {
+            readout.state == NativeSessionState::Open
+        });
+        let invitation = invitation(&mut host_bridge, host);
+        let guest = guest_bridge
+            .join(&NativeSessionJoinRequest {
+                identity: text("guest"),
+                application: text("fixture/1"),
+                invitation: text(&invitation),
+                relay_only: false,
+            })
+            .unwrap();
+        settle(&mut guest_bridge, guest, |readout| {
+            readout.state == NativeSessionState::Open
+        });
+        let payload = [3u8; 1000];
+        for _ in 0..3 {
+            guest_bridge
+                .send(
+                    &NativeSessionSendRequest {
+                        session: guest,
+                        member: 1,
+                        payload: NativeByteSlice {
+                            bytes: payload.as_ptr(),
+                            len: payload.len(),
+                        },
+                    },
+                    false,
+                )
+                .unwrap();
+        }
+        // Several calls begin, none takes its events.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let untaken = |bridge: &mut RuntimeSessionBridge| {
+            bridge.sessions[&host.value].session.untaken_bytes()
+        };
+        while untaken(&mut host_bridge) < 3000 && Instant::now() < deadline {
+            host_bridge.begin_call();
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        host_bridge.begin_call();
+        assert_eq!(
+            untaken(&mut host_bridge),
+            3000,
+            "drained payload stays charged"
+        );
+        host_bridge.take_events(host).unwrap();
+        assert_eq!(untaken(&mut host_bridge), 0, "taking releases it");
     }
 
     #[test]

@@ -296,3 +296,67 @@ fn identities_are_stored_once_and_reused() {
     assert_ne!(Identity::ephemeral().key(), first.key());
     let _ = std::fs::remove_dir_all(directory);
 }
+
+/// Sends `count` 64 KiB messages from a fresh guest while the host drains
+/// after each, releasing what it drained only when `release` is set.
+fn flood(release: bool, count: usize) -> (Vec<Event>, u32) {
+    let runtime = SessionRuntime::new().unwrap();
+    let (host, mut host_events, invitation) = host(&runtime);
+    let (guest, _) = join(&runtime, &invitation, &Identity::ephemeral());
+    let member = guest.drain().local_member;
+    let chunk = vec![7u8; 64 * 1024];
+    for _ in 0..count {
+        if host_events
+            .iter()
+            .any(|event| matches!(event, Event::Left { .. }))
+        {
+            break;
+        }
+        guest.send(HOST_MEMBER, &chunk).unwrap();
+        let before = host_events.len();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while host_events.len() == before && Instant::now() < deadline {
+            let drained = host.drain();
+            if release {
+                let bytes = drained
+                    .events
+                    .iter()
+                    .map(|event| match event {
+                        Event::Message { payload, .. } => payload.len(),
+                        _ => 0,
+                    })
+                    .sum();
+                host.release(bytes);
+            }
+            host_events.extend(drained.events);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+    std::thread::sleep(Duration::from_millis(300));
+    host_events.extend(host.drain().events);
+    (host_events, member)
+}
+
+#[test]
+fn drained_but_untaken_payload_still_counts_against_the_flood_limit() {
+    // Eight drains of 64 KiB each, never released: past the 256 KiB test limit.
+    let (events, member) = flood(false, 8);
+    assert!(
+        events.contains(&Event::Left {
+            member,
+            reason: LeaveReason::Flooded
+        }),
+        "{events:?}"
+    );
+}
+
+#[test]
+fn released_payload_never_floods() {
+    let (events, member) = flood(true, 8);
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, Event::Left { member: m, .. } if *m == member)),
+        "{events:?}"
+    );
+}

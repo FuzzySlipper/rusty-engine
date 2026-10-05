@@ -43,7 +43,10 @@ pub const SLOW_MEMBER_BYTES: usize = 32 * 1024 * 1024;
 /// Received bytes awaiting the owner beyond which the sending peer is
 /// disconnected: a peer cannot grow this process's memory without bound
 /// while the product is paused.
+#[cfg(not(test))]
 pub const PENDING_EVENT_BYTES: usize = 64 * 1024 * 1024;
+#[cfg(test)]
+pub const PENDING_EVENT_BYTES: usize = 256 * 1024;
 /// Chat lines longer than this are refused; it bounds the transcript.
 pub const MAX_CHAT_BYTES: usize = 4 * 1024;
 /// Transcript lines the host keeps and sends to joining members.
@@ -397,8 +400,8 @@ impl Shared {
         });
     }
 
-    /// Records a received event, or reports that its sender has sent more
-    /// than the owner has drained.
+    /// Records a received event, or reports that its sender has pushed the
+    /// payload the owner has not yet taken past the limit.
     fn receive(&mut self, event: Event, bytes: usize) -> bool {
         self.pending_bytes += bytes;
         self.events.push(event);
@@ -523,7 +526,7 @@ impl Session {
 
     pub fn drain(&self) -> Drained {
         let mut shared = lock(&self.shared);
-        shared.pending_bytes = 0;
+        // Drained events stay charged until the owner releases them.
         let events = std::mem::take(&mut shared.events);
         let members = shared
             .members
@@ -560,6 +563,19 @@ impl Session {
             chat: shared.chat.clone(),
             events,
         }
+    }
+
+    /// Uncharges payload the owner has finished with: drained events count
+    /// against [`PENDING_EVENT_BYTES`] until released, so an owner that drains
+    /// but never takes its events still disconnects a flooding peer.
+    pub fn release(&self, bytes: usize) {
+        let mut shared = lock(&self.shared);
+        shared.pending_bytes = shared.pending_bytes.saturating_sub(bytes);
+    }
+
+    /// Received payload bytes not yet released.
+    pub fn untaken_bytes(&self) -> usize {
+        lock(&self.shared).pending_bytes
     }
 
     /// Host: one member. Guest: the host (`member` must be [`HOST_MEMBER`]).
@@ -1041,9 +1057,7 @@ async fn serve_guest(
                 if text.is_empty() || text.len() > MAX_CHAT_BYTES {
                     continue;
                 }
-                let mut shared = lock(&shared);
-                shared.pending_bytes += text.len();
-                shared.host_chat(member, local_id, text);
+                lock(&shared).host_chat(member, local_id, text);
             }
             Ok(Some(Frame::Bye)) | Ok(None) => break LeaveReason::Left,
             Ok(Some(_)) => {}
