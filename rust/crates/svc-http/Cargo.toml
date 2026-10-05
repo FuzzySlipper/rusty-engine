@@ -1,0 +1,15 @@
+[package]
+name    = "svc-http"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+# Blocking HTTP/1.1 on Engine worker threads; rustls (ring) verifying with the
+# platform's trust store.
+ureq = { version = "3.4", default-features = false, features = ["rustls", "platform-verifier"] }
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

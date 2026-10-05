@@ -53,6 +53,8 @@ The root [README](../README.md) is the repository landing page and
 - [Portable assets](portable-assets.md): Engine-owned sprite/model semantics
   over loose files and bundles.
 - [Recorded audio](recorded-audio.md): clip containers and device playback.
+- [HTTP downloads](http-downloads.md): outbound HTTPS fetches, library
+  downloads and update checks.
 - [Rope physics](rope-physics.md): Dynamics tethers and character coupling.
 - [Implicit topology on ambiguous faces](implicit-topology-diagnosis.md): how
   implicit meshing resolves ambiguous faces.

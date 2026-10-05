@@ -836,6 +836,7 @@ sealed class PersistenceEngineContext(IPersistenceService persistence) : IEngine
     public IRandomService Random => throw new NotSupportedException();
     public IVoxelScenePresentationService VoxelScenePresentation => throw new NotSupportedException();
     public IPersistenceService Persistence { get; } = persistence;
+    public IHttpService Http => throw new NotSupportedException();
     public IUiService Ui => throw new NotSupportedException();
 }
 

@@ -34,6 +34,7 @@ internal sealed class EngineContext : IEngineContext
         CameraView = new CameraViewServiceImplementation(native.camera_view);
         Random = new RngServiceImplementation(native.rng);
         Persistence = new PersistenceServiceImplementation(native.persistence);
+        Http = new HttpServiceImplementation(native.http);
         Ui = new UiServiceImplementation(native.ui);
     }
 
@@ -61,6 +62,7 @@ internal sealed class EngineContext : IEngineContext
     public ICameraViewService CameraView { get; }
     public IRandomService Random { get; }
     public IPersistenceService Persistence { get; }
+    public IHttpService Http { get; }
     public IUiService Ui { get; }
 }
 

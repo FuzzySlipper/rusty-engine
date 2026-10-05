@@ -1714,6 +1714,7 @@ pub struct NativeEngineApi {
     pub camera_view: NativeCameraViewApi,
     pub rng: NativeRngApi,
     pub persistence: NativePersistenceApi,
+    pub http: NativeHttpApi,
     pub ui: NativeUiApi,
 }
 

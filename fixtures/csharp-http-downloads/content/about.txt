@@ -1,0 +1,1 @@
+The HTTP downloads fixture fetches its module at run time; it ships no content of its own.
