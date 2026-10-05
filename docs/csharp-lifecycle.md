@@ -670,7 +670,12 @@ A reconstructed (marching-cubes or dual-contoured) material meets a
 different non-occluding material as it meets empty space, and a
 non-occluding reconstructed material draws only its surface against empty
 space and other non-occluding materials. Collision follows the drawn
-surface under passable water too.
+surface under passable water too. A cube-mode non-occluding material (grid
+water on dual-contoured ground) draws no face against a reconstructed
+neighbour whose cells around that face are all solid or the same material,
+such as a lake bed: the bed's surface stands in for it rather than fighting
+it in depth. Where any of those cells is air or another see-through
+material, as along a shore, the face stays.
 
 A multi-cell edit may legitimately fill the space occupied by a character.
 The edit and character step are separate operations. If bounded penetration

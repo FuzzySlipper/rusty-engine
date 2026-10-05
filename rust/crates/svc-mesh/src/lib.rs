@@ -1242,8 +1242,9 @@ pub fn mesh_chunk_in_world(
 /// solid corner, so adjacent chunk calls make identical decisions without
 /// duplicating a primitive. Cube materials keep their greedy faces; a cube
 /// face against a reconstructed material is kept, since that material's
-/// surface may not cover it, and so is a face against a different
-/// non-occluding material. Returned positions remain local to `coord`,
+/// surface may not cover it, unless a non-occluding cube's surroundings
+/// leave nothing else to see there (`reconstructed_gap_enclosed`), and so is
+/// a face against a different non-occluding material. Returned positions remain local to `coord`,
 /// matching the existing chunk transform contract.
 pub fn mesh_chunk_in_world_with_options(
     world: &VoxelWorld,
