@@ -210,8 +210,11 @@ draws a presentation's distant chunks from coarse meshes. Each update, the
 Engine measures every chunk's cube from the camera of the lowest-ordered
 primary view; a chunk farther than `coarseDistance` metres (by 10% more when it
 switches, so a camera at the boundary does not flip it) is drawn coarse. Zero
-draws every chunk at full resolution. Only the drawing changes: collision,
-raycasts, picking and navigation keep every chunk's full mesh.
+draws every chunk at full resolution. Set the distance whenever the view calls
+for another (a map view, open ground, caves): a call projects only the chunks
+that change level, and repeating a distance costs nothing. Only the drawing
+changes: collision, raycasts, picking and navigation keep every chunk's full
+mesh.
 
 - A coarse mesh is the chunk's reconstructed materials meshed from a lattice
   twice as coarse. Each sample stands for a 2 × 2 × 2 block of voxels, solid

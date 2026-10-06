@@ -629,7 +629,8 @@ renderer slots. The Engine keeps incremental renderer identity and owns all
 generated mesh/frame work; C# receives only copied facts. `Clear` or disposal
 removes the matching renderer objects. `SetLevelOfDetail` draws reconstructed
 chunks beyond a distance from the primary camera from coarse meshes; the Engine
-switches them as the camera moves, with no refresh call
+switches them as the camera moves, with no refresh call, and a product may
+change the distance whenever its view changes
 ([distance level of detail](smooth-voxel-surfaces.md#distance-level-of-detail)).
 `SpatialSessionConfig.VoxelSurfaceMode` selects how the session's voxels are
 drawn; `Voxel.ConfigureMaterialSurfaces` changes it, and each material's own

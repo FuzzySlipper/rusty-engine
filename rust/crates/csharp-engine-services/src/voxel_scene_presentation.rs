@@ -285,8 +285,9 @@ impl RuntimeVoxelScenePresentationBridge {
         &mut self,
         request: NativeVoxelSceneLevelOfDetailRequest,
     ) -> Result<NativeVoxelScenePresentationReadout, CsharpEngineServicesError> {
+        let spatial = self.spatial.clone();
         let staged = self.staged_mut()?;
-        staged
+        let presentation = staged
             .state
             .presentations
             .get_mut(&request.presentation.value)
@@ -295,9 +296,15 @@ impl RuntimeVoxelScenePresentationBridge {
                     "CSHARP_VOXEL_SCENE_PRESENTATION_HANDLE",
                     "voxel scene presentation handle is not retained",
                 )
-            })?
-            .coarse_distance = request.coarse_distance;
-        self.refresh(request.presentation)
+            })?;
+        let session = presentation.session;
+        // A product may set the distance whenever its view changes, even every
+        // update: only chunks that change level are projected again.
+        presentation.coarse_distance = request.coarse_distance;
+        if let Some(frame) = project_level_changes(&mut staged.state, &spatial)? {
+            staged.frames.push(frame);
+        }
+        presentation_readout(request.presentation, session, &staged.state, &spatial)
     }
 
     /// Draws each presentation's chunks at the level of detail the camera
@@ -320,14 +327,8 @@ impl RuntimeVoxelScenePresentationBridge {
             return Ok(());
         }
         let started = Instant::now();
-        set_levels_of_detail(state);
-        let scenes = presentation_scenes(state, &self.spatial)?;
-        if state
-            .projector
-            .level_of_detail_changed(&presentation_instances(&scenes))
-        {
-            call.frames
-                .push(project_all_presentations(state, &self.spatial)?);
+        if let Some(frame) = project_level_changes(state, &self.spatial)? {
+            call.frames.push(frame);
         }
         let duration_us = started.elapsed().as_micros().min(u128::from(u64::MAX)) as u64;
         self.record_presentation_attribution(duration_us);
@@ -822,6 +823,23 @@ fn set_levels_of_detail(state: &mut VoxelScenePresentationState) {
             .projector
             .set_level_of_detail(&presentation_instance_id(*handle), level);
     }
+}
+
+/// Project every presentation if any of its chunks now belongs at another
+/// level of detail.
+fn project_level_changes(
+    state: &mut VoxelScenePresentationState,
+    spatial: &SpatialCollisionSource,
+) -> Result<Option<RenderFrameDiff>, CsharpEngineServicesError> {
+    set_levels_of_detail(state);
+    let scenes = presentation_scenes(state, spatial)?;
+    if !state
+        .projector
+        .level_of_detail_changed(&presentation_instances(&scenes))
+    {
+        return Ok(None);
+    }
+    project_all_presentations(state, spatial).map(Some)
 }
 
 fn project_all_presentations(
@@ -1477,6 +1495,24 @@ mod tests {
 
         bridge.begin_call();
         assert_eq!(bridge.refresh(presentation).unwrap().coarse_chunk_count, 2);
+        let call = bridge.take_staged_call().unwrap();
+        bridge.commit_call(call);
+        // Setting the distance again, or to one that moves no chunk, projects
+        // nothing.
+        bridge.begin_call();
+        for distance in [10.0, 10.5] {
+            assert_eq!(
+                bridge
+                    .set_level_of_detail(lod(distance))
+                    .unwrap()
+                    .coarse_chunk_count,
+                2
+            );
+        }
+        let call = bridge.take_staged_call().unwrap();
+        assert!(call.frames.is_empty());
+        bridge.commit_call(call);
+        bridge.begin_call();
         let off = bridge.set_level_of_detail(lod(0.0)).unwrap();
         assert_eq!(off.coarse_chunk_count, 0);
         let call = bridge.take_staged_call().unwrap();
