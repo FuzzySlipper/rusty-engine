@@ -69,7 +69,8 @@ Reconstructed surfaces carry tile coordinates like cube faces, projected along
 the dominant axis of each polygon in the same absolute cell space and face
 basis as a cube face of that direction. Groups are split per material and
 face, so textured, atlas-tiled and direction-specific materials (a grass top
-over dirt sides) draw on smooth surfaces with the same bindings as on cubes. A
+over dirt sides) draw on smooth surfaces with the same bindings as on cubes;
+neighbouring face groups that resolve to one material are drawn as one. A
 Blocky material's planar faces texture exactly like cubes. On curved surfaces
 the chart changes where the dominant axis does, which shows as a texture seam
 on slopes near 45°.

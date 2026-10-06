@@ -789,19 +789,15 @@ fn voxel_mesh_payload_with_material_slots(
             index_width: MeshIndexWidth::U32,
             attributes,
         },
-        groups: chunk
-            .groups
-            .iter()
-            .map(|group| MeshGroupDescriptor {
-                material_slot: material_slots.renderer_slot(
-                    group.material_slot,
-                    group.state,
-                    group.direction,
-                ),
-                start: group.start,
-                count: group.count,
-            })
-            .collect(),
+        groups: draw_groups(chunk.groups.iter().map(|group| MeshGroupDescriptor {
+            material_slot: material_slots.renderer_slot(
+                group.material_slot,
+                group.state,
+                group.direction,
+            ),
+            start: group.start,
+            count: group.count,
+        })),
         bounds: MeshBoundsDescriptor {
             min: chunk.bounds_min,
             max: chunk.bounds_max,
@@ -819,6 +815,27 @@ fn voxel_mesh_payload_with_material_slots(
             origin: chunk.origin_voxel.map(|cell| cell as f32),
         }),
     }
+}
+
+/// Groups as the renderer draws them. A voxel mesh keeps a group per
+/// material and face for face materials and texture bases; adjacent groups
+/// that resolve to one material are one draw.
+pub(crate) fn draw_groups(
+    groups: impl IntoIterator<Item = MeshGroupDescriptor>,
+) -> Vec<MeshGroupDescriptor> {
+    let mut drawn: Vec<MeshGroupDescriptor> = Vec::new();
+    for group in groups {
+        match drawn.last_mut() {
+            Some(last)
+                if last.material_slot == group.material_slot
+                    && last.start + last.count == group.start =>
+            {
+                last.count += group.count;
+            }
+            _ => drawn.push(group),
+        }
+    }
+    drawn
 }
 
 pub fn voxel_material_id(slot: u16) -> String {
@@ -879,12 +896,17 @@ mod tests {
         };
         let chunk = &scene.mesh_chunks().cloned().collect::<Vec<_>>()[0];
         let payload = voxel_mesh_payload_with_material_slots(chunk, &mapping);
-        for (source, rendered) in chunk.groups.iter().zip(&payload.groups) {
+        for source in &chunk.groups {
             let expected = match source.direction.unwrap() {
                 Direction6::PosZ => 12,
                 Direction6::PosY => 11,
                 _ => 10,
             };
+            let rendered = payload
+                .groups
+                .iter()
+                .find(|group| (group.start..group.start + group.count).contains(&source.start))
+                .unwrap();
             assert_eq!(rendered.material_slot, expected);
         }
         let rotated = chunk
@@ -894,6 +916,35 @@ mod tests {
             .unwrap();
         let vertex = chunk.indices[chunk.groups[rotated].start as usize] as usize;
         assert_eq!(&chunk.normals[vertex * 3..vertex * 3 + 3], &[1.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn a_slots_faces_without_face_materials_draw_as_one_group() {
+        let scene = VoxelCollisionScene::from_material_voxels(
+            1.0,
+            8,
+            [MaterialVoxel {
+                address: [0, 0, 0],
+                material_slot: 1,
+                state: 0,
+            }],
+        )
+        .unwrap();
+        let chunk = &scene.mesh_chunks().cloned().collect::<Vec<_>>()[0];
+        assert_eq!(chunk.groups.len(), 6);
+        let mapping = VoxelMaterialSlotMapping {
+            base: BTreeMap::from([(1, 10)]),
+            directional: BTreeMap::new(),
+        };
+        let payload = voxel_mesh_payload_with_material_slots(chunk, &mapping);
+        assert_eq!(
+            payload.groups,
+            [MeshGroupDescriptor {
+                material_slot: 10,
+                start: 0,
+                count: chunk.indices.len() as u32,
+            }]
+        );
     }
 
     fn material(slot: u16) -> RenderMaterialDescriptor {
