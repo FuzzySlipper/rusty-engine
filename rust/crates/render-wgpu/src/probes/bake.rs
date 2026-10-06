@@ -399,11 +399,23 @@ pub(super) fn dilate_region(field: &mut Field, lo: [u32; 3], hi: [u32; 3]) {
     }
 }
 
-/// The texels of `lo..=hi`: red's block of probes, then green's, then
-/// blue's, each probe its four coefficients as half floats, rows along x.
-pub(super) fn pack_region(field: &Field, lo: [u32; 3], hi: [u32; 3]) -> Vec<u16> {
+/// The texels of `lo..=hi` as half floats, rows along x: red's block of
+/// probes, then green's, then blue's, each probe its four coefficients; or
+/// `compact`, one block: the ambient coefficient's colour with the vertical
+/// coefficient's luminance (`lighting.wgsl` gives it the ambient's hue; the
+/// horizontal coefficients are dropped).
+pub(super) fn pack_region(field: &Field, lo: [u32; 3], hi: [u32; 3], compact: bool) -> Vec<u16> {
     let cells = cells_in([[lo[0], hi[0]], [lo[1], hi[1]], [lo[2], hi[2]]]);
     let mut texels = Vec::with_capacity(cells.len() * 12);
+    if compact {
+        for cell in &cells {
+            let sh = field.sh[field.grid.index(*cell)];
+            for value in [sh[0].x, sh[0].y, sh[0].z, luminance_of(sh[1])] {
+                texels.push(half_bits(value));
+            }
+        }
+        return texels;
+    }
     for channel in 0..3 {
         for cell in &cells {
             let sh = field.sh[field.grid.index(*cell)];
@@ -413,6 +425,11 @@ pub(super) fn pack_region(field: &Field, lo: [u32; 3], hi: [u32; 3]) -> Vec<u16>
         }
     }
     texels
+}
+
+/// Rec. 709 luminance.
+fn luminance_of(colour: Vec3) -> f32 {
+    colour.dot(Vec3::new(0.2126, 0.7152, 0.0722))
 }
 
 /// Run `work` over every item on the worker threads, a few at a time.
@@ -562,7 +579,7 @@ mod tests {
         for (index, sh) in field.sh.iter_mut().enumerate() {
             *sh = [Vec3::new(index as f32, 0.0, 0.0); 4];
         }
-        let texels = pack_region(&field, [1, 0, 0], [2, 1, 1]);
+        let texels = pack_region(&field, [1, 0, 0], [2, 1, 1], false);
         // 2 × 2 × 2 probes, 4 halfs each, three channels.
         assert_eq!(texels.len(), 8 * 4 * 3);
         // The red block starts at probe (1, 0, 0) = index 1, then (2, 0, 0).
@@ -570,5 +587,24 @@ mod tests {
         assert_eq!(texels[4], half_bits(2.0));
         // Green and blue hold zeros.
         assert!(texels[32..].iter().all(|t| *t == 0));
+        // Compact: one block holding the ambient coefficient's colour and the
+        // vertical coefficient's luminance.
+        field.sh[grid.index([1, 0, 0])] = [
+            Vec3::new(1.0, 2.0, 3.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            Vec3::splat(1.0),
+            Vec3::splat(1.0),
+        ];
+        let compact = pack_region(&field, [1, 0, 0], [2, 1, 1], true);
+        assert_eq!(compact.len(), 8 * 4);
+        assert_eq!(
+            &compact[..4],
+            &[
+                half_bits(1.0),
+                half_bits(2.0),
+                half_bits(3.0),
+                half_bits(0.7152)
+            ]
+        );
     }
 }

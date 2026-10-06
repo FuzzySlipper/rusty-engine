@@ -1491,7 +1491,7 @@ impl Renderer {
         for value in [sky_intensity, roughest, 0.0, 0.0] {
             bytes.extend_from_slice(&value.to_le_bytes());
         }
-        for value in crate::probes::Grid::uniform(self.probes.uniform_grid()) {
+        for value in self.probes.uniform() {
             bytes.extend_from_slice(&value.to_le_bytes());
         }
         // The cluster fields follow once the view's clusters are encoded.

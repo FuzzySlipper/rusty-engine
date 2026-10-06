@@ -44,7 +44,8 @@ struct Frame {
     // probe's position, w the spacing between probes.
     probes: vec4<f32>,
     // xyz probes per axis; w 0 off, 1 the ambient light is the sky the
-    // probes see, 2 a floor the probes add to.
+    // probes see, 2 a floor the probes add to; 3 and 4 the same with the
+    // one-slab encoding (`lighting.wgsl` probe_sh).
     probe_grid: vec4<f32>,
     // Clustered lighting (`light_clusters.wgsl`): xyz: tiles across, tiles
     // down, depth slices; w: 1 when this pass's lights are read from the

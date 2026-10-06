@@ -172,11 +172,15 @@ draws exactly as before.
   ambient the same so the move scrolls instead of starting over.
 - Per lit fragment the shader adds three trilinear reads of one small 3D
   texture (RGBA16F, 24 bytes a probe), six for metals and under the sky's
-  light. At 1080p that is 0.01 to 0.05 ms of world pass on an RX 9070 XT and
-  1 to 4 ms on llvmpipe (4 to 14 percent of its world pass; the share is
-  highest where the pass is otherwise cheap). `rusty-scene-render --indirect-light
-  cx,cy,cz,ex,ey,ez,spacing,bounces[,floor]` bakes a volume before its frames
-  and reports it under `gpu.indirectLight`.
+  light: 0.01 to 0.05 ms of world pass at 1080p on an RX 9070 XT. On a
+  software adapter (llvmpipe) each filtered read costs about a twentieth of
+  a cheap world pass, so there the Engine uploads a one-texel encoding
+  instead, the ambient coefficient in colour and the vertical coefficient's
+  luminance (sky above, torch-lit floor below; no horizontal direction), and
+  the shader reads it once: 4 to 5 percent of llvmpipe's world pass on the
+  lighting exploration's cave and dungeon. `rusty-scene-render
+  --indirect-light cx,cy,cz,ex,ey,ez,spacing,bounces[,floor]` bakes a volume
+  before its frames and reports it under `gpu.indirectLight`.
 
 ## The sky's light
 

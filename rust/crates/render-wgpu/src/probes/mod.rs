@@ -23,9 +23,11 @@
 //! it can reach (its own and one around, or a light's range), each relaxing
 //! against its neighbours' current probes and uploading alone while the old
 //! probes keep drawing. The volume is one RGBA16F 3D texture, the three
-//! colour channels stacked along its depth, that the shader samples
-//! trilinearly at the surface offset along its normal, fading over one cell
-//! past the box. A change starts a bake once the scene has been still for
+//! colour channels stacked along its depth (on a software adapter one
+//! slab: the ambient coefficient in colour and the vertical coefficient's
+//! luminance, so a fragment reads one texel instead of three), that the
+//! shader samples trilinearly at the
+//! surface offset along its normal, fading over one cell past the box. A change starts a bake once the scene has been still for
 //! `DEBOUNCE` (or every `MAX_WAIT` while something inside keeps moving).
 
 mod bake;
@@ -148,8 +150,9 @@ impl Grid {
     }
 
     /// The frame uniform's two rows: origin and spacing; dims and mode (0
-    /// off, 1 the ambient light is the sky, 2 a floor).
-    pub fn uniform(grid: Option<&Grid>) -> [f32; 8] {
+    /// off, 1 the ambient light is the sky, 2 a floor; 3 and 4 the same
+    /// with the one-slab encoding).
+    pub fn uniform(grid: Option<&Grid>, compact: bool) -> [f32; 8] {
         match grid {
             None => [0.0; 8],
             Some(grid) => [
@@ -163,7 +166,7 @@ impl Grid {
                 match grid.ambient {
                     IndirectAmbient::Sky => 1.0,
                     IndirectAmbient::Floor => 2.0,
-                },
+                } + if compact { 2.0 } else { 0.0 },
             ],
         }
     }
@@ -618,6 +621,9 @@ pub(crate) struct ProbeVolume {
     pub view: wgpu::TextureView,
     pub sampler: wgpu::Sampler,
     texture_dims: [u32; 3],
+    /// One slab instead of three: on a software adapter, where each
+    /// filtered read costs a share of the frame.
+    compact: bool,
     volume: Option<Volume>,
     schedule: Schedule,
     /// The scene generation the last batch started from.
@@ -638,10 +644,12 @@ pub(crate) struct ProbeVolume {
 
 impl ProbeVolume {
     pub fn new(gpu: &Gpu) -> Self {
-        let (texture, view) = texture(gpu, [1, 1, 1]);
+        let compact = gpu.adapter.get_info().device_type == wgpu::DeviceType::Cpu;
+        let (texture, view) = texture(gpu, [1, 1, 1], slabs(compact));
         Self {
             texture,
             view,
+            compact,
             sampler: gpu.device.create_sampler(&wgpu::SamplerDescriptor {
                 label: Some("render-wgpu probes"),
                 address_mode_u: wgpu::AddressMode::ClampToEdge,
@@ -673,12 +681,15 @@ impl ProbeVolume {
         }
     }
 
-    /// The grid the shader may sample: once every brick has baked.
-    pub fn uniform_grid(&self) -> Option<&Grid> {
-        self.volume
+    /// The frame uniform's rows: the grid once every brick has baked, and
+    /// its encoding.
+    pub fn uniform(&self) -> [f32; 8] {
+        let grid = self
+            .volume
             .as_ref()
             .filter(|volume| volume.complete)
-            .map(|volume| &volume.grid)
+            .map(|volume| &volume.grid);
+        Grid::uniform(grid, self.compact)
     }
 
     /// A change inside the volume (or to the request) was seen now.
@@ -737,7 +748,7 @@ impl ProbeVolume {
         self.readout.dims = self.texture_dims;
         self.readout.probes = self.volume.as_ref().map_or(0, |v| v.grid.probes() as u32);
         self.readout.bricks = self.volume.as_ref().map_or(0, |v| v.bricks.len() as u32);
-        self.readout.bytes = texture_bytes(self.texture_dims);
+        self.readout.bytes = texture_bytes(self.texture_dims, slabs(self.compact));
         self.schedule.touch(Instant::now());
         rebind
     }
@@ -746,7 +757,7 @@ impl ProbeVolume {
         if self.texture_dims == dims {
             return false;
         }
-        let (texture, view) = texture(gpu, dims);
+        let (texture, view) = texture(gpu, dims, slabs(self.compact));
         self.texture = texture;
         self.view = view;
         self.texture_dims = dims;
@@ -912,11 +923,11 @@ impl ProbeVolume {
         let Some(volume) = self.volume.as_ref() else {
             return;
         };
-        let texels = pack_region(&volume.field, lo, hi);
+        let texels = pack_region(&volume.field, lo, hi, self.compact);
         let extent = [0, 1, 2].map(|axis| hi[axis] - lo[axis] + 1);
         let per_channel = (extent[0] * extent[1] * extent[2] * 4) as usize;
         let depth = self.texture_dims[2];
-        for channel in 0..3_u32 {
+        for channel in 0..slabs(self.compact) {
             let block =
                 &texels[channel as usize * per_channel..(channel as usize + 1) * per_channel];
             gpu.queue.write_texture(
@@ -963,19 +974,29 @@ impl ProbeVolume {
     }
 }
 
-fn texture_bytes(dims: [u32; 3]) -> u64 {
-    u64::from(dims[0]) * u64::from(dims[1]) * u64::from(dims[2]) * 8 * 3
+/// Texels a probe takes: one per colour channel, or one in the compact
+/// encoding.
+fn slabs(compact: bool) -> u32 {
+    if compact {
+        1
+    } else {
+        3
+    }
 }
 
-/// One RGBA16F 3D texture of `dims` probes, the three colour channels
-/// stacked along its depth.
-fn texture(gpu: &Gpu, dims: [u32; 3]) -> (wgpu::Texture, wgpu::TextureView) {
+fn texture_bytes(dims: [u32; 3], slabs: u32) -> u64 {
+    u64::from(dims[0]) * u64::from(dims[1]) * u64::from(dims[2]) * 8 * u64::from(slabs)
+}
+
+/// One RGBA16F 3D texture of `dims` probes, `slabs` texels a probe stacked
+/// along its depth.
+fn texture(gpu: &Gpu, dims: [u32; 3], slabs: u32) -> (wgpu::Texture, wgpu::TextureView) {
     let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
         label: Some("render-wgpu probes"),
         size: wgpu::Extent3d {
             width: dims[0],
             height: dims[1],
-            depth_or_array_layers: dims[2] * 3,
+            depth_or_array_layers: dims[2] * slabs,
         },
         mip_level_count: 1,
         sample_count: 1,
@@ -1191,10 +1212,11 @@ mod tests {
             assert_eq!(two.coords(index), coords);
             assert_eq!(two.index(coords), index);
         }
-        let uniform = Grid::uniform(Some(&grid));
+        let uniform = Grid::uniform(Some(&grid), false);
         assert_eq!(&uniform[..4], &[6.5, 0.5, -7.5, 1.0]);
         assert_eq!(&uniform[4..], &[8.0, 4.0, 8.0, 1.0]);
-        assert_eq!(Grid::uniform(None), [0.0; 8]);
+        assert_eq!(Grid::uniform(Some(&grid), true)[7], 3.0);
+        assert_eq!(Grid::uniform(None, true), [0.0; 8]);
     }
 
     #[test]

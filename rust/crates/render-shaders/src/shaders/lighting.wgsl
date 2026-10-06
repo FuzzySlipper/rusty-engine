@@ -224,14 +224,23 @@ struct ProbeLight {
 const PROBE_NORMAL_OFFSET: f32 = 0.3;
 
 // `cell` is the sample in probe cells from the first probe's centre plus a
-// half, within one channel's slab; `depth` is probes along z.
-fn probe_sh(cell: vec3<f32>, dims: vec3<f32>, d: vec3<f32>) -> vec3<f32> {
+// half, within one slab; `dims` is probes per axis. `compact` reads the
+// one-slab encoding a software adapter uploads: the ambient coefficient's
+// colour with the vertical coefficient's luminance, which takes the
+// ambient's hue; one filtered read instead of three, and no horizontal
+// direction.
+fn probe_sh(cell: vec3<f32>, dims: vec3<f32>, d: vec3<f32>, compact: bool) -> vec3<f32> {
     let slab = vec3<f32>(0.0, 0.0, dims.z);
+    let basis = vec4<f32>(0.282095, 0.488603 * d.y, 0.488603 * d.z, 0.488603 * d.x);
+    if compact {
+        let a = textureSampleLevel(probes, probes_sampler, cell / dims, 0.0);
+        let luminance = max(dot(a.rgb, vec3<f32>(0.2126, 0.7152, 0.0722)), 1e-4);
+        return max(a.rgb * (basis.x + a.w * basis.y / luminance), vec3<f32>(0.0));
+    }
     let size = vec3<f32>(dims.x, dims.y, 3.0 * dims.z);
     let r = textureSampleLevel(probes, probes_sampler, cell / size, 0.0);
     let g = textureSampleLevel(probes, probes_sampler, (cell + slab) / size, 0.0);
     let b = textureSampleLevel(probes, probes_sampler, (cell + 2.0 * slab) / size, 0.0);
-    let basis = vec4<f32>(0.282095, 0.488603 * d.y, 0.488603 * d.z, 0.488603 * d.x);
     return max(vec3<f32>(dot(r, basis), dot(g, basis), dot(b, basis)), vec3<f32>(0.0));
 }
 
@@ -254,13 +263,15 @@ fn probe_light(position: vec3<f32>, normal: vec3<f32>, reflected: vec3<f32>, wan
         return result;
     }
     let cell = clamp(grid, vec3<f32>(0.0), extent) + vec3<f32>(0.5);
-    result.diffuse = probe_sh(cell, dims, normal);
+    let compact = mode > 2.5;
+    let floor_ambient = mode == 2.0 || mode == 4.0;
+    result.diffuse = probe_sh(cell, dims, normal, compact);
     if want_reflected {
-        result.reflected = probe_sh(cell, dims, reflected);
+        result.reflected = probe_sh(cell, dims, reflected, compact);
     }
     result.coverage = coverage;
     result.outside = 1.0 - coverage;
-    result.ambient = select(1.0 - coverage, 1.0, mode > 1.5);
+    result.ambient = select(1.0 - coverage, 1.0, floor_ambient);
     return result;
 }
 
