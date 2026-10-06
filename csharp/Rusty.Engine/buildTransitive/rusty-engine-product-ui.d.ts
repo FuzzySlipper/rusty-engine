@@ -564,6 +564,35 @@ declare module "@rusty-engine/live-debug/internal/live-debug-client/src/generate
      * Where the runtime presents the frames it renders.
      */
     export type ProductHostRenderOutput = "stream" | "window";
+    export type ProductHostRendererSettingValues = {
+        shadows: boolean;
+        shadowBudget: number | null;
+        /**
+         * `disabled`, `screenSpace` or `distanceField`.
+         */
+        ambientOcclusion: string;
+        ambientOcclusionStrength: number;
+        ambientOcclusionRadius: number;
+        /**
+         * Samples per pixel of the primary destination.
+         */
+        antialiasing: number;
+        vsync: boolean;
+        clusteredLighting: boolean;
+        gpuCulling: boolean;
+    };
+    /**
+     * The renderer settings (`RendererSettings`): what the product or its
+     * manifest asked for, what draws, and why each refused setting differs.
+     */
+    export type ProductHostRendererSettings = {
+        requested: ProductHostRendererSettingValues;
+        effective: ProductHostRendererSettingValues;
+        /**
+         * By setting name, why the device draws it differently.
+         */
+        refused: Record<string, string>;
+    };
     /**
      * The runtime renderer's adapter and what its recent frames cost.
      */
@@ -595,6 +624,10 @@ declare module "@rusty-engine/live-debug/internal/live-debug-client/src/generate
          * compute limits, and the ambient occlusion the last world view took.
          */
         gpu: ProductHostGpuStatistics;
+        /**
+         * The renderer settings in effect (`RendererSettings`).
+         */
+        settings: ProductHostRendererSettings;
     };
     /**
      * Answer to `engine.renderer`, `.status`, `.show`, `.hide` and `.toggle`.
