@@ -53,6 +53,16 @@ struct Light {
     extra: vec4<f32>,
 };
 
+// A shadow layer (render-wgpu `shadows.rs`): its view, and where its map
+// lies in the atlas.
+struct ShadowView {
+    view_proj: mat4x4<f32>,
+    // xy: the tile's corner in its page (uv); z: its side (uv); w: the page.
+    tile: vec4<f32>,
+    // x: 1 for a soft (5×5) filter; y: the tile's side in texels.
+    params: vec4<f32>,
+};
+
 struct MaterialUniform {
     roughness: f32,
     alpha_cutoff: f32,

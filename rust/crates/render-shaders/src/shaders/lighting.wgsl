@@ -7,16 +7,17 @@
 #import rusty::types::PI
 #import rusty::view::{frame, lights, shadow_maps, shadow_sampler, shadow_views}
 
-const SHADOW_MAP_SIZE: f32 = 512.0;
+// The shadow atlas page's side in texels (`shadows.rs` PAGE_SIZE).
+const SHADOW_PAGE_SIZE: f32 = 2048.0;
 // A directional light's cascades (`shadows.rs`).
 const CASCADES: u32 = 4u;
 // Over the last tenth of each cascade, blend into the next; past the last,
 // out to no shadow.
 const CASCADE_BLEND: f32 = 0.1;
-// How far along its normal a receiver looks up a cascade, in that cascade's
-// texels: a texel spans more depth than the surface's own offset to its back
-// faces, so without it lit ground shadows itself in rings.
-const CASCADE_NORMAL_OFFSET: f32 = 1.5;
+// How far along its normal a receiver looks up a layer, in that layer's
+// texels at the receiver: a texel spans more depth than a surface's offset
+// to its back faces, so without it lit surfaces shadow themselves.
+const SHADOW_NORMAL_OFFSET: f32 = 1.5;
 
 fn distance_attenuation(distance: f32, range: f32, decay: f32) -> f32 {
     var falloff = 1.0 / max(pow(distance, decay), 0.01);
@@ -58,37 +59,71 @@ fn point_face(to_fragment: vec3<f32>) -> u32 {
     return select(5u, 4u, to_fragment.z > 0.0);
 }
 
-// Fraction of a light reaching `position` through shadow layer `layer`:
-// 3×3 PCF over linearly filtered comparisons. Outside the map is lit.
-fn shadow_visibility(layer: u32, position: vec3<f32>) -> f32 {
-    let clip = shadow_views[layer] * vec4<f32>(position, 1.0);
+// Where a receiver looks shadow layer `layer` up: moved along its normal by
+// SHADOW_NORMAL_OFFSET of the layer's texels at that point (a texel's width
+// grows with the view's w over its x scale), then mapped into the layer's
+// tile. `valid` is false outside the layer's view, which is lit.
+struct ShadowLookup {
+    valid: bool,
+    uv: vec2<f32>,
+    // The tile's texel centres the filter stays between.
+    low: vec2<f32>,
+    high: vec2<f32>,
+    page: u32,
+    depth: f32,
+    soft: bool,
+};
+
+fn shadow_lookup(layer: u32, position: vec3<f32>, normal: vec3<f32>) -> ShadowLookup {
+    let view = shadow_views[layer];
+    let x_scale = length(vec3<f32>(view.view_proj[0].x, view.view_proj[1].x, view.view_proj[2].x));
+    let at = view.view_proj * vec4<f32>(position, 1.0);
+    let texel = 2.0 * at.w / (x_scale * view.params.y);
+    let clip = view.view_proj * vec4<f32>(position + normal * texel * SHADOW_NORMAL_OFFSET, 1.0);
+    var lookup: ShadowLookup;
+    lookup.valid = false;
     if clip.w <= 0.0 {
-        return 1.0;
+        return lookup;
     }
     let ndc = clip.xyz / clip.w;
-    let uv = vec2<f32>(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
-    if any(uv < vec2<f32>(0.0)) || any(uv > vec2<f32>(1.0)) || ndc.z > 1.0 {
-        return 1.0;
+    let local = vec2<f32>(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
+    if any(local < vec2<f32>(0.0)) || any(local > vec2<f32>(1.0)) || ndc.z > 1.0 || ndc.z < 0.0 {
+        return lookup;
     }
-    let texel = 1.0 / SHADOW_MAP_SIZE;
-    var lit = 0.0;
-    for (var y = -1; y <= 1; y = y + 1) {
-        for (var x = -1; x <= 1; x = x + 1) {
-            let offset = vec2<f32>(f32(x), f32(y)) * texel;
-            lit += textureSampleCompareLevel(shadow_maps, shadow_sampler, uv + offset, layer, ndc.z);
-        }
-    }
-    return lit / 9.0;
+    let half_texel = 0.5 / SHADOW_PAGE_SIZE;
+    lookup.valid = true;
+    lookup.uv = view.tile.xy + local * view.tile.z;
+    lookup.low = view.tile.xy + vec2<f32>(half_texel);
+    lookup.high = view.tile.xy + vec2<f32>(view.tile.z - half_texel);
+    lookup.page = u32(view.tile.w);
+    lookup.depth = ndc.z;
+    lookup.soft = view.params.x > 0.5;
+    return lookup;
 }
 
-// Shadow layer `layer` looked up from `position` moved along `normal` by
-// CASCADE_NORMAL_OFFSET of the layer's texels (an orthographic cascade's
-// world texel is its width over the map size).
-fn cascade_layer_visibility(layer: u32, position: vec3<f32>, normal: vec3<f32>) -> f32 {
-    let view = shadow_views[layer];
-    let width = 2.0 / length(vec3<f32>(view[0].x, view[1].x, view[2].x));
-    let texel = width / SHADOW_MAP_SIZE;
-    return shadow_visibility(layer, position + normal * texel * CASCADE_NORMAL_OFFSET);
+// Linearly filtered comparisons over a square of (2 radius + 1)² texels,
+// `spacing` texels apart, kept inside the tile.
+fn shadow_filter(lookup: ShadowLookup, radius: i32, spacing: f32) -> f32 {
+    let step = spacing / SHADOW_PAGE_SIZE;
+    var lit = 0.0;
+    for (var y = -radius; y <= radius; y = y + 1) {
+        for (var x = -radius; x <= radius; x = x + 1) {
+            let uv = clamp(lookup.uv + vec2<f32>(f32(x), f32(y)) * step, lookup.low, lookup.high);
+            lit += textureSampleCompareLevel(shadow_maps, shadow_sampler, uv, lookup.page, lookup.depth);
+        }
+    }
+    let side = f32(2 * radius + 1);
+    return lit / (side * side);
+}
+
+// Fraction of a light reaching `position` through shadow layer `layer`: a
+// 3×3 PCF, or 5×5 for a soft light. Outside the layer's view is lit.
+fn shadow_visibility(layer: u32, position: vec3<f32>, normal: vec3<f32>) -> f32 {
+    let lookup = shadow_lookup(layer, position, normal);
+    if !lookup.valid {
+        return 1.0;
+    }
+    return shadow_filter(lookup, select(1, 2, lookup.soft), 1.0);
 }
 
 // Fraction of a directional light reaching `position` through its cascades
@@ -106,12 +141,12 @@ fn cascade_visibility(
     for (var index = 0u; index < CASCADES; index = index + 1u) {
         let end = splits[index];
         if depth <= end {
-            var visibility = cascade_layer_visibility(first + index, position, normal);
+            var visibility = shadow_visibility(first + index, position, normal);
             let blend = end - (end - start) * CASCADE_BLEND;
             if depth > blend {
                 var next = 1.0;
                 if index + 1u < CASCADES {
-                    next = cascade_layer_visibility(first + index + 1u, position, normal);
+                    next = shadow_visibility(first + index + 1u, position, normal);
                 }
                 visibility = mix(visibility, next, (depth - blend) / (end - blend));
             }
@@ -123,25 +158,14 @@ fn cascade_visibility(
 }
 
 // Fraction of an ambient light's sky reaching `position` through its sky
-// layer (`shadows.rs`): a 5×5 PCF two texels apart, about a metre across,
-// so light fades in over a cave mouth. The position moves a quarter metre
-// along the normal first, off the surface it lies on.
+// layer (`shadows.rs`): a 5×5 PCF two texels apart, about a metre across, so
+// light fades in over a cave mouth.
 fn sky_visibility(layer: u32, position: vec3<f32>, normal: vec3<f32>) -> f32 {
-    let clip = shadow_views[layer] * vec4<f32>(position + normal * 0.25, 1.0);
-    let ndc = clip.xyz / clip.w;
-    let uv = vec2<f32>(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
-    if any(uv < vec2<f32>(0.0)) || any(uv > vec2<f32>(1.0)) || ndc.z > 1.0 || ndc.z < 0.0 {
+    let lookup = shadow_lookup(layer, position, normal);
+    if !lookup.valid {
         return 1.0;
     }
-    let step = 2.0 / SHADOW_MAP_SIZE;
-    var lit = 0.0;
-    for (var y = -2; y <= 2; y = y + 1) {
-        for (var x = -2; x <= 2; x = x + 1) {
-            let offset = vec2<f32>(f32(x), f32(y)) * step;
-            lit += textureSampleCompareLevel(shadow_maps, shadow_sampler, uv + offset, layer, ndc.z);
-        }
-    }
-    return lit / 25.0;
+    return shadow_filter(lookup, 2, 2.0);
 }
 
 // Specular reflectance of a uniform environment: Karis' analytic fit of the
@@ -201,18 +225,22 @@ fn standard_radiance(
                     attenuation = attenuation * smoothstep(light.extra.x, light.extra.y, angle);
                 }
             }
+            let facing = clamp(dot(normal, direction), 0.0, 1.0);
+            // A light that cannot reach the fragment needs no shadow lookup.
             let shadow = u32(light.extra.w);
-            if shadow > 0u && kind == 2u {
-                attenuation = attenuation
-                    * cascade_visibility(shadow - 1u, world_position, normal, light.position_range, light.extra.xyz);
-            } else if shadow > 0u {
-                var layer = shadow - 1u;
-                if kind == 3u {
-                    layer += point_face(world_position - light.position_range.xyz);
+            if shadow > 0u && attenuation * facing > 0.0 {
+                if kind == 2u {
+                    attenuation = attenuation
+                        * cascade_visibility(shadow - 1u, world_position, normal, light.position_range, light.extra.xyz);
+                } else {
+                    var layer = shadow - 1u;
+                    if kind == 3u {
+                        layer += point_face(world_position - light.position_range.xyz);
+                    }
+                    attenuation = attenuation * shadow_visibility(layer, world_position, normal);
                 }
-                attenuation = attenuation * shadow_visibility(layer, world_position);
             }
-            let incident = color * attenuation * clamp(dot(normal, direction), 0.0, 1.0);
+            let incident = color * attenuation * facing;
             irradiance += incident;
             specular += incident * brdf_ggx(direction, view, normal, roughness, f0);
         }

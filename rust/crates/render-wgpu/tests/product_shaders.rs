@@ -107,6 +107,7 @@ fn scene(harness: &mut Harness, right: RenderMaterialDescriptor) {
                 direction: [0.0, -0.7, 1.0],
                 range: None,
                 shadow_intent: LightShadowIntent::Requested,
+                shadow: Default::default(),
             },
         },
     ]);
@@ -273,6 +274,7 @@ fn a_product_shader_that_does_not_compose_is_reported_by_line_and_shades_as_stan
                 intensity: std::f32::consts::PI,
                 enabled: true,
                 shadow_intent: LightShadowIntent::Disabled,
+                shadow: Default::default(),
             },
         },
     ]);

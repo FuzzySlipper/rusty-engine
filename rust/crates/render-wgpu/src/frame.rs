@@ -12,7 +12,8 @@ use std::ops::{Add, AddAssign};
 use glam::{Mat4, Vec3};
 use render_host_contracts::RendererCompositionCamera;
 use render_model::{
-    FogDescriptor, RenderHandle, RenderLayer, ToneMappingDescriptor, ToneMappingOperator,
+    FogDescriptor, LightDescriptor, RenderHandle, RenderLayer, ToneMappingDescriptor,
+    ToneMappingOperator,
 };
 
 use crate::apply::light_row;
@@ -266,6 +267,8 @@ impl Renderer {
         self.advance_video();
         self.propagate_transforms();
         self.report_pending_bounds();
+        self.shadows_chosen = false;
+        self.shadows_rendered = (0, 0);
         let mut layers_changed = false;
         if self.tables.lights_dirty {
             layers_changed = self.upload_lights();
@@ -357,6 +360,7 @@ impl Renderer {
                 distance,
                 index: cascade,
                 row,
+                settings,
             } = self.shadows.layers[index].source
             else {
                 continue;
@@ -368,7 +372,8 @@ impl Renderer {
             } else {
                 splits[cascade - 1]
             };
-            let view_proj = shadows::cascade_view(direction, camera, from, splits[cascade]);
+            let view_proj =
+                shadows::cascade_view(direction, camera, from, splits[cascade], settings.size);
             let layer = &mut self.shadows.layers[index];
             if layer.view_proj != view_proj {
                 layer.view_proj = view_proj;
@@ -486,22 +491,15 @@ impl Renderer {
             neutral_rig(&mut rows, NEUTRAL_KEY_POSITION);
         }
         // Only world lights cast: viewmodel lights are camera-local.
-        let mut shadow_layers: Vec<shadows::LayerSource> = Vec::new();
-        self.retained_light_rows(&mut rows, ViewLayer::World, Some(&mut shadow_layers));
+        let mut candidates = Vec::new();
+        self.retained_light_rows(&mut rows, ViewLayer::World, Some(&mut candidates));
         let world_count = (rows.len() / LIGHT_ROW_FLOATS) as u32;
         if self.options.default_viewmodel_lights {
             neutral_rig(&mut rows, NEUTRAL_VIEWMODEL_KEY_POSITION);
         }
         self.retained_light_rows(&mut rows, ViewLayer::Viewmodel, None);
-        let (replaced, layers_changed) = self.shadows.set_layers(
-            &self.gpu.device,
-            &self.gpu.queue,
-            &self.layouts.shadow_layer,
-            &shadow_layers,
-        );
-        if replaced {
-            self.rebind_frame();
-        }
+        self.shadow_candidates = candidates;
+        let layers_changed = self.choose_shadows(Some(&mut rows));
         let total = (rows.len() / LIGHT_ROW_FLOATS) as u32;
         self.lights = LightRanges {
             world: LightRange {
@@ -530,14 +528,77 @@ impl Renderer {
         layers_changed
     }
 
-    /// Retained light rows in `layer`. With `shadow_layers`, a light whose
-    /// shadow is requested (and enabled by the host) gets its shadow layers
-    /// appended there and its row's `extra.w` set to the first layer + 1.
+    /// Choose which shadow candidates cast (`shadows::choose`, from the
+    /// last world view's eye) and give the casting lights' layers to the
+    /// atlas. Each candidate's light row gets its first layer + 1 in
+    /// `extra.w`, or 0: in `rows` while they are being built, else written
+    /// to the lights buffer, only when the choice changed. Returns whether
+    /// a layer changed.
+    fn choose_shadows(&mut self, rows: Option<&mut Vec<f32>>) -> bool {
+        let chosen = shadows::choose(
+            &self.shadow_candidates,
+            self.options.shadow_budget,
+            self.shadow_eye,
+            &self.casting,
+        );
+        let casting: HashSet<RenderHandle> = self
+            .shadow_candidates
+            .iter()
+            .zip(&chosen)
+            .filter(|(_, chosen)| **chosen)
+            .map(|(candidate, _)| candidate.light)
+            .collect();
+        if rows.is_none() && casting == self.casting {
+            return false;
+        }
+        let mut sources = Vec::new();
+        let mut firsts = Vec::with_capacity(chosen.len());
+        for (candidate, chosen) in self.shadow_candidates.iter().zip(&chosen) {
+            firsts.push(if *chosen {
+                sources.extend(candidate.layers.iter().copied());
+                (sources.len() - candidate.layers.len() + 1) as f32
+            } else {
+                0.0
+            });
+        }
+        match rows {
+            Some(rows) => {
+                for (candidate, first) in self.shadow_candidates.iter().zip(&firsts) {
+                    rows[candidate.row as usize * LIGHT_ROW_FLOATS + 15] = *first;
+                }
+            }
+            None => {
+                for (candidate, first) in self.shadow_candidates.iter().zip(&firsts) {
+                    let at = (candidate.row as usize * LIGHT_ROW_FLOATS + 15) * 4;
+                    self.gpu.queue.write_buffer(
+                        &self.lights_buffer,
+                        at as u64,
+                        bytemuck::cast_slice(&[*first]),
+                    );
+                }
+            }
+        }
+        self.casting = casting;
+        let (replaced, changed) = self.shadows.set_layers(
+            &self.gpu.device,
+            &self.gpu.queue,
+            &self.layouts.shadow_layer,
+            &sources,
+        );
+        if replaced {
+            self.rebind_frame();
+        }
+        changed
+    }
+
+    /// Retained light rows in `layer`. With `candidates`, a light whose
+    /// shadow is requested (and enabled by the host) becomes a candidate to
+    /// cast; `choose_shadows` sets its row's `extra.w`.
     fn retained_light_rows(
         &self,
         rows: &mut Vec<f32>,
         layer: ViewLayer,
-        mut shadow_layers: Option<&mut Vec<shadows::LayerSource>>,
+        mut candidates: Option<&mut Vec<shadows::ShadowCandidate>>,
     ) {
         let mut handles: Vec<&RenderHandle> = self.tables.lights.iter().collect();
         handles.sort();
@@ -548,15 +609,27 @@ impl Renderer {
                 if let (NodeKind::Light(light), true, true) =
                     (&node.kind, node.world_visible, in_layer)
                 {
-                    if let Some(mut row) = light_row(light, &node.world) {
-                        if let (true, Some(sources)) =
-                            (self.options.shadows, shadow_layers.as_mut())
+                    if let Some(row) = light_row(light, &node.world) {
+                        if let (true, Some(candidates)) =
+                            (self.options.shadows, candidates.as_mut())
                         {
                             let index = (rows.len() / LIGHT_ROW_FLOATS) as u32;
                             let layers = shadows::light_layers(light, &node.world, index);
                             if !layers.is_empty() {
-                                row[15] = (sources.len() + 1) as f32;
-                                sources.extend(layers);
+                                candidates.push(shadows::ShadowCandidate {
+                                    light: *handle,
+                                    row: index,
+                                    layers,
+                                    priority: light.shadow_settings().priority,
+                                    position: match light {
+                                        LightDescriptor::Point { position, .. }
+                                        | LightDescriptor::Spot { position, .. } => Some(
+                                            node.world
+                                                .transform_point3(crate::convert::vec3(*position)),
+                                        ),
+                                        _ => None,
+                                    },
+                                });
                             }
                         }
                         rows.extend_from_slice(&row);
@@ -729,13 +802,20 @@ impl Renderer {
             drawn.layers += 1;
             drawn.casters += layer.casters.instances();
             let index = index as u32;
+            let tile = layer.tile;
+            // A tile shares its page with others' maps: it clears only its
+            // own square.
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("render-wgpu shadow"),
                 color_attachments: &[],
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: self.shadows.layer_view(index),
+                    view: self.shadows.page_view(tile.page),
                     depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(1.0),
+                        load: if tile.is_page() {
+                            wgpu::LoadOp::Clear(1.0)
+                        } else {
+                            wgpu::LoadOp::Load
+                        },
                         store: wgpu::StoreOp::Store,
                     }),
                     stencil_ops: None,
@@ -744,6 +824,13 @@ impl Renderer {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
+            let size = tile.size as f32;
+            pass.set_viewport(tile.x as f32, tile.y as f32, size, size, 0.0, 1.0);
+            pass.set_scissor_rect(tile.x, tile.y, tile.size, tile.size);
+            if !tile.is_page() {
+                pass.set_pipeline(&self.layouts.shadow_clear);
+                pass.draw(0..3, 0..1);
+            }
             pass.set_bind_group(0, &self.caster_bind_group, &[]);
             pass.set_bind_group(
                 2,
@@ -758,6 +845,8 @@ impl Renderer {
         for layer in &mut self.shadows.layers {
             layer.stale = false;
         }
+        self.shadows_rendered.0 += drawn.layers;
+        self.shadows_rendered.1 += drawn.casters;
         drawn
     }
 
@@ -968,6 +1057,15 @@ impl Renderer {
         let view_proj = view.camera.view_proj;
         let eye = view.camera.eye;
         if world_layer {
+            // A budget chooses casting lights near the first world view of
+            // each frame.
+            if self.options.shadow_budget.is_some() && !self.shadows_chosen {
+                self.shadows_chosen = true;
+                self.shadow_eye = eye;
+                if self.choose_shadows(None) {
+                    self.cull_casters(&HashSet::new(), false);
+                }
+            }
             self.fit_cascades(&view.camera);
         }
         let instances_uploaded = self.update_view_list(&view_proj, eye, view.layer);
@@ -1224,7 +1322,7 @@ pub(crate) fn frame_bind_group(
             },
             wgpu::BindGroupEntry {
                 binding: 6,
-                resource: bindings.shadows.matrices_buffer.as_entire_binding(),
+                resource: bindings.shadows.views_buffer.as_entire_binding(),
             },
         ],
     })
@@ -1256,7 +1354,7 @@ pub(crate) fn caster_bind_group(
             },
             wgpu::BindGroupEntry {
                 binding: 6,
-                resource: shadows.matrices_buffer.as_entire_binding(),
+                resource: shadows.views_buffer.as_entire_binding(),
             },
         ],
     })

@@ -144,12 +144,18 @@ pub(crate) fn native_light_descriptor(
     let position = native_vec3_array(descriptor.position);
     let direction = native_vec3_array(descriptor.direction);
     let range = descriptor.has_range.then_some(descriptor.range);
+    let shadow = LightShadowSettings {
+        resolution: descriptor.shadow_resolution,
+        priority: descriptor.shadow_priority,
+        soft: descriptor.shadow_soft,
+    };
     let light = match descriptor.kind {
         NativeLightKind::Ambient => LightDescriptor::Ambient {
             color,
             intensity: descriptor.intensity,
             enabled: descriptor.enabled,
             shadow_intent,
+            shadow,
         },
         NativeLightKind::Directional => LightDescriptor::Directional {
             color,
@@ -158,6 +164,7 @@ pub(crate) fn native_light_descriptor(
             direction,
             range,
             shadow_intent,
+            shadow,
         },
         NativeLightKind::Point => LightDescriptor::Point {
             color,
@@ -167,6 +174,7 @@ pub(crate) fn native_light_descriptor(
             range,
             decay: descriptor.decay,
             shadow_intent,
+            shadow,
         },
         NativeLightKind::Spot => LightDescriptor::Spot {
             color,
@@ -179,6 +187,7 @@ pub(crate) fn native_light_descriptor(
             outer_angle_radians: descriptor.outer_angle_radians,
             penumbra: descriptor.penumbra,
             shadow_intent,
+            shadow,
         },
     };
     light.validate().map_err(|error| {
@@ -7296,6 +7305,7 @@ fn native_light_readout(fact: &RuntimeLightFact) -> NativeLightReadout {
             intensity,
             enabled,
             shadow_intent,
+            ..
         } => (
             NativeLightKind::Ambient,
             *color,
@@ -7316,6 +7326,7 @@ fn native_light_readout(fact: &RuntimeLightFact) -> NativeLightReadout {
             direction,
             range,
             shadow_intent,
+            ..
         } => (
             NativeLightKind::Directional,
             *color,
@@ -7337,6 +7348,7 @@ fn native_light_readout(fact: &RuntimeLightFact) -> NativeLightReadout {
             range,
             decay,
             shadow_intent,
+            ..
         } => (
             NativeLightKind::Point,
             *color,
@@ -7361,6 +7373,7 @@ fn native_light_readout(fact: &RuntimeLightFact) -> NativeLightReadout {
             outer_angle_radians,
             penumbra,
             shadow_intent,
+            ..
         } => (
             NativeLightKind::Spot,
             *color,
@@ -7375,6 +7388,7 @@ fn native_light_readout(fact: &RuntimeLightFact) -> NativeLightReadout {
             *shadow_intent,
         ),
     };
+    let shadow = fact.light.shadow_settings();
     NativeLightReadout {
         logical_id: fact.light_id,
         has_parent_object: fact.parent_object_id.is_some(),
@@ -7407,6 +7421,9 @@ fn native_light_readout(fact: &RuntimeLightFact) -> NativeLightReadout {
                 LightShadowIntent::Disabled => NativeLightShadowIntent::Disabled,
                 LightShadowIntent::Requested => NativeLightShadowIntent::Requested,
             },
+            shadow_resolution: shadow.resolution,
+            shadow_priority: shadow.priority,
+            shadow_soft: shadow.soft,
         },
     }
 }
@@ -10162,6 +10179,9 @@ pub(super) mod tests {
                 outer_angle_radians: 0.0,
                 penumbra: 0.0,
                 shadow_intent: NativeLightShadowIntent::Requested,
+                shadow_resolution: 0,
+                shadow_priority: 0,
+                shadow_soft: false,
             },
         }
     }

@@ -54,6 +54,26 @@ pub struct ProductHostRendererStatistics {
     #[ts(type = "Record<string, number>")]
     pub skipped_ops: BTreeMap<String, u64>,
     pub last_skip: Option<String>,
+    pub shadows: ProductHostShadowStatistics,
+}
+
+/// The scene's shadow layers and which requesting lights cast.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ProductHostShadowStatistics {
+    /// Layers in the shadow atlas, and the 2048² pages holding them.
+    pub layers: usize,
+    pub pages: usize,
+    /// `RustyEngineProductShadowBudget` in layers, if the manifest sets one.
+    pub budget: Option<u32>,
+    /// Lights casting, and the renderer handles of those requesting a
+    /// shadow that the budget left out.
+    pub casting_lights: usize,
+    #[ts(type = "number[]")]
+    pub skipped_lights: Vec<u64>,
+    /// Layers re-rendered in the last frame and the casters drawn into them.
+    pub rendered_layers: u32,
+    pub rendered_casters: u32,
 }
 
 /// What the recent streamed frames cost.

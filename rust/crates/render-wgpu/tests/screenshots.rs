@@ -510,6 +510,7 @@ fn a_torch_lights_a_dark_room_when_the_default_rig_is_disabled() {
                 range: Some(6.0),
                 decay: 2.0,
                 shadow_intent: LightShadowIntent::Disabled,
+                shadow: Default::default(),
             },
         },
         RenderDiff::CreateLight {
@@ -526,6 +527,7 @@ fn a_torch_lights_a_dark_room_when_the_default_rig_is_disabled() {
                 outer_angle_radians: 0.5,
                 penumbra: 0.3,
                 shadow_intent: LightShadowIntent::Disabled,
+                shadow: Default::default(),
             },
         },
         RenderDiff::CreateLight {
@@ -536,6 +538,7 @@ fn a_torch_lights_a_dark_room_when_the_default_rig_is_disabled() {
                 intensity: 0.05,
                 enabled: true,
                 shadow_intent: LightShadowIntent::Disabled,
+                shadow: Default::default(),
             },
         },
     ]);

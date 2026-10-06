@@ -154,6 +154,7 @@ mod tests {
             range: Some(8.0),
             decay: 2.0,
             shadow_intent: LightShadowIntent::Requested,
+            shadow: Default::default(),
         }
     }
     #[test]

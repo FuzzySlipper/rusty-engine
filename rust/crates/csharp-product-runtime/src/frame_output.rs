@@ -38,9 +38,9 @@ use csharp_engine_services::{
 use product_host::RuntimePublication;
 use product_host::{
     ProductHostDrawingMode, ProductHostDrawnFrame, ProductHostFrameStream,
-    ProductHostRendererInspection, ProductHostRendererStatistics, ProductHostStreamMedians,
-    ProductHostStreamStatistics, ProductHostTimedStep, ProductHostWindowMedians,
-    ProductHostWindowStatistics,
+    ProductHostRendererInspection, ProductHostRendererStatistics, ProductHostShadowStatistics,
+    ProductHostStreamMedians, ProductHostStreamStatistics, ProductHostTimedStep,
+    ProductHostWindowMedians, ProductHostWindowStatistics,
 };
 use render_host_contracts::{RendererCameraPose, RendererViewComposition, RendererViewTarget};
 use render_stream::{DrawnFrame, FrameStreamer, StreamStats};
@@ -594,6 +594,7 @@ impl FrameOutput {
                 input_steps: self.input_steps(),
                 skipped_ops: skipped_op_counts(skipped_ops),
                 last_skip,
+                shadows: shadow_statistics(&self.driver),
             };
         };
         let StreamStats {
@@ -632,6 +633,7 @@ impl FrameOutput {
             input_steps: self.input_steps(),
             skipped_ops: skipped_op_counts(skipped_ops),
             last_skip,
+            shadows: shadow_statistics(&self.driver),
         }
     }
 
@@ -814,6 +816,19 @@ fn drawn_cameras(
             camera
         })
         .collect()
+}
+
+fn shadow_statistics(driver: &SceneDriver) -> ProductHostShadowStatistics {
+    let report = driver.shadow_report();
+    ProductHostShadowStatistics {
+        layers: report.layers,
+        pages: report.pages,
+        budget: report.budget,
+        casting_lights: report.casting,
+        skipped_lights: report.skipped,
+        rendered_layers: report.rendered_layers,
+        rendered_casters: report.rendered_casters,
+    }
 }
 
 #[cfg(test)]

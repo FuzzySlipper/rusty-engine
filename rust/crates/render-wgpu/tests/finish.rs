@@ -212,6 +212,7 @@ fn bright_boxes(harness: &mut Harness) {
                 direction: [-0.3, -0.5, -1.0],
                 range: None,
                 shadow_intent: LightShadowIntent::Disabled,
+                shadow: Default::default(),
             },
         },
         RenderDiff::CreateLight {
@@ -222,6 +223,7 @@ fn bright_boxes(harness: &mut Harness) {
                 intensity: 0.6,
                 enabled: true,
                 shadow_intent: LightShadowIntent::Disabled,
+                shadow: Default::default(),
             },
         },
     ];

@@ -63,9 +63,9 @@ pub use bundle::{
 pub use engine_debug::{
     ProductHostCameraPose, ProductHostDrawingMode, ProductHostDrawnFrame, ProductHostRenderOutput,
     ProductHostRendererInspection, ProductHostRendererStatistics, ProductHostRendererStatus,
-    ProductHostRendererWidget, ProductHostStreamMedians, ProductHostStreamStatistics,
-    ProductHostTimeAnswer, ProductHostTimeMode, ProductHostTimedStep, ProductHostWindowMedians,
-    ProductHostWindowStatistics,
+    ProductHostRendererWidget, ProductHostShadowStatistics, ProductHostStreamMedians,
+    ProductHostStreamStatistics, ProductHostTimeAnswer, ProductHostTimeMode, ProductHostTimedStep,
+    ProductHostWindowMedians, ProductHostWindowStatistics,
 };
 pub use error::{ProductHostError, ProductHostRuntimeError};
 pub use frames::{

@@ -1626,6 +1626,9 @@ mod tests {
             outer_angle_radians: 0.0,
             penumbra: 0.0,
             shadow_intent: NativeLightShadowIntent::Requested,
+            shadow_resolution: 0,
+            shadow_priority: 0,
+            shadow_soft: false,
         };
         let mut request = NativeVoxelLightSampleRequest {
             session,

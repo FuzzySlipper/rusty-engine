@@ -471,6 +471,7 @@ fn shadow_scene(harness: &mut Harness) {
                 direction: [-0.9, -0.8, 0.6],
                 range: None,
                 shadow_intent: LightShadowIntent::Requested,
+                shadow: Default::default(),
             },
         },
         RenderDiff::CreateLight {
@@ -487,6 +488,7 @@ fn shadow_scene(harness: &mut Harness) {
                 outer_angle_radians: 0.6,
                 penumbra: 0.2,
                 shadow_intent: LightShadowIntent::Requested,
+                shadow: Default::default(),
             },
         },
         RenderDiff::CreateLight {
@@ -500,6 +502,7 @@ fn shadow_scene(harness: &mut Harness) {
                 range: Some(8.0),
                 decay: 2.0,
                 shadow_intent: LightShadowIntent::Requested,
+                shadow: Default::default(),
             },
         },
         RenderDiff::CreateLight {
@@ -510,6 +513,7 @@ fn shadow_scene(harness: &mut Harness) {
                 intensity: 0.4,
                 enabled: true,
                 shadow_intent: LightShadowIntent::Disabled,
+                shadow: Default::default(),
             },
         },
     ]);
@@ -603,6 +607,7 @@ fn a_light_changing_intensity_renders_no_shadow_layer() {
         range: Some(8.0),
         decay: 2.0,
         shadow_intent: LightShadowIntent::Requested,
+        shadow: Default::default(),
     };
     // A flickering lamp.
     harness.apply(vec![RenderDiff::UpdateLight {
@@ -631,6 +636,7 @@ fn a_light_changing_intensity_renders_no_shadow_layer() {
             direction: [-0.85, -0.85, 0.6],
             range: None,
             shadow_intent: LightShadowIntent::Requested,
+            shadow: Default::default(),
         },
     }]);
     assert_eq!(harness.render(&view).0.shadow_layers, 4);
@@ -663,6 +669,7 @@ fn a_light_with_a_range_draws_only_the_casters_it_reaches() {
                 range: Some(3.0),
                 decay: 2.0,
                 shadow_intent: LightShadowIntent::Requested,
+                shadow: Default::default(),
             },
         },
     ];
@@ -772,6 +779,7 @@ fn static_mesh_vertex_colours_multiply_the_material_and_payloads_ignore_them() {
                 intensity: std::f32::consts::PI,
                 enabled: true,
                 shadow_intent: LightShadowIntent::Disabled,
+                shadow: Default::default(),
             },
         },
     ]);
@@ -946,6 +954,7 @@ fn metal_materials_lose_their_diffuse_and_tint_their_specular() {
                 direction: [0.4, -0.6, -1.0],
                 range: None,
                 shadow_intent: LightShadowIntent::Disabled,
+                shadow: Default::default(),
             },
         },
         RenderDiff::CreateLight {
@@ -956,6 +965,7 @@ fn metal_materials_lose_their_diffuse_and_tint_their_specular() {
                 intensity: 0.8,
                 enabled: true,
                 shadow_intent: LightShadowIntent::Disabled,
+                shadow: Default::default(),
             },
         },
     ];
@@ -1099,6 +1109,7 @@ fn sun(direction: [f32; 3]) -> RenderDiff {
             direction,
             range: None,
             shadow_intent: LightShadowIntent::Disabled,
+            shadow: Default::default(),
         },
     }
 }
@@ -1415,6 +1426,7 @@ fn a_triplanar_material_draws_a_dual_contoured_mound_without_chart_seams() {
                     intensity: std::f32::consts::PI,
                     enabled: true,
                     shadow_intent: LightShadowIntent::Disabled,
+                    shadow: Default::default(),
                 },
             },
         ];
@@ -1519,6 +1531,7 @@ fn an_ambient_light_requesting_shadows_leaves_a_cave_darker_than_open_ground() {
                 intensity: std::f32::consts::PI,
                 enabled: true,
                 shadow_intent,
+                shadow: Default::default(),
             },
         }];
         ops.extend(project(&mut projector, &scene, &materials));
@@ -1696,6 +1709,7 @@ fn terrain_layers_blend_sand_into_rock_over_the_chosen_width() {
                         intensity: std::f32::consts::PI,
                         enabled: true,
                         shadow_intent: LightShadowIntent::Disabled,
+                        shadow: Default::default(),
                     },
                 },
             ];
@@ -1710,6 +1724,7 @@ fn terrain_layers_blend_sand_into_rock_over_the_chosen_width() {
                         direction: [-0.8, -0.4, 0.3],
                         range: None,
                         shadow_intent: LightShadowIntent::Disabled,
+                        shadow: Default::default(),
                     },
                 });
             }
@@ -1955,6 +1970,7 @@ fn a_high_contrast_keeps_a_blend_between_non_base_layers() {
                     intensity: std::f32::consts::PI,
                     enabled: true,
                     shadow_intent: LightShadowIntent::Disabled,
+                    shadow: Default::default(),
                 },
             },
         ];
@@ -2328,6 +2344,7 @@ fn sunlit_field(harness: &mut Harness, origin: [f32; 3], posts: &[f32]) {
                 direction: [-1.0, -1.0, 0.0],
                 range: None,
                 shadow_intent: LightShadowIntent::Requested,
+                shadow: Default::default(),
             },
         },
         RenderDiff::CreateLight {
@@ -2338,6 +2355,7 @@ fn sunlit_field(harness: &mut Harness, origin: [f32; 3], posts: &[f32]) {
                 intensity: 0.3,
                 enabled: true,
                 shadow_intent: LightShadowIntent::Disabled,
+                shadow: Default::default(),
             },
         },
         instance(1, None, "mesh/ground", Transform::IDENTITY),
@@ -2430,4 +2448,181 @@ fn a_sun_shadows_the_view_from_near_to_its_range_wherever_its_node_is() {
             assert_eq!(with, without, "{distance} m is past the sun's 100 m range");
         }
     }
+}
+
+/// Lamps over a floor, each with a crate beside it: `count` along X, 6 m
+/// apart, each requesting a shadow at `resolution` (0 for the default).
+fn lamp_row(harness: &mut Harness, count: u64, resolution: u32) {
+    let mut ops = vec![
+        RenderDiff::DefineMaterial {
+            material: material("material/floor", [0.75, 0.75, 0.72, 1.0], None),
+        },
+        static_mesh(
+            "mesh/floor",
+            box_mesh([-4.0, -0.1, -4.0], [6.0 * count as f32, 0.0, 4.0], |_| 0),
+            "material/floor",
+        ),
+        static_mesh(
+            "mesh/crate",
+            box_mesh([-0.4, 0.0, -0.4], [0.4, 0.8, 0.4], |_| 0),
+            "material/floor",
+        ),
+        instance(1, None, "mesh/floor", Transform::IDENTITY),
+    ];
+    for index in 0..count {
+        let x = 6.0 * index as f32;
+        ops.push(instance(
+            100 + index,
+            None,
+            "mesh/crate",
+            transform([x + 0.8, 0.0, 0.0], 0.0, [1.0; 3]),
+        ));
+        ops.push(RenderDiff::CreateLight {
+            handle: RenderHandle::new(1000 + index),
+            parent: None,
+            light: LightDescriptor::Point {
+                color: [1.0, 0.85, 0.6],
+                intensity: 6.0,
+                enabled: true,
+                position: [x, 1.6, 0.0],
+                range: Some(4.0),
+                decay: 2.0,
+                shadow_intent: LightShadowIntent::Requested,
+                shadow: LightShadowSettings {
+                    resolution,
+                    ..Default::default()
+                },
+            },
+        });
+    }
+    harness.apply(ops);
+}
+
+#[test]
+fn a_shadow_budget_casts_the_nearest_lamps_and_reports_the_rest() {
+    let mut harness = Harness::new(RendererOptions {
+        default_world_lights: false,
+        shadows: true,
+        shadow_budget: Some(12),
+        ..RendererOptions::default()
+    });
+    lamp_row(&mut harness, 4, 0);
+    // Near the first two lamps: they cast, the far two are skipped.
+    harness.render(&camera([3.0, 3.0, 6.0], 0.0, -25.0));
+    let report = harness.renderer.shadow_report();
+    assert_eq!(
+        (report.casting, report.layers, report.budget),
+        (2, 12, Some(12))
+    );
+    assert_eq!(report.skipped, vec![1002, 1003]);
+    // Walking to the far end swaps them.
+    harness.render(&camera([15.0, 3.0, 6.0], 0.0, -25.0));
+    assert_eq!(harness.renderer.shadow_report().skipped, vec![1000, 1001]);
+    // Without a budget every lamp casts.
+    let mut unlimited = Harness::new(RendererOptions {
+        default_world_lights: false,
+        shadows: true,
+        ..RendererOptions::default()
+    });
+    lamp_row(&mut unlimited, 4, 0);
+    unlimited.render(&camera([3.0, 3.0, 6.0], 0.0, -25.0));
+    let report = unlimited.renderer.shadow_report();
+    assert_eq!((report.casting, report.skipped.len()), (4, 0));
+}
+
+#[test]
+fn many_shadowed_lamps_share_atlas_pages_by_resolution() {
+    let mut harness = Harness::new(RendererOptions {
+        default_world_lights: false,
+        shadows: true,
+        ..RendererOptions::default()
+    });
+    // Forty-four lamps' 264 faces: more layers than one array could hold
+    // before, in seventeen pages of sixteen 512 tiles.
+    lamp_row(&mut harness, 44, 0);
+    let (stats, pixels) = harness.render(&camera([3.0, 3.0, 6.0], 0.0, -25.0));
+    let report = harness.renderer.shadow_report();
+    assert_eq!((report.layers, report.pages), (264, 17));
+    assert_eq!(stats.shadow_layers, 264);
+    // The first lamp's crate still shadows the floor beside it.
+    let mut plain = Harness::new(RendererOptions {
+        default_world_lights: false,
+        ..RendererOptions::default()
+    });
+    lamp_row(&mut plain, 44, 0);
+    let unshadowed = plain.render(&camera([3.0, 3.0, 6.0], 0.0, -25.0)).1;
+    let darker = pixels
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(unshadowed.as_chunks::<4>().0)
+        .filter(|(lit, plain)| {
+            let sum = |pixel: &[u8; 4]| pixel[..3].iter().map(|&c| u32::from(c)).sum::<u32>();
+            sum(plain) > sum(lit) + 30
+        })
+        .count();
+    assert!(darker > 200, "{darker} shadowed pixels");
+    // A 2048 lamp takes a page of its own; a 256 one a sixty-fourth.
+    let mut sized = Harness::new(RendererOptions {
+        default_world_lights: false,
+        shadows: true,
+        ..RendererOptions::default()
+    });
+    lamp_row(&mut sized, 1, 2048);
+    sized.render(&camera([3.0, 3.0, 6.0], 0.0, -25.0));
+    assert_eq!(sized.renderer.shadow_report().pages, 6);
+    let mut small = Harness::new(RendererOptions {
+        default_world_lights: false,
+        shadows: true,
+        ..RendererOptions::default()
+    });
+    lamp_row(&mut small, 1, 200);
+    small.render(&camera([3.0, 3.0, 6.0], 0.0, -25.0));
+    assert_eq!(small.renderer.shadow_report().pages, 1);
+}
+
+#[test]
+fn a_soft_light_filters_its_shadow_edges_differently() {
+    let render = |soft| {
+        let mut harness = Harness::new(RendererOptions {
+            default_world_lights: false,
+            shadows: true,
+            ..RendererOptions::default()
+        });
+        lamp_row(&mut harness, 1, 0);
+        if soft {
+            harness.apply(vec![RenderDiff::UpdateLight {
+                handle: RenderHandle::new(1000),
+                light: LightDescriptor::Point {
+                    color: [1.0, 0.85, 0.6],
+                    intensity: 6.0,
+                    enabled: true,
+                    position: [0.0, 1.6, 0.0],
+                    range: Some(4.0),
+                    decay: 2.0,
+                    shadow_intent: LightShadowIntent::Requested,
+                    shadow: LightShadowSettings {
+                        soft: true,
+                        ..Default::default()
+                    },
+                },
+            }]);
+        }
+        harness.render(&camera([1.5, 2.5, 3.0], 0.0, -40.0)).1
+    };
+    let (hard, soft) = (render(false), render(true));
+    // The 5×5 filter changes the shadow's edge pixels.
+    let differing = |pixels: &[u8], other: &[u8]| {
+        pixels
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(other.as_chunks::<4>().0)
+            .filter(|(a, b)| a[..3] != b[..3])
+            .count()
+    };
+    assert!(
+        differing(&hard, &soft) > 50,
+        "the filters draw the same image"
+    );
 }

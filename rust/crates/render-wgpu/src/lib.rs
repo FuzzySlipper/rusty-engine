@@ -118,8 +118,12 @@ pub struct RendererOptions {
     /// viewmodel layer unless the product disables it.
     pub default_viewmodel_lights: bool,
     /// Render shadow maps for world lights whose `shadow_intent` requests
-    /// them. Off by default; C# products do not enable it.
+    /// them. Off by default; C# products enable it in their manifest.
     pub shadows: bool,
+    /// `RustyEngineProductShadowBudget`: at most this many shadow layers
+    /// at once, the requesting lights chosen by priority then distance from
+    /// the camera (`shadows::choose`); unlimited without one.
+    pub shadow_budget: Option<u32>,
 }
 
 impl Default for RendererOptions {
@@ -128,6 +132,7 @@ impl Default for RendererOptions {
             default_world_lights: true,
             default_viewmodel_lights: true,
             shadows: false,
+            shadow_budget: None,
         }
     }
 }
@@ -154,6 +159,15 @@ pub struct Renderer {
     /// Per view layer (world, viewmodel): the last draw list.
     views: [Option<frame::ViewCache>; 2],
     shadows: shadows::ShadowMaps,
+    /// World lights requesting shadows, by light row.
+    shadow_candidates: Vec<shadows::ShadowCandidate>,
+    /// The candidates casting now.
+    casting: std::collections::HashSet<render_model::RenderHandle>,
+    /// The eye a shadow budget last chose from, and whether this frame chose.
+    shadow_eye: glam::Vec3,
+    shadows_chosen: bool,
+    /// Shadow layers and casters rendered since the frame began.
+    shadows_rendered: (u32, u32),
     frame_bind_group: wgpu::BindGroup,
     caster_bind_group: wgpu::BindGroup,
     sky_bind_group: Option<wgpu::BindGroup>,
@@ -252,6 +266,11 @@ impl Renderer {
             casters_uploaded: false,
             views: Default::default(),
             shadows,
+            shadow_candidates: Vec::new(),
+            casting: Default::default(),
+            shadow_eye: glam::Vec3::ZERO,
+            shadows_chosen: false,
+            shadows_rendered: (0, 0),
             frame_bind_group,
             caster_bind_group,
             sky_bind_group: None,
@@ -338,6 +357,23 @@ impl Renderer {
         memory
     }
 
+    pub fn shadow_report(&self) -> ShadowReport {
+        ShadowReport {
+            layers: self.shadows.layers.len(),
+            pages: self.shadows.pages(),
+            budget: self.options.shadow_budget,
+            casting: self.casting.len(),
+            skipped: self
+                .shadow_candidates
+                .iter()
+                .filter(|candidate| !self.casting.contains(&candidate.light))
+                .map(|candidate| candidate.light.raw())
+                .collect(),
+            rendered_layers: self.shadows_rendered.0,
+            rendered_casters: self.shadows_rendered.1,
+        }
+    }
+
     pub fn table_counts(&self) -> TableCounts {
         TableCounts {
             textures: self.tables.textures.len(),
@@ -354,6 +390,23 @@ impl Renderer {
             shader_variants: self.layouts.shader_variants(),
         }
     }
+}
+
+/// The scene's shadows, for diagnostics.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ShadowReport {
+    /// Layers in the atlas and pages holding them.
+    pub layers: usize,
+    pub pages: usize,
+    /// The manifest's budget in layers, if it sets one.
+    pub budget: Option<u32>,
+    /// Lights casting, and those requesting a shadow that the budget left
+    /// out (by render handle).
+    pub casting: usize,
+    pub skipped: Vec<u64>,
+    /// Layers re-rendered in the last frame and the casters drawn into them.
+    pub rendered_layers: u32,
+    pub rendered_casters: u32,
 }
 
 /// Mesh memory: the CPU geometry copies kept for bounds and wireframe, beside

@@ -512,6 +512,7 @@ fn sprites_voxel_surfaces_and_ambient_lights_fail_the_export_by_name() {
                 intensity: 0.5,
                 enabled: true,
                 shadow_intent: LightShadowIntent::Disabled,
+                shadow: Default::default(),
             },
         },
         group(5, None, Transform::IDENTITY),
@@ -526,6 +527,7 @@ fn sprites_voxel_surfaces_and_ambient_lights_fail_the_export_by_name() {
                 range: Some(10.0),
                 decay: 2.0,
                 shadow_intent: LightShadowIntent::Disabled,
+                shadow: Default::default(),
             },
         },
     ]);

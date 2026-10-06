@@ -85,6 +85,15 @@ pub struct NativeLightDescriptor {
     pub outer_angle_radians: f32,
     pub penumbra: f32,
     pub shadow_intent: NativeLightShadowIntent,
+    /// Texels on a side of each of the light's shadow layers (256 to 2048,
+    /// rounded up to a power of two); 0 for the Engine's default for its
+    /// kind.
+    pub shadow_resolution: u32,
+    /// Which requested shadows the product's shadow budget keeps: higher
+    /// first, then nearer the camera.
+    pub shadow_priority: i32,
+    /// A wider, softer shadow filter.
+    pub shadow_soft: bool,
 }
 
 /// One requested runtime light fact. `logical_id` and `parent_object_id`

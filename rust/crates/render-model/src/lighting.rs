@@ -10,6 +10,22 @@ pub enum LightShadowIntent {
     Requested,
 }
 
+/// How a light's requested shadow renders (render-wgpu `shadows.rs`); the
+/// default leaves every choice to the renderer.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LightShadowSettings {
+    /// Texels on a side of each of the light's shadow layers: 256, 512,
+    /// 1024 or 2048 (other values round up to one of them, at most 2048);
+    /// 0 for the renderer's default for the light's kind.
+    pub resolution: u32,
+    /// Which requested shadows a shadow budget keeps: higher first, then
+    /// nearer the camera.
+    pub priority: i32,
+    /// A wider, softer filter: 5×5 samples rather than 3×3.
+    pub soft: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(
     tag = "kind",
@@ -25,6 +41,8 @@ pub enum LightDescriptor {
         /// Requested: the light is the sky's, reaching a surface only where
         /// the sky above it is open (render-wgpu `shadows.rs`).
         shadow_intent: LightShadowIntent,
+        #[serde(default)]
+        shadow: LightShadowSettings,
     },
     Directional {
         color: [f32; 3],
@@ -35,6 +53,8 @@ pub enum LightDescriptor {
         /// renderer's default when absent (render-wgpu `shadows.rs`).
         range: Option<f32>,
         shadow_intent: LightShadowIntent,
+        #[serde(default)]
+        shadow: LightShadowSettings,
     },
     Point {
         color: [f32; 3],
@@ -44,6 +64,8 @@ pub enum LightDescriptor {
         range: Option<f32>,
         decay: f32,
         shadow_intent: LightShadowIntent,
+        #[serde(default)]
+        shadow: LightShadowSettings,
     },
     Spot {
         color: [f32; 3],
@@ -56,6 +78,8 @@ pub enum LightDescriptor {
         outer_angle_radians: f32,
         penumbra: f32,
         shadow_intent: LightShadowIntent,
+        #[serde(default)]
+        shadow: LightShadowSettings,
     },
 }
 
@@ -127,6 +151,15 @@ impl LightDescriptor {
         }
     }
 
+    pub const fn shadow_settings(&self) -> LightShadowSettings {
+        match self {
+            Self::Ambient { shadow, .. }
+            | Self::Directional { shadow, .. }
+            | Self::Point { shadow, .. }
+            | Self::Spot { shadow, .. } => *shadow,
+        }
+    }
+
     pub const fn shadow_intent(&self) -> LightShadowIntent {
         match self {
             Self::Ambient { shadow_intent, .. }
@@ -189,6 +222,7 @@ mod tests {
                 intensity: 0.5,
                 enabled: true,
                 shadow_intent: LightShadowIntent::Disabled,
+                shadow: Default::default(),
             },
             LightDescriptor::Directional {
                 color: [1.0, 0.9, 0.8],
@@ -197,6 +231,7 @@ mod tests {
                 direction: [-1.0, -2.0, -1.0],
                 range: Some(80.0),
                 shadow_intent: LightShadowIntent::Requested,
+                shadow: Default::default(),
             },
             LightDescriptor::Point {
                 color: [1.0, 0.4, 0.2],
@@ -206,6 +241,7 @@ mod tests {
                 range: Some(12.0),
                 decay: 2.0,
                 shadow_intent: LightShadowIntent::Disabled,
+                shadow: Default::default(),
             },
             LightDescriptor::Spot {
                 color: [0.4, 0.6, 1.0],
@@ -218,6 +254,7 @@ mod tests {
                 outer_angle_radians: 0.7,
                 penumbra: 0.25,
                 shadow_intent: LightShadowIntent::Requested,
+                shadow: Default::default(),
             },
         ];
         assert!(lights.iter().all(|light| light.validate().is_ok()));
@@ -230,12 +267,14 @@ mod tests {
             intensity: MAX_RENDER_LIGHT_INTENSITY,
             enabled: true,
             shadow_intent: LightShadowIntent::Disabled,
+            shadow: Default::default(),
         };
         let over = LightDescriptor::Ambient {
             color: [1.0; 3],
             intensity: MAX_RENDER_LIGHT_INTENSITY + 1.0,
             enabled: true,
             shadow_intent: LightShadowIntent::Disabled,
+            shadow: Default::default(),
         };
         assert_eq!(exact.validate(), Ok(()));
         assert_eq!(over.validate(), Err(LightDescriptorError::InvalidIntensity));

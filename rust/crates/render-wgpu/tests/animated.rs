@@ -683,6 +683,7 @@ fn shadowed_character(harness: &mut Harness) {
                 direction: [-0.5, -1.0, -0.3],
                 range: None,
                 shadow_intent: LightShadowIntent::Requested,
+                shadow: Default::default(),
             },
         },
         RenderDiff::CreateLight {
@@ -693,6 +694,7 @@ fn shadowed_character(harness: &mut Harness) {
                 intensity: 0.35,
                 enabled: true,
                 shadow_intent: LightShadowIntent::Disabled,
+                shadow: Default::default(),
             },
         },
     ]);

@@ -15,7 +15,7 @@ its surroundings. Updating or disabling that light changes the same retained lig
 
 ## Shadows
 
-Each shadowed light renders the scene into layers of one depth array: four
+Each shadowed light renders the scene into layers of a shadow atlas: four
 cascades for a directional light, one layer for a spot light, six for a point
 light. Every shown part of the scene layer casts, so a new object needs no
 shadow setup, but a layer draws only the parts inside its view and, for a
@@ -37,6 +37,33 @@ changes range; a cascade when the camera moves) or a part in it is added,
 removed, moved or posed. A lamp that flickers by changing colour or intensity
 re-renders nothing, and a moving object re-renders only the layers that see
 it.
+
+### Quality and budget
+
+A light's descriptor tunes its own shadow:
+
+- `ShadowResolution`: texels on a side of each of its layers, 256, 512, 1024
+  or 2048 (other values round up; 0 takes the default: 512 for point and spot
+  lights and an ambient light's sky, 1024 for each cascade). Layers share
+  2048² atlas pages by size, so a 2048 layer takes a page, a 512 one a
+  sixteenth. A lamp a metre from a wall needs fewer texels than a sun.
+- `ShadowSoft`: a wider filter, 5×5 samples rather than 3×3, for softer edges
+  at more sampling cost.
+- `ShadowPriority`: which lights a shadow budget keeps (below).
+
+Casters draw with a slope-scaled depth bias, and receivers look a layer up
+from a point moved one and a half of its texels along their normal, so lit
+surfaces do not shadow themselves at any resolution or distance.
+
+`RustyEngineProductShadowBudget` caps the shadow layers rendered at once
+(0, the default, for no limit). With a budget, the Engine chooses which
+requesting lights cast each frame: higher `ShadowPriority` first, then nearer
+the camera (a directional or ambient light counts as nearest), each while its
+layers fit; a light already casting counts a metre nearer so the choice does
+not flicker. The others light without a shadow. A product keeps its intents and
+priorities and needs no nearest-N policy of its own. `engine.renderer.status`
+reports the layers, pages, budget, casting lights, the renderer handles of
+lights the budget left out, and the layers and casters re-rendered last frame.
 
 ## Dark caves: an ambient light's sky
 
@@ -135,7 +162,9 @@ fn shade(surface: Surface) -> vec4<f32> {
   it is paused, and needs no material update, so scrolling, pulsing and
   dissolving cost nothing per frame on the C# side. Any standard module may
   be imported: `rusty::shade::standard_shade` lights and finishes a surface,
-  `rusty::lighting` has `standard_radiance` and the light rows,
+  `rusty::lighting` has `standard_radiance` and the light rows (laid out
+  in `rusty::types::Light`; a shadowed directional light's row carries its
+  cascades' split depths and view axis rather than a position and range),
   `rusty::finish::finish` applies exposure, tone mapping and fog, and
   `rusty::material` has the material's textures and samplers.
 - **What it returns.** The fragment's colour, finished or not; output that

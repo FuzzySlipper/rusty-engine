@@ -206,6 +206,7 @@ fn project_entry(
             intensity: 2.0,
             enabled: true,
             shadow_intent: LightShadowIntent::Disabled,
+            shadow: Default::default(),
         },
     });
     operations.extend(projected.frame.ops.iter().cloned());

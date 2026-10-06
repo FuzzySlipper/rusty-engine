@@ -321,6 +321,7 @@ impl Renderer {
                 default_world_lights: self.options.default_world_lights && !isolated_lighting,
                 default_viewmodel_lights: false,
                 shadows: false,
+                shadow_budget: None,
             },
         ));
         source.set_animation_time(self.animation_time);
@@ -651,6 +652,7 @@ fn studio_rig(settings: &GhostPlateCaptureSettings, orientation: Quat) -> [Light
             intensity: lighting.ambient_intensity,
             enabled: true,
             shadow_intent: LightShadowIntent::Disabled,
+            shadow: Default::default(),
         },
         LightDescriptor::Directional {
             color: lighting.key_color,
@@ -659,6 +661,7 @@ fn studio_rig(settings: &GhostPlateCaptureSettings, orientation: Quat) -> [Light
             direction: travel(lighting.key_direction),
             range: None,
             shadow_intent: LightShadowIntent::Disabled,
+            shadow: Default::default(),
         },
         LightDescriptor::Directional {
             color: lighting.fill_color,
@@ -667,6 +670,7 @@ fn studio_rig(settings: &GhostPlateCaptureSettings, orientation: Quat) -> [Light
             direction: travel(lighting.fill_direction),
             range: None,
             shadow_intent: LightShadowIntent::Disabled,
+            shadow: Default::default(),
         },
     ]
 }

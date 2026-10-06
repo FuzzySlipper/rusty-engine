@@ -243,6 +243,11 @@ impl ProductBundle {
         self.renderer_lighting.shadows
     }
 
+    /// The manifest's shadow budget in layers, if it sets one.
+    pub(super) fn shadow_budget(&self) -> Option<u32> {
+        self.renderer_lighting.shadow_budget
+    }
+
     pub(super) fn browser_entries(&self) -> Result<Vec<ProductHostBundleEntry>, String> {
         let mut entries = Vec::new();
         self.collect_ui(&mut entries)?;
@@ -570,6 +575,9 @@ struct ManifestAudio {
 struct ManifestRendererLighting {
     #[serde(default)]
     shadows: Option<String>,
+    /// Shadow layers at once; 0 or absent for no limit.
+    #[serde(default)]
+    shadow_budget: Option<u32>,
     #[serde(default)]
     default_lights: ManifestDefaultLights,
 }
@@ -608,6 +616,7 @@ impl ProductDefaultLights {
 #[derive(Debug)]
 struct ProductRendererLighting {
     shadows: bool,
+    shadow_budget: Option<u32>,
     world: ProductDefaultLights,
     viewmodel: ProductDefaultLights,
 }
@@ -633,6 +642,7 @@ impl ProductRendererLighting {
         };
         Ok(Self {
             shadows,
+            shadow_budget: value.lighting.shadow_budget.filter(|&budget| budget > 0),
             world: ProductDefaultLights::parse(
                 value.lighting.default_lights.world,
                 "renderer.lighting.defaultLights.world",
@@ -1045,7 +1055,18 @@ mod tests {
             ),
         )
         .unwrap();
-        assert!(read(&root).unwrap().shadows_enabled());
+        let product = read(&root).unwrap();
+        assert!(product.shadows_enabled());
+        assert_eq!(product.shadow_budget(), None);
+        fs::write(
+            &path,
+            original.replace(
+                marker,
+                "\"renderer\":{\"lighting\":{\"shadows\":\"enabled\",\"shadowBudget\":24}}",
+            ),
+        )
+        .unwrap();
+        assert_eq!(read(&root).unwrap().shadow_budget(), Some(24));
         fs::write(
             &path,
             original.replace(marker, "\"renderer\":{\"lighting\":{\"shadows\":\"auto\"}}"),

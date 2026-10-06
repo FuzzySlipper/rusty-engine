@@ -322,3 +322,39 @@ public readonly partial record struct AuthoredMaterialAppearanceRequest
         float triplanarSharpness)
         : this(catalog, materialId, texture, normalMap, normalScale, triplanarSharpness, default) { }
 }
+
+public readonly partial record struct LightDescriptor
+{
+    /// <summary>A light whose requested shadow takes the Engine's default resolution, priority 0 and the standard filter.</summary>
+    public LightDescriptor(
+        LightKind kind,
+        Vector3 color,
+        float intensity,
+        bool enabled,
+        Vector3 position,
+        Vector3 direction,
+        bool hasRange,
+        float range,
+        float decay,
+        float outerAngleRadians,
+        float penumbra,
+        LightShadowIntent shadowIntent)
+        : this(
+            kind,
+            color,
+            intensity,
+            enabled,
+            position,
+            direction,
+            hasRange,
+            range,
+            decay,
+            outerAngleRadians,
+            penumbra,
+            shadowIntent,
+            0,
+            0,
+            false)
+    {
+    }
+}

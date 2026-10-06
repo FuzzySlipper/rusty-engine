@@ -302,6 +302,7 @@ fn lit_sprites_shade_with_synthetic_normal_and_height_maps() {
                 range: None,
                 decay: 2.0,
                 shadow_intent: LightShadowIntent::Disabled,
+                shadow: Default::default(),
             },
         ),
         (
@@ -311,6 +312,7 @@ fn lit_sprites_shade_with_synthetic_normal_and_height_maps() {
                 color: [0.4, 0.45, 0.6],
                 intensity: 0.4,
                 shadow_intent: LightShadowIntent::Disabled,
+                shadow: Default::default(),
             },
         ),
     ] {
@@ -381,6 +383,7 @@ fn synthetic_sprite_domes_span_the_atlas_frame() {
                 range: None,
                 decay: 2.0,
                 shadow_intent: LightShadowIntent::Disabled,
+                shadow: Default::default(),
             },
         });
         harness.apply(ops);

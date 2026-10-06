@@ -1155,6 +1155,7 @@ mod tests {
                 intensity: 0.5,
                 enabled: true,
                 shadow_intent: LightShadowIntent::Requested,
+                shadow: Default::default(),
             },
         }
     }

@@ -222,6 +222,7 @@ fn directional(direction: [f32; 3]) -> RenderDiff {
             direction,
             range: None,
             shadow_intent: LightShadowIntent::Disabled,
+            shadow: Default::default(),
         },
     }
 }
@@ -333,6 +334,7 @@ fn the_occlusion_map_darkens_ambient_light_by_its_strength() {
                 intensity: 2.0,
                 enabled: true,
                 shadow_intent: LightShadowIntent::Disabled,
+                shadow: Default::default(),
             },
         }]
     };

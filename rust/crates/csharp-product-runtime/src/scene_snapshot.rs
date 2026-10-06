@@ -91,6 +91,8 @@ pub struct SceneSnapshotOptions {
     pub default_world_lights: bool,
     pub default_viewmodel_lights: bool,
     pub shadows: bool,
+    #[serde(default)]
+    pub shadow_budget: Option<u32>,
 }
 
 impl From<SceneSnapshotOptions> for render_wgpu::RendererOptions {
@@ -99,6 +101,7 @@ impl From<SceneSnapshotOptions> for render_wgpu::RendererOptions {
             default_world_lights: options.default_world_lights,
             default_viewmodel_lights: options.default_viewmodel_lights,
             shadows: options.shadows,
+            shadow_budget: options.shadow_budget,
         }
     }
 }
@@ -109,6 +112,7 @@ impl From<render_wgpu::RendererOptions> for SceneSnapshotOptions {
             default_world_lights: options.default_world_lights,
             default_viewmodel_lights: options.default_viewmodel_lights,
             shadows: options.shadows,
+            shadow_budget: options.shadow_budget,
         }
     }
 }

@@ -66,7 +66,7 @@ inputSteps: Array<ProductHostTimedStep>,
 /**
  * Retained operations the renderer skipped, by kind.
  */
-skippedOps: Record<string, number>, lastSkip: string | null, };
+skippedOps: Record<string, number>, lastSkip: string | null, shadows: ProductHostShadowStatistics, };
 
 /**
  * Answer to `engine.renderer`, `.status`, `.show`, `.hide` and `.toggle`.
@@ -86,6 +86,28 @@ export type ProductHostRendererWidget = { visible: boolean, };
  * Exact runtime generation binding used by browser input, operations, and outputs.
  */
 export type ProductHostRuntimeBinding = { instanceId: CanonicalU64, generation: CanonicalU64, controlRevision: CanonicalU64, };
+
+/**
+ * The scene's shadow layers and which requesting lights cast.
+ */
+export type ProductHostShadowStatistics = { 
+/**
+ * Layers in the shadow atlas, and the 2048² pages holding them.
+ */
+layers: number, pages: number, 
+/**
+ * `RustyEngineProductShadowBudget` in layers, if the manifest sets one.
+ */
+budget: number | null, 
+/**
+ * Lights casting, and the renderer handles of those requesting a
+ * shadow that the budget left out.
+ */
+castingLights: number, skippedLights: number[], 
+/**
+ * Layers re-rendered in the last frame and the casters drawn into them.
+ */
+renderedLayers: number, renderedCasters: number, };
 
 /**
  * Median milliseconds per frame for each stage of streaming it.

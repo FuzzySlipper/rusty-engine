@@ -224,6 +224,7 @@ fn every_retained_operation_frame() -> RenderFrameDiff {
                 direction: [0.0, -1.0, 0.0],
                 range: None,
                 shadow_intent: LightShadowIntent::Requested,
+                shadow: Default::default(),
             },
         },
         RenderDiff::UpdateLight {
@@ -235,6 +236,7 @@ fn every_retained_operation_frame() -> RenderFrameDiff {
                 direction: [1.0, -1.0, 0.0],
                 range: None,
                 shadow_intent: LightShadowIntent::Disabled,
+                shadow: Default::default(),
             },
         },
         RenderDiff::CreateStaticMeshInstance {

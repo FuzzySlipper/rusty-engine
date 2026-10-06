@@ -753,8 +753,12 @@ Set `RustyEngineProductSceneShadows` to `enabled` to render scene shadow maps
 for lights with `LightShadowIntent.Requested`. The default is `disabled`.
 This writes `renderer.lighting.shadows` in the staged product manifest and
 applies to streamed and native-window output, including skinned meshes and
-joint-attached meshes. Only requesting lights allocate 512-pixel maps: four
-cascades for a directional light, one map for a spot light, six for a point
-light and one sky layer for an ambient light. A directional light's cascades
-follow the camera out to its `Range` (100 m by default); see
-[shadows](lighting-and-sky.md#shadows).
+joint-attached meshes. Only requesting lights allocate maps: four cascades for
+a directional light, one map for a spot light, six for a point light and one
+sky layer for an ambient light. A directional light's cascades follow the
+camera out to its `Range` (100 m by default). Set
+`RustyEngineProductShadowBudget` to a number of shadow layers to have the
+Engine choose which requesting lights cast, by `ShadowPriority` then distance
+(`renderer.lighting.shadowBudget`; 0, the default, for no limit). See
+[shadows](lighting-and-sky.md#shadows) for resolution, softness and the
+budget.

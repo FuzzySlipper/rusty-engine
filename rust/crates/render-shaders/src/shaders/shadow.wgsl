@@ -40,7 +40,7 @@ fn vs_shadow(
     let part = instances[instance];
     let world = parts[part].model * vec4<f32>(position, 1.0);
     var out: VsOut;
-    out.clip = shadow_views[layer.index] * world;
+    out.clip = shadow_views[layer.index].view_proj * world;
     out.world_position = world.xyz;
     out.uv = uv;
     out.part = part;

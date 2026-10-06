@@ -264,6 +264,12 @@ impl CsharpProductRuntimeConfig {
         self
     }
 
+    /// Limit scene shadows to `budget` layers at once (none for no limit).
+    pub fn with_shadow_budget(mut self, budget: Option<u32>) -> Self {
+        self.renderer_options.shadow_budget = budget;
+        self
+    }
+
     /// Adds typed standard-runtime physical mappings to create-time host
     /// configuration. The product receives a copied descriptor; it does not
     /// own or mutate the runtime lane's mapping evaluation.

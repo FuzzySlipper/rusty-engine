@@ -40,6 +40,8 @@ pub(crate) struct Layouts {
     /// The caster entry per caster feature set (`Features::caster`).
     shadow_shaders: HashMap<Features, wgpu::ShaderModule>,
     pub shadow: ShadowPipelines,
+    /// Clears one shadow tile's depth to the far plane within its viewport.
+    pub shadow_clear: wgpu::RenderPipeline,
     /// Product shaders that did not compose since last taken; their
     /// materials draw with the standard shade stage.
     pub shader_errors: Vec<String>,
@@ -59,6 +61,10 @@ impl Pipelines {
         &self.world[&(features, pass)]
     }
 }
+
+/// The caster pass's slope-scaled depth bias, in depth per unit of the
+/// face's depth slope.
+const CASTER_SLOPE_BIAS: f32 = 1.0;
 
 /// Depth-only caster pipelines by caster features and face culling:
 /// single-sided parts render their back faces, mirrored parts wind the other
@@ -242,6 +248,35 @@ impl Layouts {
         });
         let mut shaders = Shaders::new();
         let sky_shader = standard(shaders.module(device, Entry::Sky, Features::default()));
+        let compose = standard(shaders.module(device, Entry::Compose, Features::default()));
+        let shadow_clear = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("render-wgpu shadow tile clear"),
+            layout: Some(
+                &device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                    label: Some("render-wgpu shadow tile clear"),
+                    bind_group_layouts: &[],
+                    immediate_size: 0,
+                }),
+            ),
+            vertex: wgpu::VertexState {
+                module: &compose,
+                entry_point: Some("vs_fullscreen"),
+                compilation_options: Default::default(),
+                buffers: &[],
+            },
+            primitive: Default::default(),
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: DEPTH_FORMAT,
+                depth_write_enabled: Some(true),
+                depth_compare: Some(wgpu::CompareFunction::Always),
+                stencil: Default::default(),
+                bias: Default::default(),
+            }),
+            multisample: Default::default(),
+            fragment: None,
+            multiview_mask: None,
+            cache: None,
+        });
         Self {
             frame,
             material,
@@ -256,6 +291,7 @@ impl Layouts {
             world_shaders: HashMap::new(),
             shadow_shaders: HashMap::new(),
             shadow: ShadowPipelines::default(),
+            shadow_clear,
             shader_errors: Vec::new(),
         }
     }
@@ -445,7 +481,14 @@ impl Layouts {
                 depth_write_enabled: Some(true),
                 depth_compare: Some(wgpu::CompareFunction::LessEqual),
                 stencil: Default::default(),
-                bias: Default::default(),
+                // Steeper faces, whose depth changes most across a texel,
+                // cast further back. Receivers also look up from along their
+                // normal (`rusty::lighting::shadow_lookup`).
+                bias: wgpu::DepthBiasState {
+                    constant: 0,
+                    slope_scale: CASTER_SLOPE_BIAS,
+                    clamp: 0.0,
+                },
             }),
             multisample: Default::default(),
             // Only to discard: the alpha mask or a product's caster stage.

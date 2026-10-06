@@ -265,6 +265,11 @@ impl SceneDriver {
         std::mem::take(&mut self.scene().video_facts)
     }
 
+    /// The scene's shadow layers and choice, as the last frame left them.
+    pub fn shadow_report(&self) -> crate::ShadowReport {
+        self.scene().renderer.shadow_report()
+    }
+
     /// Every realized ghost plate as the last drawn view left it.
     pub fn ghost_plate_readouts(&self) -> Vec<GhostPlateReadout> {
         self.scene().renderer.ghost_plate_readouts()
