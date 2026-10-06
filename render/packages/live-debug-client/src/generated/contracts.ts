@@ -7,36 +7,12 @@
  */
 export type CanonicalU64 = string;
 
+export type ProductHostAmbientOcclusionPath = "off" | "compute" | "raster";
+
 /**
  * The adapter's compute limits; the renderer's device takes wgpu's defaults.
  */
 export type ProductHostComputeLimits = { workgroupSize: [number, number, number], invocationsPerWorkgroup: number, workgroupsPerDimension: number, workgroupStorageBytes: number, storageBufferBindingBytes: number, };
-
-/**
- * What the renderer's compute pass costs, from the device's timestamp
- * queries, with the adapter's compute limits.
- */
-export type ProductHostComputeStatistics = { 
-/**
- * Why the pass does not run on this adapter; absent while it runs.
- */
-refused?: string, 
-/**
- * The device has timestamp queries, so the pass is timed.
- */
-timestamps: boolean, 
-/**
- * Workgroups the last frame dispatched.
- */
-workgroups: number, 
-/**
- * Recent frames whose GPU time was read back.
- */
-timedFrames: number, 
-/**
- * Median GPU milliseconds of the pass over those frames; 0 with none.
- */
-medianGpuMs: number, limits: ProductHostComputeLimits, };
 
 /**
  * Read-only product-generated descriptor data for live-debug completion and
@@ -65,6 +41,49 @@ export type ProductHostErrorBody = { code: string, diagnostic: string, };
  * The body of every host error response.
  */
 export type ProductHostErrorResponse = { accepted: false, error: ProductHostErrorBody, };
+
+/**
+ * One timed pass's GPU cost over the recent frames.
+ */
+export type ProductHostGpuPass = { pass: string, 
+/**
+ * Recent frames whose GPU time was read back.
+ */
+timedFrames: number, 
+/**
+ * Median GPU milliseconds of the pass over those frames; 0 with none.
+ */
+medianGpuMs: number, };
+
+/**
+ * What the renderer's GPU passes cost, from the device's timestamp
+ * queries, with the adapter's compute limits.
+ */
+export type ProductHostGpuStatistics = { 
+/**
+ * Why the compute path cannot run on this adapter; absent while it can.
+ */
+computeRefused?: string, 
+/**
+ * The device has timestamp queries, so the passes are timed.
+ */
+timestamps: boolean, limits: ProductHostComputeLimits, 
+/**
+ * The path the last world view's ambient occlusion took.
+ */
+ambientOcclusion: ProductHostAmbientOcclusionPath, 
+/**
+ * Workgroups the last occlusion dispatch took; 0 on the raster path.
+ */
+workgroups: number, 
+/**
+ * The occlusion texture of the last view, in texels.
+ */
+occlusionTexture: [number, number], 
+/**
+ * The timed passes, in frame order.
+ */
+passes: Array<ProductHostGpuPass>, };
 
 /**
  * Closed operation identities returned by direct runtime calls.
@@ -99,10 +118,10 @@ inputSteps: Array<ProductHostTimedStep>,
  */
 skippedOps: Record<string, number>, lastSkip: string | null, 
 /**
- * The renderer's compute pass: its GPU cost on this adapter, or why it
- * does not run.
+ * The renderer's GPU passes: the ambient occlusion path, the compute
+ * path's refusal if any, and each timed pass's cost.
  */
-compute: ProductHostComputeStatistics, };
+gpu: ProductHostGpuStatistics, };
 
 /**
  * Answer to `engine.renderer`, `.status`, `.show`, `.hide` and `.toggle`.

@@ -321,6 +321,8 @@ impl Renderer {
                 default_world_lights: self.options.default_world_lights && !isolated_lighting,
                 default_viewmodel_lights: false,
                 shadows: false,
+                // A capture is isolated geometry: no screen-space occlusion.
+                ambient_occlusion: Default::default(),
             },
         ));
         source.set_animation_time(self.animation_time);

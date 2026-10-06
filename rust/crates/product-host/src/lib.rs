@@ -61,12 +61,12 @@ pub use bundle::{
     ProductHostPresentationAspect, PRODUCT_HOST_BOOTSTRAP_PATH, PRODUCT_HOST_INDEX_PATH,
 };
 pub use engine_debug::{
-    ProductHostCameraPose, ProductHostComputeLimits, ProductHostComputeStatistics,
-    ProductHostDrawingMode, ProductHostDrawnFrame, ProductHostRenderOutput,
-    ProductHostRendererInspection, ProductHostRendererStatistics, ProductHostRendererStatus,
-    ProductHostRendererWidget, ProductHostStreamMedians, ProductHostStreamStatistics,
-    ProductHostTimeAnswer, ProductHostTimeMode, ProductHostTimedStep, ProductHostWindowMedians,
-    ProductHostWindowStatistics,
+    ProductHostAmbientOcclusionPath, ProductHostCameraPose, ProductHostComputeLimits,
+    ProductHostDrawingMode, ProductHostDrawnFrame, ProductHostGpuPass, ProductHostGpuStatistics,
+    ProductHostRenderOutput, ProductHostRendererInspection, ProductHostRendererStatistics,
+    ProductHostRendererStatus, ProductHostRendererWidget, ProductHostStreamMedians,
+    ProductHostStreamStatistics, ProductHostTimeAnswer, ProductHostTimeMode, ProductHostTimedStep,
+    ProductHostWindowMedians, ProductHostWindowStatistics,
 };
 pub use error::{ProductHostError, ProductHostRuntimeError};
 pub use frames::{

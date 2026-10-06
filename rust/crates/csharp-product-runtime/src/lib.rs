@@ -264,6 +264,16 @@ impl CsharpProductRuntimeConfig {
         self
     }
 
+    /// The product manifest's screen-space ambient occlusion: its path and
+    /// strength.
+    pub fn with_ambient_occlusion(
+        mut self,
+        ambient_occlusion: render_wgpu::AmbientOcclusion,
+    ) -> Self {
+        self.renderer_options.ambient_occlusion = ambient_occlusion;
+        self
+    }
+
     /// Adds typed standard-runtime physical mappings to create-time host
     /// configuration. The product receives a copied descriptor; it does not
     /// own or mutate the runtime lane's mapping evaluation.

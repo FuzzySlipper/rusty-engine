@@ -4,8 +4,9 @@
 //! (culled and batched, reused while neither the camera nor any part
 //! changed), render stale shadow maps before the first world pass, and encode
 //! sky and world (or viewmodel) draws. `composition.rs` orders the view
-//! passes. The compute pass (`compute.rs`) dispatches once per frame after
-//! the uploads, before any view pass.
+//! passes. A world view pass with ambient occlusion first draws its opaque
+//! batches depth-only and computes the occlusion (`ambient_occlusion.rs`),
+//! in the same encoder before its render pass.
 
 use std::ops::{Add, AddAssign};
 
@@ -275,10 +276,6 @@ impl Renderer {
             }
             self.shadows.stale = true;
         }
-        if let Ok(compute) = &mut self.compute {
-            let count = self.tables.parts.meta.len() as u32;
-            compute.encode(&self.gpu, &self.parts_buffer, count);
-        }
         uploaded
     }
 
@@ -469,9 +466,6 @@ impl Renderer {
     }
 
     fn rebind_frame(&mut self) {
-        if let Ok(compute) = &mut self.compute {
-            compute.invalidate();
-        }
         self.frame_bind_group = frame_bind_group(
             &self.gpu.device,
             &self.layouts.frame,
@@ -874,6 +868,40 @@ impl Renderer {
                 pass,
             ));
         }
+        // A world view's occlusion: its depth pre-pass draws the opaque
+        // batches with the pre-pass pipelines, which compile like the
+        // caster pipelines.
+        let occlusion = if world_layer {
+            self.ambient_occlusion.begin_view(
+                &self.gpu,
+                self.options.ambient_occlusion,
+                (view.target.width, view.target.height),
+                view.viewport,
+                &view.camera,
+            )
+        } else {
+            None
+        };
+        let prepass_batches: Vec<batch::Batch> = if occlusion.is_some() {
+            self.views[slot]
+                .as_ref()
+                .expect("view list is current")
+                .list
+                .batches
+                .iter()
+                .copied()
+                .filter(|draw| draw.pass < batch::Pass::Lines)
+                .collect()
+        } else {
+            Vec::new()
+        };
+        for (features, pass) in self.batch_variants(&prepass_batches) {
+            pipelines_created += u32::from(self.layouts.prepare_prepass(
+                &self.gpu.device,
+                features,
+                pass,
+            ));
+        }
         let whole = view.start == PassStart::Target;
         if !whole {
             self.compose.prepare_clear(&self.gpu, format, view.clear);
@@ -909,6 +937,19 @@ impl Renderer {
         } else {
             Default::default()
         };
+        if let Some(occlusion) = &occlusion {
+            self.shadows.write_camera(&self.gpu.queue, &view_proj);
+            let camera_offset = ShadowMaps::layer_offset(self.shadows.camera_slot());
+            self.ambient_occlusion
+                .encode_prepass(&mut encoder, occlusion, |pass| {
+                    pass.set_bind_group(0, &self.caster_bind_group, &[]);
+                    pass.set_bind_group(2, &self.shadows.layer_bind_group, &[camera_offset]);
+                    self.draw_batches(pass, &prepass_batches, |pass, features| {
+                        self.layouts.prepass.get(pass, features)
+                    });
+                });
+            self.ambient_occlusion.encode(&mut encoder, occlusion);
+        }
         let pipelines = &self.pipelines[format_index];
         let list = &self.views[slot]
             .as_ref()
@@ -959,6 +1000,8 @@ impl Renderer {
                 self.compose.clear_viewport(&mut pass, format, world_layer);
             }
             pass.set_bind_group(0, &self.frame_bind_group, &[]);
+            let occlusion_bind_group = self.ambient_occlusion.apply_bind_group(occlusion.as_ref());
+            pass.set_bind_group(2, occlusion_bind_group, &[]);
             if let (true, true, Some(sky)) = (world_layer, view.sky, &self.sky_bind_group) {
                 pass.set_pipeline(&pipelines.sky);
                 pass.set_bind_group(1, sky, &[]);
@@ -977,6 +1020,7 @@ impl Renderer {
             if world_layer {
                 encoded.draws += self.draw_ghost_plates(&mut pass, format);
                 pass.set_bind_group(0, &self.frame_bind_group, &[]);
+                pass.set_bind_group(2, occlusion_bind_group, &[]);
             }
             self.effects.draw_solid_sprites(&mut pass, format, &effects);
             encoded += self.draw_blended(
@@ -996,6 +1040,9 @@ impl Renderer {
             parts = encoded;
         }
         self.gpu.queue.submit([encoder.finish()]);
+        if occlusion.is_some() {
+            self.ambient_occlusion.submitted();
+        }
         ViewStats {
             draws: parts.draws + effects.draws(),
             instances: list.instances(),

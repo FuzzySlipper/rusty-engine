@@ -54,29 +54,50 @@ pub struct ProductHostRendererStatistics {
     #[ts(type = "Record<string, number>")]
     pub skipped_ops: BTreeMap<String, u64>,
     pub last_skip: Option<String>,
-    /// The renderer's compute pass: its GPU cost on this adapter, or why it
-    /// does not run.
-    pub compute: ProductHostComputeStatistics,
+    /// The renderer's GPU passes: the ambient occlusion path, the compute
+    /// path's refusal if any, and each timed pass's cost.
+    pub gpu: ProductHostGpuStatistics,
 }
 
-/// What the renderer's compute pass costs, from the device's timestamp
+/// What the renderer's GPU passes cost, from the device's timestamp
 /// queries, with the adapter's compute limits.
 #[derive(Debug, Clone, PartialEq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
-pub struct ProductHostComputeStatistics {
-    /// Why the pass does not run on this adapter; absent while it runs.
+pub struct ProductHostGpuStatistics {
+    /// Why the compute path cannot run on this adapter; absent while it can.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
-    pub refused: Option<String>,
-    /// The device has timestamp queries, so the pass is timed.
+    pub compute_refused: Option<String>,
+    /// The device has timestamp queries, so the passes are timed.
     pub timestamps: bool,
-    /// Workgroups the last frame dispatched.
+    pub limits: ProductHostComputeLimits,
+    /// The path the last world view's ambient occlusion took.
+    pub ambient_occlusion: ProductHostAmbientOcclusionPath,
+    /// Workgroups the last occlusion dispatch took; 0 on the raster path.
     pub workgroups: u32,
+    /// The occlusion texture of the last view, in texels.
+    pub occlusion_texture: (u32, u32),
+    /// The timed passes, in frame order.
+    pub passes: Vec<ProductHostGpuPass>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum ProductHostAmbientOcclusionPath {
+    Off,
+    Compute,
+    Raster,
+}
+
+/// One timed pass's GPU cost over the recent frames.
+#[derive(Debug, Clone, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ProductHostGpuPass {
+    pub pass: String,
     /// Recent frames whose GPU time was read back.
     pub timed_frames: usize,
     /// Median GPU milliseconds of the pass over those frames; 0 with none.
     pub median_gpu_ms: f64,
-    pub limits: ProductHostComputeLimits,
 }
 
 /// The adapter's compute limits; the renderer's device takes wgpu's defaults.

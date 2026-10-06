@@ -21,6 +21,10 @@
 //! (a cave, an overhang, a roofed room) loses it and open ground keeps it.
 //!
 //! Maps are re-rendered only when a light or a part changed.
+//!
+//! The matrices buffer and layer uniform hold one slot past the layers: the
+//! camera slot, which the ambient occlusion pre-pass writes a view's camera
+//! into so the caster shaders draw the view's depth (`ambient_occlusion.rs`).
 
 use glam::{Mat4, Vec3};
 use render_model::{LightDescriptor, LightShadowIntent};
@@ -196,14 +200,16 @@ impl ShadowMaps {
                 })
             })
             .collect();
+        // One slot past the layers: the camera slot.
+        let slots = capacity + 1;
         let matrices_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("render-wgpu shadow matrices"),
-            size: u64::from(capacity) * 64,
+            size: u64::from(slots) * 64,
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let mut indices = vec![0u8; (u64::from(capacity) * LAYER_UNIFORM_STRIDE) as usize];
-        for layer in 0..capacity {
+        let mut indices = vec![0u8; (u64::from(slots) * LAYER_UNIFORM_STRIDE) as usize];
+        for layer in 0..slots {
             let at = (u64::from(layer) * LAYER_UNIFORM_STRIDE) as usize;
             indices[at..at + 4].copy_from_slice(&layer.to_le_bytes());
         }
@@ -280,6 +286,20 @@ impl ShadowMaps {
 
     pub fn layer_offset(layer: u32) -> u32 {
         (u64::from(layer) * LAYER_UNIFORM_STRIDE) as u32
+    }
+
+    /// The matrix slot after the layers, for a view's camera.
+    pub fn camera_slot(&self) -> u32 {
+        self.layers
+    }
+
+    /// Put a view's camera in the camera slot for a depth pre-pass.
+    pub fn write_camera(&self, queue: &wgpu::Queue, view_proj: &Mat4) {
+        queue.write_buffer(
+            &self.matrices_buffer,
+            u64::from(self.camera_slot()) * 64,
+            bytemuck::cast_slice(&view_proj.to_cols_array()),
+        );
     }
 }
 

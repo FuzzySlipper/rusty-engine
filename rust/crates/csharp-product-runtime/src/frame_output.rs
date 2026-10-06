@@ -37,16 +37,17 @@ use csharp_engine_services::{
 };
 use product_host::RuntimePublication;
 use product_host::{
-    ProductHostComputeLimits, ProductHostComputeStatistics, ProductHostDrawingMode,
-    ProductHostDrawnFrame, ProductHostFrameStream, ProductHostRendererInspection,
-    ProductHostRendererStatistics, ProductHostStreamMedians, ProductHostStreamStatistics,
-    ProductHostTimedStep, ProductHostWindowMedians, ProductHostWindowStatistics,
+    ProductHostAmbientOcclusionPath, ProductHostComputeLimits, ProductHostDrawingMode,
+    ProductHostDrawnFrame, ProductHostFrameStream, ProductHostGpuPass, ProductHostGpuStatistics,
+    ProductHostRendererInspection, ProductHostRendererStatistics, ProductHostStreamMedians,
+    ProductHostStreamStatistics, ProductHostTimedStep, ProductHostWindowMedians,
+    ProductHostWindowStatistics,
 };
 use render_host_contracts::{RendererCameraPose, RendererViewComposition, RendererViewTarget};
 use render_stream::{DrawnFrame, FrameStreamer, StreamStats};
 use render_wgpu::{
-    AnimationFact, ComputeReadout, Gpu, RendererOptions, ResourceSource, SceneChange, SceneDriver,
-    SceneState, VideoFact, VideoFailure,
+    AmbientOcclusionPath, AnimationFact, Gpu, GpuReadout, RendererOptions, ResourceSource,
+    SceneChange, SceneDriver, SceneState, VideoFact, VideoFailure,
 };
 use serde_json::{json, Value};
 
@@ -594,7 +595,7 @@ impl FrameOutput {
                 input_steps: self.input_steps(),
                 skipped_ops: skipped_op_counts(skipped_ops),
                 last_skip,
-                compute: compute_statistics(self.driver.compute_readout()),
+                gpu: gpu_statistics(self.driver.gpu_readout()),
             };
         };
         let StreamStats {
@@ -633,7 +634,7 @@ impl FrameOutput {
             input_steps: self.input_steps(),
             skipped_ops: skipped_op_counts(skipped_ops),
             last_skip,
-            compute: compute_statistics(self.driver.compute_readout()),
+            gpu: gpu_statistics(self.driver.gpu_readout()),
         }
     }
 
@@ -736,13 +737,10 @@ fn ms(duration: Duration) -> f64 {
     duration.as_secs_f64() * 1000.0
 }
 
-fn compute_statistics(readout: ComputeReadout) -> ProductHostComputeStatistics {
-    ProductHostComputeStatistics {
-        refused: readout.refused,
+fn gpu_statistics(readout: GpuReadout) -> ProductHostGpuStatistics {
+    ProductHostGpuStatistics {
+        compute_refused: readout.compute_refused,
         timestamps: readout.timestamps,
-        workgroups: readout.workgroups,
-        timed_frames: readout.timed_frames,
-        median_gpu_ms: readout.median_gpu_ms,
         limits: ProductHostComputeLimits {
             workgroup_size: readout.limits.workgroup_size,
             invocations_per_workgroup: readout.limits.invocations_per_workgroup,
@@ -750,6 +748,22 @@ fn compute_statistics(readout: ComputeReadout) -> ProductHostComputeStatistics {
             workgroup_storage_bytes: readout.limits.workgroup_storage_bytes,
             storage_buffer_binding_bytes: readout.limits.storage_buffer_binding_bytes,
         },
+        ambient_occlusion: match readout.ambient_occlusion {
+            AmbientOcclusionPath::Off => ProductHostAmbientOcclusionPath::Off,
+            AmbientOcclusionPath::Compute => ProductHostAmbientOcclusionPath::Compute,
+            AmbientOcclusionPath::Raster => ProductHostAmbientOcclusionPath::Raster,
+        },
+        workgroups: readout.workgroups,
+        occlusion_texture: readout.occlusion_texture,
+        passes: readout
+            .passes
+            .into_iter()
+            .map(|pass| ProductHostGpuPass {
+                pass: pass.pass.to_owned(),
+                timed_frames: pass.timed_frames,
+                median_gpu_ms: pass.median_gpu_ms,
+            })
+            .collect(),
     }
 }
 
