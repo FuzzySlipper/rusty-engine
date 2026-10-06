@@ -4,8 +4,8 @@
 //!
 //! `types`, `view`, `material`, `surface`, `lighting`, `tonemap`, `finish`
 //! and `shade` are importable modules (`#import rusty::lighting::standard_radiance`);
-//! `world`, `sky`, `shadow`, `effects`, `ghost` and `compose` are the entry
-//! shaders built from them.
+//! `world`, `sky`, `shadow`, `effects`, `ghost`, `compose` and
+//! `ambient_occlusion` are the entry shaders built from them.
 //! A material's features are shader defs, so a variant only carries the
 //! samples and branches its material uses.
 //!
@@ -184,6 +184,9 @@ pub enum Entry {
     Effects,
     Ghost,
     Compose,
+    /// Screen-space ambient occlusion over a view's depth: compute and
+    /// raster paths, and the blur.
+    AmbientOcclusion,
 }
 
 impl Entry {
@@ -195,6 +198,10 @@ impl Entry {
             Self::Effects => ("shaders/effects.wgsl", include_str!("shaders/effects.wgsl")),
             Self::Ghost => ("shaders/ghost.wgsl", include_str!("shaders/ghost.wgsl")),
             Self::Compose => ("shaders/compose.wgsl", include_str!("shaders/compose.wgsl")),
+            Self::AmbientOcclusion => (
+                "shaders/ambient_occlusion.wgsl",
+                include_str!("shaders/ambient_occlusion.wgsl"),
+            ),
         }
     }
 }
@@ -396,7 +403,13 @@ mod tests {
             compose(Entry::World, features);
             compose(Entry::Shadow, features.caster());
         }
-        for entry in [Entry::Sky, Entry::Effects, Entry::Ghost, Entry::Compose] {
+        for entry in [
+            Entry::Sky,
+            Entry::Effects,
+            Entry::Ghost,
+            Entry::Compose,
+            Entry::AmbientOcclusion,
+        ] {
             compose(entry, Features::default());
         }
     }

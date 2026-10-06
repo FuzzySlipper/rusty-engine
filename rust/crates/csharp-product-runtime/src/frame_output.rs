@@ -37,7 +37,9 @@ use csharp_engine_services::{
 };
 use product_host::RuntimePublication;
 use product_host::{
-    ProductHostDrawingMode, ProductHostDrawnFrame, ProductHostFrameStream,
+    ProductHostAmbientOcclusionPath, ProductHostAmbientOcclusionStatistics,
+    ProductHostComputeLimits, ProductHostDrawingMode, ProductHostDrawnFrame,
+    ProductHostFrameStream, ProductHostGpuPass, ProductHostGpuStatistics,
     ProductHostRendererInspection, ProductHostRendererStatistics, ProductHostShadowStatistics,
     ProductHostStreamMedians, ProductHostStreamStatistics, ProductHostTimedStep,
     ProductHostWindowMedians, ProductHostWindowStatistics,
@@ -45,8 +47,8 @@ use product_host::{
 use render_host_contracts::{RendererCameraPose, RendererViewComposition, RendererViewTarget};
 use render_stream::{DrawnFrame, FrameStreamer, StreamStats};
 use render_wgpu::{
-    AnimationFact, Gpu, RendererOptions, ResourceSource, SceneChange, SceneDriver, SceneState,
-    VideoFact, VideoFailure,
+    AmbientOcclusionPath, AnimationFact, Gpu, GpuReadout, RendererOptions, ResourceSource,
+    SceneChange, SceneDriver, SceneState, VideoFact, VideoFailure,
 };
 use serde_json::{json, Value};
 
@@ -595,6 +597,7 @@ impl FrameOutput {
                 skipped_ops: skipped_op_counts(skipped_ops),
                 last_skip,
                 shadows: shadow_statistics(&self.driver),
+                gpu: gpu_statistics(self.driver.gpu_readout()),
             };
         };
         let StreamStats {
@@ -634,6 +637,7 @@ impl FrameOutput {
             skipped_ops: skipped_op_counts(skipped_ops),
             last_skip,
             shadows: shadow_statistics(&self.driver),
+            gpu: gpu_statistics(self.driver.gpu_readout()),
         }
     }
 
@@ -734,6 +738,39 @@ fn unix_ms(at: SystemTime) -> f64 {
 
 fn ms(duration: Duration) -> f64 {
     duration.as_secs_f64() * 1000.0
+}
+
+fn gpu_statistics(readout: GpuReadout) -> ProductHostGpuStatistics {
+    let ambient_occlusion = readout.ambient_occlusion;
+    ProductHostGpuStatistics {
+        timestamps: readout.timestamps,
+        limits: ProductHostComputeLimits {
+            workgroup_size: readout.limits.workgroup_size,
+            invocations_per_workgroup: readout.limits.invocations_per_workgroup,
+            workgroups_per_dimension: readout.limits.workgroups_per_dimension,
+            workgroup_storage_bytes: readout.limits.workgroup_storage_bytes,
+            storage_buffer_binding_bytes: readout.limits.storage_buffer_binding_bytes,
+        },
+        passes: readout
+            .passes
+            .into_iter()
+            .map(|pass| ProductHostGpuPass {
+                pass: pass.pass.to_owned(),
+                timed_frames: pass.timed_frames,
+                median_gpu_ms: pass.median_gpu_ms,
+            })
+            .collect(),
+        ambient_occlusion: ProductHostAmbientOcclusionStatistics {
+            path: match ambient_occlusion.path {
+                AmbientOcclusionPath::Off => ProductHostAmbientOcclusionPath::Off,
+                AmbientOcclusionPath::Compute => ProductHostAmbientOcclusionPath::Compute,
+                AmbientOcclusionPath::Raster => ProductHostAmbientOcclusionPath::Raster,
+            },
+            compute_refused: ambient_occlusion.compute_refused,
+            workgroups: ambient_occlusion.workgroups,
+            texture: ambient_occlusion.texture,
+        },
+    }
 }
 
 fn skipped_op_counts(

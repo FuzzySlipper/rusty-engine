@@ -322,6 +322,8 @@ impl Renderer {
                 default_viewmodel_lights: false,
                 shadows: false,
                 shadow_budget: None,
+                // A capture is isolated geometry: no screen-space occlusion.
+                ambient_occlusion: Default::default(),
             },
         ));
         source.set_animation_time(self.animation_time);

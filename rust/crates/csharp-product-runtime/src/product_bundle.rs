@@ -239,6 +239,10 @@ impl ProductBundle {
         self.renderer_lighting.enabled()
     }
 
+    pub(super) fn ambient_occlusion(&self) -> render_wgpu::AmbientOcclusion {
+        self.renderer_lighting.ambient_occlusion
+    }
+
     pub(super) fn shadows_enabled(&self) -> bool {
         self.renderer_lighting.shadows
     }
@@ -579,7 +583,18 @@ struct ManifestRendererLighting {
     #[serde(default)]
     shadow_budget: Option<u32>,
     #[serde(default)]
+    ambient_occlusion: Option<ManifestAmbientOcclusion>,
+    #[serde(default)]
     default_lights: ManifestDefaultLights,
+}
+#[derive(Debug, Deserialize)]
+struct ManifestAmbientOcclusion {
+    mode: String,
+    #[serde(default = "full_strength")]
+    strength: f32,
+}
+fn full_strength() -> f32 {
+    1.0
 }
 #[derive(Debug, Deserialize)]
 struct ManifestDefaultLights {
@@ -617,6 +632,7 @@ impl ProductDefaultLights {
 struct ProductRendererLighting {
     shadows: bool,
     shadow_budget: Option<u32>,
+    ambient_occlusion: render_wgpu::AmbientOcclusion,
     world: ProductDefaultLights,
     viewmodel: ProductDefaultLights,
 }
@@ -640,9 +656,36 @@ impl ProductRendererLighting {
                 ))
             }
         };
+        let ambient_occlusion = match value.lighting.ambient_occlusion {
+            None => render_wgpu::AmbientOcclusion::default(),
+            Some(ambient_occlusion) => {
+                // The Engine chooses the path (`render-wgpu`, ambient_occlusion.rs).
+                let path = match ambient_occlusion.mode.as_str() {
+                    "disabled" => render_wgpu::AmbientOcclusionPath::Off,
+                    "enabled" => render_wgpu::AmbientOcclusionPath::Raster,
+                    _ => {
+                        return Err(field_error(
+                            "renderer.lighting.ambientOcclusion.mode",
+                            "must be enabled or disabled",
+                        ))
+                    }
+                };
+                if !ambient_occlusion.strength.is_finite() || ambient_occlusion.strength < 0.0 {
+                    return Err(field_error(
+                        "renderer.lighting.ambientOcclusion.strength",
+                        "must be a finite non-negative number",
+                    ));
+                }
+                render_wgpu::AmbientOcclusion {
+                    path,
+                    strength: ambient_occlusion.strength,
+                }
+            }
+        };
         Ok(Self {
             shadows,
             shadow_budget: value.lighting.shadow_budget.filter(|&budget| budget > 0),
+            ambient_occlusion,
             world: ProductDefaultLights::parse(
                 value.lighting.default_lights.world,
                 "renderer.lighting.defaultLights.world",
@@ -1038,6 +1081,46 @@ mod tests {
         let product = read(&root).expect("independent light modes admit");
         assert_eq!(product.default_lights(), (false, true));
         assert!(!product.shadows_enabled());
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn reads_and_validates_ambient_occlusion_selection() {
+        let root = fixture_root("ambient-occlusion");
+        write_manifest(&root, "native/product.so");
+        let path = root.join(PRODUCT_MANIFEST_NAME);
+        let original = fs::read_to_string(&path).unwrap();
+        assert_eq!(
+            read(&root).unwrap().ambient_occlusion(),
+            render_wgpu::AmbientOcclusion::default(),
+            "absent: off"
+        );
+        let marker = "\"uiProjection\":{\"expectedStream\":\"fixture.terrain\",\"expectedContract\":\"fixture.terrain.v1\"}";
+        fs::write(
+            &path,
+            original.replace(
+                marker,
+                "\"renderer\":{\"lighting\":{\"ambientOcclusion\":{\"mode\":\"enabled\",\"strength\":0.5}}}",
+            ),
+        )
+        .unwrap();
+        assert_eq!(
+            read(&root).unwrap().ambient_occlusion(),
+            render_wgpu::AmbientOcclusion {
+                path: render_wgpu::AmbientOcclusionPath::Raster,
+                strength: 0.5,
+            }
+        );
+        fs::write(
+            &path,
+            original.replace(
+                marker,
+                "\"renderer\":{\"lighting\":{\"ambientOcclusion\":{\"mode\":\"always\"}}}",
+            ),
+        )
+        .unwrap();
+        assert!(read(&root)
+            .unwrap_err()
+            .contains("renderer.lighting.ambientOcclusion.mode"));
         fs::remove_dir_all(root).unwrap();
     }
     #[test]

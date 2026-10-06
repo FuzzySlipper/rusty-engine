@@ -4,26 +4,31 @@
 //!
 //! ```text
 //! rusty-scene-render <snapshot> <out.png> [--width W] [--height H] [--frames N]
-//!                    [--walk M] [--turn D]
+//!                    [--walk M] [--turn D] [--ambient-occlusion off|compute|raster]
 //! ```
 //!
 //! `--frames N` then draws N more frames into one target with readback and
 //! reports their mean and median cost. With `--walk` or `--turn` the camera
 //! moves M metres forward and turns D degrees right before each of those
 //! frames, from the snapshot's first camera, for the cost of a moving view
-//! (culling, shadow cascades). Select the adapter as for any wgpu program
-//! (for example `WGPU_BACKEND=vulkan`).
+//! (culling, shadow cascades). `--ambient-occlusion` overrides the
+//! snapshot's path (at its strength, or 1 when it was off), so the two paths
+//! compare on one scene. Select the adapter as for any wgpu program (for
+//! example `WGPU_BACKEND=vulkan`).
 
 use std::{path::PathBuf, time::Instant};
 
 use csharp_product_runtime::scene_snapshot::{SceneSnapshot, SceneSnapshotChange};
 use render_host_contracts::RendererCameraPose;
 use render_presentation::PresentationWorld;
-use render_wgpu::{encode_png, Gpu, OffscreenTarget, SceneDriver};
+use render_wgpu::{
+    encode_png, AmbientOcclusion, AmbientOcclusionPath, Gpu, OffscreenTarget, RendererOptions,
+    SceneDriver,
+};
 use serde_json::json;
 
 const USAGE: &str = "usage: rusty-scene-render <snapshot> <out.png> [--width W] [--height H] \
-     [--frames N] [--walk M] [--turn D]";
+     [--frames N] [--walk M] [--turn D] [--ambient-occlusion off|compute|raster]";
 
 fn main() {
     if let Err(error) = run() {
@@ -37,6 +42,7 @@ fn run() -> Result<(), String> {
     let mut positional = Vec::new();
     let (mut width, mut height, mut frames) = (1280_u32, 720_u32, 0_u32);
     let (mut walk, mut turn) = (0.0_f64, 0.0_f64);
+    let mut ambient_occlusion: Option<AmbientOcclusionPath> = None;
     while let Some(argument) = arguments.next() {
         let mut number = |name: &str| -> Result<f64, String> {
             arguments
@@ -50,6 +56,18 @@ fn run() -> Result<(), String> {
             "--frames" => frames = number("--frames")? as u32,
             "--walk" => walk = number("--walk")?,
             "--turn" => turn = number("--turn")?,
+            "--ambient-occlusion" => {
+                ambient_occlusion = Some(match arguments.next().as_deref() {
+                    Some("off") => AmbientOcclusionPath::Off,
+                    Some("compute") => AmbientOcclusionPath::Compute,
+                    Some("raster") => AmbientOcclusionPath::Raster,
+                    _ => {
+                        return Err(format!(
+                            "--ambient-occlusion needs off, compute or raster\n{USAGE}"
+                        ))
+                    }
+                });
+            }
             "-h" | "--help" => {
                 println!("{USAGE}");
                 return Ok(());
@@ -80,7 +98,15 @@ fn run() -> Result<(), String> {
 
     let gpu = Gpu::headless().map_err(|error| format!("{error:?}"))?;
     let adapter = gpu.adapter_summary();
-    let driver = SceneDriver::new(gpu, snapshot.metadata.options.into());
+    let mut options: RendererOptions = snapshot.metadata.options.into();
+    if let Some(path) = ambient_occlusion {
+        let strength = match options.ambient_occlusion.path {
+            AmbientOcclusionPath::Off => 1.0,
+            _ => options.ambient_occlusion.strength,
+        };
+        options.ambient_occlusion = AmbientOcclusion { path, strength };
+    }
+    let driver = SceneDriver::new(gpu, options);
     let applied = Instant::now();
     driver.rebaseline(
         snapshot.scene_changes(),
@@ -151,6 +177,7 @@ fn run() -> Result<(), String> {
         .draw(|renderer, _| (renderer.table_counts(), renderer.mesh_memory()))
         .0;
     let (skipped, last_skip) = driver.skipped_ops();
+    let gpu_readout = driver.gpu_readout();
     let report = json!({
         "snapshot": snapshot_path.display().to_string(),
         "product": snapshot.metadata.product,
@@ -167,6 +194,24 @@ fn run() -> Result<(), String> {
         "lastSkip": last_skip,
         "image": { "path": out.display().to_string(), "width": width, "height": height },
         "timing": timing,
+        // The GPU passes over the frames drawn: each timed pass's median
+        // cost and the ambient occlusion path, as `engine.renderer` reports
+        // them.
+        "gpu": {
+            "timestamps": gpu_readout.timestamps,
+            "limits": format!("{:?}", gpu_readout.limits),
+            "passes": gpu_readout.passes.iter().map(|pass| json!({
+                "pass": pass.pass,
+                "timedFrames": pass.timed_frames,
+                "medianGpuMs": pass.median_gpu_ms,
+            })).collect::<Vec<_>>(),
+            "ambientOcclusion": {
+                "path": format!("{:?}", gpu_readout.ambient_occlusion.path),
+                "computeRefused": gpu_readout.ambient_occlusion.compute_refused,
+                "workgroups": gpu_readout.ambient_occlusion.workgroups,
+                "texture": gpu_readout.ambient_occlusion.texture,
+            },
+        },
     });
     println!(
         "{}",

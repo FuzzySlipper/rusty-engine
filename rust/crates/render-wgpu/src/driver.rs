@@ -18,7 +18,7 @@ use render_model::RenderFrameDiff;
 use render_presentation::PresentationFrameDiff;
 
 use crate::{
-    AnimationFact, ApplyIssue, DrawnCamera, EntityPositions, GhostPlateReadout, Gpu,
+    AnimationFact, ApplyIssue, DrawnCamera, EntityPositions, GhostPlateReadout, Gpu, GpuReadout,
     OffscreenTarget, Renderer, RendererOptions, ResourceSource, VideoFact,
 };
 
@@ -374,6 +374,11 @@ impl SceneDriver {
         let mut rgba = Vec::new();
         target.read_rgba_into(&self.gpu, &mut rgba);
         Capture { rgba, ..capture }
+    }
+
+    /// The renderer's GPU pass readout ([`Renderer::gpu_readout`]).
+    pub fn gpu_readout(&self) -> GpuReadout {
+        self.scene().renderer.gpu_readout()
     }
 
     /// Ops the renderer could not realize, by op, and the last one's detail.

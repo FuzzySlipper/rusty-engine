@@ -446,9 +446,7 @@ pub struct NativeVoxelAssetSpatialPublishResult {
     pub authority_hash: u64,
     pub projection_version: u64,
     pub collision_revision: u64,
-    pub navigation_revision: u64,
     pub mesh_revision: u64,
-    pub navigation_cell_count: u64,
     pub voxel_data_hash: NativeVoxelContentHash,
     pub content_hash: NativeVoxelContentHash,
 }

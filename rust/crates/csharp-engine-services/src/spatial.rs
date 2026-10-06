@@ -45,8 +45,8 @@ use svc_pathfinding::{
     find_path_with_traversal_and_edge_admission, find_path_with_traversal_policy,
     find_volumetric_path, find_weighted_path_with_edge_admission, find_weighted_path_with_policy,
     find_weighted_volumetric_path, planar_nav_offsets, propose_direct_nav_movement,
-    volumetric_navigation_source_hash, DirectNavMovementRequest, NavEdgeAdmission, NavError,
-    NavPathOutcome, NavPathQuery, NavProjection, NavProjectionConfig, NavTraversalCell,
+    volumetric_navigation_source_hash, DirectNavMovementRequest, NavComponents, NavEdgeAdmission,
+    NavError, NavPathOutcome, NavPathQuery, NavProjection, NavProjectionConfig, NavTraversalCell,
     NavTraversalOverlay, PlanarNavNeighborPolicy, VolumetricAgentVolume, VolumetricNavConfig,
     VolumetricNavError, VolumetricNavOutcome, VolumetricNavQuery, VolumetricNavTraversalCell,
     VolumetricNavTraversalOverlay, VolumetricNeighborSet, VolumetricTraversalRule,
@@ -268,9 +268,7 @@ pub(crate) struct VoxelAssetSpatialPublishFacts {
     pub(crate) authority_hash: u64,
     pub(crate) projection_version: u64,
     pub(crate) collision_revision: u64,
-    pub(crate) navigation_revision: u64,
     pub(crate) mesh_revision: u64,
-    pub(crate) navigation_cell_count: u64,
 }
 
 /// Candidate scene and the exact session identity observed while preparing an
@@ -325,6 +323,9 @@ struct NavigationState {
     projection_hash: u64,
     policy: PlanarNavNeighborPolicy,
     edge_admission: Option<NavEdgeAdmission>,
+    /// The components of the projection over the edge admission, labelled
+    /// at publication; collision-derived navigation only.
+    components: Option<NavComponents>,
     agent_height_voxels: u32,
     require_solid_floor: bool,
     traversal: NavTraversalOverlay,
@@ -846,9 +847,7 @@ impl RuntimeSpatialBridge {
             authority_hash: candidate.authority_hash(),
             projection_version: candidate.projection_version(),
             collision_revision: candidate.projection_revisions().collision().raw(),
-            navigation_revision: candidate.projection_revisions().navigation().raw(),
             mesh_revision: candidate.projection_revisions().mesh().raw(),
-            navigation_cell_count: candidate.navigation_cell_count() as u64,
         };
         Ok(PreparedVoxelAssetSpatialPublish {
             expected_scene: scene_before,
@@ -1178,6 +1177,7 @@ impl RuntimeSpatialBridge {
                 projection_hash: navigation_projection_hash,
                 policy: navigation_policy,
                 edge_admission: None,
+                components: None,
                 agent_height_voxels: 0,
                 require_solid_floor: false,
                 traversal: navigation_traversal,
@@ -1469,6 +1469,7 @@ impl RuntimeSpatialBridge {
                     diagonal: false,
                 },
                 edge_admission: None,
+                components: None,
                 agent_height_voxels: 0,
                 require_solid_floor: false,
                 volumetric_traversal: VolumetricNavTraversalOverlay::empty(),
@@ -1571,6 +1572,7 @@ impl RuntimeSpatialBridge {
             projection_hash: receipt.projection_hash,
             policy,
             edge_admission: None,
+            components: None,
             agent_height_voxels: 0,
             require_solid_floor: false,
             traversal,
@@ -1644,6 +1646,7 @@ impl RuntimeSpatialBridge {
                 diagonal: false,
             },
             edge_admission: None,
+            components: None,
             agent_height_voxels: request.agent_height_voxels,
             require_solid_floor: request.require_solid_floor,
             traversal,
@@ -1790,6 +1793,7 @@ impl RuntimeSpatialBridge {
             edge_admission,
             jumps,
         } = graph;
+        let components = NavComponents::label(&projection, &edge_admission, policy);
         let traversal = NavTraversalOverlay::empty(&projection);
         let session = self.session_mut(request.session)?;
         session.navigation_revision = next_navigation_revision(session.navigation_revision)?;
@@ -1804,6 +1808,7 @@ impl RuntimeSpatialBridge {
             edge_test_count: edge_tests,
             derivation_microseconds: u64::try_from(started.elapsed().as_micros())
                 .unwrap_or(u64::MAX),
+            component_count: components.len() as u64,
         };
         cache.set_installed(navigation_revision);
         session.collision_navigation = Some(cache);
@@ -1813,6 +1818,7 @@ impl RuntimeSpatialBridge {
             projection_hash,
             policy,
             edge_admission: Some(edge_admission),
+            components: Some(components),
             agent_height_voxels: 0,
             require_solid_floor: true,
             traversal,
@@ -2042,6 +2048,7 @@ impl RuntimeSpatialBridge {
                 find_path_with_edge_admission(
                     &navigation.projection,
                     edges,
+                    navigation.components.as_ref(),
                     query,
                     navigation.policy,
                 )
@@ -2107,6 +2114,7 @@ impl RuntimeSpatialBridge {
                     &navigation.projection,
                     &navigation.traversal,
                     edges,
+                    navigation.components.as_ref(),
                     query,
                     navigation.policy,
                 )
@@ -2388,6 +2396,7 @@ fn evaluate_navigation_step_facts(
                 &navigation.projection,
                 &navigation.traversal,
                 edges,
+                navigation.components.as_ref(),
                 query,
                 navigation.policy,
             )

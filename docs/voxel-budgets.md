@@ -12,8 +12,7 @@ and whole-product costs.
 place. They then rebuild only:
 - the meshes of the changed chunks, plus resident neighbours whose surfaces
   touch the change;
-- the colliders of the changed chunks;
-- the navigation cells around the changed voxels.
+- the colliders of the changed chunks.
 
 Unchanged chunks keep their meshes and collider shapes; a bound Dynamics world
 keeps those colliders too. Nothing copies, hashes or rebuilds the whole scene.

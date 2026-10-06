@@ -1,8 +1,10 @@
 //! Bind group layouts and the render pipelines: per target colour format
 //! (offscreen RGBA8 sRGB, and whatever a surface uses), the sky and a world
 //! pipeline per material feature set and pass; depth-only shadow casters per
-//! caster feature set and culling. Pipelines are made when a material is
-//! defined and before a pass is encoded, never while drawing.
+//! caster feature set and culling, and the ambient occlusion pre-pass's
+//! depth-only pipelines per caster feature set and world pass (the caster
+//! shaders with the world pass's culling). Pipelines are made when a material
+//! is defined and before a pass is encoded, never while drawing.
 
 use std::collections::HashMap;
 
@@ -42,6 +44,9 @@ pub(crate) struct Layouts {
     pub shadow: ShadowPipelines,
     /// Clears one shadow tile's depth to the far plane within its viewport.
     pub shadow_clear: wgpu::RenderPipeline,
+    pub prepass: PrepassPipelines,
+    /// Group 2 of the world pipelines: a view's ambient occlusion.
+    pub ambient_occlusion: wgpu::BindGroupLayout,
     /// Product shaders that did not compose since last taken; their
     /// materials draw with the standard shade stage.
     pub shader_errors: Vec<String>,
@@ -87,6 +92,21 @@ impl ShadowPipelines {
     /// A pipeline `Layouts::prepare_caster` made before the pass was encoded.
     pub fn get(&self, pass: Pass, features: Features) -> &wgpu::RenderPipeline {
         &self.pipelines[&(features.caster(), Self::cull(pass))]
+    }
+}
+
+/// The ambient occlusion pre-pass: the caster shaders drawing a view's
+/// opaque batches depth-only with the world pass's culling and winding.
+#[derive(Default)]
+pub(crate) struct PrepassPipelines {
+    pipelines: HashMap<(Features, Pass), wgpu::RenderPipeline>,
+}
+
+impl PrepassPipelines {
+    /// A pipeline `Layouts::prepare_prepass` made before the pass was
+    /// encoded.
+    pub fn get(&self, pass: Pass, features: Features) -> &wgpu::RenderPipeline {
+        &self.pipelines[&(features.caster(), pass)]
     }
 }
 
@@ -231,9 +251,10 @@ impl Layouts {
                 sampler_entry(4),
             ],
         });
+        let ambient_occlusion = crate::ambient_occlusion::apply_layout(device);
         let world = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("render-wgpu world"),
-            bind_group_layouts: &[Some(&frame), Some(&material)],
+            bind_group_layouts: &[Some(&frame), Some(&material), Some(&ambient_occlusion)],
             immediate_size: 0,
         });
         let sky_pipeline = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -292,6 +313,8 @@ impl Layouts {
             shadow_shaders: HashMap::new(),
             shadow: ShadowPipelines::default(),
             shadow_clear,
+            prepass: PrepassPipelines::default(),
+            ambient_occlusion,
             shader_errors: Vec::new(),
         }
     }
@@ -506,6 +529,70 @@ impl Layouts {
         self.shadow
             .pipelines
             .insert((features, cull_mode), pipeline);
+        true
+    }
+
+    /// Make the ambient occlusion pre-pass pipeline drawing `features` in
+    /// `pass` (an opaque world pass): the caster shader with the world pass's
+    /// culling. Returns whether it was made now.
+    pub fn prepare_prepass(
+        &mut self,
+        device: &wgpu::Device,
+        features: Features,
+        pass: Pass,
+    ) -> bool {
+        let features = features.caster();
+        if self.prepass.pipelines.contains_key(&(features, pass)) {
+            return false;
+        }
+        let shader = self
+            .shadow_shaders
+            .entry(features)
+            .or_insert_with(|| standard(self.shaders.module(device, Entry::Shadow, features)));
+        let (cull_mode, front_face) = match pass {
+            Pass::OpaqueMirrored | Pass::BlendMirrored => (BACK, CW),
+            Pass::OpaqueDoubleSided | Pass::BlendDoubleSided | Pass::Lines => (None, CCW),
+            Pass::Opaque | Pass::Blend => (BACK, CCW),
+        };
+        let attributes = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x2, 3 => Float32x4];
+        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("render-wgpu ambient occlusion pre-pass"),
+            layout: Some(&self.shadow_pipeline),
+            vertex: wgpu::VertexState {
+                module: shader,
+                entry_point: Some("vs_shadow"),
+                compilation_options: Default::default(),
+                buffers: &[Some(wgpu::VertexBufferLayout {
+                    array_stride: (VERTEX_FLOATS * 4) as u64,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &attributes,
+                })],
+            },
+            primitive: wgpu::PrimitiveState {
+                cull_mode,
+                front_face,
+                ..Default::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: DEPTH_FORMAT,
+                depth_write_enabled: Some(true),
+                depth_compare: Some(wgpu::CompareFunction::LessEqual),
+                stencil: Default::default(),
+                bias: Default::default(),
+            }),
+            multisample: Default::default(),
+            fragment: (features.contains(Features::MASK) || features.product() != 0).then(|| {
+                wgpu::FragmentState {
+                    module: shader,
+                    entry_point: Some("fs_shadow"),
+                    compilation_options: Default::default(),
+                    targets: &[],
+                }
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
+        self.prepass.pipelines.insert((features, pass), pipeline);
         true
     }
 }

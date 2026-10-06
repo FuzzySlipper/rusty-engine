@@ -19,6 +19,7 @@
 
 #![forbid(unsafe_code)]
 
+mod ambient_occlusion;
 mod animated;
 mod apply;
 mod batch;
@@ -43,6 +44,7 @@ mod shadows;
 mod surface;
 mod tables;
 mod target;
+mod timing;
 mod video;
 mod voxel;
 #[cfg(feature = "web-overlay")]
@@ -69,6 +71,7 @@ pub mod cpu {
     pub use crate::tables::Builtin;
 }
 
+pub use ambient_occlusion::{AmbientOcclusion, AmbientOcclusionPath, AmbientOcclusionReadout};
 pub use animated::AnimationFact;
 pub use apply::ApplyIssue;
 pub use camera::CameraSampleReadout;
@@ -76,11 +79,12 @@ pub use composition::{DrawnCamera, TargetReadout, TargetStatus, ViewCompositionR
 pub use driver::{Capture, SceneChange, SceneDriver, SceneFrame, SceneState, SceneView};
 pub use frame::FrameStats;
 pub use ghost::GhostPlateReadout;
-pub use gpu::{AdapterSummary, Gpu, GpuError};
+pub use gpu::{AdapterSummary, ComputeLimits, Gpu, GpuError};
 pub use particles::EntityPositions;
 pub use resources::{decode_png_rgba, encode_png, NoResources, ResourceSource};
 pub use surface::{PresentSkip, SurfaceFrame, WindowSurface};
 pub use target::OffscreenTarget;
+pub use timing::GpuPassTiming;
 pub use video::{VideoFact, VideoFailure};
 
 use pipelines::{Layouts, Pipelines};
@@ -108,8 +112,21 @@ pub(crate) fn srgb_to_linear(value: f32) -> f32 {
     }
 }
 
+/// What the renderer's GPU passes report, for diagnostics and evidence
+/// (`engine.renderer`, `rusty-scene-render`). A pass that is timed adds its
+/// [`GpuPassTiming`] to `passes`, so every pass reports its cost the same way.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GpuReadout {
+    /// The device has timestamp queries, so the passes are timed.
+    pub timestamps: bool,
+    pub limits: ComputeLimits,
+    /// The timed passes, in frame order.
+    pub passes: Vec<GpuPassTiming>,
+    pub ambient_occlusion: AmbientOcclusionReadout,
+}
+
 /// Host choices that are not part of the retained model.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct RendererOptions {
     /// `RustyEngineProductDefaultWorldLights`: the neutral rig lights the world
     /// unless the product disables it.
@@ -124,6 +141,10 @@ pub struct RendererOptions {
     /// at once, the requesting lights chosen by priority then distance from
     /// the camera (`shadows::choose`); unlimited without one.
     pub shadow_budget: Option<u32>,
+    /// Screen-space ambient occlusion on world views
+    /// (`renderer.lighting.ambientOcclusion` in a product's manifest). Off by
+    /// default.
+    pub ambient_occlusion: AmbientOcclusion,
 }
 
 impl Default for RendererOptions {
@@ -133,6 +154,7 @@ impl Default for RendererOptions {
             default_viewmodel_lights: true,
             shadows: false,
             shadow_budget: None,
+            ambient_occlusion: AmbientOcclusion::default(),
         }
     }
 }
@@ -182,6 +204,7 @@ pub struct Renderer {
     /// it moves past the value they were drawn at.
     scene_generation: u64,
     compose: compose::Compose,
+    ambient_occlusion: ambient_occlusion::AmbientOcclusionPass,
     composition: composition::ViewComposition,
     effects: effects::Effects,
     particles: particles::Particles,
@@ -248,6 +271,16 @@ impl Renderer {
             Entry::Compose,
             Features::default(),
         ));
+        let ambient_occlusion_shader = pipelines::standard(layouts.shaders.module(
+            device,
+            Entry::AmbientOcclusion,
+            Features::default(),
+        ));
+        let ambient_occlusion = ambient_occlusion::AmbientOcclusionPass::new(
+            gpu,
+            ambient_occlusion_shader,
+            &layouts.ambient_occlusion,
+        );
         let mut renderer = Self {
             gpu: gpu.clone(),
             options,
@@ -282,6 +315,7 @@ impl Renderer {
             ghost_pipelines: ghost::GhostPipelines::new(device, ghost_shader),
             scene_generation: 0,
             compose: compose::Compose::new(device, compose_shader),
+            ambient_occlusion,
             composition: Default::default(),
             effects,
             particles: Default::default(),
@@ -332,6 +366,21 @@ impl Renderer {
     pub fn set_options(&mut self, options: RendererOptions) {
         self.options = options;
         self.tables.lights_dirty = true;
+    }
+
+    /// The renderer's GPU passes: each timed pass's cost, the adapter's
+    /// compute limits, and the ambient occlusion the last world view took.
+    pub fn gpu_readout(&self) -> GpuReadout {
+        GpuReadout {
+            timestamps: self
+                .gpu
+                .device
+                .features()
+                .contains(wgpu::Features::TIMESTAMP_QUERY),
+            limits: self.gpu.compute_limits(),
+            passes: self.ambient_occlusion.timings(),
+            ambient_occlusion: self.ambient_occlusion.readout(),
+        }
     }
 
     /// Retained table sizes, for diagnostics and tests.

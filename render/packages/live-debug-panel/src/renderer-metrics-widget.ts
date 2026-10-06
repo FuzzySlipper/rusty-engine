@@ -127,6 +127,13 @@ function renderSummary(root: HTMLElement, summary: ProductHostRendererStatus): v
       `Frames: ${window.framesPerSecond.toFixed(1)} per second | acquire ${milliseconds(window.medianMs.acquire)} | lock ${milliseconds(window.medianMs.lock)} | draw ${milliseconds(window.medianMs.draw)} | present ${milliseconds(window.medianMs.present)}`,
     );
   }
+  const gpu = renderer.gpu;
+  const occlusion = gpu.ambientOcclusion;
+  const passes = gpu.passes.map((pass) => `${pass.pass} ${milliseconds(pass.medianGpuMs)} over ${String(pass.timedFrames)} frames`);
+  lines.push(
+    `Ambient occlusion: ${occlusion.path}${occlusion.computeRefused === undefined ? '' : ` (compute refused: ${occlusion.computeRefused})`}`,
+    `GPU passes: ${gpu.timestamps ? passes.join(' | ') : 'untimed (no timestamp queries)'}`,
+  );
   const skipped = Object.entries(renderer.skippedOps).map(([op, count]) => `${op} ×${String(count)}`);
   lines.push(`Skipped ops: ${skipped.length === 0 ? 'none' : skipped.join(', ')}${renderer.lastSkip === null ? '' : ` | last: ${renderer.lastSkip}`}`);
   root.textContent = lines.join('\n');

@@ -38,6 +38,11 @@
 //! A layer is re-rendered only when its view changed or a caster in it was
 //! added, removed, moved or posed; a light changing colour or intensity
 //! re-renders nothing. Cascades change view as the camera moves.
+//!
+//! The views buffer and layer uniform hold one slot past the layers'
+//! capacity: the camera slot, which the ambient occlusion pre-pass writes a
+//! view's camera into so the caster shaders draw the view's depth
+//! (`ambient_occlusion.rs`).
 
 use std::collections::HashSet;
 
@@ -540,14 +545,16 @@ impl ShadowMaps {
                 })
             })
             .collect();
+        // One slot past the layers: the camera slot.
+        let slots = layer_capacity + 1;
         let views_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("render-wgpu shadow views"),
-            size: u64::from(layer_capacity) * (VIEW_ROW_FLOATS * 4) as u64,
+            size: u64::from(slots) * (VIEW_ROW_FLOATS * 4) as u64,
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let mut indices = vec![0u8; (u64::from(layer_capacity) * LAYER_UNIFORM_STRIDE) as usize];
-        for layer in 0..layer_capacity {
+        let mut indices = vec![0u8; (u64::from(slots) * LAYER_UNIFORM_STRIDE) as usize];
+        for layer in 0..slots {
             let at = (u64::from(layer) * LAYER_UNIFORM_STRIDE) as usize;
             indices[at..at + 4].copy_from_slice(&layer.to_le_bytes());
         }
@@ -682,6 +689,20 @@ impl ShadowMaps {
 
     pub fn layer_offset(layer: u32) -> u32 {
         (u64::from(layer) * LAYER_UNIFORM_STRIDE) as u32
+    }
+
+    /// The view slot after the layers' capacity, for a view's camera.
+    pub fn camera_slot(&self) -> u32 {
+        self.layer_capacity
+    }
+
+    /// Put a view's camera in the camera slot for a depth pre-pass.
+    pub fn write_camera(&self, queue: &wgpu::Queue, view_proj: &Mat4) {
+        queue.write_buffer(
+            &self.views_buffer,
+            u64::from(self.camera_slot()) * (VIEW_ROW_FLOATS * 4) as u64,
+            bytemuck::cast_slice(&view_proj.to_cols_array()),
+        );
     }
 }
 

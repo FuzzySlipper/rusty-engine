@@ -780,7 +780,9 @@ height is climbed when the headroom above it fits the body, as the character
 controller climbs it. A slope up to the maximum is walked up and down whatever
 the step height and drop: an edge steeper than a step or longer than a drop is
 admitted when the ground between rises or falls no more than such a slope over
-any short stretch, so a riser or a cliff of the same grade is still refused.
+any short stretch, so a riser or a cliff of the same grade is still refused. A
+level edge whose straight move catches a bump on a rough floor is walked the
+same way.
 
 To see why navigation hangs up, ask it:
 
@@ -801,7 +803,17 @@ To see why navigation hangs up, ask it:
   the installed navigation holds the edge.
 - A `NoPath` step result carries `Visited`, the cells the search expanded,
   and the cell it reached nearest the goal (`NearestCell`, standing at
-  `Nearest`).
+  `Nearest`). A publication labels its cells by connected component: cells
+  joined by admitted edges in either direction share a label, so a goal with
+  another label than the start has no path either way, and `EvaluateNavigationStep`,
+  `RequestNavigationPath` and `RequestWeightedNavigationPath` answer `NoPath`
+  without a search, `Visited` zero, with the start's component's cell nearest
+  the goal. Where the component holds one-way edges, that cell can lie past a
+  drop the start cannot climb back up. A goal with the same label leaves the
+  search to decide: a one-way
+  drop joins the cells above and below, and traversal overlays take no part in
+  the labels, so a query that fails only because of a one-way edge or a
+  blocked cell still searches.
 
 Use the live foot position for `EvaluateNavigationStep` so it can reconcile to
 the nearest retained support (see below).
@@ -856,6 +868,9 @@ neighbours, not the box: one that derives nothing costs microseconds.
 The receipt also reports the cost: `EdgeTestCount` is the support-to-support
 edges tested with capsule casts, and `DerivationMicroseconds` the time the
 publication took. Columns and edges are derived across the machine's cores.
+`ComponentCount` is how many connected components the cells form (see the
+`NoPath` step result above); a high count on rough terrain means a fragmented
+box, where many goals are unreachable.
 Reconstructed surfaces cost more than cubes because each capsule cast meets
 triangles rather than boxes, and rough facets send more level edges through the
 step solver.

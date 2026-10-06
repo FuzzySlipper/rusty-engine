@@ -177,16 +177,6 @@ fn rebase_keeps_voxel_nav_trigger_and_static_mesh_continuous() {
         .raycast([2.5, 3.0, 0.5], [0.0, -1.0, 0.0], 4.0)
         .unwrap();
     assert_eq!(voxel_hit.voxel, [FAR_X + 2, 0, 0]);
-    let nav = scene
-        .navigation_step(
-            Vec3::new(0.5, 1.5, 0.5),
-            Vec3::new(4.5, 1.5, 0.5),
-            Vec3::ZERO,
-            1.0,
-            64,
-        )
-        .unwrap();
-    assert!(nav.next_waypoint.x.abs() < 16_384.0);
     assert!(matches!(
         scene.raycast_world([2.0, 2.0, 0.0], [0.0, 0.0, 1.0], 4.0),
         Some(SpatialCollisionHit::StaticMesh(hit))

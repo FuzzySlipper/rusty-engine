@@ -372,9 +372,7 @@ impl RuntimeVoxelContentBridge {
             authority_hash: facts.authority_hash,
             projection_version: facts.projection_version,
             collision_revision: facts.collision_revision,
-            navigation_revision: facts.navigation_revision,
             mesh_revision: facts.mesh_revision,
-            navigation_cell_count: facts.navigation_cell_count,
             voxel_data_hash,
             content_hash,
         };
@@ -2935,7 +2933,7 @@ mod tests {
         assert_eq!(scene.solid_voxel_count, result.solid_voxel_count);
         assert_eq!(scene.resident_chunk_count, result.resident_chunk_count);
         assert_eq!(scene.authority_hash, result.authority_hash);
-        assert_eq!(scene.navigation_revision, result.navigation_revision);
+        assert_eq!(scene.mesh_revision, result.mesh_revision);
 
         let before_rejected = scene;
         let mut rejected = unsafe { std::mem::zeroed::<NativeVoxelAssetSpatialPublishResult>() };

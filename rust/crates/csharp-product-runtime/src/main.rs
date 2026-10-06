@@ -826,6 +826,7 @@ impl Arguments {
                 .with_default_lights(world_lights, viewmodel_lights)
                 .with_scene_shadows(product.shadows_enabled())
                 .with_shadow_budget(product.shadow_budget())
+                .with_ambient_occlusion(product.ambient_occlusion())
                 .with_audio_output(product.audio_output)
                 .with_product(&product.id, &product.title);
         }

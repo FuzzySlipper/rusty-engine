@@ -86,6 +86,18 @@ the rest.
 - It is presentation only. `Voxel.SampleDirectLighting` (below) still treats
   ambient light as unoccluded.
 
+## Contact darkening: screen-space ambient occlusion
+
+The sky's shadow darkens at the scale of a cave; screen-space ambient
+occlusion darkens within about 0.75 m where surfaces meet: corners, the foot
+of a wall, a crate on the floor. It scales only the ambient and hemisphere
+light of opaque, lit parts (`Surface.occlusion`, so product shaders calling
+`standard_shade` get it), so it shows where ambient light carries the scene
+and barely in one lit mostly by torches. It is under evaluation and off by
+default; a product turns it on with `RustyEngineProductAmbientOcclusion` (see
+[the product project](csharp-product-project.md#screen-space-ambient-occlusion-under-evaluation)),
+and `engine.renderer` reports its passes' GPU time.
+
 ## The standard shader
 
 Retained meshes, voxel surfaces and GLB parts all draw with the Engine's

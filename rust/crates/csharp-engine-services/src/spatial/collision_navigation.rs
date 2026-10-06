@@ -2493,6 +2493,74 @@ mod tests {
         );
     }
 
+    /// Bumps on a rough floor block a level edge's straight sweep at the start
+    /// height, yet the floor is walked as a slope: every support of a rough
+    /// floor's interior keeps its edge to each of its four neighbours.
+    #[test]
+    fn a_rough_dual_contoured_floor_keeps_every_level_edge() {
+        use engine_spatial::{
+            MaterialSurface, SurfaceCharacter, SurfaceMaterials, SurfaceMeshOptions, SurfaceMode,
+            VertexPlacement,
+        };
+        let mut voxels = Vec::new();
+        for x in -4..20 {
+            for z in -4..20 {
+                for y in 0..3 {
+                    voxels.push([x, y, z]);
+                }
+            }
+        }
+        let options = SurfaceMeshOptions {
+            mode: SurfaceMode::DualContouring,
+            materials: SurfaceMaterials::new([(
+                1,
+                MaterialSurface {
+                    mode: SurfaceMode::DualContouring,
+                    character: SurfaceCharacter {
+                        placement: VertexPlacement::Sharp,
+                        crease_angle_degrees: 40.0,
+                        roughness: 0.15,
+                    },
+                },
+            )])
+            .unwrap(),
+            ..SurfaceMeshOptions::default()
+        };
+        let scene =
+            VoxelCollisionScene::from_solid_voxels_with_mesh_options(1.0, 16, voxels, options)
+                .unwrap();
+        let (bridge, session) = publish_over(
+            scene,
+            flat_config(1.0, 3, 0.3, 1.6, 45.0),
+            [0.0, -2.0, 0.0],
+            [16.0, 12.0, 16.0],
+        );
+        let cache = bridge.sessions[&session.value]
+            .collision_navigation
+            .as_ref()
+            .unwrap();
+        let mut interior = 0;
+        for (&(x, z), supports) in &cache.columns {
+            if !(1..15).contains(&x) || !(1..15).contains(&z) {
+                continue;
+            }
+            for &(from, _) in supports {
+                interior += 1;
+                for (dx, dz) in [(1, 0), (0, 1), (-1, 0), (0, -1)] {
+                    assert!(
+                        cache.edges.get(&from).is_some_and(|targets| targets
+                            .iter()
+                            .any(|target| (target.to.x, target.to.z) == (x + dx, z + dz))),
+                        "{from:?} has no edge toward ({}, {})",
+                        x + dx,
+                        z + dz
+                    );
+                }
+            }
+        }
+        assert!(interior > 150, "{interior} interior supports");
+    }
+
     #[test]
     fn a_route_crosses_from_dual_contoured_stone_onto_cube_brick_and_back() {
         use engine_spatial::{
@@ -2858,8 +2926,11 @@ mod tests {
         *bridge.sessions.keys().next().unwrap()
     }
 
+    /// A goal on a floor no edge joins to the start's is answered from the
+    /// publication's component labels, without a search: nothing visited,
+    /// and the nearest cell is the start's floor's nearest the goal.
     #[test]
-    fn no_path_reports_how_far_the_search_got() {
+    fn no_path_across_components_reports_the_nearest_cell_without_a_search() {
         // Two floors separated by a wall the agent cannot step over.
         let mut voxels = Vec::new();
         for x in 0..8 {
@@ -2870,12 +2941,20 @@ mod tests {
                 }
             }
         }
-        let (bridge, session) = publish_over(
+        let (mut bridge, session) = bridge_with(Arc::new(
             VoxelCollisionScene::from_solid_voxels(1.0, 16, voxels).unwrap(),
-            flat_config(1.0, 1, 0.3, 1.6, 45.0),
-            [0.0, 0.0, 0.0],
-            [8.0, 3.0, 3.0],
-        );
+        ));
+        let vec = |[x, y, z]: [f32; 3]| NativeVec3 { x, y, z };
+        let receipt = bridge
+            .replace_collision_navigation(&NativeCollisionNavigationReplaceRequest {
+                session,
+                world_min: vec([0.0, 0.0, 0.0]),
+                world_max: vec([8.0, 3.0, 3.0]),
+                config: flat_config(1.0, 1, 0.3, 1.6, 45.0),
+            })
+            .unwrap();
+        assert_eq!(receipt.walkable_cell_count, 21);
+        assert_eq!(receipt.component_count, 2);
         let navigation = bridge.sessions[&session.value].navigation.as_ref().unwrap();
         let (step, _) = evaluate_navigation_step_facts(
             navigation,
@@ -2896,7 +2975,7 @@ mod tests {
             },
         );
         assert_eq!(step.outcome, NativeNavigationPathOutcome::NoPath);
-        assert_eq!(step.visited, 12);
+        assert_eq!(step.visited, 0);
         assert!(step.nearest_present);
         assert_eq!(
             (

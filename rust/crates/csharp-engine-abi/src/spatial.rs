@@ -880,7 +880,8 @@ pub enum NativeCollisionNavigationEdgeOutcome {
     DropOverMaximum = 5,
     StartOverlap = 6,
     EndOverlap = 7,
-    /// A level or downward move is blocked at the start height.
+    /// A level or downward move is blocked at the start height, and neither a
+    /// step nor a walk over ground within the maximum slope clears it.
     HorizontalSweepBlocked = 8,
     /// The fall onto the lower support is blocked.
     DescentBlocked = 9,
@@ -936,7 +937,9 @@ pub struct NativeCollisionNavigationReplaceRequest {
 /// changed; the counts show how many columns were derived and how many kept.
 /// `edge_test_count` is the support-to-support edges tested with capsule
 /// casts, and `derivation_microseconds` the time deriving and installing took,
-/// for budgeting a republish.
+/// for budgeting a republish. `component_count` is how many groups the cells
+/// fall into with no edge between the groups in either direction: a query
+/// across groups is `NoPath` without a search.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct NativeCollisionNavigationReplaceReceipt {
@@ -947,6 +950,7 @@ pub struct NativeCollisionNavigationReplaceReceipt {
     pub reused_column_count: u64,
     pub edge_test_count: u64,
     pub derivation_microseconds: u64,
+    pub component_count: u64,
 }
 
 #[repr(C)]

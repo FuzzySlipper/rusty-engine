@@ -798,8 +798,9 @@ pub enum CharacterEdgeOutcome {
     DropOverMaximum,
     StartOverlap,
     EndOverlap,
-    /// A level or downward move is blocked at the start height, and the step
-    /// manoeuvre does not clear it either.
+    /// A level or downward move is blocked at the start height, and neither
+    /// the step manoeuvre nor a walk over ground within the maximum slope
+    /// clears it.
     HorizontalSweepBlocked,
     /// The fall onto the lower support is blocked.
     DescentBlocked,
@@ -1001,10 +1002,9 @@ fn edge_outcome(
     if landed && !over_step {
         return Ok(CharacterEdgeOutcome::Traversable);
     }
-    if !level_or_down
-        && slope_grade
-        && walk_slope(&scene.projection, &capsule, start, end, config, &mut stats)?
-    {
+    // A bump on a rough floor blocks the straight sweep of a level move as a
+    // riser would, yet the controller walks over it as it walks a slope.
+    if slope_grade && walk_slope(&scene.projection, &capsule, start, end, config, &mut stats)? {
         return Ok(CharacterEdgeOutcome::Traversable);
     }
     Ok(if over_step {
