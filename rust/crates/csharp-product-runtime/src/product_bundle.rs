@@ -668,10 +668,11 @@ impl ProductRendererLighting {
                 let path = match ambient_occlusion.mode.as_str() {
                     "disabled" => render_wgpu::AmbientOcclusionPath::Off,
                     "enabled" => render_wgpu::AmbientOcclusionPath::Raster,
+                    "distanceField" => render_wgpu::AmbientOcclusionPath::DistanceField,
                     _ => {
                         return Err(field_error(
                             "renderer.lighting.ambientOcclusion.mode",
-                            "must be enabled or disabled",
+                            "must be enabled, distanceField or disabled",
                         ))
                     }
                 };
@@ -1135,6 +1136,18 @@ mod tests {
                 path: render_wgpu::AmbientOcclusionPath::Raster,
                 strength: 0.5,
             }
+        );
+        fs::write(
+            &path,
+            original.replace(
+                marker,
+                "\"renderer\":{\"lighting\":{\"ambientOcclusion\":{\"mode\":\"distanceField\",\"strength\":1}}}",
+            ),
+        )
+        .unwrap();
+        assert_eq!(
+            read(&root).unwrap().ambient_occlusion().path,
+            render_wgpu::AmbientOcclusionPath::DistanceField
         );
         fs::write(
             &path,

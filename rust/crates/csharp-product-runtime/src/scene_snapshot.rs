@@ -116,6 +116,7 @@ pub enum SceneSnapshotAmbientOcclusionPath {
     Off,
     Compute,
     Raster,
+    DistanceField,
 }
 
 impl Default for SceneSnapshotAmbientOcclusion {
@@ -135,6 +136,9 @@ impl From<SceneSnapshotAmbientOcclusion> for render_wgpu::AmbientOcclusion {
                 SceneSnapshotAmbientOcclusionPath::Raster => {
                     render_wgpu::AmbientOcclusionPath::Raster
                 }
+                SceneSnapshotAmbientOcclusionPath::DistanceField => {
+                    render_wgpu::AmbientOcclusionPath::DistanceField
+                }
             },
             strength: options.strength,
         }
@@ -151,6 +155,9 @@ impl From<render_wgpu::AmbientOcclusion> for SceneSnapshotAmbientOcclusion {
                 }
                 render_wgpu::AmbientOcclusionPath::Raster => {
                     SceneSnapshotAmbientOcclusionPath::Raster
+                }
+                render_wgpu::AmbientOcclusionPath::DistanceField => {
+                    SceneSnapshotAmbientOcclusionPath::DistanceField
                 }
             },
             strength: options.strength,
@@ -398,6 +405,7 @@ mod tests {
         };
         MeshPayloadDescriptor {
             texture_space: None,
+            distance_field: None,
             layout: MeshBufferLayout {
                 vertex_count: 3,
                 index_count: 3,

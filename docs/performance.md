@@ -72,9 +72,9 @@ rusty-scene-render scene.rscene out.png --width 1280 --height 720 --frames 600
 
 It prints the adapter, the time to open and apply the snapshot, the mean
 and median milliseconds of the extra frames, each with readback, and the
-`gpu` pass medians. `--ambient-occlusion off|compute|raster` draws the
-snapshot with that ambient occlusion path, to compare the paths on one
-scene. Compare snapshots drawn on the same adapter; `WGPU_BACKEND` selects
+`gpu` pass medians. `--ambient-occlusion off|compute|raster|field` draws the
+snapshot with that ambient occlusion path (`field` cone-traces the voxel
+chunks' distance fields), to compare the paths on one scene. Compare snapshots drawn on the same adapter; `WGPU_BACKEND` selects
 it as for any wgpu program.
 
 Trusted product code reads the same statistics (`ProductHostRendererStatistics`

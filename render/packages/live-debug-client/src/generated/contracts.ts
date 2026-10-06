@@ -7,7 +7,7 @@
  */
 export type CanonicalU64 = string;
 
-export type ProductHostAmbientOcclusionPath = "off" | "compute" | "raster";
+export type ProductHostAmbientOcclusionPath = "off" | "compute" | "raster" | "distanceField";
 
 /**
  * The screen-space ambient occlusion of the last world view.
@@ -51,6 +51,28 @@ export type ProductHostDiagnosticsReadRequest = { after?: CanonicalU64, };
  * The `diagnostics/read` answer: retained diagnostics and host telemetry.
  */
 export type ProductHostDiagnosticsReadResponse = { telemetry: ProductHostTelemetrySnapshot, events: Array<RuntimeDiagnosticEvent>, floorSequence: CanonicalU64, throughSequence: CanonicalU64, nextCursor: CanonicalU64, readMonotonicNanoseconds: CanonicalU64, lagged: boolean, warningCount: CanonicalU64, errorCount: CanonicalU64, droppedCount: CanonicalU64, };
+
+/**
+ * The chunk distance field atlas the `distanceField` ambient occlusion
+ * path cone-traces.
+ */
+export type ProductHostDistanceFieldStatistics = { 
+/**
+ * Why this device cannot trace the fields; absent while it can.
+ */
+refused?: string, 
+/**
+ * Chunk fields resident in the atlas.
+ */
+residentFields: number, 
+/**
+ * Bricks the atlas holds room for.
+ */
+atlasBricks: number, atlasBytes: bigint, 
+/**
+ * Fields placed around the camera for the last world view.
+ */
+lookupEntries: number, };
 
 export type ProductHostErrorBody = { code: string, diagnostic: string, };
 
@@ -113,7 +135,7 @@ timestamps: boolean, limits: ProductHostComputeLimits,
 /**
  * The timed passes, in frame order.
  */
-passes: Array<ProductHostGpuPass>, ambientOcclusion: ProductHostAmbientOcclusionStatistics, lightClusters: ProductHostLightClusterStatistics, gpuCulling: ProductHostGpuCullingStatistics, };
+passes: Array<ProductHostGpuPass>, ambientOcclusion: ProductHostAmbientOcclusionStatistics, distanceFields: ProductHostDistanceFieldStatistics, lightClusters: ProductHostLightClusterStatistics, gpuCulling: ProductHostGpuCullingStatistics, };
 
 /**
  * The light clustering of the last world view.

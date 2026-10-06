@@ -93,6 +93,7 @@ pub use svc_collision::{
     StaticMeshCollisionError, StaticMeshCollisionReceipt, StaticMeshHit, StaticMeshInstanceId,
     StaticMeshTransform,
 };
+pub use svc_mesh::distance_field;
 pub use svc_mesh::{
     MaterialSurface, MeshError as SurfaceMeshError, SurfaceCharacter, SurfaceMaterials,
     SurfaceMeshLimits, SurfaceMeshOptions, SurfaceMode, TerrainLayers, VertexPlacement,
@@ -194,12 +195,23 @@ pub struct VoxelMeshChunk {
     /// position, stable across world-origin rebases.
     pub origin_voxel: [i64; 3],
     pub voxel_size: f32,
+    /// Voxels per axis: the chunk's box is `size * voxel_size` from its
+    /// origin.
+    pub size: [u32; 3],
     pub positions: Vec<f32>,
     pub normals: Vec<f32>,
     pub tile_coordinates: Vec<f32>,
     /// Four terrain layer weights per vertex when the session has terrain
     /// layers (`svc_mesh::MeshPayload::layer_weights`); empty otherwise.
     pub layer_weights: Vec<f32>,
+    /// The chunk's coarse signed distance field over its box
+    /// (`svc_mesh::distance_field`, `FIELD_CELLS`³ bytes, x fastest); empty
+    /// when the mesher made none.
+    pub distance_field: Vec<u8>,
+    /// Hash of `distance_field` alone: a neighbour's edit within the field's
+    /// reach changes it without `content_hash`, and republishes the field
+    /// alone.
+    pub field_hash: u64,
     pub indices: Vec<u32>,
     pub groups: Vec<VoxelMeshGroup>,
     /// The chunk-local storage index (x-fastest) of the voxel owning each
@@ -1030,9 +1042,12 @@ impl VoxelCollisionScene {
     }
 
     /// Meshes for `dirty` chunks from the current voxels; `None` removes one.
+    /// `field_dirty` chunks outside `dirty` keep their meshes and rebuild
+    /// only their distance fields.
     pub(crate) fn build_meshes(
         &self,
         dirty: &BTreeSet<ChunkCoord>,
+        field_dirty: &BTreeSet<ChunkCoord>,
     ) -> Result<ChunkMeshes, CollisionSceneError> {
         let meshed: Vec<_> = dirty
             .iter()
@@ -1049,6 +1064,13 @@ impl VoxelCollisionScene {
             dirty.iter().map(|coordinate| (*coordinate, None)).collect();
         for (coordinate, mesh) in meshed.into_iter().zip(meshes) {
             built.insert(coordinate, Some(mesh));
+        }
+        for coordinate in field_dirty.difference(dirty) {
+            if let Some(refreshed) = self.mesh_chunks.get(coordinate).and_then(|retained| {
+                refresh_distance_field(&self.voxel_world, *coordinate, retained)
+            }) {
+                built.insert(*coordinate, Some(Arc::new(refreshed)));
+            }
         }
         Ok(ChunkMeshes {
             meshes: built,
@@ -1180,6 +1202,56 @@ impl VoxelCollisionScene {
         chunks
     }
 
+    /// Chunks whose distance field depends on the voxel at `voxel`: its own
+    /// chunk and the resident neighbours whose field reaches it
+    /// (`svc_mesh::distance_field_reach_voxels`), edge and corner
+    /// neighbours included.
+    pub(crate) fn field_neighbourhood_of_voxel(&self, voxel: VoxelCoord) -> Vec<ChunkCoord> {
+        let grid = self.voxel_world.grid();
+        let [width, height, depth] = grid.chunk_dims().to_array();
+        let (owner, local) = grid.voxel_to_chunk_local(voxel);
+        let reach = svc_mesh::distance_field_reach_voxels(self.chunk_size);
+        let offsets = |at: u32, extent: u32| {
+            let mut offsets = vec![0i64];
+            if at < reach {
+                offsets.push(-1);
+            }
+            if at + reach >= extent {
+                offsets.push(1);
+            }
+            offsets
+        };
+        let mut chunks = vec![owner];
+        for x in offsets(local.x, width) {
+            for y in offsets(local.y, height) {
+                for z in &offsets(local.z, depth) {
+                    let candidate = ChunkCoord::new(owner.x + x, owner.y + y, owner.z + z);
+                    if (x, y, *z) != (0, 0, 0) && self.voxel_world.get(candidate).is_some() {
+                        chunks.push(candidate);
+                    }
+                }
+            }
+        }
+        chunks
+    }
+
+    /// Chunks whose distance field depends on `owner` being resident: it and
+    /// all its resident neighbours.
+    pub(crate) fn field_neighbourhood(&self, owner: ChunkCoord) -> Vec<ChunkCoord> {
+        let mut chunks = vec![owner];
+        for x in -1..=1 {
+            for y in -1..=1 {
+                for z in -1..=1 {
+                    let candidate = ChunkCoord::new(owner.x + x, owner.y + y, owner.z + z);
+                    if (x, y, z) != (0, 0, 0) && self.voxel_world.get(candidate).is_some() {
+                        chunks.push(candidate);
+                    }
+                }
+            }
+        }
+        chunks
+    }
+
     /// Add (`present`) or remove one solid voxel's share of the count and hash.
     pub(crate) fn account_voxel(&mut self, voxel: MaterialVoxel, present: bool) {
         if present {
@@ -1219,11 +1291,13 @@ impl VoxelCollisionScene {
     ) {
         let mut rebuilt_chunks = 0;
         let mut removed_chunks = 0;
+        let mut rebuilt = Vec::new();
         for (coordinate, mesh) in meshes.meshes {
             match mesh {
                 Some(mesh) => {
                     self.mesh_chunks.insert(coordinate, mesh);
                     rebuilt_chunks += 1;
+                    rebuilt.push(coordinate);
                 }
                 None => {
                     if self.mesh_chunks.remove(&coordinate).is_some() {
@@ -1262,8 +1336,13 @@ impl VoxelCollisionScene {
             source_revision: self.source_revision,
             previous_mesh_state: Some(previous_mesh_state),
             surface_mode: self.mesh_options.mode,
+            // The rebuilt meshes, which may include field-only refreshes
+            // past `dirty`.
             dirty_chunks: dirty
                 .iter()
+                .chain(rebuilt.iter())
+                .collect::<BTreeSet<_>>()
+                .into_iter()
                 .map(|coordinate| coordinate.to_array())
                 .collect(),
             rebuilt_chunks,
@@ -1414,7 +1493,7 @@ fn voxel_mesh_chunk(
     source_chunk_hash: u64,
     mesh: svc_mesh::MeshPayload,
 ) -> VoxelMeshChunk {
-    let content_hash = mesh_payload_hash(&mesh);
+    let voxels = size;
     let size = size.map(i64::from);
     let triangle_owners = mesh
         .triangle_owners
@@ -1425,18 +1504,23 @@ fn voxel_mesh_chunk(
             ((local[2] * size[1] + local[1]) * size[0] + local[0]) as u32
         })
         .collect();
-    VoxelMeshChunk {
+    let mut chunk = VoxelMeshChunk {
         chunk: coordinate.to_array(),
-        content_hash,
+        content_hash: 0,
+        field_hash: 0,
         source_chunk_hash,
         surface_mode: mesh.surface_mode,
         translation: [origin.x as f32, origin.y as f32, origin.z as f32],
         origin_voxel,
         voxel_size,
+        size: voxels,
         positions: mesh.positions,
         normals: mesh.normals,
         tile_coordinates: mesh.tile_coordinates,
         layer_weights: mesh.layer_weights,
+        distance_field: mesh
+            .distance_field
+            .map_or_else(Vec::new, |field| field.data),
         indices: mesh.indices,
         groups: mesh
             .groups
@@ -1456,10 +1540,40 @@ fn voxel_mesh_chunk(
         vertices: mesh.stats.vertices,
         quads: mesh.stats.quads,
         faces_culled: mesh.stats.faces_culled,
-    }
+    };
+    chunk.content_hash = chunk_content_hash(&chunk);
+    chunk.field_hash = fnv_hash(&chunk.distance_field);
+    chunk
 }
 
-fn mesh_payload_hash(mesh: &svc_mesh::MeshPayload) -> u64 {
+/// A retained chunk with its distance field rebuilt from the world as it is
+/// now: for a chunk a neighbour's edit reached without touching its mesh.
+pub(crate) fn refresh_distance_field(
+    world: &VoxelWorld,
+    coordinate: ChunkCoord,
+    retained: &VoxelMeshChunk,
+) -> Option<VoxelMeshChunk> {
+    let field = svc_mesh::chunk_distance_field(world, coordinate)?;
+    if field.data == retained.distance_field {
+        return None;
+    }
+    let mut chunk = retained.clone();
+    chunk.distance_field = field.data;
+    chunk.field_hash = fnv_hash(&chunk.distance_field);
+    Some(chunk)
+}
+
+fn fnv_hash(bytes: &[u8]) -> u64 {
+    const OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+    const PRIME: u64 = 0x0000_0100_0000_01b3;
+    bytes.iter().fold(OFFSET, |hash, byte| {
+        (hash ^ u64::from(*byte)).wrapping_mul(PRIME)
+    })
+}
+
+/// The replacement key of a chunk's mesh publication: everything the
+/// renderer takes from it but the distance field (`field_hash`).
+fn chunk_content_hash(chunk: &VoxelMeshChunk) -> u64 {
     const OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
     const PRIME: u64 = 0x0000_0100_0000_01b3;
     let mut hash = OFFSET;
@@ -1469,23 +1583,23 @@ fn mesh_payload_hash(mesh: &svc_mesh::MeshPayload) -> u64 {
             hash = hash.wrapping_mul(PRIME);
         }
     };
-    feed(mesh.surface_mode.as_str().as_bytes());
-    for value in &mesh.positions {
+    feed(chunk.surface_mode.as_str().as_bytes());
+    for value in &chunk.positions {
         feed(&value.to_bits().to_le_bytes());
     }
-    for value in &mesh.normals {
+    for value in &chunk.normals {
         feed(&value.to_bits().to_le_bytes());
     }
-    for value in &mesh.tile_coordinates {
+    for value in &chunk.tile_coordinates {
         feed(&value.to_bits().to_le_bytes());
     }
-    for value in &mesh.layer_weights {
+    for value in &chunk.layer_weights {
         feed(&value.to_bits().to_le_bytes());
     }
-    for value in &mesh.indices {
+    for value in &chunk.indices {
         feed(&value.to_le_bytes());
     }
-    for group in &mesh.groups {
+    for group in &chunk.groups {
         feed(&group.material_slot.to_le_bytes());
         feed(&group.state.to_le_bytes());
         feed(group.surface_mode.as_str().as_bytes());
@@ -1493,7 +1607,7 @@ fn mesh_payload_hash(mesh: &svc_mesh::MeshPayload) -> u64 {
         feed(&group.start.to_le_bytes());
         feed(&group.count.to_le_bytes());
     }
-    for value in mesh.bounds.min.into_iter().chain(mesh.bounds.max) {
+    for value in chunk.bounds_min.into_iter().chain(chunk.bounds_max) {
         feed(&value.to_bits().to_le_bytes());
     }
     hash

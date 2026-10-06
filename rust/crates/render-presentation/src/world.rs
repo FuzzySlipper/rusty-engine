@@ -968,6 +968,12 @@ impl PresentationWorld {
                 }
                 node.mesh_payload = Some(payload.clone());
             }
+            RenderDiff::ReplaceMeshDistanceField { handle, field } => {
+                match &mut self.node_mut(*handle)?.mesh_payload {
+                    Some(payload) => payload.distance_field = Some(field.clone()),
+                    None => return Err(PresentationWorldError::WrongNodeKind(*handle)),
+                }
+            }
             RenderDiff::UpdateLight { handle, light } => match &mut self.node_mut(*handle)?.kind {
                 NodeKind::Light(value) => *value = light.clone(),
                 _ => return Err(PresentationWorldError::WrongNodeKind(*handle)),
@@ -1180,6 +1186,7 @@ mod tests {
             asset: asset.to_string(),
             payload: MeshPayloadDescriptor {
                 texture_space: None,
+                distance_field: None,
                 layout: MeshBufferLayout {
                     vertex_count: 3,
                     index_count: 3,

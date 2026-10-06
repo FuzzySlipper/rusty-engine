@@ -20,6 +20,7 @@ use crate::apply::light_row;
 use crate::batch::{self, DrawList, Frustum};
 use crate::camera::CameraMatrices;
 use crate::culling::CandidateList;
+use crate::distance_fields::{world_box, FieldEntry};
 use crate::effects::EffectsPass;
 use crate::light_clusters::ClusterUniform;
 use crate::shaders::Features;
@@ -27,9 +28,9 @@ use crate::shadows::{self, ShadowMaps};
 use crate::tables::{Builtin, Environment, MaterialRef, NodeKind, PART_ROW_FLOATS};
 use crate::target::{ColorTarget, TargetView};
 use crate::{
-    srgb_to_linear, OffscreenTarget, PresentSkip, Renderer, WindowSurface, DEFAULT_CLEAR_SRGB,
-    NEUTRAL_GROUND_SRGB, NEUTRAL_HEMISPHERE_INTENSITY, NEUTRAL_KEY_INTENSITY, NEUTRAL_KEY_POSITION,
-    NEUTRAL_VIEWMODEL_KEY_POSITION,
+    srgb_to_linear, AmbientOcclusionPath, OffscreenTarget, PresentSkip, Renderer, WindowSurface,
+    DEFAULT_CLEAR_SRGB, NEUTRAL_GROUND_SRGB, NEUTRAL_HEMISPHERE_INTENSITY, NEUTRAL_KEY_INTENSITY,
+    NEUTRAL_KEY_POSITION, NEUTRAL_VIEWMODEL_KEY_POSITION,
 };
 
 const LIGHT_ROW_FLOATS: usize = 16;
@@ -401,6 +402,26 @@ impl Renderer {
                 .queue
                 .write_buffer(&self.lights_buffer, 0, bytemuck::cast_slice(&rows));
         }
+    }
+
+    /// The resident distance fields of the shown scene-layer payload meshes,
+    /// in world space, for a world view's cone trace.
+    fn field_entries(&self) -> Vec<FieldEntry> {
+        let mut entries = Vec::new();
+        for (handle, mesh) in &self.tables.payload_meshes {
+            let Some((slot, field)) = mesh.distance_field else {
+                continue;
+            };
+            let Some(node) = self.tables.nodes.get(handle) else {
+                continue;
+            };
+            if !node.world_visible || node.world_layer != RenderLayer::Scene {
+                continue;
+            }
+            let (min, max) = world_box(&node.world, &field);
+            entries.push(FieldEntry { min, max, slot });
+        }
+        entries
     }
 
     /// Retained light rows in `layer`. With `shadow_views`, a light whose
@@ -1039,6 +1060,7 @@ impl Renderer {
                 (view.target.width, view.target.height),
                 view.viewport,
                 &view.camera,
+                &self.distance_fields,
             )
         } else {
             None
@@ -1144,7 +1166,21 @@ impl Renderer {
                         }
                     }
                 });
-            self.ambient_occlusion.encode(&mut encoder, occlusion);
+            if occlusion.path() == AmbientOcclusionPath::DistanceField {
+                let entries = self.field_entries();
+                self.distance_fields.begin_view(
+                    &self.gpu,
+                    &view.camera,
+                    occlusion.region(),
+                    &entries,
+                );
+            }
+            self.ambient_occlusion.encode(
+                &self.gpu,
+                &mut encoder,
+                occlusion,
+                &self.distance_fields,
+            );
         }
         // A world pass's lights are binned into clusters when the host asks
         // and the device can; the viewmodel's few lights loop.

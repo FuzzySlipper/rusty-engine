@@ -38,11 +38,12 @@ use csharp_engine_services::{
 use product_host::RuntimePublication;
 use product_host::{
     ProductHostAmbientOcclusionPath, ProductHostAmbientOcclusionStatistics,
-    ProductHostComputeLimits, ProductHostDrawingMode, ProductHostDrawnFrame,
-    ProductHostFrameStream, ProductHostGpuCullingStatistics, ProductHostGpuPass,
-    ProductHostGpuStatistics, ProductHostLightClusterStatistics, ProductHostRendererInspection,
-    ProductHostRendererStatistics, ProductHostStreamMedians, ProductHostStreamStatistics,
-    ProductHostTimedStep, ProductHostWindowMedians, ProductHostWindowStatistics,
+    ProductHostComputeLimits, ProductHostDistanceFieldStatistics, ProductHostDrawingMode,
+    ProductHostDrawnFrame, ProductHostFrameStream, ProductHostGpuCullingStatistics,
+    ProductHostGpuPass, ProductHostGpuStatistics, ProductHostLightClusterStatistics,
+    ProductHostRendererInspection, ProductHostRendererStatistics, ProductHostStreamMedians,
+    ProductHostStreamStatistics, ProductHostTimedStep, ProductHostWindowMedians,
+    ProductHostWindowStatistics,
 };
 use render_host_contracts::{RendererCameraPose, RendererViewComposition, RendererViewTarget};
 use render_stream::{DrawnFrame, FrameStreamer, StreamStats};
@@ -763,10 +764,20 @@ fn gpu_statistics(readout: GpuReadout) -> ProductHostGpuStatistics {
                 AmbientOcclusionPath::Off => ProductHostAmbientOcclusionPath::Off,
                 AmbientOcclusionPath::Compute => ProductHostAmbientOcclusionPath::Compute,
                 AmbientOcclusionPath::Raster => ProductHostAmbientOcclusionPath::Raster,
+                AmbientOcclusionPath::DistanceField => {
+                    ProductHostAmbientOcclusionPath::DistanceField
+                }
             },
             compute_refused: ambient_occlusion.compute_refused,
             workgroups: ambient_occlusion.workgroups,
             texture: ambient_occlusion.texture,
+        },
+        distance_fields: ProductHostDistanceFieldStatistics {
+            refused: readout.distance_fields.refused,
+            resident_fields: readout.distance_fields.resident_fields,
+            atlas_bricks: readout.distance_fields.atlas_bricks,
+            atlas_bytes: readout.distance_fields.atlas_bytes,
+            lookup_entries: readout.distance_fields.lookup_entries,
         },
         light_clusters: ProductHostLightClusterStatistics {
             enabled: readout.light_clusters.enabled,

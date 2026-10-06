@@ -93,7 +93,7 @@ fn assert_same_projections(scene: &VoxelCollisionScene, fresh: &VoxelCollisionSc
     let meshes = |scene: &VoxelCollisionScene| {
         scene
             .mesh_chunks()
-            .map(|chunk| (chunk.chunk, chunk.content_hash))
+            .map(|chunk| (chunk.chunk, chunk.content_hash, chunk.field_hash))
             .collect::<Vec<_>>()
     };
     assert_eq!(meshes(scene), meshes(fresh));
@@ -306,7 +306,7 @@ fn assert_reconstructed_meshes_match(scene: &VoxelCollisionScene, context: &str)
     let meshes = |scene: &VoxelCollisionScene| {
         scene
             .mesh_chunks()
-            .map(|chunk| (chunk.chunk, chunk.content_hash))
+            .map(|chunk| (chunk.chunk, chunk.content_hash, chunk.field_hash))
             .collect::<Vec<_>>()
     };
     assert_eq!(meshes(scene), meshes(&fresh), "{context}");

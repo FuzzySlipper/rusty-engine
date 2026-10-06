@@ -4003,6 +4003,7 @@ impl RuntimeAppearanceBridge {
             asset: mesh_id.clone(),
             payload: MeshPayloadDescriptor {
                 texture_space: None,
+                distance_field: None,
                 layout: MeshBufferLayout {
                     vertex_count: request.vertex_count,
                     index_count: request.index_count,
@@ -11811,6 +11812,7 @@ fn shade(surface: Surface) -> vec4<f32> {
             asset: "mesh/test".to_owned(),
             payload: MeshPayloadDescriptor {
                 texture_space: None,
+                distance_field: None,
                 layout: MeshBufferLayout {
                     vertex_count: 3,
                     index_count: 3,

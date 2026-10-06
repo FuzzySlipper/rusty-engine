@@ -107,6 +107,7 @@ pub fn partition_mesh_spatially(
         layout.index_count = out_indices.len() as u32;
         parts.push(MeshPayloadDescriptor {
             texture_space: None,
+            distance_field: None,
             layout,
             groups,
             bounds,

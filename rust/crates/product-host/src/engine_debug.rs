@@ -70,8 +70,27 @@ pub struct ProductHostGpuStatistics {
     /// The timed passes, in frame order.
     pub passes: Vec<ProductHostGpuPass>,
     pub ambient_occlusion: ProductHostAmbientOcclusionStatistics,
+    pub distance_fields: ProductHostDistanceFieldStatistics,
     pub light_clusters: ProductHostLightClusterStatistics,
     pub gpu_culling: ProductHostGpuCullingStatistics,
+}
+
+/// The chunk distance field atlas the `distanceField` ambient occlusion
+/// path cone-traces.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ProductHostDistanceFieldStatistics {
+    /// Why this device cannot trace the fields; absent while it can.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub refused: Option<String>,
+    /// Chunk fields resident in the atlas.
+    pub resident_fields: u32,
+    /// Bricks the atlas holds room for.
+    pub atlas_bricks: u32,
+    pub atlas_bytes: u64,
+    /// Fields placed around the camera for the last world view.
+    pub lookup_entries: u32,
 }
 
 /// The GPU visibility of the last view pass.
@@ -138,6 +157,7 @@ pub enum ProductHostAmbientOcclusionPath {
     Off,
     Compute,
     Raster,
+    DistanceField,
 }
 
 /// One timed pass's GPU cost over the recent frames.

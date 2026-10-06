@@ -762,13 +762,22 @@ small number of authored shadow lights in dungeon scenes.
 
 ### Screen-space ambient occlusion (under evaluation)
 
-`RustyEngineProductAmbientOcclusion` turns screen-space ambient occlusion on
-world views `enabled` or `disabled` (the default);
+`RustyEngineProductAmbientOcclusion` turns ambient occlusion on world views
+`enabled` (screen-space), `distanceField` or `disabled` (the default);
 `RustyEngineProductAmbientOcclusionStrength`, from `0` to `1` (the default),
 scales how far it darkens the ambient and hemisphere light. Direct light,
 unlit materials, blended parts and the viewmodel layer are not darkened. This
 writes `renderer.lighting.ambientOcclusion` in the staged manifest;
 `engine.renderer` reports each of its passes' GPU time.
+
+`distanceField` traces cones through the coarse signed distance fields voxel
+chunks publish with their meshes (8³ cells over each chunk, for chunk sizes
+that are multiples of 8), so a wall darkens the floor at its foot whether or
+not the wall is on screen, and a surface's occlusion does not change as the
+camera turns. It needs compute shaders; a device without them takes the
+screen-space path. Only voxel chunks carry fields: static meshes and voxel
+objects neither occlude nor are occluded by them. `engine.renderer` reports
+the field atlas (`distanceFields`) beside the occlusion path.
 
 ### Clustered lighting (under evaluation)
 

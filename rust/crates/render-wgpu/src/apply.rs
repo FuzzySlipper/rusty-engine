@@ -326,11 +326,45 @@ impl Renderer {
                 );
                 mesh.texture_space = payload.texture_space;
                 mesh.layer_weights = layer_weights;
-                self.tables.payload_meshes.insert(*handle, mesh);
+                mesh.distance_field = payload.distance_field.as_ref().and_then(|field| {
+                    let slot = self.distance_fields.allocate(&self.gpu, &field.data)?;
+                    Some((
+                        slot,
+                        crate::distance_fields::FieldBox {
+                            origin: field.origin,
+                            extent: field.extent,
+                        },
+                    ))
+                });
+                if let Some(previous) = self.tables.payload_meshes.insert(*handle, mesh) {
+                    if let Some((slot, _)) = previous.distance_field {
+                        self.distance_fields.release(slot);
+                    }
+                }
                 if let NodeKind::Primitive { has_payload, .. } = &mut self.node_mut(*handle)?.kind {
                     *has_payload = true;
                 }
                 self.rebuild_parts(*handle);
+            }
+            RenderDiff::ReplaceMeshDistanceField { handle, field } => {
+                let Some(mesh) = self.tables.payload_meshes.get_mut(handle) else {
+                    return Err(format!("node {} has no payload mesh", handle.raw()));
+                };
+                if let Some((slot, _)) = mesh.distance_field.take() {
+                    self.distance_fields.release(slot);
+                }
+                mesh.distance_field =
+                    self.distance_fields
+                        .allocate(&self.gpu, &field.data)
+                        .map(|slot| {
+                            (
+                                slot,
+                                crate::distance_fields::FieldBox {
+                                    origin: field.origin,
+                                    extent: field.extent,
+                                },
+                            )
+                        });
             }
             RenderDiff::SetMaterialInstanceParameters {
                 handle,
@@ -498,7 +532,11 @@ impl Renderer {
         }
         for handle in removed {
             self.remove_animated_instance(handle);
-            self.tables.payload_meshes.remove(&handle);
+            if let Some(mesh) = self.tables.payload_meshes.remove(&handle) {
+                if let Some((slot, _)) = mesh.distance_field {
+                    self.distance_fields.release(slot);
+                }
+            }
             self.tables.lights.remove(&handle);
             self.tables.sprites.remove(&handle);
             self.tables.dirty_nodes.remove(&handle);
@@ -1159,6 +1197,7 @@ impl Renderer {
             edges: Default::default(),
             extra: None,
             texture_space: None,
+            distance_field: None,
             layer_weights: false,
             vertices: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some(label),
@@ -1905,6 +1944,7 @@ fn op_name(op: &RenderDiff) -> &'static str {
         RenderDiff::Update { .. } => "update",
         RenderDiff::Destroy { .. } => "destroy",
         RenderDiff::ReplaceMeshPayload { .. } => "replaceMeshPayload",
+        RenderDiff::ReplaceMeshDistanceField { .. } => "replaceMeshDistanceField",
         RenderDiff::CreateLight { .. } => "createLight",
         RenderDiff::UpdateLight { .. } => "updateLight",
         RenderDiff::DefineMaterial { .. } => "defineMaterial",

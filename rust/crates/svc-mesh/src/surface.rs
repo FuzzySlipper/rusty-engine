@@ -1035,6 +1035,7 @@ pub(super) fn voxel_payload(
         indices,
         groups,
         triangle_owners: owners,
+        distance_field: None,
         stats: MeshStats {
             surface_mode: mode,
             vertices: vertices as u32,

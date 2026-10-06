@@ -46,6 +46,13 @@ default; a product turns it on with `RustyEngineProductAmbientOcclusion` (see
 [the product project](csharp-product-project.md#screen-space-ambient-occlusion-under-evaluation)),
 and `engine.renderer` reports its passes' GPU time.
 
+Its `distanceField` mode replaces the screen-space pass with a cone trace
+through the voxel chunks' signed distance fields, which the chunk mesher
+builds from the chunk and its neighbours and the renderer keeps in one 3D
+atlas; occlusion then comes from the world around a surface, out to half a
+chunk, rather than from what the view shows. The depth pre-pass and the blur
+stay the same, so the two modes swap on one product setting.
+
 ## The standard shader
 
 Retained meshes, voxel surfaces and GLB parts all draw with the Engine's

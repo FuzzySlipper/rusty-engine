@@ -5,8 +5,8 @@
 //! `types`, `view`, `material`, `surface`, `lighting`, `tonemap`, `finish`
 //! and `shade` are importable modules (`#import rusty::lighting::standard_radiance`);
 //! `world`, `sky`, `shadow`, `effects`, `ghost`, `compose`,
-//! `ambient_occlusion`, `light_clusters` and `cull` are the entry shaders
-//! built from them.
+//! `ambient_occlusion`, `light_clusters`, `cull` and `distance_field` are the
+//! entry shaders built from them.
 //! A material's features are shader defs, so a variant only carries the
 //! samples and branches its material uses.
 //!
@@ -192,6 +192,9 @@ pub enum Entry {
     LightClusters,
     /// A view's opaque candidates culled into indirect draws.
     Cull,
+    /// Distance-field ambient occlusion: cone traces through the chunk
+    /// field atlas over a view's depth.
+    DistanceField,
 }
 
 impl Entry {
@@ -212,6 +215,10 @@ impl Entry {
                 include_str!("shaders/light_clusters.wgsl"),
             ),
             Self::Cull => ("shaders/cull.wgsl", include_str!("shaders/cull.wgsl")),
+            Self::DistanceField => (
+                "shaders/distance_field.wgsl",
+                include_str!("shaders/distance_field.wgsl"),
+            ),
         }
     }
 }
@@ -421,6 +428,7 @@ mod tests {
             Entry::AmbientOcclusion,
             Entry::LightClusters,
             Entry::Cull,
+            Entry::DistanceField,
         ] {
             compose(entry, Features::default());
         }

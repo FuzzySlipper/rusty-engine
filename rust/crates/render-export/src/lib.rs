@@ -264,6 +264,20 @@ impl Frozen {
                     }
                     continue;
                 }
+                RenderDiff::ReplaceMeshDistanceField { handle, field } => {
+                    if let Some(Node {
+                        kind:
+                            Kind::Primitive {
+                                payload: Some(payload),
+                                ..
+                            },
+                        ..
+                    }) = scene.nodes.get_mut(handle)
+                    {
+                        payload.distance_field = Some(field.clone());
+                    }
+                    continue;
+                }
                 RenderDiff::SetParentJoint { handle, joint } => {
                     if let Some(node) = scene.nodes.get_mut(handle) {
                         node.parent_joint = joint.clone();

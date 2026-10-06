@@ -389,6 +389,13 @@ pub enum RenderDiff {
         handle: RenderHandle,
         payload: MeshPayloadDescriptor,
     },
+    /// Replace only the distance field of a primitive's replaced payload: a
+    /// voxel chunk whose neighbour changed within the field's reach keeps
+    /// its mesh.
+    ReplaceMeshDistanceField {
+        handle: RenderHandle,
+        field: crate::MeshDistanceField,
+    },
     CreateLight {
         handle: RenderHandle,
         parent: Option<RenderHandle>,
@@ -537,6 +544,9 @@ impl RenderDiff {
             Self::ReplaceMeshPayload { payload, .. } => {
                 payload.validate().map_err(RenderOperationError::Mesh)
             }
+            Self::ReplaceMeshDistanceField { field, .. } => {
+                field.validate().map_err(RenderOperationError::Mesh)
+            }
             Self::CreateLight { light, .. } | Self::UpdateLight { light, .. } => {
                 light.validate().map_err(RenderOperationError::Light)
             }
@@ -651,6 +661,7 @@ impl RenderDiff {
             | Self::SetParentJoint { handle, .. }
             | Self::Destroy { handle }
             | Self::ReplaceMeshPayload { handle, .. }
+            | Self::ReplaceMeshDistanceField { handle, .. }
             | Self::UpdateLight { handle, .. }
             | Self::SetMaterialInstanceParameters { handle, .. }
             | Self::SetAnimatedMeshInspection { handle, .. }
@@ -753,6 +764,7 @@ impl RenderFrameDiff {
                     .collect(),
                 // Listed so that a new op carrying a payload is added here.
                 RenderDiff::SetParentJoint { .. }
+                | RenderDiff::ReplaceMeshDistanceField { .. }
                 | RenderDiff::Create { .. }
                 | RenderDiff::Update { .. }
                 | RenderDiff::Destroy { .. }

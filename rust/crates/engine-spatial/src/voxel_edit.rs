@@ -291,12 +291,14 @@ impl VoxelEditService {
         }
         let mut changed_chunks = BTreeSet::new();
         let mut dirty = BTreeSet::new();
+        let mut field_dirty = BTreeSet::new();
         for change in &changes {
             let voxel = VoxelCoord::new(change.address[0], change.address[1], change.address[2]);
             changed_chunks.insert(grid.voxel_to_chunk(voxel));
             dirty.extend(scene.mesh_neighbourhood_of_voxel(voxel));
+            field_dirty.extend(scene.field_neighbourhood_of_voxel(voxel));
         }
-        let meshes = match scene.build_meshes(&dirty) {
+        let meshes = match scene.build_meshes(&dirty, &field_dirty) {
             Ok(meshes) => meshes,
             Err(error) => {
                 for change in changes.iter().rev() {

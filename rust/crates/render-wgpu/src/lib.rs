@@ -29,6 +29,7 @@ mod compose;
 mod composition;
 mod convert;
 mod culling;
+mod distance_fields;
 mod driver;
 mod effects;
 mod frame;
@@ -79,6 +80,7 @@ pub use apply::ApplyIssue;
 pub use camera::CameraSampleReadout;
 pub use composition::{DrawnCamera, TargetReadout, TargetStatus, ViewCompositionReadout};
 pub use culling::GpuCullingReadout;
+pub use distance_fields::DistanceFieldReadout;
 pub use driver::{Capture, SceneChange, SceneDriver, SceneFrame, SceneState, SceneView};
 pub use frame::FrameStats;
 pub use ghost::GhostPlateReadout;
@@ -127,6 +129,8 @@ pub struct GpuReadout {
     /// The timed passes, in frame order.
     pub passes: Vec<GpuPassTiming>,
     pub ambient_occlusion: AmbientOcclusionReadout,
+    /// The chunk field atlas the `DistanceField` occlusion path traces.
+    pub distance_fields: DistanceFieldReadout,
     pub light_clusters: LightClusterReadout,
     pub gpu_culling: GpuCullingReadout,
 }
@@ -209,6 +213,7 @@ pub struct Renderer {
     scene_generation: u64,
     compose: compose::Compose,
     ambient_occlusion: ambient_occlusion::AmbientOcclusionPass,
+    distance_fields: distance_fields::DistanceFields,
     light_clusters: light_clusters::LightClusters,
     culling: culling::GpuCulling,
     composition: composition::ViewComposition,
@@ -304,6 +309,14 @@ impl Renderer {
             ambient_occlusion_shader,
             &layouts.ambient_occlusion,
         );
+        let distance_fields = distance_fields::DistanceFields::new(
+            gpu,
+            pipelines::standard(layouts.shaders.module(
+                device,
+                Entry::DistanceField,
+                Features::default(),
+            )),
+        );
         let mut renderer = Self {
             gpu: gpu.clone(),
             options,
@@ -335,6 +348,7 @@ impl Renderer {
             scene_generation: 0,
             compose: compose::Compose::new(device, compose_shader),
             ambient_occlusion,
+            distance_fields,
             light_clusters,
             culling,
             composition: Default::default(),
@@ -406,6 +420,7 @@ impl Renderer {
                 .chain([self.light_clusters.timing(), self.culling.timing()])
                 .collect(),
             ambient_occlusion: self.ambient_occlusion.readout(),
+            distance_fields: self.distance_fields.readout(),
             light_clusters: self.light_clusters.readout(),
             gpu_culling: self.culling.readout(),
         }

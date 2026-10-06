@@ -130,7 +130,7 @@
     <Error Condition="('$(RustyEngineProductUiProjectionStream)' == '' and '$(RustyEngineProductUiProjectionContract)' != '') or ('$(RustyEngineProductUiProjectionStream)' != '' and '$(RustyEngineProductUiProjectionContract)' == '')"
            Text="RustyEngineProductUiProjectionStream and RustyEngineProductUiProjectionContract must be declared together." />
     <Error Condition="!$([System.Text.RegularExpressions.Regex]::IsMatch('$(RustyEngineProductSceneShadows)', '\A(enabled|disabled)\z'))" Text="RustyEngineProductSceneShadows must be enabled or disabled." />
-    <Error Condition="!$([System.Text.RegularExpressions.Regex]::IsMatch('$(RustyEngineProductAmbientOcclusion)', '\A(disabled|enabled)\z'))" Text="RustyEngineProductAmbientOcclusion must be enabled or disabled." />
+    <Error Condition="!$([System.Text.RegularExpressions.Regex]::IsMatch('$(RustyEngineProductAmbientOcclusion)', '\A(disabled|enabled|distanceField)\z'))" Text="RustyEngineProductAmbientOcclusion must be enabled, distanceField or disabled." />
     <Error Condition="!$([System.Text.RegularExpressions.Regex]::IsMatch('$(RustyEngineProductAmbientOcclusionStrength)', '\A[0-9]+(\.[0-9]+)?\z'))" Text="RustyEngineProductAmbientOcclusionStrength must be a non-negative number." />
     <Error Condition="!$([System.Text.RegularExpressions.Regex]::IsMatch('$(RustyEngineProductClusteredLighting)', '\A(enabled|disabled)\z'))" Text="RustyEngineProductClusteredLighting must be enabled or disabled." />
     <Error Condition="!$([System.Text.RegularExpressions.Regex]::IsMatch('$(RustyEngineProductGpuCulling)', '\A(enabled|disabled)\z'))" Text="RustyEngineProductGpuCulling must be enabled or disabled." />

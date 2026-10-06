@@ -4,7 +4,7 @@
 //!
 //! ```text
 //! rusty-scene-render <snapshot> <out.png> [--width W] [--height H] [--frames N]
-//!     [--ambient-occlusion off|compute|raster] [--clustered-lighting on|off]
+//!     [--ambient-occlusion off|compute|raster|field] [--clustered-lighting on|off]
 //!     [--gpu-culling on|off]
 //! ```
 //!
@@ -25,7 +25,7 @@ use render_wgpu::{
 use serde_json::json;
 
 const USAGE: &str = "usage: rusty-scene-render <snapshot> <out.png> [--width W] [--height H] \
-     [--frames N] [--ambient-occlusion off|compute|raster] [--clustered-lighting on|off] \
+     [--frames N] [--ambient-occlusion off|compute|raster|field] [--clustered-lighting on|off] \
      [--gpu-culling on|off]";
 
 fn main() {
@@ -72,9 +72,10 @@ fn run() -> Result<(), String> {
                     Some("off") => AmbientOcclusionPath::Off,
                     Some("compute") => AmbientOcclusionPath::Compute,
                     Some("raster") => AmbientOcclusionPath::Raster,
+                    Some("field") => AmbientOcclusionPath::DistanceField,
                     _ => {
                         return Err(format!(
-                            "--ambient-occlusion needs off, compute or raster\n{USAGE}"
+                            "--ambient-occlusion needs off, compute, raster or field\n{USAGE}"
                         ))
                     }
                 });
@@ -195,6 +196,13 @@ fn run() -> Result<(), String> {
                 "computeRefused": gpu_readout.ambient_occlusion.compute_refused,
                 "workgroups": gpu_readout.ambient_occlusion.workgroups,
                 "texture": gpu_readout.ambient_occlusion.texture,
+            },
+            "distanceFields": {
+                "refused": gpu_readout.distance_fields.refused,
+                "residentFields": gpu_readout.distance_fields.resident_fields,
+                "atlasBricks": gpu_readout.distance_fields.atlas_bricks,
+                "atlasBytes": gpu_readout.distance_fields.atlas_bytes,
+                "lookupEntries": gpu_readout.distance_fields.lookup_entries,
             },
             "lightClusters": {
                 "enabled": gpu_readout.light_clusters.enabled,
