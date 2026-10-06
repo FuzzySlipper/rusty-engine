@@ -469,6 +469,7 @@ fn shadow_scene(harness: &mut Harness) {
                 intensity: 2.0,
                 enabled: true,
                 direction: [-0.9, -0.8, 0.6],
+                range: None,
                 shadow_intent: LightShadowIntent::Requested,
             },
         },
@@ -524,13 +525,19 @@ fn requested_shadows_render_per_light_layers_only_when_the_scene_changes() {
     shadow_scene(&mut harness);
     let view = camera([0.0, 4.5, 6.5], 0.0, -32.0);
     let (first, pixels) = harness.render(&view);
-    // Directional and spot take one layer each, the point light six.
-    assert_eq!(harness.renderer.table_counts().shadow_layers, 8);
-    assert!(first.shadow_draws >= 8, "casters drawn into every layer");
+    // The directional light takes four cascades, the spot light one layer
+    // and the point light six.
+    assert_eq!(harness.renderer.table_counts().shadow_layers, 11);
+    assert_eq!(first.shadow_layers, 11, "every layer rendered once");
     assert_screenshot("shadows", &pixels);
 
-    let (again, _) = harness.render(&camera([0.5, 4.5, 6.5], 4.0, -32.0));
-    assert_eq!(again.shadow_draws, 0, "camera motion alone reuses the maps");
+    let (again, _) = harness.render(&view);
+    assert_eq!(again.shadow_layers, 0, "an unchanged scene reuses the maps");
+    let (moved, _) = harness.render(&camera([0.5, 4.5, 6.5], 4.0, -32.0));
+    assert!(
+        (1..=4).contains(&moved.shadow_layers),
+        "camera motion re-renders cascades only: {moved:?}"
+    );
 
     // A new object casts at once, with no per-object setup. Only the layers
     // that see it render again, and the result is what a fresh renderer
@@ -614,6 +621,19 @@ fn a_light_changing_intensity_renders_no_shadow_layer() {
         light: moved,
     }]);
     assert_eq!(harness.render(&view).0.shadow_layers, 6);
+    // A turning sun re-renders its four cascades only.
+    harness.apply(vec![RenderDiff::UpdateLight {
+        handle: RenderHandle::new(10),
+        light: LightDescriptor::Directional {
+            color: [1.0, 0.95, 0.85],
+            intensity: 2.0,
+            enabled: true,
+            direction: [-0.85, -0.85, 0.6],
+            range: None,
+            shadow_intent: LightShadowIntent::Requested,
+        },
+    }]);
+    assert_eq!(harness.render(&view).0.shadow_layers, 4);
 }
 
 #[test]
@@ -924,6 +944,7 @@ fn metal_materials_lose_their_diffuse_and_tint_their_specular() {
                 intensity: 3.0,
                 enabled: true,
                 direction: [0.4, -0.6, -1.0],
+                range: None,
                 shadow_intent: LightShadowIntent::Disabled,
             },
         },
@@ -1076,6 +1097,7 @@ fn sun(direction: [f32; 3]) -> RenderDiff {
             intensity: 2.5,
             enabled: true,
             direction,
+            range: None,
             shadow_intent: LightShadowIntent::Disabled,
         },
     }
@@ -1686,6 +1708,7 @@ fn terrain_layers_blend_sand_into_rock_over_the_chosen_width() {
                         intensity: 3.0,
                         enabled: true,
                         direction: [-0.8, -0.4, 0.3],
+                        range: None,
                         shadow_intent: LightShadowIntent::Disabled,
                     },
                 });
@@ -2280,4 +2303,131 @@ fn stochastic_tiling_hides_a_repeat_without_seams_and_keeps_its_normal_map_with_
     }
     let tiled_mapped = render(false, true, true);
     assert_screenshot("scene_stochastic_tiling", &tiled_mapped);
+}
+
+/// A sun far from its light node over a long field of posts, each wider,
+/// taller and deeper with distance so its shadow covers a few pixels.
+fn sunlit_field(harness: &mut Harness, origin: [f32; 3], posts: &[f32]) {
+    let at = |x: f32, y: f32, z: f32| [origin[0] + x, origin[1] + y, origin[2] + z];
+    let mut ops = vec![
+        RenderDiff::DefineMaterial {
+            material: material("material/ground", [0.8, 0.8, 0.78, 1.0], None),
+        },
+        static_mesh(
+            "mesh/ground",
+            box_mesh(at(-80.0, -0.1, -260.0), at(80.0, 0.0, 10.0), |_| 0),
+            "material/ground",
+        ),
+        RenderDiff::CreateLight {
+            handle: RenderHandle::new(100),
+            parent: None,
+            light: LightDescriptor::Directional {
+                color: [1.0; 3],
+                intensity: 3.0,
+                enabled: true,
+                direction: [-1.0, -1.0, 0.0],
+                range: None,
+                shadow_intent: LightShadowIntent::Requested,
+            },
+        },
+        RenderDiff::CreateLight {
+            handle: RenderHandle::new(101),
+            parent: None,
+            light: LightDescriptor::Ambient {
+                color: [1.0; 3],
+                intensity: 0.3,
+                enabled: true,
+                shadow_intent: LightShadowIntent::Disabled,
+            },
+        },
+        instance(1, None, "mesh/ground", Transform::IDENTITY),
+    ];
+    for (index, &distance) in posts.iter().enumerate() {
+        let (width, height, depth) = post_size(distance);
+        let asset = format!("mesh/post-{index}");
+        ops.push(static_mesh(
+            &asset,
+            box_mesh(
+                at(-width / 2.0, 0.0, -distance - depth / 2.0),
+                at(width / 2.0, height, -distance + depth / 2.0),
+                |_| 0,
+            ),
+            "material/ground",
+        ));
+        ops.push(instance(
+            10 + index as u64,
+            None,
+            &asset,
+            Transform::IDENTITY,
+        ));
+    }
+    harness.apply(ops);
+}
+
+fn post_size(distance: f32) -> (f32, f32, f32) {
+    (1.0 + distance / 30.0, 3.0 + distance / 10.0, distance / 3.0)
+}
+
+#[test]
+fn a_sun_shadows_the_view_from_near_to_its_range_wherever_its_node_is() {
+    let origin = [300.0, 0.0, -200.0];
+    let posts = [15.0, 35.0, 70.0, 170.0];
+    let options = |shadows| RendererOptions {
+        default_world_lights: false,
+        shadows,
+        ..RendererOptions::default()
+    };
+    let (mut shadowed, mut plain) = (Harness::new(options(true)), Harness::new(options(false)));
+    sunlit_field(&mut shadowed, origin, &posts);
+    sunlit_field(&mut plain, origin, &posts);
+    let eye = glam::Vec3::new(origin[0], 12.0, origin[2]);
+    let pitch = -15f32;
+    let mut view = camera(
+        [eye.x as f64, eye.y as f64, eye.z as f64],
+        0.0,
+        f64::from(pitch),
+    );
+    view.projection = render_host_contracts::RendererCameraProjection::Perspective {
+        fov_y_degrees: 60.0,
+        near: 0.1,
+        far: 500.0,
+    };
+    let (stats, lit) = shadowed.render(&view);
+    assert_eq!(stats.shadow_layers, 4, "{stats:?}");
+    assert_screenshot("sun-cascades", &lit);
+    let unshadowed = plain.render(&view).1;
+
+    // The ground beside each post, where the sun (travelling -X and down)
+    // throws its shadow.
+    let forward = glam::Vec3::new(0.0, pitch.to_radians().sin(), -pitch.to_radians().cos());
+    let view_proj =
+        glam::Mat4::perspective_rh(60f32.to_radians(), WIDTH as f32 / HEIGHT as f32, 0.1, 500.0)
+            * glam::Mat4::look_to_rh(eye, forward, glam::Vec3::Y);
+    let brightness = |pixels: &[u8], point: glam::Vec3| {
+        let ndc = view_proj.project_point3(point);
+        let x = ((ndc.x * 0.5 + 0.5) * WIDTH as f32) as usize;
+        let y = ((0.5 - ndc.y * 0.5) * HEIGHT as f32) as usize;
+        let index = (y * WIDTH as usize + x) * 4;
+        pixels[index..index + 3]
+            .iter()
+            .map(|&c| u32::from(c))
+            .sum::<u32>()
+    };
+    for &distance in &posts {
+        let (width, height, _) = post_size(distance);
+        let shade = glam::Vec3::new(
+            origin[0] - width / 2.0 - height / 2.0,
+            0.0,
+            origin[2] - distance,
+        );
+        let (with, without) = (brightness(&lit, shade), brightness(&unshadowed, shade));
+        if distance < 100.0 {
+            assert!(
+                with + 60 < without,
+                "{distance} m: {with} shadowed, {without} plain"
+            );
+        } else {
+            assert_eq!(with, without, "{distance} m is past the sun's 100 m range");
+        }
+    }
 }

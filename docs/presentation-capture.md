@@ -91,7 +91,7 @@ own JSON types, and `resources/<identity>` each resource. Inline mesh streams
 are stored as packed binary mesh resources.
 
 `rusty-scene-render <snapshot> <out.png> [--width W] [--height H] [--frames
-N]` (in the runtime pack's `bin/`) applies the snapshot to a fresh renderer on
+N] [--walk M] [--turn D]` (in the runtime pack's `bin/`) applies the snapshot to a fresh renderer on
 a headless device and writes a PNG, drawn as a tool capture is. Effects run on
 the renderer's own clock, so particles and other time-driven presentation can
 differ from a live capture of the same held step; retained geometry, lights and

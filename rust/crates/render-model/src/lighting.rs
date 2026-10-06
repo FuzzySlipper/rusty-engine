@@ -31,6 +31,9 @@ pub enum LightDescriptor {
         intensity: f32,
         enabled: bool,
         direction: [f32; 3],
+        /// How far from the camera its requested shadow reaches; the
+        /// renderer's default when absent (render-wgpu `shadows.rs`).
+        range: Option<f32>,
         shadow_intent: LightShadowIntent,
     },
     Point {
@@ -83,7 +86,12 @@ impl LightDescriptor {
         }
         match self {
             Self::Ambient { .. } => Ok(()),
-            Self::Directional { direction, .. } => validate_direction(*direction),
+            Self::Directional {
+                direction, range, ..
+            } => {
+                validate_direction(*direction)?;
+                validate_range_decay(*range, 0.0)
+            }
             Self::Point {
                 position,
                 range,
@@ -187,6 +195,7 @@ mod tests {
                 intensity: 2.0,
                 enabled: true,
                 direction: [-1.0, -2.0, -1.0],
+                range: Some(80.0),
                 shadow_intent: LightShadowIntent::Requested,
             },
             LightDescriptor::Point {

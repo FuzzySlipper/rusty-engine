@@ -286,15 +286,15 @@ impl Renderer {
             }
         }
         if regrouped || !moved.is_empty() || layers_changed {
-            self.cull_casters(&moved);
+            self.cull_casters(&moved, false);
         }
         uploaded
     }
 
-    /// Cull every shadow layer's casters to its view and its light's reach.
-    /// A layer whose casters differ, or hold a moved part, is stale; the
-    /// others keep their maps.
-    fn cull_casters(&mut self, moved: &HashSet<PartId>) {
+    /// Cull shadow layers' casters to their views and their lights' reach:
+    /// every layer, or only the cascades after a fit. A layer whose casters
+    /// differ, or hold a moved part, is stale; the others keep their maps.
+    fn cull_casters(&mut self, moved: &HashSet<PartId>, cascades_only: bool) {
         if self.shadows.layers.is_empty() {
             return;
         }
@@ -303,33 +303,98 @@ impl Renderer {
         // A point light's six faces share one reach.
         let mut reached: Option<((Vec3, f32), Vec<PartId>)> = None;
         // Casters follow the world and viewmodel lists in the instance
-        // buffer.
+        // buffer: fixed layers' first, then cascades', so a fit moves no
+        // fixed layer's list.
         let mut base = 2 * parts.meta.len() as u32;
         let mut changed = false;
-        for layer in &mut self.shadows.layers {
-            let inside = match layer.reach {
-                None => &candidates,
-                Some(reach) => {
-                    if reached.as_ref().is_none_or(|(at, _)| *at != reach) {
-                        reached = Some((reach, batch::within_reach(parts, &candidates, reach)));
-                    }
-                    &reached.as_ref().expect("reach culled").1
+        for cascades in [false, true] {
+            for layer in &mut self.shadows.layers {
+                if layer.is_cascade() != cascades {
+                    continue;
                 }
-            };
-            let list = batch::caster_list(parts, inside, &Frustum::new(&layer.view_proj), base);
-            base += list.instances();
-            if list.ids != layer.casters.ids || list.ids.iter().any(|id| moved.contains(id)) {
-                layer.stale = true;
-            }
-            if list != layer.casters {
-                layer.casters = list;
-                changed = true;
+                if cascades_only && !cascades {
+                    base += layer.casters.instances();
+                    continue;
+                }
+                let inside = match layer.reach() {
+                    _ if !layer.has_view() => &Vec::new(),
+                    None => &candidates,
+                    Some(reach) => {
+                        if reached.as_ref().is_none_or(|(at, _)| *at != reach) {
+                            reached = Some((reach, batch::within_reach(parts, &candidates, reach)));
+                        }
+                        &reached.as_ref().expect("reach culled").1
+                    }
+                };
+                let list = batch::caster_list(parts, inside, &Frustum::new(&layer.view_proj), base);
+                base += list.instances();
+                if list.ids != layer.casters.ids || list.ids.iter().any(|id| moved.contains(id)) {
+                    layer.stale = true;
+                }
+                if list != layer.casters {
+                    layer.casters = list;
+                    changed = true;
+                }
             }
         }
         if changed {
             self.casters_uploaded = false;
         }
         self.reserve_instances();
+    }
+
+    /// Fit each directional light's cascades to a world view's camera, and
+    /// give its light row the split depths and the view axis receivers pick
+    /// a cascade by. A cascade whose view changed is culled again and
+    /// re-renders.
+    fn fit_cascades(&mut self, camera: &CameraMatrices) {
+        let (near, far) = shadows::view_depths(&camera.projection);
+        let forward = -camera.view.row(2).truncate();
+        let mut fitted = false;
+        for index in 0..self.shadows.layers.len() {
+            let shadows::LayerSource::Cascade {
+                direction,
+                distance,
+                index: cascade,
+                row,
+            } = self.shadows.layers[index].source
+            else {
+                continue;
+            };
+            let splits = shadows::cascade_splits(near, far.min(distance));
+            let cascade = cascade as usize;
+            let from = if cascade == 0 {
+                near
+            } else {
+                splits[cascade - 1]
+            };
+            let view_proj = shadows::cascade_view(direction, camera, from, splits[cascade]);
+            let layer = &mut self.shadows.layers[index];
+            if layer.view_proj != view_proj {
+                layer.view_proj = view_proj;
+                layer.stale = true;
+                self.shadows.write_view(&self.gpu.queue, index);
+                fitted = true;
+            }
+            if cascade == 0 {
+                // A directional row's position_range and extra.xyz
+                // (`rusty::types::Light`).
+                let at = u64::from(row) * LIGHT_ROW_FLOATS as u64 * 4;
+                self.gpu.queue.write_buffer(
+                    &self.lights_buffer,
+                    at + 16,
+                    bytemuck::cast_slice(&splits),
+                );
+                self.gpu.queue.write_buffer(
+                    &self.lights_buffer,
+                    at + 48,
+                    bytemuck::cast_slice(&forward.to_array()),
+                );
+            }
+        }
+        if fitted {
+            self.cull_casters(&HashSet::new(), true);
+        }
     }
 
     /// Grow the instance buffer to hold the world and viewmodel lists (each
@@ -421,8 +486,8 @@ impl Renderer {
             neutral_rig(&mut rows, NEUTRAL_KEY_POSITION);
         }
         // Only world lights cast: viewmodel lights are camera-local.
-        let mut shadow_views: Vec<shadows::LayerView> = Vec::new();
-        self.retained_light_rows(&mut rows, ViewLayer::World, Some(&mut shadow_views));
+        let mut shadow_layers: Vec<shadows::LayerSource> = Vec::new();
+        self.retained_light_rows(&mut rows, ViewLayer::World, Some(&mut shadow_layers));
         let world_count = (rows.len() / LIGHT_ROW_FLOATS) as u32;
         if self.options.default_viewmodel_lights {
             neutral_rig(&mut rows, NEUTRAL_VIEWMODEL_KEY_POSITION);
@@ -432,7 +497,7 @@ impl Renderer {
             &self.gpu.device,
             &self.gpu.queue,
             &self.layouts.shadow_layer,
-            &shadow_views,
+            &shadow_layers,
         );
         if replaced {
             self.rebind_frame();
@@ -465,14 +530,14 @@ impl Renderer {
         layers_changed
     }
 
-    /// Retained light rows in `layer`. With `shadow_views`, a light whose
+    /// Retained light rows in `layer`. With `shadow_layers`, a light whose
     /// shadow is requested (and enabled by the host) gets its shadow layers
     /// appended there and its row's `extra.w` set to the first layer + 1.
     fn retained_light_rows(
         &self,
         rows: &mut Vec<f32>,
         layer: ViewLayer,
-        mut shadow_views: Option<&mut Vec<shadows::LayerView>>,
+        mut shadow_layers: Option<&mut Vec<shadows::LayerSource>>,
     ) {
         let mut handles: Vec<&RenderHandle> = self.tables.lights.iter().collect();
         handles.sort();
@@ -484,12 +549,14 @@ impl Renderer {
                     (&node.kind, node.world_visible, in_layer)
                 {
                     if let Some(mut row) = light_row(light, &node.world) {
-                        if let (true, Some(views)) = (self.options.shadows, shadow_views.as_mut()) {
-                            let layers = shadows::light_views(light, &node.world);
+                        if let (true, Some(sources)) =
+                            (self.options.shadows, shadow_layers.as_mut())
+                        {
+                            let index = (rows.len() / LIGHT_ROW_FLOATS) as u32;
+                            let layers = shadows::light_layers(light, &node.world, index);
                             if !layers.is_empty() {
-                                row[15] = (views.len() + 1) as f32;
-                                let reach = shadows::light_reach(light, &node.world);
-                                views.extend(layers.into_iter().map(|view| (view, reach)));
+                                row[15] = (sources.len() + 1) as f32;
+                                sources.extend(layers);
                             }
                         }
                         rows.extend_from_slice(&row);
@@ -573,10 +640,15 @@ impl Renderer {
         self.reserve_instances();
         let mut uploaded = 0;
         if !self.casters_uploaded {
-            let ids: Vec<u32> = self
-                .shadows
-                .layers
+            // In the order `cull_casters` placed them.
+            let ids: Vec<u32> = [false, true]
                 .iter()
+                .flat_map(|&cascades| {
+                    self.shadows
+                        .layers
+                        .iter()
+                        .filter(move |layer| layer.is_cascade() == cascades)
+                })
                 .flat_map(|layer| layer.casters.ids.iter().copied())
                 .collect();
             uploaded += self.upload_instances(2 * slots, &ids);
@@ -895,6 +967,9 @@ impl Renderer {
         };
         let view_proj = view.camera.view_proj;
         let eye = view.camera.eye;
+        if world_layer {
+            self.fit_cascades(&view.camera);
+        }
         let instances_uploaded = self.update_view_list(&view_proj, eye, view.layer);
         let effects = self.prepare_effects(&view);
         let slot = view.layer as usize;

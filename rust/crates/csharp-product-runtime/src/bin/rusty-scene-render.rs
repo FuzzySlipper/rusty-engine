@@ -4,21 +4,26 @@
 //!
 //! ```text
 //! rusty-scene-render <snapshot> <out.png> [--width W] [--height H] [--frames N]
+//!                    [--walk M] [--turn D]
 //! ```
 //!
 //! `--frames N` then draws N more frames into one target with readback and
-//! reports their mean and median cost. Select the adapter as for any wgpu
-//! program (for example `WGPU_BACKEND=vulkan`).
+//! reports their mean and median cost. With `--walk` or `--turn` the camera
+//! moves M metres forward and turns D degrees right before each of those
+//! frames, from the snapshot's first camera, for the cost of a moving view
+//! (culling, shadow cascades). Select the adapter as for any wgpu program
+//! (for example `WGPU_BACKEND=vulkan`).
 
 use std::{path::PathBuf, time::Instant};
 
 use csharp_product_runtime::scene_snapshot::{SceneSnapshot, SceneSnapshotChange};
+use render_host_contracts::RendererCameraPose;
 use render_presentation::PresentationWorld;
 use render_wgpu::{encode_png, Gpu, OffscreenTarget, SceneDriver};
 use serde_json::json;
 
-const USAGE: &str =
-    "usage: rusty-scene-render <snapshot> <out.png> [--width W] [--height H] [--frames N]";
+const USAGE: &str = "usage: rusty-scene-render <snapshot> <out.png> [--width W] [--height H] \
+     [--frames N] [--walk M] [--turn D]";
 
 fn main() {
     if let Err(error) = run() {
@@ -31,17 +36,20 @@ fn run() -> Result<(), String> {
     let mut arguments = std::env::args().skip(1);
     let mut positional = Vec::new();
     let (mut width, mut height, mut frames) = (1280_u32, 720_u32, 0_u32);
+    let (mut walk, mut turn) = (0.0_f64, 0.0_f64);
     while let Some(argument) = arguments.next() {
-        let mut number = |name: &str| -> Result<u32, String> {
+        let mut number = |name: &str| -> Result<f64, String> {
             arguments
                 .next()
                 .and_then(|value| value.parse().ok())
                 .ok_or_else(|| format!("{name} needs a number\n{USAGE}"))
         };
         match argument.as_str() {
-            "--width" => width = number("--width")?,
-            "--height" => height = number("--height")?,
-            "--frames" => frames = number("--frames")?,
+            "--width" => width = number("--width")? as u32,
+            "--height" => height = number("--height")? as u32,
+            "--frames" => frames = number("--frames")? as u32,
+            "--walk" => walk = number("--walk")?,
+            "--turn" => turn = number("--turn")?,
             "-h" | "--help" => {
                 println!("{USAGE}");
                 return Ok(());
@@ -90,10 +98,40 @@ fn run() -> Result<(), String> {
 
     let mut timing = serde_json::Value::Null;
     if frames > 0 {
+        let start = snapshot
+            .changes
+            .iter()
+            .rev()
+            .find_map(|change| match change {
+                SceneSnapshotChange::ViewComposition(composition) => {
+                    composition.cameras.first().map(|camera| camera.pose)
+                }
+                _ => None,
+            });
+        let moving = walk != 0.0 || turn != 0.0;
+        if moving && start.is_none() {
+            return Err("--walk and --turn need a camera in the snapshot".to_owned());
+        }
         let target = OffscreenTarget::new(driver.gpu(), width, height);
         let mut pixels = Vec::new();
         let mut costs = Vec::with_capacity(frames as usize);
-        for _ in 0..frames {
+        for frame in 1..=frames {
+            if let (true, Some(start)) = (moving, start) {
+                // Engine yaw zero faces -Z; positive yaw turns toward +X.
+                let yaw = start.yaw_degrees + turn * f64::from(frame);
+                let distance = walk * f64::from(frame);
+                let [x, y, z] = start.position;
+                let radians = start.yaw_degrees.to_radians();
+                driver.set_observer(Some(RendererCameraPose {
+                    position: [
+                        x + radians.sin() * distance,
+                        y,
+                        z - radians.cos() * distance,
+                    ],
+                    pitch_degrees: start.pitch_degrees,
+                    yaw_degrees: yaw,
+                }));
+            }
             let started = Instant::now();
             driver.draw(|renderer, now| renderer.render_view_composition(&target, now));
             target.read_rgba_into(driver.gpu(), &mut pixels);
@@ -105,6 +143,8 @@ fn run() -> Result<(), String> {
             "meanMs": costs.iter().sum::<f64>() / costs.len() as f64,
             "medianMs": costs[costs.len() / 2],
             "withReadback": true,
+            "walkMetres": walk,
+            "turnDegrees": turn,
         });
     }
     let (tables, memory) = driver

@@ -681,6 +681,7 @@ fn shadowed_character(harness: &mut Harness) {
                 intensity: 2.5,
                 enabled: true,
                 direction: [-0.5, -1.0, -0.3],
+                range: None,
                 shadow_intent: LightShadowIntent::Requested,
             },
         },
@@ -728,7 +729,8 @@ fn a_skinned_character_and_its_held_weapon_cast_shadows_that_follow_the_pose() {
     // From above, so the shadows of the body, arms and weapon fall in view.
     let view = camera([0.5, 5.5, 3.5], 0.0, -58.0);
     let (first, pixels) = shadowed.render(&view);
-    assert_eq!(shadowed.renderer.table_counts().shadow_layers, 1);
+    // A sun casts through four cascades.
+    assert_eq!(shadowed.renderer.table_counts().shadow_layers, 4);
     assert!(first.shadow_draws > 0);
     assert_screenshot("animated-shadows", &pixels);
     let running = shadowed_pixels(&pixels, &plain.render(&view).1);

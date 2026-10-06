@@ -657,6 +657,7 @@ fn studio_rig(settings: &GhostPlateCaptureSettings, orientation: Quat) -> [Light
             intensity: lighting.key_intensity,
             enabled: true,
             direction: travel(lighting.key_direction),
+            range: None,
             shadow_intent: LightShadowIntent::Disabled,
         },
         LightDescriptor::Directional {
@@ -664,6 +665,7 @@ fn studio_rig(settings: &GhostPlateCaptureSettings, orientation: Quat) -> [Light
             intensity: lighting.fill_intensity,
             enabled: true,
             direction: travel(lighting.fill_direction),
+            range: None,
             shadow_intent: LightShadowIntent::Disabled,
         },
     ]

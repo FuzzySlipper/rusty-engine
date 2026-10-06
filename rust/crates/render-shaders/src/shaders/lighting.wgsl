@@ -8,6 +8,15 @@
 #import rusty::view::{frame, lights, shadow_maps, shadow_sampler, shadow_views}
 
 const SHADOW_MAP_SIZE: f32 = 512.0;
+// A directional light's cascades (`shadows.rs`).
+const CASCADES: u32 = 4u;
+// Over the last tenth of each cascade, blend into the next; past the last,
+// out to no shadow.
+const CASCADE_BLEND: f32 = 0.1;
+// How far along its normal a receiver looks up a cascade, in that cascade's
+// texels: a texel spans more depth than the surface's own offset to its back
+// faces, so without it lit ground shadows itself in rings.
+const CASCADE_NORMAL_OFFSET: f32 = 1.5;
 
 fn distance_attenuation(distance: f32, range: f32, decay: f32) -> f32 {
     var falloff = 1.0 / max(pow(distance, decay), 0.01);
@@ -70,6 +79,47 @@ fn shadow_visibility(layer: u32, position: vec3<f32>) -> f32 {
         }
     }
     return lit / 9.0;
+}
+
+// Shadow layer `layer` looked up from `position` moved along `normal` by
+// CASCADE_NORMAL_OFFSET of the layer's texels (an orthographic cascade's
+// world texel is its width over the map size).
+fn cascade_layer_visibility(layer: u32, position: vec3<f32>, normal: vec3<f32>) -> f32 {
+    let view = shadow_views[layer];
+    let width = 2.0 / length(vec3<f32>(view[0].x, view[1].x, view[2].x));
+    let texel = width / SHADOW_MAP_SIZE;
+    return shadow_visibility(layer, position + normal * texel * CASCADE_NORMAL_OFFSET);
+}
+
+// Fraction of a directional light reaching `position` through its cascades
+// from layer `first`, picked by the view depth along `forward` (the axis the
+// cascades were fitted to); `splits` holds each cascade's far depth.
+fn cascade_visibility(
+    first: u32,
+    position: vec3<f32>,
+    normal: vec3<f32>,
+    splits: vec4<f32>,
+    forward: vec3<f32>,
+) -> f32 {
+    let depth = dot(position - frame.camera.xyz, forward);
+    var start = 0.0;
+    for (var index = 0u; index < CASCADES; index = index + 1u) {
+        let end = splits[index];
+        if depth <= end {
+            var visibility = cascade_layer_visibility(first + index, position, normal);
+            let blend = end - (end - start) * CASCADE_BLEND;
+            if depth > blend {
+                var next = 1.0;
+                if index + 1u < CASCADES {
+                    next = cascade_layer_visibility(first + index + 1u, position, normal);
+                }
+                visibility = mix(visibility, next, (depth - blend) / (end - blend));
+            }
+            return visibility;
+        }
+        start = end;
+    }
+    return 1.0;
 }
 
 // Fraction of an ambient light's sky reaching `position` through its sky
@@ -152,7 +202,10 @@ fn standard_radiance(
                 }
             }
             let shadow = u32(light.extra.w);
-            if shadow > 0u {
+            if shadow > 0u && kind == 2u {
+                attenuation = attenuation
+                    * cascade_visibility(shadow - 1u, world_position, normal, light.position_range, light.extra.xyz);
+            } else if shadow > 0u {
                 var layer = shadow - 1u;
                 if kind == 3u {
                     layer += point_face(world_position - light.position_range.xyz);

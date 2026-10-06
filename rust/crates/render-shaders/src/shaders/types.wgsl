@@ -42,12 +42,14 @@ fn texture_space_position(row: Part, position: vec3<f32>) -> vec3<f32> {
 struct Light {
     // rgb: colour * intensity (hemisphere: sky)
     color_kind: vec4<f32>,
-    // xyz: world position; w: range (0 = unbounded)
+    // xyz: world position; w: range (0 = unbounded). A shadowed directional
+    // light: each cascade's far view depth.
     position_range: vec4<f32>,
     // xyz: world travel direction; w: decay exponent
     direction_decay: vec4<f32>,
     // hemisphere: ground colour * intensity; spot: (cos outer, cos inner);
-    // w: first shadow layer + 1, or 0 without a shadow
+    // a shadowed directional light: xyz the view axis its cascades were
+    // fitted to; w: first shadow layer + 1, or 0 without a shadow
     extra: vec4<f32>,
 };
 

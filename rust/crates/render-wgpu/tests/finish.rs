@@ -210,6 +210,7 @@ fn bright_boxes(harness: &mut Harness) {
                 intensity: 9.0,
                 enabled: true,
                 direction: [-0.3, -0.5, -1.0],
+                range: None,
                 shadow_intent: LightShadowIntent::Disabled,
             },
         },

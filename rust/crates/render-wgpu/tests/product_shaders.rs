@@ -105,6 +105,7 @@ fn scene(harness: &mut Harness, right: RenderMaterialDescriptor) {
                 intensity: 2.0,
                 enabled: true,
                 direction: [0.0, -0.7, 1.0],
+                range: None,
                 shadow_intent: LightShadowIntent::Requested,
             },
         },

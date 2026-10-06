@@ -220,6 +220,7 @@ fn directional(direction: [f32; 3]) -> RenderDiff {
             intensity: 3.0,
             enabled: true,
             direction,
+            range: None,
             shadow_intent: LightShadowIntent::Disabled,
         },
     }

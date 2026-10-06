@@ -156,6 +156,7 @@ pub(crate) fn native_light_descriptor(
             intensity: descriptor.intensity,
             enabled: descriptor.enabled,
             direction,
+            range,
             shadow_intent,
         },
         NativeLightKind::Point => LightDescriptor::Point {
@@ -7313,6 +7314,7 @@ fn native_light_readout(fact: &RuntimeLightFact) -> NativeLightReadout {
             intensity,
             enabled,
             direction,
+            range,
             shadow_intent,
         } => (
             NativeLightKind::Directional,
@@ -7321,7 +7323,7 @@ fn native_light_readout(fact: &RuntimeLightFact) -> NativeLightReadout {
             *enabled,
             [0.0; 3],
             *direction,
-            None,
+            *range,
             0.0,
             0.0,
             0.0,
@@ -11072,6 +11074,37 @@ pub(super) mod tests {
         )
         .unwrap_err();
         assert_eq!(error.code(), "CSHARP_MATERIAL");
+    }
+
+    #[test]
+    fn a_directional_light_range_is_its_shadow_distance_and_reads_back() {
+        let mut bridge =
+            RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), BTreeMap::new());
+        bridge.begin_call();
+        let mut sun = point_light_request(93, None);
+        sun.descriptor.kind = NativeLightKind::Directional;
+        sun.descriptor.direction = NativeVec3 {
+            x: -1.0,
+            y: -2.0,
+            z: 0.5,
+        };
+        sun.descriptor.range = 150.0;
+        let light = bridge.create_light(sun).unwrap();
+        let readout = bridge.read_light(light).unwrap();
+        assert_eq!(readout.descriptor.kind, NativeLightKind::Directional);
+        assert!(readout.descriptor.has_range);
+        assert_eq!(readout.descriptor.range, 150.0);
+        let staged = bridge.take_staged_call();
+        assert!(staged.render_ops().iter().any(|op| matches!(
+            op,
+            render_model::RenderDiff::CreateLight {
+                light: LightDescriptor::Directional {
+                    range: Some(150.0),
+                    ..
+                },
+                ..
+            }
+        )));
     }
 
     #[test]
