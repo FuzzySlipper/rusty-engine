@@ -73,9 +73,11 @@ internal static class NavigationMappingChecks
         engine.Spatial.ReplaceCollisionNavigation(new(session, worldMin, worldMax, config));
 
         NavigationStepResult blocked = engine.Spatial.EvaluateNavigationStep(new(session, west, east, (float)CellSize, MaximumVisited));
-        Require(blocked.Outcome == NavigationPathOutcome.NoPath && blocked.Visited == WallColumn && blocked.NearestPresent
+        // The wall leaves the floors in separate components: NoPath without a
+        // search, from the west floor's cell nearest the goal.
+        Require(blocked.Outcome == NavigationPathOutcome.NoPath && blocked.Visited == 0 && blocked.NearestPresent
                 && blocked.NearestCell == new PlanarNavCell(WallColumn - 1, 1, 0) && blocked.Nearest.X == 1.25f,
-            $"NoPath did not say how far it got: {blocked}");
+            $"NoPath across the wall was not answered from the components: {blocked}");
         PlanarNavCell beforeWall = new(WallColumn - 1, 1, 0), wallTop = new(WallColumn, 3, 0);
         CollisionNavigationEdgeReadout tooHigh = engine.Spatial.ExplainCollisionNavigationEdge(new(session, beforeWall, wallTop));
         Require(tooHigh.Outcome == CollisionNavigationEdgeOutcome.NotNeighbor && !tooHigh.Admitted && tooHigh.ToY == 1.5,
