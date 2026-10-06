@@ -147,11 +147,6 @@ use entity_state::{
 };
 use svc_collision::{CollisionHit, CollisionProjection, Ray};
 use svc_mesh::{mesh_chunk_in_world_with_options, MeshError};
-use svc_pathfinding::{
-    propose_direct_nav_movement, propose_projected_direct_nav_movement, DirectNavMovementRequest,
-    NavError, NavProjection, NavProjectionConfig, ProjectedDirectNavMovementError,
-    ProjectedDirectNavMovementRequest,
-};
 use svc_spatial::VoxelWorld;
 use svc_volume::{VolumeError, VoxelChunk};
 
@@ -245,7 +240,6 @@ pub struct VoxelChunkMeshUpdate {
 pub struct VoxelCollisionScene {
     voxel_world: VoxelWorld,
     projection: CollisionProjection,
-    navigation: NavProjection,
     voxel_size: f64,
     chunk_size: u32,
     solid_voxel_count: usize,
@@ -272,13 +266,6 @@ pub(crate) struct SceneBuildRevision {
     pub world_origin: WorldOrigin,
     pub rebase: u64,
 }
-
-/// Navigation walks any empty cell a one-voxel agent occupies; floors are
-/// not required.
-const SCENE_NAVIGATION: NavProjectionConfig = NavProjectionConfig {
-    agent_height_voxels: 1,
-    require_solid_floor: false,
-};
 
 impl SceneBuildRevision {
     const fn initial(source: VoxelSourceRevision) -> Self {
@@ -312,8 +299,6 @@ impl std::fmt::Debug for VoxelCollisionScene {
                 &self.voxel_world.resident_chunks().count(),
             )
             .field("projection_version", &self.projection.version())
-            .field("navigation_cell_count", &self.navigation.walkable_len())
-            .field("navigation_hash", &self.navigation.projection_hash())
             .finish()
     }
 }
@@ -338,7 +323,6 @@ pub enum CollisionSceneError {
     },
     InvalidMaterialVoxel(VoxelAuthorityValidationError),
     Mesh(MeshError),
-    NavigationProjection(NavError),
     StaticMeshRebase(StaticMeshCollisionError),
 }
 
@@ -364,26 +348,6 @@ pub struct CollisionRayHit {
 pub enum SpatialCollisionHit {
     Voxel(CollisionRayHit),
     StaticMesh(StaticMeshHit),
-}
-
-/// One bounded path-following proposal derived from the scene's canonical
-/// voxel authority. Applying it remains the caller's responsibility.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct NavigationStep {
-    pub next_waypoint: Vec3,
-    pub reached: bool,
-    pub visited: usize,
-    pub path_len: usize,
-    pub projection_hash: u64,
-    pub path_hash: u64,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum NavigationStepError {
-    InvalidRequest { reason: &'static str },
-    StartNotWalkable { start: [i64; 3] },
-    GoalNotWalkable { goal: [i64; 3] },
-    NoPath { start: [i64; 3], goal: [i64; 3] },
 }
 
 impl VoxelCollisionScene {
@@ -616,7 +580,6 @@ impl VoxelCollisionScene {
         };
         let mut scene = Self {
             projection,
-            navigation: NavProjection::from_walkable_cells(grid, []),
             voxel_world,
             voxel_size,
             chunk_size,
@@ -648,7 +611,6 @@ impl VoxelCollisionScene {
                 .collect();
             scene.install_surface_colliders(coordinates);
         }
-        scene.rebuild_navigation();
         Ok(scene)
     }
 
@@ -860,109 +822,12 @@ impl VoxelCollisionScene {
             .has_collider(ChunkCoord::new(chunk[0], chunk[1], chunk[2]))
     }
 
-    pub fn navigation_cell_count(&self) -> usize {
-        self.navigation.walkable_len()
-    }
-
-    pub fn navigation_hash(&self) -> u64 {
-        self.navigation.projection_hash()
-    }
-
     /// The retained voxel authority that owns this scene's collision and
-    /// navigation derivations. Consumers may derive another named Engine
+    /// mesh derivations. Consumers may derive another named Engine
     /// projection from it, but do not receive mutable voxel storage through
     /// this read-only access.
     pub fn voxel_world(&self) -> &VoxelWorld {
         &self.voxel_world
-    }
-
-    pub fn navigation_step(
-        &self,
-        from: Vec3,
-        target: Vec3,
-        current_velocity: Vec3,
-        max_step_units: f32,
-        max_visited: usize,
-    ) -> Result<NavigationStep, NavigationStepError> {
-        let readout = propose_projected_direct_nav_movement(
-            &self.navigation,
-            ProjectedDirectNavMovementRequest {
-                from,
-                target,
-                max_step_units,
-                max_visited,
-            },
-        )
-        .map_err(|error| match error {
-            ProjectedDirectNavMovementError::NonFinitePosition => {
-                NavigationStepError::InvalidRequest {
-                    reason: "nonFinitePosition",
-                }
-            }
-            ProjectedDirectNavMovementError::InvalidStep => NavigationStepError::InvalidRequest {
-                reason: "invalidStep",
-            },
-            ProjectedDirectNavMovementError::InvalidQueryBudget => {
-                NavigationStepError::InvalidRequest {
-                    reason: "invalidQueryBudget",
-                }
-            }
-            ProjectedDirectNavMovementError::StartNotWalkable { start } => {
-                NavigationStepError::StartNotWalkable {
-                    start: start.to_array(),
-                }
-            }
-            ProjectedDirectNavMovementError::GoalNotWalkable { goal } => {
-                NavigationStepError::GoalNotWalkable {
-                    goal: goal.to_array(),
-                }
-            }
-            ProjectedDirectNavMovementError::NoPath { start, goal } => {
-                NavigationStepError::NoPath {
-                    start: start.to_array(),
-                    goal: goal.to_array(),
-                }
-            }
-        })?;
-        // The navigation query is deliberately stateless. Once an agent crosses a
-        // voxel boundary it would otherwise immediately turn toward the next
-        // cell and cut the corner of an adjacent solid. Finish centering in the
-        // newly entered cell before advancing; collision remains the fail-closed
-        // authority for the actual body volume.
-        let start_center = self.navigation.grid().voxel_center_world(readout.start);
-        let start_center = Vec3::new(
-            start_center.x as f32,
-            start_center.y as f32,
-            start_center.z as f32,
-        );
-        let to_center = start_center - from;
-        let centered = to_center.length() <= 0.001;
-        let moving_toward_center = to_center.x * current_velocity.x
-            + to_center.y * current_velocity.y
-            + to_center.z * current_velocity.z
-            > 0.0;
-        let (next_waypoint, reached) = if readout.path_len > 1 && !centered && moving_toward_center
-        {
-            let centering = propose_direct_nav_movement(DirectNavMovementRequest {
-                from,
-                target: start_center,
-                max_step_units,
-            })
-            .map_err(|error| NavigationStepError::InvalidRequest {
-                reason: error.label(),
-            })?;
-            (centering.next_waypoint, false)
-        } else {
-            (readout.next_waypoint, readout.reached)
-        };
-        Ok(NavigationStep {
-            next_waypoint,
-            reached,
-            visited: readout.visited,
-            path_len: readout.path_len,
-            projection_hash: readout.projection_hash,
-            path_hash: readout.path_hash,
-        })
     }
 
     /// The height where the run of collidable voxels containing `point` ends
@@ -1141,7 +1006,6 @@ impl VoxelCollisionScene {
                 .map(|(coordinate, _)| coordinate)
                 .collect();
             self.install_surface_colliders(coordinates);
-            self.rebuild_navigation();
             return;
         }
         let mut projection = CollisionProjection::build(&self.voxel_world);
@@ -1163,26 +1027,6 @@ impl VoxelCollisionScene {
                 .map(|(coordinate, chunk)| (*coordinate, Some(chunk))),
         );
         self.projection = projection;
-        self.rebuild_navigation();
-    }
-
-    fn rebuild_navigation(&mut self) {
-        let grid = self.voxel_world.grid();
-        let cells: Vec<_> = self
-            .voxel_world
-            .resident_chunks()
-            .flat_map(|(coordinate, chunk)| {
-                chunk
-                    .iter()
-                    .map(move |(local, _)| grid.chunk_local_to_voxel(coordinate, local))
-            })
-            .collect();
-        self.navigation = NavProjection::from_walkable_cells(grid, []);
-        let (world, noncollidable) = (&self.voxel_world, &self.noncollidable_materials);
-        self.navigation
-            .refresh_cells(SCENE_NAVIGATION, cells, |cell| {
-                collision_solid(world, noncollidable, cell)
-            });
     }
 
     /// Meshes for `dirty` chunks from the current voxels; `None` removes one.
@@ -1336,17 +1180,6 @@ impl VoxelCollisionScene {
         chunks
     }
 
-    /// Every cell of `coordinate`.
-    pub(crate) fn chunk_cells(&self, coordinate: ChunkCoord) -> impl Iterator<Item = VoxelCoord> {
-        let origin = self.voxel_world.grid().chunk_origin_voxel(coordinate);
-        let extent = i64::from(self.chunk_size);
-        (0..extent).flat_map(move |x| {
-            (0..extent).flat_map(move |y| {
-                (0..extent).map(move |z| VoxelCoord::new(origin.x + x, origin.y + y, origin.z + z))
-            })
-        })
-    }
-
     /// Add (`present`) or remove one solid voxel's share of the count and hash.
     pub(crate) fn account_voxel(&mut self, voxel: MaterialVoxel, present: bool) {
         if present {
@@ -1376,16 +1209,13 @@ impl VoxelCollisionScene {
     }
 
     /// Publish one local change whose voxels are already written: install the
-    /// rebuilt meshes, replace the changed chunks' colliders, refresh the
-    /// affected navigation cells, and advance the source revision.
-    /// `navigation_cells` are the cells whose walkability the change can
-    /// affect, in any order, repeats allowed.
+    /// rebuilt meshes, replace the changed chunks' colliders, and advance the
+    /// source revision.
     pub(crate) fn publish_local_change(
         &mut self,
         changed: &BTreeSet<ChunkCoord>,
         dirty: &BTreeSet<ChunkCoord>,
         meshes: ChunkMeshes,
-        mut navigation_cells: Vec<VoxelCoord>,
     ) {
         let mut rebuilt_chunks = 0;
         let mut removed_chunks = 0;
@@ -1426,13 +1256,6 @@ impl VoxelCollisionScene {
             // its mesh does, so every chunk whose mesh was rebuilt changes.
             self.install_surface_colliders(changed.union(dirty).copied().collect::<Vec<_>>());
         }
-        navigation_cells.sort_unstable();
-        navigation_cells.dedup();
-        let (world, noncollidable) = (&self.voxel_world, &self.noncollidable_materials);
-        self.navigation
-            .refresh_cells(SCENE_NAVIGATION, navigation_cells, |cell| {
-                collision_solid(world, noncollidable, cell)
-            });
         self.source_revision = self.source_revision.next();
         let previous_mesh_state = std::mem::replace(&mut self.mesh_state, next_mesh_state());
         self.mesh_update = VoxelChunkMeshUpdate {
@@ -1580,21 +1403,6 @@ fn collision_chunk<'a>(
             .expect("local coordinate came from chunk");
     }
     Some(Cow::Owned(filtered))
-}
-
-/// Collision solidity of one cell; `None` outside every resident chunk.
-fn collision_solid(
-    world: &VoxelWorld,
-    noncollidable: &BTreeSet<u16>,
-    cell: VoxelCoord,
-) -> Option<bool> {
-    let (coordinate, local) = world.grid().voxel_to_chunk_local(cell);
-    let value = world.get(coordinate)?.get(local)?;
-    Some(
-        value
-            .material()
-            .is_some_and(|material| !noncollidable.contains(&material.raw())),
-    )
 }
 
 fn voxel_mesh_chunk(

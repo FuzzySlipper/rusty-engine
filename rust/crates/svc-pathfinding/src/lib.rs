@@ -19,7 +19,7 @@ use std::{
 
 use columns::ColumnTable;
 use core_math::Vec3;
-use core_space::{VoxelCoord, VoxelGridSpec, WorldPos};
+use core_space::{VoxelCoord, VoxelGridSpec};
 use svc_spatial::VoxelWorld;
 
 /// Configuration for deriving walkable nav cells from voxel authority.
@@ -142,42 +142,6 @@ impl NavProjection {
         self.walkable
             .insert_new(added.into_iter().map(|cell| (cell, ())).collect());
     }
-
-    /// Recompute walkability for `cells` after a local voxel or residency
-    /// change. `solid` reports a cell's collision solidity, or `None` outside
-    /// every resident chunk (never walkable). The hash follows each change.
-    pub fn refresh_cells(
-        &mut self,
-        config: NavProjectionConfig,
-        cells: impl IntoIterator<Item = VoxelCoord>,
-        solid: impl Fn(VoxelCoord) -> Option<bool>,
-    ) {
-        let is_solid = |cell| solid(cell).unwrap_or(false);
-        let changes: Vec<_> = cells
-            .into_iter()
-            .map(|cell| {
-                let walkable = solid(cell) == Some(false)
-                    && (!config.require_solid_floor
-                        || is_solid(VoxelCoord::new(cell.x, cell.y - 1, cell.z)))
-                    && (0..config.agent_height_voxels).all(|dy| {
-                        !is_solid(VoxelCoord::new(cell.x, cell.y + i64::from(dy), cell.z))
-                    });
-                (cell, walkable)
-            })
-            .collect();
-        self.set_walkable_cells(changes);
-    }
-}
-
-/// Cells whose walkability can depend on the voxel at `voxel`: the cells an
-/// agent standing there or just above would occupy, and the cell resting on it.
-pub fn nav_cells_affected_by_voxel(
-    voxel: VoxelCoord,
-    config: NavProjectionConfig,
-) -> impl Iterator<Item = VoxelCoord> {
-    let below = i64::from(config.agent_height_voxels.saturating_sub(1));
-    let above = i64::from(config.require_solid_floor);
-    (voxel.y - below..=voxel.y + above).map(move |y| VoxelCoord::new(voxel.x, y, voxel.z))
 }
 
 /// Path query over an existing nav projection.
@@ -1085,37 +1049,6 @@ pub struct DirectNavMovementReadout {
     pub path_hash: u64,
 }
 
-/// A bounded live-position path-following request over a nav projection.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct ProjectedDirectNavMovementRequest {
-    pub from: Vec3,
-    pub target: Vec3,
-    pub max_step_units: f32,
-    pub max_visited: usize,
-}
-
-/// Deterministic direct-navigation proposal backed by a [`NavProjection`].
-///
-/// The service keeps no internal path cache. `projection_hash`, `path_hash`, and
-/// `movement_hash` are stable invalidation/readout tokens for callers that cache
-/// projection or path-following work outside this crate.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct ProjectedDirectNavMovementReadout {
-    pub from: Vec3,
-    pub target: Vec3,
-    pub start: VoxelCoord,
-    pub goal: VoxelCoord,
-    pub next_path_cell: VoxelCoord,
-    pub next_waypoint: Vec3,
-    pub distance_to_waypoint_units: f32,
-    pub reached: bool,
-    pub visited: usize,
-    pub path_len: usize,
-    pub projection_hash: u64,
-    pub path_hash: u64,
-    pub movement_hash: u64,
-}
-
 /// Why a direct-nav movement request was rejected.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DirectNavMovementError {
@@ -1128,30 +1061,6 @@ impl DirectNavMovementError {
         match self {
             DirectNavMovementError::NonFinitePosition => "nonFinitePosition",
             DirectNavMovementError::InvalidStep => "invalidStep",
-        }
-    }
-}
-
-/// Why a projection-backed direct-nav request was rejected.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ProjectedDirectNavMovementError {
-    NonFinitePosition,
-    InvalidStep,
-    InvalidQueryBudget,
-    StartNotWalkable { start: VoxelCoord },
-    GoalNotWalkable { goal: VoxelCoord },
-    NoPath { start: VoxelCoord, goal: VoxelCoord },
-}
-
-impl ProjectedDirectNavMovementError {
-    pub const fn label(self) -> &'static str {
-        match self {
-            ProjectedDirectNavMovementError::NonFinitePosition => "nonFinitePosition",
-            ProjectedDirectNavMovementError::InvalidStep => "invalidStep",
-            ProjectedDirectNavMovementError::InvalidQueryBudget => "invalidQueryBudget",
-            ProjectedDirectNavMovementError::StartNotWalkable { .. } => "startNotWalkable",
-            ProjectedDirectNavMovementError::GoalNotWalkable { .. } => "goalNotWalkable",
-            ProjectedDirectNavMovementError::NoPath { .. } => "noPath",
         }
     }
 }
@@ -2061,100 +1970,6 @@ pub fn propose_direct_nav_movement(
     })
 }
 
-/// Propose one deterministic, bounded waypoint using a nav projection path.
-///
-/// This helper converts the live positions into the projection's grid, runs
-/// [`find_path`], and then moves toward either the next path cell center or the
-/// final target when the next path cell is the goal. It does not mutate authority
-/// and does not maintain an internal cache.
-pub fn propose_projected_direct_nav_movement(
-    projection: &NavProjection,
-    request: ProjectedDirectNavMovementRequest,
-) -> Result<ProjectedDirectNavMovementReadout, ProjectedDirectNavMovementError> {
-    if !vec3_is_finite(request.from) || !vec3_is_finite(request.target) {
-        return Err(ProjectedDirectNavMovementError::NonFinitePosition);
-    }
-    if !request.max_step_units.is_finite() || request.max_step_units <= 0.0 {
-        return Err(ProjectedDirectNavMovementError::InvalidStep);
-    }
-    if request.max_visited == 0 {
-        return Err(ProjectedDirectNavMovementError::InvalidQueryBudget);
-    }
-
-    let start = projection
-        .grid()
-        .world_to_voxel(vec3_to_world_pos(request.from));
-    let goal = projection
-        .grid()
-        .world_to_voxel(vec3_to_world_pos(request.target));
-    let path = find_path(
-        projection,
-        NavPathQuery {
-            start,
-            goal,
-            max_visited: request.max_visited,
-        },
-    )
-    .map_err(projected_error_from_nav)?;
-
-    if path.outcome == NavPathOutcome::NoPath {
-        return Err(ProjectedDirectNavMovementError::NoPath { start, goal });
-    }
-
-    let next_path_cell = path.path.get(1).copied().unwrap_or(start);
-    let step_target = if next_path_cell == goal {
-        request.target
-    } else {
-        world_pos_to_vec3(projection.grid().voxel_center_world(next_path_cell))
-    };
-    let movement = propose_direct_nav_movement(DirectNavMovementRequest {
-        from: request.from,
-        target: step_target,
-        max_step_units: request.max_step_units,
-    })
-    .map_err(projected_error_from_direct)?;
-    let reached = next_path_cell == goal && movement.reached;
-    let mut readout = ProjectedDirectNavMovementReadout {
-        from: round_vec3(request.from),
-        target: round_vec3(request.target),
-        start,
-        goal,
-        next_path_cell,
-        next_waypoint: movement.next_waypoint,
-        distance_to_waypoint_units: movement.distance_units,
-        reached,
-        visited: path.visited,
-        path_len: path.path.len(),
-        projection_hash: projection.projection_hash(),
-        path_hash: path.path_hash,
-        movement_hash: 0,
-    };
-    readout.movement_hash = hash_projected_direct_nav_movement(&readout);
-    Ok(readout)
-}
-
-fn projected_error_from_nav(error: NavError) -> ProjectedDirectNavMovementError {
-    match error {
-        NavError::InvalidAgentHeight => ProjectedDirectNavMovementError::InvalidQueryBudget,
-        NavError::InvalidQueryBudget => ProjectedDirectNavMovementError::InvalidQueryBudget,
-        NavError::StartNotWalkable { start } => {
-            ProjectedDirectNavMovementError::StartNotWalkable { start }
-        }
-        NavError::GoalNotWalkable { goal } => {
-            ProjectedDirectNavMovementError::GoalNotWalkable { goal }
-        }
-    }
-}
-
-fn projected_error_from_direct(error: DirectNavMovementError) -> ProjectedDirectNavMovementError {
-    match error {
-        DirectNavMovementError::NonFinitePosition => {
-            ProjectedDirectNavMovementError::NonFinitePosition
-        }
-        DirectNavMovementError::InvalidStep => ProjectedDirectNavMovementError::InvalidStep,
-    }
-}
-
 fn nav_neighbors(coord: VoxelCoord) -> [VoxelCoord; 4] {
     [
         VoxelCoord::new(coord.x + 1, coord.y, coord.z),
@@ -2448,23 +2263,6 @@ fn hash_direct_nav_movement(readout: &DirectNavMovementReadout) -> u64 {
     h
 }
 
-fn hash_projected_direct_nav_movement(readout: &ProjectedDirectNavMovementReadout) -> u64 {
-    let mut h = fnv_offset();
-    feed_vec3_bits(&mut h, readout.from);
-    feed_vec3_bits(&mut h, readout.target);
-    feed_coord(&mut h, readout.start);
-    feed_coord(&mut h, readout.goal);
-    feed_coord(&mut h, readout.next_path_cell);
-    feed_vec3_bits(&mut h, readout.next_waypoint);
-    feed_f32_bits(&mut h, readout.distance_to_waypoint_units);
-    feed_byte(&mut h, u8::from(readout.reached));
-    feed_u64(&mut h, readout.visited as u64);
-    feed_u64(&mut h, readout.path_len as u64);
-    feed_u64(&mut h, readout.projection_hash);
-    feed_u64(&mut h, readout.path_hash);
-    h
-}
-
 fn feed_vec3_bits(h: &mut u64, value: Vec3) {
     feed_f32_bits(h, value.x);
     feed_f32_bits(h, value.y);
@@ -2485,14 +2283,6 @@ fn round_vec3(value: Vec3) -> Vec3 {
 
 fn round_f32(value: f32) -> f32 {
     (value * 1000.0).round() / 1000.0
-}
-
-fn vec3_to_world_pos(value: Vec3) -> WorldPos {
-    WorldPos::new(value.x as f64, value.y as f64, value.z as f64)
-}
-
-fn world_pos_to_vec3(value: WorldPos) -> Vec3 {
-    Vec3::new(value.x as f32, value.y as f32, value.z as f32)
 }
 
 #[cfg(test)]
@@ -3188,10 +2978,6 @@ mod tests {
         (VoxelCoord::new(4, 1, 8), VoxelCoord::new(2, 1, 2))
     }
 
-    fn cell_center(projection: &NavProjection, coord: VoxelCoord) -> Vec3 {
-        world_pos_to_vec3(projection.grid().voxel_center_world(coord))
-    }
-
     fn test_grid() -> VoxelGridSpec {
         VoxelGridSpec::new(GridId::new(99), 1.0, ChunkDims::cubic(8).unwrap()).unwrap()
     }
@@ -3621,192 +3407,6 @@ mod tests {
         assert_eq!(readout.distance_units, 4.01);
         assert!(!readout.reached);
         assert_eq!(readout.path_hash, 0x69ed_74d6_9292_2db7);
-    }
-
-    #[test]
-    fn projected_direct_nav_movement_uses_nav_projection_path() {
-        let projection = projection();
-        let (start, goal) = tunnel_nav_endpoints();
-        let path = find_path(
-            &projection,
-            NavPathQuery {
-                start,
-                goal,
-                max_visited: 128,
-            },
-        )
-        .expect("path");
-        let readout = propose_projected_direct_nav_movement(
-            &projection,
-            ProjectedDirectNavMovementRequest {
-                from: cell_center(&projection, start),
-                target: cell_center(&projection, goal),
-                max_step_units: 1.0,
-                max_visited: 128,
-            },
-        )
-        .expect("projected direct nav");
-        let straight_line = propose_direct_nav_movement(DirectNavMovementRequest {
-            from: cell_center(&projection, start),
-            target: cell_center(&projection, goal),
-            max_step_units: 1.0,
-        })
-        .expect("straight line direct nav");
-
-        assert_eq!(readout.start, start);
-        assert_eq!(readout.goal, goal);
-        assert_eq!(readout.next_path_cell, path.path[1]);
-        assert_eq!(
-            readout.next_waypoint,
-            cell_center(&projection, path.path[1])
-        );
-        assert_ne!(readout.next_waypoint, straight_line.next_waypoint);
-        assert_eq!(readout.projection_hash, projection.projection_hash());
-        assert_eq!(readout.path_hash, path.path_hash);
-        assert_eq!(readout.path_len, path.path.len());
-        assert!(!readout.reached);
-    }
-
-    #[test]
-    fn projected_direct_nav_movement_reports_reached_inside_same_cell() {
-        let projection = projection();
-        let (cell, _) = tunnel_nav_endpoints();
-        let from = cell_center(&projection, cell);
-        let target = from + Vec3::new(0.125, 0.0, 0.0);
-        let readout = propose_projected_direct_nav_movement(
-            &projection,
-            ProjectedDirectNavMovementRequest {
-                from,
-                target,
-                max_step_units: 0.25,
-                max_visited: 128,
-            },
-        )
-        .expect("same-cell projected direct nav");
-
-        assert_eq!(readout.start, cell);
-        assert_eq!(readout.goal, cell);
-        assert_eq!(readout.next_path_cell, cell);
-        assert_eq!(readout.next_waypoint, target);
-        assert_eq!(readout.path_len, 1);
-        assert!(readout.reached);
-    }
-
-    #[test]
-    fn projected_direct_nav_movement_rejects_no_path() {
-        let mut projection = projection();
-        let (start, goal) = tunnel_nav_endpoints();
-        for x in 1..=5 {
-            projection = projection.without_walkable(VoxelCoord::new(x, 1, 4));
-        }
-        assert_eq!(
-            propose_projected_direct_nav_movement(
-                &projection,
-                ProjectedDirectNavMovementRequest {
-                    from: cell_center(&projection, start),
-                    target: cell_center(&projection, goal),
-                    max_step_units: 1.0,
-                    max_visited: 128,
-                },
-            ),
-            Err(ProjectedDirectNavMovementError::NoPath { start, goal })
-        );
-    }
-
-    #[test]
-    fn projected_direct_nav_movement_rejects_invalid_inputs() {
-        let projection = projection();
-        assert_eq!(
-            propose_projected_direct_nav_movement(
-                &projection,
-                ProjectedDirectNavMovementRequest {
-                    from: Vec3::new(f32::NAN, 0.0, 0.0),
-                    target: Vec3::ZERO,
-                    max_step_units: 1.0,
-                    max_visited: 128,
-                },
-            ),
-            Err(ProjectedDirectNavMovementError::NonFinitePosition)
-        );
-        assert_eq!(
-            propose_projected_direct_nav_movement(
-                &projection,
-                ProjectedDirectNavMovementRequest {
-                    from: Vec3::ZERO,
-                    target: Vec3::ONE,
-                    max_step_units: 0.0,
-                    max_visited: 128,
-                },
-            ),
-            Err(ProjectedDirectNavMovementError::InvalidStep)
-        );
-        assert_eq!(
-            propose_projected_direct_nav_movement(
-                &projection,
-                ProjectedDirectNavMovementRequest {
-                    from: Vec3::ZERO,
-                    target: Vec3::ONE,
-                    max_step_units: 1.0,
-                    max_visited: 0,
-                },
-            ),
-            Err(ProjectedDirectNavMovementError::InvalidQueryBudget)
-        );
-    }
-
-    #[test]
-    fn projected_direct_nav_movement_rejects_unwalkable_endpoints() {
-        let projection = projection();
-        let (start, goal) = tunnel_nav_endpoints();
-        assert_eq!(
-            propose_projected_direct_nav_movement(
-                &projection,
-                ProjectedDirectNavMovementRequest {
-                    from: cell_center(&projection, VoxelCoord::new(0, 1, 0)),
-                    target: cell_center(&projection, goal),
-                    max_step_units: 1.0,
-                    max_visited: 128,
-                },
-            ),
-            Err(ProjectedDirectNavMovementError::StartNotWalkable {
-                start: VoxelCoord::new(0, 1, 0)
-            })
-        );
-        assert_eq!(
-            propose_projected_direct_nav_movement(
-                &projection,
-                ProjectedDirectNavMovementRequest {
-                    from: cell_center(&projection, start),
-                    target: cell_center(&projection, VoxelCoord::new(0, 1, 0)),
-                    max_step_units: 1.0,
-                    max_visited: 128,
-                },
-            ),
-            Err(ProjectedDirectNavMovementError::GoalNotWalkable {
-                goal: VoxelCoord::new(0, 1, 0)
-            })
-        );
-    }
-
-    #[test]
-    fn projected_direct_nav_movement_is_deterministic() {
-        let projection = projection();
-        let (start, goal) = tunnel_nav_endpoints();
-        let request = ProjectedDirectNavMovementRequest {
-            from: cell_center(&projection, start),
-            target: cell_center(&projection, goal),
-            max_step_units: 0.75,
-            max_visited: 128,
-        };
-        let first =
-            propose_projected_direct_nav_movement(&projection, request).expect("first readout");
-        let second =
-            propose_projected_direct_nav_movement(&projection, request).expect("second readout");
-
-        assert_eq!(first, second);
-        assert_ne!(first.movement_hash, 0);
-        assert_eq!(first.projection_hash, 0x3143_6e7d_f5df_baee);
-        assert_eq!(first.path_hash, 0x09ed_0284_f7c1_75e1);
     }
 
     /// Path queries over a rolling 64×64 box of columns with diagonal

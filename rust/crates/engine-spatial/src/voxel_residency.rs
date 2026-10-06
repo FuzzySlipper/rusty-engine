@@ -1,14 +1,13 @@
 //! Residency changes for canonical voxel chunks. Callers decide which chunks
 //! to load, replace or unload; this module validates dense chunk payloads,
 //! writes them into the scene and rebuilds only the changed chunks' meshes and
-//! colliders and their navigation cells.
+//! colliders.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use core_space::{ChunkCoord, ChunkDims};
 use core_voxel::VoxelValue;
 use serde::{Deserialize, Serialize};
-use svc_pathfinding::nav_cells_affected_by_voxel;
 use svc_volume::VoxelChunk;
 
 use crate::{
@@ -367,7 +366,6 @@ impl VoxelChunkResidencyService {
         for (coordinate, chunk) in previous {
             first_previous.entry(coordinate).or_insert(chunk);
         }
-        let mut navigation_cells = Vec::new();
         for (coordinate, before) in first_previous {
             if let Some(before) = before {
                 scene.account_chunk(coordinate, &before, false);
@@ -375,11 +373,8 @@ impl VoxelChunkResidencyService {
             if let Some(after) = scene.voxel_world.get(coordinate).cloned() {
                 scene.account_chunk(coordinate, &after, true);
             }
-            for cell in scene.chunk_cells(coordinate) {
-                navigation_cells.extend(nav_cells_affected_by_voxel(cell, crate::SCENE_NAVIGATION));
-            }
         }
-        scene.publish_local_change(&changed, &dirty, meshes, navigation_cells);
+        scene.publish_local_change(&changed, &dirty, meshes);
 
         let update = &scene.mesh_update;
         Ok(VoxelChunkResidencyReceipt {

@@ -268,9 +268,7 @@ pub(crate) struct VoxelAssetSpatialPublishFacts {
     pub(crate) authority_hash: u64,
     pub(crate) projection_version: u64,
     pub(crate) collision_revision: u64,
-    pub(crate) navigation_revision: u64,
     pub(crate) mesh_revision: u64,
-    pub(crate) navigation_cell_count: u64,
 }
 
 /// Candidate scene and the exact session identity observed while preparing an
@@ -849,9 +847,7 @@ impl RuntimeSpatialBridge {
             authority_hash: candidate.authority_hash(),
             projection_version: candidate.projection_version(),
             collision_revision: candidate.projection_revisions().collision().raw(),
-            navigation_revision: candidate.projection_revisions().navigation().raw(),
             mesh_revision: candidate.projection_revisions().mesh().raw(),
-            navigation_cell_count: candidate.navigation_cell_count() as u64,
         };
         Ok(PreparedVoxelAssetSpatialPublish {
             expected_scene: scene_before,

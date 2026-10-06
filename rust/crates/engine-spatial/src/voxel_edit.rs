@@ -1,6 +1,6 @@
 //! Local voxel edits. A batch is validated, written into the scene's chunks,
-//! and then only the touched chunks' meshes and colliders and the affected
-//! navigation cells are rebuilt. The scene is never copied or rebuilt whole.
+//! and then only the touched chunks' meshes and colliders are rebuilt. The
+//! scene is never copied or rebuilt whole.
 //!
 //! The product owns undo: an edit batch reports what changed, and the product
 //! can apply the inverse edits itself.
@@ -11,7 +11,6 @@ use crate::{CollisionSceneError, MaterialVoxel, SurfaceMode, VoxelCollisionScene
 use core_space::{ChunkCoord, VoxelCoord};
 use core_voxel::{VoxelMaterialId, VoxelState, VoxelValue};
 use serde::{Deserialize, Serialize};
-use svc_pathfinding::nav_cells_affected_by_voxel;
 use svc_volume::VoxelChunk;
 /// Keeps chunk addressing and projection work in a reviewable world-space span.
 pub const MAX_VOXEL_COORDINATE_ABS: i64 = 1_000_000;
@@ -185,7 +184,6 @@ impl std::error::Error for VoxelEditApplyError {}
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct VoxelProjectionRevisions {
     collision: VoxelSourceRevision,
-    navigation: VoxelSourceRevision,
     mesh: VoxelSourceRevision,
 }
 
@@ -193,7 +191,6 @@ impl VoxelProjectionRevisions {
     pub const fn coherent(revision: VoxelSourceRevision) -> Self {
         Self {
             collision: revision,
-            navigation: revision,
             mesh: revision,
         }
     }
@@ -202,18 +199,12 @@ impl VoxelProjectionRevisions {
         self.collision
     }
 
-    pub const fn navigation(self) -> VoxelSourceRevision {
-        self.navigation
-    }
-
     pub const fn mesh(self) -> VoxelSourceRevision {
         self.mesh
     }
 
     pub const fn is_coherent_with(self, authority: VoxelSourceRevision) -> bool {
-        self.collision.0 == authority.0
-            && self.navigation.0 == authority.0
-            && self.mesh.0 == authority.0
+        self.collision.0 == authority.0 && self.mesh.0 == authority.0
     }
 }
 
@@ -300,18 +291,10 @@ impl VoxelEditService {
         }
         let mut changed_chunks = BTreeSet::new();
         let mut dirty = BTreeSet::new();
-        let mut navigation_cells = Vec::new();
         for change in &changes {
             let voxel = VoxelCoord::new(change.address[0], change.address[1], change.address[2]);
             changed_chunks.insert(grid.voxel_to_chunk(voxel));
             dirty.extend(scene.mesh_neighbourhood_of_voxel(voxel));
-            navigation_cells.extend(nav_cells_affected_by_voxel(voxel, crate::SCENE_NAVIGATION));
-        }
-        // A chunk created by this edit brings its empty cells into navigation.
-        for coordinate in &created {
-            for cell in scene.chunk_cells(*coordinate) {
-                navigation_cells.extend(nav_cells_affected_by_voxel(cell, crate::SCENE_NAVIGATION));
-            }
         }
         let meshes = match scene.build_meshes(&dirty) {
             Ok(meshes) => meshes,
@@ -333,7 +316,7 @@ impl VoxelEditService {
                 scene.account_voxel(material_voxel(change.address, material_slot, state), true);
             }
         }
-        scene.publish_local_change(&changed_chunks, &dirty, meshes, navigation_cells);
+        scene.publish_local_change(&changed_chunks, &dirty, meshes);
 
         let bound = |pick: fn(i64, i64) -> i64| {
             [0, 1, 2].map(|axis| {
