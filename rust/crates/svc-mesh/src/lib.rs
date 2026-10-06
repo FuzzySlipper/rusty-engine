@@ -499,72 +499,25 @@ struct Quad {
 }
 
 /// Merge each exact `(material, normal, plane)` lane independently.
-///
-/// The remaining cells in a lane are ordered `(v, u)`. The least cell starts a
-/// rectangle, which grows along `u` and then across complete rows along `v`.
-/// Removing each accepted rectangle makes disconnected regions and holes
-/// deterministic without ever bridging absent cells.
 fn greedy_merge_faces(faces: Vec<Face>) -> Result<Vec<Quad>, MeshError> {
     type FacePlane = (u16, u16, Direction6, i64);
-    let mut planes: BTreeMap<FacePlane, BTreeSet<(i64, i64)>> = BTreeMap::new();
+    let mut planes: BTreeMap<FacePlane, Vec<(i64, i64)>> = BTreeMap::new();
     for face in faces {
         let axis = face.dir.axis().index();
         let (u_axis, v_axis) = in_plane_axes(face.dir);
         planes
             .entry((face.slot, face.state, face.dir, face.coordinate[axis]))
             .or_default()
-            .insert((face.coordinate[v_axis], face.coordinate[u_axis]));
+            .push((face.coordinate[v_axis], face.coordinate[u_axis]));
     }
 
     let mut quads = Vec::new();
     for ((slot, state, dir, plane), mut cells) in planes {
+        cells.sort_unstable();
+        cells.dedup();
         let axis = dir.axis().index();
         let (u_axis, v_axis) = in_plane_axes(dir);
-        while let Some(&(v_start, u_start)) = cells.first() {
-            let mut u_length = 1_u32;
-            loop {
-                let Some(next_u) = u_start.checked_add(i64::from(u_length)) else {
-                    return Err(MeshError::PositionOutOfRange);
-                };
-                if cells.contains(&(v_start, next_u)) {
-                    u_length = u_length.checked_add(1).ok_or(MeshError::TooManyVertices {
-                        vertices: u64::from(u32::MAX) + 1,
-                    })?;
-                } else {
-                    break;
-                }
-            }
-
-            let mut v_length = 1_u32;
-            'rows: loop {
-                let Some(next_v) = v_start.checked_add(i64::from(v_length)) else {
-                    return Err(MeshError::PositionOutOfRange);
-                };
-                for u_offset in 0..u_length {
-                    let Some(u) = u_start.checked_add(i64::from(u_offset)) else {
-                        return Err(MeshError::PositionOutOfRange);
-                    };
-                    if !cells.contains(&(next_v, u)) {
-                        break 'rows;
-                    }
-                }
-                v_length = v_length.checked_add(1).ok_or(MeshError::TooManyVertices {
-                    vertices: u64::from(u32::MAX) + 1,
-                })?;
-            }
-
-            for v_offset in 0..v_length {
-                let v = v_start
-                    .checked_add(i64::from(v_offset))
-                    .ok_or(MeshError::PositionOutOfRange)?;
-                for u_offset in 0..u_length {
-                    let u = u_start
-                        .checked_add(i64::from(u_offset))
-                        .ok_or(MeshError::PositionOutOfRange)?;
-                    cells.remove(&(v, u));
-                }
-            }
-
+        for [v_start, u_start, u_length, v_length] in plane_rectangles(&cells)? {
             let mut coordinate = [0_i64; 3];
             coordinate[axis] = plane;
             coordinate[u_axis] = u_start;
@@ -574,12 +527,124 @@ fn greedy_merge_faces(faces: Vec<Face>) -> Result<Vec<Quad>, MeshError> {
                 slot,
                 coordinate,
                 dir,
-                u_length,
-                v_length,
+                u_length: u_length as u32,
+                v_length: v_length as u32,
             });
         }
     }
     Ok(quads)
+}
+
+/// The rectangles `[v, u, u_length, v_length]` covering one lane's `(v, u)`
+/// cells, given ascending. The least remaining cell starts a rectangle, which
+/// grows along `u` and then across complete rows along `v`. Removing each
+/// accepted rectangle makes disconnected regions and holes deterministic
+/// without ever bridging absent cells. A lane as compact as a chunk face is
+/// merged on a grid of its extent; a sparse one on a set of its cells.
+fn plane_rectangles(cells: &[(i64, i64)]) -> Result<Vec<[i64; 4]>, MeshError> {
+    let (Some(&(v_low, _)), Some(&(v_high, _))) = (cells.first(), cells.last()) else {
+        return Ok(Vec::new());
+    };
+    let (u_low, u_high) = cells
+        .iter()
+        .fold((i64::MAX, i64::MIN), |(low, high), &(_, u)| {
+            (low.min(u), high.max(u))
+        });
+    // Past the last cell a rectangle's growth stops, without overflowing.
+    let extent = |low: i64, high: i64| {
+        high.checked_add(1)
+            .and_then(|end| end.checked_sub(low))
+            .and_then(|extent| usize::try_from(extent).ok())
+    };
+    let grid = extent(u_low, u_high)
+        .zip(extent(v_low, v_high))
+        .filter(|(width, height)| {
+            width
+                .checked_mul(*height)
+                .is_some_and(|area| area <= cells.len().saturating_mul(16).max(4096))
+        });
+    let Some((width, height)) = grid else {
+        return sparse_plane_rectangles(cells.iter().copied().collect());
+    };
+    let mut open = vec![false; width * height];
+    let at = |v: i64, u: i64| (v - v_low) as usize * width + (u - u_low) as usize;
+    for &(v, u) in cells {
+        open[at(v, u)] = true;
+    }
+    let mut rectangles = Vec::new();
+    for &(v, u) in cells {
+        if !open[at(v, u)] {
+            continue;
+        }
+        let (row, column) = ((v - v_low) as usize, (u - u_low) as usize);
+        let mut u_length = 1;
+        while column + u_length < width && open[row * width + column + u_length] {
+            u_length += 1;
+        }
+        let mut v_length = 1;
+        while row + v_length < height
+            && (column..column + u_length).all(|column| open[(row + v_length) * width + column])
+        {
+            v_length += 1;
+        }
+        for row in row..row + v_length {
+            open[row * width + column..row * width + column + u_length].fill(false);
+        }
+        rectangles.push([v, u, u_length as i64, v_length as i64]);
+    }
+    Ok(rectangles)
+}
+
+/// [`plane_rectangles`] over a set of cells.
+fn sparse_plane_rectangles(mut cells: BTreeSet<(i64, i64)>) -> Result<Vec<[i64; 4]>, MeshError> {
+    let mut rectangles = Vec::new();
+    while let Some(&(v_start, u_start)) = cells.first() {
+        let mut u_length = 1_u32;
+        loop {
+            let Some(next_u) = u_start.checked_add(i64::from(u_length)) else {
+                return Err(MeshError::PositionOutOfRange);
+            };
+            if cells.contains(&(v_start, next_u)) {
+                u_length = u_length.checked_add(1).ok_or(MeshError::TooManyVertices {
+                    vertices: u64::from(u32::MAX) + 1,
+                })?;
+            } else {
+                break;
+            }
+        }
+
+        let mut v_length = 1_u32;
+        'rows: loop {
+            let Some(next_v) = v_start.checked_add(i64::from(v_length)) else {
+                return Err(MeshError::PositionOutOfRange);
+            };
+            for u_offset in 0..u_length {
+                let Some(u) = u_start.checked_add(i64::from(u_offset)) else {
+                    return Err(MeshError::PositionOutOfRange);
+                };
+                if !cells.contains(&(next_v, u)) {
+                    break 'rows;
+                }
+            }
+            v_length = v_length.checked_add(1).ok_or(MeshError::TooManyVertices {
+                vertices: u64::from(u32::MAX) + 1,
+            })?;
+        }
+
+        for v_offset in 0..v_length {
+            let v = v_start
+                .checked_add(i64::from(v_offset))
+                .ok_or(MeshError::PositionOutOfRange)?;
+            for u_offset in 0..u_length {
+                let u = u_start
+                    .checked_add(i64::from(u_offset))
+                    .ok_or(MeshError::PositionOutOfRange)?;
+                cells.remove(&(v, u));
+            }
+        }
+        rectangles.push([v_start, u_start, i64::from(u_length), i64::from(v_length)]);
+    }
+    Ok(rectangles)
 }
 
 /// The four absolute grid points of one greedy quad, wound CCW so the polygon
@@ -2655,6 +2720,38 @@ mod tests {
         assert_eq!(mesh.stats.quads as usize, quads.len());
         assert_eq!(mesh.bounds.min, [0.0, 0.0, 0.0]);
         assert_eq!(mesh.bounds.max, [5.0, 3.0, 2.0]);
+    }
+
+    #[test]
+    fn a_plane_merges_the_same_on_its_grid_as_on_its_cell_set() {
+        // Deterministic patterns: holes, ragged rows and isolated cells, on
+        // a compact grid and spread far enough apart to take the set path.
+        let mut state = 0x2545_f491_4f6c_dd1d_u64;
+        for spread in [1_i64, 1 << 20] {
+            for density in [2_u64, 5, 9] {
+                let mut cells: Vec<(i64, i64)> = (0..24_i64)
+                    .flat_map(|v| (0..24_i64).map(move |u| (v, u)))
+                    .filter(|_| {
+                        state ^= state << 13;
+                        state ^= state >> 7;
+                        state ^= state << 17;
+                        state % 10 < density
+                    })
+                    .map(|(v, u)| (v * spread, u - 12))
+                    .collect();
+                cells.sort_unstable();
+                let rectangles = plane_rectangles(&cells).unwrap();
+                assert_eq!(
+                    rectangles,
+                    sparse_plane_rectangles(cells.iter().copied().collect()).unwrap()
+                );
+                let covered: usize = rectangles
+                    .iter()
+                    .map(|[_, _, u_length, v_length]| (u_length * v_length) as usize)
+                    .sum();
+                assert_eq!(covered, cells.len());
+            }
+        }
     }
 
     #[test]

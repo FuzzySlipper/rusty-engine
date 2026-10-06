@@ -1541,43 +1541,90 @@ fn voxel_mesh_chunk(
 }
 
 fn mesh_payload_hash(mesh: &svc_mesh::MeshPayload) -> u64 {
-    const OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
-    const PRIME: u64 = 0x0000_0100_0000_01b3;
-    let mut hash = OFFSET;
-    let mut feed = |bytes: &[u8]| {
-        for byte in bytes {
-            hash ^= u64::from(*byte);
-            hash = hash.wrapping_mul(PRIME);
-        }
-    };
-    feed(mesh.surface_mode.as_str().as_bytes());
-    for value in &mesh.positions {
-        feed(&value.to_bits().to_le_bytes());
+    let mut hash = WordHash::default();
+    hash.words(mesh.surface_mode.as_str().bytes().map(u32::from));
+    for stream in [
+        &mesh.positions,
+        &mesh.normals,
+        &mesh.tile_coordinates,
+        &mesh.layer_weights,
+    ] {
+        hash.words([stream.len() as u32]);
+        hash.words(stream.iter().map(|value| value.to_bits()));
     }
-    for value in &mesh.normals {
-        feed(&value.to_bits().to_le_bytes());
-    }
-    for value in &mesh.tile_coordinates {
-        feed(&value.to_bits().to_le_bytes());
-    }
-    for value in &mesh.layer_weights {
-        feed(&value.to_bits().to_le_bytes());
-    }
-    for value in &mesh.indices {
-        feed(&value.to_le_bytes());
-    }
+    hash.words([mesh.indices.len() as u32]);
+    hash.words(mesh.indices.iter().copied());
     for group in &mesh.groups {
-        feed(&group.material_slot.to_le_bytes());
-        feed(&group.state.to_le_bytes());
-        feed(group.surface_mode.as_str().as_bytes());
-        feed(&[group.direction.map_or(u8::MAX, |direction| direction as u8)]);
-        feed(&group.start.to_le_bytes());
-        feed(&group.count.to_le_bytes());
+        hash.words([
+            u32::from(group.material_slot),
+            u32::from(group.state),
+            group
+                .direction
+                .map_or(u32::MAX, |direction| direction as u32),
+            group.start,
+            group.count,
+        ]);
+        hash.words(group.surface_mode.as_str().bytes().map(u32::from));
     }
-    for value in mesh.bounds.min.into_iter().chain(mesh.bounds.max) {
-        feed(&value.to_bits().to_le_bytes());
+    hash.words(
+        mesh.bounds
+            .min
+            .into_iter()
+            .chain(mesh.bounds.max)
+            .map(f32::to_bits),
+    );
+    hash.finish()
+}
+
+/// A content identity over 32-bit words: each word is mixed into one of four
+/// independent lanes in turn, and the lanes are folded at the end. Words and
+/// lanes rather than FNV over bytes keep a large chunk's mesh hash a small
+/// share of meshing it.
+struct WordHash {
+    lanes: [u64; 4],
+    words: u64,
+}
+
+impl Default for WordHash {
+    fn default() -> Self {
+        Self {
+            lanes: [
+                0x243f_6a88_85a3_08d3,
+                0x1319_8a2e_0370_7344,
+                0xa409_3822_299f_31d0,
+                0x082e_fa98_ec4e_6c89,
+            ],
+            words: 0,
+        }
     }
-    hash
+}
+
+impl WordHash {
+    fn words(&mut self, words: impl IntoIterator<Item = u32>) {
+        for word in words {
+            let lane = &mut self.lanes[(self.words % 4) as usize];
+            // One multiply per word; the rotation brings the product's high
+            // bits down for the next word's multiply.
+            *lane = (*lane ^ u64::from(word))
+                .wrapping_mul(0x9e37_79b9_7f4a_7c15)
+                .rotate_left(31);
+            self.words += 1;
+        }
+    }
+
+    fn finish(self) -> u64 {
+        self.lanes
+            .into_iter()
+            .fold(finalize(self.words), |hash, lane| finalize(hash ^ lane))
+    }
+}
+
+/// splitmix64's finalizer: a bijection that spreads every input bit over the
+/// result.
+fn finalize(value: u64) -> u64 {
+    let value = (value ^ (value >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    let value = (value ^ (value >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    value ^ (value >> 31)
 }
 
 fn voxel_hash(voxel: MaterialVoxel) -> u64 {
