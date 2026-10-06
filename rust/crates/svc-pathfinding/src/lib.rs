@@ -615,8 +615,9 @@ impl NavComponents {
     }
 
     /// When no path from `start` to `goal` can exist, the cell of `start`'s
-    /// component nearest the goal, as a search that ran out of cells would
-    /// report it. Both cells are walkable.
+    /// component nearest the goal, ranked as a search ranks the cells it
+    /// reached. Where the component holds one-way edges, the cell can be one
+    /// the start does not reach. Both cells are walkable.
     fn separation(
         &self,
         projection: &NavProjection,
@@ -1277,8 +1278,8 @@ pub fn find_path_with_policy(
 /// Query a deterministic shortest path while requiring every transition to be
 /// admitted by a collision-derived edge set. With `components`, a goal in
 /// another component than the start is `NoPath` without a search: no cell
-/// visited, and the nearest cell is the start's component's nearest the
-/// goal.
+/// visited, and the nearest cell is the start's component's nearest the goal
+/// (see [`NavComponents`]).
 pub fn find_path_with_edge_admission(
     projection: &NavProjection,
     edges: &NavEdgeAdmission,

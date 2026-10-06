@@ -806,7 +806,9 @@ To see why navigation hangs up, ask it:
   another label than the start has no path either way, and `EvaluateNavigationStep`,
   `RequestNavigationPath` and `RequestWeightedNavigationPath` answer `NoPath`
   without a search, `Visited` zero, with the start's component's cell nearest
-  the goal. A goal with the same label leaves the search to decide: a one-way
+  the goal. Where the component holds one-way edges, that cell can lie past a
+  drop the start cannot climb back up. A goal with the same label leaves the
+  search to decide: a one-way
   drop joins the cells above and below, and traversal overlays take no part in
   the labels, so a query that fails only because of a one-way edge or a
   blocked cell still searches.
