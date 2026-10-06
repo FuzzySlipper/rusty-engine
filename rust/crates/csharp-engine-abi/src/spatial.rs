@@ -880,7 +880,8 @@ pub enum NativeCollisionNavigationEdgeOutcome {
     DropOverMaximum = 5,
     StartOverlap = 6,
     EndOverlap = 7,
-    /// A level or downward move is blocked at the start height.
+    /// A level or downward move is blocked at the start height, and neither a
+    /// step nor a walk over ground within the maximum slope clears it.
     HorizontalSweepBlocked = 8,
     /// The fall onto the lower support is blocked.
     DescentBlocked = 9,

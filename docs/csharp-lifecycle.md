@@ -780,7 +780,9 @@ height is climbed when the headroom above it fits the body, as the character
 controller climbs it. A slope up to the maximum is walked up and down whatever
 the step height and drop: an edge steeper than a step or longer than a drop is
 admitted when the ground between rises or falls no more than such a slope over
-any short stretch, so a riser or a cliff of the same grade is still refused.
+any short stretch, so a riser or a cliff of the same grade is still refused. A
+level edge whose straight move catches a bump on a rough floor is walked the
+same way.
 
 To see why navigation hangs up, ask it:
 
