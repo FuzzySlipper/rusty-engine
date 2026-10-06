@@ -296,8 +296,8 @@ impl VoxelEditService {
             changed_chunks.insert(grid.voxel_to_chunk(voxel));
             dirty.extend(scene.mesh_neighbourhood_of_voxel(voxel));
         }
-        let meshes = match scene.build_meshes(&dirty) {
-            Ok(meshes) => meshes,
+        let rebuild = match scene.rebuild_chunks(&changed_chunks, &dirty) {
+            Ok(rebuild) => rebuild,
             Err(error) => {
                 for change in changes.iter().rev() {
                     write_cell(scene, change.address, change.before, &mut Vec::new());
@@ -316,7 +316,7 @@ impl VoxelEditService {
                 scene.account_voxel(material_voxel(change.address, material_slot, state), true);
             }
         }
-        scene.publish_local_change(&changed_chunks, &dirty, meshes);
+        scene.publish_local_change(&dirty, rebuild);
 
         let bound = |pick: fn(i64, i64) -> i64| {
             [0, 1, 2].map(|axis| {

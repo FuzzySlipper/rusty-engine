@@ -383,8 +383,8 @@ impl VoxelDensityEditService {
                 solidity_changes += 1;
             }
         }
-        let meshes = match scene.build_meshes(&dirty) {
-            Ok(meshes) => meshes,
+        let rebuild = match scene.rebuild_chunks(&changed_chunks, &dirty) {
+            Ok(rebuild) => rebuild,
             Err(error) => {
                 for (address, before, _) in changes.iter().rev() {
                     write(
@@ -419,7 +419,7 @@ impl VoxelDensityEditService {
                 scene.account_voxel(material_voxel(*address, material_slot), true);
             }
         }
-        scene.publish_local_change(&changed_chunks, &dirty, meshes);
+        scene.publish_local_change(&dirty, rebuild);
 
         let bound = |pick: fn(i64, i64) -> i64| {
             [0, 1, 2].map(|axis| {

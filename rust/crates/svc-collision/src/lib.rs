@@ -255,6 +255,15 @@ impl VoxelBox {
     }
 }
 
+/// One chunk's collider parts, built by
+/// [`CollisionProjection::prepare_chunk_parts`] or
+/// [`CollisionProjection::prepare_chunk`].
+pub struct PreparedChunkParts {
+    boxes: Vec<VoxelBox>,
+    cubes: Option<Arc<Compound>>,
+    surface: Option<ChunkSurfacePart>,
+}
+
 #[derive(Clone)]
 struct ChunkSurfacePart {
     /// The caller's identity of the triangles, so unchanged ones are reused.
@@ -1043,8 +1052,15 @@ impl CollisionProjection {
     /// Build/replace the collider for one chunk from its current voxels, as
     /// merged boxes. Drops the entry if the chunk has become all-empty.
     fn set_chunk(&mut self, coord: ChunkCoord, chunk: &VoxelChunk) {
+        let prepared = self.prepare_chunk(coord, chunk);
+        self.install_chunk_parts(coord, chunk.content_hash().0, prepared);
+    }
+
+    /// The parts [`Self::set_chunk`] would install for a chunk of cube
+    /// voxels, built without changing the projection.
+    pub fn prepare_chunk(&self, coord: ChunkCoord, chunk: &VoxelChunk) -> PreparedChunkParts {
         let voxels = solid_voxels(&self.grid, coord, chunk);
-        self.set_chunk_parts(coord, chunk.content_hash().0, &voxels, 0, || None);
+        self.prepare_chunk_parts(coord, &voxels, 0, || None)
     }
 
     /// Rebuild one chunk's collider from `world`. If the chunk is not resident its
@@ -1111,6 +1127,19 @@ impl CollisionProjection {
         surface_key: u64,
         surface: impl FnOnce() -> Option<ChunkSurfaceCollider>,
     ) {
+        let prepared = self.prepare_chunk_parts(coord, cube_voxels, surface_key, surface);
+        self.install_chunk_parts(coord, source_hash, prepared);
+    }
+
+    /// The parts [`Self::set_chunk_parts`] would install, built without
+    /// changing the projection, so several chunks' can be built at once.
+    pub fn prepare_chunk_parts(
+        &self,
+        coord: ChunkCoord,
+        cube_voxels: &[VoxelCoord],
+        surface_key: u64,
+        surface: impl FnOnce() -> Option<ChunkSurfaceCollider>,
+    ) -> PreparedChunkParts {
         let boxes = merge_boxes(&self.grid, coord, cube_voxels);
         let previous = self.chunks.get(&coord);
         let kept_cubes = previous
@@ -1166,6 +1195,26 @@ impl CollisionProjection {
                     })
                 })
         });
+        PreparedChunkParts {
+            boxes,
+            cubes,
+            surface,
+        }
+    }
+
+    /// Install one chunk's parts from [`Self::prepare_chunk_parts`] or
+    /// [`Self::prepare_chunk`]. Does not bump the version.
+    pub fn install_chunk_parts(
+        &mut self,
+        coord: ChunkCoord,
+        source_hash: u64,
+        prepared: PreparedChunkParts,
+    ) {
+        let PreparedChunkParts {
+            boxes,
+            cubes,
+            surface,
+        } = prepared;
         self.has_surfaces |= surface.is_some();
         if cubes.is_none() && surface.is_none() {
             self.drop_collider(coord);

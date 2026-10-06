@@ -344,8 +344,8 @@ impl VoxelChunkResidencyService {
             .iter()
             .flat_map(|coordinate| scene.mesh_neighbourhood(*coordinate))
             .collect();
-        let meshes = match scene.build_meshes(&dirty) {
-            Ok(meshes) => meshes,
+        let rebuild = match scene.rebuild_chunks(&changed, &dirty) {
+            Ok(rebuild) => rebuild,
             Err(error) => {
                 for (coordinate, chunk) in previous.into_iter().rev() {
                     match chunk {
@@ -368,13 +368,11 @@ impl VoxelChunkResidencyService {
         }
         for (coordinate, before) in first_previous {
             if let Some(before) = before {
-                scene.account_chunk(coordinate, &before, false);
+                scene.account_chunk(coordinate, Some(&before), false);
             }
-            if let Some(after) = scene.voxel_world.get(coordinate).cloned() {
-                scene.account_chunk(coordinate, &after, true);
-            }
+            scene.account_chunk(coordinate, None, true);
         }
-        scene.publish_local_change(&changed, &dirty, meshes);
+        scene.publish_local_change(&dirty, rebuild);
 
         let update = &scene.mesh_update;
         Ok(VoxelChunkResidencyReceipt {

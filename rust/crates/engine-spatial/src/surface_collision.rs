@@ -18,8 +18,10 @@ use svc_spatial::VoxelWorld;
 
 use crate::{build_mesh_chunk, CollisionSceneError, VoxelMeshChunk};
 
-/// Below this many chunks per thread, meshing stays on the calling thread.
-const CHUNKS_PER_THREAD: usize = 4;
+/// Below this many chunks per thread, a rebuild stays on the calling thread.
+/// A chunk's mesh and collider together take a few hundred microseconds, so
+/// two of them outweigh starting a thread.
+const CHUNKS_PER_THREAD: usize = 2;
 
 /// Mesh `coordinates` (all resident and non-empty), in parallel when there
 /// are enough of them. Returns the meshes in input order and the summed

@@ -12,8 +12,12 @@ and whole-product costs.
 place. They then rebuild only:
 - the meshes of the changed chunks, plus resident neighbours whose surfaces
   touch the change;
-- the colliders of the changed chunks.
+- the colliders of the changed chunks, and of those neighbours when their
+  materials are reconstructed surfaces, whose colliders are what they draw.
 
+Each chunk's mesh and collider are built together, on worker threads when a
+change rebuilds several chunks, and installed in order before the call
+returns. A cube chunk's collider is its collidable voxels merged into boxes.
 Unchanged chunks keep their meshes and collider shapes; a bound Dynamics world
 keeps those colliders too. Nothing copies, hashes or rebuilds the whole scene.
 The authority hash is an order-independent sum maintained per voxel.
