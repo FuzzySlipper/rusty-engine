@@ -116,6 +116,16 @@ pub struct MaterialSurface {
     pub character: SurfaceCharacter,
 }
 
+impl MaterialSurface {
+    /// Dual-contoured Blocky without roughness: the surface is the voxels'
+    /// own block faces wherever it is drawn.
+    pub fn draws_exact_blocks(&self) -> bool {
+        self.mode == SurfaceMode::DualContouring
+            && self.character.placement == VertexPlacement::Blocky
+            && self.character.roughness == 0.0
+    }
+}
+
 /// Material slots whose surface differs from the default: the session mode
 /// with the default character. Cheap to clone.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -311,6 +321,11 @@ pub struct MeshPayload {
     /// inside corner of a marched cell, or the first cell of a cube face.
     /// Collision maps a reconstructed triangle to its voxel through it.
     pub triangle_owners: Vec<[i64; 3]>,
+    /// For each triangle, how many voxels along x, y and z its owners cover
+    /// from its `triangle_owners` entry, as an inclusive box: a merged block
+    /// face is owned by the voxels under it. Empty when every triangle has
+    /// one owner.
+    pub triangle_owner_spans: Vec<[u32; 3]>,
     pub bounds: MeshBounds,
     pub stats: MeshStats,
 }
@@ -702,6 +717,7 @@ pub fn mesh_scalar_samples(
         indices,
         groups,
         triangle_owners: surface.owners,
+        triangle_owner_spans: Vec::new(),
         bounds,
         stats: surface.stats,
     })
@@ -1136,6 +1152,7 @@ fn merge_payloads(
     }
     let vertex_base = (first.positions.len() / 3) as u32;
     let index_base = first.indices.len() as u32;
+    let (first_triangles, second_triangles) = (first.indices.len() / 3, second.indices.len() / 3);
     surface::check_output_growth(
         u64::from(vertex_base),
         u64::from(index_base),
@@ -1158,6 +1175,12 @@ fn merge_payloads(
             ..group
         }));
     first.triangle_owners.extend(second.triangle_owners);
+    if !first.triangle_owner_spans.is_empty() || !second.triangle_owner_spans.is_empty() {
+        let mut spans = second.triangle_owner_spans;
+        spans.resize(second_triangles, [1; 3]);
+        first.triangle_owner_spans.resize(first_triangles, [1; 3]);
+        first.triangle_owner_spans.extend(spans);
+    }
     first.bounds = if had_first {
         MeshBounds {
             min: std::array::from_fn(|axis| first.bounds.min[axis].min(second.bounds.min[axis])),
@@ -1215,6 +1238,7 @@ fn empty_payload(mode: SurfaceMode) -> MeshPayload {
         indices: Vec::new(),
         groups: Vec::new(),
         triangle_owners: Vec::new(),
+        triangle_owner_spans: Vec::new(),
         bounds: MeshBounds {
             min: [0.0; 3],
             max: [0.0; 3],
@@ -1307,12 +1331,15 @@ fn mesh_chunk_reconstructed(
         .terrain_layers
         .as_ref()
         .map(|layers| terrain_layers::LayerField::around_chunk(world, &spec, layers, origin, size));
-    let smooth = reconstruct(
-        lattice,
-        options,
-        owner,
+    let mut reconstruction = reconstruction(lattice, options, owner)?;
+    reconstruction.chunk_region = Some(owner);
+    let smooth = surface::voxel_payload(
+        reconstruction,
+        options.characters(),
         spec.voxel_size(),
         origin.map(|value| value as f64),
+        1.0,
+        options.limits,
         field.as_ref(),
     )?;
     with_cube_faces(world, coord, chunk, options, smooth)
@@ -1358,6 +1385,7 @@ pub fn mesh_chunk_coarse_in_world(
             )
         });
         let mut reconstruction = reconstruction(lattice, options, owner)?;
+        reconstruction.chunk_region = Some(owner);
         surface::add_skirts(&mut reconstruction, COARSE_SKIRT_DEPTH);
         let smooth = surface::voxel_payload(
             reconstruction,
@@ -1510,12 +1538,7 @@ fn reconstructed_surface_covers(
     // Only dual contouring places Blocky vertices on the block's planes;
     // marching cubes interpolates its crossings whatever the placement, so a
     // marching bank is no exact block.
-    let block = |slot: u16| {
-        let surface = options.surface(slot);
-        surface.mode == SurfaceMode::DualContouring
-            && surface.character.placement == VertexPlacement::Blocky
-            && surface.character.roughness == 0.0
-    };
+    let block = |slot: u16| options.surface(slot).draws_exact_blocks();
     if neighbour_slot(world, spec, voxel).is_some_and(block) {
         return true;
     }
@@ -1777,6 +1800,7 @@ fn emit_quads(
         indices,
         groups,
         triangle_owners,
+        triangle_owner_spans: Vec::new(),
         bounds,
         stats,
     })

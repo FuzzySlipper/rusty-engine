@@ -387,6 +387,13 @@ pub(super) struct Reconstruction {
     pub directions: Vec<Direction6>,
     /// Ring triangles outside the owned region, kept only for normals.
     pub halo: Vec<bool>,
+    /// Triangles owned by a box of voxels from their owner, as many along
+    /// each axis: those of merged block faces.
+    pub owner_spans: BTreeMap<usize, [i64; 3]>,
+    /// The owned region of a world chunk. Neighbouring chunks draw their own
+    /// surfaces, so a block face touching the region's border is not merged:
+    /// a neighbour's vertices along it meet no T-junction.
+    pub chunk_region: Option<Owner>,
     pub rank_deficient: u32,
     pub fallbacks: u32,
     pub sampled_cells: u64,
@@ -978,6 +985,246 @@ pub(super) fn add_skirts(reconstruction: &mut Reconstruction, depth: f64) {
     }
 }
 
+/// Merge the unit faces of exact blocks (dual-contoured Blocky materials
+/// without roughness) lying in one plane into rectangles, as greedy cubes
+/// merge cube faces, without moving any surface. A face merges only when
+/// every corner it uses is used by nothing but such faces of its plane, and
+/// lies inside a world chunk's region, so a neighbouring surface in another
+/// plane, of another character or in another chunk keeps every vertex it
+/// shares with the blocks (no T-junction meets it) and a merged corner keeps
+/// its snapped normal. A merged triangle is owned by the box of voxels under
+/// it.
+pub(super) fn merge_block_faces(reconstruction: &mut Reconstruction, characters: Characters<'_>) {
+    // (direction, axis, plane coordinate): faces of one plane facing one way.
+    type Plane = (Direction6, usize, i64);
+    let exact_block = |slot: u16| characters.of(slot).draws_exact_blocks();
+    if !characters
+        .materials
+        .entries()
+        .iter()
+        .any(|(_, surface)| surface.draws_exact_blocks())
+    {
+        return;
+    }
+    let key = |vertex: u32| reconstruction.positions[vertex as usize].map(f64::to_bits);
+    // A face: two consecutive triangles of one dual-contoured edge, a unit
+    // square on the voxel grid.
+    struct Face {
+        first: usize,
+        slot: u16,
+        plane: Plane,
+        cell: [i64; 2],
+    }
+    let mut faces = Vec::new();
+    let mut triangle = 0;
+    let count = reconstruction.triangles.len();
+    while triangle + 1 < count {
+        let (a, b) = (triangle, triangle + 1);
+        let face = (|| {
+            let slot = reconstruction.slots[a];
+            if reconstruction.halo[a]
+                || reconstruction.halo[b]
+                || reconstruction.slots[b] != slot
+                || reconstruction.owners[a] != reconstruction.owners[b]
+                || reconstruction.directions[a] != reconstruction.directions[b]
+                || !exact_block(slot)
+            {
+                return None;
+            }
+            let mut corners: Vec<u32> = reconstruction.triangles[a]
+                .iter()
+                .chain(&reconstruction.triangles[b])
+                .copied()
+                .collect();
+            corners.sort_unstable();
+            corners.dedup();
+            if corners.len() != 4 {
+                return None;
+            }
+            let points = corners
+                .iter()
+                .map(|corner| reconstruction.positions[*corner as usize]);
+            let direction = reconstruction.directions[a];
+            let axis = direction.axis().index();
+            let (u, v) = ((axis + 1) % 3, (axis + 2) % 3);
+            let mut low = [f64::INFINITY; 3];
+            let mut high = [f64::NEG_INFINITY; 3];
+            for point in points {
+                if point.iter().any(|value| value.fract() != 0.0) {
+                    return None;
+                }
+                for k in 0..3 {
+                    low[k] = low[k].min(point[k]);
+                    high[k] = high[k].max(point[k]);
+                }
+            }
+            (low[axis] == high[axis] && high[u] - low[u] == 1.0 && high[v] - low[v] == 1.0).then(
+                || Face {
+                    first: a,
+                    slot,
+                    plane: (direction, axis, low[axis] as i64),
+                    cell: [low[u] as i64, low[v] as i64],
+                },
+            )
+        })();
+        match face {
+            Some(face) => {
+                faces.push(face);
+                triangle += 2;
+            }
+            None => triangle += 1,
+        }
+    }
+    if faces.is_empty() {
+        return;
+    }
+    // The plane each corner position is used in, if only faces of one plane
+    // use it.
+    let mut face_of = vec![None; count];
+    for (index, face) in faces.iter().enumerate() {
+        face_of[face.first] = Some(index);
+        face_of[face.first + 1] = Some(index);
+    }
+    let mut corner_planes = HashMap::<[u64; 3], Option<Plane>>::new();
+    for (triangle, corners) in reconstruction.triangles.iter().enumerate() {
+        if reconstruction.halo[triangle] {
+            continue;
+        }
+        let plane = face_of[triangle].map(|face| faces[face].plane);
+        for corner in corners {
+            corner_planes
+                .entry(key(*corner))
+                .and_modify(|seen| {
+                    if *seen != plane {
+                        *seen = None;
+                    }
+                })
+                .or_insert(plane);
+        }
+    }
+    // Mergeable faces by material and plane, keyed by cell.
+    let mut planes = BTreeMap::<(u16, Plane), BTreeMap<[i64; 2], usize>>::new();
+    for (index, face) in faces.iter().enumerate() {
+        let corners = reconstruction.triangles[face.first]
+            .iter()
+            .chain(&reconstruction.triangles[face.first + 1]);
+        let inside = |corner: &u32| {
+            let point = reconstruction.positions[*corner as usize];
+            reconstruction.chunk_region.is_none_or(|region| {
+                (0..3).all(|k| point[k] > region.min[k] as f64 && point[k] < region.max[k] as f64)
+            })
+        };
+        if corners
+            .clone()
+            .all(|corner| corner_planes[&key(*corner)] == Some(face.plane) && inside(corner))
+        {
+            planes
+                .entry((face.slot, face.plane))
+                .or_default()
+                .insert(face.cell, index);
+        }
+    }
+    for ((slot, (direction, axis, coordinate)), cells) in planes {
+        let (u, v) = ((axis + 1) % 3, (axis + 2) % 3);
+        let mut taken = BTreeSet::new();
+        // Rows of cells by v, then u, as greedy cube faces merge.
+        let mut order: Vec<[i64; 2]> = cells.keys().copied().collect();
+        order.sort_unstable_by_key(|cell| (cell[1], cell[0]));
+        for start in order {
+            if taken.contains(&start) {
+                continue;
+            }
+            let free = |cell: [i64; 2], taken: &BTreeSet<[i64; 2]>| {
+                cells.contains_key(&cell) && !taken.contains(&cell)
+            };
+            let mut width = 1;
+            while free([start[0] + width, start[1]], &taken) {
+                width += 1;
+            }
+            let mut height = 1;
+            while (0..width).all(|du| free([start[0] + du, start[1] + height], &taken)) {
+                height += 1;
+            }
+            let members: Vec<usize> = (0..height)
+                .flat_map(|dv| (0..width).map(move |du| [start[0] + du, start[1] + dv]))
+                .map(|cell| {
+                    taken.insert(cell);
+                    cells[&cell]
+                })
+                .collect();
+            if members.len() == 1 {
+                continue;
+            }
+            // The rectangle's corners are corners of its corner faces.
+            let point = |du: i64, dv: i64| {
+                let mut point = [0.0; 3];
+                point[axis] = coordinate as f64;
+                point[u] = (start[0] + du) as f64;
+                point[v] = (start[1] + dv) as f64;
+                point
+            };
+            let vertex_at = |target: [f64; 3]| {
+                members
+                    .iter()
+                    .flat_map(|member| {
+                        let first = faces[*member].first;
+                        reconstruction.triangles[first]
+                            .into_iter()
+                            .chain(reconstruction.triangles[first + 1])
+                    })
+                    .find(|corner| reconstruction.positions[*corner as usize] == target)
+                    .expect("a rectangle corner is a corner of its corner face")
+            };
+            let rectangle = [
+                vertex_at(point(0, 0)),
+                vertex_at(point(width, 0)),
+                vertex_at(point(width, height)),
+                vertex_at(point(0, height)),
+            ];
+            // Face the way the merged faces do.
+            let first = reconstruction.triangles[faces[members[0]].first];
+            let facing = |corners: [u32; 3]| {
+                let [p0, p1, p2] = corners.map(|corner| reconstruction.positions[corner as usize]);
+                cross(sub(p1, p0), sub(p2, p0))[axis] > 0.0
+            };
+            let triangles = if facing([rectangle[0], rectangle[1], rectangle[2]]) == facing(first) {
+                [
+                    [rectangle[0], rectangle[1], rectangle[2]],
+                    [rectangle[0], rectangle[2], rectangle[3]],
+                ]
+            } else {
+                [
+                    [rectangle[0], rectangle[2], rectangle[1]],
+                    [rectangle[0], rectangle[3], rectangle[2]],
+                ]
+            };
+            let mut low = [i64::MAX; 3];
+            let mut high = [i64::MIN; 3];
+            for member in &members {
+                let first = faces[*member].first;
+                let owner = reconstruction.owners[first];
+                for k in 0..3 {
+                    low[k] = low[k].min(owner[k]);
+                    high[k] = high[k].max(owner[k]);
+                }
+                reconstruction.halo[first] = true;
+                reconstruction.halo[first + 1] = true;
+            }
+            for corners in triangles {
+                reconstruction.owner_spans.insert(
+                    reconstruction.triangles.len(),
+                    std::array::from_fn(|k| high[k] - low[k] + 1),
+                );
+                reconstruction.triangles.push(corners);
+                reconstruction.slots.push(slot);
+                reconstruction.owners.push(low);
+                reconstruction.directions.push(direction);
+                reconstruction.halo.push(false);
+            }
+        }
+    }
+}
+
 fn majority_material(materials: [Option<u16>; 8]) -> Option<u16> {
     let mut counts = BTreeMap::<u16, u8>::new();
     for slot in materials.into_iter().flatten() {
@@ -1023,7 +1270,7 @@ fn dominant_direction(facing: [f64; 3], fallback: [f64; 3]) -> Direction6 {
 /// tile coordinates continuous across regions. A lattice unit is `scale`
 /// voxels (2 for a coarse lattice); `pivot` and owners are in voxels.
 pub(super) fn voxel_payload(
-    reconstruction: Reconstruction,
+    mut reconstruction: Reconstruction,
     characters: Characters<'_>,
     cell_size: f64,
     pivot: [f64; 3],
@@ -1031,6 +1278,7 @@ pub(super) fn voxel_payload(
     limits: SurfaceMeshLimits,
     layers: Option<&LayerField<'_>>,
 ) -> Result<MeshPayload, MeshError> {
+    merge_block_faces(&mut reconstruction, characters);
     let mut lanes = BTreeMap::<(u16, Direction6), Vec<usize>>::new();
     for (triangle, (&slot, &direction)) in reconstruction
         .slots
@@ -1055,6 +1303,7 @@ pub(super) fn voxel_payload(
     let mut indices = Vec::new();
     let mut groups = Vec::with_capacity(lanes.len());
     let mut owners = Vec::new();
+    let mut owner_spans = Vec::new();
     let mut minimum = [f32::INFINITY; 3];
     let mut maximum = [f32::NEG_INFINITY; 3];
     let mut emitted = BTreeMap::<(u32, [u64; 3]), u32>::new();
@@ -1121,6 +1370,14 @@ pub(super) fn voxel_payload(
                 indices.push(index);
             }
             owners.push(reconstruction.owners[triangle].map(|value| value * scale as i64));
+            if !reconstruction.owner_spans.is_empty() {
+                let span = reconstruction
+                    .owner_spans
+                    .get(&triangle)
+                    .copied()
+                    .unwrap_or([1; 3]);
+                owner_spans.push(span.map(|value| (value * scale as i64) as u32));
+            }
         }
         groups.push(MeshGroup {
             state: 0,
@@ -1163,6 +1420,7 @@ pub(super) fn voxel_payload(
         indices,
         groups,
         triangle_owners: owners,
+        triangle_owner_spans: owner_spans,
         stats: MeshStats {
             surface_mode: mode,
             vertices: vertices as u32,

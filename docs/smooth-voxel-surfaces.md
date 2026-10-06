@@ -40,7 +40,11 @@ reconstructed material:
   voxel grid: its crossings sit on voxel faces whatever the densities, and the
   normals of a cell it wins snap to the axes, so a cube of material meshes as
   an exact cube and a neighbouring material meets its planes. Use Sharp to
-  shape sharp features with densities instead.
+  shape sharp features with densities instead. Dual-contoured Blocky faces
+  without roughness that lie in one plane are merged into rectangles, as
+  cube faces are, wherever every corner they use belongs only to such faces
+  and lies inside the chunk: faces beside another surface or at the chunk's
+  border keep the corners they share, so nothing meets a T-junction.
 - `CreaseAngleDegrees` shades a vertex smooth where the facet bends less than
   this from the vertex's interpolated normal, and flat beyond it: 0 is every
   facet flat, 180 everything smooth. `SurfaceCharacter.Default` is Sharp,
@@ -187,8 +191,8 @@ non-collidable solid), plus the chunk's reconstructed triangles. Each
 triangle belongs to a voxel (the solid end of its dual-contoured edge, or the
 first solid corner of its marched cell), so `CastRay` and picking still name
 a voxel, a face (the axis nearest the surface normal) and the normal itself.
-Cuboids are merged into boxes; a ray into a box names the voxel under the
-impact. Character casts, overlaps, Dynamics and collision navigation use the
+Cuboids are merged into boxes, and a merged Blocky rectangle is owned by the
+voxels under it; a ray into either names the voxel under the impact. Character casts, overlaps, Dynamics and collision navigation use the
 same shapes. Point and box queries in the shell between the surface and the
 interior cuboids classify by the side of the nearest surface triangle.
 Non-collidable materials contribute neither cuboids nor triangles. A chunk's

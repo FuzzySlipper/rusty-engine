@@ -12,7 +12,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use core_space::{ChunkCoord, LocalVoxelCoord, VoxelCoord};
-use svc_collision::ChunkSurfaceCollider;
+use svc_collision::{ChunkSurfaceCollider, VoxelBox};
 use svc_mesh::SurfaceMeshOptions;
 use svc_spatial::VoxelWorld;
 
@@ -213,11 +213,19 @@ pub(crate) fn collider_surface(
                     ]);
                 }
                 surface.triangles.push([first, first + 1, first + 2]);
-                surface.owners.push(VoxelCoord::new(
+                let owner = VoxelCoord::new(
                     origin.x + local[0] as i64,
                     origin.y + local[1] as i64,
                     origin.z + local[2] as i64,
-                ));
+                );
+                let span = mesh
+                    .triangle_owner_spans
+                    .get(triangle as usize)
+                    .map_or([0; 3], |span| span.map(|cells| i64::from(cells) - 1));
+                surface.owners.push(VoxelBox {
+                    min: owner,
+                    max: VoxelCoord::new(owner.x + span[0], owner.y + span[1], owner.z + span[2]),
+                });
             }
         }
         (!surface.triangles.is_empty()).then_some(surface)

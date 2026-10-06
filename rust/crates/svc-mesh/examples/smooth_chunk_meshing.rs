@@ -5,7 +5,8 @@
 //!
 //! The world is 6 × 5 × 6 chunks of 16³ one-metre cells (180 chunks, the
 //! size of a CraftSurvive dungeon): rock with carved tunnels and rooms, a
-//! block of a second material and a pool of see-through water in the room.
+//! block of a second material (Blocky when dual contoured, as a dungeon's
+//! masonry is) and a pool of see-through water in the room.
 //! Each mode meshes every resident chunk with its resident neighbours, as a
 //! scene build does, and reports the chunks whose samples include water
 //! separately. Reconstructed modes also mesh every chunk from the coarse
@@ -16,7 +17,8 @@ use std::time::{Duration, Instant};
 use core_space::{ChunkCoord, ChunkDims, GridId, LocalVoxelCoord, VoxelGridSpec};
 use core_voxel::{VoxelMaterialId, VoxelValue};
 use svc_mesh::{
-    mesh_chunk_coarse_in_world, mesh_chunk_in_world_with_options, SurfaceMeshOptions, SurfaceMode,
+    mesh_chunk_coarse_in_world, mesh_chunk_in_world_with_options, MaterialSurface,
+    SurfaceCharacter, SurfaceMaterials, SurfaceMeshOptions, SurfaceMode, VertexPlacement,
 };
 use svc_spatial::VoxelWorld;
 use svc_volume::VoxelChunk;
@@ -24,6 +26,7 @@ use svc_volume::VoxelChunk;
 const CHUNK: u32 = 16;
 const CHUNKS: [i64; 3] = [6, 5, 6];
 const ROUNDS: usize = 3;
+const BLOCK: u16 = 2;
 const WATER: u16 = 3;
 
 fn main() {
@@ -36,18 +39,32 @@ fn main() {
         SurfaceMode::MarchingCubes,
         SurfaceMode::DualContouring,
     ] {
+        let block = MaterialSurface {
+            mode,
+            character: SurfaceCharacter {
+                placement: VertexPlacement::Blocky,
+                crease_angle_degrees: 0.0,
+                roughness: 0.0,
+            },
+        };
         let options = SurfaceMeshOptions {
             mode,
             non_occluding: [WATER].into(),
+            materials: SurfaceMaterials::new(
+                (mode == SurfaceMode::DualContouring).then_some((BLOCK, block)),
+            )
+            .expect("one material"),
             ..SurfaceMeshOptions::default()
         };
         let mut best = Duration::MAX;
         let mut best_water = Duration::MAX;
         let mut triangles = 0;
+        let mut block_triangles = 0;
         for _ in 0..ROUNDS {
             let mut total = Duration::ZERO;
             let mut water = Duration::ZERO;
             triangles = 0;
+            block_triangles = 0;
             for (coord, watery) in chunks.iter().zip(&watery) {
                 let started = Instant::now();
                 let mesh = mesh_chunk_in_world_with_options(&world, *coord, &options)
@@ -59,13 +76,19 @@ fn main() {
                     water += elapsed;
                 }
                 triangles += mesh.indices.len() / 3;
+                block_triangles += mesh
+                    .groups
+                    .iter()
+                    .filter(|group| group.material_slot == BLOCK)
+                    .map(|group| group.count as usize / 3)
+                    .sum::<usize>();
             }
             best = best.min(total);
             best_water = best_water.min(water);
         }
         let per_chunk = |time: Duration, count: usize| time.as_secs_f64() * 1000.0 / count as f64;
         println!(
-            "{:>15}: {:8.1} ms total, {:6.2} ms/chunk, {triangles} triangles; {water_chunks} chunks sampling water {:6.2} ms/chunk",
+            "{:>15}: {:8.1} ms total, {:6.2} ms/chunk, {triangles} triangles ({block_triangles} of the block); {water_chunks} chunks sampling water {:6.2} ms/chunk",
             mode.as_str(),
             best.as_secs_f64() * 1000.0,
             per_chunk(best, chunks.len()),
@@ -110,7 +133,7 @@ fn solid(x: i64, y: i64, z: i64) -> Option<u16> {
         return None;
     }
     let block = (40..48).contains(&x) && (20..34).contains(&y) && (36..44).contains(&z);
-    Some(if block { 2 } else { 1 })
+    Some(if block { BLOCK } else { 1 })
 }
 
 /// Whether a chunk's samples, its own voxels and the one-voxel halo, include

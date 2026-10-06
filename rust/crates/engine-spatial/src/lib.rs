@@ -210,6 +210,10 @@ pub struct VoxelMeshChunk {
     /// The chunk-local storage index (x-fastest) of the voxel owning each
     /// triangle. Collision maps a reconstructed triangle to its voxel.
     pub triangle_owners: Vec<u32>,
+    /// For each triangle, how many voxels along x, y and z its owners cover
+    /// from its owner: a merged block face is owned by the voxels under it.
+    /// Empty when every triangle has one owner.
+    pub triangle_owner_spans: Vec<[u32; 3]>,
     pub bounds_min: [f32; 3],
     pub bounds_max: [f32; 3],
     pub vertices: u32,
@@ -1669,6 +1673,7 @@ fn voxel_mesh_chunk(
             })
             .collect(),
         triangle_owners,
+        triangle_owner_spans: mesh.triangle_owner_spans,
         bounds_min: mesh.bounds.min,
         bounds_max: mesh.bounds.max,
         vertices: mesh.stats.vertices,
