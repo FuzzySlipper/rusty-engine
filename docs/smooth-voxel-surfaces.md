@@ -209,11 +209,17 @@ Reconstructed chunks mesh from the chunk and a one-voxel halo of its
 neighbours, in parallel when a change rebuilds several chunks. On a 180-chunk
 dungeon of 16³ one-metre chunks (`svc-mesh` example `smooth_chunk_meshing`,
 release build) dual contouring costs about 0.3 ms per chunk, marching cubes
-0.5 ms and cubes 0.4 ms. A chunk's surface depends on all 26 neighbours, so
-admitting a world chunk by chunk remeshes each chunk several times; admitting
-that dungeon in slices of six chunks (`engine-spatial` example
-`smooth_residency_load`) takes about 0.43 s with dual contouring, 0.63 s with
-marching cubes and 0.40 s with cubes, collision and navigation included. Reconstructed vertices are
+0.5 ms and cubes 0.4 ms. One residency, edit or density call meshes each chunk
+it touches once, after all its writes. A chunk's surface depends on all 26
+neighbours, though, so each later call remeshes the resident neighbours of what
+it changes. Admitting that dungeon in one call (`engine-spatial` example
+`smooth_residency_load`) takes about 0.18 s with dual contouring, 0.22 s with
+marching cubes and 0.31 s with cubes, collision and navigation included; they
+take most of it. In slices of six chunks it builds 714 chunk meshes (474 with
+cubes) and takes about 0.44 s, 0.67 s and 0.33 s in all, at most about 20, 30
+and 15 ms per slice. A product filling a space behind a loading wait trades the
+longest call against the total through its slice size; larger, contiguous
+slices leave fewer resident neighbours to remesh. Reconstructed vertices are
 split per texture face and crease, so a smooth chunk draws more vertices than
 its cell count suggests. `VoxelSceneReadout.MeshMicroseconds`, and the same
 field on edit, residency and density receipts, report the meshing time of the
