@@ -16,7 +16,7 @@ use render_host_contracts::{
     RendererCameraMotion, RendererCameraProjection, RendererCompositionPresentation,
     RendererCompositionTarget, RendererCompositionView, RendererPrimaryDestination,
     RendererPrimaryDestinationKind, RendererTargetColor, RendererTargetDepth,
-    RendererTargetSampling, RendererViewTarget, RendererViewport,
+    RendererTargetSampling, RendererViewComposition, RendererViewTarget, RendererViewport,
 };
 use render_model::*;
 use render_presentation::PresentationWorld;
@@ -559,4 +559,175 @@ fn a_capture_keeps_the_scene_bloom_but_its_own_exposure() {
         }),
     }]);
     assert_ne!(capture(&harness), plain);
+}
+
+/// A dark background and a box at `at`, glowing by `emission` (0 for a
+/// plain grey box).
+fn lone_box(name: &str, handle: u64, at: [f32; 3], emission: f32) -> Vec<RenderDiff> {
+    let mut ops = coloured_mesh(name, cube(), [0.6, 0.6, 0.6, 1.0]);
+    if let RenderDiff::DefineMaterial { material } = &mut ops[0] {
+        material.emission_color = [1.0, 0.8, 0.5];
+        material.emission_intensity = emission;
+    }
+    ops.push(instance(handle, None, name, transform(at, 0.0, 1.5)));
+    ops
+}
+
+/// Two side-by-side views of one target: the left looks down -z, the right
+/// down +z.
+fn back_to_back() -> RendererViewComposition {
+    composition(
+        vec![
+            camera("ahead", [0.0, 0.0, 0.0], 0.0, 0.0),
+            camera("behind", [0.0, 0.0, 0.0], 180.0, 0.0),
+        ],
+        vec![
+            primary_view("left", "ahead", viewport(0.0, 0.0, 0.5, 1.0), 0),
+            primary_view("right", "behind", viewport(0.5, 0.0, 0.5, 1.0), 1),
+        ],
+    )
+}
+
+fn half(rgba: &[u8], right: bool) -> Vec<[u8; 4]> {
+    let columns = if right {
+        WIDTH / 2..WIDTH
+    } else {
+        0..WIDTH / 2
+    };
+    (0..HEIGHT)
+        .flat_map(|y| columns.clone().map(move |x| (x, y)))
+        .map(|(x, y)| pixel(rgba, WIDTH, x, y))
+        .collect()
+}
+
+fn largest_difference(a: &[[u8; 4]], b: &[[u8; 4]]) -> u8 {
+    a.iter()
+        .zip(b)
+        .flat_map(|(a, b)| (0..3).map(move |c| a[c].abs_diff(b[c])))
+        .max()
+        .unwrap_or(0)
+}
+
+#[test]
+fn a_view_blooms_only_its_own_viewport() {
+    let mut harness = Harness::new(RendererOptions::default());
+    harness.apply(vec![RenderDiff::SetBackgroundColor {
+        color: [0.02, 0.03, 0.06, 1.0],
+    }]);
+    // Near the left view's right edge, so its glow would cross into the
+    // right view.
+    harness.apply(lone_box("glow", 1, [0.6, 0.0, -3.0], 8.0));
+    harness.renderer.set_view_composition(&back_to_back(), 0.0);
+    let (_, plain) = harness.composition(0.0);
+    harness.apply(vec![RenderDiff::SetBloom {
+        bloom: Some(BloomDescriptor {
+            threshold: 1.0,
+            intensity: 4.0,
+        }),
+    }]);
+    let (_, bloomed) = harness.composition(0.0);
+    assert!(
+        largest_difference(&half(&plain, false), &half(&bloomed, false)) > 20,
+        "the left view glows"
+    );
+    assert!(
+        largest_difference(&half(&plain, true), &half(&bloomed, true)) <= 1,
+        "the right view, beside the glow, is untouched"
+    );
+}
+
+#[test]
+fn auto_exposure_measures_only_the_view_it_adapts_at() {
+    let left = |bright_behind: bool| {
+        let mut harness = Harness::new(RendererOptions::default());
+        harness.apply(vec![
+            RenderDiff::SetBackgroundColor {
+                color: [0.02, 0.03, 0.06, 1.0],
+            },
+            RenderDiff::SetAutoExposure {
+                auto_exposure: Some(AutoExposureDescriptor {
+                    speed: 1.0,
+                    min_exposure: 0.01,
+                    max_exposure: 100.0,
+                }),
+            },
+        ]);
+        harness.apply(lone_box("ahead", 1, [0.0, 0.0, -3.0], 0.0));
+        if bright_behind {
+            // Only the right view sees it.
+            harness.apply(lone_box("behind", 2, [0.0, 0.0, 3.0], 8.0));
+        }
+        harness.renderer.set_view_composition(&back_to_back(), 0.0);
+        harness.composition(0.0);
+        // A later frame adapts again, with the other view's last frame
+        // still in the shared target.
+        harness.renderer.set_animation_time(100.0);
+        let (_, pixels) = harness.composition(0.0);
+        (half(&pixels, false), half(&pixels, true))
+    };
+    let (alone, dark_right) = left(false);
+    let (beside_bright, bright_right) = left(true);
+    assert!(largest_difference(&dark_right, &bright_right) > 20);
+    // The first world view (the left) sets the exposure from its own world.
+    assert!(
+        largest_difference(&alone, &beside_bright) <= 1,
+        "the left view's exposure ignores the right view"
+    );
+}
+
+#[test]
+fn every_view_of_a_crowded_frame_blooms() {
+    let mut harness = Harness::new(RendererOptions::default());
+    harness.apply(vec![
+        RenderDiff::SetBackgroundColor {
+            color: [0.02, 0.03, 0.06, 1.0],
+        },
+        RenderDiff::SetBloom {
+            bloom: Some(BloomDescriptor {
+                threshold: 1.0,
+                intensity: 4.0,
+            }),
+        },
+    ]);
+    harness.apply(lone_box("glow", 1, [0.0, 0.0, -3.0], 8.0));
+    // Sixteen views of one camera, more post passes than a frame starts
+    // with uniform slots for.
+    let (columns, rows) = (4u32, 4u32);
+    let views = (0..columns * rows)
+        .map(|index| {
+            let (column, row) = (index % columns, index / columns);
+            primary_view(
+                &format!("view-{index}"),
+                "ahead",
+                viewport(
+                    f64::from(column) / f64::from(columns),
+                    f64::from(row) / f64::from(rows),
+                    1.0 / f64::from(columns),
+                    1.0 / f64::from(rows),
+                ),
+                u64::from(index),
+            )
+        })
+        .collect();
+    harness.renderer.set_view_composition(
+        &composition(vec![camera("ahead", [0.0, 0.0, 0.0], 0.0, 0.0)], views),
+        0.0,
+    );
+    let (_, pixels) = harness.composition(0.0);
+    let (width, height) = (WIDTH / columns, HEIGHT / rows);
+    let cell = |column: u32, row: u32| -> Vec<[u8; 4]> {
+        (0..height)
+            .flat_map(|y| (0..width).map(move |x| (column * width + x, row * height + y)))
+            .map(|(x, y)| pixel(&pixels, WIDTH, x, y))
+            .collect()
+    };
+    let first = cell(0, 0);
+    for row in 0..rows {
+        for column in 0..columns {
+            assert!(
+                largest_difference(&first, &cell(column, row)) <= 2,
+                "view at column {column}, row {row} draws as the first does"
+            );
+        }
+    }
 }

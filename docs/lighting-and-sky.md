@@ -271,7 +271,8 @@ engine.CameraView.SetColorGrading(new(Temperature: -0.15f, Tint: 0, Contrast: 0.
   adds it back at `Intensity` (0 to 16) before exposure and the operator, so
   a glow rolls off as the light does. It is off by default; an intensity of 0
   turns it off. A threshold of 1 keeps ordinary lit surfaces out and lets
-  emission and highlights above white glow. The background does not bloom.
+  emission and highlights above white glow. The background does not bloom,
+  and each view of a split screen blooms only its own viewport.
 - **Auto exposure** scales the exposure toward the one that brings the
   world's log-average luminance (weighted by coverage, background excluded)
   to middle grey, clamped to `MinExposure..MaxExposure`, closing
@@ -281,8 +282,8 @@ engine.CameraView.SetColorGrading(new(Temperature: -0.15f, Tint: 0, Contrast: 0.
   exposed: choose a range that keeps the world in step with its sky (a dusk
   world raised to middle grey reads as day under a dusk sky). The first
   frame after it is enabled takes its target at once. It is off by default;
-  `Enabled: false` turns it off. It adapts once a frame, at the frame's first
-  world view.
+  `Enabled: false` turns it off. It adapts once a frame, measuring the
+  frame's first world view's viewport.
 - **Colour grading** adjusts the world's colour before the operator, so the
   operator still rolls off what grading brightens. Each control runs from -1
   to 1, and 0 leaves the colour as it is: `Temperature` cools toward blue or

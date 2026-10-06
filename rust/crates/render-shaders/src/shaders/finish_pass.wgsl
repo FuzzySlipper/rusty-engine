@@ -27,7 +27,8 @@ struct FinishParams {
 @group(1) @binding(2) var scene_depth: texture_depth_2d;
 @group(1) @binding(3) var scene_depth_multisampled: texture_depth_multisampled_2d;
 @group(1) @binding(4) var scene_multisampled: texture_multisampled_2d<f32>;
-// The view's bloom (`post.wgsl`), half resolution, and its sampler.
+// The view's bloom (`post.wgsl`), at half its viewport's resolution, and
+// its sampler.
 @group(1) @binding(5) var bloom: texture_2d<f32>;
 @group(1) @binding(6) var bloom_sampler: sampler;
 // Auto exposure's adapted value (1×1).
@@ -61,12 +62,13 @@ fn finished(color: vec4<f32>, position: vec4<f32>, depth: f32, glow: vec3<f32>, 
     return result;
 }
 
-// The pixel's bloom light (zero without bloom).
+// The pixel's bloom light (zero without bloom), from the view's own bloom,
+// which spans its viewport.
 fn glow_at(position: vec4<f32>) -> vec3<f32> {
     if params.post.x <= 0.0 {
         return vec3<f32>(0.0);
     }
-    let uv = position.xy / params.output.yz;
+    let uv = (position.xy - params.viewport.xy) / params.viewport.zw;
     return textureSampleLevel(bloom, bloom_sampler, uv, 0.0).rgb * params.post.x;
 }
 

@@ -45,7 +45,8 @@ struct HdrTarget {
     color: wgpu::TextureView,
     /// A multisampled colour's single-sample resolve.
     resolve: Option<wgpu::TextureView>,
-    bloom: Option<Chain>,
+    /// Bloom chains by viewport size, so each view blooms its own viewport.
+    bloom: Vec<Chain>,
     luminance: Option<Chain>,
     used: u64,
 }
@@ -213,6 +214,11 @@ impl Finish {
         let frame = self.frame;
         self.targets
             .retain(|target| frame - target.used <= TARGET_FRAMES_KEPT);
+        for target in &mut self.targets {
+            target
+                .bloom
+                .retain(|chain| frame - chain.used <= TARGET_FRAMES_KEPT);
+        }
     }
 
     fn index(&self, width: u32, height: u32, samples: u32) -> Option<usize> {
@@ -255,7 +261,7 @@ impl Finish {
                     samples,
                     color: texture(samples),
                     resolve: None,
-                    bloom: None,
+                    bloom: Vec::new(),
                     luminance: None,
                     used: self.frame,
                 });
@@ -277,15 +283,17 @@ impl Finish {
         }
     }
 
-    /// Bloom and auto exposure from the resolved world of the HDR target of
-    /// this size and sample count, as of presentation time `now`; `timed`
-    /// for a world view.
+    /// Bloom and auto exposure from `viewport` (x, y, width, height in
+    /// pixels) of the resolved world of the HDR target of this size and
+    /// sample count, as of presentation time `now`; `timed` for a world
+    /// view.
     #[allow(clippy::too_many_arguments)]
     pub fn encode_post(
         &mut self,
         gpu: &Gpu,
         encoder: &mut wgpu::CommandEncoder,
         (width, height, samples): (u32, u32, u32),
+        viewport: [u32; 4],
         bloom: Option<BloomDescriptor>,
         auto_exposure: Option<AutoExposureDescriptor>,
         now: f64,
@@ -294,15 +302,38 @@ impl Finish {
         let Some(index) = self.index(width, height, samples) else {
             return;
         };
+        let frame = self.frame;
+        let [x, y, view_width, view_height] = viewport;
         let target = &mut self.targets[index];
-        if bloom.is_some() && target.bloom.is_none() {
-            target.bloom = Some(Chain::bloom(gpu, width, height));
+        let chain = bloom.map(|_| {
+            match target
+                .bloom
+                .iter()
+                .position(|chain| chain.key == (view_width, view_height))
+            {
+                Some(chain) => chain,
+                None => {
+                    target
+                        .bloom
+                        .push(Chain::bloom(gpu, view_width, view_height));
+                    target.bloom.len() - 1
+                }
+            }
+        });
+        if let Some(chain) = chain {
+            target.bloom[chain].used = frame;
         }
         if auto_exposure.is_some() && target.luminance.is_none() {
             target.luminance = Some(Chain::luminance(gpu));
         }
         let target = &self.targets[index];
         let source = target.resolved().clone();
+        let region = [
+            x as f32 / width as f32,
+            y as f32 / height as f32,
+            view_width as f32 / width as f32,
+            view_height as f32 / height as f32,
+        ];
         // A median never mixes frames that did different work.
         let work = (bloom.is_some(), auto_exposure.is_some());
         if timed && work != self.timed_post {
@@ -312,16 +343,31 @@ impl Finish {
             }
         }
         let timer = self.post_timer.as_ref().filter(|_| timed);
-        if let (Some(bloom), Some(chain)) = (bloom, &target.bloom) {
+        if let (Some(bloom), Some(chain)) = (bloom, chain) {
             // The stamps open on the first pass and close on the last.
             let stamps = timer.map(|timer| (timer, true, auto_exposure.is_none()));
-            self.post
-                .bloom(gpu, encoder, &source, (width, height), chain, bloom, stamps);
+            self.post.bloom(
+                gpu,
+                encoder,
+                (&source, region),
+                (width, height),
+                &target.bloom[chain],
+                bloom,
+                stamps,
+            );
         }
         if let (Some(auto), Some(chain)) = (auto_exposure, &target.luminance) {
             let stamps = timer.map(|timer| (timer, bloom.is_none(), true));
-            self.post
-                .adapt(gpu, encoder, &source, chain, auto, now, stamps);
+            self.post.adapt(
+                gpu,
+                encoder,
+                (&source, region),
+                (width, height),
+                chain,
+                auto,
+                now,
+                stamps,
+            );
         }
         if let Some(timer) = self.post_timer.as_mut().filter(|_| timed) {
             timer.resolve(encoder);
@@ -495,7 +541,11 @@ impl Finish {
             | wgpu::TextureFormat::Rg11b10Ufloat => f32::MAX,
             _ => 1.0,
         };
-        let bloom = hdr.bloom.as_ref().filter(|_| post.bloom > 0.0);
+        let bloom = hdr
+            .bloom
+            .iter()
+            .find(|chain| chain.key == (viewport[2], viewport[3]))
+            .filter(|_| post.bloom > 0.0);
         let [x, y, width, height] = viewport.map(|value| value as f32);
         let params = [
             x,

@@ -1401,6 +1401,7 @@ impl Renderer {
                 &self.gpu,
                 &mut encoder,
                 size,
+                [area.x, area.y, area.width, area.height],
                 bloom,
                 adapting,
                 self.animation_time,

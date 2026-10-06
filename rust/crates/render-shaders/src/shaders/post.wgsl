@@ -1,7 +1,8 @@
 // The finish pass's inputs from a view's HDR world (render-wgpu `post.rs`):
 // bloom (light above a threshold, spread through a mip chain) and auto
 // exposure (the coverage-weighted log-average luminance, adapted over
-// presentation time).
+// presentation time). A pass reads only its region of the source, so views
+// sharing a target never sample each other.
 
 struct PostParams {
     // xy: the source's texel size; z: the bloom threshold; w: the soft knee.
@@ -10,6 +11,9 @@ struct PostParams {
     // exposure, w the presentation seconds since the last adaptation (a
     // negative value takes the target at once).
     adapt: vec4<f32>,
+    // The source region the pass's uv spans: x, y, width, height in the
+    // source's uv (the view's viewport in the world; the whole of a mip).
+    region: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> params: PostParams;
@@ -35,14 +39,29 @@ fn vs_post(@builtin(vertex_index) index: u32) -> FullscreenOut {
     return out;
 }
 
+// The source uv a pass's uv stands for.
+fn source_uv(uv: vec2<f32>) -> vec2<f32> {
+    return params.region.xy + uv * params.region.zw;
+}
+
+// The source at `at`, kept half a texel inside the region, so a tap at its
+// edge takes the edge texel and never one beyond.
+fn tap(at: vec2<f32>) -> vec4<f32> {
+    let half_texel = params.texel.xy * 0.5;
+    let low = params.region.xy + half_texel;
+    let high = params.region.xy + params.region.zw - half_texel;
+    return textureSample(source, source_sampler, clamp(at, low, max(low, high)));
+}
+
 // Four bilinear taps one texel out on each diagonal: a 4×4 box at half
 // resolution.
 fn box4(uv: vec2<f32>) -> vec4<f32> {
     let d = params.texel.xy;
-    return (textureSample(source, source_sampler, uv + vec2<f32>(-d.x, -d.y))
-        + textureSample(source, source_sampler, uv + vec2<f32>(d.x, -d.y))
-        + textureSample(source, source_sampler, uv + vec2<f32>(-d.x, d.y))
-        + textureSample(source, source_sampler, uv + vec2<f32>(d.x, d.y))) * 0.25;
+    let at = source_uv(uv);
+    return (tap(at + vec2<f32>(-d.x, -d.y))
+        + tap(at + vec2<f32>(d.x, -d.y))
+        + tap(at + vec2<f32>(-d.x, d.y))
+        + tap(at + vec2<f32>(d.x, d.y))) * 0.25;
 }
 
 // The first bloom mip: the world's light above the threshold (a soft knee
@@ -83,7 +102,7 @@ fn fs_bloom_up(in: FullscreenOut) -> @location(0) vec4<f32> {
 // the view give the world's log-average luminance.
 @fragment
 fn fs_luminance(in: FullscreenOut) -> @location(0) vec4<f32> {
-    let color = textureSample(source, source_sampler, in.uv);
+    let color = tap(source_uv(in.uv));
     if color.a <= 0.0 {
         return vec4<f32>(0.0);
     }

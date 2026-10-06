@@ -1,5 +1,7 @@
 //! Bloom and auto exposure (`post.wgsl`): what the finish pass adds to and
-//! scales a view's HDR world by. Both read the world resolved to one sample.
+//! scales a view's HDR world by. Both read the world resolved to one sample,
+//! only within the view's viewport: views sharing a target never see each
+//! other.
 //!
 //! Bloom: the world's light above the threshold, downsampled into a half
 //! resolution mip chain, then upsampled back with each level added onto the
@@ -19,18 +21,26 @@ const LUMINANCE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rg16Float;
 const EXPOSURE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R32Float;
 /// Bloom mips below the half-resolution one, at most.
 const BLOOM_LEVELS: u32 = 6;
+/// The source region of a pass that reads a whole texture.
+const WHOLE: [f32; 4] = [0.0, 0.0, 1.0, 1.0];
 /// The luminance chain's first level: 128², averaged down to 1².
 const LUMINANCE_SIZE: u32 = 128;
 /// The soft knee below the bloom threshold, as a fraction of it.
 const BLOOM_KNEE: f32 = 0.5;
-/// Uniform slots a frame's post passes take, each 256 bytes apart.
+/// Uniform slots a frame's post passes start with, each 256 bytes apart;
+/// a frame that needs more doubles them.
 const PARAM_SLOTS: u64 = 64;
 const PARAM_STRIDE: u64 = 256;
+/// Bytes of `PostParams`: texel, adaptation, source region.
+const PARAMS_BYTES: u64 = 48;
 
-/// A mip chain: the texture's per-level views and sizes.
+/// A mip chain: the texture's per-level views and sizes, the viewport size
+/// it was made for and the frame it was last used in.
 pub(crate) struct Chain {
     views: Vec<wgpu::TextureView>,
     sizes: Vec<(u32, u32)>,
+    pub key: (u32, u32),
+    pub used: u64,
 }
 
 impl Chain {
@@ -64,10 +74,15 @@ impl Chain {
         let sizes = (0..levels)
             .map(|level| ((size.0 >> level).max(1), (size.1 >> level).max(1)))
             .collect();
-        Self { views, sizes }
+        Self {
+            views,
+            sizes,
+            key: size,
+            used: 0,
+        }
     }
 
-    /// The bloom chain of a `width`×`height` world: half resolution and
+    /// The bloom chain of a `width`×`height` viewport: half resolution and
     /// smaller, down to a few texels.
     pub fn bloom(gpu: &Gpu, width: u32, height: u32) -> Self {
         let size = ((width / 2).max(1), (height / 2).max(1));
@@ -75,7 +90,10 @@ impl Chain {
             .take_while(|&level| size.0.min(size.1) >> (level - 1) >= 4)
             .count()
             .max(1) as u32;
-        Self::new(gpu, "render-wgpu bloom", BLOOM_FORMAT, size, levels)
+        Self {
+            key: (width, height),
+            ..Self::new(gpu, "render-wgpu bloom", BLOOM_FORMAT, size, levels)
+        }
     }
 
     pub fn luminance(gpu: &Gpu) -> Self {
@@ -113,7 +131,8 @@ pub(crate) struct Post {
     pipeline_layout: wgpu::PipelineLayout,
     sampler: wgpu::Sampler,
     params: wgpu::Buffer,
-    /// The next free uniform slot this frame.
+    /// The uniform slots `params` holds, and the next free one this frame.
+    slots: u64,
     slot: u64,
     pipelines: Vec<(
         (&'static str, wgpu::TextureFormat, bool),
@@ -153,7 +172,7 @@ impl Post {
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,
                         has_dynamic_offset: true,
-                        min_binding_size: wgpu::BufferSize::new(32),
+                        min_binding_size: wgpu::BufferSize::new(PARAMS_BYTES),
                     },
                     count: None,
                 },
@@ -204,12 +223,8 @@ impl Post {
                 min_filter: wgpu::FilterMode::Linear,
                 ..Default::default()
             }),
-            params: device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("render-wgpu post params"),
-                size: PARAM_SLOTS * PARAM_STRIDE,
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            }),
+            params: params_buffer(device, PARAM_SLOTS),
+            slots: PARAM_SLOTS,
             slot: 0,
             pipelines: Vec::new(),
             black: pixel("render-wgpu no bloom", BLOOM_FORMAT, &[0; 8]),
@@ -289,8 +304,9 @@ impl Post {
         self.pipelines.len() - 1
     }
 
-    /// One full-target pass of `fragment` from `source` into `target`,
-    /// with the timer's begin and end stamps as `stamps` asks.
+    /// One full-target pass of `fragment` from `region` of `source` (x, y,
+    /// width, height in its uv) into `target`, with the timer's begin and
+    /// end stamps as `stamps` asks.
     #[allow(clippy::too_many_arguments)]
     fn pass(
         &mut self,
@@ -299,18 +315,24 @@ impl Post {
         fragment: &'static str,
         (target, format): (&wgpu::TextureView, wgpu::TextureFormat),
         additive: bool,
-        source: &wgpu::TextureView,
+        (source, region): (&wgpu::TextureView, [f32; 4]),
         previous: Option<&wgpu::TextureView>,
         params: [f32; 8],
         stamps: Stamps<'_>,
     ) {
-        if self.slot >= PARAM_SLOTS {
-            return;
+        if self.slot == self.slots {
+            // Earlier passes this frame keep the full buffer they bound.
+            self.slots *= 2;
+            self.params = params_buffer(&gpu.device, self.slots);
+            self.slot = 0;
         }
         let offset = self.slot * PARAM_STRIDE;
         self.slot += 1;
+        let mut values = [0.0f32; 12];
+        values[..8].copy_from_slice(&params);
+        values[8..].copy_from_slice(&region);
         gpu.queue
-            .write_buffer(&self.params, offset, bytemuck::cast_slice(&params));
+            .write_buffer(&self.params, offset, bytemuck::cast_slice(&values));
         let pipeline = self.pipeline(&gpu.device, fragment, format, additive);
         let group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("render-wgpu post"),
@@ -321,7 +343,7 @@ impl Post {
                     resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
                         buffer: &self.params,
                         offset: 0,
-                        size: wgpu::BufferSize::new(32),
+                        size: wgpu::BufferSize::new(PARAMS_BYTES),
                     }),
                 },
                 wgpu::BindGroupEntry {
@@ -364,14 +386,15 @@ impl Post {
         pass.draw(0..3, 0..1);
     }
 
-    /// Bloom from the resolved world (`source`, `size` texels) into `chain`;
-    /// `stamps` opens on its first pass and closes on its last as asked.
+    /// Bloom from `region` (x, y, width, height in uv) of the resolved world
+    /// (`source`, `size` texels) into `chain`; `stamps` opens on its first
+    /// pass and closes on its last as asked.
     #[allow(clippy::too_many_arguments)]
     pub fn bloom(
         &mut self,
         gpu: &Gpu,
         encoder: &mut wgpu::CommandEncoder,
-        source: &wgpu::TextureView,
+        (source, region): (&wgpu::TextureView, [f32; 4]),
         size: (u32, u32),
         chain: &Chain,
         bloom: BloomDescriptor,
@@ -385,7 +408,7 @@ impl Post {
             "fs_bloom_prefilter",
             (&chain.views[0], BLOOM_FORMAT),
             false,
-            source,
+            (source, region),
             None,
             [
                 x,
@@ -407,7 +430,7 @@ impl Post {
                 "fs_bloom_down",
                 (&chain.views[level], BLOOM_FORMAT),
                 false,
-                &chain.views[level - 1],
+                (&chain.views[level - 1], WHOLE),
                 None,
                 [x, y, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
                 None,
@@ -421,7 +444,7 @@ impl Post {
                 "fs_bloom_up",
                 (&chain.views[level], BLOOM_FORMAT),
                 true,
-                &chain.views[level + 1],
+                (&chain.views[level + 1], WHOLE),
                 None,
                 [x, y, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
                 at(stamps, false, level == 0),
@@ -429,15 +452,16 @@ impl Post {
         }
     }
 
-    /// Measure the resolved world's luminance into `chain` and adapt the
-    /// exposure toward it as of presentation time `now`; `stamps` as for
-    /// `bloom`.
+    /// Measure the luminance of `region` of the resolved world (`size`
+    /// texels) into `chain` and adapt the exposure toward it as of
+    /// presentation time `now`; `stamps` as for `bloom`.
     #[allow(clippy::too_many_arguments)]
     pub fn adapt(
         &mut self,
         gpu: &Gpu,
         encoder: &mut wgpu::CommandEncoder,
-        source: &wgpu::TextureView,
+        (source, region): (&wgpu::TextureView, [f32; 4]),
+        size: (u32, u32),
         chain: &Chain,
         auto: AutoExposureDescriptor,
         now: f64,
@@ -449,9 +473,18 @@ impl Post {
             "fs_luminance",
             (&chain.views[0], LUMINANCE_FORMAT),
             false,
-            source,
+            (source, region),
             None,
-            [0.0; 8],
+            [
+                1.0 / size.0 as f32,
+                1.0 / size.1 as f32,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+            ],
             at(stamps, true, false),
         );
         for level in 1..chain.views.len() {
@@ -461,7 +494,7 @@ impl Post {
                 "fs_luminance_down",
                 (&chain.views[level], LUMINANCE_FORMAT),
                 false,
-                &chain.views[level - 1],
+                (&chain.views[level - 1], WHOLE),
                 None,
                 [0.0; 8],
                 None,
@@ -490,7 +523,7 @@ impl Post {
             "fs_adapt",
             (&target, EXPOSURE_FORMAT),
             false,
-            &last,
+            (&last, WHOLE),
             Some(&previous),
             [
                 0.0,
@@ -506,4 +539,14 @@ impl Post {
         );
         self.current = next;
     }
+}
+
+/// The post passes' uniform buffer of `slots` slots.
+fn params_buffer(device: &wgpu::Device, slots: u64) -> wgpu::Buffer {
+    device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("render-wgpu post params"),
+        size: slots * PARAM_STRIDE,
+        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    })
 }
