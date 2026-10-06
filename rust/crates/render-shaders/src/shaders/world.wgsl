@@ -49,6 +49,17 @@
 #import rusty::product::shade
 #endif
 
+// The view's screen-space ambient occlusion (`ambient_occlusion.wgsl`),
+// sampled by target pixel; a 1×1 white map with strength 0 when it is off.
+struct AmbientOcclusion {
+    // x: strength (0 off); yz: 1 / target size (pixels).
+    params: vec4<f32>,
+};
+
+@group(2) @binding(0) var ambient_occlusion_map: texture_2d<f32>;
+@group(2) @binding(1) var ambient_occlusion_sampler: sampler;
+@group(2) @binding(2) var<uniform> ambient_occlusion: AmbientOcclusion;
+
 struct VsOut {
     @builtin(position) clip: vec4<f32>,
     @location(0) world_position: vec3<f32>,
@@ -328,11 +339,18 @@ fn standard_surface(in: VsOut, front: bool) -> Surface {
 
 @fragment
 fn fs_world(in: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
-    let surface = standard_surface(in, front);
+    var surface = standard_surface(in, front);
 #ifdef MASK
     if surface.base.a < material.alpha_cutoff {
         discard;
     }
+#endif
+#ifndef UNLIT
+    // Screen-space occlusion scales the ambient and hemisphere light with
+    // the occlusion map, through the same term.
+    let screen_occlusion = textureSample(ambient_occlusion_map, ambient_occlusion_sampler,
+        in.clip.xy * ambient_occlusion.params.yz).r;
+    surface.occlusion *= mix(1.0, screen_occlusion, ambient_occlusion.params.x);
 #endif
 #ifdef PRODUCT_SHADER
     return shade(surface);

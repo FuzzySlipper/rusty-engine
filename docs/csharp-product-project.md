@@ -759,3 +759,14 @@ shadows. A directional light casts from its node, one unit up, over a box 10
 units across: parent it to a node above the shaded area and back along the
 light's direction, or casters above the node fall outside its map. Prefer a
 small number of authored shadow lights in dungeon scenes.
+
+### Screen-space ambient occlusion (under evaluation)
+
+`RustyEngineProductAmbientOcclusion` selects screen-space ambient occlusion
+on world views: `disabled` (the default), `compute` or `raster`, the two
+Engine paths being measured against each other;
+`RustyEngineProductAmbientOcclusionStrength` (default `1`) scales how far it
+darkens the ambient and hemisphere light. This writes
+`renderer.lighting.ambientOcclusion` in the staged manifest. An adapter that
+cannot run the compute path takes the raster path; `engine.renderer` reports
+the path taken and each pass's GPU time.

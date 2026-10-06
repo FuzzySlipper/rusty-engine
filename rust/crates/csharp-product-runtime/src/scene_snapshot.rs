@@ -91,6 +91,65 @@ pub struct SceneSnapshotOptions {
     pub default_world_lights: bool,
     pub default_viewmodel_lights: bool,
     pub shadows: bool,
+    /// Snapshots written before ambient occlusion existed draw without it.
+    #[serde(default)]
+    pub ambient_occlusion: SceneSnapshotAmbientOcclusion,
+}
+
+/// `RendererOptions::ambient_occlusion` as a snapshot keeps it.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SceneSnapshotAmbientOcclusion {
+    pub path: SceneSnapshotAmbientOcclusionPath,
+    pub strength: f32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SceneSnapshotAmbientOcclusionPath {
+    Off,
+    Compute,
+    Raster,
+}
+
+impl Default for SceneSnapshotAmbientOcclusion {
+    fn default() -> Self {
+        render_wgpu::AmbientOcclusion::default().into()
+    }
+}
+
+impl From<SceneSnapshotAmbientOcclusion> for render_wgpu::AmbientOcclusion {
+    fn from(options: SceneSnapshotAmbientOcclusion) -> Self {
+        Self {
+            path: match options.path {
+                SceneSnapshotAmbientOcclusionPath::Off => render_wgpu::AmbientOcclusionPath::Off,
+                SceneSnapshotAmbientOcclusionPath::Compute => {
+                    render_wgpu::AmbientOcclusionPath::Compute
+                }
+                SceneSnapshotAmbientOcclusionPath::Raster => {
+                    render_wgpu::AmbientOcclusionPath::Raster
+                }
+            },
+            strength: options.strength,
+        }
+    }
+}
+
+impl From<render_wgpu::AmbientOcclusion> for SceneSnapshotAmbientOcclusion {
+    fn from(options: render_wgpu::AmbientOcclusion) -> Self {
+        Self {
+            path: match options.path {
+                render_wgpu::AmbientOcclusionPath::Off => SceneSnapshotAmbientOcclusionPath::Off,
+                render_wgpu::AmbientOcclusionPath::Compute => {
+                    SceneSnapshotAmbientOcclusionPath::Compute
+                }
+                render_wgpu::AmbientOcclusionPath::Raster => {
+                    SceneSnapshotAmbientOcclusionPath::Raster
+                }
+            },
+            strength: options.strength,
+        }
+    }
 }
 
 impl From<SceneSnapshotOptions> for render_wgpu::RendererOptions {
@@ -99,6 +158,7 @@ impl From<SceneSnapshotOptions> for render_wgpu::RendererOptions {
             default_world_lights: options.default_world_lights,
             default_viewmodel_lights: options.default_viewmodel_lights,
             shadows: options.shadows,
+            ambient_occlusion: options.ambient_occlusion.into(),
         }
     }
 }
@@ -109,6 +169,7 @@ impl From<render_wgpu::RendererOptions> for SceneSnapshotOptions {
             default_world_lights: options.default_world_lights,
             default_viewmodel_lights: options.default_viewmodel_lights,
             shadows: options.shadows,
+            ambient_occlusion: options.ambient_occlusion.into(),
         }
     }
 }
