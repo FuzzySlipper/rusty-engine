@@ -131,6 +131,7 @@ fn main() {
         }
         let mut best = Duration::MAX;
         let mut triangles = 0;
+        let _ = svc_mesh::take_lod9513_micros();
         for _ in 0..ROUNDS {
             let started = Instant::now();
             triangles = 0;
@@ -142,11 +143,14 @@ fn main() {
             }
             best = best.min(started.elapsed());
         }
+        let (lattice_us, contour_us) = svc_mesh::take_lod9513_micros();
         println!(
-            "{:>15}  coarse: {:6.1} ms total, {:6.2} ms/chunk, {triangles} triangles, skirts included",
+            "{:>15}  coarse: {:6.1} ms total, {:6.2} ms/chunk, {triangles} triangles, skirts included; EXPLORE #9513 per round: lattice {:.1} ms, contouring {:.1} ms",
             "",
             best.as_secs_f64() * 1000.0,
             per_chunk(best, chunks.len()),
+            lattice_us as f64 / 1000.0 / ROUNDS as f64,
+            contour_us as f64 / 1000.0 / ROUNDS as f64,
         );
     }
 }

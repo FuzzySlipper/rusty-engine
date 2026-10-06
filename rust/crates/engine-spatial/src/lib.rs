@@ -797,11 +797,18 @@ impl VoxelCollisionScene {
             }
             let grid = self.voxel_world.grid();
             let source = self.voxel_world.get(coordinate)?;
+            // EXPLORE #9513: per-chunk CPU time.
+            let started = std::time::Instant::now();
             let mesh = svc_mesh::mesh_chunk_coarse_in_world(
                 &self.voxel_world,
                 coordinate,
                 &self.mesh_options,
-            )?;
+            );
+            COARSE_MESH_MICROS.fetch_add(
+                started.elapsed().as_micros() as u64,
+                std::sync::atomic::Ordering::Relaxed,
+            );
+            let mesh = mesh?;
             Some(mesh.map_err(CollisionSceneError::Mesh).map(|mesh| {
                 voxel_mesh_chunk(
                     coordinate,
@@ -2139,4 +2146,11 @@ fn dynamic_axis_sweep_overlaps(
         (0..3)
             .all(|axis| swept_min[axis] < blocker_max[axis] && swept_max[axis] > blocker_min[axis])
     })
+}
+
+// EXPLORE #9513: coarse meshing CPU microseconds since the last take.
+static COARSE_MESH_MICROS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+pub fn take_coarse_mesh_micros() -> u64 {
+    COARSE_MESH_MICROS.swap(0, std::sync::atomic::Ordering::Relaxed)
 }

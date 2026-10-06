@@ -236,6 +236,29 @@ impl Lattice {
         Ok(coarse)
     }
 
+    /// EXPLORE #9513: the lattice as bytes: dims (3 × u32), origin (3 ×
+    /// i64), owner min and max (6 × i64), values (f32 each), materials (u16
+    /// each).
+    pub(super) fn dump_bytes(&self, owner: Owner) -> Vec<u8> {
+        let mut out = Vec::new();
+        for d in self.dims {
+            out.extend_from_slice(&(d as u32).to_le_bytes());
+        }
+        for o in self.origin {
+            out.extend_from_slice(&o.to_le_bytes());
+        }
+        for o in owner.min.iter().chain(owner.max.iter()) {
+            out.extend_from_slice(&o.to_le_bytes());
+        }
+        for v in &self.values {
+            out.extend_from_slice(&(*v as f32).to_le_bytes());
+        }
+        for m in &self.materials {
+            out.extend_from_slice(&m.to_le_bytes());
+        }
+        out
+    }
+
     /// Flip the see-through samples of `slot` between solid and empty.
     pub(super) fn flip_see_through(&mut self, slot: u16) {
         for &index in &self.see_through {

@@ -20,6 +20,8 @@
 #![forbid(unsafe_code)]
 
 mod ambient_occlusion;
+/// EXPLORE #9513.
+pub mod gpu_dc;
 mod animated;
 mod apply;
 mod batch;

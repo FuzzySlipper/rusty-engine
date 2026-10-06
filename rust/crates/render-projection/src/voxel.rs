@@ -681,7 +681,33 @@ fn plan_coarse(
         .filter(|coord| !current.contains_key(*coord) || stale(coord))
         .copied()
         .collect();
-    for (coord, mesh) in build.iter().zip(scene.coarse_mesh_chunks(&build)) {
+    // EXPLORE #9513: time the coarse meshing of this projection.
+    let started = std::time::Instant::now();
+    let built = scene.coarse_mesh_chunks(&build);
+    let wall_us = started.elapsed().as_micros();
+    if !build.is_empty() {
+        let cpu_us = engine_spatial::take_coarse_mesh_micros();
+        let triangles: u64 = built
+            .iter()
+            .flatten()
+            .filter_map(|mesh| mesh.as_ref().ok())
+            .map(|mesh| mesh.indices.len() as u64 / 3)
+            .sum();
+        eprintln!(
+            "[lod9513] projection: wanted={} built={} wall_us={} cpu_us={} triangles={} visit={}",
+            wanted.len(),
+            build.len(),
+            wall_us,
+            cpu_us,
+            triangles,
+            match visit {
+                ChunkVisit::None => "none",
+                ChunkVisit::Dirty(_) => "dirty",
+                ChunkVisit::All => "all",
+            }
+        );
+    }
+    for (coord, mesh) in build.iter().zip(built) {
         match mesh {
             Some(mesh) => {
                 let mesh = mesh.map_err(|error| VoxelProjectionError::CoarseMesh {

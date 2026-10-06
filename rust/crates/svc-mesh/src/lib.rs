@@ -1538,11 +1538,19 @@ pub fn mesh_chunk_coarse_in_world(
     Some((|| {
         check_states(chunk, options)?;
         let origin = spec.chunk_origin_voxel(coord).to_array();
+        let lattice_started = std::time::Instant::now();
         let lattice = chunk_lattice(world, coord, 2, options.limits)?.coarsened(options.limits)?;
+        LOD9513_LATTICE_MICROS.fetch_add(
+            lattice_started.elapsed().as_micros() as u64,
+            std::sync::atomic::Ordering::Relaxed,
+        );
         let owner = surface::Owner {
             min: origin.map(|value| value / 2),
             max: std::array::from_fn(|axis| (origin[axis] + size[axis]) / 2),
         };
+        // EXPLORE #9513: dump the coarse lattice for the GPU prototype.
+        let dump_dir = std::path::Path::new(LOD9513_DUMP_DIR);
+        let dump_lattice = dump_dir.is_dir();
         // Coarse vertices lie within one coarse cell, two voxels, of the chunk.
         let field = options.terrain_layers.as_ref().map(|layers| {
             terrain_layers::LayerField::around_chunk(
@@ -1553,7 +1561,21 @@ pub fn mesh_chunk_coarse_in_world(
                 size.map(|value| value + 2),
             )
         });
+        let lattice_dump = dump_lattice.then(|| lattice.dump_bytes(owner));
+        let contour_started = std::time::Instant::now();
         let mut reconstruction = reconstruction(lattice, options, owner)?;
+        LOD9513_CONTOUR_MICROS.fetch_add(
+            contour_started.elapsed().as_micros() as u64,
+            std::sync::atomic::Ordering::Relaxed,
+        );
+        if let Some(mut bytes) = lattice_dump {
+            let triangles = reconstruction.triangles.len() as u32;
+            let vertices = reconstruction.positions.len() as u32;
+            bytes.extend_from_slice(&triangles.to_le_bytes());
+            bytes.extend_from_slice(&vertices.to_le_bytes());
+            let name = format!("chunk_{}_{}_{}.lat", coord.x, coord.y, coord.z);
+            let _ = std::fs::write(dump_dir.join(name), bytes);
+        }
         reconstruction.chunk_region = Some(owner);
         surface::add_skirts(&mut reconstruction, COARSE_SKIRT_DEPTH);
         let smooth = surface::voxel_payload(
@@ -1572,6 +1594,19 @@ pub fn mesh_chunk_coarse_in_world(
 /// How far a coarse skirt reaches below the surface, in coarse cells: as far
 /// as a fine surface can lie from the coarse one.
 const COARSE_SKIRT_DEPTH: f64 = 1.0;
+
+/// EXPLORE #9513: where coarse lattices are dumped when the directory exists.
+const LOD9513_DUMP_DIR: &str = "/tmp/claude-1000/lod9513-lattices";
+static LOD9513_LATTICE_MICROS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static LOD9513_CONTOUR_MICROS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// EXPLORE #9513: (lattice build, contouring) microseconds since the last take.
+pub fn take_lod9513_micros() -> (u64, u64) {
+    (
+        LOD9513_LATTICE_MICROS.swap(0, std::sync::atomic::Ordering::Relaxed),
+        LOD9513_CONTOUR_MICROS.swap(0, std::sync::atomic::Ordering::Relaxed),
+    )
+}
 
 /// Voxel states mesh only on cube materials.
 fn check_states(chunk: &VoxelChunk, options: &SurfaceMeshOptions) -> Result<(), MeshError> {
