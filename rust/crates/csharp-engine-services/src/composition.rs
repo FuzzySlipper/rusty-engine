@@ -61,6 +61,7 @@ fn engine_api(
     video_bridge: &mut RuntimeVideoBridge,
     render_output_bridge: &mut crate::render_output::RuntimeRenderOutputBridge,
     camera_view_bridge: &mut RuntimeCameraViewBridge,
+    renderer_settings_bridge: &mut crate::renderer_settings::RuntimeRendererSettingsBridge,
     dynamics_bridge: &mut RuntimeDynamicsBridge,
     spatial_bridge: &mut RuntimeSpatialBridge,
     perception_bridge: &mut crate::perception::RuntimePerceptionBridge,
@@ -174,6 +175,7 @@ fn engine_api(
         audio: crate::audio::api(audio_bridge),
         video: crate::video::api(video_bridge),
         render_output: crate::render_output::api(render_output_bridge),
+        renderer_settings: crate::renderer_settings::api(renderer_settings_bridge),
         camera_view: NativeCameraViewApi {
             context: (camera_view_bridge as *mut RuntimeCameraViewBridge).cast(),
             create_camera: crate::camera_view::create_camera,
@@ -286,6 +288,9 @@ pub(crate) unsafe fn borrowed_utf8<'a>(
 pub struct EngineServiceSet {
     in_call: bool,
     call_elapsed_seconds: f64,
+    /// The spatial sessions' distance fields changed between calls: the
+    /// presentations republish them at the next settle.
+    fields_changed: bool,
     presentation_world: render_presentation::PresentationWorld,
     input: crate::input::RuntimeInputBridge,
     gameplay_time: crate::gameplay_time::RuntimeGameplayTimeBridge,
@@ -297,6 +302,7 @@ pub struct EngineServiceSet {
     video: RuntimeVideoBridge,
     render_output: crate::render_output::RuntimeRenderOutputBridge,
     camera_view: Box<RuntimeCameraViewBridge>,
+    renderer_settings: crate::renderer_settings::RuntimeRendererSettingsBridge,
     dynamics: RuntimeDynamicsBridge,
     spatial: RuntimeSpatialBridge,
     perception: crate::perception::RuntimePerceptionBridge,
@@ -327,6 +333,7 @@ struct ServiceCalls {
     video: RuntimeVideoCall,
     render_output: crate::render_output::RuntimeRenderOutputCall,
     camera_view: crate::camera_view::RuntimeCameraViewCall,
+    renderer_settings: crate::renderer_settings::RuntimeRendererSettingsCall,
     ui: Vec<RuntimeUiProjectionEnvelope>,
     voxel_content: crate::voxel_content::RuntimeVoxelContentCall,
     voxel_scene_presentation: crate::voxel_scene_presentation::RuntimeVoxelScenePresentationCall,
@@ -412,6 +419,7 @@ impl EngineServiceSet {
         Ok(Self {
             in_call: false,
             call_elapsed_seconds: 0.0,
+            fields_changed: false,
             presentation_world: render_presentation::PresentationWorld::default(),
             input: crate::input::RuntimeInputBridge::new(direct_intents),
             gameplay_time: crate::gameplay_time::RuntimeGameplayTimeBridge::new(),
@@ -423,6 +431,7 @@ impl EngineServiceSet {
             video,
             render_output: crate::render_output::RuntimeRenderOutputBridge::new(),
             camera_view,
+            renderer_settings: crate::renderer_settings::RuntimeRendererSettingsBridge::new(),
             dynamics,
             spatial,
             perception,
@@ -454,6 +463,7 @@ impl EngineServiceSet {
             &mut self.video,
             &mut self.render_output,
             &mut self.camera_view,
+            &mut self.renderer_settings,
             &mut self.dynamics,
             &mut self.spatial,
             &mut self.perception,
@@ -477,6 +487,20 @@ impl EngineServiceSet {
         viewport_anchors: render_host_contracts::RendererViewportAnchors,
     ) {
         self.camera_view.set_surface(surface, viewport_anchors);
+    }
+
+    /// The renderer's settings in effect and what the device refused, as
+    /// `RendererSettings.Read` returns them during the next product call.
+    pub fn ingest_renderer_settings(
+        &mut self,
+        readout: csharp_engine_abi::NativeRendererSettingsReadout,
+    ) {
+        // Chunk distance fields are built only while the renderer traces
+        // them: what draws, not what was asked for, on a device that refuses.
+        let traced = readout.effective.ambient_occlusion
+            == csharp_engine_abi::NativeAmbientOcclusionMode::DistanceField;
+        self.fields_changed |= self.spatial.set_distance_fields(traced);
+        self.renderer_settings.ingest(readout);
     }
 
     pub fn ingest_renderer_diagnostics(
@@ -601,6 +625,7 @@ impl EngineServiceSet {
         self.http.begin_call();
         self.session.begin_call();
         self.camera_view.begin_call();
+        self.renderer_settings.begin_call();
         self.ui.begin_call(ui_binding);
         self.voxel_content.begin_call();
         self.voxel_scene_presentation.begin_call();
@@ -692,6 +717,7 @@ impl EngineServiceSet {
             video: self.video.take_staged_call()?,
             render_output: self.render_output.take_call()?,
             camera_view: self.camera_view.take_staged_call()?,
+            renderer_settings: self.renderer_settings.take_staged_call()?,
             ui: self.ui.finish_call(),
             voxel_content: self.voxel_content.take_staged_call()?,
             voxel_scene_presentation: self.voxel_scene_presentation.take_staged_call()?,
@@ -721,8 +747,22 @@ impl EngineServiceSet {
             return Err(error);
         }
         // Sky resources are owned and admitted by Appearance.
-        let sky_frame =
-            crate::camera_view::environment_frame(&calls.camera_view, &calls.appearance)?;
+        let sky_frame = crate::camera_view::environment_frame(
+            &calls.camera_view,
+            &calls.appearance,
+            calls.renderer_settings.settings,
+        )?;
+        // A selection this call builds or drops the sessions' fields now; the
+        // device's answer arrives with the next report.
+        if let Some(settings) = calls.renderer_settings.settings {
+            let traced = settings.ambient_occlusion.mode
+                == render_model::AmbientOcclusionMode::DistanceField;
+            self.fields_changed |= self.spatial.set_distance_fields(traced);
+        }
+        if std::mem::take(&mut self.fields_changed) {
+            self.voxel_scene_presentation
+                .refresh_all(&mut calls.voxel_scene_presentation)?;
+        }
         self.voxel_scene_presentation.settle_level_of_detail(
             &mut calls.voxel_scene_presentation,
             calls.camera_view.primary_camera_position(),
@@ -1441,6 +1481,124 @@ mod tests {
             cleared_output.frames[0].ops.as_slice(),
             [render_model::RenderDiff::SetSkyBackground { background: None }]
         ));
+    }
+
+    #[test]
+    fn renderer_settings_publish_as_a_retained_op_and_read_returns_the_renderer_report() {
+        use crate::operation_diagnostics::{empty_receipt, receipt_codes};
+        use csharp_engine_abi::{
+            NativeAmbientOcclusionMode, NativeAntialiasing, NativeRendererSettingRefusal,
+            NativeRendererSettingsReadout, NativeRendererSettingsRequest,
+        };
+        let mut services = EngineServiceSet::new(
+            parse_runtime_appearance_catalog(None).expect("default catalog"),
+            BTreeMap::new(),
+            None,
+            RuntimeDiagnosticsSink::new(Default::default()).unwrap(),
+        )
+        .expect("service set");
+        let request = NativeRendererSettingsRequest {
+            shadows: true,
+            shadow_budget: 3,
+            ambient_occlusion: NativeAmbientOcclusionMode::DistanceField,
+            ambient_occlusion_strength: 0.8,
+            ambient_occlusion_radius: 1.5,
+            antialiasing: NativeAntialiasing::Msaa2,
+            render_scale: 0.75,
+            vsync: false,
+            clustered_lighting: true,
+            gpu_culling: true,
+        };
+        services.begin_call(binding());
+        let api = services.api();
+        let set = |request: NativeRendererSettingsRequest, refusal| unsafe {
+            (api.renderer_settings.set)(api.renderer_settings.context, &request, refusal)
+        };
+        assert_eq!(set(request, std::ptr::null_mut()), ABI_OK);
+        let mut call = services.finish_call().expect("settings call");
+        let selected = render_model::RenderDiff::SetRendererSettings {
+            settings: render_model::RendererSettingsDescriptor {
+                shadows: true,
+                shadow_budget: Some(3),
+                ambient_occlusion: render_model::AmbientOcclusionSettings {
+                    mode: render_model::AmbientOcclusionMode::DistanceField,
+                    strength: 0.8,
+                    radius: 1.5,
+                },
+                antialiasing: 2,
+                render_scale: 0.75,
+                vsync: false,
+                clustered_lighting: true,
+                gpu_culling: true,
+            },
+        };
+        assert_eq!(call.take_output().frames[0].ops, vec![selected.clone()]);
+        let attachment = services
+            .snapshot_outputs(binding())
+            .expect("fresh attachment");
+        let CsharpAppearanceCallOutput::Frame(frame) = &attachment.appearance[0] else {
+            panic!("baseline graphics frame");
+        };
+        assert!(
+            frame.ops.contains(&selected),
+            "a rebaseline keeps the selection"
+        );
+
+        // The runtime's report is what Read returns; an invalid request is
+        // refused with a code and changes nothing.
+        let mut readout = NativeRendererSettingsReadout {
+            requested: request,
+            effective: request,
+            ambient_occlusion_refusal: NativeRendererSettingRefusal::NoComputeShaders,
+            antialiasing_refusal: NativeRendererSettingRefusal::None,
+            vsync_refusal: NativeRendererSettingRefusal::NoDisplay,
+            clustered_lighting_refusal: NativeRendererSettingRefusal::None,
+            gpu_culling_refusal: NativeRendererSettingRefusal::None,
+        };
+        readout.effective.ambient_occlusion = NativeAmbientOcclusionMode::ScreenSpace;
+        services.ingest_renderer_settings(readout);
+        services.begin_call(binding());
+        let api = services.api();
+        let mut read = NativeRendererSettingsReadout {
+            ambient_occlusion_refusal: NativeRendererSettingRefusal::None,
+            ..readout
+        };
+        assert_eq!(
+            unsafe {
+                (api.renderer_settings.read)(
+                    api.renderer_settings.context,
+                    &mut read,
+                    std::ptr::null_mut(),
+                )
+            },
+            ABI_OK
+        );
+        assert_eq!(
+            read.ambient_occlusion_refusal,
+            NativeRendererSettingRefusal::NoComputeShaders
+        );
+        assert_eq!(
+            read.effective.ambient_occlusion,
+            NativeAmbientOcclusionMode::ScreenSpace
+        );
+        assert_eq!(read.vsync_refusal, NativeRendererSettingRefusal::NoDisplay);
+        let mut refusal = empty_receipt();
+        assert_eq!(
+            unsafe {
+                (api.renderer_settings.set)(
+                    api.renderer_settings.context,
+                    &NativeRendererSettingsRequest {
+                        ambient_occlusion_strength: -1.0,
+                        ..request
+                    },
+                    &mut refusal,
+                )
+            },
+            0
+        );
+        assert_eq!(receipt_codes(&refusal), ["CSHARP_RENDERER_SETTINGS"]);
+        let mut call = services.finish_call().expect("refused call");
+        assert!(call.take_output().frames.is_empty());
     }
 
     #[test]

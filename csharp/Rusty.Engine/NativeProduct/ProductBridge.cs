@@ -32,6 +32,7 @@ internal sealed class EngineContext : IEngineContext
         Presentation = new PresentationServiceImplementation(native.presentation);
         Animation = new AnimationServiceImplementation(native.animation, native.graphics);
         CameraView = new CameraViewServiceImplementation(native.camera_view);
+        RendererSettings = new RendererSettingsServiceImplementation(native.renderer_settings);
         Random = new RngServiceImplementation(native.rng);
         Persistence = new PersistenceServiceImplementation(native.persistence);
         Http = new HttpServiceImplementation(native.http);
@@ -61,6 +62,7 @@ internal sealed class EngineContext : IEngineContext
     public IPresentationService Presentation { get; }
     public IAnimationService Animation { get; }
     public ICameraViewService CameraView { get; }
+    public IRendererSettingsService RendererSettings { get; }
     public IRandomService Random { get; }
     public IPersistenceService Persistence { get; }
     public IHttpService Http { get; }

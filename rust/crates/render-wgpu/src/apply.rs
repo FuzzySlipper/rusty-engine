@@ -47,6 +47,23 @@ const FALLBACK_ROUGHNESS: f32 = 1.0;
 const PAYLOAD_SLOT_MATERIAL_PREFIX: &str = "voxel-material/";
 
 impl Renderer {
+    /// A payload's distance field as the renderer keeps it: its bytes, and a
+    /// brick in the atlas while the renderer traces fields.
+    fn mesh_field(&mut self, field: &render_model::MeshDistanceField) -> crate::tables::MeshField {
+        let slot = (self.options.ambient_occlusion.path
+            == crate::AmbientOcclusionPath::DistanceField)
+            .then(|| self.distance_fields.allocate(&self.gpu, &field.data))
+            .flatten();
+        crate::tables::MeshField {
+            field_box: crate::distance_fields::FieldBox {
+                origin: field.origin,
+                extent: field.extent,
+            },
+            data: field.data.clone(),
+            slot,
+        }
+    }
+
     /// Apply one delta from `PresentationWorld` (a fresh backend applies the
     /// world's snapshot frame first). Returns the ops it could not realize.
     pub fn apply(
@@ -131,6 +148,7 @@ impl Renderer {
             RenderDiff::SetSkyLight { sky_light } => {
                 self.tables.sky_light = *sky_light;
             }
+            RenderDiff::SetRendererSettings { settings } => self.set_settings(settings),
             RenderDiff::SetToneMapping { tone_mapping } => {
                 self.tables.tone_mapping = *tone_mapping;
             }
@@ -342,11 +360,34 @@ impl Renderer {
                 );
                 mesh.texture_space = payload.texture_space;
                 mesh.layer_weights = layer_weights;
-                self.tables.payload_meshes.insert(*handle, mesh);
+                mesh.distance_field = payload
+                    .distance_field
+                    .as_ref()
+                    .map(|field| self.mesh_field(field));
+                if let Some(previous) = self.tables.payload_meshes.insert(*handle, mesh) {
+                    if let Some(slot) = previous.distance_field.and_then(|field| field.slot) {
+                        self.distance_fields.release(slot);
+                    }
+                }
                 if let NodeKind::Primitive { has_payload, .. } = &mut self.node_mut(*handle)?.kind {
                     *has_payload = true;
                 }
                 self.rebuild_parts(*handle);
+            }
+            RenderDiff::ReplaceMeshDistanceField { handle, field } => {
+                if !self.tables.payload_meshes.contains_key(handle) {
+                    return Err(format!("node {} has no payload mesh", handle.raw()));
+                }
+                let replacement = field.as_ref().map(|field| self.mesh_field(field));
+                let mesh = self
+                    .tables
+                    .payload_meshes
+                    .get_mut(handle)
+                    .expect("checked above");
+                if let Some(slot) = mesh.distance_field.take().and_then(|field| field.slot) {
+                    self.distance_fields.release(slot);
+                }
+                mesh.distance_field = replacement;
             }
             RenderDiff::SetMaterialInstanceParameters {
                 handle,
@@ -514,7 +555,11 @@ impl Renderer {
         }
         for handle in removed {
             self.remove_animated_instance(handle);
-            self.tables.payload_meshes.remove(&handle);
+            if let Some(mesh) = self.tables.payload_meshes.remove(&handle) {
+                if let Some(slot) = mesh.distance_field.and_then(|field| field.slot) {
+                    self.distance_fields.release(slot);
+                }
+            }
             self.tables.lights.remove(&handle);
             self.tables.sprites.remove(&handle);
             self.tables.dirty_nodes.remove(&handle);
@@ -1175,6 +1220,7 @@ impl Renderer {
             edges: Default::default(),
             extra: None,
             texture_space: None,
+            distance_field: None,
             layer_weights: false,
             vertices: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some(label),
@@ -1921,6 +1967,7 @@ fn op_name(op: &RenderDiff) -> &'static str {
         RenderDiff::Update { .. } => "update",
         RenderDiff::Destroy { .. } => "destroy",
         RenderDiff::ReplaceMeshPayload { .. } => "replaceMeshPayload",
+        RenderDiff::ReplaceMeshDistanceField { .. } => "replaceMeshDistanceField",
         RenderDiff::CreateLight { .. } => "createLight",
         RenderDiff::UpdateLight { .. } => "updateLight",
         RenderDiff::DefineMaterial { .. } => "defineMaterial",
@@ -1939,6 +1986,7 @@ fn op_name(op: &RenderDiff) -> &'static str {
         RenderDiff::SetAtmosphere { .. } => "setAtmosphere",
         RenderDiff::SetSunShafts { .. } => "setSunShafts",
         RenderDiff::SetSkyLight { .. } => "setSkyLight",
+        RenderDiff::SetRendererSettings { .. } => "setRendererSettings",
         RenderDiff::SetToneMapping { .. } => "setToneMapping",
         RenderDiff::DefineSpriteAtlas { .. } => "defineSpriteAtlas",
         RenderDiff::ReleaseSpriteAtlas { .. } => "releaseSpriteAtlas",

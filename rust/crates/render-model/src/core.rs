@@ -265,6 +265,114 @@ impl ColorGradingDescriptor {
     }
 }
 
+/// Which pass darkens where surfaces meet (`RendererSettingsDescriptor`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AmbientOcclusionMode {
+    #[default]
+    Disabled,
+    /// From the view's depth: what the view shows occludes.
+    ScreenSpace,
+    /// From the voxel chunks' distance fields: the world around a surface
+    /// occludes, on screen or off.
+    DistanceField,
+}
+
+/// Ambient occlusion as a product selects it.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AmbientOcclusionSettings {
+    pub mode: AmbientOcclusionMode,
+    /// 0 draws without occlusion; 1 is the full occlusion.
+    pub strength: f32,
+    /// How far a surface darkens its neighbours, in world units.
+    pub radius: f32,
+}
+
+impl AmbientOcclusionSettings {
+    pub const DEFAULT: Self = Self {
+        mode: AmbientOcclusionMode::Disabled,
+        strength: 1.0,
+        radius: 0.75,
+    };
+
+    /// A finite non-negative strength and a finite positive radius.
+    pub fn valid(&self) -> bool {
+        self.strength.is_finite()
+            && self.strength >= 0.0
+            && self.radius.is_finite()
+            && self.radius > 0.0
+    }
+}
+
+impl Default for AmbientOcclusionSettings {
+    fn default() -> Self {
+        Self::DEFAULT
+    }
+}
+
+/// Renderer-wide settings a product selects: which pipeline features draw
+/// and at what quality. The product manifest supplies the initial values
+/// and the `RendererSettings` service changes them at runtime; the renderer
+/// realizes each where the device can and reports what it refused.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RendererSettingsDescriptor {
+    /// Render shadow maps for lights whose shadow intent requests them.
+    pub shadows: bool,
+    /// At most this many shadow layers at once, the requesting lights
+    /// chosen by priority then distance from the camera; `None` for no
+    /// limit.
+    pub shadow_budget: Option<u32>,
+    pub ambient_occlusion: AmbientOcclusionSettings,
+    /// Samples per pixel of the primary destination: 1, 2 or 4.
+    pub antialiasing: u32,
+    /// The fraction of the primary destination's size the world, viewmodel,
+    /// labels and effects draw at before being upscaled into it: 0.5 to 1.
+    pub render_scale: f32,
+    /// Window output waits for the display's refresh before presenting.
+    pub vsync: bool,
+    /// Bin each world view's lights into view-frustum clusters before
+    /// shading, instead of shading every light per fragment.
+    pub clustered_lighting: bool,
+    /// Test each view's opaque parts against its frustum on the GPU and
+    /// draw them indirectly, instead of building the draw list on the CPU.
+    pub gpu_culling: bool,
+}
+
+impl RendererSettingsDescriptor {
+    /// The sample counts a primary destination may have.
+    pub const SAMPLE_COUNTS: [u32; 3] = [1, 2, 4];
+    /// The smallest render scale.
+    pub const MIN_RENDER_SCALE: f32 = 0.5;
+
+    pub const DEFAULT: Self = Self {
+        shadows: false,
+        shadow_budget: None,
+        ambient_occlusion: AmbientOcclusionSettings::DEFAULT,
+        antialiasing: 4,
+        render_scale: 1.0,
+        vsync: true,
+        clustered_lighting: false,
+        gpu_culling: false,
+    };
+
+    /// Valid occlusion values, a supported sample count and a render scale
+    /// within range.
+    pub fn valid(&self) -> bool {
+        self.ambient_occlusion.valid()
+            && Self::SAMPLE_COUNTS.contains(&self.antialiasing)
+            && self.render_scale.is_finite()
+            && (Self::MIN_RENDER_SCALE..=1.0).contains(&self.render_scale)
+    }
+}
+
+impl Default for RendererSettingsDescriptor {
+    fn default() -> Self {
+        Self::DEFAULT
+    }
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ToneMappingOperator {
@@ -541,6 +649,15 @@ pub enum RenderDiff {
         handle: RenderHandle,
         payload: MeshPayloadDescriptor,
     },
+    /// Replace only the distance field of a primitive's replaced payload: a
+    /// voxel chunk whose neighbour changed within the field's reach keeps
+    /// its mesh.
+    /// Replaces a payload mesh's distance field alone; `None` drops it (the
+    /// scene stopped building fields).
+    ReplaceMeshDistanceField {
+        handle: RenderHandle,
+        field: Option<crate::MeshDistanceField>,
+    },
     CreateLight {
         handle: RenderHandle,
         parent: Option<RenderHandle>,
@@ -611,6 +728,10 @@ pub enum RenderDiff {
     /// Selects the sky's light; None turns it off.
     SetSkyLight {
         sky_light: Option<SkyLightDescriptor>,
+    },
+    /// Selects the renderer's settings: its pipeline features and quality.
+    SetRendererSettings {
+        settings: RendererSettingsDescriptor,
     },
     DefineSpriteAtlas {
         atlas: SpriteAtlasDescriptor,
@@ -714,6 +835,10 @@ impl RenderDiff {
             Self::ReplaceMeshPayload { payload, .. } => {
                 payload.validate().map_err(RenderOperationError::Mesh)
             }
+            Self::ReplaceMeshDistanceField {
+                field: Some(field), ..
+            } => field.validate().map_err(RenderOperationError::Mesh),
+            Self::ReplaceMeshDistanceField { field: None, .. } => Ok(()),
             Self::CreateLight { light, .. } | Self::UpdateLight { light, .. } => {
                 light.validate().map_err(RenderOperationError::Light)
             }
@@ -770,6 +895,10 @@ impl RenderDiff {
                 sky_light: Some(sky_light),
             } if !sky_light.valid() => Err(RenderOperationError::SkyLight),
             Self::SetSkyLight { .. } => Ok(()),
+            Self::SetRendererSettings { settings } if !settings.valid() => {
+                Err(RenderOperationError::RendererSettings)
+            }
+            Self::SetRendererSettings { .. } => Ok(()),
             Self::DefineSpriteAtlas { atlas } => {
                 atlas.validate().map_err(RenderOperationError::SpriteAtlas)
             }
@@ -852,6 +981,7 @@ impl RenderDiff {
             | Self::SetParentJoint { handle, .. }
             | Self::Destroy { handle }
             | Self::ReplaceMeshPayload { handle, .. }
+            | Self::ReplaceMeshDistanceField { handle, .. }
             | Self::UpdateLight { handle, .. }
             | Self::SetMaterialInstanceParameters { handle, .. }
             | Self::SetAnimatedMeshInspection { handle, .. }
@@ -872,6 +1002,7 @@ impl RenderDiff {
             | Self::SetAtmosphere { .. }
             | Self::SetSunShafts { .. }
             | Self::SetSkyLight { .. }
+            | Self::SetRendererSettings { .. }
             | Self::DefineSpriteAtlas { .. }
             | Self::DefineStaticMesh { .. }
             | Self::ReleaseMaterial { .. }
@@ -914,6 +1045,7 @@ pub enum RenderOperationError {
     Atmosphere,
     SunShafts,
     SkyLight,
+    RendererSettings,
     SpriteAtlas(crate::SpriteAtlasError),
     StaticMesh(crate::StaticMeshError),
     StaticMeshInstance(crate::StaticMeshInstanceError),
@@ -966,6 +1098,7 @@ impl RenderFrameDiff {
                     .collect(),
                 // Listed so that a new op carrying a payload is added here.
                 RenderDiff::SetParentJoint { .. }
+                | RenderDiff::ReplaceMeshDistanceField { .. }
                 | RenderDiff::Create { .. }
                 | RenderDiff::Update { .. }
                 | RenderDiff::Destroy { .. }
@@ -988,6 +1121,7 @@ impl RenderFrameDiff {
                 | RenderDiff::SetAtmosphere { .. }
                 | RenderDiff::SetSunShafts { .. }
                 | RenderDiff::SetSkyLight { .. }
+                | RenderDiff::SetRendererSettings { .. }
                 | RenderDiff::DefineSpriteAtlas { .. }
                 | RenderDiff::ReleaseSpriteAtlas { .. }
                 | RenderDiff::ReleaseStaticMesh { .. }

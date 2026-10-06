@@ -115,6 +115,14 @@ Read [the architecture overview](docs/architecture.md) and
   shader or supply its own WGSL through the Engine's material and shader
   mechanism, and the Engine still owns pipelines, resources and frame
   construction.
+- Renderer pipeline features (ambient occlusion, shadow quality, tone mapping
+  and the like) are opt-in options a product selects, not mechanisms that each
+  prove themselves against the path they would replace. Several paths may
+  coexist and improve incrementally as products need them. A feature stays
+  when it draws correctly, runs or refuses cleanly on every supported adapter
+  and reports its cost; a product's current scenes not showing it is tuning,
+  not a reason to remove it. Products choose features; the Engine chooses how
+  each is implemented.
 - TypeScript may own DOM UI, accessibility, and explicit Engine host/backend
   implementation. Downstream TypeScript must never render non-UI game elements
   or acquire application/gameplay state.

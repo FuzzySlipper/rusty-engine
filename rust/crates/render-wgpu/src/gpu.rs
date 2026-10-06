@@ -114,8 +114,17 @@ impl Gpu {
         let descriptor = wgpu::DeviceDescriptor {
             label: Some("render-wgpu"),
             // Timestamp queries time the renderer's GPU passes
-            // (`timing.rs`); an adapter without them draws untimed.
-            required_features: adapter.features() & wgpu::Features::TIMESTAMP_QUERY,
+            // (`timing.rs`); an adapter without them draws untimed. Indirect
+            // first instance lets GPU-culled batches draw from their runs
+            // (`culling.rs`); without it the CPU draw list stays.
+            // Adapter-specific format features let the primary destination
+            // multisample at every count the adapter supports (2 is not
+            // guaranteed by WebGPU); without them `samples_supported` keeps
+            // to the guaranteed counts.
+            required_features: adapter.features()
+                & (wgpu::Features::TIMESTAMP_QUERY
+                    | wgpu::Features::INDIRECT_FIRST_INSTANCE
+                    | wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES),
             required_limits: wgpu::Limits::default().using_resolution(adapter.limits()),
             ..Default::default()
         };
@@ -147,6 +156,34 @@ impl Gpu {
     /// there.
     pub fn compute_limits(&self) -> ComputeLimits {
         ComputeLimits::of(&self.adapter.limits())
+    }
+
+    /// Whether the primary destination's colour, HDR and depth formats can
+    /// all be multisampled at `samples` on this device: as wgpu validates a
+    /// texture, by the adapter's format features when the device has them,
+    /// else by the counts WebGPU guarantees.
+    pub(crate) fn samples_supported(&self, samples: u32) -> bool {
+        let adapter_specific = self
+            .device
+            .features()
+            .contains(wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES);
+        samples == 1
+            || [
+                crate::target::OFFSCREEN_FORMAT,
+                crate::finish::HDR_FORMAT,
+                crate::target::DEPTH_FORMAT,
+            ]
+            .into_iter()
+            .all(|format| {
+                let flags = if adapter_specific {
+                    self.adapter.get_texture_format_features(format).flags
+                } else {
+                    format
+                        .guaranteed_format_features(self.device.features())
+                        .flags
+                };
+                flags.sample_count_supported(samples)
+            })
     }
 
     /// Why this device cannot run a compute kernel of `workgroup` invocations

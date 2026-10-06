@@ -129,6 +129,9 @@ struct RetainedGraphics {
     atmosphere: Option<AtmosphereDescriptor>,
     sun_shafts: Option<SunShaftsDescriptor>,
     sky_light: Option<SkyLightDescriptor>,
+    /// The renderer settings the product selected at runtime; `None` while
+    /// its manifest's initial values stand.
+    renderer_settings: Option<RendererSettingsDescriptor>,
     controllers: BTreeMap<crate::AnimationProjectionHandle, crate::AnimationProjectionDescriptor>,
 }
 
@@ -261,6 +264,7 @@ impl PresentationWorld {
                 || matches!(&op, RenderDiff::SetAtmosphere { atmosphere } if &self.retained.atmosphere == atmosphere)
                 || matches!(&op, RenderDiff::SetSunShafts { sun_shafts } if &self.retained.sun_shafts == sun_shafts)
                 || matches!(&op, RenderDiff::SetSkyLight { sky_light } if &self.retained.sky_light == sky_light)
+                || matches!(&op, RenderDiff::SetRendererSettings { settings } if self.retained.renderer_settings.as_ref() == Some(settings))
             {
                 continue;
             }
@@ -705,6 +709,9 @@ impl PresentationWorld {
                 sky_light: self.retained.sky_light,
             });
         }
+        if let Some(settings) = self.retained.renderer_settings {
+            ops.push(RenderDiff::SetRendererSettings { settings });
+        }
         // Creation requires an existing parent and parents cannot be changed,
         // so this traversal is acyclic by construction.
         let mut emitted = BTreeSet::new();
@@ -1010,6 +1017,12 @@ impl PresentationWorld {
                 }
                 node.mesh_payload = Some(payload.clone());
             }
+            RenderDiff::ReplaceMeshDistanceField { handle, field } => {
+                match &mut self.node_mut(*handle)?.mesh_payload {
+                    Some(payload) => payload.distance_field = field.clone(),
+                    None => return Err(PresentationWorldError::WrongNodeKind(*handle)),
+                }
+            }
             RenderDiff::UpdateLight { handle, light } => match &mut self.node_mut(*handle)?.kind {
                 NodeKind::Light(value) => *value = light.clone(),
                 _ => return Err(PresentationWorldError::WrongNodeKind(*handle)),
@@ -1220,6 +1233,9 @@ impl PresentationWorld {
             RenderDiff::SetSkyLight { sky_light } => {
                 self.retained.sky_light = *sky_light;
             }
+            RenderDiff::SetRendererSettings { settings } => {
+                self.retained.renderer_settings = Some(*settings);
+            }
         }
         Ok(())
     }
@@ -1238,6 +1254,7 @@ mod tests {
             asset: asset.to_string(),
             payload: MeshPayloadDescriptor {
                 texture_space: None,
+                distance_field: None,
                 layout: MeshBufferLayout {
                     vertex_count: 3,
                     index_count: 3,

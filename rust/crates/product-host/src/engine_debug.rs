@@ -58,6 +58,38 @@ pub struct ProductHostRendererStatistics {
     /// The renderer's GPU passes: each timed pass's cost, the adapter's
     /// compute limits, and the ambient occlusion the last world view took.
     pub gpu: ProductHostGpuStatistics,
+    /// The renderer settings in effect (`RendererSettings`).
+    pub settings: ProductHostRendererSettings,
+}
+
+/// The renderer settings (`RendererSettings`): what the product or its
+/// manifest asked for, what draws, and why each refused setting differs.
+#[derive(Debug, Clone, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ProductHostRendererSettings {
+    pub requested: ProductHostRendererSettingValues,
+    pub effective: ProductHostRendererSettingValues,
+    /// By setting name, why the device draws it differently.
+    #[ts(type = "Record<string, string>")]
+    pub refused: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ProductHostRendererSettingValues {
+    pub shadows: bool,
+    pub shadow_budget: Option<u32>,
+    /// `disabled`, `screenSpace` or `distanceField`.
+    pub ambient_occlusion: String,
+    pub ambient_occlusion_strength: f32,
+    pub ambient_occlusion_radius: f32,
+    /// Samples per pixel of the primary destination.
+    pub antialiasing: u32,
+    /// The fraction of the primary destination's size the world draws at.
+    pub render_scale: f32,
+    pub vsync: bool,
+    pub clustered_lighting: bool,
+    pub gpu_culling: bool,
 }
 
 /// The scene's shadow layers and which requesting lights cast.
@@ -90,6 +122,76 @@ pub struct ProductHostGpuStatistics {
     /// The timed passes, in frame order.
     pub passes: Vec<ProductHostGpuPass>,
     pub ambient_occlusion: ProductHostAmbientOcclusionStatistics,
+    pub distance_fields: ProductHostDistanceFieldStatistics,
+    pub light_clusters: ProductHostLightClusterStatistics,
+    pub gpu_culling: ProductHostGpuCullingStatistics,
+}
+
+/// The chunk distance field atlas the `distanceField` ambient occlusion
+/// path cone-traces.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ProductHostDistanceFieldStatistics {
+    /// Why this device cannot trace the fields; absent while it can.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub refused: Option<String>,
+    /// Chunk fields resident in the atlas.
+    pub resident_fields: u32,
+    /// Bricks the atlas holds room for.
+    pub atlas_bricks: u32,
+    pub atlas_bytes: u64,
+    /// Fields placed around the camera for the last world view.
+    pub lookup_entries: u32,
+}
+
+/// The GPU visibility of the last view pass.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ProductHostGpuCullingStatistics {
+    /// The last view pass drew its opaque batches from GPU-culled runs.
+    pub enabled: bool,
+    /// Why this device cannot cull on the GPU; absent while it can.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub refused: Option<String>,
+    /// Opaque candidates the last pass tested.
+    pub candidates: u32,
+    /// Opaque batches the last pass drew indirectly.
+    pub batches: u32,
+    /// Instances the last read-back pass found visible.
+    pub visible: u32,
+    /// Runs of batches drawn with one multi-draw each.
+    pub multi_draws: u32,
+}
+
+/// The light clustering of the last world view.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ProductHostLightClusterStatistics {
+    /// The last world view's lighting read its clusters.
+    pub enabled: bool,
+    /// Why this device cannot cluster; absent while it can.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub refused: Option<String>,
+    /// Why the last world view looped although clustering is on: more
+    /// unbounded lights than the global list names. Absent while it
+    /// clustered.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub fallback: Option<String>,
+    /// Tiles across, tiles down, depth slices.
+    pub grid: [u32; 3],
+    /// Lights each cluster can hold.
+    pub cluster_capacity: u32,
+    /// Light rows the last binning placed in clusters, counted per cluster.
+    pub binned_lights: u32,
+    /// Lights every fragment sees: ambient, hemisphere, directional, and
+    /// point or spot lights without a range.
+    pub global_lights: u32,
+    /// Clusters that had more lights than they hold.
+    pub overflowed_clusters: u32,
 }
 
 /// The screen-space ambient occlusion of the last world view.
@@ -113,6 +215,7 @@ pub enum ProductHostAmbientOcclusionPath {
     Off,
     Compute,
     Raster,
+    DistanceField,
 }
 
 /// One timed pass's GPU cost over the recent frames.

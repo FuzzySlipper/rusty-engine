@@ -551,6 +551,7 @@ pub fn voxel_object_mesh_payload(
         },
         provenance: MeshProvenance::VoxelObject,
         texture_space: Some(texture_space),
+        distance_field: None,
     }
 }
 

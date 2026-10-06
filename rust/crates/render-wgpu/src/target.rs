@@ -8,8 +8,9 @@ pub(crate) const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth3
 pub(crate) const OFFSCREEN_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 
 /// Samples per pixel of the world and its depth at the primary destination
-/// (the offscreen primary target and the window surface). Offscreen render
-/// targets and captures are single-sample.
+/// (the offscreen primary target and the window surface) until the renderer
+/// says otherwise (`Renderer::samples`). Offscreen render targets and
+/// captures are single-sample.
 pub(crate) const PRIMARY_SAMPLES: u32 = 4;
 
 /// What a pipeline must match to draw into a target: colour format and
@@ -87,8 +88,8 @@ pub(crate) fn extent(width: u32, height: u32) -> wgpu::Extent3d {
 }
 
 /// An offscreen colour and depth target of one size, with a readback buffer.
-/// It is a primary destination: the world draws multisampled and finishes
-/// into the single-sample colour that readback copies.
+/// It is a primary destination: the world draws with the depth's samples
+/// and finishes into the single-sample colour that readback copies.
 pub struct OffscreenTarget {
     color: wgpu::Texture,
     color_view: wgpu::TextureView,
@@ -97,10 +98,13 @@ pub struct OffscreenTarget {
     padded_row: u32,
     width: u32,
     height: u32,
+    samples: u32,
 }
 
 impl OffscreenTarget {
-    pub fn new(gpu: &Gpu, width: u32, height: u32) -> Self {
+    /// A target of this size with `samples` per pixel
+    /// (`Renderer::samples`).
+    pub fn new(gpu: &Gpu, width: u32, height: u32, samples: u32) -> Self {
         let (width, height) = (width.max(1), height.max(1));
         let color = gpu.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("render-wgpu offscreen colour"),
@@ -122,12 +126,13 @@ impl OffscreenTarget {
         });
         Self {
             color_view: color.create_view(&Default::default()),
-            depth_view: multisampled_depth(gpu, width, height, PRIMARY_SAMPLES),
+            depth_view: multisampled_depth(gpu, width, height, samples),
             color,
             readback,
             padded_row,
             width,
             height,
+            samples,
         }
     }
 
@@ -135,10 +140,11 @@ impl OffscreenTarget {
         (self.width, self.height)
     }
 
-    /// Reallocate for a new size. The next render fills the new target.
-    pub fn resize(&mut self, gpu: &Gpu, width: u32, height: u32) {
-        if (width.max(1), height.max(1)) != (self.width, self.height) {
-            *self = Self::new(gpu, width, height);
+    /// Reallocate for a new size or sample count. The next render fills the
+    /// new target.
+    pub fn resize(&mut self, gpu: &Gpu, width: u32, height: u32, samples: u32) {
+        if (width.max(1), height.max(1), samples) != (self.width, self.height, self.samples) {
+            *self = Self::new(gpu, width, height, samples);
         }
     }
 
@@ -147,7 +153,7 @@ impl OffscreenTarget {
             color: &self.color_view,
             depth: &self.depth_view,
             format: OFFSCREEN_FORMAT,
-            samples: PRIMARY_SAMPLES,
+            samples: self.samples,
             width: self.width,
             height: self.height,
         }
@@ -206,5 +212,74 @@ impl OffscreenTarget {
             }
         }
         self.readback.unmap();
+    }
+}
+
+/// The internal target the primary composition draws into at a render
+/// scale below 1 (`Renderer::draw_primary`): the primary's sample count of
+/// depth at the scaled size, and the single-sample image the upscale
+/// samples bilinearly.
+pub(crate) struct ScaledPrimary {
+    image: wgpu::TextureView,
+    depth: wgpu::TextureView,
+    /// The resolved colour and a linear sampler, for `Compose::blit`.
+    pub present: wgpu::BindGroup,
+    width: u32,
+    height: u32,
+    samples: u32,
+}
+
+impl ScaledPrimary {
+    pub fn new(
+        gpu: &Gpu,
+        compose: &crate::compose::Compose,
+        width: u32,
+        height: u32,
+        samples: u32,
+    ) -> Self {
+        let (width, height) = (width.max(1), height.max(1));
+        let image = gpu
+            .device
+            .create_texture(&wgpu::TextureDescriptor {
+                label: Some("render-wgpu scaled primary"),
+                size: extent(width, height),
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: OFFSCREEN_FORMAT,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                    | wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            })
+            .create_view(&Default::default());
+        let sampler = gpu.device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("render-wgpu scaled primary"),
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+        Self {
+            depth: multisampled_depth(gpu, width, height, samples),
+            present: compose.blit_bind_group(&gpu.device, &image, &sampler),
+            image,
+            width,
+            height,
+            samples,
+        }
+    }
+
+    pub fn matches(&self, width: u32, height: u32, samples: u32) -> bool {
+        (self.width, self.height, self.samples) == (width.max(1), height.max(1), samples)
+    }
+
+    pub fn view(&self) -> TargetView<'_> {
+        TargetView {
+            color: &self.image,
+            depth: &self.depth,
+            format: OFFSCREEN_FORMAT,
+            samples: self.samples,
+            width: self.width,
+            height: self.height,
+        }
     }
 }

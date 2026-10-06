@@ -192,10 +192,11 @@ impl Layouts {
                     count: None,
                 },
                 storage_entry(6),
+                storage_entry(7),
                 // The sky's light (`sky_light.rs`): its cube, sampler and
                 // irradiance harmonics.
                 wgpu::BindGroupLayoutEntry {
-                    binding: 7,
+                    binding: 8,
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Texture {
                         sample_type: wgpu::TextureSampleType::Float { filterable: true },
@@ -204,8 +205,8 @@ impl Layouts {
                     },
                     count: None,
                 },
-                sampler_entry(8),
-                storage_entry(9),
+                sampler_entry(9),
+                storage_entry(10),
             ],
         });
         let casters = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {

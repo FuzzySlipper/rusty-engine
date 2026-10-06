@@ -5,8 +5,8 @@
 //! `types`, `view`, `material`, `surface`, `lighting`, `tonemap`, `finish`
 //! and `shade` are importable modules (`#import rusty::lighting::standard_radiance`);
 //! `world`, `sky`, `shadow`, `effects`, `ghost`, `compose`,
-//! `ambient_occlusion`, `finish_pass`, `post` and `sky_light` are the entry
-//! shaders built from them.
+//! `ambient_occlusion`, `finish_pass`, `post`, `sky_light`, `light_clusters`,
+//! `cull` and `distance_field` are the entry shaders built from them.
 //! A material's features are shader defs, so a variant only carries the
 //! samples and branches its material uses.
 //!
@@ -195,6 +195,13 @@ pub enum Entry {
     /// The sky's light: the background prefiltered into a cube and its
     /// irradiance harmonics (`sky_light.wgsl`, compute).
     SkyLight,
+    /// Light rows binned into a view's cluster grid.
+    LightClusters,
+    /// A view's opaque candidates culled into indirect draws.
+    Cull,
+    /// Distance-field ambient occlusion: cone traces through the chunk
+    /// field atlas over a view's depth.
+    DistanceField,
 }
 
 impl Entry {
@@ -218,6 +225,15 @@ impl Entry {
             Self::SkyLight => (
                 "shaders/sky_light.wgsl",
                 include_str!("shaders/sky_light.wgsl"),
+            ),
+            Self::LightClusters => (
+                "shaders/light_clusters.wgsl",
+                include_str!("shaders/light_clusters.wgsl"),
+            ),
+            Self::Cull => ("shaders/cull.wgsl", include_str!("shaders/cull.wgsl")),
+            Self::DistanceField => (
+                "shaders/distance_field.wgsl",
+                include_str!("shaders/distance_field.wgsl"),
             ),
         }
     }
@@ -429,6 +445,9 @@ mod tests {
             Entry::Finish,
             Entry::Post,
             Entry::SkyLight,
+            Entry::LightClusters,
+            Entry::Cull,
+            Entry::DistanceField,
         ] {
             compose(entry, Features::default());
         }

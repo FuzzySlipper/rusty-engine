@@ -1377,6 +1377,7 @@ impl Renderer {
             edges: Default::default(),
             extra: None,
             texture_space: None,
+            distance_field: None,
             layer_weights: false,
             vertices: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some(label),

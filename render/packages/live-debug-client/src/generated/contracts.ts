@@ -7,7 +7,7 @@
  */
 export type CanonicalU64 = string;
 
-export type ProductHostAmbientOcclusionPath = "off" | "compute" | "raster";
+export type ProductHostAmbientOcclusionPath = "off" | "compute" | "raster" | "distanceField";
 
 /**
  * The screen-space ambient occlusion of the last world view.
@@ -52,12 +52,63 @@ export type ProductHostDiagnosticsReadRequest = { after?: CanonicalU64, };
  */
 export type ProductHostDiagnosticsReadResponse = { telemetry: ProductHostTelemetrySnapshot, events: Array<RuntimeDiagnosticEvent>, floorSequence: CanonicalU64, throughSequence: CanonicalU64, nextCursor: CanonicalU64, readMonotonicNanoseconds: CanonicalU64, lagged: boolean, warningCount: CanonicalU64, errorCount: CanonicalU64, droppedCount: CanonicalU64, };
 
+/**
+ * The chunk distance field atlas the `distanceField` ambient occlusion
+ * path cone-traces.
+ */
+export type ProductHostDistanceFieldStatistics = { 
+/**
+ * Why this device cannot trace the fields; absent while it can.
+ */
+refused?: string, 
+/**
+ * Chunk fields resident in the atlas.
+ */
+residentFields: number, 
+/**
+ * Bricks the atlas holds room for.
+ */
+atlasBricks: number, atlasBytes: bigint, 
+/**
+ * Fields placed around the camera for the last world view.
+ */
+lookupEntries: number, };
+
 export type ProductHostErrorBody = { code: string, diagnostic: string, };
 
 /**
  * The body of every host error response.
  */
 export type ProductHostErrorResponse = { accepted: false, error: ProductHostErrorBody, };
+
+/**
+ * The GPU visibility of the last view pass.
+ */
+export type ProductHostGpuCullingStatistics = { 
+/**
+ * The last view pass drew its opaque batches from GPU-culled runs.
+ */
+enabled: boolean, 
+/**
+ * Why this device cannot cull on the GPU; absent while it can.
+ */
+refused?: string, 
+/**
+ * Opaque candidates the last pass tested.
+ */
+candidates: number, 
+/**
+ * Opaque batches the last pass drew indirectly.
+ */
+batches: number, 
+/**
+ * Instances the last read-back pass found visible.
+ */
+visible: number, 
+/**
+ * Runs of batches drawn with one multi-draw each.
+ */
+multiDraws: number, };
 
 /**
  * One timed pass's GPU cost over the recent frames.
@@ -84,7 +135,47 @@ timestamps: boolean, limits: ProductHostComputeLimits,
 /**
  * The timed passes, in frame order.
  */
-passes: Array<ProductHostGpuPass>, ambientOcclusion: ProductHostAmbientOcclusionStatistics, };
+passes: Array<ProductHostGpuPass>, ambientOcclusion: ProductHostAmbientOcclusionStatistics, distanceFields: ProductHostDistanceFieldStatistics, lightClusters: ProductHostLightClusterStatistics, gpuCulling: ProductHostGpuCullingStatistics, };
+
+/**
+ * The light clustering of the last world view.
+ */
+export type ProductHostLightClusterStatistics = { 
+/**
+ * The last world view's lighting read its clusters.
+ */
+enabled: boolean, 
+/**
+ * Why this device cannot cluster; absent while it can.
+ */
+refused?: string, 
+/**
+ * Why the last world view looped although clustering is on: more
+ * unbounded lights than the global list names. Absent while it
+ * clustered.
+ */
+fallback?: string, 
+/**
+ * Tiles across, tiles down, depth slices.
+ */
+grid: [number, number, number], 
+/**
+ * Lights each cluster can hold.
+ */
+clusterCapacity: number, 
+/**
+ * Light rows the last binning placed in clusters, counted per cluster.
+ */
+binnedLights: number, 
+/**
+ * Lights every fragment sees: ambient, hemisphere, directional, and
+ * point or spot lights without a range.
+ */
+globalLights: number, 
+/**
+ * Clusters that had more lights than they hold.
+ */
+overflowedClusters: number, };
 
 /**
  * Closed operation identities returned by direct runtime calls.
@@ -95,6 +186,30 @@ export type ProductHostOperationKind = "connect" | "start" | "pause" | "resume" 
  * Where the runtime presents the frames it renders.
  */
 export type ProductHostRenderOutput = "stream" | "window";
+
+export type ProductHostRendererSettingValues = { shadows: boolean, shadowBudget: number | null, 
+/**
+ * `disabled`, `screenSpace` or `distanceField`.
+ */
+ambientOcclusion: string, ambientOcclusionStrength: number, ambientOcclusionRadius: number, 
+/**
+ * Samples per pixel of the primary destination.
+ */
+antialiasing: number, 
+/**
+ * The fraction of the primary destination's size the world draws at.
+ */
+renderScale: number, vsync: boolean, clusteredLighting: boolean, gpuCulling: boolean, };
+
+/**
+ * The renderer settings (`RendererSettings`): what the product or its
+ * manifest asked for, what draws, and why each refused setting differs.
+ */
+export type ProductHostRendererSettings = { requested: ProductHostRendererSettingValues, effective: ProductHostRendererSettingValues, 
+/**
+ * By setting name, why the device draws it differently.
+ */
+refused: Record<string, string>, };
 
 /**
  * The runtime renderer's adapter and what its recent frames cost.
@@ -122,7 +237,11 @@ skippedOps: Record<string, number>, lastSkip: string | null, shadows: ProductHos
  * The renderer's GPU passes: each timed pass's cost, the adapter's
  * compute limits, and the ambient occlusion the last world view took.
  */
-gpu: ProductHostGpuStatistics, };
+gpu: ProductHostGpuStatistics, 
+/**
+ * The renderer settings in effect (`RendererSettings`).
+ */
+settings: ProductHostRendererSettings, };
 
 /**
  * Answer to `engine.renderer`, `.status`, `.show`, `.hide` and `.toggle`.

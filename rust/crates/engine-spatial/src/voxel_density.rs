@@ -374,6 +374,7 @@ impl VoxelDensityEditService {
         }
         let mut changed_chunks = BTreeSet::new();
         let mut dirty = BTreeSet::new();
+        let mut field_dirty = BTreeSet::new();
         let mut solidity_changes = 0;
         for (address, before, after) in &changes {
             let voxel = VoxelCoord::new(address[0], address[1], address[2]);
@@ -381,9 +382,10 @@ impl VoxelDensityEditService {
             dirty.extend(scene.mesh_neighbourhood_of_voxel(voxel));
             if before.material.is_some() != after.material.is_some() {
                 solidity_changes += 1;
+                field_dirty.extend(scene.field_neighbourhood_of_voxel(voxel));
             }
         }
-        let rebuild = match scene.rebuild_chunks(&changed_chunks, &dirty) {
+        let rebuild = match scene.rebuild_chunks(&changed_chunks, &dirty, &field_dirty) {
             Ok(rebuild) => rebuild,
             Err(error) => {
                 for (address, before, _) in changes.iter().rev() {

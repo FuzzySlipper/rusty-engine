@@ -332,7 +332,7 @@ impl ApplicationHandler for App {
             (gpu, Some(surface), None)
         } else {
             let gpu = Gpu::headless().expect("headless gpu");
-            let target = OffscreenTarget::new(&gpu, size.width, size.height);
+            let target = OffscreenTarget::new(&gpu, size.width, size.height, 4);
             (gpu, None, Some(target))
         };
         eprintln!("adapter: {:?}", gpu.adapter_summary());

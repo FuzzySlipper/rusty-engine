@@ -148,6 +148,46 @@ pub struct MeshPayloadDescriptor {
     /// it they project its object-space positions.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub texture_space: Option<MeshTextureSpace>,
+    /// A coarse signed distance field over a box of the mesh's own space,
+    /// for distance-field ambient occlusion. Voxel chunks carry one
+    /// (`svc_mesh::distance_field`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub distance_field: Option<MeshDistanceField>,
+}
+
+/// A mesh's signed distance field: `cells`³ bytes, x fastest, over the box
+/// from `origin` spanning `extent` in the mesh's own space. A byte encodes
+/// `(distance / reach + 1) / 2` with distances in cells and the reach the
+/// renderer and mesher agree on (`svc_mesh::distance_field::REACH`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MeshDistanceField {
+    pub cells: u32,
+    pub origin: [f32; 3],
+    pub extent: [f32; 3],
+    pub data: Vec<u8>,
+}
+
+impl MeshDistanceField {
+    pub fn validate(&self) -> Result<(), MeshDescriptorError> {
+        let expected = (self.cells as usize).pow(3);
+        if self.data.len() != expected {
+            return Err(MeshDescriptorError::DistanceFieldLengthMismatch {
+                expected,
+                actual: self.data.len(),
+            });
+        }
+        if !self
+            .origin
+            .iter()
+            .chain(&self.extent)
+            .all(|value| value.is_finite())
+            || self.extent.iter().any(|value| *value <= 0.0)
+        {
+            return Err(MeshDescriptorError::InvalidDistanceFieldBox);
+        }
+        Ok(())
+    }
 }
 
 /// A mesh's texture space: `position / cell_size + origin`, in voxel cells,
@@ -165,6 +205,9 @@ impl MeshPayloadDescriptor {
     pub fn validate(&self) -> Result<(), MeshDescriptorError> {
         self.bounds.validate()?;
         validate_attributes(&self.layout)?;
+        if let Some(field) = &self.distance_field {
+            field.validate()?;
+        }
         match &self.source {
             MeshPayloadSource::Inline {
                 positions,
@@ -533,6 +576,11 @@ pub enum MeshDescriptorError {
     },
     InvalidBounds,
     NonFiniteAttribute,
+    DistanceFieldLengthMismatch {
+        expected: usize,
+        actual: usize,
+    },
+    InvalidDistanceFieldBox,
     OptionalAttributeSourceMismatch {
         name: MeshAttributeName,
     },
@@ -629,7 +677,7 @@ impl StaticMeshAsset {
                 max: self.payload.bounds.max,
             },
             MeshCollisionPolicy::Trimesh => CollisionResolution::Trimesh {
-                payload: self.payload.clone(),
+                payload: Box::new(self.payload.clone()),
             },
         }
     }
@@ -646,7 +694,7 @@ pub enum CollisionResolution {
     None,
     Proxy { proxy_asset: String },
     Aabb { min: [f32; 3], max: [f32; 3] },
-    Trimesh { payload: MeshPayloadDescriptor },
+    Trimesh { payload: Box<MeshPayloadDescriptor> },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1641,6 +1689,7 @@ mod tests {
     fn triangle() -> MeshPayloadDescriptor {
         MeshPayloadDescriptor {
             texture_space: None,
+            distance_field: None,
             layout: MeshBufferLayout {
                 vertex_count: 3,
                 index_count: 3,
@@ -1843,7 +1892,9 @@ mod tests {
         assert_eq!(asset.validate(), Ok(()));
         assert_eq!(
             asset.resolve_collision(),
-            CollisionResolution::Trimesh { payload }
+            CollisionResolution::Trimesh {
+                payload: Box::new(payload)
+            }
         );
     }
 

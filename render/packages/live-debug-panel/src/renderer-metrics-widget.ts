@@ -130,9 +130,16 @@ function renderSummary(root: HTMLElement, summary: ProductHostRendererStatus): v
   const gpu = renderer.gpu;
   const occlusion = gpu.ambientOcclusion;
   const passes = gpu.passes.map((pass) => `${pass.pass} ${milliseconds(pass.medianGpuMs)} over ${String(pass.timedFrames)} frames`);
+  const fields = gpu.distanceFields;
   lines.push(
     `Ambient occlusion: ${occlusion.path}${occlusion.computeRefused === undefined ? '' : ` (compute refused: ${occlusion.computeRefused})`}`,
+    `Distance fields: ${String(fields.residentFields)} resident in ${String(fields.atlasBricks)} bricks | ${String(fields.lookupEntries)} around the camera${fields.refused === undefined ? '' : ` (refused: ${fields.refused})`}`,
     `GPU passes: ${gpu.timestamps ? passes.join(' | ') : 'untimed (no timestamp queries)'}`,
+  );
+  const settings = renderer.settings.effective;
+  const refused = Object.entries(renderer.settings.refused).map(([setting, reason]) => `${setting}: ${reason}`);
+  lines.push(
+    `Settings: shadows ${settings.shadows ? `on${settings.shadowBudget === null ? '' : ` (budget ${String(settings.shadowBudget)})`}` : 'off'} | occlusion ${settings.ambientOcclusion} ×${settings.ambientOcclusionStrength.toFixed(2)} within ${settings.ambientOcclusionRadius.toFixed(2)} m | ${settings.antialiasing === 1 ? 'no antialiasing' : `MSAA ${String(settings.antialiasing)}x`} | scale ${settings.renderScale.toFixed(2)} | vsync ${settings.vsync ? 'on' : 'off'} | clustered lighting ${settings.clusteredLighting ? 'on' : 'off'} | GPU culling ${settings.gpuCulling ? 'on' : 'off'}${refused.length === 0 ? '' : ` | refused ${refused.join('; ')}`}`,
   );
   const skipped = Object.entries(renderer.skippedOps).map(([op, count]) => `${op} ×${String(count)}`);
   lines.push(`Skipped ops: ${skipped.length === 0 ? 'none' : skipped.join(', ')}${renderer.lastSkip === null ? '' : ` | last: ${renderer.lastSkip}`}`);

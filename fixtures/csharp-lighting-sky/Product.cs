@@ -105,6 +105,41 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     public string Panorama() { engine.CameraView.SetSkyBackground(day); return Inspect(); }
     [DebugCommand("lighting.inspect")]
     public string Inspect() => JsonSerializer.Serialize(new LightingProof(roundTrip,litValue,blockedValue,darkValue,Sample(InsideSample),descriptor.Enabled,clock),ProofJsonContext.Default.LightingProof);
+    // Renderer settings at runtime: read what draws, change one group, read again.
+    [DebugCommand("lighting.settings")]
+    public string Settings() => JsonSerializer.Serialize(engine.RendererSettings.Read(),ProofJsonContext.Default.RendererSettingsReadout);
+    [DebugCommand("lighting.antialiasing")]
+    public string Antialiasing(string samples)
+    {
+        Antialiasing level = samples switch { "off" => Rusty.Engine.Antialiasing.Off, "2x" => Rusty.Engine.Antialiasing.Msaa2, _ => Rusty.Engine.Antialiasing.Msaa4 };
+        engine.RendererSettings.Set(engine.RendererSettings.Read().Requested with { Antialiasing = level });
+        return Settings();
+    }
+    [DebugCommand("lighting.occlusion")]
+    public string Occlusion(string mode,float strength,float radius)
+    {
+        AmbientOcclusionMode occlusion = mode switch { "screenSpace" => AmbientOcclusionMode.ScreenSpace, "distanceField" => AmbientOcclusionMode.DistanceField, _ => AmbientOcclusionMode.Disabled };
+        engine.RendererSettings.Set(engine.RendererSettings.Read().Requested with { AmbientOcclusion = occlusion, AmbientOcclusionStrength = strength, AmbientOcclusionRadius = radius });
+        return Settings();
+    }
+    [DebugCommand("lighting.scale")]
+    public string Scale(float scale)
+    {
+        engine.RendererSettings.Set(engine.RendererSettings.Read().Requested with { RenderScale = scale });
+        return Settings();
+    }
+    [DebugCommand("lighting.shadows")]
+    public string Shadows(bool enabled,uint budget)
+    {
+        engine.RendererSettings.Set(engine.RendererSettings.Read().Requested with { Shadows = enabled, ShadowBudget = budget });
+        return Settings();
+    }
+    [DebugCommand("lighting.pipeline")]
+    public string Pipeline(bool clusteredLighting,bool gpuCulling,bool vsync)
+    {
+        engine.RendererSettings.Set(engine.RendererSettings.Read().Requested with { ClusteredLighting = clusteredLighting, GpuCulling = gpuCulling, Vsync = vsync });
+        return Settings();
+    }
     public void RegisterDebugCommands(IDebugCommandModuleRegistrar registrar)=>registrar.Register(this);
     public ProductUpdateResult Update(ProductUpdate update)=>ProductUpdateResult.None;
     public void Pause(){} public void Resume(){} public void Restart(){SetTorch(true);} public void Shutdown(){}
@@ -112,7 +147,8 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
 }
 internal sealed record LightingSave(uint[] Room,LightDescriptor Torch);
 internal sealed record LightingProof(bool RoundTrip,float Lit,float Blocked,float Dark,float Current,bool Torch,float Clock);
-[JsonSourceGenerationOptions(PropertyNamingPolicy=JsonKnownNamingPolicy.CamelCase,IncludeFields=true)]
+[JsonSourceGenerationOptions(PropertyNamingPolicy=JsonKnownNamingPolicy.CamelCase,IncludeFields=true,UseStringEnumConverter=true)]
 [JsonSerializable(typeof(LightingSave))]
 [JsonSerializable(typeof(LightingProof))]
+[JsonSerializable(typeof(RendererSettingsReadout))]
 internal partial class ProofJsonContext : JsonSerializerContext { }

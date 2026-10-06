@@ -96,6 +96,37 @@ pub struct SceneSnapshotOptions {
     /// Snapshots written before ambient occlusion existed draw without it.
     #[serde(default)]
     pub ambient_occlusion: SceneSnapshotAmbientOcclusion,
+    /// Snapshots written before clustered lighting existed loop over lights.
+    #[serde(default)]
+    pub clustered_lighting: bool,
+    /// Snapshots written before GPU culling existed cull on the CPU.
+    #[serde(default)]
+    pub gpu_culling: bool,
+    /// Snapshots written before the sample count was a setting drew with 4.
+    #[serde(default = "default_samples")]
+    pub samples: u32,
+    /// Snapshots written before vsync was a setting waited for the display.
+    #[serde(default = "default_vsync")]
+    pub vsync: bool,
+    /// Snapshots written before the render scale was a setting drew at 1.
+    #[serde(default = "default_render_scale")]
+    pub render_scale: f32,
+}
+
+fn default_render_scale() -> f32 {
+    render_model::RendererSettingsDescriptor::DEFAULT.render_scale
+}
+
+fn default_samples() -> u32 {
+    render_model::RendererSettingsDescriptor::DEFAULT.antialiasing
+}
+
+fn default_vsync() -> bool {
+    render_model::RendererSettingsDescriptor::DEFAULT.vsync
+}
+
+fn default_radius() -> f32 {
+    render_model::AmbientOcclusionSettings::DEFAULT.radius
 }
 
 /// `RendererOptions::ambient_occlusion` as a snapshot keeps it.
@@ -104,6 +135,9 @@ pub struct SceneSnapshotOptions {
 pub struct SceneSnapshotAmbientOcclusion {
     pub path: SceneSnapshotAmbientOcclusionPath,
     pub strength: f32,
+    /// Snapshots written before the radius was a setting drew with 0.75 m.
+    #[serde(default = "default_radius")]
+    pub radius: f32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -112,6 +146,7 @@ pub enum SceneSnapshotAmbientOcclusionPath {
     Off,
     Compute,
     Raster,
+    DistanceField,
 }
 
 impl Default for SceneSnapshotAmbientOcclusion {
@@ -131,8 +166,12 @@ impl From<SceneSnapshotAmbientOcclusion> for render_wgpu::AmbientOcclusion {
                 SceneSnapshotAmbientOcclusionPath::Raster => {
                     render_wgpu::AmbientOcclusionPath::Raster
                 }
+                SceneSnapshotAmbientOcclusionPath::DistanceField => {
+                    render_wgpu::AmbientOcclusionPath::DistanceField
+                }
             },
             strength: options.strength,
+            radius: options.radius,
         }
     }
 }
@@ -148,8 +187,12 @@ impl From<render_wgpu::AmbientOcclusion> for SceneSnapshotAmbientOcclusion {
                 render_wgpu::AmbientOcclusionPath::Raster => {
                     SceneSnapshotAmbientOcclusionPath::Raster
                 }
+                render_wgpu::AmbientOcclusionPath::DistanceField => {
+                    SceneSnapshotAmbientOcclusionPath::DistanceField
+                }
             },
             strength: options.strength,
+            radius: options.radius,
         }
     }
 }
@@ -162,6 +205,11 @@ impl From<SceneSnapshotOptions> for render_wgpu::RendererOptions {
             shadows: options.shadows,
             shadow_budget: options.shadow_budget,
             ambient_occlusion: options.ambient_occlusion.into(),
+            clustered_lighting: options.clustered_lighting,
+            gpu_culling: options.gpu_culling,
+            samples: options.samples,
+            vsync: options.vsync,
+            render_scale: options.render_scale,
         }
     }
 }
@@ -174,6 +222,11 @@ impl From<render_wgpu::RendererOptions> for SceneSnapshotOptions {
             shadows: options.shadows,
             shadow_budget: options.shadow_budget,
             ambient_occlusion: options.ambient_occlusion.into(),
+            clustered_lighting: options.clustered_lighting,
+            gpu_culling: options.gpu_culling,
+            samples: options.samples,
+            vsync: options.vsync,
+            render_scale: options.render_scale,
         }
     }
 }
@@ -392,6 +445,7 @@ mod tests {
         };
         MeshPayloadDescriptor {
             texture_space: None,
+            distance_field: None,
             layout: MeshBufferLayout {
                 vertex_count: 3,
                 index_count: 3,

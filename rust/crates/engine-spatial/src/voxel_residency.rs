@@ -344,7 +344,11 @@ impl VoxelChunkResidencyService {
             .iter()
             .flat_map(|coordinate| scene.mesh_neighbourhood(*coordinate))
             .collect();
-        let rebuild = match scene.rebuild_chunks(&changed, &dirty) {
+        let field_dirty: BTreeSet<ChunkCoord> = changed
+            .iter()
+            .flat_map(|coordinate| scene.field_neighbourhood(*coordinate))
+            .collect();
+        let rebuild = match scene.rebuild_chunks(&changed, &dirty, &field_dirty) {
             Ok(rebuild) => rebuild,
             Err(error) => {
                 for (coordinate, chunk) in previous.into_iter().rev() {

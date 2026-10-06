@@ -193,6 +193,9 @@ pub(crate) struct RuntimeSpatialBridge {
     pub(crate) borrowed: crate::operation_diagnostics::BorrowedResult,
     update_attribution: RuntimeUpdateAttribution,
     last_character_query_stats: CharacterCollisionQueryStats,
+    /// Whether sessions build chunk distance fields: the renderer's
+    /// distance-field occlusion is selected (`RendererSettings`).
+    distance_fields: bool,
 }
 
 pub(crate) struct SpatialSession {
@@ -620,7 +623,34 @@ impl RuntimeSpatialBridge {
             borrowed: Default::default(),
             update_attribution: RuntimeUpdateAttribution::default(),
             last_character_query_stats: CharacterCollisionQueryStats::default(),
+            distance_fields: false,
         }
+    }
+
+    /// Build or drop every session's chunk distance fields as the renderer's
+    /// distance-field occlusion is selected or deselected; sessions created
+    /// later follow. Returns whether any scene changed, so the caller can
+    /// republish the presentations.
+    pub(crate) fn set_distance_fields(&mut self, enabled: bool) -> bool {
+        self.distance_fields = enabled;
+        let handles: Vec<u64> = self
+            .sessions
+            .iter()
+            .filter(|(_, session)| session.scene.distance_fields() != enabled)
+            .map(|(value, _)| *value)
+            .collect();
+        let mut changed = false;
+        for value in handles {
+            let handle = NativeSpatialSessionHandle { value };
+            let edited = self.edit_scene(handle, |session| {
+                session.change_collision(|scene| {
+                    scene.set_distance_fields(enabled);
+                    ((), Vec::new())
+                })
+            });
+            changed |= edited.is_ok();
+        }
+        changed
     }
 
     pub(crate) fn collision_source(&self) -> SpatialCollisionSource {
@@ -736,6 +766,7 @@ impl RuntimeSpatialBridge {
             std::iter::empty(),
             SurfaceMeshOptions {
                 mode: surface_mode(config.voxel_surface_mode),
+                distance_fields: self.distance_fields,
                 ..SurfaceMeshOptions::default()
             },
         )
@@ -6222,6 +6253,33 @@ mod tests {
     ) -> String {
         assert_eq!(receipt.diagnostics_len, 1);
         copied_utf8(unsafe { *receipt.diagnostics }.code)
+    }
+
+    #[test]
+    fn sessions_build_distance_fields_only_while_the_renderer_traces_them() {
+        let mut bridge = RuntimeSpatialBridge::new();
+        let api = api(&mut bridge);
+        let first = create_session(&api);
+        assert!(
+            !bridge.sessions[&first.value].scene.distance_fields(),
+            "a session builds no fields until the setting asks"
+        );
+        assert!(bridge.set_distance_fields(true), "the live session changed");
+        assert!(bridge.sessions[&first.value].scene.distance_fields());
+        let second = create_session(&api);
+        assert!(
+            bridge.sessions[&second.value].scene.distance_fields(),
+            "a session created later follows the setting"
+        );
+        assert!(
+            !bridge.set_distance_fields(true),
+            "already so: nothing changed"
+        );
+        assert!(bridge.set_distance_fields(false));
+        assert!(bridge
+            .sessions
+            .values()
+            .all(|session| !session.scene.distance_fields()));
     }
 
     fn create_session(api: &NativeSpatialApi) -> NativeSpatialSessionHandle {

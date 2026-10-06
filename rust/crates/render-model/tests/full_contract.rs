@@ -26,6 +26,7 @@ fn material() -> RenderMaterialDescriptor {
 fn payload(provenance: MeshProvenance) -> MeshPayloadDescriptor {
     MeshPayloadDescriptor {
         texture_space: None,
+        distance_field: None,
         layout: MeshBufferLayout {
             vertex_count: 3,
             index_count: 3,

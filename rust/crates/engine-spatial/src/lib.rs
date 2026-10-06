@@ -93,6 +93,7 @@ pub use svc_collision::{
     StaticMeshCollisionError, StaticMeshCollisionReceipt, StaticMeshHit, StaticMeshInstanceId,
     StaticMeshTransform,
 };
+pub use svc_mesh::distance_field;
 pub use svc_mesh::{
     MaterialSurface, MeshError as SurfaceMeshError, SurfaceCharacter, SurfaceMaterials,
     SurfaceMeshLimits, SurfaceMeshOptions, SurfaceMode, TerrainLayers, VertexPlacement,
@@ -195,12 +196,23 @@ pub struct VoxelMeshChunk {
     /// position, stable across world-origin rebases.
     pub origin_voxel: [i64; 3],
     pub voxel_size: f32,
+    /// Voxels per axis: the chunk's box is `size * voxel_size` from its
+    /// origin.
+    pub size: [u32; 3],
     pub positions: Vec<f32>,
     pub normals: Vec<f32>,
     pub tile_coordinates: Vec<f32>,
     /// Four terrain layer weights per vertex when the session has terrain
     /// layers (`svc_mesh::MeshPayload::layer_weights`); empty otherwise.
     pub layer_weights: Vec<f32>,
+    /// The chunk's coarse signed distance field over its box
+    /// (`svc_mesh::distance_field`, `FIELD_CELLS`³ bytes, x fastest); empty
+    /// when the mesher made none.
+    pub distance_field: Vec<u8>,
+    /// Hash of `distance_field` alone: a neighbour's edit within the field's
+    /// reach changes it without `content_hash`, and republishes the field
+    /// alone.
+    pub field_hash: u64,
     pub indices: Vec<u32>,
     pub groups: Vec<VoxelMeshGroup>,
     /// The chunk-local storage index (x-fastest) of the voxel owning each
@@ -680,6 +692,56 @@ impl VoxelCollisionScene {
         &self.mesh_options
     }
 
+    /// Whether chunks build their distance fields
+    /// (`SurfaceMeshOptions::distance_fields`).
+    pub fn distance_fields(&self) -> bool {
+        self.mesh_options.distance_fields
+    }
+
+    /// Build every resident chunk's distance field, or drop them all: the
+    /// renderer's distance-field occlusion was selected or deselected. The
+    /// meshes, colliders, voxels and source revision are unchanged; the
+    /// refreshed chunks are the next mesh update's dirty chunks, so a
+    /// projection republishes their fields alone. Nothing happens when the
+    /// setting is already so.
+    pub fn set_distance_fields(&mut self, enabled: bool) {
+        if self.mesh_options.distance_fields == enabled {
+            return;
+        }
+        self.mesh_options.distance_fields = enabled;
+        let coordinates: Vec<ChunkCoord> = self.mesh_chunks.keys().copied().collect();
+        let refreshed: Vec<(ChunkCoord, VoxelMeshChunk)> =
+            surface_collision::in_parallel(&coordinates, |coordinate| {
+                self.mesh_chunks.get(&coordinate).and_then(|retained| {
+                    refresh_distance_field(&self.voxel_world, coordinate, retained, enabled)
+                        .map(|chunk| (coordinate, chunk))
+                })
+            })
+            .into_iter()
+            .flatten()
+            .collect();
+        if refreshed.is_empty() {
+            return;
+        }
+        let rebuilt_chunks = refreshed.len();
+        let mut dirty_chunks = Vec::with_capacity(rebuilt_chunks);
+        for (coordinate, chunk) in refreshed {
+            self.mesh_chunks.insert(coordinate, Arc::new(chunk));
+            dirty_chunks.push(coordinate.to_array());
+        }
+        let previous_mesh_state = std::mem::replace(&mut self.mesh_state, next_mesh_state());
+        self.mesh_update = VoxelChunkMeshUpdate {
+            source_revision: self.source_revision,
+            previous_mesh_state: Some(previous_mesh_state),
+            surface_mode: self.mesh_options.mode,
+            dirty_chunks,
+            rebuilt_chunks,
+            reused_chunks: self.mesh_chunks.len() - rebuilt_chunks,
+            removed_chunks: 0,
+            mesh_microseconds: 0,
+        };
+    }
+
     /// Replace the surface modes and characters. Every chunk is remeshed and
     /// its collision rebuilt from what is drawn; the voxels, static meshes,
     /// collision materials, source revision and world origin are kept. A
@@ -1069,10 +1131,13 @@ impl VoxelCollisionScene {
     /// collider follows its own voxels, so only `changed` chunks rebuild it;
     /// a reconstructed chunk's collider is its drawn mesh, which its
     /// neighbours shape.
+    /// `field_dirty` chunks outside `dirty` keep their meshes and rebuild
+    /// only their distance fields.
     pub(crate) fn rebuild_chunks(
         &self,
         changed: &BTreeSet<ChunkCoord>,
         dirty: &BTreeSet<ChunkCoord>,
+        field_dirty: &BTreeSet<ChunkCoord>,
     ) -> Result<ChunkRebuild, CollisionSceneError> {
         let greedy = self.mesh_options.all_greedy();
         let coordinates: Vec<_> = dirty.iter().copied().collect();
@@ -1105,6 +1170,22 @@ impl VoxelCollisionScene {
                 .insert(coordinate, mesh.map(|(mesh, _)| mesh));
             if let Some(collider) = collider {
                 rebuild.colliders.push((coordinate, collider));
+            }
+        }
+        // A neighbour's edit reached these chunks' fields without touching
+        // their meshes: refresh the field alone.
+        for coordinate in field_dirty.difference(dirty) {
+            if let Some(refreshed) = self.mesh_chunks.get(coordinate).and_then(|retained| {
+                refresh_distance_field(
+                    &self.voxel_world,
+                    *coordinate,
+                    retained,
+                    self.mesh_options.distance_fields,
+                )
+            }) {
+                rebuild
+                    .meshes
+                    .insert(*coordinate, Some(Arc::new(refreshed)));
             }
         }
         Ok(rebuild)
@@ -1272,6 +1353,62 @@ impl VoxelCollisionScene {
         chunks
     }
 
+    /// Chunks whose distance field depends on the voxel at `voxel`: its own
+    /// chunk and the resident neighbours whose field reaches it
+    /// (`svc_mesh::distance_field_reach_voxels`), edge and corner
+    /// neighbours included.
+    pub(crate) fn field_neighbourhood_of_voxel(&self, voxel: VoxelCoord) -> Vec<ChunkCoord> {
+        if !self.mesh_options.distance_fields {
+            return Vec::new();
+        }
+        let grid = self.voxel_world.grid();
+        let [width, height, depth] = grid.chunk_dims().to_array();
+        let (owner, local) = grid.voxel_to_chunk_local(voxel);
+        let reach = svc_mesh::distance_field_reach_voxels(self.chunk_size);
+        let offsets = |at: u32, extent: u32| {
+            let mut offsets = vec![0i64];
+            if at < reach {
+                offsets.push(-1);
+            }
+            if at + reach >= extent {
+                offsets.push(1);
+            }
+            offsets
+        };
+        let mut chunks = vec![owner];
+        for x in offsets(local.x, width) {
+            for y in offsets(local.y, height) {
+                for z in &offsets(local.z, depth) {
+                    let candidate = ChunkCoord::new(owner.x + x, owner.y + y, owner.z + z);
+                    if (x, y, *z) != (0, 0, 0) && self.voxel_world.get(candidate).is_some() {
+                        chunks.push(candidate);
+                    }
+                }
+            }
+        }
+        chunks
+    }
+
+    /// Chunks whose distance field depends on `owner` being resident: it and
+    /// all its resident neighbours.
+    pub(crate) fn field_neighbourhood(&self, owner: ChunkCoord) -> Vec<ChunkCoord> {
+        if !self.mesh_options.distance_fields {
+            return Vec::new();
+        }
+        let mut chunks = vec![owner];
+        for x in -1..=1 {
+            for y in -1..=1 {
+                for z in -1..=1 {
+                    let candidate = ChunkCoord::new(owner.x + x, owner.y + y, owner.z + z);
+                    if (x, y, z) != (0, 0, 0) && self.voxel_world.get(candidate).is_some() {
+                        chunks.push(candidate);
+                    }
+                }
+            }
+        }
+        chunks
+    }
+
     /// Add (`present`) or remove one solid voxel's share of the count and hash.
     pub(crate) fn account_voxel(&mut self, voxel: MaterialVoxel, present: bool) {
         if present {
@@ -1319,11 +1456,13 @@ impl VoxelCollisionScene {
     ) {
         let mut rebuilt_chunks = 0;
         let mut removed_chunks = 0;
+        let mut rebuilt = Vec::new();
         for (coordinate, mesh) in rebuild.meshes {
             match mesh {
                 Some(mesh) => {
                     self.mesh_chunks.insert(coordinate, mesh);
                     rebuilt_chunks += 1;
+                    rebuilt.push(coordinate);
                 }
                 None => {
                     if self.mesh_chunks.remove(&coordinate).is_some() {
@@ -1340,8 +1479,13 @@ impl VoxelCollisionScene {
             source_revision: self.source_revision,
             previous_mesh_state: Some(previous_mesh_state),
             surface_mode: self.mesh_options.mode,
+            // The rebuilt meshes, which may include field-only refreshes
+            // past `dirty`.
             dirty_chunks: dirty
                 .iter()
+                .chain(rebuilt.iter())
+                .collect::<BTreeSet<_>>()
+                .into_iter()
                 .map(|coordinate| coordinate.to_array())
                 .collect(),
             rebuilt_chunks,
@@ -1494,8 +1638,9 @@ fn voxel_mesh_chunk(
     source_chunk_hash: u64,
     mesh: svc_mesh::MeshPayload,
 ) -> VoxelMeshChunk {
-    let content_hash = mesh_payload_hash(&mesh);
+    let voxels = size;
     let size = size.map(i64::from);
+    let content_hash = mesh_payload_hash(&mesh);
     let triangle_owners = mesh
         .triangle_owners
         .iter()
@@ -1505,18 +1650,25 @@ fn voxel_mesh_chunk(
             ((local[2] * size[1] + local[1]) * size[0] + local[0]) as u32
         })
         .collect();
+    let distance_field = mesh
+        .distance_field
+        .map_or_else(Vec::new, |field| field.data);
+    let field_hash = field_hash(&distance_field);
     VoxelMeshChunk {
         chunk: coordinate.to_array(),
         content_hash,
+        field_hash,
         source_chunk_hash,
         surface_mode: mesh.surface_mode,
         translation: [origin.x as f32, origin.y as f32, origin.z as f32],
         origin_voxel,
         voxel_size,
+        size: voxels,
         positions: mesh.positions,
         normals: mesh.normals,
         tile_coordinates: mesh.tile_coordinates,
         layer_weights: mesh.layer_weights,
+        distance_field,
         indices: mesh.indices,
         groups: mesh
             .groups
@@ -1538,6 +1690,42 @@ fn voxel_mesh_chunk(
         quads: mesh.stats.quads,
         faces_culled: mesh.stats.faces_culled,
     }
+}
+
+/// A retained chunk with its distance field rebuilt from the world as it is
+/// now (for a chunk a neighbour's edit reached without touching its mesh),
+/// or dropped when the scene no longer builds fields. `None` when nothing
+/// changes.
+pub(crate) fn refresh_distance_field(
+    world: &VoxelWorld,
+    coordinate: ChunkCoord,
+    retained: &VoxelMeshChunk,
+    enabled: bool,
+) -> Option<VoxelMeshChunk> {
+    let data = if enabled {
+        svc_mesh::chunk_distance_field(world, coordinate)?.data
+    } else {
+        Vec::new()
+    };
+    if data == retained.distance_field {
+        return None;
+    }
+    let mut chunk = retained.clone();
+    chunk.distance_field = data;
+    chunk.field_hash = field_hash(&chunk.distance_field);
+    Some(chunk)
+}
+
+/// The replacement key of a chunk's distance field alone.
+fn field_hash(field: &[u8]) -> u64 {
+    let mut hash = WordHash::default();
+    hash.words([field.len() as u32]);
+    hash.words(field.chunks(4).map(|bytes| {
+        let mut word = [0_u8; 4];
+        word[..bytes.len()].copy_from_slice(bytes);
+        u32::from_le_bytes(word)
+    }));
+    hash.finish()
 }
 
 fn mesh_payload_hash(mesh: &svc_mesh::MeshPayload) -> u64 {

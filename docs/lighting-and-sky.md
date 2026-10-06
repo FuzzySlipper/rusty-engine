@@ -121,6 +121,43 @@ engine.CameraView.SetSkyLight(new(Intensity: 1));
 - Product shaders that call `standard_shade` get it with the rest of the
   standard lighting.
 
+## Renderer settings
+
+`RendererSettings` is the product's view of the renderer's pipeline features
+and quality: `Read()` returns a `RendererSettingsReadout` and
+`Set(RendererSettingsRequest)` replaces every setting from the next frame,
+and `Read()` reports the change from the next product call.
+The request holds shadows on or off and their budget (0 for no limit),
+ambient occlusion (`Disabled`, `ScreenSpace` or `DistanceField`, with its
+strength and radius), antialiasing (`Off`, `Msaa2` or `Msaa4`), the render
+scale (0.5 to 1: the world, viewmodel, labels and effects draw at that
+fraction of the frame's size and are upscaled bilinearly into it, while a
+playing video and the browser or window UI keep their full size), vsync,
+and the clustered lighting and GPU culling switches. The product manifest's
+`RustyEngineProduct*` properties are the initial values
+([the product project](csharp-product-project.md#renderer-settings)), so a
+graphics menu starts from `Read().Requested`, changes what it offers and sets
+the rest back unchanged. The selection is retained with the scene (a
+rebaseline keeps it, and a scene snapshot records it); the Engine chooses
+how each setting is drawn, such as the pass that computes screen-space
+occlusion.
+
+The readout carries `Requested`, what the product or its manifest asked for,
+and `Effective`, what draws, with a refusal per setting the device draws
+differently: `NoComputeShaders` (distance-field occlusion and clustered
+lighting fall back to the screen-space pass and the light loop),
+`NoIndirectDraws` (GPU culling keeps the CPU list), `UnsupportedSampleCount`
+(the adapter cannot multisample at that count, so the default 4 draws) and
+`NoDisplay` (streamed output has no display, so vsync is moot). A refused
+setting is not an error: `Set` accepts any finite, non-negative strength, positive
+radius and render scale from 0.5 to 1, and refuses only values outside
+those ranges.
+`engine.renderer` reports the same under `settings`
+([renderer statistics](performance.md#renderer-statistics)). The
+`csharp-lighting-sky` fixture's `lighting.settings`, `lighting.antialiasing`,
+`lighting.occlusion`, `lighting.shadows` and `lighting.pipeline` commands
+exercise it.
+
 ## Contact darkening: screen-space ambient occlusion
 
 The sky's shadow darkens at the scale of a cave; screen-space ambient
@@ -128,10 +165,19 @@ occlusion darkens within about 0.75 m where surfaces meet: corners, the foot
 of a wall, a crate on the floor. It scales only the ambient and hemisphere
 light of opaque, lit parts (`Surface.occlusion`, so product shaders calling
 `standard_shade` get it), so it shows where ambient light carries the scene
-and barely in one lit mostly by torches. It is under evaluation and off by
-default; a product turns it on with `RustyEngineProductAmbientOcclusion` (see
-[the product project](csharp-product-project.md#screen-space-ambient-occlusion-under-evaluation)),
+and barely in one lit mostly by torches. It is off by default; a product
+turns it on with `RustyEngineProductAmbientOcclusion` (see
+[the product project](csharp-product-project.md#screen-space-ambient-occlusion)),
 and `engine.renderer` reports its passes' GPU time.
+
+Its `distanceField` mode replaces the screen-space pass with a cone trace
+through the voxel chunks' signed distance fields, which the chunk mesher
+builds from the chunk and its neighbours and the renderer keeps in one 3D
+atlas; occlusion then comes from the world around a surface, out to half a
+chunk, rather than from what the view shows. The depth pre-pass and the blur
+stay the same, so the two modes swap on one product setting. The fields are
+built, published and held in the atlas only while that mode draws: a scene
+whose product does not select it pays nothing for them.
 
 ## The standard shader
 

@@ -28,6 +28,8 @@ mod capture;
 mod compose;
 mod composition;
 mod convert;
+mod culling;
+mod distance_fields;
 mod driver;
 mod effects;
 mod finish;
@@ -36,6 +38,7 @@ mod ghost;
 mod glb;
 mod gpu;
 mod labels;
+mod light_clusters;
 mod particles;
 mod pipelines;
 mod post;
@@ -54,6 +57,8 @@ mod voxel;
 pub mod web;
 
 use std::collections::HashMap;
+
+use render_model::{AmbientOcclusionMode, RendererSettingsDescriptor};
 
 /// The CPU-side realization vocabulary, for readers that need exactly the
 /// geometry and materials the renderer draws without a device
@@ -79,10 +84,13 @@ pub use animated::AnimationFact;
 pub use apply::ApplyIssue;
 pub use camera::CameraSampleReadout;
 pub use composition::{DrawnCamera, TargetReadout, TargetStatus, ViewCompositionReadout};
+pub use culling::GpuCullingReadout;
+pub use distance_fields::DistanceFieldReadout;
 pub use driver::{Capture, SceneChange, SceneDriver, SceneFrame, SceneState, SceneView};
 pub use frame::FrameStats;
 pub use ghost::GhostPlateReadout;
 pub use gpu::{AdapterSummary, ComputeLimits, Gpu, GpuError};
+pub use light_clusters::LightClusterReadout;
 pub use particles::EntityPositions;
 pub use resources::{decode_png_rgba, encode_png, NoResources, ResourceSource};
 pub use surface::{PresentSkip, SurfaceFrame, WindowSurface};
@@ -126,6 +134,10 @@ pub struct GpuReadout {
     /// The timed passes, in frame order.
     pub passes: Vec<GpuPassTiming>,
     pub ambient_occlusion: AmbientOcclusionReadout,
+    /// The chunk field atlas the `DistanceField` occlusion path traces.
+    pub distance_fields: DistanceFieldReadout,
+    pub light_clusters: LightClusterReadout,
+    pub gpu_culling: GpuCullingReadout,
 }
 
 /// Host choices that are not part of the retained model.
@@ -148,6 +160,27 @@ pub struct RendererOptions {
     /// (`renderer.lighting.ambientOcclusion` in a product's manifest). Off by
     /// default.
     pub ambient_occlusion: AmbientOcclusion,
+    /// Bin a world view's lights into a cluster grid before its pass and
+    /// shade each fragment from its cluster (`light_clusters.rs`), instead of
+    /// looping over every light. Off by default; a device without compute
+    /// shaders loops regardless.
+    pub clustered_lighting: bool,
+    /// Test each view's opaque parts against its frustum on the GPU and
+    /// draw them indirectly (`culling.rs`), instead of building the draw
+    /// list on the CPU each time the camera moves. Off by default; a device
+    /// without indirect draws keeps the CPU list regardless.
+    pub gpu_culling: bool,
+    /// Samples per pixel of the primary destination (the offscreen primary
+    /// target and the window surface): 1, 2 or 4. Offscreen render targets
+    /// and captures stay single-sample.
+    pub samples: u32,
+    /// Window output waits for the display's refresh before presenting;
+    /// off presents as soon as a frame is drawn. Streamed output has no
+    /// display.
+    pub vsync: bool,
+    /// The fraction of the primary destination's size the primary passes
+    /// draw at (`Renderer::draw_primary`): 0.5 to 1.
+    pub render_scale: f32,
 }
 
 impl Default for RendererOptions {
@@ -158,8 +191,90 @@ impl Default for RendererOptions {
             shadows: false,
             shadow_budget: None,
             ambient_occlusion: AmbientOcclusion::default(),
+            clustered_lighting: false,
+            gpu_culling: false,
+            samples: RendererSettingsDescriptor::DEFAULT.antialiasing,
+            vsync: RendererSettingsDescriptor::DEFAULT.vsync,
+            render_scale: RendererSettingsDescriptor::DEFAULT.render_scale,
         }
     }
+}
+
+impl RendererOptions {
+    /// These options with a product's settings realized. The Engine's own
+    /// choices stay here: which occlusion path draws a mode, and the
+    /// default light rigs.
+    pub fn with_settings(mut self, settings: &RendererSettingsDescriptor) -> Self {
+        self.shadows = settings.shadows;
+        self.shadow_budget = settings.shadow_budget;
+        self.ambient_occlusion = AmbientOcclusion {
+            path: match settings.ambient_occlusion.mode {
+                AmbientOcclusionMode::Disabled => AmbientOcclusionPath::Off,
+                // The raster path draws the compute path's image and costs
+                // less on the GPUs measured (Den `compute-ao-9510`).
+                AmbientOcclusionMode::ScreenSpace => AmbientOcclusionPath::Raster,
+                AmbientOcclusionMode::DistanceField => AmbientOcclusionPath::DistanceField,
+            },
+            strength: settings.ambient_occlusion.strength,
+            radius: settings.ambient_occlusion.radius,
+        };
+        self.samples = settings.antialiasing;
+        self.vsync = settings.vsync;
+        self.render_scale = settings.render_scale;
+        self.clustered_lighting = settings.clustered_lighting;
+        self.gpu_culling = settings.gpu_culling;
+        self
+    }
+
+    /// The settings these options realize, as a product reads them back.
+    pub fn settings(&self) -> RendererSettingsDescriptor {
+        RendererSettingsDescriptor {
+            shadows: self.shadows,
+            shadow_budget: self.shadow_budget,
+            ambient_occlusion: render_model::AmbientOcclusionSettings {
+                mode: match self.ambient_occlusion.path {
+                    AmbientOcclusionPath::Off => AmbientOcclusionMode::Disabled,
+                    AmbientOcclusionPath::Compute | AmbientOcclusionPath::Raster => {
+                        AmbientOcclusionMode::ScreenSpace
+                    }
+                    AmbientOcclusionPath::DistanceField => AmbientOcclusionMode::DistanceField,
+                },
+                strength: self.ambient_occlusion.strength,
+                radius: self.ambient_occlusion.radius,
+            },
+            antialiasing: self.samples,
+            render_scale: self.render_scale,
+            vsync: self.vsync,
+            clustered_lighting: self.clustered_lighting,
+            gpu_culling: self.gpu_culling,
+        }
+    }
+}
+
+/// Why the device cannot realize a setting as asked.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SettingRefusal {
+    /// The adapter has no compute shaders.
+    NoComputeShaders,
+    /// The adapter cannot draw from GPU-written indirect arguments.
+    NoIndirectDraws,
+    /// The primary destination's formats cannot multisample at that count.
+    UnsupportedSampleCount,
+}
+
+/// The settings in effect and what the device refused: what a product
+/// reads back through `RendererSettings`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RendererSettingsReadout {
+    /// What the product (or its manifest) asked for.
+    pub requested: RendererSettingsDescriptor,
+    /// What draws: the request with each refused setting replaced by what
+    /// the device does instead.
+    pub effective: RendererSettingsDescriptor,
+    pub ambient_occlusion: Option<SettingRefusal>,
+    pub antialiasing: Option<SettingRefusal>,
+    pub clustered_lighting: Option<SettingRefusal>,
+    pub gpu_culling: Option<SettingRefusal>,
 }
 
 pub struct Renderer {
@@ -181,6 +296,9 @@ pub struct Renderer {
     sun: Option<frame::Sun>,
     /// The sky's light: the background prefiltered for the standard shader.
     sky_light: sky_light::SkyLight,
+    /// Unbounded world lights in the last upload (`upload_lights`): the
+    /// clustered path loops when they exceed its global list.
+    global_lights: u32,
     /// Part ids: the world and viewmodel view lists, then each shadow
     /// layer's casters.
     instances_buffer: wgpu::Buffer,
@@ -214,9 +332,15 @@ pub struct Renderer {
     /// it moves past the value they were drawn at.
     scene_generation: u64,
     compose: compose::Compose,
+    /// The internal target the primary passes draw into at a render scale
+    /// below 1, kept while its size and sample count hold.
+    scaled: Option<target::ScaledPrimary>,
     ambient_occlusion: ambient_occlusion::AmbientOcclusionPass,
     /// The world's HDR targets and the finish pass.
     finish: finish::Finish,
+    distance_fields: distance_fields::DistanceFields,
+    light_clusters: light_clusters::LightClusters,
+    culling: culling::GpuCulling,
     composition: composition::ViewComposition,
     effects: effects::Effects,
     particles: particles::Particles,
@@ -243,6 +367,22 @@ impl Renderer {
             frame::storage_buffer(device, "render-wgpu instances", INITIAL_INSTANCES_BYTES);
         let shadows = shadows::ShadowMaps::new(device, &layouts.shadow_layer);
         let sky_light = sky_light::SkyLight::new(gpu);
+        let light_clusters = light_clusters::LightClusters::new(
+            gpu,
+            pipelines::standard(layouts.shaders.module(
+                device,
+                Entry::LightClusters,
+                Features::default(),
+            )),
+        );
+        let culling = culling::GpuCulling::new(
+            gpu,
+            pipelines::standard(
+                layouts
+                    .shaders
+                    .module(device, Entry::Cull, Features::default()),
+            ),
+        );
         let frame_bind_group = frame::frame_bind_group(
             device,
             &layouts.frame,
@@ -253,6 +393,7 @@ impl Renderer {
                 instances: &instances_buffer,
                 shadows: &shadows,
                 sky_light: &sky_light,
+                clusters: &light_clusters.clusters,
             },
         );
         let caster_bind_group = frame::caster_bind_group(
@@ -296,6 +437,14 @@ impl Renderer {
             ambient_occlusion_shader,
             &layouts.ambient_occlusion,
         );
+        let distance_fields = distance_fields::DistanceFields::new(
+            gpu,
+            pipelines::standard(layouts.shaders.module(
+                device,
+                Entry::DistanceField,
+                Features::default(),
+            )),
+        );
         let mut renderer = Self {
             gpu: gpu.clone(),
             options,
@@ -312,6 +461,7 @@ impl Renderer {
             lights: Default::default(),
             sun: None,
             sky_light,
+            global_lights: 0,
             instances_buffer,
             casters_uploaded: false,
             views: Default::default(),
@@ -333,8 +483,12 @@ impl Renderer {
             ghost_pipelines: ghost::GhostPipelines::new(device, ghost_shader),
             scene_generation: 0,
             compose: compose::Compose::new(device, compose_shader),
+            scaled: None,
             ambient_occlusion,
             finish,
+            distance_fields,
+            light_clusters,
+            culling,
             composition: Default::default(),
             effects,
             particles: Default::default(),
@@ -381,10 +535,85 @@ impl Renderer {
     }
 
     /// Change host options; lights (and shadow layers) are re-derived on the
-    /// next render.
+    /// next render. Retained chunk fields take or give up their atlas bricks
+    /// as the occlusion path enters or leaves the distance-field path.
     pub fn set_options(&mut self, options: RendererOptions) {
+        let traced = |options: &RendererOptions| {
+            options.ambient_occlusion.path == AmbientOcclusionPath::DistanceField
+        };
+        let (was, now) = (traced(&self.options), traced(&options));
         self.options = options;
         self.tables.lights_dirty = true;
+        if was != now {
+            for mesh in self.tables.payload_meshes.values_mut() {
+                let Some(field) = &mut mesh.distance_field else {
+                    continue;
+                };
+                if now {
+                    field.slot = field
+                        .slot
+                        .or_else(|| self.distance_fields.allocate(&self.gpu, &field.data));
+                } else if let Some(slot) = field.slot.take() {
+                    self.distance_fields.release(slot);
+                }
+            }
+        }
+    }
+
+    /// Realize a product's settings (`RenderDiff::SetRendererSettings`).
+    pub(crate) fn set_settings(&mut self, settings: &RendererSettingsDescriptor) {
+        self.set_options(self.options.with_settings(settings));
+    }
+
+    /// Samples per pixel the primary destination should have: the option,
+    /// or 4 where this device cannot multisample at it. Hosts size their
+    /// targets by it.
+    pub fn samples(&self) -> u32 {
+        if self.gpu.samples_supported(self.options.samples) {
+            self.options.samples
+        } else {
+            RendererSettingsDescriptor::DEFAULT.antialiasing
+        }
+    }
+
+    /// Whether window output should wait for the display's refresh.
+    pub fn vsync(&self) -> bool {
+        self.options.vsync
+    }
+
+    /// The settings in effect and what the device refused.
+    pub fn settings_readout(&self) -> RendererSettingsReadout {
+        let requested = self.options.settings();
+        let mut effective = requested;
+        let antialiasing = (!self.gpu.samples_supported(requested.antialiasing)).then(|| {
+            effective.antialiasing = self.samples();
+            SettingRefusal::UnsupportedSampleCount
+        });
+        let ambient_occlusion = (requested.ambient_occlusion.mode
+            == AmbientOcclusionMode::DistanceField
+            && !self.distance_fields.available())
+        .then(|| {
+            effective.ambient_occlusion.mode = AmbientOcclusionMode::ScreenSpace;
+            SettingRefusal::NoComputeShaders
+        });
+        let clustered_lighting = (requested.clustered_lighting
+            && self.light_clusters.readout().refused.is_some())
+        .then(|| {
+            effective.clustered_lighting = false;
+            SettingRefusal::NoComputeShaders
+        });
+        let gpu_culling = (requested.gpu_culling && !self.culling.available()).then(|| {
+            effective.gpu_culling = false;
+            SettingRefusal::NoIndirectDraws
+        });
+        RendererSettingsReadout {
+            requested,
+            effective,
+            ambient_occlusion,
+            antialiasing,
+            clustered_lighting,
+            gpu_culling,
+        }
     }
 
     /// The renderer's GPU passes (ambient occlusion's, then the world, its
@@ -404,9 +633,16 @@ impl Renderer {
                 .timings()
                 .into_iter()
                 .chain(self.finish.timings())
-                .chain([self.sky_light.timing()])
+                .chain([
+                    self.light_clusters.timing(),
+                    self.culling.timing(),
+                    self.sky_light.timing(),
+                ])
                 .collect(),
             ambient_occlusion: self.ambient_occlusion.readout(),
+            distance_fields: self.distance_fields.readout(),
+            light_clusters: self.light_clusters.readout(),
+            gpu_culling: self.culling.readout(),
         }
     }
 

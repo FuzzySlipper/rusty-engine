@@ -87,7 +87,7 @@ fn the_driver_reports_what_it_drew_and_ends_clips_undrawn() {
         &|_| None,
         state(3, true),
     );
-    let target = OffscreenTarget::new(&gpu, 64, 32);
+    let target = OffscreenTarget::new(&gpu, 64, 32, 4);
     let (video, shown) =
         scene.draw(|renderer, now| renderer.render_view_composition(&target, now).video);
     assert!(!video);

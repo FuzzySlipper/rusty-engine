@@ -21,13 +21,17 @@ struct LabelVarying {
 @group(0) @binding(1) var label_sampler: sampler;
 @group(1) @binding(0) var scene_depth: SCENE_DEPTH;
 
-// The image is single-sample; the scene's depth has SCENE_SAMPLES samples a
-// pixel at the standard positions. A label covers the samples of its pixel
-// that its rect holds (and, depth-tested, that it is no farther than the
-// scene at), as a quad rasterized at those samples and resolved would.
+// The image is single-sample; the scene's depth has SCENE_SAMPLES (1, 2 or
+// 4) samples a pixel at the standard positions. A label covers the samples
+// of its pixel that its rect holds (and, depth-tested, that it is no
+// farther than the scene at), as a quad rasterized at those samples and
+// resolved would.
 fn sample_position(index: u32) -> vec2<f32> {
     if SCENE_SAMPLES == 1u {
         return vec2<f32>(0.5, 0.5);
+    }
+    if SCENE_SAMPLES == 2u {
+        return select(vec2<f32>(0.25, 0.25), vec2<f32>(0.75, 0.75), index == 0u);
     }
     switch index {
         case 0u: { return vec2<f32>(0.375, 0.125); }

@@ -30,7 +30,7 @@ use crate::camera::CameraMatrices;
 use crate::frame::PixelRect;
 use crate::particles::EntityPositions;
 use crate::resources::{self, DecodedImage, ResourceSource};
-use crate::target::{ColorTarget, TargetView, PRIMARY_SAMPLES};
+use crate::target::{ColorTarget, TargetView};
 use crate::Renderer;
 
 /// Every system family resolves to this bundled face (`fonts/LICENSE`).
@@ -1046,8 +1046,9 @@ const INSTANCE_FLOATS: usize = 8;
 struct LabelGpu {
     image_layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
-    /// Per multisampled scene depth: its layout, pipeline layout and shader.
-    depth_variants: HashMap<bool, DepthVariant>,
+    /// Per sample count of the scene depth: its layout, pipeline layout and
+    /// shader.
+    depth_variants: HashMap<u32, DepthVariant>,
     /// Per target and depth-tested (`true`) or not.
     pipelines: HashMap<(ColorTarget, bool), wgpu::RenderPipeline>,
     instances: wgpu::Buffer,
@@ -1096,9 +1097,10 @@ impl LabelGpu {
         }
     }
 
-    fn variant(&mut self, device: &wgpu::Device, multisampled: bool) -> &DepthVariant {
+    fn variant(&mut self, device: &wgpu::Device, samples: u32) -> &DepthVariant {
+        let multisampled = samples > 1;
         let image_layout = &self.image_layout;
-        self.depth_variants.entry(multisampled).or_insert_with(|| {
+        self.depth_variants.entry(samples).or_insert_with(|| {
             let depth_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("render-wgpu label scene depth"),
                 entries: &[wgpu::BindGroupLayoutEntry {
@@ -1128,10 +1130,7 @@ impl LabelGpu {
                     source: wgpu::ShaderSource::Wgsl(
                         include_str!("labels.wgsl")
                             .replace("SCENE_DEPTH", depth_type)
-                            .replace(
-                                "SCENE_SAMPLES",
-                                &format!("{}u", if multisampled { PRIMARY_SAMPLES } else { 1 }),
-                            )
+                            .replace("SCENE_SAMPLES", &format!("{samples}u"))
                             .into(),
                     ),
                 }),
@@ -1147,7 +1146,7 @@ impl LabelGpu {
         depth_tested: bool,
     ) -> &wgpu::RenderPipeline {
         if !self.pipelines.contains_key(&(target, depth_tested)) {
-            let variant = self.variant(device, target.samples > 1);
+            let variant = self.variant(device, target.samples);
             let blend = wgpu::BlendComponent {
                 src_factor: wgpu::BlendFactor::One,
                 dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
@@ -1317,7 +1316,7 @@ impl Renderer {
         };
         gpu_labels.pipeline(device, key, true);
         gpu_labels.pipeline(device, key, false);
-        let variant = gpu_labels.variant(device, key.samples > 1);
+        let variant = gpu_labels.variant(device, key.samples);
         let depth_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("render-wgpu label scene depth"),
             layout: &variant.depth_layout,

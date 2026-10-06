@@ -4,7 +4,8 @@
 //!
 //! ```text
 //! rusty-scene-render <snapshot> <out.png> [--width W] [--height H] [--frames N]
-//!                    [--walk M] [--turn D] [--ambient-occlusion off|compute|raster]
+//!                    [--walk M] [--turn D] [--ambient-occlusion off|compute|raster|field]
+//!                    [--clustered-lighting on|off] [--gpu-culling on|off] [--render-scale S]
 //! ```
 //!
 //! `--frames N` then draws N more frames into one target with readback and
@@ -28,7 +29,8 @@ use render_wgpu::{
 use serde_json::json;
 
 const USAGE: &str = "usage: rusty-scene-render <snapshot> <out.png> [--width W] [--height H] \
-     [--frames N] [--walk M] [--turn D] [--ambient-occlusion off|compute|raster]";
+     [--frames N] [--walk M] [--turn D] [--ambient-occlusion off|compute|raster|field] \
+     [--clustered-lighting on|off] [--gpu-culling on|off] [--render-scale S]";
 
 fn main() {
     if let Err(error) = run() {
@@ -43,6 +45,9 @@ fn run() -> Result<(), String> {
     let (mut width, mut height, mut frames) = (1280_u32, 720_u32, 0_u32);
     let (mut walk, mut turn) = (0.0_f64, 0.0_f64);
     let mut ambient_occlusion: Option<AmbientOcclusionPath> = None;
+    let mut clustered_lighting: Option<bool> = None;
+    let mut gpu_culling: Option<bool> = None;
+    let mut render_scale: Option<f32> = None;
     while let Some(argument) = arguments.next() {
         let mut number = |name: &str| -> Result<f64, String> {
             arguments
@@ -56,14 +61,30 @@ fn run() -> Result<(), String> {
             "--frames" => frames = number("--frames")? as u32,
             "--walk" => walk = number("--walk")?,
             "--turn" => turn = number("--turn")?,
+            "--render-scale" => render_scale = Some(number("--render-scale")? as f32),
+            "--gpu-culling" => {
+                gpu_culling = Some(match arguments.next().as_deref() {
+                    Some("on") => true,
+                    Some("off") => false,
+                    _ => return Err(format!("--gpu-culling needs on or off\n{USAGE}")),
+                });
+            }
+            "--clustered-lighting" => {
+                clustered_lighting = Some(match arguments.next().as_deref() {
+                    Some("on") => true,
+                    Some("off") => false,
+                    _ => return Err(format!("--clustered-lighting needs on or off\n{USAGE}")),
+                });
+            }
             "--ambient-occlusion" => {
                 ambient_occlusion = Some(match arguments.next().as_deref() {
                     Some("off") => AmbientOcclusionPath::Off,
                     Some("compute") => AmbientOcclusionPath::Compute,
                     Some("raster") => AmbientOcclusionPath::Raster,
+                    Some("field") => AmbientOcclusionPath::DistanceField,
                     _ => {
                         return Err(format!(
-                            "--ambient-occlusion needs off, compute or raster\n{USAGE}"
+                            "--ambient-occlusion needs off, compute, raster or field\n{USAGE}"
                         ))
                     }
                 });
@@ -104,7 +125,20 @@ fn run() -> Result<(), String> {
             AmbientOcclusionPath::Off => 1.0,
             _ => options.ambient_occlusion.strength,
         };
-        options.ambient_occlusion = AmbientOcclusion { path, strength };
+        options.ambient_occlusion = AmbientOcclusion {
+            path,
+            strength,
+            radius: options.ambient_occlusion.radius,
+        };
+    }
+    if let Some(clustered) = clustered_lighting {
+        options.clustered_lighting = clustered;
+    }
+    if let Some(culling) = gpu_culling {
+        options.gpu_culling = culling;
+    }
+    if let Some(scale) = render_scale {
+        options.render_scale = scale;
     }
     let driver = SceneDriver::new(gpu, options);
     let applied = Instant::now();
@@ -138,7 +172,7 @@ fn run() -> Result<(), String> {
         if moving && start.is_none() {
             return Err("--walk and --turn need a camera in the snapshot".to_owned());
         }
-        let target = OffscreenTarget::new(driver.gpu(), width, height);
+        let target = OffscreenTarget::new(driver.gpu(), width, height, driver.primary_samples());
         let mut pixels = Vec::new();
         let mut costs = Vec::with_capacity(frames as usize);
         for frame in 1..=frames {
@@ -178,6 +212,13 @@ fn run() -> Result<(), String> {
         .0;
     let (skipped, last_skip) = driver.skipped_ops();
     let gpu_readout = driver.gpu_readout();
+    let settings = driver.settings_readout();
+    let refused = [
+        ("ambientOcclusion", settings.ambient_occlusion),
+        ("antialiasing", settings.antialiasing),
+        ("clusteredLighting", settings.clustered_lighting),
+        ("gpuCulling", settings.gpu_culling),
+    ];
     let report = json!({
         "snapshot": snapshot_path.display().to_string(),
         "product": snapshot.metadata.product,
@@ -194,6 +235,15 @@ fn run() -> Result<(), String> {
         "lastSkip": last_skip,
         "image": { "path": out.display().to_string(), "width": width, "height": height },
         "timing": timing,
+        // The renderer settings drawn: the snapshot's, changed by the flags
+        // above, and what the adapter refused.
+        "settings": {
+            "requested": settings.requested,
+            "effective": settings.effective,
+            "refused": refused.iter().filter_map(|(name, refusal)| {
+                refusal.map(|refusal| json!({ "setting": name, "refusal": format!("{refusal:?}") }))
+            }).collect::<Vec<_>>(),
+        },
         // The GPU passes over the frames drawn: each timed pass's median
         // cost and the ambient occlusion path, as `engine.renderer` reports
         // them.
@@ -210,6 +260,29 @@ fn run() -> Result<(), String> {
                 "computeRefused": gpu_readout.ambient_occlusion.compute_refused,
                 "workgroups": gpu_readout.ambient_occlusion.workgroups,
                 "texture": gpu_readout.ambient_occlusion.texture,
+            },
+            "distanceFields": {
+                "refused": gpu_readout.distance_fields.refused,
+                "residentFields": gpu_readout.distance_fields.resident_fields,
+                "atlasBricks": gpu_readout.distance_fields.atlas_bricks,
+                "atlasBytes": gpu_readout.distance_fields.atlas_bytes,
+                "lookupEntries": gpu_readout.distance_fields.lookup_entries,
+            },
+            "lightClusters": {
+                "enabled": gpu_readout.light_clusters.enabled,
+                "refused": gpu_readout.light_clusters.refused,
+                "grid": gpu_readout.light_clusters.grid,
+                "binnedLights": gpu_readout.light_clusters.binned_lights,
+                "globalLights": gpu_readout.light_clusters.global_lights,
+                "overflowedClusters": gpu_readout.light_clusters.overflowed_clusters,
+            },
+            "gpuCulling": {
+                "enabled": gpu_readout.gpu_culling.enabled,
+                "refused": gpu_readout.gpu_culling.refused,
+                "candidates": gpu_readout.gpu_culling.candidates,
+                "batches": gpu_readout.gpu_culling.batches,
+                "visible": gpu_readout.gpu_culling.visible,
+                "multiDraws": gpu_readout.gpu_culling.multi_draws,
             },
         },
     });

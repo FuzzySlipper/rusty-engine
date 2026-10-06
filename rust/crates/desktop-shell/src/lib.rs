@@ -279,7 +279,7 @@ impl Shell {
         if let Some(ui) = &mut open.ui {
             ui.page().import_repaint();
         }
-        let surface = &open.surface;
+        let surface = &mut open.surface;
         // The window's scale factor is the page's device pixel ratio too.
         let pixel_ratio = open.window.scale_factor() as f32;
         #[cfg(feature = "web-overlay")]

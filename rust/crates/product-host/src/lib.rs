@@ -62,8 +62,10 @@ pub use bundle::{
 };
 pub use engine_debug::{
     ProductHostAmbientOcclusionPath, ProductHostAmbientOcclusionStatistics, ProductHostCameraPose,
-    ProductHostComputeLimits, ProductHostDrawingMode, ProductHostDrawnFrame, ProductHostGpuPass,
-    ProductHostGpuStatistics, ProductHostRenderOutput, ProductHostRendererInspection,
+    ProductHostComputeLimits, ProductHostDistanceFieldStatistics, ProductHostDrawingMode,
+    ProductHostDrawnFrame, ProductHostGpuCullingStatistics, ProductHostGpuPass,
+    ProductHostGpuStatistics, ProductHostLightClusterStatistics, ProductHostRenderOutput,
+    ProductHostRendererInspection, ProductHostRendererSettingValues, ProductHostRendererSettings,
     ProductHostRendererStatistics, ProductHostRendererStatus, ProductHostRendererWidget,
     ProductHostShadowStatistics, ProductHostStreamMedians, ProductHostStreamStatistics,
     ProductHostTimeAnswer, ProductHostTimeMode, ProductHostTimedStep, ProductHostWindowMedians,

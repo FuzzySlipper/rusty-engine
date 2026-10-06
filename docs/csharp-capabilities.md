@@ -52,6 +52,7 @@ to force a rerun.
 | `Audio` | Own audio clips, voices, control, and presentation feedback. |
 | `Video` | Own one content-backed full-viewport WebM presentation and terminal realization facts. |
 | `CameraView` | Retain cameras, offscreen targets, and ordered primary/offscreen view compositions; select one active camera as a convenience. |
+| `RendererSettings` | Read the renderer's settings in effect and select its pipeline features and quality at runtime: shadows and their budget, ambient occlusion mode, strength and radius, antialiasing, vsync, clustered lighting and GPU culling. The product manifest supplies the initial values ([renderer settings](lighting-and-sky.md#renderer-settings)). |
 | `Random` | Provide Engine-owned deterministic streams, keyed draws, and explicit-state compatibility draws. `DrawLcg15` advances a caller-held wrapping 32-bit LCG state, exposes its 15-bit sample, and reduces it with modulo arithmetic; it is intentionally compatibility behavior, so it has modulo bias and is not a general uniform random API. |
 | `Persistence` | Read and write bounded Engine persistence blobs and stores. |
 | `Http` | Fetch small HTTPS bodies into memory and download large ones into a product library directory, with progress, cancellation and library listing ([HTTP downloads](http-downloads.md)). |

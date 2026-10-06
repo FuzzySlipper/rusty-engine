@@ -21,8 +21,14 @@
 //! --ambient-occlusion`). An adapter without compute shaders or with workgroup
 //! limits below the kernel's takes the raster path and the readout says why.
 //! Each pass is timed through `timing.rs`.
+//!
+//! The `DistanceField` path (#5911) keeps the pre-pass and the blur but
+//! replaces the screen-space occlusion pass with a cone trace through the
+//! chunks' distance fields (`distance_fields.rs`), so occlusion comes from
+//! the world around a surface, not only what the view shows.
 
 use crate::camera::CameraMatrices;
+use crate::distance_fields::DistanceFields;
 use crate::frame::PixelRect;
 use crate::target::{extent, DEPTH_FORMAT};
 use crate::timing::{untimed, GpuPassTiming, PassTimer};
@@ -37,8 +43,6 @@ const WORKGROUP: u32 = 16;
 const TILE_APRON: f32 = 8.0;
 /// Shared memory `cs_occlusion` needs: the 32×32 depth tile.
 const TILE_BYTES: u32 = (WORKGROUP + 2 * TILE_APRON as u32).pow(2) * 4;
-/// How far a surface darkens its neighbours, in world units.
-const RADIUS: f32 = 0.75;
 /// Cosine below which a sample does not occlude: keeps flat surfaces and
 /// the shallow creases between a reconstructed voxel surface's triangles
 /// clean.
@@ -64,21 +68,28 @@ pub enum AmbientOcclusionPath {
     Compute,
     /// `fs_occlusion`: a full-screen triangle sampling the depth texture.
     Raster,
+    /// `cs_field_occlusion`: cones traced through the chunk distance fields
+    /// (`distance_fields.rs`); the raster path where the device cannot.
+    DistanceField,
 }
 
 /// The host's ambient occlusion choice: the path, and the product's
-/// strength (0 draws without it, 1 the full occlusion).
+/// strength (0 draws without it, 1 the full occlusion) and radius (how far
+/// a surface darkens its neighbours, in world units).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct AmbientOcclusion {
     pub path: AmbientOcclusionPath,
     pub strength: f32,
+    pub radius: f32,
 }
 
 impl Default for AmbientOcclusion {
     fn default() -> Self {
+        let settings = render_model::AmbientOcclusionSettings::DEFAULT;
         Self {
             path: AmbientOcclusionPath::Off,
-            strength: 1.0,
+            strength: settings.strength,
+            radius: settings.radius,
         }
     }
 }
@@ -96,6 +107,17 @@ pub struct AmbientOcclusionReadout {
     pub workgroups: u32,
     /// The occlusion texture of the last view: half its target.
     pub texture: (u32, u32),
+}
+
+impl ViewOcclusion {
+    pub fn path(&self) -> AmbientOcclusionPath {
+        self.path
+    }
+
+    /// The half-resolution region of the occlusion texture the view covers.
+    pub fn region(&self) -> PixelRect {
+        self.region
+    }
 }
 
 /// One world view's occlusion this frame: its target's resources and the
@@ -123,6 +145,9 @@ struct Target {
     params: wgpu::Buffer,
     apply_params: wgpu::Buffer,
     compute: Option<wgpu::BindGroup>,
+    /// The distance field path's group, for the atlas generation it was
+    /// made with.
+    field: Option<(u64, wgpu::BindGroup)>,
     raster: wgpu::BindGroup,
     blur_x: wgpu::BindGroup,
     blur_y: wgpu::BindGroup,
@@ -392,10 +417,14 @@ impl AmbientOcclusionPass {
         size: (u32, u32),
         area: PixelRect,
         camera: &CameraMatrices,
+        fields: &DistanceFields,
     ) -> Option<ViewOcclusion> {
         let path = match options.path {
             _ if options.strength <= 0.0 || options.strength.is_nan() => AmbientOcclusionPath::Off,
             AmbientOcclusionPath::Compute if self.compute.is_err() => AmbientOcclusionPath::Raster,
+            AmbientOcclusionPath::DistanceField if !fields.available() => {
+                AmbientOcclusionPath::Raster
+            }
             path => path,
         };
         if path == AmbientOcclusionPath::Off {
@@ -432,7 +461,7 @@ impl AmbientOcclusionPass {
         for value in [region.x, region.y, region.width, region.height] {
             params.extend_from_slice(&value.to_le_bytes());
         }
-        for value in [RADIUS, BIAS, INTENSITY, TILE_APRON] {
+        for value in [options.radius, BIAS, INTENSITY, TILE_APRON] {
             params.extend_from_slice(&value.to_le_bytes());
         }
         let entry = &self.targets[target];
@@ -449,7 +478,7 @@ impl AmbientOcclusionPass {
         gpu.queue.write_buffer(&entry.apply_params, 0, &apply);
         self.last_path = path;
         self.last_texture = entry.texture;
-        if path != AmbientOcclusionPath::Compute {
+        if path == AmbientOcclusionPath::Raster {
             self.last_workgroups = 0;
         }
         Some(ViewOcclusion {
@@ -493,13 +522,45 @@ impl AmbientOcclusionPass {
         }
     }
 
-    /// The occlusion pass by the view's path, then the blur.
-    pub fn encode(&mut self, encoder: &mut wgpu::CommandEncoder, view: &ViewOcclusion) {
+    /// The occlusion pass by the view's path, then the blur. On the
+    /// `DistanceField` path `fields` has this view's lookup grid
+    /// (`DistanceFields::begin_view`).
+    pub fn encode(
+        &mut self,
+        gpu: &Gpu,
+        encoder: &mut wgpu::CommandEncoder,
+        view: &ViewOcclusion,
+        fields: &DistanceFields,
+    ) {
         if let Some(timer) = &mut self.prepass_timer {
             timer.resolve(encoder);
         }
+        if view.path == AmbientOcclusionPath::DistanceField {
+            let target = &mut self.targets[view.target];
+            if target
+                .field
+                .as_ref()
+                .is_none_or(|(generation, _)| *generation != fields.generation())
+            {
+                target.field = Some((
+                    fields.generation(),
+                    fields.bind_group(&gpu.device, &target.depth, &target.raw),
+                ));
+            }
+        }
         let target = &self.targets[view.target];
         match (view.path, &self.compute, &target.compute) {
+            (AmbientOcclusionPath::DistanceField, _, _) => {
+                let (_, bind_group) = target.field.as_ref().expect("field group made above");
+                self.last_workgroups = fields.encode(
+                    encoder,
+                    bind_group,
+                    view.region,
+                    self.occlusion_timer
+                        .as_ref()
+                        .and_then(PassTimer::compute_writes),
+                );
+            }
             (AmbientOcclusionPath::Compute, Ok(compute), Some(bind_group)) => {
                 let workgroups = (
                     view.region.width.div_ceil(WORKGROUP),
@@ -733,6 +794,7 @@ impl AmbientOcclusionPass {
             params,
             apply_params,
             compute,
+            field: None,
             raster,
             blur_x,
             blur_y,

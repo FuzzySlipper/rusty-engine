@@ -89,7 +89,7 @@ impl Harness {
             .clone();
         Self {
             renderer: Renderer::new(&gpu, options),
-            target: OffscreenTarget::new(&gpu, WIDTH, HEIGHT),
+            target: OffscreenTarget::new(&gpu, WIDTH, HEIGHT, 4),
             world: PresentationWorld::default(),
             resources: Resources::default(),
             gpu,
@@ -173,6 +173,7 @@ fn payload(
     }
     MeshPayloadDescriptor {
         texture_space: None,
+        distance_field: None,
         layout: MeshBufferLayout {
             vertex_count: (positions.len() / 3) as u32,
             index_count: indices.len() as u32,
@@ -692,7 +693,7 @@ fn resize_changes_the_readback_size() {
     harness.apply(vec![RenderDiff::SetBackgroundColor {
         color: [1.0, 0.0, 0.0, 1.0],
     }]);
-    harness.target.resize(&harness.gpu, 64, 48);
+    harness.target.resize(&harness.gpu, 64, 48, 4);
     let (_, pixels) = harness.render(&camera([0.0; 3], 0.0, 0.0));
     assert_eq!(pixels.len(), 64 * 48 * 4);
     assert_eq!(

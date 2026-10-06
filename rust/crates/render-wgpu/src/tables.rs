@@ -85,6 +85,16 @@ pub(crate) enum Topology {
     Lines,
 }
 
+/// A payload mesh's coarse distance field: its box in mesh space, its bytes,
+/// and the atlas brick it holds while the renderer traces fields
+/// (`AmbientOcclusionPath::DistanceField`). The bytes stay so the setting
+/// can turn on later without a republish.
+pub(crate) struct MeshField {
+    pub field_box: crate::distance_fields::FieldBox,
+    pub data: Vec<u8>,
+    pub slot: Option<u32>,
+}
+
 pub(crate) struct GpuMesh {
     pub vertices: wgpu::Buffer,
     pub indices: wgpu::Buffer,
@@ -105,6 +115,9 @@ pub(crate) struct GpuMesh {
     pub extra: Option<wgpu::Buffer>,
     /// The payload's texture space, for triplanar materials.
     pub texture_space: Option<render_model::MeshTextureSpace>,
+    /// The payload's distance field: its atlas brick and its box in mesh
+    /// space (`distance_fields.rs`).
+    pub distance_field: Option<MeshField>,
     /// Its vertex colours are terrain layer weights, not a tint: a voxel
     /// chunk meshed with terrain layers.
     pub layer_weights: bool,

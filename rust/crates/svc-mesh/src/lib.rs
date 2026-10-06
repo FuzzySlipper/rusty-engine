@@ -18,6 +18,7 @@ use svc_spatial::VoxelWorld;
 use svc_volume::VoxelChunk;
 use texture_mapping::{project_voxel_surface_tile_point, VoxelTextureMappingError};
 
+pub mod distance_field;
 mod surface;
 mod terrain_layers;
 pub mod texture_mapping;
@@ -196,6 +197,11 @@ pub struct SurfaceMeshOptions {
     pub non_occluding: BTreeSet<u16>,
     /// Give every vertex weights for these layers ([`MeshPayload::layer_weights`]).
     pub terrain_layers: Option<TerrainLayers>,
+    /// Build each chunk's coarse signed distance field with its mesh
+    /// ([`MeshPayload::distance_field`]) for the renderer's distance-field
+    /// occlusion. Off by default: a scene whose product has not selected
+    /// that occlusion pays nothing for the fields.
+    pub distance_fields: bool,
 }
 
 impl SurfaceMeshOptions {
@@ -328,6 +334,10 @@ pub struct MeshPayload {
     pub triangle_owner_spans: Vec<[u32; 3]>,
     pub bounds: MeshBounds,
     pub stats: MeshStats,
+    /// The chunk's coarse signed distance field (`distance_field`), built
+    /// over its box from the chunk and its resident neighbours by the world
+    /// chunk meshers; `None` from the object and scalar meshers.
+    pub distance_field: Option<distance_field::DistanceField>,
 }
 
 /// One local-space material cell accepted by the standalone object mesher.
@@ -785,6 +795,7 @@ pub fn mesh_scalar_samples(
         triangle_owner_spans: Vec::new(),
         bounds,
         stats: surface.stats,
+        distance_field: None,
     })
 }
 
@@ -1312,6 +1323,7 @@ fn empty_payload(mode: SurfaceMode) -> MeshPayload {
             surface_mode: mode,
             ..MeshStats::default()
         },
+        distance_field: None,
     }
 }
 
@@ -1344,26 +1356,53 @@ pub fn mesh_chunk_in_world_with_options(
     options: &SurfaceMeshOptions,
 ) -> Option<Result<MeshPayload, MeshError>> {
     let chunk = world.get(coord)?;
-    if options.all_greedy() {
-        let spec = world.grid();
-        let around = Neighbourhood::around(world, &spec, coord);
-        return Some(
-            mesh_core(
-                &spec,
-                coord,
-                chunk,
-                |_| true,
-                |slot, voxel, _| around.slot(voxel).is_some_and(|n| options.hides(slot, n)),
-            )
-            .map(|mut cubes| {
-                if let Some(layers) = &options.terrain_layers {
-                    cube_layer_weights(&mut cubes, layers);
-                }
-                cubes
-            }),
-        );
+    let spec = world.grid();
+    let around = Neighbourhood::around(world, &spec, coord);
+    let meshed = if options.all_greedy() {
+        mesh_core(
+            &spec,
+            coord,
+            chunk,
+            |_| true,
+            |slot, voxel, _| around.slot(voxel).is_some_and(|n| options.hides(slot, n)),
+        )
+        .map(|mut cubes| {
+            if let Some(layers) = &options.terrain_layers {
+                cube_layer_weights(&mut cubes, layers);
+            }
+            cubes
+        })
+    } else {
+        mesh_chunk_reconstructed(world, coord, chunk, options)
+    };
+    Some(meshed.map(|mut payload| {
+        if options.distance_fields {
+            payload.distance_field = around.distance_field();
+        }
+        payload
+    }))
+}
+
+/// A resident chunk's distance field alone (`distance_field`), from the
+/// chunk and its resident neighbours: what [`mesh_chunk_in_world_with_options`]
+/// publishes with the mesh, for a chunk whose neighbour changed within the
+/// field's reach without touching its mesh.
+pub fn chunk_distance_field(
+    world: &VoxelWorld,
+    coord: ChunkCoord,
+) -> Option<distance_field::DistanceField> {
+    world.get(coord)?;
+    Neighbourhood::around(world, &world.grid(), coord).distance_field()
+}
+
+/// Voxels an edit reaches into a neighbouring chunk's distance field: the
+/// field's reach in its cells, each `size / FIELD_CELLS` voxels; 0 for a
+/// chunk size the fields do not cover (`chunk_distance_field`).
+pub fn distance_field_reach_voxels(chunk_size: u32) -> u32 {
+    if !chunk_size.is_multiple_of(distance_field::FIELD_CELLS as u32) {
+        return 0;
     }
-    Some(mesh_chunk_reconstructed(world, coord, chunk, options))
+    chunk_size / distance_field::FIELD_CELLS as u32 * distance_field::REACH as u32
 }
 
 /// A chunk's resident neighbours, resolved once per meshed chunk so the
@@ -1393,6 +1432,27 @@ impl<'a> Neighbourhood<'a> {
             size: spec.chunk_dims().to_array().map(i64::from),
             chunks,
         }
+    }
+
+    /// The chunk's distance field, for chunk sizes its cells tile exactly
+    /// (multiples of `FIELD_CELLS` on every axis); the renderer maps the
+    /// field onto the chunk's box.
+    fn distance_field(&self) -> Option<distance_field::DistanceField> {
+        if self
+            .size
+            .iter()
+            .any(|extent| extent % distance_field::FIELD_CELLS as i64 != 0)
+        {
+            return None;
+        }
+        Some(distance_field::build(
+            |voxel| {
+                self.slot(VoxelCoord::new(voxel[0], voxel[1], voxel[2]))
+                    .is_some()
+            },
+            self.origin,
+            self.size,
+        ))
     }
 
     /// The material slot of a resident voxel, if solid.
@@ -1911,6 +1971,7 @@ fn emit_quads(
         triangle_owner_spans: Vec::new(),
         bounds,
         stats,
+        distance_field: None,
     })
 }
 

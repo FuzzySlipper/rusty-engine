@@ -877,7 +877,7 @@ fn blended_sprites_and_blended_meshes_share_one_back_to_front_order() {
 fn pixel_sized_sprites_keep_their_css_size_at_device_pixel_ratio_two() {
     let render = |ratio: u32| {
         let mut harness = Harness::new(RendererOptions::default());
-        harness.target = OffscreenTarget::new(&harness.gpu, WIDTH * ratio, HEIGHT * ratio);
+        harness.target = OffscreenTarget::new(&harness.gpu, WIDTH * ratio, HEIGHT * ratio, 4);
         harness.renderer.set_pixel_ratio(ratio as f32);
         let mut ops = vec![RenderDiff::SetBackgroundColor {
             color: [0.0, 0.0, 0.0, 1.0],

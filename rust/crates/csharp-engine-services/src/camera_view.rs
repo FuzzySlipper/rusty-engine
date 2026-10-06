@@ -1079,8 +1079,12 @@ fn validate_target_descriptor(
 pub(crate) fn environment_frame(
     call: &RuntimeCameraViewCall,
     appearance: &RuntimeAppearanceCall,
+    renderer_settings: Option<render_model::RendererSettingsDescriptor>,
 ) -> Result<Option<RenderFrameDiff>, CsharpEngineServicesError> {
     let mut operations = Vec::with_capacity(4);
+    if let Some(settings) = renderer_settings {
+        operations.push(RenderDiff::SetRendererSettings { settings });
+    }
     if let Some(fog) = call.fog {
         operations.push(RenderDiff::SetFog { fog });
     }

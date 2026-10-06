@@ -9,9 +9,13 @@ use crate::{target, Gpu, GpuError};
 pub struct WindowSurface {
     surface: wgpu::Surface<'static>,
     config: wgpu::SurfaceConfiguration,
-    /// The window is a primary destination: the world draws multisampled
-    /// with this depth and finishes into the swapchain image.
+    /// The window is a primary destination: the world draws with this
+    /// depth's samples and finishes into the swapchain image.
     depth_view: wgpu::TextureView,
+    samples: u32,
+    /// The sample count and vsync the renderer asked for, applied by the
+    /// next acquire (a surface is not reconfigured under an acquired image).
+    wanted: Option<(u32, bool)>,
 }
 
 /// A swapchain image acquired for one frame: acquire it, draw into it
@@ -89,16 +93,31 @@ impl WindowSurface {
             color_space: wgpu::SurfaceColorSpace::Auto,
         };
         surface.configure(&gpu.device, &config);
+        let samples = target::PRIMARY_SAMPLES;
         Ok(Self {
-            depth_view: target::multisampled_depth(
-                gpu,
-                config.width,
-                config.height,
-                target::PRIMARY_SAMPLES,
-            ),
+            depth_view: target::multisampled_depth(gpu, config.width, config.height, samples),
             surface,
             config,
+            samples,
+            wanted: None,
         })
+    }
+
+    /// What the renderer wants of the window (`Renderer::samples`,
+    /// `Renderer::vsync`); the next acquire configures it.
+    pub(crate) fn request(&mut self, samples: u32, vsync: bool) {
+        if samples != self.samples || vsync != self.vsync() {
+            self.wanted = Some((samples, vsync));
+        }
+    }
+
+    fn vsync(&self) -> bool {
+        !matches!(
+            self.config.present_mode,
+            wgpu::PresentMode::AutoNoVsync
+                | wgpu::PresentMode::Immediate
+                | wgpu::PresentMode::Mailbox
+        )
     }
 
     pub fn size(&self) -> (u32, u32) {
@@ -117,13 +136,22 @@ impl WindowSurface {
     fn reconfigure(&mut self, gpu: &Gpu) {
         self.surface.configure(&gpu.device, &self.config);
         let (width, height) = (self.config.width, self.config.height);
-        self.depth_view = target::multisampled_depth(gpu, width, height, target::PRIMARY_SAMPLES);
+        self.depth_view = target::multisampled_depth(gpu, width, height, self.samples);
     }
 
     /// Acquire the next swapchain image. Under vsync this waits until the
     /// display frees one, so take it before anything a frame shares with
     /// other threads.
     pub fn acquire(&mut self, gpu: &Gpu) -> Result<SurfaceFrame, PresentSkip> {
+        if let Some((samples, vsync)) = self.wanted.take() {
+            self.config.present_mode = if vsync {
+                wgpu::PresentMode::AutoVsync
+            } else {
+                wgpu::PresentMode::AutoNoVsync
+            };
+            self.samples = samples;
+            self.reconfigure(gpu);
+        }
         let texture = match self.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(texture)
             | wgpu::CurrentSurfaceTexture::Suboptimal(texture) => texture,
@@ -162,7 +190,7 @@ impl WindowSurface {
                 color: &frame.view,
                 depth: &self.depth_view,
                 format: self.config.format,
-                samples: target::PRIMARY_SAMPLES,
+                samples: self.samples,
                 width: self.config.width,
                 height: self.config.height,
             },
@@ -170,7 +198,7 @@ impl WindowSurface {
                 color: &frame.gamma_view,
                 depth: &self.depth_view,
                 format: self.config.format.remove_srgb_suffix(),
-                samples: 1,
+                samples: self.samples,
                 width: self.config.width,
                 height: self.config.height,
             },

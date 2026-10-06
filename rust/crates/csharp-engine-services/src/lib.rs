@@ -21,6 +21,7 @@ mod persistence;
 mod presentation;
 mod render_output;
 mod render_resources;
+mod renderer_settings;
 mod rng;
 mod session;
 mod spatial;
@@ -40,6 +41,7 @@ pub use composition::{
 pub use gameplay_time::{rate_value as gameplay_rate_value, GameplayTimeRequest};
 pub use render_output::RenderOutputWork;
 pub use render_resources::{CsharpRenderResource, CsharpRenderResourceKind};
+pub use renderer_settings::renderer_settings_request;
 pub use video::VideoRealizationFact;
 
 pub use content::ProductContentBundles;
