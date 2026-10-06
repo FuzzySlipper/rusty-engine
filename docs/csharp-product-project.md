@@ -767,8 +767,9 @@ budget.
 
 `RustyEngineProductAmbientOcclusion` turns screen-space ambient occlusion on
 world views `enabled` or `disabled` (the default);
-`RustyEngineProductAmbientOcclusionStrength`, from `0` to `1` (the default),
-scales how far it darkens the ambient and hemisphere light. Direct light,
+`RustyEngineProductAmbientOcclusionStrength` scales how far it darkens the
+ambient and hemisphere light: `0` draws without it, `1` (the default) is the
+full occlusion. Direct light,
 unlit materials, blended parts and the viewmodel layer are not darkened. This
 writes `renderer.lighting.ambientOcclusion` in the staged manifest;
 `engine.renderer` reports each of its passes' GPU time.
