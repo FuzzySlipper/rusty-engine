@@ -799,8 +799,9 @@ To see why navigation hangs up, ask it:
   with jumps on, `JumpTraversable`, `RiseOverJump`, `JumpHeadroomBlocked`,
   `JumpArcBlocked` or `GapTooWide`), with both support heights and whether
   the installed navigation holds the edge.
-- A `NoPath` step result carries `Visited` and the visited cell nearest the
-  goal (`NearestCell`, standing at `Nearest`).
+- A `NoPath` step result carries `Visited`, the cells the search expanded,
+  and the cell it reached nearest the goal (`NearestCell`, standing at
+  `Nearest`).
 
 Use the live foot position for `EvaluateNavigationStep` so it can reconcile to
 the nearest retained support (see below).
