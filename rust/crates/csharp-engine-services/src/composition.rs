@@ -717,6 +717,10 @@ impl EngineServiceSet {
         // Sky resources are owned and admitted by Appearance.
         let sky_frame =
             crate::camera_view::environment_frame(&calls.camera_view, &calls.appearance)?;
+        self.voxel_scene_presentation.settle_level_of_detail(
+            &mut calls.voxel_scene_presentation,
+            calls.camera_view.primary_camera_position(),
+        )?;
         calls
             .presentation_world
             .advance_elapsed(self.call_elapsed_seconds);

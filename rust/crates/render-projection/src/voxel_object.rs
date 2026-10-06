@@ -533,15 +533,11 @@ pub fn voxel_object_mesh_payload(
             index_width: MeshIndexWidth::U32,
             attributes,
         },
-        groups: mesh
-            .groups
-            .iter()
-            .map(|group| MeshGroupDescriptor {
-                material_slot: group.material_slot,
-                start: group.start,
-                count: group.count,
-            })
-            .collect(),
+        groups: crate::voxel::draw_groups(mesh.groups.iter().map(|group| MeshGroupDescriptor {
+            material_slot: group.material_slot,
+            start: group.start,
+            count: group.count,
+        })),
         bounds: MeshBoundsDescriptor {
             min: mesh.bounds.min,
             max: mesh.bounds.max,

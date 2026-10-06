@@ -237,15 +237,17 @@ struct ChunkCollider {
     bounds: Option<WorldAabb>,
 }
 
-/// An inclusive box of voxels collided as one cuboid.
+/// An inclusive box of voxels: one collided cuboid, or the voxels owning a
+/// merged surface face. A ray hit names the voxel just inside it at the
+/// impact.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct VoxelBox {
-    min: VoxelCoord,
-    max: VoxelCoord,
+pub struct VoxelBox {
+    pub min: VoxelCoord,
+    pub max: VoxelCoord,
 }
 
 impl VoxelBox {
-    const fn single(voxel: VoxelCoord) -> Self {
+    pub const fn single(voxel: VoxelCoord) -> Self {
         Self {
             min: voxel,
             max: voxel,
@@ -259,8 +261,8 @@ struct ChunkSurfacePart {
     key: u64,
     /// Oriented, so a point near the surface can be classified inside or out.
     shape: Arc<TriMesh>,
-    /// The voxel owning each triangle.
-    owners: Vec<VoxelCoord>,
+    /// The voxels owning each triangle.
+    owners: Vec<VoxelBox>,
 }
 
 impl ChunkCollider {
@@ -274,12 +276,13 @@ impl ChunkCollider {
 }
 
 /// One chunk's reconstructed surface in collision space: world-positioned
-/// triangles (vertices may repeat) and the voxel owning each triangle.
+/// triangles (vertices may repeat) and the voxels owning each triangle: one
+/// voxel, or the box under a merged face.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ChunkSurfaceCollider {
     pub positions: Vec<[f64; 3]>,
     pub triangles: Vec<[u32; 3]>,
-    pub owners: Vec<VoxelCoord>,
+    pub owners: Vec<VoxelBox>,
 }
 
 /// How far from a reconstructed surface [`CollisionProjection::contains_point`]
@@ -1359,6 +1362,33 @@ impl CollisionProjection {
     ///
     /// Tests the chunks whose colliders meet the ray's segment and keeps the
     /// nearest hit.
+    /// The voxel of `cells` just inside what the ray hit: the only one, or
+    /// the one under the impact for a box of several.
+    fn voxel_at_impact(
+        &self,
+        cells: VoxelBox,
+        ray: Ray,
+        dir: WorldVec,
+        hit: &parry3d_f64::query::RayIntersection,
+    ) -> VoxelCoord {
+        if cells.min == cells.max {
+            return cells.min;
+        }
+        let toi = hit.time_of_impact;
+        let inward = self.grid.voxel_size() * 1.0e-3;
+        let point = WorldPos::new(
+            ray.origin.x + dir.x * toi - hit.normal.x * inward,
+            ray.origin.y + dir.y * toi - hit.normal.y * inward,
+            ray.origin.z + dir.z * toi - hit.normal.z * inward,
+        );
+        let at = self.grid.world_to_voxel(point - self.world_offset);
+        VoxelCoord::new(
+            at.x.clamp(cells.min.x, cells.max.x),
+            at.y.clamp(cells.min.y, cells.max.y),
+            at.z.clamp(cells.min.z, cells.max.z),
+        )
+    }
+
     pub fn raycast(&self, ray: Ray, max_distance: f64) -> Option<VoxelHit> {
         let len = ray.dir.length();
         if !len.is_finite() || len <= 0.0 || !max_distance.is_finite() || max_distance <= 0.0 {
@@ -1401,24 +1431,7 @@ impl CollisionProjection {
                     continue;
                 };
                 if best.is_none_or(|(t, _, _)| hit.time_of_impact < t) {
-                    let voxel = if cells.min == cells.max {
-                        cells.min
-                    } else {
-                        // The voxel just inside the box at the impact.
-                        let toi = hit.time_of_impact;
-                        let inward = self.grid.voxel_size() * 1.0e-3;
-                        let point = WorldPos::new(
-                            ray.origin.x + dir.x * toi - hit.normal.x * inward,
-                            ray.origin.y + dir.y * toi - hit.normal.y * inward,
-                            ray.origin.z + dir.z * toi - hit.normal.z * inward,
-                        );
-                        let at = self.grid.world_to_voxel(point - self.world_offset);
-                        VoxelCoord::new(
-                            at.x.clamp(cells.min.x, cells.max.x),
-                            at.y.clamp(cells.min.y, cells.max.y),
-                            at.z.clamp(cells.min.z, cells.max.z),
-                        )
-                    };
+                    let voxel = self.voxel_at_impact(cells, ray, dir, &hit);
                     best = Some((hit.time_of_impact, hit.normal, voxel));
                 }
             }
@@ -1426,11 +1439,12 @@ impl CollisionProjection {
                 if let Some((triangle, hit)) = CompositeShapeRef(&*surface.shape)
                     .cast_local_ray_and_get_normal(&parry_ray, max_distance, true)
                 {
-                    let Some(&voxel) = surface.owners.get(triangle as usize) else {
+                    let Some(&cells) = surface.owners.get(triangle as usize) else {
                         debug_assert!(false, "surface triangle must retain a voxel owner");
                         continue;
                     };
                     if best.is_none_or(|(t, _, _)| hit.time_of_impact < t) {
+                        let voxel = self.voxel_at_impact(cells, ray, dir, &hit);
                         best = Some((hit.time_of_impact, hit.normal, voxel));
                     }
                 }
@@ -1947,7 +1961,7 @@ mod tests {
         let surface = ChunkSurfaceCollider {
             positions: vec![[0.0, 3.0, 0.0], [0.0, 3.0, 8.0], [8.0, 3.0, 0.0]],
             triangles: vec![[0, 1, 2]],
-            owners: vec![VoxelCoord::new(1, 2, 1)],
+            owners: vec![VoxelBox::single(VoxelCoord::new(1, 2, 1))],
         };
         projection.set_chunk_parts(coord, 1, &cubes, 7, || Some(surface.clone()));
         projection.touch();

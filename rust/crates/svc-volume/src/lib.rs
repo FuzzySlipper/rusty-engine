@@ -182,11 +182,13 @@ impl VoxelChunk {
     }
 
     /// Whether `local` is within the chunk dimensions.
+    #[inline]
     pub fn in_bounds(&self, local: LocalVoxelCoord) -> bool {
         local.x < self.dims.x() && local.y < self.dims.y() && local.z < self.dims.z()
     }
 
     /// Flat storage index for a local coordinate (X-fastest), if in bounds.
+    #[inline]
     fn index(&self, local: LocalVoxelCoord) -> Option<usize> {
         if !self.in_bounds(local) {
             return None;
@@ -207,6 +209,7 @@ impl VoxelChunk {
     }
 
     /// The voxel at `local`, or `None` if out of bounds.
+    #[inline]
     pub fn get(&self, local: LocalVoxelCoord) -> Option<VoxelValue> {
         self.index(local).map(|i| self.cells[i])
     }
@@ -297,11 +300,13 @@ impl VoxelChunk {
 
     /// The signed density at `local`: the stored magnitude (or
     /// [`DEFAULT_DENSITY_MAGNITUDE`]) negated for a solid voxel.
+    #[inline]
     pub fn density(&self, local: LocalVoxelCoord) -> Option<f32> {
         let index = self.index(local)?;
         Some(self.density_at(index))
     }
 
+    #[inline]
     fn density_at(&self, index: usize) -> f32 {
         let magnitude = self
             .densities

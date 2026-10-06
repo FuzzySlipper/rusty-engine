@@ -85,6 +85,19 @@ pub struct NativeUpdateVoxelScenePresentationDirectionalRequest {
     pub face_materials_len: usize,
 }
 
+/// Draws a retained presentation's distant chunks from their coarse meshes.
+/// A chunk farther than `coarse_distance` world units from the camera of the
+/// lowest-ordered primary view is drawn from a lattice twice as coarse; zero
+/// draws every chunk at full resolution. Collision and picking keep the full
+/// mesh. Sessions whose materials are all cubes, or whose chunk edge is odd,
+/// draw at full resolution.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct NativeVoxelSceneLevelOfDetailRequest {
+    pub presentation: NativeVoxelScenePresentationHandle,
+    pub coarse_distance: f64,
+}
+
 /// Copied provenance for one effective source-slot/face renderer selection.
 /// `material_value` identifies the selected retained Material at admission
 /// time; it is diagnostic provenance, not a live disposable handle.
@@ -120,6 +133,8 @@ pub struct NativeVoxelScenePresentationReadout {
     pub mesh_revision: u64,
     pub chunk_count: u64,
     pub material_count: u32,
+    /// Chunks drawn from their coarse meshes at the last projection.
+    pub coarse_chunk_count: u64,
 }
 
 /// Result of clearing all retained voxel scene projections in this product
@@ -161,6 +176,12 @@ pub type NativeUpdateVoxelScenePresentationDirectional = unsafe extern "C" fn(
     *mut NativeVoxelScenePresentationReadout,
     *mut NativeOperationErrorReceipt,
 ) -> i32;
+pub type NativeSetVoxelSceneLevelOfDetail = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeVoxelSceneLevelOfDetailRequest,
+    *mut NativeVoxelScenePresentationReadout,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
 pub type NativeReadVoxelSceneMaterialMapping = unsafe extern "C" fn(
     *mut c_void,
     NativeVoxelScenePresentationHandle,
@@ -189,4 +210,5 @@ pub struct NativeVoxelScenePresentationApi {
     pub project_scene_directional: NativeProjectVoxelSceneDirectional,
     pub update_scene_directional: NativeUpdateVoxelScenePresentationDirectional,
     pub read_material_mapping: NativeReadVoxelSceneMaterialMapping,
+    pub set_level_of_detail: NativeSetVoxelSceneLevelOfDetail,
 }

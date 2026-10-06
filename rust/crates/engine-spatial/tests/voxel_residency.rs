@@ -310,6 +310,72 @@ fn whole_chunk_dirty_halos_match_every_surface_mode() {
 }
 
 #[test]
+fn one_transaction_meshes_each_chunk_once_and_slices_draw_the_same_world() {
+    const SIZE: u32 = 4;
+    // A slope crossing every boundary of a 2×2×2 block of chunks, in
+    // coordinate order.
+    let chunks: Vec<_> = (0..8)
+        .map(|index| identity(index >> 2, (index >> 1) & 1, index & 1))
+        .collect();
+    let operations: Vec<_> = chunks
+        .iter()
+        .map(|&chunk| {
+            let mut voxels = Vec::new();
+            for z in 0..SIZE {
+                for y in 0..SIZE {
+                    for x in 0..SIZE {
+                        let [gx, gy, gz] = [(chunk.x, x), (chunk.y, y), (chunk.z, z)]
+                            .map(|(chunk, local)| chunk * i64::from(SIZE) + i64::from(local));
+                        if 2 * gy < 3 + gx + gz {
+                            voxels.push(([x, y, z], 1));
+                        }
+                    }
+                }
+            }
+            VoxelChunkResidencyOperation::Admit {
+                chunk,
+                payload: payload(SIZE, &voxels),
+            }
+        })
+        .collect();
+
+    for mode in [
+        SurfaceMode::GreedyCubes,
+        SurfaceMode::MarchingCubes,
+        SurfaceMode::DualContouring,
+    ] {
+        let mut whole = empty_scene(SIZE, mode);
+        let receipt = apply(&mut whole, &operations).unwrap();
+        assert_eq!(receipt.dirty_chunks, chunks, "{mode:?}");
+        assert_eq!(receipt.rebuilt_mesh_chunks, chunks.len(), "{mode:?}");
+
+        // Each later admission remeshes the resident neighbours it touches.
+        let mut sliced = empty_scene(SIZE, mode);
+        for operation in &operations {
+            apply(&mut sliced, std::slice::from_ref(operation)).unwrap();
+        }
+        assert_eq!(sliced.authority_hash(), whole.authority_hash(), "{mode:?}");
+        for chunk in &chunks {
+            assert_eq!(
+                sliced.mesh_chunk(chunk.to_array()),
+                whole.mesh_chunk(chunk.to_array()),
+                "{mode:?} {chunk:?}"
+            );
+        }
+        for x in 0..8 {
+            for z in 0..8 {
+                let origin = [f64::from(x) + 0.5, 20.0, f64::from(z) + 0.5];
+                assert_eq!(
+                    sliced.raycast(origin, [0.0, -1.0, 0.0], 30.0),
+                    whole.raycast(origin, [0.0, -1.0, 0.0], 30.0),
+                    "{mode:?} {origin:?}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn mixed_retained_operations_are_reported_but_all_retained_is_no_change() {
     let existing_payload = payload(2, &[([0, 0, 0], 1)]);
     let mut scene = VoxelCollisionScene::from_material_voxels(

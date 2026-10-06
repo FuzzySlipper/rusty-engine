@@ -41,7 +41,7 @@ to force a rerun.
 | `WorldOrigin` | Prepare, inspect, and commit world-origin rebases. |
 | `Voxel` | Read and mutate Engine-owned voxel state: edits, residency, densities and brush edits, collision and surface modes per material ([smooth voxel surfaces](smooth-voxel-surfaces.md)). |
 | `VoxelContent` | Admit and inspect reusable voxel content resources, including bounded MagicaVoxel objects and retained object presentations. |
-| `VoxelScenePresentation` | Project Engine voxel scenes into retained renderer resources, including GreedyCubes face-directed material selection. |
+| `VoxelScenePresentation` | Project Engine voxel scenes into retained renderer resources, including GreedyCubes face-directed material selection and distance level of detail for reconstructed chunks. |
 | `Content` | Read product content admitted by the host, open content bundles and [portable assets](portable-assets.md), and admit product-owned content snapshots. |
 | `AuthoredContent` | Admit and resolve authored catalogs, scenes, prefabs, and related resources. |
 | `Graphics` | Create and update renderer-owned materials, meshes, atlas sprites, synchronized sprite playback, lights, and retained appearance state. |

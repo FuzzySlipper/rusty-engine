@@ -71,6 +71,28 @@ pub(crate) struct RuntimeCameraViewCall {
     pub(crate) tone_mapping: Option<ToneMappingDescriptor>,
 }
 
+impl RuntimeCameraViewCall {
+    /// Where the camera of the lowest-ordered primary view stands, as the
+    /// call leaves it.
+    pub(crate) fn primary_camera_position(&self) -> Option<[f64; 3]> {
+        let (_, view) = self
+            .state
+            .views
+            .iter()
+            .enumerate()
+            .filter(|(_, view)| view.target.value == 0)
+            .min_by_key(|(index, view)| (view.order, *index))?;
+        let position = self
+            .state
+            .cameras
+            .get(&view.camera.value)?
+            .descriptor
+            .pose
+            .position;
+        Some([position.x, position.y, position.z].map(f64::from))
+    }
+}
+
 /// Engine-owned typed camera/view projection. Product facts are copied at the
 /// ABI edge; this owner derives private renderer identifiers and publishes the
 /// complete active view against the current host surface.
