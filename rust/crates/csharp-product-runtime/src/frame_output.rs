@@ -37,16 +37,16 @@ use csharp_engine_services::{
 };
 use product_host::RuntimePublication;
 use product_host::{
-    ProductHostDrawingMode, ProductHostDrawnFrame, ProductHostFrameStream,
-    ProductHostRendererInspection, ProductHostRendererStatistics, ProductHostStreamMedians,
-    ProductHostStreamStatistics, ProductHostTimedStep, ProductHostWindowMedians,
-    ProductHostWindowStatistics,
+    ProductHostComputeLimits, ProductHostComputeStatistics, ProductHostDrawingMode,
+    ProductHostDrawnFrame, ProductHostFrameStream, ProductHostRendererInspection,
+    ProductHostRendererStatistics, ProductHostStreamMedians, ProductHostStreamStatistics,
+    ProductHostTimedStep, ProductHostWindowMedians, ProductHostWindowStatistics,
 };
 use render_host_contracts::{RendererCameraPose, RendererViewComposition, RendererViewTarget};
 use render_stream::{DrawnFrame, FrameStreamer, StreamStats};
 use render_wgpu::{
-    AnimationFact, Gpu, RendererOptions, ResourceSource, SceneChange, SceneDriver, SceneState,
-    VideoFact, VideoFailure,
+    AnimationFact, ComputeReadout, Gpu, RendererOptions, ResourceSource, SceneChange, SceneDriver,
+    SceneState, VideoFact, VideoFailure,
 };
 use serde_json::{json, Value};
 
@@ -594,6 +594,7 @@ impl FrameOutput {
                 input_steps: self.input_steps(),
                 skipped_ops: skipped_op_counts(skipped_ops),
                 last_skip,
+                compute: compute_statistics(self.driver.compute_readout()),
             };
         };
         let StreamStats {
@@ -632,6 +633,7 @@ impl FrameOutput {
             input_steps: self.input_steps(),
             skipped_ops: skipped_op_counts(skipped_ops),
             last_skip,
+            compute: compute_statistics(self.driver.compute_readout()),
         }
     }
 
@@ -732,6 +734,23 @@ fn unix_ms(at: SystemTime) -> f64 {
 
 fn ms(duration: Duration) -> f64 {
     duration.as_secs_f64() * 1000.0
+}
+
+fn compute_statistics(readout: ComputeReadout) -> ProductHostComputeStatistics {
+    ProductHostComputeStatistics {
+        refused: readout.refused,
+        timestamps: readout.timestamps,
+        workgroups: readout.workgroups,
+        timed_frames: readout.timed_frames,
+        median_gpu_ms: readout.median_gpu_ms,
+        limits: ProductHostComputeLimits {
+            workgroup_size: readout.limits.workgroup_size,
+            invocations_per_workgroup: readout.limits.invocations_per_workgroup,
+            workgroups_per_dimension: readout.limits.workgroups_per_dimension,
+            workgroup_storage_bytes: readout.limits.workgroup_storage_bytes,
+            storage_buffer_binding_bytes: readout.limits.storage_buffer_binding_bytes,
+        },
+    }
 }
 
 fn skipped_op_counts(

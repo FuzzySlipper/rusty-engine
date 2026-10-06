@@ -113,7 +113,9 @@ impl Gpu {
         .map_err(|error| GpuError::NoAdapter(error.to_string()))?;
         let descriptor = wgpu::DeviceDescriptor {
             label: Some("render-wgpu"),
-            required_features: wgpu::Features::empty(),
+            // Timestamp queries time the compute pass (`compute.rs`); an
+            // adapter without them draws untimed.
+            required_features: adapter.features() & wgpu::Features::TIMESTAMP_QUERY,
             required_limits: wgpu::Limits::default().using_resolution(adapter.limits()),
             ..Default::default()
         };

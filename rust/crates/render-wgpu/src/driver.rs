@@ -18,8 +18,8 @@ use render_model::RenderFrameDiff;
 use render_presentation::PresentationFrameDiff;
 
 use crate::{
-    AnimationFact, ApplyIssue, DrawnCamera, EntityPositions, GhostPlateReadout, Gpu,
-    OffscreenTarget, Renderer, RendererOptions, ResourceSource, VideoFact,
+    AnimationFact, ApplyIssue, ComputeReadout, DrawnCamera, EntityPositions, GhostPlateReadout,
+    Gpu, OffscreenTarget, Renderer, RendererOptions, ResourceSource, VideoFact,
 };
 
 /// Size a capture draws at when neither the caller nor a window states one.
@@ -369,6 +369,11 @@ impl SceneDriver {
         let mut rgba = Vec::new();
         target.read_rgba_into(&self.gpu, &mut rgba);
         Capture { rgba, ..capture }
+    }
+
+    /// The renderer's compute pass readout ([`Renderer::compute_readout`]).
+    pub fn compute_readout(&self) -> ComputeReadout {
+        self.scene().renderer.compute_readout()
     }
 
     /// Ops the renderer could not realize, by op, and the last one's detail.

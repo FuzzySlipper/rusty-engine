@@ -8,6 +8,37 @@
 export type CanonicalU64 = string;
 
 /**
+ * The adapter's compute limits; the renderer's device takes wgpu's defaults.
+ */
+export type ProductHostComputeLimits = { workgroupSize: [number, number, number], invocationsPerWorkgroup: number, workgroupsPerDimension: number, workgroupStorageBytes: number, storageBufferBindingBytes: number, };
+
+/**
+ * What the renderer's compute pass costs, from the device's timestamp
+ * queries, with the adapter's compute limits.
+ */
+export type ProductHostComputeStatistics = { 
+/**
+ * Why the pass does not run on this adapter; absent while it runs.
+ */
+refused?: string, 
+/**
+ * The device has timestamp queries, so the pass is timed.
+ */
+timestamps: boolean, 
+/**
+ * Workgroups the last frame dispatched.
+ */
+workgroups: number, 
+/**
+ * Recent frames whose GPU time was read back.
+ */
+timedFrames: number, 
+/**
+ * Median GPU milliseconds of the pass over those frames; 0 with none.
+ */
+medianGpuMs: number, limits: ProductHostComputeLimits, };
+
+/**
  * Read-only product-generated descriptor data for live-debug completion and
  * help. It is never a dispatch schema: command invocation remains the single
  * explicit `execute_debug` operation.
@@ -66,7 +97,12 @@ inputSteps: Array<ProductHostTimedStep>,
 /**
  * Retained operations the renderer skipped, by kind.
  */
-skippedOps: Record<string, number>, lastSkip: string | null, };
+skippedOps: Record<string, number>, lastSkip: string | null, 
+/**
+ * The renderer's compute pass: its GPU cost on this adapter, or why it
+ * does not run.
+ */
+compute: ProductHostComputeStatistics, };
 
 /**
  * Answer to `engine.renderer`, `.status`, `.show`, `.hide` and `.toggle`.
