@@ -448,10 +448,17 @@ pub(super) fn dual_contour(
             low[other] = start.clamp(0, limit) as usize;
             high[other] = end.clamp(0, limit) as usize;
         }
+        let stride = lattice.index(std::array::from_fn(|other| usize::from(other == axis)));
+        let inside = |index: usize| lattice.values[index] > 0.0;
         for z in low[2]..high[2] {
             for y in low[1]..high[1] {
+                let row = lattice.index([low[0], y, z]);
                 for x in low[0]..high[0] {
-                    contour.edge(axis, [x, y, z], owner, emitted)?;
+                    let start = row + (x - low[0]);
+                    // Most edges do not cross the surface.
+                    if inside(start) != inside(start + stride) {
+                        contour.edge(axis, [x, y, z], owner, emitted)?;
+                    }
                 }
             }
         }
@@ -771,15 +778,17 @@ fn march_cell(
         return Ok(());
     }
     let crossings = EDGES.map(|(a, b)| inside[a] != inside[b]);
-    let mut adjacency: [Vec<usize>; 12] = std::array::from_fn(|_| Vec::new());
+    let mut adjacency = [Adjacent::default(); 12];
     for face in FACES {
-        let crossed = face
-            .edges
-            .iter()
-            .copied()
-            .filter(|edge| crossings[*edge])
-            .collect::<Vec<_>>();
-        match crossed.as_slice() {
+        let mut crossed = [0_usize; 4];
+        let mut count = 0;
+        for edge in face.edges {
+            if crossings[edge] {
+                crossed[count] = edge;
+                count += 1;
+            }
+        }
+        match &crossed[..count] {
             [a, b] => connect(&mut adjacency, *a, *b),
             [_, _, _, _] => {
                 let [c0, c1, c2, c3] = face.corners;
@@ -820,7 +829,8 @@ fn march_cell(
         if !crossings[start] || visited[start] {
             continue;
         }
-        let mut loop_edges = Vec::new();
+        let mut loop_edges = [0_usize; 12];
+        let mut length = 0;
         let mut previous = usize::MAX;
         let mut current = start;
         loop {
@@ -831,11 +841,15 @@ fn march_cell(
                 return Err(MeshError::CoordinateRangeTooLarge);
             }
             visited[current] = true;
-            loop_edges.push(current);
-            let neighbours = &adjacency[current];
-            if neighbours.len() != 2 {
+            loop_edges[length] = current;
+            length += 1;
+            let Adjacent {
+                neighbours,
+                count: 2,
+            } = adjacency[current]
+            else {
                 return Err(MeshError::CoordinateRangeTooLarge);
-            }
+            };
             let next = if neighbours[0] != previous {
                 neighbours[0]
             } else {
@@ -847,26 +861,28 @@ fn march_cell(
                 break;
             }
         }
-        if loop_edges.len() < 3 {
+        if length < 3 {
             return Err(MeshError::CoordinateRangeTooLarge);
         }
         check_output_growth(
             out.positions.len() as u64,
             out.triangles.len() as u64 * 3,
-            loop_edges.len() as u64 + 1,
-            loop_edges.len() as u64 * 3,
+            length as u64 + 1,
+            length as u64 * 3,
             limits,
         )?;
-        let mut points = Vec::with_capacity(loop_edges.len());
-        let mut normals = Vec::with_capacity(loop_edges.len());
-        for edge in &loop_edges {
+        let mut point_storage = [[0.0; 3]; 12];
+        let mut normal_storage = [[0.0; 3]; 12];
+        let points = &mut point_storage[..length];
+        let normals = &mut normal_storage[..length];
+        for (index, edge) in loop_edges[..length].iter().enumerate() {
             let local = edge_local_point(*edge, edge_t(*edge));
             let point = std::array::from_fn(|axis| base[axis] + local[axis] + 0.5);
-            normals.push(outward_normal(
+            normals[index] = outward_normal(
                 trilinear_gradient(values, local),
                 sub(point, add(base, [1.0; 3])),
-            ));
-            points.push(point);
+            );
+            points[index] = point;
         }
         let centroid = scale(
             points.iter().fold([0.0; 3], |sum, point| add(sum, *point)),
@@ -878,16 +894,16 @@ fn march_cell(
                 .fold([0.0; 3], |sum, normal| add(sum, *normal)),
             [0.0, 1.0, 0.0],
         );
-        if dot(polygon_normal(&points), centroid_normal) < 0.0 {
+        if dot(polygon_normal(points), centroid_normal) < 0.0 {
             points.reverse();
             normals.reverse();
         }
-        let direction = dominant_direction(polygon_normal(&points), centroid_normal);
+        let direction = dominant_direction(polygon_normal(points), centroid_normal);
         let first = out.positions.len() as u32;
         out.positions.push(centroid);
         out.normals.push(centroid_normal);
-        out.positions.extend(points.iter().copied());
-        out.normals.extend(normals);
+        out.positions.extend_from_slice(points);
+        out.normals.extend_from_slice(normals);
         for index in 0..points.len() {
             out.triangles.push([
                 first,
@@ -1306,9 +1322,13 @@ pub(super) fn voxel_payload(
     let mut owner_spans = Vec::new();
     let mut minimum = [f32::INFINITY; 3];
     let mut maximum = [f32::NEG_INFINITY; 3];
+    // The lane, emitted index and normal of each source vertex's first
+    // emission. A vertex emitted again in the same lane with another normal
+    // (across a crease) is found in `emitted`.
+    let mut first = vec![(usize::MAX, 0_u32, [0_u64; 3]); reconstruction.positions.len()];
     let mut emitted = BTreeMap::<(u32, [u64; 3]), u32>::new();
     let mut mode = None;
-    for ((slot, direction), triangles) in lanes {
+    for (lane, ((slot, direction), triangles)) in lanes.into_iter().enumerate() {
         let surface = characters.of(slot);
         mode.get_or_insert(surface.mode);
         let cosine = f64::from(surface.character.crease_angle_degrees)
@@ -1333,9 +1353,17 @@ pub(super) fn voxel_payload(
                 } else {
                     face
                 };
-                let key = (vertex, normal.map(f64::to_bits));
-                let index = match emitted.get(&key) {
-                    Some(index) => *index,
+                let bits = normal.map(f64::to_bits);
+                let seen = &first[vertex as usize];
+                let found = if seen.0 != lane {
+                    None
+                } else if seen.2 == bits {
+                    Some(seen.1)
+                } else {
+                    emitted.get(&(vertex, bits)).copied()
+                };
+                let index = match found {
+                    Some(index) => index,
                     None => {
                         let index = (positions.len() / 3) as u32;
                         let point =
@@ -1363,7 +1391,12 @@ pub(super) fn voxel_payload(
                         if let Some(field) = layers {
                             layer_weights.extend(field.weights_or_slot(point, slot));
                         }
-                        emitted.insert(key, index);
+                        let seen = &mut first[vertex as usize];
+                        if seen.0 == lane {
+                            emitted.insert((vertex, bits), index);
+                        } else {
+                            *seen = (lane, index, bits);
+                        }
                         index
                     }
                 };
@@ -1586,15 +1619,31 @@ pub(super) fn check_output_growth(
     Ok(())
 }
 
-fn connect(adjacency: &mut [Vec<usize>; 12], left: usize, right: usize) {
-    if !adjacency[left].contains(&right) {
-        adjacency[left].push(right);
-        adjacency[left].sort_unstable();
+/// The edges a marched cell's crossing edge connects to, ascending. A
+/// crossing edge lies on two faces, each connecting it once; `count` keeps
+/// counting past two so a malformed cell is detected.
+#[derive(Clone, Copy, Default)]
+struct Adjacent {
+    neighbours: [usize; 2],
+    count: usize,
+}
+
+impl Adjacent {
+    fn add(&mut self, edge: usize) {
+        if self.neighbours[..self.count.min(2)].contains(&edge) {
+            return;
+        }
+        if self.count < 2 {
+            self.neighbours[self.count] = edge;
+            self.neighbours[..=self.count].sort_unstable();
+        }
+        self.count += 1;
     }
-    if !adjacency[right].contains(&left) {
-        adjacency[right].push(left);
-        adjacency[right].sort_unstable();
-    }
+}
+
+fn connect(adjacency: &mut [Adjacent; 12], left: usize, right: usize) {
+    adjacency[left].add(right);
+    adjacency[right].add(left);
 }
 
 fn edge_local_point(edge: usize, t: f64) -> [f64; 3] {

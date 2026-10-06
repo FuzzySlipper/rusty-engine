@@ -242,21 +242,21 @@ mesh.
 Reconstructed chunks mesh from the chunk and a one-voxel halo of its
 neighbours, in parallel when a change rebuilds several chunks. On a 180-chunk
 dungeon of 16³ one-metre chunks (`svc-mesh` example `smooth_chunk_meshing`,
-release build) dual contouring costs about 0.3 ms per chunk, marching cubes
-0.5 ms and cubes 0.4 ms. One residency, edit or density call meshes each chunk
+release build) dual contouring costs about 0.19 ms per chunk, marching cubes
+0.28 ms and cubes 0.4 ms. One residency, edit or density call meshes each chunk
 it touches once, after all its writes. A chunk's surface depends on all 26
 neighbours, though, so each later call remeshes the resident neighbours of what
 it changes. Admitting that dungeon in one call (`engine-spatial` example
-`smooth_residency_load`) takes about 0.18 s with dual contouring, 0.22 s with
-marching cubes and 0.31 s with cubes, collision and navigation included; they
+`smooth_residency_load`) takes about 0.21 s with dual contouring, 0.23 s with
+marching cubes and 0.35 s with cubes, collision and navigation included; they
 take most of it. In slices of six chunks it builds 714 chunk meshes (474 with
-cubes) and takes about 0.44 s, 0.67 s and 0.33 s in all, at most about 20, 30
-and 15 ms per slice. A product filling a space behind a loading wait trades the
+cubes) and takes about 0.48 s, 0.7 s and 0.4 s in all, at most about 23, 31
+and 18 ms per slice. A product filling a space behind a loading wait trades the
 longest call against the total through its slice size; larger, contiguous
 slices leave fewer resident neighbours to remesh. Reconstructed vertices are
 split per texture face and crease, so a smooth chunk draws more vertices than
-its cell count suggests. A coarse mesh takes about 0.23 ms per chunk with dual
-contouring and 0.3 ms with marching cubes, and draws about a third of the
+its cell count suggests. A coarse mesh takes about 0.16 ms per chunk with dual
+contouring and 0.21 ms with marching cubes, and draws about a third of the
 triangles (35% and 30% on that dungeon, skirts included; a quarter without).
 `VoxelSceneReadout.MeshMicroseconds`, and the same
 field on edit, residency and density receipts, report the meshing time of the
