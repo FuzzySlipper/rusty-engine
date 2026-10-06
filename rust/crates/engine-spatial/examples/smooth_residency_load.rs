@@ -50,8 +50,8 @@ fn admit(mode: SurfaceMode, slice: usize) {
     let mut longest = Duration::ZERO;
     let mut meshing = Duration::ZERO;
     let mut rebuilt = 0;
-    for slice in chunks.chunks(slice) {
-        let operations: Vec<_> = slice
+    for batch in chunks.chunks(slice) {
+        let operations: Vec<_> = batch
             .iter()
             .map(|&[x, y, z]| VoxelChunkResidencyOperation::Admit {
                 chunk: VoxelChunkIdentity::new(x, y, z),
