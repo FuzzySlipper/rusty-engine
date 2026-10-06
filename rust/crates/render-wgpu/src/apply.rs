@@ -115,6 +115,10 @@ impl Renderer {
                 self.tables.environment_dirty = true;
             }
             RenderDiff::SetFog { fog } => self.tables.fog = *fog,
+            RenderDiff::SetBloom { bloom } => self.tables.bloom = *bloom,
+            RenderDiff::SetAutoExposure { auto_exposure } => {
+                self.tables.auto_exposure = *auto_exposure;
+            }
             RenderDiff::SetToneMapping { tone_mapping } => {
                 self.tables.tone_mapping = *tone_mapping;
             }
@@ -1917,6 +1921,8 @@ fn op_name(op: &RenderDiff) -> &'static str {
         RenderDiff::SetSkyBackground { .. } => "setSkyBackground",
         RenderDiff::SetBackgroundColor { .. } => "setBackgroundColor",
         RenderDiff::SetFog { .. } => "setFog",
+        RenderDiff::SetBloom { .. } => "setBloom",
+        RenderDiff::SetAutoExposure { .. } => "setAutoExposure",
         RenderDiff::SetToneMapping { .. } => "setToneMapping",
         RenderDiff::DefineSpriteAtlas { .. } => "defineSpriteAtlas",
         RenderDiff::ReleaseSpriteAtlas { .. } => "releaseSpriteAtlas",

@@ -1121,6 +1121,16 @@ pub type NativeSetToneMapping = unsafe extern "C" fn(
     *const NativeToneMappingRequest,
     *mut crate::NativeOperationErrorReceipt,
 ) -> i32;
+pub type NativeSetBloom = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeBloomRequest,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeSetAutoExposure = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeAutoExposureRequest,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
 pub type NativeClearSkyBackground = unsafe extern "C" fn(
     *mut c_void,
     *const NativeClearSkyBackgroundRequest,
@@ -1604,6 +1614,8 @@ pub struct NativeCameraViewApi {
     pub set_background_color: NativeSetBackgroundColor,
     pub set_fog: NativeSetFog,
     pub set_tone_mapping: NativeSetToneMapping,
+    pub set_bloom: NativeSetBloom,
+    pub set_auto_exposure: NativeSetAutoExposure,
     pub set_viewport_anchor: NativeSetCameraViewportAnchor,
     pub read_surface: NativeReadCameraSurface,
     pub read_viewport_anchor: NativeReadCameraViewportAnchor,

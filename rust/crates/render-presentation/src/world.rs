@@ -123,6 +123,8 @@ struct RetainedGraphics {
     background_color: Option<[f32; 4]>,
     fog: Option<FogDescriptor>,
     tone_mapping: ToneMappingDescriptor,
+    bloom: Option<BloomDescriptor>,
+    auto_exposure: Option<AutoExposureDescriptor>,
     controllers: BTreeMap<crate::AnimationProjectionHandle, crate::AnimationProjectionDescriptor>,
 }
 
@@ -249,6 +251,8 @@ impl PresentationWorld {
                 || matches!(&op, RenderDiff::SetBackgroundColor { color } if self.retained.background_color == Some(*color) && self.retained.sky.is_none())
                 || matches!(&op, RenderDiff::SetFog { fog } if &self.retained.fog == fog)
                 || matches!(&op, RenderDiff::SetToneMapping { tone_mapping } if &self.retained.tone_mapping == tone_mapping)
+                || matches!(&op, RenderDiff::SetBloom { bloom } if &self.retained.bloom == bloom)
+                || matches!(&op, RenderDiff::SetAutoExposure { auto_exposure } if &self.retained.auto_exposure == auto_exposure)
             {
                 continue;
             }
@@ -661,6 +665,16 @@ impl PresentationWorld {
         if self.retained.tone_mapping != ToneMappingDescriptor::NONE {
             ops.push(RenderDiff::SetToneMapping {
                 tone_mapping: self.retained.tone_mapping,
+            });
+        }
+        if self.retained.bloom.is_some() {
+            ops.push(RenderDiff::SetBloom {
+                bloom: self.retained.bloom,
+            });
+        }
+        if self.retained.auto_exposure.is_some() {
+            ops.push(RenderDiff::SetAutoExposure {
+                auto_exposure: self.retained.auto_exposure,
             });
         }
         // Creation requires an existing parent and parents cannot be changed,
@@ -1161,6 +1175,10 @@ impl PresentationWorld {
             RenderDiff::SetFog { fog } => self.retained.fog = *fog,
             RenderDiff::SetToneMapping { tone_mapping } => {
                 self.retained.tone_mapping = *tone_mapping;
+            }
+            RenderDiff::SetBloom { bloom } => self.retained.bloom = *bloom,
+            RenderDiff::SetAutoExposure { auto_exposure } => {
+                self.retained.auto_exposure = *auto_exposure;
             }
         }
         Ok(())

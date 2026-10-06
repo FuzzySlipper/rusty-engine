@@ -177,10 +177,12 @@ fn shade(surface: Surface) -> vec4<f32> {
   `rusty::lighting` has `standard_radiance` and the light rows (laid out
   in `rusty::types::Light`; a shadowed directional light's row carries its
   cascades' split depths and view axis rather than a position and range),
-  `rusty::finish::finish` applies exposure, tone mapping and fog, and
-  `rusty::material` has the material's textures and samplers.
-- **What it returns.** The fragment's colour, finished or not; output that
-  skips `finish` is not tone mapped or fogged. It may `discard`.
+  `rusty::finish::finish` returns its colour unchanged (the finish pass
+  finishes everything the world draws), and `rusty::material` has the
+  material's textures and samplers.
+- **What it returns.** The fragment's colour in linear light, and its
+  alpha. The [finish pass](#exposure-tone-mapping-and-fog) applies bloom,
+  exposure, tone mapping and fog after it. It may `discard`.
 - **Variants.** It compiles once per standard feature set its materials use
   and may test them (`#ifdef NORMAL_MAP`, `UNLIT`, `VOXEL_SURFACE`,
   `TRIPLANAR`…). Its own keywords, like Unity's shader features, are chosen
@@ -238,17 +240,21 @@ fn cast_shadow(caster: Caster) {
 
 ## Exposure, tone mapping and fog
 
-Everything drawn in the world (lit and unlit meshes, voxel surfaces, GLB
-parts, sprites and particles) ends in one finish step: exposure, then the tone
-mapping operator, then distance fog. The background, a clear colour or sky
-panorama, is never finished. Both settings are retained camera-view state,
-like the sky, and products change them at runtime, for a cave, underwater or
-at night:
+The world (lit and unlit meshes, voxel surfaces, GLB parts, sprites and
+particles) draws in linear light into a 16-bit floating-point target, with the
+view's multisampling, and blends there. A full-screen finish pass then
+finishes it: bloom, exposure, the tone mapping operator, then distance fog,
+over the background. The background, a clear colour or sky panorama, is drawn
+first and never finished. These settings are retained camera-view state, like
+the sky, and products change them at runtime, for a cave, underwater or at
+night:
 
 ```csharp
 engine.CameraView.SetToneMapping(new(ToneMappingOperator.AcesFilmic, exposure));
 engine.CameraView.SetFog(new(FogMode.Linear, fogColor, Start: 3, End: 30, Density: 0));
 engine.CameraView.SetFog(new(FogMode.Off, default, 0, 0, 0));
+engine.CameraView.SetBloom(new(Threshold: 1, Intensity: 0.6f));
+engine.CameraView.SetAutoExposure(new(Enabled: true, Speed: 1.5f, MinExposure: 0.25f, MaxExposure: 4));
 ```
 
 - **Exposure** multiplies lit colour; it defaults to 1.
@@ -257,22 +263,54 @@ engine.CameraView.SetFog(new(FogMode.Off, default, 0, 0, 0));
   keeps base colours true and compresses only highlights. `AcesFilmic` adds
   film-like contrast and rolls highlights toward white. Choose one before
   tuning light intensities: the same lights read differently under each.
+  Emission and light above 1 are kept until the operator, so a lamp shade at
+  full emission rolls off under `Neutral` or `AcesFilmic` instead of clipping.
+- **Bloom** spreads the world's light above `Threshold` (linear, before
+  exposure, with a soft knee below it) through six half-resolution mips and
+  adds it back at `Intensity` (0 to 16) before exposure and the operator, so
+  a glow rolls off as the light does. It is off by default; an intensity of 0
+  turns it off. A threshold of 1 keeps ordinary lit surfaces out and lets
+  emission and highlights above white glow. The background does not bloom.
+- **Auto exposure** scales the exposure toward the one that brings the
+  world's log-average luminance (weighted by coverage, background excluded)
+  to middle grey, clamped to `MinExposure..MaxExposure`, closing
+  `1 - e^(-Speed × t)` of the gap in `t` seconds of presentation time, so it
+  holds while the simulation is paused. The tone mapping exposure multiplies
+  it, so it stays the product's brightness choice. The background is not
+  exposed: choose a range that keeps the world in step with its sky (a dusk
+  world raised to middle grey reads as day under a dusk sky). The first
+  frame after it is enabled takes its target at once. It is off by default;
+  `Enabled: false` turns it off. It adapts once a frame, at the frame's first
+  world view.
 - **Fog.** `Linear` has none before `start` and is full at `end` (metres from
   the camera). `Exponential` leaves `exp(-density × distance)` of the colour,
   and `ExponentialSquared` leaves `exp(-(density × distance)²)`, which is
   clearer near and denser far. The colour is linear RGB; alpha is ignored.
   Fog blends after tone mapping, so a fog colour equal to the background
   colour fades distant geometry exactly into it. Over a sky panorama, pick a
-  colour that matches its horizon.
+  colour that matches its horizon. Distance comes from the depth buffer: a
+  blended surface takes the fog of what is behind it, and over the background
+  it is not fogged.
 - **Captures.** `RenderOutput.CaptureImage` uses its request's own exposure
-  and tone mapping, and keeps the scene's fog as it keeps the scene's lights,
-  whichever background it selects.
+  and tone mapping, without auto exposure, and keeps the scene's fog and bloom
+  as it keeps the scene's lights, whichever background it selects.
 
-Changing either setting recompiles nothing: both are values in the frame
-uniform, so a product may update them every frame. Blended surfaces are
-finished before they blend, as three.js does, so there is no bloom; that
-needs an HDR intermediate the renderer does not have. Fog and tone mapping do
-not change `Voxel.SampleDirectLighting`, which reports linear light.
+Changing any of these recompiles nothing: they are values in uniforms, so a
+product may update them every frame. Fog and tone mapping do not change
+`Voxel.SampleDirectLighting`, which reports linear light.
+
+A product shader's `shade` returns linear colour, and the finish pass
+finishes every fragment; `rusty::finish::finish` returns its colour
+unchanged, so calling it changes nothing.
+
+The world's target costs 8 bytes a sample (66 MB at 1920×1080 with 4×
+multisampling), plus a single-sample copy (17 MB) and bloom's mips (6 MB)
+while bloom or auto exposure is on. `engine.renderer` times the frame's first
+world view's `world`, `bloom-exposure` and `finish` passes
+([performance](performance.md)). On an RX 9070 XT the finish pass takes about
+0.05 ms at 1280×720 and 0.1 ms at 1920×1080, and bloom with auto exposure
+about 0.15 ms; on llvmpipe each takes 5 to 17 ms, a large share of a light
+scene's frame.
 
 ## Read light at a voxel location
 

@@ -336,6 +336,30 @@ pub struct NativeToneMappingRequest {
     pub exposure: f32,
 }
 
+/// Bloom: the world's light above `threshold` (with a soft knee below it)
+/// spreads into a glow added at `intensity` before exposure and tone
+/// mapping. Intensity 0 (the default) turns it off; at most 16.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeBloomRequest {
+    pub threshold: f32,
+    pub intensity: f32,
+}
+
+/// Auto exposure, when `enabled`: the exposure moves toward the one that
+/// brings the world's average luminance to middle grey, kept between
+/// `min_exposure` and `max_exposure`, closing `1 - e^(-speed·t)` of the gap
+/// in `t` seconds of Engine presentation time (none while it is held). The
+/// tone mapping exposure multiplies it.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeAutoExposureRequest {
+    pub enabled: bool,
+    pub speed: f32,
+    pub min_exposure: f32,
+    pub max_exposure: f32,
+}
+
 /// Blends two retained equirectangular panoramas. Amount is in [0,1]; the
 /// product supplies its clock-derived value. Neither texture is recreated.
 #[repr(C)]

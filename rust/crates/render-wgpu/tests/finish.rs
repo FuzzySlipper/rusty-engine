@@ -299,3 +299,155 @@ fn tone_mapping_compresses_highlights_scales_by_exposure_and_leaves_the_backgrou
     let again = tone(&mut harness, ToneMappingOperator::None, 1.0);
     assert_eq!(again, none);
 }
+
+/// A box straight ahead glowing far past white.
+fn glowing_box(harness: &mut Harness) {
+    let mut glow = material("material/glow", [1.0, 0.8, 0.5, 1.0], None);
+    glow.emission_color = [1.0, 0.8, 0.5];
+    glow.emission_intensity = 6.0;
+    harness.apply(vec![
+        RenderDiff::SetBackgroundColor { color: BACKGROUND },
+        RenderDiff::DefineMaterial { material: glow },
+        static_mesh(
+            "mesh/glow",
+            box_mesh([-0.5, -0.5, -0.5], [0.5, 0.5, 0.5], |_| 0),
+            "material/glow",
+        ),
+        instance(
+            1,
+            None,
+            "mesh/glow",
+            transform([0.0, 0.0, -5.0], 0.0, [1.0; 3]),
+        ),
+    ]);
+}
+
+#[test]
+fn bloom_spreads_bright_light_past_its_surface_and_off_changes_nothing() {
+    let view = camera([0.0, 0.0, 0.0], 0.0, 0.0);
+    let render = |bloom: Option<BloomDescriptor>| {
+        let mut harness = Harness::new(RendererOptions::default());
+        glowing_box(&mut harness);
+        harness.apply(vec![RenderDiff::SetBloom { bloom }]);
+        harness.render(&view).1
+    };
+    let plain = render(None);
+    let glowing = render(Some(BloomDescriptor {
+        threshold: 1.0,
+        intensity: 1.0,
+    }));
+    // Beside the box's right edge (it spans about 57 pixels at 5 m), and far
+    // off in the corner.
+    let beside = (CENTER.0 + 40, CENTER.1);
+    assert_eq!(
+        pixel(&plain, beside),
+        pixel(&plain, CORNER),
+        "background beside the box"
+    );
+    assert!(
+        distance(pixel(&glowing, beside), pixel(&plain, beside)) > 15,
+        "the glow reaches past the box: {:?} {:?}",
+        pixel(&glowing, beside),
+        pixel(&plain, beside)
+    );
+    assert!(distance(pixel(&glowing, CORNER), pixel(&plain, CORNER)) <= SAME);
+    // Zero intensity draws what no bloom draws.
+    let zero = render(Some(BloomDescriptor {
+        threshold: 1.0,
+        intensity: 0.0,
+    }));
+    assert_eq!(zero, plain);
+}
+
+#[test]
+fn auto_exposure_brings_bright_and_dim_worlds_toward_middle_grey_over_presentation_time() {
+    let view = camera([0.0, 0.0, 0.0], 0.0, 0.0);
+    let auto = AutoExposureDescriptor {
+        speed: 2.0,
+        min_exposure: 0.01,
+        max_exposure: 100.0,
+    };
+    let lit = |harness: &mut Harness, color: f32| {
+        // The box fills the view.
+        harness.apply(vec![RenderDiff::DefineMaterial {
+            material: material("material/box", [color, color, color, 1.0], None),
+        }]);
+    };
+    let centre = |harness: &mut Harness, seconds: f64| {
+        harness.renderer.set_animation_time(seconds);
+        pixel(&harness.render(&view).1, CENTER)[0]
+    };
+    let mut harness = Harness::new(RendererOptions::default());
+    box_ahead(&mut harness, [1.0; 4]);
+    move_box(&mut harness, -0.7);
+    let mut fixed = Harness::new(RendererOptions::default());
+    box_ahead(&mut fixed, [1.0; 4]);
+    move_box(&mut fixed, -0.7);
+    harness.apply(vec![RenderDiff::SetAutoExposure {
+        auto_exposure: Some(auto),
+    }]);
+    // Bright and dim worlds differ by 20× without it.
+    lit(&mut fixed, 1.0);
+    let fixed_bright = centre(&mut fixed, 0.0);
+    lit(&mut fixed, 0.05);
+    let fixed_dim = centre(&mut fixed, 0.0);
+    assert!(fixed_bright > fixed_dim + 100, "{fixed_bright} {fixed_dim}");
+    // The first frame takes its exposure at once.
+    lit(&mut harness, 1.0);
+    let bright = centre(&mut harness, 0.0);
+    // The world dims: held time keeps the exposure, so the view goes dark.
+    lit(&mut harness, 0.05);
+    let held = centre(&mut harness, 0.0);
+    assert!(held + 50 < bright, "{held} {bright}");
+    // A second later the exposure has come most of the way, and after ten
+    // the dim world reads as the bright one did.
+    let later = centre(&mut harness, 1.0);
+    let settled = centre(&mut harness, 10.0);
+    assert!(
+        held < later && later < settled + 3,
+        "{held} {later} {settled}"
+    );
+    assert!((settled - bright).abs() <= 6, "{settled} {bright}");
+}
+
+#[test]
+fn the_world_its_bloom_and_exposure_and_its_finish_are_timed() {
+    let view = camera([0.0, 0.0, 0.0], 0.0, 0.0);
+    let mut harness = Harness::new(RendererOptions::default());
+    glowing_box(&mut harness);
+    harness.apply(vec![
+        RenderDiff::SetBloom {
+            bloom: Some(BloomDescriptor {
+                threshold: 1.0,
+                intensity: 1.0,
+            }),
+        },
+        RenderDiff::SetAutoExposure {
+            auto_exposure: Some(AutoExposureDescriptor {
+                speed: 1.0,
+                min_exposure: 0.1,
+                max_exposure: 10.0,
+            }),
+        },
+    ]);
+    // Stamps read back a frame or more after they are written.
+    for frame in 0..30 {
+        harness.renderer.set_animation_time(f64::from(frame) / 60.0);
+        harness.render(&view);
+    }
+    let readout = harness.renderer.gpu_readout();
+    eprintln!("timestamps {}, {:?}", readout.timestamps, readout.passes);
+    for name in ["world", "bloom-exposure", "finish"] {
+        let pass = readout
+            .passes
+            .iter()
+            .find(|pass| pass.pass == name)
+            .unwrap_or_else(|| panic!("{name} is reported"));
+        if readout.timestamps {
+            assert!(pass.timed_frames > 0, "{name}: no timed frame");
+            assert!(pass.median_gpu_ms.is_finite() && pass.median_gpu_ms >= 0.0);
+        } else {
+            assert_eq!(pass.timed_frames, 0, "{name}: untimed without queries");
+        }
+    }
+}

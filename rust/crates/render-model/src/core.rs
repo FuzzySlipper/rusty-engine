@@ -113,6 +113,54 @@ impl Default for ToneMappingDescriptor {
     }
 }
 
+/// Bloom: the world's light above `threshold` (a soft knee below it)
+/// spreads into a glow added at `intensity` before exposure and tone
+/// mapping.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BloomDescriptor {
+    pub threshold: f32,
+    pub intensity: f32,
+}
+
+impl BloomDescriptor {
+    /// The largest intensity a product may set.
+    pub const MAX_INTENSITY: f32 = 16.0;
+
+    /// A finite non-negative threshold and an intensity within
+    /// `0..=MAX_INTENSITY`.
+    pub fn valid(&self) -> bool {
+        self.threshold.is_finite()
+            && self.threshold >= 0.0
+            && self.intensity.is_finite()
+            && (0.0..=Self::MAX_INTENSITY).contains(&self.intensity)
+    }
+}
+
+/// Auto exposure: the exposure scale moves toward the one that brings the
+/// world's log-average luminance to middle grey, within
+/// `min_exposure..=max_exposure`, closing `1 - e^(-speed·t)` of the gap in
+/// `t` presentation seconds. The tone mapping exposure multiplies it.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AutoExposureDescriptor {
+    pub speed: f32,
+    pub min_exposure: f32,
+    pub max_exposure: f32,
+}
+
+impl AutoExposureDescriptor {
+    /// A finite positive speed and a finite positive, ordered range.
+    pub fn valid(&self) -> bool {
+        self.speed.is_finite()
+            && self.speed > 0.0
+            && self.min_exposure.is_finite()
+            && self.min_exposure > 0.0
+            && self.max_exposure.is_finite()
+            && self.max_exposure >= self.min_exposure
+    }
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ToneMappingOperator {
@@ -435,6 +483,14 @@ pub enum RenderDiff {
     SetToneMapping {
         tone_mapping: ToneMappingDescriptor,
     },
+    /// Selects the world's bloom; None turns it off.
+    SetBloom {
+        bloom: Option<BloomDescriptor>,
+    },
+    /// Selects auto exposure; None turns it off.
+    SetAutoExposure {
+        auto_exposure: Option<AutoExposureDescriptor>,
+    },
     DefineSpriteAtlas {
         atlas: SpriteAtlasDescriptor,
     },
@@ -569,6 +625,14 @@ impl RenderDiff {
                 Ok(())
             }
             Self::SetToneMapping { .. } => Err(RenderOperationError::ToneMapping),
+            Self::SetBloom { bloom: Some(bloom) } if !bloom.valid() => {
+                Err(RenderOperationError::Bloom)
+            }
+            Self::SetBloom { .. } => Ok(()),
+            Self::SetAutoExposure {
+                auto_exposure: Some(auto_exposure),
+            } if !auto_exposure.valid() => Err(RenderOperationError::AutoExposure),
+            Self::SetAutoExposure { .. } => Ok(()),
             Self::DefineSpriteAtlas { atlas } => {
                 atlas.validate().map_err(RenderOperationError::SpriteAtlas)
             }
@@ -665,6 +729,8 @@ impl RenderDiff {
             | Self::SetBackgroundColor { .. }
             | Self::SetFog { .. }
             | Self::SetToneMapping { .. }
+            | Self::SetBloom { .. }
+            | Self::SetAutoExposure { .. }
             | Self::DefineSpriteAtlas { .. }
             | Self::DefineStaticMesh { .. }
             | Self::ReleaseMaterial { .. }
@@ -701,6 +767,8 @@ pub enum RenderOperationError {
     BackgroundColor,
     Fog,
     ToneMapping,
+    Bloom,
+    AutoExposure,
     SpriteAtlas(crate::SpriteAtlasError),
     StaticMesh(crate::StaticMeshError),
     StaticMeshInstance(crate::StaticMeshInstanceError),
@@ -769,6 +837,8 @@ impl RenderFrameDiff {
                 | RenderDiff::SetBackgroundColor { .. }
                 | RenderDiff::SetFog { .. }
                 | RenderDiff::SetToneMapping { .. }
+                | RenderDiff::SetBloom { .. }
+                | RenderDiff::SetAutoExposure { .. }
                 | RenderDiff::DefineSpriteAtlas { .. }
                 | RenderDiff::ReleaseSpriteAtlas { .. }
                 | RenderDiff::ReleaseStaticMesh { .. }

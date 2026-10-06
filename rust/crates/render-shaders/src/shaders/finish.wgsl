@@ -1,9 +1,12 @@
 #define_import_path rusty::finish
 
-// The last step of everything drawn in the world: exposure, the tone mapping
-// operator, then distance fog toward its colour. The background (clear
-// colour or sky) does not pass through it, so a fog colour equal to the
-// background fades geometry into it exactly.
+// The finish: exposure, the tone mapping operator, then distance fog toward
+// its colour. The world draws in linear HDR and the finish pass
+// (`finish_pass.wgsl`) finishes each of its pixels, so a material stage's
+// `finish` returns its colour unchanged.
+// The background (clear colour or sky) is drawn before the world and never
+// finished, so a fog colour equal to the background fades geometry into it
+// exactly.
 
 #import rusty::view::frame
 #import rusty::tonemap::{aces_filmic, neutral}
@@ -14,18 +17,23 @@ const FOG_LINEAR: u32 = 1u;
 const FOG_EXPONENTIAL: u32 = 2u;
 const FOG_EXPONENTIAL_SQUARED: u32 = 3u;
 
+// A material stage's finish: the finish pass does the work.
 fn finish(color: vec4<f32>, world_position: vec3<f32>) -> vec4<f32> {
-    var rgb = color.rgb * frame.finish.x;
+    return color;
+}
+
+// Finish linear `rgb` at `distance` from the camera.
+fn finish_linear(rgb: vec3<f32>, distance: f32) -> vec3<f32> {
+    var toned = rgb * frame.finish.x;
     if frame.modes.x == TONE_NEUTRAL {
-        rgb = neutral(rgb);
+        toned = neutral(toned);
     } else if frame.modes.x == TONE_ACES_FILMIC {
-        rgb = aces_filmic(rgb);
+        toned = aces_filmic(toned);
     }
     let fog = frame.modes.y;
     if fog == 0u {
-        return vec4<f32>(rgb, color.a);
+        return toned;
     }
-    let distance = length(world_position - frame.camera.xyz);
     var visibility = 1.0;
     if fog == FOG_LINEAR {
         visibility = clamp((frame.finish.z - distance) / (frame.finish.z - frame.finish.y), 0.0, 1.0);
@@ -35,5 +43,5 @@ fn finish(color: vec4<f32>, world_position: vec3<f32>) -> vec4<f32> {
         let optical = frame.finish.w * distance;
         visibility = exp(-optical * optical);
     }
-    return vec4<f32>(mix(frame.fog_color.rgb, rgb, visibility), color.a);
+    return mix(frame.fog_color.rgb, toned, visibility);
 }

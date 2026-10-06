@@ -362,7 +362,15 @@ impl Effects {
             device,
             "render-wgpu sprite",
             &self.sprite_pipeline_layout,
-            ("vs_sprite", "fs_sprite"),
+            (
+                "vs_sprite",
+                // Solid sprites cover their pixel (`finish.rs`).
+                if state.blend {
+                    "fs_sprite"
+                } else {
+                    "fs_sprite_opaque"
+                },
+            ),
             &[
                 Some(corner),
                 Some(wgpu::VertexBufferLayout {
@@ -908,7 +916,12 @@ impl Renderer {
 
     /// Build this view pass's sprite and particle rows and make their
     /// pipelines and bindings ready. Runs before the pass is encoded.
-    pub(crate) fn prepare_effects(&mut self, view: &ViewPass<'_>) -> EffectsPass {
+    /// `format` is the world's HDR target the view draws effects into.
+    pub(crate) fn prepare_effects(
+        &mut self,
+        view: &ViewPass<'_>,
+        format: ColorTarget,
+    ) -> EffectsPass {
         let mut pass = EffectsPass::default();
         let viewmodel = view.layer == ViewLayer::Viewmodel;
         let pixel_ratio = self.pixel_ratio();
@@ -976,7 +989,6 @@ impl Renderer {
                     a.depth.total_cmp(&b.depth)
                 })
         });
-        let format = view.target.key();
         let mut rows = std::mem::take(&mut self.effects.row_scratch);
         rows.clear();
         for draw in &draws {

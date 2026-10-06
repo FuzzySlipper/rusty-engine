@@ -449,7 +449,8 @@ impl Layouts {
             multisample: pipelines.target.multisample(),
             fragment: Some(wgpu::FragmentState {
                 module: shader,
-                entry_point: Some("fs_world"),
+                // Opaque passes cover their pixel (`finish.rs`).
+                entry_point: Some(if blend { "fs_world" } else { "fs_world_opaque" }),
                 compilation_options: Default::default(),
                 targets: &[Some(wgpu::ColorTargetState {
                     format: pipelines.target.format,

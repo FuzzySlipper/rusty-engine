@@ -30,6 +30,7 @@ mod composition;
 mod convert;
 mod driver;
 mod effects;
+mod finish;
 mod frame;
 mod ghost;
 mod glb;
@@ -37,6 +38,7 @@ mod gpu;
 mod labels;
 mod particles;
 mod pipelines;
+mod post;
 mod primitives;
 mod resources;
 mod shaders;
@@ -190,6 +192,8 @@ pub struct Renderer {
     shadows_chosen: bool,
     /// Shadow layers and casters rendered since the frame began.
     shadows_rendered: (u32, u32),
+    /// Auto exposure adapted in this frame's first world view.
+    exposure_adapted: bool,
     frame_bind_group: wgpu::BindGroup,
     caster_bind_group: wgpu::BindGroup,
     sky_bind_group: Option<wgpu::BindGroup>,
@@ -205,6 +209,8 @@ pub struct Renderer {
     scene_generation: u64,
     compose: compose::Compose,
     ambient_occlusion: ambient_occlusion::AmbientOcclusionPass,
+    /// The world's HDR targets and the finish pass.
+    finish: finish::Finish,
     composition: composition::ViewComposition,
     effects: effects::Effects,
     particles: particles::Particles,
@@ -252,6 +258,7 @@ impl Renderer {
         let white = white_texture(gpu);
         let (unlit_material, lit_fallback_material) =
             apply::builtin_materials(device, &layouts.material, &white);
+        let finish = finish::Finish::new(gpu, &mut layouts.shaders);
         let effects = effects::Effects::new(
             device,
             &layouts.frame,
@@ -304,6 +311,7 @@ impl Renderer {
             shadow_eye: glam::Vec3::ZERO,
             shadows_chosen: false,
             shadows_rendered: (0, 0),
+            exposure_adapted: false,
             frame_bind_group,
             caster_bind_group,
             sky_bind_group: None,
@@ -316,6 +324,7 @@ impl Renderer {
             scene_generation: 0,
             compose: compose::Compose::new(device, compose_shader),
             ambient_occlusion,
+            finish,
             composition: Default::default(),
             effects,
             particles: Default::default(),
@@ -368,8 +377,10 @@ impl Renderer {
         self.tables.lights_dirty = true;
     }
 
-    /// The renderer's GPU passes: each timed pass's cost, the adapter's
-    /// compute limits, and the ambient occlusion the last world view took.
+    /// The renderer's GPU passes (ambient occlusion's, then the world, its
+    /// bloom and exposure, and its finish): each timed pass's cost, the
+    /// adapter's compute limits, and the ambient occlusion the last world
+    /// view took.
     pub fn gpu_readout(&self) -> GpuReadout {
         GpuReadout {
             timestamps: self
@@ -378,7 +389,12 @@ impl Renderer {
                 .features()
                 .contains(wgpu::Features::TIMESTAMP_QUERY),
             limits: self.gpu.compute_limits(),
-            passes: self.ambient_occlusion.timings(),
+            passes: self
+                .ambient_occlusion
+                .timings()
+                .into_iter()
+                .chain(self.finish.timings())
+                .collect(),
             ambient_occlusion: self.ambient_occlusion.readout(),
         }
     }

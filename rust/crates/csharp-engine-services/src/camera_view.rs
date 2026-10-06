@@ -7,8 +7,8 @@ use render_host_contracts::{
     RendererViewComposition, RendererViewTarget, RendererViewport,
 };
 use render_model::{
-    FogDescriptor, RenderDiff, RenderFrameDiff, SkyBackgroundDescriptor, ToneMappingDescriptor,
-    ToneMappingOperator,
+    AutoExposureDescriptor, BloomDescriptor, FogDescriptor, RenderDiff, RenderFrameDiff,
+    SkyBackgroundDescriptor, ToneMappingDescriptor, ToneMappingOperator,
 };
 
 use crate::{
@@ -69,6 +69,9 @@ pub(crate) struct RuntimeCameraViewCall {
     /// presentation world retains the selection.
     pub(crate) fog: Option<Option<FogDescriptor>>,
     pub(crate) tone_mapping: Option<ToneMappingDescriptor>,
+    /// Bloom and auto exposure selected during the call, as fog is.
+    pub(crate) bloom: Option<Option<BloomDescriptor>>,
+    pub(crate) auto_exposure: Option<Option<AutoExposureDescriptor>>,
 }
 
 /// Engine-owned typed camera/view projection. Product facts are copied at the
@@ -115,6 +118,8 @@ impl RuntimeCameraViewBridge {
             background: None,
             fog: None,
             tone_mapping: None,
+            bloom: None,
+            auto_exposure: None,
         });
     }
 
@@ -163,6 +168,8 @@ impl RuntimeCameraViewBridge {
             background: None,
             fog: None,
             tone_mapping: None,
+            bloom: None,
+            auto_exposure: None,
         };
         stage_composition(&mut snapshot)?;
         Ok(snapshot
@@ -448,6 +455,8 @@ impl RuntimeCameraViewBridge {
             background: None,
             fog: None,
             tone_mapping: None,
+            bloom: None,
+            auto_exposure: None,
         };
         candidate.state.views = views.to_vec();
         candidate.state.presentations = presentations.to_vec();
@@ -638,6 +647,42 @@ impl RuntimeCameraViewBridge {
             },
             exposure: request.exposure,
         });
+        Ok(())
+    }
+}
+
+impl RuntimeCameraViewBridge {
+    fn set_bloom(&mut self, request: NativeBloomRequest) -> Result<(), CsharpEngineServicesError> {
+        let bloom = BloomDescriptor {
+            threshold: request.threshold,
+            intensity: request.intensity,
+        };
+        if !bloom.valid() {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_BLOOM",
+                "bloom threshold must be finite and non-negative, and intensity within 0 to 16",
+            ));
+        }
+        self.staged_mut()?.bloom = Some((request.intensity > 0.0).then_some(bloom));
+        Ok(())
+    }
+
+    fn set_auto_exposure(
+        &mut self,
+        request: NativeAutoExposureRequest,
+    ) -> Result<(), CsharpEngineServicesError> {
+        let auto_exposure = AutoExposureDescriptor {
+            speed: request.speed,
+            min_exposure: request.min_exposure,
+            max_exposure: request.max_exposure,
+        };
+        if request.enabled && !auto_exposure.valid() {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_AUTO_EXPOSURE",
+                "auto exposure speed must be positive and its exposure range positive and ordered",
+            ));
+        }
+        self.staged_mut()?.auto_exposure = Some(request.enabled.then_some(auto_exposure));
         Ok(())
     }
 }
@@ -903,8 +948,8 @@ fn validate_target_descriptor(
     })
 }
 
-/// The call's background, fog and tone mapping selections as one frame, or
-/// None when the call selected none of them.
+/// The call's background, fog, tone mapping, bloom and auto exposure
+/// selections as one frame, or None when the call selected none of them.
 pub(crate) fn environment_frame(
     call: &RuntimeCameraViewCall,
     appearance: &RuntimeAppearanceCall,
@@ -915,6 +960,12 @@ pub(crate) fn environment_frame(
     }
     if let Some(tone_mapping) = call.tone_mapping {
         operations.push(RenderDiff::SetToneMapping { tone_mapping });
+    }
+    if let Some(bloom) = call.bloom {
+        operations.push(RenderDiff::SetBloom { bloom });
+    }
+    if let Some(auto_exposure) = call.auto_exposure {
+        operations.push(RenderDiff::SetAutoExposure { auto_exposure });
     }
     if let Some(change) = call.background {
         background_operations(change, appearance, &mut operations)?;
@@ -1412,6 +1463,48 @@ pub(crate) unsafe extern "C" fn set_tone_mapping(
     }
     let bridge = unsafe { &mut *context.cast::<RuntimeCameraViewBridge>() };
     match bridge.set_tone_mapping(unsafe { *request }) {
+        Ok(()) => ABI_OK,
+        Err(error) => {
+            bridge.operation_diagnostics.retain(&error, operation_error);
+            0
+        }
+    }
+}
+
+pub(crate) unsafe extern "C" fn set_bloom(
+    context: *mut c_void,
+    request: *const NativeBloomRequest,
+    operation_error: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    if !operation_error.is_null() {
+        unsafe { *operation_error = std::mem::zeroed() };
+    }
+    if context.is_null() || request.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeCameraViewBridge>() };
+    match bridge.set_bloom(unsafe { *request }) {
+        Ok(()) => ABI_OK,
+        Err(error) => {
+            bridge.operation_diagnostics.retain(&error, operation_error);
+            0
+        }
+    }
+}
+
+pub(crate) unsafe extern "C" fn set_auto_exposure(
+    context: *mut c_void,
+    request: *const NativeAutoExposureRequest,
+    operation_error: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    if !operation_error.is_null() {
+        unsafe { *operation_error = std::mem::zeroed() };
+    }
+    if context.is_null() || request.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeCameraViewBridge>() };
+    match bridge.set_auto_exposure(unsafe { *request }) {
         Ok(()) => ABI_OK,
         Err(error) => {
             bridge.operation_diagnostics.retain(&error, operation_error);

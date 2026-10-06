@@ -58,8 +58,11 @@ operations skipped by kind, and, for streamed frames, the recent frame rate,
 median render, readback and encode milliseconds, and bytes per frame and per
 second. The desktop window streams nothing, so it reports no frame timing.
 Where the adapter has timestamp queries, `gpu.passes` gives the median GPU
-milliseconds of each renderer pass that is timed (today the ambient
-occlusion passes), with the adapter's compute limits beside them.
+milliseconds of each renderer pass that is timed, with the adapter's
+compute limits beside them: the ambient occlusion passes (`ao-prepass`,
+`ao-occlusion`, `ao-blur`), then the first world view of a frame's `world`
+pass, its `bloom-exposure` passes together and its `finish` pass
+([exposure, tone mapping and fog](lighting-and-sky.md#exposure-tone-mapping-and-fog)).
 
 To measure the renderer's frame cost without the product, take a scene
 snapshot on the running product (`engine.renderer.snapshot <path>`, see

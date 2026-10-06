@@ -1,6 +1,6 @@
 // The standard shader's world pass: parts drawn with their material and the
-// pass's light rows, finished by exposure, tone mapping and fog
-// (`rusty::finish`). Each material compiles the features it uses
+// pass's light rows into the view's linear HDR target, which the finish pass
+// finishes (`rusty::finish`). Each material compiles the features it uses
 // (`lib.rs` `Features`): UNLIT, MASK, VOXEL_SURFACE, NORMAL_MAP,
 // EMISSIVE_MAP, OCCLUSION_MAP, TRIPLANAR, TERRAIN_LAYERS, STOCHASTIC_TILING;
 // and the mesh's
@@ -337,8 +337,7 @@ fn standard_surface(in: VsOut, front: bool) -> Surface {
     return surface;
 }
 
-@fragment
-fn fs_world(in: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
+fn world_color(in: VsOut, front: bool) -> vec4<f32> {
     var surface = standard_surface(in, front);
 #ifdef MASK
     if surface.base.a < material.alpha_cutoff {
@@ -357,4 +356,17 @@ fn fs_world(in: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<
 #else
     return standard_shade(surface);
 #endif
+}
+
+// Blended passes: the colour and its alpha, blended over the world.
+@fragment
+fn fs_world(in: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
+    return world_color(in, front);
+}
+
+// Opaque passes cover their pixel whatever the colour's alpha: the finish
+// pass composites the world over the background by its coverage.
+@fragment
+fn fs_world_opaque(in: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
+    return vec4<f32>(world_color(in, front).rgb, 1.0);
 }

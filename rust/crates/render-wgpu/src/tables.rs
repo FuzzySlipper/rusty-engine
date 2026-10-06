@@ -15,6 +15,7 @@
 //! | `animated` | `RenderHandle` | playback, pose, skinned vertex buffers | `CreateAnimatedMeshInstance`, `SetAnimatedMeshPlayback`, `SetAnimatedMeshInspection` |
 //! | `environment` | (single) | background colour or equirectangular sky (with blend) | `SetBackgroundColor` / `SetSkyBackground` |
 //! | `fog`, `tone_mapping` | (single) | distance fog; exposure and tone mapping operator | `SetFog` / `SetToneMapping` |
+//! | `bloom`, `auto_exposure` | (single) | the finish pass's bloom and auto exposure | `SetBloom` / `SetAutoExposure` |
 //!
 //! | `sprites` | `RenderHandle` | membership: the nodes of kind `Sprite` | `CreateSprite`, `Destroy` (subtree) |
 //!
@@ -582,6 +583,8 @@ pub(crate) struct Tables {
     pub environment: Environment,
     pub fog: Option<FogDescriptor>,
     pub tone_mapping: ToneMappingDescriptor,
+    pub bloom: Option<render_model::BloomDescriptor>,
+    pub auto_exposure: Option<render_model::AutoExposureDescriptor>,
     /// Nodes whose transform, visibility or parent changed since `prepare`.
     pub dirty_nodes: HashSet<RenderHandle>,
     /// Light nodes; the light rows are rebuilt when any of them changes.
@@ -610,6 +613,8 @@ impl Tables {
             environment: Environment::Default,
             fog: None,
             tone_mapping: ToneMappingDescriptor::NONE,
+            bloom: None,
+            auto_exposure: None,
             dirty_nodes: HashSet::new(),
             lights: HashSet::new(),
             lights_dirty: true,

@@ -33,7 +33,8 @@ Image dimensions are independent of the window. The result is a top-to-bottom
 Retained lights, scene fog, material assignments, camera framing and
 projection are Engine inputs. Exposure, no tone mapping/ACES, and
 multisample count are explicit capture choices; the scene's
-`CameraView.SetToneMapping` does not apply to captures; a sample count above 1 supersamples. Dimensions
+`CameraView.SetToneMapping` and `SetAutoExposure` do not apply to captures,
+while the scene's fog and bloom do; a sample count above 1 supersamples. Dimensions
 beyond the device's texture limit fail with a diagnostic. A zero
 `PoseObjectId` keeps the frozen pose; a nonzero object
 selects an exact normalized clip time in `[0,1]`, including the final pose,

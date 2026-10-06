@@ -529,3 +529,34 @@ fn a_partly_transparent_capture_background_keeps_its_colour() {
         );
     }
 }
+
+#[test]
+fn a_capture_keeps_the_scene_bloom_but_its_own_exposure() {
+    let mut harness = Harness::new(RendererOptions::default());
+    harness.apply(room());
+    let capture = |harness: &Harness| {
+        let png = harness
+            .renderer
+            .capture_image(&capture_job(&harness.world, image(1, None)), &NoResources)
+            .expect("capture");
+        decode_png_rgba(&png).expect("a PNG").2
+    };
+    let plain = capture(&harness);
+    // Auto exposure would scale the capture's exposure: it is left out.
+    harness.apply(vec![RenderDiff::SetAutoExposure {
+        auto_exposure: Some(AutoExposureDescriptor {
+            speed: 1.0,
+            min_exposure: 4.0,
+            max_exposure: 8.0,
+        }),
+    }]);
+    assert_eq!(capture(&harness), plain);
+    // Bloom is the scene's light, kept as its fog is.
+    harness.apply(vec![RenderDiff::SetBloom {
+        bloom: Some(BloomDescriptor {
+            threshold: 0.0,
+            intensity: 4.0,
+        }),
+    }]);
+    assert_ne!(capture(&harness), plain);
+}

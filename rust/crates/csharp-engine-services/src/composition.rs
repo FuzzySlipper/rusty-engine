@@ -192,6 +192,8 @@ fn engine_api(
             set_sky_background_blend: crate::camera_view::set_sky_background_blend,
             set_fog: crate::camera_view::set_fog,
             set_tone_mapping: crate::camera_view::set_tone_mapping,
+            set_bloom: crate::camera_view::set_bloom,
+            set_auto_exposure: crate::camera_view::set_auto_exposure,
             set_viewport_anchor: crate::camera_view::set_viewport_anchor,
             read_surface: crate::camera_view::read_surface,
             read_viewport_anchor: crate::camera_view::read_viewport_anchor,
@@ -1431,6 +1433,115 @@ mod tests {
             cleared_output.frames[0].ops.as_slice(),
             [render_model::RenderDiff::SetSkyBackground { background: None }]
         ));
+    }
+
+    #[test]
+    fn bloom_and_auto_exposure_publish_as_retained_environment_and_refuse_invalid_values() {
+        use crate::operation_diagnostics::{empty_receipt, receipt_codes};
+        let mut services = EngineServiceSet::new(
+            parse_runtime_appearance_catalog(None).expect("default catalog"),
+            BTreeMap::new(),
+            None,
+            RuntimeDiagnosticsSink::new(Default::default()).unwrap(),
+        )
+        .expect("service set");
+        let auto = |enabled, speed, min_exposure, max_exposure| NativeAutoExposureRequest {
+            enabled,
+            speed,
+            min_exposure,
+            max_exposure,
+        };
+        services.begin_call(binding());
+        let api = services.api();
+        let bloom = |request: NativeBloomRequest, refusal| unsafe {
+            (api.camera_view.set_bloom)(api.camera_view.context, &request, refusal)
+        };
+        let exposure = |request: NativeAutoExposureRequest, refusal| unsafe {
+            (api.camera_view.set_auto_exposure)(api.camera_view.context, &request, refusal)
+        };
+        let bright = NativeBloomRequest {
+            threshold: 1.2,
+            intensity: 0.6,
+        };
+        assert_eq!(bloom(bright, std::ptr::null_mut()), ABI_OK);
+        assert_eq!(
+            exposure(auto(true, 1.5, 0.25, 4.0), std::ptr::null_mut()),
+            ABI_OK
+        );
+        let mut call = services.finish_call().expect("environment call");
+        let selected = [
+            render_model::RenderDiff::SetBloom {
+                bloom: Some(render_model::BloomDescriptor {
+                    threshold: 1.2,
+                    intensity: 0.6,
+                }),
+            },
+            render_model::RenderDiff::SetAutoExposure {
+                auto_exposure: Some(render_model::AutoExposureDescriptor {
+                    speed: 1.5,
+                    min_exposure: 0.25,
+                    max_exposure: 4.0,
+                }),
+            },
+        ];
+        assert_eq!(call.take_output().frames[0].ops, selected);
+        let attachment = services
+            .snapshot_outputs(binding())
+            .expect("fresh attachment");
+        let CsharpAppearanceCallOutput::Frame(frame) = &attachment.appearance[0] else {
+            panic!("baseline graphics frame");
+        };
+        assert!(selected.iter().all(|op| frame.ops.contains(op)));
+
+        // Invalid values are refused; zero intensity and disabled turn them
+        // off.
+        services.begin_call(binding());
+        let api = services.api();
+        let bloom = |request: NativeBloomRequest, refusal| unsafe {
+            (api.camera_view.set_bloom)(api.camera_view.context, &request, refusal)
+        };
+        let exposure = |request: NativeAutoExposureRequest, refusal| unsafe {
+            (api.camera_view.set_auto_exposure)(api.camera_view.context, &request, refusal)
+        };
+        let mut refusal = empty_receipt();
+        assert_eq!(
+            bloom(
+                NativeBloomRequest {
+                    threshold: -1.0,
+                    intensity: 1.0,
+                },
+                &mut refusal
+            ),
+            0
+        );
+        assert_eq!(receipt_codes(&refusal), ["CSHARP_BLOOM"]);
+        let mut refusal = empty_receipt();
+        assert_eq!(exposure(auto(true, 1.0, 2.0, 1.0), &mut refusal), 0);
+        assert_eq!(receipt_codes(&refusal), ["CSHARP_AUTO_EXPOSURE"]);
+        assert_eq!(
+            bloom(
+                NativeBloomRequest {
+                    threshold: 1.0,
+                    intensity: 0.0,
+                },
+                std::ptr::null_mut()
+            ),
+            ABI_OK
+        );
+        assert_eq!(
+            exposure(auto(false, 0.0, 0.0, 0.0), std::ptr::null_mut()),
+            ABI_OK
+        );
+        let mut call = services.finish_call().expect("off");
+        assert_eq!(
+            call.take_output().frames[0].ops,
+            [
+                render_model::RenderDiff::SetBloom { bloom: None },
+                render_model::RenderDiff::SetAutoExposure {
+                    auto_exposure: None
+                },
+            ]
+        );
     }
 
     #[test]

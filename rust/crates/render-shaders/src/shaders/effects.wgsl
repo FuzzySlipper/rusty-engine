@@ -1,5 +1,5 @@
 // Sprites and particles, lit by the world pass's light rows and finished as
-// the world pass is (`rusty::finish`). Sprite bindings in group 1 start at 10
+// the world is (`rusty::finish`). Sprite bindings in group 1 start at 10
 // and particle bindings at 20, so the two layouts never collide in this
 // module.
 
@@ -78,8 +78,7 @@ fn gl_dpdy2(value: vec2<f32>) -> vec2<f32> {
     return -dpdy(value);
 }
 
-@fragment
-fn fs_sprite(in: SpriteOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
+fn shaded_sprite(in: SpriteOut, front: bool) -> vec4<f32> {
     // Derivatives and samples first: they need uniform control flow.
     let q0 = dpdx(in.world_position);
     let q1 = gl_dpdy3(in.world_position);
@@ -144,6 +143,18 @@ fn fs_sprite(in: SpriteOut, @builtin(front_facing) front: bool) -> @location(0) 
         vec4<f32>(standard_radiance(color.rgb, normal, in.world_position, roughness, 0.0, 1.0), color.a),
         in.world_position,
     );
+}
+
+// Blended sprites: the colour and its alpha, blended over the world.
+@fragment
+fn fs_sprite(in: SpriteOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
+    return shaded_sprite(in, front);
+}
+
+// Solid sprites cover their pixel (`world.wgsl` `fs_world_opaque`).
+@fragment
+fn fs_sprite_opaque(in: SpriteOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
+    return vec4<f32>(shaded_sprite(in, front).rgb, 1.0);
 }
 
 // Particle billboard: a screen-aligned quad, of constant pixel size

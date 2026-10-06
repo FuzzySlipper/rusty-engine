@@ -23,6 +23,8 @@ use crate::apply::light_row;
 use crate::batch::{self, DrawList, Frustum};
 use crate::camera::CameraMatrices;
 use crate::effects::EffectsPass;
+use crate::finish::{FinishPost, HDR_FORMAT};
+use crate::pipelines::{Layouts, Pipelines};
 use crate::shaders::Features;
 use crate::shadows::{self, ShadowMaps};
 use crate::tables::{Builtin, Environment, MaterialRef, NodeKind, PartId, PART_ROW_FLOATS};
@@ -272,6 +274,8 @@ impl Renderer {
         self.report_pending_bounds();
         self.shadows_chosen = false;
         self.shadows_rendered = (0, 0);
+        self.finish.begin_frame(&self.gpu);
+        self.exposure_adapted = false;
         let mut layers_changed = false;
         if self.tables.lights_dirty {
             layers_changed = self.upload_lights();
@@ -1072,7 +1076,14 @@ impl Renderer {
             self.fit_cascades(&view.camera);
         }
         let instances_uploaded = self.update_view_list(&view_proj, eye, view.layer);
-        let effects = self.prepare_effects(&view);
+        // The world, sprites and particles draw into the view's HDR target;
+        // the background and the finished world into the view's own.
+        let target = view.target.key();
+        let hdr_format = ColorTarget {
+            format: HDR_FORMAT,
+            samples: target.samples,
+        };
+        let effects = self.prepare_effects(&view, hdr_format);
         let slot = view.layer as usize;
         if !world_layer
             && effects.draws() == 0
@@ -1103,15 +1114,18 @@ impl Renderer {
         self.gpu.queue.write_buffer(&self.frame_buffer, 0, &bytes);
 
         // Format and sample count: every pipeline drawing here must match.
-        let format = view.target.key();
-        let format_index = match self.pipelines.iter().position(|set| set.target == format) {
+        let pipeline_set = |pipelines: &mut Vec<Pipelines>, layouts: &Layouts, key| match pipelines
+            .iter()
+            .position(|set| set.target == key)
+        {
             Some(index) => index,
             None => {
-                self.pipelines
-                    .push(self.layouts.pipelines(&self.gpu.device, format));
-                self.pipelines.len() - 1
+                pipelines.push(layouts.pipelines(&self.gpu.device, key));
+                pipelines.len() - 1
             }
         };
+        let format_index = pipeline_set(&mut self.pipelines, &self.layouts, hdr_format);
+        let sky_index = pipeline_set(&mut self.pipelines, &self.layouts, target);
         let variants = self.batch_variants(
             &self.views[slot]
                 .as_ref()
@@ -1163,20 +1177,9 @@ impl Renderer {
             ));
         }
         let whole = view.start == PassStart::Target;
-        if !whole {
-            self.compose.prepare_clear(&self.gpu, format, view.clear);
+        if !whole && world_layer {
+            self.compose.prepare_clear(&self.gpu, target, view.clear);
         }
-        let color_load = if whole && world_layer {
-            let [r, g, b, a] = view.clear.map(f64::from);
-            wgpu::LoadOp::Clear(wgpu::Color { r, g, b, a })
-        } else {
-            wgpu::LoadOp::Load
-        };
-        let depth_load = if whole {
-            wgpu::LoadOp::Clear(1.0)
-        } else {
-            wgpu::LoadOp::Load
-        };
         if world_layer {
             // Ghost plates snap per view; a view is known by its viewport.
             let area = view.viewport;
@@ -1184,7 +1187,7 @@ impl Renderer {
                 ^ (u64::from(area.y) << 32)
                 ^ (u64::from(area.width) << 16)
                 ^ u64::from(area.height);
-            self.select_ghost_sectors(eye, key, format);
+            self.select_ghost_sectors(eye, key, hdr_format);
         }
         let mut encoder = self
             .gpu
@@ -1210,6 +1213,85 @@ impl Renderer {
                 });
             self.ambient_occlusion.encode(&mut encoder, occlusion);
         }
+        let area = view.viewport;
+        let in_viewport = |pass: &mut wgpu::RenderPass<'_>| {
+            pass.set_viewport(
+                area.x as f32,
+                area.y as f32,
+                area.width as f32,
+                area.height as f32,
+                0.0,
+                1.0,
+            );
+            pass.set_scissor_rect(area.x, area.y, area.width, area.height);
+        };
+        if world_layer {
+            // The background: the clear colour, then the sky. It is never
+            // finished.
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("render-wgpu background"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: view.target.color,
+                    depth_slice: None,
+                    // The view's finish pass, which composites the world
+                    // over this, resolves a multisampled target.
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: if whole {
+                            let [r, g, b, a] = view.clear.map(f64::from);
+                            wgpu::LoadOp::Clear(wgpu::Color { r, g, b, a })
+                        } else {
+                            wgpu::LoadOp::Load
+                        },
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: view.target.depth,
+                    depth_ops: Some(wgpu::Operations {
+                        load: if whole {
+                            wgpu::LoadOp::Clear(1.0)
+                        } else {
+                            wgpu::LoadOp::Load
+                        },
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            in_viewport(&mut pass);
+            if !whole {
+                self.compose.clear_viewport(&mut pass, target, true);
+            }
+            if let (true, Some(sky)) = (view.sky, &self.sky_bind_group) {
+                pass.set_bind_group(0, &self.frame_bind_group, &[]);
+                pass.set_pipeline(&self.pipelines[sky_index].sky);
+                pass.set_bind_group(1, sky, &[]);
+                pass.draw(0..3, 0..1);
+            }
+        }
+        // Bloom spreads the world's light; auto exposure adapts at the first
+        // world view of a frame. Both read the world resolved.
+        let bloom = self
+            .tables
+            .bloom
+            .filter(|bloom| world_layer && bloom.intensity > 0.0);
+        let auto_exposure = self.tables.auto_exposure;
+        if auto_exposure.is_none() {
+            self.finish.post.reset_exposure();
+        }
+        let adapting = auto_exposure.filter(|_| world_layer && !self.exposure_adapted);
+        let size = (view.target.width, view.target.height, target.samples);
+        let hdr = self.finish.target(
+            &self.gpu,
+            size.0,
+            size.1,
+            size.2,
+            bloom.is_some() || adapting.is_some(),
+        );
         let pipelines = &self.pipelines[format_index];
         let list = &self.views[slot]
             .as_ref()
@@ -1224,49 +1306,46 @@ impl Renderer {
                     "render-wgpu viewmodel"
                 }),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: view.target.color,
+                    view: &hdr.color,
                     depth_slice: None,
-                    // A multisampled primary resolves at the end of every
-                    // pass; later passes load the multisampled colour.
-                    resolve_target: view.target.resolve,
+                    resolve_target: hdr.resolve.as_ref(),
                     ops: wgpu::Operations {
-                        load: color_load,
+                        load: if whole {
+                            wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT)
+                        } else {
+                            wgpu::LoadOp::Load
+                        },
                         store: wgpu::StoreOp::Store,
                     },
                 })],
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                     view: view.target.depth,
                     depth_ops: Some(wgpu::Operations {
-                        load: depth_load,
+                        // A world pass's depth was cleared with its
+                        // background; a viewmodel pass breaks depth here.
+                        load: if whole && !world_layer {
+                            wgpu::LoadOp::Clear(1.0)
+                        } else {
+                            wgpu::LoadOp::Load
+                        },
                         store: wgpu::StoreOp::Store,
                     }),
                     stencil_ops: None,
                 }),
-                timestamp_writes: None,
+                timestamp_writes: self.finish.world_writes(world_layer),
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            let area = view.viewport;
-            pass.set_viewport(
-                area.x as f32,
-                area.y as f32,
-                area.width as f32,
-                area.height as f32,
-                0.0,
-                1.0,
-            );
-            pass.set_scissor_rect(area.x, area.y, area.width, area.height);
+            in_viewport(&mut pass);
             if !whole {
-                self.compose.clear_viewport(&mut pass, format, world_layer);
+                // A viewport of a shared HDR target clears with a triangle,
+                // depth included (again, for a world pass).
+                self.finish
+                    .clear_viewport(&self.gpu.device, &mut pass, target.samples);
             }
             pass.set_bind_group(0, &self.frame_bind_group, &[]);
             let occlusion_bind_group = self.ambient_occlusion.apply_bind_group(occlusion.as_ref());
             pass.set_bind_group(2, occlusion_bind_group, &[]);
-            if let (true, true, Some(sky)) = (world_layer, view.sky, &self.sky_bind_group) {
-                pass.set_pipeline(&pipelines.sky);
-                pass.set_bind_group(1, sky, &[]);
-                pass.draw(0..3, 0..1);
-            }
             // Solid sprites draw between the world's opaque and blended parts.
             let batches = &list.batches;
             let blend_start = batches
@@ -1278,7 +1357,7 @@ impl Renderer {
                     pipelines.get(pass, features)
                 });
             if world_layer {
-                encoded.draws += self.draw_ghost_plates(&mut pass, format);
+                encoded.draws += self.draw_ghost_plates(&mut pass, hdr_format);
                 pass.set_bind_group(0, &self.frame_bind_group, &[]);
             }
             // Blended parts are not in the pre-pass's depth, so the occlusion
@@ -1286,10 +1365,11 @@ impl Renderer {
             if occlusion.is_some() {
                 pass.set_bind_group(2, self.ambient_occlusion.apply_bind_group(None), &[]);
             }
-            self.effects.draw_solid_sprites(&mut pass, format, &effects);
+            self.effects
+                .draw_solid_sprites(&mut pass, hdr_format, &effects);
             encoded += self.draw_blended(
                 &mut pass,
-                format,
+                hdr_format,
                 &batches[blend_start..],
                 &effects,
                 eye,
@@ -1297,19 +1377,49 @@ impl Renderer {
             );
             self.effects.draw_particles(
                 &mut pass,
-                format,
+                hdr_format,
                 &effects,
                 self.builtins.get(&Builtin::Cube),
             );
             parts = encoded;
         }
+        if world_layer {
+            self.finish.resolve_world(&mut encoder);
+        }
+        let draws = parts.draws + effects.draws();
+        let instances = list.instances();
+        if bloom.is_some() || adapting.is_some() {
+            self.exposure_adapted |= adapting.is_some();
+            self.finish.encode_post(
+                &self.gpu,
+                &mut encoder,
+                size,
+                bloom,
+                adapting,
+                self.animation_time,
+                world_layer,
+            );
+        }
+        self.finish.encode(
+            &self.gpu,
+            &mut encoder,
+            &view.target,
+            [area.x, area.y, area.width, area.height],
+            &self.frame_buffer,
+            FinishPost {
+                bloom: bloom.map_or(0.0, |bloom| bloom.intensity),
+                auto_exposure: auto_exposure.is_some(),
+            },
+            world_layer,
+        );
         self.gpu.queue.submit([encoder.finish()]);
         if occlusion.is_some() {
             self.ambient_occlusion.submitted();
         }
+        self.finish.submitted();
         ViewStats {
-            draws: parts.draws + effects.draws(),
-            instances: list.instances(),
+            draws,
+            instances,
             instances_uploaded,
             shadow_draws: shadows.encoded.draws,
             shadow_layers: shadows.layers,
