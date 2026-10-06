@@ -209,7 +209,9 @@ Reconstructed chunks mesh from the chunk and a one-voxel halo of its
 neighbours, in parallel when a change rebuilds several chunks. On a 180-chunk
 dungeon of 16³ one-metre chunks (`svc-mesh` example `smooth_chunk_meshing`,
 release build) dual contouring costs about 0.3 ms per chunk, marching cubes
-0.5 ms and cubes 0.4 ms. A chunk's surface depends on all 26 neighbours, so
+0.5 ms and cubes 0.15 ms: a cube chunk's face tests read its 26 neighbours
+through references resolved once per chunk. A chunk's surface depends on all
+26 neighbours, so
 admitting a world chunk by chunk remeshes each chunk several times; admitting
 that dungeon in slices of six chunks (`engine-spatial` example
 `smooth_residency_load`) takes about 0.43 s with dual contouring, 0.63 s with

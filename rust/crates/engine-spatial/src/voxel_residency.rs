@@ -367,7 +367,7 @@ impl VoxelChunkResidencyService {
         for (coordinate, chunk) in previous {
             first_previous.entry(coordinate).or_insert(chunk);
         }
-        let mut navigation_cells = BTreeSet::new();
+        let mut navigation_cells = Vec::new();
         for (coordinate, before) in first_previous {
             if let Some(before) = before {
                 scene.account_chunk(coordinate, &before, false);

@@ -300,7 +300,7 @@ impl VoxelEditService {
         }
         let mut changed_chunks = BTreeSet::new();
         let mut dirty = BTreeSet::new();
-        let mut navigation_cells = BTreeSet::new();
+        let mut navigation_cells = Vec::new();
         for change in &changes {
             let voxel = VoxelCoord::new(change.address[0], change.address[1], change.address[2]);
             changed_chunks.insert(grid.voxel_to_chunk(voxel));

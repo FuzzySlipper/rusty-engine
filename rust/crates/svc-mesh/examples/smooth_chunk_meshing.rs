@@ -45,13 +45,62 @@ fn main() {
             }
             best = best.min(started.elapsed().as_secs_f64());
         }
+        // The payloads' identity, outside the timing.
+        let mut payload_hash = 0xcbf2_9ce4_8422_2325_u64;
+        for coord in &chunks {
+            let mesh = mesh_chunk_in_world_with_options(&world, *coord, &options)
+                .expect("resident")
+                .expect("meshes");
+            {
+                for bytes in [
+                    bytemuck_free(&mesh.positions),
+                    bytemuck_free(&mesh.normals),
+                    bytemuck_free(&mesh.tile_coordinates),
+                ] {
+                    payload_hash = fnv(payload_hash, &bytes);
+                }
+                payload_hash = fnv(
+                    payload_hash,
+                    &mesh
+                        .indices
+                        .iter()
+                        .flat_map(|index| index.to_le_bytes())
+                        .collect::<Vec<_>>(),
+                );
+                payload_hash = fnv(
+                    payload_hash,
+                    &mesh
+                        .triangle_owners
+                        .iter()
+                        .flat_map(|owner| owner.iter().flat_map(|value| value.to_le_bytes()))
+                        .collect::<Vec<_>>(),
+                );
+            }
+        }
         println!(
-            "{:>15}: {:8.1} ms total, {:6.2} ms/chunk, {triangles} triangles",
+            "{:>15}: {:8.1} ms total, {:6.2} ms/chunk, {triangles} triangles, payload {payload_hash:016x}",
             mode.as_str(),
             best * 1000.0,
             best * 1000.0 / chunks.len() as f64,
         );
     }
+}
+
+/// The bytes of `f32`s, little-endian.
+fn bytemuck_free(values: &[f32]) -> Vec<u8> {
+    values
+        .iter()
+        .flat_map(|value| value.to_le_bytes())
+        .collect()
+}
+
+/// FNV-1a over `bytes`, continued from `hash`.
+fn fnv(mut hash: u64, bytes: &[u8]) -> u64 {
+    for &byte in bytes {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash
 }
 
 fn solid(x: i64, y: i64, z: i64) -> Option<u16> {

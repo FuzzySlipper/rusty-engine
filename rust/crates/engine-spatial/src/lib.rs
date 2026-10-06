@@ -970,19 +970,42 @@ impl VoxelCollisionScene {
     /// walk down stops at `floor`.
     pub fn collidable_voxel_run_bottom(&self, point: [f64; 3], floor: f64) -> Option<f64> {
         let grid = self.voxel_world.grid();
-        let solid = |cell| {
-            collision_solid(&self.voxel_world, &self.noncollidable_materials, cell) == Some(true)
+        let solid = |chunk: &VoxelChunk, local| {
+            chunk.get(local).is_some_and(|value| {
+                value
+                    .material()
+                    .is_some_and(|material| !self.noncollidable_materials.contains(&material.raw()))
+            })
         };
         let mut cell = grid.world_to_voxel(WorldPos::new(point[0], point[1], point[2]));
-        if !solid(cell) {
+        let (mut coordinate, mut local) = grid.voxel_to_chunk_local(cell);
+        let mut chunk = self.voxel_world.get(coordinate)?;
+        if !solid(chunk, local) {
             return None;
         }
+        // The walk reads its chunk straight until it leaves it below.
         loop {
-            let below = VoxelCoord::new(cell.x, cell.y - 1, cell.z);
-            if grid.voxel_min_world(cell).y <= floor || !solid(below) {
-                return Some(grid.voxel_min_world(cell).y);
+            let bottom = grid.voxel_min_world(cell).y;
+            if bottom <= floor {
+                return Some(bottom);
             }
-            cell = below;
+            let below = if local.y > 0 {
+                (chunk, LocalVoxelCoord::new(local.x, local.y - 1, local.z))
+            } else {
+                coordinate = ChunkCoord::new(coordinate.x, coordinate.y - 1, coordinate.z);
+                let Some(chunk) = self.voxel_world.get(coordinate) else {
+                    return Some(bottom);
+                };
+                (
+                    chunk,
+                    LocalVoxelCoord::new(local.x, grid.chunk_dims().y() - 1, local.z),
+                )
+            };
+            if !solid(below.0, below.1) {
+                return Some(bottom);
+            }
+            (chunk, local) = below;
+            cell.y -= 1;
         }
     }
 
@@ -1355,12 +1378,14 @@ impl VoxelCollisionScene {
     /// Publish one local change whose voxels are already written: install the
     /// rebuilt meshes, replace the changed chunks' colliders, refresh the
     /// affected navigation cells, and advance the source revision.
+    /// `navigation_cells` are the cells whose walkability the change can
+    /// affect, in any order, repeats allowed.
     pub(crate) fn publish_local_change(
         &mut self,
         changed: &BTreeSet<ChunkCoord>,
         dirty: &BTreeSet<ChunkCoord>,
         meshes: ChunkMeshes,
-        navigation_cells: BTreeSet<VoxelCoord>,
+        mut navigation_cells: Vec<VoxelCoord>,
     ) {
         let mut rebuilt_chunks = 0;
         let mut removed_chunks = 0;
@@ -1401,6 +1426,8 @@ impl VoxelCollisionScene {
             // its mesh does, so every chunk whose mesh was rebuilt changes.
             self.install_surface_colliders(changed.union(dirty).copied().collect::<Vec<_>>());
         }
+        navigation_cells.sort_unstable();
+        navigation_cells.dedup();
         let (world, noncollidable) = (&self.voxel_world, &self.noncollidable_materials);
         self.navigation
             .refresh_cells(SCENE_NAVIGATION, navigation_cells, |cell| {

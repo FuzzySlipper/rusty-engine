@@ -1254,15 +1254,14 @@ pub fn mesh_chunk_in_world_with_options(
     let chunk = world.get(coord)?;
     if options.all_greedy() {
         let spec = world.grid();
+        let around = Neighbourhood::around(world, &spec, coord);
         return Some(
             mesh_core(
                 &spec,
                 coord,
                 chunk,
                 |_| true,
-                |slot, voxel, _| {
-                    neighbour_slot(world, &spec, voxel).is_some_and(|n| options.hides(slot, n))
-                },
+                |slot, voxel, _| around.slot(voxel).is_some_and(|n| options.hides(slot, n)),
             )
             .map(|mut cubes| {
                 if let Some(layers) = &options.terrain_layers {
@@ -1275,14 +1274,59 @@ pub fn mesh_chunk_in_world_with_options(
     Some(mesh_chunk_reconstructed(world, coord, chunk, options))
 }
 
-/// The material slot of a resident voxel, if solid.
-fn neighbour_slot(world: &VoxelWorld, spec: &VoxelGridSpec, voxel: VoxelCoord) -> Option<u16> {
-    let (chunk, local) = spec.voxel_to_chunk_local(voxel);
-    world
-        .get(chunk)
-        .and_then(|chunk| chunk.get(local))
-        .and_then(|value| value.material())
-        .map(|material| material.raw())
+/// A chunk's resident neighbours, resolved once per meshed chunk so the
+/// face tests read voxels without a chunk lookup each. Covers the chunk and
+/// one chunk beyond it on every side, which holds every voxel within a
+/// chunk's extent of the chunk; a voxel past that is treated as absent.
+struct Neighbourhood<'a> {
+    /// The chunk's origin voxel.
+    origin: [i64; 3],
+    size: [i64; 3],
+    /// By X, Y and Z offset from the chunk, each from -1, X fastest.
+    chunks: [Option<&'a VoxelChunk>; 27],
+}
+
+impl<'a> Neighbourhood<'a> {
+    fn around(world: &'a VoxelWorld, spec: &VoxelGridSpec, coord: ChunkCoord) -> Self {
+        let chunks = std::array::from_fn(|index| {
+            let offset = |axis: usize| (index / 3_usize.pow(axis as u32)) as i64 % 3 - 1;
+            world.get(ChunkCoord::new(
+                coord.x + offset(0),
+                coord.y + offset(1),
+                coord.z + offset(2),
+            ))
+        });
+        Self {
+            origin: spec.chunk_origin_voxel(coord).to_array(),
+            size: spec.chunk_dims().to_array().map(i64::from),
+            chunks,
+        }
+    }
+
+    /// The material slot of a resident voxel, if solid.
+    fn slot(&self, voxel: VoxelCoord) -> Option<u16> {
+        let mut index = 0;
+        let mut local = [0_u32; 3];
+        for (axis, value) in voxel.to_array().into_iter().enumerate() {
+            let offset = value.checked_sub(self.origin[axis])?;
+            let (chunk, within) = if offset < 0 {
+                (0, offset.checked_add(self.size[axis])?)
+            } else if offset < self.size[axis] {
+                (1, offset)
+            } else {
+                (2, offset - self.size[axis])
+            };
+            if !(0..self.size[axis]).contains(&within) {
+                return None;
+            }
+            index += chunk * 3_usize.pow(axis as u32);
+            local[axis] = within as u32;
+        }
+        self.chunks[index]?
+            .get(LocalVoxelCoord::new(local[0], local[1], local[2]))
+            .and_then(|value| value.material())
+            .map(|material| material.raw())
+    }
 }
 
 fn mesh_chunk_reconstructed(
@@ -1370,11 +1414,11 @@ fn mesh_chunk_reconstructed(
     if !options.uses_mode(SurfaceMode::GreedyCubes) {
         return Ok(smooth);
     }
+    let around = Neighbourhood::around(world, &spec, coord);
     let mut cubes = mesh_core(&spec, coord, chunk, greedy, |slot, voxel, dir| {
-        neighbour_slot(world, &spec, voxel).is_some_and(|n| {
+        around.slot(voxel).is_some_and(|n| {
             options.hides(slot, n)
-                && (greedy(n)
-                    || reconstructed_surface_covers(world, &spec, options, slot, voxel, dir))
+                && (greedy(n) || reconstructed_surface_covers(&around, options, slot, voxel, dir))
         })
     })?;
     if let Some(layers) = &options.terrain_layers {
@@ -1400,8 +1444,7 @@ fn mesh_chunk_reconstructed(
 /// lying on it. Occluding cubes keep their faces: no reconstructed surface
 /// meets them.
 fn reconstructed_surface_covers(
-    world: &VoxelWorld,
-    spec: &VoxelGridSpec,
+    around: &Neighbourhood<'_>,
     options: &SurfaceMeshOptions,
     slot: u16,
     voxel: VoxelCoord,
@@ -1419,7 +1462,7 @@ fn reconstructed_surface_covers(
             && surface.character.placement == VertexPlacement::Blocky
             && surface.character.roughness == 0.0
     };
-    if neighbour_slot(world, spec, voxel).is_some_and(block) {
+    if around.slot(voxel).is_some_and(block) {
         return true;
     }
     let normal = dir.offset();
@@ -1430,12 +1473,12 @@ fn reconstructed_surface_covers(
     };
     (-1..=1_i64).all(|a| {
         (-1..=1_i64).all(|b| {
-            let around = VoxelCoord::new(
+            let beside = VoxelCoord::new(
                 voxel.x + a * first[0] + b * second[0],
                 voxel.y + a * first[1] + b * second[1],
                 voxel.z + a * first[2] + b * second[2],
             );
-            neighbour_slot(world, spec, around).is_some_and(|n| options.hides(slot, n))
+            around.slot(beside).is_some_and(|n| options.hides(slot, n))
         })
     })
 }

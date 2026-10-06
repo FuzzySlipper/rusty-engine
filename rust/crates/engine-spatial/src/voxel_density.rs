@@ -376,7 +376,7 @@ impl VoxelDensityEditService {
         }
         let mut changed_chunks = BTreeSet::new();
         let mut dirty = BTreeSet::new();
-        let mut navigation_cells = BTreeSet::new();
+        let mut navigation_cells = Vec::new();
         let mut solidity_changes = 0;
         for (address, before, after) in &changes {
             let voxel = VoxelCoord::new(address[0], address[1], address[2]);
