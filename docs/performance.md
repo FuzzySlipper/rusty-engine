@@ -57,6 +57,9 @@ runtime renderer's adapter and output (`stream` or `window`), retained
 operations skipped by kind, and, for streamed frames, the recent frame rate,
 median render, readback and encode milliseconds, and bytes per frame and per
 second. The desktop window streams nothing, so it reports no frame timing.
+`settings` gives the renderer settings in effect: what the product or its
+manifest requested, what draws, and why each refused setting differs
+([renderer settings](lighting-and-sky.md#renderer-settings)).
 Where the adapter has timestamp queries, `gpu.passes` gives the median GPU
 milliseconds of each renderer pass that is timed, with the adapter's
 compute limits beside them: the ambient occlusion passes (`ao-prepass`,

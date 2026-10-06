@@ -212,7 +212,7 @@ impl Renderer {
             },
             viewmodel: true,
         });
-        let output = OffscreenTarget::new(&self.gpu, *width, *height);
+        let output = OffscreenTarget::new(&self.gpu, *width, *height, 1);
         let source = capture.color.create_view(&Default::default());
         isolated.compose.convert(
             &self.gpu,

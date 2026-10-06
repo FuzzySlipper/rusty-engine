@@ -234,6 +234,7 @@ sealed class ExampleEngineContext : IEngineContext
     public IAnimationService Animation => throw new NotSupportedException();
     public IRandomService Random => throw new NotSupportedException();
     public ICameraViewService CameraView => throw new NotSupportedException();
+    public IRendererSettingsService RendererSettings => throw new NotSupportedException();
     public IPersistenceService Persistence => throw new NotSupportedException();
     public IHttpService Http => throw new NotSupportedException();
     public ISessionService Session => throw new NotSupportedException();

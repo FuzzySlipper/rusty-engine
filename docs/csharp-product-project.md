@@ -747,6 +747,21 @@ voxels or fixture callbacks to pass this check. Launch normally with
 without `--exercise`. Verify the product's actual startup and interactions
 through that host; fixture success is not evidence of gameplay correctness.
 
+### Renderer settings
+
+The properties below select the renderer's pipeline features and quality.
+They are the renderer's initial values, written into the staged manifest; a
+product reads and changes the same settings at runtime through
+`RendererSettings` ([renderer settings](lighting-and-sky.md#renderer-settings)),
+so a graphics menu starts from them. Invalid values reject staging.
+
+`RustyEngineProductAntialiasing` sets the samples per pixel of the streamed
+frame or the window: `off`, `2x` or `4x` (the default). Offscreen camera
+targets and image captures are single-sample. `RustyEngineProductVsync`,
+`enabled` (the default) or `disabled`, says whether window output waits for
+the display's refresh before presenting; streamed output has no display.
+These write `renderer.antialiasing` and `renderer.vsync`.
+
 ### Requested scene shadows
 
 Set `RustyEngineProductSceneShadows` to `enabled` to render scene shadow maps
@@ -769,10 +784,11 @@ budget.
 `enabled` (screen-space), `distanceField` or `disabled` (the default);
 `RustyEngineProductAmbientOcclusionStrength` scales how far it darkens the
 ambient and hemisphere light: `0` draws without it, `1` (the default) is the
-full occlusion. Direct light, unlit materials, blended parts and the
-viewmodel layer are not darkened. This writes
-`renderer.lighting.ambientOcclusion` in the staged manifest;
-`engine.renderer` reports each of its passes' GPU time.
+full occlusion. `RustyEngineProductAmbientOcclusionRadius` is how far a
+surface darkens its neighbours, in world units (`0.75` by default). Direct
+light, unlit materials, blended parts and the viewmodel layer are not
+darkened. These write `renderer.lighting.ambientOcclusion` in the staged
+manifest; `engine.renderer` reports each of its passes' GPU time.
 
 `distanceField` traces cones through the coarse signed distance fields voxel
 chunks publish with their meshes (8³ cells over each chunk, for chunk sizes

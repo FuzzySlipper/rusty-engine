@@ -1730,6 +1730,7 @@ pub struct NativeEngineApi {
     pub video: NativeVideoApi,
     pub render_output: NativeRenderOutputApi,
     pub camera_view: NativeCameraViewApi,
+    pub renderer_settings: NativeRendererSettingsApi,
     pub rng: NativeRngApi,
     pub persistence: NativePersistenceApi,
     pub http: NativeHttpApi,

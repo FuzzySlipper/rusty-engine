@@ -126,6 +126,9 @@ struct RetainedGraphics {
     bloom: Option<BloomDescriptor>,
     auto_exposure: Option<AutoExposureDescriptor>,
     color_grading: Option<ColorGradingDescriptor>,
+    /// The renderer settings the product selected at runtime; `None` while
+    /// its manifest's initial values stand.
+    renderer_settings: Option<RendererSettingsDescriptor>,
     controllers: BTreeMap<crate::AnimationProjectionHandle, crate::AnimationProjectionDescriptor>,
 }
 
@@ -255,6 +258,7 @@ impl PresentationWorld {
                 || matches!(&op, RenderDiff::SetBloom { bloom } if &self.retained.bloom == bloom)
                 || matches!(&op, RenderDiff::SetAutoExposure { auto_exposure } if &self.retained.auto_exposure == auto_exposure)
                 || matches!(&op, RenderDiff::SetColorGrading { color_grading } if &self.retained.color_grading == color_grading)
+                || matches!(&op, RenderDiff::SetRendererSettings { settings } if self.retained.renderer_settings.as_ref() == Some(settings))
             {
                 continue;
             }
@@ -683,6 +687,9 @@ impl PresentationWorld {
             ops.push(RenderDiff::SetColorGrading {
                 color_grading: self.retained.color_grading,
             });
+        }
+        if let Some(settings) = self.retained.renderer_settings {
+            ops.push(RenderDiff::SetRendererSettings { settings });
         }
         // Creation requires an existing parent and parents cannot be changed,
         // so this traversal is acyclic by construction.
@@ -1195,6 +1202,9 @@ impl PresentationWorld {
             }
             RenderDiff::SetColorGrading { color_grading } => {
                 self.retained.color_grading = *color_grading;
+            }
+            RenderDiff::SetRendererSettings { settings } => {
+                self.retained.renderer_settings = Some(*settings);
             }
         }
         Ok(())

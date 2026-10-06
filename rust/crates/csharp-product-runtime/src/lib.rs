@@ -258,37 +258,13 @@ impl CsharpProductRuntimeConfig {
         self
     }
 
-    /// Select scene shadows for lights that explicitly request them.
-    pub fn with_scene_shadows(mut self, enabled: bool) -> Self {
-        self.renderer_options.shadows = enabled;
-        self
-    }
-
-    /// Limit scene shadows to `budget` layers at once (none for no limit).
-    pub fn with_shadow_budget(mut self, budget: Option<u32>) -> Self {
-        self.renderer_options.shadow_budget = budget;
-        self
-    }
-
-    /// The product manifest's screen-space ambient occlusion: its path and
-    /// strength.
-    pub fn with_ambient_occlusion(
+    /// The product manifest's renderer settings: the renderer's initial
+    /// values, which `RendererSettings` changes at runtime.
+    pub fn with_renderer_settings(
         mut self,
-        ambient_occlusion: render_wgpu::AmbientOcclusion,
+        settings: &render_model::RendererSettingsDescriptor,
     ) -> Self {
-        self.renderer_options.ambient_occlusion = ambient_occlusion;
-        self
-    }
-
-    /// The product manifest's clustered lighting choice.
-    pub fn with_clustered_lighting(mut self, enabled: bool) -> Self {
-        self.renderer_options.clustered_lighting = enabled;
-        self
-    }
-
-    /// The product manifest's GPU culling choice.
-    pub fn with_gpu_culling(mut self, enabled: bool) -> Self {
-        self.renderer_options.gpu_culling = enabled;
+        self.renderer_options = self.renderer_options.with_settings(settings);
         self
     }
 
@@ -944,6 +920,9 @@ impl CsharpProductRuntime {
             config.direct_intents.clone(),
         )?);
         services.bind_content_bundles(bundles);
+        if let Some(frames) = &frame_output {
+            services.ingest_renderer_settings(frames.settings_readout());
+        }
         let native_content: Vec<NativeContentFile> = content
             .iter()
             .map(|file| NativeContentFile {

@@ -43,8 +43,6 @@ const WORKGROUP: u32 = 16;
 const TILE_APRON: f32 = 8.0;
 /// Shared memory `cs_occlusion` needs: the 32×32 depth tile.
 const TILE_BYTES: u32 = (WORKGROUP + 2 * TILE_APRON as u32).pow(2) * 4;
-/// How far a surface darkens its neighbours, in world units.
-const RADIUS: f32 = 0.75;
 /// Cosine below which a sample does not occlude: keeps flat surfaces and
 /// the shallow creases between a reconstructed voxel surface's triangles
 /// clean.
@@ -76,18 +74,22 @@ pub enum AmbientOcclusionPath {
 }
 
 /// The host's ambient occlusion choice: the path, and the product's
-/// strength (0 draws without it, 1 the full occlusion).
+/// strength (0 draws without it, 1 the full occlusion) and radius (how far
+/// a surface darkens its neighbours, in world units).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct AmbientOcclusion {
     pub path: AmbientOcclusionPath,
     pub strength: f32,
+    pub radius: f32,
 }
 
 impl Default for AmbientOcclusion {
     fn default() -> Self {
+        let settings = render_model::AmbientOcclusionSettings::DEFAULT;
         Self {
             path: AmbientOcclusionPath::Off,
-            strength: 1.0,
+            strength: settings.strength,
+            radius: settings.radius,
         }
     }
 }
@@ -459,7 +461,7 @@ impl AmbientOcclusionPass {
         for value in [region.x, region.y, region.width, region.height] {
             params.extend_from_slice(&value.to_le_bytes());
         }
-        for value in [RADIUS, BIAS, INTENSITY, TILE_APRON] {
+        for value in [options.radius, BIAS, INTENSITY, TILE_APRON] {
             params.extend_from_slice(&value.to_le_bytes());
         }
         let entry = &self.targets[target];

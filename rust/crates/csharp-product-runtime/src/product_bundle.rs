@@ -21,6 +21,7 @@ use product_host::{
     ProductHostBrowserBootstrap, ProductHostBundleEntry, ProductHostCursorMode,
     ProductHostPresentationAspect, ProductHostRuntimeMode, PRODUCT_HOST_BOOTSTRAP_PATH,
 };
+use render_model::{AmbientOcclusionMode, AmbientOcclusionSettings, RendererSettingsDescriptor};
 use runtime_input::{CompiledInputMappings, DirectInputIntentDescriptor, RuntimeInputMapping};
 use runtime_lifecycle::{
     validate_runtime_identity, RealtimeLifecycleConfig, RuntimeLifecycleConfig,
@@ -47,7 +48,7 @@ pub(super) struct ProductBundle {
     ui_root: String,
     ui_entry: String,
     ui_projection: Option<ProductUiProjection>,
-    renderer_lighting: ProductRendererLighting,
+    renderer_settings: ProductRendererSettings,
     /// Where the runtime draws (`renderer.output`).
     pub(super) render_output: csharp_product_runtime::RenderOutput,
     /// The aspect range the page keeps (`renderer.presentationAspect`).
@@ -173,7 +174,7 @@ impl ProductBundle {
                 ))
             }
         };
-        let renderer_lighting = ProductRendererLighting::from_manifest(manifest.renderer)?;
+        let renderer_settings = ProductRendererSettings::from_manifest(manifest.renderer)?;
 
         let (lifecycle, lifecycle_mode) = lifecycle(&manifest.lifecycle)?;
         let (direct_intents, physical_mappings, input_cursor_mode) = input(&manifest.input)?;
@@ -194,7 +195,7 @@ impl ProductBundle {
             ui_root,
             ui_entry,
             ui_projection,
-            renderer_lighting,
+            renderer_settings,
             render_output,
             presentation_aspect,
             audio_output,
@@ -236,28 +237,13 @@ impl ProductBundle {
 
     /// The manifest's world and viewmodel default light rigs, on or off.
     pub(super) fn default_lights(&self) -> (bool, bool) {
-        self.renderer_lighting.enabled()
+        self.renderer_settings.enabled()
     }
 
-    pub(super) fn ambient_occlusion(&self) -> render_wgpu::AmbientOcclusion {
-        self.renderer_lighting.ambient_occlusion
-    }
-
-    pub(super) fn clustered_lighting(&self) -> bool {
-        self.renderer_lighting.clustered_lighting
-    }
-
-    pub(super) fn gpu_culling(&self) -> bool {
-        self.renderer_lighting.gpu_culling
-    }
-
-    pub(super) fn shadows_enabled(&self) -> bool {
-        self.renderer_lighting.shadows
-    }
-
-    /// The manifest's shadow budget in layers, if it sets one.
-    pub(super) fn shadow_budget(&self) -> Option<u32> {
-        self.renderer_lighting.shadow_budget
+    /// The manifest's renderer settings: the renderer's initial values,
+    /// which `RendererSettings` changes at runtime.
+    pub(super) fn renderer_settings(&self) -> RendererSettingsDescriptor {
+        self.renderer_settings.settings
     }
 
     pub(super) fn browser_entries(&self) -> Result<Vec<ProductHostBundleEntry>, String> {
@@ -573,6 +559,10 @@ struct ManifestRenderer {
     lighting: ManifestRendererLighting,
     #[serde(default)]
     gpu_culling: Option<String>,
+    #[serde(default)]
+    antialiasing: Option<String>,
+    #[serde(default)]
+    vsync: Option<String>,
 }
 #[derive(Debug, Clone, Copy, Deserialize)]
 struct ManifestPresentationAspect {
@@ -604,9 +594,14 @@ struct ManifestAmbientOcclusion {
     mode: String,
     #[serde(default = "full_strength")]
     strength: f32,
+    #[serde(default = "default_radius")]
+    radius: f32,
 }
 fn full_strength() -> f32 {
-    1.0
+    AmbientOcclusionSettings::DEFAULT.strength
+}
+fn default_radius() -> f32 {
+    AmbientOcclusionSettings::DEFAULT.radius
 }
 #[derive(Debug, Deserialize)]
 struct ManifestDefaultLights {
@@ -640,17 +635,14 @@ impl ProductDefaultLights {
         }
     }
 }
+/// The manifest's renderer settings and default light rigs.
 #[derive(Debug)]
-struct ProductRendererLighting {
-    shadows: bool,
-    shadow_budget: Option<u32>,
-    ambient_occlusion: render_wgpu::AmbientOcclusion,
-    clustered_lighting: bool,
-    gpu_culling: bool,
+struct ProductRendererSettings {
+    settings: RendererSettingsDescriptor,
     world: ProductDefaultLights,
     viewmodel: ProductDefaultLights,
 }
-impl ProductRendererLighting {
+impl ProductRendererSettings {
     /// Whether the world and viewmodel default rigs are on.
     fn enabled(&self) -> (bool, bool) {
         (
@@ -660,24 +652,22 @@ impl ProductRendererLighting {
     }
 
     fn from_manifest(value: ManifestRenderer) -> Result<Self, String> {
-        let shadows = match value.lighting.shadows.as_deref() {
-            None | Some("disabled") => false,
-            Some("enabled") => true,
-            Some(_) => {
-                return Err(field_error(
-                    "renderer.lighting.shadows",
-                    "must be enabled or disabled",
-                ))
-            }
+        let switch = |value: Option<&str>, field: &str| match value {
+            None | Some("disabled") => Ok(false),
+            Some("enabled") => Ok(true),
+            Some(_) => Err(field_error(field, "must be enabled or disabled")),
         };
+        let shadows = switch(
+            value.lighting.shadows.as_deref(),
+            "renderer.lighting.shadows",
+        )?;
         let ambient_occlusion = match value.lighting.ambient_occlusion {
-            None => render_wgpu::AmbientOcclusion::default(),
+            None => AmbientOcclusionSettings::DEFAULT,
             Some(ambient_occlusion) => {
-                // The Engine chooses the path (`render-wgpu`, ambient_occlusion.rs).
-                let path = match ambient_occlusion.mode.as_str() {
-                    "disabled" => render_wgpu::AmbientOcclusionPath::Off,
-                    "enabled" => render_wgpu::AmbientOcclusionPath::Raster,
-                    "distanceField" => render_wgpu::AmbientOcclusionPath::DistanceField,
+                let mode = match ambient_occlusion.mode.as_str() {
+                    "disabled" => AmbientOcclusionMode::Disabled,
+                    "enabled" => AmbientOcclusionMode::ScreenSpace,
+                    "distanceField" => AmbientOcclusionMode::DistanceField,
                     _ => {
                         return Err(field_error(
                             "renderer.lighting.ambientOcclusion.mode",
@@ -691,38 +681,48 @@ impl ProductRendererLighting {
                         "must be a finite non-negative number",
                     ));
                 }
-                render_wgpu::AmbientOcclusion {
-                    path,
+                if !ambient_occlusion.radius.is_finite() || ambient_occlusion.radius <= 0.0 {
+                    return Err(field_error(
+                        "renderer.lighting.ambientOcclusion.radius",
+                        "must be a finite positive number of world units",
+                    ));
+                }
+                AmbientOcclusionSettings {
+                    mode,
                     strength: ambient_occlusion.strength,
+                    radius: ambient_occlusion.radius,
                 }
             }
         };
-        let clustered_lighting = match value.lighting.clustered_lighting.as_deref() {
-            None | Some("disabled") => false,
-            Some("enabled") => true,
+        let antialiasing = match value.antialiasing.as_deref() {
+            None | Some("4x") => 4,
+            Some("2x") => 2,
+            Some("off") => 1,
             Some(_) => {
                 return Err(field_error(
-                    "renderer.lighting.clusteredLighting",
-                    "must be enabled or disabled",
+                    "renderer.antialiasing",
+                    "must be off, 2x or 4x",
                 ))
             }
         };
-        let gpu_culling = match value.gpu_culling.as_deref() {
-            None | Some("disabled") => false,
-            Some("enabled") => true,
-            Some(_) => {
-                return Err(field_error(
-                    "renderer.gpuCulling",
-                    "must be enabled or disabled",
-                ))
-            }
+        let vsync = match value.vsync.as_deref() {
+            None | Some("enabled") => true,
+            Some("disabled") => false,
+            Some(_) => return Err(field_error("renderer.vsync", "must be enabled or disabled")),
         };
         Ok(Self {
-            shadows,
-            shadow_budget: value.lighting.shadow_budget.filter(|&budget| budget > 0),
-            ambient_occlusion,
-            clustered_lighting,
-            gpu_culling,
+            settings: RendererSettingsDescriptor {
+                shadows,
+                shadow_budget: value.lighting.shadow_budget.filter(|&budget| budget > 0),
+                ambient_occlusion,
+                antialiasing,
+                vsync,
+                clustered_lighting: switch(
+                    value.lighting.clustered_lighting.as_deref(),
+                    "renderer.lighting.clusteredLighting",
+                )?,
+                gpu_culling: switch(value.gpu_culling.as_deref(), "renderer.gpuCulling")?,
+            },
             world: ProductDefaultLights::parse(
                 value.lighting.default_lights.world,
                 "renderer.lighting.defaultLights.world",
@@ -1117,7 +1117,7 @@ mod tests {
 
         let product = read(&root).expect("independent light modes admit");
         assert_eq!(product.default_lights(), (false, true));
-        assert!(!product.shadows_enabled());
+        assert!(!product.renderer_settings().shadows);
         fs::remove_dir_all(root).unwrap();
     }
     #[test]
@@ -1127,8 +1127,8 @@ mod tests {
         let path = root.join(PRODUCT_MANIFEST_NAME);
         let original = fs::read_to_string(&path).unwrap();
         assert_eq!(
-            read(&root).unwrap().ambient_occlusion(),
-            render_wgpu::AmbientOcclusion::default(),
+            read(&root).unwrap().renderer_settings().ambient_occlusion,
+            AmbientOcclusionSettings::DEFAULT,
             "absent: off"
         );
         let marker = "\"uiProjection\":{\"expectedStream\":\"fixture.terrain\",\"expectedContract\":\"fixture.terrain.v1\"}";
@@ -1141,10 +1141,11 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            read(&root).unwrap().ambient_occlusion(),
-            render_wgpu::AmbientOcclusion {
-                path: render_wgpu::AmbientOcclusionPath::Raster,
+            read(&root).unwrap().renderer_settings().ambient_occlusion,
+            AmbientOcclusionSettings {
+                mode: AmbientOcclusionMode::ScreenSpace,
                 strength: 0.5,
+                radius: AmbientOcclusionSettings::DEFAULT.radius,
             }
         );
         fs::write(
@@ -1156,8 +1157,12 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            read(&root).unwrap().ambient_occlusion().path,
-            render_wgpu::AmbientOcclusionPath::DistanceField
+            read(&root)
+                .unwrap()
+                .renderer_settings()
+                .ambient_occlusion
+                .mode,
+            AmbientOcclusionMode::DistanceField
         );
         fs::write(
             &path,
@@ -1170,6 +1175,70 @@ mod tests {
         assert!(read(&root)
             .unwrap_err()
             .contains("renderer.lighting.ambientOcclusion.mode"));
+        fs::write(
+            &path,
+            original.replace(
+                marker,
+                "\"renderer\":{\"lighting\":{\"ambientOcclusion\":{\"mode\":\"enabled\",\"radius\":2}}}",
+            ),
+        )
+        .unwrap();
+        assert_eq!(
+            read(&root)
+                .unwrap()
+                .renderer_settings()
+                .ambient_occlusion
+                .radius,
+            2.0
+        );
+        fs::write(
+            &path,
+            original.replace(
+                marker,
+                "\"renderer\":{\"lighting\":{\"ambientOcclusion\":{\"mode\":\"enabled\",\"radius\":0}}}",
+            ),
+        )
+        .unwrap();
+        assert!(read(&root)
+            .unwrap_err()
+            .contains("renderer.lighting.ambientOcclusion.radius"));
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn reads_and_validates_antialiasing_and_vsync() {
+        let root = fixture_root("antialiasing-vsync");
+        write_manifest(&root, "native/product.so");
+        let path = root.join(PRODUCT_MANIFEST_NAME);
+        let original = fs::read_to_string(&path).unwrap();
+        let defaults = read(&root).unwrap().renderer_settings();
+        assert_eq!(
+            (defaults.antialiasing, defaults.vsync),
+            (4, true),
+            "absent: 4x, vsync"
+        );
+        let marker = "\"uiProjection\":{\"expectedStream\":\"fixture.terrain\",\"expectedContract\":\"fixture.terrain.v1\"}";
+        fs::write(
+            &path,
+            original.replace(
+                marker,
+                "\"renderer\":{\"antialiasing\":\"2x\",\"vsync\":\"disabled\"}",
+            ),
+        )
+        .unwrap();
+        let settings = read(&root).unwrap().renderer_settings();
+        assert_eq!((settings.antialiasing, settings.vsync), (2, false));
+        fs::write(
+            &path,
+            original.replace(marker, "\"renderer\":{\"antialiasing\":\"8x\"}"),
+        )
+        .unwrap();
+        assert!(read(&root).unwrap_err().contains("renderer.antialiasing"));
+        fs::write(
+            &path,
+            original.replace(marker, "\"renderer\":{\"vsync\":\"maybe\"}"),
+        )
+        .unwrap();
+        assert!(read(&root).unwrap_err().contains("renderer.vsync"));
         fs::remove_dir_all(root).unwrap();
     }
     #[test]
@@ -1178,14 +1247,17 @@ mod tests {
         write_manifest(&root, "native/product.so");
         let path = root.join(PRODUCT_MANIFEST_NAME);
         let original = fs::read_to_string(&path).unwrap();
-        assert!(!read(&root).unwrap().gpu_culling(), "absent: CPU");
+        assert!(
+            !read(&root).unwrap().renderer_settings().gpu_culling,
+            "absent: CPU"
+        );
         let marker = "\"uiProjection\":{\"expectedStream\":\"fixture.terrain\",\"expectedContract\":\"fixture.terrain.v1\"}";
         fs::write(
             &path,
             original.replace(marker, "\"renderer\":{\"gpuCulling\":\"enabled\"}"),
         )
         .unwrap();
-        assert!(read(&root).unwrap().gpu_culling());
+        assert!(read(&root).unwrap().renderer_settings().gpu_culling);
         fs::write(
             &path,
             original.replace(marker, "\"renderer\":{\"gpuCulling\":\"maybe\"}"),
@@ -1200,7 +1272,10 @@ mod tests {
         write_manifest(&root, "native/product.so");
         let path = root.join(PRODUCT_MANIFEST_NAME);
         let original = fs::read_to_string(&path).unwrap();
-        assert!(!read(&root).unwrap().clustered_lighting(), "absent: loop");
+        assert!(
+            !read(&root).unwrap().renderer_settings().clustered_lighting,
+            "absent: loop"
+        );
         let marker = "\"uiProjection\":{\"expectedStream\":\"fixture.terrain\",\"expectedContract\":\"fixture.terrain.v1\"}";
         fs::write(
             &path,
@@ -1210,7 +1285,7 @@ mod tests {
             ),
         )
         .unwrap();
-        assert!(read(&root).unwrap().clustered_lighting());
+        assert!(read(&root).unwrap().renderer_settings().clustered_lighting);
         fs::write(
             &path,
             original.replace(
@@ -1240,8 +1315,8 @@ mod tests {
         )
         .unwrap();
         let product = read(&root).unwrap();
-        assert!(product.shadows_enabled());
-        assert_eq!(product.shadow_budget(), None);
+        assert!(product.renderer_settings().shadows);
+        assert_eq!(product.renderer_settings().shadow_budget, None);
         fs::write(
             &path,
             original.replace(
@@ -1250,7 +1325,10 @@ mod tests {
             ),
         )
         .unwrap();
-        assert_eq!(read(&root).unwrap().shadow_budget(), Some(24));
+        assert_eq!(
+            read(&root).unwrap().renderer_settings().shadow_budget,
+            Some(24)
+        );
         fs::write(
             &path,
             original.replace(marker, "\"renderer\":{\"lighting\":{\"shadows\":\"auto\"}}"),

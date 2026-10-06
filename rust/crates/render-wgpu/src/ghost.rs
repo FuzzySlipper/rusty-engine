@@ -326,6 +326,8 @@ impl Renderer {
                 ambient_occlusion: Default::default(),
                 clustered_lighting: false,
                 gpu_culling: false,
+                samples: 1,
+                vsync: false,
             },
         ));
         source.set_animation_time(self.animation_time);

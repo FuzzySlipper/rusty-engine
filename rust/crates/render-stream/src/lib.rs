@@ -314,12 +314,13 @@ fn render_loop(driver: &SceneDriver, shared: &Shared, frames: &ProductHostFrameS
             Some(Next::Stop) => return,
             Some(Next::Draw(size, request)) => (size, request),
         };
+        let samples = driver.primary_samples();
         let target = match &mut target {
             Some(target) => {
-                target.resize(driver.gpu(), size.0, size.1);
+                target.resize(driver.gpu(), size.0, size.1, samples);
                 target
             }
-            None => target.insert(OffscreenTarget::new(driver.gpu(), size.0, size.1)),
+            None => target.insert(OffscreenTarget::new(driver.gpu(), size.0, size.1, samples)),
         };
         let started = Instant::now();
         let pixel_ratio = frames.wanted_pixel_ratio();

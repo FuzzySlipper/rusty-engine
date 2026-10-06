@@ -30,10 +30,12 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant, SystemTime};
 
 use csharp_engine_abi::{
-    NativeGhostPlateFallbackReason, NativeGhostPlateLimitationMask, NativeVideoFailureCode,
+    NativeGhostPlateFallbackReason, NativeGhostPlateLimitationMask, NativeRendererSettingRefusal,
+    NativeRendererSettingsReadout, NativeVideoFailureCode,
 };
 use csharp_engine_services::{
-    AnimationRealizationFact, EngineServiceSet, GhostPlateRealizationFact, VideoRealizationFact,
+    renderer_settings_request, AnimationRealizationFact, EngineServiceSet,
+    GhostPlateRealizationFact, VideoRealizationFact,
 };
 use product_host::RuntimePublication;
 use product_host::{
@@ -41,15 +43,16 @@ use product_host::{
     ProductHostComputeLimits, ProductHostDistanceFieldStatistics, ProductHostDrawingMode,
     ProductHostDrawnFrame, ProductHostFrameStream, ProductHostGpuCullingStatistics,
     ProductHostGpuPass, ProductHostGpuStatistics, ProductHostLightClusterStatistics,
-    ProductHostRendererInspection, ProductHostRendererStatistics, ProductHostShadowStatistics,
-    ProductHostStreamMedians, ProductHostStreamStatistics, ProductHostTimedStep,
-    ProductHostWindowMedians, ProductHostWindowStatistics,
+    ProductHostRendererInspection, ProductHostRendererSettingValues, ProductHostRendererSettings,
+    ProductHostRendererStatistics, ProductHostShadowStatistics, ProductHostStreamMedians,
+    ProductHostStreamStatistics, ProductHostTimedStep, ProductHostWindowMedians,
+    ProductHostWindowStatistics,
 };
 use render_host_contracts::{RendererCameraPose, RendererViewComposition, RendererViewTarget};
 use render_stream::{DrawnFrame, FrameStreamer, StreamStats};
 use render_wgpu::{
-    AmbientOcclusionPath, AnimationFact, Gpu, GpuReadout, RendererOptions, ResourceSource,
-    SceneChange, SceneDriver, SceneState, VideoFact, VideoFailure,
+    AmbientOcclusionPath, AnimationFact, Gpu, GpuReadout, RendererOptions, RendererSettingsReadout,
+    ResourceSource, SceneChange, SceneDriver, SceneState, SettingRefusal, VideoFact, VideoFailure,
 };
 use serde_json::{json, Value};
 
@@ -328,6 +331,7 @@ impl FrameOutput {
     /// Reports what the renderer observed since the last call, drawn or not.
     /// Call between product calls.
     pub(crate) fn report(&mut self, services: &mut EngineServiceSet) {
+        services.ingest_renderer_settings(self.settings_readout());
         let facts = self.driver.take_animation_facts();
         for chunk in facts.chunks(MAX_FACTS_PER_REPORT) {
             let facts: Vec<_> = chunk
@@ -583,6 +587,39 @@ impl FrameOutput {
         })
     }
 
+    /// The renderer's settings in effect and what the device refused, as
+    /// `RendererSettings.Read` returns them. Streamed output has no display
+    /// to synchronise with, so its vsync is refused.
+    pub(crate) fn settings_readout(&self) -> NativeRendererSettingsReadout {
+        let readout = self.driver.settings_readout();
+        let refusal = |refusal: Option<SettingRefusal>| match refusal {
+            None => NativeRendererSettingRefusal::None,
+            Some(SettingRefusal::NoComputeShaders) => {
+                NativeRendererSettingRefusal::NoComputeShaders
+            }
+            Some(SettingRefusal::NoIndirectDraws) => NativeRendererSettingRefusal::NoIndirectDraws,
+            Some(SettingRefusal::UnsupportedSampleCount) => {
+                NativeRendererSettingRefusal::UnsupportedSampleCount
+            }
+        };
+        let mut effective = readout.effective;
+        let vsync_refusal = if self.stream.is_some() && readout.requested.vsync {
+            effective.vsync = false;
+            NativeRendererSettingRefusal::NoDisplay
+        } else {
+            NativeRendererSettingRefusal::None
+        };
+        NativeRendererSettingsReadout {
+            requested: renderer_settings_request(&readout.requested),
+            effective: renderer_settings_request(&effective),
+            ambient_occlusion_refusal: refusal(readout.ambient_occlusion),
+            antialiasing_refusal: refusal(readout.antialiasing),
+            vsync_refusal,
+            clustered_lighting_refusal: refusal(readout.clustered_lighting),
+            gpu_culling_refusal: refusal(readout.gpu_culling),
+        }
+    }
+
     /// The renderer's adapter and what its recent frames cost, for
     /// `engine.renderer.*` and `Diagnostics.ReadRenderer`.
     pub(crate) fn statistics(&self) -> ProductHostRendererStatistics {
@@ -599,6 +636,10 @@ impl FrameOutput {
                 last_skip,
                 shadows: shadow_statistics(&self.driver),
                 gpu: gpu_statistics(self.driver.gpu_readout()),
+                settings: settings_statistics(
+                    self.driver.settings_readout(),
+                    self.stream.is_some(),
+                ),
             };
         };
         let StreamStats {
@@ -639,6 +680,7 @@ impl FrameOutput {
             last_skip,
             shadows: shadow_statistics(&self.driver),
             gpu: gpu_statistics(self.driver.gpu_readout()),
+            settings: settings_statistics(self.driver.settings_readout(), self.stream.is_some()),
         }
     }
 
@@ -739,6 +781,60 @@ fn unix_ms(at: SystemTime) -> f64 {
 
 fn ms(duration: Duration) -> f64 {
     duration.as_secs_f64() * 1000.0
+}
+
+fn settings_statistics(
+    readout: RendererSettingsReadout,
+    streamed: bool,
+) -> ProductHostRendererSettings {
+    let values =
+        |settings: &render_model::RendererSettingsDescriptor| ProductHostRendererSettingValues {
+            shadows: settings.shadows,
+            shadow_budget: settings.shadow_budget,
+            ambient_occlusion: match settings.ambient_occlusion.mode {
+                render_model::AmbientOcclusionMode::Disabled => "disabled",
+                render_model::AmbientOcclusionMode::ScreenSpace => "screenSpace",
+                render_model::AmbientOcclusionMode::DistanceField => "distanceField",
+            }
+            .to_owned(),
+            ambient_occlusion_strength: settings.ambient_occlusion.strength,
+            ambient_occlusion_radius: settings.ambient_occlusion.radius,
+            antialiasing: settings.antialiasing,
+            vsync: settings.vsync,
+            clustered_lighting: settings.clustered_lighting,
+            gpu_culling: settings.gpu_culling,
+        };
+    let reason = |refusal: SettingRefusal| match refusal {
+        SettingRefusal::NoComputeShaders => "the adapter has no compute shaders",
+        SettingRefusal::NoIndirectDraws => {
+            "the adapter cannot draw from GPU-written indirect arguments"
+        }
+        SettingRefusal::UnsupportedSampleCount => "the adapter cannot multisample at that count",
+    };
+    let mut effective = readout.effective;
+    let mut refused = std::collections::BTreeMap::new();
+    for (setting, refusal) in [
+        ("ambientOcclusion", readout.ambient_occlusion),
+        ("antialiasing", readout.antialiasing),
+        ("clusteredLighting", readout.clustered_lighting),
+        ("gpuCulling", readout.gpu_culling),
+    ] {
+        if let Some(refusal) = refusal {
+            refused.insert(setting.to_owned(), reason(refusal).to_owned());
+        }
+    }
+    if streamed && readout.requested.vsync {
+        effective.vsync = false;
+        refused.insert(
+            "vsync".to_owned(),
+            "streamed output has no display to synchronise with".to_owned(),
+        );
+    }
+    ProductHostRendererSettings {
+        requested: values(&readout.requested),
+        effective: values(&effective),
+        refused,
+    }
 }
 
 fn gpu_statistics(readout: GpuReadout) -> ProductHostGpuStatistics {

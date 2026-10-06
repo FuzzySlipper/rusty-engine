@@ -8,8 +8,9 @@ pub(crate) const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth3
 pub(crate) const OFFSCREEN_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 
 /// Samples per pixel of the primary destination (the offscreen primary
-/// target and the window surface). Offscreen render targets and captures
-/// are single-sample.
+/// target and the window surface) until the renderer says otherwise
+/// (`Renderer::samples`). Offscreen render targets and captures are
+/// single-sample.
 pub(crate) const PRIMARY_SAMPLES: u32 = 4;
 
 /// What a pipeline must match to draw into a target: colour format and
@@ -82,13 +83,14 @@ pub(crate) fn multisampled_color(
     width: u32,
     height: u32,
     format: wgpu::TextureFormat,
+    samples: u32,
 ) -> wgpu::TextureView {
     gpu.device
         .create_texture(&wgpu::TextureDescriptor {
             label: Some("render-wgpu multisampled colour"),
             size: extent(width, height),
             mip_level_count: 1,
-            sample_count: PRIMARY_SAMPLES,
+            sample_count: samples,
             dimension: wgpu::TextureDimension::D2,
             format,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
@@ -106,8 +108,9 @@ pub(crate) fn extent(width: u32, height: u32) -> wgpu::Extent3d {
 }
 
 /// An offscreen colour and depth target of one size, with a readback buffer.
-/// It is a primary destination: passes draw multisampled and resolve into
-/// the single-sample colour that readback copies.
+/// It is a primary destination: with more than one sample, passes draw
+/// multisampled and resolve into the single-sample colour that readback
+/// copies.
 pub struct OffscreenTarget {
     color: wgpu::Texture,
     color_view: wgpu::TextureView,
@@ -117,10 +120,13 @@ pub struct OffscreenTarget {
     padded_row: u32,
     width: u32,
     height: u32,
+    samples: u32,
 }
 
 impl OffscreenTarget {
-    pub fn new(gpu: &Gpu, width: u32, height: u32) -> Self {
+    /// A target of this size with `samples` per pixel
+    /// (`Renderer::samples`).
+    pub fn new(gpu: &Gpu, width: u32, height: u32, samples: u32) -> Self {
         let (width, height) = (width.max(1), height.max(1));
         let color = gpu.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("render-wgpu offscreen colour"),
@@ -142,13 +148,14 @@ impl OffscreenTarget {
         });
         Self {
             color_view: color.create_view(&Default::default()),
-            multisampled: multisampled_color(gpu, width, height, OFFSCREEN_FORMAT),
-            depth_view: multisampled_depth(gpu, width, height, PRIMARY_SAMPLES),
+            multisampled: multisampled_color(gpu, width, height, OFFSCREEN_FORMAT, samples),
+            depth_view: multisampled_depth(gpu, width, height, samples),
             color,
             readback,
             padded_row,
             width,
             height,
+            samples,
         }
     }
 
@@ -156,15 +163,16 @@ impl OffscreenTarget {
         (self.width, self.height)
     }
 
-    /// Reallocate for a new size. The next render fills the new target.
-    pub fn resize(&mut self, gpu: &Gpu, width: u32, height: u32) {
-        if (width.max(1), height.max(1)) != (self.width, self.height) {
-            *self = Self::new(gpu, width, height);
+    /// Reallocate for a new size or sample count. The next render fills the
+    /// new target.
+    pub fn resize(&mut self, gpu: &Gpu, width: u32, height: u32, samples: u32) {
+        if (width.max(1), height.max(1), samples) != (self.width, self.height, self.samples) {
+            *self = Self::new(gpu, width, height, samples);
         }
     }
 
     pub(crate) fn view(&self) -> TargetView<'_> {
-        let (color, resolve) = if PRIMARY_SAMPLES > 1 {
+        let (color, resolve) = if self.samples > 1 {
             (&self.multisampled, Some(&self.color_view))
         } else {
             (&self.color_view, None)
@@ -174,7 +182,7 @@ impl OffscreenTarget {
             resolve,
             depth: &self.depth_view,
             format: OFFSCREEN_FORMAT,
-            samples: PRIMARY_SAMPLES,
+            samples: self.samples,
             width: self.width,
             height: self.height,
         }

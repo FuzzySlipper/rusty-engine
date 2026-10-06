@@ -102,6 +102,24 @@ pub struct SceneSnapshotOptions {
     /// Snapshots written before GPU culling existed cull on the CPU.
     #[serde(default)]
     pub gpu_culling: bool,
+    /// Snapshots written before the sample count was a setting drew with 4.
+    #[serde(default = "default_samples")]
+    pub samples: u32,
+    /// Snapshots written before vsync was a setting waited for the display.
+    #[serde(default = "default_vsync")]
+    pub vsync: bool,
+}
+
+fn default_samples() -> u32 {
+    render_model::RendererSettingsDescriptor::DEFAULT.antialiasing
+}
+
+fn default_vsync() -> bool {
+    render_model::RendererSettingsDescriptor::DEFAULT.vsync
+}
+
+fn default_radius() -> f32 {
+    render_model::AmbientOcclusionSettings::DEFAULT.radius
 }
 
 /// `RendererOptions::ambient_occlusion` as a snapshot keeps it.
@@ -110,6 +128,9 @@ pub struct SceneSnapshotOptions {
 pub struct SceneSnapshotAmbientOcclusion {
     pub path: SceneSnapshotAmbientOcclusionPath,
     pub strength: f32,
+    /// Snapshots written before the radius was a setting drew with 0.75 m.
+    #[serde(default = "default_radius")]
+    pub radius: f32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -143,6 +164,7 @@ impl From<SceneSnapshotAmbientOcclusion> for render_wgpu::AmbientOcclusion {
                 }
             },
             strength: options.strength,
+            radius: options.radius,
         }
     }
 }
@@ -163,6 +185,7 @@ impl From<render_wgpu::AmbientOcclusion> for SceneSnapshotAmbientOcclusion {
                 }
             },
             strength: options.strength,
+            radius: options.radius,
         }
     }
 }
@@ -177,6 +200,8 @@ impl From<SceneSnapshotOptions> for render_wgpu::RendererOptions {
             ambient_occlusion: options.ambient_occlusion.into(),
             clustered_lighting: options.clustered_lighting,
             gpu_culling: options.gpu_culling,
+            samples: options.samples,
+            vsync: options.vsync,
         }
     }
 }
@@ -191,6 +216,8 @@ impl From<render_wgpu::RendererOptions> for SceneSnapshotOptions {
             ambient_occlusion: options.ambient_occlusion.into(),
             clustered_lighting: options.clustered_lighting,
             gpu_culling: options.gpu_culling,
+            samples: options.samples,
+            vsync: options.vsync,
         }
     }
 }

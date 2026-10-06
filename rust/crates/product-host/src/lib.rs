@@ -65,10 +65,11 @@ pub use engine_debug::{
     ProductHostComputeLimits, ProductHostDistanceFieldStatistics, ProductHostDrawingMode,
     ProductHostDrawnFrame, ProductHostGpuCullingStatistics, ProductHostGpuPass,
     ProductHostGpuStatistics, ProductHostLightClusterStatistics, ProductHostRenderOutput,
-    ProductHostRendererInspection, ProductHostRendererStatistics, ProductHostRendererStatus,
-    ProductHostRendererWidget, ProductHostShadowStatistics, ProductHostStreamMedians,
-    ProductHostStreamStatistics, ProductHostTimeAnswer, ProductHostTimeMode, ProductHostTimedStep,
-    ProductHostWindowMedians, ProductHostWindowStatistics,
+    ProductHostRendererInspection, ProductHostRendererSettingValues, ProductHostRendererSettings,
+    ProductHostRendererStatistics, ProductHostRendererStatus, ProductHostRendererWidget,
+    ProductHostShadowStatistics, ProductHostStreamMedians, ProductHostStreamStatistics,
+    ProductHostTimeAnswer, ProductHostTimeMode, ProductHostTimedStep, ProductHostWindowMedians,
+    ProductHostWindowStatistics,
 };
 pub use error::{ProductHostError, ProductHostRuntimeError};
 pub use frames::{

@@ -186,6 +186,104 @@ impl ColorGradingDescriptor {
     }
 }
 
+/// Which pass darkens where surfaces meet (`RendererSettingsDescriptor`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AmbientOcclusionMode {
+    #[default]
+    Disabled,
+    /// From the view's depth: what the view shows occludes.
+    ScreenSpace,
+    /// From the voxel chunks' distance fields: the world around a surface
+    /// occludes, on screen or off.
+    DistanceField,
+}
+
+/// Ambient occlusion as a product selects it.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AmbientOcclusionSettings {
+    pub mode: AmbientOcclusionMode,
+    /// 0 draws without occlusion; 1 is the full occlusion.
+    pub strength: f32,
+    /// How far a surface darkens its neighbours, in world units.
+    pub radius: f32,
+}
+
+impl AmbientOcclusionSettings {
+    pub const DEFAULT: Self = Self {
+        mode: AmbientOcclusionMode::Disabled,
+        strength: 1.0,
+        radius: 0.75,
+    };
+
+    /// A finite non-negative strength and a finite positive radius.
+    pub fn valid(&self) -> bool {
+        self.strength.is_finite()
+            && self.strength >= 0.0
+            && self.radius.is_finite()
+            && self.radius > 0.0
+    }
+}
+
+impl Default for AmbientOcclusionSettings {
+    fn default() -> Self {
+        Self::DEFAULT
+    }
+}
+
+/// Renderer-wide settings a product selects: which pipeline features draw
+/// and at what quality. The product manifest supplies the initial values
+/// and the `RendererSettings` service changes them at runtime; the renderer
+/// realizes each where the device can and reports what it refused.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RendererSettingsDescriptor {
+    /// Render shadow maps for lights whose shadow intent requests them.
+    pub shadows: bool,
+    /// At most this many shadow layers at once, the requesting lights
+    /// chosen by priority then distance from the camera; `None` for no
+    /// limit.
+    pub shadow_budget: Option<u32>,
+    pub ambient_occlusion: AmbientOcclusionSettings,
+    /// Samples per pixel of the primary destination: 1, 2 or 4.
+    pub antialiasing: u32,
+    /// Window output waits for the display's refresh before presenting.
+    pub vsync: bool,
+    /// Bin each world view's lights into view-frustum clusters before
+    /// shading, instead of shading every light per fragment.
+    pub clustered_lighting: bool,
+    /// Test each view's opaque parts against its frustum on the GPU and
+    /// draw them indirectly, instead of building the draw list on the CPU.
+    pub gpu_culling: bool,
+}
+
+impl RendererSettingsDescriptor {
+    /// The sample counts a primary destination may have.
+    pub const SAMPLE_COUNTS: [u32; 3] = [1, 2, 4];
+
+    pub const DEFAULT: Self = Self {
+        shadows: false,
+        shadow_budget: None,
+        ambient_occlusion: AmbientOcclusionSettings::DEFAULT,
+        antialiasing: 4,
+        vsync: true,
+        clustered_lighting: false,
+        gpu_culling: false,
+    };
+
+    /// Valid occlusion values and a supported sample count.
+    pub fn valid(&self) -> bool {
+        self.ambient_occlusion.valid() && Self::SAMPLE_COUNTS.contains(&self.antialiasing)
+    }
+}
+
+impl Default for RendererSettingsDescriptor {
+    fn default() -> Self {
+        Self::DEFAULT
+    }
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ToneMappingOperator {
@@ -527,6 +625,10 @@ pub enum RenderDiff {
     SetColorGrading {
         color_grading: Option<ColorGradingDescriptor>,
     },
+    /// Selects the renderer's settings: its pipeline features and quality.
+    SetRendererSettings {
+        settings: RendererSettingsDescriptor,
+    },
     DefineSpriteAtlas {
         atlas: SpriteAtlasDescriptor,
     },
@@ -676,6 +778,10 @@ impl RenderDiff {
                 color_grading: Some(color_grading),
             } if !color_grading.valid() => Err(RenderOperationError::ColorGrading),
             Self::SetColorGrading { .. } => Ok(()),
+            Self::SetRendererSettings { settings } if !settings.valid() => {
+                Err(RenderOperationError::RendererSettings)
+            }
+            Self::SetRendererSettings { .. } => Ok(()),
             Self::DefineSpriteAtlas { atlas } => {
                 atlas.validate().map_err(RenderOperationError::SpriteAtlas)
             }
@@ -776,6 +882,7 @@ impl RenderDiff {
             | Self::SetBloom { .. }
             | Self::SetAutoExposure { .. }
             | Self::SetColorGrading { .. }
+            | Self::SetRendererSettings { .. }
             | Self::DefineSpriteAtlas { .. }
             | Self::DefineStaticMesh { .. }
             | Self::ReleaseMaterial { .. }
@@ -815,6 +922,7 @@ pub enum RenderOperationError {
     Bloom,
     AutoExposure,
     ColorGrading,
+    RendererSettings,
     SpriteAtlas(crate::SpriteAtlasError),
     StaticMesh(crate::StaticMeshError),
     StaticMeshInstance(crate::StaticMeshInstanceError),
@@ -887,6 +995,7 @@ impl RenderFrameDiff {
                 | RenderDiff::SetBloom { .. }
                 | RenderDiff::SetAutoExposure { .. }
                 | RenderDiff::SetColorGrading { .. }
+                | RenderDiff::SetRendererSettings { .. }
                 | RenderDiff::DefineSpriteAtlas { .. }
                 | RenderDiff::ReleaseSpriteAtlas { .. }
                 | RenderDiff::ReleaseStaticMesh { .. }

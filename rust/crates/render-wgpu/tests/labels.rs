@@ -29,7 +29,7 @@ const NO_ENTITIES: &dyn Fn(u64) -> Option<[f32; 3]> = &|_| None;
 
 fn harness() -> Harness {
     let mut harness = Harness::new(RendererOptions::default());
-    harness.target = OffscreenTarget::new(&harness.gpu, LABEL_WIDTH, LABEL_HEIGHT);
+    harness.target = OffscreenTarget::new(&harness.gpu, LABEL_WIDTH, LABEL_HEIGHT, 4);
     harness.apply(room());
     harness
 }
@@ -788,7 +788,7 @@ fn labels_keep_their_css_size_at_device_pixel_ratio_two() {
     let render = |ratio: u32, before_labels: bool| {
         let mut harness = harness();
         harness.target =
-            OffscreenTarget::new(&harness.gpu, LABEL_WIDTH * ratio, LABEL_HEIGHT * ratio);
+            OffscreenTarget::new(&harness.gpu, LABEL_WIDTH * ratio, LABEL_HEIGHT * ratio, 4);
         if before_labels {
             harness.renderer.set_pixel_ratio(ratio as f32);
         }

@@ -19,7 +19,11 @@ const MATERIAL: &str = "material/ao-plaster";
 
 fn options(path: AmbientOcclusionPath, strength: f32) -> RendererOptions {
     RendererOptions {
-        ambient_occlusion: AmbientOcclusion { path, strength },
+        ambient_occlusion: AmbientOcclusion {
+            path,
+            strength,
+            radius: AmbientOcclusion::default().radius,
+        },
         ..RendererOptions::default()
     }
 }

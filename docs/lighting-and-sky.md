@@ -86,6 +86,38 @@ the rest.
 - It is presentation only. `Voxel.SampleDirectLighting` (below) still treats
   ambient light as unoccluded.
 
+## Renderer settings
+
+`RendererSettings` is the product's view of the renderer's pipeline features
+and quality: `Read()` returns a `RendererSettingsReadout` and
+`Set(RendererSettingsRequest)` replaces every setting from the next frame.
+The request holds shadows on or off and their budget (0 for no limit),
+ambient occlusion (`Disabled`, `ScreenSpace` or `DistanceField`, with its
+strength and radius), antialiasing (`Off`, `Msaa2` or `Msaa4`), vsync, and
+the clustered lighting and GPU culling switches. The product manifest's
+`RustyEngineProduct*` properties are the initial values
+([the product project](csharp-product-project.md#renderer-settings)), so a
+graphics menu starts from `Read().Requested`, changes what it offers and sets
+the rest back unchanged. The selection is retained with the scene (a
+rebaseline keeps it, and a scene snapshot records it); the Engine chooses
+how each setting is drawn, such as the pass that computes screen-space
+occlusion.
+
+The readout carries `Requested`, what the product or its manifest asked for,
+and `Effective`, what draws, with a refusal per setting the device draws
+differently: `NoComputeShaders` (distance-field occlusion and clustered
+lighting fall back to the screen-space pass and the light loop),
+`NoIndirectDraws` (GPU culling keeps the CPU list), `UnsupportedSampleCount`
+(the adapter cannot multisample at that count, so the default 4 draws) and
+`NoDisplay` (streamed output has no display, so vsync is moot). A refused
+setting is not an error: `Set` accepts any finite, non-negative strength and
+positive radius, and refuses only values outside those ranges.
+`engine.renderer` reports the same under `settings`
+([renderer statistics](performance.md#renderer-statistics)). The
+`csharp-lighting-sky` fixture's `lighting.settings`, `lighting.antialiasing`,
+`lighting.occlusion`, `lighting.shadows` and `lighting.pipeline` commands
+exercise it.
+
 ## Contact darkening: screen-space ambient occlusion
 
 The sky's shadow darkens at the scale of a cave; screen-space ambient

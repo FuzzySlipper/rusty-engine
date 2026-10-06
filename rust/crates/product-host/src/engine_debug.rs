@@ -58,6 +58,36 @@ pub struct ProductHostRendererStatistics {
     /// The renderer's GPU passes: each timed pass's cost, the adapter's
     /// compute limits, and the ambient occlusion the last world view took.
     pub gpu: ProductHostGpuStatistics,
+    /// The renderer settings in effect (`RendererSettings`).
+    pub settings: ProductHostRendererSettings,
+}
+
+/// The renderer settings (`RendererSettings`): what the product or its
+/// manifest asked for, what draws, and why each refused setting differs.
+#[derive(Debug, Clone, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ProductHostRendererSettings {
+    pub requested: ProductHostRendererSettingValues,
+    pub effective: ProductHostRendererSettingValues,
+    /// By setting name, why the device draws it differently.
+    #[ts(type = "Record<string, string>")]
+    pub refused: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ProductHostRendererSettingValues {
+    pub shadows: bool,
+    pub shadow_budget: Option<u32>,
+    /// `disabled`, `screenSpace` or `distanceField`.
+    pub ambient_occlusion: String,
+    pub ambient_occlusion_strength: f32,
+    pub ambient_occlusion_radius: f32,
+    /// Samples per pixel of the primary destination.
+    pub antialiasing: u32,
+    pub vsync: bool,
+    pub clustered_lighting: bool,
+    pub gpu_culling: bool,
 }
 
 /// The scene's shadow layers and which requesting lights cast.

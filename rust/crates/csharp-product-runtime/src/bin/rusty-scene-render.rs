@@ -123,7 +123,11 @@ fn run() -> Result<(), String> {
             AmbientOcclusionPath::Off => 1.0,
             _ => options.ambient_occlusion.strength,
         };
-        options.ambient_occlusion = AmbientOcclusion { path, strength };
+        options.ambient_occlusion = AmbientOcclusion {
+            path,
+            strength,
+            radius: options.ambient_occlusion.radius,
+        };
     }
     if let Some(clustered) = clustered_lighting {
         options.clustered_lighting = clustered;
@@ -163,7 +167,7 @@ fn run() -> Result<(), String> {
         if moving && start.is_none() {
             return Err("--walk and --turn need a camera in the snapshot".to_owned());
         }
-        let target = OffscreenTarget::new(driver.gpu(), width, height);
+        let target = OffscreenTarget::new(driver.gpu(), width, height, driver.primary_samples());
         let mut pixels = Vec::new();
         let mut costs = Vec::with_capacity(frames as usize);
         for frame in 1..=frames {

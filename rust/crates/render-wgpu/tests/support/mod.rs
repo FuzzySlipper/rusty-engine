@@ -88,7 +88,7 @@ impl Harness {
         let gpu = gpu();
         Self {
             renderer: Renderer::new(&gpu, options),
-            target: OffscreenTarget::new(&gpu, WIDTH, HEIGHT),
+            target: OffscreenTarget::new(&gpu, WIDTH, HEIGHT, 4),
             world: PresentationWorld::default(),
             resources: Resources::default(),
             gpu,

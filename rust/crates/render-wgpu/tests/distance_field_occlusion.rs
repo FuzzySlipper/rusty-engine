@@ -26,6 +26,7 @@ fn options(path: AmbientOcclusionPath) -> RendererOptions {
         ambient_occlusion: AmbientOcclusion {
             path,
             strength: 1.0,
+            radius: AmbientOcclusion::default().radius,
         },
         ..RendererOptions::default()
     }

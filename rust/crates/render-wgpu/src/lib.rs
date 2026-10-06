@@ -57,6 +57,8 @@ pub mod web;
 
 use std::collections::HashMap;
 
+use render_model::{AmbientOcclusionMode, RendererSettingsDescriptor};
+
 /// The CPU-side realization vocabulary, for readers that need exactly the
 /// geometry and materials the renderer draws without a device
 /// (`render-export`): decoded animated GLBs, mesh streams, built-in
@@ -167,6 +169,14 @@ pub struct RendererOptions {
     /// list on the CPU each time the camera moves. Off by default; a device
     /// without indirect draws keeps the CPU list regardless.
     pub gpu_culling: bool,
+    /// Samples per pixel of the primary destination (the offscreen primary
+    /// target and the window surface): 1, 2 or 4. Offscreen render targets
+    /// and captures stay single-sample.
+    pub samples: u32,
+    /// Window output waits for the display's refresh before presenting;
+    /// off presents as soon as a frame is drawn. Streamed output has no
+    /// display.
+    pub vsync: bool,
 }
 
 impl Default for RendererOptions {
@@ -179,8 +189,85 @@ impl Default for RendererOptions {
             ambient_occlusion: AmbientOcclusion::default(),
             clustered_lighting: false,
             gpu_culling: false,
+            samples: RendererSettingsDescriptor::DEFAULT.antialiasing,
+            vsync: RendererSettingsDescriptor::DEFAULT.vsync,
         }
     }
+}
+
+impl RendererOptions {
+    /// These options with a product's settings realized. The Engine's own
+    /// choices stay here: which occlusion path draws a mode, and the
+    /// default light rigs.
+    pub fn with_settings(mut self, settings: &RendererSettingsDescriptor) -> Self {
+        self.shadows = settings.shadows;
+        self.shadow_budget = settings.shadow_budget;
+        self.ambient_occlusion = AmbientOcclusion {
+            path: match settings.ambient_occlusion.mode {
+                AmbientOcclusionMode::Disabled => AmbientOcclusionPath::Off,
+                // The raster path draws the compute path's image and costs
+                // less on the GPUs measured (Den `compute-ao-9510`).
+                AmbientOcclusionMode::ScreenSpace => AmbientOcclusionPath::Raster,
+                AmbientOcclusionMode::DistanceField => AmbientOcclusionPath::DistanceField,
+            },
+            strength: settings.ambient_occlusion.strength,
+            radius: settings.ambient_occlusion.radius,
+        };
+        self.samples = settings.antialiasing;
+        self.vsync = settings.vsync;
+        self.clustered_lighting = settings.clustered_lighting;
+        self.gpu_culling = settings.gpu_culling;
+        self
+    }
+
+    /// The settings these options realize, as a product reads them back.
+    pub fn settings(&self) -> RendererSettingsDescriptor {
+        RendererSettingsDescriptor {
+            shadows: self.shadows,
+            shadow_budget: self.shadow_budget,
+            ambient_occlusion: render_model::AmbientOcclusionSettings {
+                mode: match self.ambient_occlusion.path {
+                    AmbientOcclusionPath::Off => AmbientOcclusionMode::Disabled,
+                    AmbientOcclusionPath::Compute | AmbientOcclusionPath::Raster => {
+                        AmbientOcclusionMode::ScreenSpace
+                    }
+                    AmbientOcclusionPath::DistanceField => AmbientOcclusionMode::DistanceField,
+                },
+                strength: self.ambient_occlusion.strength,
+                radius: self.ambient_occlusion.radius,
+            },
+            antialiasing: self.samples,
+            vsync: self.vsync,
+            clustered_lighting: self.clustered_lighting,
+            gpu_culling: self.gpu_culling,
+        }
+    }
+}
+
+/// Why the device cannot realize a setting as asked.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SettingRefusal {
+    /// The adapter has no compute shaders.
+    NoComputeShaders,
+    /// The adapter cannot draw from GPU-written indirect arguments.
+    NoIndirectDraws,
+    /// The primary destination's formats cannot multisample at that count.
+    UnsupportedSampleCount,
+}
+
+/// The settings in effect and what the device refused: what a product
+/// reads back through `RendererSettings`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RendererSettingsReadout {
+    /// What the product (or its manifest) asked for.
+    pub requested: RendererSettingsDescriptor,
+    /// What draws: the request with each refused setting replaced by what
+    /// the device does instead.
+    pub effective: RendererSettingsDescriptor,
+    pub ambient_occlusion: Option<SettingRefusal>,
+    pub antialiasing: Option<SettingRefusal>,
+    pub clustered_lighting: Option<SettingRefusal>,
+    pub gpu_culling: Option<SettingRefusal>,
 }
 
 pub struct Renderer {
@@ -428,6 +515,62 @@ impl Renderer {
     pub fn set_options(&mut self, options: RendererOptions) {
         self.options = options;
         self.tables.lights_dirty = true;
+    }
+
+    /// Realize a product's settings (`RenderDiff::SetRendererSettings`).
+    pub(crate) fn set_settings(&mut self, settings: &RendererSettingsDescriptor) {
+        self.set_options(self.options.with_settings(settings));
+    }
+
+    /// Samples per pixel the primary destination should have: the option,
+    /// or 4 where this device cannot multisample at it. Hosts size their
+    /// targets by it.
+    pub fn samples(&self) -> u32 {
+        if self.gpu.samples_supported(self.options.samples) {
+            self.options.samples
+        } else {
+            RendererSettingsDescriptor::DEFAULT.antialiasing
+        }
+    }
+
+    /// Whether window output should wait for the display's refresh.
+    pub fn vsync(&self) -> bool {
+        self.options.vsync
+    }
+
+    /// The settings in effect and what the device refused.
+    pub fn settings_readout(&self) -> RendererSettingsReadout {
+        let requested = self.options.settings();
+        let mut effective = requested;
+        let antialiasing = (!self.gpu.samples_supported(requested.antialiasing)).then(|| {
+            effective.antialiasing = self.samples();
+            SettingRefusal::UnsupportedSampleCount
+        });
+        let ambient_occlusion = (requested.ambient_occlusion.mode
+            == AmbientOcclusionMode::DistanceField
+            && !self.distance_fields.available())
+        .then(|| {
+            effective.ambient_occlusion.mode = AmbientOcclusionMode::ScreenSpace;
+            SettingRefusal::NoComputeShaders
+        });
+        let clustered_lighting = (requested.clustered_lighting
+            && self.light_clusters.readout().refused.is_some())
+        .then(|| {
+            effective.clustered_lighting = false;
+            SettingRefusal::NoComputeShaders
+        });
+        let gpu_culling = (requested.gpu_culling && !self.culling.available()).then(|| {
+            effective.gpu_culling = false;
+            SettingRefusal::NoIndirectDraws
+        });
+        RendererSettingsReadout {
+            requested,
+            effective,
+            ambient_occlusion,
+            antialiasing,
+            clustered_lighting,
+            gpu_culling,
+        }
     }
 
     /// The renderer's GPU passes (ambient occlusion's, then the world, its

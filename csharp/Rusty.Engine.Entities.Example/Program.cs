@@ -833,6 +833,7 @@ sealed class PersistenceEngineContext(IPersistenceService persistence) : IEngine
     public IVideoService Video => throw new NotSupportedException();
     public IRenderOutputService RenderOutput => throw new NotSupportedException();
     public ICameraViewService CameraView => throw new NotSupportedException();
+    public IRendererSettingsService RendererSettings => throw new NotSupportedException();
     public IRandomService Random => throw new NotSupportedException();
     public IVoxelScenePresentationService VoxelScenePresentation => throw new NotSupportedException();
     public IPersistenceService Persistence { get; } = persistence;

@@ -152,6 +152,24 @@ impl Gpu {
         ComputeLimits::of(&self.adapter.limits())
     }
 
+    /// Whether the primary destination's colour, HDR and depth formats can
+    /// all be multisampled at `samples` on this adapter.
+    pub(crate) fn samples_supported(&self, samples: u32) -> bool {
+        samples == 1
+            || [
+                crate::target::OFFSCREEN_FORMAT,
+                crate::finish::HDR_FORMAT,
+                crate::target::DEPTH_FORMAT,
+            ]
+            .into_iter()
+            .all(|format| {
+                self.adapter
+                    .get_texture_format_features(format)
+                    .flags
+                    .sample_count_supported(samples)
+            })
+    }
+
     /// Why this device cannot run a compute kernel of `workgroup` invocations
     /// using `shared_bytes` of workgroup storage, if it cannot. A kernel's
     /// owner takes its raster path or skips the work when refused.

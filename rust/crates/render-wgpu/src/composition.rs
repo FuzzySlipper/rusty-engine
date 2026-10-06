@@ -368,11 +368,12 @@ impl Renderer {
     /// Present it with [`WindowSurface::present`].
     pub fn render_view_composition_to_frame(
         &mut self,
-        surface: &WindowSurface,
+        surface: &mut WindowSurface,
         frame: &SurfaceFrame,
         time_seconds: f64,
     ) -> FrameStats {
         let uploaded = self.prepare();
+        surface.request(self.samples(), self.vsync());
         self.surface_size = Some(surface.size());
         let (view, _) = surface.views(frame);
         let mut stats = self.render_composition(view, time_seconds);

@@ -353,7 +353,7 @@ impl SceneDriver {
         let (width, height) = size
             .or(scene.renderer.surface_size())
             .unwrap_or(DEFAULT_CAPTURE_SIZE);
-        let target = OffscreenTarget::new(&self.gpu, width, height);
+        let target = OffscreenTarget::new(&self.gpu, width, height, scene.renderer.samples());
         let video = scene.renderer.render_view_composition(&target, now).video;
         let cameras = scene.renderer.drawn_cameras();
         scene.realized_seconds = scene.elapsed_seconds;
@@ -377,6 +377,16 @@ impl SceneDriver {
     }
 
     /// The renderer's GPU pass readout ([`Renderer::gpu_readout`]).
+    /// Samples per pixel the primary target should have (`Renderer::samples`).
+    pub fn primary_samples(&self) -> u32 {
+        self.scene().renderer.samples()
+    }
+
+    /// The renderer settings in effect and what the device refused.
+    pub fn settings_readout(&self) -> crate::RendererSettingsReadout {
+        self.scene().renderer.settings_readout()
+    }
+
     pub fn gpu_readout(&self) -> GpuReadout {
         self.scene().renderer.gpu_readout()
     }
