@@ -630,7 +630,7 @@ impl Renderer {
     fn field_entries(&self) -> Vec<FieldEntry> {
         let mut entries = Vec::new();
         for (handle, mesh) in &self.tables.payload_meshes {
-            let Some((slot, field)) = mesh.distance_field else {
+            let Some(slot) = mesh.distance_field.as_ref().and_then(|field| field.slot) else {
                 continue;
             };
             let Some(node) = self.tables.nodes.get(handle) else {
@@ -639,7 +639,12 @@ impl Renderer {
             if !node.world_visible || node.world_layer != RenderLayer::Scene {
                 continue;
             }
-            let (min, max) = world_box(&node.world, &field);
+            let field = &mesh
+                .distance_field
+                .as_ref()
+                .expect("checked above")
+                .field_box;
+            let (min, max) = world_box(&node.world, field);
             entries.push(FieldEntry { min, max, slot });
         }
         entries

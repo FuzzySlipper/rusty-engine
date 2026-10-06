@@ -310,6 +310,21 @@ impl RuntimeVoxelScenePresentationBridge {
     /// Draws each presentation's chunks at the level of detail the camera
     /// of the lowest-ordered primary view (`viewer`, if the product composed
     /// one) now calls for, projecting only when a chunk changes level.
+    /// Project every presentation again: the scenes' chunk distance fields
+    /// were built or dropped (`RendererSettings`), and the projector
+    /// republishes the chunks whose fields changed.
+    pub(crate) fn refresh_all(
+        &mut self,
+        call: &mut RuntimeVoxelScenePresentationCall,
+    ) -> Result<(), CsharpEngineServicesError> {
+        if call.state.presentations.is_empty() {
+            return Ok(());
+        }
+        let frame = project_all_presentations(&mut call.state, &self.spatial)?;
+        call.frames.push(frame);
+        Ok(())
+    }
+
     pub(crate) fn settle_level_of_detail(
         &mut self,
         call: &mut RuntimeVoxelScenePresentationCall,

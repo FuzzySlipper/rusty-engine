@@ -274,7 +274,7 @@ impl Frozen {
                         ..
                     }) = scene.nodes.get_mut(handle)
                     {
-                        payload.distance_field = Some(field.clone());
+                        payload.distance_field = field.clone();
                     }
                     continue;
                 }

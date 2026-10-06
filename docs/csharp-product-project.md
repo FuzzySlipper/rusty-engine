@@ -790,11 +790,14 @@ light, unlit materials, blended parts and the viewmodel layer are not
 darkened. These write `renderer.lighting.ambientOcclusion` in the staged
 manifest; `engine.renderer` reports each of its passes' GPU time.
 
-`distanceField` traces cones through the coarse signed distance fields voxel
-chunks publish with their meshes (8³ cells over each chunk, for chunk sizes
+`distanceField` traces cones through coarse signed distance fields the voxel
+chunks build with their meshes (8³ cells over each chunk, for chunk sizes
 that are multiples of 8), so a wall darkens the floor at its foot whether or
 not the wall is on screen, and a surface's occlusion does not change as the
-camera turns. It needs compute shaders; a device without them takes the
+camera turns. The fields exist only while this mode draws: selecting it
+(here or through `RendererSettings`) builds every resident chunk's field and
+republishes it, deselecting it drops them, and a scene whose product never
+selects it pays nothing for them. It needs compute shaders; a device without them takes the
 screen-space path. Only voxel chunks carry fields: static meshes and voxel
 objects neither occlude nor are occluded by them. `engine.renderer` reports
 the field atlas (`distanceFields`) beside the occlusion path.

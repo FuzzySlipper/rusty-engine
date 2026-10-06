@@ -562,11 +562,12 @@ impl ChunkProjection<'_> {
                 payload: voxel_mesh_payload_with_material_slots(chunk, self.slots),
             });
         } else if previous.is_some_and(|previous| previous.field_hash != chunk.field_hash) {
-            // A neighbour's edit reached the field, not the mesh.
-            if let Some(field) = chunk_distance_field(chunk) {
-                self.operations
-                    .push(RenderDiff::ReplaceMeshDistanceField { handle, field });
-            }
+            // A neighbour's edit reached the field, not the mesh; or the
+            // scene started or stopped building fields.
+            self.operations.push(RenderDiff::ReplaceMeshDistanceField {
+                handle,
+                field: chunk_distance_field(chunk),
+            });
         }
         // A rebuilt chunk can also move (a world-origin rebase does both).
         if previous.is_some_and(|previous| previous.translation != chunk.translation) {

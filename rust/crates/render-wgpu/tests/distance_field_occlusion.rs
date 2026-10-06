@@ -47,12 +47,21 @@ fn materials() -> BTreeMap<u16, RenderMaterialDescriptor> {
     .collect()
 }
 
+/// A scene whose product selected distance-field occlusion, so its chunks
+/// build their fields.
 fn scene_from(voxels: Vec<MaterialVoxel>) -> VoxelCollisionScene {
+    scene_with_fields(voxels, true)
+}
+
+fn scene_with_fields(voxels: Vec<MaterialVoxel>, distance_fields: bool) -> VoxelCollisionScene {
     VoxelCollisionScene::from_material_voxels_with_mesh_options(
         1.0,
         CHUNK_CELLS,
         voxels,
-        SurfaceMeshOptions::default(),
+        SurfaceMeshOptions {
+            distance_fields,
+            ..SurfaceMeshOptions::default()
+        },
     )
     .expect("voxel scene")
 }
@@ -60,6 +69,10 @@ fn scene_from(voxels: Vec<MaterialVoxel>) -> VoxelCollisionScene {
 /// A floor, a back wall and a pillar across several 8³ chunks: the foot of
 /// the wall and the pillar's base are where the fields darken.
 fn voxel_room() -> VoxelCollisionScene {
+    scene_from(room_voxels())
+}
+
+fn room_voxels() -> Vec<MaterialVoxel> {
     let mut voxels = Vec::new();
     for x in -6..6 {
         for z in -6..6 {
@@ -84,7 +97,7 @@ fn voxel_room() -> VoxelCollisionScene {
             material_slot: 3,
         });
     }
-    scene_from(voxels)
+    voxels
 }
 
 fn project(
@@ -159,13 +172,17 @@ fn chunk_fields_darken_the_corners_and_follow_edits() {
     let off = render_with(&mut harness, AmbientOcclusionPath::Off);
     let readout = harness.renderer.gpu_readout();
     assert_eq!(
-        readout.distance_fields.resident_fields as usize, chunks,
-        "each chunk holds a brick while its mesh is retained"
+        readout.distance_fields.resident_fields, 0,
+        "a chunk's field holds no brick while the renderer does not trace fields"
     );
-    assert_eq!(readout.distance_fields.atlas_bricks, 512);
 
     let with = render_with(&mut harness, AmbientOcclusionPath::DistanceField);
     let readout = harness.renderer.gpu_readout();
+    assert_eq!(
+        readout.distance_fields.resident_fields as usize, chunks,
+        "entering the distance-field path gives each retained field a brick"
+    );
+    assert_eq!(readout.distance_fields.atlas_bricks, 512);
     let occlusion = &readout.ambient_occlusion;
     match &readout.distance_fields.refused {
         Some(reason) => {
@@ -253,6 +270,86 @@ fn chunk_fields_darken_the_corners_and_follow_edits() {
         chunks
     );
     assert_ne!(edited, with, "the pillar's top is gone");
+}
+
+#[test]
+fn fields_follow_the_scene_setting_through_the_projector() {
+    let mut harness = Harness::new(options(AmbientOcclusionPath::DistanceField));
+    let materials = materials();
+    let mut scene = scene_with_fields(room_voxels(), false);
+    let mut projector = VoxelRenderProjector::new();
+    let ops = project(&mut projector, &scene, &materials);
+    let chunks = ops
+        .iter()
+        .filter(|op| match op {
+            RenderDiff::ReplaceMeshPayload { payload, .. } => {
+                assert!(
+                    payload.distance_field.is_none(),
+                    "a scene that did not select the fields publishes none"
+                );
+                true
+            }
+            _ => false,
+        })
+        .count();
+    harness.apply(ops);
+    harness.render(&view());
+    assert_eq!(
+        harness
+            .renderer
+            .gpu_readout()
+            .distance_fields
+            .resident_fields,
+        0
+    );
+
+    // Selecting the occlusion builds every chunk's field and republishes
+    // the fields alone.
+    scene.set_distance_fields(true);
+    let delta = harness.apply(project(&mut projector, &scene, &materials));
+    let republished = delta
+        .ops
+        .iter()
+        .filter(|op| {
+            matches!(
+                op,
+                RenderDiff::ReplaceMeshDistanceField { field: Some(_), .. }
+            )
+        })
+        .count();
+    assert_eq!(
+        republished, chunks,
+        "one field per chunk, no mesh republished"
+    );
+    assert!(!delta
+        .ops
+        .iter()
+        .any(|op| matches!(op, RenderDiff::ReplaceMeshPayload { .. })));
+    harness.render(&view());
+    let readout = harness.renderer.gpu_readout();
+    assert_eq!(readout.distance_fields.resident_fields as usize, chunks);
+    if readout.distance_fields.refused.is_none() {
+        assert_eq!(readout.distance_fields.lookup_entries as usize, chunks);
+    }
+
+    // Deselecting it drops them again.
+    scene.set_distance_fields(false);
+    let delta = harness.apply(project(&mut projector, &scene, &materials));
+    let dropped = delta
+        .ops
+        .iter()
+        .filter(|op| matches!(op, RenderDiff::ReplaceMeshDistanceField { field: None, .. }))
+        .count();
+    assert_eq!(dropped, chunks);
+    harness.render(&view());
+    assert_eq!(
+        harness
+            .renderer
+            .gpu_readout()
+            .distance_fields
+            .resident_fields,
+        0
+    );
 }
 
 #[test]

@@ -563,9 +563,11 @@ pub enum RenderDiff {
     /// Replace only the distance field of a primitive's replaced payload: a
     /// voxel chunk whose neighbour changed within the field's reach keeps
     /// its mesh.
+    /// Replaces a payload mesh's distance field alone; `None` drops it (the
+    /// scene stopped building fields).
     ReplaceMeshDistanceField {
         handle: RenderHandle,
-        field: crate::MeshDistanceField,
+        field: Option<crate::MeshDistanceField>,
     },
     CreateLight {
         handle: RenderHandle,
@@ -731,9 +733,10 @@ impl RenderDiff {
             Self::ReplaceMeshPayload { payload, .. } => {
                 payload.validate().map_err(RenderOperationError::Mesh)
             }
-            Self::ReplaceMeshDistanceField { field, .. } => {
-                field.validate().map_err(RenderOperationError::Mesh)
-            }
+            Self::ReplaceMeshDistanceField {
+                field: Some(field), ..
+            } => field.validate().map_err(RenderOperationError::Mesh),
+            Self::ReplaceMeshDistanceField { field: None, .. } => Ok(()),
             Self::CreateLight { light, .. } | Self::UpdateLight { light, .. } => {
                 light.validate().map_err(RenderOperationError::Light)
             }

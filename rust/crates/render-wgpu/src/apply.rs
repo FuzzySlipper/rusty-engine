@@ -47,6 +47,23 @@ const FALLBACK_ROUGHNESS: f32 = 1.0;
 const PAYLOAD_SLOT_MATERIAL_PREFIX: &str = "voxel-material/";
 
 impl Renderer {
+    /// A payload's distance field as the renderer keeps it: its bytes, and a
+    /// brick in the atlas while the renderer traces fields.
+    fn mesh_field(&mut self, field: &render_model::MeshDistanceField) -> crate::tables::MeshField {
+        let slot = (self.options.ambient_occlusion.path
+            == crate::AmbientOcclusionPath::DistanceField)
+            .then(|| self.distance_fields.allocate(&self.gpu, &field.data))
+            .flatten();
+        crate::tables::MeshField {
+            field_box: crate::distance_fields::FieldBox {
+                origin: field.origin,
+                extent: field.extent,
+            },
+            data: field.data.clone(),
+            slot,
+        }
+    }
+
     /// Apply one delta from `PresentationWorld` (a fresh backend applies the
     /// world's snapshot frame first). Returns the ops it could not realize.
     pub fn apply(
@@ -334,18 +351,12 @@ impl Renderer {
                 );
                 mesh.texture_space = payload.texture_space;
                 mesh.layer_weights = layer_weights;
-                mesh.distance_field = payload.distance_field.as_ref().and_then(|field| {
-                    let slot = self.distance_fields.allocate(&self.gpu, &field.data)?;
-                    Some((
-                        slot,
-                        crate::distance_fields::FieldBox {
-                            origin: field.origin,
-                            extent: field.extent,
-                        },
-                    ))
-                });
+                mesh.distance_field = payload
+                    .distance_field
+                    .as_ref()
+                    .map(|field| self.mesh_field(field));
                 if let Some(previous) = self.tables.payload_meshes.insert(*handle, mesh) {
-                    if let Some((slot, _)) = previous.distance_field {
+                    if let Some(slot) = previous.distance_field.and_then(|field| field.slot) {
                         self.distance_fields.release(slot);
                     }
                 }
@@ -355,24 +366,19 @@ impl Renderer {
                 self.rebuild_parts(*handle);
             }
             RenderDiff::ReplaceMeshDistanceField { handle, field } => {
-                let Some(mesh) = self.tables.payload_meshes.get_mut(handle) else {
+                if !self.tables.payload_meshes.contains_key(handle) {
                     return Err(format!("node {} has no payload mesh", handle.raw()));
-                };
-                if let Some((slot, _)) = mesh.distance_field.take() {
+                }
+                let replacement = field.as_ref().map(|field| self.mesh_field(field));
+                let mesh = self
+                    .tables
+                    .payload_meshes
+                    .get_mut(handle)
+                    .expect("checked above");
+                if let Some(slot) = mesh.distance_field.take().and_then(|field| field.slot) {
                     self.distance_fields.release(slot);
                 }
-                mesh.distance_field =
-                    self.distance_fields
-                        .allocate(&self.gpu, &field.data)
-                        .map(|slot| {
-                            (
-                                slot,
-                                crate::distance_fields::FieldBox {
-                                    origin: field.origin,
-                                    extent: field.extent,
-                                },
-                            )
-                        });
+                mesh.distance_field = replacement;
             }
             RenderDiff::SetMaterialInstanceParameters {
                 handle,
@@ -541,7 +547,7 @@ impl Renderer {
         for handle in removed {
             self.remove_animated_instance(handle);
             if let Some(mesh) = self.tables.payload_meshes.remove(&handle) {
-                if let Some((slot, _)) = mesh.distance_field {
+                if let Some(slot) = mesh.distance_field.and_then(|field| field.slot) {
                     self.distance_fields.release(slot);
                 }
             }

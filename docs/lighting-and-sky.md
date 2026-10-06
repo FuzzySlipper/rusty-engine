@@ -136,7 +136,9 @@ through the voxel chunks' signed distance fields, which the chunk mesher
 builds from the chunk and its neighbours and the renderer keeps in one 3D
 atlas; occlusion then comes from the world around a surface, out to half a
 chunk, rather than from what the view shows. The depth pre-pass and the blur
-stay the same, so the two modes swap on one product setting.
+stay the same, so the two modes swap on one product setting. The fields are
+built, published and held in the atlas only while that mode draws: a scene
+whose product does not select it pays nothing for them.
 
 ## The standard shader
 

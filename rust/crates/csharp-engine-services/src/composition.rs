@@ -285,6 +285,9 @@ pub(crate) unsafe fn borrowed_utf8<'a>(
 pub struct EngineServiceSet {
     in_call: bool,
     call_elapsed_seconds: f64,
+    /// The spatial sessions' distance fields changed between calls: the
+    /// presentations republish them at the next settle.
+    fields_changed: bool,
     presentation_world: render_presentation::PresentationWorld,
     input: crate::input::RuntimeInputBridge,
     gameplay_time: crate::gameplay_time::RuntimeGameplayTimeBridge,
@@ -413,6 +416,7 @@ impl EngineServiceSet {
         Ok(Self {
             in_call: false,
             call_elapsed_seconds: 0.0,
+            fields_changed: false,
             presentation_world: render_presentation::PresentationWorld::default(),
             input: crate::input::RuntimeInputBridge::new(direct_intents),
             gameplay_time: crate::gameplay_time::RuntimeGameplayTimeBridge::new(),
@@ -488,6 +492,11 @@ impl EngineServiceSet {
         &mut self,
         readout: csharp_engine_abi::NativeRendererSettingsReadout,
     ) {
+        // Chunk distance fields are built only while the renderer traces
+        // them: what draws, not what was asked for, on a device that refuses.
+        let traced = readout.effective.ambient_occlusion
+            == csharp_engine_abi::NativeAmbientOcclusionMode::DistanceField;
+        self.fields_changed |= self.spatial.set_distance_fields(traced);
         self.renderer_settings.ingest(readout);
     }
 
@@ -740,6 +749,17 @@ impl EngineServiceSet {
             &calls.appearance,
             calls.renderer_settings.settings,
         )?;
+        // A selection this call builds or drops the sessions' fields now; the
+        // device's answer arrives with the next report.
+        if let Some(settings) = calls.renderer_settings.settings {
+            let traced = settings.ambient_occlusion.mode
+                == render_model::AmbientOcclusionMode::DistanceField;
+            self.fields_changed |= self.spatial.set_distance_fields(traced);
+        }
+        if std::mem::take(&mut self.fields_changed) {
+            self.voxel_scene_presentation
+                .refresh_all(&mut calls.voxel_scene_presentation)?;
+        }
         self.voxel_scene_presentation.settle_level_of_detail(
             &mut calls.voxel_scene_presentation,
             calls.camera_view.primary_camera_position(),

@@ -197,6 +197,11 @@ pub struct SurfaceMeshOptions {
     pub non_occluding: BTreeSet<u16>,
     /// Give every vertex weights for these layers ([`MeshPayload::layer_weights`]).
     pub terrain_layers: Option<TerrainLayers>,
+    /// Build each chunk's coarse signed distance field with its mesh
+    /// ([`MeshPayload::distance_field`]) for the renderer's distance-field
+    /// occlusion. Off by default: a scene whose product has not selected
+    /// that occlusion pays nothing for the fields.
+    pub distance_fields: bool,
 }
 
 impl SurfaceMeshOptions {
@@ -1371,7 +1376,9 @@ pub fn mesh_chunk_in_world_with_options(
         mesh_chunk_reconstructed(world, coord, chunk, options)
     };
     Some(meshed.map(|mut payload| {
-        payload.distance_field = around.distance_field();
+        if options.distance_fields {
+            payload.distance_field = around.distance_field();
+        }
         payload
     }))
 }

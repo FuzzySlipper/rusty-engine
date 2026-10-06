@@ -998,7 +998,7 @@ impl PresentationWorld {
             }
             RenderDiff::ReplaceMeshDistanceField { handle, field } => {
                 match &mut self.node_mut(*handle)?.mesh_payload {
-                    Some(payload) => payload.distance_field = Some(field.clone()),
+                    Some(payload) => payload.distance_field = field.clone(),
                     None => return Err(PresentationWorldError::WrongNodeKind(*handle)),
                 }
             }

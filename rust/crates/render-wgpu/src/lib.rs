@@ -515,10 +515,29 @@ impl Renderer {
     }
 
     /// Change host options; lights (and shadow layers) are re-derived on the
-    /// next render.
+    /// next render. Retained chunk fields take or give up their atlas bricks
+    /// as the occlusion path enters or leaves the distance-field path.
     pub fn set_options(&mut self, options: RendererOptions) {
+        let traced = |options: &RendererOptions| {
+            options.ambient_occlusion.path == AmbientOcclusionPath::DistanceField
+        };
+        let (was, now) = (traced(&self.options), traced(&options));
         self.options = options;
         self.tables.lights_dirty = true;
+        if was != now {
+            for mesh in self.tables.payload_meshes.values_mut() {
+                let Some(field) = &mut mesh.distance_field else {
+                    continue;
+                };
+                if now {
+                    field.slot = field
+                        .slot
+                        .or_else(|| self.distance_fields.allocate(&self.gpu, &field.data));
+                } else if let Some(slot) = field.slot.take() {
+                    self.distance_fields.release(slot);
+                }
+            }
+        }
     }
 
     /// Realize a product's settings (`RenderDiff::SetRendererSettings`).
