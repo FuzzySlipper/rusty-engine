@@ -47,17 +47,17 @@ fn finished(color: vec4<f32>, position: vec4<f32>, depth: f32, glow: vec3<f32>, 
     let ceiling = vec3<f32>(params.output.x);
     var result = vec4<f32>(0.0);
     if color.a > 0.0 {
-        var distance = 0.0;
+        var ray = vec3<f32>(0.0);
         if depth < 1.0 && frame.modes.y != 0u {
             let uv = (position.xy - params.viewport.xy) / params.viewport.zw;
             let world = frame.inv_view_proj * vec4<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, depth, 1.0);
-            distance = length(world.xyz / world.w - frame.camera.xyz);
+            ray = world.xyz / world.w - frame.camera.xyz;
         }
-        let rgb = min(finish_linear((color.rgb / color.a + glow) * exposure, distance), ceiling);
+        let rgb = min(finish_linear((color.rgb / color.a + glow) * exposure, ray), ceiling);
         result = vec4<f32>(rgb * color.a, color.a);
     }
     if params.post.x > 0.0 && color.a < 1.0 {
-        result += vec4<f32>(min(finish_linear(glow * exposure, 0.0), ceiling) * (1.0 - color.a), 0.0);
+        result += vec4<f32>(min(finish_linear(glow * exposure, vec3<f32>(0.0)), ceiling) * (1.0 - color.a), 0.0);
     }
     return result;
 }

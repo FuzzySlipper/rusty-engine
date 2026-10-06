@@ -15,8 +15,8 @@ use std::ops::{Add, AddAssign};
 use glam::{Mat4, Vec3};
 use render_host_contracts::RendererCompositionCamera;
 use render_model::{
-    ColorGradingDescriptor, FogDescriptor, LightDescriptor, RenderHandle, RenderLayer,
-    ToneMappingDescriptor, ToneMappingOperator,
+    AtmosphereDescriptor, ColorGradingDescriptor, FogDescriptor, LightDescriptor, RenderHandle,
+    RenderLayer, ToneMappingDescriptor, ToneMappingOperator,
 };
 
 use crate::apply::light_row;
@@ -39,7 +39,7 @@ const LIGHT_ROW_FLOATS: usize = 16;
 /// Frame uniform (`rusty::types` `Frame`): two matrices, camera position,
 /// light count and first light; then exposure and fog distances, fog colour,
 /// and the tone mapping and fog modes; then the presentation time.
-const FRAME_UNIFORM_BYTES: u64 = (16 + 16 + 4 + 4 + 4 + 4 + 4 + 4 + 4 + 4) * 4;
+const FRAME_UNIFORM_BYTES: u64 = (16 + 16 + 4 + 4 + 4 + 4 + 4 + 4 + 4 + 4 + 4 * 4) * 4;
 
 /// Per-frame counts for diagnostics.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -506,6 +506,7 @@ impl Renderer {
         }
         self.retained_light_rows(&mut rows, ViewLayer::Viewmodel, None);
         self.shadow_candidates = candidates;
+        self.sun = self.brightest_sun();
         let layers_changed = self.choose_shadows(Some(&mut rows));
         let total = (rows.len() / LIGHT_ROW_FLOATS) as u32;
         self.lights = LightRanges {
@@ -644,6 +645,51 @@ impl Renderer {
                 }
             }
         }
+    }
+
+    /// The brightest enabled directional light of the world layer (by
+    /// intensity times its brightest channel; the lowest handle on a tie).
+    fn brightest_sun(&self) -> Option<Sun> {
+        let mut handles: Vec<&RenderHandle> = self.tables.lights.iter().collect();
+        handles.sort();
+        let mut sun: Option<(f32, Sun)> = None;
+        for handle in handles {
+            let Some(node) = self.tables.nodes.get(handle) else {
+                continue;
+            };
+            let NodeKind::Light(LightDescriptor::Directional {
+                color,
+                intensity,
+                direction,
+                enabled: true,
+                ..
+            }) = &node.kind
+            else {
+                continue;
+            };
+            if !node.world_visible || node.world_layer == RenderLayer::Viewmodel {
+                continue;
+            }
+            let toward = -node
+                .world
+                .transform_vector3(crate::convert::vec3(*direction))
+                .normalize_or_zero();
+            let brightness = intensity * color.iter().copied().fold(0.0, f32::max);
+            if toward == Vec3::ZERO || brightness <= 0.0 {
+                continue;
+            }
+            if sun.is_none_or(|(best, _)| brightness > best) {
+                sun = Some((
+                    brightness,
+                    Sun {
+                        toward,
+                        color: *color,
+                        intensity: *intensity,
+                    },
+                ));
+            }
+        }
+        sun.map(|(_, sun)| sun)
     }
 
     fn upload_parts(&mut self) -> u32 {
@@ -1118,6 +1164,9 @@ impl Renderer {
         for value in grading_uniform(self.tables.color_grading.unwrap_or_default()) {
             bytes.extend_from_slice(&value.to_le_bytes());
         }
+        for value in atmosphere_uniform(self.tables.atmosphere.unwrap_or_default(), self.sun) {
+            bytes.extend_from_slice(&value.to_le_bytes());
+        }
         self.gpu.queue.write_buffer(&self.frame_buffer, 0, &bytes);
 
         // Format and sample count: every pipeline drawing here must match.
@@ -1277,6 +1326,16 @@ impl Renderer {
                 pass.set_bind_group(0, &self.frame_bind_group, &[]);
                 pass.set_pipeline(&self.pipelines[sky_index].sky);
                 pass.set_bind_group(1, sky, &[]);
+                pass.draw(0..3, 0..1);
+            }
+            // The sun over the sky or clear colour, when the atmosphere
+            // draws a disc or halo and there is a sun.
+            let sun_shown = self.tables.atmosphere.is_some_and(|atmosphere| {
+                atmosphere.sun_radius_degrees > 0.0 || atmosphere.sun_halo > 0.0
+            });
+            if view.sky && sun_shown && self.sun.is_some() {
+                pass.set_bind_group(0, &self.frame_bind_group, &[]);
+                pass.set_pipeline(&self.pipelines[sky_index].sun);
                 pass.draw(0..3, 0..1);
             }
         }
@@ -1595,6 +1654,44 @@ fn finish_uniform(
         bytes.extend_from_slice(&value.to_le_bytes());
     }
     bytes
+}
+
+/// The world's sun: the direction toward it, its colour and intensity.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Sun {
+    toward: Vec3,
+    color: [f32; 3],
+    intensity: f32,
+}
+
+/// The frame uniform's sun and atmosphere rows (`rusty::types::Frame`): the
+/// sun (toward it, present), its colour and intensity, the fog's base and
+/// falloff heights, the haze exponent and sun disc radius, then the haze
+/// colour and sun halo.
+fn atmosphere_uniform(atmosphere: AtmosphereDescriptor, sun: Option<Sun>) -> [f32; 16] {
+    let (toward, present, [r, g, b], intensity) = match sun {
+        Some(sun) => (sun.toward, 1.0, sun.color, sun.intensity),
+        None => (Vec3::ZERO, 0.0, [0.0; 3], 0.0),
+    };
+    let [haze_r, haze_g, haze_b] = atmosphere.haze_color;
+    [
+        toward.x,
+        toward.y,
+        toward.z,
+        present,
+        r,
+        g,
+        b,
+        intensity,
+        atmosphere.fog_base_height,
+        atmosphere.fog_falloff_height,
+        atmosphere.haze_exponent,
+        atmosphere.sun_radius_degrees.to_radians(),
+        haze_r,
+        haze_g,
+        haze_b,
+        atmosphere.sun_halo,
+    ]
 }
 
 /// The frame uniform's grading rows (`rusty::finish::graded`): the white

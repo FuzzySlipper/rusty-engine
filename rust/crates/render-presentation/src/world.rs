@@ -126,6 +126,7 @@ struct RetainedGraphics {
     bloom: Option<BloomDescriptor>,
     auto_exposure: Option<AutoExposureDescriptor>,
     color_grading: Option<ColorGradingDescriptor>,
+    atmosphere: Option<AtmosphereDescriptor>,
     controllers: BTreeMap<crate::AnimationProjectionHandle, crate::AnimationProjectionDescriptor>,
 }
 
@@ -255,6 +256,7 @@ impl PresentationWorld {
                 || matches!(&op, RenderDiff::SetBloom { bloom } if &self.retained.bloom == bloom)
                 || matches!(&op, RenderDiff::SetAutoExposure { auto_exposure } if &self.retained.auto_exposure == auto_exposure)
                 || matches!(&op, RenderDiff::SetColorGrading { color_grading } if &self.retained.color_grading == color_grading)
+                || matches!(&op, RenderDiff::SetAtmosphere { atmosphere } if &self.retained.atmosphere == atmosphere)
             {
                 continue;
             }
@@ -682,6 +684,11 @@ impl PresentationWorld {
         if self.retained.color_grading.is_some() {
             ops.push(RenderDiff::SetColorGrading {
                 color_grading: self.retained.color_grading,
+            });
+        }
+        if self.retained.atmosphere.is_some() {
+            ops.push(RenderDiff::SetAtmosphere {
+                atmosphere: self.retained.atmosphere,
             });
         }
         // Creation requires an existing parent and parents cannot be changed,
@@ -1189,6 +1196,9 @@ impl PresentationWorld {
             }
             RenderDiff::SetColorGrading { color_grading } => {
                 self.retained.color_grading = *color_grading;
+            }
+            RenderDiff::SetAtmosphere { atmosphere } => {
+                self.retained.atmosphere = *atmosphere;
             }
         }
         Ok(())

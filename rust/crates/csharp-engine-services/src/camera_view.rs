@@ -7,8 +7,9 @@ use render_host_contracts::{
     RendererViewComposition, RendererViewTarget, RendererViewport,
 };
 use render_model::{
-    AutoExposureDescriptor, BloomDescriptor, ColorGradingDescriptor, FogDescriptor, RenderDiff,
-    RenderFrameDiff, SkyBackgroundDescriptor, ToneMappingDescriptor, ToneMappingOperator,
+    AtmosphereDescriptor, AutoExposureDescriptor, BloomDescriptor, ColorGradingDescriptor,
+    FogDescriptor, RenderDiff, RenderFrameDiff, SkyBackgroundDescriptor, ToneMappingDescriptor,
+    ToneMappingOperator,
 };
 
 use crate::{
@@ -69,11 +70,12 @@ pub(crate) struct RuntimeCameraViewCall {
     /// presentation world retains the selection.
     pub(crate) fog: Option<Option<FogDescriptor>>,
     pub(crate) tone_mapping: Option<ToneMappingDescriptor>,
-    /// Bloom, auto exposure and colour grading selected during the call,
-    /// as fog is.
+    /// Bloom, auto exposure, colour grading and the atmosphere selected
+    /// during the call, as fog is.
     pub(crate) bloom: Option<Option<BloomDescriptor>>,
     pub(crate) auto_exposure: Option<Option<AutoExposureDescriptor>>,
     pub(crate) color_grading: Option<Option<ColorGradingDescriptor>>,
+    pub(crate) atmosphere: Option<Option<AtmosphereDescriptor>>,
 }
 
 impl RuntimeCameraViewCall {
@@ -145,6 +147,7 @@ impl RuntimeCameraViewBridge {
             bloom: None,
             auto_exposure: None,
             color_grading: None,
+            atmosphere: None,
         });
     }
 
@@ -196,6 +199,7 @@ impl RuntimeCameraViewBridge {
             bloom: None,
             auto_exposure: None,
             color_grading: None,
+            atmosphere: None,
         };
         stage_composition(&mut snapshot)?;
         Ok(snapshot
@@ -484,6 +488,7 @@ impl RuntimeCameraViewBridge {
             bloom: None,
             auto_exposure: None,
             color_grading: None,
+            atmosphere: None,
         };
         candidate.state.views = views.to_vec();
         candidate.state.presentations = presentations.to_vec();
@@ -732,6 +737,34 @@ impl RuntimeCameraViewBridge {
         // All zero grades nothing: the finish skips grading.
         let graded = grading != ColorGradingDescriptor::default();
         self.staged_mut()?.color_grading = Some(graded.then_some(grading));
+        Ok(())
+    }
+
+    fn set_atmosphere(
+        &mut self,
+        request: NativeAtmosphereRequest,
+    ) -> Result<(), CsharpEngineServicesError> {
+        let atmosphere = AtmosphereDescriptor {
+            fog_base_height: request.fog_base_height,
+            fog_falloff_height: request.fog_falloff_height,
+            haze_color: [
+                request.haze_color.r,
+                request.haze_color.g,
+                request.haze_color.b,
+            ],
+            haze_exponent: request.haze_exponent,
+            sun_radius_degrees: request.sun_radius_degrees,
+            sun_halo: request.sun_halo,
+        };
+        if !atmosphere.valid() {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_ATMOSPHERE",
+                "atmosphere values must be finite; falloff height, haze colour, haze exponent and sun halo non-negative; sun radius within 0 to 20 degrees",
+            ));
+        }
+        // All zero is no atmosphere.
+        let set = atmosphere != AtmosphereDescriptor::default();
+        self.staged_mut()?.atmosphere = Some(set.then_some(atmosphere));
         Ok(())
     }
 }
@@ -997,9 +1030,9 @@ fn validate_target_descriptor(
     })
 }
 
-/// The call's background, fog, tone mapping, bloom, auto exposure and colour
-/// grading selections as one frame, or None when the call selected none of
-/// them.
+/// The call's background, fog, tone mapping, bloom, auto exposure, colour
+/// grading and atmosphere selections as one frame, or None when the call
+/// selected none of them.
 pub(crate) fn environment_frame(
     call: &RuntimeCameraViewCall,
     appearance: &RuntimeAppearanceCall,
@@ -1019,6 +1052,9 @@ pub(crate) fn environment_frame(
     }
     if let Some(color_grading) = call.color_grading {
         operations.push(RenderDiff::SetColorGrading { color_grading });
+    }
+    if let Some(atmosphere) = call.atmosphere {
+        operations.push(RenderDiff::SetAtmosphere { atmosphere });
     }
     if let Some(change) = call.background {
         background_operations(change, appearance, &mut operations)?;
@@ -1558,6 +1594,27 @@ pub(crate) unsafe extern "C" fn set_auto_exposure(
     }
     let bridge = unsafe { &mut *context.cast::<RuntimeCameraViewBridge>() };
     match bridge.set_auto_exposure(unsafe { *request }) {
+        Ok(()) => ABI_OK,
+        Err(error) => {
+            bridge.operation_diagnostics.retain(&error, operation_error);
+            0
+        }
+    }
+}
+
+pub(crate) unsafe extern "C" fn set_atmosphere(
+    context: *mut c_void,
+    request: *const NativeAtmosphereRequest,
+    operation_error: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    if !operation_error.is_null() {
+        unsafe { *operation_error = std::mem::zeroed() };
+    }
+    if context.is_null() || request.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeCameraViewBridge>() };
+    match bridge.set_atmosphere(unsafe { *request }) {
         Ok(()) => ABI_OK,
         Err(error) => {
             bridge.operation_diagnostics.retain(&error, operation_error);

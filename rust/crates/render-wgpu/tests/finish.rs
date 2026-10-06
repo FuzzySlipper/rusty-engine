@@ -506,3 +506,121 @@ fn colour_grading_warms_cools_desaturates_and_steepens_the_world_but_not_the_bac
     let warm = render(grey, grade(0.8, 0.0, 0.5, 0.5));
     assert_eq!(pixel(&warm, CORNER), pixel(&plain, CORNER));
 }
+
+/// A directional light travelling along `direction`.
+fn sun(harness: &mut Harness, direction: [f32; 3]) {
+    harness.apply(vec![RenderDiff::CreateLight {
+        handle: RenderHandle::new(50),
+        parent: None,
+        light: LightDescriptor::Directional {
+            color: [1.0, 0.9, 0.7],
+            intensity: 2.0,
+            enabled: true,
+            direction,
+            range: None,
+            shadow_intent: LightShadowIntent::Disabled,
+            shadow: Default::default(),
+        },
+    }]);
+}
+
+#[test]
+fn atmospheric_fog_thins_with_height_and_turns_toward_the_haze_near_the_sun() {
+    let view = camera([0.0, 0.0, 0.0], 0.0, 0.0);
+    let thick = FogDescriptor::Exponential {
+        color: [0.2, 0.3, 0.6],
+        density: 0.2,
+    };
+    // The box straight ahead, fogged, with the sun travelling along
+    // `sun_direction` (if any) and the atmosphere set.
+    let render = |fogged: bool,
+                  sun_direction: Option<[f32; 3]>,
+                  atmosphere: Option<AtmosphereDescriptor>| {
+        let mut harness = Harness::new(RendererOptions::default());
+        box_ahead(&mut harness, [0.8, 0.8, 0.8, 1.0]);
+        fog(&mut harness, fogged.then_some(thick));
+        if let Some(direction) = sun_direction {
+            sun(&mut harness, direction);
+        }
+        harness.apply(vec![RenderDiff::SetAtmosphere { atmosphere }]);
+        pixel(&harness.render(&view).1, CENTER)
+    };
+    let atmosphere = |base: f32, falloff: f32, exponent: f32| AtmosphereDescriptor {
+        fog_base_height: base,
+        fog_falloff_height: falloff,
+        haze_color: [1.0, 0.5, 0.1],
+        haze_exponent: exponent,
+        ..Default::default()
+    };
+    let clear = render(false, None, None);
+    let fogged = render(true, None, None);
+    // Zero values draw today's fog exactly.
+    assert_eq!(
+        render(true, None, Some(AtmosphereDescriptor::default())),
+        fogged
+    );
+    // Fog based far below the camera is thin air at its height; based above
+    // it, thicker.
+    let thin = render(true, None, Some(atmosphere(-10.0, 2.0, 0.0)));
+    let thicker = render(true, None, Some(atmosphere(4.0, 2.0, 0.0)));
+    assert!(
+        distance(thin, clear) * 4 < distance(fogged, clear),
+        "{thin:?} {fogged:?} {clear:?}"
+    );
+    assert!(
+        distance(thicker, clear) > distance(fogged, clear),
+        "{thicker:?} {fogged:?}"
+    );
+    // Looking into the sun (it travels toward the camera), the fog turns
+    // toward the haze colour; with the sun behind, it does not.
+    let toward = Some([0.0, 0.0, 1.0]);
+    let behind = Some([0.0, 0.0, -1.0]);
+    let [r, _, b] = render(true, toward, None);
+    let [hazy_r, _, hazy_b] = render(true, toward, Some(atmosphere(0.0, 0.0, 4.0)));
+    assert!(
+        hazy_r > r + 10 && hazy_b + 10 < b,
+        "{hazy_r} {hazy_b} from {r} {b}"
+    );
+    assert_eq!(
+        render(true, behind, Some(atmosphere(0.0, 0.0, 4.0))),
+        render(true, behind, None)
+    );
+}
+
+#[test]
+fn the_sun_draws_its_disc_and_halo_over_the_clear_colour_only_when_set() {
+    let view = camera([0.0, 0.0, 0.0], 0.0, 0.0);
+    // Nothing in the world: only the background.
+    let render = |atmosphere: Option<AtmosphereDescriptor>| {
+        let mut harness = Harness::new(RendererOptions::default());
+        harness.apply(vec![RenderDiff::SetBackgroundColor { color: BACKGROUND }]);
+        // Straight ahead of the camera.
+        sun(&mut harness, [0.0, 0.0, 1.0]);
+        harness.apply(vec![RenderDiff::SetAtmosphere { atmosphere }]);
+        harness.render(&view).1
+    };
+    let plain = render(None);
+    let disc = render(Some(AtmosphereDescriptor {
+        sun_radius_degrees: 3.0,
+        ..Default::default()
+    }));
+    let halo = render(Some(AtmosphereDescriptor {
+        sun_halo: 0.5,
+        ..Default::default()
+    }));
+    let off = render(Some(AtmosphereDescriptor::default()));
+    assert_eq!(off, plain);
+    // The disc is the sun's colour at the centre and leaves the corner.
+    assert!(pixel(&disc, CENTER)[0] > 240, "{:?}", pixel(&disc, CENTER));
+    assert_eq!(pixel(&disc, CORNER), pixel(&plain, CORNER));
+    // The halo brightens around the centre, fading outward.
+    let near = (CENTER.0 + 12, CENTER.1);
+    let far = (CENTER.0 + 60, CENTER.1);
+    let gain = |at| distance(pixel(&halo, at), pixel(&plain, at));
+    assert!(
+        gain(near) > gain(far) && gain(near) > 10,
+        "{} {}",
+        gain(near),
+        gain(far)
+    );
+}

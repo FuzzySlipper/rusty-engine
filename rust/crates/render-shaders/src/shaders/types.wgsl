@@ -26,6 +26,17 @@ struct Frame {
     // Colour grading: x the contrast exponent about middle grey, y the
     // saturation factor.
     grading: vec4<f32>,
+    // The sun, the brightest directional world light: xyz toward it, w 1
+    // when there is one.
+    sun: vec4<f32>,
+    // rgb: the sun's colour; w: its intensity.
+    sun_color: vec4<f32>,
+    // Atmosphere: x the fog's base height, y its falloff height (0: one
+    // density everywhere), z the haze exponent (0: no haze), w the sun
+    // disc's angular radius in radians (0: none).
+    atmosphere: vec4<f32>,
+    // rgb: the linear haze colour; w: the sun halo's strength.
+    haze: vec4<f32>,
 };
 
 struct Part {

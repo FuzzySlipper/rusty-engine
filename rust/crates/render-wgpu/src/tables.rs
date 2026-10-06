@@ -17,6 +17,7 @@
 //! | `fog`, `tone_mapping` | (single) | distance fog; exposure and tone mapping operator | `SetFog` / `SetToneMapping` |
 //! | `bloom`, `auto_exposure` | (single) | the finish pass's bloom and auto exposure | `SetBloom` / `SetAutoExposure` |
 //! | `color_grading` | (single) | white balance, contrast and saturation before the tone mapping operator | `SetColorGrading` |
+//! | `atmosphere` | (single) | height fog, sun haze and the sun in the sky | `SetAtmosphere` |
 //!
 //! | `sprites` | `RenderHandle` | membership: the nodes of kind `Sprite` | `CreateSprite`, `Destroy` (subtree) |
 //!
@@ -587,6 +588,7 @@ pub(crate) struct Tables {
     pub bloom: Option<render_model::BloomDescriptor>,
     pub auto_exposure: Option<render_model::AutoExposureDescriptor>,
     pub color_grading: Option<render_model::ColorGradingDescriptor>,
+    pub atmosphere: Option<render_model::AtmosphereDescriptor>,
     /// Nodes whose transform, visibility or parent changed since `prepare`.
     pub dirty_nodes: HashSet<RenderHandle>,
     /// Light nodes; the light rows are rebuilt when any of them changes.
@@ -618,6 +620,7 @@ impl Tables {
             bloom: None,
             auto_exposure: None,
             color_grading: None,
+            atmosphere: None,
             dirty_nodes: HashSet::new(),
             lights: HashSet::new(),
             lights_dirty: true,

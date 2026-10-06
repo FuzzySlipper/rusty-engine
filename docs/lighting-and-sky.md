@@ -256,6 +256,8 @@ engine.CameraView.SetFog(new(FogMode.Off, default, 0, 0, 0));
 engine.CameraView.SetBloom(new(Threshold: 1, Intensity: 0.6f));
 engine.CameraView.SetAutoExposure(new(Enabled: true, Speed: 1.5f, MinExposure: 0.25f, MaxExposure: 4));
 engine.CameraView.SetColorGrading(new(Temperature: -0.15f, Tint: 0, Contrast: 0.1f, Saturation: 0.2f));
+engine.CameraView.SetAtmosphere(new(FogBaseHeight: 20, FogFalloffHeight: 40, HazeColor: new(1f, 0.7f, 0.45f, 1),
+    HazeExponent: 8, SunRadiusDegrees: 1.5f, SunHalo: 0.35f));
 ```
 
 - **Exposure** multiplies lit colour; it defaults to 1.
@@ -304,6 +306,21 @@ engine.CameraView.SetColorGrading(new(Temperature: -0.15f, Tint: 0, Contrast: 0.
   colour that matches its horizon. Distance comes from the depth buffer: a
   blended surface takes the fog of what is behind it, and over the background
   it is not fogged.
+- **Atmosphere** makes the fog read as air, and puts the sun in the sky.
+  The sun is the brightest enabled directional world light. All zero
+  (`default(AtmosphereRequest)`) turns it off, and each part is off at
+  zero:
+  - Fog has its `SetFog` density at `FogBaseHeight` (render world y) and
+    thins by `e` every `FogFalloffHeight` above it, thickening below.
+    Each fragment takes the mean density along its ray from the camera,
+    so valleys fill and distant peaks stand clear.
+  - Looking toward the sun, the fog colour turns toward `HazeColor`
+    (linear RGB) by the cosine between the view and the sun raised to
+    `HazeExponent`. A larger exponent gathers the haze closer to the sun.
+  - The sky, panorama or clear colour alike, shows a disc of
+    `SunRadiusDegrees` (up to 20) and a halo a few degrees wide of
+    strength `SunHalo`. Both take the sun's colour, dimmed when its
+    intensity is below 1, and follow its direction.
 - **Captures.** `RenderOutput.CaptureImage` uses its request's own exposure
   and tone mapping, without auto exposure or colour grading, and keeps the
   scene's fog and bloom as it keeps the scene's lights, whichever background
@@ -390,8 +407,10 @@ engine.CameraView.SetSkyBackgroundBlend(new(dayTexture, nightTexture, amount));
 ```
 
 `amount` must be finite and in [0,1]. The product maps its own clock to this
-value and chooses authored keyframes, sun/moon positions/colors, horizon tint,
-and stars in the panoramas. Blend consecutive pairs for dawn/day/dusk/night;
+value and chooses authored keyframes, horizon tint and stars in the
+panoramas. A sun painted into a panorama stays where it was painted; the
+atmosphere's sun disc (above) follows the directional light instead, so
+moving the light with the same clock moves the sun in the sky. Blend consecutive pairs for dawn/day/dusk/night;
 use coherent features and artwork to avoid double sun/moon images during a
 crossfade. A blend is not a physical atmosphere simulation; distance fog is
 `CameraView.SetFog`.
@@ -416,5 +435,8 @@ them. The Engine owns GPU lifetime and panorama orientation.
 torch light, a persistence round-trip and two deterministic authored panoramas.
 Commands: `lighting.inspect`, `lighting.torch true|false`, `lighting.sky 0..1`,
 `lighting.room`, `lighting.fog <density>` (0 turns it off),
-`lighting.exposure <exposure>` (ACES filmic), and `lighting.panorama`. Debug selection is explicit fixture
+`lighting.exposure <exposure>` (ACES filmic), `lighting.atmosphere true|false`
+(height fog, sun haze, disc and halo) and `lighting.panorama`.
+`lighting.sky` also moves the fixture's sun from noon at 0 to a low dusk sun
+at 1. Debug selection is explicit fixture
 assistance; no downstream gameplay acceptance is implied.

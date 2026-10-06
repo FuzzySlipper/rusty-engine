@@ -366,6 +366,26 @@ pub struct NativeAutoExposureRequest {
 /// toward yellow, `tint` shifts toward green or magenta, `contrast` scales
 /// the distance from middle grey (flat at -1, doubled at 1) and
 /// `saturation` the distance from grey (none at -1, doubled at 1).
+/// The air and the sun in the sky. The sun is the brightest enabled
+/// directional world light. Fog thins with height: it has its `SetFog`
+/// density at `fog_base_height` (render world y) and falls by `e` every
+/// `fog_falloff_height` up (0: one density at every height). Looking toward
+/// the sun the fog turns toward `haze_color` (linear RGB, alpha ignored) by
+/// the cosine between the view and the sun raised to `haze_exponent` (0: no
+/// haze). The sky (panorama or clear colour) shows a disc of
+/// `sun_radius_degrees` (0 to 20; 0: none) and a halo of strength `sun_halo`
+/// (0: none). All zero (the default) turns the atmosphere off.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeAtmosphereRequest {
+    pub fog_base_height: f32,
+    pub fog_falloff_height: f32,
+    pub haze_color: NativeColor,
+    pub haze_exponent: f32,
+    pub sun_radius_degrees: f32,
+    pub sun_halo: f32,
+}
+
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeColorGradingRequest {

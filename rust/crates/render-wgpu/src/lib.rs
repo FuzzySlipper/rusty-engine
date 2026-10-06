@@ -175,6 +175,9 @@ pub struct Renderer {
     parts_buffer: wgpu::Buffer,
     lights_buffer: wgpu::Buffer,
     lights: frame::LightRanges,
+    /// The brightest enabled directional world light, for the sky's sun
+    /// and the fog's haze.
+    sun: Option<frame::Sun>,
     /// Part ids: the world and viewmodel view lists, then each shadow
     /// layer's casters.
     instances_buffer: wgpu::Buffer,
@@ -302,6 +305,7 @@ impl Renderer {
             parts_buffer,
             lights_buffer,
             lights: Default::default(),
+            sun: None,
             instances_buffer,
             casters_uploaded: false,
             views: Default::default(),

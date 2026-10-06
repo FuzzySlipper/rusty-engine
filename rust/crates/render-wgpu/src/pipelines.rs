@@ -34,6 +34,8 @@ pub(crate) struct Layouts {
     pub shadow_layer: wgpu::BindGroupLayout,
     world: wgpu::PipelineLayout,
     sky_pipeline: wgpu::PipelineLayout,
+    /// The sun pass over the background: the frame only.
+    sun_pipeline: wgpu::PipelineLayout,
     shadow_pipeline: wgpu::PipelineLayout,
     pub shaders: Shaders,
     sky_shader: wgpu::ShaderModule,
@@ -52,11 +54,13 @@ pub(crate) struct Layouts {
     pub shader_errors: Vec<String>,
 }
 
-/// One target format's pipelines: the sky, and a world pipeline per feature
-/// set and pass, created as materials need them.
+/// One target format's pipelines: the sky, the sun added over the
+/// background, and a world pipeline per feature set and pass, created as
+/// materials need them.
 pub(crate) struct Pipelines {
     pub target: ColorTarget,
     pub sky: wgpu::RenderPipeline,
+    pub sun: wgpu::RenderPipeline,
     world: HashMap<(Features, Pass), wgpu::RenderPipeline>,
 }
 
@@ -262,6 +266,11 @@ impl Layouts {
             bind_group_layouts: &[Some(&frame), Some(&sky)],
             immediate_size: 0,
         });
+        let sun_pipeline = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("render-wgpu sun"),
+            bind_group_layouts: &[Some(&frame)],
+            immediate_size: 0,
+        });
         let shadow_pipeline = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("render-wgpu shadow"),
             bind_group_layouts: &[Some(&casters), Some(&material), Some(&shadow_layer)],
@@ -306,6 +315,7 @@ impl Layouts {
             shadow_layer,
             world,
             sky_pipeline,
+            sun_pipeline,
             shadow_pipeline,
             shaders,
             sky_shader,
@@ -347,36 +357,56 @@ impl Layouts {
 
     /// A target's pipeline set, before any world pipeline is prepared.
     pub fn pipelines(&self, device: &wgpu::Device, target: ColorTarget) -> Pipelines {
-        let sky = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("render-wgpu sky"),
-            layout: Some(&self.sky_pipeline),
-            vertex: wgpu::VertexState {
-                module: &self.sky_shader,
-                entry_point: Some("vs_sky"),
-                compilation_options: Default::default(),
-                buffers: &[],
-            },
-            primitive: Default::default(),
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: DEPTH_FORMAT,
-                depth_write_enabled: Some(false),
-                depth_compare: Some(wgpu::CompareFunction::Always),
-                stencil: Default::default(),
-                bias: Default::default(),
-            }),
-            multisample: target.multisample(),
-            fragment: Some(wgpu::FragmentState {
-                module: &self.sky_shader,
-                entry_point: Some("fs_sky"),
-                compilation_options: Default::default(),
-                targets: &[Some(target.format.into())],
-            }),
-            multiview_mask: None,
-            cache: None,
-        });
+        let background = |label, layout, fragment, blend| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some(label),
+                layout: Some(layout),
+                vertex: wgpu::VertexState {
+                    module: &self.sky_shader,
+                    entry_point: Some("vs_sky"),
+                    compilation_options: Default::default(),
+                    buffers: &[],
+                },
+                primitive: Default::default(),
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: DEPTH_FORMAT,
+                    depth_write_enabled: Some(false),
+                    depth_compare: Some(wgpu::CompareFunction::Always),
+                    stencil: Default::default(),
+                    bias: Default::default(),
+                }),
+                multisample: target.multisample(),
+                fragment: Some(wgpu::FragmentState {
+                    module: &self.sky_shader,
+                    entry_point: Some(fragment),
+                    compilation_options: Default::default(),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: target.format,
+                        blend,
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                }),
+                multiview_mask: None,
+                cache: None,
+            })
+        };
+        let added = wgpu::BlendComponent {
+            src_factor: wgpu::BlendFactor::One,
+            dst_factor: wgpu::BlendFactor::One,
+            operation: wgpu::BlendOperation::Add,
+        };
         Pipelines {
             target,
-            sky,
+            sky: background("render-wgpu sky", &self.sky_pipeline, "fs_sky", None),
+            sun: background(
+                "render-wgpu sun",
+                &self.sun_pipeline,
+                "fs_sun",
+                Some(wgpu::BlendState {
+                    color: added,
+                    alpha: added,
+                }),
+            ),
             world: HashMap::new(),
         }
     }

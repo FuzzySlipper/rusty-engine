@@ -177,6 +177,45 @@ pub struct ColorGradingDescriptor {
     pub saturation: f32,
 }
 
+/// The air: distance fog thinning with height and brightening toward the
+/// sun, and the sun drawn in the sky. The sun is the brightest enabled
+/// directional light of the world. Zero leaves each part out.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AtmosphereDescriptor {
+    /// The height (render world y) where the fog has its set density.
+    pub fog_base_height: f32,
+    /// The height over which the fog thins by `e`; 0 for fog of one
+    /// density at every height.
+    pub fog_falloff_height: f32,
+    /// Linear RGB the fog turns toward when looking at the sun.
+    pub haze_color: [f32; 3],
+    /// How tightly the haze gathers around the sun (a power of the cosine
+    /// between the view ray and the sun); 0 for no haze.
+    pub haze_exponent: f32,
+    /// The sun disc's angular radius in degrees; 0 for none.
+    pub sun_radius_degrees: f32,
+    /// The glow around the sun; 0 for none.
+    pub sun_halo: f32,
+}
+
+impl AtmosphereDescriptor {
+    /// The largest sun disc radius a product may set, in degrees.
+    pub const MAX_SUN_RADIUS_DEGREES: f32 = 20.0;
+
+    /// Finite values: a non-negative falloff, haze colour, exponent and
+    /// halo, and a sun radius within `0..=MAX_SUN_RADIUS_DEGREES`.
+    pub fn valid(&self) -> bool {
+        let non_negative = |value: f32| value.is_finite() && value >= 0.0;
+        self.fog_base_height.is_finite()
+            && non_negative(self.fog_falloff_height)
+            && self.haze_color.iter().all(|&value| non_negative(value))
+            && non_negative(self.haze_exponent)
+            && (0.0..=Self::MAX_SUN_RADIUS_DEGREES).contains(&self.sun_radius_degrees)
+            && non_negative(self.sun_halo)
+    }
+}
+
 impl ColorGradingDescriptor {
     /// Every control finite and within -1 to 1.
     pub fn valid(&self) -> bool {
@@ -520,6 +559,11 @@ pub enum RenderDiff {
     SetColorGrading {
         color_grading: Option<ColorGradingDescriptor>,
     },
+    /// Selects the atmosphere: height fog, sun haze and the sun in the sky;
+    /// None turns it off.
+    SetAtmosphere {
+        atmosphere: Option<AtmosphereDescriptor>,
+    },
     DefineSpriteAtlas {
         atlas: SpriteAtlasDescriptor,
     },
@@ -666,6 +710,10 @@ impl RenderDiff {
                 color_grading: Some(color_grading),
             } if !color_grading.valid() => Err(RenderOperationError::ColorGrading),
             Self::SetColorGrading { .. } => Ok(()),
+            Self::SetAtmosphere {
+                atmosphere: Some(atmosphere),
+            } if !atmosphere.valid() => Err(RenderOperationError::Atmosphere),
+            Self::SetAtmosphere { .. } => Ok(()),
             Self::DefineSpriteAtlas { atlas } => {
                 atlas.validate().map_err(RenderOperationError::SpriteAtlas)
             }
@@ -765,6 +813,7 @@ impl RenderDiff {
             | Self::SetBloom { .. }
             | Self::SetAutoExposure { .. }
             | Self::SetColorGrading { .. }
+            | Self::SetAtmosphere { .. }
             | Self::DefineSpriteAtlas { .. }
             | Self::DefineStaticMesh { .. }
             | Self::ReleaseMaterial { .. }
@@ -804,6 +853,7 @@ pub enum RenderOperationError {
     Bloom,
     AutoExposure,
     ColorGrading,
+    Atmosphere,
     SpriteAtlas(crate::SpriteAtlasError),
     StaticMesh(crate::StaticMeshError),
     StaticMeshInstance(crate::StaticMeshInstanceError),
@@ -875,6 +925,7 @@ impl RenderFrameDiff {
                 | RenderDiff::SetBloom { .. }
                 | RenderDiff::SetAutoExposure { .. }
                 | RenderDiff::SetColorGrading { .. }
+                | RenderDiff::SetAtmosphere { .. }
                 | RenderDiff::DefineSpriteAtlas { .. }
                 | RenderDiff::ReleaseSpriteAtlas { .. }
                 | RenderDiff::ReleaseStaticMesh { .. }

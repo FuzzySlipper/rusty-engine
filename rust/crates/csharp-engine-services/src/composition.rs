@@ -195,6 +195,7 @@ fn engine_api(
             set_bloom: crate::camera_view::set_bloom,
             set_auto_exposure: crate::camera_view::set_auto_exposure,
             set_color_grading: crate::camera_view::set_color_grading,
+            set_atmosphere: crate::camera_view::set_atmosphere,
             set_viewport_anchor: crate::camera_view::set_viewport_anchor,
             read_surface: crate::camera_view::read_surface,
             read_viewport_anchor: crate::camera_view::read_viewport_anchor,
@@ -1546,6 +1547,89 @@ mod tests {
                     auto_exposure: None
                 },
             ]
+        );
+    }
+
+    #[test]
+    fn the_atmosphere_publishes_as_retained_environment_and_all_zero_turns_it_off() {
+        use crate::operation_diagnostics::{empty_receipt, receipt_codes};
+        let mut services = EngineServiceSet::new(
+            parse_runtime_appearance_catalog(None).expect("default catalog"),
+            BTreeMap::new(),
+            None,
+            RuntimeDiagnosticsSink::new(Default::default()).unwrap(),
+        )
+        .expect("service set");
+        let request = |falloff: f32, radius: f32| NativeAtmosphereRequest {
+            fog_base_height: 40.0,
+            fog_falloff_height: falloff,
+            haze_color: NativeColor {
+                r: 1.0,
+                g: 0.6,
+                b: 0.3,
+                a: 1.0,
+            },
+            haze_exponent: 8.0,
+            sun_radius_degrees: radius,
+            sun_halo: 0.4,
+        };
+        services.begin_call(binding());
+        let api = services.api();
+        let set = |request: NativeAtmosphereRequest, refusal| unsafe {
+            (api.camera_view.set_atmosphere)(api.camera_view.context, &request, refusal)
+        };
+        assert_eq!(set(request(25.0, 1.5), std::ptr::null_mut()), ABI_OK);
+        let mut call = services.finish_call().expect("atmosphere call");
+        let selected = render_model::RenderDiff::SetAtmosphere {
+            atmosphere: Some(render_model::AtmosphereDescriptor {
+                fog_base_height: 40.0,
+                fog_falloff_height: 25.0,
+                haze_color: [1.0, 0.6, 0.3],
+                haze_exponent: 8.0,
+                sun_radius_degrees: 1.5,
+                sun_halo: 0.4,
+            }),
+        };
+        assert_eq!(
+            call.take_output().frames[0].ops,
+            std::slice::from_ref(&selected)
+        );
+        let attachment = services
+            .snapshot_outputs(binding())
+            .expect("fresh attachment");
+        let CsharpAppearanceCallOutput::Frame(frame) = &attachment.appearance[0] else {
+            panic!("baseline graphics frame");
+        };
+        assert!(frame.ops.contains(&selected));
+
+        services.begin_call(binding());
+        let api = services.api();
+        let set = |request: NativeAtmosphereRequest, refusal| unsafe {
+            (api.camera_view.set_atmosphere)(api.camera_view.context, &request, refusal)
+        };
+        for refused in [request(-1.0, 1.0), request(10.0, 30.0)] {
+            let mut refusal = empty_receipt();
+            assert_eq!(set(refused, &mut refusal), 0);
+            assert_eq!(receipt_codes(&refusal), ["CSHARP_ATMOSPHERE"]);
+        }
+        let off = NativeAtmosphereRequest {
+            fog_base_height: 0.0,
+            fog_falloff_height: 0.0,
+            haze_color: NativeColor {
+                r: 0.0,
+                g: 0.0,
+                b: 0.0,
+                a: 0.0,
+            },
+            haze_exponent: 0.0,
+            sun_radius_degrees: 0.0,
+            sun_halo: 0.0,
+        };
+        assert_eq!(set(off, std::ptr::null_mut()), ABI_OK);
+        let mut call = services.finish_call().expect("off");
+        assert_eq!(
+            call.take_output().frames[0].ops,
+            [render_model::RenderDiff::SetAtmosphere { atmosphere: None }]
         );
     }
 

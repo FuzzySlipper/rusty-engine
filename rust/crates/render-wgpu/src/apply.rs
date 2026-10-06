@@ -122,6 +122,9 @@ impl Renderer {
             RenderDiff::SetColorGrading { color_grading } => {
                 self.tables.color_grading = *color_grading;
             }
+            RenderDiff::SetAtmosphere { atmosphere } => {
+                self.tables.atmosphere = *atmosphere;
+            }
             RenderDiff::SetToneMapping { tone_mapping } => {
                 self.tables.tone_mapping = *tone_mapping;
             }
@@ -1927,6 +1930,7 @@ fn op_name(op: &RenderDiff) -> &'static str {
         RenderDiff::SetBloom { .. } => "setBloom",
         RenderDiff::SetAutoExposure { .. } => "setAutoExposure",
         RenderDiff::SetColorGrading { .. } => "setColorGrading",
+        RenderDiff::SetAtmosphere { .. } => "setAtmosphere",
         RenderDiff::SetToneMapping { .. } => "setToneMapping",
         RenderDiff::DefineSpriteAtlas { .. } => "defineSpriteAtlas",
         RenderDiff::ReleaseSpriteAtlas { .. } => "releaseSpriteAtlas",
