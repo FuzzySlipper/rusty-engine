@@ -243,6 +243,14 @@ impl ProductBundle {
         self.renderer_lighting.ambient_occlusion
     }
 
+    pub(super) fn clustered_lighting(&self) -> bool {
+        self.renderer_lighting.clustered_lighting
+    }
+
+    pub(super) fn gpu_culling(&self) -> bool {
+        self.renderer_lighting.gpu_culling
+    }
+
     pub(super) fn shadows_enabled(&self) -> bool {
         self.renderer_lighting.shadows
     }
@@ -563,6 +571,8 @@ struct ManifestRenderer {
     presentation_aspect: Option<ManifestPresentationAspect>,
     #[serde(default)]
     lighting: ManifestRendererLighting,
+    #[serde(default)]
+    gpu_culling: Option<String>,
 }
 #[derive(Debug, Clone, Copy, Deserialize)]
 struct ManifestPresentationAspect {
@@ -584,6 +594,8 @@ struct ManifestRendererLighting {
     shadow_budget: Option<u32>,
     #[serde(default)]
     ambient_occlusion: Option<ManifestAmbientOcclusion>,
+    #[serde(default)]
+    clustered_lighting: Option<String>,
     #[serde(default)]
     default_lights: ManifestDefaultLights,
 }
@@ -633,6 +645,8 @@ struct ProductRendererLighting {
     shadows: bool,
     shadow_budget: Option<u32>,
     ambient_occlusion: render_wgpu::AmbientOcclusion,
+    clustered_lighting: bool,
+    gpu_culling: bool,
     world: ProductDefaultLights,
     viewmodel: ProductDefaultLights,
 }
@@ -663,10 +677,11 @@ impl ProductRendererLighting {
                 let path = match ambient_occlusion.mode.as_str() {
                     "disabled" => render_wgpu::AmbientOcclusionPath::Off,
                     "enabled" => render_wgpu::AmbientOcclusionPath::Raster,
+                    "distanceField" => render_wgpu::AmbientOcclusionPath::DistanceField,
                     _ => {
                         return Err(field_error(
                             "renderer.lighting.ambientOcclusion.mode",
-                            "must be enabled or disabled",
+                            "must be enabled, distanceField or disabled",
                         ))
                     }
                 };
@@ -682,10 +697,32 @@ impl ProductRendererLighting {
                 }
             }
         };
+        let clustered_lighting = match value.lighting.clustered_lighting.as_deref() {
+            None | Some("disabled") => false,
+            Some("enabled") => true,
+            Some(_) => {
+                return Err(field_error(
+                    "renderer.lighting.clusteredLighting",
+                    "must be enabled or disabled",
+                ))
+            }
+        };
+        let gpu_culling = match value.gpu_culling.as_deref() {
+            None | Some("disabled") => false,
+            Some("enabled") => true,
+            Some(_) => {
+                return Err(field_error(
+                    "renderer.gpuCulling",
+                    "must be enabled or disabled",
+                ))
+            }
+        };
         Ok(Self {
             shadows,
             shadow_budget: value.lighting.shadow_budget.filter(|&budget| budget > 0),
             ambient_occlusion,
+            clustered_lighting,
+            gpu_culling,
             world: ProductDefaultLights::parse(
                 value.lighting.default_lights.world,
                 "renderer.lighting.defaultLights.world",
@@ -1114,6 +1151,18 @@ mod tests {
             &path,
             original.replace(
                 marker,
+                "\"renderer\":{\"lighting\":{\"ambientOcclusion\":{\"mode\":\"distanceField\",\"strength\":1}}}",
+            ),
+        )
+        .unwrap();
+        assert_eq!(
+            read(&root).unwrap().ambient_occlusion().path,
+            render_wgpu::AmbientOcclusionPath::DistanceField
+        );
+        fs::write(
+            &path,
+            original.replace(
+                marker,
                 "\"renderer\":{\"lighting\":{\"ambientOcclusion\":{\"mode\":\"always\"}}}",
             ),
         )
@@ -1121,6 +1170,58 @@ mod tests {
         assert!(read(&root)
             .unwrap_err()
             .contains("renderer.lighting.ambientOcclusion.mode"));
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn reads_and_validates_gpu_culling_selection() {
+        let root = fixture_root("gpu-culling");
+        write_manifest(&root, "native/product.so");
+        let path = root.join(PRODUCT_MANIFEST_NAME);
+        let original = fs::read_to_string(&path).unwrap();
+        assert!(!read(&root).unwrap().gpu_culling(), "absent: CPU");
+        let marker = "\"uiProjection\":{\"expectedStream\":\"fixture.terrain\",\"expectedContract\":\"fixture.terrain.v1\"}";
+        fs::write(
+            &path,
+            original.replace(marker, "\"renderer\":{\"gpuCulling\":\"enabled\"}"),
+        )
+        .unwrap();
+        assert!(read(&root).unwrap().gpu_culling());
+        fs::write(
+            &path,
+            original.replace(marker, "\"renderer\":{\"gpuCulling\":\"maybe\"}"),
+        )
+        .unwrap();
+        assert!(read(&root).unwrap_err().contains("renderer.gpuCulling"));
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn reads_and_validates_clustered_lighting_selection() {
+        let root = fixture_root("clustered-lighting");
+        write_manifest(&root, "native/product.so");
+        let path = root.join(PRODUCT_MANIFEST_NAME);
+        let original = fs::read_to_string(&path).unwrap();
+        assert!(!read(&root).unwrap().clustered_lighting(), "absent: loop");
+        let marker = "\"uiProjection\":{\"expectedStream\":\"fixture.terrain\",\"expectedContract\":\"fixture.terrain.v1\"}";
+        fs::write(
+            &path,
+            original.replace(
+                marker,
+                "\"renderer\":{\"lighting\":{\"clusteredLighting\":\"enabled\"}}",
+            ),
+        )
+        .unwrap();
+        assert!(read(&root).unwrap().clustered_lighting());
+        fs::write(
+            &path,
+            original.replace(
+                marker,
+                "\"renderer\":{\"lighting\":{\"clusteredLighting\":\"sometimes\"}}",
+            ),
+        )
+        .unwrap();
+        assert!(read(&root)
+            .unwrap_err()
+            .contains("renderer.lighting.clusteredLighting"));
         fs::remove_dir_all(root).unwrap();
     }
     #[test]

@@ -26,6 +26,12 @@ struct Frame {
     // Colour grading: x the contrast exponent about middle grey, y the
     // saturation factor.
     grading: vec4<f32>,
+    // Clustered lighting (`light_clusters.wgsl`): xyz: tiles across, tiles
+    // down, depth slices; w: 1 when this pass's lights are read from the
+    // clusters, 0 when they are looped over.
+    cluster_grid: vec4<u32>,
+    // x: near plane, y: far plane, z: ln(far / near), w: 1 orthographic.
+    cluster_depth: vec4<f32>,
 };
 
 struct Part {

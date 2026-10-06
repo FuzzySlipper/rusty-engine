@@ -28,6 +28,8 @@ mod capture;
 mod compose;
 mod composition;
 mod convert;
+mod culling;
+mod distance_fields;
 mod driver;
 mod effects;
 mod finish;
@@ -36,6 +38,7 @@ mod ghost;
 mod glb;
 mod gpu;
 mod labels;
+mod light_clusters;
 mod particles;
 mod pipelines;
 mod post;
@@ -78,10 +81,13 @@ pub use animated::AnimationFact;
 pub use apply::ApplyIssue;
 pub use camera::CameraSampleReadout;
 pub use composition::{DrawnCamera, TargetReadout, TargetStatus, ViewCompositionReadout};
+pub use culling::GpuCullingReadout;
+pub use distance_fields::DistanceFieldReadout;
 pub use driver::{Capture, SceneChange, SceneDriver, SceneFrame, SceneState, SceneView};
 pub use frame::FrameStats;
 pub use ghost::GhostPlateReadout;
 pub use gpu::{AdapterSummary, ComputeLimits, Gpu, GpuError};
+pub use light_clusters::LightClusterReadout;
 pub use particles::EntityPositions;
 pub use resources::{decode_png_rgba, encode_png, NoResources, ResourceSource};
 pub use surface::{PresentSkip, SurfaceFrame, WindowSurface};
@@ -125,6 +131,10 @@ pub struct GpuReadout {
     /// The timed passes, in frame order.
     pub passes: Vec<GpuPassTiming>,
     pub ambient_occlusion: AmbientOcclusionReadout,
+    /// The chunk field atlas the `DistanceField` occlusion path traces.
+    pub distance_fields: DistanceFieldReadout,
+    pub light_clusters: LightClusterReadout,
+    pub gpu_culling: GpuCullingReadout,
 }
 
 /// Host choices that are not part of the retained model.
@@ -147,6 +157,16 @@ pub struct RendererOptions {
     /// (`renderer.lighting.ambientOcclusion` in a product's manifest). Off by
     /// default.
     pub ambient_occlusion: AmbientOcclusion,
+    /// Bin a world view's lights into a cluster grid before its pass and
+    /// shade each fragment from its cluster (`light_clusters.rs`), instead of
+    /// looping over every light. Off by default; a device without compute
+    /// shaders loops regardless.
+    pub clustered_lighting: bool,
+    /// Test each view's opaque parts against its frustum on the GPU and
+    /// draw them indirectly (`culling.rs`), instead of building the draw
+    /// list on the CPU each time the camera moves. Off by default; a device
+    /// without indirect draws keeps the CPU list regardless.
+    pub gpu_culling: bool,
 }
 
 impl Default for RendererOptions {
@@ -157,6 +177,8 @@ impl Default for RendererOptions {
             shadows: false,
             shadow_budget: None,
             ambient_occlusion: AmbientOcclusion::default(),
+            clustered_lighting: false,
+            gpu_culling: false,
         }
     }
 }
@@ -211,6 +233,9 @@ pub struct Renderer {
     ambient_occlusion: ambient_occlusion::AmbientOcclusionPass,
     /// The world's HDR targets and the finish pass.
     finish: finish::Finish,
+    distance_fields: distance_fields::DistanceFields,
+    light_clusters: light_clusters::LightClusters,
+    culling: culling::GpuCulling,
     composition: composition::ViewComposition,
     effects: effects::Effects,
     particles: particles::Particles,
@@ -236,6 +261,22 @@ impl Renderer {
         let instances_buffer =
             frame::storage_buffer(device, "render-wgpu instances", INITIAL_INSTANCES_BYTES);
         let shadows = shadows::ShadowMaps::new(device, &layouts.shadow_layer);
+        let light_clusters = light_clusters::LightClusters::new(
+            gpu,
+            pipelines::standard(layouts.shaders.module(
+                device,
+                Entry::LightClusters,
+                Features::default(),
+            )),
+        );
+        let culling = culling::GpuCulling::new(
+            gpu,
+            pipelines::standard(
+                layouts
+                    .shaders
+                    .module(device, Entry::Cull, Features::default()),
+            ),
+        );
         let frame_bind_group = frame::frame_bind_group(
             device,
             &layouts.frame,
@@ -245,6 +286,7 @@ impl Renderer {
                 lights: &lights_buffer,
                 instances: &instances_buffer,
                 shadows: &shadows,
+                clusters: &light_clusters.clusters,
             },
         );
         let caster_bind_group = frame::caster_bind_group(
@@ -288,6 +330,14 @@ impl Renderer {
             ambient_occlusion_shader,
             &layouts.ambient_occlusion,
         );
+        let distance_fields = distance_fields::DistanceFields::new(
+            gpu,
+            pipelines::standard(layouts.shaders.module(
+                device,
+                Entry::DistanceField,
+                Features::default(),
+            )),
+        );
         let mut renderer = Self {
             gpu: gpu.clone(),
             options,
@@ -325,6 +375,9 @@ impl Renderer {
             compose: compose::Compose::new(device, compose_shader),
             ambient_occlusion,
             finish,
+            distance_fields,
+            light_clusters,
+            culling,
             composition: Default::default(),
             effects,
             particles: Default::default(),
@@ -394,8 +447,12 @@ impl Renderer {
                 .timings()
                 .into_iter()
                 .chain(self.finish.timings())
+                .chain([self.light_clusters.timing(), self.culling.timing()])
                 .collect(),
             ambient_occlusion: self.ambient_occlusion.readout(),
+            distance_fields: self.distance_fields.readout(),
+            light_clusters: self.light_clusters.readout(),
+            gpu_culling: self.culling.readout(),
         }
     }
 

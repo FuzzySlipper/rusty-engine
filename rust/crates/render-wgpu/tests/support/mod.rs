@@ -181,6 +181,7 @@ pub fn payload(
         .collect();
     MeshPayloadDescriptor {
         texture_space: None,
+        distance_field: None,
         layout: MeshBufferLayout {
             vertex_count: (positions.len() / 3) as u32,
             index_count: indices.len() as u32,

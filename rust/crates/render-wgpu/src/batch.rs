@@ -98,6 +98,11 @@ impl Frustum {
         Self([r3 + r0, r3 - r0, r3 + r1, r3 - r1, r2, r3 - r2])
     }
 
+    /// The planes, for a GPU cull.
+    pub fn planes(&self) -> &[Vec4; 6] {
+        &self.0
+    }
+
     /// Whether any part of the box may be inside (conservative).
     pub fn intersects(&self, bounds: &Aabb) -> bool {
         if bounds.is_empty() {
@@ -150,6 +155,61 @@ pub(crate) fn view_list(
 /// (sort bucket, features (opaque passes), order within the bucket, part,
 /// pass the part draws with)
 type Entry = (Pass, Features, u32, PartId, Pass);
+
+/// The opaque parts a view layer may draw, grouped as `view_list` groups
+/// them but not culled: the GPU cull (`culling.rs`) tests each against the
+/// frustum. Rebuilt only when the parts regroup.
+pub(crate) fn opaque_candidates(parts: &Parts, viewmodel: bool, base: u32) -> DrawList {
+    let mut entries: Vec<Entry> = Vec::new();
+    for (id, state) in parts.state.iter().enumerate() {
+        if parts.meta[id].is_none()
+            || !state.shown
+            || (state.layer == RenderLayer::Viewmodel) != viewmodel
+        {
+            continue;
+        }
+        let pass = Pass::of(state.class, state.mirrored);
+        if pass.blends() {
+            continue;
+        }
+        entries.push((pass, state.class.features, state.key, id as PartId, pass));
+    }
+    group(parts, entries, base)
+}
+
+/// The blended parts a view pass sees, back to front from `eye`: the CPU
+/// keeps these beside GPU-culled opaque candidates, since their order is
+/// the camera's.
+pub(crate) fn blended_list(
+    parts: &Parts,
+    viewmodel: bool,
+    frustum: &Frustum,
+    eye: Vec3,
+    base: u32,
+) -> DrawList {
+    let mut entries: Vec<Entry> = Vec::new();
+    for (id, state) in parts.state.iter().enumerate() {
+        if parts.meta[id].is_none()
+            || !state.shown
+            || (state.layer == RenderLayer::Viewmodel) != viewmodel
+        {
+            continue;
+        }
+        let pass = Pass::of(state.class, state.mirrored);
+        if !pass.blends() || !frustum.intersects(&state.world_bounds) {
+            continue;
+        }
+        let center = (state.world_bounds.min + state.world_bounds.max) * 0.5;
+        entries.push((
+            pass.bucket(),
+            Features::default(),
+            u32::MAX - center.distance_squared(eye).to_bits(),
+            id as PartId,
+            pass,
+        ));
+    }
+    group(parts, entries, base)
+}
 
 /// Parts that may cast shadows: every shown triangle part of the scene layer.
 pub(crate) fn caster_candidates(parts: &Parts) -> Vec<PartId> {

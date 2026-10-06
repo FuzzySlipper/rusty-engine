@@ -4,10 +4,10 @@ use core_space::Direction6;
 use engine_spatial::{VoxelCollisionScene, VoxelMeshChunk};
 use render_model::{
     Geometry, Material, MeshAttribute, MeshAttributeKind, MeshAttributeName, MeshBoundsDescriptor,
-    MeshBufferLayout, MeshGroupDescriptor, MeshIndexWidth, MeshPayloadDescriptor,
-    MeshPayloadSource, MeshProvenance, MeshTextureSpace, RenderDiff, RenderFrameDiff,
-    RenderFramePublication, RenderHandle, RenderLayer, RenderMaterialDescriptor, RenderMetadata,
-    RenderNode, Transform,
+    MeshBufferLayout, MeshDistanceField, MeshGroupDescriptor, MeshIndexWidth,
+    MeshPayloadDescriptor, MeshPayloadSource, MeshProvenance, MeshTextureSpace, RenderDiff,
+    RenderFrameDiff, RenderFramePublication, RenderHandle, RenderLayer, RenderMaterialDescriptor,
+    RenderMetadata, RenderNode, Transform,
 };
 
 use crate::{HandleAllocationError, RenderHandleNamespace, StableHandleRegistry};
@@ -63,6 +63,7 @@ impl VoxelMaterialSlotMapping {
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct ChunkSnapshot {
     content_hash: u64,
+    field_hash: u64,
     translation: [f32; 3],
 }
 
@@ -531,6 +532,7 @@ impl ChunkProjection<'_> {
             coord,
             ChunkSnapshot {
                 content_hash: chunk.content_hash,
+                field_hash: chunk.field_hash,
                 translation: chunk.translation,
             },
         );
@@ -559,6 +561,12 @@ impl ChunkProjection<'_> {
                 handle,
                 payload: voxel_mesh_payload_with_material_slots(chunk, self.slots),
             });
+        } else if previous.is_some_and(|previous| previous.field_hash != chunk.field_hash) {
+            // A neighbour's edit reached the field, not the mesh.
+            if let Some(field) = chunk_distance_field(chunk) {
+                self.operations
+                    .push(RenderDiff::ReplaceMeshDistanceField { handle, field });
+            }
         }
         // A rebuilt chunk can also move (a world-origin rebase does both).
         if previous.is_some_and(|previous| previous.translation != chunk.translation) {
@@ -814,6 +822,7 @@ fn voxel_mesh_payload_with_material_slots(
             cell_size: chunk.voxel_size,
             origin: chunk.origin_voxel.map(|cell| cell as f32),
         }),
+        distance_field: chunk_distance_field(chunk),
     }
 }
 
@@ -836,6 +845,16 @@ pub(crate) fn draw_groups(
         }
     }
     drawn
+}
+
+/// A chunk's field over its box, when the mesher made one.
+fn chunk_distance_field(chunk: &VoxelMeshChunk) -> Option<MeshDistanceField> {
+    (!chunk.distance_field.is_empty()).then(|| MeshDistanceField {
+        cells: engine_spatial::distance_field::FIELD_CELLS as u32,
+        origin: [0.0; 3],
+        extent: chunk.size.map(|voxels| voxels as f32 * chunk.voxel_size),
+        data: chunk.distance_field.clone(),
+    })
 }
 
 pub fn voxel_material_id(slot: u16) -> String {

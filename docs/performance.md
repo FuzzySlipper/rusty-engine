@@ -75,13 +75,14 @@ rusty-scene-render scene.rscene out.png --width 1280 --height 720 --frames 600
 
 It prints the adapter, the time to open and apply the snapshot, the mean
 and median milliseconds of the extra frames, each with readback, and the
-`gpu` pass medians. `--ambient-occlusion off|compute|raster` draws the
-snapshot with that ambient occlusion path, to compare the paths on one
-scene. Compare snapshots drawn on the same adapter; `WGPU_BACKEND` selects
-it as for any wgpu program. A still camera reuses work a moving one repeats
-(culled lists, a directional light's shadow cascades): add `--walk M` or
-`--turn D` to move the snapshot's camera M metres forward or D degrees right
-before each extra frame.
+`gpu` pass medians. `--ambient-occlusion off|compute|raster|field` draws the
+snapshot with that ambient occlusion path (`field` cone-traces the voxel
+chunks' distance fields), to compare the paths on one scene. Compare
+snapshots drawn on the same adapter; `WGPU_BACKEND` selects it as for any
+wgpu program. A still camera reuses work a moving one repeats (culled lists,
+a directional light's shadow cascades): add `--walk M` or `--turn D` to move
+the snapshot's camera M metres forward or D degrees right before each extra
+frame.
 
 Trusted product code reads the same statistics (`ProductHostRendererStatistics`
 in `product-host`) as UTF-8 JSON bytes through

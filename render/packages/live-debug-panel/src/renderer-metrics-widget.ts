@@ -130,8 +130,10 @@ function renderSummary(root: HTMLElement, summary: ProductHostRendererStatus): v
   const gpu = renderer.gpu;
   const occlusion = gpu.ambientOcclusion;
   const passes = gpu.passes.map((pass) => `${pass.pass} ${milliseconds(pass.medianGpuMs)} over ${String(pass.timedFrames)} frames`);
+  const fields = gpu.distanceFields;
   lines.push(
     `Ambient occlusion: ${occlusion.path}${occlusion.computeRefused === undefined ? '' : ` (compute refused: ${occlusion.computeRefused})`}`,
+    `Distance fields: ${String(fields.residentFields)} resident in ${String(fields.atlasBricks)} bricks | ${String(fields.lookupEntries)} around the camera${fields.refused === undefined ? '' : ` (refused: ${fields.refused})`}`,
     `GPU passes: ${gpu.timestamps ? passes.join(' | ') : 'untimed (no timestamp queries)'}`,
   );
   const skipped = Object.entries(renderer.skippedOps).map(([op, count]) => `${op} ×${String(count)}`);

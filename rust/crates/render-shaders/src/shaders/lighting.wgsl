@@ -5,7 +5,7 @@
 // with no tone mapping; the sRGB target encodes the output.
 
 #import rusty::types::PI
-#import rusty::view::{frame, lights, shadow_maps, shadow_sampler, shadow_views}
+#import rusty::view::{frame, lights, shadow_maps, shadow_sampler, shadow_views, clusters}
 
 // The shadow atlas page's side in texels (`shadows.rs` PAGE_SIZE).
 const SHADOW_PAGE_SIZE: f32 = 2048.0;
@@ -18,6 +18,9 @@ const CASCADE_BLEND: f32 = 0.1;
 // texels at the receiver: a texel spans more depth than a surface's offset
 // to its back faces, so without it lit surfaces shadow themselves.
 const SHADOW_NORMAL_OFFSET: f32 = 1.5;
+
+// `light_clusters::CLUSTER_STRIDE`.
+const CLUSTER_STRIDE: u32 = 64u;
 
 fn distance_attenuation(distance: f32, range: f32, decay: f32) -> f32 {
     var falloff = 1.0 / max(pow(distance, decay), 0.01);
@@ -177,28 +180,45 @@ fn environment_brdf(f0: vec3<f32>, roughness: f32, n_dot_v: f32) -> vec3<f32> {
     return f0 * ab.x + ab.y;
 }
 
-// Diffuse plus GGX specular from every light row of the pass, before
-// emission. `occlusion` scales the ambient and hemisphere (indirect) light
-// only, as does an ambient light's sky layer. Metals tint specular and lose diffuse; they reflect ambient and
-// hemisphere light as a uniform environment (the hemisphere along the
-// reflection), while dielectrics take that light as diffuse only.
-fn standard_radiance(
-    albedo: vec3<f32>,
+// The cluster of a world position in this pass's grid: its screen tile and
+// its depth slice (exponential between near and far; linear when
+// orthographic).
+fn fragment_cluster(world_position: vec3<f32>) -> u32 {
+    let grid = frame.cluster_grid;
+    let clip = frame.view_proj * vec4<f32>(world_position, 1.0);
+    let ndc = clip.xyz / clip.w;
+    let x = clamp(u32(max(ndc.x * 0.5 + 0.5, 0.0) * f32(grid.x)), 0u, grid.x - 1u);
+    let y = clamp(u32(max(0.5 - ndc.y * 0.5, 0.0) * f32(grid.y)), 0u, grid.y - 1u);
+    let near = frame.cluster_depth.x;
+    let far = frame.cluster_depth.y;
+    var slice: u32;
+    if frame.cluster_depth.w == 1.0 {
+        let distance = near + clamp(ndc.z, 0.0, 1.0) * (far - near);
+        slice = u32((distance - near) / (far - near) * f32(grid.z));
+    } else {
+        let distance = max(clip.w, near);
+        slice = u32(log(distance / near) / frame.cluster_depth.z * f32(grid.z));
+    }
+    slice = clamp(slice, 0u, grid.z - 1u);
+    return (slice * grid.y + y) * grid.x + x;
+}
+
+// One light row's contribution to a fragment's irradiance, specular and
+// environment sums (`standard_radiance`).
+fn add_light(
+    index: u32,
+    f0: vec3<f32>,
+    view: vec3<f32>,
     normal: vec3<f32>,
     world_position: vec3<f32>,
     roughness: f32,
-    metalness: f32,
     occlusion: f32,
-) -> vec3<f32> {
-    let f0 = mix(vec3<f32>(0.04), albedo, metalness);
-    let view = normalize(frame.camera.xyz - world_position);
-    var irradiance = vec3<f32>(0.0);
-    var specular = vec3<f32>(0.0);
-    // Ambient and hemisphere light seen along the reflection.
-    var environment = vec3<f32>(0.0);
-    let reflected = reflect(-view, normal);
-    for (var index = frame.counts.y; index < frame.counts.y + frame.counts.x; index = index + 1u) {
-        let light = lights[index];
+    reflected: vec3<f32>,
+    irradiance: ptr<function, vec3<f32>>,
+    specular: ptr<function, vec3<f32>>,
+    environment: ptr<function, vec3<f32>>,
+) {
+    let light = lights[index];
         let kind = u32(light.color_kind.w);
         let color = light.color_kind.rgb;
         if kind == 0u {
@@ -207,11 +227,11 @@ fn standard_radiance(
             if sky_layer > 0u {
                 sky = sky_visibility(sky_layer - 1u, world_position, normal);
             }
-            irradiance += color * occlusion * sky;
-            environment += color * occlusion * sky;
+            *irradiance += color * occlusion * sky;
+            *environment += color * occlusion * sky;
         } else if kind == 1u {
-            irradiance += mix(light.extra.rgb, color, 0.5 * normal.y + 0.5) * occlusion;
-            environment += mix(light.extra.rgb, color, 0.5 * reflected.y + 0.5) * occlusion;
+            *irradiance += mix(light.extra.rgb, color, 0.5 * normal.y + 0.5) * occlusion;
+            *environment += mix(light.extra.rgb, color, 0.5 * reflected.y + 0.5) * occlusion;
         } else {
             var direction = -normalize(light.direction_decay.xyz);
             var attenuation = 1.0;
@@ -241,8 +261,49 @@ fn standard_radiance(
                 }
             }
             let incident = color * attenuation * facing;
-            irradiance += incident;
-            specular += incident * brdf_ggx(direction, view, normal, roughness, f0);
+            *irradiance += incident;
+            *specular += incident * brdf_ggx(direction, view, normal, roughness, f0);
+        }
+}
+
+// Diffuse plus GGX specular from every light row of the pass, before
+// emission. `occlusion` scales the ambient and hemisphere (indirect) light
+// only, as does an ambient light's sky layer. Metals tint specular and lose diffuse; they reflect ambient and
+// hemisphere light as a uniform environment (the hemisphere along the
+// reflection), while dielectrics take that light as diffuse only.
+fn standard_radiance(
+    albedo: vec3<f32>,
+    normal: vec3<f32>,
+    world_position: vec3<f32>,
+    roughness: f32,
+    metalness: f32,
+    occlusion: f32,
+) -> vec3<f32> {
+    let f0 = mix(vec3<f32>(0.04), albedo, metalness);
+    let view = normalize(frame.camera.xyz - world_position);
+    var irradiance = vec3<f32>(0.0);
+    var specular = vec3<f32>(0.0);
+    // Ambient and hemisphere light seen along the reflection.
+    var environment = vec3<f32>(0.0);
+    let reflected = reflect(-view, normal);
+    if frame.cluster_grid.w == 1u {
+        // The global list, then the fragment's cluster.
+        let global_base = frame.cluster_grid.x * frame.cluster_grid.y * frame.cluster_grid.z * CLUSTER_STRIDE;
+        let global_count = min(clusters[global_base], CLUSTER_STRIDE - 1u);
+        for (var slot = 0u; slot < global_count; slot = slot + 1u) {
+            add_light(clusters[global_base + 1u + slot], f0, view, normal, world_position, roughness,
+                occlusion, reflected, &irradiance, &specular, &environment);
+        }
+        let base = fragment_cluster(world_position) * CLUSTER_STRIDE;
+        let count = min(clusters[base], CLUSTER_STRIDE - 1u);
+        for (var slot = 0u; slot < count; slot = slot + 1u) {
+            add_light(clusters[base + 1u + slot], f0, view, normal, world_position, roughness,
+                occlusion, reflected, &irradiance, &specular, &environment);
+        }
+    } else {
+        for (var index = frame.counts.y; index < frame.counts.y + frame.counts.x; index = index + 1u) {
+            add_light(index, f0, view, normal, world_position, roughness, occlusion, reflected,
+                &irradiance, &specular, &environment);
         }
     }
     let n_dot_v = clamp(dot(normal, view), 0.0, 1.0);

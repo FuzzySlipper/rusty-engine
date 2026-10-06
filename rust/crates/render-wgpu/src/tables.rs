@@ -102,6 +102,9 @@ pub(crate) struct GpuMesh {
     pub extra: Option<wgpu::Buffer>,
     /// The payload's texture space, for triplanar materials.
     pub texture_space: Option<render_model::MeshTextureSpace>,
+    /// The payload's distance field: its atlas brick and its box in mesh
+    /// space (`distance_fields.rs`).
+    pub distance_field: Option<(u32, crate::distance_fields::FieldBox)>,
     /// Its vertex colours are terrain layer weights, not a tint: a voxel
     /// chunk meshed with terrain layers.
     pub layer_weights: bool,

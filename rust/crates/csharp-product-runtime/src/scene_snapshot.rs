@@ -96,6 +96,12 @@ pub struct SceneSnapshotOptions {
     /// Snapshots written before ambient occlusion existed draw without it.
     #[serde(default)]
     pub ambient_occlusion: SceneSnapshotAmbientOcclusion,
+    /// Snapshots written before clustered lighting existed loop over lights.
+    #[serde(default)]
+    pub clustered_lighting: bool,
+    /// Snapshots written before GPU culling existed cull on the CPU.
+    #[serde(default)]
+    pub gpu_culling: bool,
 }
 
 /// `RendererOptions::ambient_occlusion` as a snapshot keeps it.
@@ -112,6 +118,7 @@ pub enum SceneSnapshotAmbientOcclusionPath {
     Off,
     Compute,
     Raster,
+    DistanceField,
 }
 
 impl Default for SceneSnapshotAmbientOcclusion {
@@ -131,6 +138,9 @@ impl From<SceneSnapshotAmbientOcclusion> for render_wgpu::AmbientOcclusion {
                 SceneSnapshotAmbientOcclusionPath::Raster => {
                     render_wgpu::AmbientOcclusionPath::Raster
                 }
+                SceneSnapshotAmbientOcclusionPath::DistanceField => {
+                    render_wgpu::AmbientOcclusionPath::DistanceField
+                }
             },
             strength: options.strength,
         }
@@ -148,6 +158,9 @@ impl From<render_wgpu::AmbientOcclusion> for SceneSnapshotAmbientOcclusion {
                 render_wgpu::AmbientOcclusionPath::Raster => {
                     SceneSnapshotAmbientOcclusionPath::Raster
                 }
+                render_wgpu::AmbientOcclusionPath::DistanceField => {
+                    SceneSnapshotAmbientOcclusionPath::DistanceField
+                }
             },
             strength: options.strength,
         }
@@ -162,6 +175,8 @@ impl From<SceneSnapshotOptions> for render_wgpu::RendererOptions {
             shadows: options.shadows,
             shadow_budget: options.shadow_budget,
             ambient_occlusion: options.ambient_occlusion.into(),
+            clustered_lighting: options.clustered_lighting,
+            gpu_culling: options.gpu_culling,
         }
     }
 }
@@ -174,6 +189,8 @@ impl From<render_wgpu::RendererOptions> for SceneSnapshotOptions {
             shadows: options.shadows,
             shadow_budget: options.shadow_budget,
             ambient_occlusion: options.ambient_occlusion.into(),
+            clustered_lighting: options.clustered_lighting,
+            gpu_culling: options.gpu_culling,
         }
     }
 }
@@ -392,6 +409,7 @@ mod tests {
         };
         MeshPayloadDescriptor {
             texture_space: None,
+            distance_field: None,
             layout: MeshBufferLayout {
                 vertex_count: 3,
                 index_count: 3,

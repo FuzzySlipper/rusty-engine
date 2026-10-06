@@ -38,8 +38,9 @@ use csharp_engine_services::{
 use product_host::RuntimePublication;
 use product_host::{
     ProductHostAmbientOcclusionPath, ProductHostAmbientOcclusionStatistics,
-    ProductHostComputeLimits, ProductHostDrawingMode, ProductHostDrawnFrame,
-    ProductHostFrameStream, ProductHostGpuPass, ProductHostGpuStatistics,
+    ProductHostComputeLimits, ProductHostDistanceFieldStatistics, ProductHostDrawingMode,
+    ProductHostDrawnFrame, ProductHostFrameStream, ProductHostGpuCullingStatistics,
+    ProductHostGpuPass, ProductHostGpuStatistics, ProductHostLightClusterStatistics,
     ProductHostRendererInspection, ProductHostRendererStatistics, ProductHostShadowStatistics,
     ProductHostStreamMedians, ProductHostStreamStatistics, ProductHostTimedStep,
     ProductHostWindowMedians, ProductHostWindowStatistics,
@@ -765,10 +766,37 @@ fn gpu_statistics(readout: GpuReadout) -> ProductHostGpuStatistics {
                 AmbientOcclusionPath::Off => ProductHostAmbientOcclusionPath::Off,
                 AmbientOcclusionPath::Compute => ProductHostAmbientOcclusionPath::Compute,
                 AmbientOcclusionPath::Raster => ProductHostAmbientOcclusionPath::Raster,
+                AmbientOcclusionPath::DistanceField => {
+                    ProductHostAmbientOcclusionPath::DistanceField
+                }
             },
             compute_refused: ambient_occlusion.compute_refused,
             workgroups: ambient_occlusion.workgroups,
             texture: ambient_occlusion.texture,
+        },
+        distance_fields: ProductHostDistanceFieldStatistics {
+            refused: readout.distance_fields.refused,
+            resident_fields: readout.distance_fields.resident_fields,
+            atlas_bricks: readout.distance_fields.atlas_bricks,
+            atlas_bytes: readout.distance_fields.atlas_bytes,
+            lookup_entries: readout.distance_fields.lookup_entries,
+        },
+        light_clusters: ProductHostLightClusterStatistics {
+            enabled: readout.light_clusters.enabled,
+            refused: readout.light_clusters.refused,
+            grid: readout.light_clusters.grid,
+            cluster_capacity: readout.light_clusters.cluster_stride - 1,
+            binned_lights: readout.light_clusters.binned_lights,
+            global_lights: readout.light_clusters.global_lights,
+            overflowed_clusters: readout.light_clusters.overflowed_clusters,
+        },
+        gpu_culling: ProductHostGpuCullingStatistics {
+            enabled: readout.gpu_culling.enabled,
+            refused: readout.gpu_culling.refused,
+            candidates: readout.gpu_culling.candidates,
+            batches: readout.gpu_culling.batches,
+            visible: readout.gpu_culling.visible,
+            multi_draws: readout.gpu_culling.multi_draws,
         },
     }
 }

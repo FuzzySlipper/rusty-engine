@@ -765,11 +765,40 @@ budget.
 
 ### Screen-space ambient occlusion
 
-`RustyEngineProductAmbientOcclusion` turns screen-space ambient occlusion on
-world views `enabled` or `disabled` (the default);
+`RustyEngineProductAmbientOcclusion` turns ambient occlusion on world views
+`enabled` (screen-space), `distanceField` or `disabled` (the default);
 `RustyEngineProductAmbientOcclusionStrength` scales how far it darkens the
 ambient and hemisphere light: `0` draws without it, `1` (the default) is the
-full occlusion. Direct light,
-unlit materials, blended parts and the viewmodel layer are not darkened. This
-writes `renderer.lighting.ambientOcclusion` in the staged manifest;
+full occlusion. Direct light, unlit materials, blended parts and the
+viewmodel layer are not darkened. This writes
+`renderer.lighting.ambientOcclusion` in the staged manifest;
 `engine.renderer` reports each of its passes' GPU time.
+
+`distanceField` traces cones through the coarse signed distance fields voxel
+chunks publish with their meshes (8³ cells over each chunk, for chunk sizes
+that are multiples of 8), so a wall darkens the floor at its foot whether or
+not the wall is on screen, and a surface's occlusion does not change as the
+camera turns. It needs compute shaders; a device without them takes the
+screen-space path. Only voxel chunks carry fields: static meshes and voxel
+objects neither occlude nor are occluded by them. `engine.renderer` reports
+the field atlas (`distanceFields`) beside the occlusion path.
+
+### Clustered lighting
+
+`RustyEngineProductClusteredLighting` set to `enabled` makes each world view
+bin its lights into a 16×9×24 view-frustum cluster grid in a compute pass,
+so a fragment shades from its cluster's lights instead of every light of the
+pass. The default is `disabled`, which loops; a device without compute
+shaders loops regardless. This writes `renderer.lighting.clusteredLighting`
+in the staged manifest. `engine.renderer` reports the clusters' light counts
+and the binning pass's GPU time.
+
+### GPU culling
+
+`RustyEngineProductGpuCulling` set to `enabled` makes each view test its
+opaque parts against the frustum in a compute pass and draw the visible ones
+through indirect draw arguments, so a camera move no longer rebuilds the
+draw list on the CPU; blended parts still sort on the CPU. The default is
+`disabled`; a device without indirect draws keeps the CPU list regardless.
+This writes `renderer.gpuCulling` in the staged manifest. `engine.renderer`
+reports the candidates, visible instances, batches and the cull's GPU time.

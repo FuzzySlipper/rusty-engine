@@ -827,6 +827,8 @@ impl Arguments {
                 .with_scene_shadows(product.shadows_enabled())
                 .with_shadow_budget(product.shadow_budget())
                 .with_ambient_occlusion(product.ambient_occlusion())
+                .with_clustered_lighting(product.clustered_lighting())
+                .with_gpu_culling(product.gpu_culling())
                 .with_audio_output(product.audio_output)
                 .with_product(&product.id, &product.title);
         }

@@ -88,10 +88,18 @@
          selects the independently configurable world or viewmodel setting. -->
     <RustyEngineProductSceneShadows Condition="'$(RustyEngineProductSceneShadows)' == ''">disabled</RustyEngineProductSceneShadows>
     <RustyEngineProductShadowBudget Condition="'$(RustyEngineProductShadowBudget)' == ''">0</RustyEngineProductShadowBudget>
-    <!-- Screen-space ambient occlusion on world views: enabled or disabled,
-         and its strength from 0 to 1. -->
+    <!-- Ambient occlusion on world views: enabled (screen-space),
+         distanceField or disabled, and its strength (1 is the full
+         occlusion). -->
     <RustyEngineProductAmbientOcclusion Condition="'$(RustyEngineProductAmbientOcclusion)' == ''">disabled</RustyEngineProductAmbientOcclusion>
     <RustyEngineProductAmbientOcclusionStrength Condition="'$(RustyEngineProductAmbientOcclusionStrength)' == ''">1</RustyEngineProductAmbientOcclusionStrength>
+    <!-- Clustered forward shading: world views bin their
+         lights into a view-frustum grid and each fragment shades from its
+         cluster instead of looping over every light. -->
+    <RustyEngineProductClusteredLighting Condition="'$(RustyEngineProductClusteredLighting)' == ''">disabled</RustyEngineProductClusteredLighting>
+    <!-- GPU visibility: each view tests its opaque parts
+         against the frustum in a compute pass and draws them indirectly. -->
+    <RustyEngineProductGpuCulling Condition="'$(RustyEngineProductGpuCulling)' == ''">disabled</RustyEngineProductGpuCulling>
     <RustyEngineProductDefaultWorldLights Condition="'$(RustyEngineProductDefaultWorldLights)' == ''">neutral</RustyEngineProductDefaultWorldLights>
     <RustyEngineProductDefaultViewmodelLights Condition="'$(RustyEngineProductDefaultViewmodelLights)' == ''">neutral</RustyEngineProductDefaultViewmodelLights>
     <!-- Where the runtime draws: streamed to the browser shell, or presented
@@ -125,8 +133,10 @@
            Text="RustyEngineProductUiProjectionStream and RustyEngineProductUiProjectionContract must be declared together." />
     <Error Condition="!$([System.Text.RegularExpressions.Regex]::IsMatch('$(RustyEngineProductSceneShadows)', '\A(enabled|disabled)\z'))" Text="RustyEngineProductSceneShadows must be enabled or disabled." />
     <Error Condition="!$([System.Text.RegularExpressions.Regex]::IsMatch('$(RustyEngineProductShadowBudget)', '\A[0-9]{1,6}\z'))" Text="RustyEngineProductShadowBudget must be a whole number of shadow layers (0 for no limit)." />
-    <Error Condition="!$([System.Text.RegularExpressions.Regex]::IsMatch('$(RustyEngineProductAmbientOcclusion)', '\A(disabled|enabled)\z'))" Text="RustyEngineProductAmbientOcclusion must be enabled or disabled." />
+    <Error Condition="!$([System.Text.RegularExpressions.Regex]::IsMatch('$(RustyEngineProductAmbientOcclusion)', '\A(disabled|enabled|distanceField)\z'))" Text="RustyEngineProductAmbientOcclusion must be enabled, distanceField or disabled." />
     <Error Condition="!$([System.Text.RegularExpressions.Regex]::IsMatch('$(RustyEngineProductAmbientOcclusionStrength)', '\A[0-9]+(\.[0-9]+)?\z'))" Text="RustyEngineProductAmbientOcclusionStrength must be a non-negative number." />
+    <Error Condition="!$([System.Text.RegularExpressions.Regex]::IsMatch('$(RustyEngineProductClusteredLighting)', '\A(enabled|disabled)\z'))" Text="RustyEngineProductClusteredLighting must be enabled or disabled." />
+    <Error Condition="!$([System.Text.RegularExpressions.Regex]::IsMatch('$(RustyEngineProductGpuCulling)', '\A(enabled|disabled)\z'))" Text="RustyEngineProductGpuCulling must be enabled or disabled." />
     <Error Condition="!$([System.Text.RegularExpressions.Regex]::IsMatch('$(RustyEngineProductDefaultWorldLights)', '\A(neutral|disabled)\z'))"
            Text="RustyEngineProductDefaultWorldLights must be neutral or disabled." />
     <Error Condition="!$([System.Text.RegularExpressions.Regex]::IsMatch('$(RustyEngineProductDefaultViewmodelLights)', '\A(neutral|disabled)\z'))"
@@ -266,7 +276,7 @@
       <_RustyEngineManifestMappings>@(RustyEngineProductInputMapping-&gt;'{&quot;id&quot;:&quot;%(Identity)&quot;,&quot;intent&quot;:&quot;%(Intent)&quot;,&quot;trigger&quot;:&quot;%(Trigger)&quot;}', ',')</_RustyEngineManifestMappings>
     </PropertyGroup>
     <WriteLinesToFile File="$(RustyEngineStagedProductDirectory)/product.json" Overwrite="true"
-                      Lines="{&quot;artifact&quot;:&quot;rusty.product.bundle&quot;,&quot;schemaVersion&quot;:1,&quot;product&quot;:{&quot;id&quot;:&quot;$(RustyEngineProductId)&quot;,&quot;title&quot;:&quot;$(RustyEngineProductTitle)&quot;}$(_RustyEngineManifestNativeAot)$(_RustyEngineManifestCoreClr),&quot;ui&quot;:{&quot;root&quot;:&quot;ui&quot;,&quot;entry&quot;:&quot;$(RustyEngineProductUiEntry)&quot;,&quot;assets&quot;:&quot;$(RustyEngineProductUiAssets)&quot;},&quot;content&quot;:{&quot;root&quot;:&quot;content&quot;},&quot;lifecycle&quot;:{&quot;mode&quot;:&quot;$(RustyEngineProductLifecycleMode)&quot;$(_RustyEngineManifestFixedStep)},&quot;input&quot;:{&quot;cursorMode&quot;:&quot;$(RustyEngineProductInputCursorMode)&quot;,&quot;intents&quot;:[$(_RustyEngineManifestIntents)],&quot;mappings&quot;:[$(_RustyEngineManifestMappings)]}$(_RustyEngineManifestUiProjection),&quot;renderer&quot;:{&quot;output&quot;:&quot;$(RustyEngineProductRenderOutput)&quot;$(_RustyEngineManifestPresentationAspect),&quot;lighting&quot;:{&quot;shadows&quot;:&quot;$(RustyEngineProductSceneShadows)&quot;,&quot;shadowBudget&quot;:$(RustyEngineProductShadowBudget),&quot;ambientOcclusion&quot;:{&quot;mode&quot;:&quot;$(RustyEngineProductAmbientOcclusion)&quot;,&quot;strength&quot;:$(RustyEngineProductAmbientOcclusionStrength)},&quot;defaultLights&quot;:{&quot;world&quot;:&quot;$(RustyEngineProductDefaultWorldLights)&quot;,&quot;viewmodel&quot;:&quot;$(RustyEngineProductDefaultViewmodelLights)&quot;}}},&quot;audio&quot;:{&quot;output&quot;:&quot;$(RustyEngineProductAudioOutput)&quot;},&quot;server&quot;:{&quot;bindHost&quot;:&quot;$(RustyEngineProductBindHost)&quot;,&quot;port&quot;:$(RustyEngineProductPort),&quot;liveDebug&quot;:$(RustyEngineProductLiveDebug)}}" />
+                      Lines="{&quot;artifact&quot;:&quot;rusty.product.bundle&quot;,&quot;schemaVersion&quot;:1,&quot;product&quot;:{&quot;id&quot;:&quot;$(RustyEngineProductId)&quot;,&quot;title&quot;:&quot;$(RustyEngineProductTitle)&quot;}$(_RustyEngineManifestNativeAot)$(_RustyEngineManifestCoreClr),&quot;ui&quot;:{&quot;root&quot;:&quot;ui&quot;,&quot;entry&quot;:&quot;$(RustyEngineProductUiEntry)&quot;,&quot;assets&quot;:&quot;$(RustyEngineProductUiAssets)&quot;},&quot;content&quot;:{&quot;root&quot;:&quot;content&quot;},&quot;lifecycle&quot;:{&quot;mode&quot;:&quot;$(RustyEngineProductLifecycleMode)&quot;$(_RustyEngineManifestFixedStep)},&quot;input&quot;:{&quot;cursorMode&quot;:&quot;$(RustyEngineProductInputCursorMode)&quot;,&quot;intents&quot;:[$(_RustyEngineManifestIntents)],&quot;mappings&quot;:[$(_RustyEngineManifestMappings)]}$(_RustyEngineManifestUiProjection),&quot;renderer&quot;:{&quot;output&quot;:&quot;$(RustyEngineProductRenderOutput)&quot;$(_RustyEngineManifestPresentationAspect),&quot;gpuCulling&quot;:&quot;$(RustyEngineProductGpuCulling)&quot;,&quot;lighting&quot;:{&quot;shadows&quot;:&quot;$(RustyEngineProductSceneShadows)&quot;,&quot;shadowBudget&quot;:$(RustyEngineProductShadowBudget),&quot;ambientOcclusion&quot;:{&quot;mode&quot;:&quot;$(RustyEngineProductAmbientOcclusion)&quot;,&quot;strength&quot;:$(RustyEngineProductAmbientOcclusionStrength)},&quot;clusteredLighting&quot;:&quot;$(RustyEngineProductClusteredLighting)&quot;,&quot;defaultLights&quot;:{&quot;world&quot;:&quot;$(RustyEngineProductDefaultWorldLights)&quot;,&quot;viewmodel&quot;:&quot;$(RustyEngineProductDefaultViewmodelLights)&quot;}}},&quot;audio&quot;:{&quot;output&quot;:&quot;$(RustyEngineProductAudioOutput)&quot;},&quot;server&quot;:{&quot;bindHost&quot;:&quot;$(RustyEngineProductBindHost)&quot;,&quot;port&quot;:$(RustyEngineProductPort),&quot;liveDebug&quot;:$(RustyEngineProductLiveDebug)}}" />
   </Target>
 
   <!-- The directories of the projects the product references, directly or

@@ -196,6 +196,7 @@ pub fn payload(positions: Vec<f32>, normals: Vec<f32>, indices: Vec<u32>) -> Mes
     };
     MeshPayloadDescriptor {
         texture_space: None,
+        distance_field: None,
         layout: MeshBufferLayout {
             vertex_count: (positions.len() / 3) as u32,
             index_count: indices.len() as u32,
