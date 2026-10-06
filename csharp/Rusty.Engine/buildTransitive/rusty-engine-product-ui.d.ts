@@ -358,6 +358,35 @@ declare module "@rusty-engine/live-debug/internal/live-debug-client/src/generate
      * A JSON u64 represented as canonical decimal text.
      */
     export type CanonicalU64 = string;
+    export type ProductHostAmbientOcclusionPath = "off" | "compute" | "raster";
+    /**
+     * The screen-space ambient occlusion of the last world view.
+     */
+    export type ProductHostAmbientOcclusionStatistics = {
+        path: ProductHostAmbientOcclusionPath;
+        /**
+         * Why the compute path cannot run on this device; absent while it can.
+         */
+        computeRefused?: string;
+        /**
+         * Workgroups the last occlusion dispatch took; 0 on the raster path.
+         */
+        workgroups: number;
+        /**
+         * The occlusion texture of the last view, in texels.
+         */
+        texture: [number, number];
+    };
+    /**
+     * The adapter's compute limits; the renderer's device takes wgpu's defaults.
+     */
+    export type ProductHostComputeLimits = {
+        workgroupSize: [number, number, number];
+        invocationsPerWorkgroup: number;
+        workgroupsPerDimension: number;
+        workgroupStorageBytes: number;
+        storageBufferBindingBytes: number;
+    };
     /**
      * Read-only product-generated descriptor data for live-debug completion and
      * help. It is never a dispatch schema: command invocation remains the single
@@ -409,6 +438,36 @@ declare module "@rusty-engine/live-debug/internal/live-debug-client/src/generate
         error: ProductHostErrorBody;
     };
     /**
+     * One timed pass's GPU cost over the recent frames.
+     */
+    export type ProductHostGpuPass = {
+        pass: string;
+        /**
+         * Recent frames whose GPU time was read back.
+         */
+        timedFrames: number;
+        /**
+         * Median GPU milliseconds of the pass over those frames; 0 with none.
+         */
+        medianGpuMs: number;
+    };
+    /**
+     * What the renderer's GPU passes cost, from the device's timestamp
+     * queries, with the adapter's compute limits.
+     */
+    export type ProductHostGpuStatistics = {
+        /**
+         * The device has timestamp queries, so the passes are timed.
+         */
+        timestamps: boolean;
+        limits: ProductHostComputeLimits;
+        /**
+         * The timed passes, in frame order.
+         */
+        passes: Array<ProductHostGpuPass>;
+        ambientOcclusion: ProductHostAmbientOcclusionStatistics;
+    };
+    /**
      * Closed operation identities returned by direct runtime calls.
      */
     export type ProductHostOperationKind = "connect" | "start" | "pause" | "resume" | "restart" | "shutdown" | "report-fault" | "replace-control" | "release-control" | "claim-control" | "input" | "advance-realtime" | "admit-demand-step" | "admit-external-step" | "complete-timeline" | "execute-debug";
@@ -441,6 +500,11 @@ declare module "@rusty-engine/live-debug/internal/live-debug-client/src/generate
          */
         skippedOps: Record<string, number>;
         lastSkip: string | null;
+        /**
+         * The renderer's GPU passes: each timed pass's cost, the adapter's
+         * compute limits, and the ambient occlusion the last world view took.
+         */
+        gpu: ProductHostGpuStatistics;
     };
     /**
      * Answer to `engine.renderer`, `.status`, `.show`, `.hide` and `.toggle`.

@@ -10,6 +10,23 @@ export type CanonicalU64 = string;
 export type ProductHostAmbientOcclusionPath = "off" | "compute" | "raster";
 
 /**
+ * The screen-space ambient occlusion of the last world view.
+ */
+export type ProductHostAmbientOcclusionStatistics = { path: ProductHostAmbientOcclusionPath, 
+/**
+ * Why the compute path cannot run on this device; absent while it can.
+ */
+computeRefused?: string, 
+/**
+ * Workgroups the last occlusion dispatch took; 0 on the raster path.
+ */
+workgroups: number, 
+/**
+ * The occlusion texture of the last view, in texels.
+ */
+texture: [number, number], };
+
+/**
  * The adapter's compute limits; the renderer's device takes wgpu's defaults.
  */
 export type ProductHostComputeLimits = { workgroupSize: [number, number, number], invocationsPerWorkgroup: number, workgroupsPerDimension: number, workgroupStorageBytes: number, storageBufferBindingBytes: number, };
@@ -61,29 +78,13 @@ medianGpuMs: number, };
  */
 export type ProductHostGpuStatistics = { 
 /**
- * Why the compute path cannot run on this adapter; absent while it can.
- */
-computeRefused?: string, 
-/**
  * The device has timestamp queries, so the passes are timed.
  */
 timestamps: boolean, limits: ProductHostComputeLimits, 
 /**
- * The path the last world view's ambient occlusion took.
- */
-ambientOcclusion: ProductHostAmbientOcclusionPath, 
-/**
- * Workgroups the last occlusion dispatch took; 0 on the raster path.
- */
-workgroups: number, 
-/**
- * The occlusion texture of the last view, in texels.
- */
-occlusionTexture: [number, number], 
-/**
  * The timed passes, in frame order.
  */
-passes: Array<ProductHostGpuPass>, };
+passes: Array<ProductHostGpuPass>, ambientOcclusion: ProductHostAmbientOcclusionStatistics, };
 
 /**
  * Closed operation identities returned by direct runtime calls.
@@ -118,8 +119,8 @@ inputSteps: Array<ProductHostTimedStep>,
  */
 skippedOps: Record<string, number>, lastSkip: string | null, 
 /**
- * The renderer's GPU passes: the ambient occlusion path, the compute
- * path's refusal if any, and each timed pass's cost.
+ * The renderer's GPU passes: each timed pass's cost, the adapter's
+ * compute limits, and the ambient occlusion the last world view took.
  */
 gpu: ProductHostGpuStatistics, };
 

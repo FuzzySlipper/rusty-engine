@@ -108,14 +108,16 @@ fn reconstruct_normal(
 }
 
 // Occlusion of `centre` by the sample at `sample`: the cosine of the sample
-// above the tangent plane, past the bias, falling off with distance.
+// above the tangent plane past the bias, rescaled so a sample straight above
+// still counts fully, falling off with distance.
 fn sample_occlusion(centre: vec3<f32>, normal: vec3<f32>, sample: vec3<f32>) -> f32 {
     let v = sample - centre;
     let vv = dot(v, v);
     let radius = params.tuning.x;
     let falloff = max(1.0 - vv / (radius * radius), 0.0);
     let cosine = dot(v, normal) / (sqrt(vv) + 1e-4);
-    return falloff * max(cosine - params.tuning.y, 0.0);
+    let bias = params.tuning.y;
+    return falloff * max(cosine - bias, 0.0) / (1.0 - bias);
 }
 
 fn finish_occlusion(sum: f32) -> f32 {
@@ -181,7 +183,7 @@ fn cs_occlusion(
     var sum = 0.0;
     for (var index = 0u; index < SAMPLES; index++) {
         let at = position + spiral_offset(index, phase, radius);
-        let sample_texel = vec2<i32>(round(at));
+        let sample_texel = clamp_texel(vec2<i32>(round(at)));
         let sample_depth = tile_depth(sample_texel, origin);
         sum += sample_occlusion(centre, normal, view_position(vec2<f32>(sample_texel), sample_depth));
     }

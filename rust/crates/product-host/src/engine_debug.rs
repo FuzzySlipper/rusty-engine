@@ -54,8 +54,8 @@ pub struct ProductHostRendererStatistics {
     #[ts(type = "Record<string, number>")]
     pub skipped_ops: BTreeMap<String, u64>,
     pub last_skip: Option<String>,
-    /// The renderer's GPU passes: the ambient occlusion path, the compute
-    /// path's refusal if any, and each timed pass's cost.
+    /// The renderer's GPU passes: each timed pass's cost, the adapter's
+    /// compute limits, and the ambient occlusion the last world view took.
     pub gpu: ProductHostGpuStatistics,
 }
 
@@ -64,21 +64,27 @@ pub struct ProductHostRendererStatistics {
 #[derive(Debug, Clone, PartialEq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ProductHostGpuStatistics {
-    /// Why the compute path cannot run on this adapter; absent while it can.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub compute_refused: Option<String>,
     /// The device has timestamp queries, so the passes are timed.
     pub timestamps: bool,
     pub limits: ProductHostComputeLimits,
-    /// The path the last world view's ambient occlusion took.
-    pub ambient_occlusion: ProductHostAmbientOcclusionPath,
+    /// The timed passes, in frame order.
+    pub passes: Vec<ProductHostGpuPass>,
+    pub ambient_occlusion: ProductHostAmbientOcclusionStatistics,
+}
+
+/// The screen-space ambient occlusion of the last world view.
+#[derive(Debug, Clone, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ProductHostAmbientOcclusionStatistics {
+    pub path: ProductHostAmbientOcclusionPath,
+    /// Why the compute path cannot run on this device; absent while it can.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub compute_refused: Option<String>,
     /// Workgroups the last occlusion dispatch took; 0 on the raster path.
     pub workgroups: u32,
     /// The occlusion texture of the last view, in texels.
-    pub occlusion_texture: (u32, u32),
-    /// The timed passes, in frame order.
-    pub passes: Vec<ProductHostGpuPass>,
+    pub texture: (u32, u32),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]

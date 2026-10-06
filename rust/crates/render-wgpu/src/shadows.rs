@@ -22,8 +22,8 @@
 //!
 //! Maps are re-rendered only when a light or a part changed.
 //!
-//! The matrices buffer and layer uniform hold one slot past the layers: the
-//! camera slot, which the ambient occlusion pre-pass writes a view's camera
+//! The matrices buffer and layer uniform hold one slot past the array's
+//! layers: the camera slot, which the ambient occlusion pre-pass writes a view's camera
 //! into so the caster shaders draw the view's depth (`ambient_occlusion.rs`).
 
 use glam::{Mat4, Vec3};
@@ -288,9 +288,9 @@ impl ShadowMaps {
         (u64::from(layer) * LAYER_UNIFORM_STRIDE) as u32
     }
 
-    /// The matrix slot after the layers, for a view's camera.
+    /// The matrix slot after the array's layers, for a view's camera.
     pub fn camera_slot(&self) -> u32 {
-        self.layers
+        self.layer_views.len() as u32
     }
 
     /// Put a view's camera in the camera slot for a depth pre-pass.

@@ -71,7 +71,7 @@ pub mod cpu {
     pub use crate::tables::Builtin;
 }
 
-pub use ambient_occlusion::{AmbientOcclusion, AmbientOcclusionPath, ComputeLimits, GpuReadout};
+pub use ambient_occlusion::{AmbientOcclusion, AmbientOcclusionPath, AmbientOcclusionReadout};
 pub use animated::AnimationFact;
 pub use apply::ApplyIssue;
 pub use camera::CameraSampleReadout;
@@ -79,7 +79,7 @@ pub use composition::{DrawnCamera, TargetReadout, TargetStatus, ViewCompositionR
 pub use driver::{Capture, SceneChange, SceneDriver, SceneFrame, SceneState, SceneView};
 pub use frame::FrameStats;
 pub use ghost::GhostPlateReadout;
-pub use gpu::{AdapterSummary, Gpu, GpuError};
+pub use gpu::{AdapterSummary, ComputeLimits, Gpu, GpuError};
 pub use particles::EntityPositions;
 pub use resources::{decode_png_rgba, encode_png, NoResources, ResourceSource};
 pub use surface::{PresentSkip, SurfaceFrame, WindowSurface};
@@ -110,6 +110,19 @@ pub(crate) fn srgb_to_linear(value: f32) -> f32 {
     } else {
         ((value + 0.055) / 1.055).powf(2.4)
     }
+}
+
+/// What the renderer's GPU passes report, for diagnostics and evidence
+/// (`engine.renderer`, `rusty-scene-render`). A pass that is timed adds its
+/// [`GpuPassTiming`] to `passes`, so every pass reports its cost the same way.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GpuReadout {
+    /// The device has timestamp queries, so the passes are timed.
+    pub timestamps: bool,
+    pub limits: ComputeLimits,
+    /// The timed passes, in frame order.
+    pub passes: Vec<GpuPassTiming>,
+    pub ambient_occlusion: AmbientOcclusionReadout,
 }
 
 /// Host choices that are not part of the retained model.
@@ -337,10 +350,19 @@ impl Renderer {
         self.tables.lights_dirty = true;
     }
 
-    /// The renderer's GPU passes: the ambient occlusion path the last view
-    /// took, the compute path's refusal if any, and each timed pass's cost.
+    /// The renderer's GPU passes: each timed pass's cost, the adapter's
+    /// compute limits, and the ambient occlusion the last world view took.
     pub fn gpu_readout(&self) -> GpuReadout {
-        self.ambient_occlusion.readout()
+        GpuReadout {
+            timestamps: self
+                .gpu
+                .device
+                .features()
+                .contains(wgpu::Features::TIMESTAMP_QUERY),
+            limits: self.gpu.compute_limits(),
+            passes: self.ambient_occlusion.timings(),
+            ambient_occlusion: self.ambient_occlusion.readout(),
+        }
     }
 
     /// Retained table sizes, for diagnostics and tests.

@@ -1020,7 +1020,11 @@ impl Renderer {
             if world_layer {
                 encoded.draws += self.draw_ghost_plates(&mut pass, format);
                 pass.set_bind_group(0, &self.frame_bind_group, &[]);
-                pass.set_bind_group(2, occlusion_bind_group, &[]);
+            }
+            // Blended parts are not in the pre-pass's depth, so the occlusion
+            // under them belongs to what they cover: they draw without it.
+            if occlusion.is_some() {
+                pass.set_bind_group(2, self.ambient_occlusion.apply_bind_group(None), &[]);
             }
             self.effects.draw_solid_sprites(&mut pass, format, &effects);
             encoded += self.draw_blended(
