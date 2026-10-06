@@ -243,6 +243,10 @@ impl ProductBundle {
         self.renderer_lighting.ambient_occlusion
     }
 
+    pub(super) fn clustered_lighting(&self) -> bool {
+        self.renderer_lighting.clustered_lighting
+    }
+
     pub(super) fn shadows_enabled(&self) -> bool {
         self.renderer_lighting.shadows
     }
@@ -577,6 +581,8 @@ struct ManifestRendererLighting {
     #[serde(default)]
     ambient_occlusion: Option<ManifestAmbientOcclusion>,
     #[serde(default)]
+    clustered_lighting: Option<String>,
+    #[serde(default)]
     default_lights: ManifestDefaultLights,
 }
 #[derive(Debug, Deserialize)]
@@ -624,6 +630,7 @@ impl ProductDefaultLights {
 struct ProductRendererLighting {
     shadows: bool,
     ambient_occlusion: render_wgpu::AmbientOcclusion,
+    clustered_lighting: bool,
     world: ProductDefaultLights,
     viewmodel: ProductDefaultLights,
 }
@@ -673,9 +680,20 @@ impl ProductRendererLighting {
                 }
             }
         };
+        let clustered_lighting = match value.lighting.clustered_lighting.as_deref() {
+            None | Some("disabled") => false,
+            Some("enabled") => true,
+            Some(_) => {
+                return Err(field_error(
+                    "renderer.lighting.clusteredLighting",
+                    "must be enabled or disabled",
+                ))
+            }
+        };
         Ok(Self {
             shadows,
             ambient_occlusion,
+            clustered_lighting,
             world: ProductDefaultLights::parse(
                 value.lighting.default_lights.world,
                 "renderer.lighting.defaultLights.world",
@@ -1111,6 +1129,36 @@ mod tests {
         assert!(read(&root)
             .unwrap_err()
             .contains("renderer.lighting.ambientOcclusion.mode"));
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn reads_and_validates_clustered_lighting_selection() {
+        let root = fixture_root("clustered-lighting");
+        write_manifest(&root, "native/product.so");
+        let path = root.join(PRODUCT_MANIFEST_NAME);
+        let original = fs::read_to_string(&path).unwrap();
+        assert!(!read(&root).unwrap().clustered_lighting(), "absent: loop");
+        let marker = "\"uiProjection\":{\"expectedStream\":\"fixture.terrain\",\"expectedContract\":\"fixture.terrain.v1\"}";
+        fs::write(
+            &path,
+            original.replace(
+                marker,
+                "\"renderer\":{\"lighting\":{\"clusteredLighting\":\"enabled\"}}",
+            ),
+        )
+        .unwrap();
+        assert!(read(&root).unwrap().clustered_lighting());
+        fs::write(
+            &path,
+            original.replace(
+                marker,
+                "\"renderer\":{\"lighting\":{\"clusteredLighting\":\"sometimes\"}}",
+            ),
+        )
+        .unwrap();
+        assert!(read(&root)
+            .unwrap_err()
+            .contains("renderer.lighting.clusteredLighting"));
         fs::remove_dir_all(root).unwrap();
     }
     #[test]

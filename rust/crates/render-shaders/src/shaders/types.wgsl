@@ -19,6 +19,12 @@ struct Frame {
     // x: the Engine's presentation time in seconds: it advances with the
     // simulation, holds while it is paused, and is the same in every view.
     time: vec4<f32>,
+    // Clustered lighting (`light_clusters.wgsl`): xyz: tiles across, tiles
+    // down, depth slices; w: 1 when this pass's lights are read from the
+    // clusters, 0 when they are looped over.
+    cluster_grid: vec4<u32>,
+    // x: near plane, y: far plane, z: ln(far / near), w: 1 orthographic.
+    cluster_depth: vec4<f32>,
 };
 
 struct Part {

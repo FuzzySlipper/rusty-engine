@@ -14,3 +14,6 @@
 @group(0) @binding(4) var shadow_maps: texture_depth_2d_array;
 @group(0) @binding(5) var shadow_sampler: sampler_comparison;
 @group(0) @binding(6) var<storage, read> shadow_views: array<mat4x4<f32>>;
+// Light clusters (`light_clusters.wgsl`): per cluster a count and light row
+// indices, then the global list; read when `frame.cluster_grid.w` is 1.
+@group(0) @binding(7) var<storage, read> clusters: array<u32>;

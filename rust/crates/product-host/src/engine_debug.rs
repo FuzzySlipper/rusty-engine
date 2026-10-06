@@ -70,6 +70,30 @@ pub struct ProductHostGpuStatistics {
     /// The timed passes, in frame order.
     pub passes: Vec<ProductHostGpuPass>,
     pub ambient_occlusion: ProductHostAmbientOcclusionStatistics,
+    pub light_clusters: ProductHostLightClusterStatistics,
+}
+
+/// The light clustering of the last world view.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ProductHostLightClusterStatistics {
+    /// The last world view's lighting read its clusters.
+    pub enabled: bool,
+    /// Why this device cannot cluster; absent while it can.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub refused: Option<String>,
+    /// Tiles across, tiles down, depth slices.
+    pub grid: [u32; 3],
+    /// Lights each cluster can hold.
+    pub cluster_capacity: u32,
+    /// Light rows the last binning placed in clusters, counted per cluster.
+    pub binned_lights: u32,
+    /// Lights every fragment sees: ambient, hemisphere, directional, and
+    /// point or spot lights without a range.
+    pub global_lights: u32,
+    /// Clusters that had more lights than they hold.
+    pub overflowed_clusters: u32,
 }
 
 /// The screen-space ambient occlusion of the last world view.

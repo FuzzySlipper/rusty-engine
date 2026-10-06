@@ -35,6 +35,7 @@ mod ghost;
 mod glb;
 mod gpu;
 mod labels;
+mod light_clusters;
 mod particles;
 mod pipelines;
 mod primitives;
@@ -80,6 +81,7 @@ pub use driver::{Capture, SceneChange, SceneDriver, SceneFrame, SceneState, Scen
 pub use frame::FrameStats;
 pub use ghost::GhostPlateReadout;
 pub use gpu::{AdapterSummary, ComputeLimits, Gpu, GpuError};
+pub use light_clusters::LightClusterReadout;
 pub use particles::EntityPositions;
 pub use resources::{decode_png_rgba, encode_png, NoResources, ResourceSource};
 pub use surface::{PresentSkip, SurfaceFrame, WindowSurface};
@@ -123,6 +125,7 @@ pub struct GpuReadout {
     /// The timed passes, in frame order.
     pub passes: Vec<GpuPassTiming>,
     pub ambient_occlusion: AmbientOcclusionReadout,
+    pub light_clusters: LightClusterReadout,
 }
 
 /// Host choices that are not part of the retained model.
@@ -141,6 +144,11 @@ pub struct RendererOptions {
     /// (`renderer.lighting.ambientOcclusion` in a product's manifest). Off by
     /// default.
     pub ambient_occlusion: AmbientOcclusion,
+    /// Bin a world view's lights into a cluster grid before its pass and
+    /// shade each fragment from its cluster (`light_clusters.rs`), instead of
+    /// looping over every light. Off by default; a device without compute
+    /// shaders loops regardless.
+    pub clustered_lighting: bool,
 }
 
 impl Default for RendererOptions {
@@ -150,6 +158,7 @@ impl Default for RendererOptions {
             default_viewmodel_lights: true,
             shadows: false,
             ambient_occlusion: AmbientOcclusion::default(),
+            clustered_lighting: false,
         }
     }
 }
@@ -191,6 +200,7 @@ pub struct Renderer {
     scene_generation: u64,
     compose: compose::Compose,
     ambient_occlusion: ambient_occlusion::AmbientOcclusionPass,
+    light_clusters: light_clusters::LightClusters,
     composition: composition::ViewComposition,
     effects: effects::Effects,
     particles: particles::Particles,
@@ -216,6 +226,14 @@ impl Renderer {
         let instances_buffer =
             frame::storage_buffer(device, "render-wgpu instances", INITIAL_INSTANCES_BYTES);
         let shadows = shadows::ShadowMaps::new(device, &layouts.shadow_layer);
+        let light_clusters = light_clusters::LightClusters::new(
+            gpu,
+            pipelines::standard(layouts.shaders.module(
+                device,
+                Entry::LightClusters,
+                Features::default(),
+            )),
+        );
         let frame_bind_group = frame::frame_bind_group(
             device,
             &layouts.frame,
@@ -225,6 +243,7 @@ impl Renderer {
                 lights: &lights_buffer,
                 instances: &instances_buffer,
                 shadows: &shadows,
+                clusters: &light_clusters.clusters,
             },
         );
         let caster_bind_group = frame::caster_bind_group(
@@ -298,6 +317,7 @@ impl Renderer {
             scene_generation: 0,
             compose: compose::Compose::new(device, compose_shader),
             ambient_occlusion,
+            light_clusters,
             composition: Default::default(),
             effects,
             particles: Default::default(),
@@ -360,8 +380,14 @@ impl Renderer {
                 .features()
                 .contains(wgpu::Features::TIMESTAMP_QUERY),
             limits: self.gpu.compute_limits(),
-            passes: self.ambient_occlusion.timings(),
+            passes: self
+                .ambient_occlusion
+                .timings()
+                .into_iter()
+                .chain([self.light_clusters.timing()])
+                .collect(),
             ambient_occlusion: self.ambient_occlusion.readout(),
+            light_clusters: self.light_clusters.readout(),
         }
     }
 

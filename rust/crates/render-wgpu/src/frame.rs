@@ -20,6 +20,7 @@ use crate::apply::light_row;
 use crate::batch::{self, DrawList, Frustum};
 use crate::camera::CameraMatrices;
 use crate::effects::EffectsPass;
+use crate::light_clusters::ClusterUniform;
 use crate::shaders::Features;
 use crate::shadows::{self, ShadowMaps};
 use crate::tables::{Builtin, Environment, MaterialRef, NodeKind, PART_ROW_FLOATS};
@@ -33,8 +34,9 @@ use crate::{
 const LIGHT_ROW_FLOATS: usize = 16;
 /// Frame uniform (`rusty::types` `Frame`): two matrices, camera position,
 /// light count and first light; then exposure and fog distances, fog colour,
-/// and the tone mapping and fog modes; then the presentation time.
-const FRAME_UNIFORM_BYTES: u64 = (16 + 16 + 4 + 4 + 4 + 4 + 4 + 4) * 4;
+/// and the tone mapping and fog modes; then the presentation time; then the
+/// light cluster grid and depth range.
+const FRAME_UNIFORM_BYTES: u64 = (16 + 16 + 4 + 4 + 4 + 4 + 4 + 4 + 4 + 4) * 4;
 
 /// Per-frame counts for diagnostics.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -382,6 +384,7 @@ impl Renderer {
                 "render-wgpu lights",
                 (needed as u64).next_power_of_two(),
             );
+            self.light_clusters.invalidate();
             self.rebind_frame();
         }
         if !rows.is_empty() {
@@ -475,6 +478,7 @@ impl Renderer {
                 lights: &self.lights_buffer,
                 instances: &self.instances_buffer,
                 shadows: &self.shadows,
+                clusters: &self.light_clusters.clusters,
             },
         );
         self.caster_bind_group = caster_bind_group(
@@ -840,6 +844,8 @@ impl Renderer {
         for value in [self.animation_time as f32, 0.0, 0.0, 0.0] {
             bytes.extend_from_slice(&value.to_le_bytes());
         }
+        // The cluster fields follow once the view's clusters are encoded.
+        let cluster_offset = bytes.len() as u64;
         self.gpu.queue.write_buffer(&self.frame_buffer, 0, &bytes);
 
         // Format and sample count: every pipeline drawing here must match.
@@ -950,6 +956,32 @@ impl Renderer {
                 });
             self.ambient_occlusion.encode(&mut encoder, occlusion);
         }
+        // A world pass's lights are binned into clusters when the host asks
+        // and the device can; the viewmodel's few lights loop.
+        let clusters = if world_layer && self.options.clustered_lighting {
+            self.light_clusters.encode(
+                &self.gpu,
+                &mut encoder,
+                &self.lights_buffer,
+                &view.camera,
+                lights,
+            )
+        } else {
+            if world_layer {
+                self.light_clusters.skipped();
+            }
+            ClusterUniform::LOOP
+        };
+        let mut cluster_bytes = Vec::with_capacity(32);
+        for value in clusters.grid {
+            cluster_bytes.extend_from_slice(&value.to_le_bytes());
+        }
+        for value in clusters.depth {
+            cluster_bytes.extend_from_slice(&value.to_le_bytes());
+        }
+        self.gpu
+            .queue
+            .write_buffer(&self.frame_buffer, cluster_offset, &cluster_bytes);
         let pipelines = &self.pipelines[format_index];
         let list = &self.views[slot]
             .as_ref()
@@ -1047,6 +1079,9 @@ impl Renderer {
         if occlusion.is_some() {
             self.ambient_occlusion.submitted();
         }
+        if clusters.grid[3] == 1 {
+            self.light_clusters.submitted();
+        }
         ViewStats {
             draws: parts.draws + effects.draws(),
             instances: list.instances(),
@@ -1083,6 +1118,7 @@ pub(crate) struct FrameBindings<'a> {
     pub lights: &'a wgpu::Buffer,
     pub instances: &'a wgpu::Buffer,
     pub shadows: &'a ShadowMaps,
+    pub clusters: &'a wgpu::Buffer,
 }
 
 pub(crate) fn frame_bind_group(
@@ -1121,6 +1157,10 @@ pub(crate) fn frame_bind_group(
             wgpu::BindGroupEntry {
                 binding: 6,
                 resource: bindings.shadows.matrices_buffer.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 7,
+                resource: bindings.clusters.as_entire_binding(),
             },
         ],
     })

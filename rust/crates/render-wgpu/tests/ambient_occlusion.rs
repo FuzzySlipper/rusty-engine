@@ -286,8 +286,14 @@ fn the_passes_are_timed_where_the_device_has_timestamp_queries() {
             readout.passes,
             readout.limits
         );
-        assert_eq!(readout.passes.len(), 3, "pre-pass, occlusion, blur");
-        for pass in &readout.passes {
+        // The readout lists every timed pass; these are the occlusion's.
+        let passes: Vec<_> = readout
+            .passes
+            .iter()
+            .filter(|pass| pass.pass.starts_with("ao-"))
+            .collect();
+        assert_eq!(passes.len(), 3, "pre-pass, occlusion, blur");
+        for pass in passes {
             if readout.timestamps {
                 assert!(pass.timed_frames > 0, "{}: no timed frame", pass.pass);
                 assert!(

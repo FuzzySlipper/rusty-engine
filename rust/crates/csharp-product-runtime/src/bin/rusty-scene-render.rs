@@ -4,7 +4,7 @@
 //!
 //! ```text
 //! rusty-scene-render <snapshot> <out.png> [--width W] [--height H] [--frames N]
-//!     [--ambient-occlusion off|compute|raster]
+//!     [--ambient-occlusion off|compute|raster] [--clustered-lighting on|off]
 //! ```
 //!
 //! `--frames N` then draws N more frames into one target with readback and
@@ -24,7 +24,7 @@ use render_wgpu::{
 use serde_json::json;
 
 const USAGE: &str = "usage: rusty-scene-render <snapshot> <out.png> [--width W] [--height H] \
-     [--frames N] [--ambient-occlusion off|compute|raster]";
+     [--frames N] [--ambient-occlusion off|compute|raster] [--clustered-lighting on|off]";
 
 fn main() {
     if let Err(error) = run() {
@@ -38,6 +38,7 @@ fn run() -> Result<(), String> {
     let mut positional = Vec::new();
     let (mut width, mut height, mut frames) = (1280_u32, 720_u32, 0_u32);
     let mut ambient_occlusion: Option<AmbientOcclusionPath> = None;
+    let mut clustered_lighting: Option<bool> = None;
     while let Some(argument) = arguments.next() {
         let mut number = |name: &str| -> Result<u32, String> {
             arguments
@@ -49,6 +50,13 @@ fn run() -> Result<(), String> {
             "--width" => width = number("--width")?,
             "--height" => height = number("--height")?,
             "--frames" => frames = number("--frames")?,
+            "--clustered-lighting" => {
+                clustered_lighting = Some(match arguments.next().as_deref() {
+                    Some("on") => true,
+                    Some("off") => false,
+                    _ => return Err(format!("--clustered-lighting needs on or off\n{USAGE}")),
+                });
+            }
             "--ambient-occlusion" => {
                 ambient_occlusion = Some(match arguments.next().as_deref() {
                     Some("off") => AmbientOcclusionPath::Off,
@@ -98,6 +106,9 @@ fn run() -> Result<(), String> {
             _ => options.ambient_occlusion.strength,
         };
         options.ambient_occlusion = AmbientOcclusion { path, strength };
+    }
+    if let Some(clustered) = clustered_lighting {
+        options.clustered_lighting = clustered;
     }
     let driver = SceneDriver::new(gpu, options);
     let applied = Instant::now();
@@ -171,6 +182,14 @@ fn run() -> Result<(), String> {
                 "computeRefused": gpu_readout.ambient_occlusion.compute_refused,
                 "workgroups": gpu_readout.ambient_occlusion.workgroups,
                 "texture": gpu_readout.ambient_occlusion.texture,
+            },
+            "lightClusters": {
+                "enabled": gpu_readout.light_clusters.enabled,
+                "refused": gpu_readout.light_clusters.refused,
+                "grid": gpu_readout.light_clusters.grid,
+                "binnedLights": gpu_readout.light_clusters.binned_lights,
+                "globalLights": gpu_readout.light_clusters.global_lights,
+                "overflowedClusters": gpu_readout.light_clusters.overflowed_clusters,
             },
         },
     });

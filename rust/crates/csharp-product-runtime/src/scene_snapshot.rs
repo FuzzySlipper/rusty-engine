@@ -94,6 +94,9 @@ pub struct SceneSnapshotOptions {
     /// Snapshots written before ambient occlusion existed draw without it.
     #[serde(default)]
     pub ambient_occlusion: SceneSnapshotAmbientOcclusion,
+    /// Snapshots written before clustered lighting existed loop over lights.
+    #[serde(default)]
+    pub clustered_lighting: bool,
 }
 
 /// `RendererOptions::ambient_occlusion` as a snapshot keeps it.
@@ -159,6 +162,7 @@ impl From<SceneSnapshotOptions> for render_wgpu::RendererOptions {
             default_viewmodel_lights: options.default_viewmodel_lights,
             shadows: options.shadows,
             ambient_occlusion: options.ambient_occlusion.into(),
+            clustered_lighting: options.clustered_lighting,
         }
     }
 }
@@ -170,6 +174,7 @@ impl From<render_wgpu::RendererOptions> for SceneSnapshotOptions {
             default_viewmodel_lights: options.default_viewmodel_lights,
             shadows: options.shadows,
             ambient_occlusion: options.ambient_occlusion.into(),
+            clustered_lighting: options.clustered_lighting,
         }
     }
 }

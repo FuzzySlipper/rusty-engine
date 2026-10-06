@@ -182,6 +182,7 @@ impl Layouts {
                     count: None,
                 },
                 storage_entry(6),
+                storage_entry(7),
             ],
         });
         let casters = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {

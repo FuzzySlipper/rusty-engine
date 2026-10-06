@@ -40,9 +40,9 @@ use product_host::{
     ProductHostAmbientOcclusionPath, ProductHostAmbientOcclusionStatistics,
     ProductHostComputeLimits, ProductHostDrawingMode, ProductHostDrawnFrame,
     ProductHostFrameStream, ProductHostGpuPass, ProductHostGpuStatistics,
-    ProductHostRendererInspection, ProductHostRendererStatistics, ProductHostStreamMedians,
-    ProductHostStreamStatistics, ProductHostTimedStep, ProductHostWindowMedians,
-    ProductHostWindowStatistics,
+    ProductHostLightClusterStatistics, ProductHostRendererInspection,
+    ProductHostRendererStatistics, ProductHostStreamMedians, ProductHostStreamStatistics,
+    ProductHostTimedStep, ProductHostWindowMedians, ProductHostWindowStatistics,
 };
 use render_host_contracts::{RendererCameraPose, RendererViewComposition, RendererViewTarget};
 use render_stream::{DrawnFrame, FrameStreamer, StreamStats};
@@ -767,6 +767,15 @@ fn gpu_statistics(readout: GpuReadout) -> ProductHostGpuStatistics {
             compute_refused: ambient_occlusion.compute_refused,
             workgroups: ambient_occlusion.workgroups,
             texture: ambient_occlusion.texture,
+        },
+        light_clusters: ProductHostLightClusterStatistics {
+            enabled: readout.light_clusters.enabled,
+            refused: readout.light_clusters.refused,
+            grid: readout.light_clusters.grid,
+            cluster_capacity: readout.light_clusters.cluster_stride - 1,
+            binned_lights: readout.light_clusters.binned_lights,
+            global_lights: readout.light_clusters.global_lights,
+            overflowed_clusters: readout.light_clusters.overflowed_clusters,
         },
     }
 }

@@ -84,7 +84,41 @@ timestamps: boolean, limits: ProductHostComputeLimits,
 /**
  * The timed passes, in frame order.
  */
-passes: Array<ProductHostGpuPass>, ambientOcclusion: ProductHostAmbientOcclusionStatistics, };
+passes: Array<ProductHostGpuPass>, ambientOcclusion: ProductHostAmbientOcclusionStatistics, lightClusters: ProductHostLightClusterStatistics, };
+
+/**
+ * The light clustering of the last world view.
+ */
+export type ProductHostLightClusterStatistics = { 
+/**
+ * The last world view's lighting read its clusters.
+ */
+enabled: boolean, 
+/**
+ * Why this device cannot cluster; absent while it can.
+ */
+refused?: string, 
+/**
+ * Tiles across, tiles down, depth slices.
+ */
+grid: [number, number, number], 
+/**
+ * Lights each cluster can hold.
+ */
+clusterCapacity: number, 
+/**
+ * Light rows the last binning placed in clusters, counted per cluster.
+ */
+binnedLights: number, 
+/**
+ * Lights every fragment sees: ambient, hemisphere, directional, and
+ * point or spot lights without a range.
+ */
+globalLights: number, 
+/**
+ * Clusters that had more lights than they hold.
+ */
+overflowedClusters: number, };
 
 /**
  * Closed operation identities returned by direct runtime calls.
