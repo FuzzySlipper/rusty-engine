@@ -505,7 +505,8 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
 
         public IEnumerable<AppearanceFact> Facts()
         {
-            yield return new AppearanceFact(SignObjectId, false, 0, new Transform(new Vector3(-Column, Row, Depth), Quaternion.Identity, Vector3.One), Sign, true, RenderLayer.Scene);
+            // A named argument among the positional ones, as products write them: the convenience constructor must take the record's names.
+            yield return new AppearanceFact(SignObjectId, false, 0, new Transform(new Vector3(-Column, Row, Depth), Quaternion.Identity, Vector3.One), Sign, Visible: true, RenderLayer.Scene);
             yield return new AppearanceFact(LampObjectId, false, 0, new Transform(new Vector3(Column, Row, Depth), Quaternion.Identity, Vector3.One), Lamp, true, RenderLayer.Scene);
             yield return new AppearanceFact(CrateObjectId, false, 0, new Transform(new Vector3(-Column, -Row, Depth), Quaternion.CreateFromYawPitchRoll(0.6f, 0.4f, 0), Vector3.One), Crate, true, RenderLayer.Scene);
             for (int i = 0; i < Tinted.Length; i++)

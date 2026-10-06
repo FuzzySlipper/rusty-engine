@@ -4,12 +4,12 @@ public readonly partial record struct CameraDescriptor
 {
     /// <summary>A camera whose viewmodel layer draws with the camera's own projection.</summary>
     public CameraDescriptor(
-        CameraPose pose,
-        CameraBasisMode basisMode,
-        CameraBasis basis,
-        CameraProjection projection,
-        CameraViewport viewport)
-        : this(pose, basisMode, basis, projection, viewport, 0)
+        CameraPose Pose,
+        CameraBasisMode BasisMode,
+        CameraBasis Basis,
+        CameraProjection Projection,
+        CameraViewport Viewport)
+        : this(Pose, BasisMode, Basis, Projection, Viewport, 0)
     {
     }
 }
