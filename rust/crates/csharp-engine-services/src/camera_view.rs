@@ -8,8 +8,9 @@ use render_host_contracts::{
 };
 use render_model::{
     AtmosphereDescriptor, AutoExposureDescriptor, BloomDescriptor, ColorGradingDescriptor,
-    FogDescriptor, RenderDiff, RenderFrameDiff, SkyBackgroundDescriptor, SkyLightDescriptor,
-    SunShaftsDescriptor, ToneMappingDescriptor, ToneMappingOperator,
+    FogDescriptor, IndirectAmbient, IndirectLightDescriptor, RenderDiff, RenderFrameDiff,
+    SkyBackgroundDescriptor, SkyLightDescriptor, SunShaftsDescriptor, ToneMappingDescriptor,
+    ToneMappingOperator,
 };
 
 use crate::{
@@ -77,6 +78,7 @@ pub(crate) struct RuntimeCameraViewCall {
     pub(crate) color_grading: Option<Option<ColorGradingDescriptor>>,
     pub(crate) atmosphere: Option<Option<AtmosphereDescriptor>>,
     pub(crate) sun_shafts: Option<Option<SunShaftsDescriptor>>,
+    pub(crate) indirect_light: Option<Option<IndirectLightDescriptor>>,
     pub(crate) sky_light: Option<Option<SkyLightDescriptor>>,
 }
 
@@ -151,6 +153,7 @@ impl RuntimeCameraViewBridge {
             color_grading: None,
             atmosphere: None,
             sun_shafts: None,
+            indirect_light: None,
             sky_light: None,
         });
     }
@@ -205,6 +208,7 @@ impl RuntimeCameraViewBridge {
             color_grading: None,
             atmosphere: None,
             sun_shafts: None,
+            indirect_light: None,
             sky_light: None,
         };
         stage_composition(&mut snapshot)?;
@@ -496,6 +500,7 @@ impl RuntimeCameraViewBridge {
             color_grading: None,
             atmosphere: None,
             sun_shafts: None,
+            indirect_light: None,
             sky_light: None,
         };
         candidate.state.views = views.to_vec();
@@ -791,6 +796,31 @@ impl RuntimeCameraViewBridge {
             ));
         }
         self.staged_mut()?.sun_shafts = Some((request.intensity > 0.0).then_some(shafts));
+        Ok(())
+    }
+
+    fn set_indirect_light(
+        &mut self,
+        request: NativeIndirectLightRequest,
+    ) -> Result<(), CsharpEngineServicesError> {
+        let descriptor = IndirectLightDescriptor {
+            center: [request.center.x, request.center.y, request.center.z],
+            extent: [request.extent.x, request.extent.y, request.extent.z],
+            spacing: request.spacing,
+            bounces: request.bounces,
+            ambient: match request.ambient {
+                NativeIndirectAmbient::Sky => IndirectAmbient::Sky,
+                NativeIndirectAmbient::Floor => IndirectAmbient::Floor,
+            },
+        };
+        let off = descriptor.extent.iter().all(|value| *value == 0.0);
+        if !off && !descriptor.valid() {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_INDIRECT_LIGHT",
+                "indirect light needs a finite centre and extent, a spacing from 0.5 to 8 m, 1 to 4 bounces and at most 262,144 probes",
+            ));
+        }
+        self.staged_mut()?.indirect_light = Some((!off).then_some(descriptor));
         Ok(())
     }
 
@@ -1113,6 +1143,9 @@ pub(crate) fn environment_frame(
     }
     if let Some(sun_shafts) = call.sun_shafts {
         operations.push(RenderDiff::SetSunShafts { sun_shafts });
+    }
+    if let Some(indirect_light) = call.indirect_light {
+        operations.push(RenderDiff::SetIndirectLight { indirect_light });
     }
     if let Some(sky_light) = call.sky_light {
         operations.push(RenderDiff::SetSkyLight { sky_light });
@@ -1697,6 +1730,27 @@ pub(crate) unsafe extern "C" fn set_sun_shafts(
     }
     let bridge = unsafe { &mut *context.cast::<RuntimeCameraViewBridge>() };
     match bridge.set_sun_shafts(unsafe { *request }) {
+        Ok(()) => ABI_OK,
+        Err(error) => {
+            bridge.operation_diagnostics.retain(&error, operation_error);
+            0
+        }
+    }
+}
+
+pub(crate) unsafe extern "C" fn set_indirect_light(
+    context: *mut c_void,
+    request: *const NativeIndirectLightRequest,
+    operation_error: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    if !operation_error.is_null() {
+        unsafe { *operation_error = std::mem::zeroed() };
+    }
+    if context.is_null() || request.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeCameraViewBridge>() };
+    match bridge.set_indirect_light(unsafe { *request }) {
         Ok(()) => ABI_OK,
         Err(error) => {
             bridge.operation_diagnostics.retain(&error, operation_error);
@@ -2471,5 +2525,74 @@ mod viewmodel_field_of_view {
             let error = composition_camera("eye".to_owned(), entry(refused)).unwrap_err();
             assert_eq!(error.code(), "CSHARP_CAMERA_DESCRIPTOR", "{refused}");
         }
+    }
+
+    #[test]
+    fn an_indirect_light_request_is_staged_whole_and_a_zero_extent_turns_it_off() {
+        let mut bridge = RuntimeCameraViewBridge::new();
+        let request = NativeIndirectLightRequest {
+            center: NativeVec3 {
+                x: 1.0,
+                y: 2.0,
+                z: 3.0,
+            },
+            extent: NativeVec3 {
+                x: 8.0,
+                y: 4.0,
+                z: 8.0,
+            },
+            spacing: 1.0,
+            bounces: 2,
+            ambient: NativeIndirectAmbient::Floor,
+        };
+        bridge.begin_call();
+        bridge
+            .set_indirect_light(request)
+            .expect("a valid volume is staged");
+        let call = bridge.take_staged_call().expect("inside a call");
+        assert_eq!(
+            call.indirect_light,
+            Some(Some(IndirectLightDescriptor {
+                center: [1.0, 2.0, 3.0],
+                extent: [8.0, 4.0, 8.0],
+                spacing: 1.0,
+                bounces: 2,
+                ambient: IndirectAmbient::Floor,
+            }))
+        );
+        bridge.commit(call);
+
+        bridge.begin_call();
+        let refused = bridge
+            .set_indirect_light(NativeIndirectLightRequest {
+                spacing: 0.1,
+                ..request
+            })
+            .expect_err("a spacing under half a metre is refused");
+        assert_eq!(refused.code(), "CSHARP_INDIRECT_LIGHT");
+        let refused = bridge
+            .set_indirect_light(NativeIndirectLightRequest {
+                spacing: 0.5,
+                extent: NativeVec3 {
+                    x: 100.0,
+                    y: 100.0,
+                    z: 100.0,
+                },
+                ..request
+            })
+            .expect_err("more probes than the volume holds are refused");
+        assert_eq!(refused.code(), "CSHARP_INDIRECT_LIGHT");
+        bridge
+            .set_indirect_light(NativeIndirectLightRequest {
+                extent: NativeVec3 {
+                    x: 0.0,
+                    y: 0.0,
+                    z: 0.0,
+                },
+                ..request
+            })
+            .expect("a zero extent turns the volume off");
+        let call = bridge.take_staged_call().expect("inside a call");
+        assert_eq!(call.indirect_light, Some(None));
     }
 }

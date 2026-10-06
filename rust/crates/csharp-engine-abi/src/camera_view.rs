@@ -396,6 +396,34 @@ pub struct NativeSunShaftsRequest {
     pub length: f32,
 }
 
+/// Which light the ambient rows give inside an indirect light volume.
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum NativeIndirectAmbient {
+    /// The ambient light is the sky's: the probes see it where the world
+    /// opens to it, and it reaches nothing enclosed.
+    #[default]
+    Sky = 0,
+    /// The ambient light is a flat floor that stays everywhere; the probes
+    /// add the hemisphere, bounce and emission over it.
+    Floor = 1,
+}
+
+/// Indirect light: one irradiance probe volume the Engine bakes from the
+/// scene's own geometry and lights, over the box `center ± extent`, with
+/// probes `spacing` apart (0.5 to 8 m) and `bounces` passes of light (1 to
+/// 4). An extent of zero on every axis turns it off. The bake runs on
+/// worker threads and the volume follows retained changes inside the box.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeIndirectLightRequest {
+    pub center: NativeVec3,
+    pub extent: NativeVec3,
+    pub spacing: f32,
+    pub bounces: u32,
+    pub ambient: NativeIndirectAmbient,
+}
+
 /// The sky's light: the background (a sky panorama, two blended, or the
 /// clear colour) lights the world as an environment, prefiltered for each
 /// surface's roughness, its radiance scaled by `intensity` (0 to 16). 0 (the

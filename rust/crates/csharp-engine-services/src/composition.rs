@@ -201,6 +201,7 @@ fn engine_api(
             set_color_grading: crate::camera_view::set_color_grading,
             set_atmosphere: crate::camera_view::set_atmosphere,
             set_sun_shafts: crate::camera_view::set_sun_shafts,
+            set_indirect_light: crate::camera_view::set_indirect_light,
             set_sky_light: crate::camera_view::set_sky_light,
             set_viewport_anchor: crate::camera_view::set_viewport_anchor,
             read_surface: crate::camera_view::read_surface,

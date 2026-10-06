@@ -521,6 +521,46 @@ declare module "@rusty-engine/live-debug/internal/live-debug-client/src/generate
         distanceFields: ProductHostDistanceFieldStatistics;
         lightClusters: ProductHostLightClusterStatistics;
         gpuCulling: ProductHostGpuCullingStatistics;
+        indirectLight: ProductHostIndirectLightStatistics;
+    };
+    /**
+     * The indirect light volume (`CameraView.SetIndirectLight`): its probes and
+     * the bake that keeps them current.
+     */
+    export type ProductHostIndirectLightStatistics = {
+        /**
+         * A volume is requested.
+         */
+        enabled: boolean;
+        /**
+         * Probes per axis of the baked volume (zeros before the first bake).
+         */
+        dims: [number, number, number];
+        probes: number;
+        /**
+         * Probes inside geometry, filled from their neighbours.
+         */
+        invalid: number;
+        /**
+         * Triangles the last bake traced.
+         */
+        triangles: number;
+        /**
+         * The last bake's wall time in milliseconds, collection included.
+         */
+        bakeMs: number;
+        /**
+         * Bakes uploaded since the renderer was made.
+         */
+        bakes: number;
+        /**
+         * A change waits for the debounce or a bake is running.
+         */
+        pending: boolean;
+        /**
+         * GPU bytes the volume's textures hold.
+         */
+        bytes: bigint;
     };
     /**
      * The light clustering of the last world view.

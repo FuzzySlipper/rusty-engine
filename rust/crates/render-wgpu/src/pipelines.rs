@@ -166,6 +166,19 @@ fn texture_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
     }
 }
 
+fn probe_texture_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
+    wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: wgpu::ShaderStages::FRAGMENT,
+        ty: wgpu::BindingType::Texture {
+            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+            view_dimension: wgpu::TextureViewDimension::D3,
+            multisampled: false,
+        },
+        count: None,
+    }
+}
+
 fn sampler_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
     wgpu::BindGroupLayoutEntry {
         binding,
@@ -207,6 +220,11 @@ impl Layouts {
                 },
                 sampler_entry(9),
                 storage_entry(10),
+                // The indirect light volume (`probes.rs`): one RGBA16F 3D
+                // texture of L1 coefficients, the colour channels stacked
+                // along its depth, and its sampler.
+                probe_texture_entry(11),
+                sampler_entry(12),
             ],
         });
         let casters = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {

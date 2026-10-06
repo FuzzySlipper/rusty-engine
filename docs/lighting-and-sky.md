@@ -104,6 +104,65 @@ own rather than falling back to a flat ambient. It casts no shadow, metals
 reflect it as they reflect ambient light, and `Voxel.SampleDirectLighting`
 blends it by the sample's normal.
 
+## Indirect light: the probe volume
+
+An ambient light's sky ([above](#dark-caves-an-ambient-lights-sky)) darkens
+a cave under one light; the probe volume lights an interior from what is
+actually there. `CameraView.SetIndirectLight(new IndirectLightRequest(center,
+extent, spacing, bounces, ambient))` asks for one volume over the box
+`center ± extent`. The Engine places probes `spacing` apart (0.5 to 8 m, at
+most 262,144 probes), traces 64 rays from each through the world's shown
+opaque triangles, and keeps what arrives as low-order spherical harmonics
+(four RGB coefficients a probe). A ray that leaves the scene sees the sky:
+the hemisphere light, the sky's light when it is on, and the ambient light
+when `ambient` is `IndirectAmbient.Sky`. A ray that hits a surface sees its
+emission and its colour (times its texture's mean, or its atlas region's)
+lit by the directional, point and spot lights that reach it through shadow
+rays; `bounces` passes (1 to 4) carry that light on, each pass one bounce
+further. A probe inside rock is filled from its neighbours: one on a wall's
+surface from the side its rays found open, one inside the wall from the side
+its nearest way out faces.
+
+Where the volume covers a surface the standard shader samples it trilinearly
+(offset along the normal) in place of the ambient and hemisphere rows and
+the sky's light, fading back to them over one cell past the box; metals
+reflect it. With `IndirectAmbient.Sky` an enclosed room gets only what its
+torches bounce and what comes in through its openings, so a cave is dark by
+itself and a doorway spills daylight a few metres in. With
+`IndirectAmbient.Floor` the ambient light stays everywhere and the probes
+add the hemisphere, bounce and emission over it, for a product whose ambient
+is a deliberate fill. An extent of zero turns the volume off; the next frame
+draws exactly as before.
+
+- The bake runs on worker threads, never the render thread: the old volume
+  keeps drawing until the new one is uploaded. Any retained change inside the
+  box (a part, a material, a light) rebakes the whole volume once the scene
+  has been still for a quarter second, so a world built over many frames
+  bakes once; while something inside keeps moving every frame it rebakes
+  every two seconds instead. The cost scales with probes × rays × scene.
+  `engine.renderer` reports `gpu.indirectLight`: probes, probes filled from
+  neighbours, triangles traced, the last bake's milliseconds, the bakes so
+  far, whether one is pending, and the volume's GPU bytes. On 20 threads the 19.5 k-probe
+  cave of the lighting exploration (30 k triangles, two bounces) bakes in
+  about 110 ms and the 41 k-probe Hotel corridor (180 k triangles) in about
+  170 ms. Starting a bake while the sky's light is on reads its irradiance
+  back from the device (144 bytes, a short wait on the render thread).
+- Trilinear sampling reads the probes within one cell of a surface, on
+  both sides of a wall thinner than the spacing: at 2 m a 1 m wall lets about
+  a fifth of the daylight beyond it onto its inner face. Where thin walls
+  matter, keep the spacing at or under their thickness (the fixture's room
+  uses 0.5 m), or thicken them.
+- It is one volume. A product moves it with the player in a large world; a
+  volume that follows the camera and rebakes only the bricks the world
+  changed in is #9597.
+- Per lit fragment the shader adds three trilinear reads of one small 3D
+  texture (RGBA16F, 24 bytes a probe), six for metals and under the sky's
+  light. At 1080p that is 0.01 to 0.05 ms of world pass on an RX 9070 XT and
+  1 to 4 ms on llvmpipe (4 to 14 percent of its world pass; the share is
+  highest where the pass is otherwise cheap). `rusty-scene-render --indirect-light
+  cx,cy,cz,ex,ey,ez,spacing,bounces[,floor]` bakes a volume before its frames
+  and reports it under `gpu.indirectLight`.
+
 ## The sky's light
 
 The background can light the world: a sky panorama (or the two a blend
@@ -568,7 +627,9 @@ them. The Engine owns GPU lifetime and panorama orientation.
 `fixtures/csharp-lighting-sky` uses the packaged SDK, a voxel room, a retained
 torch light, a persistence round-trip and two deterministic authored panoramas.
 Commands: `lighting.inspect`, `lighting.torch true|false`, `lighting.sky 0..1`,
-`lighting.room`, `lighting.fog <density>` (0 turns it off),
+`lighting.room`, `lighting.cave` (from the back wall toward the doorway),
+`lighting.indirect sky|floor|off` (the probe volume over the room),
+`lighting.fog <density>` (0 turns it off),
 `lighting.exposure <exposure>` (ACES filmic), `lighting.atmosphere true|false`
 (height fog, sun haze, disc and halo) and `lighting.panorama`.
 `lighting.sky` also moves the fixture's sun from noon at 0 to a low dusk sun

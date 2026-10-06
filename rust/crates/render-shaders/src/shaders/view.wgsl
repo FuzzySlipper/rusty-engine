@@ -23,3 +23,9 @@
 @group(0) @binding(8) var sky_specular: texture_cube<f32>;
 @group(0) @binding(9) var sky_sampler: sampler;
 @group(0) @binding(10) var<storage, read> sky_irradiance: array<vec4<f32>, 9>;
+// The indirect light volume (render-wgpu `probes.rs`): a 3D texture of each
+// probe's four L1 irradiance coefficients (Y0, Y1 by y, z, x), the red, green
+// and blue channels' slabs following each other along its depth, sampled
+// trilinearly; `Frame.probes` and `Frame.probe_grid` place it.
+@group(0) @binding(11) var probes: texture_3d<f32>;
+@group(0) @binding(12) var probes_sampler: sampler;

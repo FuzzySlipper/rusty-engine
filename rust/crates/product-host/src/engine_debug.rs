@@ -125,6 +125,31 @@ pub struct ProductHostGpuStatistics {
     pub distance_fields: ProductHostDistanceFieldStatistics,
     pub light_clusters: ProductHostLightClusterStatistics,
     pub gpu_culling: ProductHostGpuCullingStatistics,
+    pub indirect_light: ProductHostIndirectLightStatistics,
+}
+
+/// The indirect light volume (`CameraView.SetIndirectLight`): its probes and
+/// the bake that keeps them current.
+#[derive(Debug, Clone, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ProductHostIndirectLightStatistics {
+    /// A volume is requested.
+    pub enabled: bool,
+    /// Probes per axis of the baked volume (zeros before the first bake).
+    pub dims: [u32; 3],
+    pub probes: u32,
+    /// Probes inside geometry, filled from their neighbours.
+    pub invalid: u32,
+    /// Triangles the last bake traced.
+    pub triangles: u32,
+    /// The last bake's wall time in milliseconds, collection included.
+    pub bake_ms: f64,
+    /// Bakes uploaded since the renderer was made.
+    pub bakes: u32,
+    /// A change waits for the debounce or a bake is running.
+    pub pending: bool,
+    /// GPU bytes the volume's textures hold.
+    pub bytes: u64,
 }
 
 /// The chunk distance field atlas the `distanceField` ambient occlusion

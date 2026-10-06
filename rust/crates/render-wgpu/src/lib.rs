@@ -43,6 +43,7 @@ mod particles;
 mod pipelines;
 mod post;
 mod primitives;
+mod probes;
 mod resources;
 mod shaders;
 mod shadows;
@@ -58,7 +59,7 @@ pub mod web;
 
 use std::collections::HashMap;
 
-use render_model::{AmbientOcclusionMode, RendererSettingsDescriptor};
+use render_model::{AmbientOcclusionMode, IndirectLightDescriptor, RendererSettingsDescriptor};
 
 /// The CPU-side realization vocabulary, for readers that need exactly the
 /// geometry and materials the renderer draws without a device
@@ -92,6 +93,7 @@ pub use ghost::GhostPlateReadout;
 pub use gpu::{AdapterSummary, ComputeLimits, Gpu, GpuError};
 pub use light_clusters::LightClusterReadout;
 pub use particles::EntityPositions;
+pub use probes::IndirectLightReadout;
 pub use resources::{decode_png_rgba, encode_png, NoResources, ResourceSource};
 pub use surface::{PresentSkip, SurfaceFrame, WindowSurface};
 pub use target::OffscreenTarget;
@@ -138,6 +140,8 @@ pub struct GpuReadout {
     pub distance_fields: DistanceFieldReadout,
     pub light_clusters: LightClusterReadout,
     pub gpu_culling: GpuCullingReadout,
+    /// The indirect light volume (`probes.rs`).
+    pub indirect_light: IndirectLightReadout,
 }
 
 /// Host choices that are not part of the retained model.
@@ -300,6 +304,9 @@ pub struct Renderer {
     sun: Option<frame::Sun>,
     /// The sky's light: the background prefiltered for the standard shader.
     sky_light: sky_light::SkyLight,
+    /// The indirect light volume and the bake that keeps it current
+    /// (`probes.rs`).
+    probes: probes::ProbeVolume,
     /// Unbounded world lights in the last upload (`upload_lights`): the
     /// clustered path loops when they exceed its global list.
     global_lights: u32,
@@ -378,6 +385,7 @@ impl Renderer {
             frame::storage_buffer(device, "render-wgpu instances", INITIAL_INSTANCES_BYTES);
         let shadows = shadows::ShadowMaps::new(device, &layouts.shadow_layer);
         let sky_light = sky_light::SkyLight::new(gpu);
+        let probes = probes::ProbeVolume::new(gpu);
         let light_clusters = light_clusters::LightClusters::new(
             gpu,
             pipelines::standard(layouts.shaders.module(
@@ -405,6 +413,7 @@ impl Renderer {
                 shadows: &shadows,
                 sky_light: &sky_light,
                 clusters: &light_clusters.clusters,
+                probes: &probes,
             },
         );
         let caster_bind_group = frame::caster_bind_group(
@@ -472,6 +481,7 @@ impl Renderer {
             lights: Default::default(),
             sun: None,
             sky_light,
+            probes,
             global_lights: 0,
             instances_buffer,
             casters_uploaded: false,
@@ -669,7 +679,43 @@ impl Renderer {
             distance_fields: self.distance_fields.readout(),
             light_clusters: self.light_clusters.readout(),
             gpu_culling: self.culling.readout(),
+            indirect_light: self.probes.readout(),
         }
+    }
+
+    /// Request the indirect light volume, or with `None` drop it, as
+    /// `RenderDiff::SetIndirectLight` does. A request bakes after the scene
+    /// has been still for `probes::DEBOUNCE`.
+    pub fn set_indirect_light(&mut self, indirect_light: Option<IndirectLightDescriptor>) {
+        self.tables.indirect_light = indirect_light;
+        if indirect_light.is_some() {
+            self.probes.touch(std::time::Instant::now());
+        } else if self.probes.clear(&self.gpu) {
+            self.rebind_frame();
+        }
+    }
+
+    /// A retained change the indirect light volume should follow.
+    pub(crate) fn touch_indirect_light(&mut self) {
+        if self.tables.indirect_light.is_some() {
+            self.probes.touch(std::time::Instant::now());
+        }
+    }
+
+    /// Bake the requested volume now, on this thread's workers, and upload
+    /// it: for tools and tests that want it before the next frame. `None`
+    /// without a request.
+    pub fn bake_indirect_light_now(&mut self) -> Option<IndirectLightReadout> {
+        let descriptor = self.tables.indirect_light?;
+        let job = self.probe_bake_job(&descriptor);
+        if self.probes.bake_now(&self.gpu, job) {
+            self.rebind_frame();
+        }
+        Some(self.probes.readout())
+    }
+
+    pub fn indirect_light_readout(&self) -> IndirectLightReadout {
+        self.probes.readout()
     }
 
     /// Retained table sizes, for diagnostics and tests.

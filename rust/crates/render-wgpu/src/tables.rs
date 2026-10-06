@@ -592,6 +592,11 @@ pub(crate) enum Environment {
 
 pub(crate) struct Tables {
     pub textures: HashMap<String, GpuTexture>,
+    /// Each texture's colour reduced to a small grid, for the probe bake's
+    /// albedo (`probes.rs`).
+    pub texture_thumbs: HashMap<String, crate::probes::Thumb>,
+    /// Each material's albedo factor for the probe bake, by material id.
+    pub material_means: HashMap<String, [f32; 3]>,
     /// Product shaders by id, with the composer id materials shaded by
     /// them take (`Shaders::product`).
     pub shaders: HashMap<String, (render_model::ShaderDescriptor, u32)>,
@@ -618,6 +623,8 @@ pub(crate) struct Tables {
     pub color_grading: Option<render_model::ColorGradingDescriptor>,
     pub atmosphere: Option<render_model::AtmosphereDescriptor>,
     pub sun_shafts: Option<render_model::SunShaftsDescriptor>,
+    /// The indirect light volume requested (`probes.rs`).
+    pub indirect_light: Option<render_model::IndirectLightDescriptor>,
     pub sky_light: Option<render_model::SkyLightDescriptor>,
     /// Nodes whose transform, visibility or parent changed since `prepare`.
     pub dirty_nodes: HashSet<RenderHandle>,
@@ -631,6 +638,8 @@ impl Tables {
     pub fn new() -> Self {
         Self {
             textures: HashMap::new(),
+            texture_thumbs: HashMap::new(),
+            material_means: HashMap::new(),
             shaders: HashMap::new(),
             materials: Slots::default(),
             static_meshes: Slots::default(),
@@ -652,6 +661,7 @@ impl Tables {
             color_grading: None,
             atmosphere: None,
             sun_shafts: None,
+            indirect_light: None,
             sky_light: None,
             dirty_nodes: HashSet::new(),
             lights: HashSet::new(),

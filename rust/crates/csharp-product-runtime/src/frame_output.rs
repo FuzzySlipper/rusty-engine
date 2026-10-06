@@ -42,11 +42,11 @@ use product_host::{
     ProductHostAmbientOcclusionPath, ProductHostAmbientOcclusionStatistics,
     ProductHostComputeLimits, ProductHostDistanceFieldStatistics, ProductHostDrawingMode,
     ProductHostDrawnFrame, ProductHostFrameStream, ProductHostGpuCullingStatistics,
-    ProductHostGpuPass, ProductHostGpuStatistics, ProductHostLightClusterStatistics,
-    ProductHostRendererInspection, ProductHostRendererSettingValues, ProductHostRendererSettings,
-    ProductHostRendererStatistics, ProductHostShadowStatistics, ProductHostStreamMedians,
-    ProductHostStreamStatistics, ProductHostTimedStep, ProductHostWindowMedians,
-    ProductHostWindowStatistics,
+    ProductHostGpuPass, ProductHostGpuStatistics, ProductHostIndirectLightStatistics,
+    ProductHostLightClusterStatistics, ProductHostRendererInspection,
+    ProductHostRendererSettingValues, ProductHostRendererSettings, ProductHostRendererStatistics,
+    ProductHostShadowStatistics, ProductHostStreamMedians, ProductHostStreamStatistics,
+    ProductHostTimedStep, ProductHostWindowMedians, ProductHostWindowStatistics,
 };
 use render_host_contracts::{RendererCameraPose, RendererViewComposition, RendererViewTarget};
 use render_stream::{DrawnFrame, FrameStreamer, StreamStats};
@@ -898,6 +898,17 @@ fn gpu_statistics(readout: GpuReadout) -> ProductHostGpuStatistics {
             batches: readout.gpu_culling.batches,
             visible: readout.gpu_culling.visible,
             multi_draws: readout.gpu_culling.multi_draws,
+        },
+        indirect_light: ProductHostIndirectLightStatistics {
+            enabled: readout.indirect_light.enabled,
+            dims: readout.indirect_light.dims,
+            probes: readout.indirect_light.probes,
+            invalid: readout.indirect_light.invalid,
+            triangles: readout.indirect_light.triangles,
+            bake_ms: readout.indirect_light.bake_ms,
+            bakes: readout.indirect_light.bakes,
+            pending: readout.indirect_light.pending,
+            bytes: readout.indirect_light.bytes,
         },
     }
 }

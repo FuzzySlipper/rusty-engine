@@ -5,7 +5,7 @@
 // with no tone mapping; the sRGB target encodes the output.
 
 #import rusty::types::PI
-#import rusty::view::{frame, lights, shadow_maps, shadow_sampler, shadow_views, clusters, sky_specular, sky_sampler, sky_irradiance}
+#import rusty::view::{frame, lights, shadow_maps, shadow_sampler, shadow_views, clusters, sky_specular, sky_sampler, sky_irradiance, probes, probes_sampler}
 
 // The shadow atlas page's side in texels (`shadows.rs` PAGE_SIZE).
 const SHADOW_PAGE_SIZE: f32 = 2048.0;
@@ -205,6 +205,65 @@ fn fragment_cluster(world_position: vec3<f32>) -> u32 {
 
 // One light row's contribution to a fragment's irradiance, specular and
 // environment sums (`standard_radiance`).
+// What the indirect light volume (render-wgpu `probes.rs`) gives a fragment:
+// irradiance along its normal and along its reflection, how much the volume
+// covers it (fading to nothing a cell beyond its edge), and the shares the
+// ambient rows and the hemisphere, sky and other outside light keep.
+struct ProbeLight {
+    diffuse: vec3<f32>,
+    reflected: vec3<f32>,
+    coverage: f32,
+    // The ambient rows' share: 1 - coverage where the probes see the sky, 1
+    // where the ambient light is a floor the probes add to.
+    ambient: f32,
+    // The hemisphere rows' and the sky light's share: 1 - coverage.
+    outside: f32,
+};
+
+// In probe spacings: how far along the normal the volume is sampled.
+const PROBE_NORMAL_OFFSET: f32 = 0.3;
+
+// `cell` is the sample in probe cells from the first probe's centre plus a
+// half, within one channel's slab; `depth` is probes along z.
+fn probe_sh(cell: vec3<f32>, dims: vec3<f32>, d: vec3<f32>) -> vec3<f32> {
+    let slab = vec3<f32>(0.0, 0.0, dims.z);
+    let size = vec3<f32>(dims.x, dims.y, 3.0 * dims.z);
+    let r = textureSampleLevel(probes, probes_sampler, cell / size, 0.0);
+    let g = textureSampleLevel(probes, probes_sampler, (cell + slab) / size, 0.0);
+    let b = textureSampleLevel(probes, probes_sampler, (cell + 2.0 * slab) / size, 0.0);
+    let basis = vec4<f32>(0.282095, 0.488603 * d.y, 0.488603 * d.z, 0.488603 * d.x);
+    return max(vec3<f32>(dot(r, basis), dot(g, basis), dot(b, basis)), vec3<f32>(0.0));
+}
+
+// `want_reflected` asks for the irradiance along the reflection too (metals,
+// and every surface while the sky's light is on); the other sample is skipped.
+fn probe_light(position: vec3<f32>, normal: vec3<f32>, reflected: vec3<f32>, want_reflected: bool) -> ProbeLight {
+    var result = ProbeLight(vec3<f32>(0.0), vec3<f32>(0.0), 0.0, 1.0, 1.0);
+    let mode = frame.probe_grid.w;
+    if mode < 0.5 {
+        return result;
+    }
+    let origin = frame.probes.xyz;
+    let spacing = frame.probes.w;
+    let dims = frame.probe_grid.xyz;
+    let extent = dims - vec3<f32>(1.0);
+    let grid = (position + normal * (spacing * PROBE_NORMAL_OFFSET) - origin) / spacing;
+    let outside = max(max(-grid, grid - extent), vec3<f32>(0.0));
+    let coverage = clamp(1.0 - max(outside.x, max(outside.y, outside.z)), 0.0, 1.0);
+    if coverage <= 0.0 {
+        return result;
+    }
+    let cell = clamp(grid, vec3<f32>(0.0), extent) + vec3<f32>(0.5);
+    result.diffuse = probe_sh(cell, dims, normal);
+    if want_reflected {
+        result.reflected = probe_sh(cell, dims, reflected);
+    }
+    result.coverage = coverage;
+    result.outside = 1.0 - coverage;
+    result.ambient = select(1.0 - coverage, 1.0, mode > 1.5);
+    return result;
+}
+
 fn add_light(
     index: u32,
     f0: vec3<f32>,
@@ -214,6 +273,8 @@ fn add_light(
     roughness: f32,
     occlusion: f32,
     reflected: vec3<f32>,
+    probe_ambient: f32,
+    probe_outside: f32,
     irradiance: ptr<function, vec3<f32>>,
     specular: ptr<function, vec3<f32>>,
     environment: ptr<function, vec3<f32>>,
@@ -228,14 +289,14 @@ fn add_light(
             if sky_layer > 0u {
                 sky = sky_visibility(sky_layer - 1u, world_position, normal);
             }
-            *irradiance += color * occlusion * sky;
-            *environment += color * occlusion * sky;
+            *irradiance += color * occlusion * sky * probe_ambient;
+            *environment += color * occlusion * sky * probe_ambient;
             if sky_layer > 0u {
                 *sky_open = min(*sky_open, sky);
             }
         } else if kind == 1u {
-            *irradiance += mix(light.extra.rgb, color, 0.5 * normal.y + 0.5) * occlusion;
-            *environment += mix(light.extra.rgb, color, 0.5 * reflected.y + 0.5) * occlusion;
+            *irradiance += mix(light.extra.rgb, color, 0.5 * normal.y + 0.5) * occlusion * probe_outside;
+            *environment += mix(light.extra.rgb, color, 0.5 * reflected.y + 0.5) * occlusion * probe_outside;
         } else {
             var direction = -normalize(light.direction_decay.xyz);
             var attenuation = 1.0;
@@ -311,34 +372,40 @@ fn standard_radiance(
     // How open the sky above is, through an ambient light's sky layer.
     var sky_open = 1.0;
     let reflected = reflect(-view, normal);
+    // Inside the indirect light volume its probes stand in for the ambient
+    // and hemisphere rows and the sky's light.
+    let probe = probe_light(world_position, normal, reflected, metalness > 0.0 || frame.sky_light.x > 0.0);
     if frame.cluster_grid.w == 1u {
         // The global list, then the fragment's cluster.
         let global_base = frame.cluster_grid.x * frame.cluster_grid.y * frame.cluster_grid.z * CLUSTER_STRIDE;
         let global_count = min(clusters[global_base], CLUSTER_STRIDE - 1u);
         for (var slot = 0u; slot < global_count; slot = slot + 1u) {
             add_light(clusters[global_base + 1u + slot], f0, view, normal, world_position, roughness,
-                occlusion, reflected, &irradiance, &specular, &environment, &sky_open);
+                occlusion, reflected, probe.ambient, probe.outside, &irradiance, &specular, &environment, &sky_open);
         }
         let base = fragment_cluster(world_position) * CLUSTER_STRIDE;
         let count = min(clusters[base], CLUSTER_STRIDE - 1u);
         for (var slot = 0u; slot < count; slot = slot + 1u) {
             add_light(clusters[base + 1u + slot], f0, view, normal, world_position, roughness,
-                occlusion, reflected, &irradiance, &specular, &environment, &sky_open);
+                occlusion, reflected, probe.ambient, probe.outside, &irradiance, &specular, &environment, &sky_open);
         }
     } else {
         for (var index = frame.counts.y; index < frame.counts.y + frame.counts.x; index = index + 1u) {
             add_light(index, f0, view, normal, world_position, roughness, occlusion, reflected,
-                &irradiance, &specular, &environment, &sky_open);
+                probe.ambient, probe.outside, &irradiance, &specular, &environment, &sky_open);
         }
     }
+    irradiance += probe.diffuse * occlusion * probe.coverage;
+    environment += probe.reflected * occlusion * probe.coverage;
     let n_dot_v = clamp(dot(normal, view), 0.0, 1.0);
     var reflection = metalness * environment * environment_brdf(f0, roughness, n_dot_v);
     let sky_intensity = frame.sky_light.x;
     if sky_intensity > 0.0 {
-        let sky = sky_intensity * occlusion * sky_open;
+        let sky = sky_intensity * occlusion * sky_open * probe.outside;
         irradiance += max(sky_irradiance_along(normal), vec3<f32>(0.0)) * sky;
         let prefiltered = textureSampleLevel(sky_specular, sky_sampler, reflected, roughness * frame.sky_light.y).rgb;
-        reflection = prefiltered * sky * environment_brdf(f0, roughness, n_dot_v);
+        reflection = (prefiltered * sky + probe.reflected / PI * occlusion * probe.coverage)
+            * environment_brdf(f0, roughness, n_dot_v);
     }
     return albedo * (1.0 - metalness) * irradiance / PI + specular + reflection;
 }

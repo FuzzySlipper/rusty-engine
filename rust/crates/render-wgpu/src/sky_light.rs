@@ -84,7 +84,7 @@ impl Copy {
         let irradiance = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("render-wgpu sky irradiance"),
             size: 9 * 16,
-            usage: wgpu::BufferUsages::STORAGE,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
             mapped_at_creation: false,
         });
         Self {
@@ -149,6 +149,40 @@ impl SkyLight {
     /// Whether the shader's copy holds a build.
     pub fn built(&self) -> bool {
         self.copies[self.front].source.is_some()
+    }
+
+    /// The shader's copy's nine irradiance coefficients, read back now (144
+    /// bytes, a short wait on the device); `None` before a build. The probe
+    /// bake takes them as the sky a missed ray sees.
+    pub fn read_irradiance(&self, gpu: &Gpu) -> Option<[[f32; 4]; 9]> {
+        if !self.built() {
+            return None;
+        }
+        let staging = gpu.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("render-wgpu sky irradiance readback"),
+            size: 9 * 16,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let mut encoder = gpu
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("render-wgpu sky irradiance readback"),
+            });
+        encoder.copy_buffer_to_buffer(self.irradiance(), 0, &staging, 0, 9 * 16);
+        gpu.queue.submit([encoder.finish()]);
+        let slice = staging.slice(..);
+        slice.map_async(wgpu::MapMode::Read, |_| {});
+        let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
+        let mapped = slice.get_mapped_range().ok()?;
+        let floats: &[f32] = bytemuck::cast_slice(&mapped);
+        let mut coefficients = [[0.0; 4]; 9];
+        for (row, values) in coefficients.iter_mut().zip(floats.as_chunks::<4>().0) {
+            *row = *values;
+        }
+        drop(mapped);
+        staging.unmap();
+        Some(coefficients)
     }
 
     pub fn timing(&self) -> GpuPassTiming {

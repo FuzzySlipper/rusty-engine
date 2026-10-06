@@ -237,6 +237,68 @@ impl SunShaftsDescriptor {
     }
 }
 
+/// Which light the ambient rows give inside an indirect light volume.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum IndirectAmbient {
+    /// The ambient light is the sky's: the volume's probes see it where the
+    /// world opens to it and it reaches nothing enclosed.
+    #[default]
+    Sky,
+    /// The ambient light is a flat floor that stays everywhere; the probes
+    /// add the hemisphere, bounce and emission over it.
+    Floor,
+}
+
+/// Indirect light: one irradiance probe volume the Engine bakes from the
+/// scene's own geometry and lights and the standard shader samples as the
+/// ambient term where it covers a fragment (render-wgpu `probes.rs`). The
+/// box is `center ± extent`; probes sit `spacing` apart; `bounces` passes of
+/// light (1 sees direct-lit surfaces and the sky, each further pass one more
+/// bounce).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct IndirectLightDescriptor {
+    pub center: [f32; 3],
+    /// Half the box's side on each axis.
+    pub extent: [f32; 3],
+    pub spacing: f32,
+    pub bounces: u32,
+    #[serde(default)]
+    pub ambient: IndirectAmbient,
+}
+
+impl IndirectLightDescriptor {
+    pub const MIN_SPACING: f32 = 0.5;
+    pub const MAX_SPACING: f32 = 8.0;
+    pub const MAX_BOUNCES: u32 = 4;
+    /// The most probes one volume may hold (64³).
+    pub const MAX_PROBES: u64 = 262_144;
+    /// The most probes along one axis: the three colour channels stack along
+    /// the volume texture's depth and stay within any adapter's 3D texture size.
+    pub const MAX_AXIS: u64 = 512;
+
+    /// Probes per axis for the box and spacing.
+    pub fn dims(&self) -> [u64; 3] {
+        [0, 1, 2].map(|axis| ((2.0 * self.extent[axis] / self.spacing).floor() as u64 + 1).max(2))
+    }
+
+    /// Finite values, a non-negative extent, a spacing within
+    /// `MIN_SPACING..=MAX_SPACING`, bounces within `1..=MAX_BOUNCES` and at
+    /// most `MAX_PROBES` probes.
+    pub fn valid(&self) -> bool {
+        let finite = |values: &[f32; 3]| values.iter().all(|value| value.is_finite());
+        finite(&self.center)
+            && finite(&self.extent)
+            && self.extent.iter().all(|value| *value >= 0.0)
+            && self.spacing.is_finite()
+            && (Self::MIN_SPACING..=Self::MAX_SPACING).contains(&self.spacing)
+            && (1..=Self::MAX_BOUNCES).contains(&self.bounces)
+            && self.dims().iter().product::<u64>() <= Self::MAX_PROBES
+            && self.dims().iter().all(|dim| *dim <= Self::MAX_AXIS)
+    }
+}
+
 /// The sky's light: the background (a sky panorama, two blended, or the
 /// clear colour) lights the world as an environment, its radiance scaled by
 /// `intensity` (0 to 16).
@@ -749,6 +811,10 @@ pub enum RenderDiff {
     SetSunShafts {
         sun_shafts: Option<SunShaftsDescriptor>,
     },
+    /// The indirect light volume; `None` turns it off.
+    SetIndirectLight {
+        indirect_light: Option<IndirectLightDescriptor>,
+    },
     /// Selects the sky's light; None turns it off.
     SetSkyLight {
         sky_light: Option<SkyLightDescriptor>,
@@ -915,6 +981,10 @@ impl RenderDiff {
                 sun_shafts: Some(sun_shafts),
             } if !sun_shafts.valid() => Err(RenderOperationError::SunShafts),
             Self::SetSunShafts { .. } => Ok(()),
+            Self::SetIndirectLight {
+                indirect_light: Some(indirect_light),
+            } if !indirect_light.valid() => Err(RenderOperationError::IndirectLight),
+            Self::SetIndirectLight { .. } => Ok(()),
             Self::SetSkyLight {
                 sky_light: Some(sky_light),
             } if !sky_light.valid() => Err(RenderOperationError::SkyLight),
@@ -1025,6 +1095,7 @@ impl RenderDiff {
             | Self::SetColorGrading { .. }
             | Self::SetAtmosphere { .. }
             | Self::SetSunShafts { .. }
+            | Self::SetIndirectLight { .. }
             | Self::SetSkyLight { .. }
             | Self::SetRendererSettings { .. }
             | Self::DefineSpriteAtlas { .. }
@@ -1068,6 +1139,7 @@ pub enum RenderOperationError {
     ColorGrading,
     Atmosphere,
     SunShafts,
+    IndirectLight,
     SkyLight,
     RendererSettings,
     SpriteAtlas(crate::SpriteAtlasError),
@@ -1144,6 +1216,7 @@ impl RenderFrameDiff {
                 | RenderDiff::SetColorGrading { .. }
                 | RenderDiff::SetAtmosphere { .. }
                 | RenderDiff::SetSunShafts { .. }
+                | RenderDiff::SetIndirectLight { .. }
                 | RenderDiff::SetSkyLight { .. }
                 | RenderDiff::SetRendererSettings { .. }
                 | RenderDiff::DefineSpriteAtlas { .. }

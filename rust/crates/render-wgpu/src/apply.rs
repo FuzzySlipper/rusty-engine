@@ -154,6 +154,9 @@ impl Renderer {
             RenderDiff::SetSunShafts { sun_shafts } => {
                 self.tables.sun_shafts = *sun_shafts;
             }
+            RenderDiff::SetIndirectLight { indirect_light } => {
+                self.set_indirect_light(*indirect_light);
+            }
             RenderDiff::SetSkyLight { sky_light } => {
                 self.tables.sky_light = *sky_light;
             }
@@ -884,8 +887,19 @@ impl Renderer {
         resources: &dyn ResourceSource,
     ) -> Result<(), String> {
         let image = resources::texture_image(texture, resources)?;
+        if let Some(image) = image.as_ref() {
+            let srgb = texture
+                .payload
+                .as_ref()
+                .is_none_or(|payload| payload.color_space == TextureColorSpace::Srgb);
+            self.tables.texture_thumbs.insert(
+                texture.id.clone(),
+                crate::probes::Thumb::of(&image.rgba, image.width, image.height, srgb),
+            );
+        }
         let uploaded = self.upload_texture(texture, image.as_ref());
         self.tables.textures.insert(texture.id.clone(), uploaded);
+        self.touch_indirect_light();
         if let Some(id) = self.tables.names.get(&texture.id) {
             self.effects.forget_texture(id);
         }
@@ -941,6 +955,11 @@ impl Renderer {
     }
 
     fn define_material(&mut self, descriptor: RenderMaterialDescriptor) -> Result<(), String> {
+        self.tables.material_means.insert(
+            descriptor.id.clone(),
+            crate::probes::material_mean(&descriptor, &self.tables.texture_thumbs),
+        );
+        self.touch_indirect_light();
         let texture = descriptor
             .texture
             .as_ref()
@@ -2053,6 +2072,7 @@ fn op_name(op: &RenderDiff) -> &'static str {
         RenderDiff::SetColorGrading { .. } => "setColorGrading",
         RenderDiff::SetAtmosphere { .. } => "setAtmosphere",
         RenderDiff::SetSunShafts { .. } => "setSunShafts",
+        RenderDiff::SetIndirectLight { .. } => "setIndirectLight",
         RenderDiff::SetSkyLight { .. } => "setSkyLight",
         RenderDiff::SetRendererSettings { .. } => "setRendererSettings",
         RenderDiff::SetToneMapping { .. } => "setToneMapping",

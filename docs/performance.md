@@ -73,7 +73,9 @@ pass, its `bloom-exposure` passes (with sun shafts) together and its
 `finish` pass
 ([exposure, tone mapping and fog](lighting-and-sky.md#exposure-tone-mapping-and-fog)),
 and a frame's share of building [the sky's
-light](lighting-and-sky.md#the-skys-light) (`sky-light`).
+light](lighting-and-sky.md#the-skys-light) (`sky-light`). `gpu.indirectLight`
+is [the probe volume](lighting-and-sky.md#indirect-light-the-probe-volume):
+its probes, triangles, last bake time and bytes.
 
 To measure the renderer's frame cost without the product, take a scene
 snapshot on the running product (`engine.renderer.snapshot <path>`, see
@@ -90,8 +92,10 @@ median draw calls, instances and CPU microseconds spent building draw lists
 per frame, the `gpu` pass medians, and the renderer `settings` drawn (the snapshot's,
 changed by the flags below) with what the adapter refused. `--ambient-occlusion off|compute|raster|field` draws the
 snapshot with that ambient occlusion path (`field` cone-traces the voxel
-chunks' distance fields), and `--render-scale S` at that fraction of the
-output size, to compare the paths on one scene. Compare
+chunks' distance fields), `--render-scale S` at that fraction of the
+output size, and `--indirect-light cx,cy,cz,ex,ey,ez,spacing,bounces[,floor]`
+with a probe volume baked before the frames (reported under `gpu.indirectLight`), to
+compare the paths on one scene. Compare
 snapshots drawn on the same adapter; `WGPU_BACKEND` selects it as for any
 wgpu program. A still camera reuses work a moving one repeats (culled lists,
 a directional light's shadow cascades): add `--walk M` or `--turn D` to move

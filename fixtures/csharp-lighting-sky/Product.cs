@@ -24,8 +24,15 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     private static readonly Vector3 TorchPosition = new(3.5f,2.5f,3.5f);
     private static readonly Vector3 RoomEye = new(3.5f,2.5f,6.5f), RoomTarget = new(3.5f,2,1);
     private static readonly Vector3 SkyEye = new(12,8,14), SkyTarget = new(3.5f,5,3.5f);
+    // A doorway in the room's +z wall, so daylight has a way in; seen from the back wall.
+    private const int DoorMinX = 3, DoorMaxX = 4, DoorMinY = 1, DoorMaxY = 3;
+    private static readonly Vector3 CaveEye = new(3.5f,2.5f,1.2f), CaveTarget = new(3.5f,2,7.5f);
+    // The indirect light volume over the room and a little past its walls, probes half a metre apart.
+    private static readonly Vector3 IndirectCenter = new(3.5f,2.5f,3.5f), IndirectExtent = new(4.5f,3,4.5f);
+    private const float IndirectSpacing = .5f;
+    private const uint IndirectBounces = 2;
     private static readonly Color FogColor = new(.55f,.6f,.7f,1);
-    // The sun follows the product's clock from noon (0) to dusk (1).
+    // The sun follows the product's clock from noon (0) to dusk (1); it casts a shadow when renderer shadows are on, so the room's inside is lit only through its doorway.
     private static readonly Vector3 NoonSunColor = new(1,.96f,.88f), DuskSunColor = new(1,.55f,.3f);
     private const float NoonElevation = 55, DuskElevation = 6, SunAzimuth = 210, NoonSunIntensity = 2.5f, DuskSunIntensity = .5f;
     // Height fog over the room, hazy toward the sun, with its disc and halo.
@@ -63,7 +70,7 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         float elevation = float.DegreesToRadians(NoonElevation+(DuskElevation-NoonElevation)*clock), azimuth = float.DegreesToRadians(SunAzimuth);
         // The light travels from the sun, down toward the room.
         var travel = -new Vector3(MathF.Cos(elevation)*MathF.Sin(azimuth),MathF.Sin(elevation),MathF.Cos(elevation)*MathF.Cos(azimuth));
-        return new(LightKind.Directional,Vector3.Lerp(NoonSunColor,DuskSunColor,clock),NoonSunIntensity+(DuskSunIntensity-NoonSunIntensity)*clock,true,Vector3.Zero,travel,false,0,0,0,0,LightShadowIntent.Disabled);
+        return new(LightKind.Directional,Vector3.Lerp(NoonSunColor,DuskSunColor,clock),NoonSunIntensity+(DuskSunIntensity-NoonSunIntensity)*clock,true,Vector3.Zero,travel,false,0,0,0,0,LightShadowIntent.Requested);
     }
     // Half extent 0 leaves the Engine's default square (64 m a side); the light is disabled until asked for.
     private static LightDescriptor SkyAmbient(float halfExtent) => new(LightKind.Ambient,SkyAmbientColor,SkyAmbientIntensity,halfExtent>=0,Vector3.Zero,Vector3.UnitY,halfExtent>0,halfExtent,0,0,0,LightShadowIntent.Requested);
@@ -76,7 +83,7 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     {
         uint[] slots = new uint[ChunkEdge*ChunkEdge*ChunkEdge];
         for(int z=0;z<RoomWidth;z++) for(int y=0;y<RoomHeight;y++) for(int x=0;x<RoomWidth;x++)
-            if(x==0||x==RoomWidth-1||y==0||y==RoomHeight-1||z==0||z==RoomWidth-1) slots[x+ChunkEdge*(y+ChunkEdge*z)] = 1;
+            if((x==0||x==RoomWidth-1||y==0||y==RoomHeight-1||z==0||z==RoomWidth-1)&&!(z==RoomWidth-1&&x>=DoorMinX&&x<=DoorMaxX&&y>=DoorMinY&&y<=DoorMaxY)) slots[x+ChunkEdge*(y+ChunkEdge*z)] = 1;
         VoxelResidencyOperation[] ops=[new(VoxelResidencyOperationKind.Admit,new(0,0,0),0,(uint)slots.Length)];
         engine.Voxel.ApplyResidency(new(scene,ops,slots));
         presentation = engine.VoxelScenePresentation.ProjectScene(new(scene,new VoxelSceneMaterialBinding[]{new(1,stone)}));
@@ -118,6 +125,20 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         engine.Graphics.UpdateLight(new(skyAmbient,new(SkyAmbientId,false,0,SkyAmbient(halfExtent))));
         return JsonSerializer.Serialize(engine.Graphics.ReadLight(skyAmbient),ProofJsonContext.Default.LightReadout);
     }
+    // The indirect light volume over the room: "sky" lets the ambient light in only through the doorway and bounces the torch off the stone, "floor" keeps the ambient light everywhere and adds the bounce over it, "off" drops it.
+    [DebugCommand("lighting.indirect")]
+    public string Indirect(string mode)
+    {
+        engine.CameraView.SetIndirectLight(mode switch
+        {
+            "sky" => new(IndirectCenter,IndirectExtent,IndirectSpacing,IndirectBounces,IndirectAmbient.Sky),
+            "floor" => new(IndirectCenter,IndirectExtent,IndirectSpacing,IndirectBounces,IndirectAmbient.Floor),
+            _ => default,
+        });
+        return Inspect();
+    }
+    [DebugCommand("lighting.cave")]
+    public string Cave() { engine.CameraView.UpdateCamera(new(camera,Camera(CaveEye,CaveTarget))); return Inspect(); }
     [DebugCommand("lighting.room")]
     public string Room() { engine.CameraView.UpdateCamera(new(camera,Camera(RoomEye,RoomTarget))); return Inspect(); }
     [DebugCommand("lighting.fog")]

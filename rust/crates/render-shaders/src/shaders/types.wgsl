@@ -40,6 +40,12 @@ struct Frame {
     // The sky's light: x its intensity (0: off), y the specular cube's last
     // mip level (its roughest).
     sky_light: vec4<f32>,
+    // The indirect light volume (render-wgpu `probes.rs`): xyz the first
+    // probe's position, w the spacing between probes.
+    probes: vec4<f32>,
+    // xyz probes per axis; w 0 off, 1 the ambient light is the sky the
+    // probes see, 2 a floor the probes add to.
+    probe_grid: vec4<f32>,
     // Clustered lighting (`light_clusters.wgsl`): xyz: tiles across, tiles
     // down, depth slices; w: 1 when this pass's lights are read from the
     // clusters, 0 when they are looped over.

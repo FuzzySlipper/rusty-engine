@@ -21,7 +21,7 @@ use std::{path::PathBuf, time::Instant};
 
 use csharp_product_runtime::scene_snapshot::{SceneSnapshot, SceneSnapshotChange};
 use render_host_contracts::RendererCameraPose;
-use render_model::RendererSettingsDescriptor;
+use render_model::{IndirectLightDescriptor, RendererSettingsDescriptor};
 use render_presentation::PresentationWorld;
 use render_wgpu::{
     encode_png, AmbientOcclusion, AmbientOcclusionPath, Gpu, OffscreenTarget, RendererOptions,
@@ -31,7 +31,8 @@ use serde_json::json;
 
 const USAGE: &str = "usage: rusty-scene-render <snapshot> <out.png> [--width W] [--height H] \
      [--frames N] [--walk M] [--turn D] [--ambient-occlusion off|compute|raster|field] \
-     [--clustered-lighting on|off] [--gpu-culling on|off] [--render-scale S]";
+     [--clustered-lighting on|off] [--gpu-culling on|off] [--render-scale S] \
+     [--indirect-light cx,cy,cz,ex,ey,ez,spacing,bounces[,floor]]";
 
 fn main() {
     if let Err(error) = run() {
@@ -54,6 +55,7 @@ struct Arguments {
     clustered_lighting: Option<bool>,
     gpu_culling: Option<bool>,
     render_scale: Option<f32>,
+    indirect_light: Option<IndirectLightDescriptor>,
 }
 
 /// Parses the command line; `None` when it asked for help. A render scale is
@@ -68,6 +70,7 @@ fn parse(arguments: impl IntoIterator<Item = String>) -> Result<Option<Arguments
     let mut clustered_lighting: Option<bool> = None;
     let mut gpu_culling: Option<bool> = None;
     let mut render_scale: Option<f32> = None;
+    let mut indirect_light: Option<IndirectLightDescriptor> = None;
     while let Some(argument) = arguments.next() {
         let mut number = |name: &str| -> Result<f64, String> {
             arguments
@@ -90,6 +93,40 @@ fn parse(arguments: impl IntoIterator<Item = String>) -> Result<Option<Arguments
                     ));
                 }
                 render_scale = Some(scale);
+            }
+            "--indirect-light" => {
+                // cx,cy,cz,ex,ey,ez,spacing,bounces[,floor]
+                let value = arguments.next().unwrap_or_default();
+                let fields: Vec<&str> = value.split(',').collect();
+                let numbers: Option<Vec<f32>> = fields
+                    .iter()
+                    .take(8)
+                    .map(|field| field.trim().parse::<f32>().ok())
+                    .collect();
+                let descriptor = match numbers.as_deref() {
+                    Some([cx, cy, cz, ex, ey, ez, spacing, bounces]) => IndirectLightDescriptor {
+                        center: [*cx, *cy, *cz],
+                        extent: [*ex, *ey, *ez],
+                        spacing: *spacing,
+                        bounces: *bounces as u32,
+                        ambient: if fields.get(8) == Some(&"floor") {
+                            render_model::IndirectAmbient::Floor
+                        } else {
+                            render_model::IndirectAmbient::Sky
+                        },
+                    },
+                    _ => {
+                        return Err(format!(
+                        "--indirect-light needs cx,cy,cz,ex,ey,ez,spacing,bounces[,floor]\n{USAGE}"
+                    ))
+                    }
+                };
+                if !descriptor.valid() {
+                    return Err(format!(
+                        "--indirect-light: the box, spacing (0.5 to 8) or bounces (1 to 4) are out of range, or more than 262,144 probes\n{USAGE}"
+                    ));
+                }
+                indirect_light = Some(descriptor);
             }
             "--gpu-culling" => {
                 gpu_culling = Some(match arguments.next().as_deref() {
@@ -140,6 +177,7 @@ fn parse(arguments: impl IntoIterator<Item = String>) -> Result<Option<Arguments
         clustered_lighting,
         gpu_culling,
         render_scale,
+        indirect_light,
     }))
 }
 
@@ -156,6 +194,7 @@ fn run() -> Result<(), String> {
         clustered_lighting,
         gpu_culling,
         render_scale,
+        indirect_light,
     }) = parse(std::env::args().skip(1))?
     else {
         println!("{USAGE}");
@@ -208,6 +247,18 @@ fn run() -> Result<(), String> {
         snapshot.metadata.state.into(),
     );
     let apply_ms = ms(applied);
+    // The indirect light volume, the snapshot's or the flag's, bakes before
+    // the frames so they draw with it.
+    let baked = Instant::now();
+    let indirect = driver
+        .draw(|renderer, _| {
+            if indirect_light.is_some() {
+                renderer.set_indirect_light(indirect_light);
+            }
+            renderer.bake_indirect_light_now()
+        })
+        .0;
+    let bake_ms = indirect.map(|_| ms(baked));
     // The first frame on a new target also compiles its pipelines.
     let captured = Instant::now();
     let capture = driver.capture(Some((width, height)));
@@ -345,6 +396,15 @@ fn run() -> Result<(), String> {
                 "globalLights": gpu_readout.light_clusters.global_lights,
                 "overflowedClusters": gpu_readout.light_clusters.overflowed_clusters,
             },
+            "indirectLight": indirect.map(|readout| json!({
+                "dims": readout.dims,
+                "probes": readout.probes,
+                "invalid": readout.invalid,
+                "triangles": readout.triangles,
+                "bakeMs": readout.bake_ms,
+                "wallMs": bake_ms,
+                "bytes": readout.bytes,
+            })),
             "gpuCulling": {
                 "enabled": gpu_readout.gpu_culling.enabled,
                 "refused": gpu_readout.gpu_culling.refused,
@@ -396,6 +456,39 @@ mod tests {
                 error.starts_with("--render-scale needs a value from 0.5 to 1"),
                 "{refused}: {error}"
             );
+        }
+    }
+
+    #[test]
+    fn an_indirect_light_volume_is_a_box_a_spacing_and_bounces_within_their_ranges() {
+        let arguments = parsed(&["--indirect-light", "1,2,3,8,4,8,0.5,2"])
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            arguments.indirect_light,
+            Some(IndirectLightDescriptor {
+                center: [1.0, 2.0, 3.0],
+                extent: [8.0, 4.0, 8.0],
+                spacing: 0.5,
+                bounces: 2,
+                ambient: render_model::IndirectAmbient::Sky,
+            })
+        );
+        let floor = parsed(&["--indirect-light", "0,0,0,4,4,4,1,1,floor"])
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            floor.indirect_light.unwrap().ambient,
+            render_model::IndirectAmbient::Floor
+        );
+        for refused in [
+            "1,2,3",
+            "0,0,0,4,4,4,0.1,1",
+            "0,0,0,4,4,4,1,9",
+            "0,0,0,200,200,200,0.5,1",
+        ] {
+            let error = parsed(&["--indirect-light", refused]).unwrap_err();
+            assert!(error.starts_with("--indirect-light"), "{refused}: {error}");
         }
     }
 

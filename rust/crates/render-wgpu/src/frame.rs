@@ -43,8 +43,10 @@ const LIGHT_ROW_FLOATS: usize = 16;
 /// light count and first light; then exposure and fog distances, fog colour,
 /// and the tone mapping and fog modes; then the presentation time and the
 /// colour grading; then the sun, the atmosphere and the sky's light; then
-/// the light cluster grid and depth range.
-const FRAME_UNIFORM_BYTES: u64 = (16 + 16 + 4 + 4 + 4 + 4 + 4 + 4 + 4 + 4 + 4 * 4 + 4 + 4 + 4) * 4;
+/// the indirect light volume's origin and grid; then the light cluster grid
+/// and depth range.
+const FRAME_UNIFORM_BYTES: u64 =
+    (16 + 16 + 4 + 4 + 4 + 4 + 4 + 4 + 4 + 4 + 4 * 4 + 4 + 4 + 4 + 4 + 4) * 4;
 /// Instance regions before the shadow casters: a list and a visible region
 /// for each of the world and viewmodel layers (`update_view_list`).
 const VIEW_REGIONS: u32 = 4;
@@ -301,6 +303,7 @@ impl Renderer {
         self.exposure_adapted = false;
         self.batch_time = std::time::Duration::ZERO;
         let mut layers_changed = false;
+        let lights_changed = self.tables.lights_dirty;
         if self.tables.lights_dirty {
             layers_changed = self.upload_lights();
             self.tables.lights_dirty = false;
@@ -324,9 +327,28 @@ impl Renderer {
         {
             self.rebind_frame();
         }
+        if self.probes.poll(&self.gpu) {
+            self.rebind_frame();
+        }
         let uploaded = self.upload_parts();
         let regrouped = std::mem::take(&mut self.tables.parts.regrouped);
         let moved = std::mem::take(&mut self.tables.parts.moved);
+        if let Some(descriptor) = self.tables.indirect_light {
+            // A change inside the volume rebakes it once the scene is still.
+            let now = std::time::Instant::now();
+            let changed = lights_changed
+                || regrouped
+                || moved.iter().any(|id| {
+                    self.probe_box_touches(&self.tables.parts.state[*id as usize].world_bounds)
+                });
+            if changed && self.probes.stale(self.scene_generation) {
+                self.probes.touch(now);
+            }
+            if self.probes.due(now) {
+                let job = self.probe_bake_job(&descriptor);
+                self.probes.start(job);
+            }
+        }
         if regrouped || !moved.is_empty() {
             // Each layer re-culls on its next pass and uploads only a
             // different list.
@@ -591,6 +613,15 @@ impl Renderer {
         layers_changed
     }
 
+    /// The world's light rows, as `upload_lights` builds them, for the probe
+    /// bake.
+    pub(crate) fn world_light_rows(&self, rows: &mut Vec<f32>) {
+        if self.options.default_world_lights {
+            neutral_rig(rows, NEUTRAL_KEY_POSITION);
+        }
+        self.retained_light_rows(rows, ViewLayer::World, None);
+    }
+
     /// Choose which shadow candidates cast (`shadows::choose`, from the
     /// last world view's eye) and give the casting lights' layers to the
     /// atlas. Each candidate's light row gets its first layer + 1 in
@@ -838,7 +869,7 @@ impl Renderer {
         uploaded
     }
 
-    fn rebind_frame(&mut self) {
+    pub(crate) fn rebind_frame(&mut self) {
         self.frame_bind_group = frame_bind_group(
             &self.gpu.device,
             &self.layouts.frame,
@@ -850,6 +881,7 @@ impl Renderer {
                 shadows: &self.shadows,
                 sky_light: &self.sky_light,
                 clusters: &self.light_clusters.clusters,
+                probes: &self.probes,
             },
         );
         self.caster_bind_group = caster_bind_group(
@@ -1444,6 +1476,9 @@ impl Renderer {
         for value in [sky_intensity, roughest, 0.0, 0.0] {
             bytes.extend_from_slice(&value.to_le_bytes());
         }
+        for value in crate::probes::Grid::uniform(self.probes.grid.as_ref()) {
+            bytes.extend_from_slice(&value.to_le_bytes());
+        }
         // The cluster fields follow once the view's clusters are encoded.
         let cluster_offset = bytes.len() as u64;
         self.gpu.queue.write_buffer(&self.frame_buffer, 0, &bytes);
@@ -1910,6 +1945,7 @@ pub(crate) struct FrameBindings<'a> {
     pub shadows: &'a ShadowMaps,
     pub sky_light: &'a crate::sky_light::SkyLight,
     pub clusters: &'a wgpu::Buffer,
+    pub probes: &'a crate::probes::ProbeVolume,
 }
 
 pub(crate) fn frame_bind_group(
@@ -1964,6 +2000,14 @@ pub(crate) fn frame_bind_group(
             wgpu::BindGroupEntry {
                 binding: 10,
                 resource: bindings.sky_light.irradiance().as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 11,
+                resource: wgpu::BindingResource::TextureView(&bindings.probes.view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 12,
+                resource: wgpu::BindingResource::Sampler(&bindings.probes.sampler),
             },
         ],
     })
