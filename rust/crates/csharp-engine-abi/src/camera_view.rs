@@ -360,12 +360,6 @@ pub struct NativeAutoExposureRequest {
     pub max_exposure: f32,
 }
 
-/// Colour grading of the world with the tone mapping, after exposure and
-/// before the operator. Each control runs from -1 to 1, and 0 (the default)
-/// leaves the colour as it is: `temperature` cools toward blue or warms
-/// toward yellow, `tint` shifts toward green or magenta, `contrast` scales
-/// the distance from middle grey (flat at -1, doubled at 1) and
-/// `saturation` the distance from grey (none at -1, doubled at 1).
 /// The air and the sun in the sky. The sun is the brightest enabled
 /// directional world light. Fog thins with height: it has its `SetFog`
 /// density at `fog_base_height` (render world y) and falls by `e` every
@@ -386,6 +380,12 @@ pub struct NativeAtmosphereRequest {
     pub sun_halo: f32,
 }
 
+/// Colour grading of the world with the tone mapping, after exposure and
+/// before the operator. Each control runs from -1 to 1, and 0 (the default)
+/// leaves the colour as it is: `temperature` cools toward blue or warms
+/// toward yellow, `tint` shifts toward green or magenta, `contrast` scales
+/// the distance from middle grey (flat at -1, doubled at 1) and
+/// `saturation` the distance from grey (none at -1, doubled at 1).
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeColorGradingRequest {
