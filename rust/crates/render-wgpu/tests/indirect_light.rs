@@ -310,3 +310,76 @@ fn moving_the_volume_bakes_only_what_it_newly_covers_and_keeps_drawing() {
         );
     }
 }
+
+#[test]
+fn a_part_moving_between_bricks_rebakes_where_it_left_and_where_it_went() {
+    let mut harness = own_lights();
+    ground_with_bricks(&mut harness);
+    harness.apply(vec![
+        static_mesh(
+            "mesh/crate",
+            box_mesh([-1.0, 0.0, -1.0], [1.0, 2.0, 1.0], |_| 0),
+            "material/ground",
+        ),
+        instance(
+            31,
+            None,
+            "mesh/crate",
+            transform([20.0, 0.0, 20.0], 0.0, [1.0; 3]),
+        ),
+    ]);
+    bake(&mut harness);
+    // Across the volume: the corner it left and the corner it reaches both
+    // rebake, 8 bricks each.
+    harness.apply(vec![RenderDiff::Update {
+        handle: RenderHandle::new(31),
+        transform: Some(transform([-20.0, 0.0, -20.0], 0.0, [1.0; 3])),
+        material: None,
+        visible: None,
+        metadata: None,
+    }]);
+    harness.render(&over_the_ground());
+    let moved = bake(&mut harness);
+    assert_eq!(moved.last_batch_bricks, 16, "{moved:?}");
+}
+
+#[test]
+fn removing_one_of_two_identical_torches_rebakes_their_bricks() {
+    let mut harness = own_lights();
+    ground_with_bricks(&mut harness);
+    let torch = |handle: u64| RenderDiff::CreateLight {
+        handle: RenderHandle::new(handle),
+        parent: None,
+        light: LightDescriptor::Point {
+            color: [1.0, 0.7, 0.4],
+            intensity: 20.0,
+            enabled: true,
+            position: [-20.0, 2.0, -20.0],
+            range: Some(6.0),
+            decay: 2.0,
+            shadow_intent: LightShadowIntent::Disabled,
+            shadow: Default::default(),
+        },
+    };
+    harness.apply(vec![torch(3), torch(4)]);
+    bake(&mut harness);
+    harness.apply(vec![RenderDiff::Destroy {
+        handle: RenderHandle::new(4),
+    }]);
+    harness.render(&over_the_ground());
+    let dimmed = bake(&mut harness);
+    assert_eq!(dimmed.last_batch_bricks, 18, "{dimmed:?}");
+}
+
+#[test]
+fn the_upload_bytes_are_the_last_frames_and_zero_when_nothing_uploaded() {
+    let mut harness = own_lights();
+    ground_with_bricks(&mut harness);
+    bake(&mut harness);
+    harness.render(&over_the_ground());
+    let uploaded = harness.renderer.indirect_light_readout();
+    assert!(uploaded.upload_bytes > 0, "{uploaded:?}");
+    harness.render(&over_the_ground());
+    let idle = harness.renderer.indirect_light_readout();
+    assert_eq!(idle.upload_bytes, 0, "{idle:?}");
+}
