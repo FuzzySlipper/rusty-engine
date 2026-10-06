@@ -131,6 +131,65 @@ fn gpu_culling_draws_the_cpu_picture_across_camera_moves() {
     assert_screenshot("gpu-culling", &harness.render(&view(215.0)).1);
 }
 
+/// A camera-local opaque crate in the viewmodel layer, lower right of the
+/// view: its own candidate list beside the world's.
+fn add_viewmodel(harness: &mut Harness) {
+    let mut root = RenderNode::new(Geometry::Group);
+    root.layer = RenderLayer::Viewmodel;
+    harness.apply(vec![
+        RenderDiff::Create {
+            handle: RenderHandle::new(900),
+            parent: None,
+            node: root,
+        },
+        instance(
+            901,
+            Some(900),
+            CRATE,
+            transform([0.45, -0.55, -1.4], 25.0, [0.35; 3]),
+        ),
+    ]);
+}
+
+#[test]
+fn opaque_viewmodel_parts_draw_with_gpu_culling_across_frames() {
+    let mut harness = wide_scene();
+    add_viewmodel(&mut harness);
+    harness.renderer.set_options(options(false));
+    let cpu = harness.render(&view(0.0)).1;
+    harness.renderer.set_options(options(true));
+    // The primary camera draws the world then the viewmodel; a second frame
+    // revisits the world with the viewmodel's upload behind it.
+    let first = harness.render(&view(0.0)).1;
+    let second = harness.render(&view(0.0)).1;
+    let readout = harness.renderer.gpu_readout().gpu_culling;
+    if readout.refused.is_some() {
+        assert_eq!(cpu, first);
+        return;
+    }
+    for (frame, gpu) in [("first", &first), ("second", &second)] {
+        let fraction = differing(&cpu, gpu);
+        assert!(
+            fraction < 0.002,
+            "{frame} frame: {:.2}% of pixels differ between CPU and GPU culling",
+            fraction * 100.0
+        );
+    }
+    // The viewmodel crate is there: hiding it changes the picture.
+    harness.apply(vec![RenderDiff::Update {
+        handle: RenderHandle::new(901),
+        transform: None,
+        material: None,
+        visible: Some(false),
+        metadata: None,
+    }]);
+    let hidden = harness.render(&view(0.0)).1;
+    assert!(
+        differing(&second, &hidden) > 0.005,
+        "the viewmodel crate drew with GPU culling"
+    );
+}
+
 #[test]
 fn the_candidates_survive_moves_and_follow_regroups_and_the_cull_is_timed() {
     let mut harness = wide_scene();

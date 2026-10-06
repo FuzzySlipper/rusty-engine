@@ -880,6 +880,7 @@ fn gpu_statistics(readout: GpuReadout) -> ProductHostGpuStatistics {
         light_clusters: ProductHostLightClusterStatistics {
             enabled: readout.light_clusters.enabled,
             refused: readout.light_clusters.refused,
+            fallback: readout.light_clusters.fallback,
             grid: readout.light_clusters.grid,
             cluster_capacity: readout.light_clusters.cluster_stride - 1,
             binned_lights: readout.light_clusters.binned_lights,

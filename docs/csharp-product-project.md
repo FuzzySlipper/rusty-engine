@@ -805,9 +805,12 @@ the field atlas (`distanceFields`) beside the occlusion path.
 bin its lights into a 16×9×24 view-frustum cluster grid in a compute pass,
 so a fragment shades from its cluster's lights instead of every light of the
 pass. The default is `disabled`, which loops; a device without compute
-shaders loops regardless. This writes `renderer.lighting.clusteredLighting`
-in the staged manifest. `engine.renderer` reports the clusters' light counts
-and the binning pass's GPU time.
+shaders loops regardless, and so does a world view with more than 63
+unbounded lights (ambient, hemisphere, directional, and point or spot
+lights without a range), since the global list names at most that many.
+This writes `renderer.lighting.clusteredLighting` in the staged manifest.
+`engine.renderer` reports the clusters' light counts, the binning pass's
+GPU time, and why a view looped (`lightClusters.fallback`).
 
 ### GPU culling
 

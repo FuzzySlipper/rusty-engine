@@ -26,7 +26,7 @@ use crate::culling::CandidateList;
 use crate::distance_fields::{world_box, FieldEntry};
 use crate::effects::EffectsPass;
 use crate::finish::{FinishPost, HDR_FORMAT};
-use crate::light_clusters::ClusterUniform;
+use crate::light_clusters::{ClusterUniform, CLUSTER_CAPACITY};
 use crate::pipelines::{Layouts, Pipelines};
 use crate::shaders::Features;
 use crate::shadows::{self, ShadowMaps};
@@ -517,6 +517,16 @@ impl Renderer {
         let mut candidates = Vec::new();
         self.retained_light_rows(&mut rows, ViewLayer::World, Some(&mut candidates));
         let world_count = (rows.len() / LIGHT_ROW_FLOATS) as u32;
+        // The lights every fragment sees (`light_clusters.wgsl` is_global):
+        // ambient, hemisphere and directional rows, and point or spot rows
+        // without a range. The clustered path names at most
+        // `CLUSTER_CAPACITY` of them, so a pass with more loops.
+        self.global_lights = rows
+            .as_chunks::<LIGHT_ROW_FLOATS>()
+            .0
+            .iter()
+            .filter(|row| row[3] < 3.0 || row[7] <= 0.0)
+            .count() as u32;
         if self.options.default_viewmodel_lights {
             neutral_rig(&mut rows, NEUTRAL_VIEWMODEL_KEY_POSITION);
         }
@@ -832,7 +842,8 @@ impl Renderer {
                             (part.first_index, part.index_count)
                         })
                     });
-                    self.culling.upload_candidates(&self.gpu, &candidates);
+                    self.culling
+                        .upload_candidates(&self.gpu, layer, &candidates);
                     candidates
                 }
             };
@@ -869,9 +880,11 @@ impl Renderer {
     fn draw_batches_indirect<'a>(
         &'a self,
         pass: &mut wgpu::RenderPass<'_>,
+        layer: ViewLayer,
         candidates: &CandidateList,
         pipeline: impl Fn(batch::Pass, Features) -> &'a wgpu::RenderPipeline,
     ) -> (Encoded, u32) {
+        let args = self.culling.args(layer);
         let batches = &candidates.list.batches;
         let mut current: Option<(batch::Pass, Features)> = None;
         let mut encoded = Encoded::default();
@@ -939,10 +952,10 @@ impl Renderer {
             }
             let offset = index as u64 * 20;
             if run > 1 {
-                pass.multi_draw_indexed_indirect(&self.culling.args, offset, run as u32);
+                pass.multi_draw_indexed_indirect(args, offset, run as u32);
                 multi_draws += 1;
             } else {
-                pass.draw_indexed_indirect(&self.culling.args, offset);
+                pass.draw_indexed_indirect(args, offset);
             }
             encoded.draws += run as u32;
             index += run;
@@ -1271,11 +1284,16 @@ impl Renderer {
         };
         let effects = self.prepare_effects(&view, hdr_format);
         let slot = view.layer as usize;
+        // With GPU culling the opaque parts are candidates, not in the list.
         if !world_layer
             && effects.draws() == 0
-            && self.views[slot]
-                .as_ref()
-                .is_none_or(|cache| cache.list.batches.is_empty())
+            && self.views[slot].as_ref().is_none_or(|cache| {
+                cache.list.batches.is_empty()
+                    && cache
+                        .candidates
+                        .as_ref()
+                        .is_none_or(|candidates| candidates.list.batches.is_empty())
+            })
         {
             return ViewStats {
                 instances_uploaded,
@@ -1411,6 +1429,7 @@ impl Renderer {
                 &self.gpu,
                 &mut encoder,
                 &self.instances_buffer,
+                view.layer,
                 candidates,
                 &view_proj,
             );
@@ -1429,9 +1448,12 @@ impl Renderer {
                         .and_then(|cache| cache.candidates.as_ref())
                     {
                         Some(candidates) => {
-                            self.draw_batches_indirect(pass, candidates, |pass, features| {
-                                self.layouts.prepass.get(pass, features)
-                            });
+                            self.draw_batches_indirect(
+                                pass,
+                                view.layer,
+                                candidates,
+                                |pass, features| self.layouts.prepass.get(pass, features),
+                            );
                         }
                         None => {
                             self.draw_batches(pass, &prepass_batches, |pass, features| {
@@ -1538,13 +1560,18 @@ impl Renderer {
         // A world pass's lights are binned into clusters when the host asks
         // and the device can; the viewmodel's few lights loop.
         let clusters = if world_layer && self.options.clustered_lighting {
-            self.light_clusters.encode(
-                &self.gpu,
-                &mut encoder,
-                &self.lights_buffer,
-                &view.camera,
-                lights,
-            )
+            if self.global_lights > CLUSTER_CAPACITY {
+                self.light_clusters.looped(self.global_lights);
+                ClusterUniform::LOOP
+            } else {
+                self.light_clusters.encode(
+                    &self.gpu,
+                    &mut encoder,
+                    &self.lights_buffer,
+                    &view.camera,
+                    lights,
+                )
+            }
         } else {
             if world_layer {
                 self.light_clusters.skipped();
@@ -1623,10 +1650,12 @@ impl Renderer {
                 .unwrap_or(batches.len());
             let mut encoded = match candidates {
                 Some(candidates) => {
-                    let (encoded, runs) =
-                        self.draw_batches_indirect(&mut pass, candidates, |pass, features| {
-                            pipelines.get(pass, features)
-                        });
+                    let (encoded, runs) = self.draw_batches_indirect(
+                        &mut pass,
+                        view.layer,
+                        candidates,
+                        |pass, features| pipelines.get(pass, features),
+                    );
                     multi_draws = runs;
                     encoded
                 }

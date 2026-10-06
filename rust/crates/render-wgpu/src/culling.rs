@@ -20,6 +20,7 @@ use std::sync::mpsc::{Receiver, TryRecvError};
 use glam::Mat4;
 
 use crate::batch::{Batch, DrawList, Frustum};
+use crate::frame::ViewLayer;
 use crate::tables::Aabb;
 use crate::timing::{GpuPassTiming, PassTimer};
 use crate::Gpu;
@@ -65,6 +66,56 @@ pub(crate) struct CandidateList {
     template: Vec<u8>,
 }
 
+/// One view layer's upload: its candidate ids, each one's batch, the
+/// argument template and the arguments the pass draws from. The world and
+/// viewmodel lists are culled in turn every frame, so each keeps its own.
+struct LayerBuffers {
+    candidates: wgpu::Buffer,
+    candidate_batches: wgpu::Buffer,
+    args: wgpu::Buffer,
+    args_template: wgpu::Buffer,
+    bind_group: Option<wgpu::BindGroup>,
+}
+
+impl LayerBuffers {
+    fn new(device: &wgpu::Device) -> Self {
+        let buffer = |label, size, usage| {
+            device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some(label),
+                size,
+                usage,
+                mapped_at_creation: false,
+            })
+        };
+        let storage = wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST;
+        Self {
+            candidates: buffer(
+                "render-wgpu gpu cull candidates",
+                INITIAL_CANDIDATES * 4,
+                storage,
+            ),
+            candidate_batches: buffer(
+                "render-wgpu gpu cull candidate batches",
+                INITIAL_CANDIDATES * 4,
+                storage,
+            ),
+            args: buffer(
+                "render-wgpu gpu cull draws",
+                INITIAL_BATCHES * ARGS_BYTES,
+                wgpu::BufferUsages::STORAGE
+                    | wgpu::BufferUsages::INDIRECT
+                    | wgpu::BufferUsages::COPY_DST,
+            ),
+            args_template: buffer(
+                "render-wgpu gpu cull draw template",
+                INITIAL_BATCHES * ARGS_BYTES,
+                wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST,
+            ),
+            bind_group: None,
+        }
+    }
+}
+
 pub(crate) struct GpuCulling {
     pipeline: Option<wgpu::ComputePipeline>,
     refused: Option<String>,
@@ -72,15 +123,11 @@ pub(crate) struct GpuCulling {
     params: wgpu::Buffer,
     /// Every part slot's world bounds.
     pub bounds: wgpu::Buffer,
-    candidates: wgpu::Buffer,
-    candidate_batches: wgpu::Buffer,
-    /// The pass's draw arguments.
-    pub args: wgpu::Buffer,
-    args_template: wgpu::Buffer,
+    /// The world layer's and the viewmodel layer's uploads (`ViewLayer`).
+    layers: [LayerBuffers; 2],
     stats: wgpu::Buffer,
     stats_readback: wgpu::Buffer,
     pending_stats: Option<Receiver<Result<(), wgpu::BufferAsyncError>>>,
-    bind_group: Option<wgpu::BindGroup>,
     timer: Option<PassTimer>,
     multi_draw: bool,
     /// Every part slot's bounds are in the buffer; false while the host
@@ -213,28 +260,7 @@ impl GpuCulling {
                 INITIAL_CANDIDATES * BOUNDS_ROW_BYTES,
                 wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             ),
-            candidates: buffer(
-                "render-wgpu gpu cull candidates",
-                INITIAL_CANDIDATES * 4,
-                wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-            ),
-            candidate_batches: buffer(
-                "render-wgpu gpu cull candidate batches",
-                INITIAL_CANDIDATES * 4,
-                wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-            ),
-            args: buffer(
-                "render-wgpu gpu cull draws",
-                INITIAL_BATCHES * ARGS_BYTES,
-                wgpu::BufferUsages::STORAGE
-                    | wgpu::BufferUsages::INDIRECT
-                    | wgpu::BufferUsages::COPY_DST,
-            ),
-            args_template: buffer(
-                "render-wgpu gpu cull draw template",
-                INITIAL_BATCHES * ARGS_BYTES,
-                wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST,
-            ),
+            layers: [LayerBuffers::new(device), LayerBuffers::new(device)],
             stats: buffer(
                 "render-wgpu gpu cull stats",
                 STATS_BYTES,
@@ -248,7 +274,6 @@ impl GpuCulling {
                 wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
             ),
             pending_stats: None,
-            bind_group: None,
             timer: PassTimer::new(gpu, PASS),
             // wgpu 30 draws several indirect arguments in one call wherever
             // it executes indirect draws at all.
@@ -290,8 +315,13 @@ impl GpuCulling {
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        self.bind_group = None;
+        self.invalidate();
         true
+    }
+
+    /// The arguments `layer`'s last cull wrote, which its pass draws from.
+    pub fn args(&self, layer: ViewLayer) -> &wgpu::Buffer {
+        &self.layers[layer as usize].args
     }
 
     /// Write one part slot's world bounds.
@@ -315,8 +345,9 @@ impl GpuCulling {
 
     /// Upload a layer's candidate list: ids, each one's batch, and the
     /// argument template.
-    pub fn upload_candidates(&mut self, gpu: &Gpu, candidates: &CandidateList) {
+    pub fn upload_candidates(&mut self, gpu: &Gpu, layer: ViewLayer, candidates: &CandidateList) {
         let device = &gpu.device;
+        let buffers = &mut self.layers[layer as usize];
         let count = candidates.list.ids.len().max(1) as u64;
         let batches = candidates.list.batches.len().max(1) as u64;
         let grow = |buffer: &mut wgpu::Buffer, label: &str, needed: u64, usage| {
@@ -334,19 +365,19 @@ impl GpuCulling {
         };
         let storage = wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST;
         let mut replaced = grow(
-            &mut self.candidates,
+            &mut buffers.candidates,
             "render-wgpu gpu cull candidates",
             count * 4,
             storage,
         );
         replaced |= grow(
-            &mut self.candidate_batches,
+            &mut buffers.candidate_batches,
             "render-wgpu gpu cull candidate batches",
             count * 4,
             storage,
         );
         replaced |= grow(
-            &mut self.args,
+            &mut buffers.args,
             "render-wgpu gpu cull draws",
             batches * ARGS_BYTES,
             wgpu::BufferUsages::STORAGE
@@ -354,17 +385,17 @@ impl GpuCulling {
                 | wgpu::BufferUsages::COPY_DST,
         );
         replaced |= grow(
-            &mut self.args_template,
+            &mut buffers.args_template,
             "render-wgpu gpu cull draw template",
             batches * ARGS_BYTES,
             wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST,
         );
         if replaced {
-            self.bind_group = None;
+            buffers.bind_group = None;
         }
         if !candidates.list.ids.is_empty() {
             gpu.queue.write_buffer(
-                &self.candidates,
+                &buffers.candidates,
                 0,
                 bytemuck::cast_slice(&candidates.list.ids),
             );
@@ -372,16 +403,22 @@ impl GpuCulling {
             for (index, batch) in candidates.list.batches.iter().enumerate() {
                 batch_of.extend(std::iter::repeat_n(index as u32, batch.instances as usize));
             }
+            gpu.queue.write_buffer(
+                &buffers.candidate_batches,
+                0,
+                bytemuck::cast_slice(&batch_of),
+            );
             gpu.queue
-                .write_buffer(&self.candidate_batches, 0, bytemuck::cast_slice(&batch_of));
-            gpu.queue
-                .write_buffer(&self.args_template, 0, &candidates.template);
+                .write_buffer(&buffers.args_template, 0, &candidates.template);
         }
     }
 
-    /// The instance buffer was replaced: bind again before the next dispatch.
+    /// The instance or bounds buffer was replaced: every layer binds again
+    /// before its next dispatch.
     pub fn invalidate(&mut self) {
-        self.bind_group = None;
+        for layer in &mut self.layers {
+            layer.bind_group = None;
+        }
     }
 
     /// Record that a pass drew from the CPU list.
@@ -389,13 +426,15 @@ impl GpuCulling {
         self.enabled = false;
     }
 
-    /// Cull `candidates` for `view_proj` in `encoder` before the view's
-    /// render pass; the pass then draws from `args` and `instances`.
+    /// Cull `layer`'s `candidates` for `view_proj` in `encoder` before the
+    /// view's render pass; the pass then draws from `args(layer)` and
+    /// `instances`.
     pub fn encode(
         &mut self,
         gpu: &Gpu,
         encoder: &mut wgpu::CommandEncoder,
         instances: &wgpu::Buffer,
+        layer: ViewLayer,
         candidates: &CandidateList,
         view_proj: &Mat4,
     ) {
@@ -407,30 +446,33 @@ impl GpuCulling {
             return;
         };
         let device = &gpu.device;
-        let bind_group = self.bind_group.get_or_insert_with(|| {
+        let (layout, params_buffer, bounds, stats) =
+            (&self.layout, &self.params, &self.bounds, &self.stats);
+        let buffers = &mut self.layers[layer as usize];
+        let bind_group = buffers.bind_group.get_or_insert_with(|| {
             device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("render-wgpu gpu cull"),
-                layout: &self.layout,
+                layout,
                 entries: &[
                     wgpu::BindGroupEntry {
                         binding: 0,
-                        resource: self.params.as_entire_binding(),
+                        resource: params_buffer.as_entire_binding(),
                     },
                     wgpu::BindGroupEntry {
                         binding: 1,
-                        resource: self.bounds.as_entire_binding(),
+                        resource: bounds.as_entire_binding(),
                     },
                     wgpu::BindGroupEntry {
                         binding: 2,
-                        resource: self.candidates.as_entire_binding(),
+                        resource: buffers.candidates.as_entire_binding(),
                     },
                     wgpu::BindGroupEntry {
                         binding: 3,
-                        resource: self.candidate_batches.as_entire_binding(),
+                        resource: buffers.candidate_batches.as_entire_binding(),
                     },
                     wgpu::BindGroupEntry {
                         binding: 4,
-                        resource: self.args.as_entire_binding(),
+                        resource: buffers.args.as_entire_binding(),
                     },
                     wgpu::BindGroupEntry {
                         binding: 5,
@@ -438,7 +480,7 @@ impl GpuCulling {
                     },
                     wgpu::BindGroupEntry {
                         binding: 6,
-                        resource: self.stats.as_entire_binding(),
+                        resource: stats.as_entire_binding(),
                     },
                 ],
             })
@@ -452,18 +494,18 @@ impl GpuCulling {
         for value in [count, batches, 0, 0] {
             params.extend_from_slice(&value.to_le_bytes());
         }
-        gpu.queue.write_buffer(&self.params, 0, &params);
+        gpu.queue.write_buffer(params_buffer, 0, &params);
         let template_bytes = candidates.template.len() as u64;
         if template_bytes > 0 {
             encoder.copy_buffer_to_buffer(
-                &self.args_template,
+                &buffers.args_template,
                 0,
-                &self.args,
+                &buffers.args,
                 0,
                 Some(template_bytes),
             );
         }
-        encoder.clear_buffer(&self.stats, 0, None);
+        encoder.clear_buffer(stats, 0, None);
         if count > 0 {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some(PASS),

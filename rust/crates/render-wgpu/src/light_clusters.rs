@@ -23,6 +23,8 @@ use crate::Gpu;
 pub(crate) const GRID: [u32; 3] = [16, 9, 24];
 /// Words per cluster: the count, then light row indices.
 pub(crate) const CLUSTER_STRIDE: u32 = 64;
+/// Lights a cluster, or the global list, can name.
+pub(crate) const CLUSTER_CAPACITY: u32 = CLUSTER_STRIDE - 1;
 const CLUSTERS: u32 = GRID[0] * GRID[1] * GRID[2];
 /// The clusters, then the global list.
 const ENTRIES: u32 = CLUSTERS + 1;
@@ -40,6 +42,10 @@ pub struct LightClusterReadout {
     pub enabled: bool,
     /// Why this device cannot cluster; `None` while it can.
     pub refused: Option<String>,
+    /// Why the last world view looped although clustering is on: more
+    /// unbounded lights than the global list names. `None` while it
+    /// clustered or clustering is off.
+    pub fallback: Option<String>,
     /// Tiles across, tiles down, depth slices.
     pub grid: [u32; 3],
     /// Words each cluster holds: the count and up to `stride - 1` lights.
@@ -66,6 +72,7 @@ pub(crate) struct LightClusters {
     pending_stats: Option<Receiver<Result<(), wgpu::BufferAsyncError>>>,
     timer: Option<PassTimer>,
     enabled: bool,
+    fallback: Option<String>,
     binned_lights: u32,
     global_lights: u32,
     overflowed_clusters: u32,
@@ -188,6 +195,7 @@ impl LightClusters {
             pending_stats: None,
             timer: PassTimer::new(gpu, PASS),
             enabled: false,
+            fallback: None,
             binned_lights: 0,
             global_lights: 0,
             overflowed_clusters: 0,
@@ -202,6 +210,7 @@ impl LightClusters {
     /// Record that a pass drew without clusters.
     pub fn skipped(&mut self) {
         self.enabled = false;
+        self.fallback = None;
     }
 
     /// Bin `lights` for a view of `camera` into the clusters, in `encoder`
@@ -286,10 +295,20 @@ impl LightClusters {
             encoder.copy_buffer_to_buffer(&self.stats, 0, &self.stats_readback, 0, None);
         }
         self.enabled = true;
+        self.fallback = None;
         ClusterUniform {
             grid: [GRID[0], GRID[1], GRID[2], 1],
             depth,
         }
+    }
+
+    /// A world view looped although clustering is on: `global_lights`
+    /// unbounded lights do not fit the global list.
+    pub fn looped(&mut self, global_lights: u32) {
+        self.enabled = false;
+        self.fallback = Some(format!(
+            "{global_lights} unbounded lights exceed the global list of {CLUSTER_CAPACITY}; the pass looped over its lights"
+        ));
     }
 
     /// After the view's encoder was submitted: read the stats and timing.
@@ -342,6 +361,7 @@ impl LightClusters {
         LightClusterReadout {
             enabled: self.enabled,
             refused: self.refused.clone(),
+            fallback: self.fallback.clone(),
             grid: GRID,
             cluster_stride: CLUSTER_STRIDE,
             binned_lights: self.binned_lights,

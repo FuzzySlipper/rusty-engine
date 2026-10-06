@@ -150,6 +150,12 @@ enabled: boolean,
  */
 refused?: string, 
 /**
+ * Why the last world view looped although clustering is on: more
+ * unbounded lights than the global list names. Absent while it
+ * clustered.
+ */
+fallback?: string, 
+/**
  * Tiles across, tiles down, depth slices.
  */
 grid: [number, number, number], 

@@ -168,6 +168,53 @@ fn clustered_shading_draws_the_looped_picture() {
 }
 
 #[test]
+fn more_global_lights_than_the_list_names_loop_and_say_so() {
+    let mut harness = lit_scene();
+    // 62 faint directional lights join the two unbounded lights: 64 in all.
+    let mut ops = Vec::new();
+    for index in 0..62_u64 {
+        let angle = index as f32 * 0.1;
+        ops.push(RenderDiff::CreateLight {
+            handle: RenderHandle::new(300 + index),
+            parent: None,
+            light: LightDescriptor::Directional {
+                color: [0.4, 0.4, 0.5],
+                intensity: 0.02,
+                enabled: true,
+                direction: [angle.sin(), -1.0, angle.cos()],
+                range: None,
+                shadow_intent: LightShadowIntent::Disabled,
+                shadow: Default::default(),
+            },
+        });
+    }
+    harness.apply(ops);
+    let looped = render_with(&mut harness, false);
+    let clustered = render_with(&mut harness, true);
+    let readout = harness.renderer.gpu_readout().light_clusters;
+    if readout.refused.is_some() {
+        return;
+    }
+    assert!(!readout.enabled, "the pass looped");
+    assert!(
+        readout
+            .fallback
+            .as_deref()
+            .is_some_and(|reason| reason.starts_with("64 unbounded lights")),
+        "{:?}",
+        readout.fallback
+    );
+    assert_eq!(looped, clustered, "every global light still shades");
+    // Below the list's capacity the pass clusters again.
+    harness.apply(vec![RenderDiff::Destroy {
+        handle: RenderHandle::new(300),
+    }]);
+    render_with(&mut harness, true);
+    let readout = harness.renderer.gpu_readout().light_clusters;
+    assert!(readout.enabled && readout.fallback.is_none());
+}
+
+#[test]
 fn the_binning_reports_its_lists_and_time() {
     let mut harness = lit_scene();
     harness.renderer.set_options(RendererOptions {

@@ -535,6 +535,12 @@ declare module "@rusty-engine/live-debug/internal/live-debug-client/src/generate
          */
         refused?: string;
         /**
+         * Why the last world view looped although clustering is on: more
+         * unbounded lights than the global list names. Absent while it
+         * clustered.
+         */
+        fallback?: string;
+        /**
          * Tiles across, tiles down, depth slices.
          */
         grid: [number, number, number];

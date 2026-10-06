@@ -284,6 +284,9 @@ pub struct Renderer {
     parts_buffer: wgpu::Buffer,
     lights_buffer: wgpu::Buffer,
     lights: frame::LightRanges,
+    /// Unbounded world lights in the last upload (`upload_lights`): the
+    /// clustered path loops when they exceed its global list.
+    global_lights: u32,
     /// Part ids: the world and viewmodel view lists, then each shadow
     /// layer's casters.
     instances_buffer: wgpu::Buffer,
@@ -439,6 +442,7 @@ impl Renderer {
             parts_buffer,
             lights_buffer,
             lights: Default::default(),
+            global_lights: 0,
             instances_buffer,
             casters_uploaded: false,
             views: Default::default(),
