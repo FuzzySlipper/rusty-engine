@@ -516,6 +516,144 @@ fn remove_reach(reaches: &mut BTreeMap<FarReach, usize>, reach: FarReach) {
     }
 }
 
+/// The connected components of a projection's cells over an edge admission,
+/// labelled once by the owner after it installs both, so that a query whose
+/// goal no path can reach is answered without a search.
+///
+/// Cells are joined when an admitted edge the search would take leads from
+/// one to the other, in either direction: a one-way drop joins the cells
+/// above and below. So cells with different labels have no path between
+/// them either way, while cells with the same label leave the one-way case
+/// to the search. Traversal overlays are product facts applied at query
+/// time and take no part in the labels.
+///
+/// The labels describe the projection and admission they were made from;
+/// the owner labels again when either changes.
+#[derive(Debug, Clone)]
+pub struct NavComponents {
+    projection_hash: u64,
+    admission_hash: u64,
+    /// Per projection position, its component.
+    labels: Vec<u32>,
+    /// The positions of each component in turn: component `c` holds
+    /// `members[starts[c]..starts[c + 1]]`.
+    members: Vec<usize>,
+    starts: Vec<usize>,
+}
+
+impl NavComponents {
+    /// Labels every cell of `projection` with its component over the edges
+    /// of `edges` that a search under `policy` would take.
+    pub fn label(
+        projection: &NavProjection,
+        edges: &NavEdgeAdmission,
+        policy: PlanarNavNeighborPolicy,
+    ) -> Self {
+        let table = &projection.walkable;
+        let positions = table.positions();
+        let mut parent: Vec<usize> = (0..positions).collect();
+        fn root(parent: &mut [usize], mut position: usize) -> usize {
+            while parent[position] != position {
+                parent[position] = parent[parent[position]];
+                position = parent[position];
+            }
+            position
+        }
+        let offsets = planar_nav_offsets(policy.diagonal);
+        let max_step = u64::from(policy.max_step_cells);
+        let mut candidates = Vec::new();
+        for (position, cell) in table.held() {
+            candidates.clear();
+            admitted_steps(edges, cell, offsets, max_step, &mut candidates);
+            for &to in &candidates {
+                let Some(next) = table.position(to) else {
+                    continue;
+                };
+                let (a, b) = (root(&mut parent, position), root(&mut parent, next));
+                parent[a.max(b)] = a.min(b);
+            }
+        }
+        // Components are numbered as their first position comes.
+        let mut labels = vec![u32::MAX; positions];
+        let mut of_root = vec![u32::MAX; positions];
+        let mut starts = vec![0; 1];
+        for (position, _) in table.held() {
+            let root = root(&mut parent, position);
+            if of_root[root] == u32::MAX {
+                of_root[root] = u32::try_from(starts.len() - 1).expect("fewer than 2^32 cells");
+                starts.push(0);
+            }
+            labels[position] = of_root[root];
+            starts[of_root[root] as usize + 1] += 1;
+        }
+        for component in 1..starts.len() {
+            starts[component] += starts[component - 1];
+        }
+        let mut members = vec![0; table.len()];
+        let mut next = starts.clone();
+        for (position, _) in table.held() {
+            let label = labels[position] as usize;
+            members[next[label]] = position;
+            next[label] += 1;
+        }
+        Self {
+            projection_hash: projection.projection_hash(),
+            admission_hash: edges.admission_hash(),
+            labels,
+            members,
+            starts,
+        }
+    }
+
+    /// How many components the cells form.
+    pub fn len(&self) -> usize {
+        self.starts.len() - 1
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// When no path from `start` to `goal` can exist, the cell of `start`'s
+    /// component nearest the goal, as a search that ran out of cells would
+    /// report it. Both cells are walkable.
+    fn separation(
+        &self,
+        projection: &NavProjection,
+        edges: &NavEdgeAdmission,
+        start: VoxelCoord,
+        goal: VoxelCoord,
+    ) -> Option<VoxelCoord> {
+        debug_assert_eq!(
+            (self.projection_hash, self.admission_hash),
+            (projection.projection_hash(), edges.admission_hash()),
+            "the components describe another projection or admission"
+        );
+        let table = &projection.walkable;
+        let start = table.position(start)?;
+        let goal_position = table.position(goal)?;
+        let label = self.labels[start] as usize;
+        if label == self.labels[goal_position] as usize {
+            return None;
+        }
+        self.members[self.starts[label]..self.starts[label + 1]]
+            .iter()
+            .map(|&position| table.cell(position))
+            .map(|cell| (squared_distance(cell, goal), cell))
+            .min()
+            .map(|(_, cell)| cell)
+    }
+}
+
+/// The squared distance between two cells, by which a search ranks the cells
+/// it reached by their nearness to the goal.
+fn squared_distance(a: VoxelCoord, b: VoxelCoord) -> u128 {
+    [a.x.abs_diff(b.x), a.y.abs_diff(b.y), a.z.abs_diff(b.z)]
+        .map(|delta| u128::from(delta) * u128::from(delta))
+        .into_iter()
+        .fold(0_u128, u128::saturating_add)
+}
+
 /// Deterministic path readout.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NavPathReadout {
@@ -1137,21 +1275,25 @@ pub fn find_path_with_policy(
 }
 
 /// Query a deterministic shortest path while requiring every transition to be
-/// admitted by a collision-derived edge set.
+/// admitted by a collision-derived edge set. With `components`, a goal in
+/// another component than the start is `NoPath` without a search: no cell
+/// visited, and the nearest cell is the start's component's nearest the
+/// goal.
 pub fn find_path_with_edge_admission(
     projection: &NavProjection,
     edges: &NavEdgeAdmission,
+    components: Option<&NavComponents>,
     query: NavPathQuery,
     policy: PlanarNavNeighborPolicy,
 ) -> Result<NavPathReadout, NavError> {
-    find_path_with_optional_edge_admission(projection, query, policy, Some(edges))
+    find_path_with_optional_edge_admission(projection, query, policy, Some((edges, components)))
 }
 
 fn find_path_with_optional_edge_admission(
     projection: &NavProjection,
     query: NavPathQuery,
     policy: PlanarNavNeighborPolicy,
-    edges: Option<&NavEdgeAdmission>,
+    edges: Option<(&NavEdgeAdmission, Option<&NavComponents>)>,
 ) -> Result<NavPathReadout, NavError> {
     if query.max_visited == 0 {
         return Err(NavError::InvalidQueryBudget);
@@ -1162,10 +1304,29 @@ fn find_path_with_optional_edge_admission(
     if !projection.is_walkable(query.goal) {
         return Err(NavError::GoalNotWalkable { goal: query.goal });
     }
+    if let Some(nearest) = separated(projection, edges, query) {
+        return Ok(nav_readout(PlanarSearch::Stopped {
+            visited: 0,
+            budget_spent: false,
+            nearest,
+        }));
+    }
+    let edges = edges.map(|(edges, _)| edges);
     match search_planar(projection, None, edges, query, policy, false) {
         Ok(search) => Ok(nav_readout(search)),
         Err(_) => unreachable!("a step of one cannot overflow"),
     }
+}
+
+/// The nearest cell a labelled query cannot reach its goal from, if the
+/// labels say no path exists.
+fn separated(
+    projection: &NavProjection,
+    edges: Option<(&NavEdgeAdmission, Option<&NavComponents>)>,
+    query: NavPathQuery,
+) -> Option<VoxelCoord> {
+    let (edges, components) = edges?;
+    components?.separation(projection, edges, query.start, query.goal)
 }
 
 /// Query a deterministic shortest path while respecting a retained traversal
@@ -1181,11 +1342,14 @@ pub fn find_path_with_traversal_policy(
 }
 
 /// Query a deterministic shortest path while respecting both caller-owned
-/// traversal cells and collision-derived directed edge admission.
+/// traversal cells and collision-derived directed edge admission, with
+/// `components` as in [`find_path_with_edge_admission`]. A query that fails
+/// only because of the overlay still searches.
 pub fn find_path_with_traversal_and_edge_admission(
     projection: &NavProjection,
     overlay: &NavTraversalOverlay,
     edges: &NavEdgeAdmission,
+    components: Option<&NavComponents>,
     query: NavPathQuery,
     policy: PlanarNavNeighborPolicy,
 ) -> Result<NavPathReadout, WeightedNavPathError> {
@@ -1194,7 +1358,7 @@ pub fn find_path_with_traversal_and_edge_admission(
         overlay,
         query,
         policy,
-        Some(edges),
+        Some((edges, components)),
     )
 }
 
@@ -1203,9 +1367,17 @@ fn find_path_with_traversal_and_optional_edge_admission(
     overlay: &NavTraversalOverlay,
     query: NavPathQuery,
     policy: PlanarNavNeighborPolicy,
-    edges: Option<&NavEdgeAdmission>,
+    edges: Option<(&NavEdgeAdmission, Option<&NavComponents>)>,
 ) -> Result<NavPathReadout, WeightedNavPathError> {
     check_traversal_query(projection, overlay, query)?;
+    if let Some(nearest) = separated(projection, edges, query) {
+        return Ok(nav_readout(PlanarSearch::Stopped {
+            visited: 0,
+            budget_spent: false,
+            nearest,
+        }));
+    }
+    let edges = edges.map(|(edges, _)| edges);
     search_planar(projection, Some(overlay), edges, query, policy, false).map(nav_readout)
 }
 
@@ -1225,15 +1397,24 @@ pub fn find_weighted_path_with_policy(
 }
 
 /// Query a deterministic minimum-cost path while requiring collision-derived
-/// directed edge admission in addition to the caller's cell traversal facts.
+/// directed edge admission in addition to the caller's cell traversal facts,
+/// with `components` as in [`find_path_with_edge_admission`]: a goal in
+/// another component is `NoPath` with no cell visited.
 pub fn find_weighted_path_with_edge_admission(
     projection: &NavProjection,
     overlay: &NavTraversalOverlay,
     edges: &NavEdgeAdmission,
+    components: Option<&NavComponents>,
     query: NavPathQuery,
     policy: PlanarNavNeighborPolicy,
 ) -> Result<WeightedNavPathReadout, WeightedNavPathError> {
-    find_weighted_path_with_optional_edge_admission(projection, overlay, query, policy, Some(edges))
+    find_weighted_path_with_optional_edge_admission(
+        projection,
+        overlay,
+        query,
+        policy,
+        Some((edges, components)),
+    )
 }
 
 fn find_weighted_path_with_optional_edge_admission(
@@ -1241,9 +1422,19 @@ fn find_weighted_path_with_optional_edge_admission(
     overlay: &NavTraversalOverlay,
     query: NavPathQuery,
     policy: PlanarNavNeighborPolicy,
-    edges: Option<&NavEdgeAdmission>,
+    edges: Option<(&NavEdgeAdmission, Option<&NavComponents>)>,
 ) -> Result<WeightedNavPathReadout, WeightedNavPathError> {
     check_traversal_query(projection, overlay, query)?;
+    if separated(projection, edges, query).is_some() {
+        return Ok(weighted_nav_readout(
+            WeightedNavPathOutcome::NoPath,
+            0,
+            0,
+            Vec::new(),
+            overlay.overlay_hash(),
+        ));
+    }
+    let edges = edges.map(|(edges, _)| edges);
     let (outcome, visited, total_cost, path) =
         match search_planar(projection, Some(overlay), edges, query, policy, true)? {
             PlanarSearch::Reached {
@@ -1472,23 +1663,13 @@ fn search_planar_with(
     };
     let offsets = planar_nav_offsets(policy.diagonal);
     let max_step = u64::from(policy.max_step_cells);
-    let rank = |from: VoxelCoord, to: VoxelCoord| (from.y.abs_diff(to.y), to.y < from.y);
 
     let start = table.position(query.start).expect("the start is walkable");
     let goal = table.position(query.goal).expect("the goal is walkable");
     // `Reverse` makes the max-heap a min-heap over (estimate, remaining,
     // order found, position); the order found makes every key distinct.
     let mut found = 0_u64;
-    let distance_to_goal = |cell: VoxelCoord| {
-        [
-            cell.x.abs_diff(query.goal.x),
-            cell.y.abs_diff(query.goal.y),
-            cell.z.abs_diff(query.goal.z),
-        ]
-        .map(|delta| u128::from(delta) * u128::from(delta))
-        .into_iter()
-        .fold(0_u128, u128::saturating_add)
-    };
+    let distance_to_goal = |cell: VoxelCoord| squared_distance(cell, query.goal);
     let mut nearest = (distance_to_goal(query.start), query.start);
     state[start] = OPEN;
     best[start] = 0;
@@ -1521,59 +1702,13 @@ fn search_planar_with(
         }
 
         candidates.clear();
-        let mut costed = false;
-        match edges {
-            Some(edges) => {
-                if let Some(record) = edges.origins.get(current) {
-                    costed = record.costed;
-                    let others = if record.others {
-                        edges.others.get(&current)
-                    } else {
-                        None
-                    };
-                    for (direction, &(dx, dz)) in offsets.iter().enumerate() {
-                        let first = candidates.len();
-                        let rise = record.rise[direction];
-                        if rise != NO_EDGE && u64::from(rise.unsigned_abs()) <= max_step {
-                            candidates.push(VoxelCoord::new(
-                                current.x + dx,
-                                current.y + i64::from(rise),
-                                current.z + dz,
-                            ));
-                        }
-                        candidates.extend(others.into_iter().flatten().copied().filter(|&to| {
-                            planar_direction(current, to) == Some(direction)
-                                && current.y.abs_diff(to.y) <= max_step
-                        }));
-                        candidates[first..].sort_by_key(|&to| rank(current, to));
-                    }
-                    candidates.extend(
-                        others
-                            .into_iter()
-                            .flatten()
-                            .copied()
-                            .filter(|&to| is_far(current, to)),
-                    );
-                }
-            }
+        let costed = match edges {
+            Some(edges) => admitted_steps(edges, current, offsets, max_step, candidates),
             None => {
-                for &(dx, dz) in offsets {
-                    let (Some(x), Some(z)) = (current.x.checked_add(dx), current.z.checked_add(dz))
-                    else {
-                        continue;
-                    };
-                    let first = candidates.len();
-                    let (_, column) = table.column(x, z);
-                    candidates.extend(
-                        column
-                            .iter()
-                            .copied()
-                            .filter(|to| current.y.abs_diff(to.y) <= max_step),
-                    );
-                    candidates[first..].sort_by_key(|&to| rank(current, to));
-                }
+                column_steps(table, current, offsets, max_step, candidates);
+                false
             }
-        }
+        };
 
         for &next_cell in candidates.iter() {
             let Some(next) = table.position(next_cell) else {
@@ -1627,6 +1762,83 @@ fn search_planar_with(
         budget_spent: false,
         nearest: nearest.1,
     })
+}
+
+/// Within an adjacent column, same-level cells come first, then upward and
+/// downward cells at increasing distance.
+fn rank(from: VoxelCoord, to: VoxelCoord) -> (u64, bool) {
+    (from.y.abs_diff(to.y), to.y < from.y)
+}
+
+/// The cells a search steps to from `current` under `edges`, whether or not
+/// they are walkable, appended to `candidates` in the canonical order: per
+/// direction of `offsets` the edges within `max_step` by [`rank`], then the
+/// edges past the planar neighbours. Returns whether an edge from `current`
+/// carries an extra cost.
+fn admitted_steps(
+    edges: &NavEdgeAdmission,
+    current: VoxelCoord,
+    offsets: &[(i64, i64)],
+    max_step: u64,
+    candidates: &mut Vec<VoxelCoord>,
+) -> bool {
+    let Some(record) = edges.origins.get(current) else {
+        return false;
+    };
+    let others = if record.others {
+        edges.others.get(&current)
+    } else {
+        None
+    };
+    for (direction, &(dx, dz)) in offsets.iter().enumerate() {
+        let first = candidates.len();
+        let rise = record.rise[direction];
+        if rise != NO_EDGE && u64::from(rise.unsigned_abs()) <= max_step {
+            candidates.push(VoxelCoord::new(
+                current.x + dx,
+                current.y + i64::from(rise),
+                current.z + dz,
+            ));
+        }
+        candidates.extend(others.into_iter().flatten().copied().filter(|&to| {
+            planar_direction(current, to) == Some(direction) && current.y.abs_diff(to.y) <= max_step
+        }));
+        candidates[first..].sort_by_key(|&to| rank(current, to));
+    }
+    candidates.extend(
+        others
+            .into_iter()
+            .flatten()
+            .copied()
+            .filter(|&to| is_far(current, to)),
+    );
+    record.costed
+}
+
+/// The walkable cells a search without an edge admission steps to from
+/// `current`: those of each adjacent column within `max_step`, appended to
+/// `candidates` in the canonical order.
+fn column_steps(
+    table: &ColumnTable<()>,
+    current: VoxelCoord,
+    offsets: &[(i64, i64)],
+    max_step: u64,
+    candidates: &mut Vec<VoxelCoord>,
+) {
+    for &(dx, dz) in offsets {
+        let (Some(x), Some(z)) = (current.x.checked_add(dx), current.z.checked_add(dz)) else {
+            continue;
+        };
+        let first = candidates.len();
+        let (_, column) = table.column(x, z);
+        candidates.extend(
+            column
+                .iter()
+                .copied()
+                .filter(|to| current.y.abs_diff(to.y) <= max_step),
+        );
+        candidates[first..].sort_by_key(|&to| rank(current, to));
+    }
 }
 
 /// Query a deterministic, bounded 3D path through resident voxel space.
@@ -2544,13 +2756,20 @@ mod tests {
             goal,
             max_visited: 64,
         };
-        let path = find_path_with_edge_admission(&projection, &edges, query, policy).unwrap();
+        let path = find_path_with_edge_admission(&projection, &edges, None, query, policy).unwrap();
         assert_eq!(path.path, vec![start, goal]);
 
         let overlay = NavTraversalOverlay::empty(&projection);
         let weighted = |edges: &NavEdgeAdmission| {
-            find_weighted_path_with_edge_admission(&projection, &overlay, edges, query, policy)
-                .unwrap()
+            find_weighted_path_with_edge_admission(
+                &projection,
+                &overlay,
+                edges,
+                None,
+                query,
+                policy,
+            )
+            .unwrap()
         };
         assert_eq!(weighted(&edges).path, vec![start, goal]);
         edges.set_cost(start, goal, 10);
@@ -2559,6 +2778,133 @@ mod tests {
         // Withdrawing the edge drops its cost and restores the hash.
         edges.set_allowed(start, goal, false);
         assert_eq!(edges.admission_hash(), without_gap);
+    }
+
+    /// A row of cells with every step between neighbours admitted both ways.
+    fn admitted_row(cells: &[VoxelCoord]) -> impl Iterator<Item = (VoxelCoord, VoxelCoord)> + '_ {
+        cells
+            .windows(2)
+            .flat_map(|pair| [(pair[0], pair[1]), (pair[1], pair[0])])
+    }
+
+    #[test]
+    fn components_answer_a_disconnected_goal_without_a_search() {
+        let near: Vec<_> = (0..4).map(|x| VoxelCoord::new(x, 0, 0)).collect();
+        let far: Vec<_> = (0..4).map(|x| VoxelCoord::new(x, 0, 2)).collect();
+        let projection =
+            NavProjection::from_walkable_cells(test_grid(), near.iter().chain(&far).copied());
+        let edges =
+            NavEdgeAdmission::from_allowed_edges(admitted_row(&near).chain(admitted_row(&far)));
+        let policy = PlanarNavNeighborPolicy {
+            max_step_cells: 1,
+            diagonal: true,
+        };
+        let components = NavComponents::label(&projection, &edges, policy);
+        assert_eq!(components.len(), 2);
+        let overlay = NavTraversalOverlay::empty(&projection);
+        let query = NavPathQuery {
+            start: near[0],
+            goal: far[3],
+            max_visited: 64,
+        };
+        let searched =
+            find_path_with_edge_admission(&projection, &edges, None, query, policy).unwrap();
+        let labelled =
+            find_path_with_edge_admission(&projection, &edges, Some(&components), query, policy)
+                .unwrap();
+        assert_eq!(searched.outcome, NavPathOutcome::NoPath);
+        assert_eq!(searched.visited, 4);
+        assert_eq!(labelled.outcome, NavPathOutcome::NoPath);
+        assert_eq!(labelled.visited, 0);
+        assert_eq!(labelled.nearest, searched.nearest);
+        assert_eq!(labelled.nearest, Some(near[3]));
+        let stepped = find_path_with_traversal_and_edge_admission(
+            &projection,
+            &overlay,
+            &edges,
+            Some(&components),
+            query,
+            policy,
+        )
+        .unwrap();
+        assert_eq!(stepped, labelled);
+        let weighted = find_weighted_path_with_edge_admission(
+            &projection,
+            &overlay,
+            &edges,
+            Some(&components),
+            query,
+            policy,
+        )
+        .unwrap();
+        assert_eq!(weighted.outcome, WeightedNavPathOutcome::NoPath);
+        assert_eq!(weighted.visited, 0);
+        // Within a component the search runs as before.
+        let within = NavPathQuery {
+            goal: near[3],
+            ..query
+        };
+        assert_eq!(
+            find_path_with_edge_admission(&projection, &edges, Some(&components), within, policy),
+            find_path_with_edge_admission(&projection, &edges, None, within, policy)
+        );
+    }
+
+    /// Labels join the cells of a one-way edge, and take no account of a
+    /// traversal overlay: both leave the answer to the search.
+    #[test]
+    fn one_way_edges_and_overlays_leave_the_search_to_run() {
+        let cells: Vec<_> = (0..3).map(|x| VoxelCoord::new(x, 0, 0)).collect();
+        let projection = NavProjection::from_walkable_cells(test_grid(), cells.iter().copied());
+        // The last step is a drop: admitted one way only.
+        let edges = NavEdgeAdmission::from_allowed_edges(
+            admitted_row(&cells[..2]).chain([(cells[1], cells[2])]),
+        );
+        let policy = PlanarNavNeighborPolicy {
+            max_step_cells: 1,
+            diagonal: false,
+        };
+        let components = NavComponents::label(&projection, &edges, policy);
+        assert_eq!(components.len(), 1);
+        let back = find_path_with_edge_admission(
+            &projection,
+            &edges,
+            Some(&components),
+            NavPathQuery {
+                start: cells[2],
+                goal: cells[0],
+                max_visited: 64,
+            },
+            policy,
+        )
+        .unwrap();
+        assert_eq!(back.outcome, NavPathOutcome::NoPath);
+        assert_eq!(back.visited, 1);
+        assert_eq!(back.nearest, Some(cells[2]));
+        let overlay = NavTraversalOverlay::from_cells(
+            &projection,
+            [NavTraversalCell {
+                coord: cells[1],
+                allowed: false,
+                cost: 1,
+            }],
+        )
+        .unwrap();
+        let blocked = find_path_with_traversal_and_edge_admission(
+            &projection,
+            &overlay,
+            &edges,
+            Some(&components),
+            NavPathQuery {
+                start: cells[0],
+                goal: cells[2],
+                max_visited: 64,
+            },
+            policy,
+        )
+        .unwrap();
+        assert_eq!(blocked.outcome, NavPathOutcome::NoPath);
+        assert_eq!(blocked.visited, 1);
     }
 
     #[test]
@@ -3505,6 +3851,17 @@ mod tests {
                 .filter(|(from, to)| (to.y - from.y).abs() <= 2)
         }));
         let overlay = NavTraversalOverlay::empty(&projection);
+        let started = std::time::Instant::now();
+        for _ in 0..REPEATS {
+            std::hint::black_box(NavComponents::label(&projection, &edges, policy));
+        }
+        let per_label = started.elapsed() / REPEATS;
+        let components = NavComponents::label(&projection, &edges, policy);
+        println!(
+            "labelling {} cells into {} components: {per_label:?}",
+            projection.walkable_len(),
+            components.len()
+        );
         let start = cell(32, 32);
         for (label, goal) in [
             ("5 cells", cell(37, 32)),
@@ -3518,42 +3875,52 @@ mod tests {
                 goal,
                 max_visited: BUDGET,
             };
-            let run = || {
-                find_path_with_traversal_and_edge_admission(
-                    &projection,
-                    &overlay,
-                    &edges,
-                    query,
-                    policy,
-                )
-                .expect("query")
-            };
-            let readout = run();
-            let started = std::time::Instant::now();
-            for _ in 0..REPEATS {
-                std::hint::black_box(run());
-            }
-            let per_query = started.elapsed() / REPEATS;
-            let weighted = || {
-                find_weighted_path_with_edge_admission(&projection, &overlay, &edges, query, policy)
+            for (labelled, components) in [("unlabelled", None), ("labelled", Some(&components))] {
+                let run = || {
+                    find_path_with_traversal_and_edge_admission(
+                        &projection,
+                        &overlay,
+                        &edges,
+                        components,
+                        query,
+                        policy,
+                    )
+                    .expect("query")
+                };
+                let readout = run();
+                let started = std::time::Instant::now();
+                for _ in 0..REPEATS {
+                    std::hint::black_box(run());
+                }
+                let per_query = started.elapsed() / REPEATS;
+                let weighted = || {
+                    find_weighted_path_with_edge_admission(
+                        &projection,
+                        &overlay,
+                        &edges,
+                        components,
+                        query,
+                        policy,
+                    )
                     .expect("weighted query")
-            };
-            let weighted_readout = weighted();
-            let started = std::time::Instant::now();
-            for _ in 0..REPEATS {
-                std::hint::black_box(weighted());
+                };
+                let weighted_readout = weighted();
+                let started = std::time::Instant::now();
+                for _ in 0..REPEATS {
+                    std::hint::black_box(weighted());
+                }
+                let per_weighted = started.elapsed() / REPEATS;
+                println!(
+                    "{label} {labelled}: {:?} path {} visited {} nearest {:?} in {per_query:?}; weighted {:?} cost {} visited {} in {per_weighted:?}",
+                    readout.outcome,
+                    readout.path.len(),
+                    readout.visited,
+                    readout.nearest,
+                    weighted_readout.outcome,
+                    weighted_readout.total_cost,
+                    weighted_readout.visited,
+                );
             }
-            let per_weighted = started.elapsed() / REPEATS;
-            println!(
-                "{label}: {:?} path {} visited {} nearest {:?} in {per_query:?}; weighted {:?} cost {} visited {} in {per_weighted:?}",
-                readout.outcome,
-                readout.path.len(),
-                readout.visited,
-                readout.nearest,
-                weighted_readout.outcome,
-                weighted_readout.total_cost,
-                weighted_readout.visited,
-            );
         }
     }
 

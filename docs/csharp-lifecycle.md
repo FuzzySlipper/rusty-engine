@@ -801,7 +801,15 @@ To see why navigation hangs up, ask it:
   the installed navigation holds the edge.
 - A `NoPath` step result carries `Visited`, the cells the search expanded,
   and the cell it reached nearest the goal (`NearestCell`, standing at
-  `Nearest`).
+  `Nearest`). A publication labels its cells by connected component: cells
+  joined by admitted edges in either direction share a label, so a goal with
+  another label than the start has no path either way, and `EvaluateNavigationStep`,
+  `RequestNavigationPath` and `RequestWeightedNavigationPath` answer `NoPath`
+  without a search, `Visited` zero, with the start's component's cell nearest
+  the goal. A goal with the same label leaves the search to decide: a one-way
+  drop joins the cells above and below, and traversal overlays take no part in
+  the labels, so a query that fails only because of a one-way edge or a
+  blocked cell still searches.
 
 Use the live foot position for `EvaluateNavigationStep` so it can reconcile to
 the nearest retained support (see below).
@@ -856,6 +864,9 @@ neighbours, not the box: one that derives nothing costs microseconds.
 The receipt also reports the cost: `EdgeTestCount` is the support-to-support
 edges tested with capsule casts, and `DerivationMicroseconds` the time the
 publication took. Columns and edges are derived across the machine's cores.
+`ComponentCount` is how many connected components the cells form (see the
+`NoPath` step result above); a high count on rough terrain means a fragmented
+box, where many goals are unreachable.
 Reconstructed surfaces cost more than cubes because each capsule cast meets
 triangles rather than boxes, and rough facets send more level edges through the
 step solver.

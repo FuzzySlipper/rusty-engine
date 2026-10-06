@@ -2858,8 +2858,11 @@ mod tests {
         *bridge.sessions.keys().next().unwrap()
     }
 
+    /// A goal on a floor no edge joins to the start's is answered from the
+    /// publication's component labels, without a search: nothing visited,
+    /// and the nearest cell is the start's floor's nearest the goal.
     #[test]
-    fn no_path_reports_how_far_the_search_got() {
+    fn no_path_across_components_reports_the_nearest_cell_without_a_search() {
         // Two floors separated by a wall the agent cannot step over.
         let mut voxels = Vec::new();
         for x in 0..8 {
@@ -2870,12 +2873,20 @@ mod tests {
                 }
             }
         }
-        let (bridge, session) = publish_over(
+        let (mut bridge, session) = bridge_with(Arc::new(
             VoxelCollisionScene::from_solid_voxels(1.0, 16, voxels).unwrap(),
-            flat_config(1.0, 1, 0.3, 1.6, 45.0),
-            [0.0, 0.0, 0.0],
-            [8.0, 3.0, 3.0],
-        );
+        ));
+        let vec = |[x, y, z]: [f32; 3]| NativeVec3 { x, y, z };
+        let receipt = bridge
+            .replace_collision_navigation(&NativeCollisionNavigationReplaceRequest {
+                session,
+                world_min: vec([0.0, 0.0, 0.0]),
+                world_max: vec([8.0, 3.0, 3.0]),
+                config: flat_config(1.0, 1, 0.3, 1.6, 45.0),
+            })
+            .unwrap();
+        assert_eq!(receipt.walkable_cell_count, 21);
+        assert_eq!(receipt.component_count, 2);
         let navigation = bridge.sessions[&session.value].navigation.as_ref().unwrap();
         let (step, _) = evaluate_navigation_step_facts(
             navigation,
@@ -2896,7 +2907,7 @@ mod tests {
             },
         );
         assert_eq!(step.outcome, NativeNavigationPathOutcome::NoPath);
-        assert_eq!(step.visited, 12);
+        assert_eq!(step.visited, 0);
         assert!(step.nearest_present);
         assert_eq!(
             (

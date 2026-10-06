@@ -203,14 +203,19 @@ impl<T: Copy> ColumnTable<T> {
 
     /// Every held cell, by column; within a column in no particular order.
     pub(crate) fn iter(&self) -> impl Iterator<Item = (VoxelCoord, &T)> + '_ {
+        self.held()
+            .map(|(position, cell)| (cell, &self.values[position]))
+    }
+
+    /// Every held position and its cell, in the order of [`Self::iter`].
+    pub(crate) fn held(&self) -> impl Iterator<Item = (usize, VoxelCoord)> + '_ {
         let slots: Box<dyn Iterator<Item = usize> + '_> = match &self.index {
             ColumnIndex::Box { .. } => Box::new(0..self.runs.len()),
             ColumnIndex::Sparse(slots) => Box::new(slots.values().copied()),
         };
         slots.flat_map(move |slot| {
             let run = self.runs[slot];
-            (run.start..run.start + run.count)
-                .map(|position| (self.cells[position], &self.values[position]))
+            (run.start..run.start + run.count).map(|position| (position, self.cells[position]))
         })
     }
 
