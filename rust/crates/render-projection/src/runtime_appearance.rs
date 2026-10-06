@@ -768,6 +768,10 @@ impl RuntimeAppearanceProjector {
             if let Appearance::AnimatedMesh {
                 material_parameters,
                 ..
+            }
+            | Appearance::StaticMesh {
+                material_parameters,
+                ..
             } = &object.values().appearance
             {
                 append_material_parameters(
@@ -996,6 +1000,9 @@ mod tests {
             voxel_surface: None,
             normal_map: None,
             triplanar: None,
+            emission_map: Default::default(),
+            occlusion_map: Default::default(),
+            unlit: false,
         }
     }
 
@@ -1116,6 +1123,7 @@ mod tests {
                     Appearance::StaticMesh {
                         asset: "mesh/triangle".to_owned(),
                         material_overrides: Vec::new(),
+                        material_parameters: Default::default(),
                     },
                 ),
                 (

@@ -1469,7 +1469,7 @@ impl MaterialParams {
         Self {
             roughness: descriptor.roughness,
             alpha_cutoff: cutoff,
-            unlit: false,
+            unlit: descriptor.unlit,
             metalness: descriptor.metalness,
             voxel_surface,
             triplanar: descriptor.triplanar.map(|triplanar| triplanar.sharpness),
@@ -1495,6 +1495,21 @@ impl MaterialParams {
                             tex_coord: 0,
                         },
                         map.scale,
+                    )
+                }),
+                emissive: descriptor.emission_map.as_ref().map(|map| MapSlot {
+                    texture: map.texture.clone(),
+                    transform: transform.unwrap_or(UvTransform::IDENTITY),
+                    tex_coord: 0,
+                }),
+                occlusion: descriptor.occlusion_map.as_ref().map(|map| {
+                    (
+                        MapSlot {
+                            texture: map.texture.clone(),
+                            transform: transform.unwrap_or(UvTransform::IDENTITY),
+                            tex_coord: 0,
+                        },
+                        1.0,
                     )
                 }),
                 base: transform,

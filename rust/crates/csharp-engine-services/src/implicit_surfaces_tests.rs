@@ -36,6 +36,9 @@ fn opaque_material() -> NativeMaterialRequest {
         double_sided: false,
         alpha_mode: NativeMaterialAlphaMode::Opaque,
         alpha_cutoff: 0.5,
+        emission_map: Default::default(),
+        occlusion_map: Default::default(),
+        unlit: false,
     }
 }
 

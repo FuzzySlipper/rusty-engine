@@ -435,6 +435,9 @@ fn material(id: &str, color: [f32; 4]) -> RenderMaterialDescriptor {
         voxel_surface: None,
         normal_map: None,
         triplanar: None,
+        emission_map: Default::default(),
+        occlusion_map: Default::default(),
+        unlit: false,
     }
 }
 

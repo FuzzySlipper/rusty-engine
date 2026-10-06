@@ -630,6 +630,16 @@ pub struct NativeMaterialRequest {
     /// more): 1 blends widely and softens the texture, higher keeps each
     /// tile crisp with narrower transitions.
     pub stochastic_tiling: f32,
+    /// Draw the base colour as it is: no lights, shadows or emission, and no
+    /// map beyond the base texture (signage, UI in the world).
+    pub unlit: bool,
+    /// A texture multiplying the emission colour and intensity, opened as
+    /// sRGB colour and read through the base texture's uv; 0 for none.
+    pub emission_map: NativeRenderResourceReference,
+    /// A texture whose red channel scales the ambient, hemisphere and sky
+    /// light the surface takes (baked occlusion), opened with a linear
+    /// colour space and read through the base texture's uv; 0 for none.
+    pub occlusion_map: NativeRenderResourceReference,
 }
 
 /// A product shader resource (`.wgsl`, `NativeRenderResourceKind::Shader`),
@@ -828,6 +838,18 @@ pub struct NativeStaticMeshMaterialUpdateRequest {
     pub appearance: NativeAppearanceHandle,
     pub bindings: *const NativeMeshMaterialBinding,
     pub bindings_len: usize,
+}
+
+/// Replaces the complete set of per-slot factors of one static mesh
+/// appearance (base colour, texture tint, emission over the slot's material);
+/// an empty set restores the materials' own. Appearances of one mesh each
+/// carry their own set, so instances of one mesh tint apart with one material.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeStaticMeshMaterialFactorsRequest {
+    pub appearance: NativeAppearanceHandle,
+    pub factors: *const NativeMeshMaterialFactors,
+    pub factors_len: usize,
 }
 
 #[repr(C)]

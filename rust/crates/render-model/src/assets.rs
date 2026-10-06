@@ -410,6 +410,18 @@ pub struct RenderMaterialDescriptor {
     /// texture holds data, so it is retained with a linear colour space.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub normal_map: Option<MaterialNormalMapDescriptor>,
+    /// Draw the base colour as it is: no lights, shadows or emission, and no
+    /// map beyond the base texture (the standard shader's `UNLIT`).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub unlit: bool,
+    /// Multiplies the emission colour and intensity, read through the same
+    /// uv as the base texture.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub emission_map: Option<MaterialEmissionMapDescriptor>,
+    /// Scales the ambient, hemisphere and sky light the surface takes, read
+    /// through the same uv as the base texture.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub occlusion_map: Option<MaterialOcclusionMapDescriptor>,
     /// Sample the base texture (and normal map) from three axis planes
     /// blended by the surface normal, instead of the mesh uv. The planes use
     /// voxel cube faces' texture bases, over the mesh's texture positions
@@ -535,6 +547,23 @@ pub struct MaterialNormalMapDescriptor {
     pub scale: f32,
 }
 
+/// A material's emission map (a GLB's emissive texture): its colour
+/// multiplies the emission colour and intensity.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MaterialEmissionMapDescriptor {
+    pub texture: String,
+}
+
+/// A material's occlusion map (a GLB's occlusion texture at full strength):
+/// its red channel scales the ambient, hemisphere and sky light the surface
+/// takes. It holds data, so it is retained with a linear colour space.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MaterialOcclusionMapDescriptor {
+    pub texture: String,
+}
+
 fn is_false(value: &bool) -> bool {
     !*value
 }
@@ -550,6 +579,8 @@ impl RenderMaterialDescriptor {
         self.texture
             .iter()
             .chain(self.normal_map.iter().map(|map| &map.texture))
+            .chain(self.emission_map.iter().map(|map| &map.texture))
+            .chain(self.occlusion_map.iter().map(|map| &map.texture))
             .chain(
                 self.shader
                     .iter()
@@ -1716,6 +1747,9 @@ mod tests {
             voxel_surface: Some(surface.clone()),
             normal_map: None,
             triplanar: None,
+            emission_map: Default::default(),
+            occlusion_map: Default::default(),
+            unlit: false,
         };
         assert_eq!(material.validate(), Ok(()));
         let material_json = serde_json::to_string(&material).unwrap();
@@ -1771,6 +1805,9 @@ mod tests {
             voxel_surface: None,
             normal_map: None,
             triplanar: None,
+            emission_map: Default::default(),
+            occlusion_map: Default::default(),
+            unlit: false,
         };
         material.validate().unwrap();
         let encoded = serde_json::to_string(&material).unwrap();

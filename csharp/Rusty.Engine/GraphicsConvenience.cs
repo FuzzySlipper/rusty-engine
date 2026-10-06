@@ -31,7 +31,10 @@ public readonly partial record struct MaterialRequest
             default,
             default,
             default,
-            0)
+            0,
+            false,
+            default,
+            default)
     {
     }
 
@@ -63,7 +66,10 @@ public readonly partial record struct MaterialRequest
             default,
             default,
             default,
-            0)
+            0,
+            false,
+            default,
+            default)
     {
     }
 
@@ -96,7 +102,10 @@ public readonly partial record struct MaterialRequest
             default,
             default,
             default,
-            0)
+            0,
+            false,
+            default,
+            default)
     {
     }
 
@@ -131,7 +140,10 @@ public readonly partial record struct MaterialRequest
             default,
             default,
             default,
-            0)
+            0,
+            false,
+            default,
+            default)
     {
     }
 
@@ -167,7 +179,10 @@ public readonly partial record struct MaterialRequest
             default,
             default,
             default,
-            0)
+            0,
+            false,
+            default,
+            default)
     {
     }
 
@@ -204,7 +219,10 @@ public readonly partial record struct MaterialRequest
             shader,
             default,
             default,
-            0)
+            0,
+            false,
+            default,
+            default)
     {
     }
 }
@@ -419,6 +437,25 @@ public readonly partial record struct LightDescriptor
             0,
             false,
             groundColor);
+}
+
+public readonly partial record struct MeshMaterialFactors
+{
+    /// <summary>Per-slot factors that keep the material's own texture tint.</summary>
+    public MeshMaterialFactors(
+        uint materialSlot,
+        bool overrideBaseColor,
+        Color baseColor,
+        bool overrideEmission,
+        Vector3 emissiveFactor,
+        float emissiveStrength)
+        : this(materialSlot, overrideBaseColor, baseColor, overrideEmission, emissiveFactor, emissiveStrength, false, default)
+    {
+    }
+
+    /// <summary>Factors that only tint one slot: the colour is multiplied by <paramref name="tint"/>.</summary>
+    public static MeshMaterialFactors Tint(uint materialSlot, Color tint) =>
+        new(materialSlot, false, default, false, default, 0, true, tint);
 }
 
 public readonly partial record struct AppearanceFact

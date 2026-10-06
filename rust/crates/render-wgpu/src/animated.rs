@@ -510,6 +510,9 @@ impl Renderer {
                 normal_map: None,
                 triplanar: None,
                 shader: None,
+                emission_map: Default::default(),
+                occlusion_map: Default::default(),
+                unlit: false,
             };
             self.define_material_with(descriptor, material.unlit, maps);
         }

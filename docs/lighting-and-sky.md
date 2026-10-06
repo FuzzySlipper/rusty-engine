@@ -215,11 +215,12 @@ material compiles only the features its contents use:
 
 | Feature | A material has it when |
 | --- | --- |
-| Unlit | it is a GLB `KHR_materials_unlit` material or an Engine primitive |
+| Unlit | it is a GLB `KHR_materials_unlit` material, an Engine primitive, or `MaterialRequest.Unlit` is set (signage, UI in the world: the base colour as it is, no lights or emission) |
 | Alpha mask | its alpha mode is `MaterialAlphaMode.Mask`, or its voxel surface is masked |
 | Voxel surface | it carries a voxel surface mapping |
 | Normal map | it is a GLB material with a normal texture, or `MaterialRequest.NormalMap` names one |
-| Emissive, occlusion map | it is a GLB material with that texture |
+| Emissive map | it is a GLB material with an emissive texture, or `MaterialRequest.EmissionMap` names one (sRGB; it multiplies `EmissionColor` × `EmissionIntensity`) |
+| Occlusion map | it is a GLB material with an occlusion texture, or `MaterialRequest.OcclusionMap` names one (opened with `TextureColorSpace.Linear`; its red channel scales the ambient, hemisphere and sky light the surface takes) |
 | Triplanar | its `TriplanarSharpness` is nonzero ([three planes](smooth-voxel-surfaces.md#textures-on-reconstructed-surfaces)) |
 | Stochastic tiling | its `StochasticTiling` is nonzero (three blended hex tiles per sample) |
 
@@ -229,6 +230,14 @@ an RX 9070 XT, then about 0.4 ms for each further pass it draws in. Doom's E1M1
 uses two. The shader is composed from importable WGSL modules in
 `render-shaders/src/shaders/` (`types`, `view`, `material`, `surface`,
 `lighting`, `tonemap`, `finish`, `shade`).
+
+Instances of one mesh need not each have a material to look different:
+`Graphics.UpdateStaticMeshMaterialFactors(new(appearance, factors))` sets,
+per material slot of one static mesh appearance, a base colour, a texture
+tint and an emission over the slot's material (`MeshMaterialFactors.Tint`
+for the common case), as `Animation.UpdateAnimatedMeshMaterialFactors` does
+for a GLB's slots; an empty set restores the materials' own. Appearances of
+one mesh each carry their own factors, and the instances still batch.
 
 ## Product shaders
 
@@ -263,6 +272,13 @@ fn shade(surface: Surface) -> vec4<f32> {
 }
 ```
 
+- **Per material, not per instance.** `MaterialShader`'s four parameter
+  vectors and two textures belong to the material, like the standard
+  shader's colour and maps: an object that needs its own values gets its own
+  material (`UpdateMaterial` changes them at runtime), and the per-instance
+  factors above (base colour, texture tint, emission) still apply over a
+  product-shaded material. A per-instance parameter vector is not built until
+  a product needs one.
 - **What it gets.** `Surface` holds the base colour and alpha, the tint
   (material, node and vertex colour without the texture), the shading normal,
   world position, uv, roughness, metalness, occlusion and emission.

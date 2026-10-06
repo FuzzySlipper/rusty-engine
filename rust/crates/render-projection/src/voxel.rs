@@ -989,6 +989,9 @@ mod tests {
             voxel_surface: None,
             normal_map: None,
             triplanar: None,
+            emission_map: Default::default(),
+            occlusion_map: Default::default(),
+            unlit: false,
         }
     }
 

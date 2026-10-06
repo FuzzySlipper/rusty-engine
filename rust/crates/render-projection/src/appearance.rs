@@ -35,6 +35,10 @@ pub enum Appearance {
     StaticMesh {
         asset: String,
         material_overrides: Vec<MeshMaterialSlot>,
+        /// Per material slot values over the slot's material (base colour,
+        /// texture tint, emission). A change updates the instance in place.
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        material_parameters: BTreeMap<u16, MaterialInstanceParameters>,
     },
     AnimatedMesh {
         #[serde(default)]
@@ -258,6 +262,7 @@ pub(crate) fn validate_appearance(
         Appearance::StaticMesh {
             asset,
             material_overrides,
+            ..
         } => {
             if !resources.static_meshes.contains_key(asset) {
                 return Err(AppearanceProjectionError::MissingStaticMesh {
@@ -448,10 +453,12 @@ pub(crate) fn requires_recreate(previous: &Appearance, next: &Appearance) -> boo
             Appearance::StaticMesh {
                 asset: previous,
                 material_overrides: previous_slots,
+                ..
             },
             Appearance::StaticMesh {
                 asset: next,
                 material_overrides: next_slots,
+                ..
             },
         ) => previous != next || previous_slots != next_slots,
         (
@@ -515,6 +522,7 @@ pub(crate) fn create_node(
         Appearance::StaticMesh {
             asset,
             material_overrides,
+            ..
         } => RenderDiff::CreateStaticMeshInstance {
             handle,
             parent,
@@ -672,10 +680,12 @@ pub(crate) fn append_node_updates(
         (
             Appearance::StaticMesh {
                 material_overrides: old_slots,
+                material_parameters: old_parameters,
                 ..
             },
             Appearance::StaticMesh {
                 material_overrides: new_slots,
+                material_parameters: new_parameters,
                 ..
             },
         ) => {
@@ -691,6 +701,7 @@ pub(crate) fn append_node_updates(
                     metadata,
                 });
             }
+            append_material_parameters(operations, handle, old_parameters, new_parameters);
         }
         (Appearance::Sprite { sprite: old }, Appearance::Sprite { sprite: new }) => {
             if transform.is_some() || metadata.is_some() {
@@ -858,6 +869,7 @@ mod tests {
             Appearance::StaticMesh {
                 asset: "mesh/held".to_owned(),
                 material_overrides: Vec::new(),
+                material_parameters: Default::default(),
             },
             Appearance::AnimatedMesh {
                 asset: "animated/held".to_owned(),

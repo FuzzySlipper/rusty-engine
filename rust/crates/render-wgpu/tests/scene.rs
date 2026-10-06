@@ -2759,3 +2759,81 @@ fn a_hemisphere_light_lights_up_faces_in_sky_colour_and_down_faces_in_ground_col
         "a disabled hemisphere light lights nothing"
     );
 }
+
+/// The centre pixel of a box in `material`, lit by a dim ambient light only;
+/// `textures` are 2×2 solid textures admitted under the given ids.
+fn material_centre(material: RenderMaterialDescriptor, textures: &[(&str, [u8; 4])]) -> [u8; 4] {
+    let mut harness = Harness::new(RendererOptions {
+        default_world_lights: false,
+        ..RendererOptions::default()
+    });
+    let mut ops: Vec<RenderDiff> = textures
+        .iter()
+        .map(|(id, rgba)| RenderDiff::DefineTexture {
+            texture: harness
+                .resources
+                .texture(id, 2, 2, &rgba.repeat(4), TextureWrap::Repeat),
+        })
+        .collect();
+    ops.extend([
+        RenderDiff::DefineMaterial { material },
+        static_mesh(
+            "mesh/slab",
+            box_mesh([-2.0, -0.5, -2.0], [2.0, 0.5, 2.0], |_| 0),
+            "material/slab",
+        ),
+        instance(1, None, "mesh/slab", Transform::IDENTITY),
+        RenderDiff::CreateLight {
+            handle: RenderHandle::new(10),
+            parent: None,
+            light: LightDescriptor::Ambient {
+                color: [1.0; 3],
+                intensity: 0.25,
+                enabled: true,
+                range: None,
+                shadow_intent: LightShadowIntent::Disabled,
+                shadow: Default::default(),
+            },
+        },
+    ]);
+    harness.apply(ops);
+    let frame = harness.render(&camera([0.0, 3.0, 4.0], 0.0, -36.0)).1;
+    pixel_at(&frame, WIDTH / 2, HEIGHT / 2)
+}
+
+#[test]
+fn material_request_features_draw_unlit_colour_mask_emission_by_the_map_and_darken_by_occlusion() {
+    let plain = material("material/slab", [0.2, 0.8, 0.2, 1.0], None);
+    let dim = material_centre(plain.clone(), &[]);
+    let mut unlit = plain.clone();
+    unlit.unlit = true;
+    let flat = material_centre(unlit, &[]);
+    assert!(
+        flat[1] > 200 && flat[1] > dim[1] + 100,
+        "an unlit material draws its colour whatever the light: {flat:?} against {dim:?} lit by a dim ambient"
+    );
+
+    let mut glowing = plain.clone();
+    glowing.emission_color = [1.0, 0.5, 0.0];
+    glowing.emission_intensity = 4.0;
+    let glow = material_centre(glowing.clone(), &[]);
+    let mut masked = glowing;
+    masked.emission_map = Some(MaterialEmissionMapDescriptor {
+        texture: "texture/black".to_owned(),
+    });
+    let dark = material_centre(masked, &[("texture/black", [0, 0, 0, 255])]);
+    assert!(
+        glow[0] > 200 && dark[0] < glow[0] / 3,
+        "a black emission map masks the emission: {dark:?} against {glow:?}"
+    );
+
+    let mut occluded = plain;
+    occluded.occlusion_map = Some(MaterialOcclusionMapDescriptor {
+        texture: "texture/grey".to_owned(),
+    });
+    let shaded = material_centre(occluded, &[("texture/grey", [64, 64, 64, 255])]);
+    assert!(
+        shaded[1] < dim[1] * 3 / 4,
+        "a grey occlusion map darkens the ambient light: {shaded:?} against {dim:?}"
+    );
+}

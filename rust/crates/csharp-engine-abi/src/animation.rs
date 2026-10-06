@@ -227,6 +227,10 @@ pub struct NativeMeshMaterialFactors {
     pub override_emission: bool,
     pub emissive_factor: NativeVec3,
     pub emissive_strength: f32,
+    /// Replace the slot's texture tint (the material's own without; a GLB
+    /// slot's is 1) with `texture_tint`, which multiplies the colour.
+    pub override_texture_tint: bool,
+    pub texture_tint: NativeColor,
 }
 
 /// Replaces the complete set of factor overrides for one animated (GLB)

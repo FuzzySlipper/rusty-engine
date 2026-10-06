@@ -681,6 +681,11 @@ pub type NativeUpdateStaticMeshMaterials = unsafe extern "C" fn(
     *const NativeStaticMeshMaterialUpdateRequest,
     *mut crate::NativeOperationErrorReceipt,
 ) -> i32;
+pub type NativeUpdateStaticMeshMaterialFactors = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeStaticMeshMaterialFactorsRequest,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
 pub type NativeCreateSpriteAppearance = unsafe extern "C" fn(
     *mut c_void,
     NativeSpriteAppearanceRequest,
@@ -1439,6 +1444,7 @@ pub struct NativeGraphicsApi {
     pub replace_static_mesh: NativeReplaceStaticMeshAppearance,
     pub replace_static_mesh_from_content: NativeReplaceStaticMeshContentAppearance,
     pub update_static_mesh_materials: NativeUpdateStaticMeshMaterials,
+    pub update_static_mesh_material_factors: NativeUpdateStaticMeshMaterialFactors,
     pub create_sprite: NativeCreateSpriteAppearance,
     pub replace_sprite: NativeReplaceSpriteAppearance,
     pub create_sprite_atlas: NativeCreateSpriteAtlas,

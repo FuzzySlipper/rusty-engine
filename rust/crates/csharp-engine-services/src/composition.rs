@@ -39,7 +39,8 @@ use crate::appearance::{
     replace_sprite_from_atlas, replace_static_mesh_appearance,
     replace_static_mesh_from_content_appearance, sample_sprite_playback,
     select_sprite_playback_frame, set_sprite_frame, set_sprite_viewport, update_light,
-    update_material, update_static_mesh_materials, RuntimeAppearanceBridge, RuntimeAppearanceCall,
+    update_material, update_static_mesh_material_factors, update_static_mesh_materials,
+    RuntimeAppearanceBridge, RuntimeAppearanceCall,
 };
 use crate::render_resources::{
     create_mesh_resource, destroy_mesh_partition, partition_mesh, read_mesh_partition,
@@ -126,6 +127,7 @@ fn engine_api(
             replace_static_mesh: replace_static_mesh_appearance,
             replace_static_mesh_from_content: replace_static_mesh_from_content_appearance,
             update_static_mesh_materials,
+            update_static_mesh_material_factors,
             create_sprite: create_sprite_appearance,
             replace_sprite: replace_sprite_appearance,
             create_sprite_atlas,

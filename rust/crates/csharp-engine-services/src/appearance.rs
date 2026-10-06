@@ -3683,6 +3683,61 @@ impl RuntimeAppearanceBridge {
         Ok(())
     }
 
+    /// Replaces the per-slot factors of a static mesh appearance: base
+    /// colour, texture tint and emission over each slot's material, so
+    /// instances of one mesh tint apart with one material.
+    unsafe fn update_static_mesh_material_factors(
+        &mut self,
+        request: &NativeStaticMeshMaterialFactorsRequest,
+    ) -> Result<(), CsharpEngineServicesError> {
+        let factors = borrowed_slice(
+            request.factors,
+            request.factors_len,
+            "static mesh material factors",
+        )?;
+        let staged = self.staged_mut()?;
+        let identity = staged
+            .state
+            .appearances
+            .get(&request.appearance.value)
+            .cloned()
+            .ok_or_else(|| {
+                CsharpEngineServicesError::new(
+                    "CSHARP_APPEARANCE_HANDLE",
+                    "appearance handle is not live",
+                )
+            })?;
+        let mut parameters = BTreeMap::new();
+        for factor in factors {
+            let slot = u16::try_from(factor.material_slot).map_err(|_| {
+                CsharpEngineServicesError::new(
+                    "CSHARP_STATIC_MESH_SLOT",
+                    "mesh material slot exceeded u16",
+                )
+            })?;
+            let value = mesh_material_parameters(factor, "CSHARP_STATIC_MESH_FACTORS")?;
+            if parameters.insert(slot, value).is_some() {
+                return Err(CsharpEngineServicesError::new(
+                    "CSHARP_STATIC_MESH_SLOT",
+                    "static mesh material factors must not repeat a slot",
+                ));
+            }
+        }
+        match staged.state.projector.appearance_mut(&identity) {
+            Some(Appearance::StaticMesh {
+                material_parameters: current,
+                ..
+            }) => {
+                *current = parameters;
+                Ok(())
+            }
+            _ => Err(CsharpEngineServicesError::new(
+                "CSHARP_STATIC_MESH_APPEARANCE",
+                "material factors require a live static mesh appearance",
+            )),
+        }
+    }
+
     fn set_mesh_inspection(
         &mut self,
         request: &NativeAnimatedMeshInspectionRequest,
@@ -3810,26 +3865,7 @@ impl RuntimeAppearanceBridge {
                         "animated mesh material factors name an unbound embedded slot",
                     )
                 })?;
-            let base = factor.base_color;
-            let emissive = factor.emissive_factor;
-            let value = MaterialInstanceParameters {
-                base_color: factor
-                    .override_base_color
-                    .then_some([base.r, base.g, base.b, base.a]),
-                texture_tint: [1.0; 4],
-                emission: factor
-                    .override_emission
-                    .then_some(MaterialInstanceEmission {
-                        color: [emissive.x, emissive.y, emissive.z],
-                        intensity: factor.emissive_strength,
-                    }),
-            };
-            value.validate().map_err(|_| {
-                CsharpEngineServicesError::new(
-                    "CSHARP_ANIMATED_MESH_FACTORS",
-                    "base colour and emissive factor channels are 0 to 1 and emissive strength is finite and not negative",
-                )
-            })?;
+            let value = mesh_material_parameters(factor, "CSHARP_ANIMATED_MESH_FACTORS")?;
             if parameters.insert(slot, value).is_some() {
                 return Err(CsharpEngineServicesError::new(
                     "CSHARP_ANIMATED_MESH_SLOT",
@@ -3892,6 +3928,7 @@ impl RuntimeAppearanceBridge {
         let appearance = self.allocate_appearance(Appearance::StaticMesh {
             asset,
             material_overrides: Vec::new(),
+            material_parameters: Default::default(),
         })?;
         self.staged_mut()?
             .state
@@ -4062,6 +4099,7 @@ impl RuntimeAppearanceBridge {
         let appearance = self.allocate_appearance(Appearance::StaticMesh {
             asset: mesh_id,
             material_overrides: Vec::new(),
+            material_parameters: Default::default(),
         })?;
         self.set_appearance_resources(appearance.value, [request.resource.value])?;
         Ok(appearance)
@@ -4132,6 +4170,7 @@ impl RuntimeAppearanceBridge {
         self.allocate_appearance(Appearance::StaticMesh {
             asset: mesh_id,
             material_overrides: Vec::new(),
+            material_parameters: Default::default(),
         })
     }
 
@@ -7782,6 +7821,21 @@ pub(crate) unsafe extern "C" fn update_static_mesh_materials(
     })
 }
 
+pub(crate) unsafe extern "C" fn update_static_mesh_material_factors(
+    context: *mut c_void,
+    request: *const NativeStaticMeshMaterialFactorsRequest,
+    operation_error: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    appearance_operation(context, operation_error, || {
+        if context.is_null() || request.is_null() {
+            return 0;
+        }
+        appearance_void(context, |bridge| unsafe {
+            bridge.update_static_mesh_material_factors(&*request)
+        })
+    })
+}
+
 pub(crate) unsafe extern "C" fn create_sprite_appearance(
     context: *mut c_void,
     request: NativeSpriteAppearanceRequest,
@@ -9259,6 +9313,9 @@ fn render_material(id: String, color: NativeColor) -> RenderMaterialDescriptor {
         voxel_surface: None,
         normal_map: None,
         triplanar: None,
+        emission_map: Default::default(),
+        occlusion_map: Default::default(),
+        unlit: false,
     }
 }
 
@@ -9382,6 +9439,22 @@ fn material_descriptor(
         Some(resource.asset_identity().to_owned())
     };
     let normal_map = normal_map_descriptor(resources, request.normal_map, request.normal_scale)?;
+    let emission_map = map_texture(
+        resources,
+        request.emission_map,
+        false,
+        "CSHARP_MATERIAL_EMISSION_MAP",
+        "a material's emission map must be an admitted texture resource",
+    )?
+    .map(|texture| render_model::MaterialEmissionMapDescriptor { texture });
+    let occlusion_map = map_texture(
+        resources,
+        request.occlusion_map,
+        true,
+        "CSHARP_MATERIAL_OCCLUSION_MAP",
+        "a material's occlusion map must be a texture opened with TextureColorSpace.Linear",
+    )?
+    .map(|texture| render_model::MaterialOcclusionMapDescriptor { texture });
     let descriptor = RenderMaterialDescriptor {
         texture_transform: texture_transform_descriptor(
             request.texture_scale,
@@ -9412,6 +9485,9 @@ fn material_descriptor(
         double_sided: request.double_sided,
         voxel_surface: None,
         normal_map,
+        unlit: request.unlit,
+        emission_map,
+        occlusion_map,
         triplanar: triplanar_descriptor(request.triplanar_sharpness),
         shader: material_shader(resources, request.shader)?.map(|(shader, _)| shader),
     };
@@ -9455,6 +9531,33 @@ fn retarget_voxel_surface(surface: &mut VoxelSurfaceDescriptor, texture_id: &str
             *texture = texture_id.to_owned();
         }
     }
+}
+
+/// A material map's texture (its retained asset identity), or none for
+/// reference 0. `linear` requires a texture opened with a linear colour
+/// space, as data maps are.
+fn map_texture(
+    resources: &RenderResourceRegistry,
+    reference: NativeRenderResourceReference,
+    linear: bool,
+    code: &'static str,
+    message: &'static str,
+) -> Result<Option<String>, CsharpEngineServicesError> {
+    if reference.value == 0 {
+        return Ok(None);
+    }
+    let resource = resources
+        .get(reference.value)
+        .filter(|resource| {
+            resource.texture().is_some_and(|texture| {
+                !linear
+                    || texture.payload.as_ref().is_some_and(|payload| {
+                        payload.color_space == render_model::TextureColorSpace::Linear
+                    })
+            })
+        })
+        .ok_or_else(|| CsharpEngineServicesError::new(code, message))?;
+    Ok(Some(resource.asset_identity().to_owned()))
 }
 
 /// A material's normal map: a texture opened as linear data, or none for
@@ -9590,6 +9693,40 @@ fn texture_transform_descriptor(
 /// Triplanar sampling at this sharpness, or none for 0.
 fn triplanar_descriptor(sharpness: f32) -> Option<render_model::MaterialTriplanarDescriptor> {
     (sharpness != 0.0).then_some(render_model::MaterialTriplanarDescriptor { sharpness })
+}
+
+/// One slot's per-instance parameters from a product's factors: a base
+/// colour, texture tint and emission each override the material's when asked.
+fn mesh_material_parameters(
+    factor: &NativeMeshMaterialFactors,
+    code: &'static str,
+) -> Result<MaterialInstanceParameters, CsharpEngineServicesError> {
+    let base = factor.base_color;
+    let tint = factor.texture_tint;
+    let emissive = factor.emissive_factor;
+    let value = MaterialInstanceParameters {
+        base_color: factor
+            .override_base_color
+            .then_some([base.r, base.g, base.b, base.a]),
+        texture_tint: if factor.override_texture_tint {
+            [tint.r, tint.g, tint.b, tint.a]
+        } else {
+            [1.0; 4]
+        },
+        emission: factor
+            .override_emission
+            .then_some(MaterialInstanceEmission {
+                color: [emissive.x, emissive.y, emissive.z],
+                intensity: factor.emissive_strength,
+            }),
+    };
+    value.validate().map_err(|_| {
+        CsharpEngineServicesError::new(
+            code,
+            "base colour, texture tint and emissive factor channels are 0 to 1 and emissive strength is finite and not negative",
+        )
+    })?;
+    Ok(value)
 }
 
 fn texture_descriptors_for_material(
@@ -10171,6 +10308,286 @@ pub(super) mod tests {
         );
     }
 
+    #[test]
+    fn emission_and_occlusion_maps_and_unlit_reach_the_material_descriptor() {
+        let mut content = BTreeMap::new();
+        content.insert("glow.png".to_owned(), Arc::from(RGBA_PNG));
+        let mut bridge = RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), content);
+        bridge.begin_call();
+        let colour = bridge.open_resource(&resource_request("glow.png")).unwrap();
+        let mut data_request = resource_request("glow.png");
+        data_request.color_space = NativeTextureColorSpace::Linear;
+        let data = bridge.open_resource(&data_request).unwrap();
+        let resources = &bridge.staged_ref().unwrap().state.render_resources;
+        let white = NativeColor {
+            r: 1.0,
+            g: 1.0,
+            b: 1.0,
+            a: 1.0,
+        };
+        let request =
+            |unlit: bool,
+             emission_map: NativeRenderResourceHandle,
+             occlusion_map: NativeRenderResourceHandle| NativeMaterialRequest {
+                texture_scale: NativeVec2::default(),
+                texture_offset: NativeVec2::default(),
+                stochastic_tiling: 0.0,
+                shader: Default::default(),
+                triplanar_sharpness: 0.0,
+                color: white,
+                texture: NativeRenderResourceReference::default(),
+                roughness: 0.8,
+                texture_tint: white,
+                emission_color: NativeVec3 {
+                    x: 1.0,
+                    y: 0.5,
+                    z: 0.0,
+                },
+                emission_intensity: 3.0,
+                double_sided: false,
+                alpha_mode: NativeMaterialAlphaMode::Opaque,
+                alpha_cutoff: 0.5,
+                metalness: 0.0,
+                normal_map: NativeRenderResourceReference::default(),
+                normal_scale: 1.0,
+                unlit,
+                emission_map: NativeRenderResourceReference {
+                    value: emission_map.value,
+                },
+                occlusion_map: NativeRenderResourceReference {
+                    value: occlusion_map.value,
+                },
+            };
+        let none = NativeRenderResourceHandle::default();
+        let plain = material_descriptor(
+            "material/plain".to_owned(),
+            request(false, none, none),
+            resources,
+        )
+        .unwrap();
+        assert!(!plain.unlit && plain.emission_map.is_none() && plain.occlusion_map.is_none());
+
+        let mapped = material_descriptor(
+            "material/mapped".to_owned(),
+            request(true, colour.handle, data.handle),
+            resources,
+        )
+        .unwrap();
+        assert!(mapped.unlit);
+        let emission = mapped.emission_map.as_ref().expect("emission map");
+        let occlusion = mapped.occlusion_map.as_ref().expect("occlusion map");
+        assert!(
+            occlusion.texture.ends_with("-linear"),
+            "{}",
+            occlusion.texture
+        );
+        assert_ne!(
+            emission.texture, occlusion.texture,
+            "one PNG, two colour spaces"
+        );
+        let textures = texture_descriptors_for_material(&mapped, resources).unwrap();
+        assert_eq!(
+            textures.len(),
+            2,
+            "both maps are retained with the material"
+        );
+
+        let refused = material_descriptor(
+            "material/colour-occlusion".to_owned(),
+            request(false, none, colour.handle),
+            resources,
+        )
+        .unwrap_err();
+        assert_eq!(
+            refused.code(),
+            "CSHARP_MATERIAL_OCCLUSION_MAP",
+            "occlusion maps are data"
+        );
+        let refused = material_descriptor(
+            "material/unknown-emission".to_owned(),
+            request(false, NativeRenderResourceHandle { value: 999 }, none),
+            resources,
+        )
+        .unwrap_err();
+        assert_eq!(refused.code(), "CSHARP_MATERIAL_EMISSION_MAP");
+    }
+
+    #[test]
+    fn static_mesh_instances_take_per_slot_factors_over_one_material() {
+        let mut bridge =
+            RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), BTreeMap::new());
+        bridge.begin_call();
+        let positions = [
+            NativeVec3::default(),
+            NativeVec3 {
+                x: 1.0,
+                y: 0.0,
+                z: 0.0,
+            },
+            NativeVec3 {
+                x: 0.0,
+                y: 1.0,
+                z: 0.0,
+            },
+        ];
+        let normals = [NativeVec3 {
+            x: 0.0,
+            y: 0.0,
+            z: 1.0,
+        }; 3];
+        let indices = [0_u32, 1, 2];
+        let groups = [NativeMeshGroup {
+            material_slot: 0,
+            start: 0,
+            count: 3,
+        }];
+        let white = NativeColor {
+            r: 1.0,
+            g: 1.0,
+            b: 1.0,
+            a: 1.0,
+        };
+        let material = bridge
+            .create_material(NativeMaterialRequest {
+                texture_scale: NativeVec2::default(),
+                texture_offset: NativeVec2::default(),
+                stochastic_tiling: 0.0,
+                shader: Default::default(),
+                triplanar_sharpness: 0.0,
+                color: white,
+                texture: NativeRenderResourceReference::default(),
+                roughness: 0.7,
+                texture_tint: white,
+                emission_color: NativeVec3::default(),
+                emission_intensity: 0.0,
+                double_sided: false,
+                alpha_mode: NativeMaterialAlphaMode::Opaque,
+                alpha_cutoff: 0.5,
+                metalness: 0.0,
+                normal_map: NativeRenderResourceReference::default(),
+                normal_scale: 1.0,
+                unlit: false,
+                emission_map: NativeRenderResourceReference::default(),
+                occlusion_map: NativeRenderResourceReference::default(),
+            })
+            .unwrap();
+        let bindings = [NativeMeshMaterialBinding {
+            material_slot: 0,
+            material,
+        }];
+        let request = NativeMeshResourceCreateRequest {
+            positions: positions.as_ptr(),
+            positions_len: positions.len(),
+            normals: normals.as_ptr(),
+            normals_len: normals.len(),
+            uvs: std::ptr::null(),
+            uvs_len: 0,
+            colors: std::ptr::null(),
+            colors_len: 0,
+            indices: indices.as_ptr(),
+            indices_len: indices.len(),
+            groups: groups.as_ptr(),
+            groups_len: groups.len(),
+            bindings: bindings.as_ptr(),
+            bindings_len: bindings.len(),
+        };
+        let resource =
+            unsafe { crate::render_resources::create_generated_mesh(&mut bridge, &request) }
+                .unwrap();
+        let tinted = bridge.create_mesh_appearance(resource).unwrap();
+        let plain = bridge.create_mesh_appearance(resource).unwrap();
+
+        let tint = |slot, r: f32| NativeMeshMaterialFactors {
+            material_slot: slot,
+            override_base_color: false,
+            base_color: NativeColor::default(),
+            override_emission: false,
+            emissive_factor: NativeVec3::default(),
+            emissive_strength: 0.0,
+            override_texture_tint: true,
+            texture_tint: NativeColor {
+                r,
+                g: 0.5,
+                b: 0.5,
+                a: 1.0,
+            },
+        };
+        let update = |bridge: &mut RuntimeAppearanceBridge,
+                      appearance,
+                      factors: &[NativeMeshMaterialFactors]| unsafe {
+            bridge.update_static_mesh_material_factors(&NativeStaticMeshMaterialFactorsRequest {
+                appearance,
+                factors: factors.as_ptr(),
+                factors_len: factors.len(),
+            })
+        };
+        update(&mut bridge, tinted, &[tint(0, 1.0)]).expect("slot 0 factors");
+        for (factors, code) in [
+            (vec![tint(0, 1.5)], "CSHARP_STATIC_MESH_FACTORS"),
+            (vec![tint(0, 0.5), tint(0, 0.5)], "CSHARP_STATIC_MESH_SLOT"),
+            (vec![tint(70_000, 0.5)], "CSHARP_STATIC_MESH_SLOT"),
+        ] {
+            assert_eq!(
+                update(&mut bridge, tinted, &factors)
+                    .expect_err("refused")
+                    .code(),
+                code
+            );
+        }
+        let state = &bridge.staged_ref().unwrap().state;
+        let parameters = |handle: NativeAppearanceHandle| match state
+            .projector
+            .appearance(&state.appearances[&handle.value])
+        {
+            Some(Appearance::StaticMesh {
+                material_parameters,
+                ..
+            }) => material_parameters.clone(),
+            _ => panic!("static mesh appearance"),
+        };
+        assert_eq!(parameters(tinted)[&0].texture_tint, [1.0, 0.5, 0.5, 1.0]);
+        assert_eq!(
+            parameters(tinted)[&0].base_color,
+            None,
+            "the material's colour stays"
+        );
+        assert!(
+            parameters(plain).is_empty(),
+            "appearances of one mesh each carry their own factors"
+        );
+
+        let facts = [appearance_fact(tinted), {
+            let mut fact = appearance_fact(plain);
+            fact.object_id = 8;
+            fact
+        }];
+        unsafe { bridge.stage_snapshot(facts.as_ptr(), facts.len()) }.unwrap();
+        let call = bridge.take_staged_call();
+        let ops = call.render_ops();
+        let parameter_ops: Vec<_> = ops
+            .iter()
+            .filter(|op| {
+                matches!(
+                    op,
+                    render_model::RenderDiff::SetMaterialInstanceParameters { .. }
+                )
+            })
+            .collect();
+        assert_eq!(
+            parameter_ops.len(),
+            1,
+            "one instance carries factors: {ops:?}"
+        );
+        assert!(matches!(
+            parameter_ops[0],
+            render_model::RenderDiff::SetMaterialInstanceParameters {
+                slot: 0,
+                parameters: Some(parameters),
+                ..
+            } if parameters.texture_tint == [1.0, 0.5, 0.5, 1.0]
+        ));
+    }
+
     fn appearance_fact(appearance: NativeAppearanceHandle) -> NativeAppearanceFact {
         NativeAppearanceFact {
             object_id: 7,
@@ -10261,6 +10678,9 @@ pub(super) mod tests {
                 metalness: 0.0,
                 normal_map: NativeRenderResourceReference::default(),
                 normal_scale: 1.0,
+                emission_map: Default::default(),
+                occlusion_map: Default::default(),
+                unlit: false,
             })
             .unwrap();
         let positions = [
@@ -10463,6 +10883,9 @@ pub(super) mod tests {
                 metalness: 0.0,
                 normal_map: NativeRenderResourceReference::default(),
                 normal_scale: 1.0,
+                emission_map: Default::default(),
+                occlusion_map: Default::default(),
+                unlit: false,
             })
             .unwrap();
         let mut positions = [
@@ -11000,6 +11423,9 @@ pub(super) mod tests {
             metalness: 0.0,
             normal_map: NativeRenderResourceReference::default(),
             normal_scale: 1.0,
+            emission_map: Default::default(),
+            occlusion_map: Default::default(),
+            unlit: false,
         };
         let original = bridge.create_material(request).expect("material");
         let replacement = bridge
@@ -11053,6 +11479,9 @@ pub(super) mod tests {
             metalness: 1.0,
             normal_map: NativeRenderResourceReference::default(),
             normal_scale: 1.0,
+            emission_map: Default::default(),
+            occlusion_map: Default::default(),
+            unlit: false,
         };
         let resources = RenderResourceRegistry::default();
         let descriptor = material_descriptor("material/metal".to_owned(), metal, &resources)
@@ -11098,6 +11527,9 @@ pub(super) mod tests {
             metalness: 0.0,
             normal_map: NativeRenderResourceReference::default(),
             normal_scale: 1.0,
+            emission_map: Default::default(),
+            occlusion_map: Default::default(),
+            unlit: false,
         };
         let resources = RenderResourceRegistry::default();
         let descriptor = material_descriptor("material/plain".to_owned(), plain, &resources)
@@ -11258,6 +11690,9 @@ pub(super) mod tests {
                 value: normal_map.value,
             },
             normal_scale: 0.5,
+            emission_map: Default::default(),
+            occlusion_map: Default::default(),
+            unlit: false,
         };
         let refused =
             material_descriptor("material/a".to_owned(), request(colour.handle), resources)
@@ -11345,6 +11780,9 @@ fn shade(surface: Surface) -> vec4<f32> {
                     parameter_0: parameter,
                     ..Default::default()
                 },
+                emission_map: Default::default(),
+                occlusion_map: Default::default(),
+                unlit: false,
             })
             .unwrap();
         let resources = bridge.staged_ref().unwrap().state.projector.resources();
@@ -11455,6 +11893,9 @@ fn shade(surface: Surface) -> vec4<f32> {
                 texture_b: NativeRenderResourceReference { value: texture_b },
                 ..Default::default()
             },
+            emission_map: Default::default(),
+            occlusion_map: Default::default(),
+            unlit: false,
         };
         assert_eq!(
             bridge
@@ -11576,6 +12017,9 @@ fn shade(surface: Surface) -> vec4<f32> {
                     double_sided: false,
                     alpha_mode: NativeMaterialAlphaMode::Opaque,
                     alpha_cutoff: 0.5,
+                    emission_map: Default::default(),
+                    occlusion_map: Default::default(),
+                    unlit: false,
                 })
                 .unwrap();
         }
@@ -11799,6 +12243,9 @@ fn shade(surface: Surface) -> vec4<f32> {
                 double_sided: false,
                 alpha_mode: NativeMaterialAlphaMode::Opaque,
                 alpha_cutoff: 0.5,
+                emission_map: Default::default(),
+                occlusion_map: Default::default(),
+                unlit: false,
             })
             .unwrap();
         assert_eq!(
@@ -12551,6 +12998,9 @@ fn shade(surface: Surface) -> vec4<f32> {
                 double_sided: false,
                 alpha_mode: NativeMaterialAlphaMode::Opaque,
                 alpha_cutoff: 0.5,
+                emission_map: Default::default(),
+                occlusion_map: Default::default(),
+                unlit: false,
             })
             .expect("material");
         let bindings = [NativeMeshMaterialBinding {
@@ -12615,6 +13065,8 @@ fn shade(surface: Surface) -> vec4<f32> {
             override_emission: false,
             emissive_factor: NativeVec3::default(),
             emissive_strength: 0.0,
+            override_texture_tint: false,
+            texture_tint: Default::default(),
         };
         let update = |bridge: &mut RuntimeAppearanceBridge,
                       factors: &[NativeMeshMaterialFactors]| unsafe {

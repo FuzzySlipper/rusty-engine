@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.Numerics;
 using Rusty.Engine;
 using Rusty.Engine.Debugging;
@@ -21,6 +22,17 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     // The echo ring as a viewmodel: camera-local, lower right, close.
     private static readonly Vector3 ViewmodelOffset = new(0.9f, -0.6f, -2.2f);
     private const float ViewmodelScale = 0.3f;
+    // The material showcase: an unlit sign, an emission-mapped lamp, an
+    // occlusion-mapped crate and three tinted instances of one box.
+    private const ulong SignObjectId = 7_787_005, LampObjectId = 7_787_006, CrateObjectId = 7_787_007, TintedObjectId = 7_787_010;
+    private static readonly Color SignColor = new(1.0f, 0.95f, 0.2f, 1.0f);
+    private static readonly Color LampColor = new(0.2f, 0.2f, 0.22f, 1.0f);
+    private static readonly Vector3 LampEmission = new(1.0f, 0.85f, 0.5f);
+    private const float LampEmissionIntensity = 6.0f;
+    private static readonly Color CrateColor = new(0.7f, 0.55f, 0.35f, 1.0f);
+    private static readonly Color BoxColor = new(0.9f, 0.9f, 0.9f, 1.0f);
+    private static readonly Color[] Tints = [new(1f, 0.35f, 0.35f, 1f), new(0.35f, 1f, 0.35f, 1f), new(0.4f, 0.5f, 1f, 1f)];
+    private static readonly BloomRequest LampBloom = new(1.0f, 0.6f);
 
     private readonly IEngineContext _engine;
     private readonly Material _innerMaterial;
@@ -34,6 +46,7 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     private LightDescriptor _lightDescriptor;
     private ShadowCasting _casting = ShadowCasting.Cast;
     private bool _viewmodel;
+    private MaterialShowcase? _showcase;
     private readonly UiStream _uiStream;
     private RingPresentation? _ring;
     private bool _alternatePulse;
@@ -131,6 +144,30 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     }
 
     /// <summary>
+    /// Show (or remove) the material showcase: an unlit sign, a lamp whose
+    /// emission map glows under bloom, a crate darkened by its occlusion map,
+    /// and three instances of one box tinted apart with one material.
+    /// </summary>
+    [DebugCommand("mesh.materials")]
+    public string Materials(bool enabled)
+    {
+        if (enabled && _showcase is null)
+        {
+            _showcase = CreateShowcase();
+            _engine.CameraView.SetBloom(LampBloom);
+        }
+        else if (!enabled && _showcase is { } showcase)
+        {
+            _showcase = null;
+            PublishRing();
+            showcase.Dispose();
+            _engine.CameraView.SetBloom(default);
+        }
+        PublishRing();
+        return $"materials={(_showcase is not null)} bloom={(_showcase is not null)}";
+    }
+
+    /// <summary>
     /// Draw the echo ring as a viewmodel (camera-local) with the viewmodel
     /// layer's own field of view in degrees (0 for the camera's).
     /// </summary>
@@ -148,6 +185,7 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     {
         ReleaseRing();
         _engine.CameraView.ClearActiveCamera(new ClearActiveCameraRequest(0));
+        _showcase?.Dispose();
         _light.Dispose();
         _camera.Dispose();
         _backdrop.Dispose();
@@ -191,10 +229,13 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         PublishRing();
 
         PresentationReadout readout = _engine.Graphics.ReadPresentation();
-        Require(readout.RetainedObjectCount == 3, "mesh snapshot did not retain both ring appearances and the backdrop");
-        Require(readout.AppearanceCount == 3, "one mesh resource did not retain two appearances beside the backdrop's");
-        Require(readout.MaterialCount == 3, "mesh resources did not retain the ring's two material slots and the backdrop's");
-        Require(readout.ResourceCount == 2, "mesh resource admission was not visible in presentation readout");
+        if (_showcase is null)
+        {
+            Require(readout.RetainedObjectCount == 3, "mesh snapshot did not retain both ring appearances and the backdrop");
+            Require(readout.AppearanceCount == 3, "one mesh resource did not retain two appearances beside the backdrop's");
+            Require(readout.MaterialCount == 3, "mesh resources did not retain the ring's two material slots and the backdrop's");
+            Require(readout.ResourceCount == 2, "mesh resource admission was not visible in presentation readout");
+        }
         PublishUi(readout);
     }
 
@@ -213,7 +254,7 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
                 new Vector3(0, 0, -0.25f),
                 Quaternion.CreateFromAxisAngle(Vector3.UnitZ, 0.18f),
                 new Vector3(0.72f));
-        _engine.Graphics.PublishSnapshot(
+        List<AppearanceFact> facts =
         [
             new AppearanceFact(
                 PrimaryObjectId,
@@ -241,7 +282,81 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
                 _backdrop,
                 true,
                 RenderLayer.Scene),
-        ]);
+        ];
+        if (_showcase is { } showcase)
+        {
+            facts.AddRange(showcase.Facts());
+        }
+        _engine.Graphics.PublishSnapshot(facts.ToArray());
+    }
+
+    private MaterialShowcase CreateShowcase()
+    {
+        Color white = new(1, 1, 1, 1);
+        RenderResource emission = _engine.Graphics.OpenResource(new RenderResourceRequest("emission.png", TextureFilter.Linear, TextureWrap.Repeat)).Handle;
+        RenderResource occlusion = _engine.Graphics.OpenResource(new RenderResourceRequest("occlusion.png", TextureFilter.Linear, TextureWrap.Clamp, TextureColorSpace.Linear)).Handle;
+        Material sign = _engine.Graphics.CreateMaterial(new MaterialRequest(SignColor, default, 1.0f, white, Vector3.Zero, 0, true) with { Unlit = true });
+        Material lamp = _engine.Graphics.CreateMaterial(new MaterialRequest(LampColor, default, 0.5f, white, LampEmission, LampEmissionIntensity, true) with { EmissionMap = emission });
+        Material crate = _engine.Graphics.CreateMaterial(new MaterialRequest(CrateColor, default, 0.8f, white, Vector3.Zero, 0, true) with { OcclusionMap = occlusion });
+        Material box = _engine.Graphics.CreateMaterial(new MaterialRequest(BoxColor, default, 0.6f, white, Vector3.Zero, 0, true));
+        MeshResource signMesh = _engine.Graphics.CreateMeshResource(BuildQuadMesh(0.6f, sign));
+        MeshResource lampMesh = _engine.Graphics.CreateMeshResource(BuildQuadMesh(0.6f, lamp));
+        MeshResource crateMesh = _engine.Graphics.CreateMeshResource(BuildBoxMesh(0.5f, crate));
+        MeshResource boxMesh = _engine.Graphics.CreateMeshResource(BuildBoxMesh(0.3f, box));
+        Appearance[] tinted = new Appearance[Tints.Length];
+        for (int i = 0; i < Tints.Length; i++)
+        {
+            tinted[i] = _engine.Graphics.CreateMeshAppearance(boxMesh);
+            _engine.Graphics.UpdateStaticMeshMaterialFactors(new StaticMeshMaterialFactorsRequest(tinted[i], new[] { MeshMaterialFactors.Tint(0, Tints[i]) }));
+        }
+        return new MaterialShowcase(
+            emission,
+            occlusion,
+            [sign, lamp, crate, box],
+            [signMesh, lampMesh, crateMesh, boxMesh],
+            _engine.Graphics.CreateMeshAppearance(signMesh),
+            _engine.Graphics.CreateMeshAppearance(lampMesh),
+            _engine.Graphics.CreateMeshAppearance(crateMesh),
+            tinted);
+    }
+
+    /// <summary>A square facing +Z in one material.</summary>
+    private static MeshResourceCreateRequest BuildQuadMesh(float half, Material material)
+    {
+        Vector3[] positions = [new(-half, -half, 0), new(half, -half, 0), new(half, half, 0), new(-half, half, 0)];
+        Vector3[] normals = [Vector3.UnitZ, Vector3.UnitZ, Vector3.UnitZ, Vector3.UnitZ];
+        Vector2[] uvs = [new(0, 0), new(1, 0), new(1, 1), new(0, 1)];
+        uint[] indices = [0, 1, 2, 0, 2, 3];
+        return new MeshResourceCreateRequest(positions, normals, uvs, indices,
+            new MeshGroup[] { new MeshGroup(0, 0, (uint)indices.Length) },
+            new MeshMaterialBinding[] { new MeshMaterialBinding(0, material) });
+    }
+
+    /// <summary>A box with each face mapped over the whole texture, in one material.</summary>
+    private static MeshResourceCreateRequest BuildBoxMesh(float half, Material material)
+    {
+        Vector3[] axes = [Vector3.UnitX, -Vector3.UnitX, Vector3.UnitY, -Vector3.UnitY, Vector3.UnitZ, -Vector3.UnitZ];
+        var positions = new List<Vector3>();
+        var normals = new List<Vector3>();
+        var uvs = new List<Vector2>();
+        var indices = new List<uint>();
+        foreach (Vector3 normal in axes)
+        {
+            Vector3 up = MathF.Abs(normal.Y) > 0.5f ? Vector3.UnitZ : Vector3.UnitY;
+            Vector3 right = Vector3.Cross(up, normal);
+            uint first = (uint)positions.Count;
+            Vector2[] corners = [new(-1, -1), new(1, -1), new(1, 1), new(-1, 1)];
+            foreach (Vector2 c in corners)
+            {
+                positions.Add((normal + right * c.X + up * c.Y) * half);
+                normals.Add(normal);
+                uvs.Add(new Vector2((c.X + 1) * 0.5f, (c.Y + 1) * 0.5f));
+            }
+            indices.AddRange([first, first + 1, first + 2, first, first + 2, first + 3]);
+        }
+        return new MeshResourceCreateRequest(positions.ToArray(), normals.ToArray(), uvs.ToArray(), indices.ToArray(),
+            new MeshGroup[] { new MeshGroup(0, 0, (uint)indices.Count) },
+            new MeshMaterialBinding[] { new MeshMaterialBinding(0, material) });
     }
 
     private void ReleaseRing()
@@ -374,4 +489,38 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     }
 
     private sealed record RingPresentation(MeshResource Mesh, Appearance Primary, Appearance Echo);
+
+    /// <summary>The showcase's resources, released together.</summary>
+    private sealed record MaterialShowcase(
+        RenderResource Emission,
+        RenderResource Occlusion,
+        Material[] Materials,
+        MeshResource[] Meshes,
+        Appearance Sign,
+        Appearance Lamp,
+        Appearance Crate,
+        Appearance[] Tinted) : IDisposable
+    {
+        private const float Row = 1.8f, Column = 2.6f, Depth = 0.5f;
+
+        public IEnumerable<AppearanceFact> Facts()
+        {
+            yield return new AppearanceFact(SignObjectId, false, 0, new Transform(new Vector3(-Column, Row, Depth), Quaternion.Identity, Vector3.One), Sign, true, RenderLayer.Scene);
+            yield return new AppearanceFact(LampObjectId, false, 0, new Transform(new Vector3(Column, Row, Depth), Quaternion.Identity, Vector3.One), Lamp, true, RenderLayer.Scene);
+            yield return new AppearanceFact(CrateObjectId, false, 0, new Transform(new Vector3(-Column, -Row, Depth), Quaternion.CreateFromYawPitchRoll(0.6f, 0.4f, 0), Vector3.One), Crate, true, RenderLayer.Scene);
+            for (int i = 0; i < Tinted.Length; i++)
+            {
+                yield return new AppearanceFact(TintedObjectId + (ulong)i, false, 0, new Transform(new Vector3(Column + (i - 1) * 0.8f, -Row, Depth), Quaternion.CreateFromYawPitchRoll(0.5f, 0.3f, 0), Vector3.One), Tinted[i], true, RenderLayer.Scene);
+            }
+        }
+
+        public void Dispose()
+        {
+            foreach (Appearance appearance in Tinted) appearance.Dispose();
+            Crate.Dispose(); Lamp.Dispose(); Sign.Dispose();
+            foreach (MeshResource mesh in Meshes) mesh.Dispose();
+            foreach (Material material in Materials) material.Dispose();
+            Occlusion.Dispose(); Emission.Dispose();
+        }
+    }
 }

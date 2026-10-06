@@ -83,6 +83,9 @@ pub fn project_catalog_material(
         voxel_surface,
         normal_map: None,
         triplanar: None,
+        emission_map: None,
+        occlusion_map: None,
+        unlit: false,
     };
     descriptor
         .validate()

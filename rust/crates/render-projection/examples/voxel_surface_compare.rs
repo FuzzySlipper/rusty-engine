@@ -317,6 +317,9 @@ fn materials(
                 voxel_surface: texture.map(|descriptor| atlas_surface(descriptor, slot)),
                 normal_map: None,
                 triplanar: None,
+                emission_map: Default::default(),
+                occlusion_map: Default::default(),
+                unlit: false,
             };
             (material.id.clone(), material)
         })

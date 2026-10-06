@@ -644,6 +644,9 @@ pub enum NodeError {
     rename_all_fields = "camelCase",
     deny_unknown_fields
 )]
+// A retained op is as large as a material definition; the ops are applied
+// and retained, not kept in bulk, so the size is not worth an indirection.
+#[allow(clippy::large_enum_variant)]
 pub enum RenderDiff {
     /// Select a named joint within this node's retained animated-mesh parent.
     /// Local TRS remains relative to that joint; None restores the parent root.
