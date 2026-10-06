@@ -514,3 +514,56 @@ fn box_queries_reach_surface_triangles_past_their_owning_chunk() {
         "a box around the hit at {point:?} misses the surface"
     );
 }
+
+#[test]
+fn a_merged_blocky_floor_names_the_voxel_under_each_hit() {
+    let blocky = SurfaceMaterials::new([(
+        1,
+        MaterialSurface {
+            mode: SurfaceMode::DualContouring,
+            character: SurfaceCharacter {
+                placement: VertexPlacement::Blocky,
+                crease_angle_degrees: 0.0,
+                roughness: 0.0,
+            },
+        },
+    )])
+    .unwrap();
+    let voxels = (0..24).flat_map(|x| {
+        (0..24).flat_map(move |z| {
+            (0..3).map(move |y| MaterialVoxel {
+                state: 0,
+                address: [x, y, z],
+                material_slot: 1,
+            })
+        })
+    });
+    let scene = VoxelCollisionScene::from_material_voxels_with_mesh_options(
+        1.0,
+        8,
+        voxels,
+        dual_contoured(blocky),
+    )
+    .unwrap();
+    // The middle chunk's top is one 6 × 6 rectangle inside the 28 faces
+    // that touch its border: 58 triangles, not 128.
+    let middle = scene.mesh_chunk([1, 0, 1]).unwrap();
+    let top = middle
+        .indices
+        .chunks(3)
+        .filter(|triangle| {
+            triangle
+                .iter()
+                .all(|corner| middle.positions[*corner as usize * 3 + 1] == 3.0)
+        })
+        .count();
+    assert_eq!(top, 28 * 2 + 2);
+    assert!(!middle.triangle_owner_spans.is_empty());
+    for (x, z) in [(10.5, 10.5), (12.25, 9.75), (13.9, 14.1)] {
+        let hit = scene
+            .raycast([x, 10.0, z], [0.0, -1.0, 0.0], 64.0)
+            .expect("the ray meets the floor");
+        assert_eq!(hit.point[1], 3.0);
+        assert_eq!(hit.voxel, [x.floor() as i64, 2, z.floor() as i64]);
+    }
+}

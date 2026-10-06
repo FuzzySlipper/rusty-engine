@@ -1,6 +1,7 @@
-//! Cost of admitting a dungeon-sized world in small residency slices, per
-//! surface mode: the load pattern of a product filling a space behind a
-//! loading screen.
+//! Cost of admitting a dungeon-sized world, per surface mode, in one residency
+//! transaction and in small slices: the load pattern of a product filling a
+//! space behind a loading screen. A transaction meshes each chunk it touches
+//! once; a later slice remeshes the resident neighbours of what it admits.
 //!
 //! Run with:
 //! `cargo run --release -p engine-spatial --example smooth_residency_load`
@@ -14,53 +15,70 @@ use engine_spatial::{
 
 const CHUNK: u32 = 16;
 const CHUNKS: [i64; 3] = [6, 5, 6];
-const SLICE: usize = 6;
+/// Chunks per transaction; `usize::MAX` admits the whole world at once.
+const SLICES: [usize; 2] = [usize::MAX, 6];
 
 fn main() {
-    for mode in [
-        SurfaceMode::GreedyCubes,
-        SurfaceMode::MarchingCubes,
-        SurfaceMode::DualContouring,
-    ] {
-        let mut scene = VoxelCollisionScene::from_solid_voxels_with_mesh_options(
-            1.0,
-            CHUNK,
-            std::iter::empty(),
-            SurfaceMeshOptions::with_mode(mode),
-        )
-        .unwrap();
-        let mut chunks = Vec::new();
-        for z in 0..CHUNKS[2] {
-            for y in 0..CHUNKS[1] {
-                for x in 0..CHUNKS[0] {
-                    chunks.push([x, y, z]);
-                }
+    for slice in SLICES {
+        for mode in [
+            SurfaceMode::GreedyCubes,
+            SurfaceMode::MarchingCubes,
+            SurfaceMode::DualContouring,
+        ] {
+            admit(mode, slice);
+        }
+    }
+}
+
+fn admit(mode: SurfaceMode, slice: usize) {
+    let mut scene = VoxelCollisionScene::from_solid_voxels_with_mesh_options(
+        1.0,
+        CHUNK,
+        std::iter::empty(),
+        SurfaceMeshOptions::with_mode(mode),
+    )
+    .unwrap();
+    let mut chunks = Vec::new();
+    for z in 0..CHUNKS[2] {
+        for y in 0..CHUNKS[1] {
+            for x in 0..CHUNKS[0] {
+                chunks.push([x, y, z]);
             }
         }
-        let started = Instant::now();
-        let mut meshing = Duration::ZERO;
-        let mut rebuilt = 0;
-        for slice in chunks.chunks(SLICE) {
-            let operations: Vec<_> = slice
-                .iter()
-                .map(|&[x, y, z]| VoxelChunkResidencyOperation::Admit {
-                    chunk: VoxelChunkIdentity::new(x, y, z),
-                    payload: payload([x, y, z]),
-                })
-                .collect();
-            let receipt = VoxelChunkResidencyService::apply(&mut scene, &operations).unwrap();
-            rebuilt += receipt.rebuilt_mesh_chunks;
-            meshing += Duration::from_micros(scene.mesh_update().mesh_microseconds);
-        }
-        let total = started.elapsed();
-        println!(
-            "{:>15}: {:7.1} ms total, {:7.1} ms meshing (summed over threads), {rebuilt} chunk meshes for {} chunks",
-            mode.as_str(),
-            total.as_secs_f64() * 1000.0,
-            meshing.as_secs_f64() * 1000.0,
-            chunks.len()
-        );
     }
+    let mut total = Duration::ZERO;
+    let mut longest = Duration::ZERO;
+    let mut meshing = Duration::ZERO;
+    let mut rebuilt = 0;
+    for batch in chunks.chunks(slice) {
+        let operations: Vec<_> = batch
+            .iter()
+            .map(|&[x, y, z]| VoxelChunkResidencyOperation::Admit {
+                chunk: VoxelChunkIdentity::new(x, y, z),
+                payload: payload([x, y, z]),
+            })
+            .collect();
+        let started = Instant::now();
+        let receipt = VoxelChunkResidencyService::apply(&mut scene, &operations).unwrap();
+        let elapsed = started.elapsed();
+        total += elapsed;
+        longest = longest.max(elapsed);
+        rebuilt += receipt.rebuilt_mesh_chunks;
+        meshing += Duration::from_micros(scene.mesh_update().mesh_microseconds);
+    }
+    let pattern = if slice >= chunks.len() {
+        "at once".to_owned()
+    } else {
+        format!("slices of {slice}")
+    };
+    println!(
+        "{:>15} {pattern:>12}: {:6.1} ms total, {:6.1} ms longest call, {:6.1} ms meshing (summed over threads), {rebuilt} chunk meshes for {} chunks",
+        mode.as_str(),
+        total.as_secs_f64() * 1000.0,
+        longest.as_secs_f64() * 1000.0,
+        meshing.as_secs_f64() * 1000.0,
+        chunks.len()
+    );
 }
 
 fn payload(chunk: [i64; 3]) -> VoxelChunkPayload {

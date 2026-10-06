@@ -205,6 +205,10 @@ pub struct VoxelMeshChunk {
     /// The chunk-local storage index (x-fastest) of the voxel owning each
     /// triangle. Collision maps a reconstructed triangle to its voxel.
     pub triangle_owners: Vec<u32>,
+    /// For each triangle, how many voxels along x, y and z its owners cover
+    /// from its owner: a merged block face is owned by the voxels under it.
+    /// Empty when every triangle has one owner.
+    pub triangle_owner_spans: Vec<[u32; 3]>,
     pub bounds_min: [f32; 3],
     pub bounds_max: [f32; 3],
     pub vertices: u32,
@@ -706,6 +710,59 @@ impl VoxelCollisionScene {
             .copy_static_meshes_from(&self.projection);
         *self = candidate;
         Ok(())
+    }
+
+    /// Whether a distant chunk can be drawn coarse: some material is
+    /// reconstructed and the chunk edge is even.
+    pub fn has_coarse_meshes(&self) -> bool {
+        !self.mesh_options.all_greedy() && self.chunk_size.is_multiple_of(2)
+    }
+
+    /// The meshes distant chunks are drawn with, in input order: their
+    /// reconstructed materials from a lattice twice as coarse, with skirts
+    /// (`svc_mesh::mesh_chunk_coarse_in_world`), built in parallel. Drawing
+    /// only: collision and picking keep each chunk's own mesh. `None` for a
+    /// chunk without a mesh, or for every chunk when the scene has no coarse
+    /// meshes.
+    pub fn coarse_mesh_chunks(
+        &self,
+        chunks: &[[i64; 3]],
+    ) -> Vec<Option<Result<VoxelMeshChunk, CollisionSceneError>>> {
+        let coordinates: Vec<_> = chunks
+            .iter()
+            .map(|chunk| ChunkCoord::new(chunk[0], chunk[1], chunk[2]))
+            .collect();
+        surface_collision::in_parallel(&coordinates, |coordinate| {
+            if !self.has_coarse_meshes() || !self.mesh_chunks.contains_key(&coordinate) {
+                return None;
+            }
+            let grid = self.voxel_world.grid();
+            let source = self.voxel_world.get(coordinate)?;
+            let mesh = svc_mesh::mesh_chunk_coarse_in_world(
+                &self.voxel_world,
+                coordinate,
+                &self.mesh_options,
+            )?;
+            Some(mesh.map_err(CollisionSceneError::Mesh).map(|mesh| {
+                voxel_mesh_chunk(
+                    coordinate,
+                    grid.voxel_min_world(grid.chunk_origin_voxel(coordinate)),
+                    grid.chunk_origin_voxel(coordinate).to_array(),
+                    grid.chunk_dims().to_array(),
+                    grid.voxel_size() as f32,
+                    source.content_hash().0,
+                    mesh,
+                )
+            }))
+        })
+    }
+
+    /// The coarse mesh of one chunk; see [`Self::coarse_mesh_chunks`].
+    pub fn coarse_mesh_chunk(
+        &self,
+        chunk: [i64; 3],
+    ) -> Option<Result<VoxelMeshChunk, CollisionSceneError>> {
+        self.coarse_mesh_chunks(&[chunk]).pop().flatten()
     }
 
     /// The mesh of one chunk, if it has one.
@@ -1451,6 +1508,7 @@ fn voxel_mesh_chunk(
             })
             .collect(),
         triangle_owners,
+        triangle_owner_spans: mesh.triangle_owner_spans,
         bounds_min: mesh.bounds.min,
         bounds_max: mesh.bounds.max,
         vertices: mesh.stats.vertices,

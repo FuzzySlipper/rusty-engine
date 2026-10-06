@@ -17,7 +17,7 @@
 //! cell, the sharper placement and the smaller roughness place the shared
 //! vertex.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use core_space::Direction6;
 
@@ -145,6 +145,8 @@ pub(super) struct Lattice {
     /// Scalar data: the lattice is the whole domain, so crossings at its
     /// boundary stay open, and an escaped QEF minimizer keeps the mass point.
     pub explicit: bool,
+    /// The see-through samples, read as empty.
+    see_through: Vec<usize>,
 }
 
 impl Lattice {
@@ -162,6 +164,7 @@ impl Lattice {
             values: vec![-f64::from(svc_volume::DEFAULT_DENSITY_MAGNITUDE); count],
             materials: vec![0; count],
             explicit: false,
+            see_through: Vec::new(),
         })
     }
 
@@ -181,40 +184,64 @@ impl Lattice {
         }
     }
 
-    /// The materials of `slots` that some inside sample holds.
-    pub(super) fn materials_inside(&self, slots: &BTreeSet<u16>) -> BTreeSet<u16> {
+    /// Make the solid samples of `slots` see-through: they read as empty at
+    /// the same magnitude, so other materials meet them as they meet air.
+    /// Returns the slots present.
+    pub(super) fn set_see_through(&mut self, slots: &BTreeSet<u16>) -> BTreeSet<u16> {
+        let mut present = BTreeSet::new();
         if slots.is_empty() {
-            return BTreeSet::new();
+            return present;
         }
-        self.values
-            .iter()
-            .zip(&self.materials)
-            .filter(|(value, slot)| **value > 0.0 && slots.contains(slot))
-            .map(|(_, slot)| *slot)
-            .collect()
+        for index in 0..self.values.len() {
+            let slot = self.materials[index];
+            if self.values[index] > 0.0 && slots.contains(&slot) {
+                self.values[index] = -self.values[index];
+                self.see_through.push(index);
+                present.insert(slot);
+            }
+        }
+        present
     }
 
-    /// The lattice with every sample of `emptied` except `kept` read as
-    /// empty at the same magnitude, so surfaces meet it as they meet air.
-    pub(super) fn layer(&self, emptied: &BTreeSet<u16>, kept: Option<u16>) -> Self {
-        let values = self
-            .values
-            .iter()
-            .zip(&self.materials)
-            .map(|(&value, slot)| {
-                if value > 0.0 && Some(*slot) != kept && emptied.contains(slot) {
-                    -value
-                } else {
-                    value
+    /// The lattice at half the resolution: each sample stands for a 2×2×2
+    /// block, solid only where the whole block is, at the block's smallest
+    /// value in coarse units and with its majority material. The origin and
+    /// dimensions are even.
+    pub(super) fn coarsened(&self, limits: SurfaceMeshLimits) -> Result<Self, MeshError> {
+        debug_assert!(self.origin.iter().all(|value| value % 2 == 0));
+        debug_assert!(self.dims.iter().all(|value| value % 2 == 0));
+        let dims = self.dims.map(|value| value / 2);
+        let mut coarse = Self::voxels(self.origin.map(|value| value / 2), dims, limits)?;
+        for z in 0..dims[2] {
+            for y in 0..dims[1] {
+                for x in 0..dims[0] {
+                    let block = CORNERS.map(|corner| {
+                        self.index([2 * x + corner[0], 2 * y + corner[1], 2 * z + corner[2]])
+                    });
+                    let value = block
+                        .iter()
+                        .map(|index| self.values[*index])
+                        .fold(f64::INFINITY, f64::min);
+                    let index = coarse.index([x, y, z]);
+                    coarse.values[index] =
+                        value.signum() * (value.abs() / 2.0).max(MINIMUM_MAGNITUDE);
+                    if value > 0.0 {
+                        coarse.materials[index] =
+                            majority_material(block.map(|index| Some(self.materials[index])))
+                                .expect("a solid block has materials");
+                    }
                 }
-            })
-            .collect();
-        Self {
-            origin: self.origin,
-            dims: self.dims,
-            values,
-            materials: self.materials.clone(),
-            explicit: self.explicit,
+            }
+        }
+        Ok(coarse)
+    }
+
+    /// Flip the see-through samples of `slot` between solid and empty.
+    pub(super) fn flip_see_through(&mut self, slot: u16) {
+        for &index in &self.see_through {
+            if self.materials[index] == slot {
+                self.values[index] = -self.values[index];
+            }
         }
     }
 
@@ -264,6 +291,7 @@ impl Lattice {
             values,
             materials,
             explicit: true,
+            see_through: Vec::new(),
         })
     }
 
@@ -359,6 +387,13 @@ pub(super) struct Reconstruction {
     pub directions: Vec<Direction6>,
     /// Ring triangles outside the owned region, kept only for normals.
     pub halo: Vec<bool>,
+    /// Triangles owned by a box of voxels from their owner, as many along
+    /// each axis: those of merged block faces.
+    pub owner_spans: BTreeMap<usize, [i64; 3]>,
+    /// The owned region of a world chunk. Neighbouring chunks draw their own
+    /// surfaces, so a block face touching the region's border is not merged:
+    /// a neighbour's vertices along it meet no T-junction.
+    pub chunk_region: Option<Owner>,
     pub rank_deficient: u32,
     pub fallbacks: u32,
     pub sampled_cells: u64,
@@ -370,6 +405,7 @@ const NOT_COMPUTED: u32 = u32::MAX - 1;
 struct DualContouring<'a> {
     lattice: &'a Lattice,
     characters: Characters<'a>,
+    kept: Option<u16>,
     cells: Vec<u32>,
     cell_dims: [usize; 3],
     out: Reconstruction,
@@ -377,12 +413,14 @@ struct DualContouring<'a> {
 }
 
 /// Dual-contour the lattice. Quads whose inside endpoint lies in `owner` are
-/// kept; with `ring`, quads within one more sample are kept as halo.
+/// kept; with `ring`, quads within one more sample are kept as halo. With
+/// `kept`, only quads of that material are.
 pub(super) fn dual_contour(
     lattice: &Lattice,
     characters: Characters<'_>,
     owner: Owner,
     ring: bool,
+    kept: Option<u16>,
     limits: SurfaceMeshLimits,
     out: &mut Reconstruction,
 ) -> Result<(), MeshError> {
@@ -390,6 +428,7 @@ pub(super) fn dual_contour(
     let mut contour = DualContouring {
         lattice,
         characters,
+        kept,
         cells: vec![NOT_COMPUTED; cell_dims[0] * cell_dims[1] * cell_dims[2]],
         cell_dims,
         out: std::mem::take(out),
@@ -409,10 +448,17 @@ pub(super) fn dual_contour(
             low[other] = start.clamp(0, limit) as usize;
             high[other] = end.clamp(0, limit) as usize;
         }
+        let stride = lattice.index(std::array::from_fn(|other| usize::from(other == axis)));
+        let inside = |index: usize| lattice.values[index] > 0.0;
         for z in low[2]..high[2] {
             for y in low[1]..high[1] {
+                let row = lattice.index([low[0], y, z]);
                 for x in low[0]..high[0] {
-                    contour.edge(axis, [x, y, z], owner, emitted)?;
+                    let start = row + (x - low[0]);
+                    // Most edges do not cross the surface.
+                    if inside(start) != inside(start + stride) {
+                        contour.edge(axis, [x, y, z], owner, emitted)?;
+                    }
                 }
             }
         }
@@ -449,7 +495,9 @@ impl DualContouring<'_> {
             return Ok(());
         }
         let slot = lattice.materials[inside_index];
-        if !lattice.explicit && self.characters.of(slot).mode != SurfaceMode::DualContouring {
+        if self.kept.is_some_and(|kept| kept != slot)
+            || (!lattice.explicit && self.characters.of(slot).mode != SurfaceMode::DualContouring)
+        {
             return Ok(());
         }
         let Some(cells) = incident_cells(axis, start, self.cell_dims) else {
@@ -669,11 +717,13 @@ fn incident_cells(axis: usize, edge: [usize; 3], cell_dims: [usize; 3]) -> Optio
 }
 
 /// March the lattice's cells whose majority material is marched and whose
-/// first inside corner lies in `owner`.
+/// first inside corner lies in `owner`; with `kept`, only cells of that
+/// majority material.
 pub(super) fn march(
     lattice: &Lattice,
     characters: Characters<'_>,
     owner: Owner,
+    kept: Option<u16>,
     limits: SurfaceMeshLimits,
     out: &mut Reconstruction,
 ) -> Result<(), MeshError> {
@@ -681,7 +731,7 @@ pub(super) fn march(
     for z in 0..cell_dims[2] {
         for y in 0..cell_dims[1] {
             for x in 0..cell_dims[0] {
-                march_cell(lattice, characters, owner, [x, y, z], limits, out)?;
+                march_cell(lattice, characters, owner, [x, y, z], kept, limits, out)?;
             }
         }
     }
@@ -694,6 +744,7 @@ fn march_cell(
     characters: Characters<'_>,
     owner: Owner,
     cell: [usize; 3],
+    kept: Option<u16>,
     limits: SurfaceMeshLimits,
     out: &mut Reconstruction,
 ) -> Result<(), MeshError> {
@@ -710,26 +761,34 @@ fn march_cell(
         .map(|corner| std::array::from_fn(|a| global_cell[a] + CORNERS[corner][a] as i64))
         .min()
         .expect("active cell has an inside corner");
-    if !owner.contains(owner_coordinate) {
+    if !owner.contains(owner_coordinate)
+        || kept.is_some_and(|kept| {
+            (0..8).all(|corner| !inside[corner] || lattice.materials[corners[corner]] != kept)
+        })
+    {
         return Ok(());
     }
     let slot = majority_material(std::array::from_fn(|corner| {
         inside[corner].then_some(lattice.materials[corners[corner]])
     }))
     .expect("active cell has an inside corner");
-    if !lattice.explicit && characters.of(slot).mode != SurfaceMode::MarchingCubes {
+    if kept.is_some_and(|kept| kept != slot)
+        || (!lattice.explicit && characters.of(slot).mode != SurfaceMode::MarchingCubes)
+    {
         return Ok(());
     }
     let crossings = EDGES.map(|(a, b)| inside[a] != inside[b]);
-    let mut adjacency: [Vec<usize>; 12] = std::array::from_fn(|_| Vec::new());
+    let mut adjacency = [Adjacent::default(); 12];
     for face in FACES {
-        let crossed = face
-            .edges
-            .iter()
-            .copied()
-            .filter(|edge| crossings[*edge])
-            .collect::<Vec<_>>();
-        match crossed.as_slice() {
+        let mut crossed = [0_usize; 4];
+        let mut count = 0;
+        for edge in face.edges {
+            if crossings[edge] {
+                crossed[count] = edge;
+                count += 1;
+            }
+        }
+        match &crossed[..count] {
             [a, b] => connect(&mut adjacency, *a, *b),
             [_, _, _, _] => {
                 let [c0, c1, c2, c3] = face.corners;
@@ -770,7 +829,8 @@ fn march_cell(
         if !crossings[start] || visited[start] {
             continue;
         }
-        let mut loop_edges = Vec::new();
+        let mut loop_edges = [0_usize; 12];
+        let mut length = 0;
         let mut previous = usize::MAX;
         let mut current = start;
         loop {
@@ -781,11 +841,15 @@ fn march_cell(
                 return Err(MeshError::CoordinateRangeTooLarge);
             }
             visited[current] = true;
-            loop_edges.push(current);
-            let neighbours = &adjacency[current];
-            if neighbours.len() != 2 {
+            loop_edges[length] = current;
+            length += 1;
+            let Adjacent {
+                neighbours,
+                count: 2,
+            } = adjacency[current]
+            else {
                 return Err(MeshError::CoordinateRangeTooLarge);
-            }
+            };
             let next = if neighbours[0] != previous {
                 neighbours[0]
             } else {
@@ -797,26 +861,28 @@ fn march_cell(
                 break;
             }
         }
-        if loop_edges.len() < 3 {
+        if length < 3 {
             return Err(MeshError::CoordinateRangeTooLarge);
         }
         check_output_growth(
             out.positions.len() as u64,
             out.triangles.len() as u64 * 3,
-            loop_edges.len() as u64 + 1,
-            loop_edges.len() as u64 * 3,
+            length as u64 + 1,
+            length as u64 * 3,
             limits,
         )?;
-        let mut points = Vec::with_capacity(loop_edges.len());
-        let mut normals = Vec::with_capacity(loop_edges.len());
-        for edge in &loop_edges {
+        let mut point_storage = [[0.0; 3]; 12];
+        let mut normal_storage = [[0.0; 3]; 12];
+        let points = &mut point_storage[..length];
+        let normals = &mut normal_storage[..length];
+        for (index, edge) in loop_edges[..length].iter().enumerate() {
             let local = edge_local_point(*edge, edge_t(*edge));
             let point = std::array::from_fn(|axis| base[axis] + local[axis] + 0.5);
-            normals.push(outward_normal(
+            normals[index] = outward_normal(
                 trilinear_gradient(values, local),
                 sub(point, add(base, [1.0; 3])),
-            ));
-            points.push(point);
+            );
+            points[index] = point;
         }
         let centroid = scale(
             points.iter().fold([0.0; 3], |sum, point| add(sum, *point)),
@@ -828,16 +894,16 @@ fn march_cell(
                 .fold([0.0; 3], |sum, normal| add(sum, *normal)),
             [0.0, 1.0, 0.0],
         );
-        if dot(polygon_normal(&points), centroid_normal) < 0.0 {
+        if dot(polygon_normal(points), centroid_normal) < 0.0 {
             points.reverse();
             normals.reverse();
         }
-        let direction = dominant_direction(polygon_normal(&points), centroid_normal);
+        let direction = dominant_direction(polygon_normal(points), centroid_normal);
         let first = out.positions.len() as u32;
         out.positions.push(centroid);
         out.normals.push(centroid_normal);
-        out.positions.extend(points.iter().copied());
-        out.normals.extend(normals);
+        out.positions.extend_from_slice(points);
+        out.normals.extend_from_slice(normals);
         for index in 0..points.len() {
             out.triangles.push([
                 first,
@@ -851,6 +917,328 @@ fn march_cell(
         }
     }
     Ok(())
+}
+
+/// Hang a skirt from every open edge of the owned surface, reaching `depth`
+/// lattice units into the solid along its vertices' normals and as far out
+/// across the edge, so a coarse chunk hides the gap against a finer
+/// neighbour's surface: a step where the two meet at different heights, and
+/// a gap where their edges stop short of each other (each surface's border
+/// vertices lie anywhere within its border cells). An edge is open when no
+/// other triangle shares its end positions (marched polygons do not share
+/// vertex indices). The skirt faces up and out, toward the neighbour; its
+/// vertices keep the edge's normals and it takes the triangle's material,
+/// face and owner.
+pub(super) fn add_skirts(reconstruction: &mut Reconstruction, depth: f64) {
+    let key = |vertex: u32| reconstruction.positions[vertex as usize].map(f64::to_bits);
+    // Undirected edge to (its last directed use, how many triangles use it).
+    let mut edges = HashMap::<_, ((usize, u32, u32), u32)>::new();
+    for (triangle, corners) in reconstruction.triangles.iter().enumerate() {
+        if reconstruction.halo[triangle] {
+            continue;
+        }
+        for k in 0..3 {
+            let (a, b) = (corners[k], corners[(k + 1) % 3]);
+            let (ka, kb) = (key(a), key(b));
+            let use_of = edges
+                .entry((ka.min(kb), ka.max(kb)))
+                .or_insert(((triangle, a, b), 0));
+            use_of.0 = (triangle, a, b);
+            use_of.1 += 1;
+        }
+    }
+    let mut open: Vec<_> = edges
+        .into_values()
+        .filter(|(_, uses)| *uses == 1)
+        .map(|(edge, _)| edge)
+        .collect();
+    open.sort_unstable();
+    // Each open vertex's outward direction: across its open edges, away
+    // from their triangles, in their planes.
+    let mut outward = BTreeMap::<u32, [f64; 3]>::new();
+    for &(triangle, a, b) in &open {
+        let corners = reconstruction.triangles[triangle];
+        let [pa, pb, pc] = corners.map(|vertex| reconstruction.positions[vertex as usize]);
+        let edge = sub(
+            reconstruction.positions[b as usize],
+            reconstruction.positions[a as usize],
+        );
+        let away = normalize_or(cross(edge, cross(sub(pb, pa), sub(pc, pa))), [0.0; 3]);
+        for vertex in [a, b] {
+            let sum = outward.entry(vertex).or_insert([0.0; 3]);
+            *sum = add(*sum, away);
+        }
+    }
+    let mut lowered = HashMap::<u32, u32>::new();
+    for (triangle, a, b) in open {
+        let [below_a, below_b] = [a, b].map(|vertex| {
+            *lowered.entry(vertex).or_insert_with(|| {
+                let index = reconstruction.positions.len() as u32;
+                let normal = reconstruction.normals[vertex as usize];
+                let out = normalize_or(outward[&vertex], [0.0; 3]);
+                let position = reconstruction.positions[vertex as usize];
+                reconstruction
+                    .positions
+                    .push(add(position, scale(sub(out, normal), depth)));
+                reconstruction.normals.push(normal);
+                index
+            })
+        });
+        let (slot, owner, direction) = (
+            reconstruction.slots[triangle],
+            reconstruction.owners[triangle],
+            reconstruction.directions[triangle],
+        );
+        // The triangle runs a -> b, so b -> a -> below faces up and away
+        // from it.
+        for corners in [[b, a, below_a], [b, below_a, below_b]] {
+            reconstruction.triangles.push(corners);
+            reconstruction.slots.push(slot);
+            reconstruction.owners.push(owner);
+            reconstruction.directions.push(direction);
+            reconstruction.halo.push(false);
+        }
+    }
+}
+
+/// Merge the unit faces of exact blocks (dual-contoured Blocky materials
+/// without roughness) lying in one plane into rectangles, as greedy cubes
+/// merge cube faces, without moving any surface. A face merges only when
+/// every corner it uses is used by nothing but such faces of its plane, and
+/// lies inside a world chunk's region, so a neighbouring surface in another
+/// plane, of another character or in another chunk keeps every vertex it
+/// shares with the blocks (no T-junction meets it) and a merged corner keeps
+/// its snapped normal. A merged triangle is owned by the box of voxels under
+/// it.
+pub(super) fn merge_block_faces(reconstruction: &mut Reconstruction, characters: Characters<'_>) {
+    // (direction, axis, plane coordinate): faces of one plane facing one way.
+    type Plane = (Direction6, usize, i64);
+    let exact_block = |slot: u16| characters.of(slot).draws_exact_blocks();
+    if !characters
+        .materials
+        .entries()
+        .iter()
+        .any(|(_, surface)| surface.draws_exact_blocks())
+    {
+        return;
+    }
+    let key = |vertex: u32| reconstruction.positions[vertex as usize].map(f64::to_bits);
+    // A face: two consecutive triangles of one dual-contoured edge, a unit
+    // square on the voxel grid.
+    struct Face {
+        first: usize,
+        slot: u16,
+        plane: Plane,
+        cell: [i64; 2],
+    }
+    let mut faces = Vec::new();
+    let mut triangle = 0;
+    let count = reconstruction.triangles.len();
+    while triangle + 1 < count {
+        let (a, b) = (triangle, triangle + 1);
+        let face = (|| {
+            let slot = reconstruction.slots[a];
+            if reconstruction.halo[a]
+                || reconstruction.halo[b]
+                || reconstruction.slots[b] != slot
+                || reconstruction.owners[a] != reconstruction.owners[b]
+                || reconstruction.directions[a] != reconstruction.directions[b]
+                || !exact_block(slot)
+            {
+                return None;
+            }
+            let mut corners: Vec<u32> = reconstruction.triangles[a]
+                .iter()
+                .chain(&reconstruction.triangles[b])
+                .copied()
+                .collect();
+            corners.sort_unstable();
+            corners.dedup();
+            if corners.len() != 4 {
+                return None;
+            }
+            let points = corners
+                .iter()
+                .map(|corner| reconstruction.positions[*corner as usize]);
+            let direction = reconstruction.directions[a];
+            let axis = direction.axis().index();
+            let (u, v) = ((axis + 1) % 3, (axis + 2) % 3);
+            let mut low = [f64::INFINITY; 3];
+            let mut high = [f64::NEG_INFINITY; 3];
+            for point in points {
+                if point.iter().any(|value| value.fract() != 0.0) {
+                    return None;
+                }
+                for k in 0..3 {
+                    low[k] = low[k].min(point[k]);
+                    high[k] = high[k].max(point[k]);
+                }
+            }
+            (low[axis] == high[axis] && high[u] - low[u] == 1.0 && high[v] - low[v] == 1.0).then(
+                || Face {
+                    first: a,
+                    slot,
+                    plane: (direction, axis, low[axis] as i64),
+                    cell: [low[u] as i64, low[v] as i64],
+                },
+            )
+        })();
+        match face {
+            Some(face) => {
+                faces.push(face);
+                triangle += 2;
+            }
+            None => triangle += 1,
+        }
+    }
+    if faces.is_empty() {
+        return;
+    }
+    // The plane each corner position is used in, if only faces of one plane
+    // use it.
+    let mut face_of = vec![None; count];
+    for (index, face) in faces.iter().enumerate() {
+        face_of[face.first] = Some(index);
+        face_of[face.first + 1] = Some(index);
+    }
+    let mut corner_planes = HashMap::<[u64; 3], Option<Plane>>::new();
+    for (triangle, corners) in reconstruction.triangles.iter().enumerate() {
+        if reconstruction.halo[triangle] {
+            continue;
+        }
+        let plane = face_of[triangle].map(|face| faces[face].plane);
+        for corner in corners {
+            corner_planes
+                .entry(key(*corner))
+                .and_modify(|seen| {
+                    if *seen != plane {
+                        *seen = None;
+                    }
+                })
+                .or_insert(plane);
+        }
+    }
+    // Mergeable faces by material and plane, keyed by cell.
+    let mut planes = BTreeMap::<(u16, Plane), BTreeMap<[i64; 2], usize>>::new();
+    for (index, face) in faces.iter().enumerate() {
+        let corners = reconstruction.triangles[face.first]
+            .iter()
+            .chain(&reconstruction.triangles[face.first + 1]);
+        let inside = |corner: &u32| {
+            let point = reconstruction.positions[*corner as usize];
+            reconstruction.chunk_region.is_none_or(|region| {
+                (0..3).all(|k| point[k] > region.min[k] as f64 && point[k] < region.max[k] as f64)
+            })
+        };
+        if corners
+            .clone()
+            .all(|corner| corner_planes[&key(*corner)] == Some(face.plane) && inside(corner))
+        {
+            planes
+                .entry((face.slot, face.plane))
+                .or_default()
+                .insert(face.cell, index);
+        }
+    }
+    for ((slot, (direction, axis, coordinate)), cells) in planes {
+        let (u, v) = ((axis + 1) % 3, (axis + 2) % 3);
+        let mut taken = BTreeSet::new();
+        // Rows of cells by v, then u, as greedy cube faces merge.
+        let mut order: Vec<[i64; 2]> = cells.keys().copied().collect();
+        order.sort_unstable_by_key(|cell| (cell[1], cell[0]));
+        for start in order {
+            if taken.contains(&start) {
+                continue;
+            }
+            let free = |cell: [i64; 2], taken: &BTreeSet<[i64; 2]>| {
+                cells.contains_key(&cell) && !taken.contains(&cell)
+            };
+            let mut width = 1;
+            while free([start[0] + width, start[1]], &taken) {
+                width += 1;
+            }
+            let mut height = 1;
+            while (0..width).all(|du| free([start[0] + du, start[1] + height], &taken)) {
+                height += 1;
+            }
+            let members: Vec<usize> = (0..height)
+                .flat_map(|dv| (0..width).map(move |du| [start[0] + du, start[1] + dv]))
+                .map(|cell| {
+                    taken.insert(cell);
+                    cells[&cell]
+                })
+                .collect();
+            if members.len() == 1 {
+                continue;
+            }
+            // The rectangle's corners are corners of its corner faces.
+            let point = |du: i64, dv: i64| {
+                let mut point = [0.0; 3];
+                point[axis] = coordinate as f64;
+                point[u] = (start[0] + du) as f64;
+                point[v] = (start[1] + dv) as f64;
+                point
+            };
+            let vertex_at = |target: [f64; 3]| {
+                members
+                    .iter()
+                    .flat_map(|member| {
+                        let first = faces[*member].first;
+                        reconstruction.triangles[first]
+                            .into_iter()
+                            .chain(reconstruction.triangles[first + 1])
+                    })
+                    .find(|corner| reconstruction.positions[*corner as usize] == target)
+                    .expect("a rectangle corner is a corner of its corner face")
+            };
+            let rectangle = [
+                vertex_at(point(0, 0)),
+                vertex_at(point(width, 0)),
+                vertex_at(point(width, height)),
+                vertex_at(point(0, height)),
+            ];
+            // Face the way the merged faces do.
+            let first = reconstruction.triangles[faces[members[0]].first];
+            let facing = |corners: [u32; 3]| {
+                let [p0, p1, p2] = corners.map(|corner| reconstruction.positions[corner as usize]);
+                cross(sub(p1, p0), sub(p2, p0))[axis] > 0.0
+            };
+            let triangles = if facing([rectangle[0], rectangle[1], rectangle[2]]) == facing(first) {
+                [
+                    [rectangle[0], rectangle[1], rectangle[2]],
+                    [rectangle[0], rectangle[2], rectangle[3]],
+                ]
+            } else {
+                [
+                    [rectangle[0], rectangle[2], rectangle[1]],
+                    [rectangle[0], rectangle[3], rectangle[2]],
+                ]
+            };
+            let mut low = [i64::MAX; 3];
+            let mut high = [i64::MIN; 3];
+            for member in &members {
+                let first = faces[*member].first;
+                let owner = reconstruction.owners[first];
+                for k in 0..3 {
+                    low[k] = low[k].min(owner[k]);
+                    high[k] = high[k].max(owner[k]);
+                }
+                reconstruction.halo[first] = true;
+                reconstruction.halo[first + 1] = true;
+            }
+            for corners in triangles {
+                reconstruction.owner_spans.insert(
+                    reconstruction.triangles.len(),
+                    std::array::from_fn(|k| high[k] - low[k] + 1),
+                );
+                reconstruction.triangles.push(corners);
+                reconstruction.slots.push(slot);
+                reconstruction.owners.push(low);
+                reconstruction.directions.push(direction);
+                reconstruction.halo.push(false);
+            }
+        }
+    }
 }
 
 fn majority_material(materials: [Option<u16>; 8]) -> Option<u16> {
@@ -895,15 +1283,18 @@ fn dominant_direction(facing: [f64; 3], fallback: [f64; 3]) -> Direction6 {
 
 /// Assemble render attributes for reconstructed voxel geometry: one group
 /// per material slot and box-projection face, crease-angle normals, and
-/// tile coordinates continuous across regions.
+/// tile coordinates continuous across regions. A lattice unit is `scale`
+/// voxels (2 for a coarse lattice); `pivot` and owners are in voxels.
 pub(super) fn voxel_payload(
-    reconstruction: Reconstruction,
+    mut reconstruction: Reconstruction,
     characters: Characters<'_>,
     cell_size: f64,
     pivot: [f64; 3],
+    scale: f64,
     limits: SurfaceMeshLimits,
     layers: Option<&LayerField<'_>>,
 ) -> Result<MeshPayload, MeshError> {
+    merge_block_faces(&mut reconstruction, characters);
     let mut lanes = BTreeMap::<(u16, Direction6), Vec<usize>>::new();
     for (triangle, (&slot, &direction)) in reconstruction
         .slots
@@ -928,11 +1319,16 @@ pub(super) fn voxel_payload(
     let mut indices = Vec::new();
     let mut groups = Vec::with_capacity(lanes.len());
     let mut owners = Vec::new();
+    let mut owner_spans = Vec::new();
     let mut minimum = [f32::INFINITY; 3];
     let mut maximum = [f32::NEG_INFINITY; 3];
+    // The lane, emitted index and normal of each source vertex's first
+    // emission. A vertex emitted again in the same lane with another normal
+    // (across a crease) is found in `emitted`.
+    let mut first = vec![(usize::MAX, 0_u32, [0_u64; 3]); reconstruction.positions.len()];
     let mut emitted = BTreeMap::<(u32, [u64; 3]), u32>::new();
     let mut mode = None;
-    for ((slot, direction), triangles) in lanes {
+    for (lane, ((slot, direction), triangles)) in lanes.into_iter().enumerate() {
         let surface = characters.of(slot);
         mode.get_or_insert(surface.mode);
         let cosine = f64::from(surface.character.crease_angle_degrees)
@@ -957,12 +1353,21 @@ pub(super) fn voxel_payload(
                 } else {
                     face
                 };
-                let key = (vertex, normal.map(f64::to_bits));
-                let index = match emitted.get(&key) {
-                    Some(index) => *index,
+                let bits = normal.map(f64::to_bits);
+                let seen = &first[vertex as usize];
+                let found = if seen.0 != lane {
+                    None
+                } else if seen.2 == bits {
+                    Some(seen.1)
+                } else {
+                    emitted.get(&(vertex, bits)).copied()
+                };
+                let index = match found {
+                    Some(index) => index,
                     None => {
                         let index = (positions.len() / 3) as u32;
-                        let point = reconstruction.positions[vertex as usize];
+                        let point =
+                            reconstruction.positions[vertex as usize].map(|value| value * scale);
                         for axis in 0..3 {
                             let value = (point[axis] - pivot[axis]) * cell_size;
                             let rendered = value as f32;
@@ -986,13 +1391,26 @@ pub(super) fn voxel_payload(
                         if let Some(field) = layers {
                             layer_weights.extend(field.weights_or_slot(point, slot));
                         }
-                        emitted.insert(key, index);
+                        let seen = &mut first[vertex as usize];
+                        if seen.0 == lane {
+                            emitted.insert((vertex, bits), index);
+                        } else {
+                            *seen = (lane, index, bits);
+                        }
                         index
                     }
                 };
                 indices.push(index);
             }
-            owners.push(reconstruction.owners[triangle]);
+            owners.push(reconstruction.owners[triangle].map(|value| value * scale as i64));
+            if !reconstruction.owner_spans.is_empty() {
+                let span = reconstruction
+                    .owner_spans
+                    .get(&triangle)
+                    .copied()
+                    .unwrap_or([1; 3]);
+                owner_spans.push(span.map(|value| (value * scale as i64) as u32));
+            }
         }
         groups.push(MeshGroup {
             state: 0,
@@ -1035,6 +1453,7 @@ pub(super) fn voxel_payload(
         indices,
         groups,
         triangle_owners: owners,
+        triangle_owner_spans: owner_spans,
         stats: MeshStats {
             surface_mode: mode,
             vertices: vertices as u32,
@@ -1200,15 +1619,31 @@ pub(super) fn check_output_growth(
     Ok(())
 }
 
-fn connect(adjacency: &mut [Vec<usize>; 12], left: usize, right: usize) {
-    if !adjacency[left].contains(&right) {
-        adjacency[left].push(right);
-        adjacency[left].sort_unstable();
+/// The edges a marched cell's crossing edge connects to, ascending. A
+/// crossing edge lies on two faces, each connecting it once; `count` keeps
+/// counting past two so a malformed cell is detected.
+#[derive(Clone, Copy, Default)]
+struct Adjacent {
+    neighbours: [usize; 2],
+    count: usize,
+}
+
+impl Adjacent {
+    fn add(&mut self, edge: usize) {
+        if self.neighbours[..self.count.min(2)].contains(&edge) {
+            return;
+        }
+        if self.count < 2 {
+            self.neighbours[self.count] = edge;
+            self.neighbours[..=self.count].sort_unstable();
+        }
+        self.count += 1;
     }
-    if !adjacency[right].contains(&left) {
-        adjacency[right].push(left);
-        adjacency[right].sort_unstable();
-    }
+}
+
+fn connect(adjacency: &mut [Adjacent; 12], left: usize, right: usize) {
+    adjacency[left].add(right);
+    adjacency[right].add(left);
 }
 
 fn edge_local_point(edge: usize, t: f64) -> [f64; 3] {

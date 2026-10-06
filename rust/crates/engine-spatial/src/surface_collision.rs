@@ -12,7 +12,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use core_space::{ChunkCoord, LocalVoxelCoord, VoxelCoord};
-use svc_collision::ChunkSurfaceCollider;
+use svc_collision::{ChunkSurfaceCollider, VoxelBox};
 use svc_mesh::SurfaceMeshOptions;
 use svc_spatial::VoxelWorld;
 
@@ -29,42 +29,45 @@ pub(crate) fn mesh_chunks(
     coordinates: &[ChunkCoord],
     options: &SurfaceMeshOptions,
 ) -> Result<(Vec<Arc<VoxelMeshChunk>>, u64), CollisionSceneError> {
-    let mesh_slice =
-        |slice: &[ChunkCoord]| -> Result<(Vec<Arc<VoxelMeshChunk>>, u64), CollisionSceneError> {
-            let mut meshes = Vec::with_capacity(slice.len());
-            let mut microseconds = 0_u64;
-            for coordinate in slice {
-                let started = Instant::now();
-                meshes.push(Arc::new(build_mesh_chunk(world, *coordinate, options)?));
-                microseconds = microseconds.saturating_add(started.elapsed().as_micros() as u64);
-            }
-            Ok((meshes, microseconds))
-        };
+    let built = in_parallel(coordinates, |coordinate| {
+        let started = Instant::now();
+        build_mesh_chunk(world, coordinate, options)
+            .map(|mesh| (Arc::new(mesh), started.elapsed().as_micros() as u64))
+    });
+    let mut meshes = Vec::with_capacity(coordinates.len());
+    let mut microseconds = 0_u64;
+    for result in built {
+        let (mesh, time) = result?;
+        meshes.push(mesh);
+        microseconds = microseconds.saturating_add(time);
+    }
+    Ok((meshes, microseconds))
+}
+
+/// `build` for each coordinate, in input order, on scoped threads when there
+/// are enough coordinates.
+pub(crate) fn in_parallel<T: Send>(
+    coordinates: &[ChunkCoord],
+    build: impl Fn(ChunkCoord) -> T + Sync,
+) -> Vec<T> {
+    let build_slice = |slice: &[ChunkCoord]| slice.iter().map(|c| build(*c)).collect::<Vec<_>>();
     let threads = std::thread::available_parallelism()
         .map_or(1, |threads| threads.get())
         .min(coordinates.len() / CHUNKS_PER_THREAD);
     if threads <= 1 {
-        return mesh_slice(coordinates);
+        return build_slice(coordinates);
     }
     let per_thread = coordinates.len().div_ceil(threads);
-    let results: Vec<_> = std::thread::scope(|scope| {
+    std::thread::scope(|scope| {
         let handles: Vec<_> = coordinates
             .chunks(per_thread)
-            .map(|slice| scope.spawn(move || mesh_slice(slice)))
+            .map(|slice| scope.spawn(|| build_slice(slice)))
             .collect();
         handles
             .into_iter()
-            .map(|handle| handle.join().expect("chunk meshing does not panic"))
+            .flat_map(|handle| handle.join().expect("chunk meshing does not panic"))
             .collect()
-    });
-    let mut meshes = Vec::with_capacity(coordinates.len());
-    let mut microseconds = 0_u64;
-    for result in results {
-        let (slice, time) = result?;
-        meshes.extend(slice);
-        microseconds = microseconds.saturating_add(time);
-    }
-    Ok((meshes, microseconds))
+    })
 }
 
 /// The cuboid voxels of one chunk of a session with reconstructed materials:
@@ -210,11 +213,19 @@ pub(crate) fn collider_surface(
                     ]);
                 }
                 surface.triangles.push([first, first + 1, first + 2]);
-                surface.owners.push(VoxelCoord::new(
+                let owner = VoxelCoord::new(
                     origin.x + local[0] as i64,
                     origin.y + local[1] as i64,
                     origin.z + local[2] as i64,
-                ));
+                );
+                let span = mesh
+                    .triangle_owner_spans
+                    .get(triangle as usize)
+                    .map_or([0; 3], |span| span.map(|cells| i64::from(cells) - 1));
+                surface.owners.push(VoxelBox {
+                    min: owner,
+                    max: VoxelCoord::new(owner.x + span[0], owner.y + span[1], owner.z + span[2]),
+                });
             }
         }
         (!surface.triangles.is_empty()).then_some(surface)

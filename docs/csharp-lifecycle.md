@@ -627,9 +627,14 @@ the face is the polygon's box-projection face. `ReadMaterialMapping` returns
 copied effective source-slot/face selections, material provenance values, and
 renderer slots. The Engine keeps incremental renderer identity and owns all
 generated mesh/frame work; C# receives only copied facts. `Clear` or disposal
-removes the matching renderer objects. `SpatialSessionConfig.VoxelSurfaceMode`
-selects how the session's voxels are drawn; `Voxel.ConfigureMaterialSurfaces`
-changes it, and each material's own mode and character, later. See
+removes the matching renderer objects. `SetLevelOfDetail` draws reconstructed
+chunks beyond a distance from the primary camera from coarse meshes; the Engine
+switches them as the camera moves, with no refresh call, and a product may
+change the distance whenever its view changes
+([distance level of detail](smooth-voxel-surfaces.md#distance-level-of-detail)).
+`SpatialSessionConfig.VoxelSurfaceMode` selects how the session's voxels are
+drawn; `Voxel.ConfigureMaterialSurfaces` changes it, and each material's own
+mode and character, later. See
 [smooth voxel surfaces and densities](smooth-voxel-surfaces.md).
 
 ### Voxel material collision

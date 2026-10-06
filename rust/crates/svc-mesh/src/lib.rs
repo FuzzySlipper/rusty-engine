@@ -116,6 +116,16 @@ pub struct MaterialSurface {
     pub character: SurfaceCharacter,
 }
 
+impl MaterialSurface {
+    /// Dual-contoured Blocky without roughness: the surface is the voxels'
+    /// own block faces wherever it is drawn.
+    pub fn draws_exact_blocks(&self) -> bool {
+        self.mode == SurfaceMode::DualContouring
+            && self.character.placement == VertexPlacement::Blocky
+            && self.character.roughness == 0.0
+    }
+}
+
 /// Material slots whose surface differs from the default: the session mode
 /// with the default character. Cheap to clone.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -311,6 +321,11 @@ pub struct MeshPayload {
     /// inside corner of a marched cell, or the first cell of a cube face.
     /// Collision maps a reconstructed triangle to its voxel through it.
     pub triangle_owners: Vec<[i64; 3]>,
+    /// For each triangle, how many voxels along x, y and z its owners cover
+    /// from its `triangle_owners` entry, as an inclusive box: a merged block
+    /// face is owned by the voxels under it. Empty when every triangle has
+    /// one owner.
+    pub triangle_owner_spans: Vec<[u32; 3]>,
     pub bounds: MeshBounds,
     pub stats: MeshStats,
 }
@@ -702,6 +717,7 @@ pub fn mesh_scalar_samples(
         indices,
         groups,
         triangle_owners: surface.owners,
+        triangle_owner_spans: Vec::new(),
         bounds,
         stats: surface.stats,
     })
@@ -810,6 +826,7 @@ pub fn mesh_scalar_surface(
                 characters,
                 owner,
                 false,
+                None,
                 limits,
                 &mut reconstruction,
             )?;
@@ -857,6 +874,7 @@ pub fn mesh_scalar_surface(
                 characters,
                 owner,
                 true,
+                None,
                 limits,
                 &mut reconstruction,
             )?;
@@ -1035,7 +1053,7 @@ pub fn mesh_cells_standalone_with_options(
         min: minimum,
         max: maximum.map(|value| value + 1),
     };
-    let smooth = reconstruct(&lattice, &options, owner, cell_size, pivot, None)?;
+    let smooth = reconstruct(lattice, &options, owner, cell_size, pivot, None)?;
     let greedy = |slot: u16| options.surface(slot).mode == SurfaceMode::GreedyCubes;
     let (faces, faces_culled) = greedy_faces(&greedy, &|slot, neighbour| {
         greedy(neighbour) && options.hides(slot, neighbour)
@@ -1063,58 +1081,59 @@ pub fn mesh_cells_standalone_with_options(
 /// Reconstruct the owned surface of a voxel lattice in every reconstructed
 /// mode its materials use.
 fn reconstruct(
-    lattice: &surface::Lattice,
+    lattice: surface::Lattice,
     options: &SurfaceMeshOptions,
     owner: surface::Owner,
     cell_size: f64,
     pivot: [f64; 3],
     layers: Option<&terrain_layers::LayerField<'_>>,
 ) -> Result<MeshPayload, MeshError> {
-    let characters = options.characters();
-    let mut reconstruction = surface::Reconstruction::default();
-    let present = lattice.materials_inside(&options.non_occluding);
-    if present.is_empty() {
-        extract(lattice, options, owner, &mut reconstruction)?;
-    } else {
-        // One layer of occluding materials, which meet water as they meet
-        // air, and one per non-occluding material, which keeps only its own
-        // surface: against air and other non-occluding materials.
-        for kept in std::iter::once(None).chain(present.into_iter().map(Some)) {
-            let layer = lattice.layer(&options.non_occluding, kept);
-            let first = reconstruction.triangles.len();
-            extract(&layer, options, owner, &mut reconstruction)?;
-            if let Some(kept) = kept {
-                for triangle in first..reconstruction.triangles.len() {
-                    if reconstruction.slots[triangle] != kept {
-                        reconstruction.halo[triangle] = true;
-                    }
-                }
-            }
-        }
-    }
     surface::voxel_payload(
-        reconstruction,
-        characters,
+        reconstruction(lattice, options, owner)?,
+        options.characters(),
         cell_size,
         pivot,
+        1.0,
         options.limits,
         layers,
     )
 }
 
-/// Append the surfaces of every reconstructed mode in use.
+/// The owned reconstructed triangles of a voxel lattice.
+fn reconstruction(
+    mut lattice: surface::Lattice,
+    options: &SurfaceMeshOptions,
+    owner: surface::Owner,
+) -> Result<surface::Reconstruction, MeshError> {
+    let mut reconstruction = surface::Reconstruction::default();
+    // Occluding materials meet non-occluding ones as they meet air, and each
+    // non-occluding material keeps only its own surface: against air and
+    // other non-occluding materials.
+    let present = lattice.set_see_through(&options.non_occluding);
+    extract(&lattice, options, owner, None, &mut reconstruction)?;
+    for slot in present {
+        lattice.flip_see_through(slot);
+        extract(&lattice, options, owner, Some(slot), &mut reconstruction)?;
+        lattice.flip_see_through(slot);
+    }
+    Ok(reconstruction)
+}
+
+/// Append the surfaces of every reconstructed mode in use, only those of
+/// `kept` when given.
 fn extract(
     lattice: &surface::Lattice,
     options: &SurfaceMeshOptions,
     owner: surface::Owner,
+    kept: Option<u16>,
     out: &mut surface::Reconstruction,
 ) -> Result<(), MeshError> {
     let characters = options.characters();
     if options.uses_mode(SurfaceMode::DualContouring) {
-        surface::dual_contour(lattice, characters, owner, false, options.limits, out)?;
+        surface::dual_contour(lattice, characters, owner, false, kept, options.limits, out)?;
     }
     if options.uses_mode(SurfaceMode::MarchingCubes) {
-        surface::march(lattice, characters, owner, options.limits, out)?;
+        surface::march(lattice, characters, owner, kept, options.limits, out)?;
     }
     Ok(())
 }
@@ -1133,6 +1152,7 @@ fn merge_payloads(
     }
     let vertex_base = (first.positions.len() / 3) as u32;
     let index_base = first.indices.len() as u32;
+    let (first_triangles, second_triangles) = (first.indices.len() / 3, second.indices.len() / 3);
     surface::check_output_growth(
         u64::from(vertex_base),
         u64::from(index_base),
@@ -1155,6 +1175,12 @@ fn merge_payloads(
             ..group
         }));
     first.triangle_owners.extend(second.triangle_owners);
+    if !first.triangle_owner_spans.is_empty() || !second.triangle_owner_spans.is_empty() {
+        let mut spans = second.triangle_owner_spans;
+        spans.resize(second_triangles, [1; 3]);
+        first.triangle_owner_spans.resize(first_triangles, [1; 3]);
+        first.triangle_owner_spans.extend(spans);
+    }
     first.bounds = if had_first {
         MeshBounds {
             min: std::array::from_fn(|axis| first.bounds.min[axis].min(second.bounds.min[axis])),
@@ -1212,6 +1238,7 @@ fn empty_payload(mode: SurfaceMode) -> MeshPayload {
         indices: Vec::new(),
         groups: Vec::new(),
         triangle_owners: Vec::new(),
+        triangle_owner_spans: Vec::new(),
         bounds: MeshBounds {
             min: [0.0; 3],
             max: [0.0; 3],
@@ -1335,27 +1362,127 @@ fn mesh_chunk_reconstructed(
     chunk: &VoxelChunk,
     options: &SurfaceMeshOptions,
 ) -> Result<MeshPayload, MeshError> {
-    let greedy = |slot: u16| options.surface(slot).mode == SurfaceMode::GreedyCubes;
-    if chunk.iter().any(|(_, value)| {
-        value.state().raw() != 0 && value.material().is_some_and(|m| !greedy(m.raw()))
-    }) {
-        return Err(MeshError::StateRequiresGreedyCubes);
-    }
+    check_states(chunk, options)?;
     let spec = world.grid();
     let origin = spec.chunk_origin_voxel(coord).to_array();
     let size = spec.chunk_dims().to_array().map(i64::from);
-    let mut maximum = [0_i64; 3];
+    let lattice = chunk_lattice(world, coord, 1, options.limits)?;
+    let owner = surface::Owner {
+        min: origin,
+        max: std::array::from_fn(|axis| origin[axis] + size[axis]),
+    };
+    let field = options
+        .terrain_layers
+        .as_ref()
+        .map(|layers| terrain_layers::LayerField::around_chunk(world, &spec, layers, origin, size));
+    let mut reconstruction = reconstruction(lattice, options, owner)?;
+    reconstruction.chunk_region = Some(owner);
+    let smooth = surface::voxel_payload(
+        reconstruction,
+        options.characters(),
+        spec.voxel_size(),
+        origin.map(|value| value as f64),
+        1.0,
+        options.limits,
+        field.as_ref(),
+    )?;
+    with_cube_faces(world, coord, chunk, options, smooth)
+}
+
+/// Mesh one resident chunk's reconstructed materials from a lattice twice as
+/// coarse, for drawing it far away: each sample stands for a 2×2×2 block of
+/// voxels, solid only where the whole block is (with its smallest density),
+/// so the coarse surface lies inside the fine one. Coarse chunks meet each
+/// other without seams, as fine ones do; a skirt below every open edge of the
+/// surface hides the gaps against a fine neighbour. Positions, tile
+/// coordinates and terrain layer weights are in the chunk's voxel units, as
+/// for [`mesh_chunk_in_world_with_options`]; cube materials keep their full
+/// resolution faces. `None` when the chunk is absent, every material is drawn
+/// as cubes, or the chunk edge is odd.
+pub fn mesh_chunk_coarse_in_world(
+    world: &VoxelWorld,
+    coord: ChunkCoord,
+    options: &SurfaceMeshOptions,
+) -> Option<Result<MeshPayload, MeshError>> {
+    let chunk = world.get(coord)?;
+    let spec = world.grid();
+    let size = spec.chunk_dims().to_array().map(i64::from);
+    if options.all_greedy() || size.iter().any(|edge| edge % 2 != 0) {
+        return None;
+    }
+    Some((|| {
+        check_states(chunk, options)?;
+        let origin = spec.chunk_origin_voxel(coord).to_array();
+        let lattice = chunk_lattice(world, coord, 2, options.limits)?.coarsened(options.limits)?;
+        let owner = surface::Owner {
+            min: origin.map(|value| value / 2),
+            max: std::array::from_fn(|axis| (origin[axis] + size[axis]) / 2),
+        };
+        // Coarse vertices lie within one coarse cell, two voxels, of the chunk.
+        let field = options.terrain_layers.as_ref().map(|layers| {
+            terrain_layers::LayerField::around_chunk(
+                world,
+                &spec,
+                layers,
+                origin.map(|value| value - 1),
+                size.map(|value| value + 2),
+            )
+        });
+        let mut reconstruction = reconstruction(lattice, options, owner)?;
+        reconstruction.chunk_region = Some(owner);
+        surface::add_skirts(&mut reconstruction, COARSE_SKIRT_DEPTH);
+        let smooth = surface::voxel_payload(
+            reconstruction,
+            options.characters(),
+            spec.voxel_size(),
+            origin.map(|value| value as f64),
+            2.0,
+            options.limits,
+            field.as_ref(),
+        )?;
+        with_cube_faces(world, coord, chunk, options, smooth)
+    })())
+}
+
+/// How far a coarse skirt reaches below the surface, in coarse cells: as far
+/// as a fine surface can lie from the coarse one.
+const COARSE_SKIRT_DEPTH: f64 = 1.0;
+
+/// Voxel states mesh only on cube materials.
+fn check_states(chunk: &VoxelChunk, options: &SurfaceMeshOptions) -> Result<(), MeshError> {
+    if chunk.iter().any(|(_, value)| {
+        value.state().raw() != 0
+            && value
+                .material()
+                .is_some_and(|m| options.surface(m.raw()).mode != SurfaceMode::GreedyCubes)
+    }) {
+        return Err(MeshError::StateRequiresGreedyCubes);
+    }
+    Ok(())
+}
+
+/// The samples of one chunk and `halo` voxels of its resident neighbours
+/// around it (absent neighbours read as empty), including their densities.
+fn chunk_lattice(
+    world: &VoxelWorld,
+    coord: ChunkCoord,
+    halo: i64,
+    limits: SurfaceMeshLimits,
+) -> Result<surface::Lattice, MeshError> {
+    let spec = world.grid();
+    let origin = spec.chunk_origin_voxel(coord).to_array();
+    let size = spec.chunk_dims().to_array().map(i64::from);
     let mut low = [0_i64; 3];
     for axis in 0..3 {
-        maximum[axis] = origin[axis]
-            .checked_add(size[axis])
+        origin[axis]
+            .checked_add(size[axis] + halo)
             .ok_or(MeshError::CoordinateRangeTooLarge)?;
         low[axis] = origin[axis]
-            .checked_sub(1)
+            .checked_sub(halo)
             .ok_or(MeshError::CoordinateRangeTooLarge)?;
     }
-    let dims = size.map(|value| value as usize + 2);
-    let mut lattice = surface::Lattice::voxels(low, dims, options.limits)?;
+    let dims = size.map(|value| (value + 2 * halo) as usize);
+    let mut lattice = surface::Lattice::voxels(low, dims, limits)?;
     let high: [i64; 3] = std::array::from_fn(|axis| low[axis] + dims[axis] as i64);
     for dz in -1..=1_i64 {
         for dy in -1..=1_i64 {
@@ -1395,25 +1522,23 @@ fn mesh_chunk_reconstructed(
             }
         }
     }
-    let owner = surface::Owner {
-        min: origin,
-        max: maximum,
-    };
-    let field = options
-        .terrain_layers
-        .as_ref()
-        .map(|layers| terrain_layers::LayerField::around_chunk(world, &spec, layers, origin, size));
-    let smooth = reconstruct(
-        &lattice,
-        options,
-        owner,
-        spec.voxel_size(),
-        origin.map(|value| value as f64),
-        field.as_ref(),
-    )?;
+    Ok(lattice)
+}
+
+/// Add the greedy faces of the chunk's cube materials, if any, to its
+/// reconstructed surface.
+fn with_cube_faces(
+    world: &VoxelWorld,
+    coord: ChunkCoord,
+    chunk: &VoxelChunk,
+    options: &SurfaceMeshOptions,
+    smooth: MeshPayload,
+) -> Result<MeshPayload, MeshError> {
     if !options.uses_mode(SurfaceMode::GreedyCubes) {
         return Ok(smooth);
     }
+    let spec = world.grid();
+    let greedy = |slot: u16| options.surface(slot).mode == SurfaceMode::GreedyCubes;
     let around = Neighbourhood::around(world, &spec, coord);
     let mut cubes = mesh_core(&spec, coord, chunk, greedy, |slot, voxel, dir| {
         around.slot(voxel).is_some_and(|n| {
@@ -1456,12 +1581,7 @@ fn reconstructed_surface_covers(
     // Only dual contouring places Blocky vertices on the block's planes;
     // marching cubes interpolates its crossings whatever the placement, so a
     // marching bank is no exact block.
-    let block = |slot: u16| {
-        let surface = options.surface(slot);
-        surface.mode == SurfaceMode::DualContouring
-            && surface.character.placement == VertexPlacement::Blocky
-            && surface.character.roughness == 0.0
-    };
+    let block = |slot: u16| options.surface(slot).draws_exact_blocks();
     if around.slot(voxel).is_some_and(block) {
         return true;
     }
@@ -1723,6 +1843,7 @@ fn emit_quads(
         indices,
         groups,
         triangle_owners,
+        triangle_owner_spans: Vec::new(),
         bounds,
         stats,
     })

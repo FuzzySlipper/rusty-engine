@@ -40,7 +40,11 @@ reconstructed material:
   voxel grid: its crossings sit on voxel faces whatever the densities, and the
   normals of a cell it wins snap to the axes, so a cube of material meshes as
   an exact cube and a neighbouring material meets its planes. Use Sharp to
-  shape sharp features with densities instead.
+  shape sharp features with densities instead. Dual-contoured Blocky faces
+  without roughness that lie in one plane are merged into rectangles, as
+  cube faces are, wherever every corner they use belongs only to such faces
+  and lies inside the chunk: faces beside another surface or at the chunk's
+  border keep the corners they share, so nothing meets a T-junction.
 - `CreaseAngleDegrees` shades a vertex smooth where the facet bends less than
   this from the vertex's interpolated normal, and flat beyond it: 0 is every
   facet flat, 180 everything smooth. `SurfaceCharacter.Default` is Sharp,
@@ -65,7 +69,8 @@ Reconstructed surfaces carry tile coordinates like cube faces, projected along
 the dominant axis of each polygon in the same absolute cell space and face
 basis as a cube face of that direction. Groups are split per material and
 face, so textured, atlas-tiled and direction-specific materials (a grass top
-over dirt sides) draw on smooth surfaces with the same bindings as on cubes. A
+over dirt sides) draw on smooth surfaces with the same bindings as on cubes;
+neighbouring face groups that resolve to one material are drawn as one. A
 Blocky material's planar faces texture exactly like cubes. On curved surfaces
 the chart changes where the dominant axis does, which shows as a texture seam
 on slopes near 45°.
@@ -186,8 +191,8 @@ non-collidable solid), plus the chunk's reconstructed triangles. Each
 triangle belongs to a voxel (the solid end of its dual-contoured edge, or the
 first solid corner of its marched cell), so `CastRay` and picking still name
 a voxel, a face (the axis nearest the surface normal) and the normal itself.
-Cuboids are merged into boxes; a ray into a box names the voxel under the
-impact. Character casts, overlaps, Dynamics and collision navigation use the
+Cuboids are merged into boxes, and a merged Blocky rectangle is owned by the
+voxels under it; a ray into either names the voxel under the impact. Character casts, overlaps, Dynamics and collision navigation use the
 same shapes. Point and box queries in the shell between the surface and the
 interior cuboids classify by the side of the nearest surface triangle.
 Non-collidable materials contribute neither cuboids nor triangles. A chunk's
@@ -200,20 +205,58 @@ surface, within one step height. A stair of one-voxel risers drawn by dual
 contouring is a run of rounded steps: its cell-centre heights vary by a few
 centimetres, so a step height tuned to exactly one voxel can refuse an edge.
 
+## Distance level of detail
+
+`VoxelScenePresentation.SetLevelOfDetail(new(presentation, coarseDistance))`
+draws a presentation's distant chunks from coarse meshes. Each update, the
+Engine measures every chunk's cube from the camera of the lowest-ordered
+primary view; a chunk farther than `coarseDistance` metres (by 10% more when it
+switches, so a camera at the boundary does not flip it) is drawn coarse. Zero
+draws every chunk at full resolution. Set the distance whenever the view calls
+for another (a map view, open ground, caves): a call projects only the chunks
+that change level, and repeating a distance costs nothing. Only the drawing
+changes: collision, raycasts, picking and navigation keep every chunk's full
+mesh.
+
+- A coarse mesh is the chunk's reconstructed materials meshed from a lattice
+  twice as coarse. Each sample stands for a 2 × 2 × 2 block of voxels, solid
+  only where the whole block is, with its majority material and smallest
+  density, so the coarse surface lies on or inside the fine one. Tile
+  coordinates, triplanar textures and terrain layer weights stay in voxel units
+  and match the fine mesh. Cube materials keep their full-resolution faces.
+- Coarse chunks meet each other without seams, as fine chunks do. Against a
+  fine neighbour every open edge of a coarse mesh carries a skirt reaching one
+  coarse cell into the solid and as far toward the neighbour, which closes both
+  the step and the gap where the two surfaces stop short of each other.
+- A coarse mesh reads two voxels into each neighbour, so a change to the chunk
+  or any neighbour rebuilds it with the next projection. Chunks that switch
+  level together are meshed in parallel.
+- Sessions whose materials are all cubes, and chunks with an odd edge, are
+  always drawn at full resolution. `VoxelScenePresentationReadout.
+  CoarseChunkCount` reports how many chunks are drawn coarse.
+
 ## Cost
 
 Reconstructed chunks mesh from the chunk and a one-voxel halo of its
 neighbours, in parallel when a change rebuilds several chunks. On a 180-chunk
 dungeon of 16³ one-metre chunks (`svc-mesh` example `smooth_chunk_meshing`,
-release build) dual contouring costs about 0.3 ms per chunk, marching cubes
-0.5 ms and cubes 0.15 ms: a cube chunk's face tests read its 26 neighbours
-through references resolved once per chunk. A chunk's surface depends on all
-26 neighbours, so
-admitting a world chunk by chunk remeshes each chunk several times; admitting
-that dungeon in slices of six chunks (`engine-spatial` example
-`smooth_residency_load`) takes about 0.43 s with dual contouring, 0.63 s with
-marching cubes and 0.40 s with cubes, collision included. Reconstructed vertices are
-split per texture face and crease, so a smooth chunk draws more vertices than
-its cell count suggests. `VoxelSceneReadout.MeshMicroseconds`, and the same
-field on edit, residency and density receipts, report the meshing time of the
-chunks the last change rebuilt, summed over chunks.
+release build) dual contouring costs about 0.18 ms per chunk, marching cubes
+0.25 ms and cubes 0.14 ms: a cube chunk's face tests read its 26 neighbours
+through references resolved once per chunk. One residency, edit or density call
+meshes each chunk it touches once, after all its writes. A chunk's surface
+depends on all 26 neighbours, though, so each later call remeshes the resident
+neighbours of what it changes. Admitting that dungeon in one call
+(`engine-spatial` example `smooth_residency_load`) takes about 63 ms with dual
+contouring, 0.1 s with marching cubes and 0.18 s with cubes, collision
+included. In slices of six chunks it builds 714 chunk meshes (474 with cubes)
+and takes about 0.31 s, 0.49 s and 0.18 s in all, at most about 15, 24 and 8 ms
+per slice. A product filling a space behind a loading wait trades the longest
+call against the total through its slice size; larger, contiguous slices leave
+fewer resident neighbours to remesh. Reconstructed vertices are split per
+texture face and crease, so a smooth chunk draws more vertices than its cell
+count suggests. A coarse mesh takes about 0.15 ms per chunk with dual
+contouring and 0.2 ms with marching cubes, and draws about a third of the
+triangles (35% and 30% on that dungeon, skirts included; a quarter without).
+`VoxelSceneReadout.MeshMicroseconds`, and the same field on edit, residency and
+density receipts, report the meshing time of the chunks the last change
+rebuilt, summed over chunks.
