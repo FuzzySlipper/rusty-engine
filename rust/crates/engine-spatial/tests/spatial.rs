@@ -202,7 +202,7 @@ fn generated_room_is_deterministic_and_seed_changes_canonical_voxels_and_mesh() 
 }
 
 #[test]
-fn generated_pillar_drives_collision_navigation_and_visible_mesh_from_one_world() {
+fn generated_pillar_drives_collision_and_visible_mesh_from_one_world() {
     let fixture = GeneratedRoomFixture::new(room_config(4)).unwrap();
     let scene = &fixture.scene;
     let record = fixture.record;
@@ -213,19 +213,6 @@ fn generated_pillar_drives_collision_navigation_and_visible_mesh_from_one_world(
         .iter()
         .any(|voxel| voxel.address == record.pillar_voxel && voxel.material_slot == 3));
     assert!(scene.contains_point([x as f64 + 0.5, y as f64 + 0.5, z as f64 + 0.5]));
-    let navigation = scene
-        .navigation_step(
-            Vec3::new(1.5, 1.5, 6.5),
-            Vec3::new(7.5, 1.5, 6.5),
-            Vec3::ZERO,
-            0.1,
-            512,
-        )
-        .unwrap();
-    assert!(
-        navigation.path_len > 7,
-        "route must detour around the pillar"
-    );
     let mesh = &scene.mesh_chunks().cloned().collect::<Vec<_>>()[0];
     assert!(mesh.vertices > 0);
     assert!(mesh.quads > 0);
@@ -234,7 +221,7 @@ fn generated_pillar_drives_collision_navigation_and_visible_mesh_from_one_world(
 }
 
 #[test]
-fn generated_exit_aperture_is_canonical_collision_navigation_and_mesh_empty_space() {
+fn generated_exit_aperture_is_canonical_collision_and_mesh_empty_space() {
     let fixture = GeneratedRoomFixture::new(room_config(4)).unwrap();
     let scene = &fixture.scene;
     let record = fixture.record;
@@ -252,15 +239,6 @@ fn generated_exit_aperture_is_canonical_collision_navigation_and_mesh_empty_spac
     }
     assert!(scene.contains_point([2.5, 1.5, 11.5]));
     assert!(scene.contains_point([6.5, 1.5, 11.5]));
-    assert!(scene
-        .navigation_step(
-            Vec3::new(4.5, 1.5, 10.5),
-            Vec3::new(4.5, 1.5, 12.5),
-            Vec3::ZERO,
-            0.4,
-            64,
-        )
-        .is_ok());
 }
 
 #[test]
@@ -283,15 +261,13 @@ fn bounded_room_fixture_stays_one_chunk_with_reviewable_mesh_counts() {
 }
 
 #[test]
-fn edit_rebuilds_collision_navigation_and_mesh_then_removal_is_reversible() {
+fn edit_rebuilds_collision_and_mesh_then_removal_is_reversible() {
     let fixture = GeneratedRoomFixture::new(room_config(4)).unwrap();
     let pillar = fixture.record.pillar_voxel;
     let mut scene = fixture.scene;
     let baseline_voxels = scene.material_voxels().to_vec();
     let baseline_mesh = scene.mesh_chunks().cloned().collect::<Vec<_>>();
     let baseline_hash = scene.authority_hash();
-    let baseline_navigation_hash = scene.navigation_hash();
-    let route_before = route_across_pillar(&scene);
     assert_eq!(
         scene
             .raycast([1.5, 1.5, 6.5], [1.0, 0.0, 0.0], 16.0)
@@ -325,8 +301,6 @@ fn edit_rebuilds_collision_navigation_and_mesh_then_removal_is_reversible() {
             .voxel,
         pillar
     );
-    assert!(route_across_pillar(&scene).path_len < route_before.path_len);
-    assert_ne!(scene.navigation_hash(), baseline_navigation_hash);
     assert_ne!(
         scene.mesh_chunks().cloned().collect::<Vec<_>>(),
         baseline_mesh
@@ -341,13 +315,11 @@ fn edit_rebuilds_collision_navigation_and_mesh_then_removal_is_reversible() {
     assert_eq!(restored.accepted_revision.raw(), 2);
     assert_eq!(scene.material_voxels(), baseline_voxels);
     assert_eq!(scene.authority_hash(), baseline_hash);
-    assert_eq!(scene.navigation_hash(), baseline_navigation_hash);
     assert_eq!(
         scene.mesh_chunks().cloned().collect::<Vec<_>>(),
         baseline_mesh
     );
     assert!(scene.contains_point(voxel_center(pillar)));
-    assert_eq!(route_across_pillar(&scene).path_len, route_before.path_len);
 }
 
 #[test]
@@ -357,7 +329,6 @@ fn rejected_edit_leaves_authority_and_every_projection_unchanged() {
     let before_voxels = scene.material_voxels().to_vec();
     let before_mesh = scene.mesh_chunks().cloned().collect::<Vec<_>>();
     let before_hash = scene.authority_hash();
-    let before_navigation = scene.navigation_hash();
     let before_revision = scene.source_revision();
     let invalid = [
         VoxelEdit::Clear { address: [1, 1, 1] },
@@ -379,7 +350,6 @@ fn rejected_edit_leaves_authority_and_every_projection_unchanged() {
         before_mesh
     );
     assert_eq!(scene.authority_hash(), before_hash);
-    assert_eq!(scene.navigation_hash(), before_navigation);
     assert_eq!(scene.source_revision(), before_revision);
 }
 
@@ -411,7 +381,6 @@ fn accepted_edit_order_does_not_change_authority_receipt_or_projections() {
     assert_eq!(left_receipt, right_receipt);
     assert_eq!(left.material_voxels(), right.material_voxels());
     assert_eq!(left.authority_hash(), right.authority_hash());
-    assert_eq!(left.navigation_hash(), right.navigation_hash());
     assert_eq!(
         left.mesh_chunks().cloned().collect::<Vec<_>>(),
         right.mesh_chunks().cloned().collect::<Vec<_>>()
@@ -584,18 +553,6 @@ fn incremental_mesh_build_failure_leaves_authority_and_chunks_unchanged() {
         before_chunks
     );
     assert_eq!(scene.source_revision(), before_revision);
-}
-
-fn route_across_pillar(scene: &VoxelCollisionScene) -> engine_spatial::NavigationStep {
-    scene
-        .navigation_step(
-            Vec3::new(1.5, 1.5, 6.5),
-            Vec3::new(7.5, 1.5, 6.5),
-            Vec3::ZERO,
-            0.1,
-            512,
-        )
-        .unwrap()
 }
 
 fn voxel_center(address: [i64; 3]) -> [f64; 3] {

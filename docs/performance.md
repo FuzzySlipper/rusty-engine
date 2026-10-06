@@ -57,6 +57,9 @@ runtime renderer's adapter and output (`stream` or `window`), retained
 operations skipped by kind, and, for streamed frames, the recent frame rate,
 median render, readback and encode milliseconds, and bytes per frame and per
 second. The desktop window streams nothing, so it reports no frame timing.
+Where the adapter has timestamp queries, `gpu.passes` gives the median GPU
+milliseconds of each renderer pass that is timed (today the ambient
+occlusion passes), with the adapter's compute limits beside them.
 
 To measure the renderer's frame cost without the product, take a scene
 snapshot on the running product (`engine.renderer.snapshot <path>`, see
@@ -67,10 +70,12 @@ again on a fresh renderer:
 rusty-scene-render scene.rscene out.png --width 1280 --height 720 --frames 600
 ```
 
-It prints the adapter, the time to open and apply the snapshot, and the mean
-and median milliseconds of the extra frames, each with readback. Compare
-snapshots drawn on the same adapter; `WGPU_BACKEND` selects it as for any
-wgpu program.
+It prints the adapter, the time to open and apply the snapshot, the mean
+and median milliseconds of the extra frames, each with readback, and the
+`gpu` pass medians. `--ambient-occlusion off|compute|raster` draws the
+snapshot with that ambient occlusion path, to compare the paths on one
+scene. Compare snapshots drawn on the same adapter; `WGPU_BACKEND` selects
+it as for any wgpu program.
 
 Trusted product code reads the same statistics (`ProductHostRendererStatistics`
 in `product-host`) as UTF-8 JSON bytes through

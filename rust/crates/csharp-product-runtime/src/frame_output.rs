@@ -37,8 +37,9 @@ use csharp_engine_services::{
 };
 use product_host::RuntimePublication;
 use product_host::{
-    ProductHostAmbientOcclusionPath, ProductHostComputeLimits, ProductHostDrawingMode,
-    ProductHostDrawnFrame, ProductHostFrameStream, ProductHostGpuPass, ProductHostGpuStatistics,
+    ProductHostAmbientOcclusionPath, ProductHostAmbientOcclusionStatistics,
+    ProductHostComputeLimits, ProductHostDrawingMode, ProductHostDrawnFrame,
+    ProductHostFrameStream, ProductHostGpuPass, ProductHostGpuStatistics,
     ProductHostRendererInspection, ProductHostRendererStatistics, ProductHostStreamMedians,
     ProductHostStreamStatistics, ProductHostTimedStep, ProductHostWindowMedians,
     ProductHostWindowStatistics,
@@ -738,8 +739,8 @@ fn ms(duration: Duration) -> f64 {
 }
 
 fn gpu_statistics(readout: GpuReadout) -> ProductHostGpuStatistics {
+    let ambient_occlusion = readout.ambient_occlusion;
     ProductHostGpuStatistics {
-        compute_refused: readout.compute_refused,
         timestamps: readout.timestamps,
         limits: ProductHostComputeLimits {
             workgroup_size: readout.limits.workgroup_size,
@@ -748,13 +749,6 @@ fn gpu_statistics(readout: GpuReadout) -> ProductHostGpuStatistics {
             workgroup_storage_bytes: readout.limits.workgroup_storage_bytes,
             storage_buffer_binding_bytes: readout.limits.storage_buffer_binding_bytes,
         },
-        ambient_occlusion: match readout.ambient_occlusion {
-            AmbientOcclusionPath::Off => ProductHostAmbientOcclusionPath::Off,
-            AmbientOcclusionPath::Compute => ProductHostAmbientOcclusionPath::Compute,
-            AmbientOcclusionPath::Raster => ProductHostAmbientOcclusionPath::Raster,
-        },
-        workgroups: readout.workgroups,
-        occlusion_texture: readout.occlusion_texture,
         passes: readout
             .passes
             .into_iter()
@@ -764,6 +758,16 @@ fn gpu_statistics(readout: GpuReadout) -> ProductHostGpuStatistics {
                 median_gpu_ms: pass.median_gpu_ms,
             })
             .collect(),
+        ambient_occlusion: ProductHostAmbientOcclusionStatistics {
+            path: match ambient_occlusion.path {
+                AmbientOcclusionPath::Off => ProductHostAmbientOcclusionPath::Off,
+                AmbientOcclusionPath::Compute => ProductHostAmbientOcclusionPath::Compute,
+                AmbientOcclusionPath::Raster => ProductHostAmbientOcclusionPath::Raster,
+            },
+            compute_refused: ambient_occlusion.compute_refused,
+            workgroups: ambient_occlusion.workgroups,
+            texture: ambient_occlusion.texture,
+        },
     }
 }
 

@@ -168,9 +168,8 @@ densities, materials))` applies edits in order:
   Add and Subtract also update voxels within two voxels of the brush so the
   surface beside it is placed exactly.
 
-Only the touched chunks' meshes and colliders, and navigation cells around
-voxels whose solidity changed, are rebuilt; a failed rebuild restores the
-scene. The receipt reports changed voxels, solidity changes, rebuilt chunks
+Only the touched chunks' meshes and colliders are rebuilt; a failed rebuild
+restores the scene. The receipt reports changed voxels, solidity changes, rebuilt chunks
 and meshing time. `Voxel.ReadDensities(new(session, min, sizeX, sizeY,
 sizeZ))` reads densities and materials back (borrowed until the next Voxel
 call). Residency operations may carry a chunk's densities through
@@ -200,8 +199,6 @@ riser) rises under the standing capsule's rim it rests the capsule on the
 surface, within one step height. A stair of one-voxel risers drawn by dual
 contouring is a run of rounded steps: its cell-centre heights vary by a few
 centimetres, so a step height tuned to exactly one voxel can refuse an edge.
-The voxel navigation projection (`navigation_step`) stays a voxel-cell
-projection; collision navigation follows the surface.
 
 ## Cost
 
@@ -209,11 +206,13 @@ Reconstructed chunks mesh from the chunk and a one-voxel halo of its
 neighbours, in parallel when a change rebuilds several chunks. On a 180-chunk
 dungeon of 16³ one-metre chunks (`svc-mesh` example `smooth_chunk_meshing`,
 release build) dual contouring costs about 0.3 ms per chunk, marching cubes
-0.5 ms and cubes 0.4 ms. A chunk's surface depends on all 26 neighbours, so
+0.5 ms and cubes 0.15 ms: a cube chunk's face tests read its 26 neighbours
+through references resolved once per chunk. A chunk's surface depends on all
+26 neighbours, so
 admitting a world chunk by chunk remeshes each chunk several times; admitting
 that dungeon in slices of six chunks (`engine-spatial` example
 `smooth_residency_load`) takes about 0.43 s with dual contouring, 0.63 s with
-marching cubes and 0.40 s with cubes, collision and navigation included. Reconstructed vertices are
+marching cubes and 0.40 s with cubes, collision included. Reconstructed vertices are
 split per texture face and crease, so a smooth chunk draws more vertices than
 its cell count suggests. `VoxelSceneReadout.MeshMicroseconds`, and the same
 field on edit, residency and density receipts, report the meshing time of the

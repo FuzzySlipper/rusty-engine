@@ -262,26 +262,43 @@ impl CollisionNavigationGraph {
             edge_admission: NavEdgeAdmission::from_allowed_edges(std::iter::empty()),
             jumps: BTreeSet::new(),
         };
-        for (&from, targets) in &cache.edges {
-            for &target in targets {
-                graph.admit(from, target, cache.key.policy.jump.cost);
-            }
-        }
+        graph.replace_edges(
+            Vec::new(),
+            cache
+                .edges
+                .iter()
+                .flat_map(|(&from, targets)| targets.iter().map(move |&target| (from, target)))
+                .collect(),
+            cache.key.policy.jump.cost,
+        );
         graph
     }
 
-    fn admit(&mut self, from: VoxelCoord, target: EdgeTarget, jump_cost: u32) {
-        self.edge_admission.set_allowed(from, target.to, true);
-        if target.jump {
+    /// Withdraws one set of edges and admits another, together.
+    fn replace_edges(
+        &mut self,
+        withdrawn: Vec<(VoxelCoord, EdgeTarget)>,
+        admitted: Vec<(VoxelCoord, EdgeTarget)>,
+        jump_cost: u32,
+    ) {
+        self.edge_admission.set_allowed_edges(
+            withdrawn
+                .iter()
+                .map(|&(from, target)| (from, target.to, false))
+                .chain(
+                    admitted
+                        .iter()
+                        .map(|&(from, target)| (from, target.to, true)),
+                ),
+        );
+        for (from, target) in withdrawn {
+            self.jumps.remove(&(from, target.to));
+        }
+        for (from, target) in admitted.into_iter().filter(|(_, target)| target.jump) {
             self.jumps.insert((from, target.to));
             self.edge_admission
                 .set_cost(from, target.to, u64::from(jump_cost));
         }
-    }
-
-    fn withdraw(&mut self, from: VoxelCoord, target: EdgeTarget) {
-        self.edge_admission.set_allowed(from, target.to, false);
-        self.jumps.remove(&(from, target.to));
     }
 }
 
@@ -465,6 +482,7 @@ impl CollisionNavigationDelta {
                 }),
             ),
         };
+        let mut withdrawn = Vec::new();
         for column in &self.edge_columns {
             let Some(supports) = cache.columns.get(column) else {
                 continue;
@@ -473,38 +491,35 @@ impl CollisionNavigationDelta {
                 let Some(targets) = cache.edges.remove(&from) else {
                     continue;
                 };
-                if let Some(graph) = &mut graph {
-                    for target in targets {
-                        graph.withdraw(from, target);
-                    }
-                }
+                withdrawn.extend(targets.into_iter().map(|target| (from, target)));
             }
         }
+        let mut walkable = Vec::new();
         for column in self.removed.iter().chain(self.derived.keys()) {
             for (cell, _) in cache.columns.remove(column).unwrap_or_default() {
+                walkable.push((cell, false));
                 if let Some(graph) = &mut graph {
-                    graph.projection.set_walkable(cell, false);
                     graph.supports.remove(&cell);
                 }
             }
         }
         for (column, supports) in self.derived {
-            if let Some(graph) = &mut graph {
-                for &(cell, height) in &supports {
-                    graph.projection.set_walkable(cell, true);
+            for &(cell, height) in &supports {
+                walkable.push((cell, true));
+                if let Some(graph) = &mut graph {
                     graph.supports.insert(cell, height);
                 }
             }
             cache.columns.insert(column, supports);
         }
-        let jump_cost = self.key.policy.jump.cost;
+        let mut admitted = Vec::new();
         for (from, targets) in self.edges {
-            if let Some(graph) = &mut graph {
-                for &target in &targets {
-                    graph.admit(from, target, jump_cost);
-                }
-            }
+            admitted.extend(targets.iter().map(|&target| (from, target)));
             cache.edges.insert(from, targets);
+        }
+        if let Some(graph) = &mut graph {
+            graph.projection.set_walkable_cells(walkable);
+            graph.replace_edges(withdrawn, admitted, self.key.policy.jump.cost);
         }
         cache.key = self.key;
         cache.scene = self.scene;
@@ -2843,8 +2858,11 @@ mod tests {
         *bridge.sessions.keys().next().unwrap()
     }
 
+    /// A goal on a floor no edge joins to the start's is answered from the
+    /// publication's component labels, without a search: nothing visited,
+    /// and the nearest cell is the start's floor's nearest the goal.
     #[test]
-    fn no_path_reports_how_far_the_search_got() {
+    fn no_path_across_components_reports_the_nearest_cell_without_a_search() {
         // Two floors separated by a wall the agent cannot step over.
         let mut voxels = Vec::new();
         for x in 0..8 {
@@ -2855,12 +2873,20 @@ mod tests {
                 }
             }
         }
-        let (bridge, session) = publish_over(
+        let (mut bridge, session) = bridge_with(Arc::new(
             VoxelCollisionScene::from_solid_voxels(1.0, 16, voxels).unwrap(),
-            flat_config(1.0, 1, 0.3, 1.6, 45.0),
-            [0.0, 0.0, 0.0],
-            [8.0, 3.0, 3.0],
-        );
+        ));
+        let vec = |[x, y, z]: [f32; 3]| NativeVec3 { x, y, z };
+        let receipt = bridge
+            .replace_collision_navigation(&NativeCollisionNavigationReplaceRequest {
+                session,
+                world_min: vec([0.0, 0.0, 0.0]),
+                world_max: vec([8.0, 3.0, 3.0]),
+                config: flat_config(1.0, 1, 0.3, 1.6, 45.0),
+            })
+            .unwrap();
+        assert_eq!(receipt.walkable_cell_count, 21);
+        assert_eq!(receipt.component_count, 2);
         let navigation = bridge.sessions[&session.value].navigation.as_ref().unwrap();
         let (step, _) = evaluate_navigation_step_facts(
             navigation,
@@ -2881,7 +2907,7 @@ mod tests {
             },
         );
         assert_eq!(step.outcome, NativeNavigationPathOutcome::NoPath);
-        assert_eq!(step.visited, 12);
+        assert_eq!(step.visited, 0);
         assert!(step.nearest_present);
         assert_eq!(
             (

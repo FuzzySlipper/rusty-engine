@@ -162,6 +162,11 @@ impl PassTimer {
         self.pending = Some(receiver);
     }
 
+    /// Forget the recent frames, as when the pass changes what it does.
+    pub fn restart(&mut self) {
+        self.recent.clear();
+    }
+
     pub fn readout(&self) -> GpuPassTiming {
         let mut values: Vec<f64> = self.recent.iter().copied().collect();
         values.sort_by(f64::total_cmp);

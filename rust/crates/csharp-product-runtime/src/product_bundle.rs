@@ -650,14 +650,14 @@ impl ProductRendererLighting {
         let ambient_occlusion = match value.lighting.ambient_occlusion {
             None => render_wgpu::AmbientOcclusion::default(),
             Some(ambient_occlusion) => {
+                // The Engine chooses the path (`render-wgpu`, ambient_occlusion.rs).
                 let path = match ambient_occlusion.mode.as_str() {
                     "disabled" => render_wgpu::AmbientOcclusionPath::Off,
-                    "compute" => render_wgpu::AmbientOcclusionPath::Compute,
-                    "raster" => render_wgpu::AmbientOcclusionPath::Raster,
+                    "enabled" => render_wgpu::AmbientOcclusionPath::Raster,
                     _ => {
                         return Err(field_error(
                             "renderer.lighting.ambientOcclusion.mode",
-                            "must be disabled, compute or raster",
+                            "must be enabled or disabled",
                         ))
                     }
                 };
@@ -1089,14 +1089,14 @@ mod tests {
             &path,
             original.replace(
                 marker,
-                "\"renderer\":{\"lighting\":{\"ambientOcclusion\":{\"mode\":\"compute\",\"strength\":0.5}}}",
+                "\"renderer\":{\"lighting\":{\"ambientOcclusion\":{\"mode\":\"enabled\",\"strength\":0.5}}}",
             ),
         )
         .unwrap();
         assert_eq!(
             read(&root).unwrap().ambient_occlusion(),
             render_wgpu::AmbientOcclusion {
-                path: render_wgpu::AmbientOcclusionPath::Compute,
+                path: render_wgpu::AmbientOcclusionPath::Raster,
                 strength: 0.5,
             }
         );

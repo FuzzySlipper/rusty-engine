@@ -87,8 +87,8 @@
     <!-- Keep the browser's existing neutral rig unless a product deliberately
          selects the independently configurable world or viewmodel setting. -->
     <RustyEngineProductSceneShadows Condition="'$(RustyEngineProductSceneShadows)' == ''">disabled</RustyEngineProductSceneShadows>
-    <!-- Screen-space ambient occlusion on world views, under evaluation: the
-         path it takes (compute or raster) and its strength. -->
+    <!-- Screen-space ambient occlusion on world views, under evaluation:
+         enabled or disabled, and its strength from 0 to 1. -->
     <RustyEngineProductAmbientOcclusion Condition="'$(RustyEngineProductAmbientOcclusion)' == ''">disabled</RustyEngineProductAmbientOcclusion>
     <RustyEngineProductAmbientOcclusionStrength Condition="'$(RustyEngineProductAmbientOcclusionStrength)' == ''">1</RustyEngineProductAmbientOcclusionStrength>
     <RustyEngineProductDefaultWorldLights Condition="'$(RustyEngineProductDefaultWorldLights)' == ''">neutral</RustyEngineProductDefaultWorldLights>
@@ -123,7 +123,7 @@
     <Error Condition="('$(RustyEngineProductUiProjectionStream)' == '' and '$(RustyEngineProductUiProjectionContract)' != '') or ('$(RustyEngineProductUiProjectionStream)' != '' and '$(RustyEngineProductUiProjectionContract)' == '')"
            Text="RustyEngineProductUiProjectionStream and RustyEngineProductUiProjectionContract must be declared together." />
     <Error Condition="!$([System.Text.RegularExpressions.Regex]::IsMatch('$(RustyEngineProductSceneShadows)', '\A(enabled|disabled)\z'))" Text="RustyEngineProductSceneShadows must be enabled or disabled." />
-    <Error Condition="!$([System.Text.RegularExpressions.Regex]::IsMatch('$(RustyEngineProductAmbientOcclusion)', '\A(disabled|compute|raster)\z'))" Text="RustyEngineProductAmbientOcclusion must be disabled, compute or raster." />
+    <Error Condition="!$([System.Text.RegularExpressions.Regex]::IsMatch('$(RustyEngineProductAmbientOcclusion)', '\A(disabled|enabled)\z'))" Text="RustyEngineProductAmbientOcclusion must be enabled or disabled." />
     <Error Condition="!$([System.Text.RegularExpressions.Regex]::IsMatch('$(RustyEngineProductAmbientOcclusionStrength)', '\A[0-9]+(\.[0-9]+)?\z'))" Text="RustyEngineProductAmbientOcclusionStrength must be a non-negative number." />
     <Error Condition="!$([System.Text.RegularExpressions.Regex]::IsMatch('$(RustyEngineProductDefaultWorldLights)', '\A(neutral|disabled)\z'))"
            Text="RustyEngineProductDefaultWorldLights must be neutral or disabled." />

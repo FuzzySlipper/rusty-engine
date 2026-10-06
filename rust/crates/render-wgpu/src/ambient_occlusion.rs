@@ -10,13 +10,17 @@
 //! triangle), into a half-resolution texture; a separable depth-aware blur
 //! smooths it;
 //! and the world pass samples the result by target pixel into
-//! `Surface.occlusion`, which scales the ambient and hemisphere light.
+//! `Surface.occlusion`, which scales the ambient and hemisphere light of its
+//! opaque parts. Blended parts are not in the pre-pass, so they draw without
+//! it.
 //!
-//! The host chooses the path and the product its strength
-//! (`RendererOptions::ambient_occlusion`). An adapter without compute shaders
-//! or with workgroup limits below the kernel's takes the raster path and the
-//! readout says why. Each pass is timed through `timing.rs` so the two paths
-//! compare on any adapter.
+//! The product turns it on and sets its strength; the host chooses the path
+//! (`RendererOptions::ambient_occlusion`). Products take the raster path, which
+//! computes the same image and measured slightly faster on RADV; the compute
+//! path stays selectable to compare them (`rusty-scene-render
+//! --ambient-occlusion`). An adapter without compute shaders or with workgroup
+//! limits below the kernel's takes the raster path and the readout says why.
+//! Each pass is timed through `timing.rs`.
 
 use crate::camera::CameraMatrices;
 use crate::frame::PixelRect;
@@ -35,8 +39,10 @@ const TILE_APRON: f32 = 8.0;
 const TILE_BYTES: u32 = (WORKGROUP + 2 * TILE_APRON as u32).pow(2) * 4;
 /// How far a surface darkens its neighbours, in world units.
 const RADIUS: f32 = 0.75;
-/// Cosine below which a sample does not occlude: keeps flat surfaces clean.
-const BIAS: f32 = 0.05;
+/// Cosine below which a sample does not occlude: keeps flat surfaces and
+/// the shallow creases between a reconstructed voxel surface's triangles
+/// clean.
+const BIAS: f32 = 0.3;
 /// Scales the summed occlusion before the strength.
 const INTENSITY: f32 = 3.0;
 /// `AoParams`: two matrices, the region and the tuning.
@@ -77,51 +83,19 @@ impl Default for AmbientOcclusion {
     }
 }
 
-/// The adapter's compute limits. The device takes wgpu's default limits
-/// (`gpu.rs`); a kernel needing more raises them there.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ComputeLimits {
-    pub workgroup_size: [u32; 3],
-    pub invocations_per_workgroup: u32,
-    pub workgroups_per_dimension: u32,
-    pub workgroup_storage_bytes: u32,
-    pub storage_buffer_binding_bytes: u64,
-}
-
-impl ComputeLimits {
-    fn of(limits: &wgpu::Limits) -> Self {
-        Self {
-            workgroup_size: [
-                limits.max_compute_workgroup_size_x,
-                limits.max_compute_workgroup_size_y,
-                limits.max_compute_workgroup_size_z,
-            ],
-            invocations_per_workgroup: limits.max_compute_invocations_per_workgroup,
-            workgroups_per_dimension: limits.max_compute_workgroups_per_dimension,
-            workgroup_storage_bytes: limits.max_compute_workgroup_storage_size,
-            storage_buffer_binding_bytes: limits.max_storage_buffer_binding_size,
-        }
-    }
-}
-
-/// What the renderer's GPU passes report, for diagnostics and evidence.
+/// The ambient occlusion of the last world view, for diagnostics and
+/// evidence.
 #[derive(Debug, Clone, PartialEq)]
-pub struct GpuReadout {
-    /// Why the compute path cannot run on this adapter; `None` while it can.
+pub struct AmbientOcclusionReadout {
+    /// The path it took (`Raster` when compute was asked for but refused).
+    pub path: AmbientOcclusionPath,
+    /// Why the compute path cannot run on this device; `None` while it can.
     /// The raster path runs either way.
     pub compute_refused: Option<String>,
-    /// The device has timestamp queries, so the passes are timed.
-    pub timestamps: bool,
-    pub limits: ComputeLimits,
-    /// The path the last world view's occlusion took (`Raster` when compute
-    /// was asked for but refused).
-    pub ambient_occlusion: AmbientOcclusionPath,
     /// Workgroups the last occlusion dispatch took; 0 on the raster path.
     pub workgroups: u32,
     /// The occlusion texture of the last view: half its target.
-    pub occlusion_texture: (u32, u32),
-    /// The timed passes: pre-pass, occlusion, blur.
-    pub passes: Vec<GpuPassTiming>,
+    pub texture: (u32, u32),
 }
 
 /// One world view's occlusion this frame: its target's resources and the
@@ -170,7 +144,6 @@ pub(crate) struct AmbientOcclusionPass {
     prepass_timer: Option<PassTimer>,
     occlusion_timer: Option<PassTimer>,
     blur_timer: Option<PassTimer>,
-    limits: ComputeLimits,
     last_path: AmbientOcclusionPath,
     last_workgroups: u32,
     last_texture: (u32, u32),
@@ -238,34 +211,6 @@ fn depth_entry(visibility: wgpu::ShaderStages) -> wgpu::BindGroupLayoutEntry {
     }
 }
 
-/// Why this adapter cannot run `cs_occlusion`, if it cannot.
-fn compute_refusal(gpu: &Gpu) -> Result<(), String> {
-    let downlevel = gpu.adapter.get_downlevel_capabilities();
-    if !downlevel
-        .flags
-        .contains(wgpu::DownlevelFlags::COMPUTE_SHADERS)
-    {
-        return Err("the adapter has no compute shaders".to_owned());
-    }
-    let granted = ComputeLimits::of(&gpu.device.limits());
-    if granted.workgroup_size[0] < WORKGROUP
-        || granted.workgroup_size[1] < WORKGROUP
-        || granted.invocations_per_workgroup < WORKGROUP * WORKGROUP
-    {
-        return Err(format!(
-            "the device allows {} invocations per workgroup ({}×{} along x and y); the occlusion kernel needs {WORKGROUP}×{WORKGROUP}",
-            granted.invocations_per_workgroup, granted.workgroup_size[0], granted.workgroup_size[1]
-        ));
-    }
-    if granted.workgroup_storage_bytes < TILE_BYTES {
-        return Err(format!(
-            "the device allows {} bytes of workgroup storage; the occlusion kernel's depth tile needs {TILE_BYTES}",
-            granted.workgroup_storage_bytes
-        ));
-    }
-    Ok(())
-}
-
 impl AmbientOcclusionPass {
     pub fn new(
         gpu: &Gpu,
@@ -273,39 +218,43 @@ impl AmbientOcclusionPass {
         apply_layout: &wgpu::BindGroupLayout,
     ) -> Self {
         let device = &gpu.device;
-        let compute = compute_refusal(gpu).map(|()| {
-            let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("render-wgpu ambient occlusion compute"),
-                entries: &[
-                    params_entry(wgpu::ShaderStages::COMPUTE),
-                    depth_entry(wgpu::ShaderStages::COMPUTE),
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 2,
-                        visibility: wgpu::ShaderStages::COMPUTE,
-                        ty: wgpu::BindingType::StorageTexture {
-                            access: wgpu::StorageTextureAccess::WriteOnly,
-                            format: OCCLUSION_FORMAT,
-                            view_dimension: wgpu::TextureViewDimension::D2,
+        let compute = gpu
+            .compute_refusal([WORKGROUP, WORKGROUP, 1], TILE_BYTES)
+            .map_or(Ok(()), Err)
+            .map(|()| {
+                let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                    label: Some("render-wgpu ambient occlusion compute"),
+                    entries: &[
+                        params_entry(wgpu::ShaderStages::COMPUTE),
+                        depth_entry(wgpu::ShaderStages::COMPUTE),
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 2,
+                            visibility: wgpu::ShaderStages::COMPUTE,
+                            ty: wgpu::BindingType::StorageTexture {
+                                access: wgpu::StorageTextureAccess::WriteOnly,
+                                format: OCCLUSION_FORMAT,
+                                view_dimension: wgpu::TextureViewDimension::D2,
+                            },
+                            count: None,
                         },
-                        count: None,
-                    },
-                ],
+                    ],
+                });
+                let pipeline_layout =
+                    device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                        label: Some("render-wgpu ambient occlusion compute"),
+                        bind_group_layouts: &[Some(&layout)],
+                        immediate_size: 0,
+                    });
+                let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                    label: Some("render-wgpu ambient occlusion compute"),
+                    layout: Some(&pipeline_layout),
+                    module: &shader,
+                    entry_point: Some("cs_occlusion"),
+                    compilation_options: Default::default(),
+                    cache: None,
+                });
+                Compute { layout, pipeline }
             });
-            let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("render-wgpu ambient occlusion compute"),
-                bind_group_layouts: &[Some(&layout)],
-                immediate_size: 0,
-            });
-            let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                label: Some("render-wgpu ambient occlusion compute"),
-                layout: Some(&pipeline_layout),
-                module: &shader,
-                entry_point: Some("cs_occlusion"),
-                compilation_options: Default::default(),
-                cache: None,
-            });
-            Compute { layout, pipeline }
-        });
         let raster_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("render-wgpu ambient occlusion raster"),
             entries: &[
@@ -428,7 +377,6 @@ impl AmbientOcclusionPass {
             prepass_timer: PassTimer::new(gpu, PREPASS),
             occlusion_timer: PassTimer::new(gpu, OCCLUSION),
             blur_timer: PassTimer::new(gpu, BLUR),
-            limits: ComputeLimits::of(&gpu.adapter.limits()),
             last_path: AmbientOcclusionPath::Off,
             last_workgroups: 0,
             last_texture: (0, 0),
@@ -446,13 +394,16 @@ impl AmbientOcclusionPass {
         camera: &CameraMatrices,
     ) -> Option<ViewOcclusion> {
         let path = match options.path {
-            AmbientOcclusionPath::Off => return None,
-            _ if options.strength <= 0.0 || options.strength.is_nan() => return None,
-            AmbientOcclusionPath::Compute if self.compute.is_ok() => AmbientOcclusionPath::Compute,
-            AmbientOcclusionPath::Compute | AmbientOcclusionPath::Raster => {
-                AmbientOcclusionPath::Raster
-            }
+            _ if options.strength <= 0.0 || options.strength.is_nan() => AmbientOcclusionPath::Off,
+            AmbientOcclusionPath::Compute if self.compute.is_err() => AmbientOcclusionPath::Raster,
+            path => path,
         };
+        if path == AmbientOcclusionPath::Off {
+            self.last_path = path;
+            self.last_workgroups = 0;
+            return None;
+        }
+        let changed_path = path != self.last_path;
         for timer in [
             &mut self.prepass_timer,
             &mut self.occlusion_timer,
@@ -462,6 +413,10 @@ impl AmbientOcclusionPass {
         .flatten()
         {
             timer.collect(gpu);
+            // A median never mixes the two paths' frames.
+            if changed_path {
+                timer.restart();
+            }
         }
         let target = self.target_index(gpu, size);
         let region = PixelRect {
@@ -636,25 +591,29 @@ impl AmbientOcclusionPass {
         }
     }
 
-    pub fn readout(&self) -> GpuReadout {
-        let timing = |timer: &Option<PassTimer>, pass| {
+    pub fn readout(&self) -> AmbientOcclusionReadout {
+        AmbientOcclusionReadout {
+            path: self.last_path,
+            compute_refused: self.compute.as_ref().err().cloned(),
+            workgroups: self.last_workgroups,
+            texture: self.last_texture,
+        }
+    }
+
+    /// The pre-pass, occlusion and blur timings, in frame order.
+    pub fn timings(&self) -> Vec<GpuPassTiming> {
+        [
+            (&self.prepass_timer, PREPASS),
+            (&self.occlusion_timer, OCCLUSION),
+            (&self.blur_timer, BLUR),
+        ]
+        .into_iter()
+        .map(|(timer, pass)| {
             timer
                 .as_ref()
                 .map_or_else(|| untimed(pass), PassTimer::readout)
-        };
-        GpuReadout {
-            compute_refused: self.compute.as_ref().err().cloned(),
-            timestamps: self.occlusion_timer.is_some(),
-            limits: self.limits,
-            ambient_occlusion: self.last_path,
-            workgroups: self.last_workgroups,
-            occlusion_texture: self.last_texture,
-            passes: vec![
-                timing(&self.prepass_timer, PREPASS),
-                timing(&self.occlusion_timer, OCCLUSION),
-                timing(&self.blur_timer, BLUR),
-            ],
-        }
+        })
+        .collect()
     }
 
     /// The resources for a target size, made on first use; the least

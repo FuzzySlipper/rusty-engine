@@ -196,7 +196,7 @@ public sealed class Product : IEngineProduct
             new[] { new VoxelEdit(VoxelEditKind.Set, exercisedVoxel, 3) }));
         Require(voxelEdit.Status == VoxelEditStatus.Accepted
             && voxelEdit.AcceptedRevision == 1 && voxelEdit.ChangedVoxels == 1 && voxelEdit.CollisionRevision == 1
-            && voxelEdit.NavigationRevision == 1 && voxelEdit.MeshRevision == 1,
+            && voxelEdit.MeshRevision == 1,
             "voxel edit did not publish coherent projection revisions");
         VoxelReadout exercisedReadout = _engine.Voxel.Read(new VoxelReadRequest(_spatial, exercisedVoxel));
         Require(exercisedReadout.Present && exercisedReadout.MaterialSlot == 3,

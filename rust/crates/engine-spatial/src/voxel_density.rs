@@ -5,15 +5,13 @@
 //! reads -0.5, which puts the surface on its cube face). Solidity follows the
 //! sign: an edit that makes a voxel's density negative makes it solid with a
 //! material, and one that makes it zero or positive empties it. Only the
-//! touched chunks' meshes and colliders, and the navigation cells around
-//! voxels whose solidity changed, are rebuilt. A failed rebuild restores the
-//! scene exactly.
+//! touched chunks' meshes and colliders are rebuilt. A failed rebuild restores
+//! the scene exactly.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use core_space::{ChunkCoord, VoxelCoord};
 use core_voxel::{VoxelMaterialId, VoxelValue};
-use svc_pathfinding::nav_cells_affected_by_voxel;
 use svc_volume::{VoxelChunk, DEFAULT_DENSITY_MAGNITUDE};
 
 use crate::voxel_edit::{validate_voxel_address, validate_voxel_material_slot};
@@ -376,7 +374,6 @@ impl VoxelDensityEditService {
         }
         let mut changed_chunks = BTreeSet::new();
         let mut dirty = BTreeSet::new();
-        let mut navigation_cells = BTreeSet::new();
         let mut solidity_changes = 0;
         for (address, before, after) in &changes {
             let voxel = VoxelCoord::new(address[0], address[1], address[2]);
@@ -384,13 +381,6 @@ impl VoxelDensityEditService {
             dirty.extend(scene.mesh_neighbourhood_of_voxel(voxel));
             if before.material.is_some() != after.material.is_some() {
                 solidity_changes += 1;
-                navigation_cells
-                    .extend(nav_cells_affected_by_voxel(voxel, crate::SCENE_NAVIGATION));
-            }
-        }
-        for coordinate in &created {
-            for cell in scene.chunk_cells(*coordinate) {
-                navigation_cells.extend(nav_cells_affected_by_voxel(cell, crate::SCENE_NAVIGATION));
             }
         }
         let meshes = match scene.build_meshes(&dirty) {
@@ -429,7 +419,7 @@ impl VoxelDensityEditService {
                 scene.account_voxel(material_voxel(*address, material_slot), true);
             }
         }
-        scene.publish_local_change(&changed_chunks, &dirty, meshes, navigation_cells);
+        scene.publish_local_change(&changed_chunks, &dirty, meshes);
 
         let bound = |pick: fn(i64, i64) -> i64| {
             [0, 1, 2].map(|axis| {

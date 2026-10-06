@@ -155,20 +155,23 @@ fn run() -> Result<(), String> {
         "lastSkip": last_skip,
         "image": { "path": out.display().to_string(), "width": width, "height": height },
         "timing": timing,
-        // The GPU passes over the frames drawn: the ambient occlusion path
-        // and each timed pass's median cost.
+        // The GPU passes over the frames drawn: each timed pass's median
+        // cost and the ambient occlusion path, as `engine.renderer` reports
+        // them.
         "gpu": {
-            "ambientOcclusion": format!("{:?}", gpu_readout.ambient_occlusion),
-            "computeRefused": gpu_readout.compute_refused,
             "timestamps": gpu_readout.timestamps,
-            "workgroups": gpu_readout.workgroups,
-            "occlusionTexture": gpu_readout.occlusion_texture,
+            "limits": format!("{:?}", gpu_readout.limits),
             "passes": gpu_readout.passes.iter().map(|pass| json!({
                 "pass": pass.pass,
                 "timedFrames": pass.timed_frames,
                 "medianGpuMs": pass.median_gpu_ms,
             })).collect::<Vec<_>>(),
-            "limits": format!("{:?}", gpu_readout.limits),
+            "ambientOcclusion": {
+                "path": format!("{:?}", gpu_readout.ambient_occlusion.path),
+                "computeRefused": gpu_readout.ambient_occlusion.compute_refused,
+                "workgroups": gpu_readout.ambient_occlusion.workgroups,
+                "texture": gpu_readout.ambient_occlusion.texture,
+            },
         },
     });
     println!(

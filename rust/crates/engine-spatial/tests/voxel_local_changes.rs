@@ -98,8 +98,6 @@ fn assert_same_projections(scene: &VoxelCollisionScene, fresh: &VoxelCollisionSc
     };
     assert_eq!(meshes(scene), meshes(fresh));
     assert_eq!(scene.collider_chunk_count(), fresh.collider_chunk_count());
-    assert_eq!(scene.navigation_cell_count(), fresh.navigation_cell_count());
-    assert_eq!(scene.navigation_hash(), fresh.navigation_hash());
     for x in (-4..40).step_by(3) {
         for z in (-4..40).step_by(5) {
             let origin = [x as f64 + 0.5, 20.0, z as f64 + 0.5];

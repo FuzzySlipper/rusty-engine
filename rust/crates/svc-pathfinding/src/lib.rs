@@ -9,13 +9,17 @@
 
 #![forbid(unsafe_code)]
 
+mod columns;
+
 use std::{
+    cell::RefCell,
     cmp::Reverse,
     collections::{BTreeMap, BTreeSet, BinaryHeap, VecDeque},
 };
 
+use columns::ColumnTable;
 use core_math::Vec3;
-use core_space::{VoxelCoord, VoxelGridSpec, WorldPos};
+use core_space::{VoxelCoord, VoxelGridSpec};
 use svc_spatial::VoxelWorld;
 
 /// Configuration for deriving walkable nav cells from voxel authority.
@@ -37,11 +41,27 @@ impl Default for NavProjectionConfig {
 }
 
 /// Read-only navigation projection suitable for policy/devtools inspection.
-#[derive(Debug, Clone, PartialEq)]
+///
+/// The walkable cells are held by X/Z column in flat arrays: every column of
+/// their bounds while the cells fill enough of it, else only the occupied
+/// columns.
+#[derive(Debug, Clone)]
 pub struct NavProjection {
     grid: VoxelGridSpec,
-    walkable: BTreeSet<VoxelCoord>,
+    walkable: ColumnTable<()>,
     projection_hash: u64,
+}
+
+impl PartialEq for NavProjection {
+    fn eq(&self, other: &Self) -> bool {
+        self.grid == other.grid
+            && self.projection_hash == other.projection_hash
+            && self.walkable.len() == other.walkable.len()
+            && self
+                .walkable
+                .iter()
+                .all(|(cell, _)| other.walkable.position(cell).is_some())
+    }
 }
 
 impl NavProjection {
@@ -54,8 +74,10 @@ impl NavProjection {
         grid: VoxelGridSpec,
         cells: impl IntoIterator<Item = VoxelCoord>,
     ) -> Self {
-        let walkable = cells.into_iter().collect::<BTreeSet<_>>();
-        let projection_hash = hash_walkable(&walkable);
+        let walkable = ColumnTable::new(cells.into_iter().map(|cell| (cell, ())));
+        let projection_hash = walkable
+            .iter()
+            .fold(0u64, |sum, (cell, _)| sum.wrapping_add(cell_hash(cell)));
         Self {
             grid,
             walkable,
@@ -76,63 +98,50 @@ impl NavProjection {
     }
 
     pub fn is_walkable(&self, coord: VoxelCoord) -> bool {
-        self.walkable.contains(&coord)
+        self.walkable.position(coord).is_some()
     }
 
     #[cfg(test)]
     fn without_walkable(mut self, coord: VoxelCoord) -> Self {
-        if self.walkable.remove(&coord) {
-            self.projection_hash = self.projection_hash.wrapping_sub(cell_hash(coord));
-        }
+        self.set_walkable(coord, false);
         self
     }
 
+    /// The walkable cells in coordinate order.
     pub fn walkable_cells(&self) -> impl Iterator<Item = VoxelCoord> + '_ {
-        self.walkable.iter().copied()
+        let mut cells: Vec<_> = self.walkable.iter().map(|(cell, _)| cell).collect();
+        cells.sort_unstable();
+        cells.into_iter()
     }
 
     /// Adds (`true`) or removes one walkable cell, as an owner that keeps
     /// its projection current applies a local change. The hash follows.
     pub fn set_walkable(&mut self, cell: VoxelCoord, walkable: bool) {
-        if walkable {
-            if self.walkable.insert(cell) {
+        self.set_walkable_cells([(cell, walkable)]);
+    }
+
+    /// [`Self::set_walkable`] for many cells in turn; the cells' columns are
+    /// laid out again at most once.
+    pub fn set_walkable_cells(&mut self, changes: impl IntoIterator<Item = (VoxelCoord, bool)>) {
+        // Cells new to the table, added together at the end.
+        let mut added = BTreeSet::new();
+        for (cell, walkable) in changes {
+            let changed = if self.walkable.position(cell).is_some() {
+                !walkable && self.walkable.remove(cell).is_some()
+            } else if walkable {
+                added.insert(cell)
+            } else {
+                added.remove(&cell)
+            };
+            if changed && walkable {
                 self.projection_hash = self.projection_hash.wrapping_add(cell_hash(cell));
+            } else if changed {
+                self.projection_hash = self.projection_hash.wrapping_sub(cell_hash(cell));
             }
-        } else if self.walkable.remove(&cell) {
-            self.projection_hash = self.projection_hash.wrapping_sub(cell_hash(cell));
         }
+        self.walkable
+            .insert_new(added.into_iter().map(|cell| (cell, ())).collect());
     }
-
-    /// Recompute walkability for `cells` after a local voxel or residency
-    /// change. `solid` reports a cell's collision solidity, or `None` outside
-    /// every resident chunk (never walkable). The hash follows each change.
-    pub fn refresh_cells(
-        &mut self,
-        config: NavProjectionConfig,
-        cells: impl IntoIterator<Item = VoxelCoord>,
-        solid: impl Fn(VoxelCoord) -> Option<bool>,
-    ) {
-        let is_solid = |cell| solid(cell).unwrap_or(false);
-        for cell in cells {
-            let walkable = solid(cell) == Some(false)
-                && (!config.require_solid_floor
-                    || is_solid(VoxelCoord::new(cell.x, cell.y - 1, cell.z)))
-                && (0..config.agent_height_voxels)
-                    .all(|dy| !is_solid(VoxelCoord::new(cell.x, cell.y + i64::from(dy), cell.z)));
-            self.set_walkable(cell, walkable);
-        }
-    }
-}
-
-/// Cells whose walkability can depend on the voxel at `voxel`: the cells an
-/// agent standing there or just above would occupy, and the cell resting on it.
-pub fn nav_cells_affected_by_voxel(
-    voxel: VoxelCoord,
-    config: NavProjectionConfig,
-) -> impl Iterator<Item = VoxelCoord> {
-    let below = i64::from(config.agent_height_voxels.saturating_sub(1));
-    let above = i64::from(config.require_solid_floor);
-    (voxel.y - below..=voxel.y + above).map(move |y| VoxelCoord::new(voxel.x, y, voxel.z))
 }
 
 /// Path query over an existing nav projection.
@@ -164,27 +173,122 @@ pub struct PlanarNavNeighborPolicy {
 /// An admitted edge may also reach past a cell's planar neighbours (a jump
 /// across a gap); searches then offer it as a neighbour too. An edge may carry
 /// an extra cost the weighted search adds to its destination cell's.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// The edges are held by origin cell, in the same flat column layout as a
+/// projection: per origin, the rise of one edge toward each planar
+/// neighbour column. A side table holds the rest: edges past the planar
+/// neighbours, a second edge toward one neighbour column, and rises too
+/// large to hold inline.
+#[derive(Debug, Clone)]
 pub struct NavEdgeAdmission {
-    allowed: BTreeSet<(VoxelCoord, VoxelCoord)>,
-    /// Admitted edges reaching past the planar neighbours, by origin.
-    beyond: BTreeMap<VoxelCoord, BTreeSet<VoxelCoord>>,
+    origins: ColumnTable<OriginEdges>,
+    /// Admitted edges an origin's inline rises do not hold, by origin.
+    others: BTreeMap<VoxelCoord, BTreeSet<VoxelCoord>>,
     costs: BTreeMap<(VoxelCoord, VoxelCoord), u64>,
+    /// How many edges past the planar neighbours reach how far, at what extra
+    /// cost: what bounds a search's estimate of the cost still to come.
+    reaches: BTreeMap<FarReach, usize>,
     admission_hash: u64,
+}
+
+/// The edges an origin holds inline.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct OriginEdges {
+    /// Per direction of [`planar_nav_offsets`], the rise of the admitted edge
+    /// to that neighbour column held here, or [`NO_EDGE`].
+    rise: [i8; 8],
+    /// Whether [`NavEdgeAdmission::others`] holds edges from this origin.
+    others: bool,
+    /// Whether an edge from this origin carries an extra cost.
+    costed: bool,
+}
+
+const NO_EDGE: i8 = i8::MIN;
+
+impl Default for OriginEdges {
+    fn default() -> Self {
+        Self {
+            rise: [NO_EDGE; 8],
+            others: false,
+            costed: false,
+        }
+    }
+}
+
+impl OriginEdges {
+    /// The direction this record would hold the edge to `to` in.
+    fn inline_direction(from: VoxelCoord, to: VoxelCoord) -> Option<(usize, i8)> {
+        let direction = planar_direction(from, to)?;
+        let rise = i8::try_from(to.y.checked_sub(from.y)?).ok()?;
+        (rise != NO_EDGE).then_some((direction, rise))
+    }
+
+    fn holds(&self, from: VoxelCoord, to: VoxelCoord) -> bool {
+        Self::inline_direction(from, to)
+            .is_some_and(|(direction, rise)| self.rise[direction] == rise)
+    }
+
+    fn is_empty(&self) -> bool {
+        !self.others && self.rise == [NO_EDGE; 8]
+    }
+}
+
+/// How far one edge past the planar neighbours reaches, and its extra cost.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct FarReach {
+    chebyshev: u64,
+    manhattan: u64,
+    extra: u64,
+}
+
+impl FarReach {
+    fn of(from: VoxelCoord, to: VoxelCoord, extra: u64) -> Self {
+        let (across, along) = (from.x.abs_diff(to.x), from.z.abs_diff(to.z));
+        Self {
+            chebyshev: across.max(along),
+            manhattan: across.saturating_add(along),
+            extra,
+        }
+    }
+}
+
+/// The index in [`planar_nav_offsets`] of the step from `from` to `to`.
+fn planar_direction(from: VoxelCoord, to: VoxelCoord) -> Option<usize> {
+    // By X step, then Z step, each from -1.
+    const DIRECTIONS: [Option<usize>; 9] = [
+        Some(6),
+        Some(2),
+        Some(5),
+        Some(3),
+        None,
+        Some(1),
+        Some(7),
+        Some(0),
+        Some(4),
+    ];
+    let step = |from: i64, to: i64| match to.checked_sub(from)? {
+        step @ -1..=1 => Some((step + 1) as usize),
+        _ => None,
+    };
+    DIRECTIONS[step(from.x, to.x)? * 3 + step(from.z, to.z)?]
+}
+
+/// Whether an edge reaches past its origin's planar neighbours.
+fn is_far(from: VoxelCoord, to: VoxelCoord) -> bool {
+    from.x.abs_diff(to.x) > 1 || from.z.abs_diff(to.z) > 1
 }
 
 impl NavEdgeAdmission {
     /// Retain deterministic directed edges from a collision-derived surface.
     pub fn from_allowed_edges(edges: impl IntoIterator<Item = (VoxelCoord, VoxelCoord)>) -> Self {
         let mut admission = Self {
-            allowed: BTreeSet::new(),
-            beyond: BTreeMap::new(),
+            origins: ColumnTable::new([]),
+            others: BTreeMap::new(),
             costs: BTreeMap::new(),
+            reaches: BTreeMap::new(),
             admission_hash: 0,
         };
-        for (from, to) in edges {
-            admission.set_allowed(from, to, true);
-        }
+        admission.set_allowed_edges(edges.into_iter().map(|(from, to)| (from, to, true)));
         admission
     }
 
@@ -192,41 +296,117 @@ impl NavEdgeAdmission {
     /// its admission current applies a local change. Withdrawing drops its
     /// extra cost. The hash follows.
     pub fn set_allowed(&mut self, from: VoxelCoord, to: VoxelCoord, allowed: bool) {
-        let far = (to.x - from.x).abs() > 1 || (to.z - from.z).abs() > 1;
-        if allowed {
-            if self.allowed.insert((from, to)) {
-                self.admission_hash = self.admission_hash.wrapping_add(edge_hash(from, to));
-                if far {
-                    self.beyond.entry(from).or_default().insert(to);
-                }
+        self.set_allowed_edges([(from, to, allowed)]);
+    }
+
+    /// [`Self::set_allowed`] for many edges in turn; the origins' columns are
+    /// laid out again at most once.
+    pub fn set_allowed_edges(
+        &mut self,
+        changes: impl IntoIterator<Item = (VoxelCoord, VoxelCoord, bool)>,
+    ) {
+        // Origins new to the table, added together at the end, and origins
+        // left without edges, dropped at the end unless admitted again.
+        let mut added: BTreeMap<VoxelCoord, OriginEdges> = BTreeMap::new();
+        let mut emptied = Vec::new();
+        for (from, to, allowed) in changes {
+            let record = match self.origins.get_mut(from) {
+                Some(record) => record,
+                None if allowed => added.entry(from).or_default(),
+                None => match added.get_mut(&from) {
+                    Some(record) => record,
+                    None => continue,
+                },
+            };
+            let inline = OriginEdges::inline_direction(from, to);
+            let held = inline.is_some_and(|(direction, rise)| record.rise[direction] == rise)
+                || record.others && self.others.get(&from).is_some_and(|set| set.contains(&to));
+            if held == allowed {
+                continue;
             }
-        } else if self.allowed.remove(&(from, to)) {
+            if allowed {
+                self.admission_hash = self.admission_hash.wrapping_add(edge_hash(from, to));
+                match inline.filter(|&(direction, _)| record.rise[direction] == NO_EDGE) {
+                    Some((direction, rise)) => record.rise[direction] = rise,
+                    None => {
+                        record.others = true;
+                        self.others.entry(from).or_default().insert(to);
+                        if is_far(from, to) {
+                            *self.reaches.entry(FarReach::of(from, to, 0)).or_default() += 1;
+                        }
+                    }
+                }
+                continue;
+            }
             self.admission_hash = self.admission_hash.wrapping_sub(edge_hash(from, to));
-            self.set_cost(from, to, 0);
-            if far {
-                if let Some(targets) = self.beyond.get_mut(&from) {
+            match inline.filter(|&(direction, rise)| record.rise[direction] == rise) {
+                Some((direction, _)) => record.rise[direction] = NO_EDGE,
+                None => {
+                    let targets = self.others.get_mut(&from).expect("a held edge");
                     targets.remove(&to);
                     if targets.is_empty() {
-                        self.beyond.remove(&from);
+                        self.others.remove(&from);
+                        record.others = false;
                     }
                 }
             }
+            let extra = self.costs.remove(&(from, to));
+            if let Some(extra) = extra {
+                self.admission_hash = self
+                    .admission_hash
+                    .wrapping_sub(edge_cost_hash(from, to, extra));
+                record.costed = has_costs_from(&self.costs, from);
+            }
+            if is_far(from, to) {
+                remove_reach(
+                    &mut self.reaches,
+                    FarReach::of(from, to, extra.unwrap_or(0)),
+                );
+            }
+            if record.is_empty() {
+                emptied.push(from);
+            }
         }
+        for from in emptied {
+            if self.origins.get(from).is_some_and(OriginEdges::is_empty) {
+                self.origins.remove(from);
+            }
+        }
+        added.retain(|_, record| !record.is_empty());
+        self.origins.insert_new(added.into_iter().collect());
     }
 
     /// Sets the extra cost the weighted search pays for one admitted edge;
     /// zero removes it. The hash follows.
     pub fn set_cost(&mut self, from: VoxelCoord, to: VoxelCoord, cost: u64) {
-        if let Some(previous) = self.costs.remove(&(from, to)) {
+        if !self.allows(from, to) {
+            return;
+        }
+        let previous = self.costs.remove(&(from, to));
+        if let Some(previous) = previous {
             self.admission_hash = self
                 .admission_hash
                 .wrapping_sub(edge_cost_hash(from, to, previous));
         }
-        if cost > 0 && self.allowed.contains(&(from, to)) {
+        if cost > 0 {
             self.costs.insert((from, to), cost);
             self.admission_hash = self
                 .admission_hash
                 .wrapping_add(edge_cost_hash(from, to, cost));
+        }
+        if is_far(from, to) {
+            remove_reach(
+                &mut self.reaches,
+                FarReach::of(from, to, previous.unwrap_or(0)),
+            );
+            *self
+                .reaches
+                .entry(FarReach::of(from, to, cost))
+                .or_default() += 1;
+        }
+        let costed = has_costs_from(&self.costs, from);
+        if let Some(record) = self.origins.get_mut(from) {
+            record.costed = costed;
         }
     }
 
@@ -237,18 +417,206 @@ impl NavEdgeAdmission {
 
     /// Admitted edges from `from` that reach past its planar neighbours.
     pub fn beyond(&self, from: VoxelCoord) -> impl Iterator<Item = VoxelCoord> + '_ {
-        self.beyond.get(&from).into_iter().flatten().copied()
+        self.others
+            .get(&from)
+            .into_iter()
+            .flatten()
+            .copied()
+            .filter(move |&to| is_far(from, to))
     }
 
     /// Whether the directed step is admitted by the owning collision policy.
     pub fn allows(&self, from: VoxelCoord, to: VoxelCoord) -> bool {
-        self.allowed.contains(&(from, to))
+        self.origins.get(from).is_some_and(|record| {
+            record.holds(from, to)
+                || record.others && self.others.get(&from).is_some_and(|set| set.contains(&to))
+        })
     }
 
     /// Stable identity for the retained directed-edge policy.
     pub const fn admission_hash(&self) -> u64 {
         self.admission_hash
     }
+
+    /// The least cost per column crossed that any admitted edge can cost, as
+    /// `(cost, columns)`, at most one: an edge past the planar neighbours
+    /// crosses several columns at once. A step costs one, or under `weighted`
+    /// at least one plus the edge's extra cost.
+    fn cost_per_column(&self, diagonal: bool, weighted: bool) -> (u64, u64) {
+        self.reaches.keys().fold((1, 1), |least, reach| {
+            let columns = if diagonal {
+                reach.chebyshev
+            } else {
+                reach.manhattan
+            };
+            let cost = if weighted {
+                reach.extra.saturating_add(1)
+            } else {
+                1
+            };
+            if u128::from(cost) * u128::from(least.1) < u128::from(least.0) * u128::from(columns) {
+                (cost, columns)
+            } else {
+                least
+            }
+        })
+    }
+}
+
+fn has_costs_from(costs: &BTreeMap<(VoxelCoord, VoxelCoord), u64>, from: VoxelCoord) -> bool {
+    let lowest = VoxelCoord::new(i64::MIN, i64::MIN, i64::MIN);
+    costs
+        .range((from, lowest)..)
+        .next()
+        .is_some_and(|((origin, _), _)| *origin == from)
+}
+
+fn remove_reach(reaches: &mut BTreeMap<FarReach, usize>, reach: FarReach) {
+    if let Some(count) = reaches.get_mut(&reach) {
+        *count -= 1;
+        if *count == 0 {
+            reaches.remove(&reach);
+        }
+    }
+}
+
+/// The connected components of a projection's cells over an edge admission,
+/// labelled once by the owner after it installs both, so that a query whose
+/// goal no path can reach is answered without a search.
+///
+/// Cells are joined when an admitted edge the search would take leads from
+/// one to the other, in either direction: a one-way drop joins the cells
+/// above and below. So cells with different labels have no path between
+/// them either way, while cells with the same label leave the one-way case
+/// to the search. Traversal overlays are product facts applied at query
+/// time and take no part in the labels.
+///
+/// The labels describe the projection and admission they were made from;
+/// the owner labels again when either changes.
+#[derive(Debug, Clone)]
+pub struct NavComponents {
+    projection_hash: u64,
+    admission_hash: u64,
+    /// Per projection position, its component.
+    labels: Vec<u32>,
+    /// The positions of each component in turn: component `c` holds
+    /// `members[starts[c]..starts[c + 1]]`.
+    members: Vec<usize>,
+    starts: Vec<usize>,
+}
+
+impl NavComponents {
+    /// Labels every cell of `projection` with its component over the edges
+    /// of `edges` that a search under `policy` would take.
+    pub fn label(
+        projection: &NavProjection,
+        edges: &NavEdgeAdmission,
+        policy: PlanarNavNeighborPolicy,
+    ) -> Self {
+        let table = &projection.walkable;
+        let positions = table.positions();
+        let mut parent: Vec<usize> = (0..positions).collect();
+        fn root(parent: &mut [usize], mut position: usize) -> usize {
+            while parent[position] != position {
+                parent[position] = parent[parent[position]];
+                position = parent[position];
+            }
+            position
+        }
+        let offsets = planar_nav_offsets(policy.diagonal);
+        let max_step = u64::from(policy.max_step_cells);
+        let mut candidates = Vec::new();
+        for (position, cell) in table.held() {
+            candidates.clear();
+            admitted_steps(edges, cell, offsets, max_step, &mut candidates);
+            for &to in &candidates {
+                let Some(next) = table.position(to) else {
+                    continue;
+                };
+                let (a, b) = (root(&mut parent, position), root(&mut parent, next));
+                parent[a.max(b)] = a.min(b);
+            }
+        }
+        // Components are numbered as their first position comes.
+        let mut labels = vec![u32::MAX; positions];
+        let mut of_root = vec![u32::MAX; positions];
+        let mut starts = vec![0; 1];
+        for (position, _) in table.held() {
+            let root = root(&mut parent, position);
+            if of_root[root] == u32::MAX {
+                of_root[root] = u32::try_from(starts.len() - 1).expect("fewer than 2^32 cells");
+                starts.push(0);
+            }
+            labels[position] = of_root[root];
+            starts[of_root[root] as usize + 1] += 1;
+        }
+        for component in 1..starts.len() {
+            starts[component] += starts[component - 1];
+        }
+        let mut members = vec![0; table.len()];
+        let mut next = starts.clone();
+        for (position, _) in table.held() {
+            let label = labels[position] as usize;
+            members[next[label]] = position;
+            next[label] += 1;
+        }
+        Self {
+            projection_hash: projection.projection_hash(),
+            admission_hash: edges.admission_hash(),
+            labels,
+            members,
+            starts,
+        }
+    }
+
+    /// How many components the cells form.
+    pub fn len(&self) -> usize {
+        self.starts.len() - 1
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// When no path from `start` to `goal` can exist, the cell of `start`'s
+    /// component nearest the goal, ranked as a search ranks the cells it
+    /// reached. Where the component holds one-way edges, the cell can be one
+    /// the start does not reach. Both cells are walkable.
+    fn separation(
+        &self,
+        projection: &NavProjection,
+        edges: &NavEdgeAdmission,
+        start: VoxelCoord,
+        goal: VoxelCoord,
+    ) -> Option<VoxelCoord> {
+        debug_assert_eq!(
+            (self.projection_hash, self.admission_hash),
+            (projection.projection_hash(), edges.admission_hash()),
+            "the components describe another projection or admission"
+        );
+        let table = &projection.walkable;
+        let start = table.position(start)?;
+        let goal_position = table.position(goal)?;
+        let label = self.labels[start] as usize;
+        if label == self.labels[goal_position] as usize {
+            return None;
+        }
+        self.members[self.starts[label]..self.starts[label + 1]]
+            .iter()
+            .map(|&position| table.cell(position))
+            .map(|cell| (squared_distance(cell, goal), cell))
+            .min()
+            .map(|(_, cell)| cell)
+    }
+}
+
+/// The squared distance between two cells, by which a search ranks the cells
+/// it reached by their nearness to the goal.
+fn squared_distance(a: VoxelCoord, b: VoxelCoord) -> u128 {
+    [a.x.abs_diff(b.x), a.y.abs_diff(b.y), a.z.abs_diff(b.z)]
+        .map(|delta| u128::from(delta) * u128::from(delta))
+        .into_iter()
+        .fold(0_u128, u128::saturating_add)
 }
 
 /// Deterministic path readout.
@@ -681,37 +1049,6 @@ pub struct DirectNavMovementReadout {
     pub path_hash: u64,
 }
 
-/// A bounded live-position path-following request over a nav projection.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct ProjectedDirectNavMovementRequest {
-    pub from: Vec3,
-    pub target: Vec3,
-    pub max_step_units: f32,
-    pub max_visited: usize,
-}
-
-/// Deterministic direct-navigation proposal backed by a [`NavProjection`].
-///
-/// The service keeps no internal path cache. `projection_hash`, `path_hash`, and
-/// `movement_hash` are stable invalidation/readout tokens for callers that cache
-/// projection or path-following work outside this crate.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct ProjectedDirectNavMovementReadout {
-    pub from: Vec3,
-    pub target: Vec3,
-    pub start: VoxelCoord,
-    pub goal: VoxelCoord,
-    pub next_path_cell: VoxelCoord,
-    pub next_waypoint: Vec3,
-    pub distance_to_waypoint_units: f32,
-    pub reached: bool,
-    pub visited: usize,
-    pub path_len: usize,
-    pub projection_hash: u64,
-    pub path_hash: u64,
-    pub movement_hash: u64,
-}
-
 /// Why a direct-nav movement request was rejected.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DirectNavMovementError {
@@ -724,30 +1061,6 @@ impl DirectNavMovementError {
         match self {
             DirectNavMovementError::NonFinitePosition => "nonFinitePosition",
             DirectNavMovementError::InvalidStep => "invalidStep",
-        }
-    }
-}
-
-/// Why a projection-backed direct-nav request was rejected.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ProjectedDirectNavMovementError {
-    NonFinitePosition,
-    InvalidStep,
-    InvalidQueryBudget,
-    StartNotWalkable { start: VoxelCoord },
-    GoalNotWalkable { goal: VoxelCoord },
-    NoPath { start: VoxelCoord, goal: VoxelCoord },
-}
-
-impl ProjectedDirectNavMovementError {
-    pub const fn label(self) -> &'static str {
-        match self {
-            ProjectedDirectNavMovementError::NonFinitePosition => "nonFinitePosition",
-            ProjectedDirectNavMovementError::InvalidStep => "invalidStep",
-            ProjectedDirectNavMovementError::InvalidQueryBudget => "invalidQueryBudget",
-            ProjectedDirectNavMovementError::StartNotWalkable { .. } => "startNotWalkable",
-            ProjectedDirectNavMovementError::GoalNotWalkable { .. } => "goalNotWalkable",
-            ProjectedDirectNavMovementError::NoPath { .. } => "noPath",
         }
     }
 }
@@ -810,7 +1123,7 @@ pub fn build_nav_projection(
         return Err(NavError::InvalidAgentHeight);
     }
     let grid = world.grid();
-    let mut walkable = BTreeSet::new();
+    let mut walkable = Vec::new();
     for (chunk_coord, chunk) in world.resident_chunks() {
         for (local, value) in chunk.iter() {
             if value.is_solid() {
@@ -818,7 +1131,7 @@ pub fn build_nav_projection(
             }
             let coord = grid.chunk_local_to_voxel(chunk_coord, local);
             if is_walkable_cell(world, coord, config) {
-                walkable.insert(coord);
+                walkable.push(coord);
             }
         }
     }
@@ -861,7 +1174,8 @@ pub fn find_path(
 ///
 /// Candidate neighbors retain the canonical planar direction order. Within
 /// each adjacent X/Z column, same-level cells are considered first, followed
-/// by upward then downward cells at increasing distance.
+/// by upward then downward cells at increasing distance. Between equally
+/// short paths, the search prefers cells nearer the goal, then that order.
 pub fn find_path_with_policy(
     projection: &NavProjection,
     query: NavPathQuery,
@@ -871,21 +1185,25 @@ pub fn find_path_with_policy(
 }
 
 /// Query a deterministic shortest path while requiring every transition to be
-/// admitted by a collision-derived edge set.
+/// admitted by a collision-derived edge set. With `components`, a goal in
+/// another component than the start is `NoPath` without a search: no cell
+/// visited, and the nearest cell is the start's component's nearest the goal
+/// (see [`NavComponents`]).
 pub fn find_path_with_edge_admission(
     projection: &NavProjection,
     edges: &NavEdgeAdmission,
+    components: Option<&NavComponents>,
     query: NavPathQuery,
     policy: PlanarNavNeighborPolicy,
 ) -> Result<NavPathReadout, NavError> {
-    find_path_with_optional_edge_admission(projection, query, policy, Some(edges))
+    find_path_with_optional_edge_admission(projection, query, policy, Some((edges, components)))
 }
 
 fn find_path_with_optional_edge_admission(
     projection: &NavProjection,
     query: NavPathQuery,
     policy: PlanarNavNeighborPolicy,
-    edges: Option<&NavEdgeAdmission>,
+    edges: Option<(&NavEdgeAdmission, Option<&NavComponents>)>,
 ) -> Result<NavPathReadout, NavError> {
     if query.max_visited == 0 {
         return Err(NavError::InvalidQueryBudget);
@@ -896,61 +1214,29 @@ fn find_path_with_optional_edge_admission(
     if !projection.is_walkable(query.goal) {
         return Err(NavError::GoalNotWalkable { goal: query.goal });
     }
-    if query.start == query.goal {
-        let path = vec![query.start];
-        return Ok(NavPathReadout {
-            outcome: NavPathOutcome::Reached,
-            visited: 1,
-            path_hash: hash_path(&path),
-            path,
-            nearest: None,
-        });
+    if let Some(nearest) = separated(projection, edges, query) {
+        return Ok(nav_readout(PlanarSearch::Stopped {
+            visited: 0,
+            budget_spent: false,
+            nearest,
+        }));
     }
-
-    let mut queue = VecDeque::new();
-    let mut visited = BTreeSet::new();
-    let mut came_from = BTreeMap::new();
-    queue.push_back(query.start);
-    visited.insert(query.start);
-
-    while let Some(current) = queue.pop_front() {
-        if visited.len() > query.max_visited {
-            break;
-        }
-        for next in planar_nav_neighbors(current, policy).chain(
-            edges
-                .into_iter()
-                .flat_map(|admission| admission.beyond(current)),
-        ) {
-            if !projection.is_walkable(next)
-                || !edges.is_none_or(|admission| admission.allows(current, next))
-                || visited.contains(&next)
-            {
-                continue;
-            }
-            came_from.insert(next, current);
-            if next == query.goal {
-                let path = reconstruct_path(query.start, query.goal, &came_from);
-                return Ok(NavPathReadout {
-                    outcome: NavPathOutcome::Reached,
-                    visited: visited.len() + 1,
-                    path_hash: hash_path(&path),
-                    path,
-                    nearest: None,
-                });
-            }
-            visited.insert(next);
-            queue.push_back(next);
-        }
+    let edges = edges.map(|(edges, _)| edges);
+    match search_planar(projection, None, edges, query, policy, false) {
+        Ok(search) => Ok(nav_readout(search)),
+        Err(_) => unreachable!("a step of one cannot overflow"),
     }
+}
 
-    Ok(NavPathReadout {
-        outcome: NavPathOutcome::NoPath,
-        visited: visited.len(),
-        path: Vec::new(),
-        path_hash: hash_path(&[]),
-        nearest: nearest_to(query.goal, &visited),
-    })
+/// The nearest cell a labelled query cannot reach its goal from, if the
+/// labels say no path exists.
+fn separated(
+    projection: &NavProjection,
+    edges: Option<(&NavEdgeAdmission, Option<&NavComponents>)>,
+    query: NavPathQuery,
+) -> Option<VoxelCoord> {
+    let (edges, components) = edges?;
+    components?.separation(projection, edges, query.start, query.goal)
 }
 
 /// Query a deterministic shortest path while respecting a retained traversal
@@ -966,11 +1252,14 @@ pub fn find_path_with_traversal_policy(
 }
 
 /// Query a deterministic shortest path while respecting both caller-owned
-/// traversal cells and collision-derived directed edge admission.
+/// traversal cells and collision-derived directed edge admission, with
+/// `components` as in [`find_path_with_edge_admission`]. A query that fails
+/// only because of the overlay still searches.
 pub fn find_path_with_traversal_and_edge_admission(
     projection: &NavProjection,
     overlay: &NavTraversalOverlay,
     edges: &NavEdgeAdmission,
+    components: Option<&NavComponents>,
     query: NavPathQuery,
     policy: PlanarNavNeighborPolicy,
 ) -> Result<NavPathReadout, WeightedNavPathError> {
@@ -979,7 +1268,7 @@ pub fn find_path_with_traversal_and_edge_admission(
         overlay,
         query,
         policy,
-        Some(edges),
+        Some((edges, components)),
     )
 }
 
@@ -988,84 +1277,26 @@ fn find_path_with_traversal_and_optional_edge_admission(
     overlay: &NavTraversalOverlay,
     query: NavPathQuery,
     policy: PlanarNavNeighborPolicy,
-    edges: Option<&NavEdgeAdmission>,
+    edges: Option<(&NavEdgeAdmission, Option<&NavComponents>)>,
 ) -> Result<NavPathReadout, WeightedNavPathError> {
-    if query.max_visited == 0 {
-        return Err(WeightedNavPathError::InvalidQueryBudget);
+    check_traversal_query(projection, overlay, query)?;
+    if let Some(nearest) = separated(projection, edges, query) {
+        return Ok(nav_readout(PlanarSearch::Stopped {
+            visited: 0,
+            budget_spent: false,
+            nearest,
+        }));
     }
-    if !projection.is_walkable(query.start) {
-        return Err(WeightedNavPathError::StartNotWalkable { start: query.start });
-    }
-    if !projection.is_walkable(query.goal) {
-        return Err(WeightedNavPathError::GoalNotWalkable { goal: query.goal });
-    }
-    if !overlay.is_allowed(query.start) {
-        return Err(WeightedNavPathError::StartBlocked { start: query.start });
-    }
-    if !overlay.is_allowed(query.goal) {
-        return Err(WeightedNavPathError::GoalBlocked { goal: query.goal });
-    }
-    if query.start == query.goal {
-        let path = vec![query.start];
-        return Ok(NavPathReadout {
-            outcome: NavPathOutcome::Reached,
-            visited: 1,
-            path_hash: hash_path(&path),
-            path,
-            nearest: None,
-        });
-    }
-    let mut queue = VecDeque::new();
-    let mut visited = BTreeSet::new();
-    let mut came_from = BTreeMap::new();
-    queue.push_back(query.start);
-    visited.insert(query.start);
-    while let Some(current) = queue.pop_front() {
-        if visited.len() > query.max_visited {
-            break;
-        }
-        for next in planar_nav_neighbors(current, policy).chain(
-            edges
-                .into_iter()
-                .flat_map(|admission| admission.beyond(current)),
-        ) {
-            if !projection.is_walkable(next)
-                || !overlay.is_allowed(next)
-                || !edges.is_none_or(|admission| admission.allows(current, next))
-                || visited.contains(&next)
-            {
-                continue;
-            }
-            came_from.insert(next, current);
-            if next == query.goal {
-                let path = reconstruct_path(query.start, query.goal, &came_from);
-                return Ok(NavPathReadout {
-                    outcome: NavPathOutcome::Reached,
-                    visited: visited.len() + 1,
-                    path_hash: hash_path(&path),
-                    path,
-                    nearest: None,
-                });
-            }
-            visited.insert(next);
-            queue.push_back(next);
-        }
-    }
-    Ok(NavPathReadout {
-        outcome: NavPathOutcome::NoPath,
-        visited: visited.len(),
-        path: Vec::new(),
-        path_hash: hash_path(&[]),
-        nearest: nearest_to(query.goal, &visited),
-    })
+    let edges = edges.map(|(edges, _)| edges);
+    search_planar(projection, Some(overlay), edges, query, policy, false).map(nav_readout)
 }
 
 /// Query a deterministic, bounded minimum-cost path through a planar
 /// projection using caller-supplied [`NavTraversalOverlay`] facts.
 ///
-/// This deliberately reuses the projection and planar-neighbor owners. It is
-/// opt-in so legacy [`find_path_with_policy`] remains its existing unweighted
-/// breadth-first operation and selection behavior.
+/// This deliberately reuses the projection and planar-neighbor owners: it is
+/// the same search as [`find_path_with_policy`], charging each cell's
+/// traversal cost instead of one per step.
 pub fn find_weighted_path_with_policy(
     projection: &NavProjection,
     overlay: &NavTraversalOverlay,
@@ -1076,15 +1307,24 @@ pub fn find_weighted_path_with_policy(
 }
 
 /// Query a deterministic minimum-cost path while requiring collision-derived
-/// directed edge admission in addition to the caller's cell traversal facts.
+/// directed edge admission in addition to the caller's cell traversal facts,
+/// with `components` as in [`find_path_with_edge_admission`]: a goal in
+/// another component is `NoPath` with no cell visited.
 pub fn find_weighted_path_with_edge_admission(
     projection: &NavProjection,
     overlay: &NavTraversalOverlay,
     edges: &NavEdgeAdmission,
+    components: Option<&NavComponents>,
     query: NavPathQuery,
     policy: PlanarNavNeighborPolicy,
 ) -> Result<WeightedNavPathReadout, WeightedNavPathError> {
-    find_weighted_path_with_optional_edge_admission(projection, overlay, query, policy, Some(edges))
+    find_weighted_path_with_optional_edge_admission(
+        projection,
+        overlay,
+        query,
+        policy,
+        Some((edges, components)),
+    )
 }
 
 fn find_weighted_path_with_optional_edge_admission(
@@ -1092,8 +1332,55 @@ fn find_weighted_path_with_optional_edge_admission(
     overlay: &NavTraversalOverlay,
     query: NavPathQuery,
     policy: PlanarNavNeighborPolicy,
-    edges: Option<&NavEdgeAdmission>,
+    edges: Option<(&NavEdgeAdmission, Option<&NavComponents>)>,
 ) -> Result<WeightedNavPathReadout, WeightedNavPathError> {
+    check_traversal_query(projection, overlay, query)?;
+    if separated(projection, edges, query).is_some() {
+        return Ok(weighted_nav_readout(
+            WeightedNavPathOutcome::NoPath,
+            0,
+            0,
+            Vec::new(),
+            overlay.overlay_hash(),
+        ));
+    }
+    let edges = edges.map(|(edges, _)| edges);
+    let (outcome, visited, total_cost, path) =
+        match search_planar(projection, Some(overlay), edges, query, policy, true)? {
+            PlanarSearch::Reached {
+                visited,
+                cost,
+                path,
+            } => (WeightedNavPathOutcome::Reached, visited, cost, path),
+            PlanarSearch::Stopped {
+                visited,
+                budget_spent,
+                ..
+            } => (
+                if budget_spent {
+                    WeightedNavPathOutcome::BudgetExhausted
+                } else {
+                    WeightedNavPathOutcome::NoPath
+                },
+                visited,
+                0,
+                Vec::new(),
+            ),
+        };
+    Ok(weighted_nav_readout(
+        outcome,
+        visited,
+        total_cost,
+        path,
+        overlay.overlay_hash(),
+    ))
+}
+
+fn check_traversal_query(
+    projection: &NavProjection,
+    overlay: &NavTraversalOverlay,
+    query: NavPathQuery,
+) -> Result<(), WeightedNavPathError> {
     if query.max_visited == 0 {
         return Err(WeightedNavPathError::InvalidQueryBudget);
     }
@@ -1109,91 +1396,359 @@ fn find_weighted_path_with_optional_edge_admission(
     if !overlay.is_allowed(query.goal) {
         return Err(WeightedNavPathError::GoalBlocked { goal: query.goal });
     }
-    if query.start == query.goal {
-        let path = vec![query.start];
-        return Ok(WeightedNavPathReadout {
-            outcome: WeightedNavPathOutcome::Reached,
-            visited: 1,
-            total_cost: 0,
+    Ok(())
+}
+
+fn nav_readout(search: PlanarSearch) -> NavPathReadout {
+    match search {
+        PlanarSearch::Reached { visited, path, .. } => NavPathReadout {
+            outcome: NavPathOutcome::Reached,
+            visited,
             path_hash: hash_path(&path),
             path,
-            overlay_hash: overlay.overlay_hash(),
-        });
+            nearest: None,
+        },
+        PlanarSearch::Stopped {
+            visited, nearest, ..
+        } => NavPathReadout {
+            outcome: NavPathOutcome::NoPath,
+            visited,
+            path: Vec::new(),
+            path_hash: hash_path(&[]),
+            nearest: Some(nearest),
+        },
     }
+}
 
-    // The priority tuple is `(cost, coordinate)`. `Reverse` makes Rust's
-    // max-heap a min-heap while preserving the coordinate's stable total
-    // ordering for equal-cost candidates.
-    let mut frontier = BinaryHeap::new();
-    let mut best_cost = BTreeMap::new();
-    let mut came_from = BTreeMap::new();
-    frontier.push(Reverse((0_u64, query.start)));
-    best_cost.insert(query.start, 0_u64);
+/// What a planar search found.
+enum PlanarSearch {
+    Reached {
+        visited: usize,
+        cost: u64,
+        path: Vec<VoxelCoord>,
+    },
+    /// The search expanded every cell it could reach, or `budget_spent`
+    /// first. `nearest` is the cell it reached nearest the goal.
+    Stopped {
+        visited: usize,
+        budget_spent: bool,
+        nearest: VoxelCoord,
+    },
+}
+
+/// A lower bound on the cost from a cell to the goal: the planar distance,
+/// Chebyshev with diagonal neighbours (a diagonal costs one step, as an
+/// orthogonal one does) and Manhattan without, scaled by the least cost an
+/// admitted edge pays per column it crosses. Its rounding up keeps it
+/// consistent, so a cell's first expansion is along a cheapest path.
+struct PlanarEstimate {
+    goal: VoxelCoord,
+    diagonal: bool,
+    cost: u64,
+    columns: u64,
+}
+
+impl PlanarEstimate {
+    fn of(&self, cell: VoxelCoord) -> u64 {
+        let (across, along) = (cell.x.abs_diff(self.goal.x), cell.z.abs_diff(self.goal.z));
+        let distance = if self.diagonal {
+            u128::from(across.max(along))
+        } else {
+            u128::from(across) + u128::from(along)
+        };
+        let scaled = distance
+            .saturating_mul(u128::from(self.cost))
+            .div_ceil(u128::from(self.columns));
+        u64::try_from(scaled).unwrap_or(u64::MAX)
+    }
+}
+
+/// The cells from `start` to `goal` along the search's parents.
+fn planar_path(
+    table: &ColumnTable<()>,
+    parent: &[usize],
+    start: usize,
+    goal: usize,
+) -> Vec<VoxelCoord> {
+    let mut path = vec![table.cell(goal)];
+    let mut at = goal;
+    while at != start {
+        at = parent[at];
+        path.push(table.cell(at));
+    }
+    path.reverse();
+    path
+}
+
+const UNSEEN: u8 = 0;
+const OPEN: u8 = 1;
+const CLOSED: u8 = 2;
+
+/// Per-position search state reused by each search on a thread, so that a
+/// search costs the cells it reaches rather than the projection's size. It
+/// keeps the size of the largest projection the thread has searched.
+#[derive(Default)]
+struct SearchScratch {
+    state: Vec<u8>,
+    best: Vec<u64>,
+    parent: Vec<usize>,
+    /// The positions the last search marked; every other one is unseen.
+    touched: Vec<usize>,
+    frontier: BinaryHeap<Reverse<(u64, u64, u64, usize)>>,
+    candidates: Vec<VoxelCoord>,
+}
+
+thread_local! {
+    static SEARCH_SCRATCH: RefCell<SearchScratch> = RefCell::new(SearchScratch::default());
+}
+
+impl SearchScratch {
+    /// Ready for a search over `positions`, whatever the last search left.
+    fn reset(&mut self, positions: usize) {
+        for &position in &self.touched {
+            self.state[position] = UNSEEN;
+        }
+        self.touched.clear();
+        self.frontier.clear();
+        if self.state.len() < positions {
+            self.state.resize(positions, UNSEEN);
+            self.best.resize(positions, 0);
+            self.parent.resize(positions, 0);
+        }
+    }
+}
+
+/// A* from `query.start` to `query.goal`, both walkable and allowed. A step
+/// costs one, or under `weighted` the entered cell's traversal cost plus the
+/// edge's extra cost. Of cells with equal estimates, the one nearer the goal
+/// is expanded first, then the one found first; neighbours are found in the
+/// canonical order. At most `query.max_visited` cells are expanded, and
+/// `visited` counts them.
+///
+/// Unweighted, the goal is reached as soon as it is found, counting as
+/// visited, as in a breadth-first search: every step costs one and a cell
+/// beside the goal is at least one column from it, so the cell being
+/// expanded already lies on a shortest path.
+fn search_planar(
+    projection: &NavProjection,
+    overlay: Option<&NavTraversalOverlay>,
+    edges: Option<&NavEdgeAdmission>,
+    query: NavPathQuery,
+    policy: PlanarNavNeighborPolicy,
+    weighted: bool,
+) -> Result<PlanarSearch, WeightedNavPathError> {
+    SEARCH_SCRATCH.with_borrow_mut(|scratch| {
+        scratch.reset(projection.walkable.positions());
+        search_planar_with(scratch, projection, overlay, edges, query, policy, weighted)
+    })
+}
+
+fn search_planar_with(
+    scratch: &mut SearchScratch,
+    projection: &NavProjection,
+    overlay: Option<&NavTraversalOverlay>,
+    edges: Option<&NavEdgeAdmission>,
+    query: NavPathQuery,
+    policy: PlanarNavNeighborPolicy,
+    weighted: bool,
+) -> Result<PlanarSearch, WeightedNavPathError> {
+    let SearchScratch {
+        state,
+        best,
+        parent,
+        touched,
+        frontier,
+        candidates,
+    } = scratch;
+    let table = &projection.walkable;
+    let overlay = overlay.filter(|overlay| !overlay.is_empty());
+    let (cost, columns) = edges.map_or((1, 1), |edges| {
+        edges.cost_per_column(policy.diagonal, weighted)
+    });
+    let estimate = PlanarEstimate {
+        goal: query.goal,
+        diagonal: policy.diagonal,
+        cost,
+        columns,
+    };
+    let offsets = planar_nav_offsets(policy.diagonal);
+    let max_step = u64::from(policy.max_step_cells);
+
+    let start = table.position(query.start).expect("the start is walkable");
+    let goal = table.position(query.goal).expect("the goal is walkable");
+    // `Reverse` makes the max-heap a min-heap over (estimate, remaining,
+    // order found, position); the order found makes every key distinct.
+    let mut found = 0_u64;
+    let distance_to_goal = |cell: VoxelCoord| squared_distance(cell, query.goal);
+    let mut nearest = (distance_to_goal(query.start), query.start);
+    state[start] = OPEN;
+    best[start] = 0;
+    touched.push(start);
+    let remaining = estimate.of(query.start);
+    frontier.push(Reverse((remaining, remaining, found, start)));
     let mut visited = 0_usize;
 
-    while let Some(Reverse((cost, current))) = frontier.pop() {
-        if best_cost.get(&current) != Some(&cost) {
+    while let Some(Reverse((_, _, _, position))) = frontier.pop() {
+        if state[position] == CLOSED {
             continue;
         }
         if visited == query.max_visited {
-            return Ok(weighted_nav_readout(
-                WeightedNavPathOutcome::BudgetExhausted,
+            return Ok(PlanarSearch::Stopped {
                 visited,
-                0,
-                Vec::new(),
-                overlay.overlay_hash(),
-            ));
+                budget_spent: true,
+                nearest: nearest.1,
+            });
         }
         visited += 1;
-        if current == query.goal {
-            let path = reconstruct_path(query.start, query.goal, &came_from);
-            return Ok(weighted_nav_readout(
-                WeightedNavPathOutcome::Reached,
+        state[position] = CLOSED;
+        let current = table.cell(position);
+        let cost = best[position];
+        if position == goal {
+            return Ok(PlanarSearch::Reached {
                 visited,
                 cost,
-                path,
-                overlay.overlay_hash(),
-            ));
+                path: planar_path(table, parent, start, goal),
+            });
         }
 
-        for next in planar_nav_neighbors(current, policy).chain(
-            edges
-                .into_iter()
-                .flat_map(|admission| admission.beyond(current)),
-        ) {
-            if !projection.is_walkable(next)
-                || !overlay.is_allowed(next)
-                || !edges.is_none_or(|admission| admission.allows(current, next))
-            {
+        candidates.clear();
+        let costed = match edges {
+            Some(edges) => admitted_steps(edges, current, offsets, max_step, candidates),
+            None => {
+                column_steps(table, current, offsets, max_step, candidates);
+                false
+            }
+        };
+
+        for &next_cell in candidates.iter() {
+            let Some(next) = table.position(next_cell) else {
+                continue;
+            };
+            if overlay.is_some_and(|overlay| !overlay.is_allowed(next_cell)) {
                 continue;
             }
-            let next_cost = cost
-                .checked_add(overlay.cost_for(next))
-                .and_then(|cost| {
-                    cost.checked_add(
-                        edges.map_or(0, |admission| admission.extra_cost(current, next)),
-                    )
-                })
-                .ok_or(WeightedNavPathError::CostOverflow)?;
-            if best_cost
-                .get(&next)
-                .is_some_and(|known| *known <= next_cost)
-            {
-                continue;
+            let next_cost = if weighted {
+                let extra = match edges {
+                    Some(edges) if costed => edges.extra_cost(current, next_cell),
+                    _ => 0,
+                };
+                cost.checked_add(overlay.map_or(1, |overlay| overlay.cost_for(next_cell)))
+                    .and_then(|cost| cost.checked_add(extra))
+                    .ok_or(WeightedNavPathError::CostOverflow)?
+            } else {
+                cost.saturating_add(1)
+            };
+            match state[next] {
+                CLOSED => continue,
+                OPEN if best[next] <= next_cost => continue,
+                UNSEEN => {
+                    touched.push(next);
+                    nearest = nearest.min((distance_to_goal(next_cell), next_cell));
+                }
+                _ => {}
             }
-            best_cost.insert(next, next_cost);
-            came_from.insert(next, current);
-            frontier.push(Reverse((next_cost, next)));
+            state[next] = OPEN;
+            best[next] = next_cost;
+            parent[next] = position;
+            if next == goal && !weighted {
+                return Ok(PlanarSearch::Reached {
+                    visited: visited + 1,
+                    cost: next_cost,
+                    path: planar_path(table, parent, start, goal),
+                });
+            }
+            found += 1;
+            let remaining = estimate.of(next_cell);
+            frontier.push(Reverse((
+                next_cost.saturating_add(remaining),
+                remaining,
+                found,
+                next,
+            )));
         }
     }
-
-    Ok(weighted_nav_readout(
-        WeightedNavPathOutcome::NoPath,
+    Ok(PlanarSearch::Stopped {
         visited,
-        0,
-        Vec::new(),
-        overlay.overlay_hash(),
-    ))
+        budget_spent: false,
+        nearest: nearest.1,
+    })
+}
+
+/// Within an adjacent column, same-level cells come first, then upward and
+/// downward cells at increasing distance.
+fn rank(from: VoxelCoord, to: VoxelCoord) -> (u64, bool) {
+    (from.y.abs_diff(to.y), to.y < from.y)
+}
+
+/// The cells a search steps to from `current` under `edges`, whether or not
+/// they are walkable, appended to `candidates` in the canonical order: per
+/// direction of `offsets` the edges within `max_step` by [`rank`], then the
+/// edges past the planar neighbours. Returns whether an edge from `current`
+/// carries an extra cost.
+fn admitted_steps(
+    edges: &NavEdgeAdmission,
+    current: VoxelCoord,
+    offsets: &[(i64, i64)],
+    max_step: u64,
+    candidates: &mut Vec<VoxelCoord>,
+) -> bool {
+    let Some(record) = edges.origins.get(current) else {
+        return false;
+    };
+    let others = if record.others {
+        edges.others.get(&current)
+    } else {
+        None
+    };
+    for (direction, &(dx, dz)) in offsets.iter().enumerate() {
+        let first = candidates.len();
+        let rise = record.rise[direction];
+        if rise != NO_EDGE && u64::from(rise.unsigned_abs()) <= max_step {
+            candidates.push(VoxelCoord::new(
+                current.x + dx,
+                current.y + i64::from(rise),
+                current.z + dz,
+            ));
+        }
+        candidates.extend(others.into_iter().flatten().copied().filter(|&to| {
+            planar_direction(current, to) == Some(direction) && current.y.abs_diff(to.y) <= max_step
+        }));
+        candidates[first..].sort_by_key(|&to| rank(current, to));
+    }
+    candidates.extend(
+        others
+            .into_iter()
+            .flatten()
+            .copied()
+            .filter(|&to| is_far(current, to)),
+    );
+    record.costed
+}
+
+/// The walkable cells a search without an edge admission steps to from
+/// `current`: those of each adjacent column within `max_step`, appended to
+/// `candidates` in the canonical order.
+fn column_steps(
+    table: &ColumnTable<()>,
+    current: VoxelCoord,
+    offsets: &[(i64, i64)],
+    max_step: u64,
+    candidates: &mut Vec<VoxelCoord>,
+) {
+    for &(dx, dz) in offsets {
+        let (Some(x), Some(z)) = (current.x.checked_add(dx), current.z.checked_add(dz)) else {
+            continue;
+        };
+        let first = candidates.len();
+        let (_, column) = table.column(x, z);
+        candidates.extend(
+            column
+                .iter()
+                .copied()
+                .filter(|to| current.y.abs_diff(to.y) <= max_step),
+        );
+        candidates[first..].sort_by_key(|&to| rank(current, to));
+    }
 }
 
 /// Query a deterministic, bounded 3D path through resident voxel space.
@@ -1415,100 +1970,6 @@ pub fn propose_direct_nav_movement(
     })
 }
 
-/// Propose one deterministic, bounded waypoint using a nav projection path.
-///
-/// This helper converts the live positions into the projection's grid, runs
-/// [`find_path`], and then moves toward either the next path cell center or the
-/// final target when the next path cell is the goal. It does not mutate authority
-/// and does not maintain an internal cache.
-pub fn propose_projected_direct_nav_movement(
-    projection: &NavProjection,
-    request: ProjectedDirectNavMovementRequest,
-) -> Result<ProjectedDirectNavMovementReadout, ProjectedDirectNavMovementError> {
-    if !vec3_is_finite(request.from) || !vec3_is_finite(request.target) {
-        return Err(ProjectedDirectNavMovementError::NonFinitePosition);
-    }
-    if !request.max_step_units.is_finite() || request.max_step_units <= 0.0 {
-        return Err(ProjectedDirectNavMovementError::InvalidStep);
-    }
-    if request.max_visited == 0 {
-        return Err(ProjectedDirectNavMovementError::InvalidQueryBudget);
-    }
-
-    let start = projection
-        .grid()
-        .world_to_voxel(vec3_to_world_pos(request.from));
-    let goal = projection
-        .grid()
-        .world_to_voxel(vec3_to_world_pos(request.target));
-    let path = find_path(
-        projection,
-        NavPathQuery {
-            start,
-            goal,
-            max_visited: request.max_visited,
-        },
-    )
-    .map_err(projected_error_from_nav)?;
-
-    if path.outcome == NavPathOutcome::NoPath {
-        return Err(ProjectedDirectNavMovementError::NoPath { start, goal });
-    }
-
-    let next_path_cell = path.path.get(1).copied().unwrap_or(start);
-    let step_target = if next_path_cell == goal {
-        request.target
-    } else {
-        world_pos_to_vec3(projection.grid().voxel_center_world(next_path_cell))
-    };
-    let movement = propose_direct_nav_movement(DirectNavMovementRequest {
-        from: request.from,
-        target: step_target,
-        max_step_units: request.max_step_units,
-    })
-    .map_err(projected_error_from_direct)?;
-    let reached = next_path_cell == goal && movement.reached;
-    let mut readout = ProjectedDirectNavMovementReadout {
-        from: round_vec3(request.from),
-        target: round_vec3(request.target),
-        start,
-        goal,
-        next_path_cell,
-        next_waypoint: movement.next_waypoint,
-        distance_to_waypoint_units: movement.distance_units,
-        reached,
-        visited: path.visited,
-        path_len: path.path.len(),
-        projection_hash: projection.projection_hash(),
-        path_hash: path.path_hash,
-        movement_hash: 0,
-    };
-    readout.movement_hash = hash_projected_direct_nav_movement(&readout);
-    Ok(readout)
-}
-
-fn projected_error_from_nav(error: NavError) -> ProjectedDirectNavMovementError {
-    match error {
-        NavError::InvalidAgentHeight => ProjectedDirectNavMovementError::InvalidQueryBudget,
-        NavError::InvalidQueryBudget => ProjectedDirectNavMovementError::InvalidQueryBudget,
-        NavError::StartNotWalkable { start } => {
-            ProjectedDirectNavMovementError::StartNotWalkable { start }
-        }
-        NavError::GoalNotWalkable { goal } => {
-            ProjectedDirectNavMovementError::GoalNotWalkable { goal }
-        }
-    }
-}
-
-fn projected_error_from_direct(error: DirectNavMovementError) -> ProjectedDirectNavMovementError {
-    match error {
-        DirectNavMovementError::NonFinitePosition => {
-            ProjectedDirectNavMovementError::NonFinitePosition
-        }
-        DirectNavMovementError::InvalidStep => ProjectedDirectNavMovementError::InvalidStep,
-    }
-}
-
 fn nav_neighbors(coord: VoxelCoord) -> [VoxelCoord; 4] {
     [
         VoxelCoord::new(coord.x + 1, coord.y, coord.z),
@@ -1516,15 +1977,6 @@ fn nav_neighbors(coord: VoxelCoord) -> [VoxelCoord; 4] {
         VoxelCoord::new(coord.x - 1, coord.y, coord.z),
         VoxelCoord::new(coord.x, coord.y, coord.z - 1),
     ]
-}
-
-/// The visited cell nearest `goal`, the first in cell order on a tie.
-fn nearest_to(goal: VoxelCoord, visited: &BTreeSet<VoxelCoord>) -> Option<VoxelCoord> {
-    visited.iter().copied().min_by_key(|cell| {
-        let [dx, dy, dz] = [cell.x - goal.x, cell.y - goal.y, cell.z - goal.z]
-            .map(|delta| i128::from(delta) * i128::from(delta));
-        dx + dy + dz
-    })
 }
 
 /// X/Z neighbour offsets: orthogonal first, then diagonal when asked.
@@ -1544,23 +1996,6 @@ pub fn planar_nav_offsets(diagonal: bool) -> &'static [(i64, i64)] {
     } else {
         &OFFSETS[..4]
     }
-}
-
-fn planar_nav_neighbors(
-    coord: VoxelCoord,
-    policy: PlanarNavNeighborPolicy,
-) -> impl Iterator<Item = VoxelCoord> {
-    let horizontal = planar_nav_offsets(policy.diagonal);
-    let mut neighbors =
-        Vec::with_capacity(horizontal.len() * (1 + usize::from(policy.max_step_cells) * 2));
-    for &(dx, dz) in horizontal {
-        neighbors.push(VoxelCoord::new(coord.x + dx, coord.y, coord.z + dz));
-        for step in 1..=i64::from(policy.max_step_cells) {
-            neighbors.push(VoxelCoord::new(coord.x + dx, coord.y + step, coord.z + dz));
-            neighbors.push(VoxelCoord::new(coord.x + dx, coord.y - step, coord.z + dz));
-        }
-    }
-    neighbors.into_iter()
 }
 
 fn volumetric_neighbors(
@@ -1707,13 +2142,8 @@ pub fn describe_nav_path(projection: &NavProjection, readout: &NavPathReadout) -
     out
 }
 
-/// Order-independent, so local refreshes can maintain it cell by cell.
-fn hash_walkable(walkable: &BTreeSet<VoxelCoord>) -> u64 {
-    walkable
-        .iter()
-        .fold(0u64, |sum, coord| sum.wrapping_add(cell_hash(*coord)))
-}
-
+/// A projection hashes to the sum of its cells' hashes, so local refreshes
+/// can maintain it cell by cell.
 fn cell_hash(coord: VoxelCoord) -> u64 {
     let mut h = fnv_offset();
     feed_coord(&mut h, coord);
@@ -1833,23 +2263,6 @@ fn hash_direct_nav_movement(readout: &DirectNavMovementReadout) -> u64 {
     h
 }
 
-fn hash_projected_direct_nav_movement(readout: &ProjectedDirectNavMovementReadout) -> u64 {
-    let mut h = fnv_offset();
-    feed_vec3_bits(&mut h, readout.from);
-    feed_vec3_bits(&mut h, readout.target);
-    feed_coord(&mut h, readout.start);
-    feed_coord(&mut h, readout.goal);
-    feed_coord(&mut h, readout.next_path_cell);
-    feed_vec3_bits(&mut h, readout.next_waypoint);
-    feed_f32_bits(&mut h, readout.distance_to_waypoint_units);
-    feed_byte(&mut h, u8::from(readout.reached));
-    feed_u64(&mut h, readout.visited as u64);
-    feed_u64(&mut h, readout.path_len as u64);
-    feed_u64(&mut h, readout.projection_hash);
-    feed_u64(&mut h, readout.path_hash);
-    h
-}
-
 fn feed_vec3_bits(h: &mut u64, value: Vec3) {
     feed_f32_bits(h, value.x);
     feed_f32_bits(h, value.y);
@@ -1870,14 +2283,6 @@ fn round_vec3(value: Vec3) -> Vec3 {
 
 fn round_f32(value: f32) -> f32 {
     (value * 1000.0).round() / 1000.0
-}
-
-fn vec3_to_world_pos(value: Vec3) -> WorldPos {
-    WorldPos::new(value.x as f64, value.y as f64, value.z as f64)
-}
-
-fn world_pos_to_vec3(value: WorldPos) -> Vec3 {
-    Vec3::new(value.x as f32, value.y as f32, value.z as f32)
 }
 
 #[cfg(test)]
@@ -2023,6 +2428,94 @@ mod tests {
         assert_eq!(allowed.path, vec![start, goal]);
     }
 
+    /// Cells added and removed singly and in batches, beyond the first cells'
+    /// box and into columns already full or emptied, leave the projection
+    /// that the final cells give at once.
+    #[test]
+    fn cells_changed_in_place_match_the_cells_at_once() {
+        let cell =
+            |i: i64| VoxelCoord::new((i * 37) % 300 - 100, (i * 13) % 7, (i * 91) % 200 - 50);
+        let mut projection = NavProjection::from_walkable_cells(test_grid(), (0..50).map(cell));
+        let mut walkable: BTreeSet<_> = (0..50).map(cell).collect();
+        let mut i = 0;
+        while i < 5_000 {
+            let batch: Vec<_> = (i..i + i % 7 + 1).map(|i| (cell(i), i % 3 != 0)).collect();
+            projection.set_walkable_cells(batch.iter().copied());
+            for (cell, walk) in batch {
+                if walk {
+                    walkable.insert(cell);
+                } else {
+                    walkable.remove(&cell);
+                }
+            }
+            i += i % 7 + 1;
+        }
+        assert_eq!(
+            projection,
+            NavProjection::from_walkable_cells(test_grid(), walkable.iter().copied())
+        );
+        assert!(projection.walkable_cells().eq(walkable.iter().copied()));
+
+        // A column emptied inside the box, refilled beside one outside it.
+        let row = |x: i64| VoxelCoord::new(x, 0, 0);
+        let held = [0, 5, 6, 7, 8, 9, 10];
+        let mut projection = NavProjection::from_walkable_cells(test_grid(), held.map(row));
+        projection.set_walkable(row(0), false);
+        projection.set_walkable_cells([(row(0), true), (row(20), true)]);
+        assert_eq!(
+            projection,
+            NavProjection::from_walkable_cells(
+                test_grid(),
+                held.map(row).into_iter().chain([row(20)])
+            )
+        );
+    }
+
+    /// Cells too far apart for a box of columns keep only their own columns
+    /// and are searched as any others.
+    #[test]
+    fn far_apart_cells_route_within_and_report_between() {
+        const FAR: i64 = 1_000_000_000;
+        let row = |x0: i64| (0..4).map(move |x| VoxelCoord::new(x0 + x, 0, 0));
+        let query = |start: VoxelCoord, goal: VoxelCoord| NavPathQuery {
+            start,
+            goal,
+            max_visited: 64,
+        };
+        let mut projection =
+            NavProjection::from_walkable_cells(test_grid(), row(0).chain(row(FAR)));
+        let along = find_path(
+            &projection,
+            query(VoxelCoord::new(FAR, 0, 0), VoxelCoord::new(FAR + 3, 0, 0)),
+        )
+        .unwrap();
+        assert_eq!(along.path, row(FAR).collect::<Vec<_>>());
+        let between = find_path(
+            &projection,
+            query(VoxelCoord::new(0, 0, 0), VoxelCoord::new(FAR, 0, 0)),
+        )
+        .unwrap();
+        assert_eq!(
+            (between.outcome, between.visited, between.nearest),
+            (NavPathOutcome::NoPath, 4, Some(VoxelCoord::new(3, 0, 0)))
+        );
+        // Growing by another far row is the projection built with it.
+        projection.set_walkable_cells(row(-FAR).map(|cell| (cell, true)));
+        assert_eq!(
+            projection,
+            NavProjection::from_walkable_cells(
+                test_grid(),
+                row(0).chain(row(FAR)).chain(row(-FAR))
+            )
+        );
+        let grown = find_path(
+            &projection,
+            query(VoxelCoord::new(-FAR + 3, 0, 0), VoxelCoord::new(-FAR, 0, 0)),
+        )
+        .unwrap();
+        assert_eq!(grown.path.len(), 4);
+    }
+
     /// An admitted edge across a gap is a neighbour too, and its extra cost
     /// sends the weighted search the long way round when that is cheaper.
     #[test]
@@ -2054,13 +2547,20 @@ mod tests {
             goal,
             max_visited: 64,
         };
-        let path = find_path_with_edge_admission(&projection, &edges, query, policy).unwrap();
+        let path = find_path_with_edge_admission(&projection, &edges, None, query, policy).unwrap();
         assert_eq!(path.path, vec![start, goal]);
 
         let overlay = NavTraversalOverlay::empty(&projection);
         let weighted = |edges: &NavEdgeAdmission| {
-            find_weighted_path_with_edge_admission(&projection, &overlay, edges, query, policy)
-                .unwrap()
+            find_weighted_path_with_edge_admission(
+                &projection,
+                &overlay,
+                edges,
+                None,
+                query,
+                policy,
+            )
+            .unwrap()
         };
         assert_eq!(weighted(&edges).path, vec![start, goal]);
         edges.set_cost(start, goal, 10);
@@ -2069,6 +2569,133 @@ mod tests {
         // Withdrawing the edge drops its cost and restores the hash.
         edges.set_allowed(start, goal, false);
         assert_eq!(edges.admission_hash(), without_gap);
+    }
+
+    /// A row of cells with every step between neighbours admitted both ways.
+    fn admitted_row(cells: &[VoxelCoord]) -> impl Iterator<Item = (VoxelCoord, VoxelCoord)> + '_ {
+        cells
+            .windows(2)
+            .flat_map(|pair| [(pair[0], pair[1]), (pair[1], pair[0])])
+    }
+
+    #[test]
+    fn components_answer_a_disconnected_goal_without_a_search() {
+        let near: Vec<_> = (0..4).map(|x| VoxelCoord::new(x, 0, 0)).collect();
+        let far: Vec<_> = (0..4).map(|x| VoxelCoord::new(x, 0, 2)).collect();
+        let projection =
+            NavProjection::from_walkable_cells(test_grid(), near.iter().chain(&far).copied());
+        let edges =
+            NavEdgeAdmission::from_allowed_edges(admitted_row(&near).chain(admitted_row(&far)));
+        let policy = PlanarNavNeighborPolicy {
+            max_step_cells: 1,
+            diagonal: true,
+        };
+        let components = NavComponents::label(&projection, &edges, policy);
+        assert_eq!(components.len(), 2);
+        let overlay = NavTraversalOverlay::empty(&projection);
+        let query = NavPathQuery {
+            start: near[0],
+            goal: far[3],
+            max_visited: 64,
+        };
+        let searched =
+            find_path_with_edge_admission(&projection, &edges, None, query, policy).unwrap();
+        let labelled =
+            find_path_with_edge_admission(&projection, &edges, Some(&components), query, policy)
+                .unwrap();
+        assert_eq!(searched.outcome, NavPathOutcome::NoPath);
+        assert_eq!(searched.visited, 4);
+        assert_eq!(labelled.outcome, NavPathOutcome::NoPath);
+        assert_eq!(labelled.visited, 0);
+        assert_eq!(labelled.nearest, searched.nearest);
+        assert_eq!(labelled.nearest, Some(near[3]));
+        let stepped = find_path_with_traversal_and_edge_admission(
+            &projection,
+            &overlay,
+            &edges,
+            Some(&components),
+            query,
+            policy,
+        )
+        .unwrap();
+        assert_eq!(stepped, labelled);
+        let weighted = find_weighted_path_with_edge_admission(
+            &projection,
+            &overlay,
+            &edges,
+            Some(&components),
+            query,
+            policy,
+        )
+        .unwrap();
+        assert_eq!(weighted.outcome, WeightedNavPathOutcome::NoPath);
+        assert_eq!(weighted.visited, 0);
+        // Within a component the search runs as before.
+        let within = NavPathQuery {
+            goal: near[3],
+            ..query
+        };
+        assert_eq!(
+            find_path_with_edge_admission(&projection, &edges, Some(&components), within, policy),
+            find_path_with_edge_admission(&projection, &edges, None, within, policy)
+        );
+    }
+
+    /// Labels join the cells of a one-way edge, and take no account of a
+    /// traversal overlay: both leave the answer to the search.
+    #[test]
+    fn one_way_edges_and_overlays_leave_the_search_to_run() {
+        let cells: Vec<_> = (0..3).map(|x| VoxelCoord::new(x, 0, 0)).collect();
+        let projection = NavProjection::from_walkable_cells(test_grid(), cells.iter().copied());
+        // The last step is a drop: admitted one way only.
+        let edges = NavEdgeAdmission::from_allowed_edges(
+            admitted_row(&cells[..2]).chain([(cells[1], cells[2])]),
+        );
+        let policy = PlanarNavNeighborPolicy {
+            max_step_cells: 1,
+            diagonal: false,
+        };
+        let components = NavComponents::label(&projection, &edges, policy);
+        assert_eq!(components.len(), 1);
+        let back = find_path_with_edge_admission(
+            &projection,
+            &edges,
+            Some(&components),
+            NavPathQuery {
+                start: cells[2],
+                goal: cells[0],
+                max_visited: 64,
+            },
+            policy,
+        )
+        .unwrap();
+        assert_eq!(back.outcome, NavPathOutcome::NoPath);
+        assert_eq!(back.visited, 1);
+        assert_eq!(back.nearest, Some(cells[2]));
+        let overlay = NavTraversalOverlay::from_cells(
+            &projection,
+            [NavTraversalCell {
+                coord: cells[1],
+                allowed: false,
+                cost: 1,
+            }],
+        )
+        .unwrap();
+        let blocked = find_path_with_traversal_and_edge_admission(
+            &projection,
+            &overlay,
+            &edges,
+            Some(&components),
+            NavPathQuery {
+                start: cells[0],
+                goal: cells[2],
+                max_visited: 64,
+            },
+            policy,
+        )
+        .unwrap();
+        assert_eq!(blocked.outcome, NavPathOutcome::NoPath);
+        assert_eq!(blocked.visited, 1);
     }
 
     #[test]
@@ -2349,10 +2976,6 @@ mod tests {
 
     fn tunnel_nav_endpoints() -> (VoxelCoord, VoxelCoord) {
         (VoxelCoord::new(4, 1, 8), VoxelCoord::new(2, 1, 2))
-    }
-
-    fn cell_center(projection: &NavProjection, coord: VoxelCoord) -> Vec3 {
-        world_pos_to_vec3(projection.grid().voxel_center_world(coord))
     }
 
     fn test_grid() -> VoxelGridSpec {
@@ -2786,190 +3409,120 @@ mod tests {
         assert_eq!(readout.path_hash, 0x69ed_74d6_9292_2db7);
     }
 
+    /// Path queries over a rolling 64×64 box of columns with diagonal
+    /// neighbours and edges admitted within two cells of height, the shape a
+    /// collision-derived publication has, with a 4,096-cell budget. Routes run
+    /// from the centre; one goes round a ridge, one ends on a pillar no edge
+    /// reaches.
     #[test]
-    fn projected_direct_nav_movement_uses_nav_projection_path() {
-        let projection = projection();
-        let (start, goal) = tunnel_nav_endpoints();
-        let path = find_path(
-            &projection,
-            NavPathQuery {
+    #[ignore = "a measurement, not a check"]
+    fn measure_planar_query_cost() {
+        const SIDE: i64 = 64;
+        const BUDGET: usize = 4_096;
+        const REPEATS: u32 = 50;
+        const LIFT: i64 = 10;
+        let height = |x: i64, z: i64| {
+            ((x as f64 * 0.3).sin() * 3.0 + (z as f64 * 0.25).cos() * 3.0).round() as i64
+        };
+        let pillar = (40, 52);
+        let ridge = |x: i64, z: i64| x == 24 && (16..=48).contains(&z);
+        let cell = |x: i64, z: i64| {
+            let lift = if (x, z) == pillar || ridge(x, z) {
+                LIFT
+            } else {
+                0
+            };
+            VoxelCoord::new(x, height(x, z) + lift, z)
+        };
+        let cells: Vec<_> = (0..SIDE)
+            .flat_map(|x| (0..SIDE).map(move |z| (x, z)))
+            .map(|(x, z)| cell(x, z))
+            .collect();
+        let projection = NavProjection::from_walkable_cells(test_grid(), cells.iter().copied());
+        let policy = PlanarNavNeighborPolicy {
+            max_step_cells: 2,
+            diagonal: true,
+        };
+        let edges = NavEdgeAdmission::from_allowed_edges(cells.iter().flat_map(|&from| {
+            planar_nav_offsets(true)
+                .iter()
+                .map(move |&(dx, dz)| (from.x + dx, from.z + dz))
+                .filter(|&(x, z)| (0..SIDE).contains(&x) && (0..SIDE).contains(&z))
+                .map(move |(x, z)| (from, cell(x, z)))
+                .filter(|(from, to)| (to.y - from.y).abs() <= 2)
+        }));
+        let overlay = NavTraversalOverlay::empty(&projection);
+        let started = std::time::Instant::now();
+        for _ in 0..REPEATS {
+            std::hint::black_box(NavComponents::label(&projection, &edges, policy));
+        }
+        let per_label = started.elapsed() / REPEATS;
+        let components = NavComponents::label(&projection, &edges, policy);
+        println!(
+            "labelling {} cells into {} components: {per_label:?}",
+            projection.walkable_len(),
+            components.len()
+        );
+        let start = cell(32, 32);
+        for (label, goal) in [
+            ("5 cells", cell(37, 32)),
+            ("15 cells", cell(47, 32)),
+            ("30 cells", cell(62, 32)),
+            ("round a ridge", cell(16, 32)),
+            ("unreachable", cell(pillar.0, pillar.1)),
+        ] {
+            let query = NavPathQuery {
                 start,
                 goal,
-                max_visited: 128,
-            },
-        )
-        .expect("path");
-        let readout = propose_projected_direct_nav_movement(
-            &projection,
-            ProjectedDirectNavMovementRequest {
-                from: cell_center(&projection, start),
-                target: cell_center(&projection, goal),
-                max_step_units: 1.0,
-                max_visited: 128,
-            },
-        )
-        .expect("projected direct nav");
-        let straight_line = propose_direct_nav_movement(DirectNavMovementRequest {
-            from: cell_center(&projection, start),
-            target: cell_center(&projection, goal),
-            max_step_units: 1.0,
-        })
-        .expect("straight line direct nav");
-
-        assert_eq!(readout.start, start);
-        assert_eq!(readout.goal, goal);
-        assert_eq!(readout.next_path_cell, path.path[1]);
-        assert_eq!(
-            readout.next_waypoint,
-            cell_center(&projection, path.path[1])
-        );
-        assert_ne!(readout.next_waypoint, straight_line.next_waypoint);
-        assert_eq!(readout.projection_hash, projection.projection_hash());
-        assert_eq!(readout.path_hash, path.path_hash);
-        assert_eq!(readout.path_len, path.path.len());
-        assert!(!readout.reached);
-    }
-
-    #[test]
-    fn projected_direct_nav_movement_reports_reached_inside_same_cell() {
-        let projection = projection();
-        let (cell, _) = tunnel_nav_endpoints();
-        let from = cell_center(&projection, cell);
-        let target = from + Vec3::new(0.125, 0.0, 0.0);
-        let readout = propose_projected_direct_nav_movement(
-            &projection,
-            ProjectedDirectNavMovementRequest {
-                from,
-                target,
-                max_step_units: 0.25,
-                max_visited: 128,
-            },
-        )
-        .expect("same-cell projected direct nav");
-
-        assert_eq!(readout.start, cell);
-        assert_eq!(readout.goal, cell);
-        assert_eq!(readout.next_path_cell, cell);
-        assert_eq!(readout.next_waypoint, target);
-        assert_eq!(readout.path_len, 1);
-        assert!(readout.reached);
-    }
-
-    #[test]
-    fn projected_direct_nav_movement_rejects_no_path() {
-        let mut projection = projection();
-        let (start, goal) = tunnel_nav_endpoints();
-        for x in 1..=5 {
-            projection = projection.without_walkable(VoxelCoord::new(x, 1, 4));
+                max_visited: BUDGET,
+            };
+            for (labelled, components) in [("unlabelled", None), ("labelled", Some(&components))] {
+                let run = || {
+                    find_path_with_traversal_and_edge_admission(
+                        &projection,
+                        &overlay,
+                        &edges,
+                        components,
+                        query,
+                        policy,
+                    )
+                    .expect("query")
+                };
+                let readout = run();
+                let started = std::time::Instant::now();
+                for _ in 0..REPEATS {
+                    std::hint::black_box(run());
+                }
+                let per_query = started.elapsed() / REPEATS;
+                let weighted = || {
+                    find_weighted_path_with_edge_admission(
+                        &projection,
+                        &overlay,
+                        &edges,
+                        components,
+                        query,
+                        policy,
+                    )
+                    .expect("weighted query")
+                };
+                let weighted_readout = weighted();
+                let started = std::time::Instant::now();
+                for _ in 0..REPEATS {
+                    std::hint::black_box(weighted());
+                }
+                let per_weighted = started.elapsed() / REPEATS;
+                println!(
+                    "{label} {labelled}: {:?} path {} visited {} nearest {:?} in {per_query:?}; weighted {:?} cost {} visited {} in {per_weighted:?}",
+                    readout.outcome,
+                    readout.path.len(),
+                    readout.visited,
+                    readout.nearest,
+                    weighted_readout.outcome,
+                    weighted_readout.total_cost,
+                    weighted_readout.visited,
+                );
+            }
         }
-        assert_eq!(
-            propose_projected_direct_nav_movement(
-                &projection,
-                ProjectedDirectNavMovementRequest {
-                    from: cell_center(&projection, start),
-                    target: cell_center(&projection, goal),
-                    max_step_units: 1.0,
-                    max_visited: 128,
-                },
-            ),
-            Err(ProjectedDirectNavMovementError::NoPath { start, goal })
-        );
-    }
-
-    #[test]
-    fn projected_direct_nav_movement_rejects_invalid_inputs() {
-        let projection = projection();
-        assert_eq!(
-            propose_projected_direct_nav_movement(
-                &projection,
-                ProjectedDirectNavMovementRequest {
-                    from: Vec3::new(f32::NAN, 0.0, 0.0),
-                    target: Vec3::ZERO,
-                    max_step_units: 1.0,
-                    max_visited: 128,
-                },
-            ),
-            Err(ProjectedDirectNavMovementError::NonFinitePosition)
-        );
-        assert_eq!(
-            propose_projected_direct_nav_movement(
-                &projection,
-                ProjectedDirectNavMovementRequest {
-                    from: Vec3::ZERO,
-                    target: Vec3::ONE,
-                    max_step_units: 0.0,
-                    max_visited: 128,
-                },
-            ),
-            Err(ProjectedDirectNavMovementError::InvalidStep)
-        );
-        assert_eq!(
-            propose_projected_direct_nav_movement(
-                &projection,
-                ProjectedDirectNavMovementRequest {
-                    from: Vec3::ZERO,
-                    target: Vec3::ONE,
-                    max_step_units: 1.0,
-                    max_visited: 0,
-                },
-            ),
-            Err(ProjectedDirectNavMovementError::InvalidQueryBudget)
-        );
-    }
-
-    #[test]
-    fn projected_direct_nav_movement_rejects_unwalkable_endpoints() {
-        let projection = projection();
-        let (start, goal) = tunnel_nav_endpoints();
-        assert_eq!(
-            propose_projected_direct_nav_movement(
-                &projection,
-                ProjectedDirectNavMovementRequest {
-                    from: cell_center(&projection, VoxelCoord::new(0, 1, 0)),
-                    target: cell_center(&projection, goal),
-                    max_step_units: 1.0,
-                    max_visited: 128,
-                },
-            ),
-            Err(ProjectedDirectNavMovementError::StartNotWalkable {
-                start: VoxelCoord::new(0, 1, 0)
-            })
-        );
-        assert_eq!(
-            propose_projected_direct_nav_movement(
-                &projection,
-                ProjectedDirectNavMovementRequest {
-                    from: cell_center(&projection, start),
-                    target: cell_center(&projection, VoxelCoord::new(0, 1, 0)),
-                    max_step_units: 1.0,
-                    max_visited: 128,
-                },
-            ),
-            Err(ProjectedDirectNavMovementError::GoalNotWalkable {
-                goal: VoxelCoord::new(0, 1, 0)
-            })
-        );
-    }
-
-    #[test]
-    fn projected_direct_nav_movement_is_deterministic() {
-        let projection = projection();
-        let (start, goal) = tunnel_nav_endpoints();
-        let request = ProjectedDirectNavMovementRequest {
-            from: cell_center(&projection, start),
-            target: cell_center(&projection, goal),
-            max_step_units: 0.75,
-            max_visited: 128,
-        };
-        let first =
-            propose_projected_direct_nav_movement(&projection, request).expect("first readout");
-        let second =
-            propose_projected_direct_nav_movement(&projection, request).expect("second readout");
-
-        assert_eq!(first, second);
-        assert_ne!(first.movement_hash, 0);
-        assert_eq!(first.projection_hash, 0x3143_6e7d_f5df_baee);
-        assert_eq!(first.path_hash, 0x09ed_0284_f7c1_75e1);
     }
 
     #[test]

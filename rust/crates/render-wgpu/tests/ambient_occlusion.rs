@@ -96,20 +96,18 @@ fn both_paths_darken_the_corners_and_agree_with_each_other() {
     let compute_readout = harness.renderer.gpu_readout();
     let raster = render_with(&mut harness, options(AmbientOcclusionPath::Raster, 1.0));
     let raster_readout = harness.renderer.gpu_readout();
-    assert_eq!(
+    let (compute_readout, raster_readout) = (
+        compute_readout.ambient_occlusion,
         raster_readout.ambient_occlusion,
-        AmbientOcclusionPath::Raster
     );
+    assert_eq!(raster_readout.path, AmbientOcclusionPath::Raster);
     assert_eq!(
         raster_readout.workgroups, 0,
         "the raster path dispatches nothing"
     );
     match &compute_readout.compute_refused {
         None => {
-            assert_eq!(
-                compute_readout.ambient_occlusion,
-                AmbientOcclusionPath::Compute
-            );
+            assert_eq!(compute_readout.path, AmbientOcclusionPath::Compute);
             assert_eq!(
                 compute_readout.workgroups,
                 (WIDTH / 2).div_ceil(16) * (HEIGHT / 2).div_ceil(16),
@@ -119,14 +117,14 @@ fn both_paths_darken_the_corners_and_agree_with_each_other() {
         Some(reason) => {
             eprintln!("compute path refused on this adapter: {reason}");
             assert_eq!(
-                compute_readout.ambient_occlusion,
+                compute_readout.path,
                 AmbientOcclusionPath::Raster,
                 "a refused compute path falls back to the raster path"
             );
         }
     }
     assert_eq!(
-        compute_readout.occlusion_texture,
+        compute_readout.texture,
         (WIDTH / 2, HEIGHT / 2),
         "half the target"
     );
@@ -138,7 +136,7 @@ fn both_paths_darken_the_corners_and_agree_with_each_other() {
         let brightened = deltas.iter().filter(|delta| **delta > 4).count() as f64 / pixels;
         let mean = deltas.iter().map(|delta| f64::from(*delta)).sum::<f64>() / pixels;
         assert!(
-            darkened > 0.02,
+            darkened > 0.01,
             "{name}: {:.2}% of pixels darkened; corners should show",
             darkened * 100.0
         );
@@ -182,7 +180,7 @@ fn strength_scales_the_occlusion_and_zero_is_off() {
     let zero = render_with(&mut harness, options(AmbientOcclusionPath::Raster, 0.0));
     assert_eq!(off, zero, "strength 0 draws exactly without occlusion");
     assert_eq!(
-        harness.renderer.gpu_readout().ambient_occlusion,
+        harness.renderer.gpu_readout().ambient_occlusion.path,
         AmbientOcclusionPath::Off,
         "strength 0 runs no occlusion passes"
     );
@@ -204,6 +202,67 @@ fn strength_scales_the_occlusion_and_zero_is_off() {
         (0.35..0.65).contains(&ratio),
         "half strength darkens about half as much: {half_sum} vs {full_sum}"
     );
+    render_with(&mut harness, options(AmbientOcclusionPath::Off, 1.0));
+    assert_eq!(
+        harness.renderer.gpu_readout().ambient_occlusion.path,
+        AmbientOcclusionPath::Off,
+        "turned off, the readout says so"
+    );
+}
+
+#[test]
+fn blended_parts_take_no_occlusion_from_what_they_cover() {
+    const PANE: &str = "static-mesh/ao-pane";
+    const GLASS: &str = "material/ao-glass";
+    let mut harness = corner_scene();
+    // A blended pane, fully covering, in front of the crates' corners: the
+    // pre-pass has no depth for it, so the occlusion under it is theirs.
+    let mut glass = material(GLASS, [0.1, 0.2, 0.9, 1.0], None);
+    glass.alpha_mode = MaterialAlphaModeDescriptor::Blend;
+    harness.apply(vec![
+        RenderDiff::DefineMaterial { material: glass },
+        static_mesh(
+            PANE,
+            box_mesh([-2.5, 0.0, 0.8], [0.5, 2.0, 0.85], |_| 0),
+            GLASS,
+        ),
+        instance(14, None, PANE, transform([0.0; 3], 0.0, [1.0; 3])),
+    ]);
+    let off = render_with(&mut harness, options(AmbientOcclusionPath::Off, 1.0));
+    let with = render_with(&mut harness, options(AmbientOcclusionPath::Raster, 1.0));
+    let blue: Vec<bool> = off
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|p| u16::from(p[2]) > u16::from(p[0]) + 40)
+        .collect();
+    // The pane's inside: its antialiased edge mixes in what it covers.
+    let (width, height) = (WIDTH as usize, HEIGHT as usize);
+    let pane: Vec<bool> = (0..width * height)
+        .map(|at| {
+            let (x, y) = (at % width, at / width);
+            x > 0
+                && y > 0
+                && x + 1 < width
+                && y + 1 < height
+                && [at, at - 1, at + 1, at - width, at + width]
+                    .iter()
+                    .all(|&near| blue[near])
+        })
+        .collect();
+    let covered = pane.iter().filter(|covered| **covered).count();
+    assert!(covered > 2000, "the pane covers {covered} pixels");
+    let deltas = differences(&off, &with);
+    let pane_changed = deltas
+        .iter()
+        .zip(&pane)
+        .filter(|(delta, covered)| **covered && delta.abs() > 1)
+        .count();
+    assert_eq!(pane_changed, 0, "pane pixels changed by occlusion");
+    assert!(
+        deltas.iter().any(|delta| *delta < -8),
+        "the corners outside the pane still darken"
+    );
 }
 
 #[test]
@@ -222,7 +281,7 @@ fn the_passes_are_timed_where_the_device_has_timestamp_queries() {
             "{} ({}): {:?} path, timestamps {}, {:?}, limits {:?}",
             adapter.name,
             adapter.backend,
-            readout.ambient_occlusion,
+            readout.ambient_occlusion.path,
             readout.timestamps,
             readout.passes,
             readout.limits

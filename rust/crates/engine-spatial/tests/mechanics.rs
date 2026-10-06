@@ -132,7 +132,6 @@ fn generated_tunnel_cells_feed_existing_collision_navigation_and_mesh_authority(
     assert!(!scene.contains_point([2.5, 2.5, 2.5]));
     assert_eq!(scene.resident_chunk_count(), 1);
     assert!(scene.mesh_chunks().len() != 0);
-    assert!(scene.navigation_cell_count() > 0);
 }
 
 #[test]

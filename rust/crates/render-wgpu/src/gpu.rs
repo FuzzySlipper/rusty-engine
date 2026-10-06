@@ -113,8 +113,8 @@ impl Gpu {
         .map_err(|error| GpuError::NoAdapter(error.to_string()))?;
         let descriptor = wgpu::DeviceDescriptor {
             label: Some("render-wgpu"),
-            // Timestamp queries time the compute pass (`compute.rs`); an
-            // adapter without them draws untimed.
+            // Timestamp queries time the renderer's GPU passes
+            // (`timing.rs`); an adapter without them draws untimed.
             required_features: adapter.features() & wgpu::Features::TIMESTAMP_QUERY,
             required_limits: wgpu::Limits::default().using_resolution(adapter.limits()),
             ..Default::default()
@@ -140,6 +140,69 @@ impl Gpu {
 
     pub fn max_texture_dimension(&self) -> u32 {
         self.device.limits().max_texture_dimension_2d
+    }
+
+    /// The adapter's compute limits, for diagnostics. The device takes wgpu's
+    /// default limits (`from_instance`); a kernel needing more raises them
+    /// there.
+    pub fn compute_limits(&self) -> ComputeLimits {
+        ComputeLimits::of(&self.adapter.limits())
+    }
+
+    /// Why this device cannot run a compute kernel of `workgroup` invocations
+    /// using `shared_bytes` of workgroup storage, if it cannot. A kernel's
+    /// owner takes its raster path or skips the work when refused.
+    pub(crate) fn compute_refusal(&self, workgroup: [u32; 3], shared_bytes: u32) -> Option<String> {
+        if !self
+            .adapter
+            .get_downlevel_capabilities()
+            .flags
+            .contains(wgpu::DownlevelFlags::COMPUTE_SHADERS)
+        {
+            return Some("the adapter has no compute shaders".to_owned());
+        }
+        let granted = ComputeLimits::of(&self.device.limits());
+        if (0..3).any(|axis| granted.workgroup_size[axis] < workgroup[axis])
+            || granted.invocations_per_workgroup < workgroup.iter().product::<u32>()
+        {
+            return Some(format!(
+                "the device allows {} invocations per workgroup ({:?} by axis); the kernel needs {workgroup:?}",
+                granted.invocations_per_workgroup, granted.workgroup_size
+            ));
+        }
+        if granted.workgroup_storage_bytes < shared_bytes {
+            return Some(format!(
+                "the device allows {} bytes of workgroup storage; the kernel needs {shared_bytes}",
+                granted.workgroup_storage_bytes
+            ));
+        }
+        None
+    }
+}
+
+/// Compute limits of an adapter or device.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ComputeLimits {
+    pub workgroup_size: [u32; 3],
+    pub invocations_per_workgroup: u32,
+    pub workgroups_per_dimension: u32,
+    pub workgroup_storage_bytes: u32,
+    pub storage_buffer_binding_bytes: u64,
+}
+
+impl ComputeLimits {
+    fn of(limits: &wgpu::Limits) -> Self {
+        Self {
+            workgroup_size: [
+                limits.max_compute_workgroup_size_x,
+                limits.max_compute_workgroup_size_y,
+                limits.max_compute_workgroup_size_z,
+            ],
+            invocations_per_workgroup: limits.max_compute_invocations_per_workgroup,
+            workgroups_per_dimension: limits.max_compute_workgroups_per_dimension,
+            workgroup_storage_bytes: limits.max_compute_workgroup_storage_size,
+            storage_buffer_binding_bytes: limits.max_storage_buffer_binding_size,
+        }
     }
 }
 
