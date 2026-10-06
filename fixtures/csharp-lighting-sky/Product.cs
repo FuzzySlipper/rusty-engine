@@ -14,7 +14,12 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     private static readonly Color StoneColor=new(.6f,.6f,.6f,1);
     private static readonly Vector3 TorchColor=new(1,.65f,.25f), CellCenter=new(.5f,.5f,.5f);
     private static readonly VoxelAddress InsideSample=new(3,1,3), OutsideSample=new(3,1,-2);
-    private const ulong TorchId = 1, SunId = 2;
+    private const ulong TorchId = 1, SunId = 2, HemisphereId = 3, SkyAmbientId = 4;
+    // A hemisphere light for a product that owns its lights: pale sky, earthy ground.
+    private static readonly Vector3 HemisphereSkyColor = new(.55f,.7f,1), HemisphereGroundColor = new(.35f,.3f,.25f);
+    // The sky's ambient light, occluded by the room: its range is half the side of the square of sky it looks down over.
+    private static readonly Vector3 SkyAmbientColor = new(.6f,.7f,.9f);
+    private const float SkyAmbientIntensity = .3f;
     private const float TorchIntensity = 35, TorchRange = 12, Horizon = 64;
     private static readonly Vector3 TorchPosition = new(3.5f,2.5f,3.5f);
     private static readonly Vector3 RoomEye = new(3.5f,2.5f,6.5f), RoomTarget = new(3.5f,2,1);
@@ -29,7 +34,7 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     private readonly SpatialSession scene;
     private readonly Material stone;
     private readonly Camera camera;
-    private readonly Light torch, sun;
+    private readonly Light torch, sun, hemisphere, skyAmbient;
     private readonly RenderResource day, night;
     private VoxelScenePresentation? presentation;
     private LightDescriptor descriptor;
@@ -47,6 +52,8 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         descriptor = new(LightKind.Point,TorchColor,TorchIntensity,true,TorchPosition,Vector3.UnitY,true,TorchRange,2,0,0,LightShadowIntent.Requested);
         torch = engine.Graphics.CreateLight(new(TorchId,false,0,descriptor));
         sun = engine.Graphics.CreateLight(new(SunId,false,0,Sun(clock)));
+        hemisphere = engine.Graphics.CreateLight(new(HemisphereId,false,0,LightDescriptor.Hemisphere(HemisphereSkyColor,HemisphereGroundColor,0,false)));
+        skyAmbient = engine.Graphics.CreateLight(new(SkyAmbientId,false,0,SkyAmbient(-1)));
         day = engine.Graphics.OpenResource(new("day.png",TextureFilter.Linear,TextureWrap.Clamp)).Handle;
         night = engine.Graphics.OpenResource(new("night.png",TextureFilter.Linear,TextureWrap.Clamp)).Handle;
         engine.CameraView.SetSkyBackgroundBlend(new(day,night,clock));
@@ -58,6 +65,8 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         var travel = -new Vector3(MathF.Cos(elevation)*MathF.Sin(azimuth),MathF.Sin(elevation),MathF.Cos(elevation)*MathF.Cos(azimuth));
         return new(LightKind.Directional,Vector3.Lerp(NoonSunColor,DuskSunColor,clock),NoonSunIntensity+(DuskSunIntensity-NoonSunIntensity)*clock,true,Vector3.Zero,travel,false,0,0,0,0,LightShadowIntent.Disabled);
     }
+    // Half extent 0 leaves the Engine's default square (64 m a side); the light is disabled until asked for.
+    private static LightDescriptor SkyAmbient(float halfExtent) => new(LightKind.Ambient,SkyAmbientColor,SkyAmbientIntensity,halfExtent>=0,Vector3.Zero,Vector3.UnitY,halfExtent>0,halfExtent,0,0,0,LightShadowIntent.Requested);
     private static CameraDescriptor Camera(Vector3 eye,Vector3 target)
     {
         CameraQueries.TryLookAtPose(eye,target,0,out CameraPose pose);
@@ -95,6 +104,20 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     public string Sky(float amount) { clock=Math.Clamp(amount,0,1); engine.CameraView.SetSkyBackgroundBlend(new(day,night,clock)); engine.Graphics.UpdateLight(new(sun,new(SunId,false,0,Sun(clock)))); engine.CameraView.UpdateCamera(new(camera,Camera(SkyEye,SkyTarget))); return Inspect(); }
     [DebugCommand("lighting.atmosphere")]
     public string Atmosphere(bool enabled) { engine.CameraView.SetAtmosphere(enabled ? Air : default); return Inspect(); }
+    // A hemisphere light at the given intensity (0 disables it), read back from the Engine.
+    [DebugCommand("lighting.hemisphere")]
+    public string Hemisphere(float intensity)
+    {
+        engine.Graphics.UpdateLight(new(hemisphere,new(HemisphereId,false,0,LightDescriptor.Hemisphere(HemisphereSkyColor,HemisphereGroundColor,intensity,intensity>0))));
+        return JsonSerializer.Serialize(engine.Graphics.ReadLight(hemisphere),ProofJsonContext.Default.LightReadout);
+    }
+    // The sky's occluded ambient light over a square of the given half extent in metres (0 for the default square, below 0 to disable it).
+    [DebugCommand("lighting.skyextent")]
+    public string SkyExtent(float halfExtent)
+    {
+        engine.Graphics.UpdateLight(new(skyAmbient,new(SkyAmbientId,false,0,SkyAmbient(halfExtent))));
+        return JsonSerializer.Serialize(engine.Graphics.ReadLight(skyAmbient),ProofJsonContext.Default.LightReadout);
+    }
     [DebugCommand("lighting.room")]
     public string Room() { engine.CameraView.UpdateCamera(new(camera,Camera(RoomEye,RoomTarget))); return Inspect(); }
     [DebugCommand("lighting.fog")]
@@ -143,7 +166,7 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     public void RegisterDebugCommands(IDebugCommandModuleRegistrar registrar)=>registrar.Register(this);
     public ProductUpdateResult Update(ProductUpdate update)=>ProductUpdateResult.None;
     public void Pause(){} public void Resume(){} public void Restart(){SetTorch(true);} public void Shutdown(){}
-    public void Dispose(){engine.CameraView.ClearSkyBackground(default); presentation?.Dispose(); torch.Dispose(); sun.Dispose(); camera.Dispose(); stone.Dispose(); scene.Dispose(); day.Dispose(); night.Dispose();}
+    public void Dispose(){engine.CameraView.ClearSkyBackground(default); presentation?.Dispose(); torch.Dispose(); sun.Dispose(); hemisphere.Dispose(); skyAmbient.Dispose(); camera.Dispose(); stone.Dispose(); scene.Dispose(); day.Dispose(); night.Dispose();}
 }
 internal sealed record LightingSave(uint[] Room,LightDescriptor Torch);
 internal sealed record LightingProof(bool RoundTrip,float Lit,float Blocked,float Dark,float Current,bool Torch,float Clock);
@@ -151,4 +174,5 @@ internal sealed record LightingProof(bool RoundTrip,float Lit,float Blocked,floa
 [JsonSerializable(typeof(LightingSave))]
 [JsonSerializable(typeof(LightingProof))]
 [JsonSerializable(typeof(RendererSettingsReadout))]
+[JsonSerializable(typeof(LightReadout))]
 internal partial class ProofJsonContext : JsonSerializerContext { }

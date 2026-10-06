@@ -544,7 +544,11 @@ impl Renderer {
         let viewmodel = self.encode_view(ViewPass {
             target: *target,
             viewport: area,
-            camera: camera::viewmodel_matrices(&camera.projection, area.aspect()),
+            camera: camera::viewmodel_matrices(
+                &camera.projection,
+                camera.viewmodel_fov_y_degrees,
+                area.aspect(),
+            ),
             layer: ViewLayer::Viewmodel,
             start: PassStart::Target,
             clear,

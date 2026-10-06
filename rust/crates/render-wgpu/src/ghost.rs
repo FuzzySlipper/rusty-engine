@@ -660,6 +660,7 @@ fn studio_rig(settings: &GhostPlateCaptureSettings, orientation: Quat) -> [Light
             enabled: true,
             shadow_intent: LightShadowIntent::Disabled,
             shadow: Default::default(),
+            range: None,
         },
         LightDescriptor::Directional {
             color: lighting.key_color,

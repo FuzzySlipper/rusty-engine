@@ -161,6 +161,9 @@ pub struct NativeCameraDescriptor {
     pub basis: NativeCameraBasis,
     pub projection: NativeCameraProjection,
     pub viewport: NativeCameraViewport,
+    /// The viewmodel layer's vertical field of view in degrees, for a
+    /// perspective camera; 0 draws it with the camera's own projection.
+    pub viewmodel_fov_y_degrees: f64,
 }
 
 #[repr(C)]

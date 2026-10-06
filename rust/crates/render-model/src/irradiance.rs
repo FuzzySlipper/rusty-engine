@@ -28,6 +28,23 @@ pub fn sample_direct_lighting(
                 enabled,
                 ..
             } => (*color, *intensity, *enabled, [0.0; 3], 0.0, 1.0),
+            LightDescriptor::Hemisphere {
+                color,
+                ground_color,
+                intensity,
+                enabled,
+            } => {
+                // Sky from above, ground from below, by how far the normal
+                // faces up; a zero normal takes the mean.
+                let up = if normal == [0.0; 3] {
+                    0.5
+                } else {
+                    0.5 + 0.5 * normal[1] as f32
+                };
+                let blend: [f32; 3] =
+                    std::array::from_fn(|i| color[i] * up + ground_color[i] * (1.0 - up));
+                (blend, *intensity, *enabled, [0.0; 3], 0.0, 1.0)
+            }
             LightDescriptor::Directional {
                 color,
                 intensity,

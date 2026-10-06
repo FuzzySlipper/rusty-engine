@@ -135,17 +135,30 @@ pub(crate) fn camera_matrices(
 
 /// The viewmodel camera: camera-relative content is authored in camera-local
 /// coordinates, so it sits at the origin looking down -Z with the world
-/// camera's projection.
+/// camera's projection, or with `fov_y_degrees` in place of a perspective
+/// camera's field of view when it is above 0 (hands and a weapon
+/// conventionally draw narrower than the world).
 pub(crate) fn viewmodel_matrices(
     projection: &RendererCameraProjection,
+    fov_y_degrees: f64,
     aspect: f32,
 ) -> CameraMatrices {
+    let projection = match *projection {
+        RendererCameraProjection::Perspective { near, far, .. } if fov_y_degrees > 0.0 => {
+            RendererCameraProjection::Perspective {
+                fov_y_degrees,
+                near,
+                far,
+            }
+        }
+        projection => projection,
+    };
     camera_matrices(
         CameraPose {
             position: Vec3::ZERO,
             orientation: Quat::IDENTITY,
         },
-        projection,
+        &projection,
         aspect,
     )
 }
@@ -311,6 +324,7 @@ mod tests {
                 interpolation: RendererCameraInterpolation::Pose,
                 cut: false,
             }),
+            viewmodel_fov_y_degrees: 0.0,
         }
     }
 

@@ -161,21 +161,27 @@ pub(crate) fn light_layers(light: &LightDescriptor, world: &Mat4, row: u32) -> V
     };
     match light {
         LightDescriptor::Ambient { enabled: false, .. }
+        | LightDescriptor::Hemisphere { .. }
         | LightDescriptor::Directional { enabled: false, .. }
         | LightDescriptor::Point { enabled: false, .. }
         | LightDescriptor::Spot { enabled: false, .. } => Vec::new(),
-        LightDescriptor::Ambient { .. } => {
-            let texel = 2.0 * SKY_HALF_EXTENT / settings.size as f32;
+        LightDescriptor::Ambient { range, .. } => {
+            // The light's range is the square's half extent; the layer
+            // looks down from a height in the same proportion, so a wider
+            // sky keeps the default's depth range per metre.
+            let half_extent = range.unwrap_or(SKY_HALF_EXTENT);
+            let height = SKY_HEIGHT * half_extent / SKY_HALF_EXTENT;
+            let texel = 2.0 * half_extent / settings.size as f32;
             let centre = (world.transform_point3(Vec3::ZERO) / texel).round() * texel;
             let projection = Mat4::orthographic_rh(
-                -SKY_HALF_EXTENT,
-                SKY_HALF_EXTENT,
-                -SKY_HALF_EXTENT,
-                SKY_HALF_EXTENT,
+                -half_extent,
+                half_extent,
+                -half_extent,
+                half_extent,
                 0.0,
-                2.0 * SKY_HEIGHT,
+                2.0 * height,
             );
-            let eye = centre + Vec3::Y * SKY_HEIGHT;
+            let eye = centre + Vec3::Y * height;
             vec![LayerSource::Fixed {
                 view_proj: projection * look_at(eye, centre),
                 reach: None,
@@ -820,9 +826,35 @@ mod tests {
             enabled: true,
             shadow_intent,
             shadow: Default::default(),
+            range: None,
         };
         assert_eq!(layers(&ambient(LightShadowIntent::Disabled)), 0);
         assert_eq!(layers(&ambient(LightShadowIntent::Requested)), 1);
+    }
+
+    #[test]
+    fn an_ambient_light_range_sets_the_sky_square_it_looks_down_over() {
+        let sky = |range| LightDescriptor::Ambient {
+            color: [1.0; 3],
+            intensity: 1.0,
+            enabled: true,
+            range,
+            shadow_intent: LightShadowIntent::Requested,
+            shadow: Default::default(),
+        };
+        let covers = |range, x: f32| {
+            let view = fixed_view(&light_layers(&sky(range), &Mat4::IDENTITY, 0)[0]);
+            let clip = view.project_point3(Vec3::new(x, 0.0, 0.0));
+            clip.x.abs() <= 1.0 && (0.0..=1.0).contains(&clip.z)
+        };
+        assert!(covers(None, 30.0), "the default square is 64 m a side");
+        assert!(!covers(None, 40.0));
+        assert!(
+            covers(Some(100.0), 90.0),
+            "the range is the square's half side"
+        );
+        assert!(!covers(Some(100.0), 110.0));
+        assert!(!covers(Some(8.0), 10.0), "a room-sized sky");
     }
 
     #[test]
@@ -833,6 +865,7 @@ mod tests {
             enabled: true,
             shadow_intent: LightShadowIntent::Requested,
             shadow: Default::default(),
+            range: None,
         };
         let at = |x: f32| {
             fixed_view(

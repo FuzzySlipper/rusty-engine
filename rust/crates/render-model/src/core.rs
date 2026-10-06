@@ -536,6 +536,23 @@ impl RenderLayer {
     }
 }
 
+/// Whether a part casts shadows. Receiving is unchanged; `None` keeps a
+/// water plane, glass or a fog card out of every shadow layer and saves the
+/// caster cost of small clutter.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ShadowCasting {
+    #[default]
+    Cast,
+    None,
+}
+
+impl ShadowCasting {
+    pub fn is_cast(&self) -> bool {
+        *self == Self::Cast
+    }
+}
+
 /// Authority provenance remains raw identity data at this border. The renderer
 /// may report it in a pick, but cannot turn it into gameplay authority.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -582,6 +599,9 @@ pub struct RenderNode {
     pub transform: Transform,
     pub visible: bool,
     pub layer: RenderLayer,
+    /// Whether the node's parts cast shadows (`Cast` by default).
+    #[serde(default, skip_serializing_if = "ShadowCasting::is_cast")]
+    pub shadow_casting: ShadowCasting,
     pub metadata: RenderMetadata,
 }
 
@@ -593,6 +613,7 @@ impl RenderNode {
             transform: Transform::IDENTITY,
             visible: true,
             layer: RenderLayer::Scene,
+            shadow_casting: ShadowCasting::Cast,
             metadata: RenderMetadata::default(),
         }
     }

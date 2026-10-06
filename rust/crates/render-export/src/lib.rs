@@ -1226,6 +1226,12 @@ impl<'a> Writer<'a> {
                     handle.raw()
                 ))
             }
+            LightDescriptor::Hemisphere { .. } => {
+                return Err(format!(
+                    "exportGlb: hemisphere light {} is not representable in glTF",
+                    handle.raw()
+                ))
+            }
             LightDescriptor::Directional {
                 color,
                 intensity,

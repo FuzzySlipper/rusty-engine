@@ -191,6 +191,7 @@ fn render(glb: Vec<u8>, lights: Vec<RenderDiff>) -> Vec<u8> {
                 playback: None,
                 metadata: RenderMetadata::default(),
                 layer: RenderLayer::Scene,
+                shadow_casting: Default::default(),
             },
         },
     ];
@@ -335,6 +336,7 @@ fn the_occlusion_map_darkens_ambient_light_by_its_strength() {
                 enabled: true,
                 shadow_intent: LightShadowIntent::Disabled,
                 shadow: Default::default(),
+                range: None,
             },
         }]
     };
@@ -539,6 +541,7 @@ fn render_pair(
                 playback: None,
                 metadata: RenderMetadata::default(),
                 layer: RenderLayer::Scene,
+                shadow_casting: Default::default(),
             },
         });
         ops.push(RenderDiff::SetMaterialInstanceParameters {

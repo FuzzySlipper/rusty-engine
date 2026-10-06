@@ -6364,6 +6364,7 @@ mod tests {
                     z: 1.0,
                 },
             },
+            shadow_casting: Default::default(),
         };
         assert_eq!(
             unsafe {

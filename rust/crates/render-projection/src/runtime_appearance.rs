@@ -9,7 +9,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use render_model::{
     LightDescriptor, RenderDiff, RenderFrameDiff, RenderHandle, RenderLayer, RenderMetadata,
-    Transform, JSON_SAFE_U64_MAX,
+    ShadowCasting, Transform, JSON_SAFE_U64_MAX,
 };
 use serde::Deserialize;
 
@@ -41,6 +41,8 @@ pub struct RuntimeAppearanceFact<'a> {
     pub transform: Transform,
     pub visible: bool,
     pub layer: RenderLayer,
+    /// Whether the object's parts cast shadows.
+    pub shadow_casting: ShadowCasting,
     /// A joint of the parent's animated mesh that this object follows; its
     /// transform is then relative to that joint.
     pub joint: Option<&'a str>,
@@ -64,6 +66,7 @@ struct RetainedObject {
     transform: Transform,
     visible: bool,
     layer: RenderLayer,
+    shadow_casting: ShadowCasting,
     joint: Option<String>,
 }
 
@@ -74,6 +77,7 @@ impl RetainedObject {
             transform: self.transform,
             visible: self.visible,
             layer: self.layer,
+            shadow_casting: self.shadow_casting,
         }
     }
 }
@@ -93,6 +97,7 @@ struct NextObject<'a> {
     transform: Transform,
     visible: bool,
     layer: RenderLayer,
+    shadow_casting: ShadowCasting,
     joint: Option<&'a str>,
 }
 
@@ -103,6 +108,7 @@ impl NextObject<'_> {
             transform: self.transform,
             visible: self.visible,
             layer: self.layer,
+            shadow_casting: self.shadow_casting,
         }
     }
 
@@ -114,6 +120,7 @@ impl NextObject<'_> {
             transform: self.transform,
             visible: self.visible,
             layer: self.layer,
+            shadow_casting: self.shadow_casting,
             joint: self.joint.map(str::to_owned),
         }
     }
@@ -344,6 +351,7 @@ impl RuntimeAppearanceProjector {
                 transform: fact.transform,
                 visible: fact.visible,
                 layer: fact.layer,
+                shadow_casting: fact.shadow_casting,
                 joint: fact.joint,
             };
             if objects
@@ -376,6 +384,7 @@ impl RuntimeAppearanceProjector {
                             transform: previous.transform,
                             visible: previous.visible,
                             layer: previous.layer,
+                            shadow_casting: previous.shadow_casting,
                             joint: previous.joint.as_deref(),
                         }),
                     );
@@ -427,7 +436,11 @@ impl RuntimeAppearanceProjector {
                         previous.appearance_id != next.appearance_id
                             || previous.appearance != *next.appearance
                     });
-                    if appearance_changed || previous.is_some_and(|p| p.layer != next.layer) {
+                    if appearance_changed
+                        || previous.is_some_and(|p| {
+                            p.layer != next.layer || p.shadow_casting != next.shadow_casting
+                        })
+                    {
                         validate_appearance(
                             id,
                             next.values(),
@@ -553,6 +566,7 @@ impl RuntimeAppearanceProjector {
             if let (Change::Put(next), Some(previous)) = (change, objects.get(id)) {
                 if previous.parent != next.parent
                     || previous.layer != next.layer
+                    || previous.shadow_casting != next.shadow_casting
                     || requires_recreate(&previous.appearance, next.appearance)
                 {
                     recreate.insert(*id);
@@ -851,6 +865,7 @@ fn unchanged(
         && previous.transform == next.transform
         && previous.visible == next.visible
         && previous.layer == next.layer
+        && previous.shadow_casting == next.shadow_casting
         && previous.joint.as_deref() == next.joint
         && (!dirty_appearances.contains(next.appearance_id)
             || previous.appearance == *next.appearance)
@@ -1131,6 +1146,7 @@ mod tests {
             visible: true,
             layer: RenderLayer::Scene,
             joint: None,
+            shadow_casting: Default::default(),
         }
     }
 
@@ -1157,6 +1173,7 @@ mod tests {
                 enabled: true,
                 shadow_intent: LightShadowIntent::Requested,
                 shadow: Default::default(),
+                range: None,
             },
         }
     }
@@ -1841,6 +1858,7 @@ mod tests {
                     visible: product.visible,
                     layer: RenderLayer::Scene,
                     joint: None,
+                    shadow_casting: Default::default(),
                 })
                 .collect();
             let removals: Vec<u64> = products
@@ -1880,6 +1898,7 @@ mod tests {
                         visible: product.visible,
                         layer: RenderLayer::Scene,
                         joint: None,
+                        shadow_casting: Default::default(),
                     })
                     .collect();
                 expected.apply(&fresh.project(&snapshot).unwrap());

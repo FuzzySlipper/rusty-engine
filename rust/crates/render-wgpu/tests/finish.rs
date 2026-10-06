@@ -224,6 +224,7 @@ fn bright_boxes(harness: &mut Harness) {
                 enabled: true,
                 shadow_intent: LightShadowIntent::Disabled,
                 shadow: Default::default(),
+                range: None,
             },
         },
     ];

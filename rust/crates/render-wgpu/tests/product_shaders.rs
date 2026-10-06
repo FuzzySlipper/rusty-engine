@@ -275,6 +275,7 @@ fn a_product_shader_that_does_not_compose_is_reported_by_line_and_shades_as_stan
                 enabled: true,
                 shadow_intent: LightShadowIntent::Disabled,
                 shadow: Default::default(),
+                range: None,
             },
         },
     ]);

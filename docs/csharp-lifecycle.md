@@ -451,7 +451,11 @@ target. Presentations copy an offscreen target into a normalized primary
 destination, so split-screen and an inset/rear view remain Engine-rendered.
 Targets' GPU lifetime belongs to the renderer; C# must not use a target as an
 arbitrary mesh texture. `SetActiveCamera` is the single-primary-view
-convenience over this same retained composition. Use `CameraViewports` for
+convenience over this same retained composition. A perspective camera's
+`ViewmodelFovYDegrees` (0, the default, for the camera's own field of view)
+draws the viewmodel layer with a field of view of its own, so hands and a
+weapon keep the narrower one first-person games give them while the world
+keeps the player's. Use `CameraViewports` for
 ordinary full, split, and inset normalized rectangles. A composition with any
 primary view owns the primary surface: the renderer draws no separate
 default-camera pass, and area outside every primary view is left cleared.

@@ -313,6 +313,7 @@ fn lit_sprites_shade_with_synthetic_normal_and_height_maps() {
                 intensity: 0.4,
                 shadow_intent: LightShadowIntent::Disabled,
                 shadow: Default::default(),
+                range: None,
             },
         ),
     ] {

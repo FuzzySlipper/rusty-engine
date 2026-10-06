@@ -1161,9 +1161,13 @@ impl Renderer {
             if let Some(bounds) = bounds {
                 state.local_bounds = bounds;
             }
-            self.tables
-                .parts
-                .write(*part, &node.world, node.world_visible, node.world_layer);
+            self.tables.parts.write(
+                *part,
+                &node.world,
+                node.world_visible,
+                node.world_layer,
+                node.shadow_casting.is_cast(),
+            );
         }
     }
 

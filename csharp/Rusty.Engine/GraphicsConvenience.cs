@@ -354,7 +354,85 @@ public readonly partial record struct LightDescriptor
             shadowIntent,
             0,
             0,
-            false)
+            false,
+            Vector3.Zero)
+    {
+    }
+
+    /// <summary>A light of any kind but hemisphere, with its shadow settings.</summary>
+    public LightDescriptor(
+        LightKind kind,
+        Vector3 color,
+        float intensity,
+        bool enabled,
+        Vector3 position,
+        Vector3 direction,
+        bool hasRange,
+        float range,
+        float decay,
+        float outerAngleRadians,
+        float penumbra,
+        LightShadowIntent shadowIntent,
+        uint shadowResolution,
+        int shadowPriority,
+        bool shadowSoft)
+        : this(
+            kind,
+            color,
+            intensity,
+            enabled,
+            position,
+            direction,
+            hasRange,
+            range,
+            decay,
+            outerAngleRadians,
+            penumbra,
+            shadowIntent,
+            shadowResolution,
+            shadowPriority,
+            shadowSoft,
+            Vector3.Zero)
+    {
+    }
+
+    /// <summary>
+    /// Sky light from above and ground light from below, blended by how far a
+    /// surface faces up. It casts no shadow. The Engine's neutral rig lights
+    /// the world with one; a product that owns its lights makes its own.
+    /// </summary>
+    public static LightDescriptor Hemisphere(Vector3 skyColor, Vector3 groundColor, float intensity, bool enabled = true) =>
+        new(
+            LightKind.Hemisphere,
+            skyColor,
+            intensity,
+            enabled,
+            Vector3.Zero,
+            Vector3.UnitY,
+            false,
+            0,
+            0,
+            0,
+            0,
+            LightShadowIntent.Disabled,
+            0,
+            0,
+            false,
+            groundColor);
+}
+
+public readonly partial record struct AppearanceFact
+{
+    /// <summary>An appearance fact whose parts cast shadows.</summary>
+    public AppearanceFact(
+        ulong objectId,
+        bool hasParentObject,
+        ulong parentObjectId,
+        Transform transform,
+        Appearance appearance,
+        bool visible,
+        RenderLayer layer)
+        : this(objectId, hasParentObject, parentObjectId, transform, appearance, visible, layer, ShadowCasting.Cast)
     {
     }
 }

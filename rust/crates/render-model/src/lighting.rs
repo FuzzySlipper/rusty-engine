@@ -38,11 +38,25 @@ pub enum LightDescriptor {
         color: [f32; 3],
         intensity: f32,
         enabled: bool,
+        /// With a requested shadow, half the side of the square of sky the
+        /// light looks down over, in metres; the renderer's default (32 m)
+        /// when absent.
+        #[serde(default)]
+        range: Option<f32>,
         /// Requested: the light is the sky's, reaching a surface only where
         /// the sky above it is open (render-wgpu `shadows.rs`).
         shadow_intent: LightShadowIntent,
         #[serde(default)]
         shadow: LightShadowSettings,
+    },
+    /// Sky light from above and ground light from below, blended by how far
+    /// a surface faces up: `color` is the sky's, `ground_color` the ground's.
+    /// It casts no shadow.
+    Hemisphere {
+        color: [f32; 3],
+        ground_color: [f32; 3],
+        intensity: f32,
+        enabled: bool,
     },
     Directional {
         color: [f32; 3],
@@ -89,6 +103,9 @@ impl LightDescriptor {
             Self::Ambient {
                 color, intensity, ..
             }
+            | Self::Hemisphere {
+                color, intensity, ..
+            }
             | Self::Directional {
                 color, intensity, ..
             }
@@ -108,8 +125,16 @@ impl LightDescriptor {
         if !intensity.is_finite() || !(0.0..=MAX_RENDER_LIGHT_INTENSITY).contains(&intensity) {
             return Err(LightDescriptorError::InvalidIntensity);
         }
+        let valid_color = |color: &[f32; 3]| {
+            color
+                .iter()
+                .all(|value| value.is_finite() && (0.0..=1.0).contains(value))
+        };
         match self {
-            Self::Ambient { .. } => Ok(()),
+            Self::Ambient { range, .. } => validate_range_decay(*range, 0.0),
+            Self::Hemisphere { ground_color, .. } => valid_color(ground_color)
+                .then_some(())
+                .ok_or(LightDescriptorError::InvalidColor),
             Self::Directional {
                 direction, range, ..
             } => {
@@ -157,6 +182,11 @@ impl LightDescriptor {
             | Self::Directional { shadow, .. }
             | Self::Point { shadow, .. }
             | Self::Spot { shadow, .. } => *shadow,
+            Self::Hemisphere { .. } => LightShadowSettings {
+                resolution: 0,
+                priority: 0,
+                soft: false,
+            },
         }
     }
 
@@ -166,6 +196,7 @@ impl LightDescriptor {
             | Self::Directional { shadow_intent, .. }
             | Self::Point { shadow_intent, .. }
             | Self::Spot { shadow_intent, .. } => *shadow_intent,
+            Self::Hemisphere { .. } => LightShadowIntent::Disabled,
         }
     }
 }
@@ -223,6 +254,7 @@ mod tests {
                 enabled: true,
                 shadow_intent: LightShadowIntent::Disabled,
                 shadow: Default::default(),
+                range: None,
             },
             LightDescriptor::Directional {
                 color: [1.0, 0.9, 0.8],
@@ -268,6 +300,7 @@ mod tests {
             enabled: true,
             shadow_intent: LightShadowIntent::Disabled,
             shadow: Default::default(),
+            range: None,
         };
         let over = LightDescriptor::Ambient {
             color: [1.0; 3],
@@ -275,6 +308,7 @@ mod tests {
             enabled: true,
             shadow_intent: LightShadowIntent::Disabled,
             shadow: Default::default(),
+            range: None,
         };
         assert_eq!(exact.validate(), Ok(()));
         assert_eq!(over.validate(), Err(LightDescriptorError::InvalidIntensity));

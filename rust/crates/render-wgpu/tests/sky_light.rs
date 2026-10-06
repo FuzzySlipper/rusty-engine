@@ -221,6 +221,7 @@ fn an_ambient_lights_sky_layer_shades_the_sky_light_under_a_roof() {
                 enabled: true,
                 shadow_intent: LightShadowIntent::Requested,
                 shadow: Default::default(),
+                range: None,
             },
         }]);
         if roofed {

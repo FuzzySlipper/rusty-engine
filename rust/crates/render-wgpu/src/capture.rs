@@ -125,7 +125,7 @@ impl Renderer {
             self.encode_view(ViewPass {
                 target,
                 viewport: area,
-                camera: camera::viewmodel_matrices(&request.projection, area.aspect()),
+                camera: camera::viewmodel_matrices(&request.projection, 0.0, area.aspect()),
                 layer: ViewLayer::Viewmodel,
                 start: PassStart::Target,
                 clear,

@@ -132,6 +132,7 @@ pub fn camera(id: &str, position: [f64; 3], yaw: f64, pitch: f64) -> RendererCom
             far: 100.0,
         },
         motion: None,
+        viewmodel_fov_y_degrees: 0.0,
     }
 }
 
@@ -308,6 +309,7 @@ pub fn instance(handle: u64, parent: Option<u64>, mesh: &str, transform: Transfo
             material_overrides: Vec::new(),
             metadata: RenderMetadata::default(),
             layer: RenderLayer::Scene,
+            shadow_casting: Default::default(),
         },
     }
 }

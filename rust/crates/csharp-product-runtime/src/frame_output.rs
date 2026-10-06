@@ -1068,6 +1068,7 @@ mod tests {
                 far: 100.0,
             },
             motion: None,
+            viewmodel_fov_y_degrees: 0.0,
         };
         let drawn = render_wgpu::DrawnCamera {
             pose: pose(5.0, 30.0),
@@ -1104,6 +1105,7 @@ mod tests {
                 far: 100.0,
             },
             motion: None,
+            viewmodel_fov_y_degrees: 0.0,
         };
         let whole = RendererViewport {
             x: 0.0,

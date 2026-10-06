@@ -152,6 +152,7 @@ fn frames_follow_viewers_and_simulation_time() {
             far: 100.0,
         },
         motion: None,
+        viewmodel_fov_y_degrees: 0.0,
     };
     let composition = RendererViewComposition {
         cameras: vec![product],

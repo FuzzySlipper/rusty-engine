@@ -717,6 +717,7 @@ fn root_node(instance: &VoxelProjectionInstance<'_>) -> RenderNode {
         transform: instance.transform,
         visible: true,
         layer: RenderLayer::Scene,
+        shadow_casting: Default::default(),
         metadata: RenderMetadata {
             source_entity: None,
             source_scene_node: None,
@@ -740,6 +741,7 @@ fn chunk_node(instance_id: &str, chunk: &VoxelMeshChunk) -> RenderNode {
         },
         visible: true,
         layer: RenderLayer::Scene,
+        shadow_casting: Default::default(),
         metadata: RenderMetadata {
             source_entity: None,
             source_scene_node: None,

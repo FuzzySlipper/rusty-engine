@@ -717,6 +717,9 @@ pub struct StaticMeshInstanceDescriptor {
     /// The layer a root instance draws in; children take their root's.
     #[serde(default, skip_serializing_if = "crate::RenderLayer::is_scene")]
     pub layer: crate::RenderLayer,
+    /// Whether the instance's parts cast shadows (`Cast` by default).
+    #[serde(default, skip_serializing_if = "crate::ShadowCasting::is_cast")]
+    pub shadow_casting: crate::ShadowCasting,
 }
 
 impl StaticMeshInstanceDescriptor {
@@ -1276,6 +1279,9 @@ pub struct AnimatedMeshInstanceDescriptor {
     /// The layer a root instance draws in; children take their root's.
     #[serde(default, skip_serializing_if = "crate::RenderLayer::is_scene")]
     pub layer: crate::RenderLayer,
+    /// Whether the instance's parts cast shadows (`Cast` by default).
+    #[serde(default, skip_serializing_if = "crate::ShadowCasting::is_cast")]
+    pub shadow_casting: crate::ShadowCasting,
 }
 
 impl AnimatedMeshInstanceDescriptor {

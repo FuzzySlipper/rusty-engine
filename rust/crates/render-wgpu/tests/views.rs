@@ -737,3 +737,59 @@ fn every_view_of_a_crowded_frame_blooms() {
         }
     }
 }
+
+#[test]
+fn a_viewmodel_field_of_view_narrower_than_the_camera_draws_the_viewmodel_larger() {
+    let mut harness = Harness::new(RendererOptions::default());
+    let mut ops = room();
+    let mut root = RenderNode::new(Geometry::Group);
+    root.layer = RenderLayer::Viewmodel;
+    ops.push(RenderDiff::Create {
+        handle: RenderHandle::new(30),
+        parent: None,
+        node: root,
+    });
+    // Centred, so a narrower field of view scales it about the middle of the
+    // frame rather than pushing it off an edge.
+    ops.push(instance(
+        31,
+        Some(30),
+        "green",
+        transform([0.0, 0.0, -1.2], 35.0, 0.3),
+    ));
+    harness.apply(ops);
+    let green = |frame: &[u8]| {
+        frame
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .filter(|[r, g, _, _]| *g > 60 && *g > *r)
+            .count()
+    };
+    let eye = camera("eye", [0.0, 0.0, 0.0], 0.0, 0.0);
+    let world_fov = green(&harness.single(&eye));
+    let mut narrow = eye.clone();
+    narrow.viewmodel_fov_y_degrees = 30.0;
+    let narrow_fov = green(&harness.single(&narrow));
+    assert!(world_fov > 0, "the viewmodel box is in view");
+    assert!(
+        narrow_fov > world_fov * 2,
+        "a 30 degree viewmodel field of view magnifies the box about the centre, roughly four times its area at the camera's 60: {narrow_fov} vs {world_fov} pixels"
+    );
+    let mut wide = eye.clone();
+    wide.viewmodel_fov_y_degrees = eye_fov(&eye);
+    assert_eq!(
+        green(&harness.single(&wide)),
+        world_fov,
+        "the camera's own field of view asked for explicitly draws the same"
+    );
+}
+
+fn eye_fov(camera: &render_host_contracts::RendererCompositionCamera) -> f64 {
+    match camera.projection {
+        render_host_contracts::RendererCameraProjection::Perspective { fov_y_degrees, .. } => {
+            fov_y_degrees
+        }
+        _ => unreachable!("the test camera is perspective"),
+    }
+}

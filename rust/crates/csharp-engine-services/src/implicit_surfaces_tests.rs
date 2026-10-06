@@ -59,6 +59,7 @@ fn fact(object_id: u64, appearance: NativeAppearanceHandle) -> NativeAppearanceF
         appearance,
         visible: true,
         layer: NativeRenderLayer::Scene,
+        shadow_casting: Default::default(),
     }
 }
 

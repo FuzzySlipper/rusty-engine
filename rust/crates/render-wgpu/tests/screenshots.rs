@@ -145,6 +145,7 @@ fn camera(position: [f64; 3], yaw_degrees: f64, pitch_degrees: f64) -> RendererC
             far: 100.0,
         },
         motion: None,
+        viewmodel_fov_y_degrees: 0.0,
     }
 }
 
@@ -302,6 +303,7 @@ fn instance(handle: u64, parent: Option<u64>, asset: &str, transform: Transform)
             material_overrides: Vec::new(),
             metadata: RenderMetadata::default(),
             layer: RenderLayer::Scene,
+            shadow_casting: Default::default(),
         },
     }
 }
@@ -540,6 +542,7 @@ fn a_torch_lights_a_dark_room_when_the_default_rig_is_disabled() {
                 enabled: true,
                 shadow_intent: LightShadowIntent::Disabled,
                 shadow: Default::default(),
+                range: None,
             },
         },
     ]);

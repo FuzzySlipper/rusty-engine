@@ -250,6 +250,7 @@ fn every_retained_operation_frame() -> RenderFrameDiff {
                 material_overrides: Vec::new(),
                 metadata: metadata(3, "static"),
                 layer: RenderLayer::Scene,
+                shadow_casting: Default::default(),
             },
         },
         RenderDiff::SetMaterialInstanceParameters {
@@ -276,6 +277,7 @@ fn every_retained_operation_frame() -> RenderFrameDiff {
                 playback: Some(playback.clone()),
                 metadata: metadata(4, "animated"),
                 layer: RenderLayer::Scene,
+                shadow_casting: Default::default(),
             },
         },
         RenderDiff::SetAnimatedMeshPlayback {

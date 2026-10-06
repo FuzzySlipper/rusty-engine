@@ -955,6 +955,13 @@ fn composition_camera(
             far: descriptor.projection.far,
         },
     };
+    let viewmodel_fov = descriptor.viewmodel_fov_y_degrees;
+    if !(viewmodel_fov.is_finite() && (0.0..180.0).contains(&viewmodel_fov)) {
+        return Err(CsharpEngineServicesError::new(
+            "CSHARP_CAMERA_DESCRIPTOR",
+            "the viewmodel field of view must be 0 (the camera's own) or between 0 and 180 degrees",
+        ));
+    }
     Ok(RendererCompositionCamera {
         id,
         pose: RendererCameraPose {
@@ -972,6 +979,7 @@ fn composition_camera(
         },
         projection,
         motion: camera.motion,
+        viewmodel_fov_y_degrees: viewmodel_fov,
     })
 }
 
@@ -1820,6 +1828,7 @@ mod tests {
                 far: 1_000.0,
             },
             viewport,
+            viewmodel_fov_y_degrees: 0.0,
         }
     }
 
@@ -2415,5 +2424,52 @@ mod tests {
             composition.views[0].camera_id,
             format!("csharp-camera-{}", front.value)
         );
+    }
+}
+
+#[cfg(test)]
+mod viewmodel_field_of_view {
+    use super::*;
+
+    fn entry(viewmodel_fov_y_degrees: f64) -> CameraEntry {
+        CameraEntry {
+            descriptor: NativeCameraDescriptor {
+                pose: NativeCameraPose::default(),
+                basis_mode: NativeCameraBasisMode::Derived,
+                basis: NativeCameraBasis::default(),
+                projection: NativeCameraProjection {
+                    kind: NativeCameraProjectionKind::Perspective,
+                    fov_y_degrees: 70.0,
+                    vertical_size: 1.0,
+                    near: 0.1,
+                    far: 500.0,
+                },
+                viewport: NativeCameraViewport {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 1.0,
+                    height: 1.0,
+                },
+                viewmodel_fov_y_degrees,
+            },
+            motion: None,
+            next_sample_id: 1,
+            viewport_anchor: None,
+        }
+    }
+
+    #[test]
+    fn the_viewmodel_field_of_view_reaches_the_composition_camera_within_its_range() {
+        let camera = composition_camera("eye".to_owned(), entry(0.0)).unwrap();
+        assert_eq!(
+            camera.viewmodel_fov_y_degrees, 0.0,
+            "0 keeps the camera's own"
+        );
+        let camera = composition_camera("eye".to_owned(), entry(35.0)).unwrap();
+        assert_eq!(camera.viewmodel_fov_y_degrees, 35.0);
+        for refused in [180.0, -1.0, f64::NAN] {
+            let error = composition_camera("eye".to_owned(), entry(refused)).unwrap_err();
+            assert_eq!(error.code(), "CSHARP_CAMERA_DESCRIPTOR", "{refused}");
+        }
     }
 }

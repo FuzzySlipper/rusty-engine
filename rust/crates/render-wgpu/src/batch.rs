@@ -211,7 +211,8 @@ pub(crate) fn blended_list(
     group(parts, entries, base)
 }
 
-/// Parts that may cast shadows: every shown triangle part of the scene layer.
+/// Parts that may cast shadows: every shown triangle part of the scene layer
+/// whose node casts (`ShadowCasting::Cast`).
 pub(crate) fn caster_candidates(parts: &Parts) -> Vec<PartId> {
     parts
         .state
@@ -220,6 +221,7 @@ pub(crate) fn caster_candidates(parts: &Parts) -> Vec<PartId> {
         .filter(|(id, state)| {
             parts.meta[*id].is_some()
                 && state.shown
+                && state.casts_shadows
                 && state.layer == RenderLayer::Scene
                 && !state.class.lines
         })

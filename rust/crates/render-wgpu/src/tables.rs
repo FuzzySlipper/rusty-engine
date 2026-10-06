@@ -40,7 +40,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use glam::{Mat4, Vec3};
 use render_model::{
     AnimatedMeshInstanceDescriptor, FogDescriptor, Geometry, LightDescriptor, Material,
-    MaterialInstanceParameters, RenderHandle, RenderLayer, RenderMaterialDescriptor,
+    MaterialInstanceParameters, RenderHandle, RenderLayer, RenderMaterialDescriptor, ShadowCasting,
     SkyBackgroundDescriptor, SpriteAtlasDescriptor, SpriteInstanceDescriptor,
     ToneMappingDescriptor, VoxelObjectInstanceDescriptor,
 };
@@ -350,6 +350,8 @@ pub(crate) struct NodeRow {
     pub layer: RenderLayer,
     /// The root ancestor's layer: children draw in their root's scene.
     pub world_layer: RenderLayer,
+    /// Whether the node's own parts cast shadows; not inherited.
+    pub shadow_casting: ShadowCasting,
     pub kind: NodeKind,
     pub parts: Vec<PartId>,
 }
@@ -396,6 +398,8 @@ pub(crate) struct PartState {
     pub shown: bool,
     /// The root's layer.
     pub layer: RenderLayer,
+    /// The part casts into shadow layers (`ShadowCasting::Cast`).
+    pub casts_shadows: bool,
 }
 
 /// GPU row per part: model matrix, normal matrix (3 columns), linear colour
@@ -469,6 +473,7 @@ impl Parts {
             local: None,
             shown: false,
             layer: RenderLayer::Scene,
+            casts_shadows: true,
         };
         let id = if let Some(id) = self.free.pop() {
             self.meta[id as usize] = Some(part);
@@ -498,7 +503,14 @@ impl Parts {
     }
 
     /// Write a part's world state into its GPU row and mark it for upload.
-    pub fn write(&mut self, id: PartId, world: &Mat4, shown: bool, layer: RenderLayer) {
+    pub fn write(
+        &mut self,
+        id: PartId,
+        world: &Mat4,
+        shown: bool,
+        layer: RenderLayer,
+        casts_shadows: bool,
+    ) {
         let world = &match self.state[id as usize].local {
             Some(local) => *world * local,
             None => *world,
@@ -528,6 +540,7 @@ impl Parts {
         state.mirrored = mirrored;
         state.shown = shown;
         state.layer = layer;
+        state.casts_shadows = casts_shadows;
         self.dirty.insert(id);
         self.moved.insert(id);
     }

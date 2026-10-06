@@ -54,6 +54,7 @@ fn composition() -> RendererViewComposition {
                 far: 100.0,
             },
             motion: None,
+            viewmodel_fov_y_degrees: 0.0,
         }],
         targets: Vec::new(),
         views: vec![RendererCompositionView {

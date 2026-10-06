@@ -7,8 +7,8 @@ use std::collections::BTreeMap;
 use glam::{Mat4, Vec3};
 use render_model::{
     Geometry, LightDescriptor, MaterialAlphaModeDescriptor, RenderDiff, RenderHandle, RenderLayer,
-    RenderMaterialDescriptor, StaticMeshAsset, TextureColorSpace, TextureDescriptor, TextureFilter,
-    TextureWrap, VoxelSurfaceAlphaModeDescriptor,
+    RenderMaterialDescriptor, ShadowCasting, StaticMeshAsset, TextureColorSpace, TextureDescriptor,
+    TextureFilter, TextureWrap, VoxelSurfaceAlphaModeDescriptor,
 };
 use wgpu::util::DeviceExt;
 
@@ -23,6 +23,15 @@ use crate::tables::{
 };
 use crate::voxel::VoxelSurfaceUniform;
 use crate::Renderer;
+
+/// Where a new node sits and how it draws: its local transform, visibility,
+/// layer and whether its parts cast shadows.
+struct NodePlacement {
+    local: Mat4,
+    visible: bool,
+    layer: RenderLayer,
+    shadow_casting: ShadowCasting,
+}
 
 /// An op the backend skipped, with the reason. Rendering continues without it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -175,9 +184,12 @@ impl Renderer {
                 self.insert_node(
                     *handle,
                     *parent,
-                    crate::convert::transform_matrix(&node.transform),
-                    node.visible,
-                    node.layer,
+                    NodePlacement {
+                        local: crate::convert::transform_matrix(&node.transform),
+                        visible: node.visible,
+                        layer: node.layer,
+                        shadow_casting: node.shadow_casting,
+                    },
                     kind,
                 );
             }
@@ -188,9 +200,12 @@ impl Renderer {
             } => self.insert_node(
                 *handle,
                 *parent,
-                crate::convert::transform_matrix(&instance.transform),
-                instance.visible,
-                instance.layer,
+                NodePlacement {
+                    local: crate::convert::transform_matrix(&instance.transform),
+                    visible: instance.visible,
+                    layer: instance.layer,
+                    shadow_casting: instance.shadow_casting,
+                },
                 NodeKind::StaticMesh {
                     asset: instance.asset.clone(),
                     overrides: instance
@@ -209,9 +224,12 @@ impl Renderer {
                 self.insert_node(
                     *handle,
                     *parent,
-                    crate::convert::transform_matrix(&instance.transform),
-                    instance.visible,
-                    instance.layer,
+                    NodePlacement {
+                        local: crate::convert::transform_matrix(&instance.transform),
+                        visible: instance.visible,
+                        layer: instance.layer,
+                        shadow_casting: instance.shadow_casting,
+                    },
                     NodeKind::AnimatedMesh(Box::new(instance.clone())),
                 );
                 self.create_animated_instance(*handle);
@@ -223,9 +241,12 @@ impl Renderer {
             } => self.insert_node(
                 *handle,
                 *parent,
-                crate::convert::transform_matrix(&instance.transform),
-                instance.visible,
-                RenderLayer::Scene,
+                NodePlacement {
+                    local: crate::convert::transform_matrix(&instance.transform),
+                    visible: instance.visible,
+                    layer: RenderLayer::Scene,
+                    shadow_casting: ShadowCasting::Cast,
+                },
                 NodeKind::VoxelObject(Box::new(instance.clone())),
             ),
             RenderDiff::CreateSprite {
@@ -242,9 +263,13 @@ impl Renderer {
                 self.insert_node(
                     *handle,
                     *parent,
-                    crate::convert::transform_matrix(&sprite.transform),
-                    sprite.visible,
-                    sprite.layer,
+                    NodePlacement {
+                        local: crate::convert::transform_matrix(&sprite.transform),
+                        visible: sprite.visible,
+                        layer: sprite.layer,
+                        shadow_casting: // Sprites cast by their own shadow policy.
+                    ShadowCasting::Cast,
+                    },
                     NodeKind::Sprite(Box::new(row)),
                 )
             }
@@ -256,9 +281,12 @@ impl Renderer {
                 self.insert_node(
                     *handle,
                     *parent,
-                    Mat4::IDENTITY,
-                    true,
-                    RenderLayer::Scene,
+                    NodePlacement {
+                        local: Mat4::IDENTITY,
+                        visible: true,
+                        layer: RenderLayer::Scene,
+                        shadow_casting: ShadowCasting::Cast,
+                    },
                     NodeKind::Light(light.clone()),
                 );
                 self.tables.lights.insert(*handle);
@@ -473,11 +501,15 @@ impl Renderer {
         &mut self,
         handle: RenderHandle,
         parent: Option<RenderHandle>,
-        local: Mat4,
-        visible: bool,
-        layer: RenderLayer,
+        placement: NodePlacement,
         kind: NodeKind,
     ) {
+        let NodePlacement {
+            local,
+            visible,
+            layer,
+            shadow_casting,
+        } = placement;
         if self.tables.nodes.contains_key(&handle) {
             self.destroy_node(handle);
         }
@@ -518,6 +550,7 @@ impl Renderer {
                 world_visible: visible,
                 layer,
                 world_layer: layer,
+                shadow_casting,
                 kind,
                 parts: Vec::new(),
             },
@@ -779,6 +812,7 @@ impl Renderer {
             NodeKind::Group | NodeKind::Light(_) | NodeKind::Sprite(_) => {}
         }
         let (world, shown, layer) = (node.world, node.world_visible, node.world_layer);
+        let casts = node.shadow_casting.is_cast();
         let mut ids = Vec::with_capacity(parts.len());
         for (mut part, mut row) in parts {
             if let MeshRef::Builtin(kind) = part.mesh {
@@ -817,7 +851,7 @@ impl Renderer {
                 features,
             };
             let id = self.tables.parts.insert(part, row, bounds, class);
-            self.tables.parts.write(id, &world, shown, layer);
+            self.tables.parts.write(id, &world, shown, layer, casts);
             ids.push(id);
         }
         if let Some(node) = self.tables.nodes.get_mut(&handle) {
@@ -1804,6 +1838,7 @@ pub(crate) fn light_row(light: &LightDescriptor, world: &Mat4) -> Option<[f32; 1
     };
     match light {
         LightDescriptor::Ambient { enabled: false, .. }
+        | LightDescriptor::Hemisphere { enabled: false, .. }
         | LightDescriptor::Directional { enabled: false, .. }
         | LightDescriptor::Point { enabled: false, .. }
         | LightDescriptor::Spot { enabled: false, .. } => None,
@@ -1818,6 +1853,24 @@ pub(crate) fn light_row(light: &LightDescriptor, world: &Mat4) -> Option<[f32; 1
             0.0,
             [0.0; 4],
         )),
+        // The neutral rig's row: sky colour, world up, ground colour.
+        LightDescriptor::Hemisphere {
+            color,
+            ground_color,
+            intensity,
+            ..
+        } => {
+            let ground = scaled(*ground_color, *intensity);
+            Some(row(
+                1.0,
+                scaled(*color, *intensity),
+                Vec3::ZERO,
+                0.0,
+                Vec3::Y,
+                0.0,
+                [ground[0], ground[1], ground[2], 0.0],
+            ))
+        }
         LightDescriptor::Directional {
             color,
             intensity,

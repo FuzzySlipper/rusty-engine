@@ -514,6 +514,7 @@ fn shadow_scene(harness: &mut Harness) {
                 enabled: true,
                 shadow_intent: LightShadowIntent::Disabled,
                 shadow: Default::default(),
+                range: None,
             },
         },
     ]);
@@ -780,6 +781,7 @@ fn static_mesh_vertex_colours_multiply_the_material_and_payloads_ignore_them() {
                 enabled: true,
                 shadow_intent: LightShadowIntent::Disabled,
                 shadow: Default::default(),
+                range: None,
             },
         },
     ]);
@@ -966,6 +968,7 @@ fn metal_materials_lose_their_diffuse_and_tint_their_specular() {
                 enabled: true,
                 shadow_intent: LightShadowIntent::Disabled,
                 shadow: Default::default(),
+                range: None,
             },
         },
     ];
@@ -1427,6 +1430,7 @@ fn a_triplanar_material_draws_a_dual_contoured_mound_without_chart_seams() {
                     enabled: true,
                     shadow_intent: LightShadowIntent::Disabled,
                     shadow: Default::default(),
+                    range: None,
                 },
             },
         ];
@@ -1532,6 +1536,7 @@ fn an_ambient_light_requesting_shadows_leaves_a_cave_darker_than_open_ground() {
                 enabled: true,
                 shadow_intent,
                 shadow: Default::default(),
+                range: None,
             },
         }];
         ops.extend(project(&mut projector, &scene, &materials));
@@ -1710,6 +1715,7 @@ fn terrain_layers_blend_sand_into_rock_over_the_chosen_width() {
                         enabled: true,
                         shadow_intent: LightShadowIntent::Disabled,
                         shadow: Default::default(),
+                        range: None,
                     },
                 },
             ];
@@ -1971,6 +1977,7 @@ fn a_high_contrast_keeps_a_blend_between_non_base_layers() {
                     enabled: true,
                     shadow_intent: LightShadowIntent::Disabled,
                     shadow: Default::default(),
+                    range: None,
                 },
             },
         ];
@@ -2356,6 +2363,7 @@ fn sunlit_field(harness: &mut Harness, origin: [f32; 3], posts: &[f32]) {
                 enabled: true,
                 shadow_intent: LightShadowIntent::Disabled,
                 shadow: Default::default(),
+                range: None,
             },
         },
         instance(1, None, "mesh/ground", Transform::IDENTITY),
@@ -2624,5 +2632,130 @@ fn a_soft_light_filters_its_shadow_edges_differently() {
     assert!(
         differing(&hard, &soft) > 50,
         "the filters draw the same image"
+    );
+}
+
+fn pixel_at(frame: &[u8], x: u32, y: u32) -> [u8; 4] {
+    let at = ((y * WIDTH + x) * 4) as usize;
+    frame[at..at + 4].try_into().unwrap()
+}
+
+/// Pixels whose green channel differs by more than a shade between two frames.
+fn differing_pixels(a: &[u8], b: &[u8]) -> usize {
+    a.as_chunks::<4>()
+        .0
+        .iter()
+        .zip(b.as_chunks::<4>().0)
+        .filter(|(a, b)| a[1].abs_diff(b[1]) > 8)
+        .count()
+}
+
+#[test]
+fn a_part_that_does_not_cast_throws_no_shadow_and_still_receives_them() {
+    let frame = |casting: ShadowCasting, shadows: bool| {
+        let mut harness = Harness::new(RendererOptions {
+            default_world_lights: false,
+            shadows,
+            ..RendererOptions::default()
+        });
+        shadow_scene(&mut harness);
+        // The crates are recreated with the casting asked for; the floor
+        // keeps casting into the layers.
+        for handle in [2, 3] {
+            harness.apply(vec![RenderDiff::Destroy {
+                handle: RenderHandle::new(handle),
+            }]);
+            let mut held = instance(handle, None, "mesh/crate", Transform::IDENTITY);
+            let RenderDiff::CreateStaticMeshInstance { instance: held, .. } = &mut held else {
+                unreachable!()
+            };
+            held.shadow_casting = casting;
+            held.transform = if handle == 2 {
+                transform([-1.5, 0.0, -1.0], 20.0, [1.0; 3])
+            } else {
+                transform([1.2, 0.0, 0.5], -15.0, [1.0, 1.6, 1.0])
+            };
+            let descriptor = held.clone();
+            harness.apply(vec![RenderDiff::CreateStaticMeshInstance {
+                handle: RenderHandle::new(handle),
+                parent: None,
+                instance: descriptor,
+            }]);
+        }
+        harness.render(&camera([0.0, 4.5, 6.5], 0.0, -32.0)).1
+    };
+    let unshadowed = frame(ShadowCasting::Cast, false);
+    let cast = frame(ShadowCasting::Cast, true);
+    let none = frame(ShadowCasting::None, true);
+    let cast_shadow = differing_pixels(&cast, &unshadowed);
+    let no_shadow = differing_pixels(&none, &unshadowed);
+    assert!(
+        cast_shadow > 400,
+        "casting crates darken the floor: {cast_shadow} pixels"
+    );
+    assert!(
+        no_shadow < cast_shadow / 8,
+        "crates that do not cast leave the floor as lit as without shadows: {no_shadow} vs {cast_shadow} pixels"
+    );
+}
+
+#[test]
+fn a_hemisphere_light_lights_up_faces_in_sky_colour_and_down_faces_in_ground_colour() {
+    let mut harness = Harness::new(RendererOptions {
+        default_world_lights: false,
+        ..RendererOptions::default()
+    });
+    harness.apply(vec![
+        RenderDiff::DefineMaterial {
+            material: material("material/plaster", [0.85, 0.85, 0.85, 1.0], None),
+        },
+        static_mesh(
+            "mesh/floor",
+            box_mesh([-8.0, -0.2, -8.0], [8.0, 0.0, 8.0], |_| 0),
+            "material/plaster",
+        ),
+        static_mesh(
+            "mesh/ceiling",
+            box_mesh([-8.0, 3.0, -8.0], [8.0, 3.2, 8.0], |_| 0),
+            "material/plaster",
+        ),
+        instance(1, None, "mesh/floor", Transform::IDENTITY),
+        instance(2, None, "mesh/ceiling", Transform::IDENTITY),
+        RenderDiff::CreateLight {
+            handle: RenderHandle::new(10),
+            parent: None,
+            light: LightDescriptor::Hemisphere {
+                color: [0.2, 0.4, 1.0],
+                ground_color: [1.0, 0.4, 0.1],
+                intensity: 2.0,
+                enabled: true,
+            },
+        },
+    ]);
+    let frame = harness.render(&camera([0.0, 1.5, 6.0], 0.0, 0.0)).1;
+    let floor = pixel_at(&frame, WIDTH / 2, HEIGHT - 4);
+    let ceiling = pixel_at(&frame, WIDTH / 2, 4);
+    assert!(
+        floor[2] > floor[0] + 40,
+        "the floor faces the sky and takes its blue: {floor:?}"
+    );
+    assert!(
+        ceiling[0] > ceiling[2] + 40,
+        "the ceiling faces the ground and takes its orange: {ceiling:?}"
+    );
+
+    harness.apply(vec![RenderDiff::UpdateLight {
+        handle: RenderHandle::new(10),
+        light: LightDescriptor::Hemisphere {
+            color: [0.2, 0.4, 1.0],
+            ground_color: [1.0, 0.4, 0.1],
+            intensity: 2.0,
+            enabled: false,
+        },
+    }]);
+    let dark = harness.render(&camera([0.0, 1.5, 6.0], 0.0, 0.0)).1;
+    assert!(
+        pixel_at(&dark, WIDTH / 2, HEIGHT - 4)[2] < 8,
+        "a disabled hemisphere light lights nothing"
     );
 }

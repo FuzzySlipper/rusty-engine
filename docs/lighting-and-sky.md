@@ -18,9 +18,12 @@ its surroundings. Updating or disabling that light changes the same retained lig
 Each shadowed light renders the scene into layers of a shadow atlas: four
 cascades for a directional light, one layer for a spot light, six for a point
 light. Every shown part of the scene layer casts, so a new object needs no
-shadow setup, but a layer draws only the parts inside its view and, for a
-point or spot light with a `Range`, the parts that range reaches. Give lamps a
-range: a lamp without one casts from everything within 500 m of it.
+shadow setup, unless its appearance fact says `ShadowCasting.None`: a water
+plane, glass or a fog card then throws no shadow, and small clutter costs no
+caster draws; it still receives shadows. A layer draws only the casters inside
+its view and, for a point or spot light with a `Range`, the ones that range
+reaches. Give lamps a range: a lamp without one casts from everything within
+500 m of it.
 
 A directional light's shadow follows the camera, wherever its node is. Its
 cascades split the view from the camera's near plane out to the light's
@@ -76,15 +79,30 @@ ground and the walls facing out of it keep it. Keep a second, unshadowed
 ambient light for the fill a dark interior should still have, and torches for
 the rest.
 
-- The sky is looked at straight down over a 64 m square centred on the
-  light's position and snapped to its texels, so move the light with the
-  player (or camera) in a large world.
-  Outside the square nothing is occluded.
+- The sky is looked at straight down over a square centred on the light's
+  position and snapped to its texels, so move the light with the player (or
+  camera) in a large world. The square is 64 m a side by default; the
+  light's `Range` (set `HasRange`) is half its side, so a landscape's view
+  distance or one room gets its own extent. A wider square spreads the same
+  texels over more ground (raise `ShadowResolution` with it). Outside the
+  square nothing is occluded.
 - It is one more shadow layer: every shown part inside the square casts into
   it, and it re-renders only when the square moves or a part in it changes. Each lit fragment takes 25
   more comparison samples. Meshing is unchanged.
 - It is presentation only. `Voxel.SampleDirectLighting` (below) still treats
   ambient light as unoccluded.
+
+## A hemisphere light
+
+`LightKind.Hemisphere` lights a surface from the sky above and the ground
+below, blended by how far it faces up: its `Color` is the sky's, its
+`GroundColor` the ground's, both scaled by `Intensity`
+(`LightDescriptor.Hemisphere(sky, ground, intensity)`). The Engine's neutral
+rig lights the world with one, so a product that disables the default world
+lights (`RustyEngineProductDefaultWorldLights`) to own its lighting makes its
+own rather than falling back to a flat ambient. It casts no shadow, metals
+reflect it as they reflect ambient light, and `Voxel.SampleDirectLighting`
+blends it by the sample's normal.
 
 ## The sky's light
 

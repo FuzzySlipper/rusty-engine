@@ -523,10 +523,11 @@ impl Renderer {
             if matches!(node.kind, NodeKind::Light(_)) {
                 self.tables.lights_dirty = true;
             }
+            let casts = node.shadow_casting.is_cast();
             let parts = node.parts.clone();
             stack.extend(node.children.iter().copied());
             for part in parts {
-                self.tables.parts.write(part, &world, visible, layer);
+                self.tables.parts.write(part, &world, visible, layer, casts);
             }
         }
     }

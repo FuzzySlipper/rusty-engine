@@ -154,8 +154,15 @@ pub(crate) fn native_light_descriptor(
             color,
             intensity: descriptor.intensity,
             enabled: descriptor.enabled,
+            range,
             shadow_intent,
             shadow,
+        },
+        NativeLightKind::Hemisphere => LightDescriptor::Hemisphere {
+            color,
+            ground_color: native_vec3_array(descriptor.ground_color),
+            intensity: descriptor.intensity,
+            enabled: descriptor.enabled,
         },
         NativeLightKind::Directional => LightDescriptor::Directional {
             color,
@@ -577,6 +584,7 @@ fn sprite_appearance_fact(appearance: NativeAppearanceHandle) -> NativeAppearanc
         appearance,
         visible: true,
         layer: NativeRenderLayer::Scene,
+        shadow_casting: Default::default(),
     }
 }
 
@@ -6696,6 +6704,10 @@ impl RuntimeAppearanceBridge {
                 transform: native_transform(fact.transform),
                 visible: fact.visible,
                 layer: native_render_layer(fact.layer)?,
+                shadow_casting: match fact.shadow_casting {
+                    NativeShadowCasting::Cast => ShadowCasting::Cast,
+                    NativeShadowCasting::None => ShadowCasting::None,
+                },
                 joint: attachments.get(&fact.object_id).copied(),
             });
         }
@@ -7300,11 +7312,13 @@ fn native_light_readout(fact: &RuntimeLightFact) -> NativeLightReadout {
         outer_angle_radians,
         penumbra,
         shadow_intent,
+        ground_color,
     ) = match &fact.light {
         LightDescriptor::Ambient {
             color,
             intensity,
             enabled,
+            range,
             shadow_intent,
             ..
         } => (
@@ -7314,11 +7328,31 @@ fn native_light_readout(fact: &RuntimeLightFact) -> NativeLightReadout {
             *enabled,
             [0.0; 3],
             [0.0; 3],
-            None,
+            *range,
             0.0,
             0.0,
             0.0,
             *shadow_intent,
+            [0.0; 3],
+        ),
+        LightDescriptor::Hemisphere {
+            color,
+            ground_color,
+            intensity,
+            enabled,
+        } => (
+            NativeLightKind::Hemisphere,
+            *color,
+            *intensity,
+            *enabled,
+            [0.0; 3],
+            [0.0; 3],
+            None,
+            0.0,
+            0.0,
+            0.0,
+            LightShadowIntent::Disabled,
+            *ground_color,
         ),
         LightDescriptor::Directional {
             color,
@@ -7340,6 +7374,7 @@ fn native_light_readout(fact: &RuntimeLightFact) -> NativeLightReadout {
             0.0,
             0.0,
             *shadow_intent,
+            [0.0; 3],
         ),
         LightDescriptor::Point {
             color,
@@ -7362,6 +7397,7 @@ fn native_light_readout(fact: &RuntimeLightFact) -> NativeLightReadout {
             0.0,
             0.0,
             *shadow_intent,
+            [0.0; 3],
         ),
         LightDescriptor::Spot {
             color,
@@ -7387,6 +7423,7 @@ fn native_light_readout(fact: &RuntimeLightFact) -> NativeLightReadout {
             *outer_angle_radians,
             *penumbra,
             *shadow_intent,
+            [0.0; 3],
         ),
     };
     let shadow = fact.light.shadow_settings();
@@ -7425,6 +7462,11 @@ fn native_light_readout(fact: &RuntimeLightFact) -> NativeLightReadout {
             shadow_resolution: shadow.resolution,
             shadow_priority: shadow.priority,
             shadow_soft: shadow.soft,
+            ground_color: NativeVec3 {
+                x: ground_color[0],
+                y: ground_color[1],
+                z: ground_color[2],
+            },
         },
     }
 }
@@ -10151,6 +10193,7 @@ pub(super) mod tests {
             appearance,
             visible: true,
             layer: NativeRenderLayer::Scene,
+            shadow_casting: Default::default(),
         }
     }
 
@@ -10183,6 +10226,7 @@ pub(super) mod tests {
                 shadow_resolution: 0,
                 shadow_priority: 0,
                 shadow_soft: false,
+                ground_color: Default::default(),
             },
         }
     }
@@ -13853,5 +13897,109 @@ mod graphics_call_tests {
         }
         assert_eq!(Arc::as_ptr(&bridge.state.0), state);
         assert_eq!(bridge.state.next_appearance, 5);
+    }
+}
+
+#[cfg(test)]
+mod light_and_shadow_facts {
+    use super::*;
+
+    fn native(kind: NativeLightKind) -> NativeLightDescriptor {
+        NativeLightDescriptor {
+            kind,
+            color: NativeVec3 {
+                x: 0.3,
+                y: 0.5,
+                z: 0.9,
+            },
+            intensity: 1.5,
+            enabled: true,
+            position: NativeVec3::default(),
+            direction: NativeVec3 {
+                x: 0.0,
+                y: 1.0,
+                z: 0.0,
+            },
+            has_range: true,
+            range: 80.0,
+            decay: 0.0,
+            outer_angle_radians: 0.0,
+            penumbra: 0.0,
+            shadow_intent: NativeLightShadowIntent::Requested,
+            shadow_resolution: 0,
+            shadow_priority: 0,
+            shadow_soft: false,
+            ground_color: NativeVec3 {
+                x: 0.4,
+                y: 0.3,
+                z: 0.2,
+            },
+        }
+    }
+
+    #[test]
+    fn a_hemisphere_light_round_trips_its_sky_and_ground_colours() {
+        let light = native_light_descriptor(native(NativeLightKind::Hemisphere)).unwrap();
+        assert_eq!(
+            light,
+            LightDescriptor::Hemisphere {
+                color: [0.3, 0.5, 0.9],
+                ground_color: [0.4, 0.3, 0.2],
+                intensity: 1.5,
+                enabled: true,
+            }
+        );
+        let readout = native_light_readout(&RuntimeLightFact {
+            light_id: 7,
+            parent_object_id: None,
+            light,
+        });
+        assert_eq!(readout.descriptor.kind, NativeLightKind::Hemisphere);
+        assert_eq!(readout.descriptor.ground_color.x, 0.4);
+        assert_eq!(readout.descriptor.color.z, 0.9);
+        assert!(
+            !readout.descriptor.has_range,
+            "a hemisphere light has no range"
+        );
+        assert_eq!(
+            readout.descriptor.shadow_intent,
+            NativeLightShadowIntent::Disabled,
+            "it casts no shadow"
+        );
+
+        let mut dark_ground = native(NativeLightKind::Hemisphere);
+        dark_ground.ground_color.x = 1.5;
+        assert!(
+            native_light_descriptor(dark_ground).is_err(),
+            "the ground colour is held to 0..=1 like the sky's"
+        );
+    }
+
+    #[test]
+    fn an_ambient_light_range_is_its_sky_square_and_reads_back() {
+        let light = native_light_descriptor(native(NativeLightKind::Ambient)).unwrap();
+        assert!(matches!(
+            light,
+            LightDescriptor::Ambient {
+                range: Some(range),
+                shadow_intent: LightShadowIntent::Requested,
+                ..
+            } if range == 80.0
+        ));
+        let readout = native_light_readout(&RuntimeLightFact {
+            light_id: 8,
+            parent_object_id: None,
+            light,
+        });
+        assert!(readout.descriptor.has_range);
+        assert_eq!(readout.descriptor.range, 80.0);
+
+        let mut unranged = native(NativeLightKind::Ambient);
+        unranged.has_range = false;
+        let light = native_light_descriptor(unranged).unwrap();
+        assert!(matches!(
+            light,
+            LightDescriptor::Ambient { range: None, .. }
+        ));
     }
 }

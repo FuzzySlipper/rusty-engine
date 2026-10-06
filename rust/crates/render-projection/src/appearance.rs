@@ -10,8 +10,8 @@ use render_model::{
     AnimatedMeshAsset, AnimatedMeshInstanceDescriptor, AnimatedMeshPlaybackCommand, Geometry,
     LightDescriptor, Material, MaterialInstanceParameters, MeshMaterialSlot, RenderDiff,
     RenderHandle, RenderLayer, RenderMaterialDescriptor, RenderMetadata, RenderNode,
-    ShaderDescriptor, SpriteAtlasDescriptor, SpriteInstanceDescriptor, StaticMeshAsset,
-    StaticMeshInstanceDescriptor, TextureDescriptor, Transform,
+    ShaderDescriptor, ShadowCasting, SpriteAtlasDescriptor, SpriteInstanceDescriptor,
+    StaticMeshAsset, StaticMeshInstanceDescriptor, TextureDescriptor, Transform,
 };
 
 use crate::HandleAllocationError;
@@ -234,6 +234,7 @@ pub(crate) struct NodeValues<'a> {
     pub(crate) transform: Transform,
     pub(crate) visible: bool,
     pub(crate) layer: RenderLayer,
+    pub(crate) shadow_casting: ShadowCasting,
 }
 
 pub(crate) fn validate_appearance(
@@ -249,6 +250,7 @@ pub(crate) fn validate_appearance(
             transform: node.transform,
             visible: node.visible,
             layer: node.layer,
+            shadow_casting: node.shadow_casting,
             metadata: metadata.clone(),
         }
         .validate()
@@ -271,6 +273,7 @@ pub(crate) fn validate_appearance(
                 material_overrides: material_overrides.clone(),
                 metadata: metadata.clone(),
                 layer: node.layer,
+                shadow_casting: Default::default(),
             }
             .validate()
             .map_err(|source| AppearanceProjectionError::InvalidStaticMeshInstance { id, source })
@@ -304,6 +307,7 @@ pub(crate) fn validate_appearance(
                 playback: playback.clone(),
                 metadata: metadata.clone(),
                 layer: node.layer,
+                shadow_casting: Default::default(),
             }
             .validate()
             .map_err(|source| AppearanceProjectionError::InvalidAnimatedMeshInstance { id, source })
@@ -484,6 +488,7 @@ pub(crate) fn light_kind(light: &LightDescriptor) -> u8 {
         LightDescriptor::Directional { .. } => 1,
         LightDescriptor::Point { .. } => 2,
         LightDescriptor::Spot { .. } => 3,
+        LightDescriptor::Hemisphere { .. } => 4,
     }
 }
 
@@ -503,6 +508,7 @@ pub(crate) fn create_node(
                 transform: node.transform,
                 visible: node.visible,
                 layer: node.layer,
+                shadow_casting: node.shadow_casting,
                 metadata,
             },
         },
@@ -519,6 +525,7 @@ pub(crate) fn create_node(
                 material_overrides: material_overrides.clone(),
                 metadata,
                 layer: node.layer,
+                shadow_casting: node.shadow_casting,
             },
         },
         Appearance::AnimatedMesh {
@@ -539,6 +546,7 @@ pub(crate) fn create_node(
                 playback: playback.clone(),
                 metadata,
                 layer: node.layer,
+                shadow_casting: node.shadow_casting,
             },
         },
         Appearance::Sprite { sprite } => {
@@ -865,6 +873,7 @@ mod tests {
                 transform: Transform::IDENTITY,
                 visible: true,
                 layer: RenderLayer::Viewmodel,
+                shadow_casting: Default::default(),
             };
             let layer = match create_node(RenderHandle::new(1), None, node, Default::default()) {
                 RenderDiff::CreateStaticMeshInstance { instance, .. } => instance.layer,

@@ -68,6 +68,7 @@ fn animated(
                 ..RenderMetadata::default()
             },
             layer: RenderLayer::Scene,
+            shadow_casting: Default::default(),
         },
     }
 }
@@ -695,6 +696,7 @@ fn shadowed_character(harness: &mut Harness) {
                 enabled: true,
                 shadow_intent: LightShadowIntent::Disabled,
                 shadow: Default::default(),
+                range: None,
             },
         },
     ]);

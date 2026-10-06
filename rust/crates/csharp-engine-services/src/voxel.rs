@@ -1622,6 +1622,7 @@ mod tests {
             shadow_resolution: 0,
             shadow_priority: 0,
             shadow_soft: false,
+            ground_color: Default::default(),
         };
         let mut request = NativeVoxelLightSampleRequest {
             session,

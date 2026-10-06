@@ -75,6 +75,18 @@ pub struct RendererCompositionCamera {
     pub projection: RendererCameraProjection,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub motion: Option<RendererCameraMotion>,
+    /// The viewmodel layer's vertical field of view in degrees; 0 (the
+    /// default) draws it with the camera's own projection.
+    #[serde(
+        default,
+        skip_serializing_if = "is_zero",
+        rename = "viewmodelFovYDegrees"
+    )]
+    pub viewmodel_fov_y_degrees: f64,
+}
+
+fn is_zero(value: &f64) -> bool {
+    *value == 0.0
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

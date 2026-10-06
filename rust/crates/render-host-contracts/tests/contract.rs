@@ -27,6 +27,7 @@ fn camera_motion_contract_carries_renderer_sampling_facts() {
             far: 1_000.0,
         },
         motion: Some(motion.clone()),
+        viewmodel_fov_y_degrees: 0.0,
     };
     assert_eq!(
         serde_json::to_value(&camera).unwrap()["motion"],

@@ -61,6 +61,10 @@ pub enum NativeLightKind {
     Directional = 1,
     Point = 2,
     Spot = 3,
+    /// Sky light from above and ground light from below, blended by how far
+    /// a surface faces up: `color` is the sky's, `ground_color` the
+    /// ground's. It casts no shadow.
+    Hemisphere = 4,
 }
 
 #[repr(u32)]
@@ -94,6 +98,11 @@ pub struct NativeLightDescriptor {
     pub shadow_priority: i32,
     /// A wider, softer shadow filter.
     pub shadow_soft: bool,
+    /// A hemisphere light's ground colour (`color` is its sky's); unused by
+    /// the other kinds. An ambient light with a requested shadow uses
+    /// `has_range`/`range` as half the side of the square of sky it looks
+    /// down over (32 m without).
+    pub ground_color: NativeVec3,
 }
 
 /// One requested runtime light fact. `logical_id` and `parent_object_id`
@@ -134,6 +143,15 @@ pub enum NativeRenderLayer {
     Debug = 1,
     Ui = 2,
     Viewmodel = 3,
+}
+
+/// Whether an object's parts cast shadows. Receiving is unchanged.
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum NativeShadowCasting {
+    #[default]
+    Cast = 0,
+    None = 1,
 }
 
 #[repr(u32)]
@@ -849,6 +867,7 @@ pub struct NativeAppearanceFact {
     pub appearance: NativeAppearanceHandle,
     pub visible: bool,
     pub layer: NativeRenderLayer,
+    pub shadow_casting: NativeShadowCasting,
 }
 
 /// Bounded Engine-generated presentation facts. These are not renderer frame

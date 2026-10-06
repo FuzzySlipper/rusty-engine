@@ -246,6 +246,7 @@ fn character(resources: &mut Resources) -> (Vec<RenderDiff>, AnimatedMeshAsset) 
                 playback: None,
                 metadata: RenderMetadata::default(),
                 layer: RenderLayer::Scene,
+                shadow_casting: Default::default(),
             },
         }
     };
@@ -357,6 +358,7 @@ fn a_joint_attachment_follows_the_skin_joint_when_another_node_shares_its_name()
                 playback: None,
                 metadata: RenderMetadata::default(),
                 layer: RenderLayer::Scene,
+                shadow_casting: Default::default(),
             },
         },
         primitive(5, Some(BODY), Geometry::Cube, [0.8, 0.2, 0.1, 1.0]),
@@ -433,6 +435,7 @@ fn a_reopened_character_renders_the_sampled_pose_as_the_original_did() {
                 playback: Some(pose),
                 metadata: RenderMetadata::default(),
                 layer: RenderLayer::Scene,
+                shadow_casting: Default::default(),
             },
         },
     ]);
@@ -513,6 +516,7 @@ fn sprites_voxel_surfaces_and_ambient_lights_fail_the_export_by_name() {
                 enabled: true,
                 shadow_intent: LightShadowIntent::Disabled,
                 shadow: Default::default(),
+                range: None,
             },
         },
         group(5, None, Transform::IDENTITY),

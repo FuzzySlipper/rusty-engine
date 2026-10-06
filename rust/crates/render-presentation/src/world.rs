@@ -461,6 +461,7 @@ impl PresentationWorld {
                         visible: $value.visible,
                         layer: $layer,
                         metadata: $value.metadata.clone(),
+                        shadow_casting: Default::default(),
                     }
                 };
             }
@@ -1584,6 +1585,7 @@ mod tests {
                         material_overrides: Vec::new(),
                         metadata: RenderMetadata::default(),
                         layer: RenderLayer::Scene,
+                        shadow_casting: Default::default(),
                     },
                 },
             ]))
@@ -1822,6 +1824,7 @@ mod joint_attachment_tests {
                     metadata: RenderMetadata::default(),
                     inspection: AnimatedMeshInspection::default(),
                     layer: RenderLayer::Scene,
+                    shadow_casting: Default::default(),
                 },
             },
             RenderDiff::Create {
