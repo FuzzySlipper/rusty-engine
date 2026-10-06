@@ -26,6 +26,7 @@ mod camera;
 mod capture;
 mod compose;
 mod composition;
+mod compute;
 mod convert;
 mod driver;
 mod effects;
@@ -73,6 +74,7 @@ pub use animated::AnimationFact;
 pub use apply::ApplyIssue;
 pub use camera::CameraSampleReadout;
 pub use composition::{DrawnCamera, TargetReadout, TargetStatus, ViewCompositionReadout};
+pub use compute::{ComputeLimits, ComputeReadout};
 pub use driver::{Capture, SceneChange, SceneDriver, SceneFrame, SceneState, SceneView};
 pub use frame::FrameStats;
 pub use ghost::GhostPlateReadout;
@@ -168,6 +170,8 @@ pub struct Renderer {
     /// it moves past the value they were drawn at.
     scene_generation: u64,
     compose: compose::Compose,
+    /// The compute pass, or why this adapter cannot run it.
+    compute: Result<compute::ComputePass, String>,
     composition: composition::ViewComposition,
     effects: effects::Effects,
     particles: particles::Particles,
@@ -234,6 +238,11 @@ impl Renderer {
             Entry::Compose,
             Features::default(),
         ));
+        let compute_shader = pipelines::standard(layouts.shaders.module(
+            device,
+            Entry::Compute,
+            Features::default(),
+        ));
         let mut renderer = Self {
             gpu: gpu.clone(),
             options,
@@ -264,6 +273,7 @@ impl Renderer {
             ghost_pipelines: ghost::GhostPipelines::new(device, ghost_shader),
             scene_generation: 0,
             compose: compose::Compose::new(device, compose_shader),
+            compute: compute::ComputePass::new(gpu, compute_shader),
             composition: Default::default(),
             effects,
             particles: Default::default(),
@@ -314,6 +324,25 @@ impl Renderer {
     pub fn set_options(&mut self, options: RendererOptions) {
         self.options = options;
         self.tables.lights_dirty = true;
+    }
+
+    /// What the compute pass did last frame and costs, or why it refused.
+    pub fn compute_readout(&self) -> ComputeReadout {
+        match &self.compute {
+            Ok(pass) => pass.readout(),
+            Err(reason) => compute::refused_readout(&self.gpu, reason),
+        }
+    }
+
+    /// The compute pass's output rows from the last frame, one per part
+    /// slot: the slot's world position from its uploaded row, and 1 in `w`
+    /// (a freed slot keeps its last row). Empty when the pass refused.
+    /// Blocks until the GPU finishes, like a readback; for tests and tools.
+    pub fn read_compute_output(&self) -> Vec<[f32; 4]> {
+        match &self.compute {
+            Ok(pass) => pass.read_output(&self.gpu, self.tables.parts.meta.len() as u32),
+            Err(_) => Vec::new(),
+        }
     }
 
     /// Retained table sizes, for diagnostics and tests.

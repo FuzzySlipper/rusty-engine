@@ -111,6 +111,7 @@ fn run() -> Result<(), String> {
         .draw(|renderer, _| (renderer.table_counts(), renderer.mesh_memory()))
         .0;
     let (skipped, last_skip) = driver.skipped_ops();
+    let compute = driver.compute_readout();
     let report = json!({
         "snapshot": snapshot_path.display().to_string(),
         "product": snapshot.metadata.product,
@@ -127,6 +128,15 @@ fn run() -> Result<(), String> {
         "lastSkip": last_skip,
         "image": { "path": out.display().to_string(), "width": width, "height": height },
         "timing": timing,
+        // The compute pass's GPU cost over the frames drawn, or why it refused.
+        "compute": {
+            "refused": compute.refused,
+            "timestamps": compute.timestamps,
+            "workgroups": compute.workgroups,
+            "timedFrames": compute.timed_frames,
+            "medianGpuMs": compute.median_gpu_ms,
+            "limits": format!("{:?}", compute.limits),
+        },
     });
     println!(
         "{}",

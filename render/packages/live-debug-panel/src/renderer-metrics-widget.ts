@@ -127,6 +127,12 @@ function renderSummary(root: HTMLElement, summary: ProductHostRendererStatus): v
       `Frames: ${window.framesPerSecond.toFixed(1)} per second | acquire ${milliseconds(window.medianMs.acquire)} | lock ${milliseconds(window.medianMs.lock)} | draw ${milliseconds(window.medianMs.draw)} | present ${milliseconds(window.medianMs.present)}`,
     );
   }
+  const compute = renderer.compute;
+  lines.push(
+    compute.refused === undefined
+      ? `Compute pass: ${milliseconds(compute.medianGpuMs)} GPU over ${String(compute.timedFrames)} frames${compute.timestamps ? '' : ' (no timestamp queries)'} | ${String(compute.workgroups)} workgroups`
+      : `Compute pass: refused (${compute.refused})`,
+  );
   const skipped = Object.entries(renderer.skippedOps).map(([op, count]) => `${op} ×${String(count)}`);
   lines.push(`Skipped ops: ${skipped.length === 0 ? 'none' : skipped.join(', ')}${renderer.lastSkip === null ? '' : ` | last: ${renderer.lastSkip}`}`);
   root.textContent = lines.join('\n');

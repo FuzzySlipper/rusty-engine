@@ -54,6 +54,41 @@ pub struct ProductHostRendererStatistics {
     #[ts(type = "Record<string, number>")]
     pub skipped_ops: BTreeMap<String, u64>,
     pub last_skip: Option<String>,
+    /// The renderer's compute pass: its GPU cost on this adapter, or why it
+    /// does not run.
+    pub compute: ProductHostComputeStatistics,
+}
+
+/// What the renderer's compute pass costs, from the device's timestamp
+/// queries, with the adapter's compute limits.
+#[derive(Debug, Clone, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ProductHostComputeStatistics {
+    /// Why the pass does not run on this adapter; absent while it runs.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub refused: Option<String>,
+    /// The device has timestamp queries, so the pass is timed.
+    pub timestamps: bool,
+    /// Workgroups the last frame dispatched.
+    pub workgroups: u32,
+    /// Recent frames whose GPU time was read back.
+    pub timed_frames: usize,
+    /// Median GPU milliseconds of the pass over those frames; 0 with none.
+    pub median_gpu_ms: f64,
+    pub limits: ProductHostComputeLimits,
+}
+
+/// The adapter's compute limits; the renderer's device takes wgpu's defaults.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ProductHostComputeLimits {
+    pub workgroup_size: [u32; 3],
+    pub invocations_per_workgroup: u32,
+    pub workgroups_per_dimension: u32,
+    pub workgroup_storage_bytes: u32,
+    #[ts(type = "number")]
+    pub storage_buffer_binding_bytes: u64,
 }
 
 /// What the recent streamed frames cost.

@@ -4,7 +4,8 @@
 //! (culled and batched, reused while neither the camera nor any part
 //! changed), render stale shadow maps before the first world pass, and encode
 //! sky and world (or viewmodel) draws. `composition.rs` orders the view
-//! passes.
+//! passes. The compute pass (`compute.rs`) dispatches once per frame after
+//! the uploads, before any view pass.
 
 use std::ops::{Add, AddAssign};
 
@@ -274,6 +275,10 @@ impl Renderer {
             }
             self.shadows.stale = true;
         }
+        if let Ok(compute) = &mut self.compute {
+            let count = self.tables.parts.meta.len() as u32;
+            compute.encode(&self.gpu, &self.parts_buffer, count);
+        }
         uploaded
     }
 
@@ -464,6 +469,9 @@ impl Renderer {
     }
 
     fn rebind_frame(&mut self) {
+        if let Ok(compute) = &mut self.compute {
+            compute.invalidate();
+        }
         self.frame_bind_group = frame_bind_group(
             &self.gpu.device,
             &self.layouts.frame,
