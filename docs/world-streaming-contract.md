@@ -122,6 +122,12 @@ building that one chunk costs.
 See [the local change tests](../rust/crates/engine-spatial/tests/voxel_local_changes.rs)
 and the packaged streaming fixture for executable usage.
 
+Resident reconstructed chunks far from the camera can be drawn from coarse
+meshes with `VoxelScenePresentation.SetLevelOfDetail`; residency and collision
+are unchanged. See
+[distance level of detail](smooth-voxel-surfaces.md#distance-level-of-detail)
+and `fixtures/csharp-voxel-lod`.
+
 ## Residency and remesh budgets (#8612)
 
 See [voxel residency and edit costs](voxel-budgets.md) for limits, CPU and

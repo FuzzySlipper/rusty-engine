@@ -17,7 +17,7 @@
 //! cell, the sharper placement and the smaller roughness place the shared
 //! vertex.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use core_space::Direction6;
 
@@ -201,6 +201,39 @@ impl Lattice {
             }
         }
         present
+    }
+
+    /// The lattice at half the resolution: each sample stands for a 2×2×2
+    /// block, solid only where the whole block is, at the block's smallest
+    /// value in coarse units and with its majority material. The origin and
+    /// dimensions are even.
+    pub(super) fn coarsened(&self, limits: SurfaceMeshLimits) -> Result<Self, MeshError> {
+        debug_assert!(self.origin.iter().all(|value| value % 2 == 0));
+        debug_assert!(self.dims.iter().all(|value| value % 2 == 0));
+        let dims = self.dims.map(|value| value / 2);
+        let mut coarse = Self::voxels(self.origin.map(|value| value / 2), dims, limits)?;
+        for z in 0..dims[2] {
+            for y in 0..dims[1] {
+                for x in 0..dims[0] {
+                    let block = CORNERS.map(|corner| {
+                        self.index([2 * x + corner[0], 2 * y + corner[1], 2 * z + corner[2]])
+                    });
+                    let value = block
+                        .iter()
+                        .map(|index| self.values[*index])
+                        .fold(f64::INFINITY, f64::min);
+                    let index = coarse.index([x, y, z]);
+                    coarse.values[index] =
+                        value.signum() * (value.abs() / 2.0).max(MINIMUM_MAGNITUDE);
+                    if value > 0.0 {
+                        coarse.materials[index] =
+                            majority_material(block.map(|index| Some(self.materials[index])))
+                                .expect("a solid block has materials");
+                    }
+                }
+            }
+        }
+        Ok(coarse)
     }
 
     /// Flip the see-through samples of `slot` between solid and empty.
@@ -863,6 +896,88 @@ fn march_cell(
     Ok(())
 }
 
+/// Hang a skirt from every open edge of the owned surface, reaching `depth`
+/// lattice units into the solid along its vertices' normals and as far out
+/// across the edge, so a coarse chunk hides the gap against a finer
+/// neighbour's surface: a step where the two meet at different heights, and
+/// a gap where their edges stop short of each other (each surface's border
+/// vertices lie anywhere within its border cells). An edge is open when no
+/// other triangle shares its end positions (marched polygons do not share
+/// vertex indices). The skirt faces up and out, toward the neighbour; its
+/// vertices keep the edge's normals and it takes the triangle's material,
+/// face and owner.
+pub(super) fn add_skirts(reconstruction: &mut Reconstruction, depth: f64) {
+    let key = |vertex: u32| reconstruction.positions[vertex as usize].map(f64::to_bits);
+    // Undirected edge to (its last directed use, how many triangles use it).
+    let mut edges = HashMap::<_, ((usize, u32, u32), u32)>::new();
+    for (triangle, corners) in reconstruction.triangles.iter().enumerate() {
+        if reconstruction.halo[triangle] {
+            continue;
+        }
+        for k in 0..3 {
+            let (a, b) = (corners[k], corners[(k + 1) % 3]);
+            let (ka, kb) = (key(a), key(b));
+            let use_of = edges
+                .entry((ka.min(kb), ka.max(kb)))
+                .or_insert(((triangle, a, b), 0));
+            use_of.0 = (triangle, a, b);
+            use_of.1 += 1;
+        }
+    }
+    let mut open: Vec<_> = edges
+        .into_values()
+        .filter(|(_, uses)| *uses == 1)
+        .map(|(edge, _)| edge)
+        .collect();
+    open.sort_unstable();
+    // Each open vertex's outward direction: across its open edges, away
+    // from their triangles, in their planes.
+    let mut outward = BTreeMap::<u32, [f64; 3]>::new();
+    for &(triangle, a, b) in &open {
+        let corners = reconstruction.triangles[triangle];
+        let [pa, pb, pc] = corners.map(|vertex| reconstruction.positions[vertex as usize]);
+        let edge = sub(
+            reconstruction.positions[b as usize],
+            reconstruction.positions[a as usize],
+        );
+        let away = normalize_or(cross(edge, cross(sub(pb, pa), sub(pc, pa))), [0.0; 3]);
+        for vertex in [a, b] {
+            let sum = outward.entry(vertex).or_insert([0.0; 3]);
+            *sum = add(*sum, away);
+        }
+    }
+    let mut lowered = HashMap::<u32, u32>::new();
+    for (triangle, a, b) in open {
+        let [below_a, below_b] = [a, b].map(|vertex| {
+            *lowered.entry(vertex).or_insert_with(|| {
+                let index = reconstruction.positions.len() as u32;
+                let normal = reconstruction.normals[vertex as usize];
+                let out = normalize_or(outward[&vertex], [0.0; 3]);
+                let position = reconstruction.positions[vertex as usize];
+                reconstruction
+                    .positions
+                    .push(add(position, scale(sub(out, normal), depth)));
+                reconstruction.normals.push(normal);
+                index
+            })
+        });
+        let (slot, owner, direction) = (
+            reconstruction.slots[triangle],
+            reconstruction.owners[triangle],
+            reconstruction.directions[triangle],
+        );
+        // The triangle runs a -> b, so b -> a -> below faces up and away
+        // from it.
+        for corners in [[b, a, below_a], [b, below_a, below_b]] {
+            reconstruction.triangles.push(corners);
+            reconstruction.slots.push(slot);
+            reconstruction.owners.push(owner);
+            reconstruction.directions.push(direction);
+            reconstruction.halo.push(false);
+        }
+    }
+}
+
 fn majority_material(materials: [Option<u16>; 8]) -> Option<u16> {
     let mut counts = BTreeMap::<u16, u8>::new();
     for slot in materials.into_iter().flatten() {
@@ -905,12 +1020,14 @@ fn dominant_direction(facing: [f64; 3], fallback: [f64; 3]) -> Direction6 {
 
 /// Assemble render attributes for reconstructed voxel geometry: one group
 /// per material slot and box-projection face, crease-angle normals, and
-/// tile coordinates continuous across regions.
+/// tile coordinates continuous across regions. A lattice unit is `scale`
+/// voxels (2 for a coarse lattice); `pivot` and owners are in voxels.
 pub(super) fn voxel_payload(
     reconstruction: Reconstruction,
     characters: Characters<'_>,
     cell_size: f64,
     pivot: [f64; 3],
+    scale: f64,
     limits: SurfaceMeshLimits,
     layers: Option<&LayerField<'_>>,
 ) -> Result<MeshPayload, MeshError> {
@@ -972,7 +1089,8 @@ pub(super) fn voxel_payload(
                     Some(index) => *index,
                     None => {
                         let index = (positions.len() / 3) as u32;
-                        let point = reconstruction.positions[vertex as usize];
+                        let point =
+                            reconstruction.positions[vertex as usize].map(|value| value * scale);
                         for axis in 0..3 {
                             let value = (point[axis] - pivot[axis]) * cell_size;
                             let rendered = value as f32;
@@ -1002,7 +1120,7 @@ pub(super) fn voxel_payload(
                 };
                 indices.push(index);
             }
-            owners.push(reconstruction.owners[triangle]);
+            owners.push(reconstruction.owners[triangle].map(|value| value * scale as i64));
         }
         groups.push(MeshGroup {
             state: 0,

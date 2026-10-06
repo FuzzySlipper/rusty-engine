@@ -21,7 +21,8 @@ use render_model::{
     RenderDiff, RenderFrameDiff, RenderMaterialDescriptor, TextureDescriptor, Transform,
 };
 use render_projection::{
-    voxel_material_id, VoxelMaterialSlotMapping, VoxelProjectionInstance, VoxelRenderProjector,
+    voxel_material_id, VoxelLevelOfDetail, VoxelMaterialSlotMapping, VoxelProjectionInstance,
+    VoxelRenderProjector,
 };
 
 use crate::{
@@ -43,6 +44,9 @@ struct RetainedVoxelScenePresentation {
     base_material_provenance: BTreeMap<u16, u64>,
     face_material_provenance: BTreeMap<(u16, u16, Direction6), u64>,
     base_material_count: u32,
+    /// Chunks farther than this from the viewer are drawn coarse; zero or
+    /// less draws every chunk at full resolution.
+    coarse_distance: f64,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -50,6 +54,9 @@ struct VoxelScenePresentationState {
     presentations: BTreeMap<u64, RetainedVoxelScenePresentation>,
     projector: VoxelRenderProjector,
     next_presentation: u64,
+    /// The camera of the lowest-ordered primary view when a call last
+    /// settled, which levels of detail are measured from.
+    viewer: Option<[f64; 3]>,
 }
 
 pub(crate) struct RuntimeVoxelScenePresentationCall {
@@ -78,6 +85,7 @@ impl RuntimeVoxelScenePresentationBridge {
                 presentations: BTreeMap::new(),
                 projector: VoxelRenderProjector::new(),
                 next_presentation: 1,
+                viewer: None,
             },
             staged: None,
             appearance: None,
@@ -239,6 +247,7 @@ impl RuntimeVoxelScenePresentationBridge {
                 base_material_provenance: resolved.base_material_provenance,
                 face_material_provenance: resolved.face_material_provenance,
                 base_material_count: resolved.base_material_count,
+                coarse_distance: 0.0,
             },
         );
         if let Err(error) = self.refresh(NativeVoxelScenePresentationHandle { value }) {
@@ -266,10 +275,63 @@ impl RuntimeVoxelScenePresentationBridge {
                     "voxel scene presentation handle is not retained",
                 )
             })?;
-        let readout = presentation_readout(presentation, &spatial)?;
+        let session = presentation.session;
         let frame = project_all_presentations(&mut staged.state, &spatial)?;
         staged.frames.push(frame);
-        Ok(readout)
+        presentation_readout(handle, session, &staged.state, &spatial)
+    }
+
+    fn set_level_of_detail(
+        &mut self,
+        request: NativeVoxelSceneLevelOfDetailRequest,
+    ) -> Result<NativeVoxelScenePresentationReadout, CsharpEngineServicesError> {
+        let staged = self.staged_mut()?;
+        staged
+            .state
+            .presentations
+            .get_mut(&request.presentation.value)
+            .ok_or_else(|| {
+                CsharpEngineServicesError::new(
+                    "CSHARP_VOXEL_SCENE_PRESENTATION_HANDLE",
+                    "voxel scene presentation handle is not retained",
+                )
+            })?
+            .coarse_distance = request.coarse_distance;
+        self.refresh(request.presentation)
+    }
+
+    /// Draws each presentation's chunks at the level of detail the camera
+    /// of the lowest-ordered primary view (`viewer`, if the product composed
+    /// one) now calls for, projecting only when a chunk changes level.
+    pub(crate) fn settle_level_of_detail(
+        &mut self,
+        call: &mut RuntimeVoxelScenePresentationCall,
+        viewer: Option<[f64; 3]>,
+    ) -> Result<(), CsharpEngineServicesError> {
+        let state = &mut call.state;
+        if viewer.is_some() {
+            state.viewer = viewer;
+        }
+        if !state
+            .presentations
+            .values()
+            .any(|presentation| presentation.coarse_distance > 0.0)
+        {
+            return Ok(());
+        }
+        let started = Instant::now();
+        set_levels_of_detail(state);
+        let scenes = presentation_scenes(state, &self.spatial)?;
+        if state
+            .projector
+            .level_of_detail_changed(&presentation_instances(&scenes))
+        {
+            call.frames
+                .push(project_all_presentations(state, &self.spatial)?);
+        }
+        let duration_us = started.elapsed().as_micros().min(u128::from(u64::MAX)) as u64;
+        self.record_presentation_attribution(duration_us);
+        Ok(())
     }
 
     fn update(
@@ -716,11 +778,13 @@ fn native_face(value: Direction6) -> NativeSpatialFace {
     }
 }
 
-fn project_all_presentations(
-    state: &mut VoxelScenePresentationState,
+type PresentationScene = (u64, NativeSpatialSessionHandle, Arc<VoxelCollisionScene>);
+
+fn presentation_scenes(
+    state: &VoxelScenePresentationState,
     spatial: &SpatialCollisionSource,
-) -> Result<RenderFrameDiff, CsharpEngineServicesError> {
-    let scenes = state
+) -> Result<Vec<PresentationScene>, CsharpEngineServicesError> {
+    state
         .presentations
         .iter()
         .map(|(handle, presentation)| {
@@ -728,8 +792,11 @@ fn project_all_presentations(
                 .scene(presentation.session)
                 .map(|scene| (*handle, presentation.session, scene))
         })
-        .collect::<Result<Vec<_>, _>>()?;
-    let instances = scenes
+        .collect()
+}
+
+fn presentation_instances(scenes: &[PresentationScene]) -> Vec<VoxelProjectionInstance<'_>> {
+    scenes
         .iter()
         .map(|(handle, session, scene)| VoxelProjectionInstance {
             instance_id: presentation_instance_id(*handle),
@@ -737,7 +804,33 @@ fn project_all_presentations(
             transform: Transform::IDENTITY,
             scene,
         })
-        .collect::<Vec<_>>();
+        .collect()
+}
+
+/// Give the projector each presentation's level of detail at the last
+/// known viewer.
+fn set_levels_of_detail(state: &mut VoxelScenePresentationState) {
+    for (handle, presentation) in &state.presentations {
+        let level = state
+            .viewer
+            .filter(|_| presentation.coarse_distance > 0.0)
+            .map(|viewer| VoxelLevelOfDetail {
+                viewer,
+                coarse_distance: presentation.coarse_distance,
+            });
+        state
+            .projector
+            .set_level_of_detail(&presentation_instance_id(*handle), level);
+    }
+}
+
+fn project_all_presentations(
+    state: &mut VoxelScenePresentationState,
+    spatial: &SpatialCollisionSource,
+) -> Result<RenderFrameDiff, CsharpEngineServicesError> {
+    set_levels_of_detail(state);
+    let scenes = presentation_scenes(state, spatial)?;
+    let instances = presentation_instances(&scenes);
     let material_slots = state
         .presentations
         .iter()
@@ -825,10 +918,18 @@ fn project_all_presentations(
 }
 
 fn presentation_readout(
-    presentation: &RetainedVoxelScenePresentation,
+    handle: NativeVoxelScenePresentationHandle,
+    session: NativeSpatialSessionHandle,
+    state: &VoxelScenePresentationState,
     spatial: &SpatialCollisionSource,
 ) -> Result<NativeVoxelScenePresentationReadout, CsharpEngineServicesError> {
-    let scene = spatial.scene(presentation.session)?;
+    let presentation = state.presentations.get(&handle.value).ok_or_else(|| {
+        CsharpEngineServicesError::new(
+            "CSHARP_VOXEL_SCENE_PRESENTATION_HANDLE",
+            "voxel scene presentation handle is not retained",
+        )
+    })?;
+    let scene = spatial.scene(session)?;
     let chunk_count = scene.mesh_chunks().len();
     Ok(NativeVoxelScenePresentationReadout {
         present: true,
@@ -841,6 +942,10 @@ fn presentation_readout(
             )
         })?,
         material_count: presentation.base_material_count,
+        coarse_chunk_count: state
+            .projector
+            .coarse_chunk_count(&presentation_instance_id(handle.value))
+            as u64,
     })
 }
 
@@ -951,6 +1056,33 @@ pub(crate) fn api(
         project_scene_directional,
         update_scene_directional,
         read_material_mapping,
+        set_level_of_detail,
+    }
+}
+
+unsafe extern "C" fn set_level_of_detail(
+    context: *mut c_void,
+    request: *const NativeVoxelSceneLevelOfDetailRequest,
+    output: *mut NativeVoxelScenePresentationReadout,
+    error: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    if error.is_null() || context.is_null() || request.is_null() || output.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeVoxelScenePresentationBridge>() };
+    let started = Instant::now();
+    let result = bridge.set_level_of_detail(unsafe { *request });
+    let duration_us = started.elapsed().as_micros().min(u128::from(u64::MAX)) as u64;
+    bridge.record_presentation_attribution(duration_us);
+    match result {
+        Ok(readout) => {
+            unsafe { *output = readout };
+            ABI_OK
+        }
+        Err(failure) => {
+            bridge.operation_diagnostics.retain(&failure, error);
+            0
+        }
     }
 }
 
@@ -1251,6 +1383,104 @@ mod tests {
             ABI_OK
         );
         handle
+    }
+
+    #[test]
+    fn distant_chunks_draw_coarse_from_the_primary_camera_until_turned_off() {
+        let mut spatial = RuntimeSpatialBridge::new();
+        let session = session_with_voxel_mode(&mut spatial, NativeVoxelSurfaceMode::DualContouring);
+        // A floor across four chunks of 8 along x.
+        let edits: Vec<_> = (0..32)
+            .flat_map(|x| {
+                (0..8).flat_map(move |z| {
+                    (0..2).map(move |y| NativeVoxelEdit {
+                        state: 0,
+                        kind: NativeVoxelEditKind::Set,
+                        address: NativeVoxelAddress { x, y, z },
+                        material_slot: 1,
+                    })
+                })
+            })
+            .collect();
+        let voxel = crate::voxel::api(&mut spatial);
+        let mut receipt = NativeVoxelEditReceipt::default();
+        let mut error = unsafe { std::mem::zeroed::<NativeOperationErrorReceipt>() };
+        assert_eq!(
+            unsafe {
+                (voxel.apply_edits)(
+                    voxel.context,
+                    &NativeVoxelEditTransaction {
+                        session,
+                        edits: edits.as_ptr(),
+                        edits_len: edits.len(),
+                    },
+                    &mut receipt,
+                    &mut error,
+                )
+            },
+            ABI_OK
+        );
+        let mut appearance =
+            RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), BTreeMap::new());
+        appearance.begin_call();
+        let stone = material(&mut appearance);
+        let mut bridge = RuntimeVoxelScenePresentationBridge::new(spatial.collision_source());
+        bridge.bind_appearance(&mut appearance);
+        bridge.begin_call();
+        let bindings = [NativeVoxelSceneMaterialBinding {
+            material_slot: 1,
+            material: stone,
+        }];
+        let presentation = bridge
+            .project_scene(NativeProjectVoxelSceneRequest {
+                session,
+                materials: bindings.as_ptr(),
+                materials_len: bindings.len(),
+            })
+            .unwrap();
+        let lod = |coarse_distance| NativeVoxelSceneLevelOfDetailRequest {
+            presentation,
+            coarse_distance,
+        };
+        // No camera has been seen yet, so nothing is coarse.
+        assert_eq!(
+            bridge
+                .set_level_of_detail(lod(10.0))
+                .unwrap()
+                .coarse_chunk_count,
+            0
+        );
+        let replaced = |frames: &[RenderFrameDiff]| {
+            frames
+                .iter()
+                .flat_map(|frame| &frame.ops)
+                .filter(|operation| matches!(operation, RenderDiff::ReplaceMeshPayload { .. }))
+                .count()
+        };
+        let mut call = bridge.take_staged_call().unwrap();
+        let before = call.frames.len();
+        bridge
+            .settle_level_of_detail(&mut call, Some([0.0, 4.0, 4.0]))
+            .unwrap();
+        // Chunks 2 and 3 lie beyond 10 × 1.1.
+        assert_eq!(replaced(&call.frames[before..]), 2);
+        bridge.commit_call(call);
+
+        // The same viewer, or a call without a primary camera, changes nothing.
+        for viewer in [Some([0.0, 4.0, 4.0]), None] {
+            bridge.begin_call();
+            let mut call = bridge.take_staged_call().unwrap();
+            bridge.settle_level_of_detail(&mut call, viewer).unwrap();
+            assert!(call.frames.is_empty());
+            bridge.commit_call(call);
+        }
+
+        bridge.begin_call();
+        assert_eq!(bridge.refresh(presentation).unwrap().coarse_chunk_count, 2);
+        let off = bridge.set_level_of_detail(lod(0.0)).unwrap();
+        assert_eq!(off.coarse_chunk_count, 0);
+        let call = bridge.take_staged_call().unwrap();
+        assert_eq!(replaced(&call.frames), 2);
     }
 
     #[test]

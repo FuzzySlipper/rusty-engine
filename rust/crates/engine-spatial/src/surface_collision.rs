@@ -29,42 +29,45 @@ pub(crate) fn mesh_chunks(
     coordinates: &[ChunkCoord],
     options: &SurfaceMeshOptions,
 ) -> Result<(Vec<Arc<VoxelMeshChunk>>, u64), CollisionSceneError> {
-    let mesh_slice =
-        |slice: &[ChunkCoord]| -> Result<(Vec<Arc<VoxelMeshChunk>>, u64), CollisionSceneError> {
-            let mut meshes = Vec::with_capacity(slice.len());
-            let mut microseconds = 0_u64;
-            for coordinate in slice {
-                let started = Instant::now();
-                meshes.push(Arc::new(build_mesh_chunk(world, *coordinate, options)?));
-                microseconds = microseconds.saturating_add(started.elapsed().as_micros() as u64);
-            }
-            Ok((meshes, microseconds))
-        };
+    let built = in_parallel(coordinates, |coordinate| {
+        let started = Instant::now();
+        build_mesh_chunk(world, coordinate, options)
+            .map(|mesh| (Arc::new(mesh), started.elapsed().as_micros() as u64))
+    });
+    let mut meshes = Vec::with_capacity(coordinates.len());
+    let mut microseconds = 0_u64;
+    for result in built {
+        let (mesh, time) = result?;
+        meshes.push(mesh);
+        microseconds = microseconds.saturating_add(time);
+    }
+    Ok((meshes, microseconds))
+}
+
+/// `build` for each coordinate, in input order, on scoped threads when there
+/// are enough coordinates.
+pub(crate) fn in_parallel<T: Send>(
+    coordinates: &[ChunkCoord],
+    build: impl Fn(ChunkCoord) -> T + Sync,
+) -> Vec<T> {
+    let build_slice = |slice: &[ChunkCoord]| slice.iter().map(|c| build(*c)).collect::<Vec<_>>();
     let threads = std::thread::available_parallelism()
         .map_or(1, |threads| threads.get())
         .min(coordinates.len() / CHUNKS_PER_THREAD);
     if threads <= 1 {
-        return mesh_slice(coordinates);
+        return build_slice(coordinates);
     }
     let per_thread = coordinates.len().div_ceil(threads);
-    let results: Vec<_> = std::thread::scope(|scope| {
+    std::thread::scope(|scope| {
         let handles: Vec<_> = coordinates
             .chunks(per_thread)
-            .map(|slice| scope.spawn(move || mesh_slice(slice)))
+            .map(|slice| scope.spawn(|| build_slice(slice)))
             .collect();
         handles
             .into_iter()
-            .map(|handle| handle.join().expect("chunk meshing does not panic"))
+            .flat_map(|handle| handle.join().expect("chunk meshing does not panic"))
             .collect()
-    });
-    let mut meshes = Vec::with_capacity(coordinates.len());
-    let mut microseconds = 0_u64;
-    for result in results {
-        let (slice, time) = result?;
-        meshes.extend(slice);
-        microseconds = microseconds.saturating_add(time);
-    }
-    Ok((meshes, microseconds))
+    })
 }
 
 /// The cuboid voxels of one chunk of a session with reconstructed materials:

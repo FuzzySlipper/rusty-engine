@@ -203,6 +203,33 @@ centimetres, so a step height tuned to exactly one voxel can refuse an edge.
 The voxel navigation projection (`navigation_step`) stays a voxel-cell
 projection; collision navigation follows the surface.
 
+## Distance level of detail
+
+`VoxelScenePresentation.SetLevelOfDetail(new(presentation, coarseDistance))`
+draws a presentation's distant chunks from coarse meshes. Each update, the
+Engine measures every chunk's cube from the camera of the lowest-ordered
+primary view; a chunk farther than `coarseDistance` metres (by 10% more when it
+switches, so a camera at the boundary does not flip it) is drawn coarse. Zero
+draws every chunk at full resolution. Only the drawing changes: collision,
+raycasts, picking and navigation keep every chunk's full mesh.
+
+- A coarse mesh is the chunk's reconstructed materials meshed from a lattice
+  twice as coarse. Each sample stands for a 2 × 2 × 2 block of voxels, solid
+  only where the whole block is, with its majority material and smallest
+  density, so the coarse surface lies on or inside the fine one. Tile
+  coordinates, triplanar textures and terrain layer weights stay in voxel units
+  and match the fine mesh. Cube materials keep their full-resolution faces.
+- Coarse chunks meet each other without seams, as fine chunks do. Against a
+  fine neighbour every open edge of a coarse mesh carries a skirt reaching one
+  coarse cell into the solid and as far toward the neighbour, which closes both
+  the step and the gap where the two surfaces stop short of each other.
+- A coarse mesh reads two voxels into each neighbour, so a change to the chunk
+  or any neighbour rebuilds it with the next projection. Chunks that switch
+  level together are meshed in parallel.
+- Sessions whose materials are all cubes, and chunks with an odd edge, are
+  always drawn at full resolution. `VoxelScenePresentationReadout.
+  CoarseChunkCount` reports how many chunks are drawn coarse.
+
 ## Cost
 
 Reconstructed chunks mesh from the chunk and a one-voxel halo of its
@@ -221,6 +248,9 @@ and 15 ms per slice. A product filling a space behind a loading wait trades the
 longest call against the total through its slice size; larger, contiguous
 slices leave fewer resident neighbours to remesh. Reconstructed vertices are
 split per texture face and crease, so a smooth chunk draws more vertices than
-its cell count suggests. `VoxelSceneReadout.MeshMicroseconds`, and the same
+its cell count suggests. A coarse mesh takes about 0.23 ms per chunk with dual
+contouring and 0.3 ms with marching cubes, and draws about a third of the
+triangles (35% and 30% on that dungeon, skirts included; a quarter without).
+`VoxelSceneReadout.MeshMicroseconds`, and the same
 field on edit, residency and density receipts, report the meshing time of the
 chunks the last change rebuilt, summed over chunks.

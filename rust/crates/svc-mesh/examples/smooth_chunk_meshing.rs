@@ -8,13 +8,16 @@
 //! block of a second material and a pool of see-through water in the room.
 //! Each mode meshes every resident chunk with its resident neighbours, as a
 //! scene build does, and reports the chunks whose samples include water
-//! separately.
+//! separately. Reconstructed modes also mesh every chunk from the coarse
+//! lattice a distant chunk is drawn from.
 
 use std::time::{Duration, Instant};
 
 use core_space::{ChunkCoord, ChunkDims, GridId, LocalVoxelCoord, VoxelGridSpec};
 use core_voxel::{VoxelMaterialId, VoxelValue};
-use svc_mesh::{mesh_chunk_in_world_with_options, SurfaceMeshOptions, SurfaceMode};
+use svc_mesh::{
+    mesh_chunk_coarse_in_world, mesh_chunk_in_world_with_options, SurfaceMeshOptions, SurfaceMode,
+};
 use svc_spatial::VoxelWorld;
 use svc_volume::VoxelChunk;
 
@@ -67,6 +70,28 @@ fn main() {
             best.as_secs_f64() * 1000.0,
             per_chunk(best, chunks.len()),
             per_chunk(best_water, water_chunks),
+        );
+        if mode == SurfaceMode::GreedyCubes {
+            continue;
+        }
+        let mut best = Duration::MAX;
+        let mut triangles = 0;
+        for _ in 0..ROUNDS {
+            let started = Instant::now();
+            triangles = 0;
+            for coord in &chunks {
+                let mesh = mesh_chunk_coarse_in_world(&world, *coord, &options)
+                    .expect("resident, reconstructed and even")
+                    .expect("meshes");
+                triangles += mesh.indices.len() / 3;
+            }
+            best = best.min(started.elapsed());
+        }
+        println!(
+            "{:>15}  coarse: {:6.1} ms total, {:6.2} ms/chunk, {triangles} triangles, skirts included",
+            "",
+            best.as_secs_f64() * 1000.0,
+            per_chunk(best, chunks.len()),
         );
     }
 }
