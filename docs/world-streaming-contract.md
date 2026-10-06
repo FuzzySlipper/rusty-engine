@@ -110,8 +110,7 @@ clock. Content/persistence service calls still belong on the callback lane.
 
 `Voxel.ApplyResidency` admits, replaces and evicts whole chunks, and
 `Voxel.ApplyEdits` changes cells. Both write into the live scene and rebuild
-only the changed chunks' meshes and colliders and the affected navigation cells.
-Admitting an identical chunk
+only the changed chunks' meshes and colliders. Admitting an identical chunk
 or evicting a non-resident one is a no-op; a batch that changes nothing returns
 a receipt with zero changes, and an edit batch returns `NoChanges`.
 

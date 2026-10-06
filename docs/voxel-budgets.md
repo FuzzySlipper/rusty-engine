@@ -3,7 +3,7 @@
 These are CPU scene costs from the
 [`voxel_budget`](../rust/crates/engine-spatial/examples/voxel_budget.rs) and
 [`voxel_edit_scaling`](../rust/crates/engine-spatial/examples/voxel_edit_scaling.rs)
-probes, measured on 2026-09-28. They exclude GPU
+probes, measured on 2026-10-06. They exclude GPU
 and whole-product costs.
 
 ## How a change is applied
@@ -12,8 +12,12 @@ and whole-product costs.
 place. They then rebuild only:
 - the meshes of the changed chunks, plus resident neighbours whose surfaces
   touch the change;
-- the colliders of the changed chunks.
+- the colliders of the changed chunks, and of those neighbours when their
+  materials are reconstructed surfaces, whose colliders are what they draw.
 
+Each chunk's mesh and collider are built together, on worker threads when a
+change rebuilds several chunks, and installed in order before the call
+returns. A cube chunk's collider is its collidable voxels merged into boxes.
 Unchanged chunks keep their meshes and collider shapes; a bound Dynamics world
 keeps those colliders too. Nothing copies, hashes or rebuilds the whole scene.
 The authority hash is an order-independent sum maintained per voxel.
@@ -51,8 +55,9 @@ Each run builds the scene, then:
 - toggles one corner cell seven times through `VoxelEditService`;
 - replaces that chunk seven times through `VoxelChunkResidencyService`.
 
-The host is an AMD Ryzen 7 8845HS running a release build, one process at a
-time, with no CPU pinning.
+The host is an Intel Core i7-12700K shared with other sessions (load about 10),
+running a release build, one process at a time, with no CPU pinning; each
+figure is the median of three runs.
 
 ## Observed costs
 
@@ -60,19 +65,19 @@ Milliseconds, as median / maximum of seven calls.
 
 | Shape / chunks | Cell edit | Chunk replace | Peak RSS |
 | --- | --- | --- | --- |
-| Solid / 16 | 1.31 / 1.50 | 1.72 / 1.84 | 28 MiB |
-| Solid / 64 | 1.18 / 1.24 | 1.60 / 1.63 | 98 MiB |
-| Checker / 16 | 3.99 / 4.76 | 4.64 / 4.83 | 49 MiB |
-| Sparse / 256 | 0.02 / 0.05 | 0.56 / 0.63 | 76 MiB |
-| Stateful / 1 | 1.65 / 2.04 | 2.04 / 2.12 | 8 MiB |
+| Solid / 16 | 0.24 / 0.30 | 0.40 / 0.43 | 8 MiB |
+| Solid / 64 | 0.25 / 0.31 | 0.40 / 0.42 | 25 MiB |
+| Checker / 16 | 2.56 / 3.58 | 2.24 / 2.45 | 62 MiB |
+| Sparse / 256 | 0.05 / 0.10 | 0.10 / 0.13 | 11 MiB |
+| Stateful / 1 | 0.47 / 0.73 | 0.64 / 0.67 | 4 MiB |
 
 Cost follows the chunk that changed, not the resident world. What remains is
 that chunk's work: a solid 16³ chunk's mesh and collider, or a checker chunk's
 12,288-quad mesh.
 
 `voxel_edit_scaling` clears 1–123 cells inside one chunk of a 16- or 64-chunk
-world. Each call takes 0.35–0.39 ms with 16 resident chunks and 0.38–0.42 ms
-with 64. The number of cells changed inside one chunk barely matters.
+world. Each call takes 0.12–0.15 ms with 16 resident chunks or with 64. The
+number of cells changed inside one chunk barely matters.
 
 ## Memory
 
