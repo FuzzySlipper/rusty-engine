@@ -216,6 +216,27 @@ impl AtmosphereDescriptor {
     }
 }
 
+/// Sun shafts: the sky around the sun, blurred along rays from it, so light
+/// streams past whatever stands in front of it. `intensity` scales the
+/// light added (0 to 16); `length` is how far the rays reach from the sun,
+/// as a fraction of the way to each pixel (0 takes the Engine's default).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SunShaftsDescriptor {
+    pub intensity: f32,
+    pub length: f32,
+}
+
+impl SunShaftsDescriptor {
+    /// The largest intensity a product may set.
+    pub const MAX_INTENSITY: f32 = 16.0;
+
+    /// An intensity within `0..=MAX_INTENSITY` and a length within `0..=1`.
+    pub fn valid(&self) -> bool {
+        (0.0..=Self::MAX_INTENSITY).contains(&self.intensity) && (0.0..=1.0).contains(&self.length)
+    }
+}
+
 impl ColorGradingDescriptor {
     /// Every control finite and within -1 to 1.
     pub fn valid(&self) -> bool {
@@ -564,6 +585,10 @@ pub enum RenderDiff {
     SetAtmosphere {
         atmosphere: Option<AtmosphereDescriptor>,
     },
+    /// Selects sun shafts; None turns them off.
+    SetSunShafts {
+        sun_shafts: Option<SunShaftsDescriptor>,
+    },
     DefineSpriteAtlas {
         atlas: SpriteAtlasDescriptor,
     },
@@ -714,6 +739,10 @@ impl RenderDiff {
                 atmosphere: Some(atmosphere),
             } if !atmosphere.valid() => Err(RenderOperationError::Atmosphere),
             Self::SetAtmosphere { .. } => Ok(()),
+            Self::SetSunShafts {
+                sun_shafts: Some(sun_shafts),
+            } if !sun_shafts.valid() => Err(RenderOperationError::SunShafts),
+            Self::SetSunShafts { .. } => Ok(()),
             Self::DefineSpriteAtlas { atlas } => {
                 atlas.validate().map_err(RenderOperationError::SpriteAtlas)
             }
@@ -814,6 +843,7 @@ impl RenderDiff {
             | Self::SetAutoExposure { .. }
             | Self::SetColorGrading { .. }
             | Self::SetAtmosphere { .. }
+            | Self::SetSunShafts { .. }
             | Self::DefineSpriteAtlas { .. }
             | Self::DefineStaticMesh { .. }
             | Self::ReleaseMaterial { .. }
@@ -854,6 +884,7 @@ pub enum RenderOperationError {
     AutoExposure,
     ColorGrading,
     Atmosphere,
+    SunShafts,
     SpriteAtlas(crate::SpriteAtlasError),
     StaticMesh(crate::StaticMeshError),
     StaticMeshInstance(crate::StaticMeshInstanceError),
@@ -926,6 +957,7 @@ impl RenderFrameDiff {
                 | RenderDiff::SetAutoExposure { .. }
                 | RenderDiff::SetColorGrading { .. }
                 | RenderDiff::SetAtmosphere { .. }
+                | RenderDiff::SetSunShafts { .. }
                 | RenderDiff::DefineSpriteAtlas { .. }
                 | RenderDiff::ReleaseSpriteAtlas { .. }
                 | RenderDiff::ReleaseStaticMesh { .. }

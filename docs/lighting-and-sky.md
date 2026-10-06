@@ -258,6 +258,7 @@ engine.CameraView.SetAutoExposure(new(Enabled: true, Speed: 1.5f, MinExposure: 0
 engine.CameraView.SetColorGrading(new(Temperature: -0.15f, Tint: 0, Contrast: 0.1f, Saturation: 0.2f));
 engine.CameraView.SetAtmosphere(new(FogBaseHeight: 20, FogFalloffHeight: 40, HazeColor: new(1f, 0.7f, 0.45f, 1),
     HazeExponent: 8, SunRadiusDegrees: 1.5f, SunHalo: 0.35f));
+engine.CameraView.SetSunShafts(new(Intensity: 0.8f, Length: 0));
 ```
 
 - **Exposure** multiplies lit colour; it defaults to 1.
@@ -321,6 +322,17 @@ engine.CameraView.SetAtmosphere(new(FogBaseHeight: 20, FogFalloffHeight: 40, Haz
     `SunRadiusDegrees` (up to 20) and a halo a few degrees wide of
     strength `SunHalo`. Both take the sun's colour, dimmed when its
     intensity is below 1, and follow its direction.
+- **Sun shafts** stream light from the sun past whatever stands in front of
+  it: a tree line at dusk, a doorway. At half resolution, the sky the world
+  leaves uncovered near the sun is blurred along rays toward the sun, and
+  added in the sun's colour at `Intensity` (0 to 16; 0 turns them off)
+  before exposure and the operator, as bloom is. `Length` (0 to 1) is how
+  far the rays reach, as a fraction of the way from each pixel to the sun;
+  0 takes the Engine's default, 0.6. The sun is the atmosphere's: the
+  brightest enabled directional world light. The shafts fade out as the sun
+  nears the horizon or moves half a view beyond its edge, and draw nothing
+  below the horizon or behind the camera. Each view of a split screen
+  treats its own viewport.
 - **Captures.** `RenderOutput.CaptureImage` uses its request's own exposure
   and tone mapping, without auto exposure or colour grading, and keeps the
   scene's fog and bloom as it keeps the scene's lights, whichever background

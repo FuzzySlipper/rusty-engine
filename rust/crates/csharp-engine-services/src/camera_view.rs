@@ -8,8 +8,8 @@ use render_host_contracts::{
 };
 use render_model::{
     AtmosphereDescriptor, AutoExposureDescriptor, BloomDescriptor, ColorGradingDescriptor,
-    FogDescriptor, RenderDiff, RenderFrameDiff, SkyBackgroundDescriptor, ToneMappingDescriptor,
-    ToneMappingOperator,
+    FogDescriptor, RenderDiff, RenderFrameDiff, SkyBackgroundDescriptor, SunShaftsDescriptor,
+    ToneMappingDescriptor, ToneMappingOperator,
 };
 
 use crate::{
@@ -70,12 +70,13 @@ pub(crate) struct RuntimeCameraViewCall {
     /// presentation world retains the selection.
     pub(crate) fog: Option<Option<FogDescriptor>>,
     pub(crate) tone_mapping: Option<ToneMappingDescriptor>,
-    /// Bloom, auto exposure, colour grading and the atmosphere selected
-    /// during the call, as fog is.
+    /// Bloom, auto exposure, colour grading, the atmosphere and sun shafts
+    /// selected during the call, as fog is.
     pub(crate) bloom: Option<Option<BloomDescriptor>>,
     pub(crate) auto_exposure: Option<Option<AutoExposureDescriptor>>,
     pub(crate) color_grading: Option<Option<ColorGradingDescriptor>>,
     pub(crate) atmosphere: Option<Option<AtmosphereDescriptor>>,
+    pub(crate) sun_shafts: Option<Option<SunShaftsDescriptor>>,
 }
 
 impl RuntimeCameraViewCall {
@@ -148,6 +149,7 @@ impl RuntimeCameraViewBridge {
             auto_exposure: None,
             color_grading: None,
             atmosphere: None,
+            sun_shafts: None,
         });
     }
 
@@ -200,6 +202,7 @@ impl RuntimeCameraViewBridge {
             auto_exposure: None,
             color_grading: None,
             atmosphere: None,
+            sun_shafts: None,
         };
         stage_composition(&mut snapshot)?;
         Ok(snapshot
@@ -489,6 +492,7 @@ impl RuntimeCameraViewBridge {
             auto_exposure: None,
             color_grading: None,
             atmosphere: None,
+            sun_shafts: None,
         };
         candidate.state.views = views.to_vec();
         candidate.state.presentations = presentations.to_vec();
@@ -767,6 +771,24 @@ impl RuntimeCameraViewBridge {
         self.staged_mut()?.atmosphere = Some(set.then_some(atmosphere));
         Ok(())
     }
+
+    fn set_sun_shafts(
+        &mut self,
+        request: NativeSunShaftsRequest,
+    ) -> Result<(), CsharpEngineServicesError> {
+        let shafts = SunShaftsDescriptor {
+            intensity: request.intensity,
+            length: request.length,
+        };
+        if !shafts.valid() {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_SUN_SHAFTS",
+                "sun shafts intensity must be within 0 to 16 and length within 0 to 1",
+            ));
+        }
+        self.staged_mut()?.sun_shafts = Some((request.intensity > 0.0).then_some(shafts));
+        Ok(())
+    }
 }
 
 fn stage_composition(staged: &mut RuntimeCameraViewCall) -> Result<(), CsharpEngineServicesError> {
@@ -1031,8 +1053,8 @@ fn validate_target_descriptor(
 }
 
 /// The call's background, fog, tone mapping, bloom, auto exposure, colour
-/// grading and atmosphere selections as one frame, or None when the call
-/// selected none of them.
+/// grading, atmosphere and sun shaft selections as one frame, or None when
+/// the call selected none of them.
 pub(crate) fn environment_frame(
     call: &RuntimeCameraViewCall,
     appearance: &RuntimeAppearanceCall,
@@ -1055,6 +1077,9 @@ pub(crate) fn environment_frame(
     }
     if let Some(atmosphere) = call.atmosphere {
         operations.push(RenderDiff::SetAtmosphere { atmosphere });
+    }
+    if let Some(sun_shafts) = call.sun_shafts {
+        operations.push(RenderDiff::SetSunShafts { sun_shafts });
     }
     if let Some(change) = call.background {
         background_operations(change, appearance, &mut operations)?;
@@ -1594,6 +1619,27 @@ pub(crate) unsafe extern "C" fn set_auto_exposure(
     }
     let bridge = unsafe { &mut *context.cast::<RuntimeCameraViewBridge>() };
     match bridge.set_auto_exposure(unsafe { *request }) {
+        Ok(()) => ABI_OK,
+        Err(error) => {
+            bridge.operation_diagnostics.retain(&error, operation_error);
+            0
+        }
+    }
+}
+
+pub(crate) unsafe extern "C" fn set_sun_shafts(
+    context: *mut c_void,
+    request: *const NativeSunShaftsRequest,
+    operation_error: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    if !operation_error.is_null() {
+        unsafe { *operation_error = std::mem::zeroed() };
+    }
+    if context.is_null() || request.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeCameraViewBridge>() };
+    match bridge.set_sun_shafts(unsafe { *request }) {
         Ok(()) => ABI_OK,
         Err(error) => {
             bridge.operation_diagnostics.retain(&error, operation_error);

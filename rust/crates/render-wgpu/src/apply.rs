@@ -125,6 +125,9 @@ impl Renderer {
             RenderDiff::SetAtmosphere { atmosphere } => {
                 self.tables.atmosphere = *atmosphere;
             }
+            RenderDiff::SetSunShafts { sun_shafts } => {
+                self.tables.sun_shafts = *sun_shafts;
+            }
             RenderDiff::SetToneMapping { tone_mapping } => {
                 self.tables.tone_mapping = *tone_mapping;
             }
@@ -1931,6 +1934,7 @@ fn op_name(op: &RenderDiff) -> &'static str {
         RenderDiff::SetAutoExposure { .. } => "setAutoExposure",
         RenderDiff::SetColorGrading { .. } => "setColorGrading",
         RenderDiff::SetAtmosphere { .. } => "setAtmosphere",
+        RenderDiff::SetSunShafts { .. } => "setSunShafts",
         RenderDiff::SetToneMapping { .. } => "setToneMapping",
         RenderDiff::DefineSpriteAtlas { .. } => "defineSpriteAtlas",
         RenderDiff::ReleaseSpriteAtlas { .. } => "releaseSpriteAtlas",

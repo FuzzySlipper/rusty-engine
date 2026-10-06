@@ -1141,6 +1141,11 @@ pub type NativeSetAtmosphere = unsafe extern "C" fn(
     *const NativeAtmosphereRequest,
     *mut crate::NativeOperationErrorReceipt,
 ) -> i32;
+pub type NativeSetSunShafts = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeSunShaftsRequest,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
 pub type NativeClearSkyBackground = unsafe extern "C" fn(
     *mut c_void,
     *const NativeClearSkyBackgroundRequest,
@@ -1628,6 +1633,7 @@ pub struct NativeCameraViewApi {
     pub set_auto_exposure: NativeSetAutoExposure,
     pub set_color_grading: NativeSetColorGrading,
     pub set_atmosphere: NativeSetAtmosphere,
+    pub set_sun_shafts: NativeSetSunShafts,
     pub set_viewport_anchor: NativeSetCameraViewportAnchor,
     pub read_surface: NativeReadCameraSurface,
     pub read_viewport_anchor: NativeReadCameraViewportAnchor,

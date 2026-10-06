@@ -18,7 +18,7 @@ struct FinishParams {
     // multisampled resolve of the target would); yz: the target's size.
     output: vec4<f32>,
     // x: bloom intensity (0 for none); y: 1 when auto exposure scales the
-    // exposure.
+    // exposure; z: sun shafts' strength (0 for none).
     post: vec4<f32>,
 };
 
@@ -33,6 +33,8 @@ struct FinishParams {
 @group(1) @binding(6) var bloom_sampler: sampler;
 // Auto exposure's adapted value (1×1).
 @group(1) @binding(7) var adapted: texture_2d<f32>;
+// The view's sun shafts (`post.wgsl`), at half its viewport's resolution.
+@group(1) @binding(8) var shafts: texture_2d<f32>;
 
 @vertex
 fn vs_finish(@builtin(vertex_index) index: u32) -> @builtin(position) vec4<f32> {
@@ -40,9 +42,9 @@ fn vs_finish(@builtin(vertex_index) index: u32) -> @builtin(position) vec4<f32> 
     return vec4<f32>(xy, 0.0, 1.0);
 }
 
-// One premultiplied sample at its depth, with the pixel's bloom added as
-// light: finished and premultiplied again, its bloom over the background
-// finished alone where the sample does not cover it.
+// One premultiplied sample at its depth, with the pixel's bloom and sun
+// shafts added as light: finished and premultiplied again, that light over
+// the background finished alone where the sample does not cover it.
 fn finished(color: vec4<f32>, position: vec4<f32>, depth: f32, glow: vec3<f32>, exposure: f32) -> vec4<f32> {
     let ceiling = vec3<f32>(params.output.x);
     var result = vec4<f32>(0.0);
@@ -56,20 +58,26 @@ fn finished(color: vec4<f32>, position: vec4<f32>, depth: f32, glow: vec3<f32>, 
         let rgb = min(finish_linear((color.rgb / color.a + glow) * exposure, ray), ceiling);
         result = vec4<f32>(rgb * color.a, color.a);
     }
-    if params.post.x > 0.0 && color.a < 1.0 {
+    if (params.post.x > 0.0 || params.post.z > 0.0) && color.a < 1.0 {
         result += vec4<f32>(min(finish_linear(glow * exposure, vec3<f32>(0.0)), ceiling) * (1.0 - color.a), 0.0);
     }
     return result;
 }
 
-// The pixel's bloom light (zero without bloom), from the view's own bloom,
-// which spans its viewport.
+// The pixel's added light: its bloom and its sun shafts in the sun's
+// colour (zero without either), from the view's own targets, which span its
+// viewport.
 fn glow_at(position: vec4<f32>) -> vec3<f32> {
-    if params.post.x <= 0.0 {
-        return vec3<f32>(0.0);
-    }
     let uv = (position.xy - params.viewport.xy) / params.viewport.zw;
-    return textureSampleLevel(bloom, bloom_sampler, uv, 0.0).rgb * params.post.x;
+    var glow = vec3<f32>(0.0);
+    if params.post.x > 0.0 {
+        glow = textureSampleLevel(bloom, bloom_sampler, uv, 0.0).rgb * params.post.x;
+    }
+    if params.post.z > 0.0 {
+        let rays = textureSampleLevel(shafts, bloom_sampler, uv, 0.0).r;
+        glow += frame.sun_color.rgb * min(frame.sun_color.w, 1.0) * rays * params.post.z;
+    }
+    return glow;
 }
 
 // The exposure scale auto exposure has adapted to (1 without it).

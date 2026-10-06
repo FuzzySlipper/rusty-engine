@@ -380,6 +380,19 @@ pub struct NativeAtmosphereRequest {
     pub sun_halo: f32,
 }
 
+/// Sun shafts: the sky around the sun (the brightest enabled directional
+/// world light) blurred along rays from it, so light streams past whatever
+/// stands in front of it. `intensity` (0 to 16) scales the light added; 0
+/// (the default) turns them off. `length` (0 to 1) is how far the rays
+/// reach, as a fraction of the way from each pixel to the sun; 0 takes the
+/// Engine's default.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeSunShaftsRequest {
+    pub intensity: f32,
+    pub length: f32,
+}
+
 /// Colour grading of the world with the tone mapping, after exposure and
 /// before the operator. Each control runs from -1 to 1, and 0 (the default)
 /// leaves the colour as it is: `temperature` cools toward blue or warms

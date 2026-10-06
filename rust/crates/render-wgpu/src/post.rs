@@ -1,5 +1,5 @@
-//! Bloom and auto exposure (`post.wgsl`): what the finish pass adds to and
-//! scales a view's HDR world by. Both read the world resolved to one sample,
+//! Bloom, auto exposure and sun shafts (`post.wgsl`): what the finish pass
+//! adds to and scales a view's HDR world by. Both read the world resolved to one sample,
 //! only within the view's viewport: views sharing a target never see each
 //! other.
 //!
@@ -8,6 +8,8 @@
 //! next larger. Auto exposure: coverage-weighted log luminance at 128²,
 //! averaged down to one texel, and an adaptation that moves a persistent
 //! exposure toward the one bringing it to middle grey over presentation time.
+//! Sun shafts: the sky's coverage around the sun at half resolution, blurred
+//! along rays toward the sun twice, the second time with a finer step.
 
 use render_model::{AutoExposureDescriptor, BloomDescriptor};
 
@@ -17,6 +19,7 @@ use crate::shaders::{Entry, Features, Shaders};
 use crate::timing::PassTimer;
 
 pub(crate) const BLOOM_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
+const SHAFT_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R16Float;
 const LUMINANCE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rg16Float;
 const EXPOSURE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R32Float;
 /// Bloom mips below the half-resolution one, at most.
@@ -27,6 +30,11 @@ const WHOLE: [f32; 4] = [0.0, 0.0, 1.0, 1.0];
 const LUMINANCE_SIZE: u32 = 128;
 /// The soft knee below the bloom threshold, as a fraction of it.
 const BLOOM_KNEE: f32 = 0.5;
+/// How far sun shafts reach when the product sets no length: this fraction
+/// of the way from each pixel to the sun.
+pub(crate) const DEFAULT_SHAFT_LENGTH: f32 = 0.6;
+/// Taps of each shaft blur pass (`post.wgsl` `SHAFT_TAPS`).
+const SHAFT_TAPS: f32 = 12.0;
 /// Uniform slots a frame's post passes start with, each 256 bytes apart;
 /// a frame that needs more doubles them.
 const PARAM_SLOTS: u64 = 64;
@@ -110,6 +118,33 @@ impl Chain {
     /// The finished bloom the finish pass samples.
     pub fn top(&self) -> &wgpu::TextureView {
         &self.views[0]
+    }
+}
+
+/// Sun shafts' two half-resolution targets for a viewport size: the mask
+/// and the first blur, then the second blur back into the first.
+pub(crate) struct ShaftTargets {
+    first: Chain,
+    second: Chain,
+    pub key: (u32, u32),
+    pub used: u64,
+}
+
+impl ShaftTargets {
+    pub fn new(gpu: &Gpu, width: u32, height: u32) -> Self {
+        let size = ((width / 2).max(1), (height / 2).max(1));
+        let target = || Chain::new(gpu, "render-wgpu sun shafts", SHAFT_FORMAT, size, 1);
+        Self {
+            first: target(),
+            second: target(),
+            key: (width, height),
+            used: 0,
+        }
+    }
+
+    /// The blurred shafts the finish pass samples.
+    pub fn top(&self) -> &wgpu::TextureView {
+        self.first.top()
     }
 }
 
@@ -448,6 +483,67 @@ impl Post {
                 None,
                 [x, y, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
                 at(stamps, false, level == 0),
+            );
+        }
+    }
+
+    /// Sun shafts from `region` of the resolved world (`size` texels) into
+    /// `targets`: the sky around the sun at `sun` (the view's uv), blurred
+    /// along rays toward it over `length` of the way; `stamps` as for
+    /// `bloom`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn shafts(
+        &mut self,
+        gpu: &Gpu,
+        encoder: &mut wgpu::CommandEncoder,
+        (source, region): (&wgpu::TextureView, [f32; 4]),
+        size: (u32, u32),
+        targets: &ShaftTargets,
+        sun: [f32; 2],
+        length: f32,
+        stamps: Stamps<'_>,
+    ) {
+        let [width, height] = [region[2] * size.0 as f32, region[3] * size.1 as f32];
+        let aspect = width / height.max(1.0);
+        let texel = [1.0 / size.0 as f32, 1.0 / size.1 as f32];
+        self.pass(
+            gpu,
+            encoder,
+            "fs_shafts_mask",
+            (targets.first.top(), SHAFT_FORMAT),
+            false,
+            (source, region),
+            None,
+            [texel[0], texel[1], sun[0], sun[1], 0.0, aspect, 0.0, 0.0],
+            at(stamps, true, false),
+        );
+        let (half_width, half_height) = targets.first.sizes[0];
+        let half_texel = [1.0 / half_width as f32, 1.0 / half_height as f32];
+        // The second pass marches a tap's span of the first, filling the
+        // gaps between its taps.
+        for (step, from, into, last) in [
+            (length, &targets.first, &targets.second, false),
+            (length / SHAFT_TAPS, &targets.second, &targets.first, true),
+        ] {
+            self.pass(
+                gpu,
+                encoder,
+                "fs_shafts_blur",
+                (into.top(), SHAFT_FORMAT),
+                false,
+                (from.top(), WHOLE),
+                None,
+                [
+                    half_texel[0],
+                    half_texel[1],
+                    sun[0],
+                    sun[1],
+                    step,
+                    aspect,
+                    0.0,
+                    0.0,
+                ],
+                at(stamps, false, last),
             );
         }
     }

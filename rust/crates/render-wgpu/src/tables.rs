@@ -18,6 +18,7 @@
 //! | `bloom`, `auto_exposure` | (single) | the finish pass's bloom and auto exposure | `SetBloom` / `SetAutoExposure` |
 //! | `color_grading` | (single) | white balance, contrast and saturation before the tone mapping operator | `SetColorGrading` |
 //! | `atmosphere` | (single) | height fog, sun haze and the sun in the sky | `SetAtmosphere` |
+//! | `sun_shafts` | (single) | the finish pass's sun shafts | `SetSunShafts` |
 //!
 //! | `sprites` | `RenderHandle` | membership: the nodes of kind `Sprite` | `CreateSprite`, `Destroy` (subtree) |
 //!
@@ -589,6 +590,7 @@ pub(crate) struct Tables {
     pub auto_exposure: Option<render_model::AutoExposureDescriptor>,
     pub color_grading: Option<render_model::ColorGradingDescriptor>,
     pub atmosphere: Option<render_model::AtmosphereDescriptor>,
+    pub sun_shafts: Option<render_model::SunShaftsDescriptor>,
     /// Nodes whose transform, visibility or parent changed since `prepare`.
     pub dirty_nodes: HashSet<RenderHandle>,
     /// Light nodes; the light rows are rebuilt when any of them changes.
@@ -621,6 +623,7 @@ impl Tables {
             auto_exposure: None,
             color_grading: None,
             atmosphere: None,
+            sun_shafts: None,
             dirty_nodes: HashSet::new(),
             lights: HashSet::new(),
             lights_dirty: true,

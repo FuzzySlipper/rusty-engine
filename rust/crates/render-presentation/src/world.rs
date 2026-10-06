@@ -127,6 +127,7 @@ struct RetainedGraphics {
     auto_exposure: Option<AutoExposureDescriptor>,
     color_grading: Option<ColorGradingDescriptor>,
     atmosphere: Option<AtmosphereDescriptor>,
+    sun_shafts: Option<SunShaftsDescriptor>,
     controllers: BTreeMap<crate::AnimationProjectionHandle, crate::AnimationProjectionDescriptor>,
 }
 
@@ -257,6 +258,7 @@ impl PresentationWorld {
                 || matches!(&op, RenderDiff::SetAutoExposure { auto_exposure } if &self.retained.auto_exposure == auto_exposure)
                 || matches!(&op, RenderDiff::SetColorGrading { color_grading } if &self.retained.color_grading == color_grading)
                 || matches!(&op, RenderDiff::SetAtmosphere { atmosphere } if &self.retained.atmosphere == atmosphere)
+                || matches!(&op, RenderDiff::SetSunShafts { sun_shafts } if &self.retained.sun_shafts == sun_shafts)
             {
                 continue;
             }
@@ -689,6 +691,11 @@ impl PresentationWorld {
         if self.retained.atmosphere.is_some() {
             ops.push(RenderDiff::SetAtmosphere {
                 atmosphere: self.retained.atmosphere,
+            });
+        }
+        if self.retained.sun_shafts.is_some() {
+            ops.push(RenderDiff::SetSunShafts {
+                sun_shafts: self.retained.sun_shafts,
             });
         }
         // Creation requires an existing parent and parents cannot be changed,
@@ -1199,6 +1206,9 @@ impl PresentationWorld {
             }
             RenderDiff::SetAtmosphere { atmosphere } => {
                 self.retained.atmosphere = *atmosphere;
+            }
+            RenderDiff::SetSunShafts { sun_shafts } => {
+                self.retained.sun_shafts = *sun_shafts;
             }
         }
         Ok(())

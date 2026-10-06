@@ -1350,13 +1350,28 @@ impl Renderer {
             self.finish.post.reset_exposure();
         }
         let adapting = auto_exposure.filter(|_| world_layer && !self.exposure_adapted);
+        // Sun shafts stream from the sun's place in the view: its uv, how
+        // far the rays reach and their strength.
+        let shafts = self
+            .tables
+            .sun_shafts
+            .filter(|shafts| world_layer && shafts.intensity > 0.0)
+            .and_then(|shafts| {
+                let (uv, fade) = sun_in_view(self.sun?.toward, &view_proj)?;
+                let length = if shafts.length > 0.0 {
+                    shafts.length
+                } else {
+                    crate::post::DEFAULT_SHAFT_LENGTH
+                };
+                Some((uv, length, shafts.intensity * fade))
+            });
         let size = (view.target.width, view.target.height, target.samples);
         let hdr = self.finish.target(
             &self.gpu,
             size.0,
             size.1,
             size.2,
-            bloom.is_some() || adapting.is_some(),
+            bloom.is_some() || adapting.is_some() || shafts.is_some(),
         );
         let pipelines = &self.pipelines[format_index];
         let list = &self.views[slot]
@@ -1454,7 +1469,7 @@ impl Renderer {
         }
         let draws = parts.draws + effects.draws();
         let instances = list.instances();
-        if bloom.is_some() || adapting.is_some() {
+        if bloom.is_some() || adapting.is_some() || shafts.is_some() {
             self.exposure_adapted |= adapting.is_some();
             self.finish.encode_post(
                 &self.gpu,
@@ -1463,6 +1478,7 @@ impl Renderer {
                 [area.x, area.y, area.width, area.height],
                 bloom,
                 adapting,
+                shafts.map(|(uv, length, _)| (uv, length)),
                 self.animation_time,
                 world_layer,
             );
@@ -1475,6 +1491,7 @@ impl Renderer {
             &self.frame_buffer,
             FinishPost {
                 bloom: bloom.map_or(0.0, |bloom| bloom.intensity),
+                shafts: shafts.map_or(0.0, |(_, _, strength)| strength),
                 auto_exposure: auto_exposure.is_some(),
             },
             world_layer,
@@ -1654,6 +1671,36 @@ fn finish_uniform(
         bytes.extend_from_slice(&value.to_le_bytes());
     }
     bytes
+}
+
+/// Sun shafts fade out this far beyond a view's edge (in view widths and
+/// heights) and draw nothing past it.
+const SHAFT_MARGIN: f32 = 0.5;
+/// Sun shafts fade in as the sun climbs this far above the horizon (the y
+/// of the direction toward it).
+const SHAFT_HORIZON: f32 = 0.1;
+
+/// Where the sun shows in a view (its uv) and how strongly its shafts draw
+/// there: not at all below the horizon, behind the camera or a margin
+/// beyond the view's edge, fading in across the margin and above the
+/// horizon.
+fn sun_in_view(toward: Vec3, view_proj: &Mat4) -> Option<([f32; 2], f32)> {
+    if toward.y <= 0.0 {
+        return None;
+    }
+    let clip = *view_proj * toward.extend(0.0);
+    if clip.w <= 0.0 {
+        return None;
+    }
+    let uv = [clip.x / clip.w * 0.5 + 0.5, 0.5 - clip.y / clip.w * 0.5];
+    let outside = [-uv[0], uv[0] - 1.0, -uv[1], uv[1] - 1.0]
+        .into_iter()
+        .fold(0.0, f32::max);
+    if outside >= SHAFT_MARGIN {
+        return None;
+    }
+    let fade = (1.0 - outside / SHAFT_MARGIN) * (toward.y / SHAFT_HORIZON).min(1.0);
+    Some((uv, fade))
 }
 
 /// The world's sun: the direction toward it, its colour and intensity.

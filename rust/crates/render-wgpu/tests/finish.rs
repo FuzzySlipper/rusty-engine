@@ -624,3 +624,67 @@ fn the_sun_draws_its_disc_and_halo_over_the_clear_colour_only_when_set() {
         gain(far)
     );
 }
+
+#[test]
+fn sun_shafts_stream_past_what_covers_the_sun_and_draw_nothing_with_the_sun_out_of_view() {
+    let view = camera([0.0, 0.0, 0.0], 0.0, 0.0);
+    // The sun about 14° above the view's centre (about 39 pixels up), the
+    // box at the centre below it.
+    let ahead = [0.0, -0.25, 1.0];
+    let render = |with_box: bool, travel: [f32; 3], shafts: Option<SunShaftsDescriptor>| {
+        let mut harness = Harness::new(RendererOptions::default());
+        if with_box {
+            box_ahead(&mut harness, [0.3, 0.3, 0.3, 1.0]);
+        } else {
+            harness.apply(vec![RenderDiff::SetBackgroundColor { color: BACKGROUND }]);
+        }
+        sun(&mut harness, travel);
+        harness.apply(vec![RenderDiff::SetSunShafts { sun_shafts: shafts }]);
+        harness.render(&view).1
+    };
+    let on = Some(SunShaftsDescriptor {
+        intensity: 4.0,
+        length: 0.0,
+    });
+    let plain = render(true, ahead, None);
+    let streaming = render(true, ahead, on);
+    // The sky between the sun and the box brightens.
+    let above = (CENTER.0, CENTER.1 - 25);
+    assert!(
+        distance(pixel(&streaming, above), pixel(&plain, above)) > 20,
+        "{:?} {:?}",
+        pixel(&streaming, above),
+        pixel(&plain, above)
+    );
+    // Below the box its rays are covered: the sky there gains less than
+    // with no box in the way (weak enough that neither saturates).
+    let weak = Some(SunShaftsDescriptor {
+        intensity: 1.0,
+        length: 0.0,
+    });
+    let below = (CENTER.0, CENTER.1 + 22);
+    let open_plain = render(false, ahead, None);
+    let open = render(false, ahead, weak);
+    let streaming = render(true, ahead, weak);
+    let gain = |image: &[u8], base: &[u8]| distance(pixel(image, below), pixel(base, below));
+    assert!(
+        gain(&open, &open_plain) > gain(&streaming, &plain) + 5,
+        "open {} covered {}",
+        gain(&open, &open_plain),
+        gain(&streaming, &plain)
+    );
+    // Off at zero intensity, with the sun behind the camera and with it
+    // below the horizon.
+    let zero = Some(SunShaftsDescriptor {
+        intensity: 0.0,
+        length: 0.5,
+    });
+    assert_eq!(render(true, ahead, zero), plain);
+    let behind = [0.0, -0.25, -1.0];
+    assert_eq!(render(true, behind, on), render(true, behind, None));
+    let below_horizon = [0.0, 0.25, 1.0];
+    assert_eq!(
+        render(true, below_horizon, on),
+        render(true, below_horizon, None)
+    );
+}

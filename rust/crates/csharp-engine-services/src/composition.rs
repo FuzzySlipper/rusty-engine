@@ -196,6 +196,7 @@ fn engine_api(
             set_auto_exposure: crate::camera_view::set_auto_exposure,
             set_color_grading: crate::camera_view::set_color_grading,
             set_atmosphere: crate::camera_view::set_atmosphere,
+            set_sun_shafts: crate::camera_view::set_sun_shafts,
             set_viewport_anchor: crate::camera_view::set_viewport_anchor,
             read_surface: crate::camera_view::read_surface,
             read_viewport_anchor: crate::camera_view::read_viewport_anchor,
@@ -1547,6 +1548,67 @@ mod tests {
                     auto_exposure: None
                 },
             ]
+        );
+    }
+
+    #[test]
+    fn sun_shafts_publish_as_retained_environment_and_zero_intensity_turns_them_off() {
+        use crate::operation_diagnostics::{empty_receipt, receipt_codes};
+        let mut services = EngineServiceSet::new(
+            parse_runtime_appearance_catalog(None).expect("default catalog"),
+            BTreeMap::new(),
+            None,
+            RuntimeDiagnosticsSink::new(Default::default()).unwrap(),
+        )
+        .expect("service set");
+        services.begin_call(binding());
+        let api = services.api();
+        let set = |intensity, length, refusal| unsafe {
+            (api.camera_view.set_sun_shafts)(
+                api.camera_view.context,
+                &NativeSunShaftsRequest { intensity, length },
+                refusal,
+            )
+        };
+        assert_eq!(set(1.5, 0.4, std::ptr::null_mut()), ABI_OK);
+        let mut call = services.finish_call().expect("shafts call");
+        let selected = render_model::RenderDiff::SetSunShafts {
+            sun_shafts: Some(render_model::SunShaftsDescriptor {
+                intensity: 1.5,
+                length: 0.4,
+            }),
+        };
+        assert_eq!(
+            call.take_output().frames[0].ops,
+            std::slice::from_ref(&selected)
+        );
+        let attachment = services
+            .snapshot_outputs(binding())
+            .expect("fresh attachment");
+        let CsharpAppearanceCallOutput::Frame(frame) = &attachment.appearance[0] else {
+            panic!("baseline graphics frame");
+        };
+        assert!(frame.ops.contains(&selected));
+
+        services.begin_call(binding());
+        let api = services.api();
+        let set = |intensity, length, refusal| unsafe {
+            (api.camera_view.set_sun_shafts)(
+                api.camera_view.context,
+                &NativeSunShaftsRequest { intensity, length },
+                refusal,
+            )
+        };
+        for (intensity, length) in [(20.0, 0.5), (1.0, 1.5), (f32::NAN, 0.5)] {
+            let mut refusal = empty_receipt();
+            assert_eq!(set(intensity, length, &mut refusal), 0);
+            assert_eq!(receipt_codes(&refusal), ["CSHARP_SUN_SHAFTS"]);
+        }
+        assert_eq!(set(0.0, 0.5, std::ptr::null_mut()), ABI_OK);
+        let mut call = services.finish_call().expect("off");
+        assert_eq!(
+            call.take_output().frames[0].ops,
+            [render_model::RenderDiff::SetSunShafts { sun_shafts: None }]
         );
     }
 

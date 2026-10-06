@@ -17,7 +17,7 @@ use render_model::{AutoExposureDescriptor, BloomDescriptor};
 
 use crate::gpu::Gpu;
 use crate::pipelines::standard;
-use crate::post::{Chain, Post};
+use crate::post::{Chain, Post, ShaftTargets};
 use crate::shaders::{Entry, Features, Shaders};
 use crate::target::{ColorTarget, TargetView, DEPTH_FORMAT};
 use crate::timing::{untimed, GpuPassTiming, PassTimer};
@@ -45,8 +45,10 @@ struct HdrTarget {
     color: wgpu::TextureView,
     /// A multisampled colour's single-sample resolve.
     resolve: Option<wgpu::TextureView>,
-    /// Bloom chains by viewport size, so each view blooms its own viewport.
+    /// Bloom chains and sun shaft targets by viewport size, so each view
+    /// treats its own viewport.
     bloom: Vec<Chain>,
+    shafts: Vec<ShaftTargets>,
     luminance: Option<Chain>,
     used: u64,
 }
@@ -70,6 +72,9 @@ pub(crate) struct HdrViews {
 pub(crate) struct FinishPost {
     /// Bloom's intensity; 0 for none.
     pub bloom: f32,
+    /// Sun shafts' strength (their intensity, faded as the sun leaves the
+    /// view or nears the horizon); 0 for none.
+    pub shafts: f32,
     /// Scale the exposure by auto exposure's adapted value.
     pub auto_exposure: bool,
 }
@@ -94,7 +99,7 @@ pub(crate) struct Finish {
     post_timer: Option<PassTimer>,
     finish_timer: Option<PassTimer>,
     /// The bloom and adaptation the post timer last timed.
-    timed_post: (bool, bool),
+    timed_post: (bool, bool, bool),
 }
 
 impl Finish {
@@ -151,6 +156,11 @@ impl Finish {
                         count: None,
                     },
                     texture(7, float, false),
+                    texture(
+                        8,
+                        wgpu::TextureSampleType::Float { filterable: true },
+                        false,
+                    ),
                 ],
             })
         };
@@ -192,7 +202,7 @@ impl Finish {
             world_timer: PassTimer::new(gpu, WORLD),
             post_timer: PassTimer::new(gpu, POST),
             finish_timer: PassTimer::new(gpu, FINISH),
-            timed_post: (false, false),
+            timed_post: (false, false, false),
         }
     }
 
@@ -218,6 +228,9 @@ impl Finish {
             target
                 .bloom
                 .retain(|chain| frame - chain.used <= TARGET_FRAMES_KEPT);
+            target
+                .shafts
+                .retain(|shafts| frame - shafts.used <= TARGET_FRAMES_KEPT);
         }
     }
 
@@ -262,6 +275,7 @@ impl Finish {
                     color: texture(samples),
                     resolve: None,
                     bloom: Vec::new(),
+                    shafts: Vec::new(),
                     luminance: None,
                     used: self.frame,
                 });
@@ -283,8 +297,9 @@ impl Finish {
         }
     }
 
-    /// Bloom and auto exposure from `viewport` (x, y, width, height in
-    /// pixels) of the resolved world of the HDR target of this size and
+    /// Bloom, auto exposure and sun shafts (the sun's place in the view's
+    /// uv and how far the rays reach) from `viewport` (x, y, width, height
+    /// in pixels) of the resolved world of the HDR target of this size and
     /// sample count, as of presentation time `now`; `timed` for a world
     /// view.
     #[allow(clippy::too_many_arguments)]
@@ -296,6 +311,7 @@ impl Finish {
         viewport: [u32; 4],
         bloom: Option<BloomDescriptor>,
         auto_exposure: Option<AutoExposureDescriptor>,
+        shafts: Option<([f32; 2], f32)>,
         now: f64,
         timed: bool,
     ) {
@@ -323,6 +339,24 @@ impl Finish {
         if let Some(chain) = chain {
             target.bloom[chain].used = frame;
         }
+        let shaft_targets = shafts.map(|_| {
+            match target
+                .shafts
+                .iter()
+                .position(|shafts| shafts.key == (view_width, view_height))
+            {
+                Some(index) => index,
+                None => {
+                    target
+                        .shafts
+                        .push(ShaftTargets::new(gpu, view_width, view_height));
+                    target.shafts.len() - 1
+                }
+            }
+        });
+        if let Some(index) = shaft_targets {
+            target.shafts[index].used = frame;
+        }
         if auto_exposure.is_some() && target.luminance.is_none() {
             target.luminance = Some(Chain::luminance(gpu));
         }
@@ -335,7 +369,7 @@ impl Finish {
             view_height as f32 / height as f32,
         ];
         // A median never mixes frames that did different work.
-        let work = (bloom.is_some(), auto_exposure.is_some());
+        let work = (bloom.is_some(), auto_exposure.is_some(), shafts.is_some());
         if timed && work != self.timed_post {
             self.timed_post = work;
             if let Some(timer) = &mut self.post_timer {
@@ -343,9 +377,10 @@ impl Finish {
             }
         }
         let timer = self.post_timer.as_ref().filter(|_| timed);
+        // The stamps open on the first pass and close on the last.
+        let last_is_bloom = auto_exposure.is_none() && shafts.is_none();
         if let (Some(bloom), Some(chain)) = (bloom, chain) {
-            // The stamps open on the first pass and close on the last.
-            let stamps = timer.map(|timer| (timer, true, auto_exposure.is_none()));
+            let stamps = timer.map(|timer| (timer, true, last_is_bloom));
             self.post.bloom(
                 gpu,
                 encoder,
@@ -357,7 +392,7 @@ impl Finish {
             );
         }
         if let (Some(auto), Some(chain)) = (auto_exposure, &target.luminance) {
-            let stamps = timer.map(|timer| (timer, bloom.is_none(), true));
+            let stamps = timer.map(|timer| (timer, bloom.is_none(), shafts.is_none()));
             self.post.adapt(
                 gpu,
                 encoder,
@@ -366,6 +401,20 @@ impl Finish {
                 chain,
                 auto,
                 now,
+                stamps,
+            );
+        }
+        if let (Some((sun, length)), Some(index)) = (shafts, shaft_targets) {
+            let first = bloom.is_none() && auto_exposure.is_none();
+            let stamps = timer.map(|timer| (timer, first, true));
+            self.post.shafts(
+                gpu,
+                encoder,
+                (&source, region),
+                (width, height),
+                &target.shafts[index],
+                sun,
+                length,
                 stamps,
             );
         }
@@ -546,6 +595,11 @@ impl Finish {
             .iter()
             .find(|chain| chain.key == (viewport[2], viewport[3]))
             .filter(|_| post.bloom > 0.0);
+        let shafts = hdr
+            .shafts
+            .iter()
+            .find(|shafts| shafts.key == (viewport[2], viewport[3]))
+            .filter(|_| post.shafts > 0.0);
         let [x, y, width, height] = viewport.map(|value| value as f32);
         let params = [
             x,
@@ -558,7 +612,7 @@ impl Finish {
             0.0,
             if bloom.is_some() { post.bloom } else { 0.0 },
             if post.auto_exposure { 1.0 } else { 0.0 },
-            0.0,
+            if shafts.is_some() { post.shafts } else { 0.0 },
             0.0,
         ];
         gpu.queue
@@ -608,6 +662,12 @@ impl Finish {
                     } else {
                         &self.post.unit
                     }),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 8,
+                    resource: wgpu::BindingResource::TextureView(
+                        shafts.map_or(&self.post.black, ShaftTargets::top),
+                    ),
                 },
             ],
         });
