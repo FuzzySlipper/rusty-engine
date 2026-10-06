@@ -13,6 +13,20 @@ color makes a surface visible but does not emit light onto other surfaces. Pair
 a torch's emissive appearance with a retained point light when it should light
 its surroundings. Updating or disabling that light changes the same retained light.
 
+## Shadows
+
+Each shadowed light renders the scene into layers of one depth array: one
+layer for a directional or spot light, six for a point light. Every shown part
+of the scene layer casts, so a new object needs no shadow setup, but a layer
+draws only the parts inside its view and, for a point or spot light with a
+`Range`, the parts that range reaches. Give lamps a range: a lamp without one
+casts from everything within 500 m of it.
+
+A layer re-renders only when its view changes (the light moves, turns or
+changes range) or a part in it is added, removed, moved or posed. A lamp that
+flickers by changing colour or intensity re-renders nothing, and a moving
+object re-renders only the layers that see it.
+
 ## Dark caves: an ambient light's sky
 
 An ambient light reaches every surface alike, so on its own a cave is as
@@ -28,8 +42,8 @@ the rest.
   light's position and snapped to its texels, so move the light with the
   player (or camera) in a large world, as for a directional light's shadow.
   Outside the square nothing is occluded.
-- It is one more shadow layer: every shown part casts into it, and it
-  re-renders only when a light or part changes. Each lit fragment takes 25
+- It is one more shadow layer: every shown part inside the square casts into
+  it, and it re-renders only when the square moves or a part in it changes. Each lit fragment takes 25
   more comparison samples. Meshing is unchanged.
 - It is presentation only. `Voxel.SampleDirectLighting` (below) still treats
   ambient light as unoccluded.

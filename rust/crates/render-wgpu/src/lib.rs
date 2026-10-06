@@ -146,10 +146,10 @@ pub struct Renderer {
     parts_buffer: wgpu::Buffer,
     lights_buffer: wgpu::Buffer,
     lights: frame::LightRanges,
-    /// Part ids: the caster list, then the world and viewmodel view lists.
+    /// Part ids: the world and viewmodel view lists, then each shadow
+    /// layer's casters.
     instances_buffer: wgpu::Buffer,
-    casters: batch::DrawList,
-    /// The caster ids are in the instance buffer.
+    /// The shadow layers' caster ids are in the instance buffer.
     casters_uploaded: bool,
     /// Per view layer (world, viewmodel): the last draw list.
     views: [Option<frame::ViewCache>; 2],
@@ -249,7 +249,6 @@ impl Renderer {
             lights_buffer,
             lights: Default::default(),
             instances_buffer,
-            casters: batch::DrawList::default(),
             casters_uploaded: false,
             views: Default::default(),
             shadows,
@@ -351,7 +350,7 @@ impl Renderer {
             voxel_objects: self.tables.voxel_objects.len(),
             animated_meshes: self.tables.animated_assets.len(),
             animated_instances: self.tables.animated.len(),
-            shadow_layers: self.shadows.layers as usize,
+            shadow_layers: self.shadows.layers.len(),
             shader_variants: self.layouts.shader_variants(),
         }
     }

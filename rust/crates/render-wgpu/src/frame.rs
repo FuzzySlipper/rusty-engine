@@ -1,11 +1,12 @@
 //! The fixed pass pipeline, in order: propagate dirty transforms, prepare GPU
-//! rows (lights and their shadow views, parts) and rebuild the shadow caster
-//! list when a part changed, then per view pass: take the layer's draw list
-//! (culled and batched, reused while neither the camera nor any part
-//! changed), render stale shadow maps before the first world pass, and encode
-//! sky and world (or viewmodel) draws. `composition.rs` orders the view
-//! passes.
+//! rows (lights and their shadow views, parts) and cull each shadow layer's
+//! casters when a part or layer changed, then per view pass: take the layer's
+//! draw list (culled and batched, reused while neither the camera nor any
+//! part changed), render stale shadow layers before the first world pass, and
+//! encode sky and world (or viewmodel) draws. `composition.rs` orders the
+//! view passes.
 
+use std::collections::HashSet;
 use std::ops::{Add, AddAssign};
 
 use glam::{Mat4, Vec3};
@@ -20,7 +21,7 @@ use crate::camera::CameraMatrices;
 use crate::effects::EffectsPass;
 use crate::shaders::Features;
 use crate::shadows::{self, ShadowMaps};
-use crate::tables::{Builtin, Environment, MaterialRef, NodeKind, PART_ROW_FLOATS};
+use crate::tables::{Builtin, Environment, MaterialRef, NodeKind, PartId, PART_ROW_FLOATS};
 use crate::target::{ColorTarget, TargetView};
 use crate::{
     srgb_to_linear, OffscreenTarget, PresentSkip, Renderer, WindowSurface, DEFAULT_CLEAR_SRGB,
@@ -48,6 +49,9 @@ pub struct FrameStats {
     pub lights: u32,
     /// Caster draw calls across shadow layers; 0 when the maps were current.
     pub shadow_draws: u32,
+    /// Shadow layers rendered, and the casters drawn into them.
+    pub shadow_layers: u32,
+    pub shadow_casters: u32,
     /// Offscreen composition views drawn this frame; a target that is not
     /// stale is presented as it is.
     pub offscreen_views: u32,
@@ -71,6 +75,8 @@ pub(crate) struct ViewStats {
     pub instances: u32,
     pub instances_uploaded: u32,
     pub shadow_draws: u32,
+    pub shadow_layers: u32,
+    pub shadow_casters: u32,
     pub sprite_candidates: u32,
     pub pipeline_binds: u32,
     pub pipelines_created: u32,
@@ -85,6 +91,8 @@ impl Add for ViewStats {
             instances: self.instances + other.instances,
             instances_uploaded: self.instances_uploaded + other.instances_uploaded,
             shadow_draws: self.shadow_draws + other.shadow_draws,
+            shadow_layers: self.shadow_layers + other.shadow_layers,
+            shadow_casters: self.shadow_casters + other.shadow_casters,
             sprite_candidates: self.sprite_candidates + other.sprite_candidates,
             pipeline_binds: self.pipeline_binds + other.pipeline_binds,
             pipelines_created: self.pipelines_created + other.pipelines_created,
@@ -98,6 +106,8 @@ impl AddAssign<ViewStats> for FrameStats {
         self.instances += view.instances;
         self.instances_uploaded += view.instances_uploaded;
         self.shadow_draws += view.shadow_draws;
+        self.shadow_layers += view.shadow_layers;
+        self.shadow_casters += view.shadow_casters;
         self.sprite_candidates += view.sprite_candidates;
         self.pipeline_binds += view.pipeline_binds;
         self.pipelines_created += view.pipelines_created;
@@ -116,6 +126,16 @@ impl AddAssign for Encoded {
         self.draws += other.draws;
         self.pipeline_binds += other.pipeline_binds;
     }
+}
+
+/// What the shadow layers rendered this frame.
+#[derive(Clone, Copy, Default)]
+struct ShadowsEncoded {
+    encoded: Encoded,
+    layers: u32,
+    casters: u32,
+    /// Caster pipelines compiled for them.
+    pipelines_created: u32,
 }
 
 /// The draw list a view layer last used, kept while nothing changed. Each
@@ -246,8 +266,9 @@ impl Renderer {
         self.advance_video();
         self.propagate_transforms();
         self.report_pending_bounds();
+        let mut layers_changed = false;
         if self.tables.lights_dirty {
-            self.upload_lights();
+            layers_changed = self.upload_lights();
             self.tables.lights_dirty = false;
         }
         if self.tables.environment_dirty {
@@ -257,24 +278,76 @@ impl Renderer {
         let uploaded = self.upload_parts();
         let regrouped = std::mem::take(&mut self.tables.parts.regrouped);
         let moved = std::mem::take(&mut self.tables.parts.moved);
-        if regrouped {
-            // Casters lead the instance buffer; they upload again only if
-            // their ids changed.
-            let casters = batch::caster_list(&self.tables.parts, 0);
-            if casters != self.casters {
-                self.casters = casters;
-                self.casters_uploaded = false;
-            }
-        }
-        if regrouped || moved {
+        if regrouped || !moved.is_empty() {
             // Each layer re-culls on its next pass and uploads only a
             // different list.
             for view in self.views.iter_mut().flatten() {
                 view.stale = true;
             }
-            self.shadows.stale = true;
+        }
+        if regrouped || !moved.is_empty() || layers_changed {
+            self.cull_casters(&moved);
         }
         uploaded
+    }
+
+    /// Cull every shadow layer's casters to its view and its light's reach.
+    /// A layer whose casters differ, or hold a moved part, is stale; the
+    /// others keep their maps.
+    fn cull_casters(&mut self, moved: &HashSet<PartId>) {
+        if self.shadows.layers.is_empty() {
+            return;
+        }
+        let parts = &self.tables.parts;
+        let candidates = batch::caster_candidates(parts);
+        // A point light's six faces share one reach.
+        let mut reached: Option<((Vec3, f32), Vec<PartId>)> = None;
+        // Casters follow the world and viewmodel lists in the instance
+        // buffer.
+        let mut base = 2 * parts.meta.len() as u32;
+        let mut changed = false;
+        for layer in &mut self.shadows.layers {
+            let inside = match layer.reach {
+                None => &candidates,
+                Some(reach) => {
+                    if reached.as_ref().is_none_or(|(at, _)| *at != reach) {
+                        reached = Some((reach, batch::within_reach(parts, &candidates, reach)));
+                    }
+                    &reached.as_ref().expect("reach culled").1
+                }
+            };
+            let list = batch::caster_list(parts, inside, &Frustum::new(&layer.view_proj), base);
+            base += list.instances();
+            if list.ids != layer.casters.ids || list.ids.iter().any(|id| moved.contains(id)) {
+                layer.stale = true;
+            }
+            if list != layer.casters {
+                layer.casters = list;
+                changed = true;
+            }
+        }
+        if changed {
+            self.casters_uploaded = false;
+        }
+        self.reserve_instances();
+    }
+
+    /// Grow the instance buffer to hold the world and viewmodel lists (each
+    /// sized for every part slot) and the shadow layers' casters. A new
+    /// buffer starts empty, so everything uploads again.
+    fn reserve_instances(&mut self) {
+        let slots = self.tables.parts.meta.len() as u32;
+        let needed = u64::from(2 * slots + self.shadows.caster_instances()).max(1) * 4;
+        if needed > self.instances_buffer.size() {
+            self.instances_buffer = storage_buffer(
+                &self.gpu.device,
+                "render-wgpu instances",
+                needed.next_power_of_two(),
+            );
+            self.rebind_frame();
+            self.views = Default::default();
+            self.casters_uploaded = false;
+        }
     }
 
     /// Recompute world transform, visibility and layer for each dirty subtree.
@@ -340,26 +413,28 @@ impl Renderer {
 
     /// World lights (the world rig and retained lights outside the viewmodel
     /// layer), then viewmodel lights (the viewmodel rig and retained lights in
-    /// the viewmodel layer, in camera-local coordinates).
-    fn upload_lights(&mut self) {
+    /// the viewmodel layer, in camera-local coordinates). Returns whether a
+    /// shadow layer's view changed.
+    fn upload_lights(&mut self) -> bool {
         let mut rows: Vec<f32> = Vec::new();
         if self.options.default_world_lights {
             neutral_rig(&mut rows, NEUTRAL_KEY_POSITION);
         }
         // Only world lights cast: viewmodel lights are camera-local.
-        let mut shadow_views: Vec<Mat4> = Vec::new();
+        let mut shadow_views: Vec<shadows::LayerView> = Vec::new();
         self.retained_light_rows(&mut rows, ViewLayer::World, Some(&mut shadow_views));
         let world_count = (rows.len() / LIGHT_ROW_FLOATS) as u32;
         if self.options.default_viewmodel_lights {
             neutral_rig(&mut rows, NEUTRAL_VIEWMODEL_KEY_POSITION);
         }
         self.retained_light_rows(&mut rows, ViewLayer::Viewmodel, None);
-        if self.shadows.set_layers(
+        let (replaced, layers_changed) = self.shadows.set_layers(
             &self.gpu.device,
             &self.gpu.queue,
             &self.layouts.shadow_layer,
             &shadow_views,
-        ) {
+        );
+        if replaced {
             self.rebind_frame();
         }
         let total = (rows.len() / LIGHT_ROW_FLOATS) as u32;
@@ -387,6 +462,7 @@ impl Renderer {
                 .queue
                 .write_buffer(&self.lights_buffer, 0, bytemuck::cast_slice(&rows));
         }
+        layers_changed
     }
 
     /// Retained light rows in `layer`. With `shadow_views`, a light whose
@@ -396,7 +472,7 @@ impl Renderer {
         &self,
         rows: &mut Vec<f32>,
         layer: ViewLayer,
-        mut shadow_views: Option<&mut Vec<Mat4>>,
+        mut shadow_views: Option<&mut Vec<shadows::LayerView>>,
     ) {
         let mut handles: Vec<&RenderHandle> = self.tables.lights.iter().collect();
         handles.sort();
@@ -412,7 +488,8 @@ impl Renderer {
                             let layers = shadows::light_views(light, &node.world);
                             if !layers.is_empty() {
                                 row[15] = (views.len() + 1) as f32;
-                                views.extend(layers);
+                                let reach = shadows::light_reach(light, &node.world);
+                                views.extend(layers.into_iter().map(|view| (view, reach)));
                             }
                         }
                         rows.extend_from_slice(&row);
@@ -490,16 +567,28 @@ impl Renderer {
     /// part ids uploaded.
     fn update_view_list(&mut self, view_proj: &Mat4, eye: Vec3, layer: ViewLayer) -> u32 {
         let slot = layer as usize;
+        // Instance regions: the world list, then the viewmodel list, each
+        // sized for every part slot, then each shadow layer's casters.
+        let slots = self.tables.parts.meta.len() as u32;
+        self.reserve_instances();
+        let mut uploaded = 0;
+        if !self.casters_uploaded {
+            let ids: Vec<u32> = self
+                .shadows
+                .layers
+                .iter()
+                .flat_map(|layer| layer.casters.ids.iter().copied())
+                .collect();
+            uploaded += self.upload_instances(2 * slots, &ids);
+            self.casters_uploaded = true;
+        }
         if self.views[slot]
             .as_ref()
             .is_some_and(|view| view.view_proj == *view_proj && !view.stale)
         {
-            return 0;
+            return uploaded;
         }
-        // Instance regions: casters, then the world list, then the viewmodel
-        // list, each list sized for every part slot.
-        let slots = self.tables.parts.meta.len() as u32;
-        let base = self.casters.instances() + slot as u32 * slots;
+        let base = slot as u32 * slots;
         let list = batch::view_list(
             &self.tables.parts,
             layer == ViewLayer::Viewmodel,
@@ -507,23 +596,6 @@ impl Renderer {
             eye,
             base,
         );
-        let needed = u64::from(self.casters.instances() + 2 * slots).max(1) * 4;
-        if needed > self.instances_buffer.size() {
-            self.instances_buffer = storage_buffer(
-                &self.gpu.device,
-                "render-wgpu instances",
-                needed.next_power_of_two(),
-            );
-            self.rebind_frame();
-            // A new buffer starts empty: everything uploads again.
-            self.views = Default::default();
-            self.casters_uploaded = false;
-        }
-        let mut uploaded = 0;
-        if !self.casters_uploaded {
-            uploaded += self.upload_instances(0, &self.casters.ids);
-            self.casters_uploaded = true;
-        }
         // Lists carry their instance offsets, so a moved base compares
         // different and uploads.
         let unchanged = self.views[slot]
@@ -551,35 +623,45 @@ impl Renderer {
         ids.len() as u32
     }
 
-    /// Render every shadow layer's casters when a light or part changed since
-    /// the maps were drawn, or presentation time moved and a product's caster
-    /// stage (which may read it) draws. Returns what the casters encoded and
-    /// the caster pipelines compiled for them.
-    fn encode_shadows(&mut self, encoder: &mut wgpu::CommandEncoder) -> (Encoded, u32) {
+    /// Render each stale shadow layer's casters, or every layer when
+    /// presentation time moved and a product's caster stage (which may read
+    /// it) draws.
+    fn encode_shadows(&mut self, encoder: &mut wgpu::CommandEncoder) -> ShadowsEncoded {
         let retimed = self.shadows.timed && self.shadows.time != self.animation_time;
-        if !(self.shadows.stale || retimed) || self.shadows.layers == 0 {
+        if !retimed && self.shadows.layers.iter().all(|layer| !layer.stale) {
             return Default::default();
         }
-        self.shadows.stale = false;
         self.shadows.time = self.animation_time;
-        let variants = self.batch_variants(&self.casters.batches);
+        let batches: Vec<batch::Batch> = self
+            .shadows
+            .layers
+            .iter()
+            .flat_map(|layer| layer.casters.batches.iter().copied())
+            .collect();
+        let variants = self.batch_variants(&batches);
         self.shadows.timed = variants
             .iter()
             .any(|(features, _)| features.caster().product() != 0);
-        let mut created = 0;
+        let mut drawn = ShadowsEncoded::default();
         for (features, pass) in variants {
-            created += u32::from(
-                self.layouts
-                    .prepare_caster(&self.gpu.device, features, pass),
-            );
+            drawn.pipelines_created += u32::from(self.layouts.prepare_caster(
+                &self.gpu.device,
+                features,
+                pass,
+            ));
         }
-        let mut encoded = Encoded::default();
-        for layer in 0..self.shadows.layers {
+        for (index, layer) in self.shadows.layers.iter().enumerate() {
+            if !(retimed || layer.stale) {
+                continue;
+            }
+            drawn.layers += 1;
+            drawn.casters += layer.casters.instances();
+            let index = index as u32;
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("render-wgpu shadow"),
                 color_attachments: &[],
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: self.shadows.layer_view(layer),
+                    view: self.shadows.layer_view(index),
                     depth_ops: Some(wgpu::Operations {
                         load: wgpu::LoadOp::Clear(1.0),
                         store: wgpu::StoreOp::Store,
@@ -594,13 +676,17 @@ impl Renderer {
             pass.set_bind_group(
                 2,
                 &self.shadows.layer_bind_group,
-                &[ShadowMaps::layer_offset(layer)],
+                &[ShadowMaps::layer_offset(index)],
             );
-            encoded += self.draw_batches(&mut pass, &self.casters.batches, |pass, features| {
-                self.layouts.shadow.get(pass, features)
-            });
+            drawn.encoded +=
+                self.draw_batches(&mut pass, &layer.casters.batches, |pass, features| {
+                    self.layouts.shadow.get(pass, features)
+                });
         }
-        (encoded, created)
+        for layer in &mut self.shadows.layers {
+            layer.stale = false;
+        }
+        drawn
     }
 
     /// The bind group and features a part's material draws with; a released
@@ -896,7 +982,7 @@ impl Renderer {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("render-wgpu view"),
             });
-        let (shadows, casters_created) = if world_layer {
+        let shadows = if world_layer {
             self.encode_shadows(&mut encoder)
         } else {
             Default::default()
@@ -992,10 +1078,12 @@ impl Renderer {
             draws: parts.draws + effects.draws(),
             instances: list.instances(),
             instances_uploaded,
-            shadow_draws: shadows.draws,
+            shadow_draws: shadows.encoded.draws,
+            shadow_layers: shadows.layers,
+            shadow_casters: shadows.casters,
             sprite_candidates: effects.sprite_candidates,
-            pipeline_binds: parts.pipeline_binds + shadows.pipeline_binds,
-            pipelines_created: pipelines_created + casters_created,
+            pipeline_binds: parts.pipeline_binds + shadows.encoded.pipeline_binds,
+            pipelines_created: pipelines_created + shadows.pipelines_created,
         }
     }
 }

@@ -532,15 +532,147 @@ fn requested_shadows_render_per_light_layers_only_when_the_scene_changes() {
     let (again, _) = harness.render(&camera([0.5, 4.5, 6.5], 4.0, -32.0));
     assert_eq!(again.shadow_draws, 0, "camera motion alone reuses the maps");
 
-    // A new object casts at once, with no per-object setup.
-    harness.apply(vec![instance(
-        4,
+    // A new object casts at once, with no per-object setup. Only the layers
+    // that see it render again, and the result is what a fresh renderer
+    // draws.
+    let crate_at = |at| {
+        vec![instance(
+            4,
+            None,
+            "mesh/crate",
+            transform(at, 0.0, [1.0; 3]),
+        )]
+    };
+    harness.apply(crate_at([0.0, 0.0, 2.0]));
+    let (added, pixels) = harness.render(&view);
+    assert!(
+        0 < added.shadow_layers && added.shadow_layers < 8,
+        "{added:?}"
+    );
+    let mut fresh = Harness::new(RendererOptions {
+        default_world_lights: false,
+        shadows: true,
+        ..RendererOptions::default()
+    });
+    shadow_scene(&mut fresh);
+    fresh.apply(crate_at([0.0, 0.0, 2.0]));
+    assert_eq!(pixels, fresh.render(&view).1);
+
+    // Moving it out of every light's view re-renders the layers it left.
+    harness.apply(vec![RenderDiff::Update {
+        handle: RenderHandle::new(4),
+        transform: Some(transform([0.0, 0.0, 40.0], 0.0, [1.0; 3])),
+        material: None,
+        visible: None,
+        metadata: None,
+    }]);
+    let (left, pixels) = harness.render(&view);
+    assert_eq!(left.shadow_layers, added.shadow_layers, "{left:?}");
+    let mut fresh = Harness::new(RendererOptions {
+        default_world_lights: false,
+        shadows: true,
+        ..RendererOptions::default()
+    });
+    shadow_scene(&mut fresh);
+    fresh.apply(crate_at([0.0, 0.0, 40.0]));
+    assert_eq!(pixels, fresh.render(&view).1);
+}
+
+#[test]
+fn a_light_changing_intensity_renders_no_shadow_layer() {
+    let mut harness = Harness::new(RendererOptions {
+        default_world_lights: false,
+        shadows: true,
+        ..RendererOptions::default()
+    });
+    shadow_scene(&mut harness);
+    let view = camera([0.0, 4.5, 6.5], 0.0, -32.0);
+    harness.render(&view);
+    let point = |intensity| LightDescriptor::Point {
+        color: [1.0, 0.55, 0.2],
+        intensity,
+        enabled: true,
+        position: [-0.2, 1.4, -2.6],
+        range: Some(8.0),
+        decay: 2.0,
+        shadow_intent: LightShadowIntent::Requested,
+    };
+    // A flickering lamp.
+    harness.apply(vec![RenderDiff::UpdateLight {
+        handle: RenderHandle::new(12),
+        light: point(5.0),
+    }]);
+    let (dimmed, _) = harness.render(&view);
+    assert_eq!((dimmed.shadow_layers, dimmed.shadow_draws), (0, 0));
+    // Moving it re-renders its six faces only.
+    let mut moved = point(5.0);
+    if let LightDescriptor::Point { position, .. } = &mut moved {
+        *position = [0.2, 1.4, -2.6];
+    }
+    harness.apply(vec![RenderDiff::UpdateLight {
+        handle: RenderHandle::new(12),
+        light: moved,
+    }]);
+    assert_eq!(harness.render(&view).0.shadow_layers, 6);
+}
+
+#[test]
+fn a_light_with_a_range_draws_only_the_casters_it_reaches() {
+    let mut harness = Harness::new(RendererOptions {
+        default_world_lights: false,
+        shadows: true,
+        ..RendererOptions::default()
+    });
+    let mut ops = vec![
+        RenderDiff::DefineMaterial {
+            material: material("material/crate", [0.7, 0.45, 0.3, 1.0], None),
+        },
+        static_mesh(
+            "mesh/crate",
+            box_mesh([-0.5, 0.0, -0.5], [0.5, 1.0, 0.5], |_| 0),
+            "material/crate",
+        ),
+        RenderDiff::CreateLight {
+            handle: RenderHandle::new(100),
+            parent: None,
+            light: LightDescriptor::Point {
+                color: [1.0; 3],
+                intensity: 8.0,
+                enabled: true,
+                position: [0.0, 0.5, 0.0],
+                range: Some(3.0),
+                decay: 2.0,
+                shadow_intent: LightShadowIntent::Requested,
+            },
+        },
+    ];
+    // One crate beside the light, on its +X side; a row of twenty beyond
+    // its range.
+    ops.push(instance(
+        1,
         None,
         "mesh/crate",
-        transform([0.0, 0.0, 2.0], 0.0, [1.0; 3]),
-    )]);
-    let (added, _) = harness.render(&view);
-    assert!(added.shadow_draws >= 8);
+        transform([1.5, 0.0, 0.0], 0.0, [1.0; 3]),
+    ));
+    for index in 0..20 {
+        let x = 5.0 + index as f32;
+        ops.push(instance(
+            2 + index,
+            None,
+            "mesh/crate",
+            transform([x, 0.0, 0.0], 0.0, [1.0; 3]),
+        ));
+    }
+    harness.apply(ops);
+    let (stats, _) = harness.render(&camera([0.0, 3.0, 6.0], 0.0, -25.0));
+    assert_eq!(stats.shadow_layers, 6);
+    // The near crate reaches the +X face (and no face sees the far row);
+    // its bounds may touch the faces beside it, never the -X face.
+    assert!(
+        (1..=5).contains(&stats.shadow_casters),
+        "{} casters",
+        stats.shadow_casters
+    );
 }
 
 #[test]

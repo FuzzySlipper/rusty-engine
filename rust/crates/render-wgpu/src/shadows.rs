@@ -4,8 +4,9 @@
 //! Each shadowed light takes layers of one depth texture array: one for a
 //! directional or spot light, six for a point light. There is no light quota:
 //! the array grows with the lights that ask. Every shown scene part casts and
-//! every lit part receives, so a new object needs no shadow setup and nothing
-//! sweeps the scene.
+//! every lit part receives, so a new object needs no shadow setup. Each layer
+//! draws only the casters inside its view and, for a point or spot light with
+//! a range, inside that range.
 //!
 //! The shadow cameras are fixed: 512² maps, no bias, back faces of single-sided parts rendered;
 //! directional lights cast from their object position (`(0, 1, 0)` in the
@@ -20,12 +21,15 @@
 //! fragment as the sky does, scaled by a wider 5×5 PCF, so ground under rock
 //! (a cave, an overhang, a roofed room) loses it and open ground keeps it.
 //!
-//! Maps are re-rendered only when a light or a part changed.
+//! A layer is re-rendered only when its view changed or a caster in it was
+//! added, removed, moved or posed; a light changing colour or intensity
+//! re-renders nothing.
 
 use glam::{Mat4, Vec3};
 use render_model::{LightDescriptor, LightShadowIntent};
 use wgpu::util::DeviceExt;
 
+use crate::batch::DrawList;
 use crate::target::DEPTH_FORMAT;
 
 pub(crate) const SHADOW_MAP_SIZE: u32 = 512;
@@ -115,6 +119,30 @@ pub(crate) fn light_views(light: &LightDescriptor, world: &Mat4) -> Vec<Mat4> {
     }
 }
 
+/// A shadow layer's view-projection and its light's reach ([`light_reach`]).
+pub(crate) type LayerView = (Mat4, Option<(Vec3, f32)>);
+
+/// The sphere a point or spot light with a range lights: nothing outside it
+/// casts into the light's layers.
+pub(crate) fn light_reach(light: &LightDescriptor, world: &Mat4) -> Option<(Vec3, f32)> {
+    match light {
+        LightDescriptor::Point {
+            position,
+            range: Some(range),
+            ..
+        }
+        | LightDescriptor::Spot {
+            position,
+            range: Some(range),
+            ..
+        } => Some((
+            world.transform_point3(crate::convert::vec3(*position)),
+            *range,
+        )),
+        _ => None,
+    }
+}
+
 /// Point light faces in the order `lighting.wgsl`'s `point_face` selects them.
 const CUBE_FACES: [(Vec3, Vec3); 6] = [
     (Vec3::X, Vec3::NEG_Y),
@@ -137,6 +165,17 @@ fn look_at(eye: Vec3, target: Vec3) -> Mat4 {
     Mat4::look_to_rh(eye, forward, up)
 }
 
+/// One shadow layer's view and the casters drawn into it.
+pub(crate) struct ShadowLayer {
+    pub view_proj: Mat4,
+    /// The sphere its light reaches ([`light_reach`]).
+    pub reach: Option<(Vec3, f32)>,
+    /// Casters inside the view and reach, offset into the instance buffer.
+    pub casters: DrawList,
+    /// The view or a caster changed since the layer was rendered.
+    pub stale: bool,
+}
+
 /// The shadow depth array, its layer matrices, and the per-layer uniform the
 /// caster pass selects its matrix with.
 pub(crate) struct ShadowMaps {
@@ -147,12 +186,21 @@ pub(crate) struct ShadowMaps {
     size: u32,
     pub layer_bind_group: wgpu::BindGroup,
     /// Layers in use (the texture may hold more).
-    pub layers: u32,
-    /// A light or caster changed since the maps were rendered.
-    pub stale: bool,
+    pub layers: Vec<ShadowLayer>,
     /// A product's caster stage drew the maps, at presentation `time`.
     pub timed: bool,
     pub time: f64,
+}
+
+impl ShadowLayer {
+    fn new(view_proj: Mat4, reach: Option<(Vec3, f32)>) -> Self {
+        Self {
+            view_proj,
+            reach,
+            casters: DrawList::default(),
+            stale: true,
+        }
+    }
 }
 
 impl ShadowMaps {
@@ -237,26 +285,28 @@ impl ShadowMaps {
             layer_views,
             size,
             layer_bind_group,
-            layers: 0,
-            stale: true,
+            layers: Vec::new(),
             timed: false,
             time: 0.0,
         }
     }
 
-    /// Hold `matrices`, growing the array when there are more layers than it
-    /// has. Returns true when the texture or buffers were replaced (the frame
-    /// bind group must be rebuilt).
+    /// Hold the layers' views and reaches, growing the array when there are
+    /// more layers than it has. A layer whose view or reach changed is stale
+    /// and keeps no casters; the others keep theirs. Returns whether the
+    /// texture or buffers were replaced (the frame bind group must be
+    /// rebuilt) and whether any layer changed (casters must be culled again).
     pub fn set_layers(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         layer_layout: &wgpu::BindGroupLayout,
-        matrices: &[Mat4],
-    ) -> bool {
-        let needed = matrices.len() as u32;
+        views: &[LayerView],
+    ) -> (bool, bool) {
+        let needed = views.len() as u32;
         let capacity = self.layer_views.len() as u32;
         let replaced = needed > 0 && (needed > capacity || self.size != SHADOW_MAP_SIZE);
+        let mut layers = std::mem::take(&mut self.layers);
         if replaced {
             *self = Self::with_capacity(
                 device,
@@ -264,14 +314,38 @@ impl ShadowMaps {
                 needed.next_power_of_two(),
                 SHADOW_MAP_SIZE,
             );
+            // A new texture holds nothing.
+            layers.clear();
         }
-        if !matrices.is_empty() {
-            let floats: Vec<f32> = matrices.iter().flat_map(Mat4::to_cols_array).collect();
+        let mut changed = layers.len() != views.len();
+        layers.truncate(views.len());
+        for (index, &(view_proj, reach)) in views.iter().enumerate() {
+            match layers.get_mut(index) {
+                Some(layer) if layer.view_proj == view_proj && layer.reach == reach => {}
+                Some(layer) => {
+                    *layer = ShadowLayer::new(view_proj, reach);
+                    changed = true;
+                }
+                None => layers.push(ShadowLayer::new(view_proj, reach)),
+            }
+        }
+        if changed && !views.is_empty() {
+            let floats: Vec<f32> = views
+                .iter()
+                .flat_map(|(view_proj, _)| view_proj.to_cols_array())
+                .collect();
             queue.write_buffer(&self.matrices_buffer, 0, bytemuck::cast_slice(&floats));
         }
-        self.layers = needed;
-        self.stale = true;
-        replaced
+        self.layers = layers;
+        (replaced, changed)
+    }
+
+    /// Caster ids across layers, in layer order.
+    pub fn caster_instances(&self) -> u32 {
+        self.layers
+            .iter()
+            .map(|layer| layer.casters.instances())
+            .sum()
     }
 
     pub fn layer_view(&self, layer: u32) -> &wgpu::TextureView {

@@ -430,9 +430,9 @@ pub(crate) struct Parts {
     /// A part was added or removed, or changed visibility, layer or winding,
     /// since the draw lists were built: batches may regroup.
     pub regrouped: bool,
-    /// A part's world transform was rewritten: culling and blend order may
-    /// change, the batches do not.
-    pub moved: bool,
+    /// Parts whose world transform was rewritten: culling and blend order
+    /// may change, the batches do not.
+    pub moved: HashSet<PartId>,
     /// Batch keys in use: key, reference count.
     keys: HashMap<BatchKey, (u32, u32)>,
     free_keys: Vec<u32>,
@@ -511,7 +511,7 @@ impl Parts {
         state.shown = shown;
         state.layer = layer;
         self.dirty.insert(id);
-        self.moved = true;
+        self.moved.insert(id);
     }
 
     fn acquire_key(&mut self, part: &Part) -> u32 {

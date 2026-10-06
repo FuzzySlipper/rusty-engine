@@ -151,17 +151,57 @@ pub(crate) fn view_list(
 /// pass the part draws with)
 type Entry = (Pass, Features, u32, PartId, Pass);
 
-/// Shadow casters: every shown triangle part of the scene layer, not culled
-/// by any camera. Blended parts cast as opaque. Passes select the face culling: single-sided parts render their back
-/// faces, double-sided parts both.
-pub(crate) fn caster_list(parts: &Parts, base: u32) -> DrawList {
+/// Parts that may cast shadows: every shown triangle part of the scene layer.
+pub(crate) fn caster_candidates(parts: &Parts) -> Vec<PartId> {
+    parts
+        .state
+        .iter()
+        .enumerate()
+        .filter(|(id, state)| {
+            parts.meta[*id].is_some()
+                && state.shown
+                && state.layer == RenderLayer::Scene
+                && !state.class.lines
+        })
+        .map(|(id, _)| id as PartId)
+        .collect()
+}
+
+/// The candidates whose bounds touch a sphere (centre, radius).
+pub(crate) fn within_reach(
+    parts: &Parts,
+    candidates: &[PartId],
+    reach: (Vec3, f32),
+) -> Vec<PartId> {
+    let (centre, radius) = reach;
+    candidates
+        .iter()
+        .copied()
+        .filter(|&id| {
+            let bounds = &parts.state[id as usize].world_bounds;
+            !bounds.is_empty()
+                && bounds
+                    .min
+                    .max(centre.min(bounds.max))
+                    .distance_squared(centre)
+                    <= radius * radius
+        })
+        .collect()
+}
+
+/// One shadow layer's casters: the candidates inside its frustum. Blended
+/// parts cast as opaque. Passes select the face culling: single-sided parts
+/// render their back faces, double-sided parts both.
+pub(crate) fn caster_list(
+    parts: &Parts,
+    candidates: &[PartId],
+    frustum: &Frustum,
+    base: u32,
+) -> DrawList {
     let mut entries: Vec<Entry> = Vec::new();
-    for (id, state) in parts.state.iter().enumerate() {
-        if parts.meta[id].is_none()
-            || !state.shown
-            || state.layer != RenderLayer::Scene
-            || state.class.lines
-        {
+    for &id in candidates {
+        let state = &parts.state[id as usize];
+        if !frustum.intersects(&state.world_bounds) {
             continue;
         }
         let opaque = PartClass {
@@ -169,13 +209,7 @@ pub(crate) fn caster_list(parts: &Parts, base: u32) -> DrawList {
             ..state.class
         };
         let pass = Pass::of(opaque, state.mirrored);
-        entries.push((
-            pass,
-            state.class.features.caster(),
-            state.key,
-            id as PartId,
-            pass,
-        ));
+        entries.push((pass, state.class.features.caster(), state.key, id, pass));
     }
     group(parts, entries, base)
 }
