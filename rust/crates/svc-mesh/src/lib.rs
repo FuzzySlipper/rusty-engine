@@ -810,6 +810,7 @@ pub fn mesh_scalar_surface(
                 characters,
                 owner,
                 false,
+                None,
                 limits,
                 &mut reconstruction,
             )?;
@@ -857,6 +858,7 @@ pub fn mesh_scalar_surface(
                 characters,
                 owner,
                 true,
+                None,
                 limits,
                 &mut reconstruction,
             )?;
@@ -1035,7 +1037,7 @@ pub fn mesh_cells_standalone_with_options(
         min: minimum,
         max: maximum.map(|value| value + 1),
     };
-    let smooth = reconstruct(&lattice, &options, owner, cell_size, pivot, None)?;
+    let smooth = reconstruct(lattice, &options, owner, cell_size, pivot, None)?;
     let greedy = |slot: u16| options.surface(slot).mode == SurfaceMode::GreedyCubes;
     let (faces, faces_culled) = greedy_faces(&greedy, &|slot, neighbour| {
         greedy(neighbour) && options.hides(slot, neighbour)
@@ -1063,7 +1065,7 @@ pub fn mesh_cells_standalone_with_options(
 /// Reconstruct the owned surface of a voxel lattice in every reconstructed
 /// mode its materials use.
 fn reconstruct(
-    lattice: &surface::Lattice,
+    mut lattice: surface::Lattice,
     options: &SurfaceMeshOptions,
     owner: surface::Owner,
     cell_size: f64,
@@ -1072,25 +1074,15 @@ fn reconstruct(
 ) -> Result<MeshPayload, MeshError> {
     let characters = options.characters();
     let mut reconstruction = surface::Reconstruction::default();
-    let present = lattice.materials_inside(&options.non_occluding);
-    if present.is_empty() {
-        extract(lattice, options, owner, &mut reconstruction)?;
-    } else {
-        // One layer of occluding materials, which meet water as they meet
-        // air, and one per non-occluding material, which keeps only its own
-        // surface: against air and other non-occluding materials.
-        for kept in std::iter::once(None).chain(present.into_iter().map(Some)) {
-            let layer = lattice.layer(&options.non_occluding, kept);
-            let first = reconstruction.triangles.len();
-            extract(&layer, options, owner, &mut reconstruction)?;
-            if let Some(kept) = kept {
-                for triangle in first..reconstruction.triangles.len() {
-                    if reconstruction.slots[triangle] != kept {
-                        reconstruction.halo[triangle] = true;
-                    }
-                }
-            }
-        }
+    // Occluding materials meet non-occluding ones as they meet air, and each
+    // non-occluding material keeps only its own surface: against air and
+    // other non-occluding materials.
+    let present = lattice.set_see_through(&options.non_occluding);
+    extract(&lattice, options, owner, None, &mut reconstruction)?;
+    for slot in present {
+        lattice.flip_see_through(slot);
+        extract(&lattice, options, owner, Some(slot), &mut reconstruction)?;
+        lattice.flip_see_through(slot);
     }
     surface::voxel_payload(
         reconstruction,
@@ -1102,19 +1094,21 @@ fn reconstruct(
     )
 }
 
-/// Append the surfaces of every reconstructed mode in use.
+/// Append the surfaces of every reconstructed mode in use, only those of
+/// `kept` when given.
 fn extract(
     lattice: &surface::Lattice,
     options: &SurfaceMeshOptions,
     owner: surface::Owner,
+    kept: Option<u16>,
     out: &mut surface::Reconstruction,
 ) -> Result<(), MeshError> {
     let characters = options.characters();
     if options.uses_mode(SurfaceMode::DualContouring) {
-        surface::dual_contour(lattice, characters, owner, false, options.limits, out)?;
+        surface::dual_contour(lattice, characters, owner, false, kept, options.limits, out)?;
     }
     if options.uses_mode(SurfaceMode::MarchingCubes) {
-        surface::march(lattice, characters, owner, options.limits, out)?;
+        surface::march(lattice, characters, owner, kept, options.limits, out)?;
     }
     Ok(())
 }
@@ -1360,7 +1354,7 @@ fn mesh_chunk_reconstructed(
         .as_ref()
         .map(|layers| terrain_layers::LayerField::around_chunk(world, &spec, layers, origin, size));
     let smooth = reconstruct(
-        &lattice,
+        lattice,
         options,
         owner,
         spec.voxel_size(),

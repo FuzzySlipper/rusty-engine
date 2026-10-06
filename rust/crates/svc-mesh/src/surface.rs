@@ -145,6 +145,8 @@ pub(super) struct Lattice {
     /// Scalar data: the lattice is the whole domain, so crossings at its
     /// boundary stay open, and an escaped QEF minimizer keeps the mass point.
     pub explicit: bool,
+    /// The see-through samples, read as empty.
+    see_through: Vec<usize>,
 }
 
 impl Lattice {
@@ -162,6 +164,7 @@ impl Lattice {
             values: vec![-f64::from(svc_volume::DEFAULT_DENSITY_MAGNITUDE); count],
             materials: vec![0; count],
             explicit: false,
+            see_through: Vec::new(),
         })
     }
 
@@ -181,40 +184,31 @@ impl Lattice {
         }
     }
 
-    /// The materials of `slots` that some inside sample holds.
-    pub(super) fn materials_inside(&self, slots: &BTreeSet<u16>) -> BTreeSet<u16> {
+    /// Make the solid samples of `slots` see-through: they read as empty at
+    /// the same magnitude, so other materials meet them as they meet air.
+    /// Returns the slots present.
+    pub(super) fn set_see_through(&mut self, slots: &BTreeSet<u16>) -> BTreeSet<u16> {
+        let mut present = BTreeSet::new();
         if slots.is_empty() {
-            return BTreeSet::new();
+            return present;
         }
-        self.values
-            .iter()
-            .zip(&self.materials)
-            .filter(|(value, slot)| **value > 0.0 && slots.contains(slot))
-            .map(|(_, slot)| *slot)
-            .collect()
+        for index in 0..self.values.len() {
+            let slot = self.materials[index];
+            if self.values[index] > 0.0 && slots.contains(&slot) {
+                self.values[index] = -self.values[index];
+                self.see_through.push(index);
+                present.insert(slot);
+            }
+        }
+        present
     }
 
-    /// The lattice with every sample of `emptied` except `kept` read as
-    /// empty at the same magnitude, so surfaces meet it as they meet air.
-    pub(super) fn layer(&self, emptied: &BTreeSet<u16>, kept: Option<u16>) -> Self {
-        let values = self
-            .values
-            .iter()
-            .zip(&self.materials)
-            .map(|(&value, slot)| {
-                if value > 0.0 && Some(*slot) != kept && emptied.contains(slot) {
-                    -value
-                } else {
-                    value
-                }
-            })
-            .collect();
-        Self {
-            origin: self.origin,
-            dims: self.dims,
-            values,
-            materials: self.materials.clone(),
-            explicit: self.explicit,
+    /// Flip the see-through samples of `slot` between solid and empty.
+    pub(super) fn flip_see_through(&mut self, slot: u16) {
+        for &index in &self.see_through {
+            if self.materials[index] == slot {
+                self.values[index] = -self.values[index];
+            }
         }
     }
 
@@ -264,6 +258,7 @@ impl Lattice {
             values,
             materials,
             explicit: true,
+            see_through: Vec::new(),
         })
     }
 
@@ -370,6 +365,7 @@ const NOT_COMPUTED: u32 = u32::MAX - 1;
 struct DualContouring<'a> {
     lattice: &'a Lattice,
     characters: Characters<'a>,
+    kept: Option<u16>,
     cells: Vec<u32>,
     cell_dims: [usize; 3],
     out: Reconstruction,
@@ -377,12 +373,14 @@ struct DualContouring<'a> {
 }
 
 /// Dual-contour the lattice. Quads whose inside endpoint lies in `owner` are
-/// kept; with `ring`, quads within one more sample are kept as halo.
+/// kept; with `ring`, quads within one more sample are kept as halo. With
+/// `kept`, only quads of that material are.
 pub(super) fn dual_contour(
     lattice: &Lattice,
     characters: Characters<'_>,
     owner: Owner,
     ring: bool,
+    kept: Option<u16>,
     limits: SurfaceMeshLimits,
     out: &mut Reconstruction,
 ) -> Result<(), MeshError> {
@@ -390,6 +388,7 @@ pub(super) fn dual_contour(
     let mut contour = DualContouring {
         lattice,
         characters,
+        kept,
         cells: vec![NOT_COMPUTED; cell_dims[0] * cell_dims[1] * cell_dims[2]],
         cell_dims,
         out: std::mem::take(out),
@@ -449,7 +448,9 @@ impl DualContouring<'_> {
             return Ok(());
         }
         let slot = lattice.materials[inside_index];
-        if !lattice.explicit && self.characters.of(slot).mode != SurfaceMode::DualContouring {
+        if self.kept.is_some_and(|kept| kept != slot)
+            || (!lattice.explicit && self.characters.of(slot).mode != SurfaceMode::DualContouring)
+        {
             return Ok(());
         }
         let Some(cells) = incident_cells(axis, start, self.cell_dims) else {
@@ -669,11 +670,13 @@ fn incident_cells(axis: usize, edge: [usize; 3], cell_dims: [usize; 3]) -> Optio
 }
 
 /// March the lattice's cells whose majority material is marched and whose
-/// first inside corner lies in `owner`.
+/// first inside corner lies in `owner`; with `kept`, only cells of that
+/// majority material.
 pub(super) fn march(
     lattice: &Lattice,
     characters: Characters<'_>,
     owner: Owner,
+    kept: Option<u16>,
     limits: SurfaceMeshLimits,
     out: &mut Reconstruction,
 ) -> Result<(), MeshError> {
@@ -681,7 +684,7 @@ pub(super) fn march(
     for z in 0..cell_dims[2] {
         for y in 0..cell_dims[1] {
             for x in 0..cell_dims[0] {
-                march_cell(lattice, characters, owner, [x, y, z], limits, out)?;
+                march_cell(lattice, characters, owner, [x, y, z], kept, limits, out)?;
             }
         }
     }
@@ -694,6 +697,7 @@ fn march_cell(
     characters: Characters<'_>,
     owner: Owner,
     cell: [usize; 3],
+    kept: Option<u16>,
     limits: SurfaceMeshLimits,
     out: &mut Reconstruction,
 ) -> Result<(), MeshError> {
@@ -710,14 +714,20 @@ fn march_cell(
         .map(|corner| std::array::from_fn(|a| global_cell[a] + CORNERS[corner][a] as i64))
         .min()
         .expect("active cell has an inside corner");
-    if !owner.contains(owner_coordinate) {
+    if !owner.contains(owner_coordinate)
+        || kept.is_some_and(|kept| {
+            (0..8).all(|corner| !inside[corner] || lattice.materials[corners[corner]] != kept)
+        })
+    {
         return Ok(());
     }
     let slot = majority_material(std::array::from_fn(|corner| {
         inside[corner].then_some(lattice.materials[corners[corner]])
     }))
     .expect("active cell has an inside corner");
-    if !lattice.explicit && characters.of(slot).mode != SurfaceMode::MarchingCubes {
+    if kept.is_some_and(|kept| kept != slot)
+        || (!lattice.explicit && characters.of(slot).mode != SurfaceMode::MarchingCubes)
+    {
         return Ok(());
     }
     let crossings = EDGES.map(|(a, b)| inside[a] != inside[b]);

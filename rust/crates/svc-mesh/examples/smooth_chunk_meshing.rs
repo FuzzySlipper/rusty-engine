@@ -4,11 +4,13 @@
 //! `cargo run --release -p svc-mesh --example smooth_chunk_meshing`
 //!
 //! The world is 6 × 5 × 6 chunks of 16³ one-metre cells (180 chunks, the
-//! size of a CraftSurvive dungeon): rock with carved tunnels and rooms and a
-//! block of a second material. Each mode meshes every resident chunk with
-//! its resident neighbours, as a scene build does.
+//! size of a CraftSurvive dungeon): rock with carved tunnels and rooms, a
+//! block of a second material and a pool of see-through water in the room.
+//! Each mode meshes every resident chunk with its resident neighbours, as a
+//! scene build does, and reports the chunks whose samples include water
+//! separately.
 
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use core_space::{ChunkCoord, ChunkDims, GridId, LocalVoxelCoord, VoxelGridSpec};
 use core_voxel::{VoxelMaterialId, VoxelValue};
@@ -19,10 +21,13 @@ use svc_volume::VoxelChunk;
 const CHUNK: u32 = 16;
 const CHUNKS: [i64; 3] = [6, 5, 6];
 const ROUNDS: usize = 3;
+const WATER: u16 = 3;
 
 fn main() {
     let world = dungeon();
     let chunks: Vec<ChunkCoord> = world.resident_chunks().map(|(c, _)| c).collect();
+    let watery: Vec<bool> = chunks.iter().map(|coord| samples_water(*coord)).collect();
+    let water_chunks = watery.iter().filter(|watery| **watery).count();
     for mode in [
         SurfaceMode::GreedyCubes,
         SurfaceMode::MarchingCubes,
@@ -30,26 +35,38 @@ fn main() {
     ] {
         let options = SurfaceMeshOptions {
             mode,
+            non_occluding: [WATER].into(),
             ..SurfaceMeshOptions::default()
         };
-        let mut best = f64::INFINITY;
+        let mut best = Duration::MAX;
+        let mut best_water = Duration::MAX;
         let mut triangles = 0;
         for _ in 0..ROUNDS {
-            let started = Instant::now();
+            let mut total = Duration::ZERO;
+            let mut water = Duration::ZERO;
             triangles = 0;
-            for coord in &chunks {
+            for (coord, watery) in chunks.iter().zip(&watery) {
+                let started = Instant::now();
                 let mesh = mesh_chunk_in_world_with_options(&world, *coord, &options)
                     .expect("resident")
                     .expect("meshes");
+                let elapsed = started.elapsed();
+                total += elapsed;
+                if *watery {
+                    water += elapsed;
+                }
                 triangles += mesh.indices.len() / 3;
             }
-            best = best.min(started.elapsed().as_secs_f64());
+            best = best.min(total);
+            best_water = best_water.min(water);
         }
+        let per_chunk = |time: Duration, count: usize| time.as_secs_f64() * 1000.0 / count as f64;
         println!(
-            "{:>15}: {:8.1} ms total, {:6.2} ms/chunk, {triangles} triangles",
+            "{:>15}: {:8.1} ms total, {:6.2} ms/chunk, {triangles} triangles; {water_chunks} chunks sampling water {:6.2} ms/chunk",
             mode.as_str(),
-            best * 1000.0,
-            best * 1000.0 / chunks.len() as f64,
+            best.as_secs_f64() * 1000.0,
+            per_chunk(best, chunks.len()),
+            per_chunk(best_water, water_chunks),
         );
     }
 }
@@ -61,11 +78,26 @@ fn solid(x: i64, y: i64, z: i64) -> Option<u16> {
         ((fx - 48.0).powi(2) + (fy - 34.0).powi(2) * 2.0 + (fz - 48.0).powi(2)).sqrt() < 14.0;
     let ripple = (fx * 0.37).sin() + (fz * 0.29).cos() + (fy * 0.21).sin();
     let ground = fy < 60.0 + ripple * 3.0;
+    if room && fy < 30.0 {
+        return Some(WATER);
+    }
     if !ground || tunnel || room {
         return None;
     }
     let block = (40..48).contains(&x) && (20..34).contains(&y) && (36..44).contains(&z);
     Some(if block { 2 } else { 1 })
+}
+
+/// Whether a chunk's samples, its own voxels and the one-voxel halo, include
+/// water.
+fn samples_water(coord: ChunkCoord) -> bool {
+    let size = i64::from(CHUNK);
+    let origin = [coord.x, coord.y, coord.z].map(|value| value * size);
+    (-1..=size).any(|x| {
+        (-1..=size).any(|y| {
+            (-1..=size).any(|z| solid(origin[0] + x, origin[1] + y, origin[2] + z) == Some(WATER))
+        })
+    })
 }
 
 fn dungeon() -> VoxelWorld {
