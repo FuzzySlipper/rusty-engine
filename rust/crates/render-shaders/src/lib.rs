@@ -5,8 +5,8 @@
 //! `types`, `view`, `material`, `surface`, `lighting`, `tonemap`, `finish`
 //! and `shade` are importable modules (`#import rusty::lighting::standard_radiance`);
 //! `world`, `sky`, `shadow`, `effects`, `ghost`, `compose`,
-//! `ambient_occlusion`, `finish_pass` and `post` are the entry shaders built
-//! from them.
+//! `ambient_occlusion`, `finish_pass`, `post` and `sky_light` are the entry
+//! shaders built from them.
 //! A material's features are shader defs, so a variant only carries the
 //! samples and branches its material uses.
 //!
@@ -192,6 +192,9 @@ pub enum Entry {
     Finish,
     /// Bloom and auto exposure from a view's HDR world (`post.wgsl`).
     Post,
+    /// The sky's light: the background prefiltered into a cube and its
+    /// irradiance harmonics (`sky_light.wgsl`, compute).
+    SkyLight,
 }
 
 impl Entry {
@@ -212,6 +215,10 @@ impl Entry {
                 include_str!("shaders/finish_pass.wgsl"),
             ),
             Self::Post => ("shaders/post.wgsl", include_str!("shaders/post.wgsl")),
+            Self::SkyLight => (
+                "shaders/sky_light.wgsl",
+                include_str!("shaders/sky_light.wgsl"),
+            ),
         }
     }
 }
@@ -421,6 +428,7 @@ mod tests {
             Entry::AmbientOcclusion,
             Entry::Finish,
             Entry::Post,
+            Entry::SkyLight,
         ] {
             compose(entry, Features::default());
         }

@@ -8,8 +8,8 @@ use render_host_contracts::{
 };
 use render_model::{
     AtmosphereDescriptor, AutoExposureDescriptor, BloomDescriptor, ColorGradingDescriptor,
-    FogDescriptor, RenderDiff, RenderFrameDiff, SkyBackgroundDescriptor, SunShaftsDescriptor,
-    ToneMappingDescriptor, ToneMappingOperator,
+    FogDescriptor, RenderDiff, RenderFrameDiff, SkyBackgroundDescriptor, SkyLightDescriptor,
+    SunShaftsDescriptor, ToneMappingDescriptor, ToneMappingOperator,
 };
 
 use crate::{
@@ -70,13 +70,14 @@ pub(crate) struct RuntimeCameraViewCall {
     /// presentation world retains the selection.
     pub(crate) fog: Option<Option<FogDescriptor>>,
     pub(crate) tone_mapping: Option<ToneMappingDescriptor>,
-    /// Bloom, auto exposure, colour grading, the atmosphere and sun shafts
-    /// selected during the call, as fog is.
+    /// Bloom, auto exposure, colour grading, the atmosphere, sun shafts and
+    /// the sky's light selected during the call, as fog is.
     pub(crate) bloom: Option<Option<BloomDescriptor>>,
     pub(crate) auto_exposure: Option<Option<AutoExposureDescriptor>>,
     pub(crate) color_grading: Option<Option<ColorGradingDescriptor>>,
     pub(crate) atmosphere: Option<Option<AtmosphereDescriptor>>,
     pub(crate) sun_shafts: Option<Option<SunShaftsDescriptor>>,
+    pub(crate) sky_light: Option<Option<SkyLightDescriptor>>,
 }
 
 impl RuntimeCameraViewCall {
@@ -150,6 +151,7 @@ impl RuntimeCameraViewBridge {
             color_grading: None,
             atmosphere: None,
             sun_shafts: None,
+            sky_light: None,
         });
     }
 
@@ -203,6 +205,7 @@ impl RuntimeCameraViewBridge {
             color_grading: None,
             atmosphere: None,
             sun_shafts: None,
+            sky_light: None,
         };
         stage_composition(&mut snapshot)?;
         Ok(snapshot
@@ -493,6 +496,7 @@ impl RuntimeCameraViewBridge {
             color_grading: None,
             atmosphere: None,
             sun_shafts: None,
+            sky_light: None,
         };
         candidate.state.views = views.to_vec();
         candidate.state.presentations = presentations.to_vec();
@@ -789,6 +793,23 @@ impl RuntimeCameraViewBridge {
         self.staged_mut()?.sun_shafts = Some((request.intensity > 0.0).then_some(shafts));
         Ok(())
     }
+
+    fn set_sky_light(
+        &mut self,
+        request: NativeSkyLightRequest,
+    ) -> Result<(), CsharpEngineServicesError> {
+        let sky_light = SkyLightDescriptor {
+            intensity: request.intensity,
+        };
+        if !sky_light.valid() {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_SKY_LIGHT",
+                "sky light intensity must be within 0 to 16",
+            ));
+        }
+        self.staged_mut()?.sky_light = Some((request.intensity > 0.0).then_some(sky_light));
+        Ok(())
+    }
 }
 
 fn stage_composition(staged: &mut RuntimeCameraViewCall) -> Result<(), CsharpEngineServicesError> {
@@ -1053,8 +1074,8 @@ fn validate_target_descriptor(
 }
 
 /// The call's background, fog, tone mapping, bloom, auto exposure, colour
-/// grading, atmosphere and sun shaft selections as one frame, or None when
-/// the call selected none of them.
+/// grading, atmosphere, sun shaft and sky light selections as one frame, or
+/// None when the call selected none of them.
 pub(crate) fn environment_frame(
     call: &RuntimeCameraViewCall,
     appearance: &RuntimeAppearanceCall,
@@ -1080,6 +1101,9 @@ pub(crate) fn environment_frame(
     }
     if let Some(sun_shafts) = call.sun_shafts {
         operations.push(RenderDiff::SetSunShafts { sun_shafts });
+    }
+    if let Some(sky_light) = call.sky_light {
+        operations.push(RenderDiff::SetSkyLight { sky_light });
     }
     if let Some(change) = call.background {
         background_operations(change, appearance, &mut operations)?;
@@ -1619,6 +1643,27 @@ pub(crate) unsafe extern "C" fn set_auto_exposure(
     }
     let bridge = unsafe { &mut *context.cast::<RuntimeCameraViewBridge>() };
     match bridge.set_auto_exposure(unsafe { *request }) {
+        Ok(()) => ABI_OK,
+        Err(error) => {
+            bridge.operation_diagnostics.retain(&error, operation_error);
+            0
+        }
+    }
+}
+
+pub(crate) unsafe extern "C" fn set_sky_light(
+    context: *mut c_void,
+    request: *const NativeSkyLightRequest,
+    operation_error: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    if !operation_error.is_null() {
+        unsafe { *operation_error = std::mem::zeroed() };
+    }
+    if context.is_null() || request.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeCameraViewBridge>() };
+    match bridge.set_sky_light(unsafe { *request }) {
         Ok(()) => ABI_OK,
         Err(error) => {
             bridge.operation_diagnostics.retain(&error, operation_error);

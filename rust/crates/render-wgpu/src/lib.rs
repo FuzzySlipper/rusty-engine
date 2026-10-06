@@ -43,6 +43,7 @@ mod primitives;
 mod resources;
 mod shaders;
 mod shadows;
+mod sky_light;
 mod surface;
 mod tables;
 mod target;
@@ -178,6 +179,8 @@ pub struct Renderer {
     /// The brightest enabled directional world light, for the sky's sun
     /// and the fog's haze.
     sun: Option<frame::Sun>,
+    /// The sky's light: the background prefiltered for the standard shader.
+    sky_light: sky_light::SkyLight,
     /// Part ids: the world and viewmodel view lists, then each shadow
     /// layer's casters.
     instances_buffer: wgpu::Buffer,
@@ -239,6 +242,7 @@ impl Renderer {
         let instances_buffer =
             frame::storage_buffer(device, "render-wgpu instances", INITIAL_INSTANCES_BYTES);
         let shadows = shadows::ShadowMaps::new(device, &layouts.shadow_layer);
+        let sky_light = sky_light::SkyLight::new(gpu);
         let frame_bind_group = frame::frame_bind_group(
             device,
             &layouts.frame,
@@ -248,6 +252,7 @@ impl Renderer {
                 lights: &lights_buffer,
                 instances: &instances_buffer,
                 shadows: &shadows,
+                sky_light: &sky_light,
             },
         );
         let caster_bind_group = frame::caster_bind_group(
@@ -306,6 +311,7 @@ impl Renderer {
             lights_buffer,
             lights: Default::default(),
             sun: None,
+            sky_light,
             instances_buffer,
             casters_uploaded: false,
             views: Default::default(),
@@ -398,6 +404,7 @@ impl Renderer {
                 .timings()
                 .into_iter()
                 .chain(self.finish.timings())
+                .chain([self.sky_light.timing()])
                 .collect(),
             ambient_occlusion: self.ambient_occlusion.readout(),
         }

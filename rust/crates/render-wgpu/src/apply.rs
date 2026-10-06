@@ -128,6 +128,9 @@ impl Renderer {
             RenderDiff::SetSunShafts { sun_shafts } => {
                 self.tables.sun_shafts = *sun_shafts;
             }
+            RenderDiff::SetSkyLight { sky_light } => {
+                self.tables.sky_light = *sky_light;
+            }
             RenderDiff::SetToneMapping { tone_mapping } => {
                 self.tables.tone_mapping = *tone_mapping;
             }
@@ -1935,6 +1938,7 @@ fn op_name(op: &RenderDiff) -> &'static str {
         RenderDiff::SetColorGrading { .. } => "setColorGrading",
         RenderDiff::SetAtmosphere { .. } => "setAtmosphere",
         RenderDiff::SetSunShafts { .. } => "setSunShafts",
+        RenderDiff::SetSkyLight { .. } => "setSkyLight",
         RenderDiff::SetToneMapping { .. } => "setToneMapping",
         RenderDiff::DefineSpriteAtlas { .. } => "defineSpriteAtlas",
         RenderDiff::ReleaseSpriteAtlas { .. } => "releaseSpriteAtlas",

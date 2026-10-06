@@ -393,6 +393,16 @@ pub struct NativeSunShaftsRequest {
     pub length: f32,
 }
 
+/// The sky's light: the background (a sky panorama, two blended, or the
+/// clear colour) lights the world as an environment, prefiltered for each
+/// surface's roughness, its radiance scaled by `intensity` (0 to 16). 0 (the
+/// default) turns it off.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeSkyLightRequest {
+    pub intensity: f32,
+}
+
 /// Colour grading of the world with the tone mapping, after exposure and
 /// before the operator. Each control runs from -1 to 1, and 0 (the default)
 /// leaves the colour as it is: `temperature` cools toward blue or warms

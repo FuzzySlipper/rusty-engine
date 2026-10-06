@@ -128,6 +128,7 @@ struct RetainedGraphics {
     color_grading: Option<ColorGradingDescriptor>,
     atmosphere: Option<AtmosphereDescriptor>,
     sun_shafts: Option<SunShaftsDescriptor>,
+    sky_light: Option<SkyLightDescriptor>,
     controllers: BTreeMap<crate::AnimationProjectionHandle, crate::AnimationProjectionDescriptor>,
 }
 
@@ -259,6 +260,7 @@ impl PresentationWorld {
                 || matches!(&op, RenderDiff::SetColorGrading { color_grading } if &self.retained.color_grading == color_grading)
                 || matches!(&op, RenderDiff::SetAtmosphere { atmosphere } if &self.retained.atmosphere == atmosphere)
                 || matches!(&op, RenderDiff::SetSunShafts { sun_shafts } if &self.retained.sun_shafts == sun_shafts)
+                || matches!(&op, RenderDiff::SetSkyLight { sky_light } if &self.retained.sky_light == sky_light)
             {
                 continue;
             }
@@ -696,6 +698,11 @@ impl PresentationWorld {
         if self.retained.sun_shafts.is_some() {
             ops.push(RenderDiff::SetSunShafts {
                 sun_shafts: self.retained.sun_shafts,
+            });
+        }
+        if self.retained.sky_light.is_some() {
+            ops.push(RenderDiff::SetSkyLight {
+                sky_light: self.retained.sky_light,
             });
         }
         // Creation requires an existing parent and parents cannot be changed,
@@ -1209,6 +1216,9 @@ impl PresentationWorld {
             }
             RenderDiff::SetSunShafts { sun_shafts } => {
                 self.retained.sun_shafts = *sun_shafts;
+            }
+            RenderDiff::SetSkyLight { sky_light } => {
+                self.retained.sky_light = *sky_light;
             }
         }
         Ok(())

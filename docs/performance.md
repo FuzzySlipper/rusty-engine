@@ -63,7 +63,9 @@ compute limits beside them: the ambient occlusion passes (`ao-prepass`,
 `ao-occlusion`, `ao-blur`), then the first world view of a frame's `world`
 pass, its `bloom-exposure` passes (with sun shafts) together and its
 `finish` pass
-([exposure, tone mapping and fog](lighting-and-sky.md#exposure-tone-mapping-and-fog)).
+([exposure, tone mapping and fog](lighting-and-sky.md#exposure-tone-mapping-and-fog)),
+and a frame's share of building [the sky's
+light](lighting-and-sky.md#the-skys-light) (`sky-light`).
 
 To measure the renderer's frame cost without the product, take a scene
 snapshot on the running product (`engine.renderer.snapshot <path>`, see

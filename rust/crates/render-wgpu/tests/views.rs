@@ -531,7 +531,7 @@ fn a_partly_transparent_capture_background_keeps_its_colour() {
 }
 
 #[test]
-fn a_capture_keeps_the_scene_bloom_but_its_own_exposure() {
+fn a_capture_keeps_the_scene_bloom_and_sky_light_but_its_own_exposure() {
     let mut harness = Harness::new(RendererOptions::default());
     harness.apply(room());
     let capture = |harness: &Harness| {
@@ -558,7 +558,13 @@ fn a_capture_keeps_the_scene_bloom_but_its_own_exposure() {
             intensity: 4.0,
         }),
     }]);
-    assert_ne!(capture(&harness), plain);
+    let bloomed = capture(&harness);
+    assert_ne!(bloomed, plain);
+    // So is the sky's light.
+    harness.apply(vec![RenderDiff::SetSkyLight {
+        sky_light: Some(SkyLightDescriptor { intensity: 2.0 }),
+    }]);
+    assert_ne!(capture(&harness), bloomed);
 }
 
 /// A dark background and a box at `at`, glowing by `emission` (0 for a

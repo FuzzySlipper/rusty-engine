@@ -86,6 +86,41 @@ the rest.
 - It is presentation only. `Voxel.SampleDirectLighting` (below) still treats
   ambient light as unoccluded.
 
+## The sky's light
+
+The background can light the world: a sky panorama (or the two a blend
+mixes), or the clear colour as a uniform sky. It is off by default, so a
+scene keeps its look until the product turns it on:
+
+```csharp
+engine.CameraView.SetSkyLight(new(Intensity: 1));
+```
+
+- Every standard-shader surface takes the sky's irradiance as diffuse light,
+  from nine spherical-harmonics coefficients, so ground under a blue sky
+  turns blue and a sunset warms what faces it. Every surface also reflects
+  the sky, prefiltered for its roughness from a 128² cube with
+  GGX-prefiltered mips. A metal tints the reflection with its colour; a
+  dielectric reflects a few percent, more at grazing angles, so wet rock,
+  water and glossy paint show the sky. This reflection replaces a metal's
+  uniform reflection of ambient and hemisphere light. Those lights still
+  light as before.
+- An ambient light's [sky layer](#dark-caves-an-ambient-lights-sky), occlusion
+  maps and screen-space ambient occlusion shade the sky's light as they shade
+  ambient light, so a cave stays dark.
+- `Intensity` (0 to 16) scales the background's radiance: panorama colours
+  are read as linear light, so at 1 a white surface under a white sky is
+  white.
+- The Engine builds it on the GPU whenever the background changes (its
+  selection, blend amount or colour). A whole build takes about 0.6 ms on an
+  RX 9070 XT and 30 ms on llvmpipe. The first build lands in its frame. A
+  blend that moves every frame is built over the next three frames while the
+  last light holds, about 0.2 ms (6 ms on llvmpipe) a frame. A still sky
+  costs a cube sample and nine coefficients per shaded fragment.
+  `engine.renderer` times the build as `sky-light`.
+- Product shaders that call `standard_shade` get it with the rest of the
+  standard lighting.
+
 ## Contact darkening: screen-space ambient occlusion
 
 The sky's shadow darkens at the scale of a cave; screen-space ambient
@@ -108,9 +143,9 @@ then finished by the product's exposure, tone mapping and fog (below).
 dielectric, to 1, a metal. A metal has no diffuse; its specular takes the base
 colour, and it reflects ambient light (and a hemisphere light along the
 reflection) as a uniform environment, so its look depends on those lights.
-Dielectrics take ambient light as diffuse only. There is no sky or
-environment-map reflection. A material compiles only the features its contents
-use:
+Dielectrics take ambient light as diffuse only. With [the sky's
+light](#the-skys-light) on, every surface reflects the sky instead. A
+material compiles only the features its contents use:
 
 | Feature | A material has it when |
 | --- | --- |
@@ -334,9 +369,9 @@ engine.CameraView.SetSunShafts(new(Intensity: 0.8f, Length: 0));
   below the horizon or behind the camera. Each view of a split screen
   treats its own viewport.
 - **Captures.** `RenderOutput.CaptureImage` uses its request's own exposure
-  and tone mapping, without auto exposure or colour grading, and keeps the
-  scene's fog and bloom as it keeps the scene's lights, whichever background
-  it selects.
+  and tone mapping, without auto exposure or colour grading. It keeps the
+  scene's fog, atmosphere, bloom, sun shafts and sky light as it keeps the
+  scene's lights, whichever background it selects.
 
 Changing any of these recompiles nothing: they are values in uniforms, so a
 product may update them every frame. Fog and tone mapping do not change
@@ -427,7 +462,8 @@ use coherent features and artwork to avoid double sun/moon images during a
 crossfade. A blend is not a physical atmosphere simulation; distance fog is
 `CameraView.SetFog`.
 Update ordinary scene lights from the same product clock when illumination
-should change too; sky presentation does not create environment lighting.
+should change too. With [the sky's light](#the-skys-light) on, the blend
+lights the world as it moves.
 
 The Engine retains both texture dependencies and one sky shader/geometry.
 Changing the amount updates uniforms only, with no texture upload, mesh rebuild,

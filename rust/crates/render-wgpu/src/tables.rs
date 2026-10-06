@@ -19,6 +19,7 @@
 //! | `color_grading` | (single) | white balance, contrast and saturation before the tone mapping operator | `SetColorGrading` |
 //! | `atmosphere` | (single) | height fog, sun haze and the sun in the sky | `SetAtmosphere` |
 //! | `sun_shafts` | (single) | the finish pass's sun shafts | `SetSunShafts` |
+//! | `sky_light` | (single) | the sky's light: the background as an environment (`sky_light.rs`) | `SetSkyLight` |
 //!
 //! | `sprites` | `RenderHandle` | membership: the nodes of kind `Sprite` | `CreateSprite`, `Destroy` (subtree) |
 //!
@@ -591,6 +592,7 @@ pub(crate) struct Tables {
     pub color_grading: Option<render_model::ColorGradingDescriptor>,
     pub atmosphere: Option<render_model::AtmosphereDescriptor>,
     pub sun_shafts: Option<render_model::SunShaftsDescriptor>,
+    pub sky_light: Option<render_model::SkyLightDescriptor>,
     /// Nodes whose transform, visibility or parent changed since `prepare`.
     pub dirty_nodes: HashSet<RenderHandle>,
     /// Light nodes; the light rows are rebuilt when any of them changes.
@@ -624,6 +626,7 @@ impl Tables {
             color_grading: None,
             atmosphere: None,
             sun_shafts: None,
+            sky_light: None,
             dirty_nodes: HashSet::new(),
             lights: HashSet::new(),
             lights_dirty: true,

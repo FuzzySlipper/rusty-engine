@@ -14,3 +14,9 @@
 @group(0) @binding(4) var shadow_maps: texture_depth_2d_array;
 @group(0) @binding(5) var shadow_sampler: sampler_comparison;
 @group(0) @binding(6) var<storage, read> shadow_views: array<ShadowView>;
+// The sky's light (render-wgpu `sky_light.rs`): the background's radiance
+// prefiltered by roughness down the cube's mips, and its irradiance as nine
+// cosine-convolved spherical-harmonics coefficients (`Frame.sky_light`).
+@group(0) @binding(7) var sky_specular: texture_cube<f32>;
+@group(0) @binding(8) var sky_sampler: sampler;
+@group(0) @binding(9) var<storage, read> sky_irradiance: array<vec4<f32>, 9>;

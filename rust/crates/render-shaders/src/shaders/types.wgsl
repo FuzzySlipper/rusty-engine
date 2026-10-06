@@ -37,6 +37,9 @@ struct Frame {
     atmosphere: vec4<f32>,
     // rgb: the linear haze colour; w: the sun halo's strength.
     haze: vec4<f32>,
+    // The sky's light: x its intensity (0: off), y the specular cube's last
+    // mip level (its roughest).
+    sky_light: vec4<f32>,
 };
 
 struct Part {

@@ -117,13 +117,13 @@ impl PassTimer {
     }
 
     /// Stamps for a stage of several render passes: `begin` on its first
-    /// pass, `end` on its last.
+    /// pass, `end` on its last; none for a pass between them.
     pub fn render_writes_between(
         &self,
         begin: bool,
         end: bool,
     ) -> Option<wgpu::RenderPassTimestampWrites<'_>> {
-        self.armed().then_some(wgpu::RenderPassTimestampWrites {
+        (self.armed() && (begin || end)).then_some(wgpu::RenderPassTimestampWrites {
             query_set: &self.queries,
             beginning_of_pass_write_index: begin.then_some(0),
             end_of_pass_write_index: end.then_some(1),
@@ -131,10 +131,20 @@ impl PassTimer {
     }
 
     pub fn compute_writes(&self) -> Option<wgpu::ComputePassTimestampWrites<'_>> {
-        self.armed().then_some(wgpu::ComputePassTimestampWrites {
+        self.compute_writes_between(true, true)
+    }
+
+    /// Stamps for a stage of several compute passes: `begin` on its first
+    /// pass, `end` on its last; none for a pass between them.
+    pub fn compute_writes_between(
+        &self,
+        begin: bool,
+        end: bool,
+    ) -> Option<wgpu::ComputePassTimestampWrites<'_>> {
+        (self.armed() && (begin || end)).then_some(wgpu::ComputePassTimestampWrites {
             query_set: &self.queries,
-            beginning_of_pass_write_index: Some(0),
-            end_of_pass_write_index: Some(1),
+            beginning_of_pass_write_index: begin.then_some(0),
+            end_of_pass_write_index: end.then_some(1),
         })
     }
 

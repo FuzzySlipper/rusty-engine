@@ -5,7 +5,7 @@
 // with no tone mapping; the sRGB target encodes the output.
 
 #import rusty::types::PI
-#import rusty::view::{frame, lights, shadow_maps, shadow_sampler, shadow_views}
+#import rusty::view::{frame, lights, shadow_maps, shadow_sampler, shadow_views, sky_specular, sky_sampler, sky_irradiance}
 
 // The shadow atlas page's side in texels (`shadows.rs` PAGE_SIZE).
 const SHADOW_PAGE_SIZE: f32 = 2048.0;
@@ -177,11 +177,30 @@ fn environment_brdf(f0: vec3<f32>, roughness: f32, n_dot_v: f32) -> vec3<f32> {
     return f0 * ab.x + ab.y;
 }
 
+// The sky's irradiance along `normal`: its harmonics' sum there.
+fn sky_irradiance_along(normal: vec3<f32>) -> vec3<f32> {
+    let d = normal;
+    return sky_irradiance[0].rgb * 0.282095
+        + sky_irradiance[1].rgb * (0.488603 * d.y)
+        + sky_irradiance[2].rgb * (0.488603 * d.z)
+        + sky_irradiance[3].rgb * (0.488603 * d.x)
+        + sky_irradiance[4].rgb * (1.092548 * d.x * d.y)
+        + sky_irradiance[5].rgb * (1.092548 * d.y * d.z)
+        + sky_irradiance[6].rgb * (0.315392 * (3.0 * d.z * d.z - 1.0))
+        + sky_irradiance[7].rgb * (1.092548 * d.x * d.z)
+        + sky_irradiance[8].rgb * (0.546274 * (d.x * d.x - d.y * d.y));
+}
+
 // Diffuse plus GGX specular from every light row of the pass, before
 // emission. `occlusion` scales the ambient and hemisphere (indirect) light
-// only, as does an ambient light's sky layer. Metals tint specular and lose diffuse; they reflect ambient and
-// hemisphere light as a uniform environment (the hemisphere along the
-// reflection), while dielectrics take that light as diffuse only.
+// only, as does an ambient light's sky layer. Metals tint specular and lose
+// diffuse; they reflect ambient and hemisphere light as a uniform
+// environment (the hemisphere along the reflection), while dielectrics take
+// that light as diffuse only. With the sky's light on, the sky adds its
+// irradiance to the diffuse light and every surface reflects the sky,
+// prefiltered by its roughness, in place of that uniform environment; the
+// ambient light's sky layer and `occlusion` scale both, as they scale
+// ambient light.
 fn standard_radiance(
     albedo: vec3<f32>,
     normal: vec3<f32>,
@@ -196,6 +215,8 @@ fn standard_radiance(
     var specular = vec3<f32>(0.0);
     // Ambient and hemisphere light seen along the reflection.
     var environment = vec3<f32>(0.0);
+    // How open the sky above is, through an ambient light's sky layer.
+    var sky_open = 1.0;
     let reflected = reflect(-view, normal);
     for (var index = frame.counts.y; index < frame.counts.y + frame.counts.x; index = index + 1u) {
         let light = lights[index];
@@ -209,6 +230,9 @@ fn standard_radiance(
             }
             irradiance += color * occlusion * sky;
             environment += color * occlusion * sky;
+            if sky_layer > 0u {
+                sky_open = min(sky_open, sky);
+            }
         } else if kind == 1u {
             irradiance += mix(light.extra.rgb, color, 0.5 * normal.y + 0.5) * occlusion;
             environment += mix(light.extra.rgb, color, 0.5 * reflected.y + 0.5) * occlusion;
@@ -246,6 +270,13 @@ fn standard_radiance(
         }
     }
     let n_dot_v = clamp(dot(normal, view), 0.0, 1.0);
-    let reflection = metalness * environment * environment_brdf(f0, roughness, n_dot_v);
+    var reflection = metalness * environment * environment_brdf(f0, roughness, n_dot_v);
+    let sky_intensity = frame.sky_light.x;
+    if sky_intensity > 0.0 {
+        let sky = sky_intensity * occlusion * sky_open;
+        irradiance += max(sky_irradiance_along(normal), vec3<f32>(0.0)) * sky;
+        let prefiltered = textureSampleLevel(sky_specular, sky_sampler, reflected, roughness * frame.sky_light.y).rgb;
+        reflection = prefiltered * sky * environment_brdf(f0, roughness, n_dot_v);
+    }
     return albedo * (1.0 - metalness) * irradiance / PI + specular + reflection;
 }

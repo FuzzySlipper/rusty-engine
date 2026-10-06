@@ -39,7 +39,7 @@ const LIGHT_ROW_FLOATS: usize = 16;
 /// Frame uniform (`rusty::types` `Frame`): two matrices, camera position,
 /// light count and first light; then exposure and fog distances, fog colour,
 /// and the tone mapping and fog modes; then the presentation time.
-const FRAME_UNIFORM_BYTES: u64 = (16 + 16 + 4 + 4 + 4 + 4 + 4 + 4 + 4 + 4 + 4 * 4) * 4;
+const FRAME_UNIFORM_BYTES: u64 = (16 + 16 + 4 + 4 + 4 + 4 + 4 + 4 + 4 + 4 + 4 * 4 + 4) * 4;
 
 /// Per-frame counts for diagnostics.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -284,6 +284,21 @@ impl Renderer {
         if self.tables.environment_dirty {
             self.rebuild_sky();
             self.tables.environment_dirty = false;
+        }
+        // The sky's light follows the background while it is on.
+        let wanted = self
+            .tables
+            .sky_light
+            .filter(|sky_light| sky_light.intensity > 0.0)
+            .map(|_| self.sky_source());
+        let textures = &self.tables.textures;
+        if self
+            .sky_light
+            .progress(&self.gpu, &mut self.layouts.shaders, wanted, |id| {
+                textures.get(id).map(|texture| &texture.view)
+            })
+        {
+            self.rebind_frame();
         }
         let uploaded = self.upload_parts();
         let regrouped = std::mem::take(&mut self.tables.parts.regrouped);
@@ -743,6 +758,7 @@ impl Renderer {
                 lights: &self.lights_buffer,
                 instances: &self.instances_buffer,
                 shadows: &self.shadows,
+                sky_light: &self.sky_light,
             },
         );
         self.caster_bind_group = caster_bind_group(
@@ -1085,6 +1101,29 @@ impl Renderer {
         );
     }
 
+    /// What the sky's light is built from: the sky panorama (or the two it
+    /// blends), or the background colour.
+    fn sky_source(&self) -> crate::sky_light::SkySource {
+        use crate::sky_light::SkySource;
+        match &self.tables.environment {
+            Environment::Sky(sky) => {
+                let (second, amount) = sky.blend.as_ref().map_or_else(
+                    || (sky.texture.clone(), 0.0),
+                    |blend| (blend.texture.clone(), blend.amount),
+                );
+                SkySource::Panorama {
+                    first: sky.texture.clone(),
+                    second,
+                    amount,
+                }
+            }
+            _ => {
+                let [r, g, b, _] = self.environment_clear();
+                SkySource::Color([r, g, b])
+            }
+        }
+    }
+
     /// The linear colour a world pass clears to: the retained background
     /// colour, or the Engine default behind a sky or with nothing selected.
     pub(crate) fn environment_clear(&self) -> [f32; 4] {
@@ -1165,6 +1204,15 @@ impl Renderer {
             bytes.extend_from_slice(&value.to_le_bytes());
         }
         for value in atmosphere_uniform(self.tables.atmosphere.unwrap_or_default(), self.sun) {
+            bytes.extend_from_slice(&value.to_le_bytes());
+        }
+        // The sky's light, once its first build is in.
+        let sky_intensity = match self.tables.sky_light {
+            Some(sky_light) if self.sky_light.built() => sky_light.intensity,
+            _ => 0.0,
+        };
+        let roughest = (crate::sky_light::SKY_LEVELS - 1) as f32;
+        for value in [sky_intensity, roughest, 0.0, 0.0] {
             bytes.extend_from_slice(&value.to_le_bytes());
         }
         self.gpu.queue.write_buffer(&self.frame_buffer, 0, &bytes);
@@ -1539,6 +1587,7 @@ pub(crate) struct FrameBindings<'a> {
     pub lights: &'a wgpu::Buffer,
     pub instances: &'a wgpu::Buffer,
     pub shadows: &'a ShadowMaps,
+    pub sky_light: &'a crate::sky_light::SkyLight,
 }
 
 pub(crate) fn frame_bind_group(
@@ -1577,6 +1626,18 @@ pub(crate) fn frame_bind_group(
             wgpu::BindGroupEntry {
                 binding: 6,
                 resource: bindings.shadows.views_buffer.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 7,
+                resource: wgpu::BindingResource::TextureView(bindings.sky_light.cube()),
+            },
+            wgpu::BindGroupEntry {
+                binding: 8,
+                resource: wgpu::BindingResource::Sampler(&bindings.sky_light.sampler),
+            },
+            wgpu::BindGroupEntry {
+                binding: 9,
+                resource: bindings.sky_light.irradiance().as_entire_binding(),
             },
         ],
     })

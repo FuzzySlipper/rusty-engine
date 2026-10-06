@@ -237,6 +237,25 @@ impl SunShaftsDescriptor {
     }
 }
 
+/// The sky's light: the background (a sky panorama, two blended, or the
+/// clear colour) lights the world as an environment, its radiance scaled by
+/// `intensity` (0 to 16).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SkyLightDescriptor {
+    pub intensity: f32,
+}
+
+impl SkyLightDescriptor {
+    /// The largest intensity a product may set.
+    pub const MAX_INTENSITY: f32 = 16.0;
+
+    /// An intensity within `0..=MAX_INTENSITY`.
+    pub fn valid(&self) -> bool {
+        (0.0..=Self::MAX_INTENSITY).contains(&self.intensity)
+    }
+}
+
 impl ColorGradingDescriptor {
     /// Every control finite and within -1 to 1.
     pub fn valid(&self) -> bool {
@@ -589,6 +608,10 @@ pub enum RenderDiff {
     SetSunShafts {
         sun_shafts: Option<SunShaftsDescriptor>,
     },
+    /// Selects the sky's light; None turns it off.
+    SetSkyLight {
+        sky_light: Option<SkyLightDescriptor>,
+    },
     DefineSpriteAtlas {
         atlas: SpriteAtlasDescriptor,
     },
@@ -743,6 +766,10 @@ impl RenderDiff {
                 sun_shafts: Some(sun_shafts),
             } if !sun_shafts.valid() => Err(RenderOperationError::SunShafts),
             Self::SetSunShafts { .. } => Ok(()),
+            Self::SetSkyLight {
+                sky_light: Some(sky_light),
+            } if !sky_light.valid() => Err(RenderOperationError::SkyLight),
+            Self::SetSkyLight { .. } => Ok(()),
             Self::DefineSpriteAtlas { atlas } => {
                 atlas.validate().map_err(RenderOperationError::SpriteAtlas)
             }
@@ -844,6 +871,7 @@ impl RenderDiff {
             | Self::SetColorGrading { .. }
             | Self::SetAtmosphere { .. }
             | Self::SetSunShafts { .. }
+            | Self::SetSkyLight { .. }
             | Self::DefineSpriteAtlas { .. }
             | Self::DefineStaticMesh { .. }
             | Self::ReleaseMaterial { .. }
@@ -885,6 +913,7 @@ pub enum RenderOperationError {
     ColorGrading,
     Atmosphere,
     SunShafts,
+    SkyLight,
     SpriteAtlas(crate::SpriteAtlasError),
     StaticMesh(crate::StaticMeshError),
     StaticMeshInstance(crate::StaticMeshInstanceError),
@@ -958,6 +987,7 @@ impl RenderFrameDiff {
                 | RenderDiff::SetColorGrading { .. }
                 | RenderDiff::SetAtmosphere { .. }
                 | RenderDiff::SetSunShafts { .. }
+                | RenderDiff::SetSkyLight { .. }
                 | RenderDiff::DefineSpriteAtlas { .. }
                 | RenderDiff::ReleaseSpriteAtlas { .. }
                 | RenderDiff::ReleaseStaticMesh { .. }

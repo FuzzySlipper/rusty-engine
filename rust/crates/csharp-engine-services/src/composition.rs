@@ -197,6 +197,7 @@ fn engine_api(
             set_color_grading: crate::camera_view::set_color_grading,
             set_atmosphere: crate::camera_view::set_atmosphere,
             set_sun_shafts: crate::camera_view::set_sun_shafts,
+            set_sky_light: crate::camera_view::set_sky_light,
             set_viewport_anchor: crate::camera_view::set_viewport_anchor,
             read_surface: crate::camera_view::read_surface,
             read_viewport_anchor: crate::camera_view::read_viewport_anchor,
@@ -1548,6 +1549,64 @@ mod tests {
                     auto_exposure: None
                 },
             ]
+        );
+    }
+
+    #[test]
+    fn the_sky_light_publishes_as_retained_environment_and_zero_turns_it_off() {
+        use crate::operation_diagnostics::{empty_receipt, receipt_codes};
+        let mut services = EngineServiceSet::new(
+            parse_runtime_appearance_catalog(None).expect("default catalog"),
+            BTreeMap::new(),
+            None,
+            RuntimeDiagnosticsSink::new(Default::default()).unwrap(),
+        )
+        .expect("service set");
+        services.begin_call(binding());
+        let api = services.api();
+        let set = |intensity, refusal| unsafe {
+            (api.camera_view.set_sky_light)(
+                api.camera_view.context,
+                &NativeSkyLightRequest { intensity },
+                refusal,
+            )
+        };
+        assert_eq!(set(0.8, std::ptr::null_mut()), ABI_OK);
+        let mut call = services.finish_call().expect("sky light call");
+        let selected = render_model::RenderDiff::SetSkyLight {
+            sky_light: Some(render_model::SkyLightDescriptor { intensity: 0.8 }),
+        };
+        assert_eq!(
+            call.take_output().frames[0].ops,
+            std::slice::from_ref(&selected)
+        );
+        let attachment = services
+            .snapshot_outputs(binding())
+            .expect("fresh attachment");
+        let CsharpAppearanceCallOutput::Frame(frame) = &attachment.appearance[0] else {
+            panic!("baseline graphics frame");
+        };
+        assert!(frame.ops.contains(&selected));
+
+        services.begin_call(binding());
+        let api = services.api();
+        let set = |intensity, refusal| unsafe {
+            (api.camera_view.set_sky_light)(
+                api.camera_view.context,
+                &NativeSkyLightRequest { intensity },
+                refusal,
+            )
+        };
+        for intensity in [-1.0, 17.0, f32::NAN] {
+            let mut refusal = empty_receipt();
+            assert_eq!(set(intensity, &mut refusal), 0);
+            assert_eq!(receipt_codes(&refusal), ["CSHARP_SKY_LIGHT"]);
+        }
+        assert_eq!(set(0.0, std::ptr::null_mut()), ABI_OK);
+        let mut call = services.finish_call().expect("off");
+        assert_eq!(
+            call.take_output().frames[0].ops,
+            [render_model::RenderDiff::SetSkyLight { sky_light: None }]
         );
     }
 
