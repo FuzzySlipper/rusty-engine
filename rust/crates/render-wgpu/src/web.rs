@@ -343,6 +343,7 @@ impl Renderer {
     ) -> FrameStats {
         let uploaded = self.prepare();
         surface.request(self.samples(), self.vsync());
+        self.display_vsync_only = Some(surface.vsync_only());
         self.surface_size = Some(surface.size());
         let (view, finished) = surface.views(frame);
         let mut stats = self.draw_primary(view, |renderer, view| {

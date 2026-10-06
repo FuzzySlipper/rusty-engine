@@ -69,6 +69,9 @@ pub enum NativeRendererSettingRefusal {
     UnsupportedSampleCount = 3,
     /// Streamed output has no display to synchronise with.
     NoDisplay = 4,
+    /// The window's display can present only in step with its refresh, so
+    /// vsync stays on.
+    VsyncOnly = 5,
 }
 
 /// What the renderer draws with: the last request (the manifest's values

@@ -80,6 +80,10 @@ pub struct FrameStats {
     /// World and caster pipelines compiled while rendering; 0 when every
     /// material's pipelines were made at its definition.
     pub pipelines_created: u32,
+    /// CPU microseconds spent building draw lists this frame: view lists
+    /// (frustum tests and grouping) and shadow caster lists; 0 when every
+    /// list was current.
+    pub cpu_batch_us: u32,
 }
 
 /// What one view pass drew.
@@ -295,6 +299,7 @@ impl Renderer {
         self.shadows_rendered = (0, 0);
         self.finish.begin_frame(&self.gpu);
         self.exposure_adapted = false;
+        self.batch_time = std::time::Duration::ZERO;
         let mut layers_changed = false;
         if self.tables.lights_dirty {
             layers_changed = self.upload_lights();
@@ -343,6 +348,7 @@ impl Renderer {
         if self.shadows.layers.is_empty() {
             return;
         }
+        let started = std::time::Instant::now();
         let parts = &self.tables.parts;
         let candidates = batch::caster_candidates(parts);
         // A point light's six faces share one reach.
@@ -382,6 +388,7 @@ impl Renderer {
                 }
             }
         }
+        self.batch_time += started.elapsed();
         if changed {
             self.casters_uploaded = false;
         }
@@ -903,7 +910,9 @@ impl Renderer {
                     ..
                 }) => candidates,
                 _ => {
+                    let started = std::time::Instant::now();
                     let list = batch::opaque_candidates(&self.tables.parts, viewmodel, base);
+                    self.batch_time += started.elapsed();
                     uploaded += self.upload_instances(base, &list.ids);
                     let candidates = CandidateList::new(list, visible_base, |batch| {
                         let part = self.tables.parts.meta[batch.part as usize].as_ref()?;
@@ -921,12 +930,16 @@ impl Renderer {
             };
             // Blended parts follow the candidates in the list region.
             let blended_base = base + candidates.list.instances();
+            let started = std::time::Instant::now();
             let list =
                 batch::blended_list(&self.tables.parts, viewmodel, &frustum, eye, blended_base);
+            self.batch_time += started.elapsed();
             uploaded += self.upload_instances(blended_base, &list.ids);
             (list, Some(candidates))
         } else {
+            let started = std::time::Instant::now();
             let list = batch::view_list(&self.tables.parts, viewmodel, &frustum, eye, base);
+            self.batch_time += started.elapsed();
             // Lists carry their instance offsets, so a moved base compares
             // different and uploads.
             let unchanged = previous.as_ref().is_some_and(|view| view.list == list);

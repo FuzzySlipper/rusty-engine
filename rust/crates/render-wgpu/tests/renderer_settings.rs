@@ -141,3 +141,46 @@ fn a_single_sample_primary_target_draws_the_same_background() {
         "the background is blue"
     );
 }
+
+#[test]
+fn a_display_without_an_immediate_mode_keeps_vsync_on() {
+    let mut harness = Harness::new(RendererOptions::default());
+    harness.apply(vec![RenderDiff::SetRendererSettings {
+        settings: settings(),
+    }]);
+    assert!(!harness.renderer.vsync(), "the request turns vsync off");
+    assert_eq!(
+        harness.renderer.settings_readout().vsync,
+        None,
+        "no display seen yet, nothing to refuse"
+    );
+
+    // wgpu resolves AutoNoVsync through Immediate and Mailbox to Fifo, so
+    // a display with Fifo alone waits for its refresh whatever was asked.
+    harness
+        .renderer
+        .set_display_present_modes(&[wgpu::PresentMode::Fifo]);
+    let readout = harness.renderer.settings_readout();
+    assert!(readout.effective.vsync, "frames wait for the display");
+    assert_eq!(readout.vsync, Some(SettingRefusal::VsyncOnly));
+    assert!(!readout.requested.vsync, "the request is reported as made");
+
+    harness
+        .renderer
+        .set_display_present_modes(&[wgpu::PresentMode::Fifo, wgpu::PresentMode::Mailbox]);
+    let readout = harness.renderer.settings_readout();
+    assert!(!readout.effective.vsync);
+    assert_eq!(readout.vsync, None);
+
+    let mut on = settings();
+    on.vsync = true;
+    harness.apply(vec![RenderDiff::SetRendererSettings { settings: on }]);
+    harness
+        .renderer
+        .set_display_present_modes(&[wgpu::PresentMode::Fifo]);
+    assert_eq!(
+        harness.renderer.settings_readout().vsync,
+        None,
+        "vsync asked for is what the display does"
+    );
+}

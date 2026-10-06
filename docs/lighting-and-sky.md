@@ -148,7 +148,9 @@ differently: `NoComputeShaders` (distance-field occlusion and clustered
 lighting fall back to the screen-space pass and the light loop),
 `NoIndirectDraws` (GPU culling keeps the CPU list), `UnsupportedSampleCount`
 (the adapter cannot multisample at that count, so the default 4 draws) and
-`NoDisplay` (streamed output has no display, so vsync is moot). A refused
+`NoDisplay` (streamed output has no display, so vsync is moot) and
+`VsyncOnly` (the window's display has no immediate or mailbox present mode,
+so frames wait for its refresh with vsync off). A refused
 setting is not an error: `Set` accepts any finite, non-negative strength, positive
 radius and render scale from 0.5 to 1, and refuses only values outside
 those ranges.

@@ -21,6 +21,7 @@ use std::{path::PathBuf, time::Instant};
 
 use csharp_product_runtime::scene_snapshot::{SceneSnapshot, SceneSnapshotChange};
 use render_host_contracts::RendererCameraPose;
+use render_model::RendererSettingsDescriptor;
 use render_presentation::PresentationWorld;
 use render_wgpu::{
     encode_png, AmbientOcclusion, AmbientOcclusionPath, Gpu, OffscreenTarget, RendererOptions,
@@ -39,8 +40,27 @@ fn main() {
     }
 }
 
-fn run() -> Result<(), String> {
-    let mut arguments = std::env::args().skip(1);
+/// The command line, parsed and checked.
+#[derive(Debug, PartialEq)]
+struct Arguments {
+    snapshot: PathBuf,
+    out: PathBuf,
+    width: u32,
+    height: u32,
+    frames: u32,
+    walk: f64,
+    turn: f64,
+    ambient_occlusion: Option<AmbientOcclusionPath>,
+    clustered_lighting: Option<bool>,
+    gpu_culling: Option<bool>,
+    render_scale: Option<f32>,
+}
+
+/// Parses the command line; `None` when it asked for help. A render scale is
+/// held to the setting's range, as the manifest and `RendererSettings.Set`
+/// hold it.
+fn parse(arguments: impl IntoIterator<Item = String>) -> Result<Option<Arguments>, String> {
+    let mut arguments = arguments.into_iter();
     let mut positional = Vec::new();
     let (mut width, mut height, mut frames) = (1280_u32, 720_u32, 0_u32);
     let (mut walk, mut turn) = (0.0_f64, 0.0_f64);
@@ -61,7 +81,16 @@ fn run() -> Result<(), String> {
             "--frames" => frames = number("--frames")? as u32,
             "--walk" => walk = number("--walk")?,
             "--turn" => turn = number("--turn")?,
-            "--render-scale" => render_scale = Some(number("--render-scale")? as f32),
+            "--render-scale" => {
+                let scale = number("--render-scale")? as f32;
+                let min = RendererSettingsDescriptor::MIN_RENDER_SCALE;
+                if !(scale.is_finite() && (min..=1.0).contains(&scale)) {
+                    return Err(format!(
+                        "--render-scale needs a value from {min} to 1\n{USAGE}"
+                    ));
+                }
+                render_scale = Some(scale);
+            }
             "--gpu-culling" => {
                 gpu_culling = Some(match arguments.next().as_deref() {
                     Some("on") => true,
@@ -89,22 +118,52 @@ fn run() -> Result<(), String> {
                     }
                 });
             }
-            "-h" | "--help" => {
-                println!("{USAGE}");
-                return Ok(());
-            }
+            "-h" | "--help" => return Ok(None),
             _ if argument.starts_with("--") => {
                 return Err(format!("unknown flag {argument}\n{USAGE}"))
             }
             _ => positional.push(PathBuf::from(argument)),
         }
     }
-    let [snapshot_path, out] = positional.as_slice() else {
+    let [snapshot, out] = positional.as_slice() else {
         return Err(USAGE.to_owned());
+    };
+    Ok(Some(Arguments {
+        snapshot: snapshot.clone(),
+        out: out.clone(),
+        width,
+        height,
+        frames,
+        walk,
+        turn,
+        ambient_occlusion,
+        clustered_lighting,
+        gpu_culling,
+        render_scale,
+    }))
+}
+
+fn run() -> Result<(), String> {
+    let Some(Arguments {
+        snapshot: snapshot_path,
+        out,
+        width,
+        height,
+        frames,
+        walk,
+        turn,
+        ambient_occlusion,
+        clustered_lighting,
+        gpu_culling,
+        render_scale,
+    }) = parse(std::env::args().skip(1))?
+    else {
+        println!("{USAGE}");
+        return Ok(());
     };
 
     let opened = Instant::now();
-    let snapshot = SceneSnapshot::open(snapshot_path)?;
+    let snapshot = SceneSnapshot::open(&snapshot_path)?;
     let open_ms = ms(opened);
     // Attached presentation (billboards, audio emitters) follows entities
     // through the retained world, as the Engine's positions do live.
@@ -153,7 +212,7 @@ fn run() -> Result<(), String> {
     let captured = Instant::now();
     let capture = driver.capture(Some((width, height)));
     let capture_ms = ms(captured);
-    std::fs::write(out, encode_png(width, height, &capture.rgba)?)
+    std::fs::write(&out, encode_png(width, height, &capture.rgba)?)
         .map_err(|error| format!("{}: {error}", out.display()))?;
 
     let mut timing = serde_json::Value::Null;
@@ -175,6 +234,7 @@ fn run() -> Result<(), String> {
         let target = OffscreenTarget::new(driver.gpu(), width, height, driver.primary_samples());
         let mut pixels = Vec::new();
         let mut costs = Vec::with_capacity(frames as usize);
+        let (mut draws, mut instances, mut batch_us) = (Vec::new(), Vec::new(), Vec::new());
         for frame in 1..=frames {
             if let (true, Some(start)) = (moving, start) {
                 // Engine yaw zero faces -Z; positive yaw turns toward +X.
@@ -193,9 +253,13 @@ fn run() -> Result<(), String> {
                 }));
             }
             let started = Instant::now();
-            driver.draw(|renderer, now| renderer.render_view_composition(&target, now));
+            let (stats, _) =
+                driver.draw(|renderer, now| renderer.render_view_composition(&target, now));
             target.read_rgba_into(driver.gpu(), &mut pixels);
             costs.push(ms(started));
+            draws.push(stats.draws);
+            instances.push(stats.instances);
+            batch_us.push(stats.cpu_batch_us);
         }
         costs.sort_by(f64::total_cmp);
         timing = json!({
@@ -203,6 +267,11 @@ fn run() -> Result<(), String> {
             "meanMs": costs.iter().sum::<f64>() / costs.len() as f64,
             "medianMs": costs[costs.len() / 2],
             "withReadback": true,
+            // Per frame, the median: draw calls, the parts they covered, and
+            // the CPU microseconds building draw lists (`FrameStats`).
+            "draws": median(&mut draws),
+            "instances": median(&mut instances),
+            "cpuBatchUs": median(&mut batch_us),
             "walkMetres": walk,
             "turnDegrees": turn,
         });
@@ -295,4 +364,48 @@ fn run() -> Result<(), String> {
 
 fn ms(since: Instant) -> f64 {
     since.elapsed().as_secs_f64() * 1000.0
+}
+
+fn median(values: &mut [u32]) -> u32 {
+    values.sort_unstable();
+    values.get(values.len() / 2).copied().unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parsed(flags: &[&str]) -> Result<Option<Arguments>, String> {
+        parse(
+            ["scene.rscene", "out.png"]
+                .iter()
+                .chain(flags)
+                .map(|argument| (*argument).to_owned()),
+        )
+    }
+
+    #[test]
+    fn a_render_scale_is_held_to_the_setting_range() {
+        for accepted in ["0.5", "0.75", "1"] {
+            let arguments = parsed(&["--render-scale", accepted]).unwrap().unwrap();
+            assert_eq!(arguments.render_scale, Some(accepted.parse().unwrap()));
+        }
+        for refused in ["0.25", "1.5", "0", "-0.5", "nan", "inf"] {
+            let error = parsed(&["--render-scale", refused]).unwrap_err();
+            assert!(
+                error.starts_with("--render-scale needs a value from 0.5 to 1"),
+                "{refused}: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_snapshot_and_image_are_required() {
+        assert!(parse(["scene.rscene".to_owned()]).is_err());
+        assert_eq!(parse(["--help".to_owned()]), Ok(None));
+        assert_eq!(
+            parsed(&[]).unwrap().unwrap().snapshot,
+            PathBuf::from("scene.rscene")
+        );
+    }
 }

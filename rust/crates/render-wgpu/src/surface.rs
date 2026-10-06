@@ -16,6 +16,9 @@ pub struct WindowSurface {
     /// The sample count and vsync the renderer asked for, applied by the
     /// next acquire (a surface is not reconfigured under an acquired image).
     wanted: Option<(u32, bool)>,
+    /// The present modes the surface supports, which say whether a request
+    /// for no vsync is realized ([`WindowSurface::vsync_only`]).
+    present_modes: Vec<wgpu::PresentMode>,
 }
 
 /// A swapchain image acquired for one frame: acquire it, draw into it
@@ -100,6 +103,7 @@ impl WindowSurface {
             config,
             samples,
             wanted: None,
+            present_modes: capabilities.present_modes,
         })
     }
 
@@ -118,6 +122,25 @@ impl WindowSurface {
                 | wgpu::PresentMode::Immediate
                 | wgpu::PresentMode::Mailbox
         )
+    }
+
+    /// The display can present only in step with its refresh: the surface
+    /// has no immediate or mailbox mode, so `AutoNoVsync` falls back to FIFO
+    /// and a request for no vsync changes nothing.
+    pub fn vsync_only(&self) -> bool {
+        Self::vsync_only_among(&self.present_modes)
+    }
+
+    /// Whether `modes`, a surface's supported present modes, hold none that
+    /// presents without waiting for the display. wgpu resolves `AutoNoVsync`
+    /// through `Immediate`, then `Mailbox`, then `Fifo`.
+    pub fn vsync_only_among(modes: &[wgpu::PresentMode]) -> bool {
+        !modes.iter().any(|mode| {
+            matches!(
+                mode,
+                wgpu::PresentMode::Immediate | wgpu::PresentMode::Mailbox
+            )
+        })
     }
 
     pub fn size(&self) -> (u32, u32) {
@@ -216,5 +239,29 @@ impl WindowSurface {
         draw(self.views(&frame).0);
         self.present(gpu, frame);
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::WindowSurface;
+    use wgpu::PresentMode;
+
+    #[test]
+    fn a_surface_with_only_fifo_modes_cannot_turn_vsync_off() {
+        assert!(WindowSurface::vsync_only_among(&[PresentMode::Fifo]));
+        assert!(WindowSurface::vsync_only_among(&[
+            PresentMode::Fifo,
+            PresentMode::FifoRelaxed
+        ]));
+        assert!(!WindowSurface::vsync_only_among(&[
+            PresentMode::Fifo,
+            PresentMode::Mailbox
+        ]));
+        assert!(!WindowSurface::vsync_only_among(&[
+            PresentMode::Immediate,
+            PresentMode::Fifo
+        ]));
+        assert!(WindowSurface::vsync_only_among(&[]));
     }
 }

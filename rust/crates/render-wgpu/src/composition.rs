@@ -379,7 +379,9 @@ impl Renderer {
         let scale = self.options.render_scale;
         if !(scale.is_finite() && scale < 1.0) {
             self.scaled = None;
-            return draw(self, primary);
+            let mut stats = draw(self, primary);
+            stats.cpu_batch_us = self.batch_time.as_micros() as u32;
+            return stats;
         }
         let width = ((primary.width as f32 * scale).round() as u32).max(1);
         let height = ((primary.height as f32 * scale).round() as u32).max(1);
@@ -393,7 +395,8 @@ impl Renderer {
                 primary.samples,
             ),
         };
-        let stats = draw(self, scaled.view());
+        let mut stats = draw(self, scaled.view());
+        stats.cpu_batch_us = self.batch_time.as_micros() as u32;
         self.upscale(&scaled, &primary);
         self.scaled = Some(scaled);
         stats
@@ -441,6 +444,7 @@ impl Renderer {
     ) -> FrameStats {
         let uploaded = self.prepare();
         surface.request(self.samples(), self.vsync());
+        self.display_vsync_only = Some(surface.vsync_only());
         self.surface_size = Some(surface.size());
         let (view, _) = surface.views(frame);
         let mut stats = self.draw_primary(view, |renderer, view| {

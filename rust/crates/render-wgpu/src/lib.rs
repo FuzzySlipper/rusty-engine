@@ -260,6 +260,9 @@ pub enum SettingRefusal {
     NoIndirectDraws,
     /// The primary destination's formats cannot multisample at that count.
     UnsupportedSampleCount,
+    /// The display can present only in step with its refresh, so vsync stays
+    /// on.
+    VsyncOnly,
 }
 
 /// The settings in effect and what the device refused: what a product
@@ -273,6 +276,7 @@ pub struct RendererSettingsReadout {
     pub effective: RendererSettingsDescriptor,
     pub ambient_occlusion: Option<SettingRefusal>,
     pub antialiasing: Option<SettingRefusal>,
+    pub vsync: Option<SettingRefusal>,
     pub clustered_lighting: Option<SettingRefusal>,
     pub gpu_culling: Option<SettingRefusal>,
 }
@@ -335,6 +339,13 @@ pub struct Renderer {
     /// The internal target the primary passes draw into at a render scale
     /// below 1, kept while its size and sample count hold.
     scaled: Option<target::ScaledPrimary>,
+    /// Whether the window the renderer last drew to can present only in step
+    /// with its refresh (`WindowSurface::vsync_only`); `None` before a window
+    /// frame.
+    display_vsync_only: Option<bool>,
+    /// CPU time this frame spent building draw lists (`batch`), reported as
+    /// `FrameStats::cpu_batch_us`.
+    batch_time: std::time::Duration,
     ambient_occlusion: ambient_occlusion::AmbientOcclusionPass,
     /// The world's HDR targets and the finish pass.
     finish: finish::Finish,
@@ -484,6 +495,8 @@ impl Renderer {
             scene_generation: 0,
             compose: compose::Compose::new(device, compose_shader),
             scaled: None,
+            display_vsync_only: None,
+            batch_time: std::time::Duration::ZERO,
             ambient_occlusion,
             finish,
             distance_fields,
@@ -581,6 +594,14 @@ impl Renderer {
         self.options.vsync
     }
 
+    /// The present modes of the display the renderer draws to, from which
+    /// the readout judges whether a request for no vsync is realized
+    /// (`WindowSurface::vsync_only_among`). The window paths note their
+    /// surface's every frame; a host presenting another way notes its own.
+    pub fn set_display_present_modes(&mut self, modes: &[wgpu::PresentMode]) {
+        self.display_vsync_only = Some(WindowSurface::vsync_only_among(modes));
+    }
+
     /// The settings in effect and what the device refused.
     pub fn settings_readout(&self) -> RendererSettingsReadout {
         let requested = self.options.settings();
@@ -606,11 +627,16 @@ impl Renderer {
             effective.gpu_culling = false;
             SettingRefusal::NoIndirectDraws
         });
+        let vsync = (!requested.vsync && self.display_vsync_only == Some(true)).then(|| {
+            effective.vsync = true;
+            SettingRefusal::VsyncOnly
+        });
         RendererSettingsReadout {
             requested,
             effective,
             ambient_occlusion,
             antialiasing,
+            vsync,
             clustered_lighting,
             gpu_culling,
         }

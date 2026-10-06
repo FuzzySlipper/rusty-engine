@@ -601,13 +601,14 @@ impl FrameOutput {
             Some(SettingRefusal::UnsupportedSampleCount) => {
                 NativeRendererSettingRefusal::UnsupportedSampleCount
             }
+            Some(SettingRefusal::VsyncOnly) => NativeRendererSettingRefusal::VsyncOnly,
         };
         let mut effective = readout.effective;
         let vsync_refusal = if self.stream.is_some() && readout.requested.vsync {
             effective.vsync = false;
             NativeRendererSettingRefusal::NoDisplay
         } else {
-            NativeRendererSettingRefusal::None
+            refusal(readout.vsync)
         };
         NativeRendererSettingsReadout {
             requested: renderer_settings_request(&readout.requested),
@@ -811,12 +812,14 @@ fn settings_statistics(
             "the adapter cannot draw from GPU-written indirect arguments"
         }
         SettingRefusal::UnsupportedSampleCount => "the adapter cannot multisample at that count",
+        SettingRefusal::VsyncOnly => "the display presents only in step with its refresh",
     };
     let mut effective = readout.effective;
     let mut refused = std::collections::BTreeMap::new();
     for (setting, refusal) in [
         ("ambientOcclusion", readout.ambient_occlusion),
         ("antialiasing", readout.antialiasing),
+        ("vsync", readout.vsync),
         ("clusteredLighting", readout.clustered_lighting),
         ("gpuCulling", readout.gpu_culling),
     ] {
