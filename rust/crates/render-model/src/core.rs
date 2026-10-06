@@ -248,6 +248,9 @@ pub struct RendererSettingsDescriptor {
     pub ambient_occlusion: AmbientOcclusionSettings,
     /// Samples per pixel of the primary destination: 1, 2 or 4.
     pub antialiasing: u32,
+    /// The fraction of the primary destination's size the world, viewmodel,
+    /// labels and effects draw at before being upscaled into it: 0.5 to 1.
+    pub render_scale: f32,
     /// Window output waits for the display's refresh before presenting.
     pub vsync: bool,
     /// Bin each world view's lights into view-frustum clusters before
@@ -261,20 +264,27 @@ pub struct RendererSettingsDescriptor {
 impl RendererSettingsDescriptor {
     /// The sample counts a primary destination may have.
     pub const SAMPLE_COUNTS: [u32; 3] = [1, 2, 4];
+    /// The smallest render scale.
+    pub const MIN_RENDER_SCALE: f32 = 0.5;
 
     pub const DEFAULT: Self = Self {
         shadows: false,
         shadow_budget: None,
         ambient_occlusion: AmbientOcclusionSettings::DEFAULT,
         antialiasing: 4,
+        render_scale: 1.0,
         vsync: true,
         clustered_lighting: false,
         gpu_culling: false,
     };
 
-    /// Valid occlusion values and a supported sample count.
+    /// Valid occlusion values, a supported sample count and a render scale
+    /// within range.
     pub fn valid(&self) -> bool {
-        self.ambient_occlusion.valid() && Self::SAMPLE_COUNTS.contains(&self.antialiasing)
+        self.ambient_occlusion.valid()
+            && Self::SAMPLE_COUNTS.contains(&self.antialiasing)
+            && self.render_scale.is_finite()
+            && (Self::MIN_RENDER_SCALE..=1.0).contains(&self.render_scale)
     }
 }
 

@@ -77,10 +77,12 @@ rusty-scene-render scene.rscene out.png --width 1280 --height 720 --frames 600
 ```
 
 It prints the adapter, the time to open and apply the snapshot, the mean
-and median milliseconds of the extra frames, each with readback, and the
-`gpu` pass medians. `--ambient-occlusion off|compute|raster|field` draws the
+and median milliseconds of the extra frames, each with readback, the
+`gpu` pass medians, and the renderer `settings` drawn (the snapshot's,
+changed by the flags below) with what the adapter refused. `--ambient-occlusion off|compute|raster|field` draws the
 snapshot with that ambient occlusion path (`field` cone-traces the voxel
-chunks' distance fields), to compare the paths on one scene. Compare
+chunks' distance fields), and `--render-scale S` at that fraction of the
+output size, to compare the paths on one scene. Compare
 snapshots drawn on the same adapter; `WGPU_BACKEND` selects it as for any
 wgpu program. A still camera reuses work a moving one repeats (culled lists,
 a directional light's shadow cascades): add `--walk M` or `--turn D` to move

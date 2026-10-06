@@ -5,7 +5,7 @@
 //! ```text
 //! rusty-scene-render <snapshot> <out.png> [--width W] [--height H] [--frames N]
 //!                    [--walk M] [--turn D] [--ambient-occlusion off|compute|raster|field]
-//!                    [--clustered-lighting on|off] [--gpu-culling on|off]
+//!                    [--clustered-lighting on|off] [--gpu-culling on|off] [--render-scale S]
 //! ```
 //!
 //! `--frames N` then draws N more frames into one target with readback and
@@ -30,7 +30,7 @@ use serde_json::json;
 
 const USAGE: &str = "usage: rusty-scene-render <snapshot> <out.png> [--width W] [--height H] \
      [--frames N] [--walk M] [--turn D] [--ambient-occlusion off|compute|raster|field] \
-     [--clustered-lighting on|off] [--gpu-culling on|off]";
+     [--clustered-lighting on|off] [--gpu-culling on|off] [--render-scale S]";
 
 fn main() {
     if let Err(error) = run() {
@@ -47,6 +47,7 @@ fn run() -> Result<(), String> {
     let mut ambient_occlusion: Option<AmbientOcclusionPath> = None;
     let mut clustered_lighting: Option<bool> = None;
     let mut gpu_culling: Option<bool> = None;
+    let mut render_scale: Option<f32> = None;
     while let Some(argument) = arguments.next() {
         let mut number = |name: &str| -> Result<f64, String> {
             arguments
@@ -60,6 +61,7 @@ fn run() -> Result<(), String> {
             "--frames" => frames = number("--frames")? as u32,
             "--walk" => walk = number("--walk")?,
             "--turn" => turn = number("--turn")?,
+            "--render-scale" => render_scale = Some(number("--render-scale")? as f32),
             "--gpu-culling" => {
                 gpu_culling = Some(match arguments.next().as_deref() {
                     Some("on") => true,
@@ -135,6 +137,9 @@ fn run() -> Result<(), String> {
     if let Some(culling) = gpu_culling {
         options.gpu_culling = culling;
     }
+    if let Some(scale) = render_scale {
+        options.render_scale = scale;
+    }
     let driver = SceneDriver::new(gpu, options);
     let applied = Instant::now();
     driver.rebaseline(
@@ -207,6 +212,13 @@ fn run() -> Result<(), String> {
         .0;
     let (skipped, last_skip) = driver.skipped_ops();
     let gpu_readout = driver.gpu_readout();
+    let settings = driver.settings_readout();
+    let refused = [
+        ("ambientOcclusion", settings.ambient_occlusion),
+        ("antialiasing", settings.antialiasing),
+        ("clusteredLighting", settings.clustered_lighting),
+        ("gpuCulling", settings.gpu_culling),
+    ];
     let report = json!({
         "snapshot": snapshot_path.display().to_string(),
         "product": snapshot.metadata.product,
@@ -223,6 +235,15 @@ fn run() -> Result<(), String> {
         "lastSkip": last_skip,
         "image": { "path": out.display().to_string(), "width": width, "height": height },
         "timing": timing,
+        // The renderer settings drawn: the snapshot's, changed by the flags
+        // above, and what the adapter refused.
+        "settings": {
+            "requested": settings.requested,
+            "effective": settings.effective,
+            "refused": refused.iter().filter_map(|(name, refusal)| {
+                refusal.map(|refusal| json!({ "setting": name, "refusal": format!("{refusal:?}") }))
+            }).collect::<Vec<_>>(),
+        },
         // The GPU passes over the frames drawn: each timed pass's median
         // cost and the ambient occlusion path, as `engine.renderer` reports
         // them.

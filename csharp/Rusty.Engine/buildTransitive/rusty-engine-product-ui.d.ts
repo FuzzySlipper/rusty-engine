@@ -583,6 +583,10 @@ declare module "@rusty-engine/live-debug/internal/live-debug-client/src/generate
          * Samples per pixel of the primary destination.
          */
         antialiasing: number;
+        /**
+         * The fraction of the primary destination's size the world draws at.
+         */
+        renderScale: number;
         vsync: boolean;
         clusteredLighting: boolean;
         gpuCulling: boolean;

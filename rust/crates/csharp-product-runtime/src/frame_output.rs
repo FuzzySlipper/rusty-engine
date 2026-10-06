@@ -800,6 +800,7 @@ fn settings_statistics(
             ambient_occlusion_strength: settings.ambient_occlusion.strength,
             ambient_occlusion_radius: settings.ambient_occlusion.radius,
             antialiasing: settings.antialiasing,
+            render_scale: settings.render_scale,
             vsync: settings.vsync,
             clustered_lighting: settings.clustered_lighting,
             gpu_culling: settings.gpu_culling,

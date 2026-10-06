@@ -246,7 +246,9 @@ impl Renderer {
         target: &OffscreenTarget,
     ) -> FrameStats {
         let uploaded = self.prepare();
-        let mut stats = self.render_camera(camera, target.view());
+        let mut stats = self.draw_primary(target.view(), |renderer, view| {
+            renderer.render_camera(camera, view)
+        });
         stats.parts_uploaded = uploaded;
         stats
     }
@@ -260,7 +262,9 @@ impl Renderer {
         let uploaded = self.prepare();
         let gpu = self.gpu.clone();
         let mut stats = FrameStats::default();
-        surface.present_with(&gpu, |view| stats = self.render_camera(camera, view))?;
+        surface.present_with(&gpu, |view| {
+            stats = self.draw_primary(view, |renderer, view| renderer.render_camera(camera, view));
+        })?;
         stats.parts_uploaded = uploaded;
         Ok(stats)
     }

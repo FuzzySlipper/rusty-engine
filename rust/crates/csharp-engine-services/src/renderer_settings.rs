@@ -75,7 +75,7 @@ impl RuntimeRendererSettingsBridge {
         if !settings.valid() {
             return Err(CsharpEngineServicesError::new(
                 "CSHARP_RENDERER_SETTINGS",
-                "ambient occlusion strength must be finite and at least 0, its radius finite and above 0",
+                "ambient occlusion strength must be finite and at least 0, its radius finite and above 0, and the render scale from 0.5 to 1",
             ));
         }
         let staged = self.staged.as_mut().ok_or_else(|| {
@@ -106,6 +106,7 @@ pub(crate) fn renderer_settings_descriptor(
             radius: request.ambient_occlusion_radius,
         },
         antialiasing: request.antialiasing as u32,
+        render_scale: request.render_scale,
         vsync: request.vsync,
         clustered_lighting: request.clustered_lighting,
         gpu_culling: request.gpu_culling,
@@ -132,6 +133,7 @@ pub fn renderer_settings_request(
             2 => NativeAntialiasing::Msaa2,
             _ => NativeAntialiasing::Msaa4,
         },
+        render_scale: settings.render_scale,
         vsync: settings.vsync,
         clustered_lighting: settings.clustered_lighting,
         gpu_culling: settings.gpu_culling,

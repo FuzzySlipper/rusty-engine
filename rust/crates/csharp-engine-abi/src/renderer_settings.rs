@@ -45,6 +45,10 @@ pub struct NativeRendererSettingsRequest {
     /// above 0.
     pub ambient_occlusion_radius: f32,
     pub antialiasing: NativeAntialiasing,
+    /// The fraction of the streamed frame's or window's size the world,
+    /// viewmodel, labels and effects draw at before being upscaled into it:
+    /// 0.5 to 1.
+    pub render_scale: f32,
     /// Window output waits for the display's refresh before presenting.
     pub vsync: bool,
     /// Bin each world view's lights into view-frustum clusters before

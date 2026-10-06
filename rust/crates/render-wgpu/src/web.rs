@@ -345,7 +345,9 @@ impl Renderer {
         surface.request(self.samples(), self.vsync());
         self.surface_size = Some(surface.size());
         let (view, finished) = surface.views(frame);
-        let mut stats = self.render_composition(view, time_seconds);
+        let mut stats = self.draw_primary(view, |renderer, view| {
+            renderer.render_composition(view, time_seconds)
+        });
         overlay.draw(finished.color, finished.format);
         stats.video = self.draw_video(&finished);
         stats.parts_uploaded = uploaded;

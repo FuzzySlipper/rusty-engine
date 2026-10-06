@@ -757,10 +757,13 @@ so a graphics menu starts from them. Invalid values reject staging.
 
 `RustyEngineProductAntialiasing` sets the samples per pixel of the streamed
 frame or the window: `off`, `2x` or `4x` (the default). Offscreen camera
-targets and image captures are single-sample. `RustyEngineProductVsync`,
-`enabled` (the default) or `disabled`, says whether window output waits for
-the display's refresh before presenting; streamed output has no display.
-These write `renderer.antialiasing` and `renderer.vsync`.
+targets and image captures are single-sample. `RustyEngineProductRenderScale`
+(`1`, the default, down to `0.5`) is the fraction of the frame's size the
+world, viewmodel, labels and effects draw at before being upscaled into it.
+`RustyEngineProductVsync`, `enabled` (the default) or `disabled`, says
+whether window output waits for the display's refresh before presenting;
+streamed output has no display. These write `renderer.antialiasing`,
+`renderer.renderScale` and `renderer.vsync`.
 
 ### Requested scene shadows
 

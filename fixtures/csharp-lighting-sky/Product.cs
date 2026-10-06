@@ -107,6 +107,12 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         engine.RendererSettings.Set(engine.RendererSettings.Read().Requested with { AmbientOcclusion = occlusion, AmbientOcclusionStrength = strength, AmbientOcclusionRadius = radius });
         return Settings();
     }
+    [DebugCommand("lighting.scale")]
+    public string Scale(float scale)
+    {
+        engine.RendererSettings.Set(engine.RendererSettings.Read().Requested with { RenderScale = scale });
+        return Settings();
+    }
     [DebugCommand("lighting.shadows")]
     public string Shadows(bool enabled,uint budget)
     {

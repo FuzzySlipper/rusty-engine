@@ -244,3 +244,80 @@ impl OffscreenTarget {
         self.readback.unmap();
     }
 }
+
+/// The internal target the primary composition draws into at a render
+/// scale below 1 (`Renderer::draw_primary`): the primary's sample count at
+/// the scaled size, resolved into a single-sample colour the upscale samples
+/// bilinearly.
+pub(crate) struct ScaledPrimary {
+    multisampled: Option<wgpu::TextureView>,
+    resolve: wgpu::TextureView,
+    depth: wgpu::TextureView,
+    /// The resolved colour and a linear sampler, for `Compose::blit`.
+    pub present: wgpu::BindGroup,
+    width: u32,
+    height: u32,
+    samples: u32,
+}
+
+impl ScaledPrimary {
+    pub fn new(
+        gpu: &Gpu,
+        compose: &crate::compose::Compose,
+        width: u32,
+        height: u32,
+        samples: u32,
+    ) -> Self {
+        let (width, height) = (width.max(1), height.max(1));
+        let resolve = gpu
+            .device
+            .create_texture(&wgpu::TextureDescriptor {
+                label: Some("render-wgpu scaled primary"),
+                size: extent(width, height),
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: OFFSCREEN_FORMAT,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                    | wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            })
+            .create_view(&Default::default());
+        let sampler = gpu.device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("render-wgpu scaled primary"),
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+        Self {
+            multisampled: (samples > 1)
+                .then(|| multisampled_color(gpu, width, height, OFFSCREEN_FORMAT, samples)),
+            depth: multisampled_depth(gpu, width, height, samples),
+            present: compose.blit_bind_group(&gpu.device, &resolve, &sampler),
+            resolve,
+            width,
+            height,
+            samples,
+        }
+    }
+
+    pub fn matches(&self, width: u32, height: u32, samples: u32) -> bool {
+        (self.width, self.height, self.samples) == (width.max(1), height.max(1), samples)
+    }
+
+    pub fn view(&self) -> TargetView<'_> {
+        let (color, resolve) = match &self.multisampled {
+            Some(multisampled) => (multisampled, Some(&self.resolve)),
+            None => (&self.resolve, None),
+        };
+        TargetView {
+            color,
+            resolve,
+            depth: &self.depth,
+            format: OFFSCREEN_FORMAT,
+            samples: self.samples,
+            width: self.width,
+            height: self.height,
+        }
+    }
+}

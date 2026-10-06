@@ -328,6 +328,7 @@ impl Renderer {
                 gpu_culling: false,
                 samples: 1,
                 vsync: false,
+                render_scale: 1.0,
             },
         ));
         source.set_animation_time(self.animation_time);

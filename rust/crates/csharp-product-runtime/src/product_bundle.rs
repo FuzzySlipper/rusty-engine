@@ -563,6 +563,8 @@ struct ManifestRenderer {
     antialiasing: Option<String>,
     #[serde(default)]
     vsync: Option<String>,
+    #[serde(default)]
+    render_scale: Option<f32>,
 }
 #[derive(Debug, Clone, Copy, Deserialize)]
 struct ManifestPresentationAspect {
@@ -710,12 +712,22 @@ impl ProductRendererSettings {
             Some("disabled") => false,
             Some(_) => return Err(field_error("renderer.vsync", "must be enabled or disabled")),
         };
+        let render_scale = value.render_scale.unwrap_or(1.0);
+        if !render_scale.is_finite()
+            || !(RendererSettingsDescriptor::MIN_RENDER_SCALE..=1.0).contains(&render_scale)
+        {
+            return Err(field_error(
+                "renderer.renderScale",
+                "must be a number from 0.5 to 1",
+            ));
+        }
         Ok(Self {
             settings: RendererSettingsDescriptor {
                 shadows,
                 shadow_budget: value.lighting.shadow_budget.filter(|&budget| budget > 0),
                 ambient_occlusion,
                 antialiasing,
+                render_scale,
                 vsync,
                 clustered_lighting: switch(
                     value.lighting.clustered_lighting.as_deref(),

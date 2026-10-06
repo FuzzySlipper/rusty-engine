@@ -177,6 +177,9 @@ pub struct RendererOptions {
     /// off presents as soon as a frame is drawn. Streamed output has no
     /// display.
     pub vsync: bool,
+    /// The fraction of the primary destination's size the primary passes
+    /// draw at (`Renderer::draw_primary`): 0.5 to 1.
+    pub render_scale: f32,
 }
 
 impl Default for RendererOptions {
@@ -191,6 +194,7 @@ impl Default for RendererOptions {
             gpu_culling: false,
             samples: RendererSettingsDescriptor::DEFAULT.antialiasing,
             vsync: RendererSettingsDescriptor::DEFAULT.vsync,
+            render_scale: RendererSettingsDescriptor::DEFAULT.render_scale,
         }
     }
 }
@@ -215,6 +219,7 @@ impl RendererOptions {
         };
         self.samples = settings.antialiasing;
         self.vsync = settings.vsync;
+        self.render_scale = settings.render_scale;
         self.clustered_lighting = settings.clustered_lighting;
         self.gpu_culling = settings.gpu_culling;
         self
@@ -237,6 +242,7 @@ impl RendererOptions {
                 radius: self.ambient_occlusion.radius,
             },
             antialiasing: self.samples,
+            render_scale: self.render_scale,
             vsync: self.vsync,
             clustered_lighting: self.clustered_lighting,
             gpu_culling: self.gpu_culling,
@@ -320,6 +326,9 @@ pub struct Renderer {
     /// it moves past the value they were drawn at.
     scene_generation: u64,
     compose: compose::Compose,
+    /// The internal target the primary passes draw into at a render scale
+    /// below 1, kept while its size and sample count hold.
+    scaled: Option<target::ScaledPrimary>,
     ambient_occlusion: ambient_occlusion::AmbientOcclusionPass,
     /// The world's HDR targets and the finish pass.
     finish: finish::Finish,
@@ -464,6 +473,7 @@ impl Renderer {
             ghost_pipelines: ghost::GhostPipelines::new(device, ghost_shader),
             scene_generation: 0,
             compose: compose::Compose::new(device, compose_shader),
+            scaled: None,
             ambient_occlusion,
             finish,
             distance_fields,

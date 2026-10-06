@@ -195,7 +195,11 @@ ambientOcclusion: string, ambientOcclusionStrength: number, ambientOcclusionRadi
 /**
  * Samples per pixel of the primary destination.
  */
-antialiasing: number, vsync: boolean, clusteredLighting: boolean, gpuCulling: boolean, };
+antialiasing: number, 
+/**
+ * The fraction of the primary destination's size the world draws at.
+ */
+renderScale: number, vsync: boolean, clusteredLighting: boolean, gpuCulling: boolean, };
 
 /**
  * The renderer settings (`RendererSettings`): what the product or its

@@ -20,6 +20,7 @@ fn settings() -> RendererSettingsDescriptor {
             radius: 2.0,
         },
         antialiasing: 1,
+        render_scale: 1.0,
         vsync: false,
         clustered_lighting: false,
         gpu_culling: false,

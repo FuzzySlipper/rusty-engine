@@ -94,8 +94,11 @@ and quality: `Read()` returns a `RendererSettingsReadout` and
 and `Read()` reports the change from the next product call.
 The request holds shadows on or off and their budget (0 for no limit),
 ambient occlusion (`Disabled`, `ScreenSpace` or `DistanceField`, with its
-strength and radius), antialiasing (`Off`, `Msaa2` or `Msaa4`), vsync, and
-the clustered lighting and GPU culling switches. The product manifest's
+strength and radius), antialiasing (`Off`, `Msaa2` or `Msaa4`), the render
+scale (0.5 to 1: the world, viewmodel, labels and effects draw at that
+fraction of the frame's size and are upscaled bilinearly into it, while a
+playing video and the browser or window UI keep their full size), vsync,
+and the clustered lighting and GPU culling switches. The product manifest's
 `RustyEngineProduct*` properties are the initial values
 ([the product project](csharp-product-project.md#renderer-settings)), so a
 graphics menu starts from `Read().Requested`, changes what it offers and sets
@@ -111,8 +114,9 @@ lighting fall back to the screen-space pass and the light loop),
 `NoIndirectDraws` (GPU culling keeps the CPU list), `UnsupportedSampleCount`
 (the adapter cannot multisample at that count, so the default 4 draws) and
 `NoDisplay` (streamed output has no display, so vsync is moot). A refused
-setting is not an error: `Set` accepts any finite, non-negative strength and
-positive radius, and refuses only values outside those ranges.
+setting is not an error: `Set` accepts any finite, non-negative strength, positive
+radius and render scale from 0.5 to 1, and refuses only values outside
+those ranges.
 `engine.renderer` reports the same under `settings`
 ([renderer statistics](performance.md#renderer-statistics)). The
 `csharp-lighting-sky` fixture's `lighting.settings`, `lighting.antialiasing`,

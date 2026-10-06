@@ -108,6 +108,13 @@ pub struct SceneSnapshotOptions {
     /// Snapshots written before vsync was a setting waited for the display.
     #[serde(default = "default_vsync")]
     pub vsync: bool,
+    /// Snapshots written before the render scale was a setting drew at 1.
+    #[serde(default = "default_render_scale")]
+    pub render_scale: f32,
+}
+
+fn default_render_scale() -> f32 {
+    render_model::RendererSettingsDescriptor::DEFAULT.render_scale
 }
 
 fn default_samples() -> u32 {
@@ -202,6 +209,7 @@ impl From<SceneSnapshotOptions> for render_wgpu::RendererOptions {
             gpu_culling: options.gpu_culling,
             samples: options.samples,
             vsync: options.vsync,
+            render_scale: options.render_scale,
         }
     }
 }
@@ -218,6 +226,7 @@ impl From<render_wgpu::RendererOptions> for SceneSnapshotOptions {
             gpu_culling: options.gpu_culling,
             samples: options.samples,
             vsync: options.vsync,
+            render_scale: options.render_scale,
         }
     }
 }

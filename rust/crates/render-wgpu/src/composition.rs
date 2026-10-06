@@ -358,10 +358,76 @@ impl Renderer {
         time_seconds: f64,
     ) -> FrameStats {
         let uploaded = self.prepare();
-        let mut stats = self.render_composition(target.view(), time_seconds);
+        let mut stats = self.draw_primary(target.view(), |renderer, view| {
+            renderer.render_composition(view, time_seconds)
+        });
         stats.video = self.draw_video(&target.view());
         stats.parts_uploaded = uploaded;
         stats
+    }
+
+    /// Draw the primary output through `draw`: into `primary` itself at a
+    /// render scale of 1, else into the internal target at the scaled size
+    /// (`RendererOptions::render_scale`), then upscaled bilinearly over the
+    /// whole of `primary`. The world, viewmodel, labels and effects all draw
+    /// at the scale; a video and the hosts' UI draw at full size after.
+    pub(crate) fn draw_primary(
+        &mut self,
+        primary: TargetView<'_>,
+        draw: impl FnOnce(&mut Self, TargetView<'_>) -> FrameStats,
+    ) -> FrameStats {
+        let scale = self.options.render_scale;
+        if !(scale.is_finite() && scale < 1.0) {
+            self.scaled = None;
+            return draw(self, primary);
+        }
+        let width = ((primary.width as f32 * scale).round() as u32).max(1);
+        let height = ((primary.height as f32 * scale).round() as u32).max(1);
+        let scaled = match self.scaled.take() {
+            Some(scaled) if scaled.matches(width, height, primary.samples) => scaled,
+            _ => crate::target::ScaledPrimary::new(
+                &self.gpu,
+                &self.compose,
+                width,
+                height,
+                primary.samples,
+            ),
+        };
+        let stats = draw(self, scaled.view());
+        self.upscale(&scaled, &primary);
+        self.scaled = Some(scaled);
+        stats
+    }
+
+    /// Present the scaled primary over the whole of `primary`.
+    fn upscale(&mut self, scaled: &crate::target::ScaledPrimary, primary: &TargetView<'_>) {
+        self.compose.prepare_blit(&self.gpu.device, primary.key());
+        let mut encoder = self
+            .gpu
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("render-wgpu upscale"),
+            });
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("render-wgpu upscale"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: primary.color,
+                    depth_slice: None,
+                    resolve_target: primary.resolve,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            self.compose.blit(&mut pass, primary.key(), &scaled.present);
+        }
+        self.gpu.queue.submit([encoder.finish()]);
     }
 
     /// Render the installed composition into an acquired window frame.
@@ -376,7 +442,9 @@ impl Renderer {
         surface.request(self.samples(), self.vsync());
         self.surface_size = Some(surface.size());
         let (view, _) = surface.views(frame);
-        let mut stats = self.render_composition(view, time_seconds);
+        let mut stats = self.draw_primary(view, |renderer, view| {
+            renderer.render_composition(view, time_seconds)
+        });
         stats.video = self.draw_video(&view);
         stats.parts_uploaded = uploaded;
         stats

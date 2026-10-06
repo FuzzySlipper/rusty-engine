@@ -85,6 +85,8 @@ pub struct ProductHostRendererSettingValues {
     pub ambient_occlusion_radius: f32,
     /// Samples per pixel of the primary destination.
     pub antialiasing: u32,
+    /// The fraction of the primary destination's size the world draws at.
+    pub render_scale: f32,
     pub vsync: bool,
     pub clustered_lighting: bool,
     pub gpu_culling: bool,
