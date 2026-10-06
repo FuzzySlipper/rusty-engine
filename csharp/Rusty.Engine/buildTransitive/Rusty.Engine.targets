@@ -88,8 +88,8 @@
          selects the independently configurable world or viewmodel setting. -->
     <RustyEngineProductSceneShadows Condition="'$(RustyEngineProductSceneShadows)' == ''">disabled</RustyEngineProductSceneShadows>
     <RustyEngineProductShadowBudget Condition="'$(RustyEngineProductShadowBudget)' == ''">0</RustyEngineProductShadowBudget>
-    <!-- Screen-space ambient occlusion on world views, under evaluation:
-         enabled or disabled, and its strength from 0 to 1. -->
+    <!-- Screen-space ambient occlusion on world views: enabled or disabled,
+         and its strength from 0 to 1. -->
     <RustyEngineProductAmbientOcclusion Condition="'$(RustyEngineProductAmbientOcclusion)' == ''">disabled</RustyEngineProductAmbientOcclusion>
     <RustyEngineProductAmbientOcclusionStrength Condition="'$(RustyEngineProductAmbientOcclusionStrength)' == ''">1</RustyEngineProductAmbientOcclusionStrength>
     <RustyEngineProductDefaultWorldLights Condition="'$(RustyEngineProductDefaultWorldLights)' == ''">neutral</RustyEngineProductDefaultWorldLights>

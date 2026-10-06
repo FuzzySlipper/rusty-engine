@@ -763,7 +763,7 @@ Engine choose which requesting lights cast, by `ShadowPriority` then distance
 [shadows](lighting-and-sky.md#shadows) for resolution, softness and the
 budget.
 
-### Screen-space ambient occlusion (under evaluation)
+### Screen-space ambient occlusion
 
 `RustyEngineProductAmbientOcclusion` turns screen-space ambient occlusion on
 world views `enabled` or `disabled` (the default);

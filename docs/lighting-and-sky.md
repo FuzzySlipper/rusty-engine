@@ -93,9 +93,9 @@ occlusion darkens within about 0.75 m where surfaces meet: corners, the foot
 of a wall, a crate on the floor. It scales only the ambient and hemisphere
 light of opaque, lit parts (`Surface.occlusion`, so product shaders calling
 `standard_shade` get it), so it shows where ambient light carries the scene
-and barely in one lit mostly by torches. It is under evaluation and off by
-default; a product turns it on with `RustyEngineProductAmbientOcclusion` (see
-[the product project](csharp-product-project.md#screen-space-ambient-occlusion-under-evaluation)),
+and barely in one lit mostly by torches. It is off by default; a product
+turns it on with `RustyEngineProductAmbientOcclusion` (see
+[the product project](csharp-product-project.md#screen-space-ambient-occlusion)),
 and `engine.renderer` reports its passes' GPU time.
 
 ## The standard shader
