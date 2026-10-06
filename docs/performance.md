@@ -59,7 +59,12 @@ median render, readback and encode milliseconds, and bytes per frame and per
 second. The desktop window streams nothing, so it reports no frame timing.
 `settings` gives the renderer settings in effect: what the product or its
 manifest requested, what draws, and why each refused setting differs
-([renderer settings](lighting-and-sky.md#renderer-settings)).
+([renderer settings](lighting-and-sky.md#renderer-settings)). Of its two
+pipeline switches, clustered lighting pays once more than about ten ranged
+lights are in view at the same time (at 50 the world pass is a third of the
+light loop's; below ten the loop is as fast or faster, and cheaper on
+llvmpipe), and GPU culling buys nothing while the CPU draw list is tens of
+microseconds a frame, which it is up to a few thousand parts in view.
 Where the adapter has timestamp queries, `gpu.passes` gives the median GPU
 milliseconds of each renderer pass that is timed, with the adapter's
 compute limits beside them: the ambient occlusion passes (`ao-prepass`,
