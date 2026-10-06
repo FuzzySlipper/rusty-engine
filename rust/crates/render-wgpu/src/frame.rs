@@ -1161,12 +1161,13 @@ impl Renderer {
             self.fit_cascades(&view.camera);
         }
         let instances_uploaded = self.update_view_list(&view_proj, eye, view.layer);
-        // The world, sprites and particles draw into the view's HDR target;
-        // the background and the finished world into the view's own.
+        // The world, sprites and particles draw into the view's HDR target,
+        // with the view's depth and its samples; the background and the
+        // finished world into the view's own image, single-sample.
         let target = view.target.key();
         let hdr_format = ColorTarget {
             format: HDR_FORMAT,
-            samples: target.samples,
+            samples: view.target.samples,
         };
         let effects = self.prepare_effects(&view, hdr_format);
         let slot = view.layer as usize;
@@ -1282,7 +1283,8 @@ impl Renderer {
         }
         let whole = view.start == PassStart::Target;
         if !whole && world_layer {
-            self.compose.prepare_clear(&self.gpu, target, view.clear);
+            self.compose
+                .prepare_clear(&self.gpu, target.format, view.clear);
         }
         if world_layer {
             // Ghost plates snap per view; a view is known by its viewport.
@@ -1330,15 +1332,14 @@ impl Renderer {
             pass.set_scissor_rect(area.x, area.y, area.width, area.height);
         };
         if world_layer {
-            // The background: the clear colour, then the sky. It is never
-            // finished.
+            // The background: the clear colour, then the sky, single-sample
+            // (they have no edges). It is never finished; the world pass
+            // clears the depth.
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("render-wgpu background"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: view.target.color,
                     depth_slice: None,
-                    // The view's finish pass, which composites the world
-                    // over this, resolves a multisampled target.
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: if whole {
@@ -1350,25 +1351,14 @@ impl Renderer {
                         store: wgpu::StoreOp::Store,
                     },
                 })],
-                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: view.target.depth,
-                    depth_ops: Some(wgpu::Operations {
-                        load: if whole {
-                            wgpu::LoadOp::Clear(1.0)
-                        } else {
-                            wgpu::LoadOp::Load
-                        },
-                        store: wgpu::StoreOp::Store,
-                    }),
-                    stencil_ops: None,
-                }),
+                depth_stencil_attachment: None,
                 timestamp_writes: None,
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
             in_viewport(&mut pass);
             if !whole {
-                self.compose.clear_viewport(&mut pass, target, true);
+                self.compose.clear_viewport(&mut pass, target.format);
             }
             if let (true, Some(sky)) = (view.sky, &self.sky_bind_group) {
                 pass.set_bind_group(0, &self.frame_bind_group, &[]);
@@ -1413,7 +1403,7 @@ impl Renderer {
                 };
                 Some((uv, length, shafts.intensity * fade))
             });
-        let size = (view.target.width, view.target.height, target.samples);
+        let size = (view.target.width, view.target.height, view.target.samples);
         let hdr = self.finish.target(
             &self.gpu,
             size.0,
@@ -1450,9 +1440,8 @@ impl Renderer {
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                     view: view.target.depth,
                     depth_ops: Some(wgpu::Operations {
-                        // A world pass's depth was cleared with its
-                        // background; a viewmodel pass breaks depth here.
-                        load: if whole && !world_layer {
+                        // A viewmodel pass breaks depth here.
+                        load: if whole {
                             wgpu::LoadOp::Clear(1.0)
                         } else {
                             wgpu::LoadOp::Load
@@ -1468,9 +1457,9 @@ impl Renderer {
             in_viewport(&mut pass);
             if !whole {
                 // A viewport of a shared HDR target clears with a triangle,
-                // depth included (again, for a world pass).
+                // depth included.
                 self.finish
-                    .clear_viewport(&self.gpu.device, &mut pass, target.samples);
+                    .clear_viewport(&self.gpu.device, &mut pass, view.target.samples);
             }
             pass.set_bind_group(0, &self.frame_bind_group, &[]);
             let occlusion_bind_group = self.ambient_occlusion.apply_bind_group(occlusion.as_ref());

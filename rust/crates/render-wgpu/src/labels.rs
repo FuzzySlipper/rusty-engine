@@ -30,7 +30,7 @@ use crate::camera::CameraMatrices;
 use crate::frame::PixelRect;
 use crate::particles::EntityPositions;
 use crate::resources::{self, DecodedImage, ResourceSource};
-use crate::target::{ColorTarget, TargetView, DEPTH_FORMAT};
+use crate::target::{ColorTarget, TargetView, PRIMARY_SAMPLES};
 use crate::Renderer;
 
 /// Every system family resolves to this bundled face (`fonts/LICENSE`).
@@ -1103,7 +1103,7 @@ impl LabelGpu {
                 label: Some("render-wgpu label scene depth"),
                 entries: &[wgpu::BindGroupLayoutEntry {
                     binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX,
+                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
                     ty: wgpu::BindingType::Texture {
                         sample_type: wgpu::TextureSampleType::Depth,
                         view_dimension: wgpu::TextureViewDimension::D2,
@@ -1128,6 +1128,10 @@ impl LabelGpu {
                     source: wgpu::ShaderSource::Wgsl(
                         include_str!("labels.wgsl")
                             .replace("SCENE_DEPTH", depth_type)
+                            .replace(
+                                "SCENE_SAMPLES",
+                                &format!("{}u", if multisampled { PRIMARY_SAMPLES } else { 1 }),
+                            )
                             .into(),
                     ),
                 }),
@@ -1166,22 +1170,17 @@ impl LabelGpu {
                     topology: wgpu::PrimitiveTopology::TriangleStrip,
                     ..Default::default()
                 },
-                // The scene's depth is attached read-only: labels never write it.
-                depth_stencil: Some(wgpu::DepthStencilState {
-                    format: DEPTH_FORMAT,
-                    depth_write_enabled: Some(false),
-                    depth_compare: Some(if depth_tested {
-                        wgpu::CompareFunction::LessEqual
-                    } else {
-                        wgpu::CompareFunction::Always
-                    }),
-                    stencil: Default::default(),
-                    bias: Default::default(),
-                }),
-                multisample: target.multisample(),
+                // Labels test the scene's depth in the shader: the image
+                // they draw into is single-sample.
+                depth_stencil: None,
+                multisample: Default::default(),
                 fragment: Some(wgpu::FragmentState {
                     module: &variant.shader,
-                    entry_point: Some("fs_label"),
+                    entry_point: Some(if depth_tested {
+                        "fs_label_tested"
+                    } else {
+                        "fs_label"
+                    }),
                     compilation_options: Default::default(),
                     targets: &[Some(wgpu::ColorTargetState {
                         format: target.format,
@@ -1311,7 +1310,11 @@ impl Renderer {
             gpu_labels.instances = instance_buffer(device, drawn.len().next_power_of_two());
         }
         self.gpu.queue.write_buffer(&gpu_labels.instances, 0, bytes);
-        let key = target.key();
+        // The image's format and the scene depth's samples.
+        let key = ColorTarget {
+            format: target.format,
+            samples: target.samples,
+        };
         gpu_labels.pipeline(device, key, true);
         gpu_labels.pipeline(device, key, false);
         let variant = gpu_labels.variant(device, key.samples > 1);
@@ -1333,18 +1336,13 @@ impl Renderer {
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: target.color,
                     depth_slice: None,
-                    resolve_target: target.resolve,
+                    resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Load,
                         store: wgpu::StoreOp::Store,
                     },
                 })],
-                // Read-only, so the vertex stage may also sample it.
-                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: target.depth,
-                    depth_ops: None,
-                    stencil_ops: None,
-                }),
+                depth_stencil_attachment: None,
                 timestamp_writes: None,
                 occlusion_query_set: None,
                 multiview_mask: None,

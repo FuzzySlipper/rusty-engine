@@ -98,7 +98,6 @@ impl Renderer {
         // Captures are render targets: single-sample.
         let target = TargetView {
             color: &color_view,
-            resolve: None,
             depth: &depth_view,
             format: request.format,
             samples: 1,
@@ -217,7 +216,7 @@ impl Renderer {
         isolated.compose.convert(
             &self.gpu,
             &source,
-            output.resolved_color(),
+            output.color(),
             Conversion {
                 factor,
                 exposure: *exposure,

@@ -22,7 +22,6 @@ struct FullscreenOut {
     @location(0) uv: vec2<f32>,
 };
 
-// At depth 1, the far plane, so a clear writes the depth a pass clear would.
 @vertex
 fn vs_fullscreen(@builtin(vertex_index) index: u32) -> FullscreenOut {
     let xy = vec2<f32>(f32((index << 1u) & 2u), f32(index & 2u)) * 2.0 - 1.0;

@@ -9,9 +9,8 @@ use crate::{target, Gpu, GpuError};
 pub struct WindowSurface {
     surface: wgpu::Surface<'static>,
     config: wgpu::SurfaceConfiguration,
-    /// The window is a primary destination: passes draw multisampled and
-    /// resolve into the swapchain image.
-    multisampled: wgpu::TextureView,
+    /// The window is a primary destination: the world draws multisampled
+    /// with this depth and finishes into the swapchain image.
     depth_view: wgpu::TextureView,
 }
 
@@ -91,7 +90,6 @@ impl WindowSurface {
         };
         surface.configure(&gpu.device, &config);
         Ok(Self {
-            multisampled: target::multisampled_color(gpu, config.width, config.height, format),
             depth_view: target::multisampled_depth(
                 gpu,
                 config.width,
@@ -119,7 +117,6 @@ impl WindowSurface {
     fn reconfigure(&mut self, gpu: &Gpu) {
         self.surface.configure(&gpu.device, &self.config);
         let (width, height) = (self.config.width, self.config.height);
-        self.multisampled = target::multisampled_color(gpu, width, height, self.config.format);
         self.depth_view = target::multisampled_depth(gpu, width, height, target::PRIMARY_SAMPLES);
     }
 
@@ -153,23 +150,16 @@ impl WindowSurface {
         gpu.queue.present(frame.texture);
     }
 
-    /// The views to draw `frame` through: the scene's (multisampled and
-    /// resolved into the image), and the finished image as a single-sample,
-    /// non-sRGB view, to encode overlays over it in gamma space after the
-    /// scene is resolved.
+    /// The views to draw `frame` through: the scene's (the image, with the
+    /// world's multisampled depth), and the image as a non-sRGB view, to
+    /// encode overlays over the finished scene in gamma space.
     pub(crate) fn views<'a>(
         &'a self,
         frame: &'a SurfaceFrame,
     ) -> (target::TargetView<'a>, target::TargetView<'a>) {
-        let (color, resolve) = if target::PRIMARY_SAMPLES > 1 {
-            (&self.multisampled, Some(&frame.view))
-        } else {
-            (&frame.view, None)
-        };
         (
             target::TargetView {
-                color,
-                resolve,
+                color: &frame.view,
                 depth: &self.depth_view,
                 format: self.config.format,
                 samples: target::PRIMARY_SAMPLES,
@@ -178,7 +168,6 @@ impl WindowSurface {
             },
             target::TargetView {
                 color: &frame.gamma_view,
-                resolve: None,
                 depth: &self.depth_view,
                 format: self.config.format.remove_srgb_suffix(),
                 samples: 1,

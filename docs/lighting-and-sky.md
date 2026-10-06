@@ -279,8 +279,11 @@ The world (lit and unlit meshes, voxel surfaces, GLB parts, sprites and
 particles) draws in linear light into a 16-bit floating-point target, with the
 view's multisampling, and blends there. A full-screen finish pass then
 finishes it: bloom, exposure, colour grading, the tone mapping operator, then
-distance fog, over the background. The background, a clear colour or sky panorama, is drawn
-first and never finished. These settings are retained camera-view state, like
+distance fog, sample by sample at edges, and writes the average over the
+background into the view's single-sample image. The background, a clear
+colour or sky panorama, is drawn there first and never finished. Labels test
+the world's depth sample by sample in their shader, so their edges keep the
+multisampled coverage. These settings are retained camera-view state, like
 the sky, and products change them at runtime, for a cave, underwater or at
 night:
 
@@ -386,9 +389,10 @@ multisampling), plus a single-sample copy (17 MB) and bloom's mips (6 MB)
 while bloom or auto exposure is on. `engine.renderer` times the frame's first
 world view's `world`, `bloom-exposure` and `finish` passes
 ([performance](performance.md)). On an RX 9070 XT the finish pass takes about
-0.05 ms at 1280×720 and 0.1 ms at 1920×1080 (colour grading adds about
-0.005 ms), and bloom with auto exposure about 0.15 ms; on llvmpipe each takes 5 to 17 ms, a large share of a light
-scene's frame.
+0.04 to 0.06 ms at 1280×720 and 0.07 to 0.13 ms at 1920×1080 (colour grading
+adds about 0.005 ms), and bloom with auto exposure about 0.15 ms. On llvmpipe
+the finish pass takes 3 to 8 ms at 1280×720 and 7 to 17 ms at 1920×1080, and
+bloom with auto exposure 4 to 10 ms, a large share of a light scene's frame.
 
 ## Read light at a voxel location
 

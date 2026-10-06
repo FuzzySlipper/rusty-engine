@@ -48,7 +48,7 @@ pub(crate) struct Video {
     shader: wgpu::ShaderModule,
     sampler: wgpu::Sampler,
     params: wgpu::Buffer,
-    pipelines: Vec<((wgpu::TextureFormat, u32), wgpu::RenderPipeline)>,
+    pipelines: Vec<(wgpu::TextureFormat, wgpu::RenderPipeline)>,
 }
 
 struct Active {
@@ -340,13 +340,9 @@ impl Renderer {
         .flat_map(|value| value.to_le_bytes())
         .collect();
         self.gpu.queue.write_buffer(&self.video.params, 0, &params);
-        // Over the finished frame: the resolved image of a multisampled
-        // target.
-        let (view, samples) = match target.resolve {
-            Some(resolve) => (resolve, 1),
-            None => (target.color, target.samples),
-        };
-        let key = (target.format, samples);
+        // Over the finished frame.
+        let view = target.color;
+        let key = target.format;
         let device = &self.gpu.device;
         let index = match self.video.pipelines.iter().position(|(k, _)| *k == key) {
             Some(index) => index,
@@ -367,10 +363,7 @@ impl Renderer {
                     },
                     primitive: Default::default(),
                     depth_stencil: None,
-                    multisample: wgpu::MultisampleState {
-                        count: samples,
-                        ..Default::default()
-                    },
+                    multisample: Default::default(),
                     fragment: Some(wgpu::FragmentState {
                         module: &self.video.shader,
                         entry_point: Some("fs_video"),

@@ -1,12 +1,13 @@
 //! The world's HDR target and the finish pass (`finish_pass.wgsl`).
 //!
-//! A view draws its background (clear colour or sky) into its target, then
-//! its world, sprites and particles into an `Rgba16Float` target of the same
-//! size and sample count, cleared to transparent: opaque draws cover their
-//! pixel, blended ones accumulate premultiplied colour and coverage. The
-//! finish pass reads that colour and the target's depth (every sample of a
-//! multisampled pair, finished one by one and averaged), finishes each
-//! covered pixel and composites it over the background with premultiplied
+//! A view draws its background (clear colour or sky) into its target's
+//! single-sample image, then its world, sprites and particles into an
+//! `Rgba16Float` target of the same size and the depth's sample count,
+//! cleared to transparent: opaque draws cover their pixel, blended ones
+//! accumulate premultiplied colour and coverage. The finish pass reads that
+//! colour and the target's depth (every sample of a multisampled pair,
+//! finished one by one and averaged), finishes each covered pixel and
+//! composites it over the background in the image with premultiplied
 //! blending. With bloom or auto exposure (`post.rs`) the world pass also
 //! resolves the HDR colour to one sample for them to read.
 //!
@@ -88,7 +89,7 @@ pub(crate) struct Finish {
     multisampled_pipeline: wgpu::PipelineLayout,
     params: wgpu::Buffer,
     bloom_sampler: wgpu::Sampler,
-    /// Finish pipelines by the target drawn into.
+    /// Finish pipelines by the image's format and the world's samples.
     pipelines: Vec<(ColorTarget, wgpu::RenderPipeline)>,
     /// Transparent viewport clears by HDR target sample count.
     clears: Vec<(u32, wgpu::RenderPipeline)>,
@@ -538,7 +539,12 @@ impl Finish {
         post: FinishPost,
         timed: bool,
     ) {
-        let key = target.key();
+        // The pipeline draws the image single-sample, averaging every sample
+        // of a multisampled world.
+        let key = ColorTarget {
+            format: target.format,
+            samples: target.samples,
+        };
         let multisampled = key.samples > 1;
         if !self.pipelines.iter().any(|(format, _)| *format == key) {
             let pipeline = gpu
@@ -558,7 +564,7 @@ impl Finish {
                     },
                     primitive: Default::default(),
                     depth_stencil: None,
-                    multisample: key.multisample(),
+                    multisample: Default::default(),
                     fragment: Some(wgpu::FragmentState {
                         module: &self.shader,
                         entry_point: Some(if multisampled {
@@ -683,7 +689,7 @@ impl Finish {
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: target.color,
                 depth_slice: None,
-                resolve_target: target.resolve,
+                resolve_target: None,
                 ops: wgpu::Operations {
                     load: wgpu::LoadOp::Load,
                     store: wgpu::StoreOp::Store,

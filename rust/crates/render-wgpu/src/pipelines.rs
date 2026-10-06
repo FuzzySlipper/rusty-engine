@@ -382,13 +382,8 @@ impl Layouts {
                     buffers: &[],
                 },
                 primitive: Default::default(),
-                depth_stencil: Some(wgpu::DepthStencilState {
-                    format: DEPTH_FORMAT,
-                    depth_write_enabled: Some(false),
-                    depth_compare: Some(wgpu::CompareFunction::Always),
-                    stencil: Default::default(),
-                    bias: Default::default(),
-                }),
+                // The background pass draws without depth.
+                depth_stencil: None,
                 multisample: target.multisample(),
                 fragment: Some(wgpu::FragmentState {
                     module: &self.sky_shader,
