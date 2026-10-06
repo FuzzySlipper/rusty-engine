@@ -404,6 +404,10 @@ fn run() -> Result<(), String> {
                 "bakeMs": readout.bake_ms,
                 "wallMs": bake_ms,
                 "bytes": readout.bytes,
+                "bricks": readout.bricks,
+                "brickMs": readout.brick_ms,
+                "brickMsMax": readout.brick_ms_max,
+                "bakedBricks": readout.last_batch_bricks,
             })),
             "gpuCulling": {
                 "enabled": gpu_readout.gpu_culling.enabled,

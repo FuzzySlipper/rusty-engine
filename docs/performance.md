@@ -75,7 +75,8 @@ pass, its `bloom-exposure` passes (with sun shafts) together and its
 and a frame's share of building [the sky's
 light](lighting-and-sky.md#the-skys-light) (`sky-light`). `gpu.indirectLight`
 is [the probe volume](lighting-and-sky.md#indirect-light-the-probe-volume):
-its probes, triangles, last bake time and bytes.
+its probes, bricks and bricks pending, triangles, the last brick's and
+batch's bake times, the last frame's upload bytes and the texture's bytes.
 
 To measure the renderer's frame cost without the product, take a scene
 snapshot on the running product (`engine.renderer.snapshot <path>`, see

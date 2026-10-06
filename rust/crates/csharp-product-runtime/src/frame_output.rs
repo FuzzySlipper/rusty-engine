@@ -909,6 +909,12 @@ fn gpu_statistics(readout: GpuReadout) -> ProductHostGpuStatistics {
             bakes: readout.indirect_light.bakes,
             pending: readout.indirect_light.pending,
             bytes: readout.indirect_light.bytes,
+            bricks: readout.indirect_light.bricks,
+            bricks_pending: readout.indirect_light.bricks_pending,
+            brick_ms: readout.indirect_light.brick_ms,
+            brick_ms_max: readout.indirect_light.brick_ms_max,
+            upload_bytes: readout.indirect_light.upload_bytes,
+            last_batch_bricks: readout.indirect_light.last_batch_bricks,
         },
     }
 }

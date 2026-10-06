@@ -27,8 +27,8 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     // A doorway in the room's +z wall, so daylight has a way in; seen from the back wall.
     private const int DoorMinX = 3, DoorMaxX = 4, DoorMinY = 1, DoorMaxY = 3;
     private static readonly Vector3 CaveEye = new(3.5f,2.5f,1.2f), CaveTarget = new(3.5f,2,7.5f);
-    // The indirect light volume over the room and a little past its walls, probes half a metre apart.
-    private static readonly Vector3 IndirectCenter = new(3.5f,2.5f,3.5f), IndirectExtent = new(4.5f,3,4.5f);
+    // The indirect light volume: the room and the ground around it (32 bricks of 16 m, so an edit shows which bricks rebake), probes half a metre apart.
+    private static readonly Vector3 IndirectCenter = new(3.5f,2.5f,3.5f), IndirectExtent = new(20,3,20);
     private const float IndirectSpacing = .5f;
     private const uint IndirectBounces = 2;
     private static readonly Color FogColor = new(.55f,.6f,.7f,1);
@@ -45,6 +45,7 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     private readonly RenderResource day, night;
     private VoxelScenePresentation? presentation;
     private LightDescriptor descriptor;
+    private uint[] room = [];
     private float clock;
     private bool roundTrip;
     private float litValue, blockedValue, darkValue;
@@ -84,6 +85,7 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         uint[] slots = new uint[ChunkEdge*ChunkEdge*ChunkEdge];
         for(int z=0;z<RoomWidth;z++) for(int y=0;y<RoomHeight;y++) for(int x=0;x<RoomWidth;x++)
             if((x==0||x==RoomWidth-1||y==0||y==RoomHeight-1||z==0||z==RoomWidth-1)&&!(z==RoomWidth-1&&x>=DoorMinX&&x<=DoorMaxX&&y>=DoorMinY&&y<=DoorMaxY)) slots[x+ChunkEdge*(y+ChunkEdge*z)] = 1;
+        room = slots;
         VoxelResidencyOperation[] ops=[new(VoxelResidencyOperationKind.Admit,new(0,0,0),0,(uint)slots.Length)];
         engine.Voxel.ApplyResidency(new(scene,ops,slots));
         presentation = engine.VoxelScenePresentation.ProjectScene(new(scene,new VoxelSceneMaterialBinding[]{new(1,stone)}));
@@ -98,6 +100,7 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         var restored=JsonSerializer.Deserialize(bytes,ProofJsonContext.Default.LightingSave)!;
         VoxelResidencyOperation[] replace=[new(VoxelResidencyOperationKind.Replace,new(0,0,0),0,(uint)restored.Room.Length)];
         engine.Voxel.ApplyResidency(new(scene,replace,restored.Room));
+        room = restored.Room;
         descriptor=restored.Torch;
         engine.Graphics.UpdateLight(new(torch,new(TorchId,false,0,descriptor)));
         roundTrip=MathF.Abs(Sample(InsideSample)-litValue)<RoundTripTolerance;
@@ -135,6 +138,23 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
             "floor" => new(IndirectCenter,IndirectExtent,IndirectSpacing,IndirectBounces,IndirectAmbient.Floor),
             _ => default,
         });
+        return Inspect();
+    }
+    // Dig one voxel out of the room (chunk coordinates 0..7): the chunk re-meshes and only the probe bricks around it rebake.
+    [DebugCommand("lighting.dig")]
+    public string Dig(uint x,uint y,uint z)
+    {
+        room[x+ChunkEdge*(y+ChunkEdge*z)] = 0;
+        VoxelResidencyOperation[] ops=[new(VoxelResidencyOperationKind.Replace,new(0,0,0),0,(uint)room.Length)];
+        engine.Voxel.ApplyResidency(new(scene,ops,room));
+        if(presentation is not null) engine.VoxelScenePresentation.RefreshScene(presentation);
+        return Inspect();
+    }
+    // Move the indirect light volume's centre (sky mode): probes it still covers keep their values, only the newly covered bricks bake.
+    [DebugCommand("lighting.follow")]
+    public string Follow(float x,float y,float z)
+    {
+        engine.CameraView.SetIndirectLight(new(new Vector3(x,y,z),IndirectExtent,IndirectSpacing,IndirectBounces,IndirectAmbient.Sky));
         return Inspect();
     }
     [DebugCommand("lighting.cave")]

@@ -139,6 +139,7 @@ impl Renderer {
             RenderDiff::SetBackgroundColor { color } => {
                 self.tables.environment = Environment::Color(*color);
                 self.tables.environment_dirty = true;
+                self.touch_indirect_light();
             }
             RenderDiff::SetFog { fog } => self.tables.fog = *fog,
             RenderDiff::SetBloom { bloom } => self.tables.bloom = *bloom,
@@ -159,6 +160,7 @@ impl Renderer {
             }
             RenderDiff::SetSkyLight { sky_light } => {
                 self.tables.sky_light = *sky_light;
+                self.touch_indirect_light();
             }
             RenderDiff::SetRendererSettings { settings } => self.set_settings(settings),
             RenderDiff::SetToneMapping { tone_mapping } => {
@@ -170,6 +172,7 @@ impl Renderer {
                     None => Environment::Default,
                 };
                 self.tables.environment_dirty = true;
+                self.touch_indirect_light();
             }
             RenderDiff::Create {
                 handle,

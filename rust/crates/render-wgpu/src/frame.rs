@@ -327,26 +327,41 @@ impl Renderer {
         {
             self.rebind_frame();
         }
-        if self.probes.poll(&self.gpu) {
-            self.rebind_frame();
-        }
+        self.probes.begin_frame();
+        self.probes.poll(&self.gpu);
         let uploaded = self.upload_parts();
         let regrouped = std::mem::take(&mut self.tables.parts.regrouped);
         let moved = std::mem::take(&mut self.tables.parts.moved);
-        if let Some(descriptor) = self.tables.indirect_light {
-            // A change inside the volume rebakes it once the scene is still.
+        let removed = std::mem::take(&mut self.tables.parts.removed_bounds);
+        if self.tables.indirect_light.is_some() {
+            // A change inside the volume marks the bricks it reaches; they
+            // bake once the scene is still.
             let now = std::time::Instant::now();
-            let changed = lights_changed
-                || regrouped
-                || moved.iter().any(|id| {
-                    self.probe_box_touches(&self.tables.parts.state[*id as usize].world_bounds)
-                });
-            if changed && self.probes.stale(self.scene_generation) {
+            let mut marked = false;
+            if self.probes.stale(self.scene_generation) {
+                let moved_bounds: Vec<_> = moved
+                    .iter()
+                    .filter(|id| !self.probes.covered_move(**id))
+                    .map(|id| self.tables.parts.state[*id as usize].world_bounds)
+                    .collect();
+                for bounds in removed.into_iter().chain(moved_bounds) {
+                    marked |= self.probe_bounds_changed(&bounds);
+                }
+            }
+            self.probes.moves_seen();
+            if lights_changed {
+                let mut rows = Vec::new();
+                self.world_light_rows(&mut rows);
+                marked |= self.probes.mark_lights(&rows);
+            }
+            if marked {
                 self.probes.touch(now);
             }
             if self.probes.due(now) {
-                let job = self.probe_bake_job(&descriptor);
-                self.probes.start(job);
+                match self.probe_batch() {
+                    Some(batch) => self.probes.start(batch),
+                    None => self.probes.settle(),
+                }
             }
         }
         if regrouped || !moved.is_empty() {
@@ -493,7 +508,7 @@ impl Renderer {
     }
 
     /// Recompute world transform, visibility and layer for each dirty subtree.
-    fn propagate_transforms(&mut self) {
+    pub(crate) fn propagate_transforms(&mut self) {
         let dirty: Vec<RenderHandle> = self.tables.dirty_nodes.drain().collect();
         let dirty_set: std::collections::HashSet<RenderHandle> = dirty.iter().copied().collect();
         for root in dirty {
@@ -1476,7 +1491,7 @@ impl Renderer {
         for value in [sky_intensity, roughest, 0.0, 0.0] {
             bytes.extend_from_slice(&value.to_le_bytes());
         }
-        for value in crate::probes::Grid::uniform(self.probes.grid.as_ref()) {
+        for value in crate::probes::Grid::uniform(self.probes.uniform_grid()) {
             bytes.extend_from_slice(&value.to_le_bytes());
         }
         // The cluster fields follow once the view's clusters are encoded.

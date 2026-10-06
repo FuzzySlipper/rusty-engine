@@ -195,3 +195,118 @@ fn an_open_roof_lets_the_ambient_sky_into_the_room() {
         "the divider sees part of the sky: {open:?} under an open sky of {lit:?}"
     );
 }
+
+/// Open ground 60 m across under the ambient sky, and a volume of 32 bricks
+/// (4 × 2 × 4 cells of 16 m) over its middle.
+fn ground_with_bricks(harness: &mut Harness) -> IndirectLightDescriptor {
+    let mut stone = material("material/ground", [0.6, 0.6, 0.6, 1.0], None);
+    stone.roughness = 1.0;
+    harness.apply(vec![
+        RenderDiff::DefineMaterial { material: stone },
+        static_mesh(
+            "mesh/ground",
+            box_mesh([-30.0, -1.0, -30.0], [30.0, 0.0, 30.0], |_| 0),
+            "material/ground",
+        ),
+        instance(30, None, "mesh/ground", transform([0.0; 3], 0.0, [1.0; 3])),
+        ambient(0.6),
+    ]);
+    let descriptor = IndirectLightDescriptor {
+        center: [0.0, 2.0, 0.0],
+        extent: [24.0, 4.0, 24.0],
+        spacing: 2.0,
+        bounces: 1,
+        ambient: IndirectAmbient::Sky,
+    };
+    harness.apply(vec![RenderDiff::SetIndirectLight {
+        indirect_light: Some(descriptor),
+    }]);
+    descriptor
+}
+
+/// Looking down at the ground a few metres ahead from the volume's middle.
+fn over_the_ground() -> render_host_contracts::RendererCompositionCamera {
+    camera([0.0, 2.0, 2.0], 0.0, -40.0)
+}
+
+#[test]
+fn an_edit_rebakes_only_the_bricks_it_reaches_and_a_torch_those_within_its_range() {
+    let mut harness = own_lights();
+    ground_with_bricks(&mut harness);
+    let first = bake(&mut harness);
+    assert_eq!(first.bricks, 32);
+    assert_eq!(first.last_batch_bricks, 32, "{first:?}");
+    assert!(!first.pending);
+    let (_, before) = harness.render(&over_the_ground());
+
+    // A crate in one corner: its cell's BVH rebuilds and the cells around
+    // it rebake, 2 × 2 × 2 of the 4 × 2 × 4.
+    harness.apply(vec![
+        static_mesh(
+            "mesh/crate",
+            box_mesh([19.0, 0.0, 19.0], [21.0, 2.0, 21.0], |_| 0),
+            "material/ground",
+        ),
+        instance(31, None, "mesh/crate", transform([0.0; 3], 0.0, [1.0; 3])),
+    ]);
+    harness.render(&over_the_ground());
+    let edited = bake(&mut harness);
+    assert_eq!(edited.last_batch_bricks, 8, "{edited:?}");
+    assert_eq!(edited.bakes, 2);
+    let (_, after) = harness.render(&over_the_ground());
+    assert_eq!(
+        pixel(&after, DIVIDER),
+        pixel(&before, DIVIDER),
+        "the ground under the camera, bricks away, is untouched"
+    );
+
+    // A torch with a 6 m range in the opposite corner: the bricks within its
+    // range and one around, 3 × 2 × 3.
+    harness.apply(vec![RenderDiff::CreateLight {
+        handle: RenderHandle::new(3),
+        parent: None,
+        light: LightDescriptor::Point {
+            color: [1.0, 0.7, 0.4],
+            intensity: 20.0,
+            enabled: true,
+            position: [-20.0, 2.0, -20.0],
+            range: Some(6.0),
+            decay: 2.0,
+            shadow_intent: LightShadowIntent::Disabled,
+            shadow: Default::default(),
+        },
+    }]);
+    harness.render(&over_the_ground());
+    let lit = bake(&mut harness);
+    assert_eq!(lit.last_batch_bricks, 18, "{lit:?}");
+}
+
+#[test]
+fn moving_the_volume_bakes_only_what_it_newly_covers_and_keeps_drawing() {
+    let mut harness = own_lights();
+    let descriptor = ground_with_bricks(&mut harness);
+    bake(&mut harness);
+    let (_, before) = harness.render(&over_the_ground());
+    // One brick east: the probes still covered keep their values and the
+    // frame does not flicker while the new cells bake.
+    harness.apply(vec![RenderDiff::SetIndirectLight {
+        indirect_light: Some(IndirectLightDescriptor {
+            center: [16.0, 2.0, 0.0],
+            ..descriptor
+        }),
+    }]);
+    let (_, during) = harness.render(&over_the_ground());
+    let moved = bake(&mut harness);
+    assert_eq!(moved.bricks, 32);
+    // The column of new cells, and the column the old volume only partly
+    // covered.
+    assert_eq!(moved.last_batch_bricks, 16, "{moved:?}");
+    let (_, after) = harness.render(&over_the_ground());
+    for (name, frame) in [("during", &during), ("after", &after)] {
+        let (now, was) = (pixel(frame, DIVIDER), pixel(&before, DIVIDER));
+        assert!(
+            (0..3).all(|c| (now[c] - was[c]).abs() <= 1),
+            "{name}: {now:?} vs {was:?}"
+        );
+    }
+}

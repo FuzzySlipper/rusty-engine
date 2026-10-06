@@ -111,9 +111,9 @@ a cave under one light; the probe volume lights an interior from what is
 actually there. `CameraView.SetIndirectLight(new IndirectLightRequest(center,
 extent, spacing, bounces, ambient))` asks for one volume over the box
 `center ± extent`. The Engine places probes `spacing` apart (0.5 to 8 m, at
-most 262,144 probes), traces 64 rays from each through the world's shown
-opaque triangles, and keeps what arrives as low-order spherical harmonics
-(four RGB coefficients a probe). A ray that leaves the scene sees the sky:
+most 262,144 probes) on a world lattice, traces 64 rays from each through
+the world's shown opaque triangles, and keeps what arrives as low-order
+spherical harmonics (four RGB coefficients a probe). A ray that leaves the scene sees the sky:
 the hemisphere light, the sky's light when it is on, and the ambient light
 when `ambient` is `IndirectAmbient.Sky`. A ray that hits a surface sees its
 emission and its colour (times its texture's mean, or its atlas region's)
@@ -134,27 +134,42 @@ add the hemisphere, bounce and emission over it, for a product whose ambient
 is a deliberate fill. An extent of zero turns the volume off; the next frame
 draws exactly as before.
 
-- The bake runs on worker threads, never the render thread: the old volume
-  keeps drawing until the new one is uploaded. Any retained change inside the
-  box (a part, a material, a light) rebakes the whole volume once the scene
-  has been still for a quarter second, so a world built over many frames
-  bakes once; while something inside keeps moving every frame it rebakes
-  every two seconds instead. The cost scales with probes × rays × scene.
+- The volume is kept in 16 m bricks, each with its own tree over the
+  triangles in its cell. The bake runs on a worker thread, never the render
+  thread, one brick after another, and each brick uploads alone while the
+  old probes keep drawing. A retained change rebakes only what it reaches:
+  a part's move, mesh, visibility or material rebuilds its cells' trees and
+  rebakes those cells and the ones around them; a point or spot light the
+  cells within its range plus one; the sun, the sky, an ambient or
+  hemisphere light, a material or a texture definition every brick. Bakes
+  start once the scene has been still for a quarter second, so a world
+  built over many frames bakes once; while something inside keeps moving
+  every frame they start every two seconds instead. Moving the request's
+  centre scrolls the volume: probes still covered keep their values, only
+  the newly covered bricks (and a brick the old box only partly covered)
+  bake, and until they do they draw the nearest old probe's value.
   `engine.renderer` reports `gpu.indirectLight`: probes, probes filled from
-  neighbours, triangles traced, the last bake's milliseconds, the bakes so
-  far, whether one is pending, and the volume's GPU bytes. On 20 threads the 19.5 k-probe
-  cave of the lighting exploration (30 k triangles, two bounces) bakes in
-  about 110 ms and the 41 k-probe Hotel corridor (180 k triangles) in about
-  170 ms. Starting a bake while the sky's light is on reads its irradiance
-  back from the device (144 bytes, a short wait on the render thread).
+  neighbours, triangles in the trees, bricks and bricks pending, the last
+  brick's and the slowest brick's milliseconds, the last batch's
+  milliseconds and brick count, the bakes so far, the last frame's upload
+  bytes, and the volume's GPU bytes. A 16 m brick at 2 m spacing (8³
+  probes, 64 rays, two bounces) bakes in about 14 ms on one core in the
+  lighting exploration's cave and dungeon, the slowest in 26 to 28 ms, and
+  in 3 to 4 ms with half the machine's cores; at 1 m spacing a brick holds
+  eight times the probes and takes about eight times as long. The first
+  bake of a whole volume costs its bricks together plus their trees (the
+  cave's 40 bricks in 118 ms on 10 threads, the dungeon's 32 in 229 ms with
+  200 k triangles). Starting a bake while the sky's light is on reads its
+  irradiance back from the device (144 bytes, a short wait on the render
+  thread).
 - Trilinear sampling reads the probes within one cell of a surface, on
   both sides of a wall thinner than the spacing: at 2 m a 1 m wall lets about
   a fifth of the daylight beyond it onto its inner face. Where thin walls
   matter, keep the spacing at or under their thickness (the fixture's room
   uses 0.5 m), or thicken them.
-- It is one volume. A product moves it with the player in a large world; a
-  volume that follows the camera and rebakes only the bricks the world
-  changed in is #9597.
+- It is one volume. A product moves it with the player in a large world by
+  re-requesting it at a new centre; keep the spacing, extent, bounces and
+  ambient the same so the move scrolls instead of starting over.
 - Per lit fragment the shader adds three trilinear reads of one small 3D
   texture (RGBA16F, 24 bytes a probe), six for metals and under the sky's
   light. At 1080p that is 0.01 to 0.05 ms of world pass on an RX 9070 XT and
@@ -629,6 +644,9 @@ torch light, a persistence round-trip and two deterministic authored panoramas.
 Commands: `lighting.inspect`, `lighting.torch true|false`, `lighting.sky 0..1`,
 `lighting.room`, `lighting.cave` (from the back wall toward the doorway),
 `lighting.indirect sky|floor|off` (the probe volume over the room),
+`lighting.dig <x> <y> <z>` (clear one of the room's voxels: its chunk
+re-meshes and only the probe bricks around it rebake),
+`lighting.follow <x> <y> <z>` (move the volume's centre),
 `lighting.fog <density>` (0 turns it off),
 `lighting.exposure <exposure>` (ACES filmic), `lighting.atmosphere true|false`
 (height fog, sun haze, disc and halo) and `lighting.panorama`.

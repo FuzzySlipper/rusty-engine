@@ -140,16 +140,28 @@ pub struct ProductHostIndirectLightStatistics {
     pub probes: u32,
     /// Probes inside geometry, filled from their neighbours.
     pub invalid: u32,
-    /// Triangles the last bake traced.
+    /// Triangles in the bricks' and the outside's BVHs.
     pub triangles: u32,
-    /// The last bake's wall time in milliseconds, collection included.
+    /// The last batch's wall time in milliseconds, collection included.
     pub bake_ms: f64,
-    /// Bakes uploaded since the renderer was made.
+    /// Batches of bricks baked since the renderer was made.
     pub bakes: u32,
-    /// A change waits for the debounce or a bake is running.
+    /// A change waits for the debounce, or bricks are dirty or baking.
     pub pending: bool,
-    /// GPU bytes the volume's textures hold.
+    /// GPU bytes the volume's texture holds.
     pub bytes: u64,
+    /// 16 m bricks the volume is kept in.
+    pub bricks: u32,
+    /// Bricks dirty or baking.
+    pub bricks_pending: u32,
+    /// The last brick's bake wall milliseconds.
+    pub brick_ms: f64,
+    /// The slowest brick since the renderer was made, in milliseconds.
+    pub brick_ms_max: f64,
+    /// Bytes the last frame that uploaded bricks wrote to the texture.
+    pub upload_bytes: u64,
+    /// Bricks the last batch baked.
+    pub last_batch_bricks: u32,
 }
 
 /// The chunk distance field atlas the `distanceField` ambient occlusion

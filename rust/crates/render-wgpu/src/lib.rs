@@ -683,33 +683,36 @@ impl Renderer {
         }
     }
 
-    /// Request the indirect light volume, or with `None` drop it, as
-    /// `RenderDiff::SetIndirectLight` does. A request bakes after the scene
-    /// has been still for `probes::DEBOUNCE`.
+    /// Request the indirect light volume, move the one there is, or with
+    /// `None` drop it, as `RenderDiff::SetIndirectLight` does. A request
+    /// bakes after the scene has been still for `probes::DEBOUNCE`.
     pub fn set_indirect_light(&mut self, indirect_light: Option<IndirectLightDescriptor>) {
         self.tables.indirect_light = indirect_light;
-        if indirect_light.is_some() {
-            self.probes.touch(std::time::Instant::now());
-        } else if self.probes.clear(&self.gpu) {
+        if self.probes.request(&self.gpu, indirect_light) {
             self.rebind_frame();
         }
     }
 
-    /// A retained change the indirect light volume should follow.
+    /// A retained change every brick of the indirect light volume should
+    /// follow: a material, a texture or the sky.
     pub(crate) fn touch_indirect_light(&mut self) {
-        if self.tables.indirect_light.is_some() {
+        if self.probes.mark_all() {
             self.probes.touch(std::time::Instant::now());
         }
     }
 
-    /// Bake the requested volume now, on this thread's workers, and upload
-    /// it: for tools and tests that want it before the next frame. `None`
-    /// without a request.
+    /// Bake the volume's dirty bricks now, on this thread's workers, and
+    /// upload them: for tools and tests that want the volume before the
+    /// next frame. `None` without a request.
     pub fn bake_indirect_light_now(&mut self) -> Option<IndirectLightReadout> {
-        let descriptor = self.tables.indirect_light?;
-        let job = self.probe_bake_job(&descriptor);
-        if self.probes.bake_now(&self.gpu, job) {
-            self.rebind_frame();
+        self.tables.indirect_light?;
+        // The batch reads the nodes' world state, which a frame would have
+        // settled first.
+        self.propagate_transforms();
+        if let Some(batch) = self.probe_batch() {
+            self.probes.bake_now(&self.gpu, batch);
+        } else {
+            self.probes.settle();
         }
         Some(self.probes.readout())
     }

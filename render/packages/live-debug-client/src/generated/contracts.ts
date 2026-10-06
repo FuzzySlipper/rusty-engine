@@ -155,25 +155,49 @@ dims: [number, number, number], probes: number,
  */
 invalid: number, 
 /**
- * Triangles the last bake traced.
+ * Triangles in the bricks' and the outside's BVHs.
  */
 triangles: number, 
 /**
- * The last bake's wall time in milliseconds, collection included.
+ * The last batch's wall time in milliseconds, collection included.
  */
 bakeMs: number, 
 /**
- * Bakes uploaded since the renderer was made.
+ * Batches of bricks baked since the renderer was made.
  */
 bakes: number, 
 /**
- * A change waits for the debounce or a bake is running.
+ * A change waits for the debounce, or bricks are dirty or baking.
  */
 pending: boolean, 
 /**
- * GPU bytes the volume's textures hold.
+ * GPU bytes the volume's texture holds.
  */
-bytes: bigint, };
+bytes: bigint, 
+/**
+ * 16 m bricks the volume is kept in.
+ */
+bricks: number, 
+/**
+ * Bricks dirty or baking.
+ */
+bricksPending: number, 
+/**
+ * The last brick's bake wall milliseconds.
+ */
+brickMs: number, 
+/**
+ * The slowest brick since the renderer was made, in milliseconds.
+ */
+brickMsMax: number, 
+/**
+ * Bytes the last frame that uploaded bricks wrote to the texture.
+ */
+uploadBytes: bigint, 
+/**
+ * Bricks the last batch baked.
+ */
+lastBatchBricks: number, };
 
 /**
  * The light clustering of the last world view.
