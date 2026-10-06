@@ -7,8 +7,8 @@ use render_host_contracts::{
     RendererViewComposition, RendererViewTarget, RendererViewport,
 };
 use render_model::{
-    AutoExposureDescriptor, BloomDescriptor, FogDescriptor, RenderDiff, RenderFrameDiff,
-    SkyBackgroundDescriptor, ToneMappingDescriptor, ToneMappingOperator,
+    AutoExposureDescriptor, BloomDescriptor, ColorGradingDescriptor, FogDescriptor, RenderDiff,
+    RenderFrameDiff, SkyBackgroundDescriptor, ToneMappingDescriptor, ToneMappingOperator,
 };
 
 use crate::{
@@ -69,9 +69,11 @@ pub(crate) struct RuntimeCameraViewCall {
     /// presentation world retains the selection.
     pub(crate) fog: Option<Option<FogDescriptor>>,
     pub(crate) tone_mapping: Option<ToneMappingDescriptor>,
-    /// Bloom and auto exposure selected during the call, as fog is.
+    /// Bloom, auto exposure and colour grading selected during the call,
+    /// as fog is.
     pub(crate) bloom: Option<Option<BloomDescriptor>>,
     pub(crate) auto_exposure: Option<Option<AutoExposureDescriptor>>,
+    pub(crate) color_grading: Option<Option<ColorGradingDescriptor>>,
 }
 
 /// Engine-owned typed camera/view projection. Product facts are copied at the
@@ -120,6 +122,7 @@ impl RuntimeCameraViewBridge {
             tone_mapping: None,
             bloom: None,
             auto_exposure: None,
+            color_grading: None,
         });
     }
 
@@ -170,6 +173,7 @@ impl RuntimeCameraViewBridge {
             tone_mapping: None,
             bloom: None,
             auto_exposure: None,
+            color_grading: None,
         };
         stage_composition(&mut snapshot)?;
         Ok(snapshot
@@ -457,6 +461,7 @@ impl RuntimeCameraViewBridge {
             tone_mapping: None,
             bloom: None,
             auto_exposure: None,
+            color_grading: None,
         };
         candidate.state.views = views.to_vec();
         candidate.state.presentations = presentations.to_vec();
@@ -683,6 +688,28 @@ impl RuntimeCameraViewBridge {
             ));
         }
         self.staged_mut()?.auto_exposure = Some(request.enabled.then_some(auto_exposure));
+        Ok(())
+    }
+
+    fn set_color_grading(
+        &mut self,
+        request: NativeColorGradingRequest,
+    ) -> Result<(), CsharpEngineServicesError> {
+        let grading = ColorGradingDescriptor {
+            temperature: request.temperature,
+            tint: request.tint,
+            contrast: request.contrast,
+            saturation: request.saturation,
+        };
+        if !grading.valid() {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_COLOR_GRADING",
+                "colour grading temperature, tint, contrast and saturation must each be within -1 to 1",
+            ));
+        }
+        // All zero grades nothing: the finish skips grading.
+        let graded = grading != ColorGradingDescriptor::default();
+        self.staged_mut()?.color_grading = Some(graded.then_some(grading));
         Ok(())
     }
 }
@@ -948,8 +975,9 @@ fn validate_target_descriptor(
     })
 }
 
-/// The call's background, fog, tone mapping, bloom and auto exposure
-/// selections as one frame, or None when the call selected none of them.
+/// The call's background, fog, tone mapping, bloom, auto exposure and colour
+/// grading selections as one frame, or None when the call selected none of
+/// them.
 pub(crate) fn environment_frame(
     call: &RuntimeCameraViewCall,
     appearance: &RuntimeAppearanceCall,
@@ -966,6 +994,9 @@ pub(crate) fn environment_frame(
     }
     if let Some(auto_exposure) = call.auto_exposure {
         operations.push(RenderDiff::SetAutoExposure { auto_exposure });
+    }
+    if let Some(color_grading) = call.color_grading {
+        operations.push(RenderDiff::SetColorGrading { color_grading });
     }
     if let Some(change) = call.background {
         background_operations(change, appearance, &mut operations)?;
@@ -1505,6 +1536,27 @@ pub(crate) unsafe extern "C" fn set_auto_exposure(
     }
     let bridge = unsafe { &mut *context.cast::<RuntimeCameraViewBridge>() };
     match bridge.set_auto_exposure(unsafe { *request }) {
+        Ok(()) => ABI_OK,
+        Err(error) => {
+            bridge.operation_diagnostics.retain(&error, operation_error);
+            0
+        }
+    }
+}
+
+pub(crate) unsafe extern "C" fn set_color_grading(
+    context: *mut c_void,
+    request: *const NativeColorGradingRequest,
+    operation_error: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    if !operation_error.is_null() {
+        unsafe { *operation_error = std::mem::zeroed() };
+    }
+    if context.is_null() || request.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeCameraViewBridge>() };
+    match bridge.set_color_grading(unsafe { *request }) {
         Ok(()) => ABI_OK,
         Err(error) => {
             bridge.operation_diagnostics.retain(&error, operation_error);

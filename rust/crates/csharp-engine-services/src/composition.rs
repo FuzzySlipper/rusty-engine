@@ -194,6 +194,7 @@ fn engine_api(
             set_tone_mapping: crate::camera_view::set_tone_mapping,
             set_bloom: crate::camera_view::set_bloom,
             set_auto_exposure: crate::camera_view::set_auto_exposure,
+            set_color_grading: crate::camera_view::set_color_grading,
             set_viewport_anchor: crate::camera_view::set_viewport_anchor,
             read_surface: crate::camera_view::read_surface,
             read_viewport_anchor: crate::camera_view::read_viewport_anchor,
@@ -1541,6 +1542,76 @@ mod tests {
                     auto_exposure: None
                 },
             ]
+        );
+    }
+
+    #[test]
+    fn colour_grading_publishes_as_retained_environment_and_neutral_turns_it_off() {
+        use crate::operation_diagnostics::{empty_receipt, receipt_codes};
+        let mut services = EngineServiceSet::new(
+            parse_runtime_appearance_catalog(None).expect("default catalog"),
+            BTreeMap::new(),
+            None,
+            RuntimeDiagnosticsSink::new(Default::default()).unwrap(),
+        )
+        .expect("service set");
+        let request = |temperature, tint, contrast, saturation| NativeColorGradingRequest {
+            temperature,
+            tint,
+            contrast,
+            saturation,
+        };
+        services.begin_call(binding());
+        let api = services.api();
+        let grade = |request: NativeColorGradingRequest, refusal| unsafe {
+            (api.camera_view.set_color_grading)(api.camera_view.context, &request, refusal)
+        };
+        assert_eq!(
+            grade(request(-0.2, 0.05, 0.1, 0.15), std::ptr::null_mut()),
+            ABI_OK
+        );
+        let mut call = services.finish_call().expect("grading call");
+        let selected = render_model::RenderDiff::SetColorGrading {
+            color_grading: Some(render_model::ColorGradingDescriptor {
+                temperature: -0.2,
+                tint: 0.05,
+                contrast: 0.1,
+                saturation: 0.15,
+            }),
+        };
+        assert_eq!(
+            call.take_output().frames[0].ops,
+            std::slice::from_ref(&selected)
+        );
+        let attachment = services
+            .snapshot_outputs(binding())
+            .expect("fresh attachment");
+        let CsharpAppearanceCallOutput::Frame(frame) = &attachment.appearance[0] else {
+            panic!("baseline graphics frame");
+        };
+        assert!(frame.ops.contains(&selected));
+
+        services.begin_call(binding());
+        let api = services.api();
+        let grade = |request: NativeColorGradingRequest, refusal| unsafe {
+            (api.camera_view.set_color_grading)(api.camera_view.context, &request, refusal)
+        };
+        let mut refusal = empty_receipt();
+        assert_eq!(grade(request(0.0, 0.0, 1.5, 0.0), &mut refusal), 0);
+        assert_eq!(receipt_codes(&refusal), ["CSHARP_COLOR_GRADING"]);
+        let mut refusal = empty_receipt();
+        assert_eq!(grade(request(f32::NAN, 0.0, 0.0, 0.0), &mut refusal), 0);
+        assert_eq!(receipt_codes(&refusal), ["CSHARP_COLOR_GRADING"]);
+        assert_eq!(
+            grade(request(0.0, 0.0, 0.0, 0.0), std::ptr::null_mut()),
+            ABI_OK
+        );
+        let mut call = services.finish_call().expect("neutral");
+        assert_eq!(
+            call.take_output().frames[0].ops,
+            [render_model::RenderDiff::SetColorGrading {
+                color_grading: None
+            }]
         );
     }
 

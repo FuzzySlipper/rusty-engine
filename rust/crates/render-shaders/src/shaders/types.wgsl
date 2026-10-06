@@ -14,11 +14,18 @@ struct Frame {
     // rgb: linear fog colour
     fog_color: vec4<f32>,
     // x: tone mapping operator (0 none, 1 neutral, 2 ACES filmic);
-    // y: fog (0 off, 1 linear, 2 exponential, 3 exponential squared)
+    // y: fog (0 off, 1 linear, 2 exponential, 3 exponential squared);
+    // z: colour grading (0 off, 1 on)
     modes: vec4<u32>,
     // x: the Engine's presentation time in seconds: it advances with the
     // simulation, holds while it is paused, and is the same in every view.
     time: vec4<f32>,
+    // Colour grading: xyz scale the white point in LMS (temperature and
+    // tint).
+    balance: vec4<f32>,
+    // Colour grading: x the contrast exponent about middle grey, y the
+    // saturation factor.
+    grading: vec4<f32>,
 };
 
 struct Part {

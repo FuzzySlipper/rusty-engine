@@ -125,6 +125,7 @@ struct RetainedGraphics {
     tone_mapping: ToneMappingDescriptor,
     bloom: Option<BloomDescriptor>,
     auto_exposure: Option<AutoExposureDescriptor>,
+    color_grading: Option<ColorGradingDescriptor>,
     controllers: BTreeMap<crate::AnimationProjectionHandle, crate::AnimationProjectionDescriptor>,
 }
 
@@ -253,6 +254,7 @@ impl PresentationWorld {
                 || matches!(&op, RenderDiff::SetToneMapping { tone_mapping } if &self.retained.tone_mapping == tone_mapping)
                 || matches!(&op, RenderDiff::SetBloom { bloom } if &self.retained.bloom == bloom)
                 || matches!(&op, RenderDiff::SetAutoExposure { auto_exposure } if &self.retained.auto_exposure == auto_exposure)
+                || matches!(&op, RenderDiff::SetColorGrading { color_grading } if &self.retained.color_grading == color_grading)
             {
                 continue;
             }
@@ -675,6 +677,11 @@ impl PresentationWorld {
         if self.retained.auto_exposure.is_some() {
             ops.push(RenderDiff::SetAutoExposure {
                 auto_exposure: self.retained.auto_exposure,
+            });
+        }
+        if self.retained.color_grading.is_some() {
+            ops.push(RenderDiff::SetColorGrading {
+                color_grading: self.retained.color_grading,
             });
         }
         // Creation requires an existing parent and parents cannot be changed,
@@ -1179,6 +1186,9 @@ impl PresentationWorld {
             RenderDiff::SetBloom { bloom } => self.retained.bloom = *bloom,
             RenderDiff::SetAutoExposure { auto_exposure } => {
                 self.retained.auto_exposure = *auto_exposure;
+            }
+            RenderDiff::SetColorGrading { color_grading } => {
+                self.retained.color_grading = *color_grading;
             }
         }
         Ok(())

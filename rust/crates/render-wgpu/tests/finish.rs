@@ -451,3 +451,58 @@ fn the_world_its_bloom_and_exposure_and_its_finish_are_timed() {
         }
     }
 }
+
+#[test]
+fn colour_grading_warms_cools_desaturates_and_steepens_the_world_but_not_the_background() {
+    let view = camera([0.0, 0.0, 0.0], 0.0, 0.0);
+    let render = |color: [f32; 4], grading: Option<ColorGradingDescriptor>| {
+        let mut harness = Harness::new(RendererOptions::default());
+        box_ahead(&mut harness, color);
+        harness.apply(vec![RenderDiff::SetColorGrading {
+            color_grading: grading,
+        }]);
+        harness.render(&view).1
+    };
+    let grade = |temperature, tint, contrast, saturation| {
+        Some(ColorGradingDescriptor {
+            temperature,
+            tint,
+            contrast,
+            saturation,
+        })
+    };
+    let grey = [0.5, 0.5, 0.5, 1.0];
+    let plain = render(grey, None);
+    // Neutral grading draws what no grading draws.
+    let neutral = render(grey, grade(0.0, 0.0, 0.0, 0.0));
+    assert!(distance(pixel(&neutral, CENTER), pixel(&plain, CENTER)) <= SAME);
+    let [r, g, b] = pixel(&plain, CENTER);
+    let [warm_r, _, warm_b] = pixel(&render(grey, grade(0.8, 0.0, 0.0, 0.0)), CENTER);
+    assert!(
+        warm_r > r + 5 && warm_b + 5 < b,
+        "warm {warm_r} {warm_b} from {r} {b}"
+    );
+    let [cool_r, _, cool_b] = pixel(&render(grey, grade(-0.8, 0.0, 0.0, 0.0)), CENTER);
+    assert!(
+        cool_r + 5 < r && cool_b > b + 5,
+        "cool {cool_r} {cool_b} from {r} {b}"
+    );
+    let [_, magenta_g, _] = pixel(&render(grey, grade(0.0, 0.8, 0.0, 0.0)), CENTER);
+    assert!(magenta_g + 5 < g, "tint {magenta_g} from {g}");
+    // No saturation turns a red box grey.
+    let red = [0.8, 0.1, 0.1, 1.0];
+    let [gr, gg, gb] = pixel(&render(red, grade(0.0, 0.0, 0.0, -1.0)), CENTER);
+    assert!(
+        gr.abs_diff(gg) <= 1 && gg.abs_diff(gb) <= 1,
+        "{gr} {gg} {gb}"
+    );
+    // More contrast takes a dark box darker and a bright one brighter.
+    let dark = [0.05, 0.05, 0.05, 1.0];
+    let bright = [1.0; 4];
+    let steeper = grade(0.0, 0.0, 0.5, 0.0);
+    assert!(pixel(&render(dark, steeper), CENTER)[0] < pixel(&render(dark, None), CENTER)[0]);
+    assert!(pixel(&render(bright, steeper), CENTER)[0] > pixel(&render(bright, None), CENTER)[0]);
+    // The background is never graded.
+    let warm = render(grey, grade(0.8, 0.0, 0.5, 0.5));
+    assert_eq!(pixel(&warm, CORNER), pixel(&plain, CORNER));
+}

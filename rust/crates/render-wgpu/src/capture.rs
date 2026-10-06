@@ -180,10 +180,11 @@ impl Renderer {
             ));
         }
         // The job's own exposure and tone mapping convert the linear capture;
-        // the scene's (auto exposure included) would apply twice. Fog and
-        // bloom stay.
+        // the scene's (auto exposure and grading included) would apply twice.
+        // Fog and bloom stay.
         isolated.tables.tone_mapping = render_model::ToneMappingDescriptor::NONE;
         isolated.tables.auto_exposure = None;
+        isolated.tables.color_grading = None;
         // A pose job samples one animated instance of the frozen scene.
         if let Some(pose) = pose {
             isolated

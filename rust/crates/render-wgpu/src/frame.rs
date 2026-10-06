@@ -15,8 +15,8 @@ use std::ops::{Add, AddAssign};
 use glam::{Mat4, Vec3};
 use render_host_contracts::RendererCompositionCamera;
 use render_model::{
-    FogDescriptor, LightDescriptor, RenderHandle, RenderLayer, ToneMappingDescriptor,
-    ToneMappingOperator,
+    ColorGradingDescriptor, FogDescriptor, LightDescriptor, RenderHandle, RenderLayer,
+    ToneMappingDescriptor, ToneMappingOperator,
 };
 
 use crate::apply::light_row;
@@ -39,7 +39,7 @@ const LIGHT_ROW_FLOATS: usize = 16;
 /// Frame uniform (`rusty::types` `Frame`): two matrices, camera position,
 /// light count and first light; then exposure and fog distances, fog colour,
 /// and the tone mapping and fog modes; then the presentation time.
-const FRAME_UNIFORM_BYTES: u64 = (16 + 16 + 4 + 4 + 4 + 4 + 4 + 4) * 4;
+const FRAME_UNIFORM_BYTES: u64 = (16 + 16 + 4 + 4 + 4 + 4 + 4 + 4 + 4 + 4) * 4;
 
 /// Per-frame counts for diagnostics.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -1105,10 +1105,17 @@ impl Renderer {
         for count in [lights.count, lights.first, 0, 0] {
             bytes.extend_from_slice(&count.to_le_bytes());
         }
-        bytes.extend_from_slice(&finish_uniform(self.tables.tone_mapping, self.tables.fog));
+        bytes.extend_from_slice(&finish_uniform(
+            self.tables.tone_mapping,
+            self.tables.fog,
+            self.tables.color_grading.is_some(),
+        ));
         // The Engine presentation time (`set_animation_time`): it holds while
         // the simulation does, so a held frame draws the same.
         for value in [self.animation_time as f32, 0.0, 0.0, 0.0] {
+            bytes.extend_from_slice(&value.to_le_bytes());
+        }
+        for value in grading_uniform(self.tables.color_grading.unwrap_or_default()) {
             bytes.extend_from_slice(&value.to_le_bytes());
         }
         self.gpu.queue.write_buffer(&self.frame_buffer, 0, &bytes);
@@ -1561,8 +1568,12 @@ fn neutral_rig(rows: &mut Vec<f32>, key_position: [f32; 3]) {
 }
 
 /// The frame uniform's finish rows: exposure and fog distances, fog colour,
-/// then the tone mapping and fog modes (`rusty::finish`).
-fn finish_uniform(tone_mapping: ToneMappingDescriptor, fog: Option<FogDescriptor>) -> Vec<u8> {
+/// then the tone mapping, fog and grading modes (`rusty::finish`).
+fn finish_uniform(
+    tone_mapping: ToneMappingDescriptor,
+    fog: Option<FogDescriptor>,
+    graded: bool,
+) -> Vec<u8> {
     let operator: u32 = match tone_mapping.operator {
         ToneMappingOperator::None => 0,
         ToneMappingOperator::Neutral => 1,
@@ -1579,8 +1590,64 @@ fn finish_uniform(tone_mapping: ToneMappingDescriptor, fog: Option<FogDescriptor
     for value in [tone_mapping.exposure, start, end, density, r, g, b, 0.0] {
         bytes.extend_from_slice(&value.to_le_bytes());
     }
-    for value in [operator, mode, 0, 0] {
+    for value in [operator, mode, u32::from(graded), 0] {
         bytes.extend_from_slice(&value.to_le_bytes());
     }
     bytes
+}
+
+/// The frame uniform's grading rows (`rusty::finish::graded`): the white
+/// point's LMS scales, then the contrast exponent about middle grey and the
+/// saturation factor.
+fn grading_uniform(grading: ColorGradingDescriptor) -> [f32; 8] {
+    let [l, m, s] = white_balance(grading.temperature, grading.tint);
+    [
+        l,
+        m,
+        s,
+        0.0,
+        1.0 + grading.contrast,
+        1.0 + grading.saturation,
+        0.0,
+        0.0,
+    ]
+}
+
+/// The LMS scales that move the D65 white point by `temperature` and
+/// `tint` (each -1 to 1), as Unity's colour balance does: a warmer
+/// temperature takes a bluer reference white, a positive tint a greener
+/// one.
+fn white_balance(temperature: f32, tint: f32) -> [f32; 3] {
+    // CIE xy to LMS (CAT02), for a white of luminance 1.
+    let lms = |x: f32, y: f32| {
+        let (big_x, big_z) = (x / y, (1.0 - x - y) / y);
+        [
+            0.7328 * big_x + 0.4296 - 0.1624 * big_z,
+            -0.7036 * big_x + 1.6975 + 0.0061 * big_z,
+            0.0030 * big_x + 0.0136 + 0.9834 * big_z,
+        ]
+    };
+    let (t1, t2) = (temperature * 100.0 / 65.0, tint * 100.0 / 65.0);
+    // D65's x, moved along the daylight locus, and its y off it by the tint.
+    let x = 0.31271 - t1 * if t1 < 0.0 { 0.1 } else { 0.05 };
+    let y = 2.87 * x - 3.0 * x * x - 0.275_095_07 + t2 * 0.05;
+    let reference = lms(x, y);
+    let d65 = [0.949_237, 1.035_42, 1.087_28];
+    [0, 1, 2].map(|i| d65[i] / reference[i])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::white_balance;
+
+    #[test]
+    fn a_neutral_white_balance_leaves_white_alone_and_warmth_raises_long_over_short() {
+        for scale in white_balance(0.0, 0.0) {
+            assert!((scale - 1.0).abs() < 2e-3, "{scale}");
+        }
+        let [long, _, short] = white_balance(0.5, 0.0);
+        assert!(long > 1.0 && short < 1.0, "{long} {short}");
+        let [long, _, short] = white_balance(-0.5, 0.0);
+        assert!(long < 1.0 && short > 1.0, "{long} {short}");
+    }
 }

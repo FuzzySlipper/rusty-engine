@@ -360,6 +360,21 @@ pub struct NativeAutoExposureRequest {
     pub max_exposure: f32,
 }
 
+/// Colour grading of the world with the tone mapping, after exposure and
+/// before the operator. Each control runs from -1 to 1, and 0 (the default)
+/// leaves the colour as it is: `temperature` cools toward blue or warms
+/// toward yellow, `tint` shifts toward green or magenta, `contrast` scales
+/// the distance from middle grey (flat at -1, doubled at 1) and
+/// `saturation` the distance from grey (none at -1, doubled at 1).
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeColorGradingRequest {
+    pub temperature: f32,
+    pub tint: f32,
+    pub contrast: f32,
+    pub saturation: f32,
+}
+
 /// Blends two retained equirectangular panoramas. Amount is in [0,1]; the
 /// product supplies its clock-derived value. Neither texture is recreated.
 #[repr(C)]

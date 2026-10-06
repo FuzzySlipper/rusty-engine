@@ -243,8 +243,8 @@ fn cast_shadow(caster: Caster) {
 The world (lit and unlit meshes, voxel surfaces, GLB parts, sprites and
 particles) draws in linear light into a 16-bit floating-point target, with the
 view's multisampling, and blends there. A full-screen finish pass then
-finishes it: bloom, exposure, the tone mapping operator, then distance fog,
-over the background. The background, a clear colour or sky panorama, is drawn
+finishes it: bloom, exposure, colour grading, the tone mapping operator, then
+distance fog, over the background. The background, a clear colour or sky panorama, is drawn
 first and never finished. These settings are retained camera-view state, like
 the sky, and products change them at runtime, for a cave, underwater or at
 night:
@@ -255,6 +255,7 @@ engine.CameraView.SetFog(new(FogMode.Linear, fogColor, Start: 3, End: 30, Densit
 engine.CameraView.SetFog(new(FogMode.Off, default, 0, 0, 0));
 engine.CameraView.SetBloom(new(Threshold: 1, Intensity: 0.6f));
 engine.CameraView.SetAutoExposure(new(Enabled: true, Speed: 1.5f, MinExposure: 0.25f, MaxExposure: 4));
+engine.CameraView.SetColorGrading(new(Temperature: -0.15f, Tint: 0, Contrast: 0.1f, Saturation: 0.2f));
 ```
 
 - **Exposure** multiplies lit colour; it defaults to 1.
@@ -282,6 +283,17 @@ engine.CameraView.SetAutoExposure(new(Enabled: true, Speed: 1.5f, MinExposure: 0
   frame after it is enabled takes its target at once. It is off by default;
   `Enabled: false` turns it off. It adapts once a frame, at the frame's first
   world view.
+- **Colour grading** adjusts the world's colour before the operator, so the
+  operator still rolls off what grading brightens. Each control runs from -1
+  to 1, and 0 leaves the colour as it is: `Temperature` cools toward blue or
+  warms toward yellow (white balance), `Tint` shifts toward green or
+  magenta, `Contrast` scales the distance from middle grey on a log scale
+  (flat at -1, doubled at 1) and `Saturation` the distance from grey (none
+  at -1, doubled at 1). `default(ColorGradingRequest)` turns it off. A
+  scene's warm lights pushing a cool material toward olive under `Neutral`
+  are pulled back by a cooler temperature and a little saturation. Fog and
+  the background are not graded, so fog still fades geometry into a
+  background of its colour.
 - **Fog.** `Linear` has none before `start` and is full at `end` (metres from
   the camera). `Exponential` leaves `exp(-density × distance)` of the colour,
   and `ExponentialSquared` leaves `exp(-(density × distance)²)`, which is
@@ -292,8 +304,9 @@ engine.CameraView.SetAutoExposure(new(Enabled: true, Speed: 1.5f, MinExposure: 0
   blended surface takes the fog of what is behind it, and over the background
   it is not fogged.
 - **Captures.** `RenderOutput.CaptureImage` uses its request's own exposure
-  and tone mapping, without auto exposure, and keeps the scene's fog and bloom
-  as it keeps the scene's lights, whichever background it selects.
+  and tone mapping, without auto exposure or colour grading, and keeps the
+  scene's fog and bloom as it keeps the scene's lights, whichever background
+  it selects.
 
 Changing any of these recompiles nothing: they are values in uniforms, so a
 product may update them every frame. Fog and tone mapping do not change
@@ -308,8 +321,8 @@ multisampling), plus a single-sample copy (17 MB) and bloom's mips (6 MB)
 while bloom or auto exposure is on. `engine.renderer` times the frame's first
 world view's `world`, `bloom-exposure` and `finish` passes
 ([performance](performance.md)). On an RX 9070 XT the finish pass takes about
-0.05 ms at 1280×720 and 0.1 ms at 1920×1080, and bloom with auto exposure
-about 0.15 ms; on llvmpipe each takes 5 to 17 ms, a large share of a light
+0.05 ms at 1280×720 and 0.1 ms at 1920×1080 (colour grading adds about
+0.005 ms), and bloom with auto exposure about 0.15 ms; on llvmpipe each takes 5 to 17 ms, a large share of a light
 scene's frame.
 
 ## Read light at a voxel location

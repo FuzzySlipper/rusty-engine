@@ -119,6 +119,9 @@ impl Renderer {
             RenderDiff::SetAutoExposure { auto_exposure } => {
                 self.tables.auto_exposure = *auto_exposure;
             }
+            RenderDiff::SetColorGrading { color_grading } => {
+                self.tables.color_grading = *color_grading;
+            }
             RenderDiff::SetToneMapping { tone_mapping } => {
                 self.tables.tone_mapping = *tone_mapping;
             }
@@ -1923,6 +1926,7 @@ fn op_name(op: &RenderDiff) -> &'static str {
         RenderDiff::SetFog { .. } => "setFog",
         RenderDiff::SetBloom { .. } => "setBloom",
         RenderDiff::SetAutoExposure { .. } => "setAutoExposure",
+        RenderDiff::SetColorGrading { .. } => "setColorGrading",
         RenderDiff::SetToneMapping { .. } => "setToneMapping",
         RenderDiff::DefineSpriteAtlas { .. } => "defineSpriteAtlas",
         RenderDiff::ReleaseSpriteAtlas { .. } => "releaseSpriteAtlas",

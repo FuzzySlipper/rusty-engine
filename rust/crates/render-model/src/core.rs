@@ -161,6 +161,31 @@ impl AutoExposureDescriptor {
     }
 }
 
+/// Colour grading with the tone mapping, after exposure and before the
+/// operator. Each control runs from -1 to 1, 0 leaving the colour as it is:
+/// `temperature` cools (toward blue) or warms (toward yellow) the white
+/// point, `tint` shifts it toward green or magenta, `contrast` scales the
+/// distance from middle grey (from flat at -1 to doubled at 1), and
+/// `saturation` scales the distance from grey (from none at -1 to doubled
+/// at 1).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ColorGradingDescriptor {
+    pub temperature: f32,
+    pub tint: f32,
+    pub contrast: f32,
+    pub saturation: f32,
+}
+
+impl ColorGradingDescriptor {
+    /// Every control finite and within -1 to 1.
+    pub fn valid(&self) -> bool {
+        [self.temperature, self.tint, self.contrast, self.saturation]
+            .iter()
+            .all(|value| (-1.0..=1.0).contains(value))
+    }
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ToneMappingOperator {
@@ -491,6 +516,10 @@ pub enum RenderDiff {
     SetAutoExposure {
         auto_exposure: Option<AutoExposureDescriptor>,
     },
+    /// Selects the world's colour grading; None turns it off.
+    SetColorGrading {
+        color_grading: Option<ColorGradingDescriptor>,
+    },
     DefineSpriteAtlas {
         atlas: SpriteAtlasDescriptor,
     },
@@ -633,6 +662,10 @@ impl RenderDiff {
                 auto_exposure: Some(auto_exposure),
             } if !auto_exposure.valid() => Err(RenderOperationError::AutoExposure),
             Self::SetAutoExposure { .. } => Ok(()),
+            Self::SetColorGrading {
+                color_grading: Some(color_grading),
+            } if !color_grading.valid() => Err(RenderOperationError::ColorGrading),
+            Self::SetColorGrading { .. } => Ok(()),
             Self::DefineSpriteAtlas { atlas } => {
                 atlas.validate().map_err(RenderOperationError::SpriteAtlas)
             }
@@ -731,6 +764,7 @@ impl RenderDiff {
             | Self::SetToneMapping { .. }
             | Self::SetBloom { .. }
             | Self::SetAutoExposure { .. }
+            | Self::SetColorGrading { .. }
             | Self::DefineSpriteAtlas { .. }
             | Self::DefineStaticMesh { .. }
             | Self::ReleaseMaterial { .. }
@@ -769,6 +803,7 @@ pub enum RenderOperationError {
     ToneMapping,
     Bloom,
     AutoExposure,
+    ColorGrading,
     SpriteAtlas(crate::SpriteAtlasError),
     StaticMesh(crate::StaticMeshError),
     StaticMeshInstance(crate::StaticMeshInstanceError),
@@ -839,6 +874,7 @@ impl RenderFrameDiff {
                 | RenderDiff::SetToneMapping { .. }
                 | RenderDiff::SetBloom { .. }
                 | RenderDiff::SetAutoExposure { .. }
+                | RenderDiff::SetColorGrading { .. }
                 | RenderDiff::DefineSpriteAtlas { .. }
                 | RenderDiff::ReleaseSpriteAtlas { .. }
                 | RenderDiff::ReleaseStaticMesh { .. }
