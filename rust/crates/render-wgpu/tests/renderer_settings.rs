@@ -91,6 +91,36 @@ fn invalid_settings_are_refused_by_the_model() {
 }
 
 #[test]
+fn every_admitted_sample_count_draws_or_is_refused_to_four() {
+    let mut harness = Harness::new(RendererOptions::default());
+    harness.apply(vec![RenderDiff::SetBackgroundColor {
+        color: [0.2, 0.4, 0.6, 1.0],
+    }]);
+    let view = camera([0.0, 1.0, 4.0], 0.0, 0.0);
+    for count in RendererSettingsDescriptor::SAMPLE_COUNTS {
+        harness.apply(vec![RenderDiff::SetRendererSettings {
+            settings: RendererSettingsDescriptor {
+                antialiasing: count,
+                ..RendererSettingsDescriptor::DEFAULT
+            },
+        }]);
+        // What the host sizes its target by never fails to create or draw.
+        let samples = harness.renderer.samples();
+        harness.target = OffscreenTarget::new(&harness.gpu, WIDTH, HEIGHT, samples);
+        let (_, pixels) = harness.render(&view);
+        let center = ((HEIGHT / 2) * WIDTH + WIDTH / 2) as usize * 4;
+        assert!(pixels[center + 2] > pixels[center], "{count} samples drew");
+        let readout = harness.renderer.settings_readout();
+        assert_eq!(readout.effective.antialiasing, samples);
+        assert_eq!(
+            readout.antialiasing.is_some(),
+            samples != count,
+            "{count} samples: refused only when the device draws another count"
+        );
+    }
+}
+
+#[test]
 fn a_single_sample_primary_target_draws_the_same_background() {
     let mut harness = Harness::new(RendererOptions::default());
     harness.apply(vec![RenderDiff::SetBackgroundColor {

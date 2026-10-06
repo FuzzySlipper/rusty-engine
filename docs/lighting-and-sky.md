@@ -90,7 +90,8 @@ the rest.
 
 `RendererSettings` is the product's view of the renderer's pipeline features
 and quality: `Read()` returns a `RendererSettingsReadout` and
-`Set(RendererSettingsRequest)` replaces every setting from the next frame.
+`Set(RendererSettingsRequest)` replaces every setting from the next frame,
+and `Read()` reports the change from the next product call.
 The request holds shadows on or off and their budget (0 for no limit),
 ambient occlusion (`Disabled`, `ScreenSpace` or `DistanceField`, with its
 strength and radius), antialiasing (`Off`, `Msaa2` or `Msaa4`), vsync, and
