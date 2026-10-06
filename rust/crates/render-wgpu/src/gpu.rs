@@ -114,8 +114,11 @@ impl Gpu {
         let descriptor = wgpu::DeviceDescriptor {
             label: Some("render-wgpu"),
             // Timestamp queries time the renderer's GPU passes
-            // (`timing.rs`); an adapter without them draws untimed.
-            required_features: adapter.features() & wgpu::Features::TIMESTAMP_QUERY,
+            // (`timing.rs`); an adapter without them draws untimed. Indirect
+            // first instance lets GPU-culled batches draw from their runs
+            // (`culling.rs`); without it the CPU draw list stays.
+            required_features: adapter.features()
+                & (wgpu::Features::TIMESTAMP_QUERY | wgpu::Features::INDIRECT_FIRST_INSTANCE),
             required_limits: wgpu::Limits::default().using_resolution(adapter.limits()),
             ..Default::default()
         };

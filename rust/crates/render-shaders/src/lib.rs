@@ -5,8 +5,8 @@
 //! `types`, `view`, `material`, `surface`, `lighting`, `tonemap`, `finish`
 //! and `shade` are importable modules (`#import rusty::lighting::standard_radiance`);
 //! `world`, `sky`, `shadow`, `effects`, `ghost`, `compose`,
-//! `ambient_occlusion` and `light_clusters` are the entry shaders built from
-//! them.
+//! `ambient_occlusion`, `light_clusters` and `cull` are the entry shaders
+//! built from them.
 //! A material's features are shader defs, so a variant only carries the
 //! samples and branches its material uses.
 //!
@@ -190,6 +190,8 @@ pub enum Entry {
     AmbientOcclusion,
     /// Light rows binned into a view's cluster grid.
     LightClusters,
+    /// A view's opaque candidates culled into indirect draws.
+    Cull,
 }
 
 impl Entry {
@@ -209,6 +211,7 @@ impl Entry {
                 "shaders/light_clusters.wgsl",
                 include_str!("shaders/light_clusters.wgsl"),
             ),
+            Self::Cull => ("shaders/cull.wgsl", include_str!("shaders/cull.wgsl")),
         }
     }
 }
@@ -417,6 +420,7 @@ mod tests {
             Entry::Compose,
             Entry::AmbientOcclusion,
             Entry::LightClusters,
+            Entry::Cull,
         ] {
             compose(entry, Features::default());
         }

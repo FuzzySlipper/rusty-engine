@@ -60,6 +60,35 @@ export type ProductHostErrorBody = { code: string, diagnostic: string, };
 export type ProductHostErrorResponse = { accepted: false, error: ProductHostErrorBody, };
 
 /**
+ * The GPU visibility of the last view pass.
+ */
+export type ProductHostGpuCullingStatistics = { 
+/**
+ * The last view pass drew its opaque batches from GPU-culled runs.
+ */
+enabled: boolean, 
+/**
+ * Why this device cannot cull on the GPU; absent while it can.
+ */
+refused?: string, 
+/**
+ * Opaque candidates the last pass tested.
+ */
+candidates: number, 
+/**
+ * Opaque batches the last pass drew indirectly.
+ */
+batches: number, 
+/**
+ * Instances the last read-back pass found visible.
+ */
+visible: number, 
+/**
+ * Runs of batches drawn with one multi-draw each.
+ */
+multiDraws: number, };
+
+/**
  * One timed pass's GPU cost over the recent frames.
  */
 export type ProductHostGpuPass = { pass: string, 
@@ -84,7 +113,7 @@ timestamps: boolean, limits: ProductHostComputeLimits,
 /**
  * The timed passes, in frame order.
  */
-passes: Array<ProductHostGpuPass>, ambientOcclusion: ProductHostAmbientOcclusionStatistics, lightClusters: ProductHostLightClusterStatistics, };
+passes: Array<ProductHostGpuPass>, ambientOcclusion: ProductHostAmbientOcclusionStatistics, lightClusters: ProductHostLightClusterStatistics, gpuCulling: ProductHostGpuCullingStatistics, };
 
 /**
  * The light clustering of the last world view.

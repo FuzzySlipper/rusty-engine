@@ -28,6 +28,7 @@ mod capture;
 mod compose;
 mod composition;
 mod convert;
+mod culling;
 mod driver;
 mod effects;
 mod frame;
@@ -77,6 +78,7 @@ pub use animated::AnimationFact;
 pub use apply::ApplyIssue;
 pub use camera::CameraSampleReadout;
 pub use composition::{DrawnCamera, TargetReadout, TargetStatus, ViewCompositionReadout};
+pub use culling::GpuCullingReadout;
 pub use driver::{Capture, SceneChange, SceneDriver, SceneFrame, SceneState, SceneView};
 pub use frame::FrameStats;
 pub use ghost::GhostPlateReadout;
@@ -126,6 +128,7 @@ pub struct GpuReadout {
     pub passes: Vec<GpuPassTiming>,
     pub ambient_occlusion: AmbientOcclusionReadout,
     pub light_clusters: LightClusterReadout,
+    pub gpu_culling: GpuCullingReadout,
 }
 
 /// Host choices that are not part of the retained model.
@@ -149,6 +152,11 @@ pub struct RendererOptions {
     /// looping over every light. Off by default; a device without compute
     /// shaders loops regardless.
     pub clustered_lighting: bool,
+    /// Test each view's opaque parts against its frustum on the GPU and
+    /// draw them indirectly (`culling.rs`), instead of building the draw
+    /// list on the CPU each time the camera moves. Off by default; a device
+    /// without indirect draws keeps the CPU list regardless.
+    pub gpu_culling: bool,
 }
 
 impl Default for RendererOptions {
@@ -159,6 +167,7 @@ impl Default for RendererOptions {
             shadows: false,
             ambient_occlusion: AmbientOcclusion::default(),
             clustered_lighting: false,
+            gpu_culling: false,
         }
     }
 }
@@ -201,6 +210,7 @@ pub struct Renderer {
     compose: compose::Compose,
     ambient_occlusion: ambient_occlusion::AmbientOcclusionPass,
     light_clusters: light_clusters::LightClusters,
+    culling: culling::GpuCulling,
     composition: composition::ViewComposition,
     effects: effects::Effects,
     particles: particles::Particles,
@@ -233,6 +243,14 @@ impl Renderer {
                 Entry::LightClusters,
                 Features::default(),
             )),
+        );
+        let culling = culling::GpuCulling::new(
+            gpu,
+            pipelines::standard(
+                layouts
+                    .shaders
+                    .module(device, Entry::Cull, Features::default()),
+            ),
         );
         let frame_bind_group = frame::frame_bind_group(
             device,
@@ -318,6 +336,7 @@ impl Renderer {
             compose: compose::Compose::new(device, compose_shader),
             ambient_occlusion,
             light_clusters,
+            culling,
             composition: Default::default(),
             effects,
             particles: Default::default(),
@@ -384,10 +403,11 @@ impl Renderer {
                 .ambient_occlusion
                 .timings()
                 .into_iter()
-                .chain([self.light_clusters.timing()])
+                .chain([self.light_clusters.timing(), self.culling.timing()])
                 .collect(),
             ambient_occlusion: self.ambient_occlusion.readout(),
             light_clusters: self.light_clusters.readout(),
+            gpu_culling: self.culling.readout(),
         }
     }
 

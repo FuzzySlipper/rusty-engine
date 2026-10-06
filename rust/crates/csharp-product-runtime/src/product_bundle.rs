@@ -247,6 +247,10 @@ impl ProductBundle {
         self.renderer_lighting.clustered_lighting
     }
 
+    pub(super) fn gpu_culling(&self) -> bool {
+        self.renderer_lighting.gpu_culling
+    }
+
     pub(super) fn shadows_enabled(&self) -> bool {
         self.renderer_lighting.shadows
     }
@@ -562,6 +566,8 @@ struct ManifestRenderer {
     presentation_aspect: Option<ManifestPresentationAspect>,
     #[serde(default)]
     lighting: ManifestRendererLighting,
+    #[serde(default)]
+    gpu_culling: Option<String>,
 }
 #[derive(Debug, Clone, Copy, Deserialize)]
 struct ManifestPresentationAspect {
@@ -631,6 +637,7 @@ struct ProductRendererLighting {
     shadows: bool,
     ambient_occlusion: render_wgpu::AmbientOcclusion,
     clustered_lighting: bool,
+    gpu_culling: bool,
     world: ProductDefaultLights,
     viewmodel: ProductDefaultLights,
 }
@@ -690,10 +697,21 @@ impl ProductRendererLighting {
                 ))
             }
         };
+        let gpu_culling = match value.gpu_culling.as_deref() {
+            None | Some("disabled") => false,
+            Some("enabled") => true,
+            Some(_) => {
+                return Err(field_error(
+                    "renderer.gpuCulling",
+                    "must be enabled or disabled",
+                ))
+            }
+        };
         Ok(Self {
             shadows,
             ambient_occlusion,
             clustered_lighting,
+            gpu_culling,
             world: ProductDefaultLights::parse(
                 value.lighting.default_lights.world,
                 "renderer.lighting.defaultLights.world",
@@ -1129,6 +1147,28 @@ mod tests {
         assert!(read(&root)
             .unwrap_err()
             .contains("renderer.lighting.ambientOcclusion.mode"));
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn reads_and_validates_gpu_culling_selection() {
+        let root = fixture_root("gpu-culling");
+        write_manifest(&root, "native/product.so");
+        let path = root.join(PRODUCT_MANIFEST_NAME);
+        let original = fs::read_to_string(&path).unwrap();
+        assert!(!read(&root).unwrap().gpu_culling(), "absent: CPU");
+        let marker = "\"uiProjection\":{\"expectedStream\":\"fixture.terrain\",\"expectedContract\":\"fixture.terrain.v1\"}";
+        fs::write(
+            &path,
+            original.replace(marker, "\"renderer\":{\"gpuCulling\":\"enabled\"}"),
+        )
+        .unwrap();
+        assert!(read(&root).unwrap().gpu_culling());
+        fs::write(
+            &path,
+            original.replace(marker, "\"renderer\":{\"gpuCulling\":\"maybe\"}"),
+        )
+        .unwrap();
+        assert!(read(&root).unwrap_err().contains("renderer.gpuCulling"));
         fs::remove_dir_all(root).unwrap();
     }
     #[test]

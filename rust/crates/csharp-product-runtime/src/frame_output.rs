@@ -39,8 +39,8 @@ use product_host::RuntimePublication;
 use product_host::{
     ProductHostAmbientOcclusionPath, ProductHostAmbientOcclusionStatistics,
     ProductHostComputeLimits, ProductHostDrawingMode, ProductHostDrawnFrame,
-    ProductHostFrameStream, ProductHostGpuPass, ProductHostGpuStatistics,
-    ProductHostLightClusterStatistics, ProductHostRendererInspection,
+    ProductHostFrameStream, ProductHostGpuCullingStatistics, ProductHostGpuPass,
+    ProductHostGpuStatistics, ProductHostLightClusterStatistics, ProductHostRendererInspection,
     ProductHostRendererStatistics, ProductHostStreamMedians, ProductHostStreamStatistics,
     ProductHostTimedStep, ProductHostWindowMedians, ProductHostWindowStatistics,
 };
@@ -776,6 +776,14 @@ fn gpu_statistics(readout: GpuReadout) -> ProductHostGpuStatistics {
             binned_lights: readout.light_clusters.binned_lights,
             global_lights: readout.light_clusters.global_lights,
             overflowed_clusters: readout.light_clusters.overflowed_clusters,
+        },
+        gpu_culling: ProductHostGpuCullingStatistics {
+            enabled: readout.gpu_culling.enabled,
+            refused: readout.gpu_culling.refused,
+            candidates: readout.gpu_culling.candidates,
+            batches: readout.gpu_culling.batches,
+            visible: readout.gpu_culling.visible,
+            multi_draws: readout.gpu_culling.multi_draws,
         },
     }
 }

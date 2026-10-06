@@ -71,6 +71,27 @@ pub struct ProductHostGpuStatistics {
     pub passes: Vec<ProductHostGpuPass>,
     pub ambient_occlusion: ProductHostAmbientOcclusionStatistics,
     pub light_clusters: ProductHostLightClusterStatistics,
+    pub gpu_culling: ProductHostGpuCullingStatistics,
+}
+
+/// The GPU visibility of the last view pass.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ProductHostGpuCullingStatistics {
+    /// The last view pass drew its opaque batches from GPU-culled runs.
+    pub enabled: bool,
+    /// Why this device cannot cull on the GPU; absent while it can.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub refused: Option<String>,
+    /// Opaque candidates the last pass tested.
+    pub candidates: u32,
+    /// Opaque batches the last pass drew indirectly.
+    pub batches: u32,
+    /// Instances the last read-back pass found visible.
+    pub visible: u32,
+    /// Runs of batches drawn with one multi-draw each.
+    pub multi_draws: u32,
 }
 
 /// The light clustering of the last world view.

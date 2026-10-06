@@ -19,6 +19,7 @@ use render_model::{
 use crate::apply::light_row;
 use crate::batch::{self, DrawList, Frustum};
 use crate::camera::CameraMatrices;
+use crate::culling::CandidateList;
 use crate::effects::EffectsPass;
 use crate::light_clusters::ClusterUniform;
 use crate::shaders::Features;
@@ -123,12 +124,19 @@ impl AddAssign for Encoded {
 }
 
 /// The draw list a view layer last used, kept while nothing changed. Each
-/// layer owns a region of the instance buffer after the caster list.
+/// layer owns two regions of the instance buffer after the caster list: its
+/// list (or, with GPU culling, its opaque candidates) and, with GPU culling,
+/// the visible runs the cull writes.
 pub(crate) struct ViewCache {
     view_proj: Mat4,
+    /// The CPU list; with GPU culling, only the blended parts.
     pub list: DrawList,
+    /// With GPU culling: the opaque candidates and their indirect arguments.
+    pub candidates: Option<CandidateList>,
     /// A part moved or regrouped: re-cull, but keep the list to compare.
     stale: bool,
+    /// A part regrouped: the candidates must be rebuilt.
+    regrouped: bool,
 }
 
 /// Which retained layers a view pass draws.
@@ -275,6 +283,7 @@ impl Renderer {
             // different list.
             for view in self.views.iter_mut().flatten() {
                 view.stale = true;
+                view.regrouped |= regrouped;
             }
             self.shadows.stale = true;
         }
@@ -447,6 +456,31 @@ impl Renderer {
         let mut dirty: Vec<u32> = parts.dirty.drain().collect();
         dirty.sort_unstable();
         let uploaded = dirty.len() as u32;
+        // The GPU cull reads world bounds beside the rows; a replaced bounds
+        // buffer, or one that fell behind while the CPU culled, takes every
+        // slot again.
+        if !self.options.gpu_culling {
+            self.culling.bounds_stale();
+        } else {
+            let slots = parts.meta.len() as u32;
+            if self.culling.reserve_bounds(&self.gpu.device, slots) {
+                for slot in 0..slots {
+                    self.culling.write_bounds(
+                        &self.gpu.queue,
+                        slot,
+                        &parts.state[slot as usize].world_bounds,
+                    );
+                }
+            } else {
+                for slot in &dirty {
+                    self.culling.write_bounds(
+                        &self.gpu.queue,
+                        *slot,
+                        &parts.state[*slot as usize].world_bounds,
+                    );
+                }
+            }
+        }
         // Coalesce consecutive rows into one write each.
         let mut index = 0;
         while index < dirty.len() {
@@ -496,24 +530,22 @@ impl Renderer {
     /// part ids uploaded.
     fn update_view_list(&mut self, view_proj: &Mat4, eye: Vec3, layer: ViewLayer) -> u32 {
         let slot = layer as usize;
-        if self.views[slot]
-            .as_ref()
-            .is_some_and(|view| view.view_proj == *view_proj && !view.stale)
-        {
+        let gpu_culled = self.options.gpu_culling && self.culling.available();
+        if self.views[slot].as_ref().is_some_and(|view| {
+            view.view_proj == *view_proj && !view.stale && view.candidates.is_some() == gpu_culled
+        }) {
             return 0;
         }
-        // Instance regions: casters, then the world list, then the viewmodel
-        // list, each list sized for every part slot.
+        // Instance regions: casters, then per layer (world, viewmodel) a
+        // list region and a visible region, each sized for every part slot.
+        // The CPU list uses the list region; GPU culling puts the opaque
+        // candidates there and their visible runs in the visible region.
         let slots = self.tables.parts.meta.len() as u32;
-        let base = self.casters.instances() + slot as u32 * slots;
-        let list = batch::view_list(
-            &self.tables.parts,
-            layer == ViewLayer::Viewmodel,
-            &Frustum::new(view_proj),
-            eye,
-            base,
-        );
-        let needed = u64::from(self.casters.instances() + 2 * slots).max(1) * 4;
+        let base = self.casters.instances() + 2 * slot as u32 * slots;
+        let visible_base = base + slots;
+        let viewmodel = layer == ViewLayer::Viewmodel;
+        let frustum = Frustum::new(view_proj);
+        let needed = u64::from(self.casters.instances() + 4 * slots).max(1) * 4;
         if needed > self.instances_buffer.size() {
             self.instances_buffer = storage_buffer(
                 &self.gpu.device,
@@ -521,6 +553,7 @@ impl Renderer {
                 needed.next_power_of_two(),
             );
             self.rebind_frame();
+            self.culling.invalidate();
             // A new buffer starts empty: everything uploads again.
             self.views = Default::default();
             self.casters_uploaded = false;
@@ -530,20 +563,144 @@ impl Renderer {
             uploaded += self.upload_instances(0, &self.casters.ids);
             self.casters_uploaded = true;
         }
-        // Lists carry their instance offsets, so a moved base compares
-        // different and uploads.
-        let unchanged = self.views[slot]
-            .as_ref()
-            .is_some_and(|view| view.list == list);
-        if !unchanged {
-            uploaded += self.upload_instances(base, &list.ids);
-        }
+        let previous = self.views[slot].take();
+        let (list, candidates) = if gpu_culled {
+            // The candidates survive a camera move and a part move; they
+            // follow a regroup.
+            let candidates = match previous {
+                Some(ViewCache {
+                    candidates: Some(candidates),
+                    regrouped: false,
+                    ..
+                }) => candidates,
+                _ => {
+                    let list = batch::opaque_candidates(&self.tables.parts, viewmodel, base);
+                    uploaded += self.upload_instances(base, &list.ids);
+                    let candidates = CandidateList::new(list, visible_base, |batch| {
+                        let part = self.tables.parts.meta[batch.part as usize].as_ref()?;
+                        self.mesh(&part.mesh)?;
+                        Some(if part.wireframe {
+                            (part.first_index * 2, part.index_count * 2)
+                        } else {
+                            (part.first_index, part.index_count)
+                        })
+                    });
+                    self.culling.upload_candidates(&self.gpu, &candidates);
+                    candidates
+                }
+            };
+            // Blended parts follow the candidates in the list region.
+            let blended_base = base + candidates.list.instances();
+            let list =
+                batch::blended_list(&self.tables.parts, viewmodel, &frustum, eye, blended_base);
+            uploaded += self.upload_instances(blended_base, &list.ids);
+            (list, Some(candidates))
+        } else {
+            let list = batch::view_list(&self.tables.parts, viewmodel, &frustum, eye, base);
+            // Lists carry their instance offsets, so a moved base compares
+            // different and uploads.
+            let unchanged = previous.as_ref().is_some_and(|view| view.list == list);
+            if !unchanged {
+                uploaded += self.upload_instances(base, &list.ids);
+            }
+            (list, None)
+        };
         self.views[slot] = Some(ViewCache {
             view_proj: *view_proj,
             list,
+            candidates,
             stale: false,
+            regrouped: false,
         });
         uploaded
+    }
+
+    /// Draw a candidate list's batches from the GPU cull's arguments: one
+    /// indirect draw per batch, or one multi-draw per run of batches sharing
+    /// a pipeline, material and mesh. Returns what was encoded and the
+    /// multi-draws issued.
+    fn draw_batches_indirect<'a>(
+        &'a self,
+        pass: &mut wgpu::RenderPass<'_>,
+        candidates: &CandidateList,
+        pipeline: impl Fn(batch::Pass, Features) -> &'a wgpu::RenderPipeline,
+    ) -> (Encoded, u32) {
+        let batches = &candidates.list.batches;
+        let mut current: Option<(batch::Pass, Features)> = None;
+        let mut encoded = Encoded::default();
+        let mut multi_draws = 0;
+        let mut index = 0;
+        while index < batches.len() {
+            let draw = &batches[index];
+            let Some(part) = self.tables.parts.meta[draw.part as usize].as_ref() else {
+                index += 1;
+                continue;
+            };
+            let Some(mesh) = self.mesh(&part.mesh) else {
+                index += 1;
+                continue;
+            };
+            let (material, features) = self.part_material(&part.material);
+            let features = features | mesh.features();
+            if current != Some((draw.pass, features)) {
+                pass.set_pipeline(pipeline(draw.pass, features));
+                current = Some((draw.pass, features));
+                encoded.pipeline_binds += 1;
+            }
+            let indices = if part.wireframe {
+                match mesh.edges.get() {
+                    Some(edges) => edges,
+                    None => {
+                        index += 1;
+                        continue;
+                    }
+                }
+            } else {
+                &mesh.indices
+            };
+            pass.set_bind_group(1, material, &[]);
+            pass.set_vertex_buffer(0, mesh.vertices.slice(..));
+            if let Some(extra) = &mesh.extra {
+                pass.set_vertex_buffer(1, extra.slice(..));
+            }
+            pass.set_index_buffer(indices.slice(..), wgpu::IndexFormat::Uint32);
+            // Following batches with the same pipeline, material and mesh
+            // draw in the same call.
+            let mut run = 1;
+            if self.culling.multi_draw() {
+                while index + run < batches.len() {
+                    let next = &batches[index + run];
+                    let same = self.tables.parts.meta[next.part as usize]
+                        .as_ref()
+                        .is_some_and(|next_part| {
+                            next.pass == draw.pass
+                                && next_part.wireframe == part.wireframe
+                                && next_part.mesh == part.mesh
+                                && self.mesh(&next_part.mesh).is_some_and(|next_mesh| {
+                                    std::ptr::eq(next_mesh, mesh)
+                                        && features
+                                            == (self.part_material(&next_part.material).1
+                                                | next_mesh.features())
+                                })
+                                && std::ptr::eq(self.part_material(&next_part.material).0, material)
+                        });
+                    if !same {
+                        break;
+                    }
+                    run += 1;
+                }
+            }
+            let offset = index as u64 * 20;
+            if run > 1 {
+                pass.multi_draw_indexed_indirect(&self.culling.args, offset, run as u32);
+                multi_draws += 1;
+            } else {
+                pass.draw_indexed_indirect(&self.culling.args, offset);
+            }
+            encoded.draws += run as u32;
+            index += run;
+        }
+        (encoded, multi_draws)
     }
 
     fn upload_instances(&self, first: u32, ids: &[u32]) -> u32 {
@@ -858,13 +1015,11 @@ impl Renderer {
                 self.pipelines.len() - 1
             }
         };
-        let variants = self.batch_variants(
-            &self.views[slot]
-                .as_ref()
-                .expect("view list is current")
-                .list
-                .batches,
-        );
+        let cache = self.views[slot].as_ref().expect("view list is current");
+        let mut variants = self.batch_variants(&cache.list.batches);
+        if let Some(candidates) = &cache.candidates {
+            variants.extend(self.batch_variants(&candidates.list.batches));
+        }
         let mut pipelines_created = 0;
         for (features, pass) in variants {
             pipelines_created += u32::from(self.layouts.prepare(
@@ -888,11 +1043,17 @@ impl Renderer {
         } else {
             None
         };
+        let culled = self.views[slot]
+            .as_ref()
+            .expect("view list is current")
+            .candidates
+            .is_some();
         let prepass_batches: Vec<batch::Batch> = if occlusion.is_some() {
-            self.views[slot]
+            let cache = self.views[slot].as_ref().expect("view list is current");
+            cache
+                .candidates
                 .as_ref()
-                .expect("view list is current")
-                .list
+                .map_or(&cache.list, |candidates| &candidates.list)
                 .batches
                 .iter()
                 .copied()
@@ -943,6 +1104,23 @@ impl Renderer {
         } else {
             Default::default()
         };
+        // The GPU cull writes the opaque visible runs and indirect arguments
+        // every pass, before anything draws them.
+        if culled {
+            let candidates = self.views[slot]
+                .as_ref()
+                .and_then(|cache| cache.candidates.as_ref())
+                .expect("culled view has candidates");
+            self.culling.encode(
+                &self.gpu,
+                &mut encoder,
+                &self.instances_buffer,
+                candidates,
+                &view_proj,
+            );
+        } else {
+            self.culling.skipped();
+        }
         if let Some(occlusion) = &occlusion {
             self.shadows.write_camera(&self.gpu.queue, &view_proj);
             let camera_offset = ShadowMaps::layer_offset(self.shadows.camera_slot());
@@ -950,9 +1128,21 @@ impl Renderer {
                 .encode_prepass(&mut encoder, occlusion, |pass| {
                     pass.set_bind_group(0, &self.caster_bind_group, &[]);
                     pass.set_bind_group(2, &self.shadows.layer_bind_group, &[camera_offset]);
-                    self.draw_batches(pass, &prepass_batches, |pass, features| {
-                        self.layouts.prepass.get(pass, features)
-                    });
+                    match self.views[slot]
+                        .as_ref()
+                        .and_then(|cache| cache.candidates.as_ref())
+                    {
+                        Some(candidates) => {
+                            self.draw_batches_indirect(pass, candidates, |pass, features| {
+                                self.layouts.prepass.get(pass, features)
+                            });
+                        }
+                        None => {
+                            self.draw_batches(pass, &prepass_batches, |pass, features| {
+                                self.layouts.prepass.get(pass, features)
+                            });
+                        }
+                    }
                 });
             self.ambient_occlusion.encode(&mut encoder, occlusion);
         }
@@ -983,10 +1173,10 @@ impl Renderer {
             .queue
             .write_buffer(&self.frame_buffer, cluster_offset, &cluster_bytes);
         let pipelines = &self.pipelines[format_index];
-        let list = &self.views[slot]
-            .as_ref()
-            .expect("view list is current")
-            .list;
+        let cache = self.views[slot].as_ref().expect("view list is current");
+        let list = &cache.list;
+        let candidates = cache.candidates.as_ref();
+        let mut multi_draws = 0;
         let parts;
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -1045,10 +1235,19 @@ impl Renderer {
                 .iter()
                 .position(|batch| batch.pass >= batch::Pass::Blend)
                 .unwrap_or(batches.len());
-            let mut encoded =
-                self.draw_batches(&mut pass, &batches[..blend_start], |pass, features| {
+            let mut encoded = match candidates {
+                Some(candidates) => {
+                    let (encoded, runs) =
+                        self.draw_batches_indirect(&mut pass, candidates, |pass, features| {
+                            pipelines.get(pass, features)
+                        });
+                    multi_draws = runs;
+                    encoded
+                }
+                None => self.draw_batches(&mut pass, &batches[..blend_start], |pass, features| {
                     pipelines.get(pass, features)
-                });
+                }),
+            };
             if world_layer {
                 encoded.draws += self.draw_ghost_plates(&mut pass, format);
                 pass.set_bind_group(0, &self.frame_bind_group, &[]);
@@ -1082,9 +1281,15 @@ impl Renderer {
         if clusters.grid[3] == 1 {
             self.light_clusters.submitted();
         }
+        if culled {
+            self.culling.drew(multi_draws);
+            self.culling.submitted();
+        }
+        let instances =
+            list.instances() + candidates.map_or(0, |candidates| candidates.list.instances());
         ViewStats {
             draws: parts.draws + effects.draws(),
-            instances: list.instances(),
+            instances,
             instances_uploaded,
             shadow_draws: shadows.draws,
             sprite_candidates: effects.sprite_candidates,

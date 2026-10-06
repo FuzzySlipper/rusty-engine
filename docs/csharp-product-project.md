@@ -779,3 +779,13 @@ pass. The default is `disabled`, which loops; a device without compute
 shaders loops regardless. This writes `renderer.lighting.clusteredLighting`
 in the staged manifest. `engine.renderer` reports the clusters' light counts
 and the binning pass's GPU time.
+
+### GPU culling (under evaluation)
+
+`RustyEngineProductGpuCulling` set to `enabled` makes each view test its
+opaque parts against the frustum in a compute pass and draw the visible ones
+through indirect draw arguments, so a camera move no longer rebuilds the
+draw list on the CPU; blended parts still sort on the CPU. The default is
+`disabled`; a device without indirect draws keeps the CPU list regardless.
+This writes `renderer.gpuCulling` in the staged manifest. `engine.renderer`
+reports the candidates, visible instances, batches and the cull's GPU time.

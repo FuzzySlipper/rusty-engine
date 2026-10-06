@@ -280,6 +280,12 @@ impl CsharpProductRuntimeConfig {
         self
     }
 
+    /// The product manifest's GPU culling choice.
+    pub fn with_gpu_culling(mut self, enabled: bool) -> Self {
+        self.renderer_options.gpu_culling = enabled;
+        self
+    }
+
     /// Adds typed standard-runtime physical mappings to create-time host
     /// configuration. The product receives a copied descriptor; it does not
     /// own or mutate the runtime lane's mapping evaluation.

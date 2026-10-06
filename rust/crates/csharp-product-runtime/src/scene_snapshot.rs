@@ -97,6 +97,9 @@ pub struct SceneSnapshotOptions {
     /// Snapshots written before clustered lighting existed loop over lights.
     #[serde(default)]
     pub clustered_lighting: bool,
+    /// Snapshots written before GPU culling existed cull on the CPU.
+    #[serde(default)]
+    pub gpu_culling: bool,
 }
 
 /// `RendererOptions::ambient_occlusion` as a snapshot keeps it.
@@ -163,6 +166,7 @@ impl From<SceneSnapshotOptions> for render_wgpu::RendererOptions {
             shadows: options.shadows,
             ambient_occlusion: options.ambient_occlusion.into(),
             clustered_lighting: options.clustered_lighting,
+            gpu_culling: options.gpu_culling,
         }
     }
 }
@@ -175,6 +179,7 @@ impl From<render_wgpu::RendererOptions> for SceneSnapshotOptions {
             shadows: options.shadows,
             ambient_occlusion: options.ambient_occlusion.into(),
             clustered_lighting: options.clustered_lighting,
+            gpu_culling: options.gpu_culling,
         }
     }
 }

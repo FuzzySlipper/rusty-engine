@@ -324,6 +324,7 @@ impl Renderer {
                 // A capture is isolated geometry: no screen-space occlusion.
                 ambient_occlusion: Default::default(),
                 clustered_lighting: false,
+                gpu_culling: false,
             },
         ));
         source.set_animation_time(self.animation_time);

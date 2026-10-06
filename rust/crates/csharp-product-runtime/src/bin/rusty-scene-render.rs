@@ -5,6 +5,7 @@
 //! ```text
 //! rusty-scene-render <snapshot> <out.png> [--width W] [--height H] [--frames N]
 //!     [--ambient-occlusion off|compute|raster] [--clustered-lighting on|off]
+//!     [--gpu-culling on|off]
 //! ```
 //!
 //! `--frames N` then draws N more frames into one target with readback and
@@ -24,7 +25,8 @@ use render_wgpu::{
 use serde_json::json;
 
 const USAGE: &str = "usage: rusty-scene-render <snapshot> <out.png> [--width W] [--height H] \
-     [--frames N] [--ambient-occlusion off|compute|raster] [--clustered-lighting on|off]";
+     [--frames N] [--ambient-occlusion off|compute|raster] [--clustered-lighting on|off] \
+     [--gpu-culling on|off]";
 
 fn main() {
     if let Err(error) = run() {
@@ -39,6 +41,7 @@ fn run() -> Result<(), String> {
     let (mut width, mut height, mut frames) = (1280_u32, 720_u32, 0_u32);
     let mut ambient_occlusion: Option<AmbientOcclusionPath> = None;
     let mut clustered_lighting: Option<bool> = None;
+    let mut gpu_culling: Option<bool> = None;
     while let Some(argument) = arguments.next() {
         let mut number = |name: &str| -> Result<u32, String> {
             arguments
@@ -50,6 +53,13 @@ fn run() -> Result<(), String> {
             "--width" => width = number("--width")?,
             "--height" => height = number("--height")?,
             "--frames" => frames = number("--frames")?,
+            "--gpu-culling" => {
+                gpu_culling = Some(match arguments.next().as_deref() {
+                    Some("on") => true,
+                    Some("off") => false,
+                    _ => return Err(format!("--gpu-culling needs on or off\n{USAGE}")),
+                });
+            }
             "--clustered-lighting" => {
                 clustered_lighting = Some(match arguments.next().as_deref() {
                     Some("on") => true,
@@ -109,6 +119,9 @@ fn run() -> Result<(), String> {
     }
     if let Some(clustered) = clustered_lighting {
         options.clustered_lighting = clustered;
+    }
+    if let Some(culling) = gpu_culling {
+        options.gpu_culling = culling;
     }
     let driver = SceneDriver::new(gpu, options);
     let applied = Instant::now();
@@ -190,6 +203,14 @@ fn run() -> Result<(), String> {
                 "binnedLights": gpu_readout.light_clusters.binned_lights,
                 "globalLights": gpu_readout.light_clusters.global_lights,
                 "overflowedClusters": gpu_readout.light_clusters.overflowed_clusters,
+            },
+            "gpuCulling": {
+                "enabled": gpu_readout.gpu_culling.enabled,
+                "refused": gpu_readout.gpu_culling.refused,
+                "candidates": gpu_readout.gpu_culling.candidates,
+                "batches": gpu_readout.gpu_culling.batches,
+                "visible": gpu_readout.gpu_culling.visible,
+                "multiDraws": gpu_readout.gpu_culling.multi_draws,
             },
         },
     });
