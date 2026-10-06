@@ -1040,29 +1040,11 @@ impl CollisionProjection {
         }
     }
 
-    /// Build/replace the collider for one chunk from its current voxels. Drops the
-    /// entry if the chunk has become all-empty.
+    /// Build/replace the collider for one chunk from its current voxels, as
+    /// merged boxes. Drops the entry if the chunk has become all-empty.
     fn set_chunk(&mut self, coord: ChunkCoord, chunk: &VoxelChunk) {
-        match build_chunk_shape(&self.grid, self.world_offset, coord, chunk) {
-            Some((shape, voxels)) => {
-                let bounds = shape_world_aabb(&shape);
-                self.note_bounds(coord, bounds);
-                let boxes = voxels.into_iter().map(VoxelBox::single).collect();
-                self.chunks.insert(
-                    coord,
-                    ChunkCollider {
-                        source_hash: chunk.content_hash().0,
-                        cubes: Some(Arc::new(shape)),
-                        boxes,
-                        surface: None,
-                        bounds,
-                    },
-                );
-            }
-            None => {
-                self.drop_collider(coord);
-            }
-        }
+        let voxels = solid_voxels(&self.grid, coord, chunk);
+        self.set_chunk_parts(coord, chunk.content_hash().0, &voxels, 0, || None);
     }
 
     /// Rebuild one chunk's collider from `world`. If the chunk is not resident its
@@ -1110,10 +1092,10 @@ impl CollisionProjection {
         self.version += 1;
     }
 
-    /// Replace one chunk's collider with explicit parts: a cuboid for each of
-    /// `cubes` and the reconstructed `surface` drawn for the chunk. Used for
-    /// chunks whose materials are drawn as reconstructed surfaces, so
-    /// collision follows what is drawn; the owner supplies cuboids only for
+    /// Replace one chunk's collider with explicit parts: boxes merged over
+    /// the `cubes` voxels and the reconstructed `surface` drawn for the chunk.
+    /// For chunks whose materials are drawn as reconstructed surfaces, so
+    /// collision follows what is drawn, the owner supplies cubes only for
     /// cube materials and for solid voxels deep enough that no surface passes
     /// through them. A neighbour's arrival rebuilds a chunk's mesh without
     /// always changing it, so parts equal to the current ones are kept: the
@@ -1296,9 +1278,9 @@ impl CollisionProjection {
         match (self.chunks.get(&chunk), world.get(chunk)) {
             (Some(c), Some(data)) => c.source_hash != data.content_hash().0,
             // No collider but the chunk now has solids → stale (needs a build).
-            (None, Some(data)) => {
-                build_chunk_shape(&self.grid, self.world_offset, chunk, data).is_some()
-            }
+            (None, Some(data)) => data
+                .iter()
+                .any(|(_, value)| collision_class(value) == CollisionClass::Solid),
             // Have a collider but the chunk is gone/unloaded → stale (needs a drop).
             (Some(_), None) => true,
             (None, None) => false,
@@ -1683,30 +1665,13 @@ fn merge_boxes(grid: &VoxelGridSpec, chunk: ChunkCoord, voxels: &[VoxelCoord]) -
 
 /// Build the parry `Compound` of world-positioned cuboids for one chunk's solid
 /// voxels, or `None` if the chunk has no solids.
-fn build_chunk_shape(
-    spec: &VoxelGridSpec,
-    world_offset: WorldVec,
-    coord: ChunkCoord,
-    chunk: &VoxelChunk,
-) -> Option<(Compound, Vec<VoxelCoord>)> {
-    let half: Real = spec.voxel_size() * 0.5;
-    let mut parts: Vec<(Pose, SharedShape)> = Vec::new();
-    let mut voxels = Vec::new();
-    for (local, value) in chunk.iter() {
-        if collision_class(value) != CollisionClass::Solid {
-            continue;
-        }
-        let voxel = spec.chunk_local_to_voxel(coord, local);
-        let center = spec.voxel_center_world(voxel) + world_offset;
-        let pose = Pose::translation(center.x, center.y, center.z);
-        parts.push((pose, SharedShape::cuboid(half, half, half)));
-        voxels.push(voxel);
-    }
-    if parts.is_empty() {
-        None
-    } else {
-        Some((Compound::new(parts), voxels))
-    }
+/// The collidable voxels of one chunk, in storage order.
+fn solid_voxels(spec: &VoxelGridSpec, coord: ChunkCoord, chunk: &VoxelChunk) -> Vec<VoxelCoord> {
+    chunk
+        .iter()
+        .filter(|(_, value)| collision_class(*value) == CollisionClass::Solid)
+        .map(|(local, _)| spec.chunk_local_to_voxel(coord, local))
+        .collect()
 }
 
 fn shape_world_aabb(shape: &dyn Shape) -> Option<WorldAabb> {
@@ -1939,14 +1904,13 @@ mod tests {
                 .len(),
             1
         );
+        // The two neighbouring voxels merge into one box.
         assert_eq!(
-            projection.chunks[&coord]
-                .cubes
-                .as_ref()
-                .unwrap()
-                .shapes()
-                .len(),
-            2
+            projection.chunks[&coord].boxes,
+            [VoxelBox {
+                min: VoxelCoord::new(0, 0, 0),
+                max: VoxelCoord::new(1, 0, 0),
+            }]
         );
     }
 
