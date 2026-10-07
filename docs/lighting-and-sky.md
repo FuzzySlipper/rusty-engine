@@ -69,7 +69,10 @@ layers fit; a light already casting counts a metre nearer so the choice does
 not flicker. The others light without a shadow. A product keeps its intents and
 priorities and needs no nearest-N policy of its own. `engine.renderer.status`
 reports the layers, pages, budget, casting lights, the renderer handles of
-lights the budget left out, and the layers and casters re-rendered last frame.
+lights the budget left out, the layers and casters re-rendered last frame, and
+the atlas's GPU bytes (`atlasBytes`, every allocated depth page). Its
+`gpu.passes` time a frame's shadow-layer rendering as `shadows`, in the frames
+that render layers.
 
 ## Dark caves: an ambient light's sky
 

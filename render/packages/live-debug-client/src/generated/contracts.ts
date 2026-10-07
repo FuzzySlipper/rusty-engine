@@ -344,7 +344,11 @@ castingLights: number, skippedLights: number[],
 /**
  * Layers re-rendered in the last frame and the casters drawn into them.
  */
-renderedLayers: number, renderedCasters: number, };
+renderedLayers: number, renderedCasters: number, 
+/**
+ * The GPU bytes of the atlas's depth pages, allocated ones included.
+ */
+atlasBytes: number, };
 
 /**
  * Median milliseconds per frame for each stage of streaming it.

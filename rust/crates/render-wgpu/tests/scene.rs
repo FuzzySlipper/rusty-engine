@@ -2539,6 +2539,43 @@ fn a_shadow_budget_casts_the_nearest_lamps_and_reports_the_rest() {
 }
 
 #[test]
+fn shadow_layers_report_their_gpu_time_and_atlas_bytes() {
+    let mut harness = Harness::new(RendererOptions {
+        default_world_lights: false,
+        shadows: true,
+        ..RendererOptions::default()
+    });
+    lamp_row(&mut harness, 2, 0);
+    let eye = camera([3.0, 3.0, 6.0], 0.0, -25.0);
+    harness.render(&eye);
+    let report = harness.renderer.shadow_report();
+    // Two lamps' twelve faces, 512 tiles on one 2048² depth page.
+    assert_eq!((report.layers, report.rendered_layers), (12, 12));
+    assert_eq!(report.atlas_bytes, 2048 * 2048 * 4);
+    // A still scene reuses its layers; forcing a re-render draws them all.
+    harness.render(&eye);
+    assert_eq!(harness.renderer.shadow_report().rendered_layers, 0);
+    harness.renderer.rerender_shadows();
+    harness.render(&eye);
+    let report = harness.renderer.shadow_report();
+    assert_eq!(report.rendered_layers, 12);
+    assert!(report.rendered_casters > 0);
+    for _ in 0..4 {
+        harness.renderer.rerender_shadows();
+        harness.render(&eye);
+    }
+    let readout = harness.renderer.gpu_readout();
+    let shadows = readout
+        .passes
+        .iter()
+        .find(|timing| timing.pass == "shadows")
+        .expect("a shadows pass");
+    if readout.timestamps {
+        assert!(shadows.timed_frames > 0 && shadows.median_gpu_ms > 0.0);
+    }
+}
+
+#[test]
 fn many_shadowed_lamps_share_atlas_pages_by_resolution() {
     let mut harness = Harness::new(RendererOptions {
         default_world_lights: false,

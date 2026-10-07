@@ -328,6 +328,9 @@ pub struct Renderer {
     shadows_chosen: bool,
     /// Shadow layers and casters rendered since the frame began.
     shadows_rendered: (u32, u32),
+    /// The frame's shadow-layer passes, first to last, in the frames that
+    /// render layers.
+    shadow_timer: Option<timing::PassTimer>,
     /// Auto exposure adapted in this frame's first world view.
     exposure_adapted: bool,
     frame_bind_group: wgpu::BindGroup,
@@ -388,6 +391,7 @@ impl Renderer {
             frame::storage_buffer(device, "render-wgpu instances", INITIAL_INSTANCES_BYTES);
         let shadows = shadows::ShadowMaps::new(device, &layouts.shadow_layer);
         let sky_light = sky_light::SkyLight::new(gpu);
+        let shadow_timer = timing::PassTimer::new(gpu, "shadows");
         let probes = probes::ProbeVolume::new(gpu);
         let light_clusters = light_clusters::LightClusters::new(
             gpu,
@@ -496,6 +500,7 @@ impl Renderer {
             shadow_eye: glam::Vec3::ZERO,
             shadows_chosen: false,
             shadows_rendered: (0, 0),
+            shadow_timer,
             exposure_adapted: false,
             frame_bind_group,
             caster_bind_group,
@@ -675,6 +680,9 @@ impl Renderer {
                 .into_iter()
                 .chain(self.finish.timings())
                 .chain([
+                    self.shadow_timer
+                        .as_ref()
+                        .map_or_else(|| timing::untimed("shadows"), timing::PassTimer::readout),
                     self.light_clusters.timing(),
                     self.culling.timing(),
                     self.sky_light.timing(),
@@ -763,6 +771,15 @@ impl Renderer {
                 .collect(),
             rendered_layers: self.shadows_rendered.0,
             rendered_casters: self.shadows_rendered.1,
+            atlas_bytes: self.shadows.atlas_bytes(),
+        }
+    }
+
+    /// Render every shadow layer again in the next frame, as if each were
+    /// stale: an offline run measures the uncached cost with it.
+    pub fn rerender_shadows(&mut self) {
+        for layer in &mut self.shadows.layers {
+            layer.stale = true;
         }
     }
 
@@ -799,6 +816,8 @@ pub struct ShadowReport {
     /// Layers re-rendered in the last frame and the casters drawn into them.
     pub rendered_layers: u32,
     pub rendered_casters: u32,
+    /// The GPU bytes of the atlas's depth pages, allocated ones included.
+    pub atlas_bytes: u64,
 }
 
 /// Mesh memory: the CPU geometry copies kept for bounds and wireframe, beside

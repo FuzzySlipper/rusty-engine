@@ -1011,6 +1011,7 @@ fn shadow_statistics(driver: &SceneDriver) -> ProductHostShadowStatistics {
         skipped_lights: report.skipped,
         rendered_layers: report.rendered_layers,
         rendered_casters: report.rendered_casters,
+        atlas_bytes: report.atlas_bytes,
     }
 }
 

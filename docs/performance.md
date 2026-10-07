@@ -72,7 +72,8 @@ milliseconds of each renderer pass that is timed, with the adapter's
 compute limits beside them: the ambient occlusion passes (`ao-prepass`,
 `ao-occlusion`, `ao-blur`), then the first world view of a frame's `world`
 pass, its `particles` pass (soft sprites and billboards, timed in the frames
-that draw it), its `bloom-exposure` passes (with sun shafts) together and its
+that draw it), the frame's shadow-layer passes together (`shadows`, timed in
+the frames that render layers), its `bloom-exposure` passes (with sun shafts) together and its
 `finish` pass
 ([exposure, tone mapping and fog](lighting-and-sky.md#exposure-tone-mapping-and-fog)),
 and a frame's share of building [the sky's
@@ -104,7 +105,13 @@ snapshots drawn on the same adapter; `WGPU_BACKEND` selects it as for any
 wgpu program. A still camera reuses work a moving one repeats (culled lists,
 a directional light's shadow cascades): add `--walk M` or `--turn D` to move
 the snapshot's camera M metres forward or D degrees right before each extra
-frame.
+frame. A still snapshot also renders its shadow layers only once:
+`--rerender-shadows` renders them all in every extra frame, so `shadows` and
+the frame times show the uncached cost. The report's `shadows` gives the
+layers, pages, atlas bytes and the layers and casters the last frame rendered.
+On an RX 9070 XT at 1280×720, a Hotel floor's 138 layers (23 shadowed
+lights, 2,053 caster draws) take 1.24 ms of GPU time re-rendered; the
+atlas is 64 MiB.
 
 Trusted product code reads the same statistics (`ProductHostRendererStatistics`
 in `product-host`) as UTF-8 JSON bytes through

@@ -109,6 +109,9 @@ pub struct ProductHostShadowStatistics {
     /// Layers re-rendered in the last frame and the casters drawn into them.
     pub rendered_layers: u32,
     pub rendered_casters: u32,
+    /// The GPU bytes of the atlas's depth pages, allocated ones included.
+    #[ts(type = "number")]
+    pub atlas_bytes: u64,
 }
 
 /// What the renderer's GPU passes cost, from the device's timestamp

@@ -6,6 +6,7 @@
 //! rusty-scene-render <snapshot> <out.png> [--width W] [--height H] [--frames N]
 //!                    [--walk M] [--turn D] [--ambient-occlusion off|compute|raster|field]
 //!                    [--clustered-lighting on|off] [--gpu-culling on|off] [--render-scale S]
+//!                    [--rerender-shadows]
 //! ```
 //!
 //! `--frames N` then draws N more frames into one target with readback and
@@ -31,7 +32,7 @@ use serde_json::json;
 
 const USAGE: &str = "usage: rusty-scene-render <snapshot> <out.png> [--width W] [--height H] \
      [--frames N] [--walk M] [--turn D] [--ambient-occlusion off|compute|raster|field] \
-     [--clustered-lighting on|off] [--gpu-culling on|off] [--render-scale S] \
+     [--clustered-lighting on|off] [--gpu-culling on|off] [--render-scale S] [--rerender-shadows] \
      [--indirect-light cx,cy,cz,ex,ey,ez,spacing,bounces[,floor]]";
 
 fn main() {
@@ -56,6 +57,7 @@ struct Arguments {
     gpu_culling: Option<bool>,
     render_scale: Option<f32>,
     indirect_light: Option<IndirectLightDescriptor>,
+    rerender_shadows: bool,
 }
 
 /// Parses the command line; `None` when it asked for help. A render scale is
@@ -69,6 +71,9 @@ fn parse(arguments: impl IntoIterator<Item = String>) -> Result<Option<Arguments
     let mut ambient_occlusion: Option<AmbientOcclusionPath> = None;
     let mut clustered_lighting: Option<bool> = None;
     let mut gpu_culling: Option<bool> = None;
+    // Render every shadow layer in each timed frame, as a still snapshot
+    // would otherwise reuse them all: the uncached shadow cost.
+    let mut rerender_shadows = false;
     let mut render_scale: Option<f32> = None;
     let mut indirect_light: Option<IndirectLightDescriptor> = None;
     while let Some(argument) = arguments.next() {
@@ -128,6 +133,7 @@ fn parse(arguments: impl IntoIterator<Item = String>) -> Result<Option<Arguments
                 }
                 indirect_light = Some(descriptor);
             }
+            "--rerender-shadows" => rerender_shadows = true,
             "--gpu-culling" => {
                 gpu_culling = Some(match arguments.next().as_deref() {
                     Some("on") => true,
@@ -178,6 +184,7 @@ fn parse(arguments: impl IntoIterator<Item = String>) -> Result<Option<Arguments
         gpu_culling,
         render_scale,
         indirect_light,
+        rerender_shadows,
     }))
 }
 
@@ -195,6 +202,7 @@ fn run() -> Result<(), String> {
         gpu_culling,
         render_scale,
         indirect_light,
+        rerender_shadows,
     }) = parse(std::env::args().skip(1))?
     else {
         println!("{USAGE}");
@@ -303,6 +311,9 @@ fn run() -> Result<(), String> {
                     yaw_degrees: yaw,
                 }));
             }
+            if rerender_shadows {
+                driver.draw(|renderer, _| renderer.rerender_shadows());
+            }
             let started = Instant::now();
             let (stats, _) =
                 driver.draw(|renderer, now| renderer.render_view_composition(&target, now));
@@ -325,6 +336,7 @@ fn run() -> Result<(), String> {
             "cpuBatchUs": median(&mut batch_us),
             "walkMetres": walk,
             "turnDegrees": turn,
+            "rerenderShadows": rerender_shadows,
         });
     }
     let (tables, memory) = driver
@@ -332,6 +344,7 @@ fn run() -> Result<(), String> {
         .0;
     let (skipped, last_skip) = driver.skipped_ops();
     let gpu_readout = driver.gpu_readout();
+    let shadows = driver.shadow_report();
     let settings = driver.settings_readout();
     let refused = [
         ("ambientOcclusion", settings.ambient_occlusion),
@@ -355,6 +368,15 @@ fn run() -> Result<(), String> {
         "lastSkip": last_skip,
         "image": { "path": out.display().to_string(), "width": width, "height": height },
         "timing": timing,
+        // The shadow atlas and the layers the last frame rendered.
+        "shadows": {
+            "layers": shadows.layers,
+            "pages": shadows.pages,
+            "atlasBytes": shadows.atlas_bytes,
+            "castingLights": shadows.casting,
+            "renderedLayers": shadows.rendered_layers,
+            "renderedCasters": shadows.rendered_casters,
+        },
         // The renderer settings drawn: the snapshot's, changed by the flags
         // above, and what the adapter refused.
         "settings": {

@@ -301,6 +301,9 @@ impl Renderer {
         self.shadows_chosen = false;
         self.shadows_rendered = (0, 0);
         self.finish.begin_frame(&self.gpu);
+        if let Some(timer) = &mut self.shadow_timer {
+            timer.collect(&self.gpu);
+        }
         self.exposure_adapted = false;
         self.batch_time = std::time::Duration::ZERO;
         let mut layers_changed = false;
@@ -1131,6 +1134,11 @@ impl Renderer {
             caster.product() != 0 || caster.moves_with_time()
         });
         let mut drawn = ShadowsEncoded::default();
+        // The first and last layer rendered carry the shadows timer's stamps.
+        let rendered: Vec<usize> = (0..self.shadows.layers.len())
+            .filter(|&index| retimed || self.shadows.layers[index].stale)
+            .collect();
+        let (first, last) = (rendered.first().copied(), rendered.last().copied());
         for (features, pass) in variants {
             drawn.pipelines_created += u32::from(self.layouts.prepare_caster(
                 &self.gpu.device,
@@ -1163,7 +1171,12 @@ impl Renderer {
                     }),
                     stencil_ops: None,
                 }),
-                timestamp_writes: None,
+                timestamp_writes: self.shadow_timer.as_ref().and_then(|timer| {
+                    timer.render_writes_between(
+                        first == Some(index as usize),
+                        last == Some(index as usize),
+                    )
+                }),
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
@@ -1187,6 +1200,11 @@ impl Renderer {
         }
         for layer in &mut self.shadows.layers {
             layer.stale = false;
+        }
+        if drawn.layers > 0 {
+            if let Some(timer) = &mut self.shadow_timer {
+                timer.resolve(encoder);
+            }
         }
         self.shadows_rendered.0 += drawn.layers;
         self.shadows_rendered.1 += drawn.casters;
@@ -2066,6 +2084,11 @@ impl Renderer {
         self.gpu.queue.submit([encoder.finish()]);
         if occlusion.is_some() {
             self.ambient_occlusion.submitted();
+        }
+        if shadows.layers > 0 {
+            if let Some(timer) = &mut self.shadow_timer {
+                timer.submitted();
+            }
         }
         self.finish.submitted();
         if clusters.grid[3] == 1 {

@@ -684,6 +684,16 @@ impl ShadowMaps {
             .sum()
     }
 
+    /// The depth pages' GPU bytes, every allocated page included.
+    pub fn atlas_bytes(&self) -> u64 {
+        let texel = u64::from(
+            DEPTH_FORMAT
+                .block_copy_size(Some(wgpu::TextureAspect::DepthOnly))
+                .unwrap_or(4),
+        );
+        u64::from(self.side) * u64::from(self.side) * self.page_views.len() as u64 * texel
+    }
+
     /// Pages any layer uses.
     pub fn pages(&self) -> usize {
         self.page_sizes.iter().filter(|&&size| size > 0).count()
