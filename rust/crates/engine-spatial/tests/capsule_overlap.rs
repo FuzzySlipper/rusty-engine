@@ -76,3 +76,21 @@ fn every_capsule_reaching_into_the_stone_overlaps_it() {
         }
     }
 }
+
+#[test]
+fn a_capsule_beside_a_corner_or_edge_overlaps_only_within_its_radius() {
+    let scene = stone();
+    // Clear: the axis is 0.354 m from the stone's vertical edge, past the
+    // radius, and 0.336 m from its top edge, past the rounded cap.
+    assert!(
+        !overlaps(&scene, -0.25, 3.0, -0.25),
+        "beside the vertical edge"
+    );
+    assert!(!overlaps(&scene, -0.25, 8.8, 8.5), "beside the top edge");
+    // Within the radius of the same edges.
+    assert!(
+        overlaps(&scene, -0.15, 3.0, -0.15),
+        "touching the vertical edge"
+    );
+    assert!(overlaps(&scene, -0.15, 8.6, 8.5), "touching the top edge");
+}

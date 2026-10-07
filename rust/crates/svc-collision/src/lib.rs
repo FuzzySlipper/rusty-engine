@@ -1881,16 +1881,18 @@ fn keep_nearest_character_hit(
     });
 }
 
-/// The overlap of a capsule with the axis-aligned boxes of a cube collider,
-/// as the shortest way out of the box it is deepest in: the contact parry's
-/// penetration solver does not find when the capsule lies well inside a box.
+/// The overlap of a capsule with the axis-aligned boxes of a cube collider:
+/// the contact parry's penetration solver does not find when the capsule
+/// lies well inside a box. A capsule overlaps a box when its axis segment
+/// comes within its radius of it. With the axis outside the box the
+/// overlap is that shortfall, along the closest approach; with the axis
+/// inside, it is the shortest way out of the box.
 fn buried_capsule_contact(capsule: CharacterCapsule, cubes: &Compound) -> Option<Contact> {
     let center = [capsule.center.x, capsule.center.y, capsule.center.z];
-    let reach = [
-        capsule.radius,
-        capsule.half_height + capsule.radius,
-        capsule.radius,
-    ];
+    let (low, high) = (
+        capsule.center.y - capsule.half_height,
+        capsule.center.y + capsule.half_height,
+    );
     let mut deepest: Option<Contact> = None;
     for (pose, shape) in cubes.shapes() {
         let Some(cuboid) = shape.as_cuboid() else {
@@ -1902,26 +1904,52 @@ fn buried_capsule_contact(capsule: CharacterCapsule, cubes: &Compound) -> Option
             cuboid.half_extents.y,
             cuboid.half_extents.z,
         ];
-        // The shortest exit: the axis and side needing the least travel.
-        let mut exit: Option<(Real, usize, Real)> = None;
-        for axis in 0..3 {
-            let below = (center[axis] + reach[axis]) - (middle[axis] - half[axis]);
-            let above = (middle[axis] + half[axis]) - (center[axis] - reach[axis]);
-            if below <= 0.0 || above <= 0.0 {
-                exit = None;
-                break;
+        let (min, max) = (
+            std::array::from_fn::<Real, 3, _>(|axis| middle[axis] - half[axis]),
+            std::array::from_fn::<Real, 3, _>(|axis| middle[axis] + half[axis]),
+        );
+        // The axis point closest to the box, and the box point closest to it.
+        let mut axis_point = center;
+        axis_point[1] = middle[1].clamp(low, high);
+        let closest: [Real; 3] =
+            std::array::from_fn(|axis| axis_point[axis].clamp(min[axis], max[axis]));
+        let gap: [Real; 3] = std::array::from_fn(|axis| axis_point[axis] - closest[axis]);
+        let distance = (gap[0] * gap[0] + gap[1] * gap[1] + gap[2] * gap[2]).sqrt();
+        let (depth, normal, face) = if distance > 0.0 {
+            if distance >= capsule.radius {
+                continue;
             }
-            let (depth, side) = if above <= below {
-                (above, 1.0)
-            } else {
-                (below, -1.0)
-            };
-            if exit.is_none_or(|(least, _, _)| depth < least) {
-                exit = Some((depth, axis, side));
+            (
+                capsule.radius - distance,
+                gap.map(|value| value / distance),
+                closest,
+            )
+        } else {
+            // The axis is inside: the shortest exit, by axis and side.
+            let reach = [
+                capsule.radius,
+                capsule.half_height + capsule.radius,
+                capsule.radius,
+            ];
+            let mut exit: Option<(Real, usize, Real)> = None;
+            for axis in 0..3 {
+                let below = (center[axis] + reach[axis]) - min[axis];
+                let above = max[axis] - (center[axis] - reach[axis]);
+                let (depth, side) = if above <= below {
+                    (above, 1.0)
+                } else {
+                    (below, -1.0)
+                };
+                if exit.is_none_or(|(least, _, _)| depth < least) {
+                    exit = Some((depth, axis, side));
+                }
             }
-        }
-        let Some((depth, axis, side)) = exit else {
-            continue;
+            let (depth, axis, side) = exit.expect("three axes");
+            let mut normal = [0.0; 3];
+            normal[axis] = side;
+            let mut face = center;
+            face[axis] = if side > 0.0 { max[axis] } else { min[axis] };
+            (depth, normal, face)
         };
         if deepest
             .as_ref()
@@ -1929,16 +1957,11 @@ fn buried_capsule_contact(capsule: CharacterCapsule, cubes: &Compound) -> Option
         {
             continue;
         }
-        let mut normal = [0.0; 3];
-        normal[axis] = side;
-        let mut face = center;
-        face[axis] = middle[axis] + side * half[axis];
-        let mut touch = center;
-        touch[axis] -= side * reach[axis];
         let normal = Vector::new(normal[0], normal[1], normal[2]);
+        let face = Vector::new(face[0], face[1], face[2]);
         deepest = Some(Contact::new(
-            Vector::new(touch[0], touch[1], touch[2]),
-            Vector::new(face[0], face[1], face[2]),
+            face - normal * depth,
+            face,
             -normal,
             normal,
             -depth,
