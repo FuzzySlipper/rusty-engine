@@ -275,6 +275,11 @@ surface, within one step height. A stair of one-voxel risers drawn by dual
 contouring is a run of rounded steps: its cell-centre heights vary by a few
 centimetres, so a step height tuned to exactly one voxel can refuse an edge.
 
+The character controller steps up a reconstructed ledge within its maximum
+step height as it does a cube ledge. A dual-contoured riser leans a little, so
+the capsule's sweep down meets the riser below its edge; the step takes the
+tread above that contact. A ledge above the step height stays a wall.
+
 ## Distance level of detail
 
 `VoxelScenePresentation.SetLevelOfDetail(new(presentation, coarseDistance))`

@@ -2560,8 +2560,17 @@ fn try_step(
         else {
             return Ok((None, casts));
         };
+        // A landing on a steep face is the riser's side, not a tread: a
+        // reconstructed riser leans, so the sweep down meets it below the
+        // edge. Its tread is then the face's top, at or above the contact.
+        let landed_on_riser = !standable(vec3_from_world(landing.normal)?, config);
+        let tread_matches_landing = if landed_on_riser {
+            tread.point.y >= landing.point.y - f64::from(landing_height_tolerance)
+        } else {
+            (tread.point.y - landing.point.y).abs() <= f64::from(landing_height_tolerance)
+        };
         if !standable(vec3_from_world(tread.normal)?, config)
-            || (tread.point.y - landing.point.y).abs() > f64::from(landing_height_tolerance)
+            || !tread_matches_landing
             || (tread.point.x - tread_probe.center.x).abs()
                 > f64::from(config.recovery.normal_nudge)
             || (tread.point.z - tread_probe.center.z).abs()
