@@ -672,6 +672,15 @@ pub struct NativeMaterialRequest {
     /// Shade each triangle flat from its own plane, whatever normals the
     /// mesh carries, with no normal map: low-poly props read as faceted.
     pub flat_shading: bool,
+    /// Sway in the scene's wind (`CameraView.SetWind`): how far each metre
+    /// of a vertex's height above the part's origin leans with the wind at
+    /// unit strength, in metres (a trunk, a stalk). 0 with `wind_flutter` 0
+    /// (the default) stands still.
+    pub wind_bend: f32,
+    /// How far a vertex flutters at unit wind strength, in metres, times its
+    /// colour's alpha (leaves, grass tips; the whole mesh without vertex
+    /// colours).
+    pub wind_flutter: f32,
 }
 
 /// A product shader resource (`.wgsl`, `NativeRenderResourceKind::Shader`),

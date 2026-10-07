@@ -3,7 +3,7 @@
 // and particle bindings at 20, so the two layouts never collide in this
 // module.
 
-#import rusty::view::frame
+#import rusty::view::{frame, mask_coverage}
 #import rusty::lighting::standard_radiance
 #import rusty::finish::finish
 
@@ -82,7 +82,7 @@ fn gl_dpdy2(value: vec2<f32>) -> vec2<f32> {
     return -dpdy(value);
 }
 
-fn shaded_sprite(in: SpriteOut, front: bool) -> vec4<f32> {
+fn shaded_sprite(in: SpriteOut, front: bool, masked: bool) -> vec4<f32> {
     // Derivatives and samples first: they need uniform control flow.
     let q0 = dpdx(in.world_position);
     let q1 = gl_dpdy3(in.world_position);
@@ -103,7 +103,7 @@ fn shaded_sprite(in: SpriteOut, front: bool) -> vec4<f32> {
     let geometry_roughness = max(max(normal_change.x, normal_change.y), normal_change.z);
 
     let cutoff = in.params.y;
-    if cutoff > 0.0 && color.a < cutoff {
+    if masked && cutoff > 0.0 && color.a < cutoff {
         discard;
     }
     let mode = u32(in.params.x + 0.5);
@@ -152,7 +152,7 @@ fn shaded_sprite(in: SpriteOut, front: bool) -> vec4<f32> {
 // A sprite's colour at `fade` of its alpha, premultiplied when it adds to
 // the frame so a faded sprite adds nothing.
 fn faded_sprite(in: SpriteOut, front: bool, fade: f32) -> vec4<f32> {
-    var color = shaded_sprite(in, front);
+    var color = shaded_sprite(in, front, true);
     color.a = color.a * fade;
     if in.soft.y > 0.5 {
         color = vec4<f32>(color.rgb * color.a, color.a);
@@ -166,10 +166,23 @@ fn fs_sprite(in: SpriteOut, @builtin(front_facing) front: bool) -> @location(0) 
     return faded_sprite(in, front, 1.0);
 }
 
-// Solid sprites cover their pixel (`world.wgsl` `fs_world_opaque`).
+struct OpaqueSpriteOut {
+    @location(0) color: vec4<f32>,
+    @builtin(sample_mask) mask: u32,
+};
+
+// Solid sprites cover their pixel (`world.wgsl` `fs_world_opaque`); a masked
+// one (a cutoff) covers its samples by its alpha, so its cut edge resolves
+// anti-aliased under multisampling.
 @fragment
-fn fs_sprite_opaque(in: SpriteOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
-    return vec4<f32>(shaded_sprite(in, front).rgb, 1.0);
+fn fs_sprite_opaque(in: SpriteOut, @builtin(front_facing) front: bool) -> OpaqueSpriteOut {
+    let cutoff = in.params.y;
+    let color = shaded_sprite(in, front, false);
+    var mask = 0xffffffffu;
+    if cutoff > 0.0 {
+        mask = mask_coverage(color.a, cutoff);
+    }
+    return OpaqueSpriteOut(vec4<f32>(color.rgb, 1.0), mask);
 }
 
 // Particle billboard: a screen-aligned quad, of constant pixel size

@@ -2,7 +2,8 @@
 //! surface in place of the standard shade stage, beside standard materials,
 //! in the opaque, blend and shadow passes; their standard-feature variants;
 //! redefinition; a shader that does not compose; its own textures and the
-//! presentation time (#9126); keywords and a caster stage (#9127).
+//! presentation time (#9126); keywords and a caster stage (#9127); a
+//! displace stage that moves the vertices and their shadow (#9541).
 
 mod support;
 
@@ -496,4 +497,82 @@ fn a_caster_stage_reads_presentation_time_and_the_shadow_follows_it() {
     );
     assert!(held == faded, "a held time draws the same");
     assert!(again == whole, "the shadow follows time back");
+}
+
+/// Lifts the box by its first parameter, scaled by a wave of presentation
+/// time, in the image and the shadow alike.
+const RISING: &str = "#import rusty::types::{Surface, Vertex}
+#import rusty::view::frame
+#import rusty::material::material
+#import rusty::shade::standard_shade
+
+fn displace(vertex: Vertex) -> vec3<f32> {
+    let lift = material.parameters[0].x * (0.5 + 0.5 * sin(frame.time.x));
+    return vertex.world_position + vec3<f32>(0.0, lift, 0.0);
+}
+
+fn shade(surface: Surface) -> vec4<f32> {
+    return standard_shade(surface);
+}
+";
+
+/// The first row from the top of the image with the right box's unlit
+/// faces (black; the background above them is not): its front face when it
+/// stands, its underside once it rises above the eye.
+fn top_of_right_box(rgba: &[u8]) -> u32 {
+    (0..HEIGHT)
+        .find(|&y| (WIDTH / 2 + 10..WIDTH - 10).any(|x| pixel(rgba, x, y)[0] < 8))
+        .expect("the right box in view")
+}
+
+#[test]
+fn a_displace_stage_moves_the_vertices_with_time_and_the_shadow_follows() {
+    let mut harness = Harness::new(RendererOptions {
+        default_world_lights: false,
+        shadows: true,
+        ..RendererOptions::default()
+    });
+    let mut rising = material("material/right", [0.8, 0.8, 0.8, 1.0], None);
+    rising.shader = Some(MaterialShaderDescriptor {
+        shader: "shader/rising".to_owned(),
+        parameters: [[0.6, 0.0, 0.0, 0.0], [0.0; 4], [0.0; 4], [0.0; 4]],
+        textures: [None, None],
+    });
+    harness.apply(vec![shader("shader/rising", RISING)]);
+    scene(&mut harness, rising);
+    let view = camera(VIEW.0, VIEW.1, VIEW.2);
+    let mut at = |time: f64| {
+        harness.renderer.set_animation_time(time);
+        harness.render(&view).1
+    };
+    // sin is -1 at 3π/2 (no lift) and 1 at π/2 (the whole lift).
+    let grounded = at(std::f64::consts::FRAC_PI_2 * 3.0);
+    let lifted = at(std::f64::consts::FRAC_PI_2);
+    let held = at(std::f64::consts::FRAC_PI_2);
+    assert!(
+        top_of_right_box(&lifted) + 6 < top_of_right_box(&grounded),
+        "the box rises from row {} to {}",
+        top_of_right_box(&grounded),
+        top_of_right_box(&lifted)
+    );
+    assert_eq!(held, lifted, "a held time draws the same");
+    // Nothing else changes between frames: the shadow maps redraw for the
+    // time alone, and the lifted box throws a different shadow.
+    assert!(
+        shadowed(&grounded) > 500,
+        "the box casts {}",
+        shadowed(&grounded)
+    );
+    let grounded_shadow: Vec<(u32, u32)> = (0..WIDTH)
+        .flat_map(|x| (0..HEIGHT).map(move |y| (x, y)))
+        .filter(|&(x, y)| pixel(&grounded, x, y)[0] < 60)
+        .collect();
+    let lifted_shadow: Vec<(u32, u32)> = (0..WIDTH)
+        .flat_map(|x| (0..HEIGHT).map(move |y| (x, y)))
+        .filter(|&(x, y)| pixel(&lifted, x, y)[0] < 60)
+        .collect();
+    assert_ne!(
+        grounded_shadow, lifted_shadow,
+        "the shadow follows the lift"
+    );
 }

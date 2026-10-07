@@ -47,7 +47,7 @@ pub struct ApplyIssue {
 /// each slot's uv set; a
 /// product shader's 16 parameters; terrain layers 1 to 3's tilings, sample
 /// rects and normal scales, and the layer contrast.
-const MATERIAL_UNIFORM_BYTES: usize = 384;
+const MATERIAL_UNIFORM_BYTES: usize = 400;
 /// Anisotropic filtering of mipmapped material textures.
 const MATERIAL_ANISOTROPY: u16 = 16;
 /// Payload groups without a voxel material are fully rough.
@@ -155,6 +155,7 @@ impl Renderer {
             RenderDiff::SetSunShafts { sun_shafts } => {
                 self.tables.sun_shafts = *sun_shafts;
             }
+            RenderDiff::SetWind { wind } => self.tables.wind = *wind,
             RenderDiff::SetIndirectLight { indirect_light } => {
                 self.set_indirect_light(*indirect_light);
             }
@@ -1384,6 +1385,8 @@ pub(crate) struct MaterialParams {
     pub alpha_cutoff: Option<f32>,
     pub unlit: bool,
     pub flat_shading: bool,
+    /// Sway in the scene's wind (`rusty::wind`).
+    pub wind: Option<render_model::MaterialWindDescriptor>,
     pub metalness: f32,
     pub voxel_surface: Option<VoxelSurfaceUniform>,
     /// Triplanar blend sharpness.
@@ -1498,6 +1501,7 @@ impl MaterialParams {
             alpha_cutoff: cutoff,
             unlit: descriptor.unlit,
             flat_shading: descriptor.flat_shading,
+            wind: descriptor.wind,
             metalness: descriptor.metalness,
             voxel_surface,
             triplanar: descriptor.triplanar.map(|triplanar| triplanar.sharpness),
@@ -1560,7 +1564,8 @@ impl MaterialParams {
             .with(
                 Features::STOCHASTIC_TILING,
                 self.stochastic_tiling.is_some(),
-            );
+            )
+            .with(Features::WIND, self.wind.is_some());
         if self.unlit {
             return base | Features::UNLIT;
         }
@@ -1696,6 +1701,10 @@ pub(crate) fn material_bind_group(
         }
         floats[95] = layers.contrast;
     }
+    if let Some(wind) = &params.wind {
+        floats[96] = wind.bend;
+        floats[97] = wind.flutter;
+    }
     let uniform: &[u8] = bytemuck::cast_slice(&floats);
     let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some(label),
@@ -1808,6 +1817,7 @@ pub(crate) fn builtin_materials(
                 alpha_cutoff: None,
                 unlit: true,
                 flat_shading: false,
+                wind: None,
                 metalness: 0.0,
                 voxel_surface: None,
                 triplanar: None,
@@ -1836,6 +1846,7 @@ pub(crate) fn builtin_materials(
                 alpha_cutoff: None,
                 unlit: false,
                 flat_shading: false,
+                wind: None,
                 metalness: 0.0,
                 voxel_surface: None,
                 triplanar: None,
@@ -2095,6 +2106,7 @@ fn op_name(op: &RenderDiff) -> &'static str {
         RenderDiff::SetColorGrading { .. } => "setColorGrading",
         RenderDiff::SetAtmosphere { .. } => "setAtmosphere",
         RenderDiff::SetSunShafts { .. } => "setSunShafts",
+        RenderDiff::SetWind { .. } => "setWind",
         RenderDiff::SetIndirectLight { .. } => "setIndirectLight",
         RenderDiff::SetSkyLight { .. } => "setSkyLight",
         RenderDiff::SetRendererSettings { .. } => "setRendererSettings",

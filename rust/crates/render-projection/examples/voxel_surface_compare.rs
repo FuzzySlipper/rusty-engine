@@ -321,6 +321,7 @@ fn materials(
                 occlusion_map: Default::default(),
                 unlit: false,
                 flat_shading: false,
+                wind: None,
             };
             (material.id.clone(), material)
         })

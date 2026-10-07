@@ -10,7 +10,7 @@ use render_model::{
     AtmosphereDescriptor, AutoExposureDescriptor, BloomDescriptor, ColorGradingDescriptor,
     FogDescriptor, IndirectAmbient, IndirectLightDescriptor, RenderDiff, RenderFrameDiff,
     SkyBackgroundDescriptor, SkyLightDescriptor, SunShaftsDescriptor, ToneMappingDescriptor,
-    ToneMappingOperator,
+    ToneMappingOperator, WindDescriptor,
 };
 
 use crate::{
@@ -78,6 +78,7 @@ pub(crate) struct RuntimeCameraViewCall {
     pub(crate) color_grading: Option<Option<ColorGradingDescriptor>>,
     pub(crate) atmosphere: Option<Option<AtmosphereDescriptor>>,
     pub(crate) sun_shafts: Option<Option<SunShaftsDescriptor>>,
+    pub(crate) wind: Option<Option<WindDescriptor>>,
     pub(crate) indirect_light: Option<Option<IndirectLightDescriptor>>,
     pub(crate) sky_light: Option<Option<SkyLightDescriptor>>,
 }
@@ -153,6 +154,7 @@ impl RuntimeCameraViewBridge {
             color_grading: None,
             atmosphere: None,
             sun_shafts: None,
+            wind: None,
             indirect_light: None,
             sky_light: None,
         });
@@ -208,6 +210,7 @@ impl RuntimeCameraViewBridge {
             color_grading: None,
             atmosphere: None,
             sun_shafts: None,
+            wind: None,
             indirect_light: None,
             sky_light: None,
         };
@@ -500,6 +503,7 @@ impl RuntimeCameraViewBridge {
             color_grading: None,
             atmosphere: None,
             sun_shafts: None,
+            wind: None,
             indirect_light: None,
             sky_light: None,
         };
@@ -796,6 +800,22 @@ impl RuntimeCameraViewBridge {
             ));
         }
         self.staged_mut()?.sun_shafts = Some((request.intensity > 0.0).then_some(shafts));
+        Ok(())
+    }
+
+    fn set_wind(&mut self, request: NativeWindRequest) -> Result<(), CsharpEngineServicesError> {
+        let wind = WindDescriptor {
+            direction: [request.direction.x, request.direction.y],
+            strength: request.strength,
+            gust: request.gust,
+        };
+        if !wind.valid() {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_WIND",
+                "wind direction must be finite with some length, strength within 0 to 16 and gust within 0 to 1",
+            ));
+        }
+        self.staged_mut()?.wind = Some((request.strength > 0.0).then_some(wind));
         Ok(())
     }
 
@@ -1143,6 +1163,9 @@ pub(crate) fn environment_frame(
     }
     if let Some(sun_shafts) = call.sun_shafts {
         operations.push(RenderDiff::SetSunShafts { sun_shafts });
+    }
+    if let Some(wind) = call.wind {
+        operations.push(RenderDiff::SetWind { wind });
     }
     if let Some(indirect_light) = call.indirect_light {
         operations.push(RenderDiff::SetIndirectLight { indirect_light });
@@ -1730,6 +1753,27 @@ pub(crate) unsafe extern "C" fn set_sun_shafts(
     }
     let bridge = unsafe { &mut *context.cast::<RuntimeCameraViewBridge>() };
     match bridge.set_sun_shafts(unsafe { *request }) {
+        Ok(()) => ABI_OK,
+        Err(error) => {
+            bridge.operation_diagnostics.retain(&error, operation_error);
+            0
+        }
+    }
+}
+
+pub(crate) unsafe extern "C" fn set_wind(
+    context: *mut c_void,
+    request: *const NativeWindRequest,
+    operation_error: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    if !operation_error.is_null() {
+        unsafe { *operation_error = std::mem::zeroed() };
+    }
+    if context.is_null() || request.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeCameraViewBridge>() };
+    match bridge.set_wind(unsafe { *request }) {
         Ok(()) => ABI_OK,
         Err(error) => {
             bridge.operation_diagnostics.retain(&error, operation_error);

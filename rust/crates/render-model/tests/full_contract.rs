@@ -24,6 +24,7 @@ fn material() -> RenderMaterialDescriptor {
         occlusion_map: Default::default(),
         unlit: false,
         flat_shading: false,
+        wind: None,
     }
 }
 

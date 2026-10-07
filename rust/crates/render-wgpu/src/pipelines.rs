@@ -574,13 +574,11 @@ impl Layouts {
             }),
             multisample: Default::default(),
             // Only to discard: the alpha mask or a product's caster stage.
-            fragment: (features.contains(Features::MASK) || features.product() != 0).then(|| {
-                wgpu::FragmentState {
-                    module: shader,
-                    entry_point: Some("fs_shadow"),
-                    compilation_options: Default::default(),
-                    targets: &[],
-                }
+            fragment: features.caster_fragment().then(|| wgpu::FragmentState {
+                module: shader,
+                entry_point: Some("fs_shadow"),
+                compilation_options: Default::default(),
+                targets: &[],
             }),
             multiview_mask: None,
             cache: None,
@@ -640,13 +638,11 @@ impl Layouts {
                 bias: Default::default(),
             }),
             multisample: Default::default(),
-            fragment: (features.contains(Features::MASK) || features.product() != 0).then(|| {
-                wgpu::FragmentState {
-                    module: shader,
-                    entry_point: Some("fs_shadow"),
-                    compilation_options: Default::default(),
-                    targets: &[],
-                }
+            fragment: features.caster_fragment().then(|| wgpu::FragmentState {
+                module: shader,
+                entry_point: Some("fs_shadow"),
+                compilation_options: Default::default(),
+                targets: &[],
             }),
             multiview_mask: None,
             cache: None,

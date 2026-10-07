@@ -128,6 +128,7 @@ struct RetainedGraphics {
     color_grading: Option<ColorGradingDescriptor>,
     atmosphere: Option<AtmosphereDescriptor>,
     sun_shafts: Option<SunShaftsDescriptor>,
+    wind: Option<WindDescriptor>,
     indirect_light: Option<IndirectLightDescriptor>,
     sky_light: Option<SkyLightDescriptor>,
     /// The renderer settings the product selected at runtime; `None` while
@@ -264,6 +265,7 @@ impl PresentationWorld {
                 || matches!(&op, RenderDiff::SetColorGrading { color_grading } if &self.retained.color_grading == color_grading)
                 || matches!(&op, RenderDiff::SetAtmosphere { atmosphere } if &self.retained.atmosphere == atmosphere)
                 || matches!(&op, RenderDiff::SetSunShafts { sun_shafts } if &self.retained.sun_shafts == sun_shafts)
+                || matches!(&op, RenderDiff::SetWind { wind } if &self.retained.wind == wind)
                 || matches!(&op, RenderDiff::SetIndirectLight { indirect_light } if &self.retained.indirect_light == indirect_light)
                 || matches!(&op, RenderDiff::SetSkyLight { sky_light } if &self.retained.sky_light == sky_light)
                 || matches!(&op, RenderDiff::SetRendererSettings { settings } if self.retained.renderer_settings.as_ref() == Some(settings))
@@ -705,6 +707,11 @@ impl PresentationWorld {
         if self.retained.sun_shafts.is_some() {
             ops.push(RenderDiff::SetSunShafts {
                 sun_shafts: self.retained.sun_shafts,
+            });
+        }
+        if self.retained.wind.is_some() {
+            ops.push(RenderDiff::SetWind {
+                wind: self.retained.wind,
             });
         }
         if self.retained.indirect_light.is_some() {
@@ -1237,6 +1244,9 @@ impl PresentationWorld {
             }
             RenderDiff::SetSunShafts { sun_shafts } => {
                 self.retained.sun_shafts = *sun_shafts;
+            }
+            RenderDiff::SetWind { wind } => {
+                self.retained.wind = *wind;
             }
             RenderDiff::SetIndirectLight { indirect_light } => {
                 self.retained.indirect_light = *indirect_light;

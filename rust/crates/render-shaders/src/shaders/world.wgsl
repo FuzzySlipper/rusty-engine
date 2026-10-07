@@ -2,13 +2,17 @@
 // pass's light rows into the view's linear HDR target, which the finish pass
 // finishes (`rusty::finish`). Each material compiles the features it uses
 // (`lib.rs` `Features`): UNLIT, MASK, VOXEL_SURFACE, NORMAL_MAP,
-// EMISSIVE_MAP, OCCLUSION_MAP, TRIPLANAR, TERRAIN_LAYERS, STOCHASTIC_TILING;
-// and the mesh's
+// EMISSIVE_MAP, OCCLUSION_MAP, TRIPLANAR, TERRAIN_LAYERS, STOCHASTIC_TILING,
+// FLAT_SHADING, WIND; and the mesh's
 // streams: VERTEX_TANGENTS, LAYER_WEIGHTS. A product shader (PRODUCT_SHADER)
-// shades the surface in place of `rusty::shade`.
+// shades the surface in place of `rusty::shade`, and may place its vertices
+// (PRODUCT_DISPLACES).
 
-#import rusty::types::texture_space_position
-#import rusty::view::{frame, parts, instances}
+#import rusty::types::{texture_space_position, Vertex}
+#import rusty::view::{frame, parts, instances, mask_coverage}
+#ifdef WIND
+#import rusty::wind::wind_displace
+#endif
 #import rusty::material::{
     material,
     albedo,
@@ -47,6 +51,9 @@
 #import rusty::shade::standard_shade
 #ifdef PRODUCT_SHADER
 #import rusty::product::shade
+#endif
+#ifdef PRODUCT_DISPLACES
+#import rusty::product::displace
 #endif
 
 // The view's screen-space ambient occlusion (`ambient_occlusion.wgsl`),
@@ -102,11 +109,31 @@ fn vs_world(
 ) -> VsOut {
     let part = instances[instance];
     let row = parts[part];
-    let world = row.model * vec4<f32>(position, 1.0);
+    var world = (row.model * vec4<f32>(position, 1.0)).xyz;
+    let world_normal = mat3x3<f32>(row.normal_x.xyz, row.normal_y.xyz, row.normal_z.xyz) * normal;
+#ifdef WIND
+#ifdef LAYER_WEIGHTS
+    world = wind_displace(world, row.model[3].xyz, 1.0);
+#else
+    world = wind_displace(world, row.model[3].xyz, color.a);
+#endif
+#endif
+#ifdef PRODUCT_DISPLACES
+    var vertex: Vertex;
+    vertex.world_position = world;
+    vertex.world_normal = world_normal;
+    vertex.position = position;
+    vertex.normal = normal;
+    vertex.uv = uv;
+    vertex.color = color;
+    vertex.origin = row.model[3].xyz;
+    vertex.part = part;
+    world = displace(vertex);
+#endif
     var out: VsOut;
-    out.clip = frame.view_proj * world;
-    out.world_position = world.xyz;
-    out.normal = mat3x3<f32>(row.normal_x.xyz, row.normal_y.xyz, row.normal_z.xyz) * normal;
+    out.clip = frame.view_proj * vec4<f32>(world, 1.0);
+    out.world_position = world;
+    out.normal = world_normal;
     out.uv = uv;
     out.part = part;
     out.color = color;
@@ -386,10 +413,10 @@ fn standard_surface(in: VsOut, front: bool) -> Surface {
     return surface;
 }
 
-fn world_color(in: VsOut, front: bool) -> vec4<f32> {
+fn world_color(in: VsOut, front: bool, masked: bool) -> vec4<f32> {
     var surface = standard_surface(in, front);
 #ifdef MASK
-    if surface.base.a < material.alpha_cutoff {
+    if masked && surface.base.a < material.alpha_cutoff {
         discard;
     }
 #endif
@@ -410,12 +437,24 @@ fn world_color(in: VsOut, front: bool) -> vec4<f32> {
 // Blended passes: the colour and its alpha, blended over the world.
 @fragment
 fn fs_world(in: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
-    return world_color(in, front);
+    return world_color(in, front, true);
 }
 
+struct OpaqueOut {
+    @location(0) color: vec4<f32>,
+    @builtin(sample_mask) mask: u32,
+};
+
 // Opaque passes cover their pixel whatever the colour's alpha: the finish
-// pass composites the world over the background by its coverage.
+// pass composites the world over the background by its coverage. A masked
+// material covers its samples by its alpha instead (`mask_coverage`), so its
+// cut edges resolve anti-aliased under multisampling.
 @fragment
-fn fs_world_opaque(in: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
-    return vec4<f32>(world_color(in, front).rgb, 1.0);
+fn fs_world_opaque(in: VsOut, @builtin(front_facing) front: bool) -> OpaqueOut {
+#ifdef MASK
+    let color = world_color(in, front, false);
+    return OpaqueOut(vec4<f32>(color.rgb, 1.0), mask_coverage(color.a, material.alpha_cutoff));
+#else
+    return OpaqueOut(vec4<f32>(world_color(in, front, true).rgb, 1.0), 0xffffffffu);
+#endif
 }

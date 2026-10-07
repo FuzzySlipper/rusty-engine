@@ -9329,6 +9329,7 @@ fn render_material(id: String, color: NativeColor) -> RenderMaterialDescriptor {
         occlusion_map: Default::default(),
         unlit: false,
         flat_shading: false,
+        wind: None,
     }
 }
 
@@ -9528,6 +9529,12 @@ fn material_descriptor(
         normal_map,
         unlit: request.unlit,
         flat_shading: request.flat_shading,
+        wind: (request.wind_bend != 0.0 || request.wind_flutter != 0.0).then_some(
+            render_model::MaterialWindDescriptor {
+                bend: request.wind_bend,
+                flutter: request.wind_flutter,
+            },
+        ),
         emission_map,
         occlusion_map,
         triplanar: triplanar_descriptor(request.triplanar_sharpness),
@@ -10402,6 +10409,8 @@ pub(super) mod tests {
                 orm_map: Default::default(),
                 occlusion_strength: 0.0,
                 flat_shading: false,
+                wind_bend: 0.0,
+                wind_flutter: 0.0,
             };
         let none = NativeRenderResourceHandle::default();
         let plain = material_descriptor(
@@ -10466,6 +10475,8 @@ pub(super) mod tests {
                 },
                 occlusion_strength: strength,
                 flat_shading: false,
+                wind_bend: 0.0,
+                wind_flutter: 0.0,
                 ..request(false, none, occlusion_map)
             };
         let packed =
@@ -10553,6 +10564,8 @@ pub(super) mod tests {
                 orm_map: Default::default(),
                 occlusion_strength: 0.0,
                 flat_shading: false,
+                wind_bend: 0.0,
+                wind_flutter: 0.0,
             })
             .unwrap();
         let bindings = [NativeMeshMaterialBinding {
@@ -10768,6 +10781,8 @@ pub(super) mod tests {
                 occlusion_strength: 0.0,
                 unlit: false,
                 flat_shading: false,
+                wind_bend: 0.0,
+                wind_flutter: 0.0,
             })
             .unwrap();
         let positions = [
@@ -10976,6 +10991,8 @@ pub(super) mod tests {
                 occlusion_strength: 0.0,
                 unlit: false,
                 flat_shading: false,
+                wind_bend: 0.0,
+                wind_flutter: 0.0,
             })
             .unwrap();
         let mut positions = [
@@ -11519,6 +11536,8 @@ pub(super) mod tests {
             occlusion_strength: 0.0,
             unlit: false,
             flat_shading: false,
+            wind_bend: 0.0,
+            wind_flutter: 0.0,
         };
         let original = bridge.create_material(request).expect("material");
         let replacement = bridge
@@ -11578,6 +11597,8 @@ pub(super) mod tests {
             occlusion_strength: 0.0,
             unlit: false,
             flat_shading: false,
+            wind_bend: 0.0,
+            wind_flutter: 0.0,
         };
         let resources = RenderResourceRegistry::default();
         let descriptor = material_descriptor("material/metal".to_owned(), metal, &resources)
@@ -11629,6 +11650,8 @@ pub(super) mod tests {
             occlusion_strength: 0.0,
             unlit: false,
             flat_shading: false,
+            wind_bend: 0.0,
+            wind_flutter: 0.0,
         };
         let resources = RenderResourceRegistry::default();
         let descriptor = material_descriptor("material/plain".to_owned(), plain, &resources)
@@ -11795,6 +11818,8 @@ pub(super) mod tests {
             occlusion_strength: 0.0,
             unlit: false,
             flat_shading: false,
+            wind_bend: 0.0,
+            wind_flutter: 0.0,
         };
         let refused =
             material_descriptor("material/a".to_owned(), request(colour.handle), resources)
@@ -11888,6 +11913,8 @@ fn shade(surface: Surface) -> vec4<f32> {
                 occlusion_strength: 0.0,
                 unlit: false,
                 flat_shading: false,
+                wind_bend: 0.0,
+                wind_flutter: 0.0,
             })
             .unwrap();
         let resources = bridge.staged_ref().unwrap().state.projector.resources();
@@ -12004,6 +12031,8 @@ fn shade(surface: Surface) -> vec4<f32> {
             occlusion_strength: 0.0,
             unlit: false,
             flat_shading: false,
+            wind_bend: 0.0,
+            wind_flutter: 0.0,
         };
         assert_eq!(
             bridge
@@ -12131,6 +12160,8 @@ fn shade(surface: Surface) -> vec4<f32> {
                     occlusion_strength: 0.0,
                     unlit: false,
                     flat_shading: false,
+                    wind_bend: 0.0,
+                    wind_flutter: 0.0,
                 })
                 .unwrap();
         }
@@ -12362,6 +12393,8 @@ fn shade(surface: Surface) -> vec4<f32> {
                 occlusion_strength: 0.0,
                 unlit: false,
                 flat_shading: false,
+                wind_bend: 0.0,
+                wind_flutter: 0.0,
             })
             .unwrap();
         assert_eq!(
@@ -13120,6 +13153,8 @@ fn shade(surface: Surface) -> vec4<f32> {
                 occlusion_strength: 0.0,
                 unlit: false,
                 flat_shading: false,
+                wind_bend: 0.0,
+                wind_flutter: 0.0,
             })
             .expect("material");
         let bindings = [NativeMeshMaterialBinding {

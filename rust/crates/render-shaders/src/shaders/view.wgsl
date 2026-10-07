@@ -30,3 +30,16 @@
 // `Frame.probe_grid` place it.
 @group(0) @binding(11) var probes: texture_3d<f32>;
 @group(0) @binding(12) var probes_sampler: sampler;
+
+// Coverage for a masked surface's pixel (MASK, `fs_world_opaque`): the
+// alpha sharpened about the cutoff over one pixel's change of it, as a share
+// of the view's samples, so a leaf's edge resolves anti-aliased where the
+// cutoff alone would alias it. The surface writes alpha 1 to the samples it
+// covers: the finish pass reads the target's alpha as coverage. Call before
+// any discard: it takes a derivative.
+fn mask_coverage(alpha: f32, cutoff: f32) -> u32 {
+    let sharpened = clamp((alpha - cutoff) / max(fwidth(alpha), 1e-5) + 0.5, 0.0, 1.0);
+    let samples = max(frame.counts.z, 1u);
+    let covered = u32(round(sharpened * f32(samples)));
+    return (1u << covered) - 1u;
+}

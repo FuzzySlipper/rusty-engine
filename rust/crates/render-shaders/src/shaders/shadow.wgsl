@@ -1,14 +1,22 @@
-// Shadow caster pass: parts drawn into one shadow layer's depth. Only MASK
-// materials and product shaders with a caster stage have a fragment stage:
-// MASK discards below the cutoff (voxel surfaces remapped and triplanar
-// planes blended as in the world pass), then a product's `cast_shadow` may discard.
+// Shadow caster pass: parts drawn into one shadow layer's depth, their
+// vertices placed as the world pass places them (the wind, a product's
+// `displace`). Only MASK materials and product shaders with a caster stage
+// have a fragment stage: MASK discards below the cutoff (voxel surfaces
+// remapped and triplanar planes blended as in the world pass), then a
+// product's `cast_shadow` may discard.
 
-#import rusty::types::{texture_space_position, Caster}
+#import rusty::types::{texture_space_position, Caster, Vertex}
 #import rusty::view::{parts, instances, shadow_views}
 #import rusty::material::{material, albedo, albedo_sampler}
 #import rusty::surface::{transform_uv, voxel_uv, triplanar_uvs, triplanar_weights, hex_tiles, hex_texture}
-#ifdef PRODUCT_SHADER
+#ifdef WIND
+#import rusty::wind::wind_displace
+#endif
+#ifdef PRODUCT_CASTS
 #import rusty::product::cast_shadow
+#endif
+#ifdef PRODUCT_DISPLACES
+#import rusty::product::displace
 #endif
 
 struct Layer {
@@ -38,18 +46,35 @@ fn vs_shadow(
     @builtin(instance_index) instance: u32,
 ) -> VsOut {
     let part = instances[instance];
-    let world = parts[part].model * vec4<f32>(position, 1.0);
-    var out: VsOut;
-    out.clip = shadow_views[layer.index].view_proj * world;
-    out.world_position = world.xyz;
-    out.uv = uv;
-    out.part = part;
+    let row = parts[part];
+    var world = (row.model * vec4<f32>(position, 1.0)).xyz;
 #ifdef LAYER_WEIGHTS
     // The vertex colour holds layer weights.
-    out.alpha = 1.0;
+    let alpha = 1.0;
 #else
-    out.alpha = color.a;
+    let alpha = color.a;
 #endif
+#ifdef WIND
+    world = wind_displace(world, row.model[3].xyz, alpha);
+#endif
+#ifdef PRODUCT_DISPLACES
+    var vertex: Vertex;
+    vertex.world_position = world;
+    vertex.world_normal = mat3x3<f32>(row.normal_x.xyz, row.normal_y.xyz, row.normal_z.xyz) * normal;
+    vertex.position = position;
+    vertex.normal = normal;
+    vertex.uv = uv;
+    vertex.color = color;
+    vertex.origin = row.model[3].xyz;
+    vertex.part = part;
+    world = displace(vertex);
+#endif
+    var out: VsOut;
+    out.clip = shadow_views[layer.index].view_proj * vec4<f32>(world, 1.0);
+    out.world_position = world;
+    out.uv = uv;
+    out.part = part;
+    out.alpha = alpha;
 #ifdef TRIPLANAR
     out.texture_position = texture_space_position(parts[part], position);
     out.texture_normal = normal;
@@ -87,7 +112,7 @@ fn fs_shadow(in: VsOut) {
         discard;
     }
 #endif
-#ifdef PRODUCT_SHADER
+#ifdef PRODUCT_CASTS
     var caster: Caster;
     caster.uv = in.uv;
     caster.world_position = in.world_position;

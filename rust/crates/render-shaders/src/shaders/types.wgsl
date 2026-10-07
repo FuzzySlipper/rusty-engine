@@ -7,7 +7,8 @@ struct Frame {
     view_proj: mat4x4<f32>,
     inv_view_proj: mat4x4<f32>,
     camera: vec4<f32>,
-    // x: light count, y: first light row (world lights, then viewmodel lights)
+    // x: light count, y: first light row (world lights, then viewmodel
+    // lights); z: the view's samples per pixel.
     counts: vec4<u32>,
     // x: exposure; fog y: start, z: end (linear), w: density (exponential)
     finish: vec4<f32>,
@@ -47,6 +48,10 @@ struct Frame {
     // probes see, 2 a floor the probes add to; 3 and 4 the same with the
     // one-slab encoding (`lighting.wgsl` probe_sh).
     probe_grid: vec4<f32>,
+    // The scene's wind (`wind.wgsl`): xy its direction over the ground
+    // (world x, z; unit length), z its strength (0: still), w its gust
+    // share.
+    wind: vec4<f32>,
     // Clustered lighting (`light_clusters.wgsl`): xyz: tiles across, tiles
     // down, depth slices; w: 1 when this pass's lights are read from the
     // clusters, 0 when they are looped over.
@@ -130,6 +135,10 @@ struct MaterialUniform {
     layer_tile: array<vec4<f32>, 3>,
     layer_rect: array<vec4<f32>, 3>,
     layer_factors: vec4<f32>,
+    // The wind feature (WIND): x how far the part leans per metre above its
+    // origin at unit wind, y how far a vertex flutters at unit wind, by its
+    // colour's alpha.
+    wind: vec4<f32>,
 };
 
 // What the standard surface stages make of a world fragment, which the shade
@@ -156,6 +165,22 @@ struct Surface {
 
 // What the shadow pass gives a product shader's caster stage
 // (`fn cast_shadow(caster: Caster)`), which may discard.
+// A vertex as the world and shadow passes' vertex stages have placed it,
+// which a product shader's `displace` returns a world position for.
+struct Vertex {
+    // In the world: the part's transform applied, and the wind's sway.
+    world_position: vec3<f32>,
+    world_normal: vec3<f32>,
+    // The mesh's own position and normal (model space).
+    position: vec3<f32>,
+    normal: vec3<f32>,
+    uv: vec2<f32>,
+    color: vec4<f32>,
+    // Where the part's origin stands in the world.
+    origin: vec3<f32>,
+    part: u32,
+};
+
 struct Caster {
     // The mesh uv; a voxel surface's tile coordinates in cells.
     uv: vec2<f32>,

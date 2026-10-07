@@ -289,6 +289,7 @@ pub fn coloured_mesh(
                 occlusion_map: Default::default(),
                 unlit: false,
                 flat_shading: false,
+                wind: None,
             },
         },
         RenderDiff::DefineStaticMesh {

@@ -6433,6 +6433,8 @@ mod tests {
                         occlusion_strength: 0.0,
                         unlit: false,
                         flat_shading: false,
+                        wind_bend: 0.0,
+                        wind_flutter: 0.0,
                     },
                     &mut material,
                     std::ptr::null_mut(),

@@ -16,7 +16,7 @@ use glam::{Mat4, Vec3};
 use render_host_contracts::RendererCompositionCamera;
 use render_model::{
     AtmosphereDescriptor, ColorGradingDescriptor, FogDescriptor, LightDescriptor, RenderHandle,
-    RenderLayer, ToneMappingDescriptor, ToneMappingOperator,
+    RenderLayer, ToneMappingDescriptor, ToneMappingOperator, WindDescriptor,
 };
 
 use crate::apply::light_row;
@@ -43,10 +43,10 @@ const LIGHT_ROW_FLOATS: usize = 16;
 /// light count and first light; then exposure and fog distances, fog colour,
 /// and the tone mapping and fog modes; then the presentation time and the
 /// colour grading; then the sun, the atmosphere and the sky's light; then
-/// the indirect light volume's origin and grid; then the light cluster grid
-/// and depth range.
+/// the indirect light volume's origin and grid and the wind; then the light
+/// cluster grid and depth range.
 const FRAME_UNIFORM_BYTES: u64 =
-    (16 + 16 + 4 + 4 + 4 + 4 + 4 + 4 + 4 + 4 + 4 * 4 + 4 + 4 + 4 + 4 + 4) * 4;
+    (16 + 16 + 4 + 4 + 4 + 4 + 4 + 4 + 4 + 4 + 4 * 4 + 4 + 4 + 4 + 4 + 4 + 4) * 4;
 /// Instance regions before the shadow casters: a list and a visible region
 /// for each of the world and viewmodel layers (`update_view_list`).
 const VIEW_REGIONS: u32 = 4;
@@ -1124,9 +1124,10 @@ impl Renderer {
             .flat_map(|layer| layer.casters.batches.iter().copied())
             .collect();
         let variants = self.batch_variants(&batches);
-        self.shadows.timed = variants
-            .iter()
-            .any(|(features, _)| features.caster().product() != 0);
+        self.shadows.timed = variants.iter().any(|(features, _)| {
+            let caster = features.caster();
+            caster.product() != 0 || caster.moves_with_time()
+        });
         let mut drawn = ShadowsEncoded::default();
         for (features, pass) in variants {
             drawn.pipelines_created += u32::from(self.layouts.prepare_caster(
@@ -1464,7 +1465,7 @@ impl Renderer {
         uniform.extend_from_slice(&view_proj.inverse().to_cols_array());
         uniform.extend_from_slice(&[eye.x, eye.y, eye.z, 1.0]);
         let mut bytes: Vec<u8> = bytemuck::cast_slice(&uniform).to_vec();
-        for count in [lights.count, lights.first, 0, 0] {
+        for count in [lights.count, lights.first, view.target.samples, 0] {
             bytes.extend_from_slice(&count.to_le_bytes());
         }
         bytes.extend_from_slice(&finish_uniform(
@@ -1493,6 +1494,9 @@ impl Renderer {
             bytes.extend_from_slice(&value.to_le_bytes());
         }
         for value in self.probes.uniform() {
+            bytes.extend_from_slice(&value.to_le_bytes());
+        }
+        for value in wind_uniform(self.tables.wind) {
             bytes.extend_from_slice(&value.to_le_bytes());
         }
         // The cluster fields follow once the view's clusters are encoded.
@@ -2223,6 +2227,18 @@ fn atmosphere_uniform(atmosphere: AtmosphereDescriptor, sun: Option<Sun>) -> [f3
         haze_b,
         atmosphere.sun_halo,
     ]
+}
+
+/// The frame uniform's wind row (`rusty::wind`): the unit direction over
+/// the ground, the strength and the gust share; all zero when still.
+fn wind_uniform(wind: Option<WindDescriptor>) -> [f32; 4] {
+    match wind {
+        Some(wind) if wind.strength > 0.0 => {
+            let [x, z] = wind.unit_direction();
+            [x, z, wind.strength, wind.gust]
+        }
+        _ => [0.0; 4],
+    }
 }
 
 /// The frame uniform's grading rows (`rusty::finish::graded`): the white

@@ -19,6 +19,7 @@
 //! | `color_grading` | (single) | white balance, contrast and saturation before the tone mapping operator | `SetColorGrading` |
 //! | `atmosphere` | (single) | height fog, sun haze and the sun in the sky | `SetAtmosphere` |
 //! | `sun_shafts` | (single) | the finish pass's sun shafts | `SetSunShafts` |
+//! | `wind` | (single) | the scene's wind, in the frame uniform | `SetWind` |
 //! | `sky_light` | (single) | the sky's light: the background as an environment (`sky_light.rs`) | `SetSkyLight` |
 //!
 //! | `sprites` | `RenderHandle` | membership: the nodes of kind `Sprite` | `CreateSprite`, `Destroy` (subtree) |
@@ -633,6 +634,7 @@ pub(crate) struct Tables {
     pub color_grading: Option<render_model::ColorGradingDescriptor>,
     pub atmosphere: Option<render_model::AtmosphereDescriptor>,
     pub sun_shafts: Option<render_model::SunShaftsDescriptor>,
+    pub wind: Option<render_model::WindDescriptor>,
     /// The indirect light volume requested (`probes.rs`).
     pub indirect_light: Option<render_model::IndirectLightDescriptor>,
     pub sky_light: Option<render_model::SkyLightDescriptor>,
@@ -671,6 +673,7 @@ impl Tables {
             color_grading: None,
             atmosphere: None,
             sun_shafts: None,
+            wind: None,
             indirect_light: None,
             sky_light: None,
             dirty_nodes: HashSet::new(),

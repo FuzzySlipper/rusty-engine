@@ -396,6 +396,20 @@ pub struct NativeSunShaftsRequest {
     pub length: f32,
 }
 
+/// The scene's wind: what materials with a wind bend or flutter
+/// (`NativeMaterialRequest`) and product displace stages sway in.
+/// `direction` is over the ground (world x, z; any length); `strength` (0
+/// to 16) scales every material's bend and flutter, and 0 (the default)
+/// stills the scene; `gust` (0 to 1) is the share of the lean that rises and
+/// falls in gusts rather than holding steady.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeWindRequest {
+    pub direction: NativeVec2,
+    pub strength: f32,
+    pub gust: f32,
+}
+
 /// Which light the ambient rows give inside an indirect light volume.
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]

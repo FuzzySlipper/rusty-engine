@@ -237,6 +237,43 @@ impl SunShaftsDescriptor {
     }
 }
 
+/// The scene's wind, which materials with the wind feature
+/// (`RenderMaterialDescriptor::wind`) and product displace stages sway in.
+/// `direction` is over the ground (world x, z; any length, normalized when
+/// read); `strength` (0 to 16) scales every material's bend and flutter;
+/// `gust` (0 to 1) is the share of the lean that rises and falls in gusts
+/// rather than holding steady.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WindDescriptor {
+    pub direction: [f32; 2],
+    pub strength: f32,
+    pub gust: f32,
+}
+
+impl WindDescriptor {
+    /// The largest strength a product may set.
+    pub const MAX_STRENGTH: f32 = 16.0;
+
+    /// A finite direction with some length, a strength within
+    /// `0..=MAX_STRENGTH` and a gust share within `0..=1`.
+    pub fn valid(&self) -> bool {
+        let [x, z] = self.direction;
+        x.is_finite()
+            && z.is_finite()
+            && (x * x + z * z) > 0.0
+            && (0.0..=Self::MAX_STRENGTH).contains(&self.strength)
+            && (0.0..=1.0).contains(&self.gust)
+    }
+
+    /// The direction at unit length.
+    pub fn unit_direction(&self) -> [f32; 2] {
+        let [x, z] = self.direction;
+        let length = (x * x + z * z).sqrt().max(f32::MIN_POSITIVE);
+        [x / length, z / length]
+    }
+}
+
 /// Which light the ambient rows give inside an indirect light volume.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -811,6 +848,10 @@ pub enum RenderDiff {
     SetSunShafts {
         sun_shafts: Option<SunShaftsDescriptor>,
     },
+    /// Selects the scene's wind; None stills it.
+    SetWind {
+        wind: Option<WindDescriptor>,
+    },
     /// The indirect light volume; `None` turns it off.
     SetIndirectLight {
         indirect_light: Option<IndirectLightDescriptor>,
@@ -981,6 +1022,8 @@ impl RenderDiff {
                 sun_shafts: Some(sun_shafts),
             } if !sun_shafts.valid() => Err(RenderOperationError::SunShafts),
             Self::SetSunShafts { .. } => Ok(()),
+            Self::SetWind { wind: Some(wind) } if !wind.valid() => Err(RenderOperationError::Wind),
+            Self::SetWind { .. } => Ok(()),
             Self::SetIndirectLight {
                 indirect_light: Some(indirect_light),
             } if !indirect_light.valid() => Err(RenderOperationError::IndirectLight),
@@ -1095,6 +1138,7 @@ impl RenderDiff {
             | Self::SetColorGrading { .. }
             | Self::SetAtmosphere { .. }
             | Self::SetSunShafts { .. }
+            | Self::SetWind { .. }
             | Self::SetIndirectLight { .. }
             | Self::SetSkyLight { .. }
             | Self::SetRendererSettings { .. }
@@ -1139,6 +1183,7 @@ pub enum RenderOperationError {
     ColorGrading,
     Atmosphere,
     SunShafts,
+    Wind,
     IndirectLight,
     SkyLight,
     RendererSettings,
@@ -1216,6 +1261,7 @@ impl RenderFrameDiff {
                 | RenderDiff::SetColorGrading { .. }
                 | RenderDiff::SetAtmosphere { .. }
                 | RenderDiff::SetSunShafts { .. }
+                | RenderDiff::SetWind { .. }
                 | RenderDiff::SetIndirectLight { .. }
                 | RenderDiff::SetSkyLight { .. }
                 | RenderDiff::SetRendererSettings { .. }

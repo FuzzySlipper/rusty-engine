@@ -58,6 +58,17 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     private MeshResource? sphereSmooth, sphereFlat;
     private RenderResource? treeMesh;
     private Appearance? sphereSmoothLook, sphereFlatLook, treeSmoothLook, treeFlatLook;
+    // The wind (#9541): the tree with a wind bend, grass cards whose vertex alpha weights their flutter, and a banner a product displace stage waves, all on the room's floor by the torch.
+    private const ulong WindTreeId = 30, GrassBaseId = 31, BannerId = 40, PoleId = 41;
+    private const int GrassCards = 6;
+    private const float TreeWindBend = .12f, GrassWindBend = .25f, GrassWindFlutter = .05f, GrassHeight = .55f, BannerWaveAmplitude = .3f, BannerWaveRate = 5f, WindGust = .6f;
+    private static readonly Vector2 WindDirection = new(1, .25f);
+    private static readonly Color GrassColor = new(.35f,.6f,.2f,1), BannerColor = new(.8f,.25f,.2f,1), PoleColor = new(.4f,.3f,.2f,1);
+    private static readonly Vector3 WindEye = new(4.2f,2.3f,6.7f), WindTarget = new(4,1.5f,3);
+    private Material? treeWind, grass, banner, pole;
+    private MeshResource? grassMesh, bannerMesh, poleMesh;
+    private RenderResource? windTreeMesh, waveShader;
+    private Appearance? windTreeLook, grassLook, bannerLook, poleLook;
     private PresentationEmitter? flame, embers, smoke;
     private PresentationParticleDescriptor flameFire, emberFire, smokeFire;
     private VoxelScenePresentation? presentation;
@@ -189,6 +200,78 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         return Inspect();
     }
     private static AppearanceFact Fact(ulong id,Appearance look,Vector3 at,float scale) => new(id,false,0,new Transform(at,Quaternion.Identity,new Vector3(scale)),look,true,RenderLayer.Scene);
+    // Blow the wind at the given strength over the tree, the grass and the banner (0 stills it; below 0 clears the scene), with the camera on them.
+    [DebugCommand("lighting.wind")]
+    public string Wind(float strength)
+    {
+        if (strength < 0)
+        {
+            if (windTreeLook is null) return Inspect();
+            engine.CameraView.SetWind(new(WindDirection,0,WindGust));
+            engine.Graphics.PublishSnapshot([]);
+            windTreeLook.Dispose(); grassLook?.Dispose(); bannerLook?.Dispose(); poleLook?.Dispose();
+            grassMesh?.Dispose(); bannerMesh?.Dispose(); poleMesh?.Dispose(); windTreeMesh?.Dispose();
+            treeWind?.Dispose(); grass?.Dispose(); banner?.Dispose(); pole?.Dispose(); waveShader?.Dispose();
+            windTreeLook = grassLook = bannerLook = poleLook = null; grassMesh = bannerMesh = poleMesh = null; windTreeMesh = waveShader = null; treeWind = grass = banner = pole = null;
+            return Inspect();
+        }
+        if (windTreeLook is null)
+        {
+            Color white = new(1,1,1,1);
+            treeWind = engine.Graphics.CreateMaterial(new MaterialRequest(TreeColor,default(RenderResourceReference),.9f,white,Vector3.Zero,0,false) with { FlatShading = true, WindBend = TreeWindBend });
+            grass = engine.Graphics.CreateMaterial(new MaterialRequest(GrassColor,default(RenderResourceReference),.9f,white,Vector3.Zero,0,true) with { WindBend = GrassWindBend, WindFlutter = GrassWindFlutter });
+            waveShader = engine.Graphics.OpenResource(new RenderResourceRequest("wave.wgsl")).Handle;
+            banner = engine.Graphics.CreateMaterial(new MaterialRequest(BannerColor,default(RenderResourceReference),.8f,white,Vector3.Zero,0,true) with { Shader = new MaterialShader(waveShader,new Vector4(BannerWaveAmplitude,BannerWaveRate,0,0)) });
+            pole = engine.Graphics.CreateMaterial(new(PoleColor,default(RenderResourceReference),.9f,white,Vector3.Zero,0,false));
+            using (ContentReference tree = engine.Content.OpenReference(new("tree.glb"))) windTreeMesh = engine.Animation.OpenAnimatedMeshFromContent(new(tree));
+            windTreeLook = engine.Animation.CreateAnimatedMeshAppearance(new(windTreeMesh));
+            engine.Animation.UpdateAnimatedMeshMaterials(new(windTreeLook,new MeshMaterialBinding[]{new(0,treeWind)}));
+            grassMesh = engine.Graphics.CreateMeshResource(Grass(grass));
+            bannerMesh = engine.Graphics.CreateMeshResource(Card(banner,.9f,.5f,0,1));
+            poleMesh = engine.Graphics.CreateMeshResource(Card(pole,.06f,2.4f,0,0));
+            grassLook = engine.Graphics.CreateMeshAppearance(grassMesh);
+            bannerLook = engine.Graphics.CreateMeshAppearance(bannerMesh);
+            poleLook = engine.Graphics.CreateMeshAppearance(poleMesh);
+            engine.Graphics.PublishSnapshot(new AppearanceFact[]
+            {
+                Fact(WindTreeId,windTreeLook,new(2.1f,1,3),1.3f),
+                Fact(GrassBaseId,grassLook,new(4.3f,1,3.2f),1),
+                Fact(PoleId,poleLook,new(6.3f,1,2.8f),1),
+                Fact(BannerId,bannerLook,new(6.3f,2.85f,2.8f),1),
+            });
+            engine.CameraView.UpdateCamera(new(camera,Camera(WindEye,WindTarget)));
+        }
+        engine.CameraView.SetWind(new(WindDirection,strength,WindGust));
+        return Inspect();
+    }
+    // A clump of grass: cards crossed at angles over a square metre, each 0.3 m wide and GrassHeight tall, its vertex alpha 0 at the root and 1 at the tip.
+    private static MeshResourceCreateRequest Grass(Material material)
+    {
+        List<Vector3> positions = [], normals = []; List<Vector2> uvs = []; List<Color> colors = []; List<uint> indices = [];
+        Random placement = new(9541);
+        for (int card = 0; card < GrassCards; card++)
+        {
+            float angle = card * MathF.PI / GrassCards, x = (float)placement.NextDouble() - .5f, z = (float)placement.NextDouble() - .5f;
+            Vector3 across = new(MathF.Cos(angle) * .15f, 0, MathF.Sin(angle) * .15f), normal = new(-MathF.Sin(angle), 0, MathF.Cos(angle)), root = new(x, 0, z);
+            uint first = (uint)positions.Count;
+            positions.AddRange([root - across, root + across, root + across + new Vector3(0, GrassHeight, 0), root - across + new Vector3(0, GrassHeight, 0)]);
+            normals.AddRange([normal, normal, normal, normal]);
+            uvs.AddRange([new(0, 1), new(1, 1), new(1, 0), new(0, 0)]);
+            colors.AddRange([new(1, 1, 1, 0), new(1, 1, 1, 0), new(1, 1, 1, 1), new(1, 1, 1, 1)]);
+            indices.AddRange([first, first + 1, first + 2, first, first + 2, first + 3]);
+        }
+        return new MeshResourceCreateRequest(positions.ToArray(), normals.ToArray(), uvs.ToArray(), colors.ToArray(), indices.ToArray(),
+            new MeshGroup[]{new(0,0,(uint)indices.Count)}, new MeshMaterialBinding[]{new(0,material)});
+    }
+    // A card in the xy plane facing +z, `width` across from its origin (uv.x 0 at the origin's edge) and `height` tall, its vertex alpha `rootAlpha` along the bottom and `tipAlpha` along the top.
+    private static MeshResourceCreateRequest Card(Material material, float width, float height, float rootAlpha, float tipAlpha)
+    {
+        Vector3[] positions = [new(0, 0, 0), new(width, 0, 0), new(width, height, 0), new(0, height, 0)];
+        Vector3[] normals = [Vector3.UnitZ, Vector3.UnitZ, Vector3.UnitZ, Vector3.UnitZ];
+        Vector2[] uvs = [new(0, 1), new(1, 1), new(1, 0), new(0, 0)];
+        Color[] colors = [new(1, 1, 1, rootAlpha), new(1, 1, 1, rootAlpha), new(1, 1, 1, tipAlpha), new(1, 1, 1, tipAlpha)];
+        return new MeshResourceCreateRequest(positions, normals, uvs, colors, new uint[]{0, 1, 2, 0, 2, 3}, new MeshGroup[]{new(0,0,6)}, new MeshMaterialBinding[]{new(0,material)});
+    }
     // A unit sphere of 6 rings and 12 segments with smooth normals: welded, as a low-poly export without split normals comes.
     private static MeshResourceCreateRequest Sphere(Material material)
     {
@@ -327,7 +410,7 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     public void RegisterDebugCommands(IDebugCommandModuleRegistrar registrar)=>registrar.Register(this);
     public ProductUpdateResult Update(ProductUpdate update)=>ProductUpdateResult.None;
     public void Pause(){} public void Resume(){} public void Restart(){SetTorch(true);} public void Shutdown(){}
-    public void Dispose(){engine.CameraView.ClearSkyBackground(default); Flame(false); Facets(false); flameSprite?.Dispose(); emberSprite?.Dispose(); smokeSprite?.Dispose(); presentation?.Dispose(); torch.Dispose(); sun.Dispose(); hemisphere.Dispose(); skyAmbient.Dispose(); camera.Dispose(); stone.Dispose(); scene.Dispose(); day.Dispose(); night.Dispose();}
+    public void Dispose(){engine.CameraView.ClearSkyBackground(default); Flame(false); Facets(false); Wind(-1); flameSprite?.Dispose(); emberSprite?.Dispose(); smokeSprite?.Dispose(); presentation?.Dispose(); torch.Dispose(); sun.Dispose(); hemisphere.Dispose(); skyAmbient.Dispose(); camera.Dispose(); stone.Dispose(); scene.Dispose(); day.Dispose(); night.Dispose();}
 }
 internal sealed record LightingSave(uint[] Room,LightDescriptor Torch);
 internal sealed record LightingProof(bool RoundTrip,float Lit,float Blocked,float Dark,float Current,bool Torch,float Clock);

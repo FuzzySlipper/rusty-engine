@@ -303,6 +303,7 @@ material compiles only the features its contents use:
 | Triplanar | its `TriplanarSharpness` is nonzero ([three planes](smooth-voxel-surfaces.md#textures-on-reconstructed-surfaces)) |
 | Flat shading | `MaterialRequest.FlatShading` is set (or a static mesh asset's material says `flatShading`): each triangle shades from its own plane, taken from the world position's screen derivatives and turned to face the mesh's normal, so a low-poly prop with welded smooth normals reads as faceted; its normal map is ignored. A GLB's authored materials are never flat by themselves: replace a slot's material with a flat one through `Animation.UpdateAnimatedMeshMaterial` or bind it on a static mesh |
 | Stochastic tiling | its `StochasticTiling` is nonzero (three blended hex tiles per sample) |
+| Wind | `MaterialRequest.WindBend` or `WindFlutter` is nonzero (or a static mesh asset's material has `wind`): the part sways in [the scene's wind](#wind) in the world and shadow passes alike. `WindBend` is how far each metre of a vertex's height above the part's origin leans with the wind at unit strength, in metres, so a trunk or stalk bends from its root; `WindFlutter` is how far a vertex circles at unit strength, in metres, times its colour's alpha, so leaves and grass tips flutter while their roots (alpha 0) hold; a mesh without vertex colours flutters whole. Masked leaves resolve anti-aliased under multisampling: a masked material covers its pixel's samples by its alpha sharpened about the cutoff, and masked sprites do the same |
 
 Materials with the same features share pipelines and batch together. A new
 feature set compiles once, when its first material is defined: about 8 ms on
@@ -397,6 +398,19 @@ fn shade(surface: Surface) -> vec4<f32> {
   redraw as presentation time moves. Defined under a keyword's `#ifdef`, only
   that variant has it. Without it, materials cast through the standard
   caster.
+- **Vertices.** A shader may define `fn displace(vertex: Vertex) ->
+  vec3<f32>`, which the world and shadow passes' vertex stages call for the
+  vertex's world position, so a banner waves, a flag ripples or a creature
+  breathes in its image and its shadow alike. `Vertex` holds the world
+  position and normal as the part's transform (and the wind feature, when
+  the material has it) placed them, the mesh's own position and normal, the
+  uv, the vertex colour, the part's origin in the world and its part index.
+  It may read `frame.time` and the scene's wind (`frame.wind`: xy its unit
+  direction over the ground, z its strength, w its gust share), and
+  `rusty::wind::wind_displace` is the wind feature's own sway. While a
+  displacing material draws, the shadow maps redraw as presentation time
+  moves, as they do for a caster stage. The standard stages still cull by
+  the mesh's bounds, so keep a displacement within a metre or so of them.
 - **Checked when opened.** `OpenResource` checks the keywords and composes
   the shader (and its caster stage) with the standard modules, refusing an
   error with `CSHARP_SHADER`, naming the file, line and column. A product
@@ -434,6 +448,25 @@ fn cast_shadow(caster: Caster) {
 #endif
 }
 ```
+
+## Wind
+
+`engine.CameraView.SetWind(new(Direction: new Vector2(1, 0.3f), Strength: 1.5f,
+Gust: 0.6f))` blows a wind over the scene: materials with a wind bend or
+flutter ([the standard shader](#the-standard-shader)) sway in it, and
+product shaders read it in a displace stage ([product
+shaders](#product-shaders)). `Direction` is over the ground (world x, z;
+any length); `Strength` (0 to 16) scales every material's bend and flutter,
+and 0 stills the scene (the default, and `SetWind` with strength 0); `Gust`
+(0 to 1) is the share of the lean that rises and falls in slow gusts rather
+than holding steady. The sway moves with presentation time, so it holds
+while the simulation is paused and costs nothing per frame on the C# side;
+each part's lean is phased by where it stands, so neighbouring trees differ,
+and each vertex's flutter by where it is. The wind is retained with the
+other environment settings and survives a runtime restart. A swaying
+material's shadow sways too: while one draws, the shadow maps redraw every
+frame, so give the wind feature to trees, grass and banners rather than to
+whole terrains.
 
 ## Exposure, tone mapping and fog
 
@@ -660,9 +693,13 @@ re-meshes and only the probe bricks around it rebake),
 flipbook, soft additive embers and soft alpha smoke, with the camera on it;
 `lighting.torch.softness 0` gives them hard depth edges again and 1 the
 authored softness; [particle bursts](csharp-lifecycle.md#particle-bursts)
-describes the two options), and `lighting.facets true|false` (a welded
+describes the two options), `lighting.facets true|false` (a welded
 low-poly sphere and the fixture's low-poly tree twice: their authored smooth
-normals on the left, the flat-shading material on the right, by the torch).
+normals on the left, the flat-shading material on the right, by the torch),
+and `lighting.wind <strength>` (the tree under a material with a wind bend,
+a clump of grass cards whose vertex alpha weights their flutter, and a
+banner a product displace stage (`content/wave.wgsl`) waves, with the
+camera on them; 0 stills the wind, below 0 clears the scene).
 `generate-particles.py` regenerates its three authored sprites.
 `lighting.sky` also moves the fixture's sun from noon at 0 to a low dusk sun
 at 1. Debug selection is explicit fixture

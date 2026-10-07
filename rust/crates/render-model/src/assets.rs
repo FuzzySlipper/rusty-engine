@@ -419,6 +419,11 @@ pub struct RenderMaterialDescriptor {
     /// `FLAT_SHADING`): low-poly props read as faceted.
     #[serde(default, skip_serializing_if = "is_false")]
     pub flat_shading: bool,
+    /// Sway in the scene's wind (`WindDescriptor`; the standard shader's
+    /// `WIND`): the part leans with height above its origin and its vertices
+    /// flutter by their colour's alpha, in the shadow maps too.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wind: Option<MaterialWindDescriptor>,
     /// Multiplies the emission colour and intensity, read through the same
     /// uv as the base texture.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -475,6 +480,26 @@ pub struct MaterialTerrainLayerDescriptor {
     pub voxel_surface: VoxelSurfaceDescriptor,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub normal_map: Option<MaterialNormalMapDescriptor>,
+}
+
+/// How a material moves in the wind: `bend` is how far each metre of a
+/// vertex's height above the part's origin leans with the wind at unit
+/// strength, in metres (a trunk, a stalk); `flutter` is how far a vertex
+/// circles at unit strength, in metres, times its colour's alpha (leaves,
+/// grass tips; the whole mesh without vertex colours). Both finite and
+/// non-negative.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MaterialWindDescriptor {
+    pub bend: f32,
+    pub flutter: f32,
+}
+
+impl MaterialWindDescriptor {
+    pub fn valid(&self) -> bool {
+        let non_negative = |value: f32| value.is_finite() && value >= 0.0;
+        non_negative(self.bend) && non_negative(self.flutter)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -671,6 +696,9 @@ impl RenderMaterialDescriptor {
         {
             return Err(MaterialDescriptorError::InvalidTriplanar);
         }
+        if self.wind.is_some_and(|wind| !wind.valid()) {
+            return Err(MaterialDescriptorError::InvalidWind);
+        }
         if self.texture_transform.is_some_and(|transform| {
             !transform
                 .scale
@@ -759,6 +787,8 @@ pub enum MaterialDescriptorError {
     InvalidOcclusionStrength,
     InvalidNormalMap,
     InvalidTriplanar,
+    /// A wind bend and flutter must be finite and non-negative.
+    InvalidWind,
     InvalidTextureTransform,
     InvalidStochasticTiling,
     InvalidShader,
@@ -1827,6 +1857,7 @@ mod tests {
             occlusion_map: Default::default(),
             unlit: false,
             flat_shading: false,
+            wind: None,
         };
         assert_eq!(material.validate(), Ok(()));
         let material_json = serde_json::to_string(&material).unwrap();
@@ -1886,6 +1917,7 @@ mod tests {
             occlusion_map: Default::default(),
             unlit: false,
             flat_shading: false,
+            wind: None,
         };
         material.validate().unwrap();
         let encoded = serde_json::to_string(&material).unwrap();

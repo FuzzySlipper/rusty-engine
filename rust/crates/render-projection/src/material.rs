@@ -87,6 +87,7 @@ pub fn project_catalog_material(
         occlusion_map: None,
         unlit: false,
         flat_shading: false,
+        wind: None,
     };
     descriptor
         .validate()
