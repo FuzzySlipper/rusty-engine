@@ -550,6 +550,8 @@ pub fn voxel_object_mesh_payload(
             indices: mesh.indices.clone(),
         },
         provenance: MeshProvenance::VoxelObject,
+        layer_weights: false,
+        vertex_occlusion: false,
         texture_space: Some(texture_space),
         distance_field: None,
     }

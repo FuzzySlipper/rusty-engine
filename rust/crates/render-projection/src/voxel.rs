@@ -875,9 +875,33 @@ fn voxel_mesh_payload_with_material_slots(
         components: 2,
         kind: MeshAttributeKind::F32,
     });
-    // Terrain layer weights travel as the chunk's vertex colours.
-    let layer_weights = (!chunk.layer_weights.is_empty()).then(|| chunk.layer_weights.clone());
-    if layer_weights.is_some() {
+    // Terrain layer weights and vertex occlusion travel as the chunk's
+    // vertex colours: the weights' first three layers (the fourth is the
+    // remainder) with the occlusion as alpha, or either alone.
+    let layered = !chunk.layer_weights.is_empty();
+    let occluded = !chunk.occlusion.is_empty();
+    let colors = match (layered, occluded) {
+        (true, true) => Some(
+            chunk
+                .layer_weights
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .zip(&chunk.occlusion)
+                .flat_map(|(weights, occlusion)| [weights[0], weights[1], weights[2], *occlusion])
+                .collect(),
+        ),
+        (true, false) => Some(chunk.layer_weights.clone()),
+        (false, true) => Some(
+            chunk
+                .occlusion
+                .iter()
+                .flat_map(|occlusion| [1.0, 1.0, 1.0, *occlusion])
+                .collect(),
+        ),
+        (false, false) => None,
+    };
+    if colors.is_some() {
         attributes.push(MeshAttribute {
             name: MeshAttributeName::Color,
             components: 4,
@@ -908,10 +932,12 @@ fn voxel_mesh_payload_with_material_slots(
             positions: chunk.positions.clone(),
             normals: chunk.normals.clone(),
             uvs: Some(chunk.tile_coordinates.clone()),
-            colors: layer_weights,
+            colors,
             indices: chunk.indices.clone(),
         },
         provenance: MeshProvenance::VoxelChunk,
+        layer_weights: layered,
+        vertex_occlusion: occluded,
         texture_space: Some(MeshTextureSpace {
             cell_size: chunk.voxel_size,
             origin: chunk.origin_voxel.map(|cell| cell as f32),
@@ -2208,5 +2234,47 @@ mod tests {
         }
         // Most frames touch only some chunks.
         assert!(partial > 200, "{partial} partial frames");
+    }
+}
+
+#[cfg(test)]
+mod vertex_occlusion_tests {
+    use super::*;
+    use engine_spatial::{MaterialVoxel, SurfaceMeshOptions, SurfaceMode, VoxelCollisionScene};
+
+    /// A greedy-cube scene with vertex occlusion carries one occlusion per
+    /// vertex into its payload's colour alpha, flagged as such.
+    #[test]
+    fn a_greedy_scene_with_vertex_occlusion_publishes_occluded_colours() {
+        let voxels = (0..4).flat_map(|x| {
+            (0..4).map(move |z| MaterialVoxel {
+                state: 0,
+                address: [x, 0, z],
+                material_slot: 1,
+            })
+        });
+        let options = SurfaceMeshOptions {
+            vertex_occlusion: 1.0,
+            ..SurfaceMeshOptions::with_mode(SurfaceMode::GreedyCubes)
+        };
+        let scene =
+            VoxelCollisionScene::from_material_voxels_with_mesh_options(1.0, 8, voxels, options)
+                .unwrap();
+        let chunk = scene.mesh_chunks().next().expect("one chunk");
+        assert_eq!(
+            chunk.occlusion.len(),
+            chunk.positions.len() / 3,
+            "one per vertex"
+        );
+        let payload = voxel_mesh_payload(chunk);
+        assert!(payload.vertex_occlusion && !payload.layer_weights);
+        let MeshPayloadSource::Inline { colors, .. } = &payload.source else {
+            unreachable!()
+        };
+        assert_eq!(
+            colors.as_ref().map(Vec::len),
+            Some(chunk.occlusion.len() * 4),
+            "the colours carry the occlusion"
+        );
     }
 }

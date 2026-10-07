@@ -1285,6 +1285,7 @@ fn dominant_direction(facing: [f64; 3], fallback: [f64; 3]) -> Direction6 {
 /// per material slot and box-projection face, crease-angle normals, and
 /// tile coordinates continuous across regions. A lattice unit is `scale`
 /// voxels (2 for a coarse lattice); `pivot` and owners are in voxels.
+#[allow(clippy::too_many_arguments, reason = "one payload")]
 pub(super) fn voxel_payload(
     mut reconstruction: Reconstruction,
     characters: Characters<'_>,
@@ -1293,6 +1294,7 @@ pub(super) fn voxel_payload(
     scale: f64,
     limits: SurfaceMeshLimits,
     layers: Option<&LayerField<'_>>,
+    occlusion: Option<&crate::occlusion::OcclusionField>,
 ) -> Result<MeshPayload, MeshError> {
     merge_block_faces(&mut reconstruction, characters);
     let mut lanes = BTreeMap::<(u16, Direction6), Vec<usize>>::new();
@@ -1316,6 +1318,7 @@ pub(super) fn voxel_payload(
     let mut normals = Vec::new();
     let mut tile_coordinates = Vec::new();
     let mut layer_weights = Vec::new();
+    let mut occlusions = Vec::new();
     let mut indices = Vec::new();
     let mut groups = Vec::with_capacity(lanes.len());
     let mut owners = Vec::new();
@@ -1391,6 +1394,9 @@ pub(super) fn voxel_payload(
                         if let Some(field) = layers {
                             layer_weights.extend(field.weights_or_slot(point, slot));
                         }
+                        if let Some(field) = occlusion {
+                            occlusions.push(field.surface_occlusion(point, normal));
+                        }
                         let seen = &mut first[vertex as usize];
                         if seen.0 == lane {
                             emitted.insert((vertex, bits), index);
@@ -1450,6 +1456,7 @@ pub(super) fn voxel_payload(
         normals,
         tile_coordinates,
         layer_weights,
+        occlusion: occlusions,
         indices,
         groups,
         triangle_owners: owners,

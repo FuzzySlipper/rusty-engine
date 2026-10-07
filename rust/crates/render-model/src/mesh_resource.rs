@@ -214,6 +214,8 @@ pub fn pack_mesh_resources(
                 groups: payload.groups.clone(),
                 bounds: payload.bounds,
                 provenance: payload.provenance,
+                layer_weights: payload.layer_weights,
+                vertex_occlusion: payload.vertex_occlusion,
                 source,
             });
         }
@@ -421,6 +423,8 @@ pub fn decode_mesh_resource_payload(
             indices,
         },
         provenance: payload.provenance,
+        layer_weights: payload.layer_weights,
+        vertex_occlusion: payload.vertex_occlusion,
     };
     decoded
         .validate()
@@ -665,6 +669,8 @@ mod tests {
                 indices: vec![0, 1, 2],
             },
             provenance: MeshProvenance::VoxelObject,
+            layer_weights: false,
+            vertex_occlusion: false,
         }
     }
 

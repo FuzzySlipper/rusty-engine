@@ -4,7 +4,7 @@
 // (`lib.rs` `Features`): UNLIT, MASK, VOXEL_SURFACE, NORMAL_MAP,
 // EMISSIVE_MAP, OCCLUSION_MAP, TRIPLANAR, TERRAIN_LAYERS, STOCHASTIC_TILING,
 // FLAT_SHADING, WIND, WATER; and the mesh's
-// streams: VERTEX_TANGENTS, LAYER_WEIGHTS. A product shader (PRODUCT_SHADER)
+// streams: VERTEX_TANGENTS, LAYER_WEIGHTS, VERTEX_OCCLUSION. A product shader (PRODUCT_SHADER)
 // shades the surface in place of `rusty::shade`, and may place its vertices
 // (PRODUCT_DISPLACES).
 
@@ -130,7 +130,11 @@ fn vs_world(
 #ifdef LAYER_WEIGHTS
     world = wind_displace(world, row.model[3].xyz, 1.0);
 #else
+#ifdef VERTEX_OCCLUSION
+    world = wind_displace(world, row.model[3].xyz, 1.0);
+#else
     world = wind_displace(world, row.model[3].xyz, color.a);
+#endif
 #endif
 #endif
 #ifdef PRODUCT_DISPLACES
@@ -248,7 +252,14 @@ fn layer_normal(layer: u32, uv: vec2<f32>) -> vec3<f32> {
 // through the material's contrast, or all layer 0 on a mesh without them.
 fn terrain_shares(in: VsOut) -> vec4<f32> {
 #ifdef LAYER_WEIGHTS
-    return layer_shares(in.color, material.layer_factors.w);
+#ifdef VERTEX_OCCLUSION
+    // The fourth layer's weight is what the first three leave; the alpha
+    // is occlusion.
+    let weights = vec4<f32>(in.color.rgb, max(1.0 - in.color.r - in.color.g - in.color.b, 0.0));
+#else
+    let weights = in.color;
+#endif
+    return layer_shares(weights, material.layer_factors.w);
 #else
     return vec4<f32>(1.0, 0.0, 0.0, 0.0);
 #endif
@@ -302,14 +313,23 @@ fn standard_surface(in: VsOut, front: bool) -> Surface {
     // The vertex colour holds layer weights.
     surface.tint = row.color;
 #else
+#ifdef VERTEX_OCCLUSION
+    // The vertex colour's alpha holds occlusion.
+    surface.tint = row.color * vec4<f32>(in.color.rgb, 1.0);
+#else
     surface.tint = row.color * in.color;
+#endif
 #endif
     surface.base = surface.tint * texture_color;
     surface.world_position = in.world_position;
     surface.uv = in.uv;
     surface.roughness = 1.0;
     surface.metalness = 0.0;
+#ifdef VERTEX_OCCLUSION
+    surface.occlusion = in.color.a;
+#else
     surface.occlusion = 1.0;
+#endif
     surface.emission = vec3<f32>(0.0);
 #ifdef FLAT_SHADING
     // The triangle's own plane, turned to face the way the mesh's normal

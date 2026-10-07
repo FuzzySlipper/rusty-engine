@@ -122,6 +122,9 @@ pub(crate) struct GpuMesh {
     /// Its vertex colours are terrain layer weights, not a tint: a voxel
     /// chunk meshed with terrain layers.
     pub layer_weights: bool,
+    /// Its vertex colours' alpha is ambient occlusion: a voxel chunk meshed
+    /// with vertex occlusion.
+    pub vertex_occlusion: bool,
 }
 
 impl GpuMesh {
@@ -133,6 +136,10 @@ impl GpuMesh {
                 self.extra.is_some(),
             )
             .with(crate::shaders::Features::LAYER_WEIGHTS, self.layer_weights)
+            .with(
+                crate::shaders::Features::VERTEX_OCCLUSION,
+                self.vertex_occlusion,
+            )
     }
 }
 

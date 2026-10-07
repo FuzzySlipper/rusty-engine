@@ -205,6 +205,9 @@ pub struct VoxelMeshChunk {
     /// Four terrain layer weights per vertex when the session has terrain
     /// layers (`svc_mesh::MeshPayload::layer_weights`); empty otherwise.
     pub layer_weights: Vec<f32>,
+    /// One occlusion per vertex when the session has vertex occlusion
+    /// (`svc_mesh::MeshPayload::occlusion`); empty otherwise.
+    pub occlusion: Vec<f32>,
     /// The chunk's coarse signed distance field over its box
     /// (`svc_mesh::distance_field`, `FIELD_CELLS`³ bytes, x fastest); empty
     /// when the mesher made none.
@@ -1334,12 +1337,18 @@ impl VoxelCollisionScene {
         let [width, height, depth] = grid.chunk_dims().to_array();
         let (owner, local) = grid.voxel_to_chunk_local(voxel);
         // A neighbour's vertices lie within a voxel of this chunk and weigh
-        // the voxels within a transition of them (one more for margin).
+        // the voxels within a transition of them (one more for margin), or
+        // within their occlusion's reach.
         let reach = self
             .mesh_options
             .terrain_layers
             .as_ref()
-            .map_or(1, |layers| 1 + u32::from(layers.transition_cells()));
+            .map_or(1, |layers| 1 + u32::from(layers.transition_cells()))
+            .max(if self.mesh_options.vertex_occlusion > 0.0 {
+                svc_mesh::VERTEX_OCCLUSION_REACH
+            } else {
+                1
+            });
         let offsets = |at: u32, extent: u32| {
             let mut offsets = vec![0i64];
             if at < reach {
@@ -1693,6 +1702,7 @@ fn voxel_mesh_chunk(
         normals: mesh.normals,
         tile_coordinates: mesh.tile_coordinates,
         layer_weights: mesh.layer_weights,
+        occlusion: mesh.occlusion,
         distance_field,
         indices: mesh.indices,
         groups: mesh
@@ -1761,6 +1771,7 @@ fn mesh_payload_hash(mesh: &svc_mesh::MeshPayload) -> u64 {
         &mesh.normals,
         &mesh.tile_coordinates,
         &mesh.layer_weights,
+        &mesh.occlusion,
     ] {
         hash.words([stream.len() as u32]);
         hash.words(stream.iter().map(|value| value.to_bits()));

@@ -19,7 +19,13 @@ use svc_volume::VoxelChunk;
 use texture_mapping::{project_voxel_surface_tile_point, VoxelTextureMappingError};
 
 pub mod distance_field;
+mod occlusion;
 mod surface;
+
+/// How far beyond a chunk its vertex occlusion reads, in voxels
+/// ([`SurfaceMeshOptions::vertex_occlusion`]): an edit within this reach of
+/// a neighbour remeshes it.
+pub const VERTEX_OCCLUSION_REACH: u32 = occlusion::REACH as u32;
 mod terrain_layers;
 pub mod texture_mapping;
 
@@ -202,6 +208,11 @@ pub struct SurfaceMeshOptions {
     /// occlusion. Off by default: a scene whose product has not selected
     /// that occlusion pays nothing for the fields.
     pub distance_fields: bool,
+    /// Darken each vertex by the solid voxels around it
+    /// ([`MeshPayload::occlusion`]), by this strength (0, the default, off;
+    /// 1 the full occlusion). Reconstructed vertices look out over their
+    /// normal; cube face corners take the classic voxel rule.
+    pub vertex_occlusion: f32,
 }
 
 impl SurfaceMeshOptions {
@@ -318,6 +329,10 @@ pub struct MeshPayload {
     /// of the voxels around it; a cube face takes its own slot's layer.
     /// Empty otherwise.
     pub layer_weights: Vec<f32>,
+    /// With [`SurfaceMeshOptions::vertex_occlusion`], 1 `f32` per vertex: how
+    /// much ambient light reaches it (1 in the open, down toward 0 in a
+    /// closed corner), baked with the strength. Empty otherwise.
+    pub occlusion: Vec<f32>,
     /// 3 `u32` per triangle.
     pub indices: Vec<u32>,
     /// Groups whose `count`s tile `indices`.
@@ -490,12 +505,20 @@ fn in_plane_axes(dir: Direction6) -> (usize, usize) {
     }
 }
 
+/// A face's corners' occlusion levels (`occlusion::OcclusionField::cube_corner_levels`)
+/// when faces are occluded; every corner open otherwise, so the lanes merge
+/// as before.
+const OPEN_CORNERS: [u8; 4] = [3; 4];
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 struct Face {
     state: u16,
     slot: u16,
     coordinate: [i64; 3],
     dir: Direction6,
+    /// Its corners' occlusion levels: faces merge only with equal corners,
+    /// so a merged quad's corners keep their own.
+    occlusion: [u8; 4],
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -506,23 +529,31 @@ struct Quad {
     dir: Direction6,
     u_length: u32,
     v_length: u32,
+    occlusion: [u8; 4],
 }
 
-/// Merge each exact `(material, normal, plane)` lane independently.
+/// Merge each exact `(material, normal, plane, corner occlusion)` lane
+/// independently.
 fn greedy_merge_faces(faces: Vec<Face>) -> Result<Vec<Quad>, MeshError> {
-    type FacePlane = (u16, u16, Direction6, i64);
+    type FacePlane = (u16, u16, Direction6, i64, [u8; 4]);
     let mut planes: BTreeMap<FacePlane, Vec<(i64, i64)>> = BTreeMap::new();
     for face in faces {
         let axis = face.dir.axis().index();
         let (u_axis, v_axis) = in_plane_axes(face.dir);
         planes
-            .entry((face.slot, face.state, face.dir, face.coordinate[axis]))
+            .entry((
+                face.slot,
+                face.state,
+                face.dir,
+                face.coordinate[axis],
+                face.occlusion,
+            ))
             .or_default()
             .push((face.coordinate[v_axis], face.coordinate[u_axis]));
     }
 
     let mut quads = Vec::new();
-    for ((slot, state, dir, plane), mut cells) in planes {
+    for ((slot, state, dir, plane, occlusion), mut cells) in planes {
         cells.sort_unstable();
         cells.dedup();
         let axis = dir.axis().index();
@@ -539,6 +570,7 @@ fn greedy_merge_faces(faces: Vec<Face>) -> Result<Vec<Quad>, MeshError> {
                 dir,
                 u_length: u_length as u32,
                 v_length: v_length as u32,
+                occlusion,
             });
         }
     }
@@ -707,6 +739,7 @@ pub fn mesh_chunk_standalone(
             let (c, l) = spec.voxel_to_chunk_local(v);
             c == coord && chunk.get(l).is_some_and(|x| x.is_opaque())
         },
+        None,
     )
 }
 
@@ -789,6 +822,7 @@ pub fn mesh_scalar_samples(
         normals: surface.normals.into_iter().flatten().collect(),
         tile_coordinates: Vec::new(),
         layer_weights: Vec::new(),
+        occlusion: Vec::new(),
         indices,
         groups,
         triangle_owners: surface.owners,
@@ -1068,6 +1102,7 @@ pub fn mesh_cells_standalone_with_options(
                         slot,
                         coordinate,
                         dir,
+                        occlusion: OPEN_CORNERS,
                     });
                 }
             }
@@ -1088,6 +1123,7 @@ pub fn mesh_cells_standalone_with_options(
             source_faces,
             faces_culled,
             options.limits,
+            None,
         );
     }
 
@@ -1129,7 +1165,7 @@ pub fn mesh_cells_standalone_with_options(
         min: minimum,
         max: maximum.map(|value| value + 1),
     };
-    let smooth = reconstruct(lattice, &options, owner, cell_size, pivot, None)?;
+    let smooth = reconstruct(lattice, &options, owner, cell_size, pivot, None, None)?;
     let greedy = |slot: u16| options.surface(slot).mode == SurfaceMode::GreedyCubes;
     let (faces, faces_culled) = greedy_faces(&greedy, &|slot, neighbour| {
         greedy(neighbour) && options.hides(slot, neighbour)
@@ -1147,6 +1183,7 @@ pub fn mesh_cells_standalone_with_options(
             source_faces,
             faces_culled,
             options.limits,
+            None,
         )?;
         merge_payloads(cubes, smooth, options.mode, options.limits)?
     };
@@ -1163,6 +1200,7 @@ fn reconstruct(
     cell_size: f64,
     pivot: [f64; 3],
     layers: Option<&terrain_layers::LayerField<'_>>,
+    occlusion: Option<&occlusion::OcclusionField>,
 ) -> Result<MeshPayload, MeshError> {
     surface::voxel_payload(
         reconstruction(lattice, options, owner)?,
@@ -1172,7 +1210,29 @@ fn reconstruct(
         1.0,
         options.limits,
         layers,
+        occlusion,
     )
+}
+
+/// The occlusion field around a chunk when the options ask for vertex
+/// occlusion.
+fn occlusion_field(
+    world: &VoxelWorld,
+    spec: &VoxelGridSpec,
+    options: &SurfaceMeshOptions,
+    origin: [i64; 3],
+    size: [i64; 3],
+) -> Option<occlusion::OcclusionField> {
+    (options.vertex_occlusion > 0.0).then(|| {
+        occlusion::OcclusionField::around_chunk(
+            world,
+            spec,
+            &options.non_occluding,
+            origin,
+            size,
+            options.vertex_occlusion,
+        )
+    })
 }
 
 /// The owned reconstructed triangles of a voxel lattice.
@@ -1237,10 +1297,18 @@ fn merge_payloads(
         limits,
     )?;
     let had_first = !first.indices.is_empty();
+    let (first_vertices, second_vertices) = (first.positions.len() / 3, second.positions.len() / 3);
     first.positions.extend(second.positions);
     first.normals.extend(second.normals);
     first.tile_coordinates.extend(second.tile_coordinates);
     first.layer_weights.extend(second.layer_weights);
+    // A side without occlusion is open.
+    if !first.occlusion.is_empty() || !second.occlusion.is_empty() {
+        first.occlusion.resize(first_vertices, 1.0);
+        let mut occlusion = second.occlusion;
+        occlusion.resize(second_vertices, 1.0);
+        first.occlusion.extend(occlusion);
+    }
     first
         .indices
         .extend(second.indices.into_iter().map(|index| index + vertex_base));
@@ -1311,6 +1379,7 @@ fn empty_payload(mode: SurfaceMode) -> MeshPayload {
         normals: Vec::new(),
         tile_coordinates: Vec::new(),
         layer_weights: Vec::new(),
+        occlusion: Vec::new(),
         indices: Vec::new(),
         groups: Vec::new(),
         triangle_owners: Vec::new(),
@@ -1358,6 +1427,13 @@ pub fn mesh_chunk_in_world_with_options(
     let chunk = world.get(coord)?;
     let spec = world.grid();
     let around = Neighbourhood::around(world, &spec, coord);
+    let field = occlusion_field(
+        world,
+        &spec,
+        options,
+        spec.chunk_origin_voxel(coord).to_array(),
+        spec.chunk_dims().to_array().map(i64::from),
+    );
     let meshed = if options.all_greedy() {
         mesh_core(
             &spec,
@@ -1365,6 +1441,7 @@ pub fn mesh_chunk_in_world_with_options(
             chunk,
             |_| true,
             |slot, voxel, _| around.slot(voxel).is_some_and(|n| options.hides(slot, n)),
+            field.as_ref(),
         )
         .map(|mut cubes| {
             if let Some(layers) = &options.terrain_layers {
@@ -1500,6 +1577,7 @@ fn mesh_chunk_reconstructed(
         .terrain_layers
         .as_ref()
         .map(|layers| terrain_layers::LayerField::around_chunk(world, &spec, layers, origin, size));
+    let occlusion = occlusion_field(world, &spec, options, origin, size);
     let mut reconstruction = reconstruction(lattice, options, owner)?;
     reconstruction.chunk_region = Some(owner);
     let smooth = surface::voxel_payload(
@@ -1510,8 +1588,9 @@ fn mesh_chunk_reconstructed(
         1.0,
         options.limits,
         field.as_ref(),
+        occlusion.as_ref(),
     )?;
-    with_cube_faces(world, coord, chunk, options, smooth)
+    with_cube_faces(world, coord, chunk, options, smooth, occlusion.as_ref())
 }
 
 /// Mesh one resident chunk's reconstructed materials from a lattice twice as
@@ -1556,6 +1635,7 @@ pub fn mesh_chunk_coarse_in_world(
         let mut reconstruction = reconstruction(lattice, options, owner)?;
         reconstruction.chunk_region = Some(owner);
         surface::add_skirts(&mut reconstruction, COARSE_SKIRT_DEPTH);
+        // Coarse chunks draw far away: no occlusion.
         let smooth = surface::voxel_payload(
             reconstruction,
             options.characters(),
@@ -1564,8 +1644,9 @@ pub fn mesh_chunk_coarse_in_world(
             2.0,
             options.limits,
             field.as_ref(),
+            None,
         )?;
-        with_cube_faces(world, coord, chunk, options, smooth)
+        with_cube_faces(world, coord, chunk, options, smooth, None)
     })())
 }
 
@@ -1658,6 +1739,7 @@ fn with_cube_faces(
     chunk: &VoxelChunk,
     options: &SurfaceMeshOptions,
     smooth: MeshPayload,
+    occlusion: Option<&occlusion::OcclusionField>,
 ) -> Result<MeshPayload, MeshError> {
     if !options.uses_mode(SurfaceMode::GreedyCubes) {
         return Ok(smooth);
@@ -1665,12 +1747,20 @@ fn with_cube_faces(
     let spec = world.grid();
     let greedy = |slot: u16| options.surface(slot).mode == SurfaceMode::GreedyCubes;
     let around = Neighbourhood::around(world, &spec, coord);
-    let mut cubes = mesh_core(&spec, coord, chunk, greedy, |slot, voxel, dir| {
-        around.slot(voxel).is_some_and(|n| {
-            options.hides(slot, n)
-                && (greedy(n) || reconstructed_surface_covers(&around, options, slot, voxel, dir))
-        })
-    })?;
+    let mut cubes = mesh_core(
+        &spec,
+        coord,
+        chunk,
+        greedy,
+        |slot, voxel, dir| {
+            around.slot(voxel).is_some_and(|n| {
+                options.hides(slot, n)
+                    && (greedy(n)
+                        || reconstructed_surface_covers(&around, options, slot, voxel, dir))
+            })
+        },
+        occlusion,
+    )?;
     if let Some(layers) = &options.terrain_layers {
         cube_layer_weights(&mut cubes, layers);
     }
@@ -1750,6 +1840,7 @@ fn mesh_core(
     chunk: &VoxelChunk,
     include: impl Fn(u16) -> bool,
     hides: impl Fn(u16, VoxelCoord, Direction6) -> bool,
+    occlusion: Option<&occlusion::OcclusionField>,
 ) -> Result<MeshPayload, MeshError> {
     // Collect visible faces in deterministic order, with culling stats.
     let mut faces: Vec<Face> = Vec::new();
@@ -1771,6 +1862,9 @@ fn mesh_core(
                     slot: material.raw(),
                     coordinate: [i64::from(local.x), i64::from(local.y), i64::from(local.z)],
                     dir,
+                    occlusion: occlusion.map_or(OPEN_CORNERS, |field| {
+                        field.cube_corner_levels(world_voxel, dir)
+                    }),
                 });
             }
         }
@@ -1786,6 +1880,7 @@ fn mesh_core(
         source_faces,
         faces_culled,
         SurfaceMeshLimits::default(),
+        occlusion,
     )
 }
 
@@ -1829,6 +1924,7 @@ fn state_tile_point(
         .map_err(MeshError::TextureMapping)
 }
 
+#[allow(clippy::too_many_arguments, reason = "one payload")]
 fn emit_quads(
     quads: &[Quad],
     cell_size: f64,
@@ -1837,6 +1933,7 @@ fn emit_quads(
     source_faces: u32,
     faces_culled: u32,
     limits: SurfaceMeshLimits,
+    occlusion: Option<&occlusion::OcclusionField>,
 ) -> Result<MeshPayload, MeshError> {
     let vertex_count = quads.len() as u64 * 4;
     if vertex_count > u64::from(limits.max_vertices) {
@@ -1866,6 +1963,11 @@ fn emit_quads(
     let mut positions: Vec<f32> = Vec::with_capacity(quads.len() * 12);
     let mut normals: Vec<f32> = Vec::with_capacity(quads.len() * 12);
     let mut tile_coordinates: Vec<f32> = Vec::with_capacity(quads.len() * 8);
+    let mut occlusions: Vec<f32> = Vec::with_capacity(if occlusion.is_some() {
+        quads.len() * 4
+    } else {
+        0
+    });
     let mut indices: Vec<u32> = Vec::with_capacity(quads.len() * 6);
     let mut triangle_owners: Vec<[i64; 3]> = Vec::with_capacity(quads.len() * 2);
     let mut groups: Vec<MeshGroup> = Vec::new();
@@ -1894,7 +1996,10 @@ fn emit_quads(
         let base = (positions.len() / 3) as u32;
         let normal = quad.dir.normal();
         let [nx, ny, nz] = [normal.x as f32, normal.y as f32, normal.z as f32];
-        for point in quad_corners(*quad)? {
+        for (corner, point) in quad_corners(*quad)?.into_iter().enumerate() {
+            if let Some(field) = occlusion {
+                occlusions.push(field.cube_occlusion(quad.occlusion[corner]));
+            }
             let mut p = [0.0_f32; 3];
             for axis in 0..3 {
                 let value = (point[axis] as f64 - pivot[axis]) * cell_size;
@@ -1965,6 +2070,7 @@ fn emit_quads(
         normals,
         tile_coordinates,
         layer_weights: Vec::new(),
+        occlusion: occlusions,
         indices,
         groups,
         triangle_owners,
@@ -2878,6 +2984,7 @@ mod tests {
                 dir,
                 u_length: 5,
                 v_length: 3,
+                occlusion: OPEN_CORNERS,
             };
             let corners = quad_corners(quad).unwrap();
             let tiles = project_voxel_surface_tile_corners(dir, corners, [0, 0, 0]).unwrap();
@@ -3140,6 +3247,7 @@ mod tests {
                         slot,
                         coordinate,
                         dir,
+                        occlusion: OPEN_CORNERS,
                     });
                 }
             }
@@ -3161,6 +3269,7 @@ mod tests {
                         slot: quad.slot,
                         coordinate,
                         dir: quad.dir,
+                        occlusion: OPEN_CORNERS,
                     });
                 }
             }

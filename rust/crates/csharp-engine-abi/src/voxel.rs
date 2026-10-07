@@ -304,6 +304,26 @@ pub type NativeConfigureVoxelTerrainLayers = unsafe extern "C" fn(
     *mut NativeOperationErrorReceipt,
 ) -> i32;
 
+/// Darken every vertex of a session's surfaces by the solid voxels around
+/// it, at mesh time: a reconstructed vertex by the fan of directions over
+/// its normal, a cube face corner by the classic voxel rule. `strength` 0
+/// (the default) turns it off, 1 applies the full occlusion; between scales
+/// it. Every chunk is remeshed; geometry, material slots and collision are
+/// unchanged.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeVoxelVertexOcclusionRequest {
+    pub session: NativeSpatialSessionHandle,
+    pub strength: f32,
+}
+
+pub type NativeConfigureVoxelVertexOcclusion = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeVoxelVertexOcclusionRequest,
+    *mut NativeVoxelSceneReadout,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum NativeVoxelDensityEditKind {
@@ -492,6 +512,7 @@ pub struct NativeVoxelApi {
     pub apply_density_edits: NativeApplyVoxelDensityEdits,
     pub read_densities: NativeReadVoxelDensities,
     pub configure_terrain_layers: NativeConfigureVoxelTerrainLayers,
+    pub configure_vertex_occlusion: NativeConfigureVoxelVertexOcclusion,
 }
 
 /// Samples direct incident light at address + offset (in voxel units). Descriptors

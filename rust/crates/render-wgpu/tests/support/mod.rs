@@ -210,6 +210,8 @@ pub fn payload(
             indices,
         },
         provenance: MeshProvenance::Generated,
+        layer_weights: false,
+        vertex_occlusion: false,
     }
 }
 

@@ -4094,6 +4094,8 @@ impl RuntimeAppearanceBridge {
                     indices_byte_offset: request.indices_byte_offset,
                 },
                 provenance: MeshProvenance::StaticAsset,
+                layer_weights: false,
+                vertex_occlusion: false,
             },
             material_slots: material_slots.clone(),
             collision: MeshCollisionPolicy::VisualOnly,
@@ -12628,6 +12630,8 @@ fn shade(surface: Surface) -> vec4<f32> {
                     indices: vec![0, 1, 2],
                 },
                 provenance: MeshProvenance::StaticAsset,
+                layer_weights: false,
+                vertex_occlusion: false,
             },
             material_slots: vec![MeshMaterialSlot {
                 slot: 0,

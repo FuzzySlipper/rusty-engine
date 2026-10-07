@@ -74,11 +74,16 @@ impl Features {
     /// group 3), foam along the shore, scrolling normal maps or procedural
     /// ripples, and a Fresnel alpha. Only blended materials have it.
     pub const WATER: Self = Self::bit(16384);
+    /// The mesh's vertex colour alpha is ambient occlusion from the voxels
+    /// around each vertex (a mesh feature, not a material one), scaling the
+    /// ambient, hemisphere and sky light; with LAYER_WEIGHTS the fourth
+    /// layer's weight is the remainder of the first three.
+    pub const VERTEX_OCCLUSION: Self = Self::bit(32768);
     /// Every standard feature's bit.
     #[cfg(test)]
-    const ALL_BITS: u16 = 32767;
+    const ALL_BITS: u16 = 65535;
 
-    const DEFS: [(Self, &'static str); 15] = [
+    const DEFS: [(Self, &'static str); 16] = [
         (Self::UNLIT, "UNLIT"),
         (Self::MASK, "MASK"),
         (Self::VOXEL_SURFACE, "VOXEL_SURFACE"),
@@ -94,6 +99,7 @@ impl Features {
         (Self::FLAT_SHADING, "FLAT_SHADING"),
         (Self::WIND, "WIND"),
         (Self::WATER, "WATER"),
+        (Self::VERTEX_OCCLUSION, "VERTEX_OCCLUSION"),
     ];
 
     const fn bit(bits: u16) -> Self {
@@ -125,9 +131,9 @@ impl Features {
 
     /// What the shadow caster pass compiles: only the alpha mask, the voxel
     /// uv remap, triplanar planes and hex tiles it samples through, whether
-    /// vertex colours are layer weights rather than alpha, the wind that
-    /// moves the vertices, and a product shader that defines a caster or a
-    /// displace stage.
+    /// vertex colours are layer weights or occlusion rather than alpha, the
+    /// wind that moves the vertices, and a product shader that defines a
+    /// caster or a displace stage.
     pub fn caster(self) -> Self {
         Self {
             bits: self.bits
@@ -136,6 +142,7 @@ impl Features {
                     | Self::TRIPLANAR.bits
                     | Self::STOCHASTIC_TILING.bits
                     | Self::LAYER_WEIGHTS.bits
+                    | Self::VERTEX_OCCLUSION.bits
                     | Self::WIND.bits),
             product: if self.product & (PRODUCT_CASTS | PRODUCT_DISPLACES) != 0 {
                 self.product

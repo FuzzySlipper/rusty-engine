@@ -376,10 +376,15 @@ impl Renderer {
             RenderDiff::ReplaceMeshPayload { handle, payload } => {
                 let mut streams = resources::mesh_streams(payload, resources)?;
                 // Uploaded payloads draw without vertex colours. A voxel
-                // chunk's are its terrain layer weights.
-                let layer_weights = payload.provenance == render_model::MeshProvenance::VoxelChunk
-                    && streams.colors.is_some();
-                if !layer_weights {
+                // chunk's are its terrain layer weights and its vertex
+                // occlusion (a chunk from before the flags carried weights).
+                let voxel_chunk = payload.provenance == render_model::MeshProvenance::VoxelChunk;
+                let vertex_occlusion =
+                    voxel_chunk && streams.colors.is_some() && payload.vertex_occlusion;
+                let layer_weights = voxel_chunk
+                    && streams.colors.is_some()
+                    && (payload.layer_weights || !payload.vertex_occlusion);
+                if !layer_weights && !vertex_occlusion {
                     streams.colors = None;
                 }
                 let mut mesh = self.upload_mesh(
@@ -395,6 +400,7 @@ impl Renderer {
                 );
                 mesh.texture_space = payload.texture_space;
                 mesh.layer_weights = layer_weights;
+                mesh.vertex_occlusion = vertex_occlusion;
                 mesh.distance_field = payload
                     .distance_field
                     .as_ref()
@@ -1283,6 +1289,7 @@ impl Renderer {
             texture_space: None,
             distance_field: None,
             layer_weights: false,
+            vertex_occlusion: false,
             vertices: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some(label),
                 contents: bytemuck::cast_slice(vertices),

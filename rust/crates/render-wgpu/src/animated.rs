@@ -1391,6 +1391,7 @@ impl Renderer {
             texture_space: None,
             distance_field: None,
             layer_weights: false,
+            vertex_occlusion: false,
             vertices: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some(label),
                 contents: bytemuck::cast_slice(vertices),

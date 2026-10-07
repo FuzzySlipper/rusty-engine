@@ -68,6 +68,8 @@ fn payload(provenance: MeshProvenance) -> MeshPayloadDescriptor {
             indices: vec![0, 1, 2],
         },
         provenance,
+        layer_weights: false,
+        vertex_occlusion: false,
     }
 }
 

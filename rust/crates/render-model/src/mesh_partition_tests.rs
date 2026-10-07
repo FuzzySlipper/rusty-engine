@@ -83,6 +83,8 @@ fn attributed_mesh() -> MeshPayloadDescriptor {
             indices: (0..9).collect(),
         },
         provenance: MeshProvenance::StaticAsset,
+        layer_weights: false,
+        vertex_occlusion: false,
     }
 }
 

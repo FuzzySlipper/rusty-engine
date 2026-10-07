@@ -144,6 +144,16 @@ pub struct MeshPayloadDescriptor {
     pub bounds: MeshBoundsDescriptor,
     pub source: MeshPayloadSource,
     pub provenance: MeshProvenance,
+    /// The vertex colours are terrain layer weights, not a tint (a voxel
+    /// chunk meshed with terrain layers): the four layers', or with
+    /// `vertex_occlusion` the first three's and the fourth's as the
+    /// remainder.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub layer_weights: bool,
+    /// The vertex colours' alpha is ambient occlusion (a voxel chunk meshed
+    /// with vertex occlusion), scaling the ambient, hemisphere and sky light.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub vertex_occlusion: bool,
     /// Where triplanar materials project this mesh's positions from. Without
     /// it they project its object-space positions.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1730,6 +1740,8 @@ mod tests {
                 indices: vec![0, 1, 2],
             },
             provenance: MeshProvenance::StaticAsset,
+            layer_weights: false,
+            vertex_occlusion: false,
         }
     }
 
@@ -2109,4 +2121,8 @@ mod tests {
             } if (offset - 6.0).abs() < f64::EPSILON
         ));
     }
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }

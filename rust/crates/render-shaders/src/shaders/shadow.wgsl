@@ -52,7 +52,12 @@ fn vs_shadow(
     // The vertex colour holds layer weights.
     let alpha = 1.0;
 #else
+#ifdef VERTEX_OCCLUSION
+    // The vertex colour's alpha holds occlusion.
+    let alpha = 1.0;
+#else
     let alpha = color.a;
+#endif
 #endif
 #ifdef WIND
     world = wind_displace(world, row.model[3].xyz, alpha);

@@ -149,6 +149,34 @@ or noise); the Engine only blends what it chose:
   the samples, 12× with triplanar planes), in a shader variant only terrain
   layer materials compile. Layer materials are opaque.
 
+## Vertex occlusion
+
+Corners, the foot of a wall and the inside of a crevice read deeper when the
+ambient light there is less. `engine.Voxel.ConfigureVertexOcclusion(new(session,
+Strength: 1))` darkens every vertex of the session's surfaces by the solid
+voxels around it at mesh time, with no screen-space pass: a reconstructed
+vertex looks out along a fan of directions over its normal (straight out,
+and two rings at 45 and 75 degrees from it) at three quarters of a voxel and
+one and three quarters, and counts the solid voxels it meets, nearer ones
+weighing more; a cube face's corner takes the classic voxel rule from the
+two voxels beside it across the face's plane and the one diagonal, and
+greedy faces merge only with equal corners, so a merged quad keeps each
+corner's own value. `Strength` scales the darkening (0, the default, turns it
+off and costs nothing; 1 applies it fully). The value rides the chunk's
+vertex colour alpha and scales the ambient, hemisphere, sky and probe light
+the standard shader gives the surface, as the occlusion map and
+[screen-space occlusion](lighting-and-sky.md#contact-darkening-screen-space-ambient-occlusion)
+do; the sun and lamps are unchanged. Values come from absolute voxel
+positions and the same voxels on both sides of a chunk seam, so neighbouring
+chunks give a shared vertex the same value and a world-origin rebase changes
+none; an edit within three voxels of a neighbouring chunk remeshes it, as a
+terrain transition does. Geometry, material slots and collision are
+unchanged. With terrain layers, the fourth layer's weight becomes the
+remainder of the first three, so the alpha can carry the occlusion. Coarse
+(distant) chunks draw without it. Cost: about 0.15 ms more per 16³ chunk
+dual contoured on the `smooth_chunk_meshing` example (0.31 to 0.47 ms),
+0.07 ms marched; cube chunks mesh into more quads where corners differ.
+
 ## Densities
 
 A density is signed, negative inside, in voxel units. A voxel without one

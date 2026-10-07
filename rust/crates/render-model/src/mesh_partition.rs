@@ -112,6 +112,8 @@ pub fn partition_mesh_spatially(
             groups,
             bounds,
             provenance: mesh.provenance,
+            layer_weights: mesh.layer_weights,
+            vertex_occlusion: mesh.vertex_occlusion,
             source: MeshPayloadSource::Inline {
                 positions: out_positions,
                 normals: out_normals,

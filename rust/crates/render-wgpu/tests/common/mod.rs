@@ -221,6 +221,8 @@ pub fn payload(positions: Vec<f32>, normals: Vec<f32>, indices: Vec<u32>) -> Mes
             indices,
         },
         provenance: MeshProvenance::Generated,
+        layer_weights: false,
+        vertex_occlusion: false,
     }
 }
 

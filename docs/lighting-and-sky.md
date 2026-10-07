@@ -271,6 +271,12 @@ turns it on with `RustyEngineProductAmbientOcclusion` (see
 [the product project](csharp-product-project.md#screen-space-ambient-occlusion)),
 and `engine.renderer` reports its passes' GPU time.
 
+A voxel session can instead, or as well, bake occlusion into its surfaces
+at mesh time from the voxels around each vertex
+([vertex occlusion](smooth-voxel-surfaces.md#vertex-occlusion)): no pass,
+no view dependence, and it reaches into every corner the lattice knows,
+at the scale of a voxel rather than of the screen.
+
 Its `distanceField` mode replaces the screen-space pass with a cone trace
 through the voxel chunks' signed distance fields, which the chunk mesher
 builds from the chunk and its neighbours and the renderer keeps in one 3D
@@ -748,11 +754,13 @@ normals on the left, the flat-shading material on the right, by the torch),
 and `lighting.wind <strength>` (the tree under a material with a wind bend,
 a clump of grass cards whose vertex alpha weights their flutter, and a
 banner a product displace stage (`content/wave.wgsl`) waves, with the
-camera on them; 0 stills the wind, below 0 clears the scene), and
+camera on them; 0 stills the wind, below 0 clears the scene),
 `lighting.water 1|0|-1` (a dual-contoured sand bank sloping into a water
 slab with a cube pier, seen from the bank under the sun: 1 the water
 feature with the fixture's foam and ripple textures, 0 the same slab as a
-plain blended material, below 0 clears the scene).
+plain blended material, below 0 clears the scene), and
+`lighting.vertexocclusion <strength>` (the room's cube vertices darkened by
+the voxels around them, with the camera on the room's far corner).
 `generate-particles.py` regenerates its three authored sprites and
 `generate-water.py` the foam and ripple textures.
 `lighting.sky` also moves the fixture's sun from noon at 0 to a low dusk sun

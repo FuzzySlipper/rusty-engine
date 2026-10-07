@@ -158,6 +158,30 @@ impl RuntimeSpatialBridge {
         })
     }
 
+    fn configure_voxel_vertex_occlusion(
+        &mut self,
+        request: &NativeVoxelVertexOcclusionRequest,
+    ) -> Result<NativeVoxelSceneReadout, CsharpEngineServicesError> {
+        if !request.strength.is_finite() || !(0.0..=1.0).contains(&request.strength) {
+            return Err(voxel_error(
+                "CSHARP_VOXEL_VERTEX_OCCLUSION",
+                "vertex occlusion strength must be within 0 to 1",
+            ));
+        }
+        let session = self.session_mut(request.session)?;
+        let options = SurfaceMeshOptions {
+            vertex_occlusion: request.strength,
+            ..session.scene.mesh_options().clone()
+        };
+        self.edit_scene(request.session, |session| {
+            Arc::make_mut(&mut session.scene).set_mesh_options(options)
+        })?
+        .map_err(|error| voxel_error("CSHARP_VOXEL_VERTEX_OCCLUSION", &error.to_string()))?;
+        self.read_voxel_scene(NativeVoxelSceneReadRequest {
+            session: request.session,
+        })
+    }
+
     fn apply_voxel_density_edits(
         &mut self,
         request: &NativeVoxelDensityTransaction,
@@ -928,6 +952,34 @@ pub(crate) fn api(bridge: &mut RuntimeSpatialBridge) -> NativeVoxelApi {
         apply_density_edits,
         read_densities,
         configure_terrain_layers,
+        configure_vertex_occlusion,
+    }
+}
+
+unsafe extern "C" fn configure_vertex_occlusion(
+    context: *mut c_void,
+    request: *const NativeVoxelVertexOcclusionRequest,
+    output: *mut NativeVoxelSceneReadout,
+    receipt: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    if receipt.is_null() {
+        return 0;
+    }
+    // SAFETY: this borrowed receipt starts empty for every direct callback.
+    unsafe { *receipt = std::mem::zeroed() };
+    if context.is_null() || request.is_null() || output.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeSpatialBridge>() };
+    match bridge.configure_voxel_vertex_occlusion(unsafe { &*request }) {
+        Ok(value) => {
+            unsafe { *output = value };
+            ABI_OK
+        }
+        Err(error) => {
+            bridge.operation_diagnostics.retain(&error, receipt);
+            0
+        }
     }
 }
 

@@ -9,7 +9,8 @@
 //! masonry is) and a pool of see-through water in the room.
 //! Each mode meshes every resident chunk with its resident neighbours, as a
 //! scene build does, and reports the chunks whose samples include water
-//! separately. Reconstructed modes also mesh every chunk from the coarse
+//! separately. `SMOOTH_CHUNK_MESHING_OCCLUSION=1` meshes with vertex
+//! occlusion (#9506) to measure its cost. Reconstructed modes also mesh every chunk from the coarse
 //! lattice a distant chunk is drawn from.
 
 use std::time::{Duration, Instant};
@@ -54,6 +55,11 @@ fn main() {
                 (mode == SurfaceMode::DualContouring).then_some((BLOCK, block)),
             )
             .expect("one material"),
+            vertex_occlusion: if std::env::var_os("SMOOTH_CHUNK_MESHING_OCCLUSION").is_some() {
+                1.0
+            } else {
+                0.0
+            },
             ..SurfaceMeshOptions::default()
         };
         let mut best = Duration::MAX;

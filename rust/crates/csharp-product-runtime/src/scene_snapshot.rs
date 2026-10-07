@@ -472,6 +472,8 @@ mod tests {
                 indices: vec![0, 1, 2],
             },
             provenance: MeshProvenance::StaticAsset,
+            layer_weights: false,
+            vertex_occlusion: false,
         }
     }
 

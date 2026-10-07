@@ -27,6 +27,8 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     // A doorway in the room's +z wall, so daylight has a way in; seen from the back wall.
     private const int DoorMinX = 3, DoorMaxX = 4, DoorMinY = 1, DoorMaxY = 3;
     private static readonly Vector3 CaveEye = new(3.5f,2.5f,1.2f), CaveTarget = new(3.5f,2,7.5f);
+    // The room's far corner from inside, where the walls, floor and ceiling meet: the cube-only vertex occlusion view.
+    private static readonly Vector3 CornerEye = new(5.5f,2.2f,5.5f), CornerTarget = new(1.4f,1.6f,1.4f);
     // The indirect light volume: the room and the ground around it (32 bricks of 16 m, so an edit shows which bricks rebake), probes half a metre apart.
     private static readonly Vector3 IndirectCenter = new(3.5f,2.5f,3.5f), IndirectExtent = new(20,3,20);
     private const float IndirectSpacing = .5f;
@@ -524,6 +526,15 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         engine.RendererSettings.Set(engine.RendererSettings.Read().Requested with { AmbientOcclusion = occlusion, AmbientOcclusionStrength = strength, AmbientOcclusionRadius = radius });
         return Settings();
     }
+    // Vertex occlusion (#9506): darken the room's cube vertices by the solid voxels around them at the given strength (0 off, 1 full), with the camera on the room's corner.
+    [DebugCommand("lighting.vertexocclusion")]
+    public string VertexOcclusion(float strength)
+    {
+        VoxelSceneReadout readout = engine.Voxel.ConfigureVertexOcclusion(new VoxelVertexOcclusionRequest(scene,strength));
+        if(presentation is not null) engine.VoxelScenePresentation.RefreshScene(presentation);
+        engine.CameraView.UpdateCamera(new(camera,Camera(CornerEye,CornerTarget)));
+        return JsonSerializer.Serialize(readout,ProofJsonContext.Default.VoxelSceneReadout);
+    }
     [DebugCommand("lighting.scale")]
     public string Scale(float scale)
     {
@@ -554,4 +565,5 @@ internal sealed record LightingProof(bool RoundTrip,float Lit,float Blocked,floa
 [JsonSerializable(typeof(LightingProof))]
 [JsonSerializable(typeof(RendererSettingsReadout))]
 [JsonSerializable(typeof(LightReadout))]
+[JsonSerializable(typeof(VoxelSceneReadout))]
 internal partial class ProofJsonContext : JsonSerializerContext { }
