@@ -753,6 +753,15 @@ declare module "@rusty-engine/live-debug/internal/live-debug-client/src/generate
          */
         renderedLayers: number;
         renderedCasters: number;
+        /**
+         * The GPU bytes of the atlas's depth pages, allocated ones included.
+         */
+        atlasBytes: number;
+        /**
+         * The static cache's bytes, the size of the atlas once a light's layer
+         * has moving casters (their layers redraw only those); 0 before.
+         */
+        staticCacheBytes: number;
     };
     /**
      * Median milliseconds per frame for each stage of streaming it.
