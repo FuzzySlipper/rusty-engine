@@ -10,13 +10,16 @@
 //! Each mode meshes every resident chunk with its resident neighbours, as a
 //! scene build does, and reports the chunks whose samples include water
 //! separately. `SMOOTH_CHUNK_MESHING_OCCLUSION=1` meshes with vertex
-//! occlusion (#9506) to measure its cost. Reconstructed modes also mesh every chunk from the coarse
-//! lattice a distant chunk is drawn from.
+//! occlusion (#9506) to measure its cost. Each mode also samples every
+//! chunk's upward ground for the scatter service (#9546), at 4 spots per
+//! square metre on ground up to 35 degrees steep. Reconstructed modes also
+//! mesh every chunk from the coarse lattice a distant chunk is drawn from.
 
 use std::time::{Duration, Instant};
 
 use core_space::{ChunkCoord, ChunkDims, GridId, LocalVoxelCoord, VoxelGridSpec};
 use core_voxel::{VoxelMaterialId, VoxelValue};
+use svc_mesh::scatter::{surface_points, ChunkSurface, SurfaceSampling};
 use svc_mesh::{
     mesh_chunk_coarse_in_world, mesh_chunk_in_world_with_options, MaterialSurface,
     SurfaceCharacter, SurfaceMaterials, SurfaceMeshOptions, SurfaceMode, VertexPlacement,
@@ -131,6 +134,54 @@ fn main() {
             best.as_secs_f64() * 1000.0,
             per_chunk(best, chunks.len()),
             per_chunk(best_water, water_chunks),
+        );
+        // The scatter service's surface sampling, on the meshes as drawn.
+        let meshes: Vec<_> = chunks
+            .iter()
+            .map(|coord| {
+                let mesh = mesh_chunk_in_world_with_options(&world, *coord, &options)
+                    .expect("resident")
+                    .expect("meshes");
+                let groups: Vec<(u16, u32, u32)> = mesh
+                    .groups
+                    .iter()
+                    .map(|group| (group.material_slot, group.start, group.count))
+                    .collect();
+                let origin = coord
+                    .to_array()
+                    .map(|value| (value * i64::from(CHUNK)) as f64);
+                (mesh, groups, origin)
+            })
+            .collect();
+        let mut best = Duration::MAX;
+        let mut spots = 0;
+        for _ in 0..ROUNDS {
+            let started = Instant::now();
+            spots = 0;
+            for (mesh, groups, origin) in &meshes {
+                spots += surface_points(
+                    &ChunkSurface {
+                        positions: &mesh.positions,
+                        indices: &mesh.indices,
+                        groups,
+                        origin: *origin,
+                        band: 1.0,
+                    },
+                    &SurfaceSampling {
+                        density: 4.0,
+                        seed: 9546,
+                        minimum_normal_y: 35f64.to_radians().cos(),
+                    },
+                )
+                .len();
+            }
+            best = best.min(started.elapsed());
+        }
+        println!(
+            "{:>15} scatter: {:6.1} ms total, {:6.3} ms/chunk, {spots} spots at 4 per m²",
+            "",
+            best.as_secs_f64() * 1000.0,
+            per_chunk(best, chunks.len()),
         );
         if mode == SurfaceMode::GreedyCubes {
             continue;

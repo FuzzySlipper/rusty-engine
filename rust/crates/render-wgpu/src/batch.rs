@@ -132,14 +132,16 @@ pub(crate) fn view_list(
         if parts.meta[id].is_none()
             || !state.shown
             || (state.layer == RenderLayer::Viewmodel) != viewmodel
-            || !frustum.intersects(&state.world_bounds)
+            || parts.follows(id as PartId)
+            || !frustum.intersects(parts.cull_bounds(id as PartId))
         {
             continue;
         }
         let pass = Pass::of(state.class, state.mirrored);
         let (features, order) = if pass.blends() {
             // Farthest first: larger distances sort earlier.
-            let center = (state.world_bounds.min + state.world_bounds.max) * 0.5;
+            let bounds = parts.cull_bounds(id as PartId);
+            let center = (bounds.min + bounds.max) * 0.5;
             (
                 Features::default(),
                 u32::MAX - center.distance_squared(eye).to_bits(),
@@ -149,7 +151,7 @@ pub(crate) fn view_list(
         };
         entries.push((pass.bucket(), features, order, id as PartId, pass));
     }
-    group(parts, entries, base)
+    group(parts, entries, base, true)
 }
 
 /// (sort bucket, features (opaque passes), order within the bucket, part,
@@ -158,7 +160,8 @@ type Entry = (Pass, Features, u32, PartId, Pass);
 
 /// The opaque parts a view layer may draw, grouped as `view_list` groups
 /// them but not culled: the GPU cull (`culling.rs`) tests each against the
-/// frustum. Rebuilt only when the parts regroup.
+/// frustum. Rebuilt only when the parts regroup. Scattered copies are
+/// candidates one by one: the GPU culls each by its own bounds.
 pub(crate) fn opaque_candidates(parts: &Parts, viewmodel: bool, base: u32) -> DrawList {
     let mut entries: Vec<Entry> = Vec::new();
     for (id, state) in parts.state.iter().enumerate() {
@@ -174,7 +177,7 @@ pub(crate) fn opaque_candidates(parts: &Parts, viewmodel: bool, base: u32) -> Dr
         }
         entries.push((pass, state.class.features, state.key, id as PartId, pass));
     }
-    group(parts, entries, base)
+    group(parts, entries, base, false)
 }
 
 /// The blended parts a view pass sees, back to front from `eye`: the CPU
@@ -196,10 +199,11 @@ pub(crate) fn blended_list(
             continue;
         }
         let pass = Pass::of(state.class, state.mirrored);
-        if !pass.blends() || !frustum.intersects(&state.world_bounds) {
+        let bounds = parts.cull_bounds(id as PartId);
+        if !pass.blends() || parts.follows(id as PartId) || !frustum.intersects(bounds) {
             continue;
         }
-        let center = (state.world_bounds.min + state.world_bounds.max) * 0.5;
+        let center = (bounds.min + bounds.max) * 0.5;
         entries.push((
             pass.bucket(),
             Features::default(),
@@ -208,12 +212,13 @@ pub(crate) fn blended_list(
             pass,
         ));
     }
-    group(parts, entries, base)
+    group(parts, entries, base, true)
 }
 
 /// Parts that may cast shadows: every shown triangle part of the scene layer
 /// whose node casts (`ShadowCasting::Cast`) and whose material does (an
-/// opaque one, or a blended one with `translucent_shadow`).
+/// opaque one, or a blended one with `translucent_shadow`). A scattered run
+/// is one candidate, its leader.
 pub(crate) fn caster_candidates(parts: &Parts) -> Vec<PartId> {
     parts
         .state
@@ -226,6 +231,7 @@ pub(crate) fn caster_candidates(parts: &Parts) -> Vec<PartId> {
                 && state.class.shadow
                 && state.layer == RenderLayer::Scene
                 && !state.class.lines
+                && !parts.follows(*id as PartId)
         })
         .map(|(id, _)| id as PartId)
         .collect()
@@ -242,7 +248,7 @@ pub(crate) fn within_reach(
         .iter()
         .copied()
         .filter(|&id| {
-            let bounds = &parts.state[id as usize].world_bounds;
+            let bounds = parts.cull_bounds(id);
             !bounds.is_empty()
                 && bounds
                     .min
@@ -265,7 +271,7 @@ pub(crate) fn caster_list(
     let mut entries: Vec<Entry> = Vec::new();
     for &id in candidates {
         let state = &parts.state[id as usize];
-        if !frustum.intersects(&state.world_bounds) {
+        if !frustum.intersects(parts.cull_bounds(id)) {
             continue;
         }
         let opaque = PartClass {
@@ -275,10 +281,12 @@ pub(crate) fn caster_list(
         let pass = Pass::of(opaque, state.mirrored);
         entries.push((pass, state.class.features.caster(), state.key, id, pass));
     }
-    group(parts, entries, base)
+    group(parts, entries, base, true)
 }
 
-fn group(parts: &Parts, mut entries: Vec<Entry>, base: u32) -> DrawList {
+/// Batch sorted entries into instance runs. With `runs`, a scattered run's
+/// leader stands for its whole run: one batch of all its copies.
+fn group(parts: &Parts, mut entries: Vec<Entry>, base: u32, runs: bool) -> DrawList {
     entries.sort_unstable();
     let mut list = DrawList {
         batches: Vec::new(),
@@ -287,6 +295,18 @@ fn group(parts: &Parts, mut entries: Vec<Entry>, base: u32) -> DrawList {
     let mut previous: Option<(Pass, u32)> = None;
     for (_, _, _, id, pass) in entries {
         let key = parts.state[id as usize].key;
+        if let Some(run) = runs.then(|| parts.runs.get(&id)).flatten() {
+            list.batches.push(Batch {
+                pass,
+                part: id,
+                first_instance: base + list.ids.len() as u32,
+                instances: run.ids.len() as u32,
+            });
+            list.ids.extend_from_slice(&run.ids);
+            // The next part starts a batch of its own.
+            previous = None;
+            continue;
+        }
         match list.batches.last_mut() {
             Some(batch) if !pass.blends() && previous == Some((pass, key)) => {
                 batch.instances += 1;

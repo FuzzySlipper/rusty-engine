@@ -6,7 +6,7 @@
 // product's `cast_shadow` may discard.
 
 #import rusty::types::{texture_space_position, Caster, Vertex}
-#import rusty::view::{parts, instances, shadow_views}
+#import rusty::view::{parts, instances, shadow_views, fade_toward_origin}
 #import rusty::material::{material, albedo, albedo_sampler}
 #import rusty::surface::{transform_uv, voxel_uv, triplanar_uvs, triplanar_weights, hex_tiles, hex_texture}
 #ifdef WIND
@@ -47,7 +47,7 @@ fn vs_shadow(
 ) -> VsOut {
     let part = instances[instance];
     let row = parts[part];
-    var world = (row.model * vec4<f32>(position, 1.0)).xyz;
+    var world = fade_toward_origin(row, (row.model * vec4<f32>(position, 1.0)).xyz);
 #ifdef LAYER_WEIGHTS
     // The vertex colour holds layer weights.
     let alpha = 1.0;

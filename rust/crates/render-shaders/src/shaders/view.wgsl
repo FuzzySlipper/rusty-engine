@@ -37,6 +37,18 @@
 // cutoff alone would alias it. The surface writes alpha 1 to the samples it
 // covers: the finish pass reads the target's alpha as coverage. Call before
 // any discard: it takes a derivative.
+// A part's distance fade (`Part::fade`): its vertex drawn toward the part's
+// origin as the camera nears the fade's end, so a scattered copy sinks into
+// its spot rather than popping out.
+fn fade_toward_origin(row: Part, world: vec3<f32>) -> vec3<f32> {
+    if (row.fade.y <= 0.0) {
+        return world;
+    }
+    let origin = row.model[3].xyz;
+    let keep = 1.0 - smoothstep(row.fade.x, row.fade.y, distance(origin, frame.camera.xyz));
+    return origin + (world - origin) * keep;
+}
+
 fn mask_coverage(alpha: f32, cutoff: f32) -> u32 {
     let sharpened = clamp((alpha - cutoff) / max(fwidth(alpha), 1e-5) + 0.5, 0.0, 1.0);
     let samples = max(frame.counts.z, 1u);

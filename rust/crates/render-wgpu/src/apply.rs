@@ -223,6 +223,21 @@ impl Renderer {
                     parameters: BTreeMap::new(),
                 },
             ),
+            RenderDiff::CreateScatterPatch {
+                handle,
+                parent,
+                patch,
+            } => self.insert_node(
+                *handle,
+                *parent,
+                NodePlacement {
+                    local: glam::Mat4::IDENTITY,
+                    visible: true,
+                    layer: RenderLayer::Scene,
+                    shadow_casting: patch.shadow_casting,
+                },
+                NodeKind::Scatter(Box::new(patch.clone())),
+            ),
             RenderDiff::CreateAnimatedMeshInstance {
                 handle,
                 parent,
@@ -631,6 +646,10 @@ impl Renderer {
             self.tables.parts.remove(part);
         }
         let mut parts: Vec<(Part, PartRow)> = Vec::new();
+        // A scattered node's copies: each part's transform under the node,
+        // and the runs (part index ranges) its mesh groups make.
+        let mut locals: Vec<glam::Mat4> = Vec::new();
+        let mut runs: Vec<std::ops::Range<usize>> = Vec::new();
         match &node.kind {
             NodeKind::Primitive {
                 geometry,
@@ -822,12 +841,76 @@ impl Renderer {
                     ));
                 }
             }
+            NodeKind::Scatter(patch) => {
+                if let Some((mesh_id, mesh)) = crate::tables::named(
+                    &self.tables.names,
+                    &self.tables.static_meshes,
+                    &patch.asset,
+                ) {
+                    let copies: Vec<glam::Mat4> = patch
+                        .instances
+                        .iter()
+                        .map(|instance| {
+                            glam::Mat4::from_scale_rotation_translation(
+                                glam::Vec3::splat(instance.scale),
+                                glam::Quat::from_array(instance.rotation),
+                                glam::Vec3::from(instance.translation),
+                            )
+                        })
+                        .collect();
+                    for (slot, start, count) in &mesh.groups {
+                        let material_id = patch
+                            .material_overrides
+                            .iter()
+                            .find(|binding| binding.slot == *slot)
+                            .map(|binding| &binding.material)
+                            .or_else(|| mesh.slots.get(slot));
+                        let (material_ref, color, emission) = match material_id.and_then(|id| {
+                            crate::tables::named(&self.tables.names, &self.tables.materials, id)
+                        }) {
+                            Some((id, row)) => {
+                                let (color, emission) = instance_colors(&row.descriptor, None);
+                                (MaterialRef::Retained(id), color, emission)
+                            }
+                            None => (MaterialRef::LitFallback, slot_color(*slot), [0.0; 3]),
+                        };
+                        let first = parts.len();
+                        for (instance, local) in patch.instances.iter().zip(&copies) {
+                            let tint = instance.tint;
+                            let mut row = PartRow::new(
+                                [
+                                    color[0] * tint[0],
+                                    color[1] * tint[1],
+                                    color[2] * tint[2],
+                                    color[3],
+                                ],
+                                emission,
+                            );
+                            row.fade = [patch.fade.start, patch.fade.end];
+                            parts.push((
+                                Part {
+                                    node: handle,
+                                    mesh: MeshRef::Static(mesh_id),
+                                    first_index: *start,
+                                    index_count: *count,
+                                    material: material_ref.clone(),
+                                    wireframe: false,
+                                },
+                                row,
+                            ));
+                            locals.push(*local);
+                        }
+                        runs.push(first..parts.len());
+                    }
+                }
+            }
             NodeKind::Group | NodeKind::Light(_) | NodeKind::Sprite(_) => {}
         }
         let (world, shown, layer) = (node.world, node.world_visible, node.world_layer);
         let casts = node.shadow_casting.is_cast();
         let mut ids = Vec::with_capacity(parts.len());
-        for (mut part, mut row) in parts {
+        let mut leader = None;
+        for (index, (mut part, mut row)) in parts.into_iter().enumerate() {
             if let MeshRef::Builtin(kind) = part.mesh {
                 part.index_count = self.builtins[&kind].groups[0].2;
             }
@@ -866,8 +949,21 @@ impl Renderer {
                 features,
             };
             let id = self.tables.parts.insert(part, row, bounds, class);
+            if let Some(local) = locals.get(index) {
+                // A copy follows its run from the first write, so it marks
+                // nothing the indirect light reads.
+                if runs.iter().any(|run| run.start == index) {
+                    leader = Some(id);
+                }
+                let state = &mut self.tables.parts.state[id as usize];
+                state.local = Some(*local);
+                state.leader = leader;
+            }
             self.tables.parts.write(id, &world, shown, layer, casts);
             ids.push(id);
+        }
+        for run in runs {
+            self.tables.parts.make_run(ids[run].to_vec());
         }
         if let Some(node) = self.tables.nodes.get_mut(&handle) {
             node.parts = ids;
@@ -1210,17 +1306,22 @@ impl Renderer {
         );
         let id = self.tables.names.id(&asset.asset);
         let redefined = self.tables.static_meshes.insert(id, mesh).is_some();
-        if redefined {
-            let instances: Vec<RenderHandle> = self
-                .tables
-                .nodes
-                .iter()
-                .filter(|(_, node)| matches!(&node.kind, NodeKind::StaticMesh { asset: used, .. } if *used == asset.asset))
-                .map(|(handle, _)| *handle)
-                .collect();
-            for handle in instances {
-                self.rebuild_parts(handle);
-            }
+        // A redefinition redraws every user; a first definition the scatter
+        // patches that arrived before it (they come from another service's
+        // frames than the mesh's appearance).
+        let instances: Vec<RenderHandle> = self
+            .tables
+            .nodes
+            .iter()
+            .filter(|(_, node)| match &node.kind {
+                NodeKind::StaticMesh { asset: used, .. } => redefined && *used == asset.asset,
+                NodeKind::Scatter(patch) => patch.asset == asset.asset,
+                _ => false,
+            })
+            .map(|(handle, _)| *handle)
+            .collect();
+        for handle in instances {
+            self.rebuild_parts(handle);
         }
         Ok(())
     }
@@ -2168,6 +2269,7 @@ fn op_name(op: &RenderDiff) -> &'static str {
         RenderDiff::ReleaseVoxelObject { .. } => "releaseVoxelObject",
         RenderDiff::CreateStaticMeshInstance { .. } => "createStaticMeshInstance",
         RenderDiff::CreateAnimatedMeshInstance { .. } => "createAnimatedMeshInstance",
+        RenderDiff::CreateScatterPatch { .. } => "createScatterPatch",
         RenderDiff::SetAnimatedMeshInspection { .. } => "setAnimatedMeshInspection",
         RenderDiff::SetAnimatedMeshPlayback { .. } => "setAnimatedMeshPlayback",
         RenderDiff::CreateVoxelObjectInstance { .. } => "createVoxelObjectInstance",

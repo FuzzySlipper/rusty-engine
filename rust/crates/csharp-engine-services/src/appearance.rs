@@ -1165,6 +1165,8 @@ pub(crate) struct RuntimeAppearanceData {
     sprite_playbacks: BTreeMap<u64, RuntimeSpritePlayback>,
     sprite_playbacks_by_atlas: BTreeMap<u64, BTreeSet<u64>>,
     sprite_playbacks_by_appearance: BTreeMap<u64, BTreeSet<u64>>,
+    /// Static-mesh appearances voxel scatters grow, with how many do.
+    scatter_appearances: BTreeMap<u64, u32>,
     next_sprite_playback: u64,
     animated_appearances: BTreeMap<u64, u64>,
     animation_instances: BTreeMap<u64, AnimationInstance>,
@@ -1407,6 +1409,7 @@ impl RuntimeAppearanceBridge {
             sprite_playbacks: BTreeMap::new(),
             sprite_playbacks_by_atlas: BTreeMap::new(),
             sprite_playbacks_by_appearance: BTreeMap::new(),
+            scatter_appearances: BTreeMap::new(),
             next_sprite_playback: 1,
             animated_appearances: BTreeMap::new(),
             animation_instances: BTreeMap::new(),
@@ -2378,6 +2381,67 @@ impl RuntimeAppearanceBridge {
             })
             .transpose()?;
         Ok((material, textures, shader))
+    }
+
+    /// The static mesh a static-mesh appearance draws, and its material
+    /// slots, for a voxel scatter (#9546).
+    pub(crate) fn scatter_mesh(
+        &mut self,
+        appearance: NativeAppearanceHandle,
+    ) -> Result<(String, BTreeSet<u16>), CsharpEngineServicesError> {
+        let refusal = |message: &str| {
+            CsharpEngineServicesError::new("CSHARP_VOXEL_SCATTER_APPEARANCE", message.to_owned())
+        };
+        let staged = self.staged_mut()?;
+        let state = &*staged.state;
+        let identity = state
+            .appearances
+            .get(&appearance.value)
+            .ok_or_else(|| refusal("scatter appearance handle is not live"))?;
+        let Some(render_projection::Appearance::StaticMesh { asset, .. }) =
+            state.projector.appearance(identity)
+        else {
+            return Err(refusal("a scatter grows a static mesh appearance"));
+        };
+        let mesh = state
+            .projector
+            .resources()
+            .static_meshes
+            .iter()
+            .find(|mesh| mesh.asset == *asset)
+            .ok_or_else(|| refusal("scatter appearance mesh is not retained"))?;
+        let slots = mesh
+            .material_slots
+            .iter()
+            .map(|slot| slot.slot)
+            .chain(mesh.payload.groups.iter().map(|group| group.material_slot))
+            .collect();
+        Ok((asset.clone(), slots))
+    }
+
+    /// Count a scatter growing `appearance` (or one fewer): an appearance
+    /// a scatter grows is not disposed under it.
+    pub(crate) fn hold_for_scatter(
+        &mut self,
+        appearance: u64,
+        held: bool,
+    ) -> Result<(), CsharpEngineServicesError> {
+        let staged = self.staged_mut()?;
+        if held {
+            // The mesh is defined with the catalog's pending changes, which
+            // publish with this call even when no snapshot does.
+            staged.resource_releases_pending = true;
+        }
+        let holds = &mut staged.state.scatter_appearances;
+        if held {
+            *holds.entry(appearance).or_default() += 1;
+        } else if let Some(count) = holds.get_mut(&appearance) {
+            *count -= 1;
+            if *count == 0 {
+                holds.remove(&appearance);
+            }
+        }
+        Ok(())
     }
 
     pub(crate) fn voxel_material_descriptor(
@@ -3565,6 +3629,16 @@ impl RuntimeAppearanceBridge {
             return Err(CsharpEngineServicesError::new(
                 "CSHARP_SPRITE_PLAYBACK_APPEARANCE_IN_USE",
                 "dispose sprite playbacks using this appearance before disposing or replacing it",
+            ));
+        }
+        if staged
+            .state
+            .scatter_appearances
+            .contains_key(&appearance.value)
+        {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_SCATTER_APPEARANCE_IN_USE",
+                "remove the voxel scene scatters growing this appearance before disposing or replacing it",
             ));
         }
         let Some(identity) = staged.state.appearances.remove(&appearance.value) else {

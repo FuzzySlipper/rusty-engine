@@ -176,7 +176,7 @@ impl RuntimeSpatialBridge {
         self.edit_scene(request.session, |session| {
             Arc::make_mut(&mut session.scene).set_mesh_options(options)
         })?
-        .map_err(|error| voxel_error("CSHARP_VOXEL_VERTEX_OCCLUSION", &error.to_string()))?;
+        .map_err(|error| voxel_error("CSHARP_VOXEL_VERTEX_OCCLUSION", error.to_string()))?;
         self.read_voxel_scene(NativeVoxelSceneReadRequest {
             session: request.session,
         })

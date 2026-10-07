@@ -20,6 +20,7 @@ use texture_mapping::{project_voxel_surface_tile_point, VoxelTextureMappingError
 
 pub mod distance_field;
 mod occlusion;
+pub mod scatter;
 mod surface;
 
 /// How far beyond a chunk its vertex occlusion reads, in voxels

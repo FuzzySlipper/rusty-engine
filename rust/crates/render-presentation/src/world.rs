@@ -20,6 +20,9 @@ enum NodeKind {
     VoxelObject(VoxelObjectInstanceDescriptor),
     Sprite(SpriteInstanceDescriptor),
     Light(LightDescriptor),
+    /// A patch of scattered copies: drawn at its parent, never addressed by
+    /// transform or metadata.
+    Scatter(ScatterPatchDescriptor),
 }
 
 impl NodeKind {
@@ -30,7 +33,7 @@ impl NodeKind {
             Self::AnimatedMesh(instance) => Some(&instance.transform),
             Self::VoxelObject(instance) => Some(&instance.transform),
             Self::Sprite(instance) => Some(&instance.transform),
-            Self::Light(_) => None,
+            Self::Light(_) | Self::Scatter(_) => None,
         }
     }
 
@@ -45,7 +48,7 @@ impl NodeKind {
             Self::AnimatedMesh(instance) => Some(&instance.metadata),
             Self::VoxelObject(instance) => Some(&instance.metadata),
             Self::Sprite(instance) => Some(&instance.metadata),
-            Self::Light(_) => None,
+            Self::Light(_) | Self::Scatter(_) => None,
         }
     }
 }
@@ -475,6 +478,7 @@ impl PresentationWorld {
                 NodeKind::AnimatedMesh(value) => group!(value, RenderLayer::Scene),
                 NodeKind::VoxelObject(value) => group!(value, RenderLayer::Scene),
                 NodeKind::Sprite(value) => group!(value, value.layer),
+                NodeKind::Scatter(_) => RenderNode::new(Geometry::Group),
                 NodeKind::Light(_) => continue,
             };
             node.kind = NodeKind::Primitive(group);
@@ -519,6 +523,15 @@ impl PresentationWorld {
                     voxels.insert(instance.asset.clone());
                     materials.extend(
                         instance
+                            .material_overrides
+                            .iter()
+                            .map(|slot| slot.material.clone()),
+                    );
+                }
+                NodeKind::Scatter(patch) => {
+                    meshes.insert(patch.asset.clone());
+                    materials.extend(
+                        patch
                             .material_overrides
                             .iter()
                             .map(|slot| slot.material.clone()),
@@ -789,6 +802,11 @@ impl PresentationWorld {
                 parent,
                 sprite: sprite.clone(),
             },
+            NodeKind::Scatter(patch) => RenderDiff::CreateScatterPatch {
+                handle,
+                parent,
+                patch: patch.clone(),
+            },
             NodeKind::Light(light) => RenderDiff::CreateLight {
                 handle,
                 parent,
@@ -937,6 +955,11 @@ impl PresentationWorld {
                 parent,
                 sprite,
             } => self.insert(*handle, *parent, NodeKind::Sprite(sprite.clone()))?,
+            RenderDiff::CreateScatterPatch {
+                handle,
+                parent,
+                patch,
+            } => self.insert(*handle, *parent, NodeKind::Scatter(patch.clone()))?,
             RenderDiff::CreateLight {
                 handle,
                 parent,
@@ -1014,7 +1037,7 @@ impl PresentationWorld {
                     NodeKind::Sprite(value) => {
                         update!(value);
                     }
-                    NodeKind::Light(_) => {
+                    NodeKind::Light(_) | NodeKind::Scatter(_) => {
                         return Err(PresentationWorldError::WrongNodeKind(*handle))
                     }
                 }
@@ -1111,6 +1134,7 @@ impl PresentationWorld {
                         NodeKind::StaticMesh(instance) => instance.material_overrides.iter().any(|slot| &slot.material == id),
                         NodeKind::AnimatedMesh(instance) => instance.material_overrides.iter().any(|slot| &slot.material == id),
                         NodeKind::VoxelObject(instance) => instance.material_overrides.iter().any(|slot| &slot.material == id),
+                        NodeKind::Scatter(patch) => patch.material_overrides.iter().any(|slot| &slot.material == id),
                         _ => false,
                     })
                     || self.retained.ghost_captures.values().any(|frame| frame.ops.iter().any(|op| matches!(op, RenderDiff::DefineMaterial { material } if &material.id == id)));
@@ -1199,7 +1223,10 @@ impl PresentationWorld {
                 if !self.retained.static_meshes.contains_key(asset) {
                     return Err(PresentationWorldError::UndefinedStaticMesh(asset.clone()));
                 }
-                if self.retained.nodes.values().any(|node| matches!(&node.kind, NodeKind::StaticMesh(instance) if &instance.asset == asset)) {
+                if self.retained.nodes.values().any(|node| {
+                    matches!(&node.kind, NodeKind::StaticMesh(instance) if &instance.asset == asset)
+                        || matches!(&node.kind, NodeKind::Scatter(patch) if &patch.asset == asset)
+                }) {
                     return Err(PresentationWorldError::ReferencedResource(asset.clone()));
                 }
                 self.retained.static_meshes.remove(asset);

@@ -898,6 +898,13 @@ pub enum RenderDiff {
         parent: Option<RenderHandle>,
         instance: crate::AnimatedMeshInstanceDescriptor,
     },
+    /// Many copies of a static mesh drawn as one node (`scatter`): grass,
+    /// stones and flowers the Engine placed over a piece of ground.
+    CreateScatterPatch {
+        handle: RenderHandle,
+        parent: Option<RenderHandle>,
+        patch: crate::ScatterPatchDescriptor,
+    },
     SetAnimatedMeshInspection {
         handle: RenderHandle,
         inspection: crate::AnimatedMeshInspection,
@@ -1082,6 +1089,9 @@ impl RenderDiff {
             Self::CreateAnimatedMeshInstance { instance, .. } => instance
                 .validate()
                 .map_err(RenderOperationError::AnimatedMeshInstance),
+            Self::CreateScatterPatch { patch, .. } => {
+                patch.validate().map_err(RenderOperationError::ScatterPatch)
+            }
             Self::SetAnimatedMeshPlayback { playback, .. } => playback
                 .validate()
                 .map_err(RenderOperationError::AnimatedPlayback),
@@ -1107,6 +1117,7 @@ impl RenderDiff {
             | Self::CreateLight { handle, parent, .. }
             | Self::CreateStaticMeshInstance { handle, parent, .. }
             | Self::CreateAnimatedMeshInstance { handle, parent, .. }
+            | Self::CreateScatterPatch { handle, parent, .. }
             | Self::CreateVoxelObjectInstance { handle, parent, .. }
             | Self::CreateSprite { handle, parent, .. } => {
                 handle.validate()?;
@@ -1192,6 +1203,7 @@ pub enum RenderOperationError {
     StaticMeshInstance(crate::StaticMeshInstanceError),
     AnimatedMesh(crate::AnimatedMeshAssetError),
     AnimatedMeshInstance(crate::AnimatedMeshInstanceError),
+    ScatterPatch(crate::ScatterPatchError),
     AnimatedPlayback(crate::AnimatedMeshPlaybackError),
     VoxelObject(crate::VoxelObjectRenderAssetError),
     VoxelObjectInstance(crate::VoxelObjectInstanceError),
@@ -1273,6 +1285,7 @@ impl RenderFrameDiff {
                 | RenderDiff::ReleaseVoxelObject { .. }
                 | RenderDiff::CreateStaticMeshInstance { .. }
                 | RenderDiff::CreateAnimatedMeshInstance { .. }
+                | RenderDiff::CreateScatterPatch { .. }
                 | RenderDiff::SetAnimatedMeshInspection { .. }
                 | RenderDiff::SetAnimatedMeshPlayback { .. }
                 | RenderDiff::CreateVoxelObjectInstance { .. }

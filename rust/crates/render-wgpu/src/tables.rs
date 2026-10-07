@@ -171,6 +171,14 @@ impl Aabb {
         self.max = self.max.max(point);
     }
 
+    /// The box holding both (an empty one adds nothing).
+    pub fn union(&self, other: &Self) -> Self {
+        Self {
+            min: self.min.min(other.min),
+            max: self.max.max(other.max),
+        }
+    }
+
     /// The world box of this local box under `world`.
     pub fn transformed(&self, world: &Mat4) -> Self {
         if self.is_empty() {
@@ -241,6 +249,8 @@ pub(crate) enum NodeKind {
     AnimatedMesh(Box<AnimatedMeshInstanceDescriptor>),
     VoxelObject(Box<VoxelObjectInstanceDescriptor>),
     Sprite(Box<SpriteRow>),
+    /// Scattered copies of a static mesh (`render_model::scatter`).
+    Scatter(Box<render_model::ScatterPatchDescriptor>),
 }
 
 /// One node's GPU-side row: a derived twin of `PresentationWorld`'s node,
@@ -411,11 +421,15 @@ pub(crate) struct PartState {
     pub layer: RenderLayer,
     /// The part casts into shadow layers (`ShadowCasting::Cast`).
     pub casts_shadows: bool,
+    /// A scattered copy (`NodeKind::Scatter`): the first copy of its mesh
+    /// group, which leads the run the CPU lists cull and draw as one.
+    pub leader: Option<PartId>,
 }
 
 /// GPU row per part: model matrix, normal matrix (3 columns), linear colour
-/// (rgb, alpha) and emission (rgb pre-multiplied by intensity).
-pub(crate) const PART_ROW_FLOATS: usize = 16 + 12 + 4 + 4;
+/// (rgb, alpha), emission (rgb pre-multiplied by intensity) and the distance
+/// fade (start, end).
+pub(crate) const PART_ROW_FLOATS: usize = 16 + 12 + 4 + 4 + 4;
 
 #[derive(Clone, Copy)]
 pub(crate) struct PartRow {
@@ -424,6 +438,9 @@ pub(crate) struct PartRow {
     /// Texture-space origin (xyz) and cells per unit (w): where triplanar
     /// materials project the part's positions from. Set from its mesh.
     pub texture_space: [f32; 4],
+    /// The part shrinks into its origin between these distances from the
+    /// camera (`ScatterFade`); an end of 0 keeps it whole.
+    pub fade: [f32; 2],
 }
 
 impl PartRow {
@@ -432,8 +449,15 @@ impl PartRow {
             color,
             emission,
             texture_space: OBJECT_TEXTURE_SPACE,
+            fade: [0.0; 2],
         }
     }
+}
+
+/// A run of scattered copies drawn as one: its parts and their world bounds.
+pub(crate) struct Run {
+    pub ids: Vec<PartId>,
+    pub bounds: Aabb,
 }
 
 /// Object-space positions, for meshes without a texture space.
@@ -474,6 +498,10 @@ pub(crate) struct Parts {
     keys: HashMap<BatchKey, (u32, u32)>,
     free_keys: Vec<u32>,
     next_key: u32,
+    /// Scattered runs by their leader.
+    pub runs: HashMap<PartId, Run>,
+    /// Runs whose copies were written since their bounds were.
+    dirty_runs: HashSet<PartId>,
 }
 
 impl Parts {
@@ -489,6 +517,7 @@ impl Parts {
             shown: false,
             layer: RenderLayer::Scene,
             casts_shadows: true,
+            leader: None,
         };
         let id = if let Some(id) = self.free.pop() {
             self.meta[id as usize] = Some(part);
@@ -511,8 +540,14 @@ impl Parts {
     pub fn remove(&mut self, id: PartId) {
         if let Some(part) = self.meta[id as usize].take() {
             self.release_key(part);
-            self.former_bounds
-                .push(self.state[id as usize].world_bounds);
+            if self.state[id as usize].leader.is_none() {
+                self.former_bounds
+                    .push(self.state[id as usize].world_bounds);
+            }
+        }
+        if self.state[id as usize].leader.take() == Some(id) {
+            self.runs.remove(&id);
+            self.dirty_runs.remove(&id);
         }
         self.dirty.remove(&id);
         self.free.push(id);
@@ -548,13 +583,17 @@ impl Parts {
         out[28..32].copy_from_slice(&row.color);
         out[32..35].copy_from_slice(&row.emission);
         out[35] = row.texture_space[3];
+        out[36..38].copy_from_slice(&row.fade);
         let state = &mut self.state[id as usize];
         let mirrored = world.determinant() < 0.0;
         if state.mirrored != mirrored || state.shown != shown || state.layer != layer {
             self.regrouped = true;
         }
         let bounds = state.local_bounds.transformed(world);
-        if !state.world_bounds.is_empty() && state.world_bounds != bounds {
+        // Scattered copies are not the indirect light's scene: they mark no
+        // bricks, and their run re-culls as a whole.
+        let leader = state.leader;
+        if leader.is_none() && !state.world_bounds.is_empty() && state.world_bounds != bounds {
             self.former_bounds.push(state.world_bounds);
         }
         state.world_bounds = bounds;
@@ -563,7 +602,59 @@ impl Parts {
         state.layer = layer;
         state.casts_shadows = casts_shadows;
         self.dirty.insert(id);
-        self.moved.insert(id);
+        match leader {
+            Some(leader) => {
+                self.dirty_runs.insert(leader);
+                self.regrouped = true;
+            }
+            None => {
+                self.moved.insert(id);
+            }
+        }
+    }
+
+    /// Make `ids` (inserted, one mesh group's copies) a run led by the
+    /// first.
+    pub fn make_run(&mut self, ids: Vec<PartId>) {
+        let Some(&leader) = ids.first() else { return };
+        for &id in &ids {
+            self.state[id as usize].leader = Some(leader);
+        }
+        self.dirty_runs.insert(leader);
+        self.runs.insert(
+            leader,
+            Run {
+                ids,
+                bounds: Aabb::EMPTY,
+            },
+        );
+    }
+
+    /// Bring the bounds of runs whose copies moved up to date.
+    pub fn settle_runs(&mut self) {
+        for leader in std::mem::take(&mut self.dirty_runs) {
+            if let Some(run) = self.runs.get_mut(&leader) {
+                run.bounds = run.ids.iter().fold(Aabb::EMPTY, |bounds, id| {
+                    bounds.union(&self.state[*id as usize].world_bounds)
+                });
+            }
+        }
+    }
+
+    /// Whether the CPU lists skip this part: a scattered copy they draw
+    /// through its run's leader.
+    pub fn follows(&self, id: PartId) -> bool {
+        self.state[id as usize]
+            .leader
+            .is_some_and(|leader| leader != id)
+    }
+
+    /// The bounds the CPU lists cull a part by: its run's for a leader.
+    pub fn cull_bounds(&self, id: PartId) -> &Aabb {
+        match self.runs.get(&id) {
+            Some(run) => &run.bounds,
+            None => &self.state[id as usize].world_bounds,
+        }
     }
 
     fn acquire_key(&mut self, part: &Part) -> u32 {

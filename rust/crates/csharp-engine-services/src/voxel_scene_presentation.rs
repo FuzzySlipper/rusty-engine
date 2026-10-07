@@ -22,7 +22,7 @@ use render_model::{
 };
 use render_projection::{
     voxel_material_id, VoxelLevelOfDetail, VoxelMaterialSlotMapping, VoxelProjectionInstance,
-    VoxelRenderProjector,
+    VoxelRenderProjector, VoxelScatter, VoxelScatterField,
 };
 
 use crate::{
@@ -47,6 +47,17 @@ struct RetainedVoxelScenePresentation {
     /// Chunks farther than this from the viewer are drawn coarse; zero or
     /// less draws every chunk at full resolution.
     coarse_distance: f64,
+    /// What grows on the ground around the viewer, by the product's key.
+    scatters: BTreeMap<u32, RetainedScatter>,
+}
+
+/// One scatter: the appearance it grows and its placement request. Its
+/// material is a copy defined when the scatter was set, so the product's
+/// material may change or go without changing what grows.
+#[derive(Debug, Clone)]
+struct RetainedScatter {
+    appearance: u64,
+    scatter: VoxelScatter,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -248,6 +259,7 @@ impl RuntimeVoxelScenePresentationBridge {
                 face_material_provenance: resolved.face_material_provenance,
                 base_material_count: resolved.base_material_count,
                 coarse_distance: 0.0,
+                scatters: BTreeMap::new(),
             },
         );
         if let Err(error) = self.refresh(NativeVoxelScenePresentationHandle { value }) {
@@ -334,11 +346,9 @@ impl RuntimeVoxelScenePresentationBridge {
         if viewer.is_some() {
             state.viewer = viewer;
         }
-        if !state
-            .presentations
-            .values()
-            .any(|presentation| presentation.coarse_distance > 0.0)
-        {
+        if !state.presentations.values().any(|presentation| {
+            presentation.coarse_distance > 0.0 || !presentation.scatters.is_empty()
+        }) {
             return Ok(());
         }
         let started = Instant::now();
@@ -347,6 +357,169 @@ impl RuntimeVoxelScenePresentationBridge {
         }
         let duration_us = started.elapsed().as_micros().min(u128::from(u64::MAX)) as u64;
         self.record_presentation_attribution(duration_us);
+        Ok(())
+    }
+
+    /// Grow (or regrow) one scatter on a presentation's ground (#9546).
+    fn set_scatter(
+        &mut self,
+        request: &NativeVoxelSceneScatterRequest,
+    ) -> Result<NativeVoxelScenePresentationReadout, CsharpEngineServicesError> {
+        let refusal =
+            |message: String| CsharpEngineServicesError::new("CSHARP_VOXEL_SCENE_SCATTER", message);
+        self.retained_session(request.presentation)?;
+        // SAFETY: generated C# pins this bounded typed array for the direct
+        // callback; the slots are copied before returning.
+        let slots = unsafe { borrowed_slice(request.slots, request.slots_len, "scatter slots")? }
+            .iter()
+            .map(|slot| {
+                u16::try_from(*slot)
+                    .map_err(|_| refusal(format!("scatter slot {slot} exceeds the slot limit")))
+            })
+            .collect::<Result<BTreeSet<u16>, _>>()?;
+        let appearance = self.appearance_mut()?;
+        let (mesh, mesh_slots) = appearance.scatter_mesh(request.appearance)?;
+        let (mut material, textures, shader) =
+            appearance.voxel_material_projection(request.material)?;
+        material.id = scatter_material_id(request.presentation.value, request.scatter);
+        let scatter = VoxelScatter {
+            mesh,
+            material_overrides: mesh_slots
+                .into_iter()
+                .map(|slot| render_model::MeshMaterialSlot {
+                    slot,
+                    material: material.id.clone(),
+                })
+                .collect(),
+            slots,
+            density: request.density,
+            radius: request.radius,
+            fade: request.fade,
+            scale: [request.scale_min, request.scale_max],
+            tints: [
+                [request.tint_low.x, request.tint_low.y, request.tint_low.z],
+                [
+                    request.tint_high.x,
+                    request.tint_high.y,
+                    request.tint_high.z,
+                ],
+            ],
+            slope_limit_degrees: request.slope_limit_degrees,
+            align: request.align,
+            shadow_casting: if request.casts_shadows {
+                render_model::ShadowCasting::Cast
+            } else {
+                render_model::ShadowCasting::None
+            },
+            maximum_instances: request.maximum_instances,
+            seed: (u64::from(request.seed) << 32) | u64::from(request.scatter),
+        };
+        scatter
+            .validate()
+            .map_err(|error| refusal(format!("scatter request is invalid: {error:?}")))?;
+        let appearance = self.appearance_mut()?;
+        appearance.hold_for_scatter(request.appearance.value, true)?;
+        let spatial = self.spatial.clone();
+        let staged = self.staged_mut()?;
+        let presentation = staged
+            .state
+            .presentations
+            .get_mut(&request.presentation.value)
+            .expect("presentation existence was checked above");
+        let mut operations: Vec<RenderDiff> = textures
+            .iter()
+            .cloned()
+            .map(|texture| RenderDiff::DefineTexture { texture })
+            .chain(
+                shader
+                    .iter()
+                    .cloned()
+                    .map(|shader| RenderDiff::DefineShader { shader }),
+            )
+            .collect();
+        operations.push(RenderDiff::DefineMaterial { material });
+        let replaced = presentation.scatters.insert(
+            request.scatter,
+            RetainedScatter {
+                appearance: request.appearance.value,
+                scatter,
+            },
+        );
+        let session = presentation.session;
+        staged.frames.push(
+            RenderFrameDiff::try_from_ops(operations).map_err(|error| {
+                refusal(format!("scatter material frame is invalid: {error:?}"))
+            })?,
+        );
+        let frame = project_all_presentations(&mut staged.state, &spatial)?;
+        staged.frames.push(frame);
+        let readout = presentation_readout(request.presentation, session, &staged.state, &spatial)?;
+        if let Some(replaced) = replaced {
+            self.appearance_mut()?
+                .hold_for_scatter(replaced.appearance, false)?;
+        }
+        Ok(readout)
+    }
+
+    /// Stop growing one scatter: its copies are removed.
+    fn remove_scatter(
+        &mut self,
+        request: &NativeVoxelSceneScatterRemoval,
+    ) -> Result<NativeVoxelScenePresentationReadout, CsharpEngineServicesError> {
+        let session = self.retained_session(request.presentation)?;
+        let spatial = self.spatial.clone();
+        let staged = self.staged_mut()?;
+        let removed = staged
+            .state
+            .presentations
+            .get_mut(&request.presentation.value)
+            .expect("presentation existence was checked above")
+            .scatters
+            .remove(&request.scatter);
+        let frame = project_all_presentations(&mut staged.state, &spatial)?;
+        staged.frames.push(frame);
+        let readout = presentation_readout(request.presentation, session, &staged.state, &spatial)?;
+        if let Some(removed) = removed {
+            self.appearance_mut()?
+                .hold_for_scatter(removed.appearance, false)?;
+        }
+        Ok(readout)
+    }
+
+    fn retained_session(
+        &mut self,
+        presentation: NativeVoxelScenePresentationHandle,
+    ) -> Result<NativeSpatialSessionHandle, CsharpEngineServicesError> {
+        self.staged_mut()?
+            .state
+            .presentations
+            .get(&presentation.value)
+            .map(|retained| retained.session)
+            .ok_or_else(|| {
+                CsharpEngineServicesError::new(
+                    "CSHARP_VOXEL_SCENE_PRESENTATION_HANDLE",
+                    "voxel scene presentation handle is not retained",
+                )
+            })
+    }
+
+    /// Let go of the appearances the scatters of removed presentations grew.
+    fn release_scatters(
+        &mut self,
+        removed: impl IntoIterator<Item = RetainedVoxelScenePresentation>,
+    ) -> Result<(), CsharpEngineServicesError> {
+        let held: Vec<u64> = removed
+            .into_iter()
+            .flat_map(|presentation| presentation.scatters.into_values())
+            .map(|scatter| scatter.appearance)
+            .collect();
+        if held.is_empty() {
+            return Ok(());
+        }
+        let appearance = self.appearance_mut()?;
+        for value in held {
+            appearance.hold_for_scatter(value, false)?;
+        }
         Ok(())
     }
 
@@ -491,7 +664,7 @@ impl RuntimeVoxelScenePresentationBridge {
     ) -> Result<(), CsharpEngineServicesError> {
         let spatial = self.spatial.clone();
         let staged = self.staged_mut()?;
-        staged
+        let removed = staged
             .state
             .presentations
             .remove(&handle.value)
@@ -503,7 +676,7 @@ impl RuntimeVoxelScenePresentationBridge {
             })?;
         let frame = project_all_presentations(&mut staged.state, &spatial)?;
         staged.frames.push(frame);
-        Ok(())
+        self.release_scatters([removed])
     }
 
     fn read_material_mapping(
@@ -600,10 +773,11 @@ impl RuntimeVoxelScenePresentationBridge {
                 "voxel scene presentation count exceeded the C# receipt range",
             )
         })?;
-        staged.state.presentations.clear();
+        let removed = std::mem::take(&mut staged.state.presentations);
         staged
             .frames
             .push(project_all_presentations(&mut staged.state, &spatial)?);
+        self.release_scatters(removed.into_values())?;
         Ok(NativeVoxelScenePresentationClearReceipt {
             cleared_count,
             retained_count: 0,
@@ -837,6 +1011,20 @@ fn set_levels_of_detail(state: &mut VoxelScenePresentationState) {
         state
             .projector
             .set_level_of_detail(&presentation_instance_id(*handle), level);
+        let field = state
+            .viewer
+            .filter(|_| !presentation.scatters.is_empty())
+            .map(|viewer| VoxelScatterField {
+                viewer,
+                scatters: presentation
+                    .scatters
+                    .values()
+                    .map(|retained| retained.scatter.clone())
+                    .collect(),
+            });
+        state
+            .projector
+            .set_scatter(&presentation_instance_id(*handle), field);
     }
 }
 
@@ -848,9 +1036,9 @@ fn project_level_changes(
 ) -> Result<Option<RenderFrameDiff>, CsharpEngineServicesError> {
     set_levels_of_detail(state);
     let scenes = presentation_scenes(state, spatial)?;
-    if !state
-        .projector
-        .level_of_detail_changed(&presentation_instances(&scenes))
+    let instances = presentation_instances(&scenes);
+    if !state.projector.level_of_detail_changed(&instances)
+        && !state.projector.scatter_changed(&instances)
     {
         return Ok(None);
     }
@@ -964,6 +1152,9 @@ fn presentation_readout(
     })?;
     let scene = spatial.scene(session)?;
     let chunk_count = scene.mesh_chunks().len();
+    let scatter = state
+        .projector
+        .scatter_readout(&presentation_instance_id(handle.value));
     Ok(NativeVoxelScenePresentationReadout {
         present: true,
         source_revision: scene.source_revision().raw(),
@@ -982,7 +1173,15 @@ fn presentation_readout(
         coarse_mesh_microseconds: state
             .projector
             .coarse_mesh_microseconds(&presentation_instance_id(handle.value)),
+        scatter_patch_count: scatter.patches,
+        scatter_instance_count: scatter.instances,
+        scatter_over_budget_count: scatter.over_budget,
     })
+}
+
+/// The id of a scatter's copy of its material.
+fn scatter_material_id(presentation: u64, scatter: u32) -> String {
+    format!("material/voxel-scatter-{presentation}-{scatter}")
 }
 
 fn presentation_instance_id(handle: u64) -> String {
@@ -1093,6 +1292,60 @@ pub(crate) fn api(
         update_scene_directional,
         read_material_mapping,
         set_level_of_detail,
+        set_scatter,
+        remove_scatter,
+    }
+}
+
+unsafe extern "C" fn set_scatter(
+    context: *mut c_void,
+    request: *const NativeVoxelSceneScatterRequest,
+    output: *mut NativeVoxelScenePresentationReadout,
+    error: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    if error.is_null() || context.is_null() || request.is_null() || output.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeVoxelScenePresentationBridge>() };
+    let started = Instant::now();
+    let result = bridge.set_scatter(unsafe { &*request });
+    let duration_us = started.elapsed().as_micros().min(u128::from(u64::MAX)) as u64;
+    bridge.record_presentation_attribution(duration_us);
+    match result {
+        Ok(readout) => {
+            unsafe { *output = readout };
+            ABI_OK
+        }
+        Err(failure) => {
+            bridge.operation_diagnostics.retain(&failure, error);
+            0
+        }
+    }
+}
+
+unsafe extern "C" fn remove_scatter(
+    context: *mut c_void,
+    request: *const NativeVoxelSceneScatterRemoval,
+    output: *mut NativeVoxelScenePresentationReadout,
+    error: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    if error.is_null() || context.is_null() || request.is_null() || output.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeVoxelScenePresentationBridge>() };
+    let started = Instant::now();
+    let result = bridge.remove_scatter(unsafe { &*request });
+    let duration_us = started.elapsed().as_micros().min(u128::from(u64::MAX)) as u64;
+    bridge.record_presentation_attribution(duration_us);
+    match result {
+        Ok(readout) => {
+            unsafe { *output = readout };
+            ABI_OK
+        }
+        Err(failure) => {
+            bridge.operation_diagnostics.retain(&failure, error);
+            0
+        }
     }
 }
 
@@ -1310,7 +1563,7 @@ unsafe extern "C" fn clear(
 mod tests {
     use super::*;
     use crate::{appearance::RuntimeAppearanceBridge, spatial::RuntimeSpatialBridge};
-    use render_model::RenderDiff;
+    use render_model::{MeshMaterialSlot, RenderDiff, ScatterFade, ScatterPatchDescriptor};
     use render_projection::RuntimeAppearanceCatalog;
     use std::sync::Arc;
 
@@ -1545,6 +1798,280 @@ mod tests {
         assert_eq!(off.coarse_chunk_count, 0);
         let call = bridge.take_staged_call().unwrap();
         assert_eq!(replaced(&call.frames), 2);
+    }
+
+    /// A card mesh (a 0.2 × 0.5 m quad) as a static mesh appearance.
+    fn card_appearance(
+        appearance: &mut RuntimeAppearanceBridge,
+        material: NativeMaterialHandle,
+    ) -> NativeAppearanceHandle {
+        let positions = [
+            NativeVec3 {
+                x: -0.1,
+                y: 0.0,
+                z: 0.0,
+            },
+            NativeVec3 {
+                x: 0.1,
+                y: 0.0,
+                z: 0.0,
+            },
+            NativeVec3 {
+                x: 0.1,
+                y: 0.5,
+                z: 0.0,
+            },
+            NativeVec3 {
+                x: -0.1,
+                y: 0.5,
+                z: 0.0,
+            },
+        ];
+        let normals = [NativeVec3 {
+            x: 0.0,
+            y: 0.0,
+            z: 1.0,
+        }; 4];
+        let indices = [0u32, 1, 2, 0, 2, 3];
+        let groups = [NativeMeshGroup {
+            material_slot: 0,
+            start: 0,
+            count: 6,
+        }];
+        let bindings = [NativeMeshMaterialBinding {
+            material_slot: 0,
+            material,
+        }];
+        let request = NativeMeshResourceCreateRequest {
+            positions: positions.as_ptr(),
+            positions_len: positions.len(),
+            normals: normals.as_ptr(),
+            normals_len: normals.len(),
+            uvs: std::ptr::null(),
+            uvs_len: 0,
+            colors: std::ptr::null(),
+            colors_len: 0,
+            indices: indices.as_ptr(),
+            indices_len: indices.len(),
+            groups: groups.as_ptr(),
+            groups_len: groups.len(),
+            bindings: bindings.as_ptr(),
+            bindings_len: bindings.len(),
+        };
+        let resource =
+            unsafe { crate::render_resources::create_generated_mesh(appearance, &request) }
+                .unwrap();
+        let mut handle = NativeAppearanceHandle::default();
+        let mut error = unsafe { std::mem::zeroed::<NativeOperationErrorReceipt>() };
+        assert_eq!(
+            unsafe {
+                crate::appearance::create_mesh_appearance(
+                    (appearance as *mut RuntimeAppearanceBridge).cast(),
+                    resource,
+                    &mut handle,
+                    &mut error,
+                )
+            },
+            ABI_OK
+        );
+        handle
+    }
+
+    #[test]
+    fn a_scatter_grows_copies_around_the_primary_camera_and_holds_its_appearance() {
+        let mut spatial = RuntimeSpatialBridge::new();
+        let session = session_with_voxel_mode(&mut spatial, NativeVoxelSurfaceMode::DualContouring);
+        // A floor across four chunks of 8 along x, its top 2 m up.
+        let edits: Vec<_> = (0..32)
+            .flat_map(|x| {
+                (0..8).flat_map(move |z| {
+                    (0..2).map(move |y| NativeVoxelEdit {
+                        state: 0,
+                        kind: NativeVoxelEditKind::Set,
+                        address: NativeVoxelAddress { x, y, z },
+                        material_slot: 1,
+                    })
+                })
+            })
+            .collect();
+        let voxel = crate::voxel::api(&mut spatial);
+        let mut receipt = NativeVoxelEditReceipt::default();
+        let mut error = unsafe { std::mem::zeroed::<NativeOperationErrorReceipt>() };
+        assert_eq!(
+            unsafe {
+                (voxel.apply_edits)(
+                    voxel.context,
+                    &NativeVoxelEditTransaction {
+                        session,
+                        edits: edits.as_ptr(),
+                        edits_len: edits.len(),
+                    },
+                    &mut receipt,
+                    &mut error,
+                )
+            },
+            ABI_OK
+        );
+        let mut appearance =
+            RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), BTreeMap::new());
+        appearance.begin_call();
+        let stone = material(&mut appearance);
+        let blades = material(&mut appearance);
+        let card = card_appearance(&mut appearance, blades);
+        let mut bridge = RuntimeVoxelScenePresentationBridge::new(spatial.collision_source());
+        bridge.bind_appearance(&mut appearance);
+        bridge.begin_call();
+        let bindings = [NativeVoxelSceneMaterialBinding {
+            material_slot: 1,
+            material: stone,
+        }];
+        let presentation = bridge
+            .project_scene(NativeProjectVoxelSceneRequest {
+                session,
+                materials: bindings.as_ptr(),
+                materials_len: bindings.len(),
+            })
+            .unwrap();
+        let slots = [1u32];
+        let request = NativeVoxelSceneScatterRequest {
+            presentation,
+            scatter: 3,
+            appearance: card,
+            material: blades,
+            slots: slots.as_ptr(),
+            slots_len: slots.len(),
+            density: 2.0,
+            radius: 10.0,
+            fade: 3.0,
+            scale_min: 0.8,
+            scale_max: 1.2,
+            tint_low: NativeVec3 {
+                x: 0.8,
+                y: 0.9,
+                z: 0.7,
+            },
+            tint_high: NativeVec3 {
+                x: 1.0,
+                y: 1.0,
+                z: 1.0,
+            },
+            slope_limit_degrees: 40.0,
+            align: 0.3,
+            casts_shadows: false,
+            maximum_instances: 100_000,
+            seed: 5,
+        };
+        // No camera has been seen yet, so nothing grows; the mesh the copies
+        // will draw is defined with this call.
+        let readout = bridge.set_scatter(&request).unwrap();
+        assert_eq!(readout.scatter_patch_count, 0);
+        let published = appearance.take_staged_call();
+        assert!(published.render_ops().iter().any(|operation| matches!(
+            operation,
+            RenderDiff::DefineStaticMesh { asset } if asset.payload.groups.len() == 1
+        )));
+        appearance.commit(published);
+        appearance.begin_call();
+        let patches = |frames: &[RenderFrameDiff]| -> Vec<ScatterPatchDescriptor> {
+            frames
+                .iter()
+                .flat_map(|frame| &frame.ops)
+                .filter_map(|operation| match operation {
+                    RenderDiff::CreateScatterPatch { patch, .. } => Some(patch.clone()),
+                    _ => None,
+                })
+                .collect()
+        };
+        let mut call = bridge.take_staged_call().unwrap();
+        assert!(call.frames.iter().flat_map(|frame| &frame.ops).any(|operation| matches!(
+            operation,
+            RenderDiff::DefineMaterial { material } if material.id == "material/voxel-scatter-1-3"
+        )));
+        let before = call.frames.len();
+        bridge
+            .settle_level_of_detail(&mut call, Some([4.0, 3.0, 4.0]))
+            .unwrap();
+        let grown = patches(&call.frames[before..]);
+        // Chunks 0 and 1 lie within 10 m.
+        assert_eq!(grown.len(), 2);
+        assert!(grown.iter().all(|patch| patch.material_overrides
+            == [MeshMaterialSlot {
+                slot: 0,
+                material: "material/voxel-scatter-1-3".into(),
+            }]
+            && patch.fade
+                == ScatterFade {
+                    start: 7.0,
+                    end: 10.0
+                }
+            && patch.shadow_casting == render_model::ShadowCasting::None
+            && !patch.instances.is_empty()));
+        bridge.commit_call(call);
+
+        // The readout counts them; the appearance is held while they grow.
+        bridge.begin_call();
+        let readout = bridge.refresh(presentation).unwrap();
+        assert_eq!(readout.scatter_patch_count, 2);
+        assert_eq!(
+            readout.scatter_instance_count,
+            grown
+                .iter()
+                .map(|patch| patch.instances.len() as u64)
+                .sum::<u64>()
+        );
+        let mut error = unsafe { std::mem::zeroed::<NativeOperationErrorReceipt>() };
+        assert_eq!(
+            unsafe {
+                crate::appearance::destroy_appearance(
+                    (&mut appearance as *mut RuntimeAppearanceBridge).cast(),
+                    card,
+                    &mut error,
+                )
+            },
+            0,
+            "a grown appearance is not disposed under its scatter"
+        );
+        let call = bridge.take_staged_call().unwrap();
+        bridge.commit_call(call);
+
+        // Walking to the far end places ahead and removes behind.
+        bridge.begin_call();
+        let mut call = bridge.take_staged_call().unwrap();
+        bridge
+            .settle_level_of_detail(&mut call, Some([28.0, 3.0, 4.0]))
+            .unwrap();
+        assert_eq!(patches(&call.frames).len(), 2);
+        bridge.commit_call(call);
+
+        // Removing the scatter removes its copies and lets the appearance go.
+        bridge.begin_call();
+        let readout = bridge
+            .remove_scatter(&NativeVoxelSceneScatterRemoval {
+                presentation,
+                scatter: 3,
+            })
+            .unwrap();
+        assert_eq!(readout.scatter_patch_count, 0);
+        let call = bridge.take_staged_call().unwrap();
+        assert_eq!(
+            call.frames
+                .iter()
+                .flat_map(|frame| &frame.ops)
+                .filter(|operation| matches!(operation, RenderDiff::Destroy { .. }))
+                .count(),
+            2
+        );
+        bridge.commit_call(call);
+        assert_eq!(
+            unsafe {
+                crate::appearance::destroy_appearance(
+                    (&mut appearance as *mut RuntimeAppearanceBridge).cast(),
+                    card,
+                    &mut error,
+                )
+            },
+            ABI_OK
+        );
     }
 
     #[test]

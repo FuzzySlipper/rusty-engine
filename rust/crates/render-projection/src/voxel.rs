@@ -10,7 +10,11 @@ use render_model::{
     RenderMetadata, RenderNode, Transform,
 };
 
-use crate::{HandleAllocationError, RenderHandleNamespace, StableHandleRegistry};
+use crate::voxel_scatter::{scatter_changed, ScatterProjection, ScatterSnapshot};
+use crate::{
+    HandleAllocationError, RenderHandleNamespace, StableHandleRegistry, VoxelScatterField,
+    VoxelScatterReadout,
+};
 
 /// One voxel scene to project. `instance_id` is the retained key and must be
 /// unique within a projection.
@@ -95,12 +99,23 @@ struct InstanceSnapshot {
     pending_coarse: BTreeMap<[i64; 3], u32>,
     /// Time spent meshing the coarse chunks the last projection built.
     coarse_mesh_microseconds: u64,
+    /// The scatter patches placed on the chunks.
+    scatter: ScatterSnapshot,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-enum VoxelRenderKey {
+pub(crate) enum VoxelRenderKey {
     Root(String),
-    Chunk { instance: String, chunk: [i64; 3] },
+    Chunk {
+        instance: String,
+        chunk: [i64; 3],
+    },
+    /// A chunk's patch of one scatter (`voxel_scatter`).
+    Scatter {
+        instance: String,
+        chunk: [i64; 3],
+        scatter: usize,
+    },
 }
 
 /// Which of an instance's chunks a projection visits.
@@ -147,6 +162,7 @@ pub struct VoxelRenderProjector {
     last_instances: BTreeMap<String, InstanceSnapshot>,
     last_materials: BTreeMap<u16, RenderMaterialDescriptor>,
     levels: BTreeMap<String, VoxelLevelOfDetail>,
+    scatter_fields: BTreeMap<String, VoxelScatterField>,
     publication_stream: Option<String>,
     publication_revision: u64,
 }
@@ -164,6 +180,7 @@ impl VoxelRenderProjector {
             last_instances: BTreeMap::new(),
             last_materials: BTreeMap::new(),
             levels: BTreeMap::new(),
+            scatter_fields: BTreeMap::new(),
             publication_stream: None,
             publication_revision: 0,
         }
@@ -187,6 +204,44 @@ impl VoxelRenderProjector {
                 self.levels.remove(instance_id);
             }
         }
+    }
+
+    /// Grow `field`'s scatters on `instance_id`'s chunks around its viewer
+    /// from the next projection on, or nothing with `None`.
+    pub fn set_scatter(&mut self, instance_id: &str, field: Option<VoxelScatterField>) {
+        match field {
+            Some(field) => {
+                self.scatter_fields.insert(instance_id.to_owned(), field);
+            }
+            None => {
+                self.scatter_fields.remove(instance_id);
+            }
+        }
+    }
+
+    /// Whether projecting `instances` now would place or remove a scatter
+    /// patch.
+    pub fn scatter_changed(&self, instances: &[VoxelProjectionInstance<'_>]) -> bool {
+        instances.iter().any(|instance| {
+            self.last_instances
+                .get(&instance.instance_id)
+                .filter(|previous| previous.asset_id == instance.asset_id)
+                .is_some_and(|previous| {
+                    scatter_changed(
+                        &previous.scatter,
+                        instance.scene,
+                        self.scatter_fields.get(&instance.instance_id),
+                        &previous.coarse,
+                    )
+                })
+        })
+    }
+
+    /// The patches and copies an instance's scatters hold.
+    pub fn scatter_readout(&self, instance_id: &str) -> VoxelScatterReadout {
+        self.last_instances
+            .get(instance_id)
+            .map_or_else(Default::default, |instance| instance.scatter.readout())
     }
 
     /// Whether projecting `instances` now would draw a projected chunk at
@@ -340,6 +395,7 @@ impl VoxelRenderProjector {
         for instance_id in retired {
             if !current.contains_key(instance_id.as_str()) {
                 self.levels.remove(&instance_id);
+                self.scatter_fields.remove(&instance_id);
             }
             let previous = self
                 .last_instances
@@ -349,6 +405,13 @@ impl VoxelRenderProjector {
                 self.registry.remove(&VoxelRenderKey::Chunk {
                     instance: instance_id.clone(),
                     chunk: *chunk,
+                });
+            }
+            for (chunk, scatter) in previous.scatter.patches.keys() {
+                self.registry.remove(&VoxelRenderKey::Scatter {
+                    instance: instance_id.clone(),
+                    chunk: *chunk,
+                    scatter: *scatter,
                 });
             }
             let handle = self
@@ -404,6 +467,7 @@ impl VoxelRenderProjector {
                         coarse: BTreeMap::new(),
                         pending_coarse: BTreeMap::new(),
                         coarse_mesh_microseconds: 0,
+                        scatter: ScatterSnapshot::default(),
                     });
                     (snapshot, handle)
                 }
@@ -460,6 +524,17 @@ impl VoxelRenderProjector {
             for coord in level_changes {
                 chunks.project(coord, drawn(coord))?;
             }
+            ScatterProjection {
+                registry: &mut self.registry,
+                instance_id: &instance.instance_id,
+                snapshot: &mut snapshot.scatter,
+                operations: &mut operations,
+            }
+            .project(
+                scene,
+                self.scatter_fields.get(&instance.instance_id),
+                &snapshot.coarse,
+            )?;
             snapshot.mesh_state = scene.mesh_state();
             snapshot.source_revision = scene.source_revision().raw();
         }

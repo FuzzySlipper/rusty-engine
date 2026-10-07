@@ -331,6 +331,7 @@ impl Renderer {
         self.probes.begin_frame();
         self.probes.poll(&self.gpu);
         let uploaded = self.upload_parts();
+        self.tables.parts.settle_runs();
         let regrouped = std::mem::take(&mut self.tables.parts.regrouped);
         let moved = std::mem::take(&mut self.tables.parts.moved);
         let former = std::mem::take(&mut self.tables.parts.former_bounds);

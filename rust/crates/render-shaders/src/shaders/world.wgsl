@@ -9,7 +9,7 @@
 // (PRODUCT_DISPLACES).
 
 #import rusty::types::{texture_space_position, Vertex}
-#import rusty::view::{frame, parts, instances, mask_coverage}
+#import rusty::view::{frame, parts, instances, mask_coverage, fade_toward_origin}
 #ifdef WIND
 #import rusty::wind::wind_displace
 #endif
@@ -124,7 +124,7 @@ fn vs_world(
 ) -> VsOut {
     let part = instances[instance];
     let row = parts[part];
-    var world = (row.model * vec4<f32>(position, 1.0)).xyz;
+    var world = fade_toward_origin(row, (row.model * vec4<f32>(position, 1.0)).xyz);
     let world_normal = mat3x3<f32>(row.normal_x.xyz, row.normal_y.xyz, row.normal_z.xyz) * normal;
 #ifdef WIND
 #ifdef LAYER_WEIGHTS

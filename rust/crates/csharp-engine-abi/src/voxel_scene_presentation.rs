@@ -5,8 +5,8 @@
 //! renderer handles, or a parallel scene representation.
 
 use crate::{
-    NativeMaterialHandle, NativeOperationErrorReceipt, NativeSpatialFace,
-    NativeSpatialSessionHandle,
+    NativeAppearanceHandle, NativeMaterialHandle, NativeOperationErrorReceipt, NativeSpatialFace,
+    NativeSpatialSessionHandle, NativeVec3,
 };
 use std::ffi::c_void;
 
@@ -98,6 +98,51 @@ pub struct NativeVoxelSceneLevelOfDetailRequest {
     pub coarse_distance: f64,
 }
 
+/// Grass, stones or flowers the Engine grows on a presentation's ground
+/// around the camera of the lowest-ordered primary view (#9546). Copies stand
+/// on upward surface within `slope_limit_degrees` of the material slots
+/// named (all slots when none are), `density` per square metre of ground, on
+/// full-resolution chunks within `radius` of the camera, shrinking away over
+/// the last `fade` metres of it. Each copy draws `appearance` (a static mesh
+/// appearance) with `material` at a scale between `scale_min` and
+/// `scale_max`, tinted between `tint_low` and `tint_high`, turned at random
+/// about its up axis and leaning `align` of the way from upright to the
+/// ground's normal. The nearest chunks' copies come first within
+/// `maximum_instances`. Copies are never nodes, entities, colliders or
+/// pickable. `scatter` names this scatter within the presentation: setting it
+/// again replaces it. The appearance and material must stay live while the
+/// scatter grows them.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeVoxelSceneScatterRequest {
+    pub presentation: NativeVoxelScenePresentationHandle,
+    pub scatter: u32,
+    pub appearance: NativeAppearanceHandle,
+    pub material: NativeMaterialHandle,
+    pub slots: *const u32,
+    pub slots_len: usize,
+    pub density: f32,
+    pub radius: f32,
+    pub fade: f32,
+    pub scale_min: f32,
+    pub scale_max: f32,
+    pub tint_low: NativeVec3,
+    pub tint_high: NativeVec3,
+    pub slope_limit_degrees: f32,
+    pub align: f32,
+    pub casts_shadows: bool,
+    pub maximum_instances: u32,
+    pub seed: u32,
+}
+
+/// Stops growing one scatter: its copies are removed.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct NativeVoxelSceneScatterRemoval {
+    pub presentation: NativeVoxelScenePresentationHandle,
+    pub scatter: u32,
+}
+
 /// Copied provenance for one effective source-slot/face renderer selection.
 /// `material_value` identifies the selected retained Material at admission
 /// time; it is diagnostic provenance, not a live disposable handle.
@@ -138,6 +183,11 @@ pub struct NativeVoxelScenePresentationReadout {
     /// Time the last projection spent meshing coarse chunks, summed over
     /// chunks (they mesh in parallel, so wall time can be shorter).
     pub coarse_mesh_microseconds: u64,
+    /// Scatter patches (one per chunk and scatter) and the copies they hold.
+    pub scatter_patch_count: u64,
+    pub scatter_instance_count: u64,
+    /// Chunks within a scatter's reach left bare by its instance budget.
+    pub scatter_over_budget_count: u64,
 }
 
 /// Result of clearing all retained voxel scene projections in this product
@@ -185,6 +235,18 @@ pub type NativeSetVoxelSceneLevelOfDetail = unsafe extern "C" fn(
     *mut NativeVoxelScenePresentationReadout,
     *mut NativeOperationErrorReceipt,
 ) -> i32;
+pub type NativeSetVoxelSceneScatter = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeVoxelSceneScatterRequest,
+    *mut NativeVoxelScenePresentationReadout,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeRemoveVoxelSceneScatter = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeVoxelSceneScatterRemoval,
+    *mut NativeVoxelScenePresentationReadout,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
 pub type NativeReadVoxelSceneMaterialMapping = unsafe extern "C" fn(
     *mut c_void,
     NativeVoxelScenePresentationHandle,
@@ -214,4 +276,6 @@ pub struct NativeVoxelScenePresentationApi {
     pub update_scene_directional: NativeUpdateVoxelScenePresentationDirectional,
     pub read_material_mapping: NativeReadVoxelSceneMaterialMapping,
     pub set_level_of_detail: NativeSetVoxelSceneLevelOfDetail,
+    pub set_scatter: NativeSetVoxelSceneScatter,
+    pub remove_scatter: NativeRemoveVoxelSceneScatter,
 }

@@ -273,6 +273,63 @@ mesh.
   `CoarseMeshMicroseconds` the time the last projection spent meshing coarse
   chunks, summed over chunks.
 
+## Scatter
+
+Grass, bushes, stones and flowers grow on a presentation's ground through
+`engine.VoxelScenePresentation.SetScatter(new VoxelSceneScatterRequest(
+presentation, scatter, appearance, material, slots, density, radius))`. The
+product names what grows (a static-mesh `Appearance` drawn with a
+`Material`), on which material slots (all when none are named), how densely
+(copies per square metre of ground) and how far from the camera of the
+lowest-ordered primary view; `with` sets the rest: `Fade` (the last metres of
+the radius over which copies shrink into the ground, a quarter of it by
+default), `ScaleMin` and `ScaleMax`, `TintLow` and `TintHigh` (linear colours
+each copy's colour is drawn between), `SlopeLimitDegrees` (35 by default),
+`Align` (0 stands copies upright, 1 along the ground's normal),
+`CastsShadows` (off by default), `MaximumInstances` and `Seed`. `scatter` is the
+product's key: setting it again replaces that scatter, and
+`RemoveScatter(new(presentation, scatter))` removes its copies. The Engine owns
+the rest:
+
+- **Where.** On every full-resolution chunk within the radius, the Engine
+  samples the chunk's drawn triangles: a jittered grid over the ground in
+  absolute coordinates gives each grid cell one candidate spot, kept on every
+  upward triangle of a named slot, within the slope limit, whose footprint
+  holds it (`svc_mesh::scatter`). So the same ground grows the same copies
+  whichever chunk meshed it and every time it comes back into reach, ground is
+  covered evenly whatever its triangles' sizes, and a ledge over the ground
+  grows its own. Each copy's scale, tint and turn about its up axis come from
+  a hash of its spot.
+- **Drawing.** A chunk's copies of one scatter are one scatter patch, a child
+  of the chunk's node: one instanced draw per mesh group, culled by the
+  patch's bounds (the GPU cull, when on, culls each copy). Copies are rows of
+  the patch, never nodes, entities, colliders or pickable, and the indirect
+  light volume does not see them. They shrink toward their origin over the
+  fade distance from the camera, in the vertex stage and the shadow pass
+  alike, so nothing pops at the edge of the radius. The material's wind
+  sways them: bend grows with height above each copy's own origin.
+- **Following the ground.** A patch is placed when its chunk comes within
+  the radius and removed when the chunk is 10% farther (so a camera at the
+  boundary does not rebuild it), when the chunk is drawn coarse (distant
+  chunks grow nothing), or when the scatter changes; an edit or remesh places
+  the chunk's patches again, and a world-origin rebase moves them with their
+  chunk. Nearer chunks come first within `MaximumInstances`; a chunk the budget
+  leaves bare stays bare until the camera moves.
+- **Lifetime.** The scatter keeps a copy of the material from when it was
+  set, and holds the appearance: disposing the appearance while a scatter
+  grows it is refused. Every mesh slot draws with the scatter's material.
+
+`VoxelScenePresentationReadout.ScatterPatchCount`, `ScatterInstanceCount` and
+`ScatterOverBudgetCount` report the patches, the copies they hold and the
+chunks a budget left bare. Sampling costs about 0.012 ms per 16³ dual
+contoured chunk at 4 spots per square metre on the `smooth_chunk_meshing`
+example (meshing the chunk costs 0.17 ms), and runs only for chunks coming
+into reach, not at mesh time: the samples are not stored with the chunk.
+Drawing is the cost that matters: masked grass cards are overdraw. On
+`fixtures/csharp-voxel-scatter`, which grows grass clumps and bushes on a dual
+contoured hill, 8,725 visible copies in 35 patch draws take a 1280 × 720 frame
+from 0.68 to 0.96 ms on an RX 9070 XT and from 13 to 64 ms on llvmpipe.
+
 ## Cost
 
 Reconstructed chunks mesh from the chunk and a one-voxel halo of its
