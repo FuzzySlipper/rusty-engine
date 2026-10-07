@@ -1120,14 +1120,19 @@ impl Renderer {
         // A terrain layer material's narrowed variants follow it: those the
         // chunks drawing it need are made anew, the rest released.
         self.release_layer_variants(&descriptor.id);
-        let palettes = if descriptor.terrain_layers.is_some() {
-            self.layer_palettes_drawing(&descriptor.id)
-        } else {
-            BTreeSet::new()
-        };
+        let paletted = self.paletted_meshes_drawing(&descriptor.id);
         self.define_material_alone(descriptor.clone())?;
-        for palette in palettes {
-            self.define_layer_variant(&descriptor, &palette)?;
+        if descriptor.terrain_layers.is_some() {
+            let palettes: BTreeSet<&Vec<u8>> =
+                paletted.iter().map(|(_, palette)| palette).collect();
+            for palette in palettes {
+                self.define_layer_variant(&descriptor, palette)?;
+            }
+        }
+        // Those chunks switch between the material and its variants when it
+        // gains or loses layers, which neither definition alone rebinds.
+        for (handle, _) in paletted {
+            self.rebuild_parts(handle);
         }
         Ok(())
     }
@@ -1237,23 +1242,23 @@ impl Renderer {
         }
     }
 
-    /// The terrain layer palettes of the payload meshes drawing `id` as a
-    /// slot material.
-    fn layer_palettes_drawing(&self, id: &str) -> BTreeSet<Vec<u8>> {
+    /// The payload meshes with a terrain layer palette drawing `id` as a slot
+    /// material, and their palettes.
+    fn paletted_meshes_drawing(&self, id: &str) -> Vec<(RenderHandle, Vec<u8>)> {
         let Some(slot) = id
             .strip_prefix(PAYLOAD_SLOT_MATERIAL_PREFIX)
             .and_then(|slot| slot.parse::<u16>().ok())
         else {
-            return BTreeSet::new();
+            return Vec::new();
         };
         self.tables
             .payload_meshes
-            .values()
-            .filter(|mesh| {
+            .iter()
+            .filter(|(_, mesh)| {
                 !mesh.layer_palette.is_empty()
                     && mesh.groups.iter().any(|(drawn, _, _)| *drawn == slot)
             })
-            .map(|mesh| mesh.layer_palette.clone())
+            .map(|(handle, mesh)| (*handle, mesh.layer_palette.clone()))
             .collect()
     }
 

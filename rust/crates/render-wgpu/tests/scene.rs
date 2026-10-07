@@ -2206,6 +2206,37 @@ fn a_session_of_six_terrain_layers_draws_each_chunk_as_the_layers_it_weighs() {
     let west = (((HEIGHT / 2) * WIDTH + WIDTH / 10) * 4) as usize;
     assert_eq!(expected[west..west + 3], SAND[..3]);
     assert_eq!(swapped[west..west + 3], ROCK[..3]);
+
+    // Without replacing the chunks, the slots turning ordinary draw them with
+    // the plain material, and turning layered again draws them through their
+    // palettes once more.
+    harness.apply(
+        [1, 2]
+            .map(|slot| RenderDiff::DefineMaterial {
+                material: (six.base)(slot, 0),
+            })
+            .into(),
+    );
+    let ordinary = harness.render(&view).1;
+    let east = (((HEIGHT / 2) * WIDTH + WIDTH * 9 / 10) * 4) as usize;
+    assert_eq!(ordinary[west..west + 3], UNUSED[0][..3]);
+    assert_eq!(ordinary[east..east + 3], UNUSED[0][..3]);
+    harness.apply(
+        six_layers(4, 5)
+            .into_values()
+            .map(|material| RenderDiff::DefineMaterial { material })
+            .collect(),
+    );
+    let layered_again = harness.render(&view).1;
+    let differing = expected
+        .chunks(4)
+        .zip(layered_again.chunks(4))
+        .filter(|(a, b)| (0..3).any(|c| a[c].abs_diff(b[c]) > 2))
+        .count();
+    assert_eq!(
+        differing, 0,
+        "layered again, the chunks draw their palettes"
+    );
 }
 
 /// The six ground materials of [`six_grounds`], west to east in their
