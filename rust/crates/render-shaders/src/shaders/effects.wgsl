@@ -24,6 +24,8 @@ struct SpriteIn {
     // x: lighting (0 unlit, 1 synthetic, 2 normal map, 3 bump map),
     // y: alpha cutoff (0 for none), z: normal or bump strength, w: synthetic bias.
     @location(8) params: vec4<f32>,
+    // x: softness in metres (0 hard), y: 1 when added to the frame.
+    @location(9) soft: vec4<f32>,
 };
 
 struct SpriteOut {
@@ -36,6 +38,7 @@ struct SpriteOut {
     // Where the fragment lies in its atlas frame, in image orientation: the
     // whole-texture uv for a whole texture.
     @location(5) cell: vec2<f32>,
+    @location(6) soft: vec4<f32>,
 };
 
 @group(1) @binding(10) var sprite_color: texture_2d<f32>;
@@ -62,6 +65,7 @@ fn vs_sprite(in: SpriteIn) -> SpriteOut {
     out.cell = (out.uv - frame_min) / frame_size;
     out.tint = in.tint;
     out.params = in.params;
+    out.soft = in.soft;
     return out;
 }
 
@@ -145,10 +149,21 @@ fn shaded_sprite(in: SpriteOut, front: bool) -> vec4<f32> {
     );
 }
 
-// Blended sprites: the colour and its alpha, blended over the world.
+// A sprite's colour at `fade` of its alpha, premultiplied when it adds to
+// the frame so a faded sprite adds nothing.
+fn faded_sprite(in: SpriteOut, front: bool, fade: f32) -> vec4<f32> {
+    var color = shaded_sprite(in, front);
+    color.a = color.a * fade;
+    if in.soft.y > 0.5 {
+        color = vec4<f32>(color.rgb * color.a, color.a);
+    }
+    return color;
+}
+
+// Blended sprites: the colour and its alpha, blended over (or added to) the world.
 @fragment
 fn fs_sprite(in: SpriteOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
-    return shaded_sprite(in, front);
+    return faded_sprite(in, front, 1.0);
 }
 
 // Solid sprites cover their pixel (`world.wgsl` `fs_world_opaque`).
@@ -236,26 +251,103 @@ fn depth_point(depth: f32) -> vec3<f32> {
     return point.xyz / point.w;
 }
 
+// How far a soft billboard at `depth` is faded by the world at `scene`:
+// nothing where the world is in front of it (the depth test the world pass
+// would make), else by the gap, over `softness` metres.
+fn soft_fade(depth: f32, scene: f32, softness: f32) -> f32 {
+    if depth > scene {
+        return 0.0;
+    }
+    return saturate(distance(depth_point(scene), depth_point(depth)) / softness);
+}
+
 // A soft billboard against the world's depth at its pixel: hidden where the
-// world is in front of it (the depth test the world pass would make), faded
-// out over `params.x` metres as it nears the world behind it.
-fn soft_particle(in: ParticleOut, scene: f32) -> vec4<f32> {
-    let gap = distance(depth_point(scene), depth_point(in.clip.z));
-    let color = particle_color(in, saturate(gap / in.params.x));
-    if in.clip.z > scene || color.a <= 0.001 {
+// world is in front of it, faded out over `params.x` metres as it nears the
+// world behind it.
+@fragment
+fn fs_particle_soft(in: ParticleOut) -> @location(0) vec4<f32> {
+    let fade = soft_fade(in.clip.z, textureLoad(scene_depth, vec2<i32>(in.clip.xy), 0), in.params.x);
+    let color = particle_color(in, fade);
+    if fade <= 0.0 || color.a <= 0.001 {
         discard;
     }
     return finish(color, in.world_position);
 }
 
+struct SoftMultisampledOut {
+    @location(0) color: vec4<f32>,
+    // Only the samples the world leaves uncovered take the billboard, as the
+    // fixed-function depth test of the world pass would decide per sample.
+    @builtin(sample_mask) mask: u32,
+};
+
+// The multisampled soft billboard: each of the world's samples at the pixel
+// is tested and faded on its own, the fragment covers the samples the world
+// is behind, and its colour fades by their mean gap.
 @fragment
-fn fs_particle_soft(in: ParticleOut) -> @location(0) vec4<f32> {
-    return soft_particle(in, textureLoad(scene_depth, vec2<i32>(in.clip.xy), 0));
+fn fs_particle_soft_multisampled(in: ParticleOut) -> SoftMultisampledOut {
+    let samples = i32(textureNumSamples(scene_depth_multisampled));
+    var mask = 0u;
+    var fade = 0.0;
+    var covered = 0.0;
+    for (var sample = 0; sample < samples; sample++) {
+        let scene = textureLoad(scene_depth_multisampled, vec2<i32>(in.clip.xy), sample);
+        let sample_fade = soft_fade(in.clip.z, scene, in.params.x);
+        if sample_fade > 0.0 {
+            mask |= 1u << u32(sample);
+            fade += sample_fade;
+            covered += 1.0;
+        }
+    }
+    if covered <= 0.0 {
+        discard;
+    }
+    let color = particle_color(in, fade / covered);
+    if color.a <= 0.001 {
+        discard;
+    }
+    var out: SoftMultisampledOut;
+    out.color = finish(color, in.world_position);
+    out.mask = mask;
+    return out;
+}
+
+// A soft sprite against the world's depth at its pixel, as a soft billboard:
+// hidden where the world is in front, faded over `soft.x` metres toward it.
+@fragment
+fn fs_sprite_soft(in: SpriteOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
+    let fade = soft_fade(in.clip.z, textureLoad(scene_depth, vec2<i32>(in.clip.xy), 0), in.soft.x);
+    let color = faded_sprite(in, front, fade);
+    if fade <= 0.0 || color.a <= 0.001 {
+        discard;
+    }
+    return color;
 }
 
 @fragment
-fn fs_particle_soft_multisampled(in: ParticleOut) -> @location(0) vec4<f32> {
-    return soft_particle(in, textureLoad(scene_depth_multisampled, vec2<i32>(in.clip.xy), 0));
+fn fs_sprite_soft_multisampled(in: SpriteOut, @builtin(front_facing) front: bool) -> SoftMultisampledOut {
+    let samples = i32(textureNumSamples(scene_depth_multisampled));
+    var mask = 0u;
+    var fade = 0.0;
+    var covered = 0.0;
+    for (var sample = 0; sample < samples; sample++) {
+        let scene = textureLoad(scene_depth_multisampled, vec2<i32>(in.clip.xy), sample);
+        let sample_fade = soft_fade(in.clip.z, scene, in.soft.x);
+        if sample_fade > 0.0 {
+            mask |= 1u << u32(sample);
+            fade += sample_fade;
+            covered += 1.0;
+        }
+    }
+    // Sampled before the branch: the sprite's derivatives need uniform control flow.
+    let color = faded_sprite(in, front, fade / max(covered, 1.0));
+    if covered <= 0.0 || color.a <= 0.001 {
+        discard;
+    }
+    var out: SoftMultisampledOut;
+    out.color = color;
+    out.mask = mask;
+    return out;
 }
 
 // Particle cube: the builtin unit cube per instance, flat colour.

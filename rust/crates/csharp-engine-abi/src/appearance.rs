@@ -279,6 +279,22 @@ pub struct NativeSpriteMaterialDescriptor {
     pub alpha_mode: NativeSpriteAlphaMode,
     pub alpha_cutoff: f32,
     pub shadow: NativeSpriteShadowPolicy,
+    /// How a blended sprite's colour reaches the frame: over what is behind
+    /// it by its alpha (the zero default), or added to it.
+    pub blend: NativeSpriteBlendMode,
+    /// Metres over which a blended sprite fades out as it nears the opaque
+    /// world behind it; 0 (the default) keeps the hard depth edge. A soft
+    /// sprite draws after the world's blended parts rather than among them.
+    pub softness_metres: f32,
+}
+
+/// How a blended sprite's colour reaches the frame.
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum NativeSpriteBlendMode {
+    #[default]
+    Alpha = 0,
+    Additive = 1,
 }
 
 impl Default for NativeSpriteMaterialDescriptor {
@@ -292,6 +308,8 @@ impl Default for NativeSpriteMaterialDescriptor {
             alpha_mode: NativeSpriteAlphaMode::Blend,
             alpha_cutoff: 0.5,
             shadow: NativeSpriteShadowPolicy::None,
+            blend: NativeSpriteBlendMode::Alpha,
+            softness_metres: 0.0,
         }
     }
 }

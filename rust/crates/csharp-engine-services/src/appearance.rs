@@ -4387,6 +4387,11 @@ impl RuntimeAppearanceBridge {
                 NativeSpriteShadowPolicy::Receive => SpriteShadowPolicy::Receive,
                 NativeSpriteShadowPolicy::CastAndReceive => SpriteShadowPolicy::CastAndReceive,
             },
+            blend: match value.blend {
+                NativeSpriteBlendMode::Alpha => SpriteBlendMode::Alpha,
+                NativeSpriteBlendMode::Additive => SpriteBlendMode::Additive,
+            },
+            softness_metres: value.softness_metres,
         };
         descriptor.validate().map_err(|error| {
             CsharpEngineServicesError::new(
@@ -12185,6 +12190,8 @@ fn shade(surface: Surface) -> vec4<f32> {
             alpha_mode: NativeSpriteAlphaMode::Mask,
             alpha_cutoff: 0.4,
             shadow: NativeSpriteShadowPolicy::CastAndReceive,
+            blend: NativeSpriteBlendMode::Alpha,
+            softness_metres: 0.0,
         };
         let appearance = bridge
             .create_sprite_from_atlas(request)

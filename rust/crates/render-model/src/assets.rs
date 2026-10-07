@@ -1327,6 +1327,23 @@ pub struct SpriteMaterialDescriptor {
     pub normal_bias: f32,
     pub alpha: SpriteAlphaMode,
     pub shadow: SpriteShadowPolicy,
+    /// How a blended sprite's colour reaches the frame.
+    #[serde(default)]
+    pub blend: SpriteBlendMode,
+    /// Metres over which a blended sprite fades out as it nears the opaque
+    /// world behind it; 0 keeps the hard depth edge.
+    #[serde(default)]
+    pub softness_metres: f32,
+}
+
+/// How a blended sprite's colour reaches the frame: over what is behind it
+/// by its alpha, or added to it (premultiplied by its alpha) for glows.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SpriteBlendMode {
+    #[default]
+    Alpha,
+    Additive,
 }
 
 impl Default for SpriteMaterialDescriptor {
@@ -1339,6 +1356,8 @@ impl Default for SpriteMaterialDescriptor {
             normal_bias: 0.0,
             alpha: SpriteAlphaMode::Blend,
             shadow: SpriteShadowPolicy::None,
+            blend: SpriteBlendMode::Alpha,
+            softness_metres: 0.0,
         }
     }
 }
@@ -1354,6 +1373,9 @@ impl SpriteMaterialDescriptor {
         }
         if !self.normal_bias.is_finite() || !(-1.0..=1.0).contains(&self.normal_bias) {
             return Err(SpriteMaterialError::InvalidNormalBias);
+        }
+        if !self.softness_metres.is_finite() || self.softness_metres < 0.0 {
+            return Err(SpriteMaterialError::InvalidSoftness);
         }
         if let SpriteAlphaMode::Mask { cutoff } = self.alpha {
             if !cutoff.is_finite() || !(0.0..=1.0).contains(&cutoff) {
@@ -1395,6 +1417,7 @@ pub enum SpriteMaterialError {
     InvalidNormalStrength,
     InvalidNormalBias,
     InvalidAlphaCutoff,
+    InvalidSoftness,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -1576,6 +1599,8 @@ mod tests {
             normal_bias: 0.1,
             alpha: SpriteAlphaMode::Mask { cutoff: 0.45 },
             shadow: SpriteShadowPolicy::CastAndReceive,
+            blend: SpriteBlendMode::Alpha,
+            softness_metres: 0.0,
         };
         assert_eq!(authored.validate(), Ok(()));
 

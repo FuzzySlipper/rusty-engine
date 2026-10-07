@@ -35,6 +35,7 @@ const PARAMS_BYTES: u64 = 48;
 const WORLD: &str = "world";
 const POST: &str = "bloom-exposure";
 const FINISH: &str = "finish";
+const PARTICLES: &str = "particles";
 
 /// One size and sample count of HDR target: the colour the world draws
 /// into and the finish pass reads, and what bloom and auto exposure need of
@@ -97,6 +98,8 @@ pub(crate) struct Finish {
     pub post: Post,
     frame: u64,
     world_timer: Option<PassTimer>,
+    /// The soft-particle pass, timed only in the frames that draw it.
+    particles_timer: Option<PassTimer>,
     post_timer: Option<PassTimer>,
     finish_timer: Option<PassTimer>,
     /// The bloom and adaptation the post timer last timed.
@@ -201,6 +204,7 @@ impl Finish {
             post: Post::new(gpu, shaders),
             frame: 0,
             world_timer: PassTimer::new(gpu, WORLD),
+            particles_timer: PassTimer::new(gpu, PARTICLES),
             post_timer: PassTimer::new(gpu, POST),
             finish_timer: PassTimer::new(gpu, FINISH),
             timed_post: (false, false, false),
@@ -214,6 +218,7 @@ impl Finish {
         self.post.begin_frame();
         for timer in [
             &mut self.world_timer,
+            &mut self.particles_timer,
             &mut self.post_timer,
             &mut self.finish_timer,
         ]
@@ -439,10 +444,26 @@ impl Finish {
         }
     }
 
+    /// The soft-particle pass's stamps, for a world view.
+    pub fn particles_writes(&self, timed: bool) -> Option<wgpu::RenderPassTimestampWrites<'_>> {
+        self.particles_timer
+            .as_ref()
+            .filter(|_| timed)
+            .and_then(PassTimer::render_writes)
+    }
+
+    /// After a timed soft-particle pass, in its encoder.
+    pub fn resolve_particles(&mut self, encoder: &mut wgpu::CommandEncoder) {
+        if let Some(timer) = &mut self.particles_timer {
+            timer.resolve(encoder);
+        }
+    }
+
     /// After a view's encoder was submitted: read its timed passes back.
     pub fn submitted(&mut self) {
         for timer in [
             &mut self.world_timer,
+            &mut self.particles_timer,
             &mut self.post_timer,
             &mut self.finish_timer,
         ]
@@ -457,6 +478,7 @@ impl Finish {
     pub fn timings(&self) -> Vec<GpuPassTiming> {
         [
             (&self.world_timer, WORLD),
+            (&self.particles_timer, PARTICLES),
             (&self.post_timer, POST),
             (&self.finish_timer, FINISH),
         ]

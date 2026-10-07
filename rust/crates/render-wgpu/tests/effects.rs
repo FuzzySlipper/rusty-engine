@@ -636,6 +636,20 @@ fn still_particle(
     blend: ParticleBlendMode,
     softness_metres: f32,
 ) -> Vec<u8> {
+    still_particle_by(samples, wall, false, color, blend, softness_metres)
+}
+
+/// `still_particle` with, when `post` is set, a slanted post standing in
+/// front of the billboard, so pixels along its edge cover the world's
+/// samples unevenly.
+fn still_particle_by(
+    samples: u32,
+    wall: bool,
+    post: bool,
+    color: [f32; 4],
+    blend: ParticleBlendMode,
+    softness_metres: f32,
+) -> Vec<u8> {
     let mut harness = Harness::new(RendererOptions::default());
     harness.target = OffscreenTarget::new(&harness.gpu, WIDTH, HEIGHT, samples);
     let mut ops = vec![RenderDiff::SetBackgroundColor {
@@ -655,6 +669,15 @@ fn still_particle(
             None,
             "wall",
             transform([0.0, 0.0, -9.0], 0.0, 6.0),
+        ));
+    }
+    if post {
+        ops.extend(coloured_mesh("post", cube(), [0.3, 0.3, 0.3, 1.0]));
+        ops.push(instance(
+            3,
+            None,
+            "post",
+            transform([0.7, 0.9, -2.6], 25.0, 1.1),
         ));
     }
     let white = vec![255; 8 * 8 * 4];
@@ -1117,4 +1140,180 @@ fn pixel_sized_sprites_keep_their_css_size_at_device_pixel_ratio_two() {
     assert!(one_w > 10 && one_h > 10, "{one_w}x{one_h}");
     assert!((two_w - 2 * one_w).abs() <= 2, "{one_w} -> {two_w}");
     assert!((two_h - 2 * one_h).abs() <= 2, "{one_h} -> {two_h}");
+}
+
+/// Under multisampling a soft billboard decides per scene sample which samples
+/// it covers, as the world pass's depth test would: with a negligible
+/// softness it matches the hard billboard pixel for pixel along a slanted
+/// post's edge, where the post covers some of a pixel's samples and not
+/// others. Testing one sample for the whole pixel would leak the billboard
+/// over the post, or lose it, along that edge.
+#[test]
+fn multisampled_soft_particles_cover_the_samples_the_world_leaves() {
+    let white = [1.0, 1.0, 1.0, 1.0];
+    let hard = still_particle_by(4, false, true, white, ParticleBlendMode::Alpha, 0.0);
+    let soft = still_particle_by(4, false, true, white, ParticleBlendMode::Alpha, 0.001);
+    // The post's edge crosses the billboard: pixels of neither the billboard's
+    // white nor the post's grey are the mixed-coverage ones this test is about.
+    let mixed = (0..WIDTH * HEIGHT)
+        .filter(|index| {
+            let red = hard[(index * 4) as usize];
+            red > 90 && red < 240
+        })
+        .count();
+    assert!(
+        mixed >= 20,
+        "the post's edge should cross the billboard: {mixed} mixed pixels"
+    );
+    let worst = hard
+        .chunks(4)
+        .zip(soft.chunks(4))
+        .map(|(a, b)| (i32::from(a[0]) - i32::from(b[0])).abs())
+        .max()
+        .unwrap_or(0);
+    assert!(
+        worst <= 12,
+        "a soft billboard with negligible softness differs from the hard one by {worst}/255"
+    );
+}
+
+/// A still 2 m white sprite 4 m out over the floor, like `still_particle`,
+/// with the material's blend and softness.
+fn still_sprite(
+    samples: u32,
+    wall: bool,
+    tint: [f32; 4],
+    blend: SpriteBlendMode,
+    softness_metres: f32,
+) -> Vec<u8> {
+    let mut harness = Harness::new(RendererOptions::default());
+    harness.target = OffscreenTarget::new(&harness.gpu, WIDTH, HEIGHT, samples);
+    let (texture, _) =
+        harness
+            .resources
+            .texture("texture/white", 1, 1, &[255; 4], TextureFilter::Nearest);
+    let mut ops = vec![
+        RenderDiff::SetBackgroundColor {
+            color: [0.0, 0.0, 0.0, 1.0],
+        },
+        texture,
+        RenderDiff::DefineSpriteAtlas {
+            atlas: SpriteAtlasDescriptor {
+                id: "sprite/white".into(),
+                texture: "texture/white".into(),
+                frames: vec![SpriteFrameRect {
+                    frame: 0,
+                    uv_min: [0.0; 2],
+                    uv_max: [1.0; 2],
+                    size: None,
+                }],
+            },
+        },
+    ];
+    ops.extend(coloured_mesh("floor", floor(8.0), [0.5, 0.5, 0.5, 1.0]));
+    ops.push(instance(
+        1,
+        None,
+        "floor",
+        transform([0.0, 0.0, -4.0], 0.0, 1.0),
+    ));
+    if wall {
+        ops.extend(coloured_mesh("wall", cube(), [0.5, 0.5, 0.5, 1.0]));
+        ops.push(instance(
+            2,
+            None,
+            "wall",
+            transform([0.0, 0.0, -9.0], 0.0, 6.0),
+        ));
+    }
+    let mut still = sprite(0, [0.0, 0.0, -4.0], BillboardMode::Spherical);
+    still.asset = "sprite/white".into();
+    still.size = [2.0; 2];
+    still.tint = tint;
+    still.material.alpha = SpriteAlphaMode::Blend;
+    still.material.blend = blend;
+    still.material.softness_metres = softness_metres;
+    ops.push(create(3, still));
+    harness.apply(ops);
+    harness.single(&camera("eye", [0.0, 1.0, 0.0], 0.0, -14.0))
+}
+
+/// A blended sprite with a softness fades into the floor behind it as a
+/// soft billboard does, where a hard one meets it in one row, under both
+/// depth sample counts; without a softness it draws exactly as before.
+#[test]
+fn soft_sprites_fade_into_the_scene_they_meet() {
+    for samples in [1, 4] {
+        let centre = |rgba: &[u8]| -> Vec<u8> {
+            (0..HEIGHT)
+                .map(|y| pixel(rgba, WIDTH, WIDTH / 2, y)[0])
+                .collect()
+        };
+        let white = [1.0, 1.0, 1.0, 1.0];
+        let hard = centre(&still_sprite(
+            samples,
+            false,
+            white,
+            SpriteBlendMode::Alpha,
+            0.0,
+        ));
+        let soft = centre(&still_sprite(
+            samples,
+            false,
+            white,
+            SpriteBlendMode::Alpha,
+            2.0,
+        ));
+        let level = *hard.last().expect("a frame has rows");
+        let graded = |column: &[u8]| {
+            column
+                .iter()
+                .filter(|&&red| red > level + 6 && red < 250)
+                .count()
+        };
+        assert!(
+            graded(&hard) <= 2,
+            "{samples}x: hard sprite grades over {} rows",
+            graded(&hard)
+        );
+        assert!(
+            graded(&soft) >= 6,
+            "{samples}x: soft sprite grades over {} rows",
+            graded(&soft)
+        );
+        let top = |column: &[u8]| column.iter().copied().max().unwrap_or(0);
+        assert!(
+            top(&soft) >= 250 && top(&hard) >= 250,
+            "{samples}x: both sprites reach white away from the floor"
+        );
+        assert!(
+            hard[HEIGHT as usize - 1] == soft[HEIGHT as usize - 1],
+            "{samples}x: the floor still hides both at the frame's bottom"
+        );
+    }
+}
+
+/// An additive sprite brightens the wall behind it where an alpha one of the
+/// same colour replaces it, and over nothing the two agree.
+#[test]
+fn additive_sprites_add_to_the_scene_behind_them() {
+    let grey = [0.4, 0.4, 0.4, 1.0];
+    let at = |rgba: &[u8]| pixel(rgba, WIDTH, WIDTH / 2, HEIGHT / 2 - 20)[0];
+    let alpha = at(&still_sprite(4, true, grey, SpriteBlendMode::Alpha, 0.0));
+    let additive = at(&still_sprite(4, true, grey, SpriteBlendMode::Additive, 0.0));
+    let wall = at(&still_sprite(
+        4,
+        true,
+        [0.0, 0.0, 0.0, 0.0],
+        SpriteBlendMode::Alpha,
+        0.0,
+    ));
+    assert!(
+        additive > wall + 20,
+        "additive sprite brightens the wall: {additive} over {wall}"
+    );
+    assert!(
+        additive > alpha + 10,
+        "additive sprite is brighter than the alpha one it replaces: {additive} vs {alpha}"
+    );
 }

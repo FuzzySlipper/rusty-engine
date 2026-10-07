@@ -1900,7 +1900,7 @@ impl Renderer {
                     },
                 })],
                 depth_stencil_attachment: None,
-                timestamp_writes: None,
+                timestamp_writes: self.finish.particles_writes(world_layer),
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
@@ -1908,7 +1908,13 @@ impl Renderer {
             pass.set_bind_group(0, &self.frame_bind_group, &[]);
             pass.set_bind_group(2, &scene_depth, &[]);
             self.effects
+                .draw_soft_sprites(&mut pass, hdr_format, &effects);
+            self.effects
                 .draw_soft_particles(&mut pass, hdr_format, &effects);
+            drop(pass);
+            if world_layer {
+                self.finish.resolve_particles(&mut encoder);
+            }
         }
         let draws = parts.draws + effects.draws();
         if bloom.is_some() || adapting.is_some() || shafts.is_some() {

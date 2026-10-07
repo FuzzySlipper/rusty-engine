@@ -324,7 +324,26 @@ internal static class GraphicsDefaults
         0.0f,
         SpriteAlphaMode.Blend,
         0.5f,
-        SpriteShadowPolicy.None);
+        SpriteShadowPolicy.None,
+        SpriteBlendMode.Alpha,
+        0f);
+}
+
+public readonly partial record struct SpriteMaterialDescriptor
+{
+    /// <summary>A sprite material blended by alpha (<see cref="SpriteBlendMode.Alpha"/>) with a hard depth edge (<see cref="SoftnessMetres"/> 0).</summary>
+    public SpriteMaterialDescriptor(
+        SpriteLightingMode Lighting,
+        RenderResourceReference NormalTexture,
+        RenderResourceReference DepthTexture,
+        float NormalStrength,
+        float NormalBias,
+        SpriteAlphaMode AlphaMode,
+        float AlphaCutoff,
+        SpriteShadowPolicy Shadow)
+        : this(Lighting, NormalTexture, DepthTexture, NormalStrength, NormalBias, AlphaMode, AlphaCutoff, Shadow, SpriteBlendMode.Alpha, 0f)
+    {
+    }
 }
 
 public readonly partial record struct AuthoredMaterialAppearanceRequest

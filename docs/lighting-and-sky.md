@@ -548,7 +548,7 @@ unchanged, so calling it changes nothing.
 The world's target costs 8 bytes a sample (66 MB at 1920×1080 with 4×
 multisampling), plus a single-sample copy (17 MB) and bloom's mips (6 MB)
 while bloom or auto exposure is on. `engine.renderer` times the frame's first
-world view's `world`, `bloom-exposure` and `finish` passes
+world view's `world`, `particles` (soft sprites and billboards, in the frames that draw them), `bloom-exposure` and `finish` passes
 ([performance](performance.md)). On an RX 9070 XT the finish pass takes about
 0.04 to 0.06 ms at 1280×720 and 0.07 to 0.13 ms at 1920×1080 (colour grading
 adds about 0.005 ms), and bloom with auto exposure about 0.15 ms. On llvmpipe

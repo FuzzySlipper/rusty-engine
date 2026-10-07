@@ -410,9 +410,15 @@ shaders](lighting-and-sky.md#product-shaders).
 `AuthoredMaterialAppearanceRequest.Shader` does the same for authored and
 voxel materials.
 Sprite requests accept a `SpriteMaterialDescriptor` for lighting, normal/depth
-maps, alpha, and shadow policy. Sprites and atlases keep the sampler selected
-when their texture was opened; the short constructors select opaque mesh and
-unlit/blended sprite defaults.
+maps, alpha, shadow policy, and, for a blended sprite, `Blend`
+(`SpriteBlendMode.Alpha`, the default, or `Additive`: the colour premultiplied
+by its alpha and added to the frame, for glows) and `SoftnessMetres` (0, the
+default, keeps the hard depth edge; above it the sprite fades out over that
+many metres as it nears the opaque world behind it). A soft sprite draws after
+the world's blended parts, in the particle pass, rather than sorted among
+them, and needs its depth test on. Sprites and atlases keep the sampler
+selected when their texture was opened; the short constructors select opaque
+mesh and unlit/blended sprite defaults.
 
 `Graphics.CreateMeshResource(new MeshResourceCreateRequest(positions, normals,
 uvs, colors, indices, groups, bindings))` copies ordinary managed arrays into

@@ -69,7 +69,8 @@ Where the adapter has timestamp queries, `gpu.passes` gives the median GPU
 milliseconds of each renderer pass that is timed, with the adapter's
 compute limits beside them: the ambient occlusion passes (`ao-prepass`,
 `ao-occlusion`, `ao-blur`), then the first world view of a frame's `world`
-pass, its `bloom-exposure` passes (with sun shafts) together and its
+pass, its `particles` pass (soft sprites and billboards, timed in the frames
+that draw it), its `bloom-exposure` passes (with sun shafts) together and its
 `finish` pass
 ([exposure, tone mapping and fog](lighting-and-sky.md#exposure-tone-mapping-and-fog)),
 and a frame's share of building [the sky's

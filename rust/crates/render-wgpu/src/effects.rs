@@ -22,8 +22,8 @@ use std::collections::HashMap;
 
 use glam::{Mat3, Mat4, Quat, Vec3, Vec4};
 use render_model::{
-    BillboardMode, RenderLayer, SpriteAlphaMode, SpriteDepthPolicy, SpriteInstanceDescriptor,
-    SpriteLightingMode, SpriteSizeMode, SpriteViewportFit,
+    BillboardMode, RenderLayer, SpriteAlphaMode, SpriteBlendMode, SpriteDepthPolicy,
+    SpriteInstanceDescriptor, SpriteLightingMode, SpriteSizeMode, SpriteViewportFit,
 };
 use render_presentation::{
     ParticleBlendMode, ParticleSizeMode, ParticleSpriteRef, ParticleVisual, PresentationFrameDiff,
@@ -41,7 +41,7 @@ use crate::{srgb_to_linear, ApplyIssue, Gpu, Renderer};
 
 /// Particle billboards are drawn `size × 24` pixels across.
 const PARTICLE_PIXELS_PER_UNIT: f32 = 24.0;
-const SPRITE_ROW_FLOATS: usize = 32;
+const SPRITE_ROW_FLOATS: usize = 36;
 const PARTICLE_ROW_FLOATS: usize = 16;
 const CUBE_ROW_FLOATS: usize = 8;
 /// Viewport-placed sprites sit mid-depth (GL clip z 0).
@@ -53,6 +53,11 @@ struct SpriteState {
     depth_test: bool,
     depth_write: bool,
     blend: bool,
+    /// A blended sprite added to the frame rather than drawn over it.
+    additive: bool,
+    /// A blended sprite fading against the world's depth: drawn in the
+    /// particle pass after the world, by its own depth test.
+    soft: bool,
 }
 
 /// Colour texture id and detail (normal or height) texture id; `None` is the
@@ -71,10 +76,12 @@ struct SpriteDraw {
 /// What one view pass draws of this family, prepared before the pass.
 #[derive(Default)]
 pub(crate) struct EffectsPass {
-    /// One instance per sprite in the sprite rows: solid sprites, then
-    /// blended ones in back-to-front order.
-    solid: Vec<(SpriteState, SpriteTextures)>,
+    /// Sprites by their instance in the sprite rows: solid sprites, then
+    /// blended ones in back-to-front order (the soft ones among them drawn
+    /// after the world instead), then soft sprites.
+    solid: Vec<SpriteInstance>,
     blended: Vec<BlendedSprite>,
+    soft_sprites: Vec<SpriteInstance>,
     cubes: u32,
     /// Runs into the particle rows: hard billboards, then soft ones.
     billboards: Vec<BillboardRun>,
@@ -101,6 +108,15 @@ struct BlendedSprite {
     render_order: i32,
     /// Squared distance from the view's eye.
     depth: f32,
+    instance: u32,
+}
+
+/// One sprite's draw: its pipeline state, textures and row.
+#[derive(Clone, Copy)]
+struct SpriteInstance {
+    state: SpriteState,
+    textures: SpriteTextures,
+    instance: u32,
 }
 
 impl EffectsPass {
@@ -113,13 +129,14 @@ impl EffectsPass {
     }
 
     pub fn draws(&self) -> u32 {
-        (self.solid.len() + self.blended.len() + self.billboards.len()) as u32
+        (self.solid.len() + self.blended.len() + self.soft_sprites.len() + self.billboards.len())
+            as u32
             + u32::from(self.cubes > 0)
     }
 
-    /// Whether any billboard needs the particle pass after the world's.
+    /// Whether any sprite or billboard needs the particle pass after the world's.
     pub fn soft(&self) -> bool {
-        self.billboards.iter().any(|run| run.soft)
+        !self.soft_sprites.is_empty() || self.billboards.iter().any(|run| run.soft)
     }
 }
 
@@ -196,6 +213,8 @@ pub(crate) struct Effects {
     sprite_layout: wgpu::BindGroupLayout,
     particle_layout: wgpu::BindGroupLayout,
     sprite_pipeline_layout: wgpu::PipelineLayout,
+    /// Soft sprites: the sprite layout with the world's depth in group 2.
+    soft_sprite_layouts: [wgpu::PipelineLayout; 2],
     particle_pipeline_layout: wgpu::PipelineLayout,
     soft_layouts: [SoftLayouts; 2],
     cube_pipeline_layout: wgpu::PipelineLayout,
@@ -291,6 +310,16 @@ impl Effects {
                 depth,
             }
         });
+        let soft_sprite_layouts = [0, 1].map(|index| {
+            pipeline_layout(
+                "render-wgpu soft sprite",
+                &[
+                    Some(frame_layout),
+                    Some(&sprite_layout),
+                    Some(&soft_layouts[index].depth),
+                ],
+            )
+        });
         use wgpu::util::DeviceExt;
         let corners: [f32; 8] = [0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 1.0];
         Self {
@@ -299,6 +328,7 @@ impl Effects {
                 "render-wgpu sprite",
                 &[Some(frame_layout), Some(&sprite_layout)],
             ),
+            soft_sprite_layouts,
             particle_pipeline_layout: pipeline_layout(
                 "render-wgpu particle",
                 &[Some(frame_layout), Some(&particle_layout)],
@@ -481,21 +511,47 @@ impl Effects {
         };
         let instance = wgpu::vertex_attr_array![
             1 => Float32x4, 2 => Float32x4, 3 => Float32x4, 4 => Float32x4,
-            5 => Float32x4, 6 => Float32x4, 7 => Float32x4, 8 => Float32x4
+            5 => Float32x4, 6 => Float32x4, 7 => Float32x4, 8 => Float32x4,
+            9 => Float32x4
         ];
+        // Solid sprites cover their pixel (`finish.rs`); soft ones test the
+        // world's depth themselves in the particle pass.
+        let (layout, fragment, depth) = if state.soft {
+            let soft = soft_index(format.samples);
+            (
+                &self.soft_sprite_layouts[soft],
+                if soft == 0 {
+                    "fs_sprite_soft"
+                } else {
+                    "fs_sprite_soft_multisampled"
+                },
+                None,
+            )
+        } else if state.blend {
+            (
+                &self.sprite_pipeline_layout,
+                "fs_sprite",
+                Some(depth_state(state.depth_test, state.depth_write)),
+            )
+        } else {
+            (
+                &self.sprite_pipeline_layout,
+                "fs_sprite_opaque",
+                Some(depth_state(state.depth_test, state.depth_write)),
+            )
+        };
+        let blend = state.blend.then(|| {
+            blend_state(if state.additive {
+                ParticleBlendMode::Additive
+            } else {
+                ParticleBlendMode::Alpha
+            })
+        });
         let pipeline = self.pipeline(
             device,
             "render-wgpu sprite",
-            &self.sprite_pipeline_layout,
-            (
-                "vs_sprite",
-                // Solid sprites cover their pixel (`finish.rs`).
-                if state.blend {
-                    "fs_sprite"
-                } else {
-                    "fs_sprite_opaque"
-                },
-            ),
+            layout,
+            ("vs_sprite", fragment),
             &[
                 Some(corner),
                 Some(wgpu::VertexBufferLayout {
@@ -507,8 +563,8 @@ impl Effects {
             wgpu::PrimitiveTopology::TriangleStrip,
             None,
             format,
-            Some(depth_state(state.depth_test, state.depth_write)),
-            state.blend.then_some(wgpu::BlendState::ALPHA_BLENDING),
+            depth,
+            blend,
         );
         self.formats[index].sprites.insert(state, pipeline);
     }
@@ -565,8 +621,14 @@ impl Effects {
         format: ColorTarget,
         effects: &EffectsPass,
     ) {
-        for (index, (state, textures)) in effects.solid.iter().enumerate() {
-            self.draw_sprite(pass, format, *state, textures, index as u32);
+        for sprite in &effects.solid {
+            self.draw_sprite(
+                pass,
+                format,
+                sprite.state,
+                &sprite.textures,
+                sprite.instance,
+            );
         }
     }
 
@@ -580,8 +642,32 @@ impl Effects {
         index: usize,
     ) {
         if let Some(sprite) = effects.blended.get(index) {
-            let instance = (effects.solid.len() + index) as u32;
-            self.draw_sprite(pass, format, sprite.state, &sprite.textures, instance);
+            self.draw_sprite(
+                pass,
+                format,
+                sprite.state,
+                &sprite.textures,
+                sprite.instance,
+            );
+        }
+    }
+
+    /// Draw the soft sprites in the particle pass, back to front, the
+    /// world's depth bound in group 2.
+    pub fn draw_soft_sprites(
+        &self,
+        pass: &mut wgpu::RenderPass<'_>,
+        format: ColorTarget,
+        effects: &EffectsPass,
+    ) {
+        for sprite in &effects.soft_sprites {
+            self.draw_sprite(
+                pass,
+                format,
+                sprite.state,
+                &sprite.textures,
+                sprite.instance,
+            );
         }
     }
 
@@ -717,11 +803,16 @@ fn sprite_state(sprite: &SpriteInstanceDescriptor) -> (SpriteState, f32) {
         SpriteAlphaMode::Mask { cutoff } => (sprite.tint[3] < 1.0, cutoff, true),
         SpriteAlphaMode::Blend => (true, 0.0, false),
     };
+    let material = &sprite.material;
     (
         SpriteState {
             depth_test: sprite.depth != SpriteDepthPolicy::DepthTestOff,
             depth_write: sprite.depth != SpriteDepthPolicy::DepthWriteOff && alpha_write,
             blend: transparent,
+            additive: transparent && material.blend == SpriteBlendMode::Additive,
+            soft: transparent
+                && material.softness_metres > 0.0
+                && sprite.depth != SpriteDepthPolicy::DepthTestOff,
         },
         cutoff,
     )
@@ -1149,6 +1240,12 @@ impl Renderer {
             row[20..24].copy_from_slice(&sprite.tint);
             row[24..28].copy_from_slice(&quad);
             row[28..32].copy_from_slice(&[mode, cutoff, strength, bias]);
+            row[32..36].copy_from_slice(&[
+                sprite.material.softness_metres,
+                f32::from(state.additive),
+                0.0,
+                0.0,
+            ]);
             draws.push(SpriteDraw {
                 state,
                 textures: (color, detail),
@@ -1209,16 +1306,28 @@ impl Renderer {
                     .sprite_bind_groups
                     .insert(draw.textures, bind_group);
             }
+            let instance = (rows.len() / SPRITE_ROW_FLOATS) as u32;
             rows.extend_from_slice(&draw.row);
-            if draw.state.blend {
+            if draw.state.soft {
+                pass.soft_sprites.push(SpriteInstance {
+                    state: draw.state,
+                    textures: draw.textures,
+                    instance,
+                });
+            } else if draw.state.blend {
                 pass.blended.push(BlendedSprite {
                     state: draw.state,
                     textures: draw.textures,
                     render_order: draw.render_order,
                     depth: draw.depth,
+                    instance,
                 });
             } else {
-                pass.solid.push((draw.state, draw.textures));
+                pass.solid.push(SpriteInstance {
+                    state: draw.state,
+                    textures: draw.textures,
+                    instance,
+                });
             }
         }
         self.effects.sprite_rows.write(&self.gpu, &rows);
