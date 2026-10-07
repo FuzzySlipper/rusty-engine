@@ -857,6 +857,20 @@ impl CollisionProjection {
                     result,
                 );
             }
+            // Deep inside a large merged box, parry finds no penetrating
+            // contact; the boxes are axis-aligned, so measure that directly.
+            if !best
+                .as_ref()
+                .is_some_and(|hit| hit.source == CharacterCollisionSource::VoxelChunk(*coord))
+            {
+                if let Some(cubes) = &collider.cubes {
+                    keep_deepest_character_overlap(
+                        &mut best,
+                        CharacterCollisionSource::VoxelChunk(*coord),
+                        buried_capsule_contact(capsule, cubes),
+                    );
+                }
+            }
         }
         for (instance, asset, geometry_hash, shape, bounds) in self.static_meshes.character_shapes()
         {
@@ -1865,6 +1879,72 @@ fn keep_nearest_character_hit(
         start_solid: hit.status == ShapeCastStatus::PenetratingOrWithinTargetDist,
         converged: hit.status == ShapeCastStatus::Converged,
     });
+}
+
+/// The overlap of a capsule with the axis-aligned boxes of a cube collider,
+/// as the shortest way out of the box it is deepest in: the contact parry's
+/// penetration solver does not find when the capsule lies well inside a box.
+fn buried_capsule_contact(capsule: CharacterCapsule, cubes: &Compound) -> Option<Contact> {
+    let center = [capsule.center.x, capsule.center.y, capsule.center.z];
+    let reach = [
+        capsule.radius,
+        capsule.half_height + capsule.radius,
+        capsule.radius,
+    ];
+    let mut deepest: Option<Contact> = None;
+    for (pose, shape) in cubes.shapes() {
+        let Some(cuboid) = shape.as_cuboid() else {
+            continue;
+        };
+        let middle = [pose.translation.x, pose.translation.y, pose.translation.z];
+        let half = [
+            cuboid.half_extents.x,
+            cuboid.half_extents.y,
+            cuboid.half_extents.z,
+        ];
+        // The shortest exit: the axis and side needing the least travel.
+        let mut exit: Option<(Real, usize, Real)> = None;
+        for axis in 0..3 {
+            let below = (center[axis] + reach[axis]) - (middle[axis] - half[axis]);
+            let above = (middle[axis] + half[axis]) - (center[axis] - reach[axis]);
+            if below <= 0.0 || above <= 0.0 {
+                exit = None;
+                break;
+            }
+            let (depth, side) = if above <= below {
+                (above, 1.0)
+            } else {
+                (below, -1.0)
+            };
+            if exit.is_none_or(|(least, _, _)| depth < least) {
+                exit = Some((depth, axis, side));
+            }
+        }
+        let Some((depth, axis, side)) = exit else {
+            continue;
+        };
+        if deepest
+            .as_ref()
+            .is_some_and(|current| -current.dist >= depth)
+        {
+            continue;
+        }
+        let mut normal = [0.0; 3];
+        normal[axis] = side;
+        let mut face = center;
+        face[axis] = middle[axis] + side * half[axis];
+        let mut touch = center;
+        touch[axis] -= side * reach[axis];
+        let normal = Vector::new(normal[0], normal[1], normal[2]);
+        deepest = Some(Contact::new(
+            Vector::new(touch[0], touch[1], touch[2]),
+            Vector::new(face[0], face[1], face[2]),
+            -normal,
+            normal,
+            -depth,
+        ));
+    }
+    deepest
 }
 
 fn keep_deepest_character_overlap(
