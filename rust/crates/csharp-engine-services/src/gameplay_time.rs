@@ -27,7 +27,7 @@ pub enum GameplayTimeRequest {
 }
 
 pub(crate) struct RuntimeGameplayTimeBridge {
-    fixed_step_hz: Option<u32>,
+    fixed_step_hz: u32,
     effective: GameplayTime,
     staged: Option<GameplayTimeRequest>,
 }
@@ -35,15 +35,14 @@ pub(crate) struct RuntimeGameplayTimeBridge {
 impl RuntimeGameplayTimeBridge {
     pub(crate) fn new() -> Self {
         Self {
-            fixed_step_hz: None,
+            fixed_step_hz: 0,
             effective: GameplayTime::default(),
             staged: None,
         }
     }
 
-    /// The lifecycle's current selection; `None` cadence refuses requests
-    /// (demand and external runtimes have no realtime rate).
-    pub(crate) fn set(&mut self, fixed_step_hz: Option<u32>, effective: GameplayTime) {
+    /// The lifecycle's fixed-step rate and current selection.
+    pub(crate) fn set(&mut self, fixed_step_hz: u32, effective: GameplayTime) {
         self.fixed_step_hz = fixed_step_hz;
         self.effective = effective;
     }
@@ -70,7 +69,7 @@ impl RuntimeGameplayTimeBridge {
             selected: self.effective.selected() || self.staged.is_some(),
             rate: rate_value(rate),
             advance_remaining_steps: remaining,
-            fixed_step_hz: self.fixed_step_hz.unwrap_or(0),
+            fixed_step_hz: self.fixed_step_hz,
         }
     }
 
@@ -78,13 +77,7 @@ impl RuntimeGameplayTimeBridge {
         &mut self,
         request: impl FnOnce(u32) -> Result<GameplayTimeRequest, CsharpEngineServicesError>,
     ) -> Result<NativeGameplayTimeReadout, CsharpEngineServicesError> {
-        let hz = self.fixed_step_hz.ok_or_else(|| {
-            CsharpEngineServicesError::new(
-                "CSHARP_GAMEPLAY_TIME_MODE",
-                "gameplay time needs a realtime runtime; demand and external runtimes have no rate",
-            )
-        })?;
-        self.staged = Some(request(hz)?);
+        self.staged = Some(request(self.fixed_step_hz)?);
         Ok(self.readout())
     }
 }
@@ -204,7 +197,7 @@ mod tests {
     use super::*;
     use crate::operation_diagnostics::receipt_codes;
 
-    fn bridge(hz: Option<u32>) -> RuntimeGameplayTimeBridge {
+    fn bridge(hz: u32) -> RuntimeGameplayTimeBridge {
         let mut bridge = RuntimeGameplayTimeBridge::new();
         bridge.set(hz, GameplayTime::default());
         bridge.begin_call();
@@ -256,7 +249,7 @@ mod tests {
 
     #[test]
     fn requests_stage_the_latest_valid_selection_and_refuse_invalid_ones() {
-        let mut bridge = bridge(Some(60));
+        let mut bridge = bridge(60);
         let held = rate(&mut bridge, 0.0).unwrap();
         assert!(held.selected);
         assert_eq!(held.rate, 0.0);
@@ -280,7 +273,7 @@ mod tests {
 
     #[test]
     fn an_advance_rounds_up_to_whole_steps() {
-        let mut bridge = bridge(Some(60));
+        let mut bridge = bridge(60);
         assert_eq!(
             advance_for(&mut bridge, 0.1, 1.0)
                 .unwrap()
@@ -309,15 +302,5 @@ mod tests {
             advance_for(&mut bridge, 1.0, 0.0),
             Err(vec!["CSHARP_GAMEPLAY_TIME_RATE".to_owned()])
         );
-    }
-
-    #[test]
-    fn a_runtime_without_a_realtime_cadence_refuses() {
-        let mut bridge = bridge(None);
-        assert_eq!(
-            rate(&mut bridge, 0.5),
-            Err(vec!["CSHARP_GAMEPLAY_TIME_MODE".to_owned()])
-        );
-        assert_eq!(bridge.take_call(), None);
     }
 }

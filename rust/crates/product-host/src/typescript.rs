@@ -18,9 +18,9 @@ use crate::engine_debug::{
 use crate::frames::{header, FLAG_HELD, FLAG_VIDEO, FRAME_MAGIC};
 use crate::host::{
     ProductHostConnectionBaseline, ProductHostControlClaimRequest, ProductHostControlRequest,
-    ProductHostDiagnosticsReadRequest, ProductHostDiagnosticsReadResponse, ProductHostEmptyRequest,
-    ProductHostErrorResponse, ProductHostExternalRequest, ProductHostInputRequest,
-    ProductHostLifecycleRequest, ProductHostRealtimeRequest,
+    ProductHostDiagnosticsReadRequest, ProductHostDiagnosticsReadResponse,
+    ProductHostErrorResponse, ProductHostInputRequest, ProductHostLifecycleRequest,
+    ProductHostRealtimeRequest,
 };
 use crate::model::{ProductHostRuntimeOutputWire, ProductHostTimelineCompletionWire};
 use crate::{
@@ -158,13 +158,11 @@ fn packages() -> Vec<(&'static str, String)> {
                 .with::<ProductHostTimelineCompletionResult>()
                 .with::<ProductHostBrowserDiagnosticsReport>()
                 .with::<ProductHostBrowserDiagnosticsResult>()
-                .with::<ProductHostEmptyRequest>()
                 .with::<ProductHostLifecycleRequest>()
                 .with::<ProductHostControlRequest>()
                 .with::<ProductHostControlClaimRequest>()
                 .with::<ProductHostInputRequest>()
                 .with::<ProductHostRealtimeRequest>()
-                .with::<ProductHostExternalRequest>()
                 .with::<ProductHostDebugCatalog>()
                 .with::<ProductHostRendererInspection>()
                 .with::<ProductHostTimeAnswer>()

@@ -1,13 +1,5 @@
 use crate::NativeInputEvent;
 
-#[repr(u32)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum NativeProductUpdateMode {
-    Realtime = 1,
-    Demand = 2,
-    External = 3,
-}
-
 /// One typed result a trusted product may return after an admitted update.
 ///
 /// The result is copied across the product callback boundary and applied by
@@ -38,8 +30,8 @@ pub enum NativeProductLifecycleState {
 /// Typed facts for one Rust-admitted product update.
 ///
 /// The lifecycle remains the sole host clock and simulation-admission owner.
-/// Realtime observations carry host monotonic nanoseconds and fixed-step
-/// facts; demand/external updates carry zero for fields that do not apply.
+/// Updates carry the host monotonic observation (zero for a step admitted
+/// without one, such as a playtest manual step) and fixed-step facts.
 /// `simulation_step` is the first step in the admitted batch and
 /// `admitted_step_count` describes the complete batch. Dropped steps are the
 /// whole steps dropped from this realtime observation, not a product-owned
@@ -52,7 +44,6 @@ pub enum NativeProductLifecycleState {
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct NativeProductUpdateFacts {
-    pub mode: NativeProductUpdateMode,
     pub lifecycle_state: NativeProductLifecycleState,
     pub generation: u64,
     pub control_revision: u64,

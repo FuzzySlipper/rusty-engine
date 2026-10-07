@@ -25,8 +25,6 @@ export type PointerButton = "primary" | "secondary" | "middle";
 
 export type ProductHostBootstrapInput = { cursorMode: ProductHostCursorMode, };
 
-export type ProductHostBootstrapLifecycle = { mode: ProductHostRuntimeMode, };
-
 export type ProductHostBootstrapProduct = { id: string, title: string, };
 
 export type ProductHostBootstrapRenderer = { 
@@ -69,7 +67,7 @@ export type ProductHostBrowserAttachmentBaseline = { runtime: ProductHostRuntime
  * What the runtime pack's page needs to mount a product: the product host
  * writes it from the product's manifest.
  */
-export type ProductHostBrowserBootstrap = { product: ProductHostBootstrapProduct, ui: ProductHostBootstrapUi, lifecycle: ProductHostBootstrapLifecycle, input: ProductHostBootstrapInput, uiProjection?: ProductHostBootstrapUiProjection, renderer: ProductHostBootstrapRenderer, };
+export type ProductHostBrowserBootstrap = { product: ProductHostBootstrapProduct, ui: ProductHostBootstrapUi, input: ProductHostBootstrapInput, uiProjection?: ProductHostBootstrapUiProjection, renderer: ProductHostBootstrapRenderer, };
 
 export type ProductHostBrowserConnectionState = "open" | "closed";
 
@@ -146,16 +144,6 @@ export type ProductHostDrawingMode = "continuous" | "on-demand";
 export type ProductHostDrawnFrame = { sequence: number, step: number, };
 
 /**
- * The body of a route that takes no arguments: `{}`.
- */
-export type ProductHostEmptyRequest = Record<string, never>;
-
-/**
- * `admit-external-step`: the step an external clock admits.
- */
-export type ProductHostExternalRequest = { step: CanonicalU64, };
-
-/**
  * Closed recovery posture for one host operation result. The code identifies
  * the precise failure while this value tells a host what it may safely do
  * next without interpreting the diagnostic text.
@@ -193,7 +181,7 @@ export type ProductHostLifecycleRequest = { runtime?: ProductHostRuntimeBinding,
 /**
  * Closed operation identities returned by direct runtime calls.
  */
-export type ProductHostOperationKind = "connect" | "start" | "pause" | "resume" | "restart" | "shutdown" | "report-fault" | "replace-control" | "release-control" | "claim-control" | "input" | "advance-realtime" | "admit-demand-step" | "admit-external-step" | "complete-timeline" | "execute-debug";
+export type ProductHostOperationKind = "connect" | "start" | "pause" | "resume" | "restart" | "shutdown" | "report-fault" | "replace-control" | "release-control" | "claim-control" | "input" | "advance-realtime" | "complete-timeline" | "execute-debug";
 
 /**
  * Direct operation result supplied by the generated runtime.
@@ -250,8 +238,6 @@ export type ProductHostRuntimeBinding = { instanceId: CanonicalU64, generation: 
 
 export type ProductHostRuntimeFault = "owner-reported" | "counter-exhausted";
 
-export type ProductHostRuntimeMode = "realtime" | "demand" | "external";
-
 export type ProductHostRuntimeOutput = { "kind": "binding", runtime: ProductHostRuntimeBinding, nextInputSequence: CanonicalU64, 
 /**
  * The harness holding input, when one has claimed it: the page shows
@@ -262,7 +248,7 @@ inputClaim?: string, } | { "kind": "ui-projection", envelope: RuntimeUiProjectio
 /**
  * Minimal local readout passed through from the generated runtime owner.
  */
-export type ProductHostRuntimeReadout = { artifact: "rusty.product.runtime-readout", runtime: ProductHostRuntimeBinding, mode: ProductHostRuntimeMode, state: ProductHostRuntimeState, admittedSimulationSteps: CanonicalU64, admittedPresentations: CanonicalU64, droppedRealtimeSteps: CanonicalU64, clockRegressions: CanonicalU64, scaledRemainder: number | null, lastObservedTimeNs: CanonicalU64 | null, fault: ProductHostRuntimeFault | null, };
+export type ProductHostRuntimeReadout = { artifact: "rusty.product.runtime-readout", runtime: ProductHostRuntimeBinding, state: ProductHostRuntimeState, admittedSimulationSteps: CanonicalU64, admittedPresentations: CanonicalU64, droppedRealtimeSteps: CanonicalU64, clockRegressions: CanonicalU64, scaledRemainder: number, lastObservedTimeNs: CanonicalU64 | null, fault: ProductHostRuntimeFault | null, };
 
 export type ProductHostRuntimeState = "created" | "running" | "paused" | "faulted" | "shutdown";
 

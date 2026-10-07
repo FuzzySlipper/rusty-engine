@@ -446,7 +446,6 @@ include = [
     "NativeStructuredValue",
     "NativeUiProjection",
     "NativeUiStreamRequest",
-    "NativeProductUpdateMode",
     "NativeProductUpdateResult",
     "NativeProductLifecycleState",
     "NativeProductUpdateFacts",

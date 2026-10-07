@@ -17,7 +17,7 @@ and references only the package, exactly:
 ```
 
 The ordinary product project also declares the concrete product and its bundle
-facts. A realtime product has a shape like:
+facts. A product has a shape like:
 
 ```xml
 <PropertyGroup>
@@ -26,11 +26,14 @@ facts. A realtime product has a shape like:
   <RustyEngineProductTitle>Example Game</RustyEngineProductTitle>
   <RustyEngineProductUiRoot>$(MSBuildProjectDirectory)/../../ui</RustyEngineProductUiRoot>
   <RustyEngineProductContentRoot>$(MSBuildProjectDirectory)/../../content</RustyEngineProductContentRoot>
-  <RustyEngineProductLifecycleMode>realtime</RustyEngineProductLifecycleMode>
   <RustyEngineProductFixedStepHz>60</RustyEngineProductFixedStepHz>
   <RustyEngineProductFixedStepMaxCatchUpSteps>4</RustyEngineProductFixedStepMaxCatchUpSteps>
 </PropertyGroup>
 ```
+
+Every product runs on the Engine's fixed-step clock; the two `FixedStep`
+properties default to 60 Hz and 4 catch-up steps. A turn-based game holds and
+advances that clock with [gameplay time](csharp-lifecycle.md#gameplay-time).
 
 Input intents and mappings are `RustyEngineProductInputIntent` and
 `RustyEngineProductInputMapping` items. An optional UI-projection identity is

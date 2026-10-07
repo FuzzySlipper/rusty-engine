@@ -3,7 +3,7 @@ use std::{collections::BTreeMap, sync::Arc};
 use serde::Serialize;
 use ts_rs::TS;
 
-use crate::{ProductHostError, ProductHostRenderOutput, ProductHostRuntimeMode};
+use crate::{ProductHostError, ProductHostRenderOutput};
 
 /// The generated Product Bundle entry point served at the local origin root.
 pub const PRODUCT_HOST_INDEX_PATH: &str = "index.html";
@@ -17,7 +17,6 @@ pub const PRODUCT_HOST_BOOTSTRAP_PATH: &str = "product-bootstrap.json";
 pub struct ProductHostBrowserBootstrap {
     pub product: ProductHostBootstrapProduct,
     pub ui: ProductHostBootstrapUi,
-    pub lifecycle: ProductHostBootstrapLifecycle,
     pub input: ProductHostBootstrapInput,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
@@ -37,12 +36,6 @@ pub struct ProductHostBootstrapProduct {
 pub struct ProductHostBootstrapUi {
     /// The product UI module, relative to the page: `product-ui/...`.
     pub entry: String,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct ProductHostBootstrapLifecycle {
-    pub mode: ProductHostRuntimeMode,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]

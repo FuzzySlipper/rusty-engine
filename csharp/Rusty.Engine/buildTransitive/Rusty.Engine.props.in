@@ -34,9 +34,8 @@
          port. Product code names its projection; the shell never guesses it. -->
     <RustyEngineProductUiProjectionStream Condition="'$(RustyEngineProductUiProjectionStream)' == ''"></RustyEngineProductUiProjectionStream>
     <RustyEngineProductUiProjectionContract Condition="'$(RustyEngineProductUiProjectionContract)' == ''"></RustyEngineProductUiProjectionContract>
-    <RustyEngineProductLifecycleMode Condition="'$(RustyEngineProductLifecycleMode)' == ''">demand</RustyEngineProductLifecycleMode>
-    <RustyEngineProductFixedStepHz Condition="'$(RustyEngineProductFixedStepHz)' == ''"></RustyEngineProductFixedStepHz>
-    <RustyEngineProductFixedStepMaxCatchUpSteps Condition="'$(RustyEngineProductFixedStepMaxCatchUpSteps)' == ''"></RustyEngineProductFixedStepMaxCatchUpSteps>
+    <RustyEngineProductFixedStepHz Condition="'$(RustyEngineProductFixedStepHz)' == ''">60</RustyEngineProductFixedStepHz>
+    <RustyEngineProductFixedStepMaxCatchUpSteps Condition="'$(RustyEngineProductFixedStepMaxCatchUpSteps)' == ''">4</RustyEngineProductFixedStepMaxCatchUpSteps>
     <!-- Existing first-person products retain pointer lock unless they opt into a free gameplay cursor. -->
     <RustyEngineProductInputCursorMode Condition="'$(RustyEngineProductInputCursorMode)' == ''">pointer-lock</RustyEngineProductInputCursorMode>
     <RustyEngineNativeAotRuntimeIdentifier Condition="'$(RustyEngineNativeAotRuntimeIdentifier)' == ''">linux-x64</RustyEngineNativeAotRuntimeIdentifier>

@@ -12,10 +12,7 @@ impl CsharpProductRuntime {
         let words: Vec<_> = command.split_whitespace().collect();
         let mut outputs = Vec::new();
         let mut advanced = 0_u32;
-        let hz = match self.lifecycle.configuration() {
-            RuntimeLifecycleConfig::Realtime(config) => config.fixed_step_hz(),
-            _ => return time_error("manual time requires a configured fixed-step cadence"),
-        };
+        let hz = self.lifecycle.configuration().fixed_step_hz();
         match words.as_slice() {
             ["engine.time"] => {}
             ["engine.time.mode", mode] => {
@@ -47,7 +44,7 @@ impl CsharpProductRuntime {
                     outputs.extend(
                         // Manual admission changes who advances the clock, not the
                         // realtime product contract or its animation step semantics.
-                        self.update_admitted(REALTIME_UPDATE_MODE, None, admission, 0)
+                        self.update_admitted(None, admission, 0)
                             .map_err(|error| self.runtime_error(error))?,
                     );
                     advanced += 1;

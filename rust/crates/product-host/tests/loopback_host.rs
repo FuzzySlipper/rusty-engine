@@ -15,8 +15,8 @@ use product_host::{
     ProductHostDebugCatalog, ProductHostDebugResult, ProductHostInputBatch, ProductHostInputResult,
     ProductHostLifecycleOperation, ProductHostLog, ProductHostOperationKind,
     ProductHostOperationResult, ProductHostRuntime, ProductHostRuntimeBinding,
-    ProductHostRuntimeMode, ProductHostRuntimeReadout, ProductHostRuntimeReceipt,
-    ProductHostRuntimeState, ProductHostTimelineCompletion, ProductHostTimelineCompletionResult,
+    ProductHostRuntimeReadout, ProductHostRuntimeReceipt, ProductHostRuntimeState,
+    ProductHostTimelineCompletion, ProductHostTimelineCompletionResult,
 };
 use runtime_input::RuntimeInputBinding;
 use runtime_lifecycle::{RuntimeControlRevision, RuntimeGeneration, RuntimeInstanceId};
@@ -54,11 +54,7 @@ impl FixtureRuntime {
     }
 
     fn readout() -> ProductHostRuntimeReadout {
-        ProductHostRuntimeReadout::new(
-            Self::binding(),
-            ProductHostRuntimeMode::Realtime,
-            ProductHostRuntimeState::Running,
-        )
+        ProductHostRuntimeReadout::new(Self::binding(), ProductHostRuntimeState::Running)
     }
 
     fn publication_binding() -> RuntimeInputBinding {
@@ -197,25 +193,6 @@ impl ProductHostRuntime for ReconnectRuntime {
         Ok(self.operation(ProductHostOperationKind::AdvanceRealtime, false))
     }
 
-    fn admit_demand_step(
-        &mut self,
-    ) -> Result<
-        ProductHostRuntimeReceipt<ProductHostOperationResult>,
-        product_host::ProductHostRuntimeError,
-    > {
-        Ok(self.operation(ProductHostOperationKind::AdmitDemandStep, false))
-    }
-
-    fn admit_external_step(
-        &mut self,
-        _step: CanonicalU64,
-    ) -> Result<
-        ProductHostRuntimeReceipt<ProductHostOperationResult>,
-        product_host::ProductHostRuntimeError,
-    > {
-        Ok(self.operation(ProductHostOperationKind::AdmitExternalStep, false))
-    }
-
     fn complete_timeline(
         &mut self,
         completion: ProductHostTimelineCompletion,
@@ -333,25 +310,6 @@ impl ProductHostRuntime for FixtureRuntime {
         Ok(Self::operation(ProductHostOperationKind::AdvanceRealtime))
     }
 
-    fn admit_demand_step(
-        &mut self,
-    ) -> Result<
-        ProductHostRuntimeReceipt<ProductHostOperationResult>,
-        product_host::ProductHostRuntimeError,
-    > {
-        Ok(Self::operation(ProductHostOperationKind::AdmitDemandStep))
-    }
-
-    fn admit_external_step(
-        &mut self,
-        _step: CanonicalU64,
-    ) -> Result<
-        ProductHostRuntimeReceipt<ProductHostOperationResult>,
-        product_host::ProductHostRuntimeError,
-    > {
-        Ok(Self::operation(ProductHostOperationKind::AdmitExternalStep))
-    }
-
     fn complete_timeline(
         &mut self,
         completion: ProductHostTimelineCompletion,
@@ -435,29 +393,6 @@ impl ProductHostRuntime for OutputFailureRuntime {
         ))
     }
 
-    fn admit_demand_step(
-        &mut self,
-    ) -> Result<
-        ProductHostRuntimeReceipt<ProductHostOperationResult>,
-        product_host::ProductHostRuntimeError,
-    > {
-        Ok(FixtureRuntime::operation(
-            ProductHostOperationKind::AdmitDemandStep,
-        ))
-    }
-
-    fn admit_external_step(
-        &mut self,
-        _step: CanonicalU64,
-    ) -> Result<
-        ProductHostRuntimeReceipt<ProductHostOperationResult>,
-        product_host::ProductHostRuntimeError,
-    > {
-        Ok(FixtureRuntime::operation(
-            ProductHostOperationKind::AdmitExternalStep,
-        ))
-    }
-
     fn complete_timeline(
         &mut self,
         completion: ProductHostTimelineCompletion,
@@ -533,29 +468,6 @@ impl ProductHostRuntime for GatedLifecycleRuntime {
     > {
         Ok(FixtureRuntime::operation(
             ProductHostOperationKind::AdvanceRealtime,
-        ))
-    }
-
-    fn admit_demand_step(
-        &mut self,
-    ) -> Result<
-        ProductHostRuntimeReceipt<ProductHostOperationResult>,
-        product_host::ProductHostRuntimeError,
-    > {
-        Ok(FixtureRuntime::operation(
-            ProductHostOperationKind::AdmitDemandStep,
-        ))
-    }
-
-    fn admit_external_step(
-        &mut self,
-        _step: CanonicalU64,
-    ) -> Result<
-        ProductHostRuntimeReceipt<ProductHostOperationResult>,
-        product_host::ProductHostRuntimeError,
-    > {
-        Ok(FixtureRuntime::operation(
-            ProductHostOperationKind::AdmitExternalStep,
         ))
     }
 

@@ -6,8 +6,6 @@ import {
   type ProductHostBrowserDiagnosticsResult,
   type ProductHostConnectionBaseline,
   type ProductHostControlRequest,
-  type ProductHostEmptyRequest,
-  type ProductHostExternalRequest,
   type ProductHostInputRequest,
   type ProductHostInputResult,
   type ProductHostLifecycleRequest,
@@ -50,8 +48,6 @@ const ROUTES = Object.freeze({
   }),
   input: 'input',
   advanceRealtime: 'advance-realtime',
-  admitDemandStep: 'admit-demand-step',
-  admitExternalStep: 'admit-external-step',
   completeTimeline: 'timeline-completion',
   browserDiagnostics: 'browser-diagnostics',
   outputs: 'outputs',
@@ -592,12 +588,6 @@ export function createProductBrowserLocalHttpAdapter(
   const advanceRealtime = (observedTimeNs: string): Promise<ProductHostOperationResult> =>
     post<ProductHostRealtimeRequest, ProductHostOperationResult>(ROUTES.advanceRealtime, { observedTimeNs });
 
-  const admitDemandStep = (): Promise<ProductHostOperationResult> =>
-    post<ProductHostEmptyRequest, ProductHostOperationResult>(ROUTES.admitDemandStep, {});
-
-  const admitExternalStep = (step: string): Promise<ProductHostOperationResult> =>
-    post<ProductHostExternalRequest, ProductHostOperationResult>(ROUTES.admitExternalStep, { step });
-
   const completeTimeline = (
     completion: ProductHostTimelineCompletion,
   ): Promise<ProductHostTimelineCompletionResult> =>
@@ -1019,8 +1009,6 @@ export function createProductBrowserLocalHttpAdapter(
     input,
     reportBrowserDiagnostics,
     advanceRealtime,
-    admitDemandStep,
-    admitExternalStep,
     completeTimeline,
     subscribeTerminalFailures,
     subscribeOutputs,

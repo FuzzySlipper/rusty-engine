@@ -1,10 +1,10 @@
 use crate::model::{
-    ExternalStep, GameplayRate, GameplayTime, HostMonotonicTime, LifecycleOperation,
-    LifecycleReceipt, PresentationAdmission, PresentationToken, RealtimeAdvance,
-    RuntimeControlOperation, RuntimeControlRevision, RuntimeFault, RuntimeGeneration,
-    RuntimeInstanceId, RuntimeLifecycleConfig, RuntimeLifecycleError, RuntimeLifecycleReadout,
-    RuntimeMode, RuntimePhaseToken, RuntimeState, SimulationAdmission, SimulationStep,
-    SimulationToken, GAMEPLAY_RATE_REALTIME_PPM, SCALED_NANOSECONDS_PER_SECOND,
+    GameplayRate, GameplayTime, HostMonotonicTime, LifecycleOperation, LifecycleReceipt,
+    PresentationAdmission, PresentationToken, RealtimeAdvance, RuntimeControlOperation,
+    RuntimeControlRevision, RuntimeFault, RuntimeGeneration, RuntimeInstanceId,
+    RuntimeLifecycleConfig, RuntimeLifecycleError, RuntimeLifecycleReadout, RuntimePhaseToken,
+    RuntimeState, SimulationAdmission, SimulationStep, SimulationToken, GAMEPLAY_RATE_REALTIME_PPM,
+    SCALED_NANOSECONDS_PER_SECOND,
 };
 /// Realtime debt is kept in `nanoseconds * hertz * rate ppm`, so one whole
 /// step is this many units and a rate change keeps the fraction exactly.
@@ -48,7 +48,7 @@ pub struct RuntimeLifecycle {
     next_presentation: u64,
     dropped_realtime_steps: u128,
     clock_regressions: u64,
-    realtime: Option<RealtimeState>,
+    realtime: RealtimeState,
     gameplay: GameplayTime,
     fault: Option<RuntimeFault>,
 }
@@ -56,10 +56,6 @@ pub struct RuntimeLifecycle {
 impl RuntimeLifecycle {
     /// Creates a stopped lifecycle from an explicit configuration.
     pub const fn new(instance_id: RuntimeInstanceId, config: RuntimeLifecycleConfig) -> Self {
-        let realtime = match config {
-            RuntimeLifecycleConfig::Realtime(_) => Some(RealtimeState::new()),
-            RuntimeLifecycleConfig::Demand | RuntimeLifecycleConfig::External => None,
-        };
         Self {
             instance_id,
             config,
@@ -70,7 +66,7 @@ impl RuntimeLifecycle {
             next_presentation: 0,
             dropped_realtime_steps: 0,
             clock_regressions: 0,
-            realtime,
+            realtime: RealtimeState::new(),
             gameplay: GameplayTime::DEFAULT,
             fault: None,
         }
@@ -82,10 +78,6 @@ impl RuntimeLifecycle {
 
     pub const fn configuration(&self) -> RuntimeLifecycleConfig {
         self.config
-    }
-
-    pub const fn mode(&self) -> RuntimeMode {
-        self.config.mode()
     }
 
     pub const fn state(&self) -> RuntimeState {
@@ -205,29 +197,15 @@ impl RuntimeLifecycle {
         &mut self,
         observed_time: HostMonotonicTime,
     ) -> Result<RealtimeAdvance, RuntimeLifecycleError> {
-        let config = match self.config {
-            RuntimeLifecycleConfig::Realtime(config) => config,
-            _ => {
-                return Err(RuntimeLifecycleError::WrongMode {
-                    operation: LifecycleOperation::AdvanceRealtime,
-                    mode: self.mode(),
-                })
-            }
-        };
+        let config = self.config;
         self.require_state(
             LifecycleOperation::AdvanceRealtime,
             &[RuntimeState::Running],
         )?;
 
-        let realtime = match self.realtime {
-            Some(realtime) => realtime,
-            None => return self.counter_exhausted(),
-        };
+        let realtime = self.realtime;
         let Some(previous) = realtime.last_observed_time else {
-            self.realtime = Some(RealtimeState {
-                last_observed_time: Some(observed_time),
-                scaled_remainder: realtime.scaled_remainder,
-            });
+            self.realtime.last_observed_time = Some(observed_time);
             return Ok(RealtimeAdvance::new(
                 observed_time,
                 None,
@@ -281,10 +259,10 @@ impl RuntimeLifecycle {
             Some(self.prepare_simulation_admission(admitted_count)?)
         };
 
-        self.realtime = Some(RealtimeState {
+        self.realtime = RealtimeState {
             last_observed_time: Some(observed_time),
             scaled_remainder,
-        });
+        };
         self.dropped_realtime_steps = next_dropped;
         if advancing > 0 {
             self.gameplay.advance_remaining_steps = advancing - admitted_count;
@@ -305,7 +283,7 @@ impl RuntimeLifecycle {
     /// must suspend its automatic scheduler before calling this operation.
     pub fn admit_manual_step(&mut self) -> Result<SimulationAdmission, RuntimeLifecycleError> {
         self.require_state(
-            LifecycleOperation::AdmitDemandStep,
+            LifecycleOperation::AdmitManualStep,
             &[RuntimeState::Running],
         )?;
         self.clear_realtime_baseline();
@@ -314,9 +292,8 @@ impl RuntimeLifecycle {
 
     /// Selects how fast realtime admission follows host time from the next
     /// observation, ending any bounded advance. Debt already accrued keeps its
-    /// fraction, so a change neither loses nor bursts time. Only a realtime
-    /// lifecycle has a rate; it survives pause, resume and faults, and a new
-    /// generation returns to realtime.
+    /// fraction, so a change neither loses nor bursts time. The rate survives
+    /// pause, resume and faults, and a new generation returns to realtime.
     pub fn select_gameplay_rate(
         &mut self,
         rate: GameplayRate,
@@ -354,10 +331,6 @@ impl RuntimeLifecycle {
     }
 
     fn require_gameplay_time(&self) -> Result<(), RuntimeLifecycleError> {
-        self.require_mode(
-            LifecycleOperation::SelectGameplayTime,
-            RuntimeMode::Realtime,
-        )?;
         self.require_not_state(
             LifecycleOperation::SelectGameplayTime,
             RuntimeState::Shutdown,
@@ -367,39 +340,6 @@ impl RuntimeLifecycle {
     /// Discards wall time accumulated while an external controller held time.
     pub fn reset_realtime_baseline(&mut self) {
         self.clear_realtime_baseline();
-    }
-
-    /// Admits one caller-demanded simulation step. It never reads a clock.
-    pub fn admit_demand_step(&mut self) -> Result<SimulationAdmission, RuntimeLifecycleError> {
-        self.require_mode(LifecycleOperation::AdmitDemandStep, RuntimeMode::Demand)?;
-        self.require_state(
-            LifecycleOperation::AdmitDemandStep,
-            &[RuntimeState::Running],
-        )?;
-        self.prepare_simulation_admission(1)
-    }
-
-    /// Admits the exact next externally supplied deterministic step number.
-    ///
-    /// No timestamp enters this mode. Supplying a duplicate or skipped value is
-    /// rejected without changing lifecycle state.
-    pub fn admit_external_step(
-        &mut self,
-        external_step: ExternalStep,
-    ) -> Result<SimulationAdmission, RuntimeLifecycleError> {
-        self.require_mode(LifecycleOperation::AdmitExternalStep, RuntimeMode::External)?;
-        self.require_state(
-            LifecycleOperation::AdmitExternalStep,
-            &[RuntimeState::Running],
-        )?;
-        let expected = ExternalStep::new(self.next_simulation_step);
-        if external_step != expected {
-            return Err(RuntimeLifecycleError::ExternalStepOutOfOrder {
-                expected,
-                received: external_step,
-            });
-        }
-        self.prepare_simulation_admission(1)
     }
 
     /// Admits one presentation attempt without scheduling simulation.
@@ -473,18 +413,8 @@ impl RuntimeLifecycle {
 
     /// Returns current lifecycle facts without advancing time or admitting work.
     pub fn readout(&self) -> RuntimeLifecycleReadout {
-        let (scaled_remainder, last_observed_time) = self
-            .realtime
-            .map(|realtime| {
-                (
-                    Some(scaled_remainder_u32(realtime.scaled_remainder)),
-                    realtime.last_observed_time,
-                )
-            })
-            .unwrap_or((None, None));
         RuntimeLifecycleReadout {
             instance_id: self.instance_id,
-            mode: self.mode(),
             state: self.state,
             generation: self.generation,
             control_revision: self.control_revision,
@@ -492,8 +422,8 @@ impl RuntimeLifecycle {
             admitted_presentations: self.next_presentation,
             dropped_realtime_steps: self.dropped_realtime_steps,
             clock_regressions: self.clock_regressions,
-            scaled_remainder,
-            last_observed_time,
+            scaled_remainder: scaled_remainder_u32(self.realtime.scaled_remainder),
+            last_observed_time: self.realtime.last_observed_time,
             fault: self.fault,
         }
     }
@@ -553,15 +483,11 @@ impl RuntimeLifecycle {
     }
 
     fn reset_realtime_progress(&mut self) {
-        if let Some(realtime) = &mut self.realtime {
-            realtime.reset();
-        }
+        self.realtime.reset();
     }
 
     fn clear_realtime_baseline(&mut self) {
-        if let Some(realtime) = &mut self.realtime {
-            realtime.last_observed_time = None;
-        }
+        self.realtime.last_observed_time = None;
     }
 
     fn receipt(&self, operation: LifecycleOperation) -> LifecycleReceipt {
@@ -572,21 +498,6 @@ impl RuntimeLifecycle {
             self.generation,
             self.control_revision,
         )
-    }
-
-    fn require_mode(
-        &self,
-        operation: LifecycleOperation,
-        expected: RuntimeMode,
-    ) -> Result<(), RuntimeLifecycleError> {
-        if self.mode() == expected {
-            Ok(())
-        } else {
-            Err(RuntimeLifecycleError::WrongMode {
-                operation,
-                mode: self.mode(),
-            })
-        }
     }
 
     fn require_state(
@@ -682,13 +593,15 @@ mod tests {
 
     #[test]
     fn simulation_sequence_exhaustion_faults_instead_of_wrapping() {
-        let mut lifecycle =
-            RuntimeLifecycle::new(RuntimeInstanceId::new(7), RuntimeLifecycleConfig::Demand);
+        let mut lifecycle = RuntimeLifecycle::new(
+            RuntimeInstanceId::new(7),
+            RuntimeLifecycleConfig::new(60, 4).unwrap(),
+        );
         lifecycle.start().unwrap();
         lifecycle.next_simulation_step = u64::MAX;
 
         assert_eq!(
-            lifecycle.admit_demand_step(),
+            lifecycle.admit_manual_step(),
             Err(RuntimeLifecycleError::CounterExhausted)
         );
         assert_eq!(lifecycle.state(), RuntimeState::Faulted);

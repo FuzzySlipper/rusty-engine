@@ -525,11 +525,10 @@ impl EngineServiceSet {
     }
 
     /// The lifecycle's gameplay time selection, which `GameplayTime.Read`
-    /// answers and requests build on. `fixed_step_hz` is `None` for a runtime
-    /// without a realtime rate.
+    /// answers and requests build on, at the lifecycle's fixed-step rate.
     pub fn set_gameplay_time(
         &mut self,
-        fixed_step_hz: Option<u32>,
+        fixed_step_hz: u32,
         effective: runtime_lifecycle::GameplayTime,
     ) {
         self.gameplay_time.set(fixed_step_hz, effective);
@@ -1114,7 +1113,6 @@ mod tests {
             services.begin_update_call(
                 binding(),
                 NativeProductUpdateFacts {
-                    mode: NativeProductUpdateMode::Realtime,
                     lifecycle_state: NativeProductLifecycleState::Running,
                     generation: 1,
                     control_revision: 1,
@@ -1158,7 +1156,7 @@ mod tests {
             RuntimeDiagnosticsSink::new(Default::default()).unwrap(),
         )
         .unwrap();
-        services.set_gameplay_time(Some(60), runtime_lifecycle::GameplayTime::default());
+        services.set_gameplay_time(60, runtime_lifecycle::GameplayTime::default());
         services.begin_call(binding());
         let api = services.api();
         let mut readout = NativeGameplayTimeReadout::default();
@@ -1197,7 +1195,6 @@ mod tests {
             services.begin_update_call(
                 binding(),
                 NativeProductUpdateFacts {
-                    mode: NativeProductUpdateMode::Realtime,
                     lifecycle_state: NativeProductLifecycleState::Running,
                     generation: 1,
                     control_revision: 1,

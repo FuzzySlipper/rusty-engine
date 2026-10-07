@@ -416,15 +416,8 @@ public sealed class Product : IEngineProduct
         Require(facts.Generation != 0 && facts.ControlRevision != 0, "lifecycle facts did not carry the current identity");
         Require(facts.AdmittedStepCount != 0, "update facts did not carry admitted simulation steps");
         Require(facts.SimulationStep + facts.AdmittedStepCount >= facts.SimulationStep, "simulation step facts overflowed");
-        if (facts.Mode == ProductUpdateMode.Realtime)
-        {
-            Require(facts.ObservedHostTimeNanoseconds != 0, "realtime update facts did not carry host observation");
-            Require(facts.FixedStepHz != 0 && facts.FixedDeltaSeconds > 0, "realtime update facts did not carry fixed-step timing");
-        }
-        else
-        {
-            Require(facts.ObservedHostTimeNanoseconds == 0 && facts.FixedStepHz == 0 && facts.FixedDeltaSeconds == 0, "non-realtime update facts carried realtime-only timing");
-        }
+        Require(facts.ObservedHostTimeNanoseconds != 0, "realtime update facts did not carry host observation");
+        Require(facts.FixedStepHz != 0 && facts.FixedDeltaSeconds > 0, "realtime update facts did not carry fixed-step timing");
         _updateFactsSeen = true;
         _lastUpdateGeneration = facts.Generation;
         _lastUpdateControlRevision = facts.ControlRevision;

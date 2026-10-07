@@ -544,7 +544,6 @@ fn atlas_sprite_failures_and_legacy_replacement_leave_or_release_the_lease() {
 #[cfg(test)]
 fn realtime_sprite_update(step: u64, delta: f64) -> NativeProductUpdateFacts {
     NativeProductUpdateFacts {
-        mode: NativeProductUpdateMode::Realtime,
         lifecycle_state: NativeProductLifecycleState::Running,
         generation: 1,
         control_revision: 1,
@@ -7642,9 +7641,7 @@ fn validate_sprite_playback_update(
         ));
     }
     if facts.admitted_step_count > 0
-        && (facts.mode != NativeProductUpdateMode::Realtime
-            || !facts.fixed_delta_seconds.is_finite()
-            || facts.fixed_delta_seconds <= 0.0)
+        && (!facts.fixed_delta_seconds.is_finite() || facts.fixed_delta_seconds <= 0.0)
     {
         return Err(CsharpEngineServicesError::new(
             "CSHARP_SPRITE_PLAYBACK_UPDATE",

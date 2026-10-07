@@ -22,7 +22,7 @@ runtime instance/generation/control revision, simulation step, and admitted
 step count. Realtime catch-up is one callback carrying several admitted steps;
 callback frequency is not the fixed simulation frequency.
 
-Realtime callbacks and direct demand/external calls retain their attribution.
+Realtime callbacks and manual steps retain their attribution.
 `inFlightOperation` and its age observe a running callback without acquiring
 the product lock. A new runtime incarnation starts a new distribution.
 

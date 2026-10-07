@@ -55,9 +55,9 @@ pub use audio::{
     PRODUCT_HOST_AUDIO_SAMPLE_RATE,
 };
 pub use bundle::{
-    ProductHostBootstrapInput, ProductHostBootstrapLifecycle, ProductHostBootstrapProduct,
-    ProductHostBootstrapRenderer, ProductHostBootstrapUi, ProductHostBootstrapUiProjection,
-    ProductHostBrowserBootstrap, ProductHostBundle, ProductHostBundleEntry, ProductHostCursorMode,
+    ProductHostBootstrapInput, ProductHostBootstrapProduct, ProductHostBootstrapRenderer,
+    ProductHostBootstrapUi, ProductHostBootstrapUiProjection, ProductHostBrowserBootstrap,
+    ProductHostBundle, ProductHostBundleEntry, ProductHostCursorMode,
     ProductHostPresentationAspect, PRODUCT_HOST_BOOTSTRAP_PATH, PRODUCT_HOST_INDEX_PATH,
 };
 pub use engine_debug::{
@@ -95,7 +95,7 @@ pub use model::{
     ProductHostDebugCommandParameterDescriptor, ProductHostDebugResult,
     ProductHostFaultDisposition, ProductHostInputBatch, ProductHostInputResult,
     ProductHostLifecycleOperation, ProductHostOperationKind, ProductHostOperationResult,
-    ProductHostRuntime, ProductHostRuntimeBinding, ProductHostRuntimeFault, ProductHostRuntimeMode,
+    ProductHostRuntime, ProductHostRuntimeBinding, ProductHostRuntimeFault,
     ProductHostRuntimeOutput, ProductHostRuntimeReadout, ProductHostRuntimeReceipt,
     ProductHostRuntimeScheduleState, ProductHostRuntimeState, ProductHostTelemetrySnapshot,
     ProductHostTimelineCompletion, ProductHostTimelineCompletionResult,

@@ -123,8 +123,6 @@ pub enum ProductHostOperationKind {
     ClaimControl,
     Input,
     AdvanceRealtime,
-    AdmitDemandStep,
-    AdmitExternalStep,
     CompleteTimeline,
     ExecuteDebug,
 }
@@ -456,33 +454,27 @@ pub struct ProductHostRuntimeReadout {
     #[ts(type = "\"rusty.product.runtime-readout\"")]
     artifact: String,
     runtime: ProductHostRuntimeBinding,
-    mode: ProductHostRuntimeMode,
     state: ProductHostRuntimeState,
     admitted_simulation_steps: CanonicalU64,
     admitted_presentations: CanonicalU64,
     dropped_realtime_steps: CanonicalU64,
     clock_regressions: CanonicalU64,
-    scaled_remainder: Option<u32>,
+    scaled_remainder: u32,
     last_observed_time_ns: Option<CanonicalU64>,
     fault: Option<ProductHostRuntimeFault>,
 }
 
 impl ProductHostRuntimeReadout {
-    pub fn new(
-        runtime: ProductHostRuntimeBinding,
-        mode: ProductHostRuntimeMode,
-        state: ProductHostRuntimeState,
-    ) -> Self {
+    pub fn new(runtime: ProductHostRuntimeBinding, state: ProductHostRuntimeState) -> Self {
         Self {
             artifact: "rusty.product.runtime-readout".to_owned(),
             runtime,
-            mode,
             state,
             admitted_simulation_steps: CanonicalU64::new(0),
             admitted_presentations: CanonicalU64::new(0),
             dropped_realtime_steps: CanonicalU64::new(0),
             clock_regressions: CanonicalU64::new(0),
-            scaled_remainder: None,
+            scaled_remainder: 0,
             last_observed_time_ns: None,
             fault: None,
         }
@@ -502,11 +494,7 @@ impl ProductHostRuntimeReadout {
         self
     }
 
-    pub fn with_clock(
-        mut self,
-        scaled_remainder: Option<u32>,
-        last_observed_time_ns: Option<u64>,
-    ) -> Self {
+    pub fn with_clock(mut self, scaled_remainder: u32, last_observed_time_ns: Option<u64>) -> Self {
         self.scaled_remainder = scaled_remainder;
         self.last_observed_time_ns = last_observed_time_ns.map(CanonicalU64::new);
         self
@@ -521,28 +509,14 @@ impl ProductHostRuntimeReadout {
         self.runtime
     }
 
-    /// Lifecycle mode selected by the standard runtime configuration.
-    pub const fn mode(&self) -> ProductHostRuntimeMode {
-        self.mode
-    }
-
     /// Whether a browser holding `previous` needs this readout: identity,
-    /// mode, state and fault. Per-tick counters and clock samples stay with
+    /// state and fault. Per-tick counters and clock samples stay with
     /// live debug (`engine.time`).
     pub fn changes_browser_view(&self, previous: &Self) -> bool {
         self.runtime != previous.runtime
-            || self.mode != previous.mode
             || self.state != previous.state
             || self.fault != previous.fault
     }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[serde(rename_all = "kebab-case")]
-pub enum ProductHostRuntimeMode {
-    Realtime,
-    Demand,
-    External,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -561,8 +535,8 @@ pub enum ProductHostRuntimeState {
 /// lifecycle state machine.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ProductHostRuntimeScheduleState {
-    /// This runtime is demand/external driven or otherwise does not opt into
-    /// the standard Rust-host realtime scheduler.
+    /// This runtime is caller driven and does not opt into the standard
+    /// Rust-host realtime scheduler.
     Unsupported,
     Created,
     Running,
@@ -1788,8 +1762,8 @@ pub trait ProductHostRuntime: Send + 'static {
         None
     }
     /// Reports whether the runtime participates in the standard Rust-host
-    /// realtime scheduler. Older/demand/external runtimes remain caller
-    /// driven and return `Unsupported` by default.
+    /// realtime scheduler. Caller-driven runtimes return `Unsupported` by
+    /// default.
     fn realtime_schedule_state(&self) -> ProductHostRuntimeScheduleState {
         ProductHostRuntimeScheduleState::Unsupported
     }
@@ -1908,15 +1882,6 @@ pub trait ProductHostRuntime: Send + 'static {
     fn advance_realtime(
         &mut self,
         observed_time_ns: CanonicalU64,
-    ) -> Result<ProductHostRuntimeReceipt<ProductHostOperationResult>, ProductHostRuntimeError>;
-
-    fn admit_demand_step(
-        &mut self,
-    ) -> Result<ProductHostRuntimeReceipt<ProductHostOperationResult>, ProductHostRuntimeError>;
-
-    fn admit_external_step(
-        &mut self,
-        step: CanonicalU64,
     ) -> Result<ProductHostRuntimeReceipt<ProductHostOperationResult>, ProductHostRuntimeError>;
 
     fn complete_timeline(
@@ -2107,13 +2072,9 @@ mod tests {
             control_revision: CanonicalU64::new(1),
         };
         let running = |steps: u64| {
-            ProductHostRuntimeReadout::new(
-                binding,
-                ProductHostRuntimeMode::Realtime,
-                ProductHostRuntimeState::Running,
-            )
-            .with_counters(steps, steps, 0, 0)
-            .with_clock(Some(3), Some(steps * 16_666_667))
+            ProductHostRuntimeReadout::new(binding, ProductHostRuntimeState::Running)
+                .with_counters(steps, steps, 0, 0)
+                .with_clock(3, Some(steps * 16_666_667))
         };
         assert!(!running(2).changes_browser_view(&running(1)));
         let paused = ProductHostRuntimeReadout {

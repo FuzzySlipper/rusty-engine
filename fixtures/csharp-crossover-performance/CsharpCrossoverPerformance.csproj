@@ -19,7 +19,6 @@
     <RustyEngineProductUiEntry>main.js</RustyEngineProductUiEntry>
     <RustyEngineProductUiProjectionStream>crossover-performance</RustyEngineProductUiProjectionStream>
     <RustyEngineProductUiProjectionContract>crossover.performance.v1</RustyEngineProductUiProjectionContract>
-    <RustyEngineProductLifecycleMode>demand</RustyEngineProductLifecycleMode>
     <RustyEngineStagedProductDirectory>$(MSBuildProjectDirectory)/obj/Rusty.Engine/Product</RustyEngineStagedProductDirectory>
   </PropertyGroup>
 

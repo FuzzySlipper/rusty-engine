@@ -19,7 +19,6 @@ import type {
   ProductHostInputResult,
   ProductHostOperationResult,
   ProductHostRenderOutput,
-  ProductHostRuntimeMode,
   ProductHostRuntimeOutput,
   ProductHostRuntimeReadout,
   ProductHostTimelineCompletion,
@@ -112,10 +111,6 @@ export interface ProductBrowserRuntimeAdapter {
   readonly advanceRealtime: (
     observedTimeNs: string,
   ) => Promise<ProductHostOperationResult>;
-  readonly admitDemandStep?: () => Promise<ProductHostOperationResult>;
-  readonly admitExternalStep?: (
-    step: string,
-  ) => Promise<ProductHostOperationResult>;
   readonly completeTimeline?: (
     completion: ProductHostTimelineCompletion,
   ) => Promise<ProductHostTimelineCompletionResult>;
@@ -141,11 +136,7 @@ export interface ProductBrowserRuntimeAdapter {
 export interface ProductBrowserHostOptions {
   readonly root: HTMLElement;
   readonly transport: ProductBrowserRuntimeAdapter;
-  readonly lifecycleMode: ProductHostRuntimeMode;
-  /**
-   * Owner of realtime simulation admission. Defaults to `browser`. Only
-   * realtime products read it; demand and external products ignore it.
-   */
+  /** Owner of realtime simulation admission. Defaults to `browser`. */
   readonly realtimeAdvanceOwner?: ProductBrowserRealtimeAdvanceOwner;
   /** Where the runtime draws the world: streamed to this page (the default) or to the desktop window. */
   readonly output?: ProductHostRenderOutput;
@@ -176,7 +167,6 @@ export interface ProductBrowserUiProjectionOptions {
 export interface ProductBrowserHostReadout {
   readonly artifact: typeof PRODUCT_BROWSER_HOST_ARTIFACT;
   readonly state: 'starting' | 'ready' | 'degraded' | 'failed' | 'disposed';
-  readonly mode: ProductHostRuntimeMode;
   readonly realtimeAdvanceOwner: ProductBrowserRealtimeAdvanceOwner;
   readonly host: RustyApplicationHostReadout | null;
   readonly runtime: ProductHostRuntimeReadout | null;
@@ -191,10 +181,6 @@ export interface ProductBrowserHost {
   readonly completeTimeline: (
     completion: ProductHostTimelineCompletion,
   ) => Promise<ProductHostTimelineCompletionResult>;
-  readonly admitDemandStep: () => Promise<ProductHostOperationResult>;
-  readonly admitExternalStep: (
-    step: string,
-  ) => Promise<ProductHostOperationResult>;
   readonly dispose: () => Promise<void>;
 }
 
@@ -265,7 +251,6 @@ export function syncProductBrowserHealthDatasets(
   roots: readonly Pick<HTMLElement, 'dataset'>[],
   values: {
     readonly state: ProductBrowserHostReadout['state'];
-    readonly mode: ProductHostRuntimeMode;
     readonly progress: string;
     readonly failure: string | null;
   },
@@ -273,9 +258,6 @@ export function syncProductBrowserHealthDatasets(
   for (const root of roots) {
     if (root.dataset['rustyProductHostState'] !== values.state) {
       root.dataset['rustyProductHostState'] = values.state;
-    }
-    if (root.dataset['rustyProductRuntimeMode'] !== values.mode) {
-      root.dataset['rustyProductRuntimeMode'] = values.mode;
     }
     if (root.dataset['rustyProductRuntimeProgress'] !== values.progress) {
       root.dataset['rustyProductRuntimeProgress'] = values.progress;
@@ -387,7 +369,6 @@ export async function mountProductBrowserHostWithApplication(
     const roots = [options.root, document.body].filter((root): root is HTMLElement => root !== null);
     syncProductBrowserHealthDatasets(roots, {
       state,
-      mode: options.lifecycleMode,
       progress: String(runtimeProgress),
       failure: (failure ?? recoveryFailure) === null ? null : boundedDiagnostic((failure ?? recoveryFailure)!.message),
     });
@@ -880,15 +861,7 @@ export async function mountProductBrowserHostWithApplication(
     }
   };
 
-  const drainAndSendInput = async (): Promise<void> => {
-    const host = requireApplication();
-    host.input?.sampleController();
-    const batch = host.input?.drain() ?? [];
-    if (batch.length > 0) await sendInput(batch);
-  };
-
   cadence = createProductBrowserCadence({
-    lifecycleMode: options.lifecycleMode,
     realtimeAdvanceOwner,
     isReady: () => inputRecovery === null
       && started
@@ -912,20 +885,10 @@ export async function mountProductBrowserHostWithApplication(
         recoverableClockDiagnosticPending = false;
         recoverableClockDiagnosticReported = false;
       }
-      if (accepted && options.lifecycleMode === 'realtime' && realtimeAdvanceOwner === 'browser') {
+      if (accepted && realtimeAdvanceOwner === 'browser') {
         runtimeProgress += 1;
         publishHealth();
       }
-    },
-    admitDemandStep: async () => {
-      requireReady();
-      if (transport.admitDemandStep === undefined) {
-        throw new ProductBrowserHostError(
-          'transport_failed',
-          'this native product did not provide a demand-step transport lane',
-        );
-      }
-      applyOperationResult(await transport.admitDemandStep());
     },
     onFailure: (cause) => {
       if (isRecoveryGateError(cause)) return;
@@ -1072,7 +1035,6 @@ export async function mountProductBrowserHostWithApplication(
   const readout = (): ProductBrowserHostReadout => Object.freeze({
     artifact: PRODUCT_BROWSER_HOST_ARTIFACT,
     state,
-    mode: options.lifecycleMode,
     realtimeAdvanceOwner,
     host: application?.readout() ?? null,
     runtime: runtimeReadout,
@@ -1107,37 +1069,6 @@ export async function mountProductBrowserHostWithApplication(
         );
       }
       restoreReadyAfterHealthyTransport();
-      return result;
-    }).catch((cause: unknown) => {
-      if (isRecoveryGateError(cause)) throw cause;
-      throw recoverOrClose(cause, 'transport_failed');
-    });
-  };
-
-  const admitStep = (
-    mode: 'demand' | 'external',
-    admit: (() => Promise<ProductHostOperationResult>) | undefined,
-  ): Promise<ProductHostOperationResult> => {
-    try { requireReady(); } catch (cause) { return Promise.reject(cause); }
-    if (options.lifecycleMode !== mode) {
-      return Promise.reject(new ProductBrowserHostError(
-        'invalid_options',
-        mode === 'demand'
-          ? 'admitDemandStep is only available for demand lifecycle products'
-          : 'admitExternalStep is only available for external lifecycle products',
-      ));
-    }
-    if (admit === undefined) {
-      return Promise.reject(new ProductBrowserHostError(
-        'transport_failed',
-        `this native product did not provide a ${mode === 'demand' ? 'demand' : 'external'}-step transport lane`,
-      ));
-    }
-    return queue.enqueue(async () => {
-      requireReady();
-      await drainAndSendInput();
-      const result = await admit();
-      applyOperationResult(result);
       return result;
     }).catch((cause: unknown) => {
       if (isRecoveryGateError(cause)) throw cause;
@@ -1187,11 +1118,6 @@ export async function mountProductBrowserHostWithApplication(
     transport,
     readout,
     completeTimeline,
-    admitDemandStep: () => admitStep('demand', transport.admitDemandStep),
-    admitExternalStep: (step: string) => admitStep(
-      'external',
-      transport.admitExternalStep === undefined ? undefined : () => transport.admitExternalStep!(step),
-    ),
     dispose,
   });
 }

@@ -459,7 +459,6 @@ mod tests {
                 runtime_lifecycle::RuntimeControlRevision::ZERO,
             ),
             NativeProductUpdateFacts {
-                mode: NativeProductUpdateMode::Realtime,
                 lifecycle_state: NativeProductLifecycleState::Running,
                 generation: 1,
                 control_revision: 1,

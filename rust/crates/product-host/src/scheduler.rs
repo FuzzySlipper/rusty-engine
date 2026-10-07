@@ -107,8 +107,8 @@ mod tests {
     use crate::publication::RuntimePublication;
     use crate::{
         ProductHostLifecycleOperation, ProductHostOperationKind, ProductHostRuntimeBinding,
-        ProductHostRuntimeMode, ProductHostRuntimeReadout, ProductHostRuntimeState,
-        ProductHostTimelineCompletion, ProductHostTimelineCompletionResult,
+        ProductHostRuntimeReadout, ProductHostRuntimeState, ProductHostTimelineCompletion,
+        ProductHostTimelineCompletionResult,
     };
     use runtime_input::RuntimeInputBinding;
     use runtime_lifecycle::{RuntimeControlRevision, RuntimeGeneration, RuntimeInstanceId};
@@ -125,11 +125,7 @@ mod tests {
         }
 
         fn readout() -> ProductHostRuntimeReadout {
-            ProductHostRuntimeReadout::new(
-                Self::binding(),
-                ProductHostRuntimeMode::Demand,
-                ProductHostRuntimeState::Running,
-            )
+            ProductHostRuntimeReadout::new(Self::binding(), ProductHostRuntimeState::Running)
         }
 
         fn publications() -> Vec<RuntimePublication> {
@@ -195,21 +191,6 @@ mod tests {
         ) -> Result<ProductHostRuntimeReceipt<ProductHostOperationResult>, ProductHostRuntimeError>
         {
             Ok(Self::operation(ProductHostOperationKind::AdvanceRealtime))
-        }
-
-        fn admit_demand_step(
-            &mut self,
-        ) -> Result<ProductHostRuntimeReceipt<ProductHostOperationResult>, ProductHostRuntimeError>
-        {
-            Ok(Self::operation(ProductHostOperationKind::AdmitDemandStep))
-        }
-
-        fn admit_external_step(
-            &mut self,
-            _step: CanonicalU64,
-        ) -> Result<ProductHostRuntimeReceipt<ProductHostOperationResult>, ProductHostRuntimeError>
-        {
-            Ok(Self::operation(ProductHostOperationKind::AdmitExternalStep))
         }
 
         fn complete_timeline(

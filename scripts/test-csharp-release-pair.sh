@@ -59,7 +59,6 @@ cat > "$consumer/PairConsumer.csproj" <<EOF
     <RustyEngineProductEntryType>PairConsumer.Product</RustyEngineProductEntryType>
     <RustyEngineProductId>fixture.release-pair</RustyEngineProductId>
     <RustyEngineProductTitle>Release pair fixture</RustyEngineProductTitle>
-    <RustyEngineProductLifecycleMode>realtime</RustyEngineProductLifecycleMode>
     <RustyEngineProductFixedStepHz>60</RustyEngineProductFixedStepHz>
     <RustyEngineProductFixedStepMaxCatchUpSteps>4</RustyEngineProductFixedStepMaxCatchUpSteps>
     <RustyEngineProductInputCursorMode>unlocked</RustyEngineProductInputCursorMode>

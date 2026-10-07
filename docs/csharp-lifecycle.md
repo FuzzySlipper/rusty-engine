@@ -70,8 +70,11 @@ callable from C# simply because its crate is public.
 
 ### Gameplay time
 
-A realtime product can stop its world, slow it, or run it a bounded amount,
-for realtime-with-pause and movement-driven time. The Engine keeps the fixed
+Every product runs on the Engine's fixed-step clock. A product can stop its
+world, slow it, or run it a bounded amount, for realtime-with-pause,
+turn-based and movement-driven time: a turn-based game holds the world and
+advances it by what an action costs, so animation, particles, audio and
+layout-driven updates keep running between turns. The Engine keeps the fixed
 step and admits whole steps; `GameplayTime` only changes how fast host time
 becomes steps. The product decides when and by how much
 (`GameplayTimeConvenience`):
@@ -91,13 +94,12 @@ and the last request in one callback wins. A rate change keeps the fraction of
 a step already owed, so slowing, holding and resuming neither loses nor
 bursts time, and a held world owes nothing for the wall time it sat still.
 An advance admits exactly its steps: time past its end belongs to the hold.
-A demand or external runtime has no rate and refuses
-(`CSHARP_GAMEPLAY_TIME_MODE`). The product's own rules decide what costs time
+The product's own rules decide what costs time
 (movement, an attack's duration, a cooldown); the Engine does not classify
 input.
 
-Once a product makes any gameplay-time request, every realtime host
-observation delivers one `Update`. One that admits no step has
+Once a product makes any gameplay-time request, every host observation
+delivers one `Update`. One that admits no step has
 `AdmittedStepCount` zero and `SimulationStep` the next step to be admitted:
 read input, aim, present and choose there, and advance the world only per
 admitted step (`SimulationScheduler.Advance` already does). A product that

@@ -2,7 +2,7 @@ using Rusty.Engine;
 
 namespace CsharpCrossoverPerformance;
 
-/// <summary>Small demand-mode workload shared by the CoreCLR and NativeAOT crossover probes.</summary>
+/// <summary>Small one-step workload shared by the CoreCLR and NativeAOT crossover probes.</summary>
 public sealed class Product : IEngineProduct
 {
     private const uint RootNode = 0;

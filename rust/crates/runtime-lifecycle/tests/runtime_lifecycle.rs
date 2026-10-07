@@ -1,10 +1,9 @@
 use std::num::NonZeroU32;
 
 use runtime_lifecycle::{
-    validate_runtime_identity, ExternalStep, GameplayRate, HostMonotonicTime,
-    RealtimeLifecycleConfig, RuntimeFault, RuntimeInstanceId, RuntimeLifecycle,
-    RuntimeLifecycleConfig, RuntimeLifecycleConfigError, RuntimeMode, RuntimePhase, RuntimeState,
-    MAX_RUNTIME_IDENTITY_BYTES,
+    validate_runtime_identity, GameplayRate, HostMonotonicTime, RuntimeFault, RuntimeInstanceId,
+    RuntimeLifecycle, RuntimeLifecycleConfig, RuntimeLifecycleConfigError, RuntimePhase,
+    RuntimeState, MAX_RUNTIME_IDENTITY_BYTES,
 };
 
 #[test]
@@ -30,16 +29,12 @@ fn neutral_runtime_identity_preserves_the_retained_boundary_grammar() {
 fn realtime(hz: u32, catch_up: u32) -> RuntimeLifecycle {
     RuntimeLifecycle::new(
         RuntimeInstanceId::new(1),
-        RuntimeLifecycleConfig::Realtime(RealtimeLifecycleConfig::new(hz, catch_up).unwrap()),
+        RuntimeLifecycleConfig::new(hz, catch_up).unwrap(),
     )
 }
 
-fn demand() -> RuntimeLifecycle {
-    RuntimeLifecycle::new(RuntimeInstanceId::new(1), RuntimeLifecycleConfig::Demand)
-}
-
-fn external() -> RuntimeLifecycle {
-    RuntimeLifecycle::new(RuntimeInstanceId::new(1), RuntimeLifecycleConfig::External)
+fn stepped() -> RuntimeLifecycle {
+    realtime(60, 4)
 }
 
 #[test]
@@ -169,7 +164,7 @@ fn pause_resume_resets_baseline_and_keeps_presentation_available() {
     lifecycle
         .validate_presentation_token(paused_presentation)
         .unwrap();
-    assert!(lifecycle.admit_demand_step().is_err());
+    assert!(lifecycle.admit_manual_step().is_err());
 
     let resumed = lifecycle.resume().unwrap();
     assert_eq!(resumed.generation(), generation);
@@ -187,50 +182,12 @@ fn pause_resume_resets_baseline_and_keeps_presentation_available() {
 }
 
 #[test]
-fn demand_mode_has_no_clock_and_rejects_other_mode_admissions() {
-    let mut lifecycle = demand();
-    lifecycle.start().unwrap();
-    let first = lifecycle.admit_demand_step().unwrap();
-    assert_eq!(first.first_step().value(), 0);
-    assert_eq!(first.step_count(), 1);
-    assert_eq!(lifecycle.readout().mode(), RuntimeMode::Demand);
-    assert!(lifecycle
-        .advance_realtime(HostMonotonicTime::from_nanoseconds(1))
-        .is_err());
-    assert!(lifecycle.admit_external_step(ExternalStep::new(0)).is_err());
-}
-
-#[test]
-fn external_mode_requires_exact_caller_step_numbers() {
-    let mut lifecycle = external();
-    lifecycle.start().unwrap();
-    let first = lifecycle.admit_external_step(ExternalStep::new(0)).unwrap();
-    assert_eq!(first.first_step().value(), 0);
-    assert!(matches!(
-        lifecycle.admit_external_step(ExternalStep::new(0)),
-        Err(runtime_lifecycle::RuntimeLifecycleError::ExternalStepOutOfOrder { .. })
-    ));
-    assert!(matches!(
-        lifecycle.admit_external_step(ExternalStep::new(2)),
-        Err(runtime_lifecycle::RuntimeLifecycleError::ExternalStepOutOfOrder { .. })
-    ));
-    assert_eq!(
-        lifecycle
-            .admit_external_step(ExternalStep::new(1))
-            .unwrap()
-            .first_step()
-            .value(),
-        1
-    );
-}
-
-#[test]
 fn start_restart_and_control_revisions_make_old_tokens_stale() {
-    let mut lifecycle = demand();
+    let mut lifecycle = stepped();
     let start = lifecycle.start().unwrap();
     assert_eq!(start.generation().value(), 1);
     let token = lifecycle
-        .admit_demand_step()
+        .admit_manual_step()
         .unwrap()
         .step_at(0)
         .unwrap()
@@ -254,10 +211,10 @@ fn start_restart_and_control_revisions_make_old_tokens_stale() {
 
 #[test]
 fn fault_stops_simulation_until_a_new_generation_restarts() {
-    let mut lifecycle = demand();
+    let mut lifecycle = stepped();
     lifecycle.start().unwrap();
     let before_fault = lifecycle
-        .admit_demand_step()
+        .admit_manual_step()
         .unwrap()
         .step_at(0)
         .unwrap()
@@ -268,7 +225,7 @@ fn fault_stops_simulation_until_a_new_generation_restarts() {
         lifecycle.readout().fault(),
         Some(RuntimeFault::OwnerReported)
     );
-    assert!(lifecycle.admit_demand_step().is_err());
+    assert!(lifecycle.admit_manual_step().is_err());
     assert!(lifecycle.validate_simulation_token(before_fault).is_err());
 
     lifecycle.restart().unwrap();
@@ -278,14 +235,14 @@ fn fault_stops_simulation_until_a_new_generation_restarts() {
 
 #[test]
 fn shutdown_is_terminal_and_invalidates_every_admission_path() {
-    let mut lifecycle = demand();
+    let mut lifecycle = stepped();
     lifecycle.start().unwrap();
     let token = lifecycle.admit_presentation().unwrap().token();
     lifecycle.shutdown().unwrap();
     assert_eq!(lifecycle.state(), RuntimeState::Shutdown);
     assert!(lifecycle.start().is_err());
     assert!(lifecycle.restart().is_err());
-    assert!(lifecycle.admit_demand_step().is_err());
+    assert!(lifecycle.admit_manual_step().is_err());
     assert!(lifecycle.admit_presentation().is_err());
     assert!(lifecycle.validate_presentation_token(token).is_err());
 }
@@ -314,23 +271,23 @@ fn presentation_is_never_implicitly_admitted_by_realtime_advance() {
 #[test]
 fn realtime_configuration_enforces_runtime_bounds() {
     assert_eq!(
-        RealtimeLifecycleConfig::new(0, 1),
+        RuntimeLifecycleConfig::new(0, 1),
         Err(RuntimeLifecycleConfigError::ZeroFixedStepHz)
     );
     assert_eq!(
-        RealtimeLifecycleConfig::new(241, 1),
+        RuntimeLifecycleConfig::new(241, 1),
         Err(RuntimeLifecycleConfigError::FixedStepHzExceedsMaximum)
     );
     assert_eq!(
-        RealtimeLifecycleConfig::new(1, 0),
+        RuntimeLifecycleConfig::new(1, 0),
         Err(RuntimeLifecycleConfigError::ZeroCatchUpSteps)
     );
     assert_eq!(
-        RealtimeLifecycleConfig::new(1, 17),
+        RuntimeLifecycleConfig::new(1, 17),
         Err(RuntimeLifecycleConfigError::CatchUpStepsExceedMaximum)
     );
     assert_eq!(
-        RealtimeLifecycleConfig::new(240, 16)
+        RuntimeLifecycleConfig::new(240, 16)
             .unwrap()
             .fixed_step_hz(),
         240
@@ -338,31 +295,19 @@ fn realtime_configuration_enforces_runtime_bounds() {
 }
 
 #[test]
-fn explicit_runtime_configuration_selects_each_lifecycle_mode() {
-    for (config, expected_mode) in [
-        (
-            RuntimeLifecycleConfig::Realtime(RealtimeLifecycleConfig::new(60, 4).unwrap()),
-            RuntimeMode::Realtime,
-        ),
-        (RuntimeLifecycleConfig::Demand, RuntimeMode::Demand),
-        (RuntimeLifecycleConfig::External, RuntimeMode::External),
-    ] {
-        let lifecycle = RuntimeLifecycle::new(RuntimeInstanceId::new(9), config);
-        assert_eq!(lifecycle.mode(), expected_mode);
-        assert_eq!(lifecycle.readout().instance_id(), RuntimeInstanceId::new(9));
-    }
-}
-
-#[test]
 fn tokens_reject_another_explicit_lifecycle_instance() {
-    let mut first =
-        RuntimeLifecycle::new(RuntimeInstanceId::new(1), RuntimeLifecycleConfig::Demand);
-    let mut second =
-        RuntimeLifecycle::new(RuntimeInstanceId::new(2), RuntimeLifecycleConfig::Demand);
+    let mut first = RuntimeLifecycle::new(
+        RuntimeInstanceId::new(1),
+        RuntimeLifecycleConfig::new(60, 4).unwrap(),
+    );
+    let mut second = RuntimeLifecycle::new(
+        RuntimeInstanceId::new(2),
+        RuntimeLifecycleConfig::new(60, 4).unwrap(),
+    );
     first.start().unwrap();
     second.start().unwrap();
     let token = first
-        .admit_demand_step()
+        .admit_manual_step()
         .unwrap()
         .step_at(0)
         .unwrap()
@@ -376,9 +321,9 @@ fn tokens_reject_another_explicit_lifecycle_instance() {
 
 #[test]
 fn phase_validation_rejects_a_token_for_the_wrong_named_handoff() {
-    let mut lifecycle = demand();
+    let mut lifecycle = stepped();
     lifecycle.start().unwrap();
-    let step = lifecycle.admit_demand_step().unwrap().step_at(0).unwrap();
+    let step = lifecycle.admit_manual_step().unwrap().step_at(0).unwrap();
     assert!(matches!(
         lifecycle.validate_phase_token(step.phases().schedule(), RuntimePhase::Timeline),
         Err(runtime_lifecycle::RuntimeLifecycleError::WrongPhaseToken { .. })
@@ -398,11 +343,11 @@ fn pause_resume_retains_fractional_realtime_debt_but_requires_a_new_baseline() {
     lifecycle
         .advance_realtime(HostMonotonicTime::from_nanoseconds(6_944_444))
         .unwrap();
-    assert_eq!(lifecycle.readout().scaled_remainder(), Some(999_999_936));
+    assert_eq!(lifecycle.readout().scaled_remainder(), 999_999_936);
 
     lifecycle.pause().unwrap();
     lifecycle.resume().unwrap();
-    assert_eq!(lifecycle.readout().scaled_remainder(), Some(999_999_936));
+    assert_eq!(lifecycle.readout().scaled_remainder(), 999_999_936);
     assert_eq!(lifecycle.readout().last_observed_time(), None);
     assert_eq!(
         lifecycle
@@ -424,10 +369,10 @@ fn pause_resume_retains_fractional_realtime_debt_but_requires_a_new_baseline() {
 
 #[test]
 fn repeated_token_validation_is_idempotent_correlation_evidence() {
-    let mut lifecycle = demand();
+    let mut lifecycle = stepped();
     lifecycle.start().unwrap();
     let token = lifecycle
-        .admit_demand_step()
+        .admit_manual_step()
         .unwrap()
         .step_at(0)
         .unwrap()
@@ -440,7 +385,7 @@ fn repeated_token_validation_is_idempotent_correlation_evidence() {
 fn explicit_forward_steps_keep_realtime_cadence_and_discard_pause_wall_time() {
     let mut runtime = RuntimeLifecycle::new(
         RuntimeInstanceId::new(71),
-        RuntimeLifecycleConfig::Realtime(RealtimeLifecycleConfig::new(60, 4).unwrap()),
+        RuntimeLifecycleConfig::new(60, 4).unwrap(),
     );
     runtime.start().unwrap();
     runtime
@@ -484,7 +429,7 @@ fn gameplay_rate_scales_host_time_from_hold_through_realtime() {
         assert_eq!(steps_at(&mut lifecycle, second * SECOND_NS), 0);
     }
     assert_eq!(lifecycle.readout().admitted_simulation_steps(), 0);
-    assert_eq!(lifecycle.readout().scaled_remainder(), Some(0));
+    assert_eq!(lifecycle.readout().scaled_remainder(), 0);
 
     // A tenth of realtime: one second of host time is six 60 Hz steps.
     lifecycle.select_gameplay_rate(rate(100_000)).unwrap();
@@ -512,15 +457,15 @@ fn rate_changes_keep_the_owed_fraction_without_loss_or_burst() {
     steps_at(&mut lifecycle, 0);
     // Half a step owed at realtime...
     assert_eq!(steps_at(&mut lifecycle, SECOND_NS / 100), 0);
-    assert_eq!(lifecycle.readout().scaled_remainder(), Some(500_000_000));
+    assert_eq!(lifecycle.readout().scaled_remainder(), 500_000_000);
     // ...is still owed through a hold of any length...
     lifecycle.select_gameplay_rate(GameplayRate::HOLD).unwrap();
     assert_eq!(steps_at(&mut lifecycle, 10 * SECOND_NS), 0);
-    assert_eq!(lifecycle.readout().scaled_remainder(), Some(500_000_000));
+    assert_eq!(lifecycle.readout().scaled_remainder(), 500_000_000);
     // ...and a half-rate half step completes it.
     lifecycle.select_gameplay_rate(rate(500_000)).unwrap();
     assert_eq!(steps_at(&mut lifecycle, 10 * SECOND_NS + SECOND_NS / 50), 1);
-    assert_eq!(lifecycle.readout().scaled_remainder(), Some(0));
+    assert_eq!(lifecycle.readout().scaled_remainder(), 0);
 }
 
 #[test]
@@ -546,7 +491,7 @@ fn a_bounded_advance_admits_exactly_its_steps_then_holds() {
     assert_eq!(admitted.iter().sum::<u32>(), 10);
     assert_eq!(admitted, [1, 2, 1, 2, 1, 2, 1]);
     assert!(lifecycle.gameplay_time().held());
-    assert_eq!(lifecycle.readout().scaled_remainder(), Some(0));
+    assert_eq!(lifecycle.readout().scaled_remainder(), 0);
     assert_eq!(steps_at(&mut lifecycle, now + SECOND_NS), 0);
     assert_eq!(lifecycle.readout().admitted_simulation_steps(), 10);
 
@@ -624,16 +569,4 @@ fn manual_inspection_steps_ignore_and_keep_the_gameplay_rate() {
     assert!(lifecycle.gameplay_time().held());
     steps_at(&mut lifecycle, 0);
     assert_eq!(steps_at(&mut lifecycle, SECOND_NS), 0);
-}
-
-#[test]
-fn only_realtime_lifecycles_have_a_gameplay_rate() {
-    for mut lifecycle in [demand(), external()] {
-        lifecycle.start().unwrap();
-        assert!(matches!(
-            lifecycle.select_gameplay_rate(GameplayRate::HOLD),
-            Err(runtime_lifecycle::RuntimeLifecycleError::WrongMode { .. })
-        ));
-    }
-    assert_eq!(GameplayRate::from_parts_per_million(1_000_001), None);
 }

@@ -172,7 +172,7 @@ unsafe fn create(
     // Gameplay time answers as in the standard realtime runtime; a request
     // stages and reads back within its call, with no lifecycle to settle it.
     services.set_gameplay_time(
-        Some(STANDARD_REALTIME_HZ),
+        STANDARD_REALTIME_HZ,
         runtime_lifecycle::GameplayTime::default(),
     );
     let engine = services.api();

@@ -2,8 +2,8 @@
 
 The runtime owns simulation steps. Inspection time modes gate its realtime
 scheduler; a manual advance keeps the product's fixed-step cadence and uses the
-ordinary C# update/input path. Admitted updates keep `Realtime` mode and the
-configured fixed delta. Switching back to realtime clears the wall-time
+ordinary C# update/input path. Admitted updates keep the configured fixed
+delta. Switching back to realtime clears the wall-time
 baseline. Inspection overrides a product's
 [gameplay time](csharp-lifecycle.md#gameplay-time): a held mode stops it, a
 manual advance ignores its rate, and switching back continues it. Holding does not stop input admission or renderer inspection.

@@ -448,8 +448,6 @@ enum DiagnosticsOperationWire {
     ReleaseControl,
     Input,
     AdvanceRealtime,
-    AdmitDemandStep,
-    AdmitExternalStep,
     CompleteTimeline,
     ExecuteDebug,
 }

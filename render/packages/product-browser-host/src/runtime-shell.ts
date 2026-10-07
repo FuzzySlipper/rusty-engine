@@ -29,7 +29,6 @@ export async function startProductBrowserShell(root: HTMLElement): Promise<void>
   await mountProductBrowserHost({
     root,
     transport: createProductBrowserLocalHttpAdapter(),
-    lifecycleMode: bootstrap.lifecycle.mode,
     realtimeAdvanceOwner: 'rust-host',
     initialInteractionMode: 'gameplay',
     gameplayCursorMode: bootstrap.input.cursorMode,

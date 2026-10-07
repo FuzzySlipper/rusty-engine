@@ -16,7 +16,6 @@ test('realtime owner controls advancement without dropping typed cadence input',
     const observedTimes: string[] = [];
     const failures: unknown[] = [];
     const cadence = createProductBrowserCadence({
-      lifecycleMode: 'realtime',
       realtimeAdvanceOwner,
       isReady: () => true,
       enqueueOperation: (operation) => operation(),
@@ -27,8 +26,7 @@ test('realtime owner controls advancement without dropping typed cadence input',
       advanceRealtime: async (observedTimeNs) => {
         observedTimes.push(observedTimeNs);
       },
-      admitDemandStep: async () => undefined,
-      onFailure: (cause) => {
+        onFailure: (cause) => {
         failures.push(cause);
       },
     });
@@ -49,7 +47,7 @@ test('realtime owner controls advancement without dropping typed cadence input',
   assert.deepEqual(rustHost.failures, []);
 });
 
-test('input availability wakes static realtime and demand admission without a second loop', async () => {
+test('input availability wakes browser-owned realtime admission without a second loop', async () => {
   const input: RuntimeInputWireEvent = {
     runtime: { instanceId: '1', generation: '1', controlRevision: '1' },
     sequence: '1',
@@ -61,34 +59,26 @@ test('input availability wakes static realtime and demand admission without a se
       data: { seed: 7, preset: 'spread' },
     },
   };
-  const run = async (
-    lifecycleMode: 'realtime' | 'demand' | 'external',
-    realtimeAdvanceOwner: 'browser' | 'rust-host' = 'browser',
-  ) => {
+  const run = async (realtimeAdvanceOwner: 'browser' | 'rust-host') => {
     const batches: Array<readonly RuntimeInputWireEvent[]> = [];
     const advances: string[] = [];
-    let demandSteps = 0;
     const cadence = createProductBrowserCadence({
-      lifecycleMode,
       realtimeAdvanceOwner,
       isReady: () => true,
       enqueueOperation: (operation) => operation(),
       sampleInput: () => [input],
       sendInput: async (batch) => { batches.push(batch); },
       advanceRealtime: async (time) => { advances.push(time); },
-      admitDemandStep: async () => { demandSteps += 1; },
       onFailure: (cause) => { assert.fail(String(cause)); },
     });
     cadence.pulseInput(25);
     await cadence.settle();
     cadence.dispose();
-    return { batches, advances, demandSteps };
+    return { batches, advances };
   };
 
-  assert.deepEqual(await run('realtime'), { batches: [[input]], advances: ['25000000'], demandSteps: 0 });
-  assert.deepEqual(await run('realtime', 'rust-host'), { batches: [[input]], advances: [], demandSteps: 0 });
-  assert.deepEqual(await run('demand'), { batches: [[input]], advances: [], demandSteps: 1 });
-  assert.deepEqual(await run('external'), { batches: [[input]], advances: [], demandSteps: 0 });
+  assert.deepEqual(await run('browser'), { batches: [[input]], advances: ['25000000'] });
+  assert.deepEqual(await run('rust-host'), { batches: [[input]], advances: [] });
 });
 
 test('slow cadence coalesces an input wake while ingress preserves ordered edges', async () => {
@@ -109,7 +99,6 @@ test('slow cadence coalesces an input wake while ingress preserves ordered edges
   let releaseFirstAdvance: () => void = () => undefined;
   const firstAdvance = new Promise<void>((resolve) => { releaseFirstAdvance = resolve; });
   const cadence = createProductBrowserCadence({
-    lifecycleMode: 'realtime',
     realtimeAdvanceOwner: 'browser',
     isReady: () => true,
     enqueueOperation: (operation) => operation(),
@@ -119,7 +108,6 @@ test('slow cadence coalesces an input wake while ingress preserves ordered edges
       advances.push(time);
       if (advances.length === 1) await firstAdvance;
     },
-    admitDemandStep: async () => undefined,
     onFailure: (cause) => { assert.fail(String(cause)); },
   });
 
@@ -151,7 +139,6 @@ test('a page cadence before a pending input wake does not drain later input earl
   let releaseFirstAdvance: () => void = () => undefined;
   const firstAdvance = new Promise<void>((resolve) => { releaseFirstAdvance = resolve; });
   const cadence = createProductBrowserCadence({
-    lifecycleMode: 'realtime',
     realtimeAdvanceOwner: 'browser',
     isReady: () => true,
     enqueueOperation: (operation) => operation(),
@@ -164,7 +151,6 @@ test('a page cadence before a pending input wake does not drain later input earl
       advances.push(time);
       if (advances.length === 1) await firstAdvance;
     },
-    admitDemandStep: async () => undefined,
     onFailure: (cause) => { assert.fail(String(cause)); },
   });
 
@@ -196,7 +182,6 @@ test('a cadence deferred by the serialized lane does not drain a later input wak
   const priorOperation = new Promise<void>((resolve) => { releasePriorOperation = resolve; });
   let operationTail: Promise<void> = priorOperation;
   const cadence = createProductBrowserCadence({
-    lifecycleMode: 'realtime',
     realtimeAdvanceOwner: 'browser',
     isReady: () => true,
     enqueueOperation: async <T>(operation: () => Promise<T>): Promise<T> => {
@@ -213,7 +198,6 @@ test('a cadence deferred by the serialized lane does not drain a later input wak
     },
     sendInput: async (batch) => { batches.push(batch); },
     advanceRealtime: async (time) => { advances.push(time); },
-    admitDemandStep: async () => undefined,
     onFailure: (cause) => { assert.fail(String(cause)); },
   });
 
@@ -249,7 +233,6 @@ test('slow admission keeps ingress overflow recovery bounded after more than 102
   let releaseFirstAdvance: () => void = () => undefined;
   const firstAdvance = new Promise<void>((resolve) => { releaseFirstAdvance = resolve; });
   const cadence = createProductBrowserCadence({
-    lifecycleMode: 'realtime',
     realtimeAdvanceOwner: 'browser',
     isReady: () => true,
     enqueueOperation: (operation) => operation(),
@@ -262,7 +245,6 @@ test('slow admission keeps ingress overflow recovery bounded after more than 102
       advances.push(time);
       if (advances.length === 1) await firstAdvance;
     },
-    admitDemandStep: async () => undefined,
     onFailure: (cause) => { failures.push(cause); },
   });
 
@@ -295,7 +277,6 @@ test('cadence keeps an older same-frame RAF timestamp monotonic after an input w
   let releaseFirstAdvance: () => void = () => undefined;
   const firstAdvance = new Promise<void>((resolve) => { releaseFirstAdvance = resolve; });
   const cadence = createProductBrowserCadence({
-    lifecycleMode: 'realtime',
     realtimeAdvanceOwner: 'browser',
     isReady: () => true,
     enqueueOperation: (operation) => operation(),
@@ -305,7 +286,6 @@ test('cadence keeps an older same-frame RAF timestamp monotonic after an input w
       advances.push(time);
       if (advances.length === 1) await firstAdvance;
     },
-    admitDemandStep: async () => undefined,
     onFailure: (cause) => { assert.fail(String(cause)); },
   });
 

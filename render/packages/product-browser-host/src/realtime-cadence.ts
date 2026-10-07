@@ -1,4 +1,4 @@
-import type { ProductHostRuntimeMode, RuntimeInputWireEvent } from './generated/contracts.js';
+import type { RuntimeInputWireEvent } from './generated/contracts.js';
 import type { ProductBrowserRealtimeAdvanceOwner } from './product-browser-host.js';
 
 /**
@@ -8,7 +8,6 @@ import type { ProductBrowserRealtimeAdvanceOwner } from './product-browser-host.
  * without manufacturing a second DOM host.
  */
 export interface ProductBrowserCadenceDependencies {
-  readonly lifecycleMode: ProductHostRuntimeMode;
   readonly realtimeAdvanceOwner: ProductBrowserRealtimeAdvanceOwner;
   readonly isReady: () => boolean;
   readonly enqueueOperation: <T>(operation: () => Promise<T>) => Promise<T>;
@@ -17,7 +16,6 @@ export interface ProductBrowserCadenceDependencies {
     batch: readonly RuntimeInputWireEvent[],
   ) => Promise<void>;
   readonly advanceRealtime: (observedTimeNs: string) => Promise<void>;
-  readonly admitDemandStep: () => Promise<void>;
   readonly onFailure: (cause: unknown) => void;
 }
 
@@ -25,8 +23,8 @@ export interface ProductBrowserCadence {
   readonly enqueue: (timeMs: number) => void;
   /**
    * Wakes the same serialized admission lane when input arrives between page frames.
-   * Browser-owned realtime advances once, demand admits one step, and externally owned
-   * modes only deliver the input because their scheduling authority remains external.
+   * Browser-owned realtime advances once; under the `rust-host` owner the wake only
+   * delivers the input, because that scheduler admits the steps.
    */
   readonly pulseInput: (timeMs: number) => void;
   /** Waits for the current cadence operation and any coalesced follow-up. */
@@ -45,7 +43,6 @@ export function createProductBrowserCadence(
 ): ProductBrowserCadence {
   let cadenceInFlight = false;
   let pendingCadenceTimeMs: number | null = null;
-  let pendingDemandAdmission = false;
   // Input ingress is the sole envelope queue. While an operation owns the
   // serialized lane, retain only the first wake timestamp: it gets the next
   // admission opportunity without retaining, copying, or reordering input
@@ -57,7 +54,6 @@ export function createProductBrowserCadence(
 
   const startOperation = (
     timeMs: number,
-    demandAdmission = false,
     inputWake = false,
     sampleInput = true,
   ): void => {
@@ -74,14 +70,10 @@ export function createProductBrowserCadence(
         : [];
       if (batch.length > 0) await dependencies.sendInput(batch);
       // A wake can become redundant when an earlier page cadence drains
-      // ingress. Do not advance or admit demand work solely for that empty
-      // wake.
+      // ingress. Do not advance solely for that empty wake.
       if (inputWake && batch.length === 0) return;
-      if (dependencies.lifecycleMode === 'realtime'
-        && dependencies.realtimeAdvanceOwner === 'browser') {
+      if (dependencies.realtimeAdvanceOwner === 'browser') {
         await dependencies.advanceRealtime(toNanoseconds(timeMs));
-      } else if (dependencies.lifecycleMode === 'demand' && demandAdmission) {
-        await dependencies.admitDemandStep();
       }
     });
     lastOperation = operation.then(
@@ -93,7 +85,7 @@ export function createProductBrowserCadence(
     );
   };
 
-  const enqueue = (timeMs: number, demandAdmission = false): void => {
+  const enqueue = (timeMs: number): void => {
     if (disposed || !dependencies.isReady()) return;
     // requestAnimationFrame timestamps describe the start of the frame, while
     // input wakeups sample performance.now() when the event is handled. A RAF
@@ -107,10 +99,9 @@ export function createProductBrowserCadence(
       // outstanding. This is intentionally separate from the input wake,
       // whose earlier timestamp determines when ingress next gets sampled.
       pendingCadenceTimeMs = monotonicTimeMs;
-      pendingDemandAdmission ||= demandAdmission;
       return;
     }
-    startOperation(monotonicTimeMs, demandAdmission);
+    startOperation(monotonicTimeMs);
   };
 
   const pulseInput = (timeMs: number): void => {
@@ -123,7 +114,7 @@ export function createProductBrowserCadence(
       if (pendingInputWakeTimeMs === null) pendingInputWakeTimeMs = monotonicTimeMs;
       return;
     }
-    startOperation(monotonicTimeMs, dependencies.lifecycleMode === 'demand', true);
+    startOperation(monotonicTimeMs, true);
   };
 
   const finish = (): void => {
@@ -133,26 +124,24 @@ export function createProductBrowserCadence(
       || orderingTime(inputWakeTimeMs) <= orderingTime(pendingCadenceTimeMs))) {
       pendingInputWakeTimeMs = null;
       if (!disposed && dependencies.isReady()) {
-        startOperation(inputWakeTimeMs, dependencies.lifecycleMode === 'demand', true);
+        startOperation(inputWakeTimeMs, true);
       }
       return;
     }
     const nextTimeMs = pendingCadenceTimeMs;
-    const demandAdmission = pendingDemandAdmission;
     pendingCadenceTimeMs = null;
-    pendingDemandAdmission = false;
     if (nextTimeMs !== null && !disposed && dependencies.isReady()) {
       // A page cadence that predates a queued input wake may still advance
       // its clock, but it must not drain input that became available later.
       // The following wake samples the one ingress queue at its own time.
       const cadencePrecedesInputWake = pendingInputWakeTimeMs !== null
         && orderingTime(nextTimeMs) < orderingTime(pendingInputWakeTimeMs);
-      startOperation(nextTimeMs, demandAdmission, false, !cadencePrecedesInputWake);
+      startOperation(nextTimeMs, false, !cadencePrecedesInputWake);
     }
   };
 
   return Object.freeze({
-    enqueue: (timeMs: number): void => enqueue(timeMs),
+    enqueue,
     pulseInput,
     settle: async (): Promise<void> => {
       while (cadenceInFlight || pendingCadenceTimeMs !== null || pendingInputWakeTimeMs !== null) {
@@ -162,7 +151,6 @@ export function createProductBrowserCadence(
     dispose: (): void => {
       disposed = true;
       pendingCadenceTimeMs = null;
-      pendingDemandAdmission = false;
       pendingInputWakeTimeMs = null;
     },
   });

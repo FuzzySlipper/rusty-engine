@@ -47,9 +47,8 @@ use runtime_input::{
     RuntimeIntentEnvelope, RuntimeIntentValue,
 };
 use runtime_lifecycle::{
-    ExternalStep, HostMonotonicTime, RealtimeLifecycleConfig, RuntimeControlOperation,
-    RuntimeInstanceId, RuntimeLifecycle, RuntimeLifecycleConfig, RuntimeLifecycleReadout,
-    RuntimeMode, RuntimeState,
+    HostMonotonicTime, RuntimeControlOperation, RuntimeInstanceId, RuntimeLifecycle,
+    RuntimeLifecycleConfig, RuntimeLifecycleReadout, RuntimeState,
 };
 use runtime_ui::RuntimeUiRuntimeBinding;
 
@@ -72,9 +71,6 @@ enum PendingInputAdmission {
 // standard native runtime on that typed host default lets generated physical
 // input reach RuntimeInputLane without product-local bundle edits.
 const STANDARD_INPUT_CONTEXT: &str = "gameplay.default";
-const REALTIME_UPDATE_MODE: NativeProductUpdateMode = NativeProductUpdateMode::Realtime;
-const DEMAND_UPDATE_MODE: NativeProductUpdateMode = NativeProductUpdateMode::Demand;
-const EXTERNAL_UPDATE_MODE: NativeProductUpdateMode = NativeProductUpdateMode::External;
 // These are host admission bounds, before the immutable Content service owns
 // references. The per-file limit matches the Engine renderer resource limit;
 // the aggregate limit matches the existing product persistence payload limit.
@@ -679,14 +675,6 @@ struct FinishedProductCall {
     failure: Option<CsharpProductRuntimeError>,
 }
 
-/// The fixed-step rate of a runtime that has a gameplay rate.
-fn gameplay_cadence(lifecycle: &RuntimeLifecycle) -> Option<u32> {
-    match lifecycle.configuration() {
-        RuntimeLifecycleConfig::Realtime(config) => Some(config.fixed_step_hz()),
-        RuntimeLifecycleConfig::Demand | RuntimeLifecycleConfig::External => None,
-    }
-}
-
 fn apply_gameplay_time(
     lifecycle: &mut RuntimeLifecycle,
     request: csharp_engine_services::GameplayTimeRequest,
@@ -939,7 +927,10 @@ impl CsharpProductRuntime {
             engine: services.api(),
         };
         let mut handle = ptr::null_mut();
-        services.set_gameplay_time(gameplay_cadence(&lifecycle), lifecycle.gameplay_time());
+        services.set_gameplay_time(
+            lifecycle.configuration().fixed_step_hz(),
+            lifecycle.gameplay_time(),
+        );
         services.begin_create_call(ui_binding(&lifecycle));
         let created = call_create(&api, &args, &mut handle).and_then(|()| {
             if handle.is_null() {
@@ -1024,13 +1015,10 @@ impl CsharpProductRuntime {
         })
     }
 
-    /// The one standard realtime host configuration. Demand and external modes
-    /// have no Engine timing policy and use their respective lifecycle variants.
+    /// The one standard realtime host configuration.
     pub fn standard_realtime_config() -> RuntimeLifecycleConfig {
-        RuntimeLifecycleConfig::Realtime(
-            RealtimeLifecycleConfig::new(STANDARD_REALTIME_HZ, STANDARD_MAX_CATCH_UP_STEPS)
-                .expect("fixed standard realtime configuration"),
-        )
+        RuntimeLifecycleConfig::new(STANDARD_REALTIME_HZ, STANDARD_MAX_CATCH_UP_STEPS)
+            .expect("fixed standard realtime configuration")
     }
 
     /// Runs provider-fixture assertions, not a general product health check.
@@ -1129,16 +1117,17 @@ impl CsharpProductRuntime {
         .map_err(exercise_runtime_error)?;
         self.exercise_physical_mapping(released_binding)?;
         self.exercise_direct_intent(released_binding)?;
-        self.exercise_selected_mode()?;
+        self.exercise_realtime_admission()?;
         self.exercise_timeline_completion()?;
         self.exercise_pause_resume()?;
         Ok(())
     }
 
-    /// Measures the ordinary demand-update path through lifecycle admission,
+    /// Measures the ordinary one-step update path through lifecycle admission,
     /// the generated C# callback, Engine service staging/commit, and output
-    /// conversion. This is an explicit diagnostic probe, never runtime policy.
-    pub fn performance_probe_demand(
+    /// conversion. Steps are admitted manually, so no host clock enters the
+    /// measurement. This is an explicit diagnostic probe, never runtime policy.
+    pub fn performance_probe(
         &mut self,
         iterations: u32,
     ) -> Result<Vec<u128>, CsharpProductRuntimeError> {
@@ -1146,12 +1135,6 @@ impl CsharpProductRuntime {
             return Err(CsharpProductRuntimeError::new(
                 "CSHARP_PERFORMANCE_ITERATIONS",
                 "performance probe iterations must be in 1..=256",
-            ));
-        }
-        if self.lifecycle.mode() != RuntimeMode::Demand {
-            return Err(CsharpProductRuntimeError::new(
-                "CSHARP_PERFORMANCE_MODE",
-                "performance probe requires demand lifecycle mode",
             ));
         }
         if self.lifecycle.state() == RuntimeState::Created {
@@ -1165,7 +1148,7 @@ impl CsharpProductRuntime {
             )?;
         }
         for _ in 0..iterations.min(8) {
-            ProductHostRuntime::admit_demand_step(self).map_err(|error| {
+            self.admit_manual_step().map_err(|error| {
                 CsharpProductRuntimeError::new(
                     "CSHARP_PERFORMANCE_RUNTIME",
                     format!("{}: {}", error.code(), error.diagnostic()),
@@ -1175,7 +1158,7 @@ impl CsharpProductRuntime {
         let mut durations = Vec::with_capacity(iterations as usize);
         for _ in 0..iterations {
             let started = Instant::now();
-            ProductHostRuntime::admit_demand_step(self).map_err(|error| {
+            self.admit_manual_step().map_err(|error| {
                 CsharpProductRuntimeError::new(
                     "CSHARP_PERFORMANCE_RUNTIME",
                     format!("{}: {}", error.code(), error.diagnostic()),
@@ -1253,35 +1236,26 @@ impl CsharpProductRuntime {
         &mut self,
         expected: RuntimeInputBinding,
     ) -> Result<(), CsharpProductRuntimeError> {
-        let receipt = match self.lifecycle.mode() {
-            RuntimeMode::Realtime => {
-                let baseline = self
-                    .lifecycle
-                    .readout()
-                    .last_observed_time()
-                    .map(|value| value.nanoseconds())
-                    .unwrap_or(0);
-                self.advance_realtime(CanonicalU64::new(baseline))
-                    .map_err(exercise_runtime_error)?;
-                self.advance_realtime(CanonicalU64::new(
-                    baseline
-                        .checked_add(STANDARD_REALTIME_EXERCISE_ADMISSION_NS)
-                        .ok_or_else(|| {
-                            CsharpProductRuntimeError::new(
-                                "CSHARP_EXERCISE_UI_BINDING",
-                                "realtime UI projection observation overflowed",
-                            )
-                        })?,
-                ))
-                .map_err(exercise_runtime_error)?
-            }
-            RuntimeMode::Demand => self.admit_demand_step().map_err(exercise_runtime_error)?,
-            RuntimeMode::External => self
-                .admit_external_step(CanonicalU64::new(
-                    self.lifecycle.readout().admitted_simulation_steps(),
-                ))
-                .map_err(exercise_runtime_error)?,
-        };
+        let baseline = self
+            .lifecycle
+            .readout()
+            .last_observed_time()
+            .map(|value| value.nanoseconds())
+            .unwrap_or(0);
+        self.advance_realtime(CanonicalU64::new(baseline))
+            .map_err(exercise_runtime_error)?;
+        let receipt = self
+            .advance_realtime(CanonicalU64::new(
+                baseline
+                    .checked_add(STANDARD_REALTIME_EXERCISE_ADMISSION_NS)
+                    .ok_or_else(|| {
+                        CsharpProductRuntimeError::new(
+                            "CSHARP_EXERCISE_UI_BINDING",
+                            "realtime UI projection observation overflowed",
+                        )
+                    })?,
+            ))
+            .map_err(exercise_runtime_error)?;
         let (_, outputs) = receipt.into_parts();
         assert_ui_projection_binding(&outputs, expected).map(|_| ())
     }
@@ -1317,22 +1291,10 @@ impl CsharpProductRuntime {
                 "resume did not leave the Rust lifecycle running",
             ));
         }
-        match self.lifecycle.mode() {
-            RuntimeMode::Realtime => {
-                self.advance_realtime(CanonicalU64::new(0))
-                    .map_err(exercise_runtime_error)?;
-                self.advance_realtime(CanonicalU64::new(STANDARD_REALTIME_EXERCISE_ADMISSION_NS))
-                    .map_err(exercise_runtime_error)?;
-            }
-            RuntimeMode::Demand => {
-                self.admit_demand_step().map_err(exercise_runtime_error)?;
-            }
-            RuntimeMode::External => {
-                let step = self.lifecycle.readout().admitted_simulation_steps();
-                self.admit_external_step(CanonicalU64::new(step))
-                    .map_err(exercise_runtime_error)?;
-            }
-        }
+        self.advance_realtime(CanonicalU64::new(0))
+            .map_err(exercise_runtime_error)?;
+        self.advance_realtime(CanonicalU64::new(STANDARD_REALTIME_EXERCISE_ADMISSION_NS))
+            .map_err(exercise_runtime_error)?;
         self.exercise_fault_restart()?;
         Ok(())
     }
@@ -1355,35 +1317,23 @@ impl CsharpProductRuntime {
             fault_sequence,
         )]))
         .map_err(exercise_runtime_error)?;
-        match self.lifecycle.mode() {
-            RuntimeMode::Realtime => {
-                let baseline = self
-                    .lifecycle
-                    .readout()
-                    .last_observed_time()
-                    .map(|value| value.nanoseconds())
-                    .unwrap_or(0);
-                self.advance_realtime(CanonicalU64::new(
-                    baseline
-                        .checked_add(STANDARD_REALTIME_EXERCISE_ADMISSION_NS)
-                        .ok_or_else(|| {
-                            CsharpProductRuntimeError::new(
-                                "CSHARP_EXERCISE_FAULT",
-                                "fault exercise observation overflowed",
-                            )
-                        })?,
-                ))
-                .map_err(exercise_runtime_error)?;
-            }
-            RuntimeMode::Demand => {
-                self.admit_demand_step().map_err(exercise_runtime_error)?;
-            }
-            RuntimeMode::External => {
-                let step = self.lifecycle.readout().admitted_simulation_steps();
-                self.admit_external_step(CanonicalU64::new(step))
-                    .map_err(exercise_runtime_error)?;
-            }
-        }
+        let baseline = self
+            .lifecycle
+            .readout()
+            .last_observed_time()
+            .map(|value| value.nanoseconds())
+            .unwrap_or(0);
+        self.advance_realtime(CanonicalU64::new(
+            baseline
+                .checked_add(STANDARD_REALTIME_EXERCISE_ADMISSION_NS)
+                .ok_or_else(|| {
+                    CsharpProductRuntimeError::new(
+                        "CSHARP_EXERCISE_FAULT",
+                        "fault exercise observation overflowed",
+                    )
+                })?,
+        ))
+        .map_err(exercise_runtime_error)?;
         let faulted = self.lifecycle.readout();
         if faulted.state() != RuntimeState::Faulted
             || faulted.fault() != Some(runtime_lifecycle::RuntimeFault::OwnerReported)
@@ -1451,21 +1401,10 @@ impl CsharpProductRuntime {
                 "pre-restart input binding remained admitted after restart",
             ));
         }
-        match self.lifecycle.mode() {
-            RuntimeMode::Realtime => {
-                self.advance_realtime(CanonicalU64::new(0))
-                    .map_err(exercise_runtime_error)?;
-                self.advance_realtime(CanonicalU64::new(STANDARD_REALTIME_EXERCISE_ADMISSION_NS))
-                    .map_err(exercise_runtime_error)?;
-            }
-            RuntimeMode::Demand => {
-                self.admit_demand_step().map_err(exercise_runtime_error)?;
-            }
-            RuntimeMode::External => {
-                self.admit_external_step(CanonicalU64::new(0))
-                    .map_err(exercise_runtime_error)?;
-            }
-        }
+        self.advance_realtime(CanonicalU64::new(0))
+            .map_err(exercise_runtime_error)?;
+        self.advance_realtime(CanonicalU64::new(STANDARD_REALTIME_EXERCISE_ADMISSION_NS))
+            .map_err(exercise_runtime_error)?;
         if self.lifecycle.readout().admitted_simulation_steps() == 0 {
             return Err(CsharpProductRuntimeError::new(
                 "CSHARP_EXERCISE_RESTART",
@@ -1500,53 +1439,21 @@ impl CsharpProductRuntime {
                     )
                 })
         };
-        match self.lifecycle.mode() {
-            RuntimeMode::Realtime => {
-                self.advance_realtime(CanonicalU64::new(baseline))
-                    .map_err(exercise_runtime_error)?;
-                self.advance_realtime(CanonicalU64::new(realtime_observation(1)?))
-                    .map_err(exercise_runtime_error)?;
-                self.advance_realtime(CanonicalU64::new(realtime_observation(2)?))
-                    .map_err(exercise_runtime_error)?;
-            }
-            RuntimeMode::Demand => {
-                self.admit_demand_step().map_err(exercise_runtime_error)?;
-                self.admit_demand_step().map_err(exercise_runtime_error)?;
-            }
-            RuntimeMode::External => {
-                let first = self.lifecycle.readout().admitted_simulation_steps();
-                self.admit_external_step(CanonicalU64::new(first))
-                    .map_err(exercise_runtime_error)?;
-                let second = self.lifecycle.readout().admitted_simulation_steps();
-                self.admit_external_step(CanonicalU64::new(second))
-                    .map_err(exercise_runtime_error)?;
-            }
-        }
+        self.advance_realtime(CanonicalU64::new(baseline))
+            .map_err(exercise_runtime_error)?;
+        self.advance_realtime(CanonicalU64::new(realtime_observation(1)?))
+            .map_err(exercise_runtime_error)?;
+        self.advance_realtime(CanonicalU64::new(realtime_observation(2)?))
+            .map_err(exercise_runtime_error)?;
         self.input(ProductHostInputBatch::new(vec![key_release(
             current_binding,
             3,
         )]))
         .map_err(exercise_runtime_error)?;
-        match self.lifecycle.mode() {
-            RuntimeMode::Realtime => {
-                self.advance_realtime(CanonicalU64::new(realtime_observation(3)?))
-                    .map_err(exercise_runtime_error)?;
-                self.advance_realtime(CanonicalU64::new(realtime_observation(4)?))
-                    .map_err(exercise_runtime_error)?;
-            }
-            RuntimeMode::Demand => {
-                self.admit_demand_step().map_err(exercise_runtime_error)?;
-                self.admit_demand_step().map_err(exercise_runtime_error)?;
-            }
-            RuntimeMode::External => {
-                let first = self.lifecycle.readout().admitted_simulation_steps();
-                self.admit_external_step(CanonicalU64::new(first))
-                    .map_err(exercise_runtime_error)?;
-                let second = self.lifecycle.readout().admitted_simulation_steps();
-                self.admit_external_step(CanonicalU64::new(second))
-                    .map_err(exercise_runtime_error)?;
-            }
-        }
+        self.advance_realtime(CanonicalU64::new(realtime_observation(3)?))
+            .map_err(exercise_runtime_error)?;
+        self.advance_realtime(CanonicalU64::new(realtime_observation(4)?))
+            .map_err(exercise_runtime_error)?;
         Ok(())
     }
 
@@ -1664,97 +1571,36 @@ impl CsharpProductRuntime {
         Ok(())
     }
 
-    fn exercise_selected_mode(&mut self) -> Result<(), CsharpProductRuntimeError> {
-        let selected_mode = self.lifecycle.mode();
-        let readout_mode = self.readout().mode();
-        let expected_readout_mode = match selected_mode {
-            RuntimeMode::Realtime => product_host::ProductHostRuntimeMode::Realtime,
-            RuntimeMode::Demand => product_host::ProductHostRuntimeMode::Demand,
-            RuntimeMode::External => product_host::ProductHostRuntimeMode::External,
-        };
-        if readout_mode != expected_readout_mode {
-            return Err(CsharpProductRuntimeError::new(
-                "CSHARP_EXERCISE_MODE_READOUT",
-                "runtime readout did not report the selected lifecycle mode",
-            ));
-        }
+    fn exercise_realtime_admission(&mut self) -> Result<(), CsharpProductRuntimeError> {
         let admitted_before = self.lifecycle.readout().admitted_simulation_steps();
-        let pending_before = self.pending_inputs.len();
-        let rejected = match selected_mode {
-            RuntimeMode::Realtime => self.admit_demand_step().is_err(),
-            RuntimeMode::Demand => self.advance_realtime(CanonicalU64::new(0)).is_err(),
-            RuntimeMode::External => self.admit_demand_step().is_err(),
-        };
-        if !rejected
-            || self.lifecycle.readout().admitted_simulation_steps() != admitted_before
-            || self.pending_inputs.len() != pending_before
-        {
-            return Err(CsharpProductRuntimeError::new(
-                "CSHARP_EXERCISE_WRONG_MODE",
-                "wrong lifecycle mode reached Product.Game or changed lifecycle admission",
-            ));
-        }
-
-        let expected_admission_increment = 1;
-        match selected_mode {
-            RuntimeMode::Realtime => {
-                let baseline = self
-                    .lifecycle
-                    .readout()
-                    .last_observed_time()
-                    .map(|value| value.nanoseconds())
-                    .unwrap_or(0);
-                self.advance_realtime(CanonicalU64::new(baseline))
-                    .map_err(exercise_runtime_error)?;
-                let observation = CanonicalU64::new(
-                    baseline
-                        .checked_add(STANDARD_REALTIME_EXERCISE_ADMISSION_NS)
-                        .ok_or_else(|| {
-                            CsharpProductRuntimeError::new(
-                                "CSHARP_EXERCISE_REALTIME",
-                                "realtime exercise observation overflowed",
-                            )
-                        })?,
-                );
-                self.advance_realtime(observation)
-                    .map_err(exercise_runtime_error)?;
-            }
-            RuntimeMode::Demand => {
-                self.admit_demand_step().map_err(exercise_runtime_error)?;
-            }
-            RuntimeMode::External => {
-                let accepted_step = CanonicalU64::new(admitted_before);
-                self.admit_external_step(accepted_step)
-                    .map_err(exercise_runtime_error)?;
-                let admitted_after = self.lifecycle.readout().admitted_simulation_steps();
-                let pending_after = self.pending_inputs.len();
-                let skipped_step =
-                    CanonicalU64::new(admitted_after.checked_add(2).ok_or_else(|| {
-                        CsharpProductRuntimeError::new(
-                            "CSHARP_EXERCISE_EXTERNAL_STEP",
-                            "external exercise step identity overflowed",
-                        )
-                    })?);
-                if self.admit_external_step(accepted_step).is_ok()
-                    || self.admit_external_step(skipped_step).is_ok()
-                    || self.lifecycle.readout().admitted_simulation_steps() != admitted_after
-                    || self.pending_inputs.len() != pending_after
-                {
-                    return Err(CsharpProductRuntimeError::new(
-                        "CSHARP_EXERCISE_EXTERNAL_STEP",
-                        "duplicate or skipped external steps reached Product.Game or lifecycle admission",
-                    ));
-                }
-            }
-        };
+        let baseline = self
+            .lifecycle
+            .readout()
+            .last_observed_time()
+            .map(|value| value.nanoseconds())
+            .unwrap_or(0);
+        self.advance_realtime(CanonicalU64::new(baseline))
+            .map_err(exercise_runtime_error)?;
+        let observation = CanonicalU64::new(
+            baseline
+                .checked_add(STANDARD_REALTIME_EXERCISE_ADMISSION_NS)
+                .ok_or_else(|| {
+                    CsharpProductRuntimeError::new(
+                        "CSHARP_EXERCISE_REALTIME",
+                        "realtime exercise observation overflowed",
+                    )
+                })?,
+        );
+        self.advance_realtime(observation)
+            .map_err(exercise_runtime_error)?;
         if self.lifecycle.readout().admitted_simulation_steps()
             != admitted_before
-                .checked_add(expected_admission_increment)
+                .checked_add(1)
                 .expect("successful lifecycle admission cannot overflow")
         {
             return Err(CsharpProductRuntimeError::new(
                 "CSHARP_EXERCISE_ADMISSION",
-                "selected lifecycle mode did not admit exactly one product update",
+                "one realtime step did not admit exactly one product update",
             ));
         }
         Ok(())
@@ -1868,9 +1714,31 @@ impl CsharpProductRuntime {
         Ok(outputs)
     }
 
+    /// Admits one fixed step and its product update without a host clock
+    /// observation, for probes and tests that step deterministically.
+    fn admit_manual_step(
+        &mut self,
+    ) -> Result<ProductHostRuntimeReceipt<ProductHostOperationResult>, ProductHostRuntimeError>
+    {
+        let admission = self
+            .lifecycle
+            .admit_manual_step()
+            .map_err(|error| self.lifecycle_runtime_error(error))?;
+        let outputs = match self.update_admitted(None, admission, 0) {
+            Ok(outputs) => outputs,
+            Err(error) => {
+                return self.resync_operation(ProductHostOperationKind::AdvanceRealtime, error);
+            }
+        };
+        match self.receipt(ProductHostOperationKind::AdvanceRealtime, outputs) {
+            Ok(receipt) => Ok(receipt),
+            Err(error) => self
+                .resync_operation_runtime_error(ProductHostOperationKind::AdvanceRealtime, error),
+        }
+    }
+
     fn update_admitted(
         &mut self,
-        kind: NativeProductUpdateMode,
         observed_host_time_nanoseconds: Option<u64>,
         admission: runtime_lifecycle::SimulationAdmission,
         dropped_step_count: u128,
@@ -1901,7 +1769,6 @@ impl CsharpProductRuntime {
         let host_elapsed = self.take_host_elapsed(observed_host_time_nanoseconds);
         let facts = update_facts(
             &self.lifecycle,
-            kind,
             observed_host_time_nanoseconds,
             (admission.first_step().value(), admission.step_count()),
             dropped_step_count,
@@ -1944,7 +1811,6 @@ impl CsharpProductRuntime {
         let host_elapsed = self.take_host_elapsed(Some(observed_host_time_nanoseconds));
         let facts = update_facts(
             &self.lifecycle,
-            REALTIME_UPDATE_MODE,
             Some(observed_host_time_nanoseconds),
             (next_step, 0),
             0,
@@ -2047,7 +1913,7 @@ impl CsharpProductRuntime {
             }
         }
         self.services.set_gameplay_time(
-            gameplay_cadence(&self.lifecycle),
+            self.lifecycle.configuration().fixed_step_hz(),
             self.lifecycle.gameplay_time(),
         );
         self.follow_world_time();
@@ -2859,9 +2725,6 @@ impl ProductHostRuntime for CsharpProductRuntime {
     }
 
     fn realtime_schedule_state(&self) -> ProductHostRuntimeScheduleState {
-        if !matches!(self.lifecycle.mode(), RuntimeMode::Realtime) {
-            return ProductHostRuntimeScheduleState::Unsupported;
-        }
         match self.lifecycle.state() {
             RuntimeState::Created => ProductHostRuntimeScheduleState::Created,
             RuntimeState::Running if self.playtest_time != playtest::TimeMode::Realtime => {
@@ -2875,9 +2738,7 @@ impl ProductHostRuntime for CsharpProductRuntime {
     }
 
     fn realtime_schedule_interval(&self) -> Option<std::time::Duration> {
-        let RuntimeLifecycleConfig::Realtime(config) = self.lifecycle.configuration() else {
-            return None;
-        };
+        let config = self.lifecycle.configuration();
         // The host cadence is derived from the admitted lifecycle setting. The
         // standard 60 Hz value belongs only to standard_realtime_config(); it
         // is not a second scheduler policy here. Round up so an observation
@@ -3315,7 +3176,6 @@ impl ProductHostRuntime for CsharpProductRuntime {
             // product receives one update per accepted host observation while
             // retaining the host observation as its realtime timing value.
             Some(simulation) => match self.update_admitted(
-                REALTIME_UPDATE_MODE,
                 Some(observed_time_ns.get()),
                 simulation,
                 admission.dropped_steps(),
@@ -3342,49 +3202,6 @@ impl ProductHostRuntime for CsharpProductRuntime {
             Ok(receipt) => Ok(receipt),
             Err(error) => self
                 .resync_operation_runtime_error(ProductHostOperationKind::AdvanceRealtime, error),
-        }
-    }
-
-    fn admit_demand_step(
-        &mut self,
-    ) -> Result<ProductHostRuntimeReceipt<ProductHostOperationResult>, ProductHostRuntimeError>
-    {
-        let admission = self
-            .lifecycle
-            .admit_demand_step()
-            .map_err(|error| self.lifecycle_runtime_error(error))?;
-        let outputs = match self.update_admitted(DEMAND_UPDATE_MODE, None, admission, 0) {
-            Ok(outputs) => outputs,
-            Err(error) => {
-                return self.resync_operation(ProductHostOperationKind::AdmitDemandStep, error);
-            }
-        };
-        match self.receipt(ProductHostOperationKind::AdmitDemandStep, outputs) {
-            Ok(receipt) => Ok(receipt),
-            Err(error) => self
-                .resync_operation_runtime_error(ProductHostOperationKind::AdmitDemandStep, error),
-        }
-    }
-
-    fn admit_external_step(
-        &mut self,
-        step: CanonicalU64,
-    ) -> Result<ProductHostRuntimeReceipt<ProductHostOperationResult>, ProductHostRuntimeError>
-    {
-        let admission = self
-            .lifecycle
-            .admit_external_step(ExternalStep::new(step.get()))
-            .map_err(|error| self.lifecycle_runtime_error(error))?;
-        let outputs = match self.update_admitted(EXTERNAL_UPDATE_MODE, None, admission, 0) {
-            Ok(outputs) => outputs,
-            Err(error) => {
-                return self.resync_operation(ProductHostOperationKind::AdmitExternalStep, error);
-            }
-        };
-        match self.receipt(ProductHostOperationKind::AdmitExternalStep, outputs) {
-            Ok(receipt) => Ok(receipt),
-            Err(error) => self
-                .resync_operation_runtime_error(ProductHostOperationKind::AdmitExternalStep, error),
         }
     }
 
@@ -3725,11 +3542,6 @@ fn standard_input_context() -> InputContext {
 }
 
 fn dev_readout(readout: RuntimeLifecycleReadout) -> ProductHostRuntimeReadout {
-    let mode = match readout.mode() {
-        RuntimeMode::Realtime => product_host::ProductHostRuntimeMode::Realtime,
-        RuntimeMode::Demand => product_host::ProductHostRuntimeMode::Demand,
-        RuntimeMode::External => product_host::ProductHostRuntimeMode::External,
-    };
     let state = match readout.state() {
         RuntimeState::Created => ProductHostRuntimeState::Created,
         RuntimeState::Running => ProductHostRuntimeState::Running,
@@ -3737,7 +3549,7 @@ fn dev_readout(readout: RuntimeLifecycleReadout) -> ProductHostRuntimeReadout {
         RuntimeState::Faulted => ProductHostRuntimeState::Faulted,
         RuntimeState::Shutdown => ProductHostRuntimeState::Shutdown,
     };
-    let mut projected = ProductHostRuntimeReadout::new(dev_binding(readout), mode, state)
+    let mut projected = ProductHostRuntimeReadout::new(dev_binding(readout), state)
         .with_counters(
             readout.admitted_simulation_steps(),
             readout.admitted_presentations(),
@@ -3765,7 +3577,6 @@ fn dev_readout(readout: RuntimeLifecycleReadout) -> ProductHostRuntimeReadout {
 
 fn update_facts(
     lifecycle: &RuntimeLifecycle,
-    mode: NativeProductUpdateMode,
     observed_host_time_nanoseconds: Option<u64>,
     (simulation_step, admitted_step_count): (u64, u32),
     dropped_step_count: u128,
@@ -3773,15 +3584,7 @@ fn update_facts(
 ) -> Result<NativeProductUpdateFacts, CsharpProductRuntimeError> {
     let readout = lifecycle.readout();
     let gameplay = lifecycle.gameplay_time();
-    let (observed_host_time_nanoseconds, fixed_step_hz, fixed_delta_seconds) =
-        match lifecycle.configuration() {
-            RuntimeLifecycleConfig::Realtime(config) => (
-                observed_host_time_nanoseconds.unwrap_or_default(),
-                config.fixed_step_hz(),
-                1.0 / f64::from(config.fixed_step_hz()),
-            ),
-            RuntimeLifecycleConfig::Demand | RuntimeLifecycleConfig::External => (0, 0, 0.0),
-        };
+    let fixed_step_hz = lifecycle.configuration().fixed_step_hz();
     let dropped_step_count = u64::try_from(dropped_step_count).map_err(|_| {
         CsharpProductRuntimeError::new(
             "CSHARP_LIFECYCLE_FACTS",
@@ -3789,16 +3592,15 @@ fn update_facts(
         )
     })?;
     Ok(NativeProductUpdateFacts {
-        mode,
         lifecycle_state: native_lifecycle_state(readout.state()),
         generation: readout.generation().value(),
         control_revision: readout.control_revision().value(),
-        observed_host_time_nanoseconds,
+        observed_host_time_nanoseconds: observed_host_time_nanoseconds.unwrap_or_default(),
         simulation_step,
         fixed_step_hz,
         admitted_step_count,
         dropped_step_count,
-        fixed_delta_seconds,
+        fixed_delta_seconds: 1.0 / f64::from(fixed_step_hz),
         gameplay_time_selected: gameplay.selected(),
         gameplay_rate: csharp_engine_services::gameplay_rate_value(gameplay.rate()),
         gameplay_advance_remaining_steps: gameplay.advance_remaining_steps(),
@@ -3882,12 +3684,8 @@ fn lifecycle_error_code(error: &runtime_lifecycle::RuntimeLifecycleError) -> &'s
     use runtime_lifecycle::RuntimeLifecycleError;
 
     match error {
-        RuntimeLifecycleError::WrongMode { .. } => "CSHARP_LIFECYCLE_WRONG_MODE",
         RuntimeLifecycleError::WrongState { .. } => "CSHARP_LIFECYCLE_WRONG_STATE",
         RuntimeLifecycleError::ClockRegression { .. } => "CSHARP_LIFECYCLE_CLOCK_REGRESSION",
-        RuntimeLifecycleError::ExternalStepOutOfOrder { .. } => {
-            "CSHARP_LIFECYCLE_EXTERNAL_STEP_OUT_OF_ORDER"
-        }
         RuntimeLifecycleError::StaleToken { .. } => "CSHARP_LIFECYCLE_STALE_TOKEN",
         RuntimeLifecycleError::ForeignInstance { .. } => "CSHARP_LIFECYCLE_FOREIGN_INSTANCE",
         RuntimeLifecycleError::WrongPhaseToken { .. } => "CSHARP_LIFECYCLE_WRONG_PHASE_TOKEN",
@@ -5996,7 +5794,7 @@ mod tests {
     }
 
     fn drop_fixture_runtime(label: &str) -> (CsharpProductRuntime, PathBuf) {
-        drop_fixture_runtime_with_config(label, RuntimeLifecycleConfig::Demand)
+        drop_fixture_runtime_with_config(label, CsharpProductRuntime::standard_realtime_config())
     }
 
     fn audio_disposal_fixture_runtime(label: &str) -> (CsharpProductRuntime, PathBuf) {
@@ -6023,7 +5821,7 @@ mod tests {
             content,
             CsharpProductRuntimeConfig::new(
                 RuntimeInstanceId::new(1),
-                RuntimeLifecycleConfig::Demand,
+                CsharpProductRuntime::standard_realtime_config(),
                 Vec::new(),
             ),
             || Ok(drop_fixture_api()),
@@ -6033,8 +5831,8 @@ mod tests {
     }
 
     fn realtime_drop_fixture_runtime(label: &str) -> (CsharpProductRuntime, PathBuf) {
-        let config = RealtimeLifecycleConfig::new(30, 2).expect("realtime fixture config");
-        drop_fixture_runtime_with_config(label, RuntimeLifecycleConfig::Realtime(config))
+        let config = RuntimeLifecycleConfig::new(30, 2).expect("realtime fixture config");
+        drop_fixture_runtime_with_config(label, config)
     }
 
     fn drop_fixture_runtime_with_config(
@@ -6068,7 +5866,7 @@ mod tests {
             content,
             CsharpProductRuntimeConfig::new(
                 RuntimeInstanceId::new(1),
-                RuntimeLifecycleConfig::Demand,
+                CsharpProductRuntime::standard_realtime_config(),
                 Vec::new(),
             )
             .with_diagnostics(diagnostics),
@@ -6091,7 +5889,7 @@ mod tests {
             content,
             CsharpProductRuntimeConfig::new(
                 RuntimeInstanceId::new(1),
-                RuntimeLifecycleConfig::Demand,
+                CsharpProductRuntime::standard_realtime_config(),
                 vec![descriptor],
             ),
             || Ok(direct_input_fixture_api()),
@@ -6122,7 +5920,7 @@ mod tests {
             content,
             CsharpProductRuntimeConfig::new(
                 RuntimeInstanceId::new(1),
-                RuntimeLifecycleConfig::Demand,
+                CsharpProductRuntime::standard_realtime_config(),
                 vec![descriptor],
             )
             .with_physical_mappings(vec![old_mapping]),
@@ -6155,7 +5953,7 @@ mod tests {
             content,
             CsharpProductRuntimeConfig::new(
                 RuntimeInstanceId::new(1),
-                RuntimeLifecycleConfig::Demand,
+                CsharpProductRuntime::standard_realtime_config(),
                 vec![descriptor],
             )
             .with_physical_mappings(vec![old_mapping]),
@@ -6176,7 +5974,7 @@ mod tests {
             content,
             CsharpProductRuntimeConfig::new(
                 RuntimeInstanceId::new(1),
-                RuntimeLifecycleConfig::Demand,
+                CsharpProductRuntime::standard_realtime_config(),
                 Vec::new(),
             )
             .with_diagnostics(diagnostics),
@@ -6519,7 +6317,7 @@ mod tests {
             content,
             CsharpProductRuntimeConfig::new(
                 RuntimeInstanceId::new(77),
-                RuntimeLifecycleConfig::Demand,
+                CsharpProductRuntime::standard_realtime_config(),
                 Vec::new(),
             ),
             || Ok(drop_fixture_api()),
@@ -6555,7 +6353,7 @@ mod tests {
             .lifecycle(ProductHostLifecycleOperation::Start)
             .expect("fixture start");
         // An ordinary update publishes the HUD before the throwing one.
-        runtime.admit_demand_step().expect("ordinary update");
+        runtime.admit_manual_step().expect("ordinary update");
         assert_eq!(
             runtime
                 .services
@@ -6567,7 +6365,7 @@ mod tests {
         UPDATE_CALLBACK_PUBLISH_DIAGNOSTIC.store(true, Ordering::SeqCst);
         UPDATE_CALLBACK_STATUS.store(99, Ordering::SeqCst);
         let (_, outputs) = runtime
-            .admit_demand_step()
+            .admit_manual_step()
             .expect("an escaped exception faults instead of failing the operation")
             .into_parts();
         assert_eq!(runtime.lifecycle.state(), RuntimeState::Faulted);
@@ -6601,7 +6399,7 @@ mod tests {
             "what the call did before the exception is kept"
         );
         runtime
-            .admit_demand_step()
+            .admit_manual_step()
             .expect_err("a faulted lifecycle admits no simulation");
         assert_eq!(UPDATE_CALLBACK_CALLS.load(Ordering::SeqCst), 1);
 
@@ -6609,7 +6407,7 @@ mod tests {
         runtime
             .lifecycle(ProductHostLifecycleOperation::Resume)
             .expect("resume continues the same product");
-        runtime.admit_demand_step().expect("simulation continues");
+        runtime.admit_manual_step().expect("simulation continues");
         assert_eq!(UPDATE_CALLBACK_CALLS.load(Ordering::SeqCst), 2);
         drop(runtime);
         let events = DROP_EVENTS
@@ -6691,7 +6489,7 @@ mod tests {
             .lifecycle(ProductHostLifecycleOperation::Start)
             .expect("fixture start");
         runtime
-            .admit_demand_step()
+            .admit_manual_step()
             .expect("a failed callback still returns its receipt");
         UPDATE_CALLBACK_STATUS.store(ABI_OK, Ordering::SeqCst);
         assert_eq!(runtime.lifecycle.state(), RuntimeState::Faulted);
@@ -6730,7 +6528,7 @@ mod tests {
         VOXEL_FAILURE_PRESENTATION.store(presentation.value, Ordering::SeqCst);
         VOXEL_FAILURE_ENABLED.store(true, Ordering::SeqCst);
         let (_, outputs) = runtime
-            .admit_demand_step()
+            .admit_manual_step()
             .expect("the fault still publishes the call's work")
             .into_parts();
         VOXEL_FAILURE_ENABLED.store(false, Ordering::SeqCst);
@@ -6879,7 +6677,7 @@ mod tests {
             .result()
             .succeeded());
         runtime
-            .admit_demand_step()
+            .admit_manual_step()
             .expect("semantic rejection preserves the owner");
         runtime.api.execute_debug = debug_abi_failure_after_result;
         assert_eq!(
@@ -6890,7 +6688,7 @@ mod tests {
             "CSHARP_PRODUCT_CALL"
         );
         runtime
-            .admit_demand_step()
+            .admit_manual_step()
             .expect("a failed debug command does not stop the product");
         drop(runtime);
         fs::remove_dir_all(root).unwrap();
@@ -6968,7 +6766,7 @@ mod tests {
             content,
             CsharpProductRuntimeConfig::new(
                 RuntimeInstanceId::new(1),
-                RuntimeLifecycleConfig::Demand,
+                CsharpProductRuntime::standard_realtime_config(),
                 Vec::new(),
             ),
             || Ok(product_error_fixture_api()),
@@ -7095,7 +6893,7 @@ mod tests {
             .lifecycle(ProductHostLifecycleOperation::Start)
             .expect("start direct-input fixture");
         runtime
-            .admit_demand_step()
+            .admit_manual_step()
             .expect("drain start clear before the regression sequence");
         DIRECT_INPUT_CALLBACK_EVENTS
             .lock()
@@ -7125,7 +6923,7 @@ mod tests {
         );
 
         runtime
-            .admit_demand_step()
+            .admit_manual_step()
             .expect("deliver ordered clear and direct payload");
         assert_eq!(
             DIRECT_INPUT_CALLBACK_EVENTS
@@ -7223,7 +7021,7 @@ mod tests {
             .lifecycle(ProductHostLifecycleOperation::Start)
             .expect("start duplicate-input fixture");
         runtime
-            .admit_demand_step()
+            .admit_manual_step()
             .expect("drain start clear before duplicate input");
         DIRECT_INPUT_CALLBACK_EVENTS
             .lock()
@@ -7256,7 +7054,7 @@ mod tests {
         assert_eq!(encoded["nextInputSequence"], "2");
 
         runtime
-            .admit_demand_step()
+            .admit_manual_step()
             .expect("deliver only the first input");
         let events = DIRECT_INPUT_CALLBACK_EVENTS
             .lock()
@@ -7287,7 +7085,7 @@ mod tests {
         runtime
             .lifecycle(ProductHostLifecycleOperation::Start)
             .expect("start fixture");
-        runtime.admit_demand_step().expect("drain start clear");
+        runtime.admit_manual_step().expect("drain start clear");
         DIRECT_INPUT_CALLBACK_EVENTS
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
@@ -7361,7 +7159,7 @@ mod tests {
                 )),
             ]))
             .expect("fresh physical edge is admitted");
-        runtime.admit_demand_step().expect("deliver fresh edge");
+        runtime.admit_manual_step().expect("deliver fresh edge");
         let events = DIRECT_INPUT_CALLBACK_EVENTS
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
@@ -7396,11 +7194,11 @@ mod tests {
         runtime
             .lifecycle(ProductHostLifecycleOperation::Start)
             .expect("start fixture");
-        runtime.admit_demand_step().expect("drain start clear");
+        runtime.admit_manual_step().expect("drain start clear");
         let old_binding = input_binding(&runtime.lifecycle);
         REMAPPING_CALLBACK_STAGE.store(true, Ordering::SeqCst);
         let (_, outputs) = runtime
-            .admit_demand_step()
+            .admit_manual_step()
             .expect("settle callback mapping")
             .into_parts();
         assert_eq!(REMAPPING_CALLBACK_STATUS.load(Ordering::SeqCst), ABI_OK);
@@ -7442,7 +7240,7 @@ mod tests {
             ]))
             .expect("fresh binding input");
         runtime
-            .admit_demand_step()
+            .admit_manual_step()
             .expect("deliver fresh mapped edge");
         let events = DIRECT_INPUT_CALLBACK_EVENTS
             .lock()
@@ -7773,28 +7571,6 @@ mod tests {
         fs::remove_dir_all(&target).expect("remove target root");
     }
 
-    #[test]
-    fn lifecycle_readout_reports_each_explicit_standard_mode() {
-        let cases = [
-            (
-                CsharpProductRuntime::standard_realtime_config(),
-                product_host::ProductHostRuntimeMode::Realtime,
-            ),
-            (
-                RuntimeLifecycleConfig::Demand,
-                product_host::ProductHostRuntimeMode::Demand,
-            ),
-            (
-                RuntimeLifecycleConfig::External,
-                product_host::ProductHostRuntimeMode::External,
-            ),
-        ];
-        for (config, expected_mode) in cases {
-            let lifecycle = RuntimeLifecycle::new(RuntimeInstanceId::new(1), config);
-            assert_eq!(dev_readout(lifecycle.readout()).mode(), expected_mode);
-        }
-    }
-
     static MANUAL_UPDATE_FACTS: Mutex<Vec<NativeProductUpdateFacts>> = Mutex::new(Vec::new());
 
     unsafe extern "C" fn manual_time_fixture_update(
@@ -7839,7 +7615,6 @@ mod tests {
                 .unwrap_or_else(PoisonError::into_inner);
             assert_eq!(facts.len(), 3);
             for fact in facts.iter() {
-                assert_eq!(fact.mode, NativeProductUpdateMode::Realtime);
                 assert_eq!(fact.lifecycle_state, NativeProductLifecycleState::Running);
                 assert_eq!(fact.fixed_step_hz, 30);
                 assert_eq!(fact.fixed_delta_seconds, 1.0 / 30.0);
@@ -8124,9 +7899,7 @@ mod tests {
             content,
             CsharpProductRuntimeConfig::new(
                 RuntimeInstanceId::new(1),
-                RuntimeLifecycleConfig::Realtime(
-                    RealtimeLifecycleConfig::new(30, 2).expect("realtime fixture config"),
-                ),
+                RuntimeLifecycleConfig::new(30, 2).expect("realtime fixture config"),
                 vec![attack, look],
             )
             .with_physical_mappings(mappings),
@@ -8168,7 +7941,7 @@ mod tests {
     fn unlocked_pointer_facts_reach_csharp_with_their_position() {
         let binding = input_binding(&RuntimeLifecycle::new(
             RuntimeInstanceId::new(1),
-            RuntimeLifecycleConfig::Demand,
+            CsharpProductRuntime::standard_realtime_config(),
         ));
         let axis = |value| AxisValue::new(value).unwrap();
         let at = runtime_input::PointerPosition {
@@ -8477,15 +8250,6 @@ mod tests {
         );
         drop(realtime);
         fs::remove_dir_all(root).expect("remove realtime schedule fixture content");
-
-        let (demand, root) = drop_fixture_runtime("demand-schedule-seam");
-        assert_eq!(
-            demand.realtime_schedule_state(),
-            ProductHostRuntimeScheduleState::Unsupported
-        );
-        assert_eq!(demand.realtime_schedule_interval(), None);
-        drop(demand);
-        fs::remove_dir_all(root).expect("remove demand schedule fixture content");
     }
 
     #[test]
@@ -8572,7 +8336,7 @@ mod tests {
             publication_kind(outputs.last().unwrap()),
             "complete-baseline"
         );
-        runtime.admit_demand_step().expect("owner remains usable");
+        runtime.admit_manual_step().expect("owner remains usable");
         drop(runtime);
         fs::remove_dir_all(root).unwrap();
     }
@@ -8723,7 +8487,7 @@ mod tests {
         runtime
             .lifecycle(ProductHostLifecycleOperation::Start)
             .unwrap();
-        runtime.admit_demand_step().unwrap();
+        runtime.admit_manual_step().unwrap();
         let running_binding = input_binding(&runtime.lifecycle);
         runtime
             .lifecycle(ProductHostLifecycleOperation::Pause)
@@ -8806,7 +8570,7 @@ mod tests {
         runtime
             .lifecycle(ProductHostLifecycleOperation::Resume)
             .unwrap();
-        runtime.admit_demand_step().unwrap();
+        runtime.admit_manual_step().unwrap();
         let updates = DIRECT_INPUT_CALLBACK_EVENTS.lock().unwrap().clone();
         assert_eq!(updates.len(), 1);
         assert!(updates[0]
@@ -8942,7 +8706,7 @@ mod tests {
         assert!(!recovery.iter().any(|output| output["kind"] == "frame"));
 
         let (_, outputs) = runtime
-            .admit_demand_step()
+            .admit_manual_step()
             .expect("next operation remains usable after input recovery")
             .into_parts();
         let encoded = outputs.iter().map(publication_value).collect::<Vec<_>>();
@@ -8961,42 +8725,40 @@ mod tests {
 
     #[test]
     fn lifecycle_readout_projects_owner_fault_and_restart_reset() {
-        let mut lifecycle =
-            RuntimeLifecycle::new(RuntimeInstanceId::new(1), RuntimeLifecycleConfig::Demand);
+        let mut lifecycle = RuntimeLifecycle::new(
+            RuntimeInstanceId::new(1),
+            CsharpProductRuntime::standard_realtime_config(),
+        );
         lifecycle.start().expect("start lifecycle");
-        lifecycle.admit_demand_step().expect("admit one step");
+        lifecycle.admit_manual_step().expect("admit one step");
         let before_fault = lifecycle.readout();
         lifecycle
             .report_fault(runtime_lifecycle::RuntimeFault::OwnerReported)
             .expect("report owner fault");
 
         let faulted = lifecycle.readout();
-        let expected_faulted = ProductHostRuntimeReadout::new(
-            dev_binding(faulted),
-            product_host::ProductHostRuntimeMode::Demand,
-            ProductHostRuntimeState::Faulted,
-        )
-        .with_counters(
-            before_fault.admitted_simulation_steps(),
-            before_fault.admitted_presentations(),
-            before_fault
-                .dropped_realtime_steps()
-                .min(u128::from(u64::MAX)) as u64,
-            before_fault.clock_regressions(),
-        )
-        .with_clock(None, None)
-        .with_fault(ProductHostRuntimeFault::OwnerReported);
+        let expected_faulted =
+            ProductHostRuntimeReadout::new(dev_binding(faulted), ProductHostRuntimeState::Faulted)
+                .with_counters(
+                    before_fault.admitted_simulation_steps(),
+                    before_fault.admitted_presentations(),
+                    before_fault
+                        .dropped_realtime_steps()
+                        .min(u128::from(u64::MAX)) as u64,
+                    before_fault.clock_regressions(),
+                )
+                .with_clock(0, None)
+                .with_fault(ProductHostRuntimeFault::OwnerReported);
         assert_eq!(dev_readout(faulted), expected_faulted);
 
         lifecycle.restart().expect("restart lifecycle");
         let restarted = lifecycle.readout();
         let expected_restarted = ProductHostRuntimeReadout::new(
             dev_binding(restarted),
-            product_host::ProductHostRuntimeMode::Demand,
             ProductHostRuntimeState::Running,
         )
         .with_counters(0, 0, 0, 0)
-        .with_clock(None, None);
+        .with_clock(0, None);
         assert_eq!(dev_readout(restarted), expected_restarted);
     }
 

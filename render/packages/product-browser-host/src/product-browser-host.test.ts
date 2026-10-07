@@ -30,7 +30,6 @@ const adapter: ProductBrowserRuntimeAdapter = {
     droppedCount: 0,
   }),
   advanceRealtime: async () => ({ accepted: true, ...ACCEPTED_FAULT, operation: 'advance-realtime' as const }),
-  admitDemandStep: async () => ({ accepted: true, ...ACCEPTED_FAULT, operation: 'admit-demand-step' as const }),
   subscribeOutputs: () => () => undefined,
   dispose: () => undefined,
 };
@@ -64,6 +63,15 @@ async function withFakeRoot<T>(run: (root: HTMLElement) => Promise<T>): Promise<
   }
 }
 
+type PageCadence = (timeMs: number) => void;
+
+/** Runs one page cadence: under the rust-host owner it drains and sends page input. */
+async function runCadence(cadence: PageCadence | undefined, timeMs: number): Promise<void> {
+  assert.ok(cadence !== undefined, 'the host registered its page cadence');
+  cadence(timeMs);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+}
+
 function fakeApplication(input: Record<string, unknown>, projections: unknown[] = []) {
   return {
     ui: {},
@@ -82,7 +90,6 @@ test('pre-mount buffering keeps the newest readout and the newest projection per
   const readout = {
     artifact: 'rusty.product.runtime-readout' as const,
     runtime: { instanceId: '1', generation: '1', controlRevision: '1' },
-    mode: 'realtime' as const,
     state: 'running' as const,
     admittedSimulationSteps: '1',
     admittedPresentations: '1',
@@ -124,13 +131,13 @@ test('browser health datasets skip stable attributes', () => {
     },
   }) as DOMStringMap;
   const roots = [{ dataset }];
-  const health = { state: 'ready' as const, mode: 'realtime' as const, progress: '1', failure: null };
+  const health = { state: 'ready' as const, progress: '1', failure: null };
   syncProductBrowserHealthDatasets(roots, health);
-  assert.equal(writes, 3);
+  assert.equal(writes, 2);
   syncProductBrowserHealthDatasets(roots, health);
-  assert.equal(writes, 3);
+  assert.equal(writes, 2);
   syncProductBrowserHealthDatasets(roots, { ...health, progress: '2' });
-  assert.equal(writes, 4);
+  assert.equal(writes, 3);
 });
 
 test('only the typed lifecycle clock regression is a dropped cadence observation', () => {
@@ -144,7 +151,7 @@ test('only the typed lifecycle clock regression is a dropped cadence observation
   assert.equal(isDroppedClockRegression(dropped), true);
   assert.equal(isDroppedClockRegression({ ...dropped, code: 'CSHARP_LIFECYCLE_COUNTER_EXHAUSTED' }), false);
   assert.equal(isDroppedClockRegression({ ...dropped, disposition: 'terminal' }), false);
-  assert.equal(isDroppedClockRegression({ ...dropped, operation: 'admit-demand-step' }), false);
+  assert.equal(isDroppedClockRegression({ ...dropped, operation: 'input' }), false);
 });
 
 test('a rebinding output rebinds input and the host stays ready', async () => {
@@ -161,8 +168,6 @@ test('a rebinding output rebinds input and the host stays ready', async () => {
           return () => { emit = null; };
         },
       },
-      lifecycleMode: 'demand',
-      // The runtime-pack shell passes this for every product; demand ignores it.
       realtimeAdvanceOwner: 'rust-host',
       mountUi: async () => undefined,
       autoStart: false,
@@ -187,7 +192,7 @@ test('mounted UI pauses and resumes the runtime it is bound to and follows its r
     const PAUSED = { ...RUNNING, controlRevision: '3' } as const;
     const readout = (runtime: typeof RUNNING | typeof PAUSED, state: 'running' | 'paused') => ({
       artifact: 'rusty.product.runtime-readout' as const,
-      runtime, mode: 'realtime' as const, state,
+      runtime, state,
       admittedSimulationSteps: '1', admittedPresentations: '1', droppedRealtimeSteps: '0',
       clockRegressions: '0', scaledRemainder: 0, lastObservedTimeNs: null, fault: null,
     });
@@ -217,7 +222,6 @@ test('mounted UI pauses and resumes the runtime it is bound to and follows its r
           return () => { emit = null; };
         },
       },
-      lifecycleMode: 'realtime',
       realtimeAdvanceOwner: 'rust-host',
       mountUi: async () => undefined,
       autoStart: false,
@@ -263,7 +267,7 @@ test('a lifecycle response that settles after a newer published change does not 
     const RESUMED = { ...RUNNING, controlRevision: '4' } as const;
     const readout = (runtime: typeof RUNNING | typeof PAUSED | typeof RESUMED, state: 'running' | 'paused') => ({
       artifact: 'rusty.product.runtime-readout' as const,
-      runtime, mode: 'realtime' as const, state,
+      runtime, state,
       admittedSimulationSteps: '1', admittedPresentations: '1', droppedRealtimeSteps: '0',
       clockRegressions: '0', scaledRemainder: 0, lastObservedTimeNs: null, fault: null,
     });
@@ -307,7 +311,6 @@ test('a lifecycle response that settles after a newer published change does not 
           return () => { emit = null; };
         },
       },
-      lifecycleMode: 'realtime',
       realtimeAdvanceOwner: 'rust-host',
       mountUi: async () => undefined,
       autoStart: false,
@@ -339,6 +342,7 @@ test('while a harness holds input the page sends none and shows the claim', asyn
       runtime, sequence: '1', context: 'gameplay.default', fact: { kind: 'key', code: 'key-w', edge: 'pressed' },
     });
     let pending: RuntimeInputWireEvent[] = [];
+    let cadence: PageCadence | undefined;
     const host = await mountProductBrowserHostWithApplication({
       root,
       transport: {
@@ -352,13 +356,16 @@ test('while a harness holds input the page sends none and shows the claim', asyn
           return () => { emit = null; };
         },
       },
-      lifecycleMode: 'demand',
+      realtimeAdvanceOwner: 'rust-host',
       mountUi: async () => undefined,
       autoStart: false,
-    }, async () => fakeApplication({
-      drain: () => { const drained = pending; pending = []; return drained; },
-      bindRuntime: () => undefined,
-    }) as never);
+    }, async (options) => {
+      cadence = options.onCadence;
+      return fakeApplication({
+        drain: () => { const drained = pending; pending = []; return drained; },
+        bindRuntime: () => undefined,
+      }) as never;
+    });
     const publish = emit as unknown as ProductBrowserRuntimeOutputBatchListener;
     const fake = root as unknown as { appended: { textContent: string; removed: boolean }[] };
 
@@ -368,7 +375,7 @@ test('while a harness holds input the page sends none and shows the claim', asyn
     assert.equal(root.dataset['rustyInputClaim'], 'crew-agent-2');
     assert.equal(fake.appended[0]?.textContent, 'Input held by crew-agent-2');
     pending = [key(claimed)];
-    await host.admitDemandStep();
+    await runCadence(cadence, 1);
     assert.deepEqual(sent, [], 'no page input while claimed');
     // The harness's input results reach the page too; they keep the claim.
     publish([{
@@ -380,7 +387,7 @@ test('while a harness holds input the page sends none and shows the claim', asyn
     }], { epoch: 1, baseline: false, recovery: 'none' });
     assert.equal(root.dataset['rustyInputClaim'], 'crew-agent-2');
     pending = [key(claimed)];
-    await host.admitDemandStep();
+    await runCadence(cadence, 2);
     assert.deepEqual(sent, [], 'an input result does not end the claim');
 
     publish([{ kind: 'binding', runtime: released, nextInputSequence: '1' }], {
@@ -389,7 +396,7 @@ test('while a harness holds input the page sends none and shows the claim', asyn
     assert.equal(root.dataset['rustyInputClaim'], undefined);
     assert.equal(fake.appended[0]?.removed, true);
     pending = [key(released)];
-    await host.admitDemandStep();
+    await runCadence(cadence, 3);
     assert.equal(sent.length, 1, 'input resumes once the claim is released');
     await host.dispose();
   });
@@ -406,37 +413,40 @@ test('a claimed binding that completes input recovery keeps the page from sendin
     const unknown = () => new ProductBrowserLocalTransportError('request_failed', 'lost input response', {
       route: 'input', mutation: { certainty: 'outcome-unknown', outputRecovery: 'none', outputThrough: null },
     });
+    let cadence: PageCadence | undefined;
     const host = await mountProductBrowserHostWithApplication({
-      root, lifecycleMode: 'demand', autoStart: false, mountUi: async () => undefined,
+      root, realtimeAdvanceOwner: 'rust-host', autoStart: false, mountUi: async () => undefined,
       transport: {
         ...adapter,
         input: async (batch) => { calls++; if (calls === 1) throw unknown(); return adapter.input(batch); },
         replaceControl: async () => { throw unknown(); },
         subscribeOutputBatches: listener => { emit = listener; return () => { emit = null; }; },
       },
-    }, async () => fakeApplication({
-      bindRuntime: () => undefined,
-      rebaselineRuntime: (value: { runtime: typeof claimed }) => { binding = value.runtime; },
-      drain: () => {
-        if (!pending) return [];
-        pending = false;
-        return [{ runtime: binding, sequence: '1', context: 'gameplay.default',
-          fact: { kind: 'key', code: 'key-w', edge: 'pressed' } }];
-      },
-    }) as never);
+    }, async (options) => {
+      cadence = options.onCadence;
+      return fakeApplication({
+        bindRuntime: () => undefined,
+        rebaselineRuntime: (value: { runtime: typeof claimed }) => { binding = value.runtime; },
+        drain: () => {
+          if (!pending) return [];
+          pending = false;
+          return [{ runtime: binding, sequence: '1', context: 'gameplay.default',
+            fact: { kind: 'key', code: 'key-w', edge: 'pressed' } }];
+        },
+      }) as never;
+    });
     const publish = emit as unknown as ProductBrowserRuntimeOutputBatchListener;
     publish([{ kind: 'binding', runtime: RUNNING, nextInputSequence: '1' }], {
       epoch: 1, baseline: false, recovery: 'none',
     });
-    await assert.rejects(host.admitDemandStep());
-    await new Promise<void>(resolve => setImmediate(resolve));
+    await runCadence(cadence, 1);
     assert.equal(host.readout().state, 'degraded');
     publish([{ kind: 'binding', runtime: claimed, nextInputSequence: '1', inputClaim: 'review-harness' }], {
       epoch: 1, baseline: false, recovery: 'none',
     });
     assert.equal(host.readout().state, 'ready');
     pending = true;
-    await host.admitDemandStep();
+    await runCadence(cadence, 2);
     const badge = root.dataset['rustyInputClaim'];
     assert.deepEqual({ calls, badge }, { calls: 1, badge: 'review-harness' },
       'fresh harness binding must show its claim and keep the page from sending into it');
@@ -448,7 +458,7 @@ test('a claimed binding that completes input recovery keeps the page from sendin
     });
     assert.equal(root.dataset['rustyInputClaim'], undefined);
     pending = true;
-    await host.admitDemandStep();
+    await runCadence(cadence, 3);
     assert.equal(calls, 2, 'page input resumes after the release');
     await host.dispose();
   });
@@ -469,7 +479,6 @@ test('after an output gap only the fresh baseline is applied', async () => {
         },
         confirmOutputBaseline: (epoch) => { confirmed.push(epoch); },
       },
-      lifecycleMode: 'demand',
       mountUi: async () => undefined,
       uiProjection: { expectedContract: 'hud.v1' },
       autoStart: false,
@@ -510,6 +519,7 @@ test('host recovers an unknown input batch from a fresh binding after a lost con
     let controlAttempts = 0;
     let timelineCalls = 0;
     let inputAvailable = true;
+    let cadence: PageCadence | undefined;
     const unknown = (): ProductBrowserLocalTransportError => new ProductBrowserLocalTransportError(
       'request_failed', 'no response', {
         route: 'input', mutation: { certainty: 'outcome-unknown', outputRecovery: 'none', outputThrough: null },
@@ -533,18 +543,21 @@ test('host recovers an unknown input batch from a fresh binding after a lost con
           return () => { emitOutputs = null; };
         },
       },
-      lifecycleMode: 'demand',
+      realtimeAdvanceOwner: 'rust-host',
       mountUi: async () => undefined,
       autoStart: false,
-    }, async () => fakeApplication({
-      drain: () => {
-        if (!inputAvailable) return [];
-        inputAvailable = false;
-        return [inputBatch];
-      },
-      bindRuntime: (binding: unknown) => { boundRuntimes.push(binding); },
-      rebaselineRuntime: (binding: unknown) => { baselines.push(binding); },
-    }) as never);
+    }, async (options) => {
+      cadence = options.onCadence;
+      return fakeApplication({
+        drain: () => {
+          if (!inputAvailable) return [];
+          inputAvailable = false;
+          return [inputBatch];
+        },
+        bindRuntime: (binding: unknown) => { boundRuntimes.push(binding); },
+        rebaselineRuntime: (binding: unknown) => { baselines.push(binding); },
+      }) as never;
+    });
 
     const publishOutputs = emitOutputs as unknown as ProductBrowserRuntimeOutputBatchListener;
     publishOutputs([{ kind: 'binding', runtime: RUNNING, nextInputSequence: '4' }], {
@@ -555,9 +568,10 @@ test('host recovers an unknown input batch from a fresh binding after a lost con
       context: 'gameplay.default',
       nextSequence: '4',
     }]);
-    const demand = host.admitDemandStep();
+    assert.ok(cadence !== undefined);
+    // The cadence's input send owns the serialized lane; the timeline waits behind it.
+    cadence(1);
     const queuedTimeline = host.completeTimeline({} as never);
-    await assert.rejects(demand);
     await assert.rejects(queuedTimeline);
     await new Promise<void>((resolve) => setImmediate(resolve));
     assert.equal(host.readout().state, 'degraded');
@@ -604,6 +618,7 @@ for (const terminalFirst of [false, true]) {
         route: 'input', mutation: { certainty: 'outcome-unknown', outputRecovery: 'none', outputThrough: null },
       });
       let inputAvailable = true;
+      let cadence: PageCadence | undefined;
       const host = await mountProductBrowserHostWithApplication({
         root,
         transport: {
@@ -616,24 +631,25 @@ for (const terminalFirst of [false, true]) {
           },
           dispose: () => { disposed += 1; },
         },
-        lifecycleMode: 'demand',
+        realtimeAdvanceOwner: 'rust-host',
         mountUi: async () => undefined,
         autoStart: false,
-      }, async () => fakeApplication({
-        drain: () => {
-          if (!inputAvailable) return [];
-          inputAvailable = false;
-          return [{ runtime: RUNNING, sequence: '1', context: 'gameplay.default',
-            fact: { kind: 'key', code: 'key-w', edge: 'pressed' } }];
-        },
-      }) as never);
-      const pending = assert.rejects(host.admitDemandStep());
-      await new Promise<void>((resolve) => setImmediate(resolve));
+      }, async (options) => {
+        cadence = options.onCadence;
+        return fakeApplication({
+          drain: () => {
+            if (!inputAvailable) return [];
+            inputAvailable = false;
+            return [{ runtime: RUNNING, sequence: '1', context: 'gameplay.default',
+              fact: { kind: 'key', code: 'key-w', edge: 'pressed' } }];
+          },
+        }) as never;
+      });
+      await runCadence(cadence, 1);
       assert.equal(inputCalls, 1);
       const terminate = () => emitTerminal({ kind: 'runtime-failure', diagnostic: 'fresh output stream failed' });
       if (terminalFirst) terminate();
       rejectInput(unknown);
-      await pending;
       await new Promise<void>((resolve) => setImmediate(resolve));
       if (!terminalFirst) {
         assert.equal(host.readout().state, 'degraded');

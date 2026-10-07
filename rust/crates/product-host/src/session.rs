@@ -287,33 +287,6 @@ impl<R: ProductHostRuntime> ProductHostOperationOwner<R> {
         self.advance_realtime(observed_time_ns)
     }
 
-    /// Admits one demand step through the runtime owner.
-    pub fn admit_demand_step(
-        &self,
-    ) -> Result<ProductHostRuntimeReceipt<ProductHostOperationResult>, ProductHostRuntimeError>
-    {
-        self.with_runtime(|runtime| runtime.admit_demand_step())
-    }
-
-    /// Admits one canonical external step through the runtime owner.
-    pub fn admit_external_step(
-        &self,
-        step: CanonicalU64,
-    ) -> Result<ProductHostRuntimeReceipt<ProductHostOperationResult>, ProductHostRuntimeError>
-    {
-        self.with_runtime(|runtime| runtime.admit_external_step(step))
-    }
-
-    /// Strictly admits a canonical JSON u64 and forwards an external step.
-    pub fn admit_external_step_json(
-        &self,
-        bytes: &[u8],
-    ) -> Result<ProductHostRuntimeReceipt<ProductHostOperationResult>, ProductHostRuntimeError>
-    {
-        let step = decode_canonical_u64(bytes)?;
-        self.admit_external_step(step)
-    }
-
     /// Admits one already validated timeline completion through the runtime
     /// owner.
     pub fn complete_timeline(
@@ -424,11 +397,7 @@ mod tests {
     }
 
     fn readout() -> crate::ProductHostRuntimeReadout {
-        crate::ProductHostRuntimeReadout::new(
-            binding(),
-            crate::ProductHostRuntimeMode::Demand,
-            crate::ProductHostRuntimeState::Running,
-        )
+        crate::ProductHostRuntimeReadout::new(binding(), crate::ProductHostRuntimeState::Running)
     }
 
     impl ProductHostRuntime for FixtureRuntime {
@@ -472,21 +441,6 @@ mod tests {
         ) -> Result<ProductHostRuntimeReceipt<ProductHostOperationResult>, ProductHostRuntimeError>
         {
             Ok(Self::operation(ProductHostOperationKind::AdvanceRealtime))
-        }
-
-        fn admit_demand_step(
-            &mut self,
-        ) -> Result<ProductHostRuntimeReceipt<ProductHostOperationResult>, ProductHostRuntimeError>
-        {
-            Ok(Self::operation(ProductHostOperationKind::AdmitDemandStep))
-        }
-
-        fn admit_external_step(
-            &mut self,
-            _step: CanonicalU64,
-        ) -> Result<ProductHostRuntimeReceipt<ProductHostOperationResult>, ProductHostRuntimeError>
-        {
-            Ok(Self::operation(ProductHostOperationKind::AdmitExternalStep))
         }
 
         fn complete_timeline(
@@ -545,16 +499,6 @@ mod tests {
         assert_eq!(
             session
                 .advance_realtime_json(br#""2""#)
-                .unwrap()
-                .into_parts()
-                .1
-                .len(),
-            1
-        );
-        assert_eq!(session.admit_demand_step().unwrap().into_parts().1.len(), 1);
-        assert_eq!(
-            session
-                .admit_external_step_json(br#""3""#)
                 .unwrap()
                 .into_parts()
                 .1

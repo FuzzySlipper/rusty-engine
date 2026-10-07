@@ -10,7 +10,9 @@ operation into independently attributable layers:
   without Rust or browser work.
 - `csharp-rust-crossover` measures generated CoreCLR and NativeAOT callbacks,
   the Engine service call, and output conversion.
-- `product-host-http` adds the local product-host HTTP admission path.
+- `product-host-http` adds the local product-host HTTP admission path: with
+  time held, each sample is one `engine.time.advance` request admitting one
+  step.
 
 Run the complete probe from the repository root:
 
@@ -27,7 +29,7 @@ public SDK staging targets with an explicit Engine contributor override. The
 runner packs the current SDK, stages one Release bundle for both loaders
 through `StageRustyEngineCombinedProduct`, and launches the current Rust host
 with `--product`, each `--loader` and `--performance-probe`. This measures one
-small demand-mode UI publication; it is not a full game or graphics workload.
+small one-step UI publication; it is not a full game or graphics workload.
 Loader, runtime and workload identity keep the two lanes distinct.
 
 The runner needs an existing runtime pack for its browser shell, at

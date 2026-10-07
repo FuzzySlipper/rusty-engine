@@ -170,11 +170,6 @@ test('same-origin local transport uses fixed typed operation routes and SSE outp
         case `${RUNTIME_BASE_PATH}advance-realtime`:
           assert.equal(body?.['observedTimeNs'], '100');
           return response(result('advance-realtime'));
-        case `${RUNTIME_BASE_PATH}admit-demand-step`:
-          return response(result('admit-demand-step'));
-        case `${RUNTIME_BASE_PATH}admit-external-step`:
-          assert.equal(body?.['step'], '1');
-          return response(result('admit-external-step'));
         case `${RUNTIME_BASE_PATH}timeline-completion`:
           assert.equal(body?.['ticket'], '1');
           return response({ accepted: true, ...ACCEPTED_FAULT, ticket: '1', binding: RUNTIME, readout: READOUT });
@@ -222,8 +217,6 @@ test('same-origin local transport uses fixed typed operation routes and SSE outp
   assert.equal(lifecycle.nextInputSequence, '1');
   assert.equal((await adapter.input([])).count, 0);
   assert.equal((await adapter.advanceRealtime('100')).operation, 'advance-realtime');
-  assert.equal((await adapter.admitDemandStep?.())?.operation, 'admit-demand-step');
-  assert.equal((await adapter.admitExternalStep?.('1'))?.operation, 'admit-external-step');
   assert.equal((await adapter.completeTimeline?.({
     ticket: '1',
     runtime: RUNTIME,
@@ -235,8 +228,6 @@ test('same-origin local transport uses fixed typed operation routes and SSE outp
     'POST /__rusty/product/runtime/lifecycle/start',
     'POST /__rusty/product/runtime/input',
     'POST /__rusty/product/runtime/advance-realtime',
-    'POST /__rusty/product/runtime/admit-demand-step',
-    'POST /__rusty/product/runtime/admit-external-step',
     'POST /__rusty/product/runtime/timeline-completion',
   ]);
   assert.equal(batches.length, 1);
@@ -832,9 +823,7 @@ test('a truncated committed resync response refreshes output before surfacing it
 test('concurrent resync-required receipts share one fresh output connection', async () => {
   FakeEventSource.instances.length = 0;
   const adapter = createProductBrowserLocalHttpAdapter({
-    fetch: async (input) => response(result(String(input).endsWith('admit-demand-step')
-      ? 'admit-demand-step'
-      : 'advance-realtime'), 200, {
+    fetch: async () => response(result('advance-realtime'), 200, {
       'x-rusty-commit-disposition': 'resync-required',
       'x-rusty-resync-outputs': 'fresh',
     }),
@@ -844,7 +833,7 @@ test('concurrent resync-required receipts share one fresh output connection', as
   completeConnectionBaseline(FakeEventSource.instances[0]!);
 
   const first = adapter.advanceRealtime('1');
-  const second = adapter.admitDemandStep?.();
+  const second = adapter.advanceRealtime('2');
   await new Promise<void>((resolve) => setImmediate(resolve));
   assert.equal(FakeEventSource.instances.length, 2);
   completeConnectionBaseline(FakeEventSource.instances[1]!);

@@ -109,7 +109,6 @@ cat > "$consumer_dir/Consumer.csproj" <<EOF
     <RustyEngineProductTitle>SDK package fixture</RustyEngineProductTitle>
     <RustyEngineProductUiEntry>main.js</RustyEngineProductUiEntry>
     <RustyEngineProductUiAssets>assets</RustyEngineProductUiAssets>
-    <RustyEngineProductLifecycleMode>realtime</RustyEngineProductLifecycleMode>
     <RustyEngineProductFixedStepHz>60</RustyEngineProductFixedStepHz>
     <RustyEngineProductFixedStepMaxCatchUpSteps>4</RustyEngineProductFixedStepMaxCatchUpSteps>
     <RustyEngineProductDefaultWorldLights>disabled</RustyEngineProductDefaultWorldLights>
@@ -491,7 +490,7 @@ jq -e '.server == {"bindHost":"127.0.0.1","port":40821,"liveDebug":true}' \
     echo "test-csharp-sdk-package: SDK staging did not apply the server override properties." >&2
     exit 1
 }
-jq -e '.lifecycle == {"mode":"realtime","fixedStep":{"hz":60,"maxCatchUpSteps":4}} and .input.intents == [{"id":"runtime.exercise","value":"payload:runtime.exercise.payload"},{"id":"runtime.exercise.move","value":"digital"}] and .input.mappings == [{"id":"runtime.exercise.move","intent":"runtime.exercise.move","trigger":"key:key-w:held"}]' \
+jq -e '.lifecycle == {"fixedStep":{"hz":60,"maxCatchUpSteps":4}} and .input.intents == [{"id":"runtime.exercise","value":"payload:runtime.exercise.payload"},{"id":"runtime.exercise.move","value":"digital"}] and .input.mappings == [{"id":"runtime.exercise.move","intent":"runtime.exercise.move","trigger":"key:key-w:held"}]' \
     "$staged_product_directory/product.json" >/dev/null || {
     echo "test-csharp-sdk-package: SDK staging did not emit the declared lifecycle/input metadata." >&2
     exit 1
@@ -536,7 +535,6 @@ if [[ "$coreclr_smoke" == true ]]; then
         --runtimeconfig "$staged_product_directory/coreclr/Consumer.runtimeconfig.json" \
         --bundle-dir "$host_bundle_dir" \
         --content-dir "$staged_product_directory/content" \
-        --mode realtime \
         --persistence-root "$work_dir/persistence" \
         --direct-intent runtime.exercise=payload:runtime.exercise.payload \
         --port 0 \
@@ -585,7 +583,6 @@ if [[ "$run_aot" == true ]]; then
         --library "$aot_staged/native/Consumer.so" \
         --bundle-dir "$host_bundle_dir" \
         --content-dir "$aot_staged/content" \
-        --mode realtime \
         --persistence-root "$work_dir/aot-persistence" \
         --direct-intent runtime.exercise=payload:runtime.exercise.payload \
         --port 0 \

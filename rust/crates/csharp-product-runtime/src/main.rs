@@ -165,14 +165,15 @@ fn main() -> Result<(), String> {
         .performance_probe
         .map(|iterations| {
             runtime
-                .performance_probe_demand(iterations)
+                .performance_probe(iterations)
                 .map(|durations| (iterations, durations))
                 .map_err(|error| error.to_string())
         })
         .transpose()?;
     let mut config = ProductHostConfig::new(args.port(), bundle.clone())
         .with_bind_host(args.bind_host())
-        .with_live_debug(args.live_debug())
+        // The probe's HTTP lane steps held time through the debug route.
+        .with_live_debug(args.live_debug() || args.performance_probe.is_some())
         .with_diagnostics(diagnostics)
         .with_ui_files(runtime.ui_files());
     config = config.with_presentation(runtime.presentation());
@@ -261,10 +262,13 @@ fn main() -> Result<(), String> {
             )
         );
         let output_stream = open_fresh_output_stream(host.address())?;
+        // Held time keeps the host scheduler idle, so each request admits
+        // exactly one step: any advance up to one fixed step rounds to one.
+        post_debug_command(host.address(), "engine.time.mode manual")?;
         let mut host_durations = Vec::with_capacity(iterations as usize);
         for _ in 0..iterations {
             let started = Instant::now();
-            post_empty_json(host.address(), "/__rusty/product/runtime/admit-demand-step")?;
+            post_debug_command(host.address(), "engine.time.advance 1")?;
             host_durations.push(started.elapsed().as_nanos());
         }
         println!(
@@ -552,10 +556,12 @@ fn open_fresh_output_stream(address: SocketAddr) -> Result<TcpStream, String> {
     Ok(stream)
 }
 
-fn post_empty_json(address: SocketAddr, path: &str) -> Result<(), String> {
+fn post_debug_command(address: SocketAddr, command: &str) -> Result<(), String> {
+    let path = "/__rusty/product/runtime/debug/execute";
     let mut stream = TcpStream::connect(address).map_err(|error| error.to_string())?;
     let request = format!(
-        "POST {path} HTTP/1.1\r\nHost: {address}\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{{}}"
+        "POST {path} HTTP/1.1\r\nHost: {address}\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{command}",
+        command.len()
     );
     stream
         .write_all(request.as_bytes())
@@ -566,7 +572,7 @@ fn post_empty_json(address: SocketAddr, path: &str) -> Result<(), String> {
         .map_err(|error| error.to_string())?;
     if !response.starts_with("HTTP/1.1 200") {
         return Err(format!(
-            "performance probe request {path} failed: {}",
+            "performance probe command {command} failed: {}",
             response.lines().next().unwrap_or("empty response")
         ));
     }
@@ -607,7 +613,6 @@ fn performance_summary(
                 "version": 1,
                 "configuration": configuration,
                 "launch": "canonical-product-v1",
-                "lifecycle": product.lifecycle_mode,
                 "loader": loader.identifier(),
             })
         },
@@ -639,7 +644,6 @@ struct Arguments {
     content_dir: Option<PathBuf>,
     port: u16,
     bind_host: Ipv4Addr,
-    mode: Option<RuntimeMode>,
     direct_intents: Vec<DirectInputIntentDescriptor>,
     physical_mappings: Vec<RuntimeInputMapping>,
     legacy_live_debug: bool,
@@ -731,31 +735,6 @@ impl ProductLoader {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
-enum RuntimeMode {
-    Realtime,
-    Demand,
-    External,
-}
-
-impl RuntimeMode {
-    fn parse(value: &str) -> Result<Self, String> {
-        match value {
-            "realtime" => Ok(Self::Realtime),
-            "demand" => Ok(Self::Demand),
-            "external" => Ok(Self::External),
-            _ => Err("--mode must be realtime, demand, or external".to_owned()),
-        }
-    }
-    fn lifecycle_config(self) -> runtime_lifecycle::RuntimeLifecycleConfig {
-        match self {
-            Self::Realtime => CsharpProductRuntime::standard_realtime_config(),
-            Self::Demand => runtime_lifecycle::RuntimeLifecycleConfig::Demand,
-            Self::External => runtime_lifecycle::RuntimeLifecycleConfig::External,
-        }
-    }
-}
-
 impl Arguments {
     /// Packaged CoreCLR launches, and any `--supervised` or `--headless`
     /// launch, run the runtime as a child of a signal-owning supervisor with
@@ -807,10 +786,7 @@ impl Arguments {
         let (direct_intents, physical_mappings) = self.input_configuration();
         let lifecycle = match &self.product {
             Some(product) => product.lifecycle,
-            None => self
-                .mode
-                .expect("legacy mode is required")
-                .lifecycle_config(),
+            None => CsharpProductRuntime::standard_realtime_config(),
         };
         let mut config = CsharpProductRuntimeConfig::new(
             self.runtime_instance_id
@@ -923,7 +899,6 @@ impl Arguments {
         let mut content_dir = None;
         let mut port = 0;
         let mut bind_host = Ipv4Addr::LOCALHOST;
-        let mut mode = None;
         let mut direct_intents = Vec::new();
         let mut physical_mappings = Vec::new();
         let mut persistence_root = None;
@@ -976,11 +951,6 @@ impl Arguments {
                         .ok_or("--bind-host requires an IPv4 address")?
                         .parse()
                         .map_err(|_| "--bind-host must be an IPv4 address")?
-                }
-                "--mode" => {
-                    mode = Some(RuntimeMode::parse(
-                        &values.next().ok_or("--mode requires a value")?,
-                    )?)
                 }
                 "--live-debug" => live_debug = true,
                 "--direct-intent" => {
@@ -1098,7 +1068,6 @@ impl Arguments {
                 || runtime_config_path.is_some()
                 || bundle_dir.is_some()
                 || content_dir.is_some()
-                || mode.is_some()
                 || staged_launch.is_some()
                 || port != 0
                 || bind_host != Ipv4Addr::LOCALHOST
@@ -1128,7 +1097,6 @@ impl Arguments {
             content_dir,
             port,
             bind_host,
-            mode,
             direct_intents,
             physical_mappings,
             persistence_root,
@@ -1163,25 +1131,14 @@ impl Arguments {
         if arguments.exercise && arguments.performance_probe.is_some() {
             return Err("--exercise and --performance-probe are mutually exclusive".to_owned());
         }
-        let is_demand = match &arguments.product {
-            Some(product) => matches!(
-                product.lifecycle,
-                runtime_lifecycle::RuntimeLifecycleConfig::Demand
-            ),
-            None => matches!(arguments.mode, Some(RuntimeMode::Demand)),
-        };
-        if arguments.performance_probe.is_some() && !is_demand {
-            return Err("--performance-probe requires --mode demand".to_owned());
-        }
         if let Some(product) = &arguments.product {
             product.selected_artifacts(arguments.loader)?;
         } else {
             if arguments.library.is_none()
                 || arguments.bundle_dir.is_none()
                 || arguments.content_dir.is_none()
-                || arguments.mode.is_none()
             {
-                return Err("legacy launch requires --library, --bundle-dir, --content-dir, and --mode (or use --product)".to_owned());
+                return Err("legacy launch requires --library, --bundle-dir, and --content-dir (or use --product)".to_owned());
             }
             match (arguments.loader, &arguments.runtime_config_path) {
                 (ProductLoader::CoreClr, None) => {
@@ -1565,8 +1522,6 @@ mod tests {
             "bundle".to_owned(),
             "--content-dir".to_owned(),
             "content".to_owned(),
-            "--mode".to_owned(),
-            "demand".to_owned(),
         ];
         values.extend(arguments.iter().map(|value| (*value).to_owned()));
         Arguments::parse_from(values)
@@ -1843,8 +1798,6 @@ mod tests {
                 "bundle",
                 "--content-dir",
                 "content",
-                "--mode",
-                "demand",
             ]
             .into_iter()
             .map(str::to_owned),

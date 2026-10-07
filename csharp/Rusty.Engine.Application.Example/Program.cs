@@ -167,7 +167,7 @@ var customOrder = new List<string>();
 var customPipeline = new UpdatePipeline(engine, [UpdatePhase.Presentation, UpdatePhase.Input]);
 Register(customPipeline, UpdatePhase.Input, "input", customOrder, engine);
 Register(customPipeline, UpdatePhase.Presentation, "presentation", customOrder, engine);
-customPipeline.Run(new ProductUpdate(new ProductUpdateFacts(ProductUpdateMode.Realtime, ProductLifecycleState.Running, 1, 1, 0, 0, 60, 0, 0, 1.0 / 60.0), ReadOnlySpan<ProductInputEvent>.Empty));
+customPipeline.Run(new ProductUpdate(new ProductUpdateFacts(ProductLifecycleState.Running, 1, 1, 0, 0, 60, 0, 0, 1.0 / 60.0), ReadOnlySpan<ProductInputEvent>.Empty));
 
 Require(string.Join(',', customOrder) == "presentation,input", "the supplied phase order was not used");
 
@@ -179,7 +179,6 @@ static ProductUpdate UpdateAt(
 {
     return new ProductUpdate(
         new ProductUpdateFacts(
-            ProductUpdateMode.Realtime,
             state,
             generation,
             1,

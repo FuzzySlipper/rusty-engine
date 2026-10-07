@@ -16,16 +16,14 @@ use product_container::{is_relative_path, join};
 
 use csharp_engine_abi::NativeInputCursorMode;
 use product_host::{
-    ProductHostBootstrapInput, ProductHostBootstrapLifecycle, ProductHostBootstrapProduct,
-    ProductHostBootstrapRenderer, ProductHostBootstrapUi, ProductHostBootstrapUiProjection,
-    ProductHostBrowserBootstrap, ProductHostBundleEntry, ProductHostCursorMode,
-    ProductHostPresentationAspect, ProductHostRuntimeMode, PRODUCT_HOST_BOOTSTRAP_PATH,
+    ProductHostBootstrapInput, ProductHostBootstrapProduct, ProductHostBootstrapRenderer,
+    ProductHostBootstrapUi, ProductHostBootstrapUiProjection, ProductHostBrowserBootstrap,
+    ProductHostBundleEntry, ProductHostCursorMode, ProductHostPresentationAspect,
+    PRODUCT_HOST_BOOTSTRAP_PATH,
 };
 use render_model::{AmbientOcclusionMode, AmbientOcclusionSettings, RendererSettingsDescriptor};
 use runtime_input::{CompiledInputMappings, DirectInputIntentDescriptor, RuntimeInputMapping};
-use runtime_lifecycle::{
-    validate_runtime_identity, RealtimeLifecycleConfig, RuntimeLifecycleConfig,
-};
+use runtime_lifecycle::{validate_runtime_identity, RuntimeLifecycleConfig};
 use serde::Deserialize;
 
 use super::{content_type, parse_direct_intent, parse_physical_mapping, ProductLoader};
@@ -56,7 +54,6 @@ pub(super) struct ProductBundle {
     /// Where committed audio plays (`audio.output`).
     pub(super) audio_output: csharp_product_runtime::AudioOutputSelection,
     pub(super) lifecycle: RuntimeLifecycleConfig,
-    pub(super) lifecycle_mode: ProductHostRuntimeMode,
     pub(super) direct_intents: Vec<DirectInputIntentDescriptor>,
     pub(super) physical_mappings: Vec<RuntimeInputMapping>,
     pub(super) input_cursor_mode: ProductInputCursorMode,
@@ -176,7 +173,7 @@ impl ProductBundle {
         };
         let renderer_settings = ProductRendererSettings::from_manifest(manifest.renderer)?;
 
-        let (lifecycle, lifecycle_mode) = lifecycle(&manifest.lifecycle)?;
+        let lifecycle = lifecycle(&manifest.lifecycle)?;
         let (direct_intents, physical_mappings, input_cursor_mode) = input(&manifest.input)?;
         let bind_host = manifest
             .server
@@ -200,7 +197,6 @@ impl ProductBundle {
             presentation_aspect,
             audio_output,
             lifecycle,
-            lifecycle_mode,
             direct_intents,
             physical_mappings,
             input_cursor_mode,
@@ -257,9 +253,6 @@ impl ProductBundle {
             ui: ProductHostBootstrapUi {
                 entry: format!("{PRODUCT_UI_PREFIX}/{}", self.ui_entry),
             },
-            lifecycle: ProductHostBootstrapLifecycle {
-                mode: self.lifecycle_mode,
-            },
             input: ProductHostBootstrapInput {
                 cursor_mode: self.input_cursor_mode.bootstrap(),
             },
@@ -286,50 +279,9 @@ impl ProductBundle {
     }
 }
 
-fn lifecycle(
-    value: &ManifestLifecycle,
-) -> Result<(RuntimeLifecycleConfig, ProductHostRuntimeMode), String> {
-    match value.mode.as_str() {
-        "realtime" => {
-            let fixed_step = value.fixed_step.as_ref().ok_or_else(|| {
-                field_error("lifecycle.fixedStep", "is required for realtime mode")
-            })?;
-            let config = RealtimeLifecycleConfig::new(fixed_step.hz, fixed_step.max_catch_up_steps)
-                .map_err(|error| field_error("lifecycle.fixedStep", error.to_string()))?;
-            Ok((
-                RuntimeLifecycleConfig::Realtime(config),
-                ProductHostRuntimeMode::Realtime,
-            ))
-        }
-        "demand" => {
-            if value.fixed_step.is_some() {
-                return Err(field_error(
-                    "lifecycle.fixedStep",
-                    "is valid only for realtime mode",
-                ));
-            }
-            Ok((
-                RuntimeLifecycleConfig::Demand,
-                ProductHostRuntimeMode::Demand,
-            ))
-        }
-        "external" => {
-            if value.fixed_step.is_some() {
-                return Err(field_error(
-                    "lifecycle.fixedStep",
-                    "is valid only for realtime mode",
-                ));
-            }
-            Ok((
-                RuntimeLifecycleConfig::External,
-                ProductHostRuntimeMode::External,
-            ))
-        }
-        _ => Err(field_error(
-            "lifecycle.mode",
-            "must be realtime, demand, or external",
-        )),
-    }
+fn lifecycle(value: &ManifestLifecycle) -> Result<RuntimeLifecycleConfig, String> {
+    RuntimeLifecycleConfig::new(value.fixed_step.hz, value.fixed_step.max_catch_up_steps)
+        .map_err(|error| field_error("lifecycle.fixedStep", error.to_string()))
 }
 
 fn input(
@@ -749,8 +701,7 @@ impl ProductRendererSettings {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ManifestLifecycle {
-    mode: String,
-    fixed_step: Option<ManifestFixedStep>,
+    fixed_step: ManifestFixedStep,
 }
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -881,7 +832,7 @@ mod tests {
           "ui":{{"root":"ui","entry":"main.js","assets":"assets"}},
           "content":{{"root":"content"}},
           "uiProjection":{{"expectedStream":"fixture.terrain","expectedContract":"fixture.terrain.v1"}},
-          "lifecycle":{{"mode":"realtime","fixedStep":{{"hz":60,"maxCatchUpSteps":2}}}},
+          "lifecycle":{{"fixedStep":{{"hz":60,"maxCatchUpSteps":2}}}},
           "input":{{"intents":[{{"id":"move.forward","value":"digital"}}],"mappings":[{{"id":"move.forward.w","intent":"move.forward","trigger":"key:key-w:held"}}]}},
           "server":{{"bindHost":"127.0.0.1","port":0,"liveDebug":true}},
           "ignoredV1Field":true

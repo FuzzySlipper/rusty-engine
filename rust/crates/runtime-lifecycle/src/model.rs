@@ -88,20 +88,6 @@ impl RuntimeInstanceId {
     }
 }
 
-/// A deterministic externally supplied simulation step number.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct ExternalStep(u64);
-
-impl ExternalStep {
-    pub const fn new(value: u64) -> Self {
-        Self(value)
-    }
-
-    pub const fn value(self) -> u64 {
-        self.0
-    }
-}
-
 /// Stable identity for one started/restarted runtime instance.
 ///
 /// Pausing and resuming retain this identity; they change the separately
@@ -143,22 +129,14 @@ impl RuntimeControlRevision {
     }
 }
 
-/// The one lifecycle family selected for this runtime instance.
+/// Fixed-step settings for realtime admission.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RuntimeMode {
-    Realtime,
-    Demand,
-    External,
-}
-
-/// Realtime settings for fixed-step admission.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct RealtimeLifecycleConfig {
+pub struct RuntimeLifecycleConfig {
     fixed_step_hz: u32,
     max_catch_up_steps: u32,
 }
 
-impl RealtimeLifecycleConfig {
+impl RuntimeLifecycleConfig {
     /// Creates bounded, allocation-free fixed-step settings.
     pub const fn new(
         fixed_step_hz: u32,
@@ -188,24 +166,6 @@ impl RealtimeLifecycleConfig {
 
     pub const fn max_catch_up_steps(self) -> u32 {
         self.max_catch_up_steps
-    }
-}
-
-/// The complete lifecycle configuration for one runtime owner.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RuntimeLifecycleConfig {
-    Realtime(RealtimeLifecycleConfig),
-    Demand,
-    External,
-}
-
-impl RuntimeLifecycleConfig {
-    pub const fn mode(self) -> RuntimeMode {
-        match self {
-            Self::Realtime(_) => RuntimeMode::Realtime,
-            Self::Demand => RuntimeMode::Demand,
-            Self::External => RuntimeMode::External,
-        }
     }
 }
 
@@ -251,8 +211,7 @@ pub enum LifecycleOperation {
     ReplaceControl,
     ReleaseControl,
     AdvanceRealtime,
-    AdmitDemandStep,
-    AdmitExternalStep,
+    AdmitManualStep,
     AdmitPresentation,
     ValidateSimulationToken,
     ValidatePresentationToken,
@@ -735,7 +694,6 @@ impl GameplayTime {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RuntimeLifecycleReadout {
     pub(crate) instance_id: RuntimeInstanceId,
-    pub(crate) mode: RuntimeMode,
     pub(crate) state: RuntimeState,
     pub(crate) generation: RuntimeGeneration,
     pub(crate) control_revision: RuntimeControlRevision,
@@ -743,7 +701,7 @@ pub struct RuntimeLifecycleReadout {
     pub(crate) admitted_presentations: u64,
     pub(crate) dropped_realtime_steps: u128,
     pub(crate) clock_regressions: u64,
-    pub(crate) scaled_remainder: Option<u32>,
+    pub(crate) scaled_remainder: u32,
     pub(crate) last_observed_time: Option<HostMonotonicTime>,
     pub(crate) fault: Option<RuntimeFault>,
 }
@@ -753,9 +711,6 @@ impl RuntimeLifecycleReadout {
         self.instance_id
     }
 
-    pub const fn mode(self) -> RuntimeMode {
-        self.mode
-    }
     pub const fn state(self) -> RuntimeState {
         self.state
     }
@@ -777,7 +732,7 @@ impl RuntimeLifecycleReadout {
     pub const fn clock_regressions(self) -> u64 {
         self.clock_regressions
     }
-    pub const fn scaled_remainder(self) -> Option<u32> {
+    pub const fn scaled_remainder(self) -> u32 {
         self.scaled_remainder
     }
     pub const fn last_observed_time(self) -> Option<HostMonotonicTime> {
@@ -791,10 +746,6 @@ impl RuntimeLifecycleReadout {
 /// A caller error or safe rejection from the lifecycle admission boundary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RuntimeLifecycleError {
-    WrongMode {
-        operation: LifecycleOperation,
-        mode: RuntimeMode,
-    },
     WrongState {
         operation: LifecycleOperation,
         state: RuntimeState,
@@ -802,10 +753,6 @@ pub enum RuntimeLifecycleError {
     ClockRegression {
         previous: HostMonotonicTime,
         observed: HostMonotonicTime,
-    },
-    ExternalStepOutOfOrder {
-        expected: ExternalStep,
-        received: ExternalStep,
     },
     StaleToken {
         expected_generation: RuntimeGeneration,

@@ -1451,8 +1451,6 @@ fn dispatch_request<R: ProductHostRuntime>(
         "/__rusty/product/runtime/control/claim" => invoke_claim(state, &request.body),
         "/__rusty/product/runtime/input" => invoke_input(state, &request.body),
         "/__rusty/product/runtime/advance-realtime" => invoke_realtime(state, &request.body),
-        "/__rusty/product/runtime/admit-demand-step" => invoke_demand(state, &request.body),
-        "/__rusty/product/runtime/admit-external-step" => invoke_external(state, &request.body),
         "/__rusty/product/runtime/timeline-completion" => invoke_timeline(state, &request.body),
         "/__rusty/product/runtime/diagnostics/read" => {
             invoke_diagnostics_read(state, &request.body)
@@ -1691,8 +1689,8 @@ fn invoke_input<R: ProductHostRuntime>(state: &HostState<R>, body: &[u8]) -> Htt
     };
     // Realtime products enqueue at the host edge so a product callback cannot
     // hold up browser input transport. The cached capability covers
-    // Created/Paused states as well; demand/external runtimes retain their
-    // direct receipt semantics and remain caller-driven.
+    // Created/Paused states as well; caller-driven runtimes retain their
+    // direct receipt semantics.
     if state.realtime_scheduler_enabled {
         let count = batch.events().len();
         let enqueued_ns = state.diagnostics.now_monotonic_nanoseconds();
@@ -1768,45 +1766,6 @@ fn invoke_realtime<R: ProductHostRuntime>(state: &HostState<R>, body: &[u8]) -> 
         |error| {
             ProductHostOperationResult::rejected_runtime(
                 ProductHostOperationKind::AdvanceRealtime,
-                error,
-            )
-        },
-    )
-}
-
-fn invoke_demand<R: ProductHostRuntime>(state: &HostState<R>, body: &[u8]) -> HttpResponse {
-    if decode_empty(body).is_err() {
-        return HttpResponse::error(
-            400,
-            "PRODUCT_HOST_REQUEST_BODY",
-            "demand route requires exactly {} JSON",
-        );
-    }
-    call_runtime(
-        state,
-        ProductHostOperationKind::AdmitDemandStep,
-        |runtime| runtime.admit_demand_step(),
-        |error| {
-            ProductHostOperationResult::rejected_runtime(
-                ProductHostOperationKind::AdmitDemandStep,
-                error,
-            )
-        },
-    )
-}
-
-fn invoke_external<R: ProductHostRuntime>(state: &HostState<R>, body: &[u8]) -> HttpResponse {
-    let request: ProductHostExternalRequest = match decode_json(body) {
-        Ok(value) => value,
-        Err(response) => return response,
-    };
-    call_runtime(
-        state,
-        ProductHostOperationKind::AdmitExternalStep,
-        |runtime| runtime.admit_external_step(request.step),
-        |error| {
-            ProductHostOperationResult::rejected_runtime(
-                ProductHostOperationKind::AdmitExternalStep,
                 error,
             )
         },
@@ -2834,8 +2793,6 @@ mod tests {
     /// serves every route except the live-debug ones, so a new route joins
     /// one of these lists deliberately (see the crate doc).
     const SHIPPED_ROUTES: &[&str] = &[
-        "admit-demand-step",
-        "admit-external-step",
         "advance-realtime",
         "audio",
         "browser-diagnostics",
@@ -3033,25 +2990,6 @@ mod tests {
             Err(blocking_runtime_error())
         }
 
-        fn admit_demand_step(
-            &mut self,
-        ) -> Result<
-            crate::ProductHostRuntimeReceipt<crate::ProductHostOperationResult>,
-            crate::ProductHostRuntimeError,
-        > {
-            Err(blocking_runtime_error())
-        }
-
-        fn admit_external_step(
-            &mut self,
-            _step: CanonicalU64,
-        ) -> Result<
-            crate::ProductHostRuntimeReceipt<crate::ProductHostOperationResult>,
-            crate::ProductHostRuntimeError,
-        > {
-            Err(blocking_runtime_error())
-        }
-
         fn complete_timeline(
             &mut self,
             _completion: crate::ProductHostTimelineCompletion,
@@ -3146,7 +3084,6 @@ mod tests {
             vec![
                 ProductHostRuntimeOutput::runtime_readout(crate::ProductHostRuntimeReadout::new(
                     binding(),
-                    crate::ProductHostRuntimeMode::Realtime,
                     crate::ProductHostRuntimeState::Running,
                 )),
                 ProductHostRuntimeOutput::test_value(serde_json::json!({})),
@@ -3360,7 +3297,6 @@ mod tests {
             binding(),
             crate::ProductHostRuntimeReadout::new(
                 binding(),
-                crate::ProductHostRuntimeMode::Realtime,
                 crate::ProductHostRuntimeState::Running,
             ),
         )
@@ -3383,7 +3319,6 @@ mod tests {
             binding(),
             crate::ProductHostRuntimeReadout::new(
                 binding(),
-                crate::ProductHostRuntimeMode::Realtime,
                 crate::ProductHostRuntimeState::Running,
             ),
         )
@@ -3428,7 +3363,6 @@ mod tests {
         > {
             let paused = crate::ProductHostRuntimeReadout::new(
                 binding(),
-                crate::ProductHostRuntimeMode::Realtime,
                 crate::ProductHostRuntimeState::Paused,
             );
             crate::ProductHostRuntimeReceipt::new(
@@ -3476,25 +3410,6 @@ mod tests {
         fn advance_realtime(
             &mut self,
             _observed_time_ns: CanonicalU64,
-        ) -> Result<
-            crate::ProductHostRuntimeReceipt<crate::ProductHostOperationResult>,
-            crate::ProductHostRuntimeError,
-        > {
-            Err(blocking_runtime_error())
-        }
-
-        fn admit_demand_step(
-            &mut self,
-        ) -> Result<
-            crate::ProductHostRuntimeReceipt<crate::ProductHostOperationResult>,
-            crate::ProductHostRuntimeError,
-        > {
-            Err(blocking_runtime_error())
-        }
-
-        fn admit_external_step(
-            &mut self,
-            _step: CanonicalU64,
         ) -> Result<
             crate::ProductHostRuntimeReceipt<crate::ProductHostOperationResult>,
             crate::ProductHostRuntimeError,
@@ -3812,11 +3727,10 @@ mod tests {
             ProductHostRuntimeOutput::runtime_readout(
                 crate::ProductHostRuntimeReadout::new(
                     runtime,
-                    crate::ProductHostRuntimeMode::Realtime,
                     crate::ProductHostRuntimeState::Running,
                 )
                 .with_counters(tick + 1, 0, 0, 0)
-                .with_clock(None, Some(tick + 1)),
+                .with_clock(0, Some(tick + 1)),
             ),
         ]
     }
@@ -4234,11 +4148,6 @@ pub(crate) struct ProductHostErrorBody {
     diagnostic: String,
 }
 
-/// The body of a route that takes no arguments: `{}`.
-#[derive(Deserialize, TS)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct ProductHostEmptyRequest {}
-
 /// `diagnostics/read`: diagnostics after a cursor, or the retained ones.
 #[derive(Deserialize, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -4300,13 +4209,6 @@ pub(crate) struct ProductHostRealtimeRequest {
     observed_time_ns: CanonicalU64,
 }
 
-/// `admit-external-step`: the step an external clock admits.
-#[derive(Deserialize, TS)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(crate) struct ProductHostExternalRequest {
-    step: CanonicalU64,
-}
-
 /// The `rusty-output-baseline` event that ends a connection's baseline.
 #[derive(Serialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -4316,10 +4218,6 @@ pub(crate) struct ProductHostConnectionBaseline {
     /// The output sequence at the baseline, so a caller can wait for a
     /// later operation's outputs.
     output_through: CanonicalU64,
-}
-
-fn decode_empty(body: &[u8]) -> Result<(), HttpResponse> {
-    decode_json::<ProductHostEmptyRequest>(body).map(|_| ())
 }
 
 fn decode_json<T: for<'de> Deserialize<'de>>(body: &[u8]) -> Result<T, HttpResponse> {

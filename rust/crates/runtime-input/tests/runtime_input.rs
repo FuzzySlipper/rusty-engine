@@ -28,8 +28,10 @@ fn axis(value: f32) -> AxisValue {
 }
 
 fn lifecycle_and_binding() -> (RuntimeLifecycle, RuntimeInputBinding) {
-    let mut lifecycle =
-        RuntimeLifecycle::new(RuntimeInstanceId::new(41), RuntimeLifecycleConfig::Demand);
+    let mut lifecycle = RuntimeLifecycle::new(
+        RuntimeInstanceId::new(41),
+        RuntimeLifecycleConfig::new(60, 4).unwrap(),
+    );
     let receipt = lifecycle.start().unwrap();
     let binding = RuntimeInputBinding::new(
         receipt.instance_id(),
@@ -41,7 +43,7 @@ fn lifecycle_and_binding() -> (RuntimeLifecycle, RuntimeInputBinding) {
 
 fn input_token(lifecycle: &mut RuntimeLifecycle) -> runtime_lifecycle::RuntimePhaseToken {
     lifecycle
-        .admit_demand_step()
+        .admit_manual_step()
         .unwrap()
         .step_at(0)
         .unwrap()
@@ -573,14 +575,16 @@ fn focus_restart_and_context_invalidation_cancel_pending_direct_payloads() {
 fn lifecycle_tokens_fence_wrong_phase_foreign_and_stale_bindings() {
     let (mut lifecycle, binding) = lifecycle_and_binding();
     let mut lane = RuntimeInputLane::new(compiled_mappings(), binding, context());
-    let admission = lifecycle.admit_demand_step().unwrap().step_at(0).unwrap();
+    let admission = lifecycle.admit_manual_step().unwrap().step_at(0).unwrap();
     assert!(matches!(
         lane.snapshot_for_step(&lifecycle, admission.phases().schedule()),
         Err(RuntimeInputError::WrongSnapshotPhase)
     ));
 
-    let mut foreign =
-        RuntimeLifecycle::new(RuntimeInstanceId::new(42), RuntimeLifecycleConfig::Demand);
+    let mut foreign = RuntimeLifecycle::new(
+        RuntimeInstanceId::new(42),
+        RuntimeLifecycleConfig::new(60, 4).unwrap(),
+    );
     foreign.start().unwrap();
     let foreign_token = input_token(&mut foreign);
     assert!(matches!(

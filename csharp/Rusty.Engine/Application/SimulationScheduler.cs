@@ -174,9 +174,8 @@ public sealed class SimulationScheduler
 
     /// <summary>
     /// Consumes one Engine-admitted product update. Every admitted batch is
-    /// expanded into its individual simulation steps. Realtime supplies its
-    /// host-timing facts alongside those steps; demand and external updates
-    /// may also admit simulation steps without those realtime-only facts.
+    /// expanded into its individual simulation steps, which arrive with their
+    /// host-timing facts.
     /// </summary>
     public void Advance(ProductUpdate update)
     {

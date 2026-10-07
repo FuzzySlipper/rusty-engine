@@ -53,7 +53,6 @@ public readonly partial record struct ProductUpdateFacts
 {
     /// <summary>Facts for a product that has not selected gameplay time.</summary>
     public ProductUpdateFacts(
-        ProductUpdateMode mode,
         ProductLifecycleState lifecycleState,
         ulong generation,
         ulong controlRevision,
@@ -63,7 +62,7 @@ public readonly partial record struct ProductUpdateFacts
         uint admittedStepCount,
         ulong droppedStepCount,
         double fixedDeltaSeconds)
-        : this(mode, lifecycleState, generation, controlRevision, observedHostTimeNanoseconds, simulationStep,
+        : this(lifecycleState, generation, controlRevision, observedHostTimeNanoseconds, simulationStep,
             fixedStepHz, admittedStepCount, droppedStepCount, fixedDeltaSeconds, false,
             GameplayTimeConvenience.RealtimeRate, 0, fixedDeltaSeconds * admittedStepCount)
     {
