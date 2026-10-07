@@ -74,6 +74,18 @@ the atlas's GPU bytes (`atlasBytes`, every allocated depth page). Its
 `gpu.passes` time a frame's shadow-layer rendering as `shadows`, in the frames
 that render layers.
 
+A point or spot light's layer re-renders only when a caster in it moves. A
+caster that moves while the layer draws it (a posed character, a door, a
+carried prop) becomes dynamic for that layer. The layer keeps its static
+casters' depth in a static cache and, while only dynamic casters move,
+restores that depth and redraws just them, so one walking resident among
+thirty props draws one caster per face, not thirty-one, and the shadows
+are the same. A static caster that moves, joins or leaves renders the static
+depth once more. The cache is a depth array the size of the atlas, built
+the first time a layer has a dynamic caster (`staticCacheBytes`). A
+directional light's cascades, which follow the camera, and casters a
+product shader moves with time redraw whole as before.
+
 ## Dark caves: an ambient light's sky
 
 An ambient light reaches every surface alike, so on its own a cave is as

@@ -112,6 +112,10 @@ pub struct ProductHostShadowStatistics {
     /// The GPU bytes of the atlas's depth pages, allocated ones included.
     #[ts(type = "number")]
     pub atlas_bytes: u64,
+    /// The static cache's bytes, the size of the atlas once a light's layer
+    /// has moving casters (their layers redraw only those); 0 before.
+    #[ts(type = "number")]
+    pub static_cache_bytes: u64,
 }
 
 /// What the renderer's GPU passes cost, from the device's timestamp

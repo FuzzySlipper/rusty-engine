@@ -71,7 +71,7 @@ pub(crate) struct Batch {
     pub instances: u32,
 }
 
-#[derive(Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct DrawList {
     pub batches: Vec<Batch>,
     /// Part ids, one run per batch; offset by the list's base in the buffer.

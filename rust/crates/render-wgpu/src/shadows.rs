@@ -424,10 +424,39 @@ pub(crate) struct ShadowLayer {
     pub view_proj: Mat4,
     /// No tile yet (size 0) until `set_layers` places it.
     pub tile: Tile,
-    /// Casters inside the view and reach, offset into the instance buffer.
+    /// Casters inside the view and reach, offset into the instance buffer:
+    /// the static ones. A light's layer keeps the casters that have moved
+    /// (posed, moved, added) in `dynamic`, after these in the buffer.
     pub casters: DrawList,
+    pub dynamic: DrawList,
+    /// The caster candidates `dynamic` holds: once a caster moves it stays
+    /// dynamic while it is inside the layer's reach.
+    pub dynamic_parts: Vec<crate::tables::PartId>,
+    /// What the static cache holds for this layer: its static casters'
+    /// depth, rendered for this tile, view and list.
+    pub cached: Option<CachedStatic>,
     /// The view, tile or a caster changed since the layer was rendered.
     pub stale: bool,
+}
+
+/// The static casters' depth a layer's tile in the static cache holds, by
+/// what it was rendered from. A layer whose static list, view or tile
+/// differs, or a cache since rebuilt, renders it again.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct CachedStatic {
+    pub tile: Tile,
+    pub view_proj: Mat4,
+    pub casters: DrawList,
+    pub generation: u64,
+}
+
+/// A depth array laid out as the atlas: each layer with moving casters keeps
+/// its static casters' depth at its own tile, restored before those casters
+/// redraw (`shadow_restore.wgsl`).
+pub(crate) struct StaticCache {
+    page_views: Vec<wgpu::TextureView>,
+    pub bind_group: wgpu::BindGroup,
+    bytes: u64,
 }
 
 /// The shadow atlas (pages of one depth array), each layer's view and tile,
@@ -450,6 +479,10 @@ pub(crate) struct ShadowMaps {
     /// A product's caster stage drew the maps, at presentation `time`.
     pub timed: bool,
     pub time: f64,
+    /// Built once a layer first has moving casters; a new atlas drops it.
+    pub cache: Option<StaticCache>,
+    /// Counts the caches built, so a layer's `CachedStatic` names its own.
+    pub cache_generation: u64,
 }
 
 impl ShadowLayer {
@@ -462,6 +495,9 @@ impl ShadowLayer {
             },
             tile: Tile::default(),
             casters: DrawList::default(),
+            dynamic: DrawList::default(),
+            dynamic_parts: Vec::new(),
+            cached: None,
             stale: true,
         }
     }
@@ -599,6 +635,8 @@ impl ShadowMaps {
             layers: Vec::new(),
             timed: false,
             time: 0.0,
+            cache: None,
+            cache_generation: 0,
         }
     }
 
@@ -646,6 +684,7 @@ impl ShadowMaps {
             } else {
                 pages.max(1).next_power_of_two()
             };
+            let generation = self.cache_generation;
             *self = Self::with_capacity(
                 device,
                 layer_layout,
@@ -653,9 +692,13 @@ impl ShadowMaps {
                 needed.max(self.layer_capacity).max(1).next_power_of_two(),
                 page_sizes.clone(),
             );
+            // The next cache is a new generation, so no layer's record of
+            // the dropped one matches it.
+            self.cache_generation = generation;
             // A new texture holds nothing.
             for layer in &mut layers {
                 layer.stale = true;
+                layer.cached = None;
             }
         }
         self.page_sizes = page_sizes;
@@ -680,8 +723,72 @@ impl ShadowMaps {
     pub fn caster_instances(&self) -> u32 {
         self.layers
             .iter()
-            .map(|layer| layer.casters.instances())
+            .map(|layer| layer.casters.instances() + layer.dynamic.instances())
             .sum()
+    }
+
+    /// Build the static cache if there is none, laid out as the atlas, and
+    /// return its generation.
+    pub fn ensure_cache(&mut self, device: &wgpu::Device, layout: &wgpu::BindGroupLayout) -> u64 {
+        if self.cache.is_none() {
+            let pages = self.page_views.len() as u32;
+            let texture = device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("render-wgpu shadow static cache"),
+                size: wgpu::Extent3d {
+                    width: self.side,
+                    height: self.side,
+                    depth_or_array_layers: pages,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: DEPTH_FORMAT,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                    | wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            });
+            let array = texture.create_view(&wgpu::TextureViewDescriptor {
+                label: Some("render-wgpu shadow static cache"),
+                dimension: Some(wgpu::TextureViewDimension::D2Array),
+                ..Default::default()
+            });
+            let page_views = (0..pages)
+                .map(|page| {
+                    texture.create_view(&wgpu::TextureViewDescriptor {
+                        label: Some("render-wgpu shadow static cache page"),
+                        dimension: Some(wgpu::TextureViewDimension::D2),
+                        base_array_layer: page,
+                        array_layer_count: Some(1),
+                        ..Default::default()
+                    })
+                })
+                .collect();
+            let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("render-wgpu shadow static cache"),
+                layout,
+                entries: &[wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&array),
+                }],
+            });
+            self.cache_generation += 1;
+            self.cache = Some(StaticCache {
+                page_views,
+                bind_group,
+                bytes: self.atlas_bytes(),
+            });
+        }
+        self.cache_generation
+    }
+
+    /// The static cache's page `page`, as a depth attachment.
+    pub fn cache_page_view(&self, page: u32) -> &wgpu::TextureView {
+        &self.cache.as_ref().expect("a static cache").page_views[page as usize]
+    }
+
+    /// The static cache's GPU bytes; 0 before a layer has moving casters.
+    pub fn cache_bytes(&self) -> u64 {
+        self.cache.as_ref().map_or(0, |cache| cache.bytes)
     }
 
     /// The depth pages' GPU bytes, every allocated page included.

@@ -2575,6 +2575,102 @@ fn shadow_layers_report_their_gpu_time_and_atlas_bytes() {
     }
 }
 
+/// A lamp over a floor ringed with thirty static crates, and one crate at
+/// `x` that a product moves (handle 99).
+fn crowded_lamp(harness: &mut Harness, x: f32) {
+    let mut ops = vec![
+        RenderDiff::DefineMaterial {
+            material: material("material/floor", [0.7, 0.7, 0.7, 1.0], None),
+        },
+        static_mesh(
+            "mesh/floor",
+            box_mesh([-6.0, -0.1, -6.0], [6.0, 0.0, 6.0], |_| 0),
+            "material/floor",
+        ),
+        static_mesh(
+            "mesh/crate",
+            box_mesh([-0.2, 0.0, -0.2], [0.2, 0.5, 0.2], |_| 0),
+            "material/floor",
+        ),
+        instance(1, None, "mesh/floor", Transform::IDENTITY),
+        instance(
+            99,
+            None,
+            "mesh/crate",
+            transform([x, 0.0, 0.8], 0.0, [1.0; 3]),
+        ),
+        RenderDiff::CreateLight {
+            handle: RenderHandle::new(1000),
+            parent: None,
+            light: LightDescriptor::Point {
+                color: [1.0, 0.85, 0.6],
+                intensity: 8.0,
+                enabled: true,
+                position: [0.0, 1.8, 0.0],
+                range: Some(5.0),
+                decay: 2.0,
+                shadow_intent: LightShadowIntent::Requested,
+                shadow: LightShadowSettings::default(),
+            },
+        },
+    ];
+    for index in 0..30 {
+        let angle = index as f32 * std::f32::consts::TAU / 30.0;
+        ops.push(instance(
+            100 + index,
+            None,
+            "mesh/crate",
+            transform([2.2 * angle.cos(), 0.0, 2.2 * angle.sin()], 0.0, [1.0; 3]),
+        ));
+    }
+    harness.apply(ops);
+}
+
+#[test]
+fn a_moving_caster_redraws_only_itself_over_its_layers_cached_static_casters() {
+    let options = || RendererOptions {
+        default_world_lights: false,
+        shadows: true,
+        ..RendererOptions::default()
+    };
+    let eye = camera([0.0, 4.0, 5.0], 0.0, -40.0);
+    let mut moving = Harness::new(options());
+    crowded_lamp(&mut moving, -0.6);
+    moving.render(&eye);
+    let shift = |harness: &mut Harness, x: f32| {
+        harness.apply(vec![RenderDiff::Update {
+            handle: RenderHandle::new(99),
+            transform: Some(transform([x, 0.0, 0.8], 0.0, [1.0; 3])),
+            material: None,
+            visible: None,
+            metadata: None,
+        }]);
+    };
+    // The first move turns the crate dynamic: its layers render their
+    // static casters once into the static cache.
+    shift(&mut moving, -0.5);
+    moving.render(&eye);
+    assert!(moving.renderer.shadow_report().static_cache_bytes > 0);
+    // Each later move redraws only the crate in the layers it is in.
+    let mut last = Vec::new();
+    for step in 0..3 {
+        shift(&mut moving, -0.4 + 0.1 * step as f32);
+        last = moving.render(&eye).1;
+        let report = moving.renderer.shadow_report();
+        assert!(report.rendered_layers > 0, "the crate's layers re-render");
+        assert_eq!(
+            report.rendered_casters, report.rendered_layers,
+            "one caster drawn per re-rendered layer: {report:?}"
+        );
+    }
+    // The same scene drawn whole from the start: the same picture.
+    let mut whole = Harness::new(options());
+    crowded_lamp(&mut whole, -0.2);
+    let fresh = whole.render(&eye).1;
+    assert!(whole.renderer.shadow_report().rendered_casters > 6);
+    assert_eq!(last, fresh, "restored static depth draws today's shadows");
+}
+
 #[test]
 fn many_shadowed_lamps_share_atlas_pages_by_resolution() {
     let mut harness = Harness::new(RendererOptions {

@@ -407,7 +407,7 @@ impl Renderer {
                     continue;
                 }
                 if cascades_only && !cascades {
-                    base += layer.casters.instances();
+                    base += layer.casters.instances() + layer.dynamic.instances();
                     continue;
                 }
                 let inside = match layer.reach() {
@@ -420,13 +420,56 @@ impl Renderer {
                         &reached.as_ref().expect("reach culled").1
                     }
                 };
-                let list = batch::caster_list(parts, inside, &Frustum::new(&layer.view_proj), base);
+                // A light's caster that moves (or a run member of it) turns
+                // dynamic for the layer: its moves then redraw only the
+                // dynamic casters over the cached static ones. Cascades
+                // re-fit with the camera and keep one list.
+                let moves = |id: &PartId| {
+                    moved.contains(id)
+                        || parts
+                            .runs
+                            .get(id)
+                            .is_some_and(|run| run.ids.iter().any(|member| moved.contains(member)))
+                };
+                if !cascades {
+                    layer.dynamic_parts.retain(|id| inside.contains(id));
+                    // Only a caster the layer already drew: a part arriving
+                    // (or every part, at the first upload) is not moving.
+                    let drew = |id: &PartId| {
+                        layer.casters.ids.contains(id) || layer.dynamic.ids.contains(id)
+                    };
+                    let moving: Vec<PartId> = inside
+                        .iter()
+                        .filter(|id| drew(id) && moves(id))
+                        .copied()
+                        .collect();
+                    for id in &moving {
+                        if !layer.dynamic_parts.contains(id) {
+                            layer.dynamic_parts.push(*id);
+                        }
+                    }
+                }
+                let (dynamic_ids, static_ids): (Vec<PartId>, Vec<PartId>) = inside
+                    .iter()
+                    .partition(|id| layer.dynamic_parts.contains(id));
+                let frustum = Frustum::new(&layer.view_proj);
+                let list = batch::caster_list(parts, &static_ids, &frustum, base);
                 base += list.instances();
-                if list.ids != layer.casters.ids || list.ids.iter().any(|id| moved.contains(id)) {
+                let dynamic = batch::caster_list(parts, &dynamic_ids, &frustum, base);
+                base += dynamic.instances();
+                if list.ids != layer.casters.ids
+                    || dynamic.ids != layer.dynamic.ids
+                    || list
+                        .ids
+                        .iter()
+                        .chain(&dynamic.ids)
+                        .any(|id| moved.contains(id))
+                {
                     layer.stale = true;
                 }
-                if list != layer.casters {
+                if list != layer.casters || dynamic != layer.dynamic {
                     layer.casters = list;
+                    layer.dynamic = dynamic;
                     changed = true;
                 }
             }
@@ -938,7 +981,7 @@ impl Renderer {
                         .iter()
                         .filter(move |layer| layer.is_cascade() == cascades)
                 })
-                .flat_map(|layer| layer.casters.ids.iter().copied())
+                .flat_map(|layer| layer.casters.ids.iter().chain(&layer.dynamic.ids).copied())
                 .collect();
             uploaded += self.upload_instances(VIEW_REGIONS * slots, &ids);
             self.casters_uploaded = true;
@@ -1126,7 +1169,14 @@ impl Renderer {
             .shadows
             .layers
             .iter()
-            .flat_map(|layer| layer.casters.batches.iter().copied())
+            .flat_map(|layer| {
+                layer
+                    .casters
+                    .batches
+                    .iter()
+                    .chain(&layer.dynamic.batches)
+                    .copied()
+            })
             .collect();
         let variants = self.batch_variants(&batches);
         self.shadows.timed = variants.iter().any(|(features, _)| {
@@ -1134,11 +1184,6 @@ impl Renderer {
             caster.product() != 0 || caster.moves_with_time()
         });
         let mut drawn = ShadowsEncoded::default();
-        // The first and last layer rendered carry the shadows timer's stamps.
-        let rendered: Vec<usize> = (0..self.shadows.layers.len())
-            .filter(|&index| retimed || self.shadows.layers[index].stale)
-            .collect();
-        let (first, last) = (rendered.first().copied(), rendered.last().copied());
         for (features, pass) in variants {
             drawn.pipelines_created += u32::from(self.layouts.prepare_caster(
                 &self.gpu.device,
@@ -1146,60 +1191,122 @@ impl Renderer {
                 pass,
             ));
         }
-        for (index, layer) in self.shadows.layers.iter().enumerate() {
-            if !(retimed || layer.stale) {
-                continue;
-            }
+        // A layer with dynamic casters keeps its static casters' depth in the
+        // static cache, unless time moves every caster (`retimed`).
+        let cached_path = |layer: &shadows::ShadowLayer| !retimed && layer.dynamic.instances() > 0;
+        let generation = if self
+            .shadows
+            .layers
+            .iter()
+            .any(|layer| (retimed || layer.stale) && cached_path(layer))
+        {
+            self.shadows
+                .ensure_cache(&self.gpu.device, &self.layouts.shadow_restore_layout)
+        } else {
+            self.shadows.cache_generation
+        };
+        // The frame's first pass and last pass carry the shadows timer's
+        // stamps.
+        let rendered: Vec<usize> = (0..self.shadows.layers.len())
+            .filter(|&index| retimed || self.shadows.layers[index].stale)
+            .collect();
+        let last = rendered.last().copied();
+        let mut begun = false;
+        let mut cached = Vec::new();
+        for index in rendered {
+            let layer = &self.shadows.layers[index];
             drawn.layers += 1;
-            drawn.casters += layer.casters.instances();
-            let index = index as u32;
             let tile = layer.tile;
-            // A tile shares its page with others' maps: it clears only its
-            // own square.
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("render-wgpu shadow"),
-                color_attachments: &[],
-                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: self.shadows.page_view(tile.page),
-                    depth_ops: Some(wgpu::Operations {
-                        load: if tile.is_page() {
-                            wgpu::LoadOp::Clear(1.0)
-                        } else {
-                            wgpu::LoadOp::Load
-                        },
-                        store: wgpu::StoreOp::Store,
-                    }),
-                    stencil_ops: None,
-                }),
-                timestamp_writes: self.shadow_timer.as_ref().and_then(|timer| {
-                    timer.render_writes_between(
-                        first == Some(index as usize),
-                        last == Some(index as usize),
-                    )
-                }),
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            let size = tile.size as f32;
-            pass.set_viewport(tile.x as f32, tile.y as f32, size, size, 0.0, 1.0);
-            pass.set_scissor_rect(tile.x, tile.y, tile.size, tile.size);
-            if !tile.is_page() {
-                pass.set_pipeline(&self.layouts.shadow_clear);
-                pass.draw(0..3, 0..1);
-            }
-            pass.set_bind_group(0, &self.caster_bind_group, &[]);
-            pass.set_bind_group(
-                2,
-                &self.shadows.layer_bind_group,
-                &[ShadowMaps::layer_offset(index)],
-            );
-            drawn.encoded +=
-                self.draw_batches(&mut pass, &layer.casters.batches, |pass, features| {
+            let layer_index = index as u32;
+            let use_cache = cached_path(layer);
+            let token = shadows::CachedStatic {
+                tile,
+                view_proj: layer.view_proj,
+                casters: layer.casters.clone(),
+                generation,
+            };
+            let rebuild = use_cache && layer.cached.as_ref() != Some(&token);
+            // One pass into a tile of the atlas or of the static cache.
+            let timer = self.shadow_timer.as_ref();
+            let mut stamps = |end: bool| {
+                let begin = !std::mem::replace(&mut begun, true);
+                timer.and_then(|timer| timer.render_writes_between(begin, end))
+            };
+            let casters_into = |pass: &mut wgpu::RenderPass<'_>, list: &batch::DrawList| {
+                pass.set_bind_group(0, &self.caster_bind_group, &[]);
+                pass.set_bind_group(
+                    2,
+                    &self.shadows.layer_bind_group,
+                    &[ShadowMaps::layer_offset(layer_index)],
+                );
+                self.draw_batches(pass, &list.batches, |pass, features| {
                     self.layouts.shadow.get(pass, features)
-                });
+                })
+            };
+            let ends_frame = last == Some(index);
+            if use_cache {
+                if rebuild {
+                    // The static casters alone, into the layer's cache tile.
+                    let mut pass = tile_pass(
+                        encoder,
+                        self.shadows.cache_page_view(tile.page),
+                        tile,
+                        stamps(false),
+                    );
+                    if !tile.is_page() {
+                        pass.set_pipeline(&self.layouts.shadow_clear);
+                        pass.draw(0..3, 0..1);
+                    }
+                    drawn.encoded += casters_into(&mut pass, &layer.casters);
+                    drawn.casters += layer.casters.instances();
+                    cached.push((index, token));
+                }
+                // The tile: the static depth restored, the dynamic casters
+                // over it.
+                let mut pass = tile_pass(
+                    encoder,
+                    self.shadows.page_view(tile.page),
+                    tile,
+                    stamps(ends_frame),
+                );
+                pass.set_pipeline(&self.layouts.shadow_restore);
+                pass.set_bind_group(
+                    0,
+                    &self
+                        .shadows
+                        .cache
+                        .as_ref()
+                        .expect("a static cache")
+                        .bind_group,
+                    &[],
+                );
+                pass.draw(0..3, tile.page..tile.page + 1);
+                drawn.encoded += casters_into(&mut pass, &layer.dynamic);
+                drawn.casters += layer.dynamic.instances();
+            } else {
+                let mut pass = tile_pass(
+                    encoder,
+                    self.shadows.page_view(tile.page),
+                    tile,
+                    stamps(ends_frame),
+                );
+                if !tile.is_page() {
+                    pass.set_pipeline(&self.layouts.shadow_clear);
+                    pass.draw(0..3, 0..1);
+                }
+                drawn.encoded += casters_into(&mut pass, &layer.casters);
+                drawn.encoded += casters_into(&mut pass, &layer.dynamic);
+                drawn.casters += layer.casters.instances() + layer.dynamic.instances();
+            }
         }
-        for layer in &mut self.shadows.layers {
+        for (index, layer) in self.shadows.layers.iter_mut().enumerate() {
             layer.stale = false;
+            if retimed || layer.dynamic.instances() == 0 {
+                layer.cached = None;
+            }
+            if let Some((_, token)) = cached.iter().find(|(at, _)| *at == index) {
+                layer.cached = Some(token.clone());
+            }
         }
         if drawn.layers > 0 {
             if let Some(timer) = &mut self.shadow_timer {
@@ -2417,6 +2524,40 @@ fn white_balance(temperature: f32, tint: f32) -> [f32; 3] {
     let reference = lms(x, y);
     let d65 = [0.949_237, 1.035_42, 1.087_28];
     [0, 1, 2].map(|i| d65[i] / reference[i])
+}
+
+/// A pass into one shadow tile of the atlas or the static cache. A tile shares
+/// its page with others' maps: it clears only its own square, and a whole
+/// page clears its attachment.
+fn tile_pass<'e>(
+    encoder: &'e mut wgpu::CommandEncoder,
+    view: &wgpu::TextureView,
+    tile: shadows::Tile,
+    timestamp_writes: Option<wgpu::RenderPassTimestampWrites<'_>>,
+) -> wgpu::RenderPass<'e> {
+    let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        label: Some("render-wgpu shadow"),
+        color_attachments: &[],
+        depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+            view,
+            depth_ops: Some(wgpu::Operations {
+                load: if tile.is_page() {
+                    wgpu::LoadOp::Clear(1.0)
+                } else {
+                    wgpu::LoadOp::Load
+                },
+                store: wgpu::StoreOp::Store,
+            }),
+            stencil_ops: None,
+        }),
+        timestamp_writes,
+        occlusion_query_set: None,
+        multiview_mask: None,
+    });
+    let size = tile.size as f32;
+    pass.set_viewport(tile.x as f32, tile.y as f32, size, size, 0.0, 1.0);
+    pass.set_scissor_rect(tile.x, tile.y, tile.size, tile.size);
+    pass
 }
 
 #[cfg(test)]

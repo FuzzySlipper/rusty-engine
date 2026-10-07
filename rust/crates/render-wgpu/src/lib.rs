@@ -772,6 +772,7 @@ impl Renderer {
             rendered_layers: self.shadows_rendered.0,
             rendered_casters: self.shadows_rendered.1,
             atlas_bytes: self.shadows.atlas_bytes(),
+            static_cache_bytes: self.shadows.cache_bytes(),
         }
     }
 
@@ -818,6 +819,9 @@ pub struct ShadowReport {
     pub rendered_casters: u32,
     /// The GPU bytes of the atlas's depth pages, allocated ones included.
     pub atlas_bytes: u64,
+    /// The static cache's bytes: an atlas-sized depth array, built once a
+    /// light's layer has moving casters; 0 before.
+    pub static_cache_bytes: u64,
 }
 
 /// Mesh memory: the CPU geometry copies kept for bounds and wireframe, beside

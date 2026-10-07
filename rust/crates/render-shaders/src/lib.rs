@@ -295,6 +295,9 @@ pub enum Entry {
     /// The opaque pass's depth copied for the blend pass's water surfaces
     /// (`water_depth.wgsl`).
     WaterDepth,
+    /// A shadow layer's static depth restored from its cache
+    /// (`shadow_restore.wgsl`).
+    ShadowRestore,
 }
 
 impl Entry {
@@ -327,6 +330,10 @@ impl Entry {
             Self::WaterDepth => (
                 "shaders/water_depth.wgsl",
                 include_str!("shaders/water_depth.wgsl"),
+            ),
+            Self::ShadowRestore => (
+                "shaders/shadow_restore.wgsl",
+                include_str!("shaders/shadow_restore.wgsl"),
             ),
             Self::DistanceField => (
                 "shaders/distance_field.wgsl",
@@ -669,6 +676,7 @@ mod tests {
             Entry::Cull,
             Entry::DistanceField,
             Entry::WaterDepth,
+            Entry::ShadowRestore,
         ] {
             compose(&mut shaders, entry, Features::default());
         }

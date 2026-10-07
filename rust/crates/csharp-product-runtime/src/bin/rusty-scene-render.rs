@@ -373,6 +373,7 @@ fn run() -> Result<(), String> {
             "layers": shadows.layers,
             "pages": shadows.pages,
             "atlasBytes": shadows.atlas_bytes,
+            "staticCacheBytes": shadows.static_cache_bytes,
             "castingLights": shadows.casting,
             "renderedLayers": shadows.rendered_layers,
             "renderedCasters": shadows.rendered_casters,

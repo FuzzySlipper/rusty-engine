@@ -49,6 +49,10 @@ pub(crate) struct Layouts {
     pub shadow: ShadowPipelines,
     /// Clears one shadow tile's depth to the far plane within its viewport.
     pub shadow_clear: wgpu::RenderPipeline,
+    /// Restores a shadow tile's static casters' depth from the static cache
+    /// (`shadow_restore.wgsl`), and its cache binding.
+    pub shadow_restore: wgpu::RenderPipeline,
+    pub shadow_restore_layout: wgpu::BindGroupLayout,
     pub prepass: PrepassPipelines,
     /// Group 2 of the world pipelines: a view's ambient occlusion.
     pub ambient_occlusion: wgpu::BindGroupLayout,
@@ -350,6 +354,54 @@ impl Layouts {
             multiview_mask: None,
             cache: None,
         });
+        let shadow_restore_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("render-wgpu shadow restore"),
+                entries: &[wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Depth,
+                        view_dimension: wgpu::TextureViewDimension::D2Array,
+                        multisampled: false,
+                    },
+                    count: None,
+                }],
+            });
+        let restore = standard(shaders.module(device, Entry::ShadowRestore, Features::default()));
+        let shadow_restore = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("render-wgpu shadow restore"),
+            layout: Some(
+                &device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                    label: Some("render-wgpu shadow restore"),
+                    bind_group_layouts: &[Some(&shadow_restore_layout)],
+                    immediate_size: 0,
+                }),
+            ),
+            vertex: wgpu::VertexState {
+                module: &restore,
+                entry_point: Some("vs_restore"),
+                compilation_options: Default::default(),
+                buffers: &[],
+            },
+            primitive: Default::default(),
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: DEPTH_FORMAT,
+                depth_write_enabled: Some(true),
+                depth_compare: Some(wgpu::CompareFunction::Always),
+                stencil: Default::default(),
+                bias: Default::default(),
+            }),
+            multisample: Default::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &restore,
+                entry_point: Some("fs_restore"),
+                compilation_options: Default::default(),
+                targets: &[],
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
         Self {
             frame,
             material,
@@ -367,6 +419,8 @@ impl Layouts {
             shadow_shaders: HashMap::new(),
             shadow: ShadowPipelines::default(),
             shadow_clear,
+            shadow_restore,
+            shadow_restore_layout,
             prepass: PrepassPipelines::default(),
             ambient_occlusion,
             shader_errors: Vec::new(),

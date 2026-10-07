@@ -1012,6 +1012,7 @@ fn shadow_statistics(driver: &SceneDriver) -> ProductHostShadowStatistics {
         rendered_layers: report.rendered_layers,
         rendered_casters: report.rendered_casters,
         atlas_bytes: report.atlas_bytes,
+        static_cache_bytes: report.static_cache_bytes,
     }
 }
 
