@@ -27,9 +27,12 @@
 
   <ItemGroup Condition="'$(RustyEngineUseSourceDevelopment)' == 'true' and '$(RustyEngineSourceDevelopmentPath)' != ''">
     <ProjectReference Include="$(RustyEngineSourceDevelopmentPath)/csharp/Rusty.Engine/Rusty.Engine.csproj" />
+    <!-- The generator is a netstandard2.0 analyzer: a NativeAOT publish's
+         global properties do not apply to it. -->
     <ProjectReference Include="$(RustyEngineSourceDevelopmentPath)/csharp/Rusty.Engine.ProductGenerator/Rusty.Engine.ProductGenerator.csproj"
                       OutputItemType="Analyzer"
                       ReferenceOutputAssembly="false"
+                      UndefineProperties="PublishAot;NativeLib;StripSymbols;RuntimeIdentifier;SelfContained"
                       Condition="'$(RustyEngineProductEntryType)' != ''" />
   </ItemGroup>
 
@@ -267,6 +270,13 @@
           DependsOnTargets="ValidateRustyEngineProduct">
     <Error Condition="'$(RustyEngineNativeAotRuntimeIdentifier)' != 'linux-x64'"
            Text="VerifyRustyEngineAot currently proves the supported linux-x64 NativeAOT module; set RustyEngineNativeAotRuntimeIdentifier=linux-x64." />
+    <!-- NuGet restore evaluates a project without its package imports, so it
+         never sees the source override's ProjectReferences above; restore
+         them for this publish's own extensions path first. -->
+    <Exec Condition="'$(RustyEngineUseSourceDevelopment)' == 'true'"
+          Command="dotnet restore &quot;$(RustyEngineSourceDevelopmentPath)/csharp/Rusty.Engine/Rusty.Engine.csproj&quot; --runtime &quot;$(RustyEngineNativeAotRuntimeIdentifier)&quot; &quot;-p:CustomBeforeDirectoryBuildProps=$(MSBuildThisFileDirectory)Rusty.Engine.NativeAotRestore.props&quot;" />
+    <Exec Condition="'$(RustyEngineUseSourceDevelopment)' == 'true'"
+          Command="dotnet restore &quot;$(RustyEngineSourceDevelopmentPath)/csharp/Rusty.Engine.ProductGenerator/Rusty.Engine.ProductGenerator.csproj&quot; &quot;-p:CustomBeforeDirectoryBuildProps=$(MSBuildThisFileDirectory)Rusty.Engine.NativeAotRestore.props&quot;" />
     <Exec Command="dotnet publish &quot;$(MSBuildProjectFullPath)&quot; --configuration &quot;$(Configuration)&quot; --runtime &quot;$(RustyEngineNativeAotRuntimeIdentifier)&quot; --output &quot;$(_RustyEngineNativeAotOutputDirectory)&quot; -p:PublishAot=true -p:NativeLib=Shared -p:InvariantGlobalization=true -p:StripSymbols=true &quot;-p:CustomBeforeDirectoryBuildProps=$(MSBuildThisFileDirectory)Rusty.Engine.NativeAotRestore.props&quot; &quot;-p:RustyEngineUseSourceDevelopment=$(RustyEngineUseSourceDevelopment)&quot; &quot;-p:RustyEngineSourceDevelopmentPath=$(RustyEngineSourceDevelopmentPath)&quot;" />
     <Error Condition="!Exists('$(_RustyEngineNativeAotOutputDirectory)/$(_RustyEngineProductNativeModule)')"
            Text="NativeAOT publish did not produce $(_RustyEngineProductNativeModule)." />
