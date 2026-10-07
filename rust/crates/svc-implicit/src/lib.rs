@@ -344,6 +344,16 @@ impl Field {
         sample_tape(&tape, points)
     }
 
+    /// The node's value and gradient at each point: what a density stamp
+    /// divides to estimate the distance to the surface (#9505).
+    pub fn sample_gradients(
+        &self,
+        node: Node,
+        points: &[[f32; 3]],
+    ) -> Result<Vec<(f32, [f32; 3])>, Error> {
+        values_and_gradients(&JitShape::from(self.tree(node)?), points)
+    }
+
     pub fn generate(&self, node: Node, options: GenerateOptions) -> Result<Geometry, Error> {
         let started = Instant::now();
         let bounds = options.bounds.validate()?;
@@ -450,6 +460,17 @@ fn sample_tape(tape: &ShapeTape<JitBulkFn<f32>>, points: &[[f32; 3]]) -> Result<
 
 #[cfg(test)]
 fn gradients_shape(shape: &JitShape, points: &[[f32; 3]]) -> Result<Vec<[f32; 3]>, Error> {
+    Ok(values_and_gradients(shape, points)?
+        .into_iter()
+        .map(|(_, gradient)| gradient)
+        .collect())
+}
+
+/// The field's value and gradient at each point.
+fn values_and_gradients(
+    shape: &JitShape,
+    points: &[[f32; 3]],
+) -> Result<Vec<(f32, [f32; 3])>, Error> {
     use fidget::types::Grad;
     let mut evaluator = JitShape::new_grad_slice_eval();
     let tape = shape.ez_grad_slice_tape();
@@ -467,7 +488,7 @@ fn gradients_shape(shape: &JitShape, points: &[[f32; 3]]) -> Result<Vec<[f32; 3]
         .collect();
     evaluator
         .eval(&tape, &x, &y, &z)
-        .map(|v| v.iter().map(|g| [g.dx, g.dy, g.dz]).collect())
+        .map(|v| v.iter().map(|g| (g.v, [g.dx, g.dy, g.dz])).collect())
         .map_err(|e| Error(format!("field gradient failed: {e}")))
 }
 

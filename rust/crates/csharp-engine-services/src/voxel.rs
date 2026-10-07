@@ -211,36 +211,105 @@ impl RuntimeSpatialBridge {
             .iter()
             .map(|edit| native_density_edit(edit, densities, materials))
             .collect::<Result<Vec<_>, _>>()?;
-        self.edit_scene(request.session, |session| {
-            session.change_collision(
-                |scene| match VoxelDensityEditService::apply(scene, &edits) {
-                    Ok(receipt) => {
-                        let changed = collision_reach(
-                            scene,
-                            voxel_box(scene, receipt.changed_min, receipt.changed_max_inclusive),
-                        );
-                        (Ok(native_density_receipt(scene, &receipt)), vec![changed])
-                    }
-                    Err(VoxelDensityApplyError::Rejected(VoxelDensityRejection::NoChanges)) => {
-                        let revision = scene.source_revision().raw();
-                        (
-                            Ok(NativeVoxelDensityReceipt {
-                                status: NativeVoxelEditStatus::NoChanges,
-                                revision_before: revision,
-                                accepted_revision: revision,
-                                solid_voxel_count: scene.solid_voxel_count() as u64,
-                                authority_hash: scene.authority_hash(),
-                                ..Default::default()
-                            }),
-                            Vec::new(),
-                        )
-                    }
-                    Err(error) => (
-                        Err(voxel_error("CSHARP_VOXEL_DENSITY_EDIT", error.to_string())),
+        self.apply_density(request.session, &edits)
+    }
+
+    /// Stamp an implicit field node into a session's densities (#9505): sample
+    /// the node at the centres of the stamp box's voxels, divide each value
+    /// by the field's gradient into a distance, and apply it as a brush.
+    fn stamp_voxel_implicit(
+        &mut self,
+        request: &NativeVoxelImplicitStampRequest,
+    ) -> Result<NativeVoxelDensityReceipt, CsharpEngineServicesError> {
+        let refuse = |message: &str| voxel_error("CSHARP_VOXEL_IMPLICIT_STAMP", message);
+        let vector = |value: NativeVec3| [value.x, value.y, value.z].map(f64::from);
+        let low = vector(request.bounds_min);
+        let high = vector(request.bounds_max);
+        if !(0..3)
+            .all(|axis| low[axis].is_finite() && high[axis].is_finite() && low[axis] < high[axis])
+        {
+            return Err(refuse("stamp bounds must be finite with min below max"));
+        }
+        let material_slot = u16::try_from(request.material_slot)
+            .map_err(|_| refuse("stamp material slot exceeds the slot limit"))?;
+        let operation = density_operation(request.operation, request.strength);
+        let implicit = self
+            .sibling_implicit
+            .ok_or_else(|| refuse("voxel stamps have no ImplicitSurfaces owner"))?;
+        // SAFETY: bind_implicit points at the sibling owner retained by
+        // EngineServiceSet; the field is cloned out within this call.
+        let (field, node) = unsafe { &mut *implicit }.stamp_field(request.field, request.node)?;
+        let session = self.session_mut(request.session)?;
+        let scene = session.scene.as_ref();
+        let (min, size) = engine_spatial::density_stamp_box(scene, low, high, operation);
+        let count = size.iter().map(|value| u64::from(*value)).product::<u64>();
+        if count == 0 || count > engine_spatial::MAX_DENSITY_EDIT_VOXELS {
+            return Err(refuse("a stamp covers 1 to 16,777,216 voxels"));
+        }
+        let mut points = Vec::with_capacity(count as usize);
+        for z in 0..i64::from(size[2]) {
+            for y in 0..i64::from(size[1]) {
+                for x in 0..i64::from(size[0]) {
+                    let at = engine_spatial::density_voxel_center(
+                        scene,
+                        [min[0] + x, min[1] + y, min[2] + z],
+                    );
+                    points.push(at.map(|value| value as f32));
+                }
+            }
+        }
+        let voxel_size = scene.voxel_size() as f32;
+        let distances = field
+            .sample_gradients(node, &points)
+            .map_err(|error| voxel_error("CSHARP_VOXEL_IMPLICIT_STAMP", error.0))?
+            .into_iter()
+            .map(|(value, gradient)| stamp_distance(value, gradient, voxel_size))
+            .collect();
+        self.apply_density(
+            request.session,
+            &[VoxelDensityEdit::Stamp {
+                min,
+                size,
+                distances,
+                operation,
+                material_slot,
+            }],
+        )
+    }
+
+    fn apply_density(
+        &mut self,
+        session: NativeSpatialSessionHandle,
+        edits: &[VoxelDensityEdit],
+    ) -> Result<NativeVoxelDensityReceipt, CsharpEngineServicesError> {
+        self.edit_scene(session, |session| {
+            session.change_collision(|scene| match VoxelDensityEditService::apply(scene, edits) {
+                Ok(receipt) => {
+                    let changed = collision_reach(
+                        scene,
+                        voxel_box(scene, receipt.changed_min, receipt.changed_max_inclusive),
+                    );
+                    (Ok(native_density_receipt(scene, &receipt)), vec![changed])
+                }
+                Err(VoxelDensityApplyError::Rejected(VoxelDensityRejection::NoChanges)) => {
+                    let revision = scene.source_revision().raw();
+                    (
+                        Ok(NativeVoxelDensityReceipt {
+                            status: NativeVoxelEditStatus::NoChanges,
+                            revision_before: revision,
+                            accepted_revision: revision,
+                            solid_voxel_count: scene.solid_voxel_count() as u64,
+                            authority_hash: scene.authority_hash(),
+                            ..Default::default()
+                        }),
                         Vec::new(),
-                    ),
-                },
-            )
+                    )
+                }
+                Err(error) => (
+                    Err(voxel_error("CSHARP_VOXEL_DENSITY_EDIT", error.to_string())),
+                    Vec::new(),
+                ),
+            })
         })?
     }
 
@@ -509,18 +578,46 @@ fn native_density_edit(
                         max: vector(edit.box_max),
                     },
                 },
-                operation: match edit.operation {
-                    NativeVoxelDensityOperation::Add => VoxelDensityOperation::Add,
-                    NativeVoxelDensityOperation::Subtract => VoxelDensityOperation::Subtract,
-                    NativeVoxelDensityOperation::Smooth => VoxelDensityOperation::Smooth {
-                        strength: edit.strength,
-                    },
-                    NativeVoxelDensityOperation::Paint => VoxelDensityOperation::Paint,
-                },
+                operation: density_operation(edit.operation, edit.strength),
                 material_slot,
             }
         }
     })
+}
+
+fn density_operation(
+    operation: NativeVoxelDensityOperation,
+    strength: f32,
+) -> VoxelDensityOperation {
+    match operation {
+        NativeVoxelDensityOperation::Add => VoxelDensityOperation::Add,
+        NativeVoxelDensityOperation::Subtract => VoxelDensityOperation::Subtract,
+        NativeVoxelDensityOperation::Smooth => VoxelDensityOperation::Smooth { strength },
+        NativeVoxelDensityOperation::Paint => VoxelDensityOperation::Paint,
+    }
+}
+
+/// How far, in voxels, a stamp's distances reach either side of its surface:
+/// past the brush margin they only decide inside from outside.
+const STAMP_DISTANCE_LIMIT_VOXELS: f32 = 2.0 * engine_spatial::STAMP_MARGIN_VOXELS as f32;
+
+/// An implicit field's value as a distance in voxels: divided by its
+/// gradient's length (first-order distance to the surface), so a field that
+/// grows faster or slower than distance places its surface as a brush would,
+/// and clamped to the stamp's reach.
+fn stamp_distance(value: f32, gradient: [f32; 3], voxel_size: f32) -> f32 {
+    let slope =
+        (gradient[0] * gradient[0] + gradient[1] * gradient[1] + gradient[2] * gradient[2]).sqrt();
+    let distance = if slope.is_finite() && slope > f32::EPSILON {
+        value / slope / voxel_size
+    } else {
+        value.signum() * STAMP_DISTANCE_LIMIT_VOXELS
+    };
+    if distance.is_finite() {
+        distance.clamp(-STAMP_DISTANCE_LIMIT_VOXELS, STAMP_DISTANCE_LIMIT_VOXELS)
+    } else {
+        value.signum() * STAMP_DISTANCE_LIMIT_VOXELS
+    }
 }
 
 fn native_density_receipt(
@@ -953,6 +1050,34 @@ pub(crate) fn api(bridge: &mut RuntimeSpatialBridge) -> NativeVoxelApi {
         read_densities,
         configure_terrain_layers,
         configure_vertex_occlusion,
+        stamp_implicit,
+    }
+}
+
+unsafe extern "C" fn stamp_implicit(
+    context: *mut c_void,
+    request: *const NativeVoxelImplicitStampRequest,
+    output: *mut NativeVoxelDensityReceipt,
+    receipt: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    if receipt.is_null() {
+        return 0;
+    }
+    // SAFETY: this borrowed receipt starts empty for every direct callback.
+    unsafe { *receipt = std::mem::zeroed() };
+    if context.is_null() || request.is_null() || output.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeSpatialBridge>() };
+    match bridge.stamp_voxel_implicit(unsafe { &*request }) {
+        Ok(value) => {
+            unsafe { *output = value };
+            ABI_OK
+        }
+        Err(error) => {
+            bridge.operation_diagnostics.retain(&error, receipt);
+            0
+        }
     }
 }
 
@@ -1617,6 +1742,236 @@ mod tests {
         assert_eq!(samples.len(), 2);
         assert!(samples.iter().all(|sample| sample.resident));
         assert!(samples[1].density >= 0.0 && samples[1].material_slot == 0);
+    }
+
+    /// A dual-contoured 16 x 4 x 16 stone floor.
+    fn dual_contoured_floor(bridge: &mut RuntimeSpatialBridge) -> NativeSpatialSessionHandle {
+        let spatial = crate::spatial::api(bridge);
+        let mut session = NativeSpatialSessionHandle::default();
+        assert_eq!(
+            unsafe {
+                (spatial.create_session)(
+                    spatial.context,
+                    NativeSpatialSessionConfig {
+                        collision_voxel_size: 1.0,
+                        collision_chunk_size: 8,
+                        voxel_surface_mode: NativeVoxelSurfaceMode::DualContouring,
+                    },
+                    &mut session,
+                    std::ptr::null_mut(),
+                )
+            },
+            ABI_OK
+        );
+        let floor: Vec<_> = (0..16)
+            .flat_map(|x| (0..16).flat_map(move |z| (0..4).map(move |y| (x, y, z))))
+            .map(|(x, y, z)| set(NativeVoxelAddress { x, y, z }, 1))
+            .collect();
+        bridge
+            .apply_voxel_edits(&NativeVoxelEditTransaction {
+                session,
+                edits: floor.as_ptr(),
+                edits_len: floor.len(),
+            })
+            .unwrap();
+        session
+    }
+
+    /// A stamp of an implicit sphere carves what the sphere brush carves; a
+    /// sphere scaled up by a transform (whose values are not distances)
+    /// carves the same once its values are divided by its gradient; a stamp
+    /// adds and paints as brushes do (#9505).
+    #[test]
+    fn an_implicit_stamp_carves_as_the_brush_of_its_shape() {
+        let mut appearance = crate::appearance::RuntimeAppearanceBridge::new(
+            render_projection::RuntimeAppearanceCatalog::default(),
+            Default::default(),
+        );
+        let mut implicit = crate::implicit_surfaces::RuntimeImplicitBridge::new();
+        implicit.begin_call();
+        let surfaces = crate::implicit_surfaces::api(&mut implicit, &mut appearance);
+        let mut error: NativeOperationErrorReceipt = unsafe { std::mem::zeroed() };
+        let mut field = NativeImplicitFieldHandle { value: 0 };
+        assert_eq!(
+            unsafe { (surfaces.create_field)(surfaces.context, &mut field, &mut error) },
+            ABI_OK
+        );
+        let centre = NativeVec3 {
+            x: 8.0,
+            y: 4.0,
+            z: 8.0,
+        };
+        let mut exact = NativeImplicitNode { value: 0 };
+        assert_eq!(
+            unsafe {
+                (surfaces.add_sphere)(
+                    surfaces.context,
+                    NativeImplicitSphereRequest {
+                        field,
+                        center: centre,
+                        radius: 3.0,
+                    },
+                    &mut exact,
+                    &mut error,
+                )
+            },
+            ABI_OK
+        );
+        let mut unit = NativeImplicitNode { value: 0 };
+        assert_eq!(
+            unsafe {
+                (surfaces.add_sphere)(
+                    surfaces.context,
+                    NativeImplicitSphereRequest {
+                        field,
+                        center: NativeVec3::default(),
+                        radius: 1.0,
+                    },
+                    &mut unit,
+                    &mut error,
+                )
+            },
+            ABI_OK
+        );
+        let mut scaled = NativeImplicitNode { value: 0 };
+        assert_eq!(
+            unsafe {
+                (surfaces.transform)(
+                    surfaces.context,
+                    NativeImplicitTransformRequest {
+                        field,
+                        source: unit,
+                        transform: NativeTransform {
+                            translation: centre,
+                            rotation: NativeQuat {
+                                x: 0.0,
+                                y: 0.0,
+                                z: 0.0,
+                                w: 1.0,
+                            },
+                            scale: NativeVec3 {
+                                x: 3.0,
+                                y: 3.0,
+                                z: 3.0,
+                            },
+                        },
+                    },
+                    &mut scaled,
+                    &mut error,
+                )
+            },
+            ABI_OK
+        );
+
+        let mut brushed = RuntimeSpatialBridge::new();
+        let session = dual_contoured_floor(&mut brushed);
+        let brush = brushed
+            .apply_density(
+                session,
+                &[VoxelDensityEdit::Brush {
+                    shape: VoxelDensityShape::Sphere {
+                        center: [8.0, 4.0, 8.0],
+                        radius: 3.0,
+                    },
+                    operation: VoxelDensityOperation::Subtract,
+                    material_slot: 1,
+                }],
+            )
+            .unwrap();
+        assert!(brush.solidity_changes > 0);
+        for node in [exact, scaled] {
+            let mut stamped = RuntimeSpatialBridge::new();
+            stamped.bind_implicit(&mut implicit);
+            let session = dual_contoured_floor(&mut stamped);
+            let stamp = stamped
+                .stamp_voxel_implicit(&NativeVoxelImplicitStampRequest {
+                    session,
+                    field,
+                    node,
+                    bounds_min: NativeVec3 {
+                        x: 5.0,
+                        y: 1.0,
+                        z: 5.0,
+                    },
+                    bounds_max: NativeVec3 {
+                        x: 11.0,
+                        y: 7.0,
+                        z: 11.0,
+                    },
+                    operation: NativeVoxelDensityOperation::Subtract,
+                    strength: 0.0,
+                    material_slot: 1,
+                })
+                .unwrap();
+            assert_eq!(
+                (stamp.solidity_changes, stamp.solid_voxel_count),
+                (brush.solidity_changes, brush.solid_voxel_count),
+                "node {}",
+                node.value
+            );
+            // Adding the sphere back fills the hole (and the sphere's crown
+            // above the floor, within the bounds and the brush margin).
+            let filled = stamped
+                .stamp_voxel_implicit(&NativeVoxelImplicitStampRequest {
+                    session,
+                    field,
+                    node,
+                    bounds_min: NativeVec3 {
+                        x: 5.0,
+                        y: 1.0,
+                        z: 5.0,
+                    },
+                    bounds_max: NativeVec3 {
+                        x: 11.0,
+                        y: 4.0,
+                        z: 11.0,
+                    },
+                    operation: NativeVoxelDensityOperation::Add,
+                    strength: 0.0,
+                    material_slot: 2,
+                })
+                .unwrap();
+            assert!(filled.solid_voxel_count > 16 * 16 * 4);
+            assert_eq!(
+                filled.solidity_changes,
+                stamp.solidity_changes + (filled.solid_voxel_count - 16 * 16 * 4) as u32
+            );
+        }
+
+        // A stamp needs live field and node handles, and bounds with volume.
+        let mut stamped = RuntimeSpatialBridge::new();
+        stamped.bind_implicit(&mut implicit);
+        let session = dual_contoured_floor(&mut stamped);
+        let request = NativeVoxelImplicitStampRequest {
+            session,
+            field,
+            node: exact,
+            bounds_min: NativeVec3 {
+                x: 5.0,
+                y: 1.0,
+                z: 5.0,
+            },
+            bounds_max: NativeVec3 {
+                x: 5.0,
+                y: 7.0,
+                z: 11.0,
+            },
+            operation: NativeVoxelDensityOperation::Subtract,
+            strength: 0.0,
+            material_slot: 1,
+        };
+        assert!(stamped.stamp_voxel_implicit(&request).is_err());
+        assert!(stamped
+            .stamp_voxel_implicit(&NativeVoxelImplicitStampRequest {
+                node: NativeImplicitNode { value: 999 },
+                bounds_max: NativeVec3 {
+                    x: 11.0,
+                    y: 7.0,
+                    z: 11.0
+                },
+                ..request
+            })
+            .is_err());
     }
 
     fn set(address: NativeVoxelAddress, material_slot: u32) -> NativeVoxelEdit {

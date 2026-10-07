@@ -192,6 +192,16 @@ impl RuntimeImplicitBridge {
             .get_mut(&handle.value)
             .ok_or_else(|| error("unknown implicit field"))
     }
+    /// A retained field and one of its nodes, read by a voxel density stamp
+    /// (#9505) for the length of the call.
+    pub(crate) fn stamp_field(
+        &mut self,
+        field: NativeImplicitFieldHandle,
+        node: NativeImplicitNode,
+    ) -> Result<(Arc<Field>, Node)> {
+        let retained = self.retained(field)?;
+        Ok((Arc::clone(&retained.field), retained.node(node)?))
+    }
     fn retained_volume(
         &mut self,
         handle: NativeSampledVolumeHandle,

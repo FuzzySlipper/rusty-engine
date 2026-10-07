@@ -6,10 +6,11 @@ use std::collections::BTreeSet;
 use core_ids::EntityId;
 use core_math::{Vec2, Vec3};
 use engine_spatial::{
-    CharacterControllerCommand, CharacterControllerConfig, CharacterControllerService,
-    MaterialSurface, MaterialVoxel, SurfaceCharacter, SurfaceMaterials, SurfaceMeshOptions,
-    SurfaceMode, VertexPlacement, VoxelCollisionScene, VoxelDensityApplyError, VoxelDensityEdit,
-    VoxelDensityEditService, VoxelDensityOperation, VoxelDensityRejection, VoxelDensityShape,
+    density_stamp_box, density_voxel_center, CharacterControllerCommand, CharacterControllerConfig,
+    CharacterControllerService, MaterialSurface, MaterialVoxel, SurfaceCharacter, SurfaceMaterials,
+    SurfaceMeshOptions, SurfaceMode, VertexPlacement, VoxelCollisionScene, VoxelDensityApplyError,
+    VoxelDensityEdit, VoxelDensityEditService, VoxelDensityOperation, VoxelDensityRejection,
+    VoxelDensityShape,
 };
 use entity_state::{CharacterMotionComponent, EntityDefinition, EntityState};
 
@@ -279,6 +280,76 @@ fn a_blast_rebuilds_nearby_chunks_and_collision_follows_the_crater() {
     )
     .unwrap();
     assert!(scene.contains_point([8.0, center[1] - 1.0, 12.0]));
+}
+
+/// A stamp is a brush of any shape (#9505): sampling a sphere's distance at
+/// the voxel centres of its stamp box and stamping it changes exactly what
+/// the sphere brush changes, for every operation.
+#[test]
+fn a_stamp_of_sampled_distances_applies_as_the_brush_it_samples() {
+    let center = [8.0, slope_height(12.0), 12.0];
+    let radius = 2.5;
+    let sphere = VoxelDensityShape::Sphere { center, radius };
+    for operation in [
+        VoxelDensityOperation::Add,
+        VoxelDensityOperation::Subtract,
+        VoxelDensityOperation::Smooth { strength: 0.5 },
+        VoxelDensityOperation::Paint,
+    ] {
+        let options = dual_contoured(SurfaceMaterials::default());
+        let mut brushed = slope_scene_in_chunks(options.clone(), 4);
+        let mut stamped = slope_scene_in_chunks(options, 4);
+        let outcome = |result: Result<_, VoxelDensityApplyError>| match result {
+            Ok(receipt) => {
+                let receipt: engine_spatial::VoxelDensityReceipt = receipt;
+                Some((
+                    receipt.changed_voxels,
+                    receipt.solidity_changes,
+                    receipt.authority_hash,
+                ))
+            }
+            Err(VoxelDensityApplyError::Rejected(VoxelDensityRejection::NoChanges)) => None,
+            Err(error) => panic!("{error}"),
+        };
+        let brush = outcome(VoxelDensityEditService::apply(
+            &mut brushed,
+            &[VoxelDensityEdit::Brush {
+                shape: sphere,
+                operation,
+                material_slot: BRICK,
+            }],
+        ));
+        let low = center.map(|value| value - radius);
+        let high = center.map(|value| value + radius);
+        let (min, size) = density_stamp_box(&stamped, low, high, operation);
+        let mut distances = Vec::new();
+        for z in 0..i64::from(size[2]) {
+            for y in 0..i64::from(size[1]) {
+                for x in 0..i64::from(size[0]) {
+                    let at = density_voxel_center(&stamped, [min[0] + x, min[1] + y, min[2] + z]);
+                    let delta: [f64; 3] = std::array::from_fn(|axis| at[axis] - center[axis]);
+                    let distance =
+                        (delta[0] * delta[0] + delta[1] * delta[1] + delta[2] * delta[2]).sqrt()
+                            - radius;
+                    distances.push(distance as f32);
+                }
+            }
+        }
+        let stamp = outcome(VoxelDensityEditService::apply(
+            &mut stamped,
+            &[VoxelDensityEdit::Stamp {
+                min,
+                size,
+                distances,
+                operation,
+                material_slot: BRICK,
+            }],
+        ));
+        assert_eq!(stamp, brush, "{operation:?}");
+        if !matches!(operation, VoxelDensityOperation::Smooth { .. }) {
+            assert!(brush.is_some(), "{operation:?} changes the slope");
+        }
+    }
 }
 
 #[test]

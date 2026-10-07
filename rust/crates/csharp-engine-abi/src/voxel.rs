@@ -1,4 +1,4 @@
-use crate::{NativeLightDescriptor, NativeVec3};
+use crate::{NativeImplicitFieldHandle, NativeImplicitNode, NativeLightDescriptor, NativeVec3};
 use crate::{NativeOperationErrorReceipt, NativeSpatialSessionHandle};
 use std::ffi::c_void;
 
@@ -422,6 +422,35 @@ pub struct NativeVoxelDensityReceipt {
     pub mesh_microseconds: u64,
 }
 
+/// Stamp an implicit field node into a session's densities (#9505): the
+/// node's surface applied as a density brush (Add, Subtract, Smooth or
+/// Paint, with `strength` for Smooth and `material_slot` for what it
+/// adds or paints) over the voxels whose centres lie in `bounds_min` to
+/// `bounds_max` (the scene's frame, metres), plus the brush margin for Add
+/// and Subtract. Field values are scaled by the field's gradient into
+/// distances, so a stamp places its surface as a brush of the same shape
+/// would. The field stays owned by ImplicitSurfaces and is read for the
+/// call. Returns the density receipt.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeVoxelImplicitStampRequest {
+    pub session: NativeSpatialSessionHandle,
+    pub field: NativeImplicitFieldHandle,
+    pub node: NativeImplicitNode,
+    pub bounds_min: NativeVec3,
+    pub bounds_max: NativeVec3,
+    pub operation: NativeVoxelDensityOperation,
+    pub strength: f32,
+    pub material_slot: u32,
+}
+
+pub type NativeStampVoxelImplicit = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeVoxelImplicitStampRequest,
+    *mut NativeVoxelDensityReceipt,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+
 pub type NativeApplyVoxelDensityEdits = unsafe extern "C" fn(
     *mut c_void,
     *const NativeVoxelDensityTransaction,
@@ -513,6 +542,7 @@ pub struct NativeVoxelApi {
     pub read_densities: NativeReadVoxelDensities,
     pub configure_terrain_layers: NativeConfigureVoxelTerrainLayers,
     pub configure_vertex_occlusion: NativeConfigureVoxelVertexOcclusion,
+    pub stamp_implicit: NativeStampVoxelImplicit,
 }
 
 /// Samples direct incident light at address + offset (in voxel units). Descriptors

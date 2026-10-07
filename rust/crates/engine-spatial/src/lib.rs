@@ -101,8 +101,9 @@ pub use svc_mesh::{
 };
 pub use svc_volume::DEFAULT_DENSITY_MAGNITUDE;
 pub use voxel_density::{
-    VoxelDensityApplyError, VoxelDensityEdit, VoxelDensityEditService, VoxelDensityOperation,
-    VoxelDensityReceipt, VoxelDensityRejection, VoxelDensityShape, MAX_DENSITY_EDIT_VOXELS,
+    density_stamp_box, density_voxel_center, VoxelDensityApplyError, VoxelDensityEdit,
+    VoxelDensityEditService, VoxelDensityOperation, VoxelDensityReceipt, VoxelDensityRejection,
+    VoxelDensityShape, MAX_DENSITY_EDIT_VOXELS, STAMP_MARGIN_VOXELS,
 };
 pub use voxel_edit::{
     validate_material_voxel, validate_voxel_address, validate_voxel_material_slot,

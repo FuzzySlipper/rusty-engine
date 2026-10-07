@@ -185,6 +185,8 @@ pub(crate) struct RuntimeSpatialBridge {
     pub(crate) operation_diagnostics: crate::operation_diagnostics::OperationDiagnostics,
     collision_source: SpatialCollisionSource,
     sibling_appearance: Option<*mut crate::appearance::RuntimeAppearanceBridge>,
+    /// The ImplicitSurfaces owner a density stamp reads its field from.
+    pub(crate) sibling_implicit: Option<*mut crate::implicit_surfaces::RuntimeImplicitBridge>,
     content: Option<*const crate::content::RuntimeContentBridge>,
     next_session: u64,
     pub(crate) prepared_world_origins: BTreeMap<u64, crate::world_origin::PreparedWorldOriginOwner>,
@@ -616,6 +618,7 @@ impl RuntimeSpatialBridge {
             operation_diagnostics: Default::default(),
             collision_source: SpatialCollisionSource::new(),
             sibling_appearance: None,
+            sibling_implicit: None,
             content: None,
             next_session: 1,
             prepared_world_origins: BTreeMap::new(),
@@ -666,6 +669,16 @@ impl RuntimeSpatialBridge {
         // synchronous, copy-on-admission collision replacement.
         self.sibling_appearance =
             Some(appearance as *mut crate::appearance::RuntimeAppearanceBridge);
+    }
+
+    pub(crate) fn bind_implicit(
+        &mut self,
+        implicit: &mut crate::implicit_surfaces::RuntimeImplicitBridge,
+    ) {
+        // Retained by EngineServiceSet like the appearance sibling; a stamp
+        // reads a field through it within one synchronous call.
+        self.sibling_implicit =
+            Some(implicit as *mut crate::implicit_surfaces::RuntimeImplicitBridge);
     }
 
     pub(crate) fn reset_update_attribution(&mut self) {

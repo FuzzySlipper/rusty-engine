@@ -107,6 +107,60 @@ pub enum VoxelDensityEdit {
         operation: VoxelDensityOperation,
         material_slot: u16,
     },
+    /// A brush of any shape: the signed distance (voxel units, negative
+    /// inside) to its surface at the centre of each voxel of a box, `size`
+    /// from `min`, in x-fastest order, applied as a brush applies its own.
+    /// The caller samples the shape (an implicit field, #9505); the box
+    /// should reach [`STAMP_MARGIN_VOXELS`] past the shape for Add and
+    /// Subtract, as a brush's does ([`density_stamp_box`]).
+    Stamp {
+        min: [i64; 3],
+        size: [u32; 3],
+        distances: Vec<f32>,
+        operation: VoxelDensityOperation,
+        material_slot: u16,
+    },
+}
+
+/// How far past its shape a stamp's box reaches for Add and Subtract, in
+/// voxels: the margin a brush lowers or raises densities within.
+pub const STAMP_MARGIN_VOXELS: f64 = BRUSH_MARGIN_VOXELS;
+
+/// The voxel box a stamp of `operation` over the world box `low`..`high` (in
+/// the scene's frame) covers: the voxels whose centres lie within it, grown
+/// by the brush margin for Add and Subtract. Returns the first voxel and the
+/// size.
+pub fn density_stamp_box(
+    scene: &VoxelCollisionScene,
+    low: [f64; 3],
+    high: [f64; 3],
+    operation: VoxelDensityOperation,
+) -> ([i64; 3], [u32; 3]) {
+    let (first, last) = brush_voxels(
+        scene,
+        VoxelDensityShape::Box {
+            min: low,
+            max: high,
+        },
+        operation_margin(operation),
+    );
+    let size = std::array::from_fn(|axis| {
+        (last[axis] - first[axis] + 1).clamp(0, i64::from(u32::MAX)) as u32
+    });
+    (first, size)
+}
+
+/// The centre of a voxel in the scene's frame, where a stamp's distances
+/// are sampled.
+pub fn density_voxel_center(scene: &VoxelCollisionScene, address: [i64; 3]) -> [f64; 3] {
+    voxel_center(scene, address)
+}
+
+fn operation_margin(operation: VoxelDensityOperation) -> f64 {
+    match operation {
+        VoxelDensityOperation::Add | VoxelDensityOperation::Subtract => BRUSH_MARGIN_VOXELS,
+        _ => 0.0,
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -268,13 +322,7 @@ impl VoxelDensityEditService {
                     material_slot,
                 } => {
                     let voxel_size = scene.voxel_size;
-                    let margin = match operation {
-                        VoxelDensityOperation::Add | VoxelDensityOperation::Subtract => {
-                            BRUSH_MARGIN_VOXELS
-                        }
-                        _ => 0.0,
-                    };
-                    let (low, high) = brush_voxels(scene, *shape, margin);
+                    let (low, high) = brush_voxels(scene, *shape, operation_margin(*operation));
                     let mut updates = Vec::new();
                     for z in low[2]..=high[2] {
                         for y in low[1]..=high[1] {
@@ -282,72 +330,42 @@ impl VoxelDensityEditService {
                                 let address = [x, y, z];
                                 let center = voxel_center(scene, address);
                                 let distance = (shape.distance(center) / voxel_size) as f32;
-                                let before = read(scene, &working, address);
-                                let after = match operation {
-                                    VoxelDensityOperation::Add => {
-                                        let density = before.density.min(distance);
-                                        Sample {
-                                            density,
-                                            material: if density < 0.0 {
-                                                before.material.or(Some(*material_slot))
-                                            } else {
-                                                None
-                                            },
-                                        }
-                                    }
-                                    VoxelDensityOperation::Subtract => {
-                                        let density = before.density.max(-distance);
-                                        Sample {
-                                            density,
-                                            material: if density < 0.0 {
-                                                before.material
-                                            } else {
-                                                None
-                                            },
-                                        }
-                                    }
-                                    VoxelDensityOperation::Smooth { strength } => {
-                                        if distance >= 0.0 {
-                                            continue;
-                                        }
-                                        let neighbours = SIX.map(|offset| {
-                                            read(scene, &working, add(address, offset))
-                                        });
-                                        let mean =
-                                            neighbours.iter().map(|n| n.density).sum::<f32>() / 6.0;
-                                        let density =
-                                            before.density + strength * (mean - before.density);
-                                        let material = if density < 0.0 {
-                                            before
-                                                .material
-                                                .or_else(|| {
-                                                    most_common(
-                                                        neighbours
-                                                            .iter()
-                                                            .filter_map(|n| n.material),
-                                                    )
-                                                })
-                                                .or(Some(*material_slot))
-                                        } else {
-                                            None
-                                        };
-                                        Sample { density, material }
-                                    }
-                                    VoxelDensityOperation::Paint => {
-                                        if distance >= 0.0 || before.material.is_none() {
-                                            continue;
-                                        }
-                                        Sample {
-                                            material: Some(*material_slot),
-                                            ..before
-                                        }
-                                    }
-                                };
-                                updates.push((address, after));
+                                let read_at = |at| read(scene, &working, at);
+                                if let Some(after) =
+                                    operate(*operation, *material_slot, address, distance, read_at)
+                                {
+                                    updates.push((address, after));
+                                }
                             }
                         }
                     }
                     // Smoothing reads the batch's state before this brush.
+                    working.extend(updates);
+                }
+                VoxelDensityEdit::Stamp {
+                    min,
+                    size,
+                    distances,
+                    operation,
+                    material_slot,
+                } => {
+                    let mut updates = Vec::new();
+                    let mut index = 0;
+                    for z in 0..i64::from(size[2]) {
+                        for y in 0..i64::from(size[1]) {
+                            for x in 0..i64::from(size[0]) {
+                                let address = [min[0] + x, min[1] + y, min[2] + z];
+                                let distance = distances[index];
+                                index += 1;
+                                let read_at = |at| read(scene, &working, at);
+                                if let Some(after) =
+                                    operate(*operation, *material_slot, address, distance, read_at)
+                                {
+                                    updates.push((address, after));
+                                }
+                            }
+                        }
+                    }
                     working.extend(updates);
                 }
             }
@@ -449,6 +467,65 @@ impl VoxelDensityEditService {
             mesh_microseconds: update.mesh_microseconds,
         })
     }
+}
+
+/// What a brush operation makes of one voxel at `distance` (voxel units,
+/// negative inside) from the brush's surface, or `None` when it leaves the
+/// voxel as it is. `read` gives the batch's current sample at an address.
+fn operate(
+    operation: VoxelDensityOperation,
+    material_slot: u16,
+    address: [i64; 3],
+    distance: f32,
+    read: impl Fn([i64; 3]) -> Sample,
+) -> Option<Sample> {
+    let before = read(address);
+    Some(match operation {
+        VoxelDensityOperation::Add => {
+            let density = before.density.min(distance);
+            Sample {
+                density,
+                material: if density < 0.0 {
+                    before.material.or(Some(material_slot))
+                } else {
+                    None
+                },
+            }
+        }
+        VoxelDensityOperation::Subtract => {
+            let density = before.density.max(-distance);
+            Sample {
+                density,
+                material: if density < 0.0 { before.material } else { None },
+            }
+        }
+        VoxelDensityOperation::Smooth { strength } => {
+            if distance >= 0.0 {
+                return None;
+            }
+            let neighbours = SIX.map(|offset| read(add(address, offset)));
+            let mean = neighbours.iter().map(|n| n.density).sum::<f32>() / 6.0;
+            let density = before.density + strength * (mean - before.density);
+            let material = if density < 0.0 {
+                before
+                    .material
+                    .or_else(|| most_common(neighbours.iter().filter_map(|n| n.material)))
+                    .or(Some(material_slot))
+            } else {
+                None
+            };
+            Sample { density, material }
+        }
+        VoxelDensityOperation::Paint => {
+            if distance >= 0.0 || before.material.is_none() {
+                return None;
+            }
+            Sample {
+                material: Some(material_slot),
+                ..before
+            }
+        }
+    })
 }
 
 const SIX: [[i64; 3]; 6] = [
@@ -575,12 +652,31 @@ fn validate(
                 }
             }
             check_material(*material_slot)?;
-            let margin = match operation {
-                VoxelDensityOperation::Add | VoxelDensityOperation::Subtract => BRUSH_MARGIN_VOXELS,
-                _ => 0.0,
-            };
-            let (low, high) = brush_voxels(scene, *shape, margin);
+            let (low, high) = brush_voxels(scene, *shape, operation_margin(*operation));
             check_range(low, high)
+        }
+        VoxelDensityEdit::Stamp {
+            min,
+            size,
+            distances,
+            operation,
+            material_slot,
+        } => {
+            let count = size.iter().map(|value| u64::from(*value)).product::<u64>();
+            if count == 0 || distances.len() as u64 != count {
+                return Err(VoxelDensityRejection::InvalidRegion { edit_index });
+            }
+            if !distances.iter().all(|value| value.is_finite()) {
+                return Err(VoxelDensityRejection::InvalidDensity { edit_index });
+            }
+            if let VoxelDensityOperation::Smooth { strength } = operation {
+                if !(strength.is_finite() && *strength > 0.0 && *strength <= 1.0) {
+                    return Err(VoxelDensityRejection::InvalidBrush { edit_index });
+                }
+            }
+            check_material(*material_slot)?;
+            let high: [i64; 3] = std::array::from_fn(|axis| min[axis] + i64::from(size[axis]) - 1);
+            check_range(*min, high)
         }
     }
 }

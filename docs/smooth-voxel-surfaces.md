@@ -201,6 +201,24 @@ densities, materials))` applies edits in order:
   Add and Subtract also update voxels within two voxels of the brush so the
   surface beside it is placed exactly.
 
+`Voxel.StampImplicit(new VoxelImplicitStampRequest(session, field, node,
+boundsMin, boundsMax, operation, strength, materialSlot))` stamps any shape an
+implicit field can describe (`ImplicitRecipe`: capsules, smooth unions,
+offsets, placed and wave-roughened shapes) as one of these brushes. The Engine
+samples the node at the centre of every voxel whose centre lies within the
+bounds (grown by the two-voxel margin for Add and Subtract), divides each value
+by the field's gradient so it reads as a distance in voxels even where the
+field grows faster or slower than distance (a scaled or wave-displaced shape),
+clamps it to four voxels either side of the surface, and applies it as a brush
+of that shape: an implicit sphere stamps exactly what the sphere brush does.
+The bounds must enclose the shape; anything outside them is untouched. The
+field stays owned by ImplicitSurfaces and is only read during the call, so a
+recipe can be disposed right after. On `fixtures/csharp-voxel-stamp`, carving
+a smooth union of three capsules (42,369 voxels changed, 32 chunks rebuilt)
+takes about 37 ms, 12 of them meshing; in a CraftSurvive dungeon a rounded
+chamber took 5.8 ms by stamp against 10.5 ms for the same cut read, computed
+and written back as a region from C#.
+
 Only the touched chunks' meshes and colliders are rebuilt; a failed rebuild
 restores the scene. The receipt reports changed voxels, solidity changes, rebuilt chunks
 and meshing time. `Voxel.ReadDensities(new(session, min, sizeX, sizeY,

@@ -20,6 +20,11 @@ these constructive fields preserve a zero surface but are not necessarily
 Euclidean distances. Smooth-union radii and
 level-set offsets are in field-value units, especially after nonuniform scale.
 
+A field node can also shape a voxel session: `engine.Voxel.StampImplicit`
+applies it to the session's densities as a density brush (Add, Subtract,
+Smooth or Paint), dividing its values by its gradient so they read as
+distances ([smooth voxel surfaces](smooth-voxel-surfaces.md#densities)).
+
 `DisplaceWaves(ImplicitWaveRequest)` adds smooth seeded spectral noise to a
 source field. `Frequency` selects cycles per coordinate unit on each axis;
 `Amplitude` bounds the absolute change in field value. `Octaves` (1–8),
