@@ -1135,7 +1135,7 @@ impl std::ops::DerefMut for RuntimeAppearanceState {
 
 #[derive(Clone)]
 pub(crate) struct RuntimeAppearanceData {
-    projector: RuntimeAppearanceProjector,
+    pub(crate) projector: RuntimeAppearanceProjector,
     appearances: BTreeMap<u64, String>,
     next_appearance: u64,
     pub(crate) generated_meshes: GeneratedMeshes,
@@ -1183,6 +1183,7 @@ pub(crate) struct RuntimeAppearanceData {
     ghost_plate_projector: GhostPlateProjector,
     ghost_plates: BTreeMap<u64, RuntimeGhostPlatePresentation>,
     next_ghost_plate: u64,
+    pub(crate) tweens: crate::tween::RuntimeTweens,
 }
 
 #[derive(Clone)]
@@ -1362,7 +1363,7 @@ pub(crate) struct RuntimeAppearanceBridge {
     imports: RenderResourceImports,
     operation_diagnostics: crate::operation_diagnostics::OperationDiagnostics,
     /// Backing of the latest borrowed appearance result.
-    borrowed: crate::operation_diagnostics::BorrowedResult,
+    pub(crate) borrowed: crate::operation_diagnostics::BorrowedResult,
     content: Option<*const crate::content::RuntimeContentBridge>,
     camera_view: Option<*const crate::camera_view::RuntimeCameraViewBridge>,
     staged: Option<RuntimeAppearanceCall>,
@@ -1426,6 +1427,7 @@ impl RuntimeAppearanceBridge {
             ghost_plate_projector: GhostPlateProjector::default(),
             ghost_plates: BTreeMap::new(),
             next_ghost_plate: 1,
+            tweens: Default::default(),
         });
         Self {
             idle_state: state.clone(),
@@ -1528,6 +1530,9 @@ impl RuntimeAppearanceBridge {
         if state.render_resources.recently_released().next().is_some() {
             state.render_resources.begin_call();
         }
+        if let Some(facts) = &admitted_update {
+            crate::tween::advance(&mut state, facts);
+        }
         self.staged = Some(RuntimeAppearanceCall {
             state,
             admitted_update,
@@ -1611,6 +1616,14 @@ impl RuntimeAppearanceBridge {
                     .expect("every product call begins an appearance call")
                     .release_error = Some(error);
             }
+        }
+        // After every other write of the call, so tweens show over them.
+        let staged = self
+            .staged
+            .as_mut()
+            .expect("every product call begins an appearance call");
+        if let Err(error) = crate::tween::settle(staged) {
+            staged.release_error.get_or_insert(error);
         }
         self.staged
             .take()
@@ -7395,7 +7408,10 @@ fn append_projection_frame(
     Ok(())
 }
 
-fn push_extra_frame(staged: &mut RuntimeAppearanceCall, frame: render_model::RenderFrameDiff) {
+pub(crate) fn push_extra_frame(
+    staged: &mut RuntimeAppearanceCall,
+    frame: render_model::RenderFrameDiff,
+) {
     staged
         .outputs
         .push(RuntimeAppearanceCallOutput::Frame(frame));
@@ -14780,3 +14796,7 @@ mod light_and_shadow_facts {
         ));
     }
 }
+
+#[cfg(test)]
+#[path = "tween_tests.rs"]
+mod tween_tests;

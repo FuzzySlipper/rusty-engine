@@ -230,6 +230,7 @@ sealed class ExampleEngineContext : IEngineContext
     public IAuthoredContentService AuthoredContent => throw new NotSupportedException();
     public IGraphicsService Graphics => throw new NotSupportedException();
     public IPresentationService Presentation => throw new NotSupportedException();
+    public ITweenService Tween => throw new NotSupportedException();
     public IAnimationService Animation => throw new NotSupportedException();
     public IRandomService Random => throw new NotSupportedException();
     public ICameraViewService CameraView => throw new NotSupportedException();

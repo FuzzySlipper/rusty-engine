@@ -1774,6 +1774,7 @@ pub struct NativeEngineApi {
     pub authored_content: NativeAuthoredContentApi,
     pub graphics: NativeGraphicsApi,
     pub presentation: NativePresentationApi,
+    pub tween: NativeTweenApi,
     pub animation: NativeAnimationApi,
     pub audio: NativeAudioApi,
     pub video: NativeVideoApi,

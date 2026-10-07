@@ -287,6 +287,14 @@ impl RuntimeAppearanceProjector {
             .map(|object| object.appearance_id.as_str())
     }
 
+    /// A retained object's published transform and the appearance it was
+    /// last projected with.
+    pub fn object_projection(&self, object_id: u64) -> Option<(Transform, &Appearance)> {
+        self.objects
+            .get(&object_id)
+            .map(|object| (object.transform, &object.appearance))
+    }
+
     /// The joint a retained object follows.
     pub fn object_joint(&self, object_id: u64) -> Option<&str> {
         self.objects.get(&object_id)?.joint.as_deref()

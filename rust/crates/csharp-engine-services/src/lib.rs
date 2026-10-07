@@ -25,6 +25,7 @@ mod renderer_settings;
 mod rng;
 mod session;
 mod spatial;
+mod tween;
 mod ui;
 mod video;
 mod voxel;

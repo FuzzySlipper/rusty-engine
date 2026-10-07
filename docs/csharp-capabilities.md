@@ -46,6 +46,7 @@ to force a rerun.
 | `AuthoredContent` | Admit and resolve authored catalogs, scenes, prefabs, and related resources. |
 | `Graphics` | Create and update renderer-owned materials, meshes, atlas sprites, synchronized sprite playback, lights, and retained appearance state. |
 | `Presentation` | Publish presentation effects and diagnostic facts without creating another renderer, including retained ghost-plate captures. |
+| `Tween` | Play eased presentation offsets (timelines of hops, squash and stretch, punches, shakes, splines and tints) over published appearance objects, with completion and marker events ([appearance tweens](appearance-tweens.md)). |
 | `RenderOutput` | Capture offline images and export GLB from the retained appearance snapshot ([offline images](csharp-offline-images.md)). |
 | `ImplicitSurfaces` | Build scalar fields and generate retained meshes from them ([implicit surfaces](csharp-implicit-surfaces.md)). |
 | `Animation` | Own animation resources, graphs, controllers, parameters, and playback realization. |

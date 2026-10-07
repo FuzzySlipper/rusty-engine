@@ -910,6 +910,7 @@ sealed class PersistenceEngineContext(IPersistenceService persistence) : IEngine
     public IGraphicsService Graphics => throw new NotSupportedException();
     public IImplicitSurfacesService ImplicitSurfaces => throw new NotSupportedException();
     public IPresentationService Presentation => throw new NotSupportedException();
+    public ITweenService Tween => throw new NotSupportedException();
     public IAnimationService Animation => throw new NotSupportedException();
     public IAudioService Audio => throw new NotSupportedException();
     public IVideoService Video => throw new NotSupportedException();

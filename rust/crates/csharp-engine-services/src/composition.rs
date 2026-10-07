@@ -174,6 +174,7 @@ fn engine_api(
             read_ghost_plate: crate::presentation::read_ghost_plate,
             destroy_ghost_plate: crate::presentation::destroy_ghost_plate,
         },
+        tween: crate::tween::api(appearance_bridge),
         animation: crate::appearance::animation_api(appearance_bridge),
         audio: crate::audio::api(audio_bridge),
         video: crate::video::api(video_bridge),

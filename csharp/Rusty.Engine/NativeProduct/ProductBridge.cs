@@ -30,6 +30,7 @@ internal sealed class EngineContext : IEngineContext
         Graphics = new GraphicsServiceImplementation(native.graphics);
         ImplicitSurfaces = new ImplicitSurfacesServiceImplementation(native.implicit_surfaces, native.graphics);
         Presentation = new PresentationServiceImplementation(native.presentation);
+        Tween = new TweenServiceImplementation(native.tween);
         Animation = new AnimationServiceImplementation(native.animation, native.graphics);
         CameraView = new CameraViewServiceImplementation(native.camera_view);
         RendererSettings = new RendererSettingsServiceImplementation(native.renderer_settings);
@@ -60,6 +61,7 @@ internal sealed class EngineContext : IEngineContext
     public IGraphicsService Graphics { get; }
     public IImplicitSurfacesService ImplicitSurfaces { get; }
     public IPresentationService Presentation { get; }
+    public ITweenService Tween { get; }
     public IAnimationService Animation { get; }
     public ICameraViewService CameraView { get; }
     public IRendererSettingsService RendererSettings { get; }

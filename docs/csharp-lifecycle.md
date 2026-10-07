@@ -115,7 +115,9 @@ so a held world keeps its moment while the player looks around, and slow time
 slows them all together. Device audio plays at the gameplay rate and holds
 while the world holds ([recorded audio](recorded-audio.md#realization)).
 Appearances show their last published transforms (nothing is extrapolated
-between steps), and camera samples are presentation (see below). Anything a
+between steps) under any [tweens](appearance-tweens.md) the Engine plays on
+them, which advance on world time unless they select host time, and camera
+samples are presentation (see below). Anything a
 product drives from `HostElapsedSeconds` is its own presentation and keeps
 moving while held. `ProductUpdateFacts.GameplayTimeSelected`,
 `GameplayRate` and `GameplayAdvanceRemainingSteps` report the selection in
