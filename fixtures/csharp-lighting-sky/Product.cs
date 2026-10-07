@@ -50,10 +50,10 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     private readonly Light torch, sun, hemisphere, skyAmbient;
     private readonly RenderResource day, night;
     private RenderResource? flameSprite, emberSprite, smokeSprite;
-    // Flat shading (#9543): a smooth low-poly sphere and the low-poly tree, each twice: authored normals on the left, the flat-shading feature on the right, by the torch.
+    // Flat shading (#9543): a smooth low-poly sphere and the low-poly tree, each twice: authored normals on the left, the flat-shading feature on the right, by the torch. The trees stand on the floor at the room's sides and the spheres between them, so nothing hides either pair.
     private const ulong SphereSmoothId = 20, SphereFlatId = 21, TreeSmoothId = 22, TreeFlatId = 23;
     private static readonly Color FacetColor = new(.75f,.7f,.6f,1), TreeColor = new(.4f,.6f,.3f,1);
-    private static readonly Vector3 FacetsEye = new(3.5f,2.4f,6.8f), FacetsTarget = new(3.5f,1.5f,3.2f);
+    private static readonly Vector3 FacetsEye = new(3.5f,2.3f,6.9f), FacetsTarget = new(3.5f,1.7f,3f);
     private Material? facetSmooth, facetFlat, treeFlat;
     private MeshResource? sphereSmooth, sphereFlat;
     private RenderResource? treeMesh;
@@ -182,10 +182,10 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
             engine.Animation.UpdateAnimatedMeshMaterials(new(treeFlatLook,new MeshMaterialBinding[]{new(0,treeFlat)}));
             engine.Graphics.PublishSnapshot(new AppearanceFact[]
             {
-                Fact(SphereSmoothId,sphereSmoothLook,new(2.3f,1.7f,3.6f),.6f),
-                Fact(SphereFlatId,sphereFlatLook,new(4.7f,1.7f,3.6f),.6f),
-                Fact(TreeSmoothId,treeSmoothLook,new(1.2f,0,2.2f),1.6f),
-                Fact(TreeFlatId,treeFlatLook,new(5.8f,0,2.2f),1.6f),
+                Fact(SphereSmoothId,sphereSmoothLook,new(2.9f,1.6f,3.4f),.5f),
+                Fact(SphereFlatId,sphereFlatLook,new(4.1f,1.6f,3.4f),.5f),
+                Fact(TreeSmoothId,treeSmoothLook,new(1.6f,1,2.6f),1.2f),
+                Fact(TreeFlatId,treeFlatLook,new(5.4f,1,2.6f),1.2f),
             });
             engine.CameraView.UpdateCamera(new(camera,Camera(FacetsEye,FacetsTarget)));
         }
