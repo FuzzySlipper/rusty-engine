@@ -278,3 +278,86 @@ fn water_takes_its_base_texture_into_the_tint() {
         "the deep side still darkens: {red_deep:?} against {red_shallow:?}"
     );
 }
+
+/// Water reflects its surroundings by Fresnel without a sky cube (#9540
+/// review): black, foamless, non-metallic water under ambient or hemisphere
+/// light alone shows that light's colour, far more at a grazing view than
+/// looking straight down.
+#[test]
+fn water_reflects_ambient_and_hemisphere_light_by_fresnel() {
+    let black = MaterialWaterDescriptor {
+        shallow_color: [0.0; 3],
+        deep_color: [0.0; 3],
+        // Foam never rises above a threshold past 1.
+        foam_threshold: 2.0,
+        ..water(0.5, 2.0)
+    };
+    for (name, light) in [
+        (
+            "ambient",
+            LightDescriptor::Ambient {
+                color: [0.4, 0.6, 1.0],
+                intensity: 1.5,
+                enabled: true,
+                shadow_intent: LightShadowIntent::Disabled,
+                shadow: Default::default(),
+                range: None,
+            },
+        ),
+        (
+            "hemisphere",
+            LightDescriptor::Hemisphere {
+                color: [0.4, 0.6, 1.0],
+                ground_color: [0.1, 0.1, 0.1],
+                intensity: 1.5,
+                enabled: true,
+            },
+        ),
+    ] {
+        let mut harness = Harness::new(RendererOptions {
+            default_world_lights: false,
+            ..RendererOptions::default()
+        });
+        let mut ops = vec![
+            RenderDiff::SetBackgroundColor {
+                color: [0.0, 0.0, 0.0, 1.0],
+            },
+            RenderDiff::CreateLight {
+                handle: RenderHandle::new(78),
+                parent: None,
+                light,
+            },
+        ];
+        ops.extend(sheet(Some(black.clone()), 1.0, None));
+        if let RenderDiff::DefineMaterial { material } = &mut ops[2] {
+            material.metalness = 0.0;
+        }
+        ops.push(instance(
+            3,
+            None,
+            "sheet",
+            transform([0.0, 0.0, -4.0], 0.0, 1.0),
+        ));
+        harness.apply(ops);
+        // The water's blue in the lower middle of the frame.
+        let blue = |frame: &[u8]| -> f64 {
+            let mut sum = 0.0;
+            for y in HEIGHT * 3 / 5..HEIGHT * 4 / 5 {
+                for x in WIDTH * 2 / 5..WIDTH * 3 / 5 {
+                    sum += f64::from(pixel(frame, WIDTH, x, y)[2]);
+                }
+            }
+            sum / f64::from(HEIGHT / 5 * WIDTH / 5)
+        };
+        let grazing = blue(&harness.single(&camera("eye", [0.0, 0.25, 0.0], 0.0, -6.0)));
+        let steep = blue(&harness.single(&camera("eye", [0.0, 3.0, -4.0], 0.0, -89.0)));
+        // Without the reflection both read black. Looking straight down the
+        // water still reflects its few percent (lifted by the sRGB curve);
+        // at a grazing view far more.
+        assert!(grazing > 90.0, "{name}: grazing water reflects {grazing}");
+        assert!(
+            steep > 20.0 && steep + 30.0 < grazing,
+            "{name}: straight down {steep}, grazing {grazing}"
+        );
+    }
+}

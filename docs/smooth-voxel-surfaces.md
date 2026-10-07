@@ -355,8 +355,10 @@ the rest:
   boundary does not rebuild it), when the chunk is drawn coarse (distant
   chunks grow nothing), or when the scatter changes; an edit or remesh places
   the chunk's patches again, and a world-origin rebase moves them with their
-  chunk. Nearer chunks come first within `MaximumInstances`; a chunk the budget
-  leaves bare stays bare until the camera moves.
+  chunk. Nearer chunks come first within `MaximumInstances`, and the budget
+  follows the camera: a step that makes another chunk nearest moves the
+  copies to it. A chunk the budget leaves bare is counted once and not
+  sampled again until it remeshes.
 - **Lifetime.** The scatter keeps a copy of the material from when it was
   set, and holds the appearance: disposing the appearance while a scatter
   grows it is refused. Every mesh slot draws with the scatter's material.
@@ -366,7 +368,9 @@ the rest:
 chunks a budget left bare. Sampling costs about 0.012 ms per 16³ dual
 contoured chunk at 4 spots per square metre on the `smooth_chunk_meshing`
 example (meshing the chunk costs 0.17 ms), and runs only for chunks coming
-into reach, not at mesh time: the samples are not stored with the chunk.
+into reach, not at mesh time: the samples are not stored with the chunk, so
+ground that leaves reach and comes back is sampled again, into the same
+copies.
 Drawing is the cost that matters: masked grass cards are overdraw. On
 `fixtures/csharp-voxel-scatter`, which grows grass clumps and bushes on a dual
 contoured hill, 8,725 visible copies in 35 patch draws take a 1280 × 720 frame

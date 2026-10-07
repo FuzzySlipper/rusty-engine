@@ -485,7 +485,11 @@ pixel knows what lies behind it along its view ray:
   the sky's reflection follow the ripples.
 - **Fresnel.** The alpha rises toward the reflectance at grazing angles, so
   a lake seen along its length mirrors the sky while the shallows under the
-  eye stay clear.
+  eye stay clear. Water is a dielectric (metalness 0) that still reflects
+  the ambient and hemisphere light along the reflection, weighted by the
+  same Fresnel term metals use, so it mirrors its surroundings without the
+  sky's light; with the sky's light on, the prefiltered sky takes over as
+  for every surface.
 
 The water needs no vertex motion; a product that wants waves gives the
 material a [displace stage](#product-shaders) or a wind bend. A water view

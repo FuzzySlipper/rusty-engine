@@ -356,12 +356,22 @@ fn sky_irradiance_along(normal: vec3<f32>) -> vec3<f32> {
         + sky_irradiance[8].rgb * (0.546274 * (d.x * d.x - d.y * d.y));
 }
 
+// Whether a dielectric reflects the ambient and hemisphere environment as
+// metals do: water (WATER) mirrors its surroundings by Fresnel even where no
+// sky cube is lit.
+#ifdef WATER
+const MIRRORS_ENVIRONMENT: f32 = 1.0;
+#else
+const MIRRORS_ENVIRONMENT: f32 = 0.0;
+#endif
+
 // Diffuse plus GGX specular from every light row of the pass, before
 // emission. `occlusion` scales the ambient and hemisphere (indirect) light
 // only, as does an ambient light's sky layer. Metals tint specular and lose
 // diffuse; they reflect ambient and hemisphere light as a uniform
 // environment (the hemisphere along the reflection), while dielectrics take
-// that light as diffuse only. With the sky's light on, the sky adds its
+// that light as diffuse only (except water, which reflects it by Fresnel
+// too, `MIRRORS_ENVIRONMENT`). With the sky's light on, the sky adds its
 // irradiance to the diffuse light and every surface reflects the sky,
 // prefiltered by its roughness, in place of that uniform environment; the
 // ambient light's sky layer and `occlusion` scale both, as they scale
@@ -385,7 +395,8 @@ fn standard_radiance(
     let reflected = reflect(-view, normal);
     // Inside the indirect light volume its probes stand in for the ambient
     // and hemisphere rows and the sky's light.
-    let probe = probe_light(world_position, normal, reflected, metalness > 0.0 || frame.sky_light.x > 0.0);
+    let environment_share = max(metalness, MIRRORS_ENVIRONMENT);
+    let probe = probe_light(world_position, normal, reflected, environment_share > 0.0 || frame.sky_light.x > 0.0);
     if frame.cluster_grid.w == 1u {
         // The global list, then the fragment's cluster.
         let global_base = frame.cluster_grid.x * frame.cluster_grid.y * frame.cluster_grid.z * CLUSTER_STRIDE;
@@ -409,7 +420,7 @@ fn standard_radiance(
     irradiance += probe.diffuse * occlusion * probe.coverage;
     environment += probe.reflected * occlusion * probe.coverage;
     let n_dot_v = clamp(dot(normal, view), 0.0, 1.0);
-    var reflection = metalness * environment * environment_brdf(f0, roughness, n_dot_v);
+    var reflection = environment_share * environment * environment_brdf(f0, roughness, n_dot_v);
     let sky_intensity = frame.sky_light.x;
     if sky_intensity > 0.0 {
         let sky = sky_intensity * occlusion * sky_open * probe.outside;

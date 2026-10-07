@@ -352,7 +352,9 @@ fn standard_surface(in: VsOut, front: bool) -> Surface {
 #ifdef OCCLUSION_MAP
     let occlusion_sample = textureSample(occlusion_map, occlusion_sampler,
         transform_uv(material.occlusion_uv_u, material.occlusion_uv_v, slot_uv(in, material.tex_coords.w))).r;
-    surface.occlusion = 1.0 + material.factors.x * (occlusion_sample - 1.0);
+    // Multiplied into the baked vertex occlusion (VERTEX_OCCLUSION), so a
+    // neutral map keeps it.
+    surface.occlusion *= 1.0 + material.factors.x * (occlusion_sample - 1.0);
 #endif
 #ifdef ORM_MAP
     // Packed occlusion, roughness, metalness, read as the base texture is.
@@ -376,7 +378,7 @@ fn standard_surface(in: VsOut, front: bool) -> Surface {
 #endif
 #endif
 #endif
-    surface.occlusion = 1.0 + material.factors.x * (orm.r - 1.0);
+    surface.occlusion *= 1.0 + material.factors.x * (orm.r - 1.0);
     let map_roughness = orm.g;
     let map_metalness = orm.b;
 #else

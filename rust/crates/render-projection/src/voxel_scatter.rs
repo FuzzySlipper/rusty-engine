@@ -143,8 +143,65 @@ pub(crate) struct ScatterSnapshot {
     pub scatters: Vec<VoxelScatter>,
     /// By chunk and scatter index.
     pub patches: BTreeMap<([i64; 3], usize), PatchSnapshot>,
-    /// Chunks within reach that the instance budget left bare, by scatter.
-    pub over_budget: BTreeSet<([i64; 3], usize)>,
+    /// Chunks within reach that the instance budget left bare, by scatter,
+    /// with the mesh they were counted on and their copies: counted once,
+    /// they are not placed again until they remesh.
+    pub over_budget: BTreeMap<([i64; 3], usize), (u64, u32)>,
+}
+
+impl ScatterSnapshot {
+    /// The copies a scatter grows on a chunk's current mesh, when known:
+    /// from its patch or its over-budget count.
+    fn known_count(&self, chunk: &VoxelMeshChunk, scatter: usize) -> Option<u64> {
+        let key = (chunk.chunk, scatter);
+        match (self.patches.get(&key), self.over_budget.get(&key)) {
+            (Some(patch), _) if patch.content_hash == chunk.content_hash => {
+                Some(u64::from(patch.instances))
+            }
+            (_, Some((hash, count))) if *hash == chunk.content_hash => Some(u64::from(*count)),
+            _ => None,
+        }
+    }
+
+    fn holds(&self, chunk: [i64; 3], scatter: usize) -> bool {
+        self.patches.contains_key(&(chunk, scatter))
+            || self.over_budget.contains_key(&(chunk, scatter))
+    }
+}
+
+/// What a scatter's budget gives copies to: the chunks in reach nearest
+/// first, each taking its copies while they fit; a chunk that does not fit
+/// stays bare and a farther, smaller one may still fit.
+struct Selection<'a> {
+    grown: Vec<&'a VoxelMeshChunk>,
+    bare: Vec<(&'a VoxelMeshChunk, u64)>,
+}
+
+/// The selection for one scatter, counting each chunk with `count`; `None`
+/// when `count` cannot count a chunk.
+fn select<'a>(
+    scene: &'a VoxelCollisionScene,
+    field: &VoxelScatterField,
+    scatter: usize,
+    coarse: &BTreeMap<[i64; 3], VoxelMeshChunk>,
+    held: &impl Fn(&[i64; 3]) -> bool,
+    mut count: impl FnMut(&'a VoxelMeshChunk) -> Option<u64>,
+) -> Option<Selection<'a>> {
+    let mut budget = u64::from(field.scatters[scatter].maximum_instances);
+    let mut selection = Selection {
+        grown: Vec::new(),
+        bare: Vec::new(),
+    };
+    for (_, chunk) in reached(scene, field, scatter, coarse, held) {
+        let copies = count(chunk)?;
+        if copies > budget {
+            selection.bare.push((chunk, copies));
+        } else {
+            budget -= copies;
+            selection.grown.push(chunk);
+        }
+    }
+    Some(selection)
 }
 
 /// An instance's scatter readout.
@@ -207,7 +264,8 @@ fn reached<'a>(
 }
 
 /// Whether projecting now would place or remove a patch: the viewer moved a
-/// chunk into or out of reach, or the scatters changed.
+/// chunk into or out of reach or changed which chunks the budget grows, a
+/// chunk in reach has not been counted on its mesh, or the scatters changed.
 pub(crate) fn scatter_changed(
     snapshot: &ScatterSnapshot,
     scene: &VoxelCollisionScene,
@@ -221,22 +279,24 @@ pub(crate) fn scatter_changed(
         return true;
     }
     (0..field.scatters.len()).any(|scatter| {
-        let held = |coord: &[i64; 3]| {
-            snapshot.patches.contains_key(&(*coord, scatter))
-                || snapshot.over_budget.contains(&(*coord, scatter))
+        let held = |coord: &[i64; 3]| snapshot.holds(*coord, scatter);
+        let Some(selection) = select(scene, field, scatter, coarse, &held, |chunk| {
+            snapshot.known_count(chunk, scatter)
+        }) else {
+            return true;
         };
-        let wanted: BTreeSet<[i64; 3]> = reached(scene, field, scatter, coarse, &held)
-            .into_iter()
-            .map(|(_, chunk)| chunk.chunk)
+        let grown: BTreeSet<[i64; 3]> = selection.grown.iter().map(|chunk| chunk.chunk).collect();
+        let bare: BTreeSet<[i64; 3]> = selection
+            .bare
+            .iter()
+            .map(|(chunk, _)| chunk.chunk)
             .collect();
-        let had: BTreeSet<[i64; 3]> = snapshot
-            .patches
-            .keys()
-            .chain(&snapshot.over_budget)
-            .filter(|(_, index)| *index == scatter)
-            .map(|(coord, _)| *coord)
-            .collect();
-        wanted != had
+        let had = |keys: &mut dyn Iterator<Item = &([i64; 3], usize)>| -> BTreeSet<[i64; 3]> {
+            keys.filter(|(_, index)| *index == scatter)
+                .map(|(coord, _)| *coord)
+                .collect()
+        };
+        grown != had(&mut snapshot.patches.keys()) || bare != had(&mut snapshot.over_budget.keys())
     })
 }
 
@@ -265,33 +325,33 @@ impl ScatterProjection<'_> {
         }
         let mut wanted = BTreeMap::<([i64; 3], usize), &VoxelMeshChunk>::new();
         let mut placed = BTreeMap::<([i64; 3], usize), Vec<ScatterInstance>>::new();
-        let mut over_budget = BTreeSet::new();
+        let mut over_budget = BTreeMap::new();
         if let Some(field) = field {
             for (index, scatter) in scatters.iter().enumerate() {
-                let held = |coord: &[i64; 3]| {
-                    !rebuilt
-                        && (self.snapshot.patches.contains_key(&(*coord, index))
-                            || self.snapshot.over_budget.contains(&(*coord, index)))
-                };
-                let mut budget = u64::from(scatter.maximum_instances);
-                for (_, chunk) in reached(scene, field, index, coarse, &held) {
-                    let count = match self.snapshot.patches.get(&(chunk.chunk, index)) {
-                        Some(patch) if !rebuilt && patch.content_hash == chunk.content_hash => {
-                            u64::from(patch.instances)
-                        }
-                        _ => {
-                            let copies = place(chunk, scatter);
-                            let count = copies.len() as u64;
-                            placed.insert((chunk.chunk, index), copies);
-                            count
-                        }
-                    };
-                    if count > budget {
-                        over_budget.insert((chunk.chunk, index));
-                        continue;
-                    }
-                    budget -= count;
+                let snapshot = &*self.snapshot;
+                let held = |coord: &[i64; 3]| !rebuilt && snapshot.holds(*coord, index);
+                let selection = select(scene, field, index, coarse, &held, |chunk| {
+                    Some(
+                        match snapshot.known_count(chunk, index).filter(|_| !rebuilt) {
+                            Some(count) => count,
+                            None => {
+                                let copies = place(chunk, scatter);
+                                let count = copies.len() as u64;
+                                placed.insert((chunk.chunk, index), copies);
+                                count
+                            }
+                        },
+                    )
+                })
+                .expect("placing counts every chunk");
+                for chunk in selection.grown {
                     wanted.insert((chunk.chunk, index), chunk);
+                }
+                for (chunk, count) in selection.bare {
+                    over_budget.insert(
+                        (chunk.chunk, index),
+                        (chunk.content_hash, u32::try_from(count).unwrap_or(u32::MAX)),
+                    );
                 }
             }
         }
@@ -383,8 +443,16 @@ impl ScatterProjection<'_> {
     }
 }
 
+#[cfg(test)]
+thread_local! {
+    /// How many times this thread sampled a chunk for a scatter.
+    static PLACEMENTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// The copies `scatter` grows on `chunk`, in the chunk's space.
 pub(crate) fn place(chunk: &VoxelMeshChunk, scatter: &VoxelScatter) -> Vec<ScatterInstance> {
+    #[cfg(test)]
+    PLACEMENTS.with(|count| count.set(count.get() + 1));
     let groups: Vec<(u16, u32, u32)> = chunk
         .groups
         .iter()
@@ -738,6 +806,73 @@ mod tests {
             land.projector.scatter_readout("land"),
             VoxelScatterReadout::default()
         );
+    }
+
+    /// A budget for one chunk's copies follows the nearest chunk as the
+    /// viewer steps across a chunk border, though the chunks in reach stay
+    /// the same (#9546 review); a chunk the budget leaves bare is counted
+    /// once and not sampled again while its mesh stands.
+    #[test]
+    fn a_tight_budget_follows_the_nearest_chunk_and_counts_bare_chunks_once() {
+        let scene = floor_scene();
+        let mut land = Land::new();
+        let one_patch = VoxelScatter {
+            maximum_instances: 160,
+            ..grass()
+        };
+        let frame = land.project(&scene, [7.0, 4.0, 4.0], one_patch.clone());
+        assert_eq!(
+            created(&land, &frame).keys().copied().collect::<Vec<_>>(),
+            [0]
+        );
+        assert_eq!(land.projector.scatter_readout("land").over_budget, 2);
+
+        // Standing still samples nothing more.
+        let before = PLACEMENTS.with(|count| count.get());
+        assert!(!land.changed(&scene, [7.0, 4.0, 4.0], one_patch.clone()));
+        land.project(&scene, [7.0, 4.0, 4.0], one_patch.clone());
+        assert_eq!(
+            PLACEMENTS.with(|count| count.get()),
+            before,
+            "bare chunks are not sampled again"
+        );
+
+        // One step over the border: chunk 1 is now nearest.
+        assert!(land.changed(&scene, [9.0, 4.0, 4.0], one_patch.clone()));
+        let frame = land.project(&scene, [9.0, 4.0, 4.0], one_patch.clone());
+        assert_eq!(
+            created(&land, &frame).keys().copied().collect::<Vec<_>>(),
+            [1]
+        );
+        assert_eq!(destroyed(&frame), 1, "chunk 0 gives its copies up");
+        let readout = land.projector.scatter_readout("land");
+        assert!(
+            readout.instances <= 160 && readout.patches == 1,
+            "{readout:?}"
+        );
+        assert!(!land.changed(&scene, [9.0, 4.0, 4.0], one_patch));
+    }
+
+    /// Ground that leaves reach and comes back is sampled again, lazily, and
+    /// grows exactly the copies it grew before; a remesh samples its chunk
+    /// again (the lifecycle the owner accepted for #9546 in place of samples
+    /// carried by every resident chunk).
+    #[test]
+    fn ground_coming_back_into_reach_is_sampled_again_into_the_same_copies() {
+        let scene = floor_scene();
+        let mut land = Land::new();
+        let frame = land.project(&scene, [4.0, 4.0, 4.0], grass());
+        let first = created(&land, &frame);
+        let away = land.project(&scene, [60.0, 4.0, 4.0], grass());
+        assert_eq!(destroyed(&away), first.len());
+        let before = PLACEMENTS.with(|count| count.get());
+        let back = land.project(&scene, [4.0, 4.0, 4.0], grass());
+        assert_eq!(
+            PLACEMENTS.with(|count| count.get()),
+            before + first.len(),
+            "sampled again"
+        );
+        assert_eq!(created(&land, &back), first, "into the same copies");
     }
 
     #[test]
