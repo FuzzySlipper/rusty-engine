@@ -1375,6 +1375,8 @@ pub(crate) struct RuntimeAppearanceBridge {
     authored_content: Option<*const crate::authored_content::RuntimeAuthoredContentBridge>,
     diagnostics_sink: Option<RuntimeDiagnosticsSink>,
     reported_recoverable_codes: BTreeSet<&'static str>,
+    /// The world time tweens last saw owed toward the next step.
+    tween_owed_seconds: f64,
 }
 
 impl RuntimeAppearanceBridge {
@@ -1447,6 +1449,7 @@ impl RuntimeAppearanceBridge {
             authored_content: None,
             diagnostics_sink: None,
             reported_recoverable_codes: BTreeSet::new(),
+            tween_owed_seconds: 0.0,
         }
     }
 
@@ -1514,15 +1517,30 @@ impl RuntimeAppearanceBridge {
         self.diagnostics_sink = Some(sink);
     }
 
+    #[cfg(test)]
     pub(crate) fn begin_call(&mut self) {
-        self.begin_call_with_update(None);
+        self.begin_call_with_update(None, None);
     }
 
+    #[cfg(test)]
     pub(crate) fn begin_update_call(&mut self, facts: NativeProductUpdateFacts) {
-        self.begin_call_with_update(Some(facts));
+        self.begin_call_with_update(
+            Some(facts),
+            Some(crate::tween::TweenTime::of_update(&facts)),
+        );
     }
 
-    fn begin_call_with_update(&mut self, admitted_update: Option<NativeProductUpdateFacts>) {
+    pub(crate) fn tweens_playing(&self) -> bool {
+        crate::tween::playing(&self.state)
+    }
+
+    /// Begins a call; with a `clock` (an update, or the Engine's own tween
+    /// call) its tweens advance first.
+    pub(crate) fn begin_call_with_update(
+        &mut self,
+        admitted_update: Option<NativeProductUpdateFacts>,
+        clock: Option<crate::tween::TweenTime>,
+    ) {
         // Move the state into the call and leave the idle placeholder behind,
         // so the call's first write does not copy the whole graphics state.
         let mut state = std::mem::replace(&mut self.state, self.idle_state.clone());
@@ -1530,8 +1548,17 @@ impl RuntimeAppearanceBridge {
         if state.render_resources.recently_released().next().is_some() {
             state.render_resources.begin_call();
         }
-        if let Some(facts) = &admitted_update {
-            crate::tween::advance(&mut state, facts);
+        if let Some(clock) = clock {
+            let admitted_seconds = admitted_update.as_ref().map_or(0.0, |facts| {
+                facts.fixed_delta_seconds * f64::from(facts.admitted_step_count)
+            });
+            crate::tween::advance(
+                &mut state,
+                &mut self.tween_owed_seconds,
+                admitted_seconds,
+                clock,
+                admitted_update.is_some(),
+            );
         }
         self.staged = Some(RuntimeAppearanceCall {
             state,

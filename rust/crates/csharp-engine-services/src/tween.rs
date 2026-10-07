@@ -98,21 +98,58 @@ impl RuntimeTweens {
     }
 }
 
-/// Advances every playing tween by the update's world and host seconds.
+/// What tweens advance by beyond an update's admitted steps, so they move at
+/// the presentation cadence: between steps the world time owed toward the
+/// next one, and the host time since they last advanced.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TweenTime {
+    /// World seconds owed toward the next fixed step (the lifecycle's
+    /// remainder at the gameplay rate); `None` keeps the last.
+    pub owed_world_seconds: Option<f64>,
+    pub host_seconds: f64,
+}
+
+impl TweenTime {
+    /// Steps only: the update's host seconds and no owed world time.
+    pub fn of_update(facts: &NativeProductUpdateFacts) -> Self {
+        Self {
+            owed_world_seconds: None,
+            host_seconds: facts.host_elapsed_seconds,
+        }
+    }
+}
+
+/// Advances every playing tween by `admitted_seconds` of steps plus the
+/// clock's change in owed world time, and its host seconds. An update
+/// reports the events raised since the last; a call without one keeps its
+/// events for the next.
 pub(crate) fn advance(
     state: &mut crate::appearance::RuntimeAppearanceState,
-    facts: &NativeProductUpdateFacts,
+    owed: &mut f64,
+    admitted_seconds: f64,
+    clock: TweenTime,
+    update: bool,
 ) {
+    // The owed time is followed whether or not tweens play, so one started
+    // between steps counts from where it started.
+    let owed_before = *owed;
+    if let Some(now) = clock.owed_world_seconds {
+        *owed = now;
+    }
     // Read first: a call with no tweens does not write the shared state.
     let idle = &state.tweens;
     if idle.tweens.is_empty() && idle.pending_events.is_empty() && idle.events.is_empty() {
         return;
     }
     let tweens = &mut state.tweens;
-    tweens.events = std::mem::take(&mut tweens.pending_events);
-    let world_seconds = facts.fixed_delta_seconds * f64::from(facts.admitted_step_count);
-    let realtime_seconds = facts.host_elapsed_seconds;
+    if update {
+        tweens.events = std::mem::take(&mut tweens.pending_events);
+    }
+    // A reset owed time (a new baseline) gives no time back.
+    let world_seconds = (admitted_seconds + *owed - owed_before).max(0.0);
+    let realtime_seconds = clock.host_seconds;
     let mut crossed = Vec::new();
+    let mut raised = Vec::new();
     for (handle, tween) in &mut tweens.tweens {
         let before = tween.playback.elapsed_seconds();
         crossed.clear();
@@ -120,7 +157,7 @@ pub(crate) fn advance(
             .playback
             .advance(world_seconds, realtime_seconds, &mut crossed);
         for &(marker_id, iteration) in &crossed {
-            tweens.events.push(NativeTweenEvent {
+            raised.push(NativeTweenEvent {
                 tween: NativeTweenHandle { value: *handle },
                 object_id: tween.object_id,
                 kind: NativeTweenEventKind::Marker,
@@ -129,12 +166,23 @@ pub(crate) fn advance(
             });
         }
         if completed {
-            tweens.events.push(completed_event(*handle, tween));
+            raised.push(completed_event(*handle, tween));
         }
         if completed || tween.playback.elapsed_seconds() != before {
             tweens.dirty.insert(tween.object_id);
         }
     }
+    if update {
+        tweens.events.extend(raised);
+    } else {
+        tweens.pending_events.extend(raised);
+    }
+}
+
+/// Whether any tween plays, so a host observation without an update still
+/// has tweens to advance.
+pub(crate) fn playing(state: &crate::appearance::RuntimeAppearanceState) -> bool {
+    !state.tweens.tweens.is_empty()
 }
 
 fn completed_event(handle: u64, tween: &RuntimeTween) -> NativeTweenEvent {

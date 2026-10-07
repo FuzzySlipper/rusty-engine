@@ -504,3 +504,53 @@ fn a_tween_needs_a_published_object_and_ends_when_it_is_removed() {
     );
     assert!(end(&mut bridge).is_empty());
 }
+
+/// The time an observation between steps gives tweens.
+fn between_steps(owed_world_seconds: f64, host_seconds: f64) -> crate::tween::TweenTime {
+    crate::tween::TweenTime {
+        owed_world_seconds: Some(owed_world_seconds),
+        host_seconds,
+    }
+}
+
+#[test]
+fn world_tweens_move_between_steps_by_the_world_time_owed() {
+    let (mut bridge, _) = published_cube();
+    bridge.begin_call();
+    bridge
+        .tween_start(&request(
+            &[hop()],
+            &[NativeTweenMarker {
+                marker_id: 5,
+                time_seconds: 0.1,
+            }],
+            NativeTweenClock::World,
+            NativeTweenStart::Replace,
+        ))
+        .unwrap();
+    end(&mut bridge);
+    // Observations between steps: no update, the Engine's own tween call.
+    // A tenth of a second is owed toward the 0.25 s step.
+    bridge.begin_call_with_update(None, Some(between_steps(0.1, 0.1)));
+    let first = shown(&mut bridge).expect("the tween moved between steps");
+    assert!((first[0] - 1.2).abs() < 1.0e-5, "{first:?}");
+    // Held: the owed time stays, so nothing moves, however much host time.
+    bridge.begin_call_with_update(None, Some(between_steps(0.1, 0.5)));
+    assert!(end(&mut bridge).is_empty(), "a held world holds the tween");
+    // The step arrives: 0.25 s of steps, nothing owed after it. The marker
+    // crossed in the Engine's call is reported by this update.
+    let step = update(1, 0.15);
+    bridge.begin_call_with_update(Some(step), Some(between_steps(0.0, 0.15)));
+    assert_eq!(
+        events(&mut bridge),
+        vec![(NativeTweenEventKind::Marker, 5, 0)]
+    );
+    assert_near(shown(&mut bridge), [1.5, 1.0, 0.0]);
+    // The next step completes it.
+    bridge.begin_call_with_update(Some(step), Some(between_steps(0.0, 0.25)));
+    assert_eq!(
+        events(&mut bridge),
+        vec![(NativeTweenEventKind::Completed, 0, 0)]
+    );
+    assert_near(shown(&mut bridge), [2.0, 0.0, 0.0]);
+}

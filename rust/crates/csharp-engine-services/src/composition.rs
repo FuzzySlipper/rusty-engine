@@ -10,6 +10,7 @@ use csharp_engine_abi::*;
 use entity_state::Quat;
 use runtime_diagnostics::{RuntimeDiagnosticsSink, RuntimeUpdateAttribution};
 
+use crate::tween::TweenTime;
 use crate::{
     audio::{AudioRealizationFact, RuntimeAudioBridge, RuntimeAudioCall},
     authored_content::RuntimeAuthoredContentBridge,
@@ -544,17 +545,17 @@ impl EngineServiceSet {
     }
 
     pub fn begin_call(&mut self, ui_binding: RuntimeUiRuntimeBinding) {
-        self.begin_services(ui_binding, None, false);
+        self.begin_services(ui_binding, None, None, false);
     }
 
     /// Product construction is the only non-update callback that can select a
     /// complete initial physical map before the runtime input lane exists.
     pub fn begin_create_call(&mut self, ui_binding: RuntimeUiRuntimeBinding) {
-        self.begin_services(ui_binding, None, true);
+        self.begin_services(ui_binding, None, None, true);
     }
 
     pub fn begin_lifecycle_call(&mut self, ui_binding: RuntimeUiRuntimeBinding) {
-        self.begin_services(ui_binding, None, true);
+        self.begin_services(ui_binding, None, None, true);
     }
 
     pub fn begin_update_call(
@@ -562,9 +563,31 @@ impl EngineServiceSet {
         ui_binding: RuntimeUiRuntimeBinding,
         facts: NativeProductUpdateFacts,
     ) {
+        self.begin_update_call_with_clock(ui_binding, facts, TweenTime::of_update(&facts));
+    }
+
+    /// An update whose tweens also advance by `clock`'s owed world time.
+    pub fn begin_update_call_with_clock(
+        &mut self,
+        ui_binding: RuntimeUiRuntimeBinding,
+        facts: NativeProductUpdateFacts,
+        clock: TweenTime,
+    ) {
         self.spatial.reset_update_attribution();
         self.voxel_scene_presentation.reset_update_attribution();
-        self.begin_services(ui_binding, Some(facts), true);
+        self.begin_services(ui_binding, Some(facts), Some(clock), true);
+    }
+
+    /// An Engine call with no product callback that advances the tweens by
+    /// `clock`, for a host observation that delivers no update; finish it
+    /// with [`Self::finish_call`]. Their events wait for the next update.
+    pub fn begin_tween_call(&mut self, ui_binding: RuntimeUiRuntimeBinding, clock: TweenTime) {
+        self.begin_services(ui_binding, None, Some(clock), false);
+    }
+
+    /// Whether any tween plays ([`Self::begin_tween_call`]).
+    pub fn tweens_playing(&self) -> bool {
+        self.appearance.tweens_playing()
     }
 
     /// Returns every committed renderer stream continuation point. Detached
@@ -606,6 +629,7 @@ impl EngineServiceSet {
         &mut self,
         ui_binding: RuntimeUiRuntimeBinding,
         update: Option<NativeProductUpdateFacts>,
+        tween_clock: Option<TweenTime>,
         accepts_input_replacement: bool,
     ) {
         if self.in_call {
@@ -616,10 +640,7 @@ impl EngineServiceSet {
         self.call_elapsed_seconds = update.map_or(0.0, |facts| {
             facts.fixed_delta_seconds * f64::from(facts.admitted_step_count)
         });
-        match update {
-            Some(facts) => self.appearance.begin_update_call(facts),
-            None => self.appearance.begin_call(),
-        }
+        self.appearance.begin_call_with_update(update, tween_clock);
         self.input.begin_call(accepts_input_replacement);
         self.gameplay_time.begin_call();
         self.audio.begin_call();

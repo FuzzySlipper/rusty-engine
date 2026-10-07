@@ -111,17 +111,24 @@ changes. `TweenSegment` has `Move`, `Hop`, `Rotate`, `Scale`, `Tint`,
 
 ## Clocks
 
-`World` (the default) advances with admitted steps: by
-`FixedDeltaSeconds × AdmittedStepCount` each update, like particles, sprite
-playback and GLB animation. It holds and slows with
-[gameplay time](csharp-lifecycle.md#gameplay-time). `Realtime` advances by
-`HostElapsedSeconds`, so hover and menu motion keep moving while the world is
-held. Neither moves during a lifecycle pause, when no update runs.
+`World` (the default) follows world time: the admitted steps, and between
+them the world time already owed toward the next step, so it holds and slows
+with [gameplay time](csharp-lifecycle.md#gameplay-time) and never runs ahead
+of the steps by more than one. `Realtime` follows host time, so hover and menu
+motion keep moving while the world is held. Neither moves during a lifecycle
+pause.
+
+Tweens move at every host observation, not only at steps. A product that
+selected gameplay time already updates at every observation. For one that
+did not, the Engine advances and shows its tweens at an observation with no
+step without calling the product; markers and completions crossed there are
+reported by the next update.
 
 ## Limits
 
-- Tweens are sampled at each update, like the rest of world presentation.
-  They are not interpolated between updates.
+- Tweens are sampled at each host observation. The rest of world
+  presentation (particles, sprite playback, GLB animation) still moves at
+  steps.
 - Spatial picking, rays, collision and gameplay use the product's own
   transforms, not the offset shown, as with
   [camera samples](csharp-lifecycle.md#retained-camera-composition). Particle
@@ -133,9 +140,12 @@ held. Neither moves during a lifecycle pause, when no update runs.
 
 ## Cost
 
-Each update costs one timeline sample per active tween (a few segments each)
+Each host observation while a tween plays costs one timeline sample per
+active tween (a few segments each)
 and one transform update, plus a colour update for a tint, per object whose
-shown values changed. While any tween runs, the end of each call also passes
+shown values changed; for a product that did not select gameplay time, the
+observations between steps add one Engine call of their own. While any tween
+runs, the end of each call also passes
 over the render updates that call made, to find tweened objects the product
 republished. Objects without tweens are not examined. A call with no tweens
 does nothing. Measured in a release build of the services bridge, an update with

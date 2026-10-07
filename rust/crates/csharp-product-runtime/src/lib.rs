@@ -718,6 +718,9 @@ pub struct CsharpProductRuntime {
     /// Unscaled host time observed since the last realtime update, which the
     /// next one reports as `host_elapsed_seconds`.
     host_elapsed_ns: u64,
+    /// Unscaled host time observed since the Engine's tweens last advanced,
+    /// in an update or in a tween call of their own.
+    tween_host_ns: u64,
     /// Present when audio plays on this process's output device.
     audio_output: Option<audio_output::AudioOutput>,
     /// The renderer, when the configuration selected an output: absent only
@@ -1005,6 +1008,7 @@ impl CsharpProductRuntime {
             pending_update_attribution: None,
             staged_gameplay_time: initial_gameplay_time,
             host_elapsed_ns: 0,
+            tween_host_ns: 0,
             audio_output,
             frame_output,
             presentation,
@@ -1609,6 +1613,7 @@ impl CsharpProductRuntime {
     fn update(
         &mut self,
         facts: NativeProductUpdateFacts,
+        tween_time: csharp_engine_services::TweenTime,
     ) -> Result<Vec<RuntimePublication>, CsharpProductRuntimeError> {
         let events: Vec<NativeInputEvent> = self
             .pending_inputs
@@ -1650,7 +1655,7 @@ impl CsharpProductRuntime {
         };
         self.services.ingest_camera_surface(surface, anchors);
         self.services
-            .begin_update_call(ui_binding(&self.lifecycle), facts);
+            .begin_update_call_with_clock(ui_binding(&self.lifecycle), facts, tween_time);
         let callback_started = Instant::now();
         let callback_result = call_update(
             &self.api,
@@ -1767,6 +1772,7 @@ impl CsharpProductRuntime {
             return Ok(Vec::new());
         }
         let host_elapsed = self.take_host_elapsed(observed_host_time_nanoseconds);
+        let tween_time = self.take_tween_time(observed_host_time_nanoseconds);
         let facts = update_facts(
             &self.lifecycle,
             observed_host_time_nanoseconds,
@@ -1774,7 +1780,7 @@ impl CsharpProductRuntime {
             dropped_step_count,
             host_elapsed,
         )?;
-        self.update(facts)
+        self.update(facts, tween_time)
     }
 
     /// The host time a realtime update reports; an update without a host
@@ -1784,6 +1790,50 @@ impl CsharpProductRuntime {
             return 0.0;
         }
         std::mem::take(&mut self.host_elapsed_ns) as f64 / 1e9
+    }
+
+    /// What the Engine's tweens advance by beyond admitted steps: the host
+    /// time since they last advanced, and the world time owed toward the
+    /// next step, so world tweens move between steps and still hold and slow
+    /// with gameplay time. An inspection step owes and observes nothing new.
+    fn take_tween_time(
+        &mut self,
+        observed_host_time_nanoseconds: Option<u64>,
+    ) -> csharp_engine_services::TweenTime {
+        if observed_host_time_nanoseconds.is_none() {
+            return csharp_engine_services::TweenTime {
+                owed_world_seconds: None,
+                host_seconds: 0.0,
+            };
+        }
+        // The remainder is in `nanoseconds * hertz`: a whole step is 1e9.
+        let owed_steps = f64::from(self.lifecycle.readout().scaled_remainder()) / 1e9;
+        csharp_engine_services::TweenTime {
+            owed_world_seconds: Some(
+                owed_steps / f64::from(self.lifecycle.configuration().fixed_step_hz()),
+            ),
+            host_seconds: std::mem::take(&mut self.tween_host_ns) as f64 / 1e9,
+        }
+    }
+
+    /// A host observation that admits no step and delivers no update (a
+    /// product that never selected gameplay time) still advances the
+    /// Engine's tweens and shows them, without calling the product.
+    fn present_tweens(
+        &mut self,
+        observed_host_time_nanoseconds: u64,
+    ) -> Result<Vec<RuntimePublication>, CsharpProductRuntimeError> {
+        if !self.services.tweens_playing() {
+            return Ok(Vec::new());
+        }
+        let tween_time = self.take_tween_time(Some(observed_host_time_nanoseconds));
+        self.services
+            .begin_tween_call(ui_binding(&self.lifecycle), tween_time);
+        let finished = self.finish_product_call(None);
+        match finished.failure {
+            Some(failure) => Err(failure),
+            None => Ok(finished.outputs),
+        }
     }
 
     /// The update a product that selected gameplay time receives for a host
@@ -1809,6 +1859,7 @@ impl CsharpProductRuntime {
         }
         let next_step = self.lifecycle.readout().admitted_simulation_steps();
         let host_elapsed = self.take_host_elapsed(Some(observed_host_time_nanoseconds));
+        let tween_time = self.take_tween_time(Some(observed_host_time_nanoseconds));
         let facts = update_facts(
             &self.lifecycle,
             Some(observed_host_time_nanoseconds),
@@ -1816,7 +1867,7 @@ impl CsharpProductRuntime {
             0,
             host_elapsed,
         )?;
-        self.update(facts)
+        self.update(facts, tween_time)
     }
 
     /// Hands the direct UI claims a paused runtime admitted to the product in
@@ -3166,9 +3217,12 @@ impl ProductHostRuntime for CsharpProductRuntime {
             .map_err(|error| self.lifecycle_runtime_error(error))?;
         // A bounded advance counts down (and ends in a hold) here.
         self.settle_gameplay_time();
-        self.host_elapsed_ns = match admission.elapsed_nanoseconds() {
-            Some(elapsed) => self.host_elapsed_ns.saturating_add(elapsed),
-            None => 0,
+        (self.host_elapsed_ns, self.tween_host_ns) = match admission.elapsed_nanoseconds() {
+            Some(elapsed) => (
+                self.host_elapsed_ns.saturating_add(elapsed),
+                self.tween_host_ns.saturating_add(elapsed),
+            ),
+            None => (0, 0),
         };
         let outputs = match admission.simulation() {
             // The lifecycle owns admission and its readout counters. Runtime
@@ -3196,7 +3250,14 @@ impl ProductHostRuntime for CsharpProductRuntime {
                     }
                 }
             }
-            None => Vec::new(),
+            // Otherwise the Engine still plays its tweens there, so they move
+            // at the presentation cadence, not only at steps.
+            None => match self.present_tweens(observed_time_ns.get()) {
+                Ok(outputs) => outputs,
+                Err(error) => {
+                    return self.resync_operation(ProductHostOperationKind::AdvanceRealtime, error);
+                }
+            },
         };
         match self.receipt(ProductHostOperationKind::AdvanceRealtime, outputs) {
             Ok(receipt) => Ok(receipt),
@@ -7587,6 +7648,231 @@ mod tests {
             *result = NativeProductUpdateResult::None;
         }
         ABI_OK
+    }
+
+    /// The graphics and tween tables from the tween fixture's create.
+    struct FixtureTweenTables(NativeGraphicsApi, NativeTweenApi);
+    // SAFETY: tests serialize fixture products with DROP_FIXTURE_GATE and use
+    // the tables only inside that product's callbacks.
+    unsafe impl Send for FixtureTweenTables {}
+    static FIXTURE_TWEEN_TABLES: Mutex<Option<FixtureTweenTables>> = Mutex::new(None);
+    static TWEEN_FIXTURE_UPDATES: AtomicUsize = AtomicUsize::new(0);
+
+    unsafe extern "C" fn tween_fixture_create(
+        args: *const NativeProductCreateArgs,
+        handle: *mut *mut c_void,
+        error: *mut NativeProductCallError,
+    ) -> i32 {
+        // SAFETY: product creation receives the live Engine service table.
+        let engine = unsafe { (*args).engine };
+        *FIXTURE_TWEEN_TABLES
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) =
+            Some(FixtureTweenTables(engine.graphics, engine.tween));
+        unsafe { drop_fixture_create(args, handle, error) }
+    }
+
+    /// Its first update publishes a cube as object 7 at x = 2 and starts a
+    /// one-second world hop from one unit behind it; later updates do
+    /// nothing, so whatever moves the cube afterwards is the Engine.
+    unsafe extern "C" fn tween_fixture_update(
+        _handle: *mut c_void,
+        _args: *const NativeProductUpdateArgs,
+        result: *mut NativeProductUpdateResult,
+    ) -> i32 {
+        unsafe { *result = NativeProductUpdateResult::None };
+        if TWEEN_FIXTURE_UPDATES.fetch_add(1, Ordering::SeqCst) > 0 {
+            return ABI_OK;
+        }
+        let tables = FIXTURE_TWEEN_TABLES
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let FixtureTweenTables(graphics, tween) = tables.as_ref().expect("fixture tables");
+        let mut error = unsafe { std::mem::zeroed::<NativeOperationErrorReceipt>() };
+        let mut cube = NativeAppearanceHandle::default();
+        let request = NativePrimitiveAppearanceRequest {
+            geometry: NativePrimitiveGeometry::Cube,
+            wireframe: false,
+            color: NativeColor {
+                r: 1.0,
+                g: 1.0,
+                b: 1.0,
+                a: 1.0,
+            },
+        };
+        let unit = NativeVec3 {
+            x: 1.0,
+            y: 1.0,
+            z: 1.0,
+        };
+        // SAFETY: the tables and their contexts are live for this call.
+        unsafe {
+            assert_eq!(
+                (graphics.create_primitive)(graphics.context, request, &mut cube, &mut error),
+                ABI_OK
+            );
+            let fact = NativeAppearanceFact {
+                object_id: 7,
+                has_parent_object: false,
+                parent_object_id: 0,
+                transform: NativeTransform {
+                    translation: NativeVec3 {
+                        x: 2.0,
+                        y: 0.0,
+                        z: 0.0,
+                    },
+                    rotation: NativeQuat {
+                        x: 0.0,
+                        y: 0.0,
+                        z: 0.0,
+                        w: 1.0,
+                    },
+                    scale: unit,
+                },
+                appearance: cube,
+                visible: true,
+                layer: NativeRenderLayer::Scene,
+                shadow_casting: Default::default(),
+            };
+            assert_eq!(
+                (graphics.publish_snapshot)(graphics.context, &fact, 1, &mut error),
+                ABI_OK
+            );
+            let zero = NativeVec4 {
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+                w: 0.0,
+            };
+            let segment = NativeTweenSegment {
+                start_seconds: 0.0,
+                duration_seconds: 1.0,
+                channel: NativeTweenChannel::Translation,
+                layer: NativeTweenLayer::Base,
+                shape: NativeTweenShape::Tween,
+                easing: NativeTweenEasing {
+                    kind: NativeTweenEasingKind::Linear,
+                    parameter_0: 0.0,
+                    parameter_1: 0.0,
+                    parameter_2: 0.0,
+                    parameter_3: 0.0,
+                },
+                from: NativeVec4 { x: -1.0, ..zero },
+                to: zero,
+                arc: NativeVec3 {
+                    x: 0.0,
+                    y: 0.0,
+                    z: 0.0,
+                },
+                frequency: 0.0,
+                seed: 0,
+                before: zero,
+                after: zero,
+            };
+            let start = NativeTweenStartRequest {
+                object_id: 7,
+                segments: &segment,
+                segments_len: 1,
+                markers: std::ptr::null(),
+                markers_len: 0,
+                iterations: 1,
+                forever: false,
+                yoyo: false,
+                clock: NativeTweenClock::World,
+                start: NativeTweenStart::Replace,
+            };
+            let mut readout = std::mem::zeroed::<NativeTweenReadout>();
+            assert_eq!(
+                (tween.start)(tween.context, &start, &mut readout, &mut error),
+                ABI_OK
+            );
+        }
+        ABI_OK
+    }
+
+    /// The x of every transform the publications wrote, in order.
+    fn written_x(publications: &[RuntimePublication]) -> Vec<f32> {
+        publications
+            .iter()
+            .filter_map(|publication| match publication {
+                RuntimePublication::Frame(frame) => Some(frame),
+                _ => None,
+            })
+            .flat_map(|frame| &frame.ops)
+            .filter_map(|op| match op {
+                render_model::RenderDiff::Update {
+                    transform: Some(transform),
+                    ..
+                } => Some(transform.translation[0]),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn world_tweens_move_at_every_observation_between_fixed_steps() {
+        let _guard = DROP_FIXTURE_GATE
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        TWEEN_FIXTURE_UPDATES.store(0, Ordering::SeqCst);
+        let root = content_fixture_root("tween-presentation-cadence");
+        fs::create_dir_all(&root).expect("tween fixture content root");
+        let content = CsharpProductContent::admit(&root).expect("tween fixture content");
+        let mut runtime = CsharpProductRuntime::load_admitted_with(
+            content,
+            CsharpProductRuntimeConfig::new(
+                RuntimeInstanceId::new(1),
+                RuntimeLifecycleConfig::new(30, 2).expect("30 Hz realtime"),
+                Vec::new(),
+            ),
+            || {
+                let mut api = drop_fixture_api();
+                api.create = tween_fixture_create;
+                api.update = tween_fixture_update;
+                Ok(api)
+            },
+        )
+        .expect("tween fixture runtime");
+        runtime
+            .lifecycle(ProductHostLifecycleOperation::Start)
+            .unwrap();
+        let mut observe = |milliseconds: u64| {
+            let (_, publications) = runtime
+                .advance_realtime(CanonicalU64::new(milliseconds * 1_000_000))
+                .unwrap()
+                .into_parts();
+            written_x(&publications)
+        };
+        observe(0);
+        // The first 30 Hz step: the product publishes and starts the hop,
+        // which shows its start.
+        let started = observe(34);
+        assert_eq!(TWEEN_FIXTURE_UPDATES.load(Ordering::SeqCst), 1);
+        assert!(
+            (started.last().unwrap() - 1.0).abs() < 1.0e-4,
+            "{started:?}"
+        );
+        // Observations between steps call no product, yet the hop moves by
+        // the world time owed toward the next step.
+        let mut shown = Vec::new();
+        for milliseconds in [44, 54, 64] {
+            let written = observe(milliseconds);
+            assert_eq!(written.len(), 1, "at {milliseconds} ms: {written:?}");
+            shown.push(written[0]);
+        }
+        assert_eq!(TWEEN_FIXTURE_UPDATES.load(Ordering::SeqCst), 1);
+        for (x, elapsed) in shown.iter().zip([0.010_f32, 0.020, 0.030]) {
+            assert!((x - (1.0 + elapsed)).abs() < 1.0e-3, "{shown:?}");
+        }
+        // The next step's update continues from there.
+        let stepped = observe(70);
+        assert_eq!(TWEEN_FIXTURE_UPDATES.load(Ordering::SeqCst), 2);
+        assert!(
+            (stepped.last().unwrap() - 1.036).abs() < 1.0e-3,
+            "{stepped:?}"
+        );
+        drop(runtime);
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
