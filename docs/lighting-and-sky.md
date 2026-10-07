@@ -735,6 +735,44 @@ to the Engine default. Selecting one replaces the other. Both selected blend
 textures stay live until the selection changes; clear the sky before releasing
 them. The Engine owns GPU lifetime and panorama orientation.
 
+## Clouds
+
+A cloud layer drifts over the sky panorama, lit by the sun:
+
+```csharp
+engine.CameraView.SetClouds(new(Coverage: .6f, Drift: new Vector2(8, 3),
+    Altitude: 1200, Scale: 500, Color: Vector3.One));
+```
+
+- `Coverage` (0 to 1) is how much of the sky is cloud. 0 clears the layer,
+  draws no `clouds` pass and leaves the sky exactly as without it (the
+  default).
+- `Drift` is the layer's velocity over the ground (world x, z) in metres per
+  second, at most 1000. Pass the [wind](#wind)'s direction to have clouds
+  follow it. Clouds move with presentation time, so they hold while the
+  simulation is paused.
+- `Altitude` and `Scale` (above 0, at most 100 km) are the layer's height
+  and the size of one cloud, in metres. The view ray meets a plane at that
+  height, so clouds look larger overhead and shrink toward the horizon,
+  where they fade into the panorama.
+- `Color` (linear, 0 to 16 a channel) tints the light the clouds take.
+- The clouds take the brightest directional light's colour and direction,
+  less where more cloud lies between them and the sun, and brighter at
+  their thin edges toward it. They also take a greyed share of the
+  panorama's colour behind them. Moving the sun and blending the
+  panoramas with the product clock ([below](#blend-authored-time-of-day-skies))
+  warms them at dusk and darkens them at night with no other call.
+- The layer draws over a sky panorama (or a blend), after the sun's disc,
+  which it covers. Over a clear colour it draws nothing. The
+  [sky's light](#the-skys-light) and reflections do not see it, and it
+  casts no shadow.
+- The layer is retained camera-view state like the wind, and survives a
+  runtime restart.
+- `engine.renderer` times it as the `clouds` pass, in the frames that draw
+  it. It is one pass over the screen: two four-octave noise samples and two
+  panorama reads a pixel. At 1920×1080 it takes about 0.36 ms on an RX 9070
+  XT and 15 to 18 ms on llvmpipe.
+
 ## Fixture
 
 `fixtures/csharp-lighting-sky` uses the packaged SDK, a voxel room, a retained
@@ -764,7 +802,10 @@ slab with a cube pier, seen from the bank under the sun: 1 the water
 feature with the fixture's foam and ripple textures, 0 the same slab as a
 plain blended material, below 0 clears the scene), and
 `lighting.vertexocclusion <strength>` (the room's cube vertices darkened by
-the voxels around them, with the camera on the room's far corner).
+the voxels around them, with the camera on the room's far corner), and
+`lighting.clouds <coverage>` (a drifting cloud layer over the panorama, with
+the camera up toward it; 0 clears it, and `lighting.sky` moves the sun that
+lights it from noon to dusk).
 `generate-particles.py` regenerates its three authored sprites and
 `generate-water.py` the foam and ripple textures.
 `lighting.sky` also moves the fixture's sun from noon at 0 to a low dusk sun

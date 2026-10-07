@@ -274,6 +274,51 @@ impl WindDescriptor {
     }
 }
 
+/// A cloud layer drawn over the sky panorama and lit by the sun. `coverage`
+/// (0 to 1) is how much of the sky it covers; `drift` is its velocity over
+/// the ground (world x, z) in metres per second; `altitude` is the height
+/// of the layer and `scale` the size of one cloud, both in metres, which
+/// together set how large clouds look and how they shrink toward the
+/// horizon; `color` (linear, 0 to 16 a channel) tints the light they take.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CloudsDescriptor {
+    pub coverage: f32,
+    pub drift: [f32; 2],
+    pub altitude: f32,
+    pub scale: f32,
+    pub color: [f32; 3],
+}
+
+impl CloudsDescriptor {
+    /// The largest altitude and cloud size, in metres.
+    pub const MAX_DISTANCE: f32 = 100_000.0;
+    /// The fastest drift, in metres per second.
+    pub const MAX_DRIFT: f32 = 1_000.0;
+    /// The largest colour channel.
+    pub const MAX_COLOR: f32 = 16.0;
+
+    /// Coverage within `0..=1`, a finite drift no faster than `MAX_DRIFT`, an
+    /// altitude and scale above 0 and within `MAX_DISTANCE`, and colour
+    /// channels within `0..=MAX_COLOR`.
+    pub fn valid(&self) -> bool {
+        let [x, z] = self.drift;
+        let distance = 0.0..=Self::MAX_DISTANCE;
+        (0.0..=1.0).contains(&self.coverage)
+            && x.is_finite()
+            && z.is_finite()
+            && (x * x + z * z).sqrt() <= Self::MAX_DRIFT
+            && self.altitude > 0.0
+            && distance.contains(&self.altitude)
+            && self.scale > 0.0
+            && distance.contains(&self.scale)
+            && self
+                .color
+                .iter()
+                .all(|channel| (0.0..=Self::MAX_COLOR).contains(channel))
+    }
+}
+
 /// Which light the ambient rows give inside an indirect light volume.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -852,6 +897,10 @@ pub enum RenderDiff {
     SetWind {
         wind: Option<WindDescriptor>,
     },
+    /// Selects the sky's cloud layer; None clears the sky of clouds.
+    SetClouds {
+        clouds: Option<CloudsDescriptor>,
+    },
     /// The indirect light volume; `None` turns it off.
     SetIndirectLight {
         indirect_light: Option<IndirectLightDescriptor>,
@@ -1031,6 +1080,10 @@ impl RenderDiff {
             Self::SetSunShafts { .. } => Ok(()),
             Self::SetWind { wind: Some(wind) } if !wind.valid() => Err(RenderOperationError::Wind),
             Self::SetWind { .. } => Ok(()),
+            Self::SetClouds {
+                clouds: Some(clouds),
+            } if !clouds.valid() => Err(RenderOperationError::Clouds),
+            Self::SetClouds { .. } => Ok(()),
             Self::SetIndirectLight {
                 indirect_light: Some(indirect_light),
             } if !indirect_light.valid() => Err(RenderOperationError::IndirectLight),
@@ -1150,6 +1203,7 @@ impl RenderDiff {
             | Self::SetAtmosphere { .. }
             | Self::SetSunShafts { .. }
             | Self::SetWind { .. }
+            | Self::SetClouds { .. }
             | Self::SetIndirectLight { .. }
             | Self::SetSkyLight { .. }
             | Self::SetRendererSettings { .. }
@@ -1195,6 +1249,7 @@ pub enum RenderOperationError {
     Atmosphere,
     SunShafts,
     Wind,
+    Clouds,
     IndirectLight,
     SkyLight,
     RendererSettings,
@@ -1274,6 +1329,7 @@ impl RenderFrameDiff {
                 | RenderDiff::SetAtmosphere { .. }
                 | RenderDiff::SetSunShafts { .. }
                 | RenderDiff::SetWind { .. }
+                | RenderDiff::SetClouds { .. }
                 | RenderDiff::SetIndirectLight { .. }
                 | RenderDiff::SetSkyLight { .. }
                 | RenderDiff::SetRendererSettings { .. }

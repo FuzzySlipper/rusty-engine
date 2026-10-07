@@ -36,6 +36,7 @@ const WORLD: &str = "world";
 const POST: &str = "bloom-exposure";
 const FINISH: &str = "finish";
 const PARTICLES: &str = "particles";
+const CLOUDS: &str = "clouds";
 
 /// One size and sample count of HDR target: the colour the world draws
 /// into and the finish pass reads, and what bloom and auto exposure need of
@@ -100,6 +101,8 @@ pub(crate) struct Finish {
     world_timer: Option<PassTimer>,
     /// The soft-particle pass, timed only in the frames that draw it.
     particles_timer: Option<PassTimer>,
+    /// The sky's cloud layer, timed in the frames that draw it.
+    clouds_timer: Option<PassTimer>,
     post_timer: Option<PassTimer>,
     finish_timer: Option<PassTimer>,
     /// The bloom and adaptation the post timer last timed.
@@ -205,6 +208,7 @@ impl Finish {
             frame: 0,
             world_timer: PassTimer::new(gpu, WORLD),
             particles_timer: PassTimer::new(gpu, PARTICLES),
+            clouds_timer: PassTimer::new(gpu, CLOUDS),
             post_timer: PassTimer::new(gpu, POST),
             finish_timer: PassTimer::new(gpu, FINISH),
             timed_post: (false, false, false),
@@ -219,6 +223,7 @@ impl Finish {
         for timer in [
             &mut self.world_timer,
             &mut self.particles_timer,
+            &mut self.clouds_timer,
             &mut self.post_timer,
             &mut self.finish_timer,
         ]
@@ -465,11 +470,26 @@ impl Finish {
         }
     }
 
+    /// The cloud layer pass's stamps.
+    pub fn clouds_writes(&self) -> Option<wgpu::RenderPassTimestampWrites<'_>> {
+        self.clouds_timer
+            .as_ref()
+            .and_then(PassTimer::render_writes)
+    }
+
+    /// After a cloud layer pass, in its encoder.
+    pub fn resolve_clouds(&mut self, encoder: &mut wgpu::CommandEncoder) {
+        if let Some(timer) = &mut self.clouds_timer {
+            timer.resolve(encoder);
+        }
+    }
+
     /// After a view's encoder was submitted: read its timed passes back.
     pub fn submitted(&mut self) {
         for timer in [
             &mut self.world_timer,
             &mut self.particles_timer,
+            &mut self.clouds_timer,
             &mut self.post_timer,
             &mut self.finish_timer,
         ]
@@ -480,9 +500,11 @@ impl Finish {
         }
     }
 
-    /// The world, bloom and exposure, and finish timings, in frame order.
+    /// The clouds, world, bloom and exposure, and finish timings, in frame
+    /// order.
     pub fn timings(&self) -> Vec<GpuPassTiming> {
         [
+            (&self.clouds_timer, CLOUDS),
             (&self.world_timer, WORLD),
             (&self.particles_timer, PARTICLES),
             (&self.post_timer, POST),

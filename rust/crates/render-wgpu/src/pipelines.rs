@@ -58,12 +58,13 @@ pub(crate) struct Layouts {
 }
 
 /// One target format's pipelines: the sky, the sun added over the
-/// background, and a world pipeline per feature set and pass, created as
-/// materials need them.
+/// background, the cloud layer blended over both, and a world pipeline per
+/// feature set and pass, created as materials need them.
 pub(crate) struct Pipelines {
     pub target: ColorTarget,
     pub sky: wgpu::RenderPipeline,
     pub sun: wgpu::RenderPipeline,
+    pub clouds: wgpu::RenderPipeline,
     world: HashMap<(Features, Pass), wgpu::RenderPipeline>,
 }
 
@@ -443,6 +444,24 @@ impl Layouts {
                 Some(wgpu::BlendState {
                     color: added,
                     alpha: added,
+                }),
+            ),
+            // Premultiplied over the background, which keeps its alpha.
+            clouds: background(
+                "render-wgpu clouds",
+                &self.sky_pipeline,
+                "fs_clouds",
+                Some(wgpu::BlendState {
+                    color: wgpu::BlendComponent {
+                        src_factor: wgpu::BlendFactor::One,
+                        dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                        operation: wgpu::BlendOperation::Add,
+                    },
+                    alpha: wgpu::BlendComponent {
+                        src_factor: wgpu::BlendFactor::Zero,
+                        dst_factor: wgpu::BlendFactor::One,
+                        operation: wgpu::BlendOperation::Add,
+                    },
                 }),
             ),
             world: HashMap::new(),

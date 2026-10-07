@@ -736,6 +736,8 @@ pub(crate) struct Tables {
     pub atmosphere: Option<render_model::AtmosphereDescriptor>,
     pub sun_shafts: Option<render_model::SunShaftsDescriptor>,
     pub wind: Option<render_model::WindDescriptor>,
+    /// The sky's cloud layer (`sky.wgsl` `fs_clouds`).
+    pub clouds: Option<render_model::CloudsDescriptor>,
     /// The indirect light volume requested (`probes.rs`).
     pub indirect_light: Option<render_model::IndirectLightDescriptor>,
     pub sky_light: Option<render_model::SkyLightDescriptor>,
@@ -775,6 +777,7 @@ impl Tables {
             atmosphere: None,
             sun_shafts: None,
             wind: None,
+            clouds: None,
             indirect_light: None,
             sky_light: None,
             dirty_nodes: HashSet::new(),

@@ -7,10 +7,10 @@ use render_host_contracts::{
     RendererViewComposition, RendererViewTarget, RendererViewport,
 };
 use render_model::{
-    AtmosphereDescriptor, AutoExposureDescriptor, BloomDescriptor, ColorGradingDescriptor,
-    FogDescriptor, IndirectAmbient, IndirectLightDescriptor, RenderDiff, RenderFrameDiff,
-    SkyBackgroundDescriptor, SkyLightDescriptor, SunShaftsDescriptor, ToneMappingDescriptor,
-    ToneMappingOperator, WindDescriptor,
+    AtmosphereDescriptor, AutoExposureDescriptor, BloomDescriptor, CloudsDescriptor,
+    ColorGradingDescriptor, FogDescriptor, IndirectAmbient, IndirectLightDescriptor, RenderDiff,
+    RenderFrameDiff, SkyBackgroundDescriptor, SkyLightDescriptor, SunShaftsDescriptor,
+    ToneMappingDescriptor, ToneMappingOperator, WindDescriptor,
 };
 
 use crate::{
@@ -79,6 +79,7 @@ pub(crate) struct RuntimeCameraViewCall {
     pub(crate) atmosphere: Option<Option<AtmosphereDescriptor>>,
     pub(crate) sun_shafts: Option<Option<SunShaftsDescriptor>>,
     pub(crate) wind: Option<Option<WindDescriptor>>,
+    pub(crate) clouds: Option<Option<CloudsDescriptor>>,
     pub(crate) indirect_light: Option<Option<IndirectLightDescriptor>>,
     pub(crate) sky_light: Option<Option<SkyLightDescriptor>>,
 }
@@ -155,6 +156,7 @@ impl RuntimeCameraViewBridge {
             atmosphere: None,
             sun_shafts: None,
             wind: None,
+            clouds: None,
             indirect_light: None,
             sky_light: None,
         });
@@ -211,6 +213,7 @@ impl RuntimeCameraViewBridge {
             atmosphere: None,
             sun_shafts: None,
             wind: None,
+            clouds: None,
             indirect_light: None,
             sky_light: None,
         };
@@ -504,6 +507,7 @@ impl RuntimeCameraViewBridge {
             atmosphere: None,
             sun_shafts: None,
             wind: None,
+            clouds: None,
             indirect_light: None,
             sky_light: None,
         };
@@ -816,6 +820,27 @@ impl RuntimeCameraViewBridge {
             ));
         }
         self.staged_mut()?.wind = Some((request.strength > 0.0).then_some(wind));
+        Ok(())
+    }
+
+    fn set_clouds(
+        &mut self,
+        request: NativeCloudsRequest,
+    ) -> Result<(), CsharpEngineServicesError> {
+        let clouds = CloudsDescriptor {
+            coverage: request.coverage,
+            drift: [request.drift.x, request.drift.y],
+            altitude: request.altitude,
+            scale: request.scale,
+            color: [request.color.x, request.color.y, request.color.z],
+        };
+        if !clouds.valid() {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_CLOUDS",
+                "clouds need coverage within 0 to 1, a finite drift of at most 1000 m/s, an altitude and scale above 0 and at most 100 km, and colour channels within 0 to 16",
+            ));
+        }
+        self.staged_mut()?.clouds = Some((request.coverage > 0.0).then_some(clouds));
         Ok(())
     }
 
@@ -1166,6 +1191,9 @@ pub(crate) fn environment_frame(
     }
     if let Some(wind) = call.wind {
         operations.push(RenderDiff::SetWind { wind });
+    }
+    if let Some(clouds) = call.clouds {
+        operations.push(RenderDiff::SetClouds { clouds });
     }
     if let Some(indirect_light) = call.indirect_light {
         operations.push(RenderDiff::SetIndirectLight { indirect_light });
@@ -1774,6 +1802,27 @@ pub(crate) unsafe extern "C" fn set_wind(
     }
     let bridge = unsafe { &mut *context.cast::<RuntimeCameraViewBridge>() };
     match bridge.set_wind(unsafe { *request }) {
+        Ok(()) => ABI_OK,
+        Err(error) => {
+            bridge.operation_diagnostics.retain(&error, operation_error);
+            0
+        }
+    }
+}
+
+pub(crate) unsafe extern "C" fn set_clouds(
+    context: *mut c_void,
+    request: *const NativeCloudsRequest,
+    operation_error: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    if !operation_error.is_null() {
+        unsafe { *operation_error = std::mem::zeroed() };
+    }
+    if context.is_null() || request.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeCameraViewBridge>() };
+    match bridge.set_clouds(unsafe { *request }) {
         Ok(()) => ABI_OK,
         Err(error) => {
             bridge.operation_diagnostics.retain(&error, operation_error);

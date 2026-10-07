@@ -1347,8 +1347,20 @@ impl Renderer {
             },
             None => (first, 0.0),
         };
-        let mut uniform = [0u8; 16];
-        uniform[0..4].copy_from_slice(&amount.to_le_bytes());
+        // The blend amount, then the cloud layer's coverage, altitude and
+        // size, drift and tint (`sky.wgsl` SkyUniform).
+        let clouds = self.tables.clouds;
+        let mut values = [0.0f32; 16];
+        values[0] = amount;
+        if let Some(clouds) = clouds {
+            values[4..7].copy_from_slice(&[clouds.coverage, clouds.altitude, clouds.scale]);
+            values[8..10].copy_from_slice(&clouds.drift);
+            values[12..15].copy_from_slice(&clouds.color);
+        }
+        let uniform: Vec<u8> = values
+            .iter()
+            .flat_map(|value| value.to_le_bytes())
+            .collect();
         use wgpu::util::DeviceExt;
         let buffer = self
             .gpu
@@ -1729,6 +1741,39 @@ impl Renderer {
                 pass.set_bind_group(0, &self.frame_bind_group, &[]);
                 pass.set_pipeline(&self.pipelines[sky_index].sun);
                 pass.draw(0..3, 0..1);
+            }
+            drop(pass);
+            // The cloud layer over the panorama and the sun, in a pass of
+            // its own so `gpu.passes` times it. Without cover there is no
+            // pass and the sky is drawn as before.
+            let covered = self
+                .tables
+                .clouds
+                .is_some_and(|clouds| clouds.coverage > 0.0);
+            if let (true, true, Some(sky)) = (view.sky, covered, &self.sky_bind_group) {
+                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("render-wgpu clouds"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: view.target.color,
+                        depth_slice: None,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Load,
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: self.finish.clouds_writes(),
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+                in_viewport(&mut pass);
+                pass.set_bind_group(0, &self.frame_bind_group, &[]);
+                pass.set_pipeline(&self.pipelines[sky_index].clouds);
+                pass.set_bind_group(1, sky, &[]);
+                pass.draw(0..3, 0..1);
+                drop(pass);
+                self.finish.resolve_clouds(&mut encoder);
             }
         }
         // Bloom spreads the world's light; auto exposure adapts at the first

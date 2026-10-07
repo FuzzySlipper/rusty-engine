@@ -203,6 +203,7 @@ fn engine_api(
             set_atmosphere: crate::camera_view::set_atmosphere,
             set_sun_shafts: crate::camera_view::set_sun_shafts,
             set_wind: crate::camera_view::set_wind,
+            set_clouds: crate::camera_view::set_clouds,
             set_indirect_light: crate::camera_view::set_indirect_light,
             set_sky_light: crate::camera_view::set_sky_light,
             set_viewport_anchor: crate::camera_view::set_viewport_anchor,
@@ -1903,6 +1904,86 @@ mod tests {
         assert_eq!(
             call.take_output().frames[0].ops,
             [render_model::RenderDiff::SetWind { wind: None }]
+        );
+    }
+
+    #[test]
+    fn clouds_publish_as_retained_environment_and_zero_coverage_clears_them() {
+        use crate::operation_diagnostics::{empty_receipt, receipt_codes};
+        let mut services = EngineServiceSet::new(
+            parse_runtime_appearance_catalog(None).expect("default catalog"),
+            BTreeMap::new(),
+            None,
+            RuntimeDiagnosticsSink::new(Default::default()).unwrap(),
+        )
+        .expect("service set");
+        let request = |coverage, drift: f32, altitude, scale, red| NativeCloudsRequest {
+            coverage,
+            drift: NativeVec2 { x: drift, y: 2.0 },
+            altitude,
+            scale,
+            color: NativeVec3 {
+                x: red,
+                y: 1.0,
+                z: 1.0,
+            },
+        };
+        services.begin_call(binding());
+        let api = services.api();
+        let set = |request: NativeCloudsRequest, refusal| unsafe {
+            (api.camera_view.set_clouds)(api.camera_view.context, &request, refusal)
+        };
+        assert_eq!(
+            set(request(0.6, 8.0, 1500.0, 600.0, 1.0), std::ptr::null_mut()),
+            ABI_OK
+        );
+        let mut call = services.finish_call().expect("clouds call");
+        let selected = render_model::RenderDiff::SetClouds {
+            clouds: Some(render_model::CloudsDescriptor {
+                coverage: 0.6,
+                drift: [8.0, 2.0],
+                altitude: 1500.0,
+                scale: 600.0,
+                color: [1.0; 3],
+            }),
+        };
+        assert_eq!(
+            call.take_output().frames[0].ops,
+            std::slice::from_ref(&selected)
+        );
+        let attachment = services
+            .snapshot_outputs(binding())
+            .expect("fresh attachment");
+        let CsharpAppearanceCallOutput::Frame(frame) = &attachment.appearance[0] else {
+            panic!("baseline graphics frame");
+        };
+        assert!(frame.ops.contains(&selected));
+
+        services.begin_call(binding());
+        let api = services.api();
+        let set = |request: NativeCloudsRequest, refusal| unsafe {
+            (api.camera_view.set_clouds)(api.camera_view.context, &request, refusal)
+        };
+        for refused in [
+            request(1.5, 8.0, 1500.0, 600.0, 1.0),
+            request(0.5, f32::NAN, 1500.0, 600.0, 1.0),
+            request(0.5, 2000.0, 1500.0, 600.0, 1.0),
+            request(0.5, 8.0, 0.0, 600.0, 1.0),
+            request(0.5, 8.0, 1500.0, -1.0, 1.0),
+            request(0.5, 8.0, 1500.0, 600.0, 20.0),
+        ] {
+            let mut refusal = empty_receipt();
+            assert_eq!(set(refused, &mut refusal), 0);
+            assert_eq!(receipt_codes(&refusal), ["CSHARP_CLOUDS"]);
+        }
+        assert_eq!(
+            set(request(0.0, 8.0, 1500.0, 600.0, 1.0), std::ptr::null_mut()),
+            ABI_OK
+        );
+        let mut call = services.finish_call().expect("clear");
+        assert_eq!(
+            call.take_output().frames[0].ops,
+            [render_model::RenderDiff::SetClouds { clouds: None }]
         );
     }
 

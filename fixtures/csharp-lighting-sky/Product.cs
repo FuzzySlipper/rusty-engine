@@ -39,6 +39,10 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     private const float NoonElevation = 55, DuskElevation = 6, SunAzimuth = 210, NoonSunIntensity = 2.5f, DuskSunIntensity = .5f;
     // Height fog over the room, hazy toward the sun, with its disc and halo.
     private static readonly AtmosphereRequest Air = new(0,6,new Color(1,.7f,.45f,1),8,1.5f,.35f);
+    // The cloud layer: its drift over the ground (m/s), altitude and cloud size (m), and an untinted light.
+    private static readonly Vector2 CloudDrift = new(8, 3);
+    private const float CloudAltitude = 1200, CloudScale = 500;
+    private static readonly Vector3 CloudTint = Vector3.One, CloudsEye = new(3.5f,8,14), CloudsTarget = new(3.5f,14,-10);
     // The torch's fire on the floor by the -x wall: a soft additive flame flipbook, soft additive embers and soft alpha smoke rising along the wall, so each sheet meets the stone without a hard edge. Seen from the fire viewpoint.
     private const ulong FlameId = 10, EmberId = 11, SmokeId = 12;
     private static readonly Vector3 FirePosition = new(1.55f,1.05f,3.5f);
@@ -452,6 +456,14 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     };
     [DebugCommand("lighting.sky")]
     public string Sky(float amount) { clock=Math.Clamp(amount,0,1); engine.CameraView.SetSkyBackgroundBlend(new(day,night,clock)); engine.Graphics.UpdateLight(new(sun,new(SunId,false,0,Sun(clock)))); engine.CameraView.UpdateCamera(new(camera,Camera(SkyEye,SkyTarget))); return Inspect(); }
+    // A drifting cloud layer over the panorama at the given coverage (0 to 1; 0 clears it), with the camera up toward it; lighting.sky moves the sun that lights it from noon to dusk.
+    [DebugCommand("lighting.clouds")]
+    public string Clouds(float coverage)
+    {
+        engine.CameraView.SetClouds(new(Math.Clamp(coverage,0,1),CloudDrift,CloudAltitude,CloudScale,CloudTint));
+        engine.CameraView.UpdateCamera(new(camera,Camera(CloudsEye,CloudsTarget)));
+        return Inspect();
+    }
     [DebugCommand("lighting.atmosphere")]
     public string Atmosphere(bool enabled) { engine.CameraView.SetAtmosphere(enabled ? Air : default); return Inspect(); }
     // A hemisphere light at the given intensity (0 disables it), read back from the Engine.
