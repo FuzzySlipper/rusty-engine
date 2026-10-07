@@ -332,7 +332,7 @@ impl Renderer {
         let uploaded = self.upload_parts();
         let regrouped = std::mem::take(&mut self.tables.parts.regrouped);
         let moved = std::mem::take(&mut self.tables.parts.moved);
-        let removed = std::mem::take(&mut self.tables.parts.removed_bounds);
+        let former = std::mem::take(&mut self.tables.parts.former_bounds);
         if self.tables.indirect_light.is_some() {
             // A change inside the volume marks the bricks it reaches; they
             // bake once the scene is still.
@@ -341,10 +341,11 @@ impl Renderer {
             if self.probes.stale(self.scene_generation) {
                 let moved_bounds: Vec<_> = moved
                     .iter()
-                    .filter(|id| !self.probes.covered_move(**id))
-                    .map(|id| self.tables.parts.state[*id as usize].world_bounds)
+                    .map(|id| (*id, self.tables.parts.state[*id as usize].world_bounds))
+                    .filter(|(id, bounds)| !self.probes.covered_move(*id, bounds))
+                    .map(|(_, bounds)| bounds)
                     .collect();
-                for bounds in removed.into_iter().chain(moved_bounds) {
+                for bounds in former.into_iter().chain(moved_bounds) {
                     marked |= self.probe_bounds_changed(&bounds);
                 }
             }

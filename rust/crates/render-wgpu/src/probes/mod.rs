@@ -34,7 +34,7 @@ mod bake;
 pub(crate) mod thumb;
 mod trace;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::mpsc::{self, Receiver};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -511,6 +511,24 @@ impl Volume {
     }
 }
 
+/// The light rows whose count differs between `old` and `new`: a row added,
+/// removed or changed, counted with its duplicates, since two lights alike in
+/// every value are still two lights.
+fn changed_rows(old: &[f32], new: &[f32]) -> Vec<[f32; LIGHT_ROW]> {
+    let mut counts: HashMap<[u32; LIGHT_ROW], i32> = HashMap::new();
+    for row in old.as_chunks::<LIGHT_ROW>().0 {
+        *counts.entry(row.map(f32::to_bits)).or_default() -= 1;
+    }
+    for row in new.as_chunks::<LIGHT_ROW>().0 {
+        *counts.entry(row.map(f32::to_bits)).or_default() += 1;
+    }
+    counts
+        .into_iter()
+        .filter(|(_, count)| *count != 0)
+        .map(|(row, _)| row.map(f32::from_bits))
+        .collect()
+}
+
 /// When the next bake starts.
 #[derive(Default)]
 struct Schedule {
@@ -634,9 +652,10 @@ pub(crate) struct ProbeVolume {
     batch_bricks: u32,
     /// The world light rows the last marking compared against.
     last_rows: Vec<f32>,
-    /// Parts whose move the last batch already read, so the frame that
-    /// drains them does not mark their bricks again.
-    covered_moved: HashSet<PartId>,
+    /// Parts whose move the last batch already read, with the bounds it
+    /// read, so the frame that drains them does not mark their bricks again
+    /// unless they moved since.
+    covered_moved: HashMap<PartId, Aabb>,
     readout: IndirectLightReadout,
     /// Bytes uploaded since the frame began.
     frame_upload: u64,
@@ -666,7 +685,7 @@ impl ProbeVolume {
             job: None,
             batch_bricks: 0,
             last_rows: Vec::new(),
-            covered_moved: HashSet::new(),
+            covered_moved: HashMap::new(),
             readout: IndirectLightReadout::default(),
             frame_upload: 0,
         }
@@ -707,11 +726,9 @@ impl ProbeVolume {
         self.baked_generation != generation
     }
 
-    /// The frame began: the upload count starts over.
+    /// The frame began: the frame before is the last one, uploads or none.
     pub fn begin_frame(&mut self) {
-        if self.frame_upload > 0 {
-            self.readout.upload_bytes = self.frame_upload;
-        }
+        self.readout.upload_bytes = self.frame_upload;
         self.frame_upload = 0;
     }
 
@@ -764,10 +781,10 @@ impl ProbeVolume {
         true
     }
 
-    /// Whether the last batch already read this part's move; each part is
-    /// answered once.
-    pub fn covered_move(&mut self, part: PartId) -> bool {
-        self.covered_moved.remove(&part)
+    /// Whether the last batch already read this part where it is now; each
+    /// part is answered once.
+    pub fn covered_move(&mut self, part: PartId, bounds: &Aabb) -> bool {
+        self.covered_moved.remove(&part).as_ref() == Some(bounds)
     }
 
     /// The frame's moves have been looked at.
@@ -788,12 +805,9 @@ impl ProbeVolume {
         let Some(volume) = self.volume.as_mut() else {
             return false;
         };
-        let key = |row: &[f32; LIGHT_ROW]| row.map(f32::to_bits);
-        let old: HashSet<[u32; LIGHT_ROW]> = self.last_rows.as_chunks().0.iter().map(key).collect();
-        let new: HashSet<[u32; LIGHT_ROW]> = rows.as_chunks().0.iter().map(key).collect();
         let mut marked = false;
-        for row in old.symmetric_difference(&new) {
-            volume.mark_light(&row.map(f32::from_bits));
+        for row in changed_rows(&self.last_rows, rows) {
+            volume.mark_light(&row);
             marked = true;
         }
         self.last_rows = rows.to_vec();
@@ -1075,8 +1089,14 @@ impl Renderer {
         }
         // What this batch reads is not a change for the next frame.
         self.probes.last_rows = rows.clone();
-        self.probes.covered_moved = self.tables.parts.moved.clone();
-        self.tables.parts.removed_bounds.clear();
+        self.probes.covered_moved = self
+            .tables
+            .parts
+            .moved
+            .iter()
+            .map(|id| (*id, self.tables.parts.state[*id as usize].world_bounds))
+            .collect();
+        self.tables.parts.former_bounds.clear();
         let volume = self.probes.volume.as_ref()?;
         Some(Batch {
             generation: self.scene_generation,
@@ -1278,6 +1298,25 @@ mod tests {
         // An ambient row marks every brick.
         volume.mark_light(&[0.0; LIGHT_ROW]);
         assert_eq!(volume.take_work().expect("marked").bake.len(), 32);
+    }
+
+    #[test]
+    fn light_rows_are_compared_with_their_duplicates() {
+        let mut torch = [0.0_f32; LIGHT_ROW];
+        torch[3] = 3.0;
+        torch[7] = 6.0;
+        let mut ambient = [0.0_f32; LIGHT_ROW];
+        ambient[0] = 0.5;
+        let two_torches: Vec<f32> = [torch, torch, ambient].concat();
+        let one_torch: Vec<f32> = [torch, ambient].concat();
+        // Removing one of two identical torches is a change where it stood.
+        assert_eq!(changed_rows(&two_torches, &one_torch), vec![torch]);
+        assert_eq!(changed_rows(&one_torch, &two_torches), vec![torch]);
+        assert!(changed_rows(&one_torch, &one_torch).is_empty());
+        let mut moved = torch;
+        moved[4] = 10.0;
+        let changed = changed_rows(&one_torch, &[moved, ambient].concat());
+        assert_eq!(changed.len(), 2, "the old and the new place: {changed:?}");
     }
 
     #[test]

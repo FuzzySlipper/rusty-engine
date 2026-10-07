@@ -455,9 +455,10 @@ pub(crate) struct Parts {
     /// Parts whose world transform was rewritten: culling and blend order
     /// may change, the batches do not.
     pub moved: HashSet<PartId>,
-    /// The world bounds of parts removed since the last frame, for the
-    /// indirect light volume's dirty bricks (`probes`).
-    pub removed_bounds: Vec<Aabb>,
+    /// The former world bounds of parts removed or moved since the last
+    /// frame, for the indirect light volume's dirty bricks (`probes`): a
+    /// part that left a brick is a change there too.
+    pub former_bounds: Vec<Aabb>,
     /// Batch keys in use: key, reference count.
     keys: HashMap<BatchKey, (u32, u32)>,
     free_keys: Vec<u32>,
@@ -499,7 +500,7 @@ impl Parts {
     pub fn remove(&mut self, id: PartId) {
         if let Some(part) = self.meta[id as usize].take() {
             self.release_key(part);
-            self.removed_bounds
+            self.former_bounds
                 .push(self.state[id as usize].world_bounds);
         }
         self.dirty.remove(&id);
@@ -541,7 +542,11 @@ impl Parts {
         if state.mirrored != mirrored || state.shown != shown || state.layer != layer {
             self.regrouped = true;
         }
-        state.world_bounds = state.local_bounds.transformed(world);
+        let bounds = state.local_bounds.transformed(world);
+        if !state.world_bounds.is_empty() && state.world_bounds != bounds {
+            self.former_bounds.push(state.world_bounds);
+        }
+        state.world_bounds = bounds;
         state.mirrored = mirrored;
         state.shown = shown;
         state.layer = layer;
