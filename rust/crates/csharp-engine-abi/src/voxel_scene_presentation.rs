@@ -135,6 +135,9 @@ pub struct NativeVoxelScenePresentationReadout {
     pub material_count: u32,
     /// Chunks drawn from their coarse meshes at the last projection.
     pub coarse_chunk_count: u64,
+    /// Time the last projection spent meshing coarse chunks, summed over
+    /// chunks (they mesh in parallel, so wall time can be shorter).
+    pub coarse_mesh_microseconds: u64,
 }
 
 /// Result of clearing all retained voxel scene projections in this product
