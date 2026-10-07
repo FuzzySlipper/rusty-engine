@@ -52,7 +52,13 @@ store. `EntityOriginRebaser.Prepare` computes each root's local transform in
 the target frame from its global position; `Commit` moves the origin and
 rebases the live collision scene. Voxel or collision edits made between the
 two are kept, and several prepared rebases may commit in any order: the last
-commit decides the origin. `Commit` also rebases every stored `CharacterMotion`,
+commit decides the origin. A root whose local position would fall outside the
+session's envelope (16,384 m) refuses the whole rebase, unless `Prepare` is
+called with `excludeOutsideEnvelope: true`: then such roots are left out and
+named in the receipt's `Excluded`, every other root is still rebased
+atomically at commit, and the excluded roots keep their transforms and stored
+`CharacterMotion` for the product to retire or move (a site transition that
+resets the origin before unloading distant actors). `Commit` also rebases every stored `CharacterMotion`,
 whose support anchor, fixed tether anchor and fall/peak heights are local-frame
 values. A product that holds character motion itself applies
 `motion.Rebased(receipt.LocalDelta)` after the commit. Without it, the next step

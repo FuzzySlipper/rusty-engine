@@ -391,6 +391,41 @@ pub struct NativeSpatialTriggerReadResult {
     pub active: bool,
 }
 
+/// Which registered triggers contain each of several world points. A
+/// trigger's geometry is its collider row from the session's last trigger
+/// reconcile or restore, sensed under the same rule (one sensing from active
+/// collision needs it enabled); an inactive trigger contains nothing, and a
+/// point on a face is outside, as a touching subject is. The points need not
+/// be registered subjects, and the answer does not depend on the overlap
+/// list.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeSpatialTriggerPointQueryRequest {
+    pub session: NativeSpatialSessionHandle,
+    pub points: *const NativeVec3,
+    pub points_len: usize,
+}
+
+/// One point inside one trigger: the point's index in the request and the
+/// trigger's id.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeSpatialTriggerPointHit {
+    pub point: u32,
+    pub trigger: u64,
+}
+
+/// Borrowed result of one point query: every containment, in point then
+/// trigger id order. `hits` points into Spatial bridge storage and stays
+/// valid until the next call on the same context.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeSpatialTriggerPointQueryResult {
+    pub hits: *const NativeSpatialTriggerPointHit,
+    pub hits_len: usize,
+    pub points: u32,
+}
+
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeMeshResourceReference {

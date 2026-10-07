@@ -985,10 +985,24 @@ any new edge. `ReconcileTriggers` and `SetTriggerActive` return their
 enter/exit edges in `Facts`. `RestoreTriggers` accepts the complete active
 trigger ID set plus current projected colliders and replaces the active and
 overlap state without producing gameplay facts. `ReadTrigger` returns the
-current active flag and every overlap subject. Unknown IDs, activating an
+current active flag and every overlap subject. `QueryTriggersAtPoints` returns
+which active triggers contain each of several world points, by trigger id:
+a trigger's geometry is its row from the last `ReconcileTriggers` or
+`RestoreTriggers`, sensed under the same rule, and a point on a face is
+outside, as a touching subject is. The points need not be registered subjects
+and the answer does not wait for a reconcile, so an actor can ask whether its
+current position is in water without being a trigger subject. Unknown IDs, activating an
 active trigger (or deactivating an inactive one), and duplicate restore IDs
 reject without changing the session. Disposing the Spatial session destroys
 the definitions, active set and overlaps together.
+
+`EntityTriggerProjection` (`Rusty.Engine.Entities`) builds those collider rows
+from an `EntityStore`'s Transform and `SpatialCollider` components:
+`Project(entity, transform, collider)` is the per-entity projection (the local
+box's corners scaled, rotated and translated, then bounded), `ProjectEntities`
+projects every active row, and `ReconcileTriggers` and `RestoreTriggers` take
+caller-projected subjects as well, such as a character collider the movement
+system owns, so a product never keeps its own copy of the bounds arithmetic.
 
 ### Generated level artifact admission
 

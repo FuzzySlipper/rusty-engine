@@ -427,6 +427,36 @@ static void ExerciseWorldOriginEntityComposition()
     Require(committed.Native.LocalDelta == new Vector3(-100.0f, 0.0f, 0.0f)
         && world.Get(entity, EngineComponentTypes.CharacterMotion).SupportPreviousTranslation == new Vector3(0.0f, 1.0f, 0.0f),
         "world-origin commit left stored character motion in the old frame");
+
+    // A root 20 km from the next target lies outside the envelope: without
+    // opting in the prepare refuses; opting in leaves it out by name, rebases
+    // the other root, and leaves the excluded root's motion as it was.
+    EntityId distant = world.Create();
+    world.Set(distant, EngineComponentTypes.Transform, new Transform(new Vector3(20_000.0f, 0.0f, 0.0f), Quaternion.Identity, Vector3.One));
+    world.Set(distant, globalPositions, new WorldOriginGlobalPosition(20_100, 0, 0, 0.0, 0.0, 0.0));
+    world.Set(distant, EngineComponentTypes.CharacterMotion, default(CharacterMotion) with
+    {
+        SupportEntityPresent = true,
+        SupportEntity = 9,
+        SupportPreviousTranslation = new Vector3(20_000.0f, 1.0f, 0.0f),
+        SupportPreviousRotation = Quaternion.Identity,
+    });
+    Throws(() => adapter.Prepare(200, 0, 0), "an out-of-envelope root did not refuse the rebase without opting in");
+    using (EntityOriginRebaserPrepared partial = adapter.Prepare(200, 0, 0, excludeOutsideEnvelope: true))
+    {
+        Require(partial.Receipt.Affected.Length == 1
+            && partial.Receipt.Affected.Span[0].EntityId == entity.Value
+            && partial.Receipt.Excluded.Length == 1
+            && partial.Receipt.Excluded.Span[0].EntityId == distant.Value,
+            "the prepare did not exclude the distant root by name");
+        EntityOriginRebaserCommitReceipt partialCommit = partial.Commit();
+        Require(partialCommit.Native.ExcludedEntityCount == 1
+            && world.Get(entity, EngineComponentTypes.Transform).Translation.X == -100.0f
+            && world.Get(entity, EngineComponentTypes.CharacterMotion).SupportPreviousTranslation.X == -100.0f
+            && world.Get(distant, EngineComponentTypes.Transform).Translation.X == 20_000.0f
+            && world.Get(distant, EngineComponentTypes.CharacterMotion).SupportPreviousTranslation.X == 20_000.0f,
+            "the commit did not rebase only the included root and its motion");
+    }
 }
 
 static void ExerciseMotionEntityComposition()
@@ -567,6 +597,46 @@ static void ExerciseSpatialEntityProjection()
         && receipt.Facts.Span[0].Enter
         && receipt.Facts.Span[0].Subject == actor.Value,
         "spatial reconciliation did not copy its generated readback");
+
+    // The public per-entity projection is the one the reconcile applied, with
+    // rotation and scale bounded over the box's corners: a quarter turn about
+    // Y swaps the scaled x and z extents.
+    var turned = new Transform(
+        new Vector3(10f, 2f, -3f),
+        Quaternion.CreateFromAxisAngle(Vector3.UnitY, MathF.PI / 2f),
+        new Vector3(2f, 1f, 3f));
+    var box = new SpatialCollider(new Vector3(-1f, -1f, -1f), new Vector3(1f, 2f, 1f), 1, 1, true, false, false);
+    SpatialEntityCollider projectedTurned = EntityTriggerProjection.Project(actor, turned, box);
+    Require(Vector3.Distance(projectedTurned.Min, new Vector3(7f, 1f, -5f)) < 1e-4f
+        && Vector3.Distance(projectedTurned.Max, new Vector3(13f, 4f, -1f)) < 1e-4f
+        && projectedTurned.Entity == actor.Value
+        && !projectedTurned.Trigger,
+        $"per-entity projection did not bound the rotated, scaled box: {projectedTurned.Min} .. {projectedTurned.Max}");
+    world.Set(actor, EngineComponentTypes.Transform, turned);
+    world.Set(actor, EngineComponentTypes.SpatialCollider, box);
+    Require(adapter.ReconcileTriggers(8, SpatialTriggerCause.Movement).Entities.Span[0] == projectedTurned
+        && adapter.ProjectEntities().Length == 1
+        && adapter.ProjectEntities()[0] == projectedTurned,
+        "the reconcile and ProjectEntities disagree with the public projection");
+
+    // A caller-projected subject that is not a store entity joins the same
+    // reconcile and the same restore baseline, after the store's rows.
+    var character = new SpatialEntityCollider(900, new Vector3(0f, 0f, 0f), new Vector3(1f, 2f, 1f), 1, 1, true, false, false);
+    EntityTriggerProjectionReconcileReceipt withCharacter = adapter.ReconcileTriggers(9, SpatialTriggerCause.Movement, [character]);
+    Require(withCharacter.Entities.Length == 2
+        && withCharacter.Entities.Span[0] == projectedTurned
+        && withCharacter.Entities.Span[1] == character
+        && spatial.LastEntities.Length == 2
+        && spatial.LastEntities[1].Entity == 900,
+        "a caller-supplied subject did not reach the reconcile after the projected entities");
+    EntityTriggerProjectionRestoreReceipt restored = adapter.RestoreTriggers(new ulong[] { actor.Value }, [character]);
+    Require(spatial.RestoreCalls == 1
+        && spatial.RestoreActiveTriggers.Length == 1
+        && spatial.RestoreActiveTriggers[0] == actor.Value
+        && restored.Entities.Length == 2
+        && restored.Entities.Span[1] == character
+        && restored.Trigger.ActiveCount == 1,
+        "the restore baseline was not built from the projection plus the caller's subject");
 }
 
 static void ExerciseCharacterEntityComposition()
@@ -656,6 +726,9 @@ sealed class SpatialServiceFake : ISpatialService
 {
     public CollisionReplaceReceipt ApplyCollisionResidency(CollisionResidencyRequest request) => throw new NotSupportedException();
     public int ReconcileCalls { get; private set; }
+    public int RestoreCalls { get; private set; }
+    public ulong[] RestoreActiveTriggers { get; private set; } = [];
+    public SpatialEntityCollider[] LastEntities => _entities;
     public int CharacterStepCalls { get; private set; }
     public SpatialSession Session { get; } = new(new SpatialSessionHandle(2), () => { });
     private SpatialEntityCollider[] _entities = [];
@@ -746,10 +819,17 @@ sealed class SpatialServiceFake : ISpatialService
     public SpatialTriggerLifecycleResult SetTriggerActive(SpatialTriggerSetActiveRequest request) =>
         throw new NotSupportedException();
 
-    public SpatialTriggerRestoreReceipt RestoreTriggers(SpatialTriggerRestoreRequest request) =>
-        throw new NotSupportedException();
+    public SpatialTriggerRestoreReceipt RestoreTriggers(SpatialTriggerRestoreRequest request)
+    {
+        RestoreCalls++;
+        RestoreActiveTriggers = request.ActiveTriggers.ToArray();
+        _entities = request.Entities.ToArray();
+        return new SpatialTriggerRestoreReceipt(1, (uint)RestoreActiveTriggers.Length, (uint)_entities.Length, 0);
+    }
 
     public SpatialTriggerReadResult ReadTrigger(SpatialTriggerReadRequest arg0) => throw new NotSupportedException();
+    public SpatialContentArtifactResidencyReceipt ApplyContentArtifactResidency(SpatialContentArtifactResidencyRequest arg0) => throw new NotSupportedException();
+    public SpatialTriggerPointQueryResult QueryTriggersAtPoints(SpatialTriggerPointQueryRequest arg0) => throw new NotSupportedException();
 }
 
 sealed class GraphicsServiceFake : IGraphicsService
@@ -807,6 +887,8 @@ sealed class GraphicsServiceFake : IGraphicsService
     public Light ReplaceLight(LightUpdateRequest arg0) => throw new NotSupportedException();
     public LightReadout ReadLight(Light arg0) => throw new NotSupportedException();
     public PresentationReadout ReadPresentation() => throw new NotSupportedException();
+    public void UpdateStaticMeshMaterialFactors(StaticMeshMaterialFactorsRequest arg0) => throw new NotSupportedException();
+    public Material CreateTerrainLayerMaterial(TerrainLayerMaterialRequest arg0) => throw new NotSupportedException();
 }
 
 
@@ -919,7 +1001,9 @@ sealed class InMemoryPersistenceService : IPersistenceService
 sealed class WorldOriginServiceFake : IWorldOriginService
 {
     private const ulong InitialRevision = 0;
+    private const float Envelope = 16_384.0f;
     private readonly Dictionary<ulong, Prepared> _prepared = [];
+    private (long X, long Y, long Z) _origin;
     private ulong _nextPrepared = 1;
 
     public SpatialSession Session { get; } = new(new SpatialSessionHandle(1), () => { });
@@ -928,55 +1012,66 @@ sealed class WorldOriginServiceFake : IWorldOriginService
     public WorldOriginPrepared Prepare(WorldOriginPrepareRequest request)
     {
         ulong handle = _nextPrepared++;
-        var facts = new WorldOriginAffectedTransform[request.Entities.Length];
+        var facts = new List<WorldOriginAffectedTransform>(request.Entities.Length);
+        var excluded = new List<WorldOriginExcludedEntity>();
         ReadOnlySpan<WorldOriginEntityRow> rows = request.Entities.Span;
         for (int index = 0; index < rows.Length; index++)
         {
             WorldOriginEntityRow row = rows[index];
-            Transform local = row.LocalTransform with
+            var translation = new Vector3(
+                checked((float)(row.GlobalPosition.CellX - request.TargetCellX)) + (float)row.GlobalPosition.OffsetX,
+                checked((float)(row.GlobalPosition.CellY - request.TargetCellY)) + (float)row.GlobalPosition.OffsetY,
+                checked((float)(row.GlobalPosition.CellZ - request.TargetCellZ)) + (float)row.GlobalPosition.OffsetZ);
+            if (MathF.Abs(translation.X) > Envelope || MathF.Abs(translation.Y) > Envelope || MathF.Abs(translation.Z) > Envelope)
             {
-                Translation = new Vector3(
-                    checked((float)(row.GlobalPosition.CellX - request.TargetCellX)) + (float)row.GlobalPosition.OffsetX,
-                    checked((float)(row.GlobalPosition.CellY - request.TargetCellY)) + (float)row.GlobalPosition.OffsetY,
-                    checked((float)(row.GlobalPosition.CellZ - request.TargetCellZ)) + (float)row.GlobalPosition.OffsetZ),
-            };
-            facts[index] = new WorldOriginAffectedTransform(row.EntityId, local);
+                if (!request.ExcludeOutsideEnvelope)
+                {
+                    throw new InvalidOperationException("world-origin row is outside the local envelope");
+                }
+                excluded.Add(new WorldOriginExcludedEntity(row.EntityId));
+                continue;
+            }
+            facts.Add(new WorldOriginAffectedTransform(row.EntityId, row.LocalTransform with { Translation = translation }));
         }
-        _prepared.Add(handle, new Prepared(request, facts));
+        _prepared.Add(handle, new Prepared(request, facts.ToArray(), excluded.ToArray()));
         return new WorldOriginPrepared(new WorldOriginPreparedHandle(handle), () => _prepared.Remove(handle));
     }
 
     public WorldOriginReadout Read(WorldOriginReadRequest request)
-        => new(0, 0, 0, InitialRevision, 16_384.0f, 0, 0);
+        => new(_origin.X, _origin.Y, _origin.Z, InitialRevision, Envelope, 0, 0);
 
     public WorldOriginPreparedResult ReadPrepared(WorldOriginPreparedReadRequest request)
     {
         Prepared prepared = Require(request.Prepared);
         return new WorldOriginPreparedResult(
             prepared.Facts,
+            prepared.Excluded,
             prepared.Request.TargetCellX,
             prepared.Request.TargetCellY,
             prepared.Request.TargetCellZ,
-            16_384.0f);
+            Envelope);
     }
 
     public WorldOriginCommitReceipt Commit(WorldOriginCommitRequest request)
     {
         Prepared prepared = Require(request.Prepared);
         CommitCount++;
+        (long X, long Y, long Z) before = _origin;
+        _origin = (prepared.Request.TargetCellX, prepared.Request.TargetCellY, prepared.Request.TargetCellZ);
         return new WorldOriginCommitReceipt(
             InitialRevision,
             InitialRevision + 1,
-            0,
-            0,
-            0,
+            before.X,
+            before.Y,
+            before.Z,
             prepared.Request.TargetCellX,
             prepared.Request.TargetCellY,
             prepared.Request.TargetCellZ,
             0,
             0,
             checked((uint)prepared.Facts.Length),
-            16_384.0f);
+            checked((uint)prepared.Excluded.Length),
+            Envelope);
     }
 
     private Prepared Require(WorldOriginPrepared prepared)
@@ -984,7 +1079,7 @@ sealed class WorldOriginServiceFake : IWorldOriginService
             ? value
             : throw new InvalidOperationException("world-origin prepared handle was unavailable");
 
-    private sealed record Prepared(WorldOriginPrepareRequest Request, WorldOriginAffectedTransform[] Facts);
+    private sealed record Prepared(WorldOriginPrepareRequest Request, WorldOriginAffectedTransform[] Facts, WorldOriginExcludedEntity[] Excluded);
 }
 
 sealed class MotionServiceFake : IMotionService

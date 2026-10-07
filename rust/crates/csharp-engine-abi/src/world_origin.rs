@@ -42,6 +42,12 @@ pub struct NativeWorldOriginPrepareRequest {
     pub target_cell_z: i64,
     pub entities: *const NativeWorldOriginEntityRow,
     pub entities_len: usize,
+    /// Leave out the rows whose local position in the target frame would
+    /// fall outside the session's envelope, naming them in the prepared
+    /// result's `excluded`, instead of refusing the whole request. Every
+    /// other row is still rebased atomically at commit; the product retires
+    /// or moves the excluded ones itself. False refuses as before.
+    pub exclude_outside_envelope: bool,
 }
 
 #[repr(C)]
@@ -76,14 +82,25 @@ pub struct NativeWorldOriginAffectedTransform {
     pub local_transform: NativeTransform,
 }
 
-/// Borrowed readout of one prepared rebase. `affected` points into Spatial
-/// bridge storage and stays valid until the next call on the same context;
-/// the generated managed binding copies it before returning.
+/// One root a prepare excluded for falling outside the envelope.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct NativeWorldOriginExcludedEntity {
+    pub entity_id: u64,
+}
+
+/// Borrowed readout of one prepared rebase. `affected` and `excluded` point
+/// into Spatial bridge storage and stay valid until the next call on the same
+/// context; the generated managed binding copies them before returning.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeWorldOriginPreparedResult {
     pub affected: *const NativeWorldOriginAffectedTransform,
     pub affected_len: usize,
+    /// The entity ids the request excluded for falling outside the
+    /// envelope, in request order; empty unless it asked to exclude them.
+    pub excluded: *const NativeWorldOriginExcludedEntity,
+    pub excluded_len: usize,
     pub target_cell_x: i64,
     pub target_cell_y: i64,
     pub target_cell_z: i64,
@@ -112,5 +129,7 @@ pub struct NativeWorldOriginCommitReceipt {
     pub voxel_source_revision: u64,
     pub static_mesh_revision: u64,
     pub affected_entity_count: u32,
+    /// Rows the prepare excluded for falling outside the envelope.
+    pub excluded_entity_count: u32,
     pub local_envelope: f32,
 }

@@ -1579,6 +1579,7 @@ mod tests {
         let request = WorldOriginRebaseRequest {
             target_origin: WorldOrigin::new([100_000, 0, 0]),
             entities: Vec::new(),
+            exclude_outside_envelope: false,
         };
         let prepared = WorldOriginRebaseService.prepare(&origin, request).unwrap();
         (scene, _) = WorldOriginRebaseService
@@ -2136,6 +2137,7 @@ mod tests {
                     let request = WorldOriginRebaseRequest {
                         target_origin,
                         entities: Vec::new(),
+                        exclude_outside_envelope: false,
                     };
                     let prepared = WorldOriginRebaseService.prepare(&origin, request).unwrap();
                     (*scene, _) = WorldOriginRebaseService

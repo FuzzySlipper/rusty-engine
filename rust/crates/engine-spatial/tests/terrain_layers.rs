@@ -102,6 +102,7 @@ fn a_rebase_keeps_every_weight() {
             WorldOriginRebaseRequest {
                 target_origin: WorldOrigin::new([8, 1, 0]),
                 entities: Vec::new(),
+                exclude_outside_envelope: false,
             },
         )
         .unwrap();

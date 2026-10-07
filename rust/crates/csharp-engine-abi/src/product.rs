@@ -406,6 +406,12 @@ pub type NativeSpatialReadTrigger = unsafe extern "C" fn(
     *mut NativeSpatialTriggerReadResult,
     *mut NativeOperationErrorReceipt,
 ) -> i32;
+pub type NativeSpatialQueryTriggersAtPoints = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeSpatialTriggerPointQueryRequest,
+    *mut NativeSpatialTriggerPointQueryResult,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
 pub type NativeWorldOriginPrepare = unsafe extern "C" fn(
     *mut c_void,
     *const NativeWorldOriginPrepareRequest,
@@ -1394,6 +1400,7 @@ pub struct NativeSpatialApi {
     pub set_trigger_active: NativeSpatialSetTriggerActive,
     pub restore_triggers: NativeSpatialRestoreTriggers,
     pub read_trigger: NativeSpatialReadTrigger,
+    pub query_triggers_at_points: NativeSpatialQueryTriggersAtPoints,
 }
 
 /// Origin rebasing is a distinct named service family, but shares the Spatial

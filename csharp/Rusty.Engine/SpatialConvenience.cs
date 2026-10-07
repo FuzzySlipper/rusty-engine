@@ -122,3 +122,17 @@ public readonly partial record struct NavigationStepResult
     {
     }
 }
+
+public readonly partial record struct WorldOriginPrepareRequest
+{
+    /// <summary>A rebase that refuses when any row falls outside the local envelope.</summary>
+    public WorldOriginPrepareRequest(
+        SpatialSession session,
+        long targetCellX,
+        long targetCellY,
+        long targetCellZ,
+        ReadOnlyMemory<WorldOriginEntityRow> entities)
+        : this(session, targetCellX, targetCellY, targetCellZ, entities, false)
+    {
+    }
+}

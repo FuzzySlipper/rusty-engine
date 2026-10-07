@@ -395,6 +395,7 @@ fn residency_carries_densities_through_eviction_and_rebase() {
             WorldOriginRebaseRequest {
                 target_origin: WorldOrigin::new([4, 1, 0]),
                 entities: Vec::new(),
+                exclude_outside_envelope: false,
             },
         )
         .unwrap();

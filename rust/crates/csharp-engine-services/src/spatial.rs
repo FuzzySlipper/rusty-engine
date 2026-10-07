@@ -3310,6 +3310,38 @@ impl RuntimeSpatialBridge {
         self.borrowed.hold(subjects);
         Ok(result)
     }
+
+    fn query_triggers_at_points(
+        &mut self,
+        request: &NativeSpatialTriggerPointQueryRequest,
+    ) -> Result<NativeSpatialTriggerPointQueryResult, CsharpEngineServicesError> {
+        let points =
+            unsafe { borrowed_slice(request.points, request.points_len, "trigger query points") }?;
+        let count = checked_u32(points.len(), "trigger query point count")?;
+        let session = self.session_mut(request.session)?;
+        let hits = points
+            .iter()
+            .enumerate()
+            .flat_map(|(index, point)| {
+                session
+                    .triggers
+                    .triggers_containing(native_vec3_value(*point))
+                    .into_iter()
+                    .map(move |trigger| NativeSpatialTriggerPointHit {
+                        point: index as u32,
+                        trigger: trigger.raw(),
+                    })
+            })
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
+        let result = NativeSpatialTriggerPointQueryResult {
+            hits: hits.as_ptr(),
+            hits_len: hits.len(),
+            points: count,
+        };
+        self.borrowed.hold(hits);
+        Ok(result)
+    }
 }
 
 fn native_trigger_facts(facts: &[TriggerOverlapFact]) -> Box<[NativeSpatialTriggerFact]> {
@@ -5135,6 +5167,27 @@ unsafe extern "C" fn read_trigger(
     }
 }
 
+unsafe extern "C" fn query_triggers_at_points(
+    context: *mut c_void,
+    request: *const NativeSpatialTriggerPointQueryRequest,
+    result: *mut NativeSpatialTriggerPointQueryResult,
+    error: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    clear_receipt(error);
+    if context.is_null() || request.is_null() || result.is_null() {
+        return 0;
+    }
+    match unsafe { &mut *context.cast::<RuntimeSpatialBridge>() }
+        .query_triggers_at_points(unsafe { &*request })
+    {
+        Ok(value) => {
+            unsafe { *result = value };
+            ABI_OK
+        }
+        Err(refusal) => refuse(&refusal, error),
+    }
+}
+
 pub(crate) fn api(bridge: &mut RuntimeSpatialBridge) -> NativeSpatialApi {
     NativeSpatialApi {
         context: (bridge as *mut RuntimeSpatialBridge).cast(),
@@ -5184,6 +5237,7 @@ pub(crate) fn api(bridge: &mut RuntimeSpatialBridge) -> NativeSpatialApi {
         set_trigger_active,
         restore_triggers,
         read_trigger,
+        query_triggers_at_points,
     }
 }
 
@@ -8596,6 +8650,7 @@ mod tests {
                 target_cell_z: target[2],
                 entities: std::ptr::null(),
                 entities_len: 0,
+                exclude_outside_envelope: false,
             };
             let mut prepared = NativeWorldOriginPreparedHandle::default();
             assert_eq!(
@@ -9348,6 +9403,113 @@ mod tests {
     }
 
     #[test]
+    fn trigger_point_queries_read_the_last_reconciled_geometry_of_active_triggers() {
+        let mut bridge = RuntimeSpatialBridge::new();
+        let api = api(&mut bridge);
+        let session = create_session(&api);
+        let mut error: NativeOperationErrorReceipt = unsafe { std::mem::zeroed() };
+        for trigger in [41_u64, 42] {
+            assert_eq!(
+                unsafe {
+                    (api.register_trigger)(
+                        api.context,
+                        &NativeSpatialTriggerRegisterRequest {
+                            session,
+                            trigger,
+                            scope: utf8("fixture.pool"),
+                            tag: utf8("water"),
+                            geometry: NativeSpatialTriggerGeometry::ActiveCollision,
+                        },
+                        &mut error,
+                    )
+                },
+                ABI_OK
+            );
+        }
+        let cube = |entity, x: f32, half: f32| NativeSpatialEntityCollider {
+            entity,
+            min: NativeVec3 {
+                x: x - half,
+                y: -half,
+                z: -half,
+            },
+            max: NativeVec3 {
+                x: x + half,
+                y: half,
+                z: half,
+            },
+            enabled: true,
+            ..Default::default()
+        };
+        let point = |x: f32| NativeVec3 { x, y: 0.0, z: 0.0 };
+        let query = |bridge: &mut RuntimeSpatialBridge, points: &[NativeVec3]| {
+            let result = bridge
+                .query_triggers_at_points(&NativeSpatialTriggerPointQueryRequest {
+                    session,
+                    points: points.as_ptr(),
+                    points_len: points.len(),
+                })
+                .unwrap();
+            assert_eq!(result.points as usize, points.len());
+            unsafe { std::slice::from_raw_parts(result.hits, result.hits_len) }
+                .iter()
+                .map(|hit| (hit.point, hit.trigger))
+                .collect::<Vec<_>>()
+        };
+        // Before any reconcile the triggers have no geometry.
+        assert!(query(&mut bridge, &[point(0.0)]).is_empty());
+
+        // A nested pair: 42 inside 41. Points need not be subjects.
+        let rows = [cube(41, 0.0, 4.0), cube(42, 0.0, 1.0)];
+        let mut receipt: NativeSpatialTriggerReconcileResult = unsafe { std::mem::zeroed() };
+        assert_eq!(
+            unsafe {
+                (api.reconcile_triggers)(
+                    api.context,
+                    &NativeSpatialTriggerReconcileRequest {
+                        session,
+                        tick: 1,
+                        cause: NativeSpatialTriggerCause::Scheduled,
+                        entities: rows.as_ptr(),
+                        entities_len: rows.len(),
+                    },
+                    &mut receipt,
+                    &mut error,
+                )
+            },
+            ABI_OK
+        );
+        assert_eq!(
+            query(
+                &mut bridge,
+                &[point(0.0), point(2.0), point(4.0), point(9.0)]
+            ),
+            [(0, 41), (0, 42), (1, 41)]
+        );
+
+        // An inactive trigger contains nothing.
+        let mut lifecycle: NativeSpatialTriggerLifecycleResult = unsafe { std::mem::zeroed() };
+        assert_eq!(
+            unsafe {
+                (api.set_trigger_active)(
+                    api.context,
+                    &NativeSpatialTriggerSetActiveRequest {
+                        session,
+                        trigger: 42,
+                        active: false,
+                        tick: 2,
+                    },
+                    &mut lifecycle,
+                    &mut error,
+                )
+            },
+            ABI_OK
+        );
+        assert_eq!(query(&mut bridge, &[point(0.0)]), [(0, 41)]);
+        assert!(query(&mut bridge, &[]).is_empty());
+    }
+
+    #[test]
     fn trigger_lifecycle_and_restore_are_fail_atomic_and_session_owned() {
         let mut bridge = RuntimeSpatialBridge::new();
         let api = api(&mut bridge);
@@ -9609,6 +9771,7 @@ mod tests {
             target_cell_z: target[2],
             entities: std::ptr::null(),
             entities_len: 0,
+            exclude_outside_envelope: false,
         };
         let mut prepared = NativeWorldOriginPreparedHandle::default();
         assert_eq!(

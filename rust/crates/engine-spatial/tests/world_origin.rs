@@ -79,6 +79,7 @@ fn request(
     WorldOriginRebaseRequest {
         target_origin,
         entities,
+        exclude_outside_envelope: false,
     }
 }
 
@@ -114,6 +115,71 @@ fn collider(entity: EntityId, center: Vec3, half: f32) -> TriggerCollider {
         max: center + Vec3::splat(half),
         collision_enabled: true,
     }
+}
+
+#[test]
+fn a_prepare_may_exclude_roots_outside_the_envelope_instead_of_refusing() {
+    let (mut origin, mut scene) = fixture();
+    let near = EntityId::new(11);
+    let far = EntityId::new(12);
+    let also_near = EntityId::new(13);
+    let target = WorldOrigin::new([FAR_X, 0, 0]);
+    // 20 km from the target is outside the 16,384 m envelope.
+    let roots = || {
+        vec![
+            root(near, FAR_X as f64 + 4.0, 1.0),
+            root(far, FAR_X as f64 + 20_000.0, 1.0),
+            root(also_near, FAR_X as f64 - 4.0, 1.0),
+        ]
+    };
+
+    // Without opting in, one such root refuses the whole request, as before.
+    let refused = WorldOriginRebaseService.prepare(&origin, request(target, roots()));
+    assert!(matches!(
+        refused,
+        Err(WorldOriginRebaseError::Position { entity, .. }) if entity == far
+    ));
+
+    // Opting in leaves it out, named, and rebases the rest atomically.
+    let prepared = WorldOriginRebaseService
+        .prepare(
+            &origin,
+            WorldOriginRebaseRequest {
+                target_origin: target,
+                entities: roots(),
+                exclude_outside_envelope: true,
+            },
+        )
+        .unwrap();
+    assert_eq!(prepared.excluded(), [far]);
+    let affected = prepared.affected_transforms();
+    assert_eq!(
+        affected.iter().map(|row| row.entity).collect::<Vec<_>>(),
+        [near, also_near]
+    );
+    assert_eq!(affected[0].transform.translation.x, 4.0);
+    assert_eq!(affected[1].transform.translation.x, -4.0);
+    let receipt = commit(&mut origin, &mut scene, &prepared);
+    assert_eq!((receipt.entity_count, receipt.excluded_count), (2, 1));
+    assert_eq!(origin.origin(), target);
+
+    // Every root excluded still moves the origin.
+    let farther = WorldOrigin::new([FAR_X + 50_000, 0, 0]);
+    let prepared = WorldOriginRebaseService
+        .prepare(
+            &origin,
+            WorldOriginRebaseRequest {
+                target_origin: farther,
+                entities: roots(),
+                exclude_outside_envelope: true,
+            },
+        )
+        .unwrap();
+    assert_eq!(prepared.excluded(), [near, far, also_near]);
+    assert!(prepared.affected_transforms().is_empty());
+    let receipt = commit(&mut origin, &mut scene, &prepared);
+    assert_eq!((receipt.entity_count, receipt.excluded_count), (0, 3));
+    assert_eq!(origin.origin(), farther);
 }
 
 #[test]

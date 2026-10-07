@@ -39,7 +39,19 @@ public sealed class EntityOriginRebaser
     /// rebases the live collision scene. Product code chooses when and where to
     /// rebase by passing the target cell explicitly.
     /// </summary>
-    public EntityOriginRebaserPrepared Prepare(long targetCellX, long targetCellY, long targetCellZ)
+    /// <param name="excludeOutsideEnvelope">
+    /// Leave out the roots whose local position in the target frame would fall
+    /// outside the session's envelope, naming them in the prepared receipt's
+    /// <c>Excluded</c>, instead of refusing the whole rebase. Commit still
+    /// rebases every other root atomically and leaves the excluded ones as
+    /// they are, their stored <see cref="CharacterMotion"/> included, for the
+    /// product to retire or move. False (the default) refuses as before.
+    /// </param>
+    public EntityOriginRebaserPrepared Prepare(
+        long targetCellX,
+        long targetCellY,
+        long targetCellZ,
+        bool excludeOutsideEnvelope = false)
     {
         IReadOnlyList<EntityComponents<Transform, WorldOriginGlobalPosition>> joined = _entities.Query(
             EngineComponentTypes.Transform,
@@ -56,7 +68,8 @@ public sealed class EntityOriginRebaser
             targetCellX,
             targetCellY,
             targetCellZ,
-            rows));
+            rows,
+            excludeOutsideEnvelope));
         try
         {
             WorldOriginPreparedResult prepared = _worldOrigins.ReadPrepared(new WorldOriginPreparedReadRequest(native));
@@ -67,6 +80,18 @@ public sealed class EntityOriginRebaser
             native.Dispose();
             throw;
         }
+    }
+
+    private static bool IsExcluded(ReadOnlySpan<WorldOriginExcludedEntity> excluded, EntityId entity)
+    {
+        foreach (WorldOriginExcludedEntity row in excluded)
+        {
+            if (row.EntityId == entity.Value)
+            {
+                return true;
+            }
+        }
+        return false;
     }
 
     internal EntityOriginRebaserCommitReceipt CommitPrepared(
@@ -80,10 +105,15 @@ public sealed class EntityOriginRebaser
             batch.Set(new EntityId(fact.EntityId), EngineComponentTypes.Transform, fact.LocalTransform);
         }
         // Stored character motion holds local-frame anchors and heights; without
-        // this the next step carries the character back by the whole delta.
+        // this the next step carries the character back by the whole delta. An
+        // excluded root keeps its transform, so its motion stays as it is too.
         Vector3 delta = nativeReceipt.LocalDelta;
         foreach ((EntityId entity, CharacterMotion motion) in _entities.Query<CharacterMotion>(includeDisabled: true))
         {
+            if (IsExcluded(prepared.Excluded.Span, entity))
+            {
+                continue;
+            }
             batch.Set(entity, EngineComponentTypes.CharacterMotion, motion.Rebased(delta));
         }
         return new EntityOriginRebaserCommitReceipt(nativeReceipt, _entities.Commit(batch));

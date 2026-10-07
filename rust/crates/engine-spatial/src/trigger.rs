@@ -35,6 +35,17 @@ impl TriggerCollider {
             && self.min.z < other.max.z
             && self.max.z > other.min.z
     }
+
+    /// Whether the box contains `point`, as [`Self::overlaps`] treats a
+    /// subject of no extent there: a point on a face is outside.
+    fn contains(&self, point: Vec3) -> bool {
+        self.min.x < point.x
+            && point.x < self.max.x
+            && self.min.y < point.y
+            && point.y < self.max.y
+            && self.min.z < point.z
+            && point.z < self.max.z
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -210,11 +221,14 @@ pub struct TriggerRestoreReceipt {
     pub diagnostics: Vec<TriggerVolumeDiagnostic>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct TriggerVolumeSystem {
     definitions: BTreeMap<EntityId, KinematicTriggerDefinition>,
     inactive_triggers: BTreeSet<EntityId>,
     active_overlaps: BTreeSet<TriggerOverlapPair>,
+    /// Each registered trigger's row from the last reconcile or restore: the
+    /// geometry a point query reads.
+    geometry: BTreeMap<EntityId, TriggerCollider>,
 }
 
 impl TriggerVolumeSystem {
@@ -351,8 +365,9 @@ impl TriggerVolumeSystem {
             .collect::<BTreeSet<_>>();
         let mut candidate = self.clone();
         candidate.inactive_triggers = inactive_triggers;
-        let (active_overlaps, diagnostics) = candidate.compute_overlaps(colliders);
+        let (active_overlaps, diagnostics, geometry) = candidate.compute_overlaps(colliders);
         candidate.active_overlaps = active_overlaps;
+        candidate.geometry = geometry;
         *self = candidate;
         Ok(TriggerRestoreReceipt {
             registered_count: self.definitions.len(),
@@ -368,7 +383,8 @@ impl TriggerVolumeSystem {
         tick: u64,
         cause: TriggerReconcileCause,
     ) -> TriggerReconcileReceipt {
-        let (next, diagnostics) = self.compute_overlaps(colliders);
+        let (next, diagnostics, geometry) = self.compute_overlaps(colliders);
+        self.geometry = geometry;
         let exits = self
             .active_overlaps
             .difference(&next)
@@ -410,6 +426,28 @@ impl TriggerVolumeSystem {
         }
     }
 
+    /// The active triggers whose geometry contains `point`, in id order. The
+    /// geometry is each trigger's row from the last reconcile or restore,
+    /// sensed under the same rule (a trigger sensing from active collision
+    /// needs it enabled); a point on a face is outside, as a touching subject
+    /// is. Nothing here depends on the overlap list, so the point need not be
+    /// a registered subject.
+    pub fn triggers_containing(&self, point: Vec3) -> Vec<EntityId> {
+        self.definitions
+            .values()
+            .filter(|definition| {
+                let trigger = definition.trigger_id();
+                !self.inactive_triggers.contains(&trigger)
+                    && self.geometry.get(&trigger).is_some_and(|bounds| {
+                        (definition.geometry != TriggerGeometrySource::ActiveCollision
+                            || bounds.collision_enabled)
+                            && bounds.contains(point)
+                    })
+            })
+            .map(KinematicTriggerDefinition::trigger_id)
+            .collect()
+    }
+
     pub fn current_overlaps(
         &self,
         trigger: EntityId,
@@ -424,10 +462,17 @@ impl TriggerVolumeSystem {
         Ok(TriggerOverlapReadout { trigger, subjects })
     }
 
+    /// The overlaps `colliders` make, the diagnostics, and the registered
+    /// triggers' rows among them.
+    #[allow(clippy::type_complexity)]
     fn compute_overlaps(
         &self,
         colliders: impl IntoIterator<Item = TriggerCollider>,
-    ) -> (BTreeSet<TriggerOverlapPair>, Vec<TriggerVolumeDiagnostic>) {
+    ) -> (
+        BTreeSet<TriggerOverlapPair>,
+        Vec<TriggerVolumeDiagnostic>,
+        BTreeMap<EntityId, TriggerCollider>,
+    ) {
         let mut triggers = BTreeMap::new();
         let mut subjects = Vec::new();
         for collider in colliders {
@@ -469,7 +514,7 @@ impl TriggerVolumeSystem {
                     .map(|subject| TriggerOverlapPair::new(trigger, subject.entity)),
             );
         }
-        (next, diagnostics)
+        (next, diagnostics, triggers)
     }
 }
 

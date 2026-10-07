@@ -396,6 +396,88 @@ fn entity_bounds_trigger_keeps_subject_eligibility() {
     assert!(receipt.diagnostics.is_empty());
 }
 
+#[test]
+fn triggers_containing_a_point_read_the_last_reconciled_geometry_of_active_triggers() {
+    let outer = EntityId::new(1);
+    let inner = EntityId::new(2);
+    let beside = EntityId::new(3);
+    let bounds_only = EntityId::new(4);
+    let mut triggers = TriggerVolumeSystem::new([
+        KinematicTriggerDefinition::new(outer, "pool", ["water"]),
+        KinematicTriggerDefinition::new(inner, "pool.deep", ["water"]),
+        KinematicTriggerDefinition::new(beside, "shore", ["land"]),
+        KinematicTriggerDefinition::new(bounds_only, "mist", ["air"])
+            .with_geometry_source(TriggerGeometrySource::EntityBounds),
+    ])
+    .unwrap();
+    // Nothing has been reconciled: no geometry, no containment.
+    assert!(triggers.triggers_containing(Vec3::ZERO).is_empty());
+
+    // A nested pair, an adjacent box sharing the face x = 4, and a bounds-only
+    // trigger with disabled collision.
+    let colliders = vec![
+        collider(outer, Vec3::ZERO, 4.0, true),
+        collider(inner, Vec3::ZERO, 1.0, true),
+        collider(beside, Vec3::new(8.0, 0.0, 0.0), 4.0, true),
+        collider(bounds_only, Vec3::new(0.0, 10.0, 0.0), 1.0, false),
+    ];
+    triggers.reconcile(colliders.clone(), 1, TriggerReconcileCause::Scheduled);
+    assert_eq!(triggers.triggers_containing(Vec3::ZERO), [outer, inner]);
+    assert_eq!(
+        triggers.triggers_containing(Vec3::new(2.0, 0.0, 0.0)),
+        [outer]
+    );
+    // The shared face belongs to neither, as a subject touching it overlaps
+    // neither; just inside is one or the other.
+    assert!(triggers
+        .triggers_containing(Vec3::new(4.0, 0.0, 0.0))
+        .is_empty());
+    assert_eq!(
+        triggers.triggers_containing(Vec3::new(3.999, 0.0, 0.0)),
+        [outer]
+    );
+    assert_eq!(
+        triggers.triggers_containing(Vec3::new(4.001, 0.0, 0.0)),
+        [beside]
+    );
+    // A bounds trigger senses with its collision disabled.
+    assert_eq!(
+        triggers.triggers_containing(Vec3::new(0.0, 10.0, 0.0)),
+        [bounds_only]
+    );
+
+    // An inactive trigger contains nothing; reactivated, it does again.
+    triggers.set_active(inner, false, 2).unwrap();
+    assert_eq!(triggers.triggers_containing(Vec3::ZERO), [outer]);
+    triggers.set_active(inner, true, 3).unwrap();
+    assert_eq!(triggers.triggers_containing(Vec3::ZERO), [outer, inner]);
+
+    // A trigger sensing from active collision needs it enabled, as a
+    // reconcile requires.
+    let mut disabled = colliders.clone();
+    set_collision(&mut disabled, outer, false);
+    triggers.reconcile(disabled, 4, TriggerReconcileCause::ActivationChanged);
+    assert_eq!(triggers.triggers_containing(Vec3::ZERO), [inner]);
+
+    // The geometry is the last reconcile's: a moved volume answers from where
+    // it moved to, and a restore replaces it too.
+    let mut moved = colliders.clone();
+    move_collider(&mut moved, inner, Vec3::new(0.0, 0.0, 20.0));
+    triggers.reconcile(moved, 5, TriggerReconcileCause::Movement);
+    assert_eq!(triggers.triggers_containing(Vec3::ZERO), [outer]);
+    assert_eq!(
+        triggers.triggers_containing(Vec3::new(0.0, 0.0, 20.0)),
+        [inner]
+    );
+    triggers
+        .restore(&[outer, inner, beside], colliders)
+        .unwrap();
+    assert_eq!(triggers.triggers_containing(Vec3::ZERO), [outer, inner]);
+    assert!(triggers
+        .triggers_containing(Vec3::new(0.0, 10.0, 0.0))
+        .is_empty());
+}
+
 fn trigger_fixture() -> (
     Vec<TriggerCollider>,
     TriggerVolumeSystem,

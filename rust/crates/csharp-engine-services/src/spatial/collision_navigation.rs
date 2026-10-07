@@ -1649,6 +1649,7 @@ mod tests {
             target_cell_z: 0,
             entities: std::ptr::null(),
             entities_len: 0,
+            exclude_outside_envelope: false,
         };
         assert_eq!(
             unsafe {

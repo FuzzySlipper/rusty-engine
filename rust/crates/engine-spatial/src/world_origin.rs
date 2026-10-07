@@ -72,6 +72,11 @@ pub struct WorldOriginEntity {
 pub struct WorldOriginRebaseRequest {
     pub target_origin: WorldOrigin,
     pub entities: Vec<WorldOriginEntity>,
+    /// Leave out the roots whose local position in the target frame would
+    /// fall outside the session's envelope, naming them in the prepared
+    /// rebase, instead of rejecting the whole request. The product retires
+    /// or moves them itself.
+    pub exclude_outside_envelope: bool,
 }
 
 /// A prepared target origin plus the rebased local transforms the product
@@ -81,6 +86,7 @@ pub struct WorldOriginRebaseRequest {
 pub struct PreparedWorldOriginRebase {
     target_origin: WorldOrigin,
     affected_transforms: Vec<WorldOriginAffectedTransform>,
+    excluded: Vec<EntityId>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -98,12 +104,20 @@ pub struct WorldOriginRebaseReceipt {
     pub voxel_source_revision: u64,
     pub static_mesh_revision: u64,
     pub entity_count: usize,
+    /// Roots the request excluded for falling outside the envelope.
+    pub excluded_count: usize,
     pub local_envelope: f32,
 }
 
 impl PreparedWorldOriginRebase {
     pub fn affected_transforms(&self) -> &[WorldOriginAffectedTransform] {
         &self.affected_transforms
+    }
+
+    /// The roots left out for falling outside the envelope, in request
+    /// order; empty unless the request asked to exclude them.
+    pub fn excluded(&self) -> &[EntityId] {
+        &self.excluded
     }
 
     pub const fn target_origin(&self) -> WorldOrigin {
@@ -146,29 +160,39 @@ impl WorldOriginRebaseService {
         request: WorldOriginRebaseRequest,
     ) -> Result<PreparedWorldOriginRebase, WorldOriginRebaseError> {
         validate_origin(request.target_origin)?;
-        let affected_transforms = request
-            .entities
-            .into_iter()
-            .map(|value| {
-                let translation = value
-                    .global_position
-                    .local(request.target_origin, origin.local_envelope)
-                    .map_err(|reason| WorldOriginRebaseError::Position {
+        let mut affected_transforms = Vec::with_capacity(request.entities.len());
+        let mut excluded = Vec::new();
+        for value in request.entities {
+            let translation = match value
+                .global_position
+                .local(request.target_origin, origin.local_envelope)
+            {
+                Ok(translation) => translation,
+                Err(GlobalPositionError::OutsideLocalEnvelope { .. })
+                    if request.exclude_outside_envelope =>
+                {
+                    excluded.push(value.entity);
+                    continue;
+                }
+                Err(reason) => {
+                    return Err(WorldOriginRebaseError::Position {
                         entity: value.entity,
                         reason,
-                    })?;
-                Ok(WorldOriginAffectedTransform {
-                    entity: value.entity,
-                    transform: EntityTransform {
-                        translation: Vec3::new(translation[0], translation[1], translation[2]),
-                        ..value.transform
-                    },
-                })
-            })
-            .collect::<Result<Vec<_>, WorldOriginRebaseError>>()?;
+                    })
+                }
+            };
+            affected_transforms.push(WorldOriginAffectedTransform {
+                entity: value.entity,
+                transform: EntityTransform {
+                    translation: Vec3::new(translation[0], translation[1], translation[2]),
+                    ..value.transform
+                },
+            });
+        }
         Ok(PreparedWorldOriginRebase {
             target_origin: request.target_origin,
             affected_transforms,
+            excluded,
         })
     }
 
@@ -199,6 +223,7 @@ impl WorldOriginRebaseService {
             voxel_source_revision: rebased.source_revision().raw(),
             static_mesh_revision: rebased.static_mesh_collision_revision(),
             entity_count: prepared.affected_transforms.len(),
+            excluded_count: prepared.excluded.len(),
             local_envelope: origin.local_envelope,
         };
         Ok((rebased, receipt))

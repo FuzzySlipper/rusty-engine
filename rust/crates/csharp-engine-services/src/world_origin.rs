@@ -57,6 +57,7 @@ impl RuntimeSpatialBridge {
                         request.target_cell_z,
                     ]),
                     entities,
+                    exclude_outside_envelope: request.exclude_outside_envelope,
                 },
             )
             .map_err(|error| world_origin_error("CSHARP_WORLD_ORIGIN_PREPARE", error))?;
@@ -111,15 +112,26 @@ impl RuntimeSpatialBridge {
             })
             .collect::<Vec<_>>()
             .into_boxed_slice();
+        let excluded = owner
+            .candidate
+            .excluded()
+            .iter()
+            .map(|entity| NativeWorldOriginExcludedEntity {
+                entity_id: entity.raw(),
+            })
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
         let result = NativeWorldOriginPreparedResult {
             affected: affected.as_ptr(),
             affected_len: affected.len(),
+            excluded: excluded.as_ptr(),
+            excluded_len: excluded.len(),
             target_cell_x: target[0],
             target_cell_y: target[1],
             target_cell_z: target[2],
             local_envelope,
         };
-        self.borrowed.hold(affected);
+        self.borrowed.hold((affected, excluded));
         Ok(result)
     }
 
@@ -168,6 +180,7 @@ impl RuntimeSpatialBridge {
             voxel_source_revision: receipt.voxel_source_revision,
             static_mesh_revision: receipt.static_mesh_revision,
             affected_entity_count: receipt.entity_count as u32,
+            excluded_entity_count: receipt.excluded_count as u32,
             local_envelope: receipt.local_envelope,
         })
     }
@@ -408,7 +421,126 @@ mod tests {
             target_cell_z: 0,
             entities: rows.as_ptr(),
             entities_len: rows.len(),
+            exclude_outside_envelope: false,
         }
+    }
+
+    #[test]
+    fn a_prepare_may_exclude_the_rows_outside_the_envelope_and_names_them() {
+        let mut bridge = RuntimeSpatialBridge::new();
+        let spatial_api = spatial::api(&mut bridge);
+        let world_origin_api = api(&mut bridge);
+        let session = session(&spatial_api);
+        let mut error = unsafe { std::mem::zeroed::<NativeOperationErrorReceipt>() };
+        // A root 20 km from the target is outside the 16,384 m envelope.
+        let rows = [row(1, 0.0, 100), row(2, 0.0, 20_100), row(3, 0.0, 101)];
+        let mut request = prepare_request(session, 100, &rows);
+        let mut prepared = NativeWorldOriginPreparedHandle::default();
+        // Without opting in, one such row refuses the whole request.
+        assert_ne!(
+            unsafe {
+                (world_origin_api.prepare)(
+                    world_origin_api.context,
+                    &request,
+                    &mut prepared,
+                    &mut error,
+                )
+            },
+            ABI_OK
+        );
+        request.exclude_outside_envelope = true;
+        assert_eq!(
+            unsafe {
+                (world_origin_api.prepare)(
+                    world_origin_api.context,
+                    &request,
+                    &mut prepared,
+                    std::ptr::null_mut(),
+                )
+            },
+            ABI_OK
+        );
+        let mut summary: NativeWorldOriginPreparedResult = unsafe { std::mem::zeroed() };
+        assert_eq!(
+            unsafe {
+                (world_origin_api.read_prepared)(
+                    world_origin_api.context,
+                    NativeWorldOriginPreparedReadRequest { prepared },
+                    &mut summary,
+                    std::ptr::null_mut(),
+                )
+            },
+            ABI_OK
+        );
+        let affected =
+            unsafe { std::slice::from_raw_parts(summary.affected, summary.affected_len) }.to_vec();
+        let excluded =
+            unsafe { std::slice::from_raw_parts(summary.excluded, summary.excluded_len) }.to_vec();
+        assert_eq!(
+            affected.iter().map(|row| row.entity_id).collect::<Vec<_>>(),
+            [1, 3]
+        );
+        assert_eq!(affected[1].local_transform.translation.x, 1.0);
+        assert_eq!(excluded, [NativeWorldOriginExcludedEntity { entity_id: 2 }]);
+        let mut receipt = NativeWorldOriginCommitReceipt::default();
+        assert_eq!(
+            unsafe {
+                (world_origin_api.commit)(
+                    world_origin_api.context,
+                    NativeWorldOriginCommitRequest { prepared },
+                    &mut receipt,
+                    std::ptr::null_mut(),
+                )
+            },
+            ABI_OK
+        );
+        assert_eq!(receipt.origin_after_cell_x, 100);
+        assert_eq!(receipt.affected_entity_count, 2);
+        assert_eq!(receipt.excluded_entity_count, 1);
+
+        // Every row excluded still moves the origin.
+        let far = [row(7, 0.0, 50_000), row(8, 0.0, -50_000)];
+        let mut request = prepare_request(session, 200, &far);
+        request.exclude_outside_envelope = true;
+        assert_eq!(
+            unsafe {
+                (world_origin_api.prepare)(
+                    world_origin_api.context,
+                    &request,
+                    &mut prepared,
+                    std::ptr::null_mut(),
+                )
+            },
+            ABI_OK
+        );
+        assert_eq!(
+            unsafe {
+                (world_origin_api.read_prepared)(
+                    world_origin_api.context,
+                    NativeWorldOriginPreparedReadRequest { prepared },
+                    &mut summary,
+                    std::ptr::null_mut(),
+                )
+            },
+            ABI_OK
+        );
+        assert_eq!((summary.affected_len, summary.excluded_len), (0, 2));
+        assert_eq!(
+            unsafe {
+                (world_origin_api.commit)(
+                    world_origin_api.context,
+                    NativeWorldOriginCommitRequest { prepared },
+                    &mut receipt,
+                    std::ptr::null_mut(),
+                )
+            },
+            ABI_OK
+        );
+        assert_eq!(receipt.origin_after_cell_x, 200);
+        assert_eq!(
+            (receipt.affected_entity_count, receipt.excluded_entity_count),
+            (0, 2)
+        );
     }
 
     #[test]
