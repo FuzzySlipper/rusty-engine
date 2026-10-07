@@ -2807,16 +2807,31 @@ fn lit_material_centre(
     material: RenderMaterialDescriptor,
     textures: &[(&str, [u8; 4])],
 ) -> [u8; 4] {
+    let textures: Vec<_> = textures
+        .iter()
+        .map(|(id, rgba)| (*id, 2, rgba.repeat(4)))
+        .collect();
+    let frame = lit_material_frame(material, &textures);
+    pixel_at(&frame, WIDTH / 2, HEIGHT / 2)
+}
+
+/// The frame `lit_material_centre` reads, with `textures` as (id, width,
+/// rgba) square textures. The slab's top face maps texture u along world x,
+/// so u = 0.5 falls on the frame's centre column.
+fn lit_material_frame(
+    material: RenderMaterialDescriptor,
+    textures: &[(&str, u32, Vec<u8>)],
+) -> Vec<u8> {
     let mut harness = Harness::new(RendererOptions {
         default_world_lights: false,
         ..RendererOptions::default()
     });
     let mut ops: Vec<RenderDiff> = textures
         .iter()
-        .map(|(id, rgba)| RenderDiff::DefineTexture {
+        .map(|(id, size, rgba)| RenderDiff::DefineTexture {
             texture: harness
                 .resources
-                .texture(id, 2, 2, &rgba.repeat(4), TextureWrap::Repeat),
+                .texture(id, *size, *size, rgba, TextureWrap::Repeat),
         })
         .collect();
     ops.extend([
@@ -2855,8 +2870,7 @@ fn lit_material_centre(
         },
     ]);
     harness.apply(ops);
-    let frame = harness.render(&camera([0.0, 3.0, 4.0], 0.0, -36.0)).1;
-    pixel_at(&frame, WIDTH / 2, HEIGHT / 2)
+    harness.render(&camera([0.0, 3.0, 4.0], 0.0, -36.0)).1
 }
 
 #[test]
@@ -2896,6 +2910,49 @@ fn an_orm_map_sets_roughness_and_metalness_per_texel_and_a_white_one_changes_not
         &[("texture/dielectric", [255, 255, 0, 255])],
     );
     assert_ne!(dielectric, matte, "the map's blue sets the metalness");
+
+    // One map, two regions: glossy metal where u < 0.5, rough dielectric
+    // where u >= 0.5. Each side of the slab draws as its region's own uniform
+    // map, so the map is read per texel through the mesh's UVs.
+    const SIZE: u32 = 16;
+    const GLOSSY: [u8; 4] = [255, 13, 255, 255];
+    const DIELECTRIC: [u8; 4] = [255, 255, 0, 255];
+    let split: Vec<u8> = (0..SIZE * SIZE)
+        .flat_map(|texel| {
+            if texel % SIZE < SIZE / 2 {
+                GLOSSY
+            } else {
+                DIELECTRIC
+            }
+        })
+        .collect();
+    let uniform = |rgba: [u8; 4]| rgba.repeat((SIZE * SIZE) as usize);
+    let frame =
+        |rgba: Vec<u8>| lit_material_frame(orm("texture/orm", 1.0), &[("texture/orm", SIZE, rgba)]);
+    let (two_region, all_glossy, all_dielectric) = (
+        frame(split),
+        frame(uniform(GLOSSY)),
+        frame(uniform(DIELECTRIC)),
+    );
+    // Columns either side of the centre, on the top face.
+    let (left, right) = (WIDTH / 2 - 24, WIDTH / 2 + 24);
+    for column in [left, right] {
+        assert_ne!(
+            pixel_at(&all_glossy, column, HEIGHT / 2),
+            pixel_at(&all_dielectric, column, HEIGHT / 2),
+            "the two regions draw differently at column {column}"
+        );
+    }
+    assert_eq!(
+        pixel_at(&two_region, left, HEIGHT / 2),
+        pixel_at(&all_glossy, left, HEIGHT / 2),
+        "the u < 0.5 region draws as glossy metal"
+    );
+    assert_eq!(
+        pixel_at(&two_region, right, HEIGHT / 2),
+        pixel_at(&all_dielectric, right, HEIGHT / 2),
+        "the u >= 0.5 region draws as a rough dielectric"
+    );
 
     // Red is the occlusion, scaled by the strength.
     let dim = material_centre(plain.clone(), &[]);
