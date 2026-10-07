@@ -133,7 +133,7 @@ impl RuntimeSpatialBridge {
             } else {
                 let layers = layers
                     .iter()
-                    .map(|layer| u8::try_from(*layer).map_err(|_| invalid("layer must be 0 to 3")))
+                    .map(|layer| u8::try_from(*layer).map_err(|_| invalid("layer must be 0 to 15")))
                     .collect::<Result<Vec<_>, _>>()?;
                 TerrainLayers::mapped(slots, layers, cells)
             };
@@ -1627,7 +1627,7 @@ mod tests {
         // Malformed sets and a transition as long as the 8-voxel chunk are
         // refused, leaving the meshes as they were.
         for (slots, cells) in [
-            (vec![1, 2, 3, 4, 5], 1),
+            ((1..=17).collect(), 1),
             (vec![1, 1], 1),
             (vec![1, 2], 0),
             (vec![1, 2], 7),
@@ -1635,13 +1635,13 @@ mod tests {
         ] {
             assert_eq!(configure(&slots, cells), 0, "{slots:?} {cells}");
         }
-        // So are duplicate or conflicting slot mappings, a layer past 3, a
+        // So are duplicate or conflicting slot mappings, a layer past 15, a
         // layer count that does not match the slots, and too many slots.
         let many: Vec<u32> = (1..=17).collect();
         for (slots, layers) in [
             (vec![1, 2, 1], vec![0, 1, 0]),
             (vec![1, 2, 1], vec![0, 1, 1]),
-            (vec![1, 2], vec![0, 4]),
+            (vec![1, 2], vec![0, 16]),
             (vec![1, 2], vec![0, 256]),
             (vec![1, 2], vec![0]),
             (vec![], vec![0]),

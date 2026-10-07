@@ -248,6 +248,7 @@ pub fn import_with_context(source: &SourceMesh, context: &ImportContext) -> Impo
             },
             provenance: MeshProvenance::StaticAsset,
             layer_weights: false,
+            layer_palette: Vec::new(),
             vertex_occlusion: false,
         },
         material_slots: source

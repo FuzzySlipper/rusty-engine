@@ -469,12 +469,14 @@ pub struct RenderMaterialDescriptor {
 }
 
 /// How many layers a material blends over its own.
-pub const MAX_MATERIAL_TERRAIN_LAYERS: usize = 3;
+pub const MAX_MATERIAL_TERRAIN_LAYERS: usize = 15;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct MaterialTerrainLayersDescriptor {
-    /// Layers 1 to 3, in the order of the mesh's weights.
+    /// Layers 1 to 15, in the order of the mesh's weights. A material of
+    /// more than three draws a chunk as the four its weights stand for
+    /// (`MeshPayloadDescriptor::layer_palette`), or else its first four.
     pub layers: Vec<MaterialTerrainLayerDescriptor>,
     /// The weights are raised to this power (1 or more) before they are
     /// normalized: 1 blends them as they are, higher narrows each transition

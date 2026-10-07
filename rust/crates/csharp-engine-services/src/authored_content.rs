@@ -3647,7 +3647,7 @@ mod tests {
         };
         for (layers, contrast) in [
             (Vec::new(), 1.0),
-            (vec![handles[1]; 4], 1.0),
+            (vec![handles[1]; 16], 1.0),
             (vec![handles[1]], 0.5),
             (vec![NativeMaterialHandle { value: 999 }], 1.0),
         ] {

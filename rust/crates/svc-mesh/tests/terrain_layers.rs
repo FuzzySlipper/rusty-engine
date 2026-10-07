@@ -286,6 +286,84 @@ fn a_cube_face_takes_its_slots_mapped_layer() {
     assert_eq!(seen, [true; 4]);
 }
 
+/// Bands `width` voxels wide, west to east: slot `20 + band`.
+fn banded_slope(width: i64) -> VoxelWorld {
+    slope_of(|vx, _| 20 + (vx / width) as u16)
+}
+
+fn banded_layers(slots: Vec<u16>, layers: Vec<u8>) -> SurfaceMeshOptions {
+    SurfaceMeshOptions {
+        terrain_layers: Some(TerrainLayers::mapped(slots, layers, 1).unwrap()),
+        ..SurfaceMeshOptions::with_mode(SurfaceMode::DualContouring)
+    }
+}
+
+#[test]
+fn a_set_of_more_than_four_layers_narrows_each_chunk_to_its_palette() {
+    let world = banded_slope(4);
+    let slots: Vec<u16> = (20..26).collect();
+    let six = banded_layers(slots.clone(), (0..6).collect());
+    // The same set with the last three layers merged: four layers, no
+    // palette. The west chunk reaches only the first three bands, so its
+    // weights are those of the four-layer set to the bit.
+    let four = banded_layers(slots, vec![0, 1, 2, 3, 3, 3]);
+    let west = mesh(&world, 0, &six);
+    assert_eq!(west.layer_palette, [0, 1, 2]);
+    assert_eq!(mesh(&world, 0, &four).layer_palette, Vec::<u8>::new());
+    assert_eq!(west.layer_weights, mesh(&world, 0, &four).layer_weights);
+    // Every chunk draws at most four, the chunks together all six, and a
+    // seam vertex blends the same layers alike in both its chunks.
+    let mut drawn = [false; 6];
+    let mut seen = BTreeMap::<[i64; 3], [u32; 6]>::new();
+    let mut shared = 0;
+    for cx in 0..CHUNKS {
+        let payload = mesh(&world, cx, &six);
+        assert!((1..=4).contains(&payload.layer_palette.len()));
+        for (position, weights) in payload
+            .positions
+            .chunks(3)
+            .zip(payload.layer_weights.chunks(4))
+        {
+            let total: f32 = weights.iter().sum();
+            assert!((total - 1.0).abs() < 1e-5, "{weights:?}");
+            let mut layers = [0.0_f32; 6];
+            for (weight, layer) in weights.iter().zip(&payload.layer_palette) {
+                layers[usize::from(*layer)] = *weight;
+                drawn[usize::from(*layer)] |= *weight > 0.0;
+            }
+            let key = [
+                ((position[0] / 0.5 + (cx * SIZE) as f32) * 1024.0).round() as i64,
+                (position[1] / 0.5 * 1024.0).round() as i64,
+                (position[2] / 0.5 * 1024.0).round() as i64,
+            ];
+            if let Some(previous) = seen.insert(key, layers.map(f32::to_bits)) {
+                shared += 1;
+                assert_eq!(previous, layers.map(f32::to_bits), "at {key:?}");
+            }
+        }
+    }
+    assert_eq!(drawn, [true; 6]);
+    assert!(shared > 0, "the chunks share seam vertices");
+}
+
+#[test]
+fn a_chunk_reaching_more_than_four_layers_draws_the_four_most_weighed() {
+    // Bands one voxel wide, sixteen of them layers: the two western chunks
+    // each reach eight or more.
+    let world = banded_slope(1);
+    let slots: Vec<u16> = (20..36).collect();
+    let options = banded_layers(slots, (0..16).collect());
+    for cx in 0..2 {
+        let payload = mesh(&world, cx, &options);
+        assert_eq!(payload.layer_palette.len(), 4, "chunk {cx}");
+        assert!(payload.layer_palette.is_sorted());
+        for weights in payload.layer_weights.chunks(4) {
+            let total: f32 = weights.iter().sum();
+            assert!((total - 1.0).abs() < 1e-5, "{weights:?}");
+        }
+    }
+}
+
 #[test]
 fn malformed_mappings_are_refused() {
     let many: Vec<u16> = (1..=17).collect();
@@ -293,7 +371,7 @@ fn malformed_mappings_are_refused() {
         (vec![], vec![]),
         (vec![1, 2, 1], vec![0, 1, 0]),
         (vec![1, 2, 1], vec![0, 1, 1]),
-        (vec![1, 2], vec![0, 4]),
+        (vec![1, 2], vec![0, 16]),
         (vec![1, 2], vec![0]),
         (many.clone(), vec![0; many.len()]),
     ] {
@@ -308,7 +386,7 @@ fn malformed_mappings_are_refused() {
 fn malformed_sets_are_refused() {
     for (slots, cells) in [
         (vec![], 1),
-        (vec![1, 2, 3, 4, 5], 1),
+        ((1..=17).collect(), 1),
         (vec![1, 1], 1),
         (vec![1], 0),
         (vec![1], 5),

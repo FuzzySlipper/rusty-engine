@@ -94,7 +94,7 @@ metre unless `MaterialRequest.TextureScale` sets another repeat.
 ## Blending terrain layers
 
 Where two materials meet on a reconstructed surface their textures change at
-a polygon edge. To blend them instead, name up to four material slots as
+a polygon edge. To blend them instead, name up to sixteen material slots as
 terrain layers and draw them with one terrain layer material:
 
 ```csharp
@@ -107,7 +107,7 @@ Material terrain = engine.Graphics.CreateTerrainLayerMaterial(
 
 Several physical slots can draw as one layer, so grass and the dirt under it
 keep their own identities and still blend as one texture. `Layers` gives the
-layer (0 to 3) of each slot at the same index, for up to 16 distinct slots:
+layer (0 to 15) of each slot at the same index, for up to 16 distinct slots:
 
 ```csharp
 engine.Voxel.ConfigureTerrainLayers(new VoxelTerrainLayerRequest(
@@ -116,6 +116,18 @@ engine.Voxel.ConfigureTerrainLayers(new VoxelTerrainLayerRequest(
     TransitionCells: 2,
     Layers: new uint[] { 0, 0, 1, 2, 3, 3 }));
 // Bind the four-layer material to all six slots.
+```
+
+Or give each its own layer: each chunk then draws the up to four it touches.
+
+```csharp
+engine.Voxel.ConfigureTerrainLayers(new VoxelTerrainLayerRequest(
+    session,
+    Slots: new uint[] { MeadowSlot, EarthSlot, RockSlot, GravelSlot, SandSlot, SnowSlot },
+    TransitionCells: 2));
+Material ground = engine.Graphics.CreateTerrainLayerMaterial(new TerrainLayerMaterialRequest(
+    meadow, new[] { earth, rock, gravel, sand, snow }, Contrast: 2));
+// Bind `ground` to all six slots.
 ```
 
 The product still decides which material each voxel is (biome, slope, height
@@ -128,11 +140,11 @@ or noise); the Engine only blends what it chose:
   the same weights in both chunks, and a world-origin rebase changes none. An
   edit within reach of a chunk border remeshes the neighbour as well. A vertex
   with no layer voxel in reach, and every cube face, takes its own slot's
-  layer whole. Without `Layers`, the slots are layers 0 to 3 in order. A
-  duplicate slot, a layer past 3, or `Layers` of another length than `Slots`
+  layer whole. Without `Layers`, the slots are layers 0 to 15 in order. A
+  duplicate slot, a layer past 15, or `Layers` of another length than `Slots`
   is refused and the previous layers stay. No slots removes the weights.
 - **Material.** `CreateTerrainLayerMaterial` takes the base material as layer 0
-  and 1 to 3 more (`Layers`), all voxel surface materials. Each layer keeps
+  and 1 to 15 more (`Layers`), all voxel surface materials. Each layer keeps
   its own texture, repeat or atlas tiling and normal map, as they are when the
   material is made; the base gives the rest, triplanar sharpness included. The
   material keeps those textures while it lives. `Contrast` (1 or more) raises
@@ -140,14 +152,26 @@ or noise); the Engine only blends what it chose:
   are, higher narrows each transition toward the dominant layer. Width comes
   from `TransitionCells`, sharpness from `Contrast`, and texture scale and
   triplanar sharpness from the layer materials, each independently.
+- **More than four layers.** A chunk draws at most four. With more layers in
+  the session, each chunk keeps the weights of the layers its vertices weigh,
+  its palette, and draws the material narrowed to them. Most chunks touch two
+  or three grounds. A seam vertex weighs the same voxels in both chunks, so
+  both palettes hold its layers and it blends alike on both sides. Where more
+  than four layers reach one chunk, it draws the four with the most weight, a
+  vertex's share of the others goes to those four, and its seams can then
+  show. A vertex of a slot outside the set takes the chunk's first layer.
 - **What stays.** Geometry, groups, material slots, collision, navigation and
   voxel readouts are unchanged: blending is drawn only. A slot outside the layers, bound to an
   ordinary material, draws as before.
 - **Cost.** Meshing reads up to (2 × `TransitionCells`)³ voxels per vertex
-  and looks each voxel's slot up in the set.
+  and looks each voxel's slot up in the set; past four layers it keeps a
+  weight per layer for each vertex until it narrows them.
   The material samples every layer's texture and normal map (four layers: 4×
   the samples, 12× with triplanar planes), in a shader variant only terrain
-  layer materials compile. Layer materials are opaque.
+  layer materials compile. Layer materials are opaque. A session of more
+  than four layers costs the same per pixel as one of four, since each chunk
+  draws four at most; the renderer makes one narrowed material per palette
+  in use.
 
 ## Vertex occlusion
 

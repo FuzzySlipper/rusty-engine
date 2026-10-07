@@ -1441,6 +1441,7 @@ unsafe fn generated_mesh_payload(
         },
         provenance: MeshProvenance::Generated,
         layer_weights: false,
+        layer_palette: Vec::new(),
         vertex_occlusion: false,
     };
     Ok((payload, slots, bindings))
@@ -1894,6 +1895,7 @@ pub(crate) mod tests {
                 },
                 provenance: MeshProvenance::StaticAsset,
                 layer_weights: false,
+                layer_palette: Vec::new(),
                 vertex_occlusion: false,
             },
             material_slots: vec![MeshMaterialSlot {

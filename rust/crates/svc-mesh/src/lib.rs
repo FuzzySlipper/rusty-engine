@@ -31,7 +31,8 @@ mod terrain_layers;
 pub mod texture_mapping;
 
 pub use terrain_layers::{
-    TerrainLayers, MAX_TERRAIN_LAYERS, MAX_TERRAIN_LAYER_SLOTS, MAX_TERRAIN_TRANSITION_CELLS,
+    TerrainLayers, CHUNK_TERRAIN_LAYERS, MAX_TERRAIN_LAYERS, MAX_TERRAIN_LAYER_SLOTS,
+    MAX_TERRAIN_TRANSITION_CELLS,
 };
 
 /// Renderer-neutral derived presentation selected for canonical voxel facts.
@@ -333,10 +334,15 @@ pub struct MeshPayload {
     /// absolute voxel coordinates; voxel objects use object-local coordinates.
     pub tile_coordinates: Vec<f32>,
     /// With [`SurfaceMeshOptions::terrain_layers`], 4 `f32` per vertex: each
-    /// layer's weight, summing to 1. A reconstructed vertex blends the layers
-    /// of the voxels around it; a cube face takes its own slot's layer.
-    /// Empty otherwise.
+    /// layer's weight, summing to 1, in layer order or, with a
+    /// [`Self::layer_palette`], its order. A reconstructed vertex blends the
+    /// layers of the voxels around it; a cube face takes its own slot's
+    /// layer. Empty otherwise.
     pub layer_weights: Vec<f32>,
+    /// With a terrain layer set of more than four layers, the layer each of
+    /// the chunk's weights stands for: the one to four it draws, in layer
+    /// order. Empty otherwise.
+    pub layer_palette: Vec<u8>,
     /// With [`SurfaceMeshOptions::vertex_occlusion`], 1 `f32` per vertex: how
     /// much ambient light reaches it (1 in the open, down toward 0 in a
     /// closed corner), baked with the strength. Empty otherwise.
@@ -830,6 +836,7 @@ pub fn mesh_scalar_samples(
         normals: surface.normals.into_iter().flatten().collect(),
         tile_coordinates: Vec::new(),
         layer_weights: Vec::new(),
+        layer_palette: Vec::new(),
         occlusion: Vec::new(),
         indices,
         groups,
@@ -1388,6 +1395,7 @@ fn empty_payload(mode: SurfaceMode) -> MeshPayload {
         normals: Vec::new(),
         tile_coordinates: Vec::new(),
         layer_weights: Vec::new(),
+        layer_palette: Vec::new(),
         occlusion: Vec::new(),
         indices: Vec::new(),
         groups: Vec::new(),
@@ -1465,8 +1473,20 @@ pub fn mesh_chunk_in_world_with_options(
         if options.distance_fields {
             payload.distance_field = around.distance_field();
         }
+        narrow_layer_weights(&mut payload, options);
         payload
     }))
+}
+
+/// Narrows a chunk's terrain layer weights to the four per vertex it draws
+/// (`terrain_layers::narrow`).
+fn narrow_layer_weights(payload: &mut MeshPayload, options: &SurfaceMeshOptions) {
+    if let Some(layers) = &options.terrain_layers {
+        let (weights, palette) =
+            terrain_layers::narrow(layers, std::mem::take(&mut payload.layer_weights));
+        payload.layer_weights = weights;
+        payload.layer_palette = palette;
+    }
 }
 
 /// A resident chunk's distance field alone (`distance_field`), from the
@@ -1658,7 +1678,9 @@ pub fn mesh_chunk_coarse_in_world(
             field.as_ref(),
             None,
         )?;
-        with_cube_faces(world, coord, chunk, options, smooth, None)
+        let mut payload = with_cube_faces(world, coord, chunk, options, smooth, None)?;
+        narrow_layer_weights(&mut payload, options);
+        Ok(payload)
     })())
 }
 
@@ -1843,14 +1865,21 @@ fn reconstructed_surface_covers(
 /// Gives each cube face vertex all of its slot's layer weight: cube faces
 /// keep their block look.
 fn cube_layer_weights(cubes: &mut MeshPayload, layers: &TerrainLayers) {
-    let mut weights = vec![[1.0, 0.0, 0.0, 0.0]; cubes.positions.len() / 3];
+    let width = layers.width();
+    let mut weights = vec![0.0; cubes.positions.len() / 3 * width];
+    let unowned = layers.outside();
+    for vertex in weights.chunks_exact_mut(width) {
+        vertex.copy_from_slice(&unowned[..width]);
+    }
     for group in &cubes.groups {
         let range = group.start as usize..(group.start + group.count) as usize;
+        let one_hot = layers.one_hot(group.material_slot);
         for &vertex in &cubes.indices[range] {
-            weights[vertex as usize] = layers.one_hot(group.material_slot);
+            let at = vertex as usize * width;
+            weights[at..at + width].copy_from_slice(&one_hot[..width]);
         }
     }
-    cubes.layer_weights = weights.into_iter().flatten().collect();
+    cubes.layer_weights = weights;
 }
 
 /// Core mesher: `hides(slot, world_voxel, dir)` answers whether a voxel hides
@@ -2093,6 +2122,7 @@ fn emit_quads(
         normals,
         tile_coordinates,
         layer_weights: Vec::new(),
+        layer_palette: Vec::new(),
         occlusion: occlusions,
         indices,
         groups,

@@ -736,7 +736,8 @@ shares an atlas material's region layout, so an atlas normal map matches its
 colour atlas texel for texel. `TriplanarSharpness` blends the material's
 texture from three planes on smooth surfaces
 ([textures on reconstructed surfaces](smooth-voxel-surfaces.md#textures-on-reconstructed-surfaces)).
-`Graphics.CreateTerrainLayerMaterial` blends up to four such materials by
+`Graphics.CreateTerrainLayerMaterial` blends up to sixteen such materials,
+four in any one chunk, by
 `Voxel.ConfigureTerrainLayers` weights, which can map several slots to one
 layer
 ([blending terrain layers](smooth-voxel-surfaces.md#blending-terrain-layers)).

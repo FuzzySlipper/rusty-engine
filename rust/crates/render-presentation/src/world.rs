@@ -1348,6 +1348,7 @@ mod tests {
                 },
                 provenance: MeshProvenance::StaticAsset,
                 layer_weights: false,
+                layer_palette: Vec::new(),
                 vertex_occlusion: false,
             },
             material_slots: vec![MeshMaterialSlot {

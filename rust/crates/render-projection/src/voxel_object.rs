@@ -551,6 +551,7 @@ pub fn voxel_object_mesh_payload(
         },
         provenance: MeshProvenance::VoxelObject,
         layer_weights: false,
+        layer_palette: Vec::new(),
         vertex_occlusion: false,
         texture_space: Some(texture_space),
         distance_field: None,

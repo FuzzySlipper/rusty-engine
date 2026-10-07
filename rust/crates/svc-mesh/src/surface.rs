@@ -1459,7 +1459,9 @@ pub(super) fn voxel_payload(
                         tile_coordinates.push(project(basis.u));
                         tile_coordinates.push(project(basis.v));
                         if let Some(field) = layers {
-                            layer_weights.extend(field.weights_or_slot(point, slot));
+                            layer_weights.extend_from_slice(
+                                &field.weights_or_slot(point, slot)[..field.width()],
+                            );
                         }
                         if let Some(field) = occlusion {
                             occlusions.push(field.surface_occlusion(point, normal));
@@ -1523,6 +1525,7 @@ pub(super) fn voxel_payload(
         normals,
         tile_coordinates,
         layer_weights,
+        layer_palette: Vec::new(),
         occlusion: occlusions,
         indices,
         groups,

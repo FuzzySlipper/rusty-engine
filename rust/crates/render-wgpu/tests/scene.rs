@@ -5,7 +5,7 @@
 
 mod support;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use engine_spatial::{
     MaterialVoxel, SurfaceMeshOptions, VoxelCollisionScene, VoxelEdit, VoxelEditService,
@@ -2032,6 +2032,357 @@ fn a_high_contrast_keeps_a_blend_between_non_base_layers() {
         mixed(&sharp),
         mixed(&gentle)
     );
+}
+
+#[test]
+fn a_session_of_six_terrain_layers_draws_each_chunk_as_the_layers_it_weighs() {
+    // Sand and rock are layers 4 and 5 of six; layers 0 to 3 are colours no
+    // voxel uses. Each chunk draws the material narrowed to its palette, so
+    // the slope looks as it does under a plain two-layer sand-rock set.
+    const SAND: [u8; 4] = [230, 200, 80, 255];
+    const ROCK: [u8; 4] = [70, 80, 110, 255];
+    const UNUSED: [[u8; 4]; 4] = [
+        [255, 0, 0, 255],
+        [0, 255, 0, 255],
+        [0, 0, 255, 255],
+        [255, 255, 255, 255],
+    ];
+    struct Setup {
+        textures: Vec<TextureDescriptor>,
+        layer: Box<dyn Fn(usize) -> MaterialTerrainLayerDescriptor>,
+        base: Box<dyn Fn(u16, usize) -> RenderMaterialDescriptor>,
+    }
+    let setup = |harness: &mut Harness| {
+        let colours = [UNUSED[0], UNUSED[1], UNUSED[2], UNUSED[3], SAND, ROCK];
+        let textures: Vec<TextureDescriptor> = colours
+            .iter()
+            .enumerate()
+            .map(|(index, color)| {
+                harness.resources.texture(
+                    &format!("texture/layer-{index}"),
+                    4,
+                    4,
+                    &image(4, 4, |_, _| *color),
+                    TextureWrap::Repeat,
+                )
+            })
+            .collect();
+        let repeat = |texture: &TextureDescriptor| VoxelSurfaceMappingDescriptor::Repeat {
+            texture: texture.id.clone(),
+            texture_version: texture.version,
+            texture_content_hash: texture.content_hash.clone().unwrap(),
+            tile_scale_cells: [2.0, 2.0],
+            tile_origin_cells: [0.0, 0.0],
+        };
+        let surfaces: Vec<RenderMaterialDescriptor> = textures
+            .iter()
+            .map(|texture| voxel_material(0, [1.0; 4], Some(texture), Some(repeat(texture))))
+            .collect();
+        let layers = surfaces.clone();
+        let bases = surfaces;
+        Setup {
+            textures,
+            layer: Box::new(move |index| MaterialTerrainLayerDescriptor {
+                voxel_surface: layers[index].voxel_surface.clone().unwrap(),
+                normal_map: None,
+            }),
+            base: Box::new(move |slot, index| RenderMaterialDescriptor {
+                id: render_projection::voxel_material_id(slot),
+                ..bases[index].clone()
+            }),
+        }
+    };
+    let ambient = RenderDiff::CreateLight {
+        handle: RenderHandle::new(90),
+        parent: None,
+        light: LightDescriptor::Ambient {
+            color: [1.0; 3],
+            intensity: std::f32::consts::PI,
+            enabled: true,
+            shadow_intent: LightShadowIntent::Disabled,
+            shadow: Default::default(),
+            range: None,
+        },
+    };
+    let view = camera([0.0, 9.0, 1.0], 0.0, -55.0);
+    let start = |setup: &Setup,
+                 scene: &VoxelCollisionScene,
+                 materials: &BTreeMap<u16, RenderMaterialDescriptor>| {
+        let mut ops: Vec<RenderDiff> = setup
+            .textures
+            .iter()
+            .map(|texture| RenderDiff::DefineTexture {
+                texture: texture.clone(),
+            })
+            .collect();
+        ops.push(ambient.clone());
+        ops.extend(project(&mut VoxelRenderProjector::new(), scene, materials));
+        ops
+    };
+
+    // Two layers: sand over rock.
+    let mut harness = Harness::new(RendererOptions {
+        default_world_lights: false,
+        ..RendererOptions::default()
+    });
+    let two = setup(&mut harness);
+    let mut materials = BTreeMap::new();
+    for slot in [1, 2] {
+        let mut blend = (two.base)(slot, 4);
+        blend.terrain_layers = Some(MaterialTerrainLayersDescriptor {
+            layers: vec![(two.layer)(5)],
+            contrast: 1.0,
+        });
+        materials.insert(slot, blend);
+    }
+    materials.insert(3, (two.base)(3, 3));
+    harness.apply(start(&two, &sand_and_rock(Some(3)), &materials));
+    let expected = harness.render(&view).1;
+
+    // Six layers, sand and rock the last two.
+    let mut harness = Harness::new(RendererOptions {
+        default_world_lights: false,
+        ..RendererOptions::default()
+    });
+    let six = setup(&mut harness);
+    let scene = sand_and_rock_scene(
+        Some(
+            engine_spatial::TerrainLayers::mapped(
+                vec![10, 11, 12, 13, 1, 2],
+                vec![0, 1, 2, 3, 4, 5],
+                3,
+            )
+            .unwrap(),
+        ),
+        false,
+    );
+    let palettes: BTreeSet<Vec<u8>> = scene
+        .mesh_chunks()
+        .map(|chunk| chunk.layer_palette.clone())
+        .collect();
+    assert!(
+        palettes.iter().all(
+            |palette| !palette.is_empty() && palette.iter().all(|layer| [4, 5].contains(layer))
+        ),
+        "chunks weigh only sand and rock: {palettes:?}"
+    );
+    let six_layers = |sand: usize, rock: usize| {
+        let mut materials = BTreeMap::new();
+        for slot in [1, 2] {
+            let mut blend = (six.base)(slot, 0);
+            blend.terrain_layers = Some(MaterialTerrainLayersDescriptor {
+                layers: (1..6)
+                    .map(|layer| match layer {
+                        4 => (six.layer)(sand),
+                        5 => (six.layer)(rock),
+                        other => (six.layer)(other),
+                    })
+                    .collect(),
+                contrast: 1.0,
+            });
+            materials.insert(slot, blend);
+        }
+        materials.insert(3, (six.base)(3, 3));
+        materials
+    };
+    harness.apply(start(&six, &scene, &six_layers(4, 5)));
+    let narrowed = harness.render(&view).1;
+    let differing = expected
+        .chunks(4)
+        .zip(narrowed.chunks(4))
+        .filter(|(a, b)| (0..3).any(|c| a[c].abs_diff(b[c]) > 2))
+        .count();
+    assert_eq!(differing, 0, "six layers draw as the two each chunk weighs");
+
+    // Redefining the material redraws its narrowed chunks: sand and rock
+    // swapped put rock at the west end.
+    harness.apply(
+        six_layers(5, 4)
+            .into_values()
+            .map(|material| RenderDiff::DefineMaterial { material })
+            .collect(),
+    );
+    let swapped = harness.render(&view).1;
+    let west = (((HEIGHT / 2) * WIDTH + WIDTH / 10) * 4) as usize;
+    assert_eq!(expected[west..west + 3], SAND[..3]);
+    assert_eq!(swapped[west..west + 3], ROCK[..3]);
+}
+
+/// The six ground materials of [`six_grounds`], west to east in their
+/// layer order: slot, layer and colour.
+const GROUNDS: [(u16, &str, [u8; 3]); 6] = [
+    (21, "meadow", [80, 150, 60]),
+    (22, "earth", [125, 88, 52]),
+    (23, "rock", [105, 105, 112]),
+    (24, "gravel", [165, 152, 132]),
+    (25, "sand", [226, 200, 130]),
+    (26, "snow", [244, 246, 250]),
+];
+
+/// A dual-contoured hillside 48 voxels square: sand along the low ground,
+/// meadow over earth, a bare earth path across it, gravel and rock up the
+/// slopes and snow on the tops.
+fn six_grounds(terrain_layers: engine_spatial::TerrainLayers) -> VoxelCollisionScene {
+    let [meadow, earth, rock, gravel, sand, snow] = GROUNDS.map(|(slot, _, _)| slot);
+    let height = |x: i64, z: i64| {
+        let (x, z) = (x as f64, z as f64);
+        (3.0 + 3.5 * (x / 7.0).sin() * (z / 9.0).cos() + x * 0.12).round() as i64
+    };
+    let voxels = (-24..24).flat_map(move |x: i64| {
+        (-48..0).flat_map(move |z: i64| {
+            let top = height(x, z);
+            (-4..=top).map(move |y| {
+                let surface = y == top;
+                let slot = if top <= 0 {
+                    sand
+                } else if top >= 7 {
+                    if surface {
+                        snow
+                    } else {
+                        rock
+                    }
+                } else if top >= 5 {
+                    rock
+                } else if top >= 4 {
+                    gravel
+                } else if (z + 20).abs() <= 1 || !surface {
+                    earth
+                } else {
+                    meadow
+                };
+                MaterialVoxel {
+                    state: 0,
+                    address: [x, y, z],
+                    material_slot: slot,
+                }
+            })
+        })
+    });
+    VoxelCollisionScene::from_material_voxels_with_mesh_options(
+        1.0,
+        CHUNK_CELLS,
+        voxels,
+        SurfaceMeshOptions {
+            terrain_layers: Some(terrain_layers),
+            ..SurfaceMeshOptions::with_mode(engine_spatial::SurfaceMode::DualContouring)
+        },
+    )
+    .expect("six-ground hillside")
+}
+
+#[test]
+fn six_ground_materials_blend_on_one_dual_contoured_session() {
+    let scene = six_grounds(
+        engine_spatial::TerrainLayers::new(GROUNDS.map(|(slot, _, _)| slot).to_vec(), 2).unwrap(),
+    );
+    // Each chunk draws at most four of the six; together they draw all six,
+    // in several palettes.
+    let palettes: BTreeSet<Vec<u8>> = scene
+        .mesh_chunks()
+        .filter(|chunk| !chunk.layer_weights.is_empty())
+        .map(|chunk| chunk.layer_palette.clone())
+        .collect();
+    assert!(palettes.len() > 2, "{palettes:?}");
+    assert!(palettes
+        .iter()
+        .all(|palette| (1..=4).contains(&palette.len())));
+    let drawn: BTreeSet<u8> = palettes.iter().flatten().copied().collect();
+    assert_eq!(drawn, (0..6).collect(), "{palettes:?}");
+
+    let render = |lit: bool| {
+        let mut harness = Harness::new(RendererOptions {
+            default_world_lights: false,
+            ..RendererOptions::default()
+        });
+        let mut ops = Vec::new();
+        let mut layers = Vec::new();
+        for (index, (_, name, color)) in GROUNDS.iter().enumerate() {
+            // Two shades in a checker, so the tiling shows.
+            let dark = color.map(|channel| (f32::from(channel) * 0.88) as u8);
+            let texture = harness.resources.texture(
+                &format!("texture/{name}"),
+                4,
+                4,
+                &image(4, 4, |x, y| {
+                    let [r, g, b] = if (x + y) % 2 == 0 { *color } else { dark };
+                    [r, g, b, 255]
+                }),
+                TextureWrap::Repeat,
+            );
+            let mapping = VoxelSurfaceMappingDescriptor::Repeat {
+                texture: texture.id.clone(),
+                texture_version: texture.version,
+                texture_content_hash: texture.content_hash.clone().unwrap(),
+                tile_scale_cells: [2.0, 2.0],
+                tile_origin_cells: [0.0, 0.0],
+            };
+            layers.push(
+                voxel_material(index as u16, [1.0; 4], Some(&texture), Some(mapping))
+                    .voxel_surface
+                    .unwrap(),
+            );
+            ops.push(RenderDiff::DefineTexture { texture });
+        }
+        // One six-layer material, meadow its own layer, on every slot.
+        let mut materials = BTreeMap::new();
+        for (slot, _, _) in GROUNDS {
+            let mut blend = voxel_material(slot, [1.0; 4], None, None);
+            blend.texture = Some(layers[0].texture().to_owned());
+            blend.voxel_surface = Some(layers[0].clone());
+            blend.terrain_layers = Some(MaterialTerrainLayersDescriptor {
+                layers: layers[1..]
+                    .iter()
+                    .map(|surface| MaterialTerrainLayerDescriptor {
+                        voxel_surface: surface.clone(),
+                        normal_map: None,
+                    })
+                    .collect(),
+                contrast: 2.0,
+            });
+            materials.insert(slot, blend);
+        }
+        ops.push(RenderDiff::CreateLight {
+            handle: RenderHandle::new(91),
+            parent: None,
+            light: LightDescriptor::Ambient {
+                color: [1.0; 3],
+                intensity: if lit { 1.2 } else { std::f32::consts::PI },
+                enabled: true,
+                shadow_intent: LightShadowIntent::Disabled,
+                shadow: Default::default(),
+                range: None,
+            },
+        });
+        if lit {
+            ops.push(sun([-0.5, -0.8, -0.3]));
+        }
+        ops.extend(project(
+            &mut VoxelRenderProjector::new(),
+            &scene,
+            &materials,
+        ));
+        harness.apply(ops);
+        harness.render(&camera([0.0, 20.0, 8.0], 0.0, -38.0)).1
+    };
+    // Under ambient light alone each ground shows its own colours, and
+    // pixels between them blend.
+    let flat = render(false);
+    let near = |pixel: &[u8], color: [u8; 3]| {
+        (0..3).all(|channel| {
+            let dark = (f32::from(color[channel]) * 0.88) as u8;
+            pixel[channel].abs_diff(color[channel]) <= 3 || pixel[channel].abs_diff(dark) <= 3
+        })
+    };
+    for (_, name, color) in GROUNDS {
+        let shown = flat.chunks(4).filter(|pixel| near(pixel, color)).count();
+        assert!(shown > 100, "{name} shows on {shown} pixels");
+    }
+    let blended = flat
+        .chunks(4)
+        .filter(|pixel| GROUNDS.iter().all(|(_, _, color)| !near(pixel, *color)))
+        .count();
+    assert!(blended > 500, "{blended} pixels blend two grounds");
+    assert_screenshot("scene_terrain_layers_six_grounds", &render(true));
 }
 
 /// Quads in the z = 0 plane facing +Z, one per material slot, each `width`

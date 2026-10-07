@@ -1,6 +1,6 @@
 //! Per-vertex terrain layer weights for reconstructed voxel surfaces.
 //!
-//! A terrain layer set maps material slots to up to four layers; several
+//! A terrain layer set maps material slots to up to sixteen layers; several
 //! slots may share a layer, so physically distinct materials (grass and the
 //! dirt under it) draw as one texture. Each reconstructed vertex gets one
 //! weight per layer: the share, under a tent filter `transition_cells` voxels
@@ -9,6 +9,10 @@
 //! both sides of a chunk seam, so neighbouring chunks give a shared vertex
 //! the same weights, and a world-origin rebase changes none. They only colour
 //! the surface: geometry, material slots and collision are unchanged.
+//!
+//! A chunk draws at most [`CHUNK_TERRAIN_LAYERS`] of them: a set of more
+//! layers narrows each chunk's weights to the layers its vertices weigh
+//! ([`narrow`]), its palette.
 
 use core_space::{ChunkCoord, LocalVoxelCoord, VoxelCoord, VoxelGridSpec};
 use svc_spatial::VoxelWorld;
@@ -16,7 +20,10 @@ use svc_spatial::VoxelWorld;
 use crate::MeshError;
 
 /// The most layers one set blends.
-pub const MAX_TERRAIN_LAYERS: usize = 4;
+pub const MAX_TERRAIN_LAYERS: usize = 16;
+/// The most layers one chunk's vertices weigh: a mesh carries this many
+/// weights per vertex.
+pub const CHUNK_TERRAIN_LAYERS: usize = 4;
 /// The most material slots one set maps onto its layers. Meshing looks each
 /// voxel's slot up in the set, so the set stays short.
 pub const MAX_TERRAIN_LAYER_SLOTS: usize = 16;
@@ -89,6 +96,17 @@ impl TerrainLayers {
         self.transition_cells
     }
 
+    /// The weights meshing keeps per vertex until [`narrow`]: one per
+    /// layer, and at least [`CHUNK_TERRAIN_LAYERS`].
+    pub(crate) fn width(&self) -> usize {
+        let count = self
+            .layers
+            .iter()
+            .max()
+            .map_or(0, |layer| usize::from(*layer) + 1);
+        count.max(CHUNK_TERRAIN_LAYERS)
+    }
+
     fn layer(&self, slot: u16) -> Option<u8> {
         self.slots
             .iter()
@@ -97,10 +115,24 @@ impl TerrainLayers {
     }
 
     /// All weight on `slot`'s layer: a vertex with no layer voxel in reach,
-    /// or a cube face. A slot outside the set reads layer 0.
-    pub(crate) fn one_hot(&self, slot: u16) -> [f32; 4] {
-        let mut weights = [0.0; 4];
-        weights[usize::from(self.layer(slot).unwrap_or(0))] = 1.0;
+    /// or a cube face. A slot outside the set reads layer 0, or past four
+    /// layers no weight, so it widens no palette, and then [`narrow`] gives
+    /// it the palette's first.
+    pub(crate) fn one_hot(&self, slot: u16) -> [f32; MAX_TERRAIN_LAYERS] {
+        let Some(layer) = self.layer(slot) else {
+            return self.outside();
+        };
+        let mut weights = [0.0; MAX_TERRAIN_LAYERS];
+        weights[usize::from(layer)] = 1.0;
+        weights
+    }
+
+    /// The weights of a vertex outside the set ([`Self::one_hot`]).
+    pub(crate) fn outside(&self) -> [f32; MAX_TERRAIN_LAYERS] {
+        let mut weights = [0.0; MAX_TERRAIN_LAYERS];
+        if self.width() == CHUNK_TERRAIN_LAYERS {
+            weights[0] = 1.0;
+        }
         weights
     }
 }
@@ -180,16 +212,21 @@ impl<'a> LayerField<'a> {
         }
     }
 
+    /// The weights meshing keeps per vertex ([`TerrainLayers::width`]).
+    pub(crate) fn width(&self) -> usize {
+        self.layers.width()
+    }
+
     /// The weights at `point`, or all on `slot`'s layer with no layer voxel
     /// in reach.
-    pub(crate) fn weights_or_slot(&self, point: [f64; 3], slot: u16) -> [f32; 4] {
+    pub(crate) fn weights_or_slot(&self, point: [f64; 3], slot: u16) -> [f32; MAX_TERRAIN_LAYERS] {
         self.weights(point)
             .unwrap_or_else(|| self.layers.one_hot(slot))
     }
 
     /// The layer weights at `point` in lattice units (voxel `c`'s centre at
     /// `c + 0.5`), summing to 1, or `None` with no layer voxel in reach.
-    pub(crate) fn weights(&self, point: [f64; 3]) -> Option<[f32; 4]> {
+    pub(crate) fn weights(&self, point: [f64; 3]) -> Option<[f32; MAX_TERRAIN_LAYERS]> {
         let radius = f64::from(self.layers.transition_cells);
         let range = |axis: usize| {
             let first = ((point[axis] - 0.5 - radius).ceil() as i64).max(self.low[axis]);
@@ -199,7 +236,7 @@ impl<'a> LayerField<'a> {
         };
         let tent =
             |axis: usize, sample: i64| 1.0 - (point[axis] - 0.5 - sample as f64).abs() / radius;
-        let mut sums = [0.0_f64; 4];
+        let mut sums = [0.0_f64; MAX_TERRAIN_LAYERS];
         for z in range(2) {
             let wz = tent(2, z);
             if wz <= 0.0 {
@@ -224,4 +261,59 @@ impl<'a> LayerField<'a> {
         let total: f64 = sums.iter().sum();
         (total > 0.0).then(|| sums.map(|sum| (sum / total) as f32))
     }
+}
+
+/// Narrows `weights`, [`TerrainLayers::width`] per vertex, to
+/// [`CHUNK_TERRAIN_LAYERS`] per vertex and the palette they stand for: the
+/// layers any vertex weighs, in layer order. A set of at most four layers
+/// keeps its weights in layer order and no palette. Neighbouring chunks
+/// weigh a seam vertex alike, so both palettes hold its layers and it
+/// blends alike in both. Past four layers in one chunk the four most
+/// weighed draw, and a vertex's share of the others goes to them; a vertex
+/// weighing none of them (a slot outside the set) takes the first.
+pub(crate) fn narrow(layers: &TerrainLayers, weights: Vec<f32>) -> (Vec<f32>, Vec<u8>) {
+    let width = layers.width();
+    if width == CHUNK_TERRAIN_LAYERS {
+        return (weights, Vec::new());
+    }
+    let mut totals = vec![0.0_f64; width];
+    for vertex in weights.chunks_exact(width) {
+        for (total, weight) in totals.iter_mut().zip(vertex) {
+            *total += f64::from(*weight);
+        }
+    }
+    let mut palette: Vec<u8> = (0..width as u8)
+        .filter(|layer| totals[usize::from(*layer)] > 0.0)
+        .collect();
+    if palette.len() > CHUNK_TERRAIN_LAYERS {
+        palette.sort_by(|a, b| totals[usize::from(*b)].total_cmp(&totals[usize::from(*a)]));
+        palette.truncate(CHUNK_TERRAIN_LAYERS);
+        palette.sort_unstable();
+    }
+    if palette.is_empty() {
+        palette.push(0);
+    }
+    let narrowed = weights
+        .chunks_exact(width)
+        .flat_map(|vertex| {
+            let mut kept = [0.0_f32; CHUNK_TERRAIN_LAYERS];
+            for (weight, layer) in kept.iter_mut().zip(&palette) {
+                *weight = vertex[usize::from(*layer)];
+            }
+            let outside = vertex
+                .iter()
+                .enumerate()
+                .any(|(layer, weight)| *weight > 0.0 && !palette.contains(&(layer as u8)));
+            if outside || kept == [0.0; CHUNK_TERRAIN_LAYERS] {
+                let total: f32 = kept.iter().sum();
+                if total > 0.0 {
+                    kept = kept.map(|weight| weight / total);
+                } else {
+                    kept = [1.0, 0.0, 0.0, 0.0];
+                }
+            }
+            kept
+        })
+        .collect();
+    (narrowed, palette)
 }

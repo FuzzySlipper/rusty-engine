@@ -84,6 +84,7 @@ fn attributed_mesh() -> MeshPayloadDescriptor {
         },
         provenance: MeshProvenance::StaticAsset,
         layer_weights: false,
+        layer_palette: Vec::new(),
         vertex_occlusion: false,
     }
 }

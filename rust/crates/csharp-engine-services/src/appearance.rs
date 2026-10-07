@@ -3455,7 +3455,7 @@ impl RuntimeAppearanceBridge {
             )
         }?;
         if !(1..=render_model::MAX_MATERIAL_TERRAIN_LAYERS).contains(&handles.len()) {
-            return Err(invalid("name 1 to 3 layer materials"));
+            return Err(invalid("name 1 to 15 layer materials"));
         }
         let layers = handles
             .iter()
@@ -4181,6 +4181,7 @@ impl RuntimeAppearanceBridge {
                 },
                 provenance: MeshProvenance::StaticAsset,
                 layer_weights: false,
+                layer_palette: Vec::new(),
                 vertex_occlusion: false,
             },
             material_slots: material_slots.clone(),
@@ -12718,6 +12719,7 @@ fn shade(surface: Surface) -> vec4<f32> {
                 },
                 provenance: MeshProvenance::StaticAsset,
                 layer_weights: false,
+                layer_palette: Vec::new(),
                 vertex_occlusion: false,
             },
             material_slots: vec![MeshMaterialSlot {

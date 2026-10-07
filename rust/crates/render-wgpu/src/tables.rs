@@ -122,6 +122,9 @@ pub(crate) struct GpuMesh {
     /// Its vertex colours are terrain layer weights, not a tint: a voxel
     /// chunk meshed with terrain layers.
     pub layer_weights: bool,
+    /// The terrain layers its weights stand for, when its session has more
+    /// than four: its groups draw their materials narrowed to them.
+    pub layer_palette: Vec<u8>,
     /// Its vertex colours' alpha is ambient occlusion: a voxel chunk meshed
     /// with vertex occlusion.
     pub vertex_occlusion: bool,
@@ -713,6 +716,10 @@ pub(crate) struct Tables {
     /// them take (`Shaders::product`).
     pub shaders: HashMap<String, (render_model::ShaderDescriptor, u32)>,
     pub materials: Slots<MaterialRow>,
+    /// The palettes each terrain layer material of more than four layers
+    /// has a narrowed variant for (`apply.rs` `define_layer_variant`), by
+    /// material id.
+    pub layer_variants: HashMap<String, BTreeSet<Vec<u8>>>,
     pub static_meshes: Slots<GpuMesh>,
     pub payload_meshes: HashMap<RenderHandle, GpuMesh>,
     pub nodes: HashMap<RenderHandle, NodeRow>,
@@ -759,6 +766,7 @@ impl Tables {
             materials: Slots::default(),
             static_meshes: Slots::default(),
             payload_meshes: HashMap::new(),
+            layer_variants: HashMap::new(),
             nodes: HashMap::new(),
             sprites: BTreeSet::new(),
             parts: Parts::default(),

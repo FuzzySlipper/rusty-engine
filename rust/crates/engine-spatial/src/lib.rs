@@ -206,6 +206,9 @@ pub struct VoxelMeshChunk {
     /// Four terrain layer weights per vertex when the session has terrain
     /// layers (`svc_mesh::MeshPayload::layer_weights`); empty otherwise.
     pub layer_weights: Vec<f32>,
+    /// The layer each weight stands for when the session has more than four
+    /// (`svc_mesh::MeshPayload::layer_palette`); empty otherwise.
+    pub layer_palette: Vec<u8>,
     /// One occlusion per vertex when the session has vertex occlusion
     /// (`svc_mesh::MeshPayload::occlusion`); empty otherwise.
     pub occlusion: Vec<f32>,
@@ -1706,6 +1709,7 @@ fn voxel_mesh_chunk(
         normals: mesh.normals,
         tile_coordinates: mesh.tile_coordinates,
         layer_weights: mesh.layer_weights,
+        layer_palette: mesh.layer_palette,
         occlusion: mesh.occlusion,
         distance_field,
         indices: mesh.indices,
@@ -1781,6 +1785,8 @@ fn mesh_payload_hash(mesh: &svc_mesh::MeshPayload) -> u64 {
         hash.words([stream.len() as u32]);
         hash.words(stream.iter().map(|value| value.to_bits()));
     }
+    hash.words([mesh.layer_palette.len() as u32]);
+    hash.words(mesh.layer_palette.iter().copied().map(u32::from));
     hash.words([mesh.indices.len() as u32]);
     hash.words(mesh.indices.iter().copied());
     for group in &mesh.groups {

@@ -2,7 +2,7 @@
 //! A delta the backend cannot realize is reported and skipped; the retained
 //! model already validated every op, so nothing here re-validates it.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use glam::{Mat4, Vec3};
 use render_model::{
@@ -54,6 +54,9 @@ const MATERIAL_ANISOTROPY: u16 = 16;
 const FALLBACK_ROUGHNESS: f32 = 1.0;
 /// Prefix of the retained materials payload mesh groups bind by slot.
 const PAYLOAD_SLOT_MATERIAL_PREFIX: &str = "voxel-material/";
+/// The terrain layers a material draws over its own (`material.wgsl`
+/// `layer_albedo_1` to `layer_albedo_3`).
+const DRAWN_TERRAIN_LAYERS: usize = 3;
 
 impl Renderer {
     /// A payload's distance field as the renderer keeps it: its bytes, and a
@@ -113,6 +116,7 @@ impl Renderer {
                 if let Some(id) = self.tables.names.get(id) {
                     self.tables.materials.remove(id);
                 }
+                self.release_layer_variants(id);
             }
             RenderDiff::DefineStaticMesh { asset } => self.define_static_mesh(asset, resources)?,
             RenderDiff::ReleaseStaticMesh { asset } => {
@@ -420,11 +424,37 @@ impl Renderer {
                 );
                 mesh.texture_space = payload.texture_space;
                 mesh.layer_weights = layer_weights;
+                if layer_weights {
+                    mesh.layer_palette = payload.layer_palette.clone();
+                }
                 mesh.vertex_occlusion = vertex_occlusion;
                 mesh.distance_field = payload
                     .distance_field
                     .as_ref()
                     .map(|field| self.mesh_field(field));
+                let variants: Vec<(RenderMaterialDescriptor, Vec<u8>)> = mesh
+                    .groups
+                    .iter()
+                    .filter(|_| !mesh.layer_palette.is_empty())
+                    .filter_map(|(slot, _, _)| {
+                        let name = format!("{PAYLOAD_SLOT_MATERIAL_PREFIX}{slot}");
+                        let (_, row) = crate::tables::named(
+                            &self.tables.names,
+                            &self.tables.materials,
+                            &name,
+                        )?;
+                        let defined = self
+                            .tables
+                            .layer_variants
+                            .get(&name)
+                            .is_some_and(|palettes| palettes.contains(&mesh.layer_palette));
+                        (row.descriptor.terrain_layers.is_some() && !defined)
+                            .then(|| (row.descriptor.clone(), mesh.layer_palette.clone()))
+                    })
+                    .collect();
+                for (base, palette) in variants {
+                    self.define_layer_variant(&base, &palette)?;
+                }
                 if let Some(previous) = self.tables.payload_meshes.insert(*handle, mesh) {
                     if let Some(slot) = previous.distance_field.and_then(|field| field.slot) {
                         self.distance_fields.release(slot);
@@ -680,11 +710,24 @@ impl Renderer {
                     if let Some(mesh) = self.tables.payload_meshes.get(&handle) {
                         for (slot, start, count) in &mesh.groups {
                             let slot_material = format!("{PAYLOAD_SLOT_MATERIAL_PREFIX}{slot}");
-                            let (material_ref, color, emission) = match crate::tables::named(
-                                &self.tables.names,
-                                &self.tables.materials,
-                                &slot_material,
-                            ) {
+                            // A chunk with a terrain layer palette draws its
+                            // material narrowed to it.
+                            let variant = (!mesh.layer_palette.is_empty())
+                                .then(|| layer_variant_id(&slot_material, &mesh.layer_palette))
+                                .and_then(|variant| {
+                                    crate::tables::named(
+                                        &self.tables.names,
+                                        &self.tables.materials,
+                                        &variant,
+                                    )
+                                });
+                            let (material_ref, color, emission) = match variant.or_else(|| {
+                                crate::tables::named(
+                                    &self.tables.names,
+                                    &self.tables.materials,
+                                    &slot_material,
+                                )
+                            }) {
                                 Some((id, row)) => (
                                     MaterialRef::Retained(id),
                                     mul(row.descriptor.color, row.descriptor.texture_tint),
@@ -1024,6 +1067,12 @@ impl Renderer {
             .filter(|row| row.descriptor.textures().any(|used| *used == texture.id))
             .map(|row| row.descriptor.clone())
             .collect();
+        // A narrowed variant samples its material's textures: the material
+        // makes it anew.
+        let dependents: Vec<_> = dependents
+            .into_iter()
+            .filter(|descriptor| !self.is_layer_variant(&descriptor.id))
+            .collect();
         for descriptor in dependents {
             // A product shader's error was reported when it was defined.
             let _ = self.define_material(descriptor);
@@ -1068,6 +1117,25 @@ impl Renderer {
     }
 
     fn define_material(&mut self, descriptor: RenderMaterialDescriptor) -> Result<(), String> {
+        // A terrain layer material's narrowed variants follow it: those the
+        // chunks drawing it need are made anew, the rest released.
+        self.release_layer_variants(&descriptor.id);
+        let palettes = if descriptor.terrain_layers.is_some() {
+            self.layer_palettes_drawing(&descriptor.id)
+        } else {
+            BTreeSet::new()
+        };
+        self.define_material_alone(descriptor.clone())?;
+        for palette in palettes {
+            self.define_layer_variant(&descriptor, &palette)?;
+        }
+        Ok(())
+    }
+
+    fn define_material_alone(
+        &mut self,
+        descriptor: RenderMaterialDescriptor,
+    ) -> Result<(), String> {
         self.tables.material_means.insert(
             descriptor.id.clone(),
             crate::probes::material_mean(&descriptor, &self.tables.texture_thumbs),
@@ -1110,6 +1178,10 @@ impl Renderer {
             })
             .map(|row| row.descriptor.clone())
             .collect();
+        let dependents: Vec<_> = dependents
+            .into_iter()
+            .filter(|descriptor| !self.is_layer_variant(&descriptor.id))
+            .collect();
         let mut errors: Vec<String> = Vec::new();
         for descriptor in dependents {
             if let Err(error) = self.define_material(descriptor) {
@@ -1127,6 +1199,64 @@ impl Renderer {
     /// Store a material row with `params` and re-derive the parts drawing it.
     /// A product shader that is not defined, or does not compose, is an
     /// error; the material is stored and draws with the standard shade stage.
+    /// Define `base` narrowed to the terrain layers of `palette`, for the
+    /// chunks whose weights stand for them.
+    fn define_layer_variant(
+        &mut self,
+        base: &RenderMaterialDescriptor,
+        palette: &[u8],
+    ) -> Result<(), String> {
+        let Some(variant) = narrowed_to_palette(base, palette) else {
+            return Ok(());
+        };
+        self.tables
+            .layer_variants
+            .entry(base.id.clone())
+            .or_default()
+            .insert(palette.to_vec());
+        self.define_material_alone(variant)
+    }
+
+    /// Whether `id` is a narrowed variant: its material redefines it.
+    fn is_layer_variant(&self, id: &str) -> bool {
+        self.tables
+            .layer_variants
+            .iter()
+            .any(|(material, palettes)| {
+                palettes
+                    .iter()
+                    .any(|palette| layer_variant_id(material, palette) == id)
+            })
+    }
+
+    fn release_layer_variants(&mut self, id: &str) {
+        for palette in self.tables.layer_variants.remove(id).into_iter().flatten() {
+            if let Some(variant) = self.tables.names.get(&layer_variant_id(id, &palette)) {
+                self.tables.materials.remove(variant);
+            }
+        }
+    }
+
+    /// The terrain layer palettes of the payload meshes drawing `id` as a
+    /// slot material.
+    fn layer_palettes_drawing(&self, id: &str) -> BTreeSet<Vec<u8>> {
+        let Some(slot) = id
+            .strip_prefix(PAYLOAD_SLOT_MATERIAL_PREFIX)
+            .and_then(|slot| slot.parse::<u16>().ok())
+        else {
+            return BTreeSet::new();
+        };
+        self.tables
+            .payload_meshes
+            .values()
+            .filter(|mesh| {
+                !mesh.layer_palette.is_empty()
+                    && mesh.groups.iter().any(|(drawn, _, _)| *drawn == slot)
+            })
+            .map(|mesh| mesh.layer_palette.clone())
+            .collect()
+    }
+
     pub(crate) fn insert_material(
         &mut self,
         descriptor: RenderMaterialDescriptor,
@@ -1395,6 +1525,7 @@ impl Renderer {
             texture_space: None,
             distance_field: None,
             layer_weights: false,
+            layer_palette: Vec::new(),
             vertex_occlusion: false,
             vertices: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some(label),
@@ -1521,6 +1652,45 @@ pub(crate) struct MaterialParams {
     pub terrain_layers: Option<TerrainLayerParams>,
 }
 
+/// The id of `material` narrowed to the terrain layers of `palette`.
+fn layer_variant_id(material: &str, palette: &[u8]) -> String {
+    let layers: Vec<String> = palette.iter().map(u8::to_string).collect();
+    format!("{material}#layers-{}", layers.join("."))
+}
+
+/// `material` drawing the terrain layers of `palette` (one to four, in the
+/// order of a chunk's weights) as its layers 0 to 3: the first's texture,
+/// tiling and normal map as its own, the rest as its layers. A layer the
+/// material lacks draws as its layer 0. `None` without terrain layers.
+fn narrowed_to_palette(
+    material: &RenderMaterialDescriptor,
+    palette: &[u8],
+) -> Option<RenderMaterialDescriptor> {
+    let layers = material.terrain_layers.as_ref()?;
+    let own = render_model::MaterialTerrainLayerDescriptor {
+        voxel_surface: material.voxel_surface.clone()?,
+        normal_map: material.normal_map.clone(),
+    };
+    let mut drawn = palette.iter().map(|layer| {
+        usize::from(*layer)
+            .checked_sub(1)
+            .and_then(|index| layers.layers.get(index))
+            .unwrap_or(&own)
+            .clone()
+    });
+    let first = drawn.next()?;
+    let mut narrowed = material.clone();
+    narrowed.id = layer_variant_id(&material.id, palette);
+    narrowed.texture = Some(first.voxel_surface.texture().to_owned());
+    narrowed.voxel_surface = Some(first.voxel_surface);
+    narrowed.normal_map = first.normal_map;
+    narrowed.terrain_layers = Some(render_model::MaterialTerrainLayersDescriptor {
+        layers: drawn.collect(),
+        contrast: layers.contrast,
+    });
+    Some(narrowed)
+}
+
 /// A material's terrain layers 1 to 3 and their weight contrast.
 #[derive(Clone)]
 pub(crate) struct TerrainLayerParams {
@@ -1543,9 +1713,12 @@ impl TerrainLayerParams {
         texture_size: impl Fn(&str) -> Option<(u32, u32)>,
     ) -> Self {
         Self {
+            // A material of more layers draws its first four where a chunk
+            // has no palette; its variants draw the others.
             layers: layers
                 .layers
                 .iter()
+                .take(DRAWN_TERRAIN_LAYERS)
                 .map(|layer| TerrainLayerSlot {
                     texture: layer.voxel_surface.texture().to_owned(),
                     surface: VoxelSurfaceUniform::resolve(

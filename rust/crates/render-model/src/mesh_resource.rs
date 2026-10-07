@@ -215,6 +215,7 @@ pub fn pack_mesh_resources(
                 bounds: payload.bounds,
                 provenance: payload.provenance,
                 layer_weights: payload.layer_weights,
+                layer_palette: payload.layer_palette.clone(),
                 vertex_occlusion: payload.vertex_occlusion,
                 source,
             });
@@ -424,6 +425,7 @@ pub fn decode_mesh_resource_payload(
         },
         provenance: payload.provenance,
         layer_weights: payload.layer_weights,
+        layer_palette: payload.layer_palette.clone(),
         vertex_occlusion: payload.vertex_occlusion,
     };
     decoded
@@ -670,6 +672,7 @@ mod tests {
             },
             provenance: MeshProvenance::VoxelObject,
             layer_weights: false,
+            layer_palette: Vec::new(),
             vertex_occlusion: false,
         }
     }

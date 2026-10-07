@@ -288,10 +288,11 @@ pub type NativeConfigureVoxelMaterialSurfaces = unsafe extern "C" fn(
 /// `slots` are distinct material slots drawn by the terrain layer material
 /// bound to them, and each vertex weighs the solid voxels of each layer's
 /// slots within `transition_cells` voxels (1 to 4, less than the chunk size).
-/// Without `layers`, 1 to 4 slots are layers 0 to 3 in order. With them, 1 to
-/// 16 slots each take the layer (0 to 3) at the same index, so several slots
-/// can share one layer. No slots removes the weights. Every chunk is
-/// remeshed; geometry, material slots and collision are unchanged.
+/// Without `layers`, 1 to 16 slots are layers 0 to 15 in order. With them, 1
+/// to 16 slots each take the layer (0 to 15) at the same index, so several
+/// slots can share one layer. A chunk draws at most four layers: past four,
+/// each draws those its vertices weigh. No slots removes the weights. Every
+/// chunk is remeshed; geometry, material slots and collision are unchanged.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeVoxelTerrainLayerRequest {
