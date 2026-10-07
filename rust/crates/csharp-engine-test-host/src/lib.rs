@@ -152,6 +152,12 @@ unsafe fn create(
         let bytes = unsafe { bytes(file.bytes, file.bytes_len) }?;
         content.insert(path.to_owned(), Arc::<[u8]>::from(bytes));
     }
+    // Supplied content with the SDK's bundle inventory opens its bundles as a
+    // loose staged Product does: their files are read when a bundle opens,
+    // not handed out with the eager content.
+    let bundles = csharp_engine_services::ProductContentBundles::admit_supplied(&content)
+        .map_err(|error| CsharpEngineServicesError::new("CSHARP_CONTENT_BUNDLES", error))?;
+    content.retain(|path, _| !bundles.owns_path(path));
     let catalog = parse_runtime_appearance_catalog(
         content
             .get("runtime-appearances.json")
@@ -169,6 +175,7 @@ unsafe fn create(
         persistence_root,
         diagnostics,
     )?);
+    services.bind_content_bundles(bundles);
     // Gameplay time answers as in the standard realtime runtime; a request
     // stages and reads back within its call, with no lifecycle to settle it.
     services.set_gameplay_time(
@@ -280,6 +287,158 @@ mod tests {
                 String::from_utf8(bytes.to_vec()).unwrap()
             })
             .collect()
+    }
+
+    fn slice(text: &str) -> NativeUtf8Slice {
+        NativeUtf8Slice {
+            bytes: text.as_ptr(),
+            len: text.len(),
+        }
+    }
+
+    /// A host over `files`, with a call begun.
+    fn host_with(files: &[(&str, &[u8])]) -> Result<NativeEngineTestHostApi, Vec<String>> {
+        let content: Vec<NativeContentFile> = files
+            .iter()
+            .map(|(path, bytes)| NativeContentFile {
+                path: path.as_ptr(),
+                path_len: path.len(),
+                bytes: bytes.as_ptr(),
+                bytes_len: bytes.len(),
+            })
+            .collect();
+        let mut request = request(PRODUCT_ABI_FINGERPRINT, "");
+        request.content = content.as_ptr();
+        request.content_len = content.len();
+        let mut api = std::mem::MaybeUninit::<NativeEngineTestHostApi>::uninit();
+        let mut receipt = NativeOperationErrorReceipt {
+            diagnostics: ptr::null(),
+            diagnostics_len: 0,
+        };
+        let status =
+            unsafe { rusty_engine_test_host_create(&request, api.as_mut_ptr(), &mut receipt) };
+        if status != ABI_OK {
+            return Err(codes(&receipt));
+        }
+        let api = unsafe { api.assume_init() };
+        assert_eq!(unsafe { (api.begin_call)(api.context) }, ABI_OK);
+        Ok(api)
+    }
+
+    fn inventory(files: &[(&str, u64)]) -> String {
+        let files: Vec<String> = files
+            .iter()
+            .map(|(path, length)| {
+                format!(
+                    r#"{{"path":"{path}","byteLength":{length},"sha256":"{}"}}"#,
+                    "0".repeat(64)
+                )
+            })
+            .collect();
+        format!(
+            r#"{{"bundles":[{{"id":"rooms","root":"rooms","files":[{}]}}]}}"#,
+            files.join(",")
+        )
+    }
+
+    fn open_bundle(api: &NativeEngineTestHostApi, id: &str) -> Option<NativeContentBundleHandle> {
+        let content = api.engine.content;
+        let mut handle = NativeContentBundleHandle::default();
+        let request = NativeContentBundleOpenRequest { id: slice(id) };
+        (unsafe { (content.open_bundle)(content.context, &request, &mut handle) } == ABI_OK)
+            .then_some(handle)
+    }
+
+    #[test]
+    fn supplied_content_with_an_inventory_opens_its_bundles_as_a_staged_product_does() {
+        let index = inventory(&[("first.txt", 5), ("nested/second.txt", 6)]);
+        let api = host_with(&[
+            (".rusty-bundles.json", index.as_bytes()),
+            ("rooms/first.txt", b"hello"),
+            ("rooms/nested/second.txt", b"world!"),
+            ("loose.txt", b"eager"),
+        ])
+        .unwrap();
+        let content = api.engine.content;
+        let mut listed = NativeContentBundleInfoResult {
+            bundles: ptr::null(),
+            bundles_len: 0,
+        };
+        assert_eq!(
+            unsafe { (content.list_bundles)(content.context, &mut listed) },
+            ABI_OK
+        );
+        let bundles = unsafe { std::slice::from_raw_parts(listed.bundles, listed.bundles_len) };
+        assert_eq!(bundles.len(), 1);
+        let id = unsafe { std::slice::from_raw_parts(bundles[0].id.bytes, bundles[0].id.len) };
+        assert_eq!(
+            (id, bundles[0].file_count, bundles[0].byte_length),
+            (&b"rooms"[..], 2, 11)
+        );
+
+        let bundle = open_bundle(&api, "rooms").expect("the bundle opens");
+        let mut receipt = NativeOperationErrorReceipt {
+            diagnostics: ptr::null(),
+            diagnostics_len: 0,
+        };
+        let mut reference = NativeContentReferenceHandle::default();
+        let request = NativeContentBundleReferenceRequest {
+            bundle,
+            path: slice("nested/second.txt"),
+        };
+        assert_eq!(
+            unsafe {
+                (content.open_bundle_reference)(
+                    content.context,
+                    &request,
+                    &mut reference,
+                    &mut receipt,
+                )
+            },
+            ABI_OK,
+            "a bundle file opens by its bundle-relative path"
+        );
+        // Bundle files are not eager content; other files are.
+        let open = |path: &str| {
+            let mut reference = NativeContentReferenceHandle::default();
+            let mut receipt = NativeOperationErrorReceipt {
+                diagnostics: ptr::null(),
+                diagnostics_len: 0,
+            };
+            let request = NativeContentOpenRequest { path: slice(path) };
+            unsafe {
+                (content.open_reference)(content.context, &request, &mut reference, &mut receipt)
+            }
+        };
+        assert_eq!(open("loose.txt"), ABI_OK);
+        assert_ne!(open("rooms/first.txt"), ABI_OK);
+        assert_ne!(open(".rusty-bundles.json"), ABI_OK);
+        assert!(open_bundle(&api, "missing").is_none());
+        unsafe { (api.destroy)(api.context) };
+    }
+
+    #[test]
+    fn a_supplied_bundle_with_a_short_or_missing_file_refuses_to_open() {
+        let short = inventory(&[("first.txt", 6)]);
+        let api = host_with(&[
+            (".rusty-bundles.json", short.as_bytes()),
+            ("rooms/first.txt", b"hello"),
+        ])
+        .unwrap();
+        assert!(open_bundle(&api, "rooms").is_none(), "a length mismatch");
+        unsafe { (api.destroy)(api.context) };
+
+        let missing = inventory(&[("first.txt", 5), ("gone.txt", 3)]);
+        let api = host_with(&[
+            (".rusty-bundles.json", missing.as_bytes()),
+            ("rooms/first.txt", b"hello"),
+        ])
+        .unwrap();
+        assert!(open_bundle(&api, "rooms").is_none(), "a missing file");
+        unsafe { (api.destroy)(api.context) };
+
+        let refused = host_with(&[(".rusty-bundles.json", b"{not json")]).err();
+        assert_eq!(refused, Some(vec!["CSHARP_CONTENT_BUNDLES".to_owned()]));
     }
 
     #[test]

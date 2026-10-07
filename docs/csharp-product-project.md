@@ -282,6 +282,8 @@ order; helpers do not sort them again or list every bundle before an open.
 Directory semantics
 match ProductContent, with **bundle-relative** paths; bundle ordering follows UTF-8 path order.
 Each open has independent ownership; a second open is not a global cached mount.
+A product's tests open the same bundles under `EngineTestHost` when they
+supply the staged inventory with the files ([test](csharp-sdk.md#test)).
 
 Disposing a bundle releases its collection ownership and prevents further
 helper reads. Previously returned managed bytes remain valid. An independently

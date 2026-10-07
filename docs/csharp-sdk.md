@@ -253,8 +253,17 @@ pair's runtime pack (`lib/librusty_engine_test_host.so`, or
 or `Rusty.Engine` records its path at build time, so `rusty install` is the
 only setup. `RustyEngineTestHostLibrary` or `EngineTestHostOptions.LibraryPath`
 names another. A library from a different pair refuses with
-`CSHARP_TEST_HOST_ABI`. Content bundles, input and product lifecycle are not
-part of the test host; drive those through `rusty dev` or the host exercise.
+`CSHARP_TEST_HOST_ABI`. Input and product lifecycle are not part of the test
+host; drive those through `rusty dev` or the host exercise.
+
+Content bundles open as in a loose staged Product when `Content` includes
+the SDK-staged `.rusty-bundles.json` with the files it lists, by their
+content-relative paths (link the staged `content/` tree, for example).
+`new ProductContent(files, engine.Content)` then lists the inventory and opens
+each bundle by bundle-relative paths. A file whose length differs from the
+inventory, or is missing, refuses the open as at run time, and an invalid
+inventory refuses `Create` with `CSHARP_CONTENT_BUNDLES`. Bundle files are not
+among the eager content, as in a running product.
 
 ## Tools
 

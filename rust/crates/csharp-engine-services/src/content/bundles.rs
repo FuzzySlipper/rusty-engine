@@ -11,11 +11,28 @@ pub const INDEX: &str = ".rusty-bundles.json";
 
 #[derive(Debug, Default)]
 pub struct ProductContentBundles {
-    /// Absent only for a Product with no content source (tests).
-    source: Option<ProductSource>,
+    /// Absent only for content with no bundle inventory.
+    source: Option<BundleSource>,
     /// The content root within `source`.
     content_root: String,
     bundles: Vec<BundleDefinition>,
+}
+
+/// Where bundle files are read from: a staged Product, or the content files a
+/// test supplied (`EngineTestHost`), keyed by content-relative path.
+#[derive(Debug)]
+enum BundleSource {
+    Product(ProductSource),
+    Supplied(Arc<BTreeMap<String, Arc<[u8]>>>),
+}
+
+impl BundleSource {
+    fn read(&self, path: &str) -> Option<Arc<[u8]>> {
+        match self {
+            Self::Product(source) => source.read(path).ok().map(|bytes| Arc::from(bytes.as_ref())),
+            Self::Supplied(files) => files.get(path).cloned(),
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -59,8 +76,29 @@ impl ProductContentBundles {
                 }
             }
         };
+        Self::checked(BundleSource::Product(source.clone()), content_root, bundles)
+    }
+
+    /// The inventory among content files a test supplied, as a loose
+    /// Product's content root carries it; none without one. Bundle files are
+    /// read from the same files when a bundle opens.
+    pub fn admit_supplied(files: &BTreeMap<String, Arc<[u8]>>) -> Result<Self, String> {
+        let Some(index) = files.get(INDEX) else {
+            return Ok(Self::default());
+        };
+        let bundles = serde_json::from_slice::<Index>(index)
+            .map_err(|e| format!("invalid ProductContent bundle inventory: {e}"))?
+            .bundles;
+        Self::checked(BundleSource::Supplied(Arc::new(files.clone())), "", bundles)
+    }
+
+    fn checked(
+        source: BundleSource,
+        content_root: &str,
+        bundles: Vec<BundleDefinition>,
+    ) -> Result<Self, String> {
         let mut source = Self {
-            source: Some(source.clone()),
+            source: Some(source),
             content_root: content_root.to_owned(),
             bundles,
         };
@@ -128,7 +166,7 @@ impl ProductContentBundles {
                 &self.content_root,
                 &format!("{}/{}", bundle.root, file.path),
             );
-            let bytes = source.read(&path).ok()?;
+            let bytes = source.read(&path)?;
             // Staging wrote the manifest's SHA-256 from these same bytes, so
             // its identity is trusted rather than recomputed on every open. A
             // body changed after staging gets a new identity on the next
@@ -140,7 +178,7 @@ impl ProductContentBundles {
             hashes.insert(file.path.as_str(), sha256_words(&hex_digest(&file.sha256)?));
             bodies.insert(
                 format!("{}/{}", bundle.root, file.path),
-                Arc::<[u8]>::from(bytes.as_ref()),
+                bytes,
             );
         }
         let identities = bundle

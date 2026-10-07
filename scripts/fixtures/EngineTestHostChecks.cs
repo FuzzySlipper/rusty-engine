@@ -146,6 +146,8 @@ internal static class EngineTestHostChecks
             ExpectRefusal(() => engine.GameplayTime.Advance(0), "CSHARP_GAMEPLAY_TIME_ADVANCE");
             ExpectRefusal(() => engine.GameplayTime.Advance(1, 0), "CSHARP_GAMEPLAY_TIME_RATE");
         });
+
+        Bundles(library);
     }
 
     private const string TintShader = """
@@ -158,6 +160,58 @@ internal static class EngineTestHostChecks
             return vec4<f32>(shaded.rgb * material.parameters[0].rgb, surface.base.a);
         }
         """;
+
+    // Supplied content carrying the SDK's bundle inventory opens its bundles
+    // as a staged Product does, by bundle-relative path; a short or missing
+    // bundle file refuses the open.
+    private static void Bundles(string? library)
+    {
+        static string Inventory(params (string Path, int Length)[] files) =>
+            "{\"bundles\":[{\"id\":\"rooms\",\"root\":\"rooms\",\"files\":["
+            + string.Join(",", Array.ConvertAll(files, file =>
+                $"{{\"path\":\"{file.Path}\",\"byteLength\":{file.Length},\"sha256\":\"{new string('0', 64)}\"}}"))
+            + "]}]}";
+        EngineTestHost Host(string inventory, Dictionary<string, ReadOnlyMemory<byte>> files)
+        {
+            files[".rusty-bundles.json"] = System.Text.Encoding.UTF8.GetBytes(inventory);
+            return EngineTestHost.Create(new EngineTestHostOptions { Content = files, LibraryPath = library });
+        }
+
+        using (EngineTestHost host = Host(Inventory(("first.txt", 5), ("nested/second.txt", 6)), new()
+        {
+            ["rooms/first.txt"] = "hello"u8.ToArray(),
+            ["rooms/nested/second.txt"] = "world!"u8.ToArray(),
+        }))
+        {
+            host.Call(engine =>
+            {
+                ProductContent content = new(ReadOnlyMemory<ProductContentFile>.Empty, engine.Content);
+                ContentBundleInfo[] bundles = content.ListBundles().ToArray();
+                Require(bundles.Length == 1 && bundles[0] == new ContentBundleInfo("rooms", 2, 11), "the inventory's bundle is listed");
+                using ProductContentBundle rooms = content.OpenBundle("rooms");
+                Require(rooms.ReadText("first.txt") == "hello" && rooms.ReadText("nested/second.txt") == "world!",
+                    "bundle files read by bundle-relative path");
+            });
+        }
+        foreach ((string inventory, string why) in new[]
+        {
+            (Inventory(("first.txt", 6)), "a length mismatch"),
+            (Inventory(("first.txt", 5), ("gone.txt", 3)), "a missing file"),
+        })
+        {
+            using EngineTestHost host = Host(inventory, new() { ["rooms/first.txt"] = "hello"u8.ToArray() });
+            host.Call(engine =>
+            {
+                ProductContent content = new(ReadOnlyMemory<ProductContentFile>.Empty, engine.Content);
+                try
+                {
+                    content.OpenBundle("rooms").Dispose();
+                    throw new InvalidOperationException($"a bundle with {why} opened");
+                }
+                catch (System.IO.IOException) { }
+            });
+        }
+    }
 
     private static void ExpectRefusal(Action operation, string code)
     {
