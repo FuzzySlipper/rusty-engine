@@ -590,8 +590,38 @@ mod tests {
         found
     }
 
+    /// `module` written through naga's HLSL backend, as wgpu's DX12 backend
+    /// writes it before FXC compiles it.
+    fn write_hlsl(module: &naga::Module) -> Result<(), String> {
+        let info = naga::valid::Validator::new(
+            naga::valid::ValidationFlags::all(),
+            naga::valid::Capabilities::all(),
+        )
+        .validate(module)
+        .map_err(|error| format!("{error:?}"))?;
+        // Overridable constants take their defaults, as a pipeline that
+        // sets none of them gets.
+        let (module, info) = naga::back::pipeline_constants::process_overrides(
+            module,
+            &info,
+            None,
+            &Default::default(),
+        )
+        .map_err(|error| error.to_string())?;
+        let mut hlsl = String::new();
+        naga::back::hlsl::Writer::new(
+            &mut hlsl,
+            &naga::back::hlsl::Options::default(),
+            &naga::back::hlsl::PipelineOptions::default(),
+        )
+        .write(&module, &info, None)
+        .map(|_| ())
+        .map_err(|error| error.to_string())
+    }
+
     /// Every entry composes and validates under every feature set it can be
-    /// compiled with, without a device, and holds no type FXC rejects.
+    /// compiled with, without a device, writes as HLSL (the DX12 path), and
+    /// holds no type FXC rejects.
     #[test]
     fn every_entry_composes_under_every_feature_set() {
         let compose = |shaders: &mut Shaders, entry: Entry, features: Features| {
@@ -609,6 +639,8 @@ mod tests {
                         wrapped.is_empty(),
                         "{entry:?} {features:?}: FXC cannot compile {wrapped:?}"
                     );
+                    write_hlsl(&module)
+                        .unwrap_or_else(|error| panic!("{entry:?} {features:?}: HLSL: {error}"));
                 }
                 Err(error) => panic!(
                     "{entry:?} {features:?}: {}",

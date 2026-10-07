@@ -13,3 +13,7 @@ workspace = true
 naga_oil = { version = "0.23", default-features = false }
 # The composed module type (naga_oil's, which wgpu takes as is).
 naga = { version = "30", default-features = false }
+
+[dev-dependencies]
+# Tests write every composed shader through the HLSL backend DX12 uses.
+naga = { version = "30", default-features = false, features = ["hlsl-out"] }
