@@ -486,6 +486,7 @@ impl Renderer {
                         strength,
                     ))
                 }),
+                occlusion_roughness_metalness: false,
             };
             let descriptor = RenderMaterialDescriptor {
                 texture_transform: None,

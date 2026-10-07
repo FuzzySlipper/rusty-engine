@@ -56,11 +56,15 @@ impl Features {
     /// Sample the base texture and normal map as blended, randomly offset
     /// and rotated hexagonal tiles (`rusty::surface::hex_tiles`).
     pub const STOCHASTIC_TILING: Self = Self::bit(1024);
+    /// The occlusion map is packed occlusion, roughness, metalness (R, G,
+    /// B): its green and blue multiply the material's roughness and
+    /// metalness. Replaces OCCLUSION_MAP for that material.
+    pub const ORM_MAP: Self = Self::bit(2048);
     /// Every standard feature's bit.
     #[cfg(test)]
-    const ALL_BITS: u16 = 2047;
+    const ALL_BITS: u16 = 4095;
 
-    const DEFS: [(Self, &'static str); 11] = [
+    const DEFS: [(Self, &'static str); 12] = [
         (Self::UNLIT, "UNLIT"),
         (Self::MASK, "MASK"),
         (Self::VOXEL_SURFACE, "VOXEL_SURFACE"),
@@ -72,6 +76,7 @@ impl Features {
         (Self::TERRAIN_LAYERS, "TERRAIN_LAYERS"),
         (Self::LAYER_WEIGHTS, "LAYER_WEIGHTS"),
         (Self::STOCHASTIC_TILING, "STOCHASTIC_TILING"),
+        (Self::ORM_MAP, "ORM_MAP"),
     ];
 
     const fn bit(bits: u16) -> Self {

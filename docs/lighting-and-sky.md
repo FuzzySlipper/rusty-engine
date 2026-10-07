@@ -298,7 +298,8 @@ material compiles only the features its contents use:
 | Voxel surface | it carries a voxel surface mapping |
 | Normal map | it is a GLB material with a normal texture, or `MaterialRequest.NormalMap` names one |
 | Emissive map | it is a GLB material with an emissive texture, or `MaterialRequest.EmissionMap` names one (sRGB; it multiplies `EmissionColor` × `EmissionIntensity`) |
-| Occlusion map | it is a GLB material with an occlusion texture, or `MaterialRequest.OcclusionMap` names one (opened with `TextureColorSpace.Linear`; its red channel scales the ambient, hemisphere and sky light the surface takes) |
+| Occlusion map | it is a GLB material with an occlusion texture, or `MaterialRequest.OcclusionMap` names one (opened with `TextureColorSpace.Linear`; its red channel scales the ambient, hemisphere and sky light the surface takes, by `OcclusionStrength`: 1, or 0, applies it fully) |
+| ORM map | `MaterialRequest.OrmMap` names a packed occlusion, roughness, metalness texture (glTF's R, G, B; opened with `TextureColorSpace.Linear`; a material takes it or `OcclusionMap`, not both). Red is occlusion as above; green multiplies `Roughness` and blue `Metalness` per texel, so one texture mixes matte and glossy or metal and dielectric regions. It reads as the base texture does: the mesh uv or the triplanar planes, with the same repeats, offset and stochastic tiling |
 | Triplanar | its `TriplanarSharpness` is nonzero ([three planes](smooth-voxel-surfaces.md#textures-on-reconstructed-surfaces)) |
 | Stochastic tiling | its `StochasticTiling` is nonzero (three blended hex tiles per sample) |
 

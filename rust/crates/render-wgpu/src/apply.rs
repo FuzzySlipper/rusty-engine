@@ -1121,6 +1121,7 @@ impl Renderer {
                     .occlusion
                     .clone()
                     .filter(|(map, _)| retained(map)),
+                occlusion_roughness_metalness: params.maps.occlusion_roughness_metalness,
             },
             voxel_surface: params.voxel_surface,
             product_textures: params.product_textures.clone(),
@@ -1452,6 +1453,9 @@ pub(crate) struct MaterialMaps {
     pub normal: Option<(MapSlot, f32)>,
     /// With the occlusion strength.
     pub occlusion: Option<(MapSlot, f32)>,
+    /// The occlusion map is packed occlusion, roughness, metalness: its
+    /// green and blue multiply the roughness and metalness (`ORM_MAP`).
+    pub occlusion_roughness_metalness: bool,
 }
 
 /// A map's retained texture (linear for normal and occlusion data) and uv
@@ -1531,9 +1535,13 @@ impl MaterialParams {
                             transform: transform.unwrap_or(UvTransform::IDENTITY),
                             tex_coord: 0,
                         },
-                        1.0,
+                        map.strength,
                     )
                 }),
+                occlusion_roughness_metalness: descriptor
+                    .occlusion_map
+                    .as_ref()
+                    .is_some_and(|map| map.roughness_metalness),
                 base: transform,
                 ..MaterialMaps::default()
             },
@@ -1565,7 +1573,14 @@ impl MaterialParams {
             self.maps.normal.is_some() || layer_normals,
         )
         .with(Features::EMISSIVE_MAP, self.maps.emissive.is_some())
-        .with(Features::OCCLUSION_MAP, self.maps.occlusion.is_some())
+        .with(
+            Features::OCCLUSION_MAP,
+            self.maps.occlusion.is_some() && !self.maps.occlusion_roughness_metalness,
+        )
+        .with(
+            Features::ORM_MAP,
+            self.maps.occlusion.is_some() && self.maps.occlusion_roughness_metalness,
+        )
         .with(Features::TERRAIN_LAYERS, layers.is_some())
     }
 }

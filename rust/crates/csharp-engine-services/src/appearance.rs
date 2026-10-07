@@ -9454,6 +9454,17 @@ fn material_descriptor(
         "a material's emission map must be an admitted texture resource",
     )?
     .map(|texture| render_model::MaterialEmissionMapDescriptor { texture });
+    if request.occlusion_map.value != 0 && request.orm_map.value != 0 {
+        return Err(CsharpEngineServicesError::new(
+            "CSHARP_MATERIAL_OCCLUSION_MAP",
+            "a material takes an occlusion map or an ORM map, not both",
+        ));
+    }
+    let occlusion_strength = if request.occlusion_strength == 0.0 {
+        1.0
+    } else {
+        request.occlusion_strength
+    };
     let occlusion_map = map_texture(
         resources,
         request.occlusion_map,
@@ -9461,7 +9472,24 @@ fn material_descriptor(
         "CSHARP_MATERIAL_OCCLUSION_MAP",
         "a material's occlusion map must be a texture opened with TextureColorSpace.Linear",
     )?
-    .map(|texture| render_model::MaterialOcclusionMapDescriptor { texture });
+    .map(|texture| render_model::MaterialOcclusionMapDescriptor {
+        texture,
+        strength: occlusion_strength,
+        roughness_metalness: false,
+    })
+    .or(map_texture(
+        resources,
+        request.orm_map,
+        true,
+        "CSHARP_MATERIAL_ORM_MAP",
+        "a material's ORM map must be a texture opened with TextureColorSpace.Linear",
+    )?
+    .map(|texture| {
+        render_model::MaterialOcclusionMapDescriptor::occlusion_roughness_metalness(
+            texture,
+            occlusion_strength,
+        )
+    }));
     let descriptor = RenderMaterialDescriptor {
         texture_transform: texture_transform_descriptor(
             request.texture_scale,
@@ -10364,6 +10392,8 @@ pub(super) mod tests {
                 occlusion_map: NativeRenderResourceReference {
                     value: occlusion_map.value,
                 },
+                orm_map: Default::default(),
+                occlusion_strength: 0.0,
             };
         let none = NativeRenderResourceHandle::default();
         let plain = material_descriptor(
@@ -10417,6 +10447,41 @@ pub(super) mod tests {
         )
         .unwrap_err();
         assert_eq!(refused.code(), "CSHARP_MATERIAL_EMISSION_MAP");
+
+        // A packed occlusion, roughness, metalness map takes the occlusion
+        // slot with the strength; 0 means full strength; it excludes a plain
+        // occlusion map and must be data too.
+        let orm =
+            |occlusion_map: NativeRenderResourceHandle, strength: f32| NativeMaterialRequest {
+                orm_map: NativeRenderResourceReference {
+                    value: data.handle.value,
+                },
+                occlusion_strength: strength,
+                ..request(false, none, occlusion_map)
+            };
+        let packed =
+            material_descriptor("material/orm".to_owned(), orm(none, 0.5), resources).unwrap();
+        let map = packed.occlusion_map.as_ref().expect("orm map");
+        assert!(map.roughness_metalness && map.strength == 0.5 && map.texture.ends_with("-linear"));
+        let full =
+            material_descriptor("material/orm-full".to_owned(), orm(none, 0.0), resources).unwrap();
+        assert_eq!(full.occlusion_map.as_ref().unwrap().strength, 1.0);
+        let refused =
+            material_descriptor("material/both".to_owned(), orm(data.handle, 1.0), resources)
+                .unwrap_err();
+        assert_eq!(refused.code(), "CSHARP_MATERIAL_OCCLUSION_MAP");
+        let refused = material_descriptor(
+            "material/orm-colour".to_owned(),
+            NativeMaterialRequest {
+                orm_map: NativeRenderResourceReference {
+                    value: colour.handle.value,
+                },
+                ..request(false, none, none)
+            },
+            resources,
+        )
+        .unwrap_err();
+        assert_eq!(refused.code(), "CSHARP_MATERIAL_ORM_MAP");
     }
 
     #[test]
@@ -10476,6 +10541,8 @@ pub(super) mod tests {
                 unlit: false,
                 emission_map: NativeRenderResourceReference::default(),
                 occlusion_map: NativeRenderResourceReference::default(),
+                orm_map: Default::default(),
+                occlusion_strength: 0.0,
             })
             .unwrap();
         let bindings = [NativeMeshMaterialBinding {
@@ -10687,6 +10754,8 @@ pub(super) mod tests {
                 normal_scale: 1.0,
                 emission_map: Default::default(),
                 occlusion_map: Default::default(),
+                orm_map: Default::default(),
+                occlusion_strength: 0.0,
                 unlit: false,
             })
             .unwrap();
@@ -10892,6 +10961,8 @@ pub(super) mod tests {
                 normal_scale: 1.0,
                 emission_map: Default::default(),
                 occlusion_map: Default::default(),
+                orm_map: Default::default(),
+                occlusion_strength: 0.0,
                 unlit: false,
             })
             .unwrap();
@@ -11432,6 +11503,8 @@ pub(super) mod tests {
             normal_scale: 1.0,
             emission_map: Default::default(),
             occlusion_map: Default::default(),
+            orm_map: Default::default(),
+            occlusion_strength: 0.0,
             unlit: false,
         };
         let original = bridge.create_material(request).expect("material");
@@ -11488,6 +11561,8 @@ pub(super) mod tests {
             normal_scale: 1.0,
             emission_map: Default::default(),
             occlusion_map: Default::default(),
+            orm_map: Default::default(),
+            occlusion_strength: 0.0,
             unlit: false,
         };
         let resources = RenderResourceRegistry::default();
@@ -11536,6 +11611,8 @@ pub(super) mod tests {
             normal_scale: 1.0,
             emission_map: Default::default(),
             occlusion_map: Default::default(),
+            orm_map: Default::default(),
+            occlusion_strength: 0.0,
             unlit: false,
         };
         let resources = RenderResourceRegistry::default();
@@ -11699,6 +11776,8 @@ pub(super) mod tests {
             normal_scale: 0.5,
             emission_map: Default::default(),
             occlusion_map: Default::default(),
+            orm_map: Default::default(),
+            occlusion_strength: 0.0,
             unlit: false,
         };
         let refused =
@@ -11789,6 +11868,8 @@ fn shade(surface: Surface) -> vec4<f32> {
                 },
                 emission_map: Default::default(),
                 occlusion_map: Default::default(),
+                orm_map: Default::default(),
+                occlusion_strength: 0.0,
                 unlit: false,
             })
             .unwrap();
@@ -11902,6 +11983,8 @@ fn shade(surface: Surface) -> vec4<f32> {
             },
             emission_map: Default::default(),
             occlusion_map: Default::default(),
+            orm_map: Default::default(),
+            occlusion_strength: 0.0,
             unlit: false,
         };
         assert_eq!(
@@ -12026,6 +12109,8 @@ fn shade(surface: Surface) -> vec4<f32> {
                     alpha_cutoff: 0.5,
                     emission_map: Default::default(),
                     occlusion_map: Default::default(),
+                    orm_map: Default::default(),
+                    occlusion_strength: 0.0,
                     unlit: false,
                 })
                 .unwrap();
@@ -12252,6 +12337,8 @@ fn shade(surface: Surface) -> vec4<f32> {
                 alpha_cutoff: 0.5,
                 emission_map: Default::default(),
                 occlusion_map: Default::default(),
+                orm_map: Default::default(),
+                occlusion_strength: 0.0,
                 unlit: false,
             })
             .unwrap();
@@ -13007,6 +13094,8 @@ fn shade(surface: Surface) -> vec4<f32> {
                 alpha_cutoff: 0.5,
                 emission_map: Default::default(),
                 occlusion_map: Default::default(),
+                orm_map: Default::default(),
+                occlusion_strength: 0.0,
                 unlit: false,
             })
             .expect("material");

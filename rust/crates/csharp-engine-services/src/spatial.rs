@@ -6429,6 +6429,8 @@ mod tests {
                         alpha_cutoff: 0.5,
                         emission_map: Default::default(),
                         occlusion_map: Default::default(),
+                        orm_map: Default::default(),
+                        occlusion_strength: 0.0,
                         unlit: false,
                     },
                     &mut material,

@@ -2801,6 +2801,118 @@ fn material_centre(material: RenderMaterialDescriptor, textures: &[(&str, [u8; 4
     pixel_at(&frame, WIDTH / 2, HEIGHT / 2)
 }
 
+/// `material_centre` under a directional light that the slab's top face
+/// mirrors into the camera, instead of the dim ambient alone.
+fn lit_material_centre(
+    material: RenderMaterialDescriptor,
+    textures: &[(&str, [u8; 4])],
+) -> [u8; 4] {
+    let mut harness = Harness::new(RendererOptions {
+        default_world_lights: false,
+        ..RendererOptions::default()
+    });
+    let mut ops: Vec<RenderDiff> = textures
+        .iter()
+        .map(|(id, rgba)| RenderDiff::DefineTexture {
+            texture: harness
+                .resources
+                .texture(id, 2, 2, &rgba.repeat(4), TextureWrap::Repeat),
+        })
+        .collect();
+    ops.extend([
+        RenderDiff::DefineMaterial { material },
+        static_mesh(
+            "mesh/slab",
+            box_mesh([-2.0, -0.5, -2.0], [2.0, 0.5, 2.0], |_| 0),
+            "material/slab",
+        ),
+        instance(1, None, "mesh/slab", Transform::IDENTITY),
+        RenderDiff::CreateLight {
+            handle: RenderHandle::new(10),
+            parent: None,
+            light: LightDescriptor::Ambient {
+                color: [1.0; 3],
+                intensity: 0.1,
+                enabled: true,
+                range: None,
+                shadow_intent: LightShadowIntent::Disabled,
+                shadow: Default::default(),
+            },
+        },
+        RenderDiff::CreateLight {
+            handle: RenderHandle::new(11),
+            parent: None,
+            light: LightDescriptor::Directional {
+                color: [1.0; 3],
+                intensity: 3.0,
+                enabled: true,
+                // The camera at (0, 3, 4) mirrored about the top face's normal.
+                direction: [0.0, -3.0, 4.0],
+                range: None,
+                shadow_intent: LightShadowIntent::Disabled,
+                shadow: Default::default(),
+            },
+        },
+    ]);
+    harness.apply(ops);
+    let frame = harness.render(&camera([0.0, 3.0, 4.0], 0.0, -36.0)).1;
+    pixel_at(&frame, WIDTH / 2, HEIGHT / 2)
+}
+
+#[test]
+fn an_orm_map_sets_roughness_and_metalness_per_texel_and_a_white_one_changes_nothing() {
+    // A rough grey dielectric whose roughness and metalness the map may lower.
+    let mut plain = material("material/slab", [0.6, 0.6, 0.6, 1.0], None);
+    plain.roughness = 1.0;
+    plain.metalness = 1.0;
+    let orm = |texture: &str, strength: f32| {
+        let mut material = plain.clone();
+        material.occlusion_map =
+            Some(MaterialOcclusionMapDescriptor::occlusion_roughness_metalness(texture, strength));
+        material
+    };
+    // A white map leaves every channel at the material's own values.
+    let reference = lit_material_centre(plain.clone(), &[]);
+    let white = lit_material_centre(orm("texture/white", 1.0), &[("texture/white", [255; 4])]);
+    assert_eq!(white, reference, "a white ORM map changes nothing");
+
+    // Green 0.05 makes the metal glossy: the mirrored light shows at the
+    // centre; green 1 keeps it matte. Blue 0 makes a dielectric of it, which
+    // the directional light lights diffusely instead.
+    let glossy = lit_material_centre(
+        orm("texture/glossy", 1.0),
+        &[("texture/glossy", [255, 13, 255, 255])],
+    );
+    let matte = lit_material_centre(
+        orm("texture/matte", 1.0),
+        &[("texture/matte", [255, 255, 255, 255])],
+    );
+    assert!(
+        glossy[1] > matte[1] + 60,
+        "the map's green lowers the roughness into a highlight: glossy {glossy:?} against matte {matte:?}"
+    );
+    let dielectric = lit_material_centre(
+        orm("texture/dielectric", 1.0),
+        &[("texture/dielectric", [255, 255, 0, 255])],
+    );
+    assert_ne!(dielectric, matte, "the map's blue sets the metalness");
+
+    // Red is the occlusion, scaled by the strength.
+    let dim = material_centre(plain.clone(), &[]);
+    let occluded = material_centre(
+        orm("texture/dark", 1.0),
+        &[("texture/dark", [0, 255, 255, 255])],
+    );
+    let half = material_centre(
+        orm("texture/dark", 0.5),
+        &[("texture/dark", [0, 255, 255, 255])],
+    );
+    assert!(
+        occluded[1] < half[1] && half[1] < dim[1],
+        "the map's red darkens the ambient by the strength: {occluded:?} < {half:?} < {dim:?}"
+    );
+}
+
 #[test]
 fn material_request_features_draw_unlit_colour_mask_emission_by_the_map_and_darken_by_occlusion() {
     let plain = material("material/slab", [0.2, 0.8, 0.2, 1.0], None);
@@ -2828,9 +2940,7 @@ fn material_request_features_draw_unlit_colour_mask_emission_by_the_map_and_dark
     );
 
     let mut occluded = plain;
-    occluded.occlusion_map = Some(MaterialOcclusionMapDescriptor {
-        texture: "texture/grey".to_owned(),
-    });
+    occluded.occlusion_map = Some(MaterialOcclusionMapDescriptor::occlusion("texture/grey"));
     let shaded = material_centre(occluded, &[("texture/grey", [64, 64, 64, 255])]);
     assert!(
         shaded[1] < dim[1] * 3 / 4,

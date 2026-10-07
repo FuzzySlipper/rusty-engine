@@ -558,10 +558,47 @@ pub struct MaterialEmissionMapDescriptor {
 /// A material's occlusion map (a GLB's occlusion texture at full strength):
 /// its red channel scales the ambient, hemisphere and sky light the surface
 /// takes. It holds data, so it is retained with a linear colour space.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct MaterialOcclusionMapDescriptor {
     pub texture: String,
+    /// How far the map's occlusion darkens the ambient, hemisphere and sky
+    /// light: 1 (the default) applies it fully, 0 not at all.
+    #[serde(default = "one", skip_serializing_if = "is_one")]
+    pub strength: f32,
+    /// The map is packed occlusion, roughness and metalness (glTF's R, G,
+    /// B, linear): its green multiplies the material's roughness and its
+    /// blue the metalness. False reads the red channel alone.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub roughness_metalness: bool,
+}
+
+impl MaterialOcclusionMapDescriptor {
+    /// A map whose red channel is occlusion, applied fully.
+    pub fn occlusion(texture: impl Into<String>) -> Self {
+        Self {
+            texture: texture.into(),
+            strength: 1.0,
+            roughness_metalness: false,
+        }
+    }
+
+    /// A packed occlusion, roughness, metalness map.
+    pub fn occlusion_roughness_metalness(texture: impl Into<String>, strength: f32) -> Self {
+        Self {
+            texture: texture.into(),
+            strength,
+            roughness_metalness: true,
+        }
+    }
+}
+
+fn one() -> f32 {
+    1.0
+}
+
+fn is_one(value: &f32) -> bool {
+    *value == 1.0
 }
 
 fn is_false(value: &bool) -> bool {
@@ -615,6 +652,13 @@ impl RenderMaterialDescriptor {
         }
         if !self.metalness.is_finite() || !(0.0..=1.0).contains(&self.metalness) {
             return Err(MaterialDescriptorError::InvalidMetalness);
+        }
+        if self
+            .occlusion_map
+            .as_ref()
+            .is_some_and(|map| !map.strength.is_finite() || !(0.0..=1.0).contains(&map.strength))
+        {
+            return Err(MaterialDescriptorError::InvalidOcclusionStrength);
         }
         if self
             .triplanar
@@ -706,6 +750,8 @@ pub enum MaterialDescriptorError {
     InvalidColor,
     InvalidRoughness,
     InvalidMetalness,
+    /// An occlusion map's strength must be finite and within 0 to 1.
+    InvalidOcclusionStrength,
     InvalidNormalMap,
     InvalidTriplanar,
     InvalidTextureTransform,

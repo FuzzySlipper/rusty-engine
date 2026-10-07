@@ -213,6 +213,14 @@ fn hex_texture(map: texture_2d<f32>, map_sampler: sampler, tiles: HexTiles, cont
     return sample;
 }
 
+// A data map (occlusion, roughness, metalness) read through the same patches
+// and shares as a colour.
+fn hex_data(map: texture_2d<f32>, map_sampler: sampler, tiles: HexTiles, shares: vec3<f32>) -> vec3<f32> {
+    return hex_patch(map, map_sampler, tiles, 0u).rgb * shares.x
+        + hex_patch(map, map_sampler, tiles, 1u).rgb * shares.y
+        + hex_patch(map, map_sampler, tiles, 2u).rgb * shares.z;
+}
+
 // A tangent-space normal map read through the same patches and shares as a
 // colour, as a map sample (0 to 1): each patch's tilt turned back from its
 // rotation into the uv's frame (y up the image mirrors v, so the turn is the

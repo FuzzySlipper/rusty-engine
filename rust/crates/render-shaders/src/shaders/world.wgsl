@@ -41,7 +41,7 @@
     HexTiles,
     hex_tiles,
     hex_texture,
-    hex_normal,
+    hex_normal, hex_data,
 }
 #import rusty::types::Surface
 #import rusty::shade::standard_shade
@@ -143,6 +143,19 @@ fn normal_texture(uv: vec2<f32>) -> vec3<f32> {
 #else
     return textureSample(normal_map, normal_sampler,
         transform_uv(material.normal_uv_u, material.normal_uv_v, uv)).rgb;
+#endif
+}
+
+// The occlusion, roughness, metalness map at a surface uv, as `base_texture`
+// samples (ORM_MAP).
+fn orm_texture(uv: vec2<f32>) -> vec3<f32> {
+#ifdef VOXEL_SURFACE
+    return textureSampleLevel(occlusion_map, occlusion_sampler,
+        transform_uv(material.occlusion_uv_u, material.occlusion_uv_v, voxel_uv(uv, material.tile, material.sample_rect)),
+        voxel_lod(uv, material.tile, material.sample_rect, vec2<f32>(textureDimensions(occlusion_map, 0)))).rgb;
+#else
+    return textureSample(occlusion_map, occlusion_sampler,
+        transform_uv(material.occlusion_uv_u, material.occlusion_uv_v, uv)).rgb;
 #endif
 }
 
@@ -269,6 +282,35 @@ fn standard_surface(in: VsOut, front: bool) -> Surface {
         transform_uv(material.occlusion_uv_u, material.occlusion_uv_v, slot_uv(in, material.tex_coords.w))).r;
     surface.occlusion = 1.0 + material.factors.x * (occlusion_sample - 1.0);
 #endif
+#ifdef ORM_MAP
+    // Packed occlusion, roughness, metalness, read as the base texture is.
+#ifdef TRIPLANAR
+#ifdef STOCHASTIC_TILING
+    let orm = hex_data(occlusion_map, occlusion_sampler, tiled[0].tiles, tiled[0].base.shares) * weights.x
+        + hex_data(occlusion_map, occlusion_sampler, tiled[1].tiles, tiled[1].base.shares) * weights.y
+        + hex_data(occlusion_map, occlusion_sampler, tiled[2].tiles, tiled[2].base.shares) * weights.z;
+#else
+    let orm = orm_texture(planes[0]) * weights.x + orm_texture(planes[1]) * weights.y
+        + orm_texture(planes[2]) * weights.z;
+#endif
+#else
+#ifdef VOXEL_SURFACE
+    let orm = orm_texture(in.uv);
+#else
+#ifdef STOCHASTIC_TILING
+    let orm = hex_data(occlusion_map, occlusion_sampler, tiled.tiles, tiled.base.shares);
+#else
+    let orm = orm_texture(slot_uv(in, material.tex_coords.w));
+#endif
+#endif
+#endif
+    surface.occlusion = 1.0 + material.factors.x * (orm.r - 1.0);
+    let map_roughness = orm.g;
+    let map_metalness = orm.b;
+#else
+    let map_roughness = 1.0;
+    let map_metalness = 1.0;
+#endif
 #ifdef NORMAL_MAP
 #ifdef TRIPLANAR
     // Blended in texture space, then into the world by the normal matrix.
@@ -331,8 +373,8 @@ fn standard_surface(in: VsOut, front: bool) -> Surface {
     surface.normal = normal;
     let normal_change = max(abs(dpdx(facing)), abs(dpdy(facing)));
     let geometry_roughness = max(max(normal_change.x, normal_change.y), normal_change.z);
-    surface.roughness = min(max(material.roughness, 0.0525) + geometry_roughness, 1.0);
-    surface.metalness = material.metalness;
+    surface.roughness = min(max(material.roughness * map_roughness, 0.0525) + geometry_roughness, 1.0);
+    surface.metalness = material.metalness * map_metalness;
 #endif
     return surface;
 }

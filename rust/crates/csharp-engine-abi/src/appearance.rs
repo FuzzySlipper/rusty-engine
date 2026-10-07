@@ -640,6 +640,17 @@ pub struct NativeMaterialRequest {
     /// light the surface takes (baked occlusion), opened with a linear
     /// colour space and read through the base texture's uv; 0 for none.
     pub occlusion_map: NativeRenderResourceReference,
+    /// A packed occlusion, roughness, metalness texture (glTF's channels: R
+    /// occlusion, G roughness, B metalness), opened with a linear colour
+    /// space and read as the base texture is (mesh uv or triplanar, the same
+    /// repeats and tiling). Its green multiplies `roughness` and its blue
+    /// `metalness`; its red scales the ambient, hemisphere and sky light by
+    /// `occlusion_strength`. 0 for none; a material takes this or
+    /// `occlusion_map`, not both.
+    pub orm_map: NativeRenderResourceReference,
+    /// How far the occlusion of `occlusion_map` or `orm_map` darkens: 1
+    /// applies it fully, 0.5 half way. 0 (the default) means 1.
+    pub occlusion_strength: f32,
 }
 
 /// A product shader resource (`.wgsl`, `NativeRenderResourceKind::Shader`),
