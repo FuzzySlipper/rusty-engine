@@ -29,7 +29,10 @@ enum BundleSource {
 impl BundleSource {
     fn read(&self, path: &str) -> Option<Arc<[u8]>> {
         match self {
-            Self::Product(source) => source.read(path).ok().map(|bytes| Arc::from(bytes.as_ref())),
+            Self::Product(source) => source
+                .read(path)
+                .ok()
+                .map(|bytes| Arc::from(bytes.as_ref())),
             Self::Supplied(files) => files.get(path).cloned(),
         }
     }
@@ -176,10 +179,7 @@ impl ProductContentBundles {
                 return None;
             }
             hashes.insert(file.path.as_str(), sha256_words(&hex_digest(&file.sha256)?));
-            bodies.insert(
-                format!("{}/{}", bundle.root, file.path),
-                bytes,
-            );
+            bodies.insert(format!("{}/{}", bundle.root, file.path), bytes);
         }
         let identities = bundle
             .files
