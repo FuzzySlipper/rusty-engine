@@ -6271,6 +6271,7 @@ mod tests {
                         orm_map: Default::default(),
                         occlusion_strength: 0.0,
                         unlit: false,
+                        flat_shading: false,
                     },
                     &mut material,
                     std::ptr::null_mut(),

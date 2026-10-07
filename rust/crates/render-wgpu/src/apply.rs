@@ -1383,6 +1383,7 @@ pub(crate) struct MaterialParams {
     /// Alpha-masked below this cutoff.
     pub alpha_cutoff: Option<f32>,
     pub unlit: bool,
+    pub flat_shading: bool,
     pub metalness: f32,
     pub voxel_surface: Option<VoxelSurfaceUniform>,
     /// Triplanar blend sharpness.
@@ -1496,6 +1497,7 @@ impl MaterialParams {
             roughness: descriptor.roughness,
             alpha_cutoff: cutoff,
             unlit: descriptor.unlit,
+            flat_shading: descriptor.flat_shading,
             metalness: descriptor.metalness,
             voxel_surface,
             triplanar: descriptor.triplanar.map(|triplanar| triplanar.sharpness),
@@ -1570,8 +1572,9 @@ impl MaterialParams {
             layers.is_some_and(|layers| layers.layers.iter().any(|layer| layer.normal.is_some()));
         base.with(
             Features::NORMAL_MAP,
-            self.maps.normal.is_some() || layer_normals,
+            !self.flat_shading && (self.maps.normal.is_some() || layer_normals),
         )
+        .with(Features::FLAT_SHADING, self.flat_shading)
         .with(Features::EMISSIVE_MAP, self.maps.emissive.is_some())
         .with(
             Features::OCCLUSION_MAP,
@@ -1804,6 +1807,7 @@ pub(crate) fn builtin_materials(
                 roughness: 1.0,
                 alpha_cutoff: None,
                 unlit: true,
+                flat_shading: false,
                 metalness: 0.0,
                 voxel_surface: None,
                 triplanar: None,
@@ -1831,6 +1835,7 @@ pub(crate) fn builtin_materials(
                 roughness: FALLBACK_ROUGHNESS,
                 alpha_cutoff: None,
                 unlit: false,
+                flat_shading: false,
                 metalness: 0.0,
                 voxel_surface: None,
                 triplanar: None,

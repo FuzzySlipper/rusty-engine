@@ -278,6 +278,7 @@ fn material(id: &str, color: [f32; 4], texture: Option<&str>) -> RenderMaterialD
         emission_map: Default::default(),
         occlusion_map: Default::default(),
         unlit: false,
+        flat_shading: false,
     }
 }
 

@@ -50,6 +50,14 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     private readonly Light torch, sun, hemisphere, skyAmbient;
     private readonly RenderResource day, night;
     private RenderResource? flameSprite, emberSprite, smokeSprite;
+    // Flat shading (#9543): a smooth low-poly sphere and the low-poly tree, each twice: authored normals on the left, the flat-shading feature on the right, by the torch.
+    private const ulong SphereSmoothId = 20, SphereFlatId = 21, TreeSmoothId = 22, TreeFlatId = 23;
+    private static readonly Color FacetColor = new(.75f,.7f,.6f,1), TreeColor = new(.4f,.6f,.3f,1);
+    private static readonly Vector3 FacetsEye = new(3.5f,2.4f,6.8f), FacetsTarget = new(3.5f,1.5f,3.2f);
+    private Material? facetSmooth, facetFlat, treeFlat;
+    private MeshResource? sphereSmooth, sphereFlat;
+    private RenderResource? treeMesh;
+    private Appearance? sphereSmoothLook, sphereFlatLook, treeSmoothLook, treeFlatLook;
     private PresentationEmitter? flame, embers, smoke;
     private PresentationParticleDescriptor flameFire, emberFire, smokeFire;
     private VoxelScenePresentation? presentation;
@@ -141,6 +149,66 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         }
         else if (!burning) { flame?.Dispose(); embers?.Dispose(); smoke?.Dispose(); flame = embers = smoke = null; }
         return Inspect();
+    }
+    // Show (or clear) the flat-shading pair: a 6x12 smooth sphere and the tree with their authored normals on the left, and the same meshes under a flat-shaded material on the right.
+    [DebugCommand("lighting.facets")]
+    public string Facets(bool shown)
+    {
+        if (shown && sphereSmoothLook is null)
+        {
+            Color white = new(1,1,1,1);
+            facetSmooth = engine.Graphics.CreateMaterial(new(FacetColor,default(RenderResourceReference),.9f,white,Vector3.Zero,0,false));
+            facetFlat = engine.Graphics.CreateMaterial(new MaterialRequest(FacetColor,default(RenderResourceReference),.9f,white,Vector3.Zero,0,false) with { FlatShading = true });
+            treeFlat = engine.Graphics.CreateMaterial(new MaterialRequest(TreeColor,default(RenderResourceReference),.9f,white,Vector3.Zero,0,false) with { FlatShading = true });
+            sphereSmooth = engine.Graphics.CreateMeshResource(Sphere(facetSmooth));
+            sphereFlat = engine.Graphics.CreateMeshResource(Sphere(facetFlat));
+            sphereSmoothLook = engine.Graphics.CreateMeshAppearance(sphereSmooth);
+            sphereFlatLook = engine.Graphics.CreateMeshAppearance(sphereFlat);
+            using (ContentReference tree = engine.Content.OpenReference(new("tree.glb"))) treeMesh = engine.Animation.OpenAnimatedMeshFromContent(new(tree));
+            treeSmoothLook = engine.Animation.CreateAnimatedMeshAppearance(new(treeMesh));
+            treeFlatLook = engine.Animation.CreateAnimatedMeshAppearance(new(treeMesh));
+            // The GLB's one material slot, rebound to the flat material: the override a product makes for an imported prop.
+            engine.Animation.UpdateAnimatedMeshMaterials(new(treeFlatLook,new MeshMaterialBinding[]{new(0,treeFlat)}));
+            engine.Graphics.PublishSnapshot(new AppearanceFact[]
+            {
+                Fact(SphereSmoothId,sphereSmoothLook,new(2.3f,1.7f,3.6f),.6f),
+                Fact(SphereFlatId,sphereFlatLook,new(4.7f,1.7f,3.6f),.6f),
+                Fact(TreeSmoothId,treeSmoothLook,new(1.2f,0,2.2f),1.6f),
+                Fact(TreeFlatId,treeFlatLook,new(5.8f,0,2.2f),1.6f),
+            });
+            engine.CameraView.UpdateCamera(new(camera,Camera(FacetsEye,FacetsTarget)));
+        }
+        else if (!shown && sphereSmoothLook is not null)
+        {
+            engine.Graphics.PublishSnapshot([]);
+            sphereSmoothLook.Dispose(); sphereFlatLook?.Dispose(); treeSmoothLook?.Dispose(); treeFlatLook?.Dispose();
+            sphereSmooth?.Dispose(); sphereFlat?.Dispose(); treeMesh?.Dispose();
+            facetSmooth?.Dispose(); facetFlat?.Dispose(); treeFlat?.Dispose();
+            sphereSmoothLook = sphereFlatLook = treeSmoothLook = treeFlatLook = null; sphereSmooth = sphereFlat = null; treeMesh = null; facetSmooth = facetFlat = treeFlat = null;
+        }
+        return Inspect();
+    }
+    private static AppearanceFact Fact(ulong id,Appearance look,Vector3 at,float scale) => new(id,false,0,new Transform(at,Quaternion.Identity,new Vector3(scale)),look,true,RenderLayer.Scene);
+    // A unit sphere of 6 rings and 12 segments with smooth normals: welded, as a low-poly export without split normals comes.
+    private static MeshResourceCreateRequest Sphere(Material material)
+    {
+        const int rings = 6, segments = 12;
+        List<Vector3> positions = [], normals = []; List<Vector2> uvs = []; List<uint> indices = [];
+        for (int ring = 0; ring <= rings; ring++)
+        for (int segment = 0; segment <= segments; segment++)
+        {
+            float theta = MathF.PI*ring/rings, phi = MathF.Tau*segment/segments;
+            Vector3 n = new(MathF.Sin(theta)*MathF.Cos(phi),MathF.Cos(theta),MathF.Sin(theta)*MathF.Sin(phi));
+            positions.Add(n); normals.Add(n); uvs.Add(new((float)segment/segments,(float)ring/rings));
+        }
+        for (uint ring = 0; ring < rings; ring++)
+        for (uint segment = 0; segment < segments; segment++)
+        {
+            uint a = ring*(segments+1)+segment, b = a+segments+1;
+            indices.AddRange([a,b,a+1,a+1,b,b+1]);
+        }
+        return new MeshResourceCreateRequest(positions.ToArray(),normals.ToArray(),uvs.ToArray(),indices.ToArray(),
+            new MeshGroup[]{new(0,0,(uint)indices.Count)},new MeshMaterialBinding[]{new(0,material)});
     }
     // Scale the burning fire's softness: 0 gives every sheet a hard depth edge, 1 the authored softness.
     [DebugCommand("lighting.torch.softness")]
@@ -259,7 +327,7 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     public void RegisterDebugCommands(IDebugCommandModuleRegistrar registrar)=>registrar.Register(this);
     public ProductUpdateResult Update(ProductUpdate update)=>ProductUpdateResult.None;
     public void Pause(){} public void Resume(){} public void Restart(){SetTorch(true);} public void Shutdown(){}
-    public void Dispose(){engine.CameraView.ClearSkyBackground(default); Flame(false); flameSprite?.Dispose(); emberSprite?.Dispose(); smokeSprite?.Dispose(); presentation?.Dispose(); torch.Dispose(); sun.Dispose(); hemisphere.Dispose(); skyAmbient.Dispose(); camera.Dispose(); stone.Dispose(); scene.Dispose(); day.Dispose(); night.Dispose();}
+    public void Dispose(){engine.CameraView.ClearSkyBackground(default); Flame(false); Facets(false); flameSprite?.Dispose(); emberSprite?.Dispose(); smokeSprite?.Dispose(); presentation?.Dispose(); torch.Dispose(); sun.Dispose(); hemisphere.Dispose(); skyAmbient.Dispose(); camera.Dispose(); stone.Dispose(); scene.Dispose(); day.Dispose(); night.Dispose();}
 }
 internal sealed record LightingSave(uint[] Room,LightDescriptor Torch);
 internal sealed record LightingProof(bool RoundTrip,float Lit,float Blocked,float Dark,float Current,bool Torch,float Clock);

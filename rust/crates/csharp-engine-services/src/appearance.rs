@@ -9328,6 +9328,7 @@ fn render_material(id: String, color: NativeColor) -> RenderMaterialDescriptor {
         emission_map: Default::default(),
         occlusion_map: Default::default(),
         unlit: false,
+        flat_shading: false,
     }
 }
 
@@ -9526,6 +9527,7 @@ fn material_descriptor(
         voxel_surface: None,
         normal_map,
         unlit: request.unlit,
+        flat_shading: request.flat_shading,
         emission_map,
         occlusion_map,
         triplanar: triplanar_descriptor(request.triplanar_sharpness),
@@ -10399,6 +10401,7 @@ pub(super) mod tests {
                 },
                 orm_map: Default::default(),
                 occlusion_strength: 0.0,
+                flat_shading: false,
             };
         let none = NativeRenderResourceHandle::default();
         let plain = material_descriptor(
@@ -10462,6 +10465,7 @@ pub(super) mod tests {
                     value: data.handle.value,
                 },
                 occlusion_strength: strength,
+                flat_shading: false,
                 ..request(false, none, occlusion_map)
             };
         let packed =
@@ -10548,6 +10552,7 @@ pub(super) mod tests {
                 occlusion_map: NativeRenderResourceReference::default(),
                 orm_map: Default::default(),
                 occlusion_strength: 0.0,
+                flat_shading: false,
             })
             .unwrap();
         let bindings = [NativeMeshMaterialBinding {
@@ -10762,6 +10767,7 @@ pub(super) mod tests {
                 orm_map: Default::default(),
                 occlusion_strength: 0.0,
                 unlit: false,
+                flat_shading: false,
             })
             .unwrap();
         let positions = [
@@ -10969,6 +10975,7 @@ pub(super) mod tests {
                 orm_map: Default::default(),
                 occlusion_strength: 0.0,
                 unlit: false,
+                flat_shading: false,
             })
             .unwrap();
         let mut positions = [
@@ -11511,6 +11518,7 @@ pub(super) mod tests {
             orm_map: Default::default(),
             occlusion_strength: 0.0,
             unlit: false,
+            flat_shading: false,
         };
         let original = bridge.create_material(request).expect("material");
         let replacement = bridge
@@ -11569,6 +11577,7 @@ pub(super) mod tests {
             orm_map: Default::default(),
             occlusion_strength: 0.0,
             unlit: false,
+            flat_shading: false,
         };
         let resources = RenderResourceRegistry::default();
         let descriptor = material_descriptor("material/metal".to_owned(), metal, &resources)
@@ -11619,6 +11628,7 @@ pub(super) mod tests {
             orm_map: Default::default(),
             occlusion_strength: 0.0,
             unlit: false,
+            flat_shading: false,
         };
         let resources = RenderResourceRegistry::default();
         let descriptor = material_descriptor("material/plain".to_owned(), plain, &resources)
@@ -11784,6 +11794,7 @@ pub(super) mod tests {
             orm_map: Default::default(),
             occlusion_strength: 0.0,
             unlit: false,
+            flat_shading: false,
         };
         let refused =
             material_descriptor("material/a".to_owned(), request(colour.handle), resources)
@@ -11876,6 +11887,7 @@ fn shade(surface: Surface) -> vec4<f32> {
                 orm_map: Default::default(),
                 occlusion_strength: 0.0,
                 unlit: false,
+                flat_shading: false,
             })
             .unwrap();
         let resources = bridge.staged_ref().unwrap().state.projector.resources();
@@ -11991,6 +12003,7 @@ fn shade(surface: Surface) -> vec4<f32> {
             orm_map: Default::default(),
             occlusion_strength: 0.0,
             unlit: false,
+            flat_shading: false,
         };
         assert_eq!(
             bridge
@@ -12117,6 +12130,7 @@ fn shade(surface: Surface) -> vec4<f32> {
                     orm_map: Default::default(),
                     occlusion_strength: 0.0,
                     unlit: false,
+                    flat_shading: false,
                 })
                 .unwrap();
         }
@@ -12347,6 +12361,7 @@ fn shade(surface: Surface) -> vec4<f32> {
                 orm_map: Default::default(),
                 occlusion_strength: 0.0,
                 unlit: false,
+                flat_shading: false,
             })
             .unwrap();
         assert_eq!(
@@ -13104,6 +13119,7 @@ fn shade(surface: Surface) -> vec4<f32> {
                 orm_map: Default::default(),
                 occlusion_strength: 0.0,
                 unlit: false,
+                flat_shading: false,
             })
             .expect("material");
         let bindings = [NativeMeshMaterialBinding {

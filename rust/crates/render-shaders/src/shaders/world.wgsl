@@ -266,7 +266,14 @@ fn standard_surface(in: VsOut, front: bool) -> Surface {
     surface.metalness = 0.0;
     surface.occlusion = 1.0;
     surface.emission = vec3<f32>(0.0);
+#ifdef FLAT_SHADING
+    // The triangle's own plane, turned to face the way the mesh's normal
+    // does, so a mirrored part keeps its outside.
+    let flat = cross(dpdx(in.world_position), dpdy(in.world_position));
+    let geometric = normalize(flat * sign(dot(flat, in.normal) + 1e-20));
+#else
     let geometric = normalize(in.normal);
+#endif
 #ifdef UNLIT
     surface.normal = select(-geometric, geometric, front);
 #else

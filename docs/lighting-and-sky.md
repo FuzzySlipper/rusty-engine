@@ -301,6 +301,7 @@ material compiles only the features its contents use:
 | Occlusion map | it is a GLB material with an occlusion texture, or `MaterialRequest.OcclusionMap` names one (opened with `TextureColorSpace.Linear`; its red channel scales the ambient, hemisphere and sky light the surface takes, by `OcclusionStrength`: 1, or 0, applies it fully) |
 | ORM map | `MaterialRequest.OrmMap` names a packed occlusion, roughness, metalness texture (glTF's R, G, B; opened with `TextureColorSpace.Linear`; a material takes it or `OcclusionMap`, not both). Red is occlusion as above; green multiplies `Roughness` and blue `Metalness` per texel, so one texture mixes matte and glossy or metal and dielectric regions. It reads as the base texture does: the mesh uv or the triplanar planes, with the same repeats, offset and stochastic tiling |
 | Triplanar | its `TriplanarSharpness` is nonzero ([three planes](smooth-voxel-surfaces.md#textures-on-reconstructed-surfaces)) |
+| Flat shading | `MaterialRequest.FlatShading` is set (or a static mesh asset's material says `flatShading`): each triangle shades from its own plane, taken from the world position's screen derivatives and turned to face the mesh's normal, so a low-poly prop with welded smooth normals reads as faceted; its normal map is ignored. A GLB's authored materials are never flat by themselves: replace a slot's material with a flat one through `Animation.UpdateAnimatedMeshMaterial` or bind it on a static mesh |
 | Stochastic tiling | its `StochasticTiling` is nonzero (three blended hex tiles per sample) |
 
 Materials with the same features share pipelines and batch together. A new
@@ -659,7 +660,10 @@ re-meshes and only the probe bricks around it rebake),
 flipbook, soft additive embers and soft alpha smoke, with the camera on it;
 `lighting.torch.softness 0` gives them hard depth edges again and 1 the
 authored softness; [particle bursts](csharp-lifecycle.md#particle-bursts)
-describes the two options). `generate-particles.py` regenerates its three authored sprites.
+describes the two options), and `lighting.facets true|false` (a welded
+low-poly sphere and the fixture's low-poly tree twice: their authored smooth
+normals on the left, the flat-shading material on the right, by the torch).
+`generate-particles.py` regenerates its three authored sprites.
 `lighting.sky` also moves the fixture's sun from noon at 0 to a low dusk sun
 at 1. Debug selection is explicit fixture
 assistance; no downstream gameplay acceptance is implied.

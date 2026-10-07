@@ -414,6 +414,11 @@ pub struct RenderMaterialDescriptor {
     /// map beyond the base texture (the standard shader's `UNLIT`).
     #[serde(default, skip_serializing_if = "is_false")]
     pub unlit: bool,
+    /// Shade each triangle flat from its own plane, whatever normals the
+    /// mesh carries, with no normal map (the standard shader's
+    /// `FLAT_SHADING`): low-poly props read as faceted.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub flat_shading: bool,
     /// Multiplies the emission colour and intensity, read through the same
     /// uv as the base texture.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1821,6 +1826,7 @@ mod tests {
             emission_map: Default::default(),
             occlusion_map: Default::default(),
             unlit: false,
+            flat_shading: false,
         };
         assert_eq!(material.validate(), Ok(()));
         let material_json = serde_json::to_string(&material).unwrap();
@@ -1879,6 +1885,7 @@ mod tests {
             emission_map: Default::default(),
             occlusion_map: Default::default(),
             unlit: false,
+            flat_shading: false,
         };
         material.validate().unwrap();
         let encoded = serde_json::to_string(&material).unwrap();

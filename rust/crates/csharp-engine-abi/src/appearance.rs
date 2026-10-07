@@ -669,6 +669,9 @@ pub struct NativeMaterialRequest {
     /// How far the occlusion of `occlusion_map` or `orm_map` darkens: 1
     /// applies it fully, 0.5 half way. 0 (the default) means 1.
     pub occlusion_strength: f32,
+    /// Shade each triangle flat from its own plane, whatever normals the
+    /// mesh carries, with no normal map: low-poly props read as faceted.
+    pub flat_shading: bool,
 }
 
 /// A product shader resource (`.wgsl`, `NativeRenderResourceKind::Shader`),

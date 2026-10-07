@@ -60,11 +60,14 @@ impl Features {
     /// B): its green and blue multiply the material's roughness and
     /// metalness. Replaces OCCLUSION_MAP for that material.
     pub const ORM_MAP: Self = Self::bit(2048);
+    /// Shade each triangle flat: the normal comes from the world position's
+    /// screen derivatives, the mesh's normals and any normal map ignored.
+    pub const FLAT_SHADING: Self = Self::bit(4096);
     /// Every standard feature's bit.
     #[cfg(test)]
-    const ALL_BITS: u16 = 4095;
+    const ALL_BITS: u16 = 8191;
 
-    const DEFS: [(Self, &'static str); 12] = [
+    const DEFS: [(Self, &'static str); 13] = [
         (Self::UNLIT, "UNLIT"),
         (Self::MASK, "MASK"),
         (Self::VOXEL_SURFACE, "VOXEL_SURFACE"),
@@ -77,6 +80,7 @@ impl Features {
         (Self::LAYER_WEIGHTS, "LAYER_WEIGHTS"),
         (Self::STOCHASTIC_TILING, "STOCHASTIC_TILING"),
         (Self::ORM_MAP, "ORM_MAP"),
+        (Self::FLAT_SHADING, "FLAT_SHADING"),
     ];
 
     const fn bit(bits: u16) -> Self {

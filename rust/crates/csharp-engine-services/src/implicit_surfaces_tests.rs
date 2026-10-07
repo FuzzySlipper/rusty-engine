@@ -41,6 +41,7 @@ fn opaque_material() -> NativeMaterialRequest {
         orm_map: Default::default(),
         occlusion_strength: 0.0,
         unlit: false,
+        flat_shading: false,
     }
 }
 

@@ -514,6 +514,7 @@ impl Renderer {
                 emission_map: Default::default(),
                 occlusion_map: Default::default(),
                 unlit: false,
+                flat_shading: false,
             };
             self.define_material_with(descriptor, material.unlit, maps);
         }
