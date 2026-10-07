@@ -69,11 +69,13 @@ fn main() {
         let mut best_water = Duration::MAX;
         let mut triangles = 0;
         let mut block_triangles = 0;
+        let mut multi_loop_cells = 0;
         for _ in 0..ROUNDS {
             let mut total = Duration::ZERO;
             let mut water = Duration::ZERO;
             triangles = 0;
             block_triangles = 0;
+            multi_loop_cells = 0;
             for (coord, watery) in chunks.iter().zip(&watery) {
                 let started = Instant::now();
                 let mesh = mesh_chunk_in_world_with_options(&world, *coord, &options)
@@ -85,6 +87,7 @@ fn main() {
                     water += elapsed;
                 }
                 triangles += mesh.indices.len() / 3;
+                multi_loop_cells += mesh.stats.multi_loop_cells;
                 block_triangles += mesh
                     .groups
                     .iter()
@@ -129,7 +132,7 @@ fn main() {
         }
         let per_chunk = |time: Duration, count: usize| time.as_secs_f64() * 1000.0 / count as f64;
         println!(
-            "{:>15}: {:8.1} ms total, {:6.2} ms/chunk, {triangles} triangles ({block_triangles} of the block); {water_chunks} chunks sampling water {:6.2} ms/chunk; payload {payload_hash:016x}",
+            "{:>15}: {:8.1} ms total, {:6.2} ms/chunk, {triangles} triangles ({block_triangles} of the block), {multi_loop_cells} multi-loop cells; {water_chunks} chunks sampling water {:6.2} ms/chunk; payload {payload_hash:016x}",
             mode.as_str(),
             best.as_secs_f64() * 1000.0,
             per_chunk(best, chunks.len()),

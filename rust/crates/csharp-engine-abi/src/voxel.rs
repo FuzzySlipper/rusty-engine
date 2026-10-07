@@ -48,6 +48,9 @@ pub struct NativeVoxelSceneReadout {
     pub removed_mesh_chunks: u32,
     /// Time meshing the chunks the last change rebuilt, summed over chunks.
     pub mesh_microseconds: u64,
+    /// Dual-contouring cells of the resident meshes the surface passes
+    /// through more than once, each pinched to one vertex (#9507).
+    pub multi_loop_cells: u64,
 }
 
 #[repr(C)]

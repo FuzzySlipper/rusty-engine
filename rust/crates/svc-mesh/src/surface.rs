@@ -423,6 +423,9 @@ pub(super) struct Reconstruction {
     pub rank_deficient: u32,
     pub fallbacks: u32,
     pub sampled_cells: u64,
+    /// Owned cells the surface passes through more than once (#9507): one
+    /// vertex pinches its separate sheets together.
+    pub multi_loop_cells: u32,
 }
 
 const NO_VERTEX: u32 = u32::MAX;
@@ -436,6 +439,7 @@ struct DualContouring<'a> {
     cell_dims: [usize; 3],
     out: Reconstruction,
     limits: SurfaceMeshLimits,
+    owner: Owner,
 }
 
 /// Dual-contour the lattice. Quads whose inside endpoint lies in `owner` are
@@ -459,6 +463,7 @@ pub(super) fn dual_contour(
         cell_dims,
         out: std::mem::take(out),
         limits,
+        owner,
     };
     let emitted = if ring { owner.grown(1) } else { owner };
     let dims = lattice.dims;
@@ -692,6 +697,9 @@ impl DualContouring<'_> {
         if samples.is_empty() {
             self.cells[cell_index] = NO_VERTEX;
             return Ok(NO_VERTEX);
+        }
+        if self.owner.contains(global_cell) && cell_loops(values) > 1 {
+            self.out.multi_loop_cells = self.out.multi_loop_cells.saturating_add(1);
         }
         let (mut position, rank_deficient, fallback) = if placement_rank == 0 {
             (mass_point(&samples), false, false)
@@ -1537,6 +1545,7 @@ pub(super) fn voxel_payload(
             sampled_cells: reconstruction.sampled_cells,
             qef_rank_deficient: reconstruction.rank_deficient,
             qef_fallbacks: reconstruction.fallbacks,
+            multi_loop_cells: reconstruction.multi_loop_cells,
         },
     })
 }
@@ -1713,6 +1722,114 @@ fn connect(adjacency: &mut [Adjacent; 12], left: usize, right: usize) {
     adjacency[right].add(left);
 }
 
+/// [`crossing_loops`] by the cell's sign pattern: the count, or 0 where a
+/// face is a saddle and the count depends on the values.
+static LOOPS_BY_SIGNS: std::sync::LazyLock<[u8; 256]> = std::sync::LazyLock::new(|| {
+    std::array::from_fn(|signs| {
+        let inside: [bool; 8] = std::array::from_fn(|corner| signs & (1 << corner) != 0);
+        // A face crossed on all four of its edges is a saddle.
+        let saddle = (0..3).any(|axis| {
+            (0..2).any(|side| {
+                EDGES
+                    .iter()
+                    .filter(|(a, b)| CORNERS[*a][axis] == side && CORNERS[*b][axis] == side)
+                    .filter(|(a, b)| inside[*a] != inside[*b])
+                    .count()
+                    == 4
+            })
+        });
+        if saddle {
+            0
+        } else {
+            crossing_loops(inside.map(|value| if value { 1.0 } else { -1.0 })) as u8
+        }
+    })
+});
+
+/// How many separate pieces of surface cross a cell (#9507): from the sign
+/// table, or counted where a face is a saddle.
+fn cell_loops(values: [f64; 8]) -> usize {
+    let signs = values
+        .iter()
+        .enumerate()
+        .fold(0_usize, |signs, (corner, value)| {
+            signs | (usize::from(*value > 0.0) << corner)
+        });
+    match LOOPS_BY_SIGNS[signs] {
+        0 => crossing_loops(values),
+        loops => usize::from(loops),
+    }
+}
+
+/// How many separate pieces of surface cross a cell with these corner
+/// values (positive inside): its crossing edges joined through the faces
+/// they share. A face crossed four times is a saddle; its two segments
+/// separate the corners whose side its centre (the corners' mean) is not on.
+fn crossing_loops(values: [f64; 8]) -> usize {
+    let inside = values.map(|value| value > 0.0);
+    let crossed: Vec<usize> = (0..EDGES.len())
+        .filter(|edge| inside[EDGES[*edge].0] != inside[EDGES[*edge].1])
+        .collect();
+    let mut parent: [usize; 12] = std::array::from_fn(|edge| edge);
+    fn root(parent: &mut [usize; 12], mut edge: usize) -> usize {
+        while parent[edge] != edge {
+            parent[edge] = parent[parent[edge]];
+            edge = parent[edge];
+        }
+        edge
+    }
+    for (axis, side) in (0..3).flat_map(|axis| (0..2).map(move |side| (axis, side))) {
+        {
+            let corners: Vec<usize> = (0..8)
+                .filter(|corner| CORNERS[*corner][axis] == side)
+                .collect();
+            let on_face: Vec<usize> = crossed
+                .iter()
+                .copied()
+                .filter(|edge| {
+                    let (a, b) = EDGES[*edge];
+                    corners.contains(&a) && corners.contains(&b)
+                })
+                .collect();
+            let pairs: Vec<(usize, usize)> = match on_face.len() {
+                2 => vec![(on_face[0], on_face[1])],
+                4 => {
+                    // Join the two crossings beside each corner on the side
+                    // the face's centre is not on.
+                    let centre_inside =
+                        corners.iter().map(|corner| values[*corner]).sum::<f64>() > 0.0;
+                    corners
+                        .iter()
+                        .filter(|corner| inside[**corner] != centre_inside)
+                        .map(|corner| {
+                            let beside: Vec<usize> = on_face
+                                .iter()
+                                .copied()
+                                .filter(|edge| {
+                                    EDGES[*edge].0 == *corner || EDGES[*edge].1 == *corner
+                                })
+                                .collect();
+                            (beside[0], beside[1])
+                        })
+                        .collect()
+                }
+                _ => Vec::new(),
+            };
+            for (a, b) in pairs {
+                let (a, b) = (root(&mut parent, a), root(&mut parent, b));
+                parent[a] = b;
+            }
+        }
+    }
+    let mut roots: Vec<usize> = crossed
+        .iter()
+        .map(|edge| root(&mut parent, *edge))
+        .collect();
+    roots.sort_unstable();
+    roots.dedup();
+    roots.len()
+}
+
 fn edge_local_point(edge: usize, t: f64) -> [f64; 3] {
     let (a, b) = EDGES[edge];
     std::array::from_fn(|axis| {
@@ -1804,6 +1921,52 @@ fn squared_distance(left: [f64; 3], right: [f64; 3]) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn crossing_loops_count_the_separate_pieces_of_surface_in_a_cell() {
+        let cell = |inside: &[usize], strength: f64| -> [f64; 8] {
+            std::array::from_fn(|corner| {
+                if inside.contains(&corner) {
+                    strength
+                } else {
+                    -1.0
+                }
+            })
+        };
+        assert_eq!(crossing_loops(cell(&[0], 1.0)), 1, "one corner");
+        assert_eq!(crossing_loops(cell(&[0, 1, 2, 3], 1.0)), 1, "a floor");
+        assert_eq!(
+            crossing_loops(cell(&[0, 6], 1.0)),
+            2,
+            "two opposite corners"
+        );
+        // Two corners on a face's diagonal: apart when the face's centre is
+        // outside, one tunnel between them when it is inside.
+        assert_eq!(
+            crossing_loops(cell(&[0, 2], 1.0)),
+            2,
+            "a saddle, centre outside"
+        );
+        assert_eq!(
+            crossing_loops(cell(&[0, 2], 3.0)),
+            1,
+            "a saddle, centre inside"
+        );
+        assert_eq!(crossing_loops(cell(&[0, 1, 4, 5], 1.0)), 1, "a wall's face");
+        // The sign table agrees with the count for every pattern and values.
+        for signs in 0..256_usize {
+            for strength in [1.0, 3.0] {
+                let inside: Vec<usize> =
+                    (0..8).filter(|corner| signs & (1 << corner) != 0).collect();
+                let values = cell(&inside, strength);
+                assert_eq!(
+                    cell_loops(values),
+                    crossing_loops(values),
+                    "pattern {signs:08b}"
+                );
+            }
+        }
+    }
 
     #[test]
     fn jacobi_qef_eigenvalues_are_deterministic() {

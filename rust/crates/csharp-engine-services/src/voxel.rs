@@ -46,6 +46,10 @@ impl RuntimeSpatialBridge {
             reused_mesh_chunks: narrow(update.reused_chunks),
             removed_mesh_chunks: narrow(update.removed_chunks),
             mesh_microseconds: update.mesh_microseconds,
+            multi_loop_cells: scene
+                .mesh_chunks()
+                .map(|chunk| u64::from(chunk.multi_loop_cells))
+                .sum(),
         })
     }
 

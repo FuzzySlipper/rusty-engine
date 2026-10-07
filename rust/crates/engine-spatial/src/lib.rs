@@ -231,6 +231,9 @@ pub struct VoxelMeshChunk {
     pub vertices: u32,
     pub quads: u32,
     pub faces_culled: u32,
+    /// Owned dual-contouring cells the surface passes through more than
+    /// once, pinched to one vertex (#9507).
+    pub multi_loop_cells: u32,
 }
 
 /// Coarse meshes built together ([`VoxelCollisionScene::coarse_mesh_chunks`]).
@@ -1725,6 +1728,7 @@ fn voxel_mesh_chunk(
         vertices: mesh.stats.vertices,
         quads: mesh.stats.quads,
         faces_culled: mesh.stats.faces_culled,
+        multi_loop_cells: mesh.stats.multi_loop_cells,
     }
 }
 

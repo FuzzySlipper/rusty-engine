@@ -397,3 +397,9 @@ cubes, and draws about a third of the triangles (35% and 30% on that dungeon,
 skirts included; a quarter without). `VoxelSceneReadout.MeshMicroseconds`, and
 the same field on edit, residency and density receipts, report the meshing time
 of the chunks the last change rebuilt, summed over chunks.
+`VoxelSceneReadout.MultiLoopCells` counts the dual-contoured cells of the
+resident meshes that the surface passes through more than once (a sheet thinner
+than a voxel, two surfaces meeting in one cell): each has one vertex, which
+pinches its sheets together. On CraftSurvive's content (#9507) the overworld
+has none and a 180-chunk dungeon 9 to 96, about one surface cell in a thousand;
+blasting it adds a couple. Counting costs nothing measurable.

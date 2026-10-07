@@ -315,6 +315,9 @@ pub struct MeshStats {
     pub qef_rank_deficient: u32,
     /// Dual-contouring cells that used the deterministic mass-point fallback.
     pub qef_fallbacks: u32,
+    /// Owned dual-contouring cells the surface passes through more than once,
+    /// whose single vertex pinches the separate sheets together (#9507).
+    pub multi_loop_cells: u32,
 }
 
 /// A renderable mesh for one chunk: separate `f32` attribute streams, a `u32`
@@ -1029,6 +1032,7 @@ pub fn mesh_scalar_surface(
             sampled_cells: reconstruction.sampled_cells,
             qef_rank_deficient: reconstruction.rank_deficient,
             qef_fallbacks: reconstruction.fallbacks,
+            multi_loop_cells: reconstruction.multi_loop_cells,
         },
         positions,
         normals,
@@ -2081,6 +2085,7 @@ fn emit_quads(
         sampled_cells: 0,
         qef_rank_deficient: 0,
         qef_fallbacks: 0,
+        multi_loop_cells: 0,
     };
     Ok(MeshPayload {
         surface_mode: SurfaceMode::GreedyCubes,
