@@ -228,12 +228,22 @@ mesh.
   fine neighbour every open edge of a coarse mesh carries a skirt reaching one
   coarse cell into the solid and as far toward the neighbour, which closes both
   the step and the gap where the two surfaces stop short of each other.
-- A coarse mesh reads two voxels into each neighbour, so a change to the chunk
-  or any neighbour rebuilds it with the next projection. Chunks that switch
-  level together are meshed in parallel.
+- A coarse mesh reads two voxels into each neighbour, so a change to the
+  voxels of the chunk or of any neighbour rebuilds it; a neighbour remeshed
+  only for its seams changes nothing. An edit rebuilds it with the same
+  projection. A chunk admitted or evicted within reach, as a stream does
+  column after column, rebuilds it once the stream pauses: with the second
+  consecutive projection that admits or evicts nothing within reach (the
+  first is the update's own level-of-detail settle). A streamed chunk is
+  thus meshed coarse once its neighbours have arrived rather than once per
+  neighbour. Until then a chunk newly drawn coarse shows its full mesh and
+  one already coarse keeps its coarse mesh. Chunks rebuilt together are
+  meshed in parallel.
 - Sessions whose materials are all cubes, and chunks with an odd edge, are
   always drawn at full resolution. `VoxelScenePresentationReadout.
-  CoarseChunkCount` reports how many chunks are drawn coarse.
+  CoarseChunkCount` reports how many chunks are drawn coarse, and
+  `CoarseMeshMicroseconds` the time the last projection spent meshing coarse
+  chunks, summed over chunks.
 
 ## Cost
 

@@ -979,6 +979,9 @@ fn presentation_readout(
             .projector
             .coarse_chunk_count(&presentation_instance_id(handle.value))
             as u64,
+        coarse_mesh_microseconds: state
+            .projector
+            .coarse_mesh_microseconds(&presentation_instance_id(handle.value)),
     })
 }
 

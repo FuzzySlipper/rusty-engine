@@ -229,6 +229,16 @@ pub struct VoxelMeshChunk {
     pub faces_culled: u32,
 }
 
+/// Coarse meshes built together ([`VoxelCollisionScene::coarse_mesh_chunks`]).
+#[derive(Debug)]
+pub struct CoarseMeshes {
+    /// One per requested chunk, in input order.
+    pub meshes: Vec<Option<Result<VoxelMeshChunk, CollisionSceneError>>>,
+    /// Time spent meshing, summed over chunks (they mesh in parallel, so wall
+    /// time can be shorter).
+    pub microseconds: u64,
+}
+
 /// Exact chunk-mesh publication performed at one accepted voxel revision.
 ///
 /// Dirty coordinates include removed chunks so retained projection can destroy
@@ -779,22 +789,20 @@ impl VoxelCollisionScene {
 
     /// The meshes distant chunks are drawn with, in input order: their
     /// reconstructed materials from a lattice twice as coarse, with skirts
-    /// (`svc_mesh::mesh_chunk_coarse_in_world`), built in parallel. Drawing
-    /// only: collision and picking keep each chunk's own mesh. `None` for a
-    /// chunk without a mesh, or for every chunk when the scene has no coarse
-    /// meshes.
-    pub fn coarse_mesh_chunks(
-        &self,
-        chunks: &[[i64; 3]],
-    ) -> Vec<Option<Result<VoxelMeshChunk, CollisionSceneError>>> {
+    /// (`svc_mesh::mesh_chunk_coarse_in_world`), built in parallel, and the
+    /// time spent meshing them. Drawing only: collision and picking keep
+    /// each chunk's own mesh. `None` for a chunk without a mesh, or for
+    /// every chunk when the scene has no coarse meshes.
+    pub fn coarse_mesh_chunks(&self, chunks: &[[i64; 3]]) -> CoarseMeshes {
         let coordinates: Vec<_> = chunks
             .iter()
             .map(|chunk| ChunkCoord::new(chunk[0], chunk[1], chunk[2]))
             .collect();
-        surface_collision::in_parallel(&coordinates, |coordinate| {
+        let built = surface_collision::in_parallel(&coordinates, |coordinate| {
             if !self.has_coarse_meshes() || !self.mesh_chunks.contains_key(&coordinate) {
                 return None;
             }
+            let started = Instant::now();
             let grid = self.voxel_world.grid();
             let source = self.voxel_world.get(coordinate)?;
             let mesh = svc_mesh::mesh_chunk_coarse_in_world(
@@ -803,7 +811,7 @@ impl VoxelCollisionScene {
                 &self.mesh_options,
             )?;
             Some(mesh.map_err(CollisionSceneError::Mesh).map(|mesh| {
-                voxel_mesh_chunk(
+                let mesh = voxel_mesh_chunk(
                     coordinate,
                     grid.voxel_min_world(grid.chunk_origin_voxel(coordinate)),
                     grid.chunk_origin_voxel(coordinate).to_array(),
@@ -811,9 +819,26 @@ impl VoxelCollisionScene {
                     grid.voxel_size() as f32,
                     source.content_hash().0,
                     mesh,
-                )
+                );
+                (mesh, started.elapsed().as_micros() as u64)
             }))
-        })
+        });
+        let mut microseconds = 0_u64;
+        let meshes = built
+            .into_iter()
+            .map(|mesh| {
+                mesh.map(|mesh| {
+                    mesh.map(|(mesh, time)| {
+                        microseconds = microseconds.saturating_add(time);
+                        mesh
+                    })
+                })
+            })
+            .collect();
+        CoarseMeshes {
+            meshes,
+            microseconds,
+        }
     }
 
     /// The coarse mesh of one chunk; see [`Self::coarse_mesh_chunks`].
@@ -821,7 +846,7 @@ impl VoxelCollisionScene {
         &self,
         chunk: [i64; 3],
     ) -> Option<Result<VoxelMeshChunk, CollisionSceneError>> {
-        self.coarse_mesh_chunks(&[chunk]).pop().flatten()
+        self.coarse_mesh_chunks(&[chunk]).meshes.pop().flatten()
     }
 
     /// The mesh of one chunk, if it has one.
