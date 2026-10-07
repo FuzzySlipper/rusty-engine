@@ -68,8 +68,9 @@ spring overshoot; the others stay within the segment's values. The curves
 live in `render-presentation`; products do not reimplement them.
 
 `Yoyo` plays every second iteration backwards. A marker is reported each
-iteration the timeline passes its time; a marker at 0 is reported by the first
-update.
+iteration the timeline passes its time, backwards ones included, so it fires
+when the pose passes it; a marker where a yoyo turns is reported once. A
+marker at 0 is reported by the first update.
 
 `Tweens` builds common timelines: `HopFrom`, `Breathe`, `PunchScale`,
 `Shake`, `Flash` and `FadeIn`. Each returns an ordinary request for `with`

@@ -297,6 +297,60 @@ fn repeats_and_yoyo_map_elapsed_time_to_iterations() {
 }
 
 #[test]
+fn a_yoyo_crosses_its_markers_where_its_pose_passes_them() {
+    let markers = [(25, 0.25), (75, 0.75)]
+        .map(|(marker_id, time_seconds)| TweenMarker {
+            marker_id,
+            time_seconds,
+        })
+        .to_vec();
+    let tween = TweenDefinition::new(
+        vec![segment(
+            TweenChannel::Translation,
+            0.0,
+            1.0,
+            [0.0; 4],
+            [1.0, 0.0, 0.0, 0.0],
+        )],
+        markers,
+        TweenRepeat::Count(2),
+        true,
+    )
+    .unwrap();
+    let crossings = |from: f64, to: f64| {
+        let mut crossed = Vec::new();
+        tween.crossings(from, to, &mut crossed);
+        crossed
+    };
+    // Reversed, 1.25 s shows 0.75: it has just crossed marker 75.
+    assert_vec(&tween.sample(1.25).translation, &[0.75, 0.0, 0.0]);
+    assert_eq!(crossings(1.0, 1.3), vec![(75, 1)]);
+    assert_eq!(crossings(1.3, 2.0), vec![(25, 1)]);
+    // Across the turn: forward 25 and 75, then back over 75.
+    assert_eq!(crossings(0.0, 1.5), vec![(25, 0), (75, 0), (75, 1)]);
+    // Every pose the markers sit at agrees with the marker crossed there.
+    for (from, to) in [(0.2, 0.3), (0.7, 0.8), (1.2, 1.3), (1.7, 1.8)] {
+        let crossed = crossings(from, to);
+        let (a, b) = (
+            tween.sample(from).translation[0],
+            tween.sample(to).translation[0],
+        );
+        let expected: Vec<u64> = [25u64, 75]
+            .into_iter()
+            .filter(|id| {
+                let at = *id as f32 / 100.0;
+                a.min(b) < at && at <= a.max(b)
+            })
+            .collect();
+        assert_eq!(
+            crossed.iter().map(|(id, _)| *id).collect::<Vec<_>>(),
+            expected,
+            "{from}..{to}"
+        );
+    }
+}
+
+#[test]
 fn markers_are_crossed_once_per_iteration_in_time_order() {
     let markers = vec![
         TweenMarker {
@@ -329,7 +383,9 @@ fn markers_are_crossed_once_per_iteration_in_time_order() {
     crossed.clear();
     tween.crossings(0.5, 0.5, &mut crossed);
     tween.crossings(0.5, 2.6, &mut crossed);
-    assert_eq!(crossed, vec![(1, 1), (2, 1), (1, 2), (2, 2)]);
+    // The yoyo's second iteration plays back from 1 to 0: it crosses 0.5,
+    // then turns on 0, which the third iteration does not cross again.
+    assert_eq!(crossed, vec![(2, 1), (1, 1), (2, 2)]);
     crossed.clear();
     // Past the last iteration nothing more fires, and the marker after the
     // iteration end never does.

@@ -325,7 +325,9 @@ impl TweenDefinition {
 
     /// Markers crossed moving from `from` to `to` seconds after the start,
     /// as `(marker_id, iteration)` in time order. A marker at 0 is crossed
-    /// by the first advance.
+    /// by the first advance. A yoyo's reversed iterations cross their markers
+    /// in reverse, and a marker where playback turns is crossed once, by the
+    /// iteration that reaches it.
     pub fn crossings(&self, from: f64, to: f64, crossed: &mut Vec<(u64, u32)>) {
         let length = f64::from(self.iteration_seconds);
         if self.markers.is_empty() || to <= from || length <= 0.0 {
@@ -341,7 +343,13 @@ impl TweenDefinition {
                 if time > length {
                     continue;
                 }
-                let at = f64::from(iteration) * length + time;
+                let reversed = self.yoyo && iteration % 2 == 1;
+                let into = if reversed { length - time } else { time };
+                // The previous iteration ended on this point.
+                if self.yoyo && iteration > 0 && into == 0.0 {
+                    continue;
+                }
+                let at = f64::from(iteration) * length + into;
                 if (at > from || (at == 0.0 && from == 0.0)) && at <= to {
                     found.push((at, marker.marker_id, iteration));
                 }
