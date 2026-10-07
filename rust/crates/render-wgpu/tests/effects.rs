@@ -12,9 +12,10 @@ mod common;
 use common::*;
 use render_model::*;
 use render_presentation::{
-    ParticleAnchor, ParticleColorKey, ParticleEmitterDescriptor, ParticleEmitterHandle,
-    ParticleEmitterPatch, ParticleProjectionOp, ParticleScalarKey, ParticleSizeMode,
-    ParticleSpriteRef, ParticleVisual, PresentationFrameDiff, PresentationOp, PresentationOpMeta,
+    ParticleAnchor, ParticleBlendMode, ParticleColorKey, ParticleEmitterDescriptor,
+    ParticleEmitterHandle, ParticleEmitterPatch, ParticleProjectionOp, ParticleScalarKey,
+    ParticleSizeMode, ParticleSpriteRef, ParticleVisual, PresentationFrameDiff, PresentationOp,
+    PresentationOpMeta,
 };
 use render_wgpu::{OffscreenTarget, RendererOptions, TargetStatus};
 
@@ -427,6 +428,8 @@ fn emitter(
         anchor: ParticleAnchor::World { position },
         visual,
         size_mode: Default::default(),
+        blend: Default::default(),
+        softness_metres: 0.0,
         rate_per_second: 0.0,
         burst_count: count,
         lifetime_seconds: [1.5, 2.5],
@@ -621,6 +624,204 @@ fn world_size_particles_shrink_with_distance_like_sprites() {
         );
     }
     assert_eq!(height(3.0, "screen"), height(8.0, "screen"));
+}
+
+/// One still 2 m world-size billboard of a flat colour at (0, 0, -4), over
+/// an 8 m floor at y = 0 (so its lower half is under the floor) and, with
+/// `wall`, in front of a lit grey wall. Returns the frame's rgba.
+fn still_particle(
+    samples: u32,
+    wall: bool,
+    color: [f32; 4],
+    blend: ParticleBlendMode,
+    softness_metres: f32,
+) -> Vec<u8> {
+    let mut harness = Harness::new(RendererOptions::default());
+    harness.target = OffscreenTarget::new(&harness.gpu, WIDTH, HEIGHT, samples);
+    let mut ops = vec![RenderDiff::SetBackgroundColor {
+        color: [0.0, 0.0, 0.0, 1.0],
+    }];
+    ops.extend(coloured_mesh("floor", floor(8.0), [0.5, 0.5, 0.5, 1.0]));
+    ops.push(instance(
+        1,
+        None,
+        "floor",
+        transform([0.0, 0.0, -4.0], 0.0, 1.0),
+    ));
+    if wall {
+        ops.extend(coloured_mesh("wall", cube(), [0.5, 0.5, 0.5, 1.0]));
+        ops.push(instance(
+            2,
+            None,
+            "wall",
+            transform([0.0, 0.0, -9.0], 0.0, 6.0),
+        ));
+    }
+    let white = vec![255; 8 * 8 * 4];
+    let (texture, hash) =
+        harness
+            .resources
+            .texture("texture/white", 8, 8, &white, TextureFilter::Nearest);
+    ops.push(texture);
+    harness.apply(ops);
+    let mut still = emitter(
+        ParticleVisual::Billboard {
+            sprite: ParticleSpriteRef {
+                asset: "texture/white".to_owned(),
+                content_hash: hash,
+                frame_count: 1,
+            },
+        },
+        [0.0, 0.0, -4.0],
+        1,
+        5,
+    );
+    still.size_mode = ParticleSizeMode::World;
+    still.blend = blend;
+    still.softness_metres = softness_metres;
+    still.velocity_min = [0.0; 3];
+    still.velocity_max = [0.0; 3];
+    still.acceleration = [0.0; 3];
+    still.lifetime_seconds = [10.0, 10.0];
+    for key in &mut still.size_curve {
+        key.value = 2.0;
+    }
+    for key in &mut still.color_curve {
+        key.color = color;
+    }
+    let issues = harness.renderer.apply_presentation(
+        &particle_frame(vec![ParticleProjectionOp::Emit {
+            signal_id: "still".to_owned(),
+            descriptor: still,
+        }]),
+        &harness.resources,
+        NO_ENTITIES,
+    );
+    assert!(issues.is_empty(), "{issues:?}");
+    harness.renderer.advance_effects(0.01, NO_ENTITIES);
+    harness.single(&camera("eye", [0.0, 1.0, 0.0], 0.0, -14.0))
+}
+
+/// A soft billboard fades out as it nears the floor behind it, over its
+/// softness in metres: where a hard one meets the floor in one edge row, a
+/// soft one grades over many, and both stay hidden under the floor. Both
+/// the single-sample and the multisampled depth paths.
+#[test]
+fn soft_particles_fade_into_the_scene_they_meet() {
+    for samples in [1, 4] {
+        let centre = |rgba: &[u8]| -> Vec<u8> {
+            (0..HEIGHT)
+                .map(|y| pixel(rgba, WIDTH, WIDTH / 2, y)[0])
+                .collect()
+        };
+        let white = [1.0, 1.0, 1.0, 1.0];
+        let hard = centre(&still_particle(
+            samples,
+            false,
+            white,
+            ParticleBlendMode::Alpha,
+            0.0,
+        ));
+        let soft = centre(&still_particle(
+            samples,
+            false,
+            white,
+            ParticleBlendMode::Alpha,
+            2.0,
+        ));
+        // The floor's own brightness, at the frame's bottom row.
+        let level = *hard.last().expect("a frame has rows");
+        // Rows of neither the particle's white nor the floor's grey.
+        let graded = |column: &[u8]| {
+            column
+                .iter()
+                .filter(|&&red| red > level + 6 && red < 250)
+                .count()
+        };
+        assert!(
+            graded(&hard) <= 2,
+            "{samples} samples: a hard particle meets the floor in {} graded rows",
+            graded(&hard)
+        );
+        assert!(
+            graded(&soft) >= 6,
+            "{samples} samples: a soft particle fades over {} rows",
+            graded(&soft)
+        );
+        let top = |column: &[u8]| column.iter().position(|&red| red >= 250);
+        assert_eq!(
+            top(&hard),
+            top(&soft),
+            "{samples} samples: far from the floor the particle is as bright as a hard one"
+        );
+        let floor_rows = |column: &[u8]| {
+            column
+                .iter()
+                .rev()
+                .take_while(|&&red| red <= level + 3)
+                .count()
+        };
+        assert!(
+            floor_rows(&hard) > 20 && floor_rows(&soft) >= floor_rows(&hard),
+            "{samples} samples: the floor hides the particle under it ({} and {} rows)",
+            floor_rows(&hard),
+            floor_rows(&soft)
+        );
+    }
+}
+
+/// An additive billboard adds its colour to the lit wall behind it, where an
+/// alpha one of the same opaque colour replaces it, and over nothing lit the
+/// two are the same; a faded additive particle adds nothing.
+#[test]
+fn additive_particles_add_to_the_scene_behind_them() {
+    let grey = [0.4, 0.4, 0.4, 1.0];
+    let at = |rgba: &[u8]| pixel(rgba, WIDTH, WIDTH / 2, HEIGHT / 2 - 20)[0];
+    let alpha = at(&still_particle(
+        4,
+        true,
+        grey,
+        ParticleBlendMode::Alpha,
+        0.0,
+    ));
+    let additive = at(&still_particle(
+        4,
+        true,
+        grey,
+        ParticleBlendMode::Additive,
+        0.0,
+    ));
+    let unlit = at(&still_particle(
+        4,
+        false,
+        grey,
+        ParticleBlendMode::Alpha,
+        0.0,
+    ));
+    let wall = at(&still_particle(
+        4,
+        true,
+        [0.0, 0.0, 0.0, 0.0],
+        ParticleBlendMode::Alpha,
+        0.0,
+    ));
+    assert!(wall > 40, "the wall is lit: {wall}");
+    assert!(
+        alpha.abs_diff(unlit) <= 2,
+        "an alpha particle covers the wall: {alpha} over it, {unlit} over nothing"
+    );
+    assert!(
+        additive > alpha + 20 && additive > wall + 20,
+        "an additive particle brightens the wall: {additive} over its {wall}, alpha {alpha}"
+    );
+    let faded = at(&still_particle(
+        4,
+        true,
+        [0.4, 0.4, 0.4, 0.0],
+        ParticleBlendMode::Additive,
+        0.0,
+    ));
+    assert_eq!(faded, wall, "a faded additive particle adds nothing");
 }
 
 #[test]

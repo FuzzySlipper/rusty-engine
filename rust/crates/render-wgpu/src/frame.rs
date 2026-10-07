@@ -1879,6 +1879,37 @@ impl Renderer {
         if world_layer {
             self.finish.resolve_world(&mut encoder);
         }
+        if effects.soft() {
+            // Soft billboards fade against the world's depth, which the world
+            // pass was drawing into, so they draw over its HDR target in a
+            // pass of their own with that depth bound as a texture.
+            let scene_depth = self.effects.scene_depth_bind_group(
+                &self.gpu.device,
+                view.target.samples,
+                view.target.depth,
+            );
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("render-wgpu particles"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &hdr.color,
+                    depth_slice: None,
+                    resolve_target: hdr.resolve.as_ref(),
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            in_viewport(&mut pass);
+            pass.set_bind_group(0, &self.frame_bind_group, &[]);
+            pass.set_bind_group(2, &scene_depth, &[]);
+            self.effects
+                .draw_soft_particles(&mut pass, hdr_format, &effects);
+        }
         let draws = parts.draws + effects.draws();
         if bloom.is_some() || adapting.is_some() || shafts.is_some() {
             self.exposure_adapted |= adapting.is_some();

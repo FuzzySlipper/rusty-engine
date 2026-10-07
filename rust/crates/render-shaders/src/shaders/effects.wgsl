@@ -159,6 +159,9 @@ fn fs_sprite_opaque(in: SpriteOut, @builtin(front_facing) front: bool) -> @locat
 
 // Particle billboard: a screen-aligned quad, of constant pixel size
 // (`size × 24` pixels) or of a world size, with a horizontal flipbook strip.
+// A hard billboard draws in the world pass under its depth test; a soft one
+// (`params.x` > 0) draws in the particle pass after it, with the world's
+// depth bound in group 2, and tests and fades against that depth itself.
 struct ParticleIn {
     @location(0) corner: vec2<f32>,
     // xyz: world position; w: half width in clip units.
@@ -167,6 +170,10 @@ struct ParticleIn {
     // x: half height in clip units; y: frame; z: frame count; w: 1 when the
     // half extents are projected world sizes (no depth scaling), 0 for screen.
     @location(3) flipbook: vec4<f32>,
+    // x: the metres over which the billboard fades out as it nears the
+    // world behind it (0: a hard depth edge); y: 1 when its colour adds to
+    // the frame (premultiplied by its alpha here), 0 when it blends by alpha.
+    @location(4) params: vec4<f32>,
 };
 
 struct ParticleOut {
@@ -175,10 +182,15 @@ struct ParticleOut {
     @location(1) color: vec4<f32>,
     // The billboard's centre, for fog.
     @location(2) world_position: vec3<f32>,
+    @location(3) params: vec4<f32>,
 };
 
 @group(1) @binding(20) var particle_texture: texture_2d<f32>;
 @group(1) @binding(21) var particle_sampler: sampler;
+// The world's depth for soft billboards, as the view has it: one of these is
+// bound, by the view's sample count.
+@group(2) @binding(30) var scene_depth: texture_depth_2d;
+@group(2) @binding(31) var scene_depth_multisampled: texture_depth_multisampled_2d;
 
 @vertex
 fn vs_particle(in: ParticleIn) -> ParticleOut {
@@ -193,16 +205,57 @@ fn vs_particle(in: ParticleIn) -> ParticleOut {
     out.uv = vec2<f32>((frame_index + in.corner.x) / count, 1.0 - in.corner.y);
     out.color = in.color;
     out.world_position = in.center.xyz;
+    out.params = in.params;
     return out;
+}
+
+// The billboard's colour at `fade` of its alpha: premultiplied when it adds
+// to the frame, so a faded particle adds nothing.
+fn particle_color(in: ParticleOut, fade: f32) -> vec4<f32> {
+    var color = textureSample(particle_texture, particle_sampler, in.uv) * in.color;
+    color.a = color.a * fade;
+    if in.params.y > 0.5 {
+        color = vec4<f32>(color.rgb * color.a, color.a);
+    }
+    return color;
 }
 
 @fragment
 fn fs_particle(in: ParticleOut) -> @location(0) vec4<f32> {
-    let color = textureSample(particle_texture, particle_sampler, in.uv) * in.color;
+    let color = particle_color(in, 1.0);
     if color.a <= 0.001 {
         discard;
     }
     return finish(color, in.world_position);
+}
+
+// The world point at `depth` on the view's centre ray: the gap between two
+// such points is the view-space distance between two depths.
+fn depth_point(depth: f32) -> vec3<f32> {
+    let point = frame.inv_view_proj * vec4<f32>(0.0, 0.0, depth, 1.0);
+    return point.xyz / point.w;
+}
+
+// A soft billboard against the world's depth at its pixel: hidden where the
+// world is in front of it (the depth test the world pass would make), faded
+// out over `params.x` metres as it nears the world behind it.
+fn soft_particle(in: ParticleOut, scene: f32) -> vec4<f32> {
+    let gap = distance(depth_point(scene), depth_point(in.clip.z));
+    let color = particle_color(in, saturate(gap / in.params.x));
+    if in.clip.z > scene || color.a <= 0.001 {
+        discard;
+    }
+    return finish(color, in.world_position);
+}
+
+@fragment
+fn fs_particle_soft(in: ParticleOut) -> @location(0) vec4<f32> {
+    return soft_particle(in, textureLoad(scene_depth, vec2<i32>(in.clip.xy), 0));
+}
+
+@fragment
+fn fs_particle_soft_multisampled(in: ParticleOut) -> @location(0) vec4<f32> {
+    return soft_particle(in, textureLoad(scene_depth_multisampled, vec2<i32>(in.clip.xy), 0));
 }
 
 // Particle cube: the builtin unit cube per instance, flat colour.

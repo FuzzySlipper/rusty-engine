@@ -653,7 +653,12 @@ re-meshes and only the probe bricks around it rebake),
 `lighting.follow <x> <y> <z>` (move the volume's centre),
 `lighting.fog <density>` (0 turns it off),
 `lighting.exposure <exposure>` (ACES filmic), `lighting.atmosphere true|false`
-(height fog, sun haze, disc and halo) and `lighting.panorama`.
+(height fog, sun haze, disc and halo), `lighting.panorama` and
+`lighting.torch.flame true|false` (a fire by the wall: a soft additive flame
+flipbook, soft additive embers and soft alpha smoke, with the camera on it;
+`lighting.torch.softness 0` gives them hard depth edges again and 1 the
+authored softness; [particle bursts](csharp-lifecycle.md#particle-bursts)
+describes the two options). `generate-particles.py` regenerates its three authored sprites.
 `lighting.sky` also moves the fixture's sun from noon at 0 to a low dusk sun
 at 1. Debug selection is explicit fixture
 assistance; no downstream gameplay acceptance is implied.

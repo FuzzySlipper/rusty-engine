@@ -12,7 +12,11 @@
 //!
 //! In a view pass, sprites and particles draw after the world's opaque parts:
 //! solid sprites, then the world's blended parts, then blended sprites back to
-//! front, then particle cubes and billboards.
+//! front, then particle cubes and billboards. A soft billboard (a positive
+//! `softness_metres`) fades out as it nears the world behind it, which needs
+//! the world's depth as a texture, so soft billboards draw last in their own
+//! pass over the world's HDR target (`frame.rs`, "render-wgpu particles"),
+//! testing and fading against that depth in their fragment shader.
 
 use std::collections::HashMap;
 
@@ -22,7 +26,8 @@ use render_model::{
     SpriteLightingMode, SpriteSizeMode, SpriteViewportFit,
 };
 use render_presentation::{
-    ParticleSizeMode, ParticleSpriteRef, ParticleVisual, PresentationFrameDiff, PresentationOp,
+    ParticleBlendMode, ParticleSizeMode, ParticleSpriteRef, ParticleVisual, PresentationFrameDiff,
+    PresentationOp,
 };
 
 use crate::camera::CameraMatrices;
@@ -37,7 +42,7 @@ use crate::{srgb_to_linear, ApplyIssue, Gpu, Renderer};
 /// Particle billboards are drawn `size × 24` pixels across.
 const PARTICLE_PIXELS_PER_UNIT: f32 = 24.0;
 const SPRITE_ROW_FLOATS: usize = 32;
-const PARTICLE_ROW_FLOATS: usize = 12;
+const PARTICLE_ROW_FLOATS: usize = 16;
 const CUBE_ROW_FLOATS: usize = 8;
 /// Viewport-placed sprites sit mid-depth (GL clip z 0).
 const PLACEMENT_DEPTH: f32 = 0.5;
@@ -71,10 +76,21 @@ pub(crate) struct EffectsPass {
     solid: Vec<(SpriteState, SpriteTextures)>,
     blended: Vec<BlendedSprite>,
     cubes: u32,
-    /// (particle texture, first row, count) into the particle rows.
-    billboards: Vec<(u32, u32, u32)>,
+    /// Runs into the particle rows: hard billboards, then soft ones.
+    billboards: Vec<BillboardRun>,
     /// Sprite nodes examined for this pass.
     pub sprite_candidates: u32,
+}
+
+/// Billboard particles drawn by one call: they share a texture, a blend and
+/// a depth path (hard in the world pass, soft in the particle pass after it).
+#[derive(Clone, Copy)]
+struct BillboardRun {
+    texture: u32,
+    blend: ParticleBlendMode,
+    soft: bool,
+    first: u32,
+    count: u32,
 }
 
 /// A blended sprite with the keys the world pass merges it by: transparent
@@ -99,6 +115,11 @@ impl EffectsPass {
     pub fn draws(&self) -> u32 {
         (self.solid.len() + self.blended.len() + self.billboards.len()) as u32
             + u32::from(self.cubes > 0)
+    }
+
+    /// Whether any billboard needs the particle pass after the world's.
+    pub fn soft(&self) -> bool {
+        self.billboards.iter().any(|run| run.soft)
     }
 }
 
@@ -137,11 +158,37 @@ fn rows_buffer(device: &wgpu::Device, label: &str, size: u64) -> wgpu::Buffer {
     })
 }
 
+/// Billboard pipelines by blend mode (`blend_index`).
+type BlendPipelines = [wgpu::RenderPipeline; 2];
+
+fn blend_index(blend: ParticleBlendMode) -> usize {
+    match blend {
+        ParticleBlendMode::Alpha => 0,
+        ParticleBlendMode::Additive => 1,
+    }
+}
+
 struct FormatPipelines {
     format: ColorTarget,
     sprites: HashMap<SpriteState, wgpu::RenderPipeline>,
-    billboard: wgpu::RenderPipeline,
+    /// Hard billboards, depth-tested by the world pass.
+    billboard: BlendPipelines,
+    /// Soft billboards, testing the world's depth themselves; made at the
+    /// first soft emitter.
+    soft: Option<BlendPipelines>,
     cube: wgpu::RenderPipeline,
+}
+
+/// The soft billboard pass's layouts for one depth sample count: the world's
+/// depth bound in group 2 (`effects.wgsl` `scene_depth*`).
+struct SoftLayouts {
+    depth: wgpu::BindGroupLayout,
+    pipeline: wgpu::PipelineLayout,
+}
+
+/// Which `SoftLayouts` a view's depth takes: single-sample or multisampled.
+fn soft_index(samples: u32) -> usize {
+    usize::from(samples > 1)
 }
 
 pub(crate) struct Effects {
@@ -150,6 +197,7 @@ pub(crate) struct Effects {
     particle_layout: wgpu::BindGroupLayout,
     sprite_pipeline_layout: wgpu::PipelineLayout,
     particle_pipeline_layout: wgpu::PipelineLayout,
+    soft_layouts: [SoftLayouts; 2],
     cube_pipeline_layout: wgpu::PipelineLayout,
     corners: wgpu::Buffer,
     sprite_rows: Rows,
@@ -168,8 +216,9 @@ pub(crate) struct Effects {
     sprite_scratch: Vec<SpriteDraw>,
     row_scratch: Vec<f32>,
     cube_scratch: Vec<f32>,
-    /// (group: 0 cube, 1 + texture index for billboards, particle index).
-    order_scratch: Vec<(u32, u32)>,
+    /// (group: 0 cube, 1 + the billboard's blend and depth path; texture
+    /// slot; particle index).
+    order_scratch: Vec<(u32, u32, u32)>,
 }
 
 fn texture_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
@@ -220,6 +269,28 @@ impl Effects {
                 immediate_size: 0,
             })
         };
+        let soft_layouts = [false, true].map(|multisampled| {
+            let depth = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("render-wgpu particle scene depth"),
+                entries: &[wgpu::BindGroupLayoutEntry {
+                    binding: 30 + u32::from(multisampled),
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Depth,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled,
+                    },
+                    count: None,
+                }],
+            });
+            SoftLayouts {
+                pipeline: pipeline_layout(
+                    "render-wgpu soft particle",
+                    &[Some(frame_layout), Some(&particle_layout), Some(&depth)],
+                ),
+                depth,
+            }
+        });
         use wgpu::util::DeviceExt;
         let corners: [f32; 8] = [0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 1.0];
         Self {
@@ -232,6 +303,7 @@ impl Effects {
                 "render-wgpu particle",
                 &[Some(frame_layout), Some(&particle_layout)],
             ),
+            soft_layouts,
             cube_pipeline_layout: pipeline_layout(
                 "render-wgpu particle cube",
                 &[Some(frame_layout)],
@@ -272,35 +344,8 @@ impl Effects {
         if let Some(index) = self.formats.iter().position(|set| set.format == format) {
             return index;
         }
-        let corner = wgpu::VertexBufferLayout {
-            array_stride: 8,
-            step_mode: wgpu::VertexStepMode::Vertex,
-            attributes: &wgpu::vertex_attr_array![0 => Float32x2],
-        };
-        let particle_attributes =
-            wgpu::vertex_attr_array![1 => Float32x4, 2 => Float32x4, 3 => Float32x4];
-        let billboard = self.pipeline(
-            device,
-            "render-wgpu particle billboard",
-            &self.particle_pipeline_layout,
-            ("vs_particle", "fs_particle"),
-            &[
-                Some(corner.clone()),
-                Some(wgpu::VertexBufferLayout {
-                    array_stride: (PARTICLE_ROW_FLOATS * 4) as u64,
-                    step_mode: wgpu::VertexStepMode::Instance,
-                    attributes: &particle_attributes,
-                }),
-            ],
-            wgpu::PrimitiveTopology::TriangleStrip,
-            None,
-            format,
-            SpriteState {
-                depth_test: true,
-                depth_write: false,
-                blend: true,
-            },
-        );
+        let billboard = [ParticleBlendMode::Alpha, ParticleBlendMode::Additive]
+            .map(|blend| self.billboard_pipeline(device, format, blend, None));
         let cube_vertex = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x2];
         let cube_instance = wgpu::vertex_attr_array![3 => Float32x4, 4 => Float32x4];
         let cube = self.pipeline(
@@ -324,19 +369,99 @@ impl Effects {
             Some(wgpu::Face::Back),
             format,
             // Cube particles are transparent but write depth.
-            SpriteState {
-                depth_test: true,
-                depth_write: true,
-                blend: true,
-            },
+            Some(depth_state(true, true)),
+            Some(wgpu::BlendState::ALPHA_BLENDING),
         );
         self.formats.push(FormatPipelines {
             format,
             sprites: HashMap::new(),
             billboard,
+            soft: None,
             cube,
         });
         self.formats.len() - 1
+    }
+
+    /// A billboard pipeline: depth-tested by the world pass, or, for the
+    /// particle pass over a depth of `soft` samples, by its own shader.
+    fn billboard_pipeline(
+        &self,
+        device: &wgpu::Device,
+        format: ColorTarget,
+        blend: ParticleBlendMode,
+        soft: Option<u32>,
+    ) -> wgpu::RenderPipeline {
+        let corner = wgpu::VertexBufferLayout {
+            array_stride: 8,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &wgpu::vertex_attr_array![0 => Float32x2],
+        };
+        let particle_attributes = wgpu::vertex_attr_array![
+            1 => Float32x4, 2 => Float32x4, 3 => Float32x4, 4 => Float32x4
+        ];
+        let (layout, fragment, depth) = match soft {
+            None => (
+                &self.particle_pipeline_layout,
+                "fs_particle",
+                Some(depth_state(true, false)),
+            ),
+            Some(1) => (&self.soft_layouts[0].pipeline, "fs_particle_soft", None),
+            Some(_) => (
+                &self.soft_layouts[1].pipeline,
+                "fs_particle_soft_multisampled",
+                None,
+            ),
+        };
+        self.pipeline(
+            device,
+            "render-wgpu particle billboard",
+            layout,
+            ("vs_particle", fragment),
+            &[
+                Some(corner),
+                Some(wgpu::VertexBufferLayout {
+                    array_stride: (PARTICLE_ROW_FLOATS * 4) as u64,
+                    step_mode: wgpu::VertexStepMode::Instance,
+                    attributes: &particle_attributes,
+                }),
+            ],
+            wgpu::PrimitiveTopology::TriangleStrip,
+            None,
+            format,
+            depth,
+            Some(blend_state(blend)),
+        )
+    }
+
+    /// The soft billboard pipelines of this format, made at the first soft
+    /// emitter. The view's depth has the format's sample count.
+    fn ensure_soft_pipelines(&mut self, device: &wgpu::Device, format: ColorTarget) {
+        let index = self.format_index(device, format);
+        if self.formats[index].soft.is_some() {
+            return;
+        }
+        let soft = [ParticleBlendMode::Alpha, ParticleBlendMode::Additive]
+            .map(|blend| self.billboard_pipeline(device, format, blend, Some(format.samples)));
+        self.formats[index].soft = Some(soft);
+    }
+
+    /// The world's depth bound for the particle pass of a view whose depth
+    /// has `samples` per pixel.
+    pub fn scene_depth_bind_group(
+        &self,
+        device: &wgpu::Device,
+        samples: u32,
+        depth: &wgpu::TextureView,
+    ) -> wgpu::BindGroup {
+        let index = soft_index(samples);
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("render-wgpu particle scene depth"),
+            layout: &self.soft_layouts[index].depth,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 30 + index as u32,
+                resource: wgpu::BindingResource::TextureView(depth),
+            }],
+        })
     }
 
     fn ensure_sprite_pipeline(
@@ -382,7 +507,8 @@ impl Effects {
             wgpu::PrimitiveTopology::TriangleStrip,
             None,
             format,
-            state,
+            Some(depth_state(state.depth_test, state.depth_write)),
+            state.blend.then_some(wgpu::BlendState::ALPHA_BLENDING),
         );
         self.formats[index].sprites.insert(state, pipeline);
     }
@@ -398,7 +524,8 @@ impl Effects {
         topology: wgpu::PrimitiveTopology,
         cull_mode: Option<wgpu::Face>,
         format: ColorTarget,
-        state: SpriteState,
+        depth_stencil: Option<wgpu::DepthStencilState>,
+        blend: Option<wgpu::BlendState>,
     ) -> wgpu::RenderPipeline {
         device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some(label),
@@ -414,17 +541,7 @@ impl Effects {
                 cull_mode,
                 ..Default::default()
             },
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: DEPTH_FORMAT,
-                depth_write_enabled: Some(state.depth_write),
-                depth_compare: Some(if state.depth_test {
-                    wgpu::CompareFunction::LessEqual
-                } else {
-                    wgpu::CompareFunction::Always
-                }),
-                stencil: Default::default(),
-                bias: Default::default(),
-            }),
+            depth_stencil,
             multisample: format.multisample(),
             fragment: Some(wgpu::FragmentState {
                 module: &self.shader,
@@ -432,7 +549,7 @@ impl Effects {
                 compilation_options: Default::default(),
                 targets: &[Some(wgpu::ColorTargetState {
                     format: format.format,
-                    blend: state.blend.then_some(wgpu::BlendState::ALPHA_BLENDING),
+                    blend,
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
             }),
@@ -510,18 +627,81 @@ impl Effects {
             let count = cube.groups.first().map_or(0, |group| group.2);
             pass.draw_indexed(0..count, 0, 0..effects.cubes);
         }
-        if effects.billboards.is_empty() {
-            return;
+        self.draw_billboards(pass, effects, &set.billboard, false);
+    }
+
+    /// Draw the soft billboards in the particle pass, the world's depth
+    /// bound in group 2 (`scene_depth_bind_group`).
+    pub fn draw_soft_particles(
+        &self,
+        pass: &mut wgpu::RenderPass<'_>,
+        format: ColorTarget,
+        effects: &EffectsPass,
+    ) {
+        if let Some(pipelines) = self
+            .formats
+            .iter()
+            .find(|set| set.format == format)
+            .and_then(|set| set.soft.as_ref())
+        {
+            self.draw_billboards(pass, effects, pipelines, true);
         }
-        pass.set_pipeline(&set.billboard);
-        pass.set_vertex_buffer(0, self.corners.slice(..));
-        pass.set_vertex_buffer(1, self.particle_rows.buffer.slice(..));
-        for (texture, first, count) in &effects.billboards {
-            if let Some(Some(texture)) = self.particle_textures.get(*texture as usize) {
-                pass.set_bind_group(1, &texture.bind_group, &[]);
-                pass.draw(0..4, *first..first + count);
+    }
+
+    fn draw_billboards(
+        &self,
+        pass: &mut wgpu::RenderPass<'_>,
+        effects: &EffectsPass,
+        pipelines: &BlendPipelines,
+        soft: bool,
+    ) {
+        let mut bound = None;
+        for run in effects.billboards.iter().filter(|run| run.soft == soft) {
+            let Some(Some(texture)) = self.particle_textures.get(run.texture as usize) else {
+                continue;
+            };
+            if bound.is_none() {
+                pass.set_vertex_buffer(0, self.corners.slice(..));
+                pass.set_vertex_buffer(1, self.particle_rows.buffer.slice(..));
             }
+            if bound != Some(run.blend) {
+                pass.set_pipeline(&pipelines[blend_index(run.blend)]);
+                bound = Some(run.blend);
+            }
+            pass.set_bind_group(1, &texture.bind_group, &[]);
+            pass.draw(0..4, run.first..run.first + run.count);
         }
+    }
+}
+
+fn depth_state(test: bool, write: bool) -> wgpu::DepthStencilState {
+    wgpu::DepthStencilState {
+        format: DEPTH_FORMAT,
+        depth_write_enabled: Some(write),
+        depth_compare: Some(if test {
+            wgpu::CompareFunction::LessEqual
+        } else {
+            wgpu::CompareFunction::Always
+        }),
+        stencil: Default::default(),
+        bias: Default::default(),
+    }
+}
+
+/// How a billboard's colour reaches the frame. Additive colour is
+/// premultiplied by its alpha in the shader, so a faded particle adds
+/// nothing; the frame's alpha keeps its coverage either way.
+fn blend_state(blend: ParticleBlendMode) -> wgpu::BlendState {
+    match blend {
+        ParticleBlendMode::Alpha => wgpu::BlendState::ALPHA_BLENDING,
+        ParticleBlendMode::Additive => wgpu::BlendState {
+            color: wgpu::BlendComponent {
+                src_factor: wgpu::BlendFactor::One,
+                dst_factor: wgpu::BlendFactor::One,
+                operation: wgpu::BlendOperation::Add,
+            },
+            alpha: wgpu::BlendState::ALPHA_BLENDING.alpha,
+        },
     }
 }
 
@@ -1056,20 +1236,32 @@ impl Renderer {
             );
             let mut order = std::mem::take(&mut self.effects.order_scratch);
             order.clear();
+            let mut soft = false;
             for (index, particle) in self.particles.particles.iter().enumerate() {
-                let group = match &particle.descriptor.visual {
-                    ParticleVisual::Cube => Some(0),
-                    ParticleVisual::Billboard { .. } => particle.texture.map(|slot| slot + 1),
+                let descriptor = &particle.descriptor;
+                let group = match &descriptor.visual {
+                    ParticleVisual::Cube => Some((0, 0)),
+                    // Hard billboards by blend then texture, then soft ones
+                    // the same way: each run is one draw.
+                    ParticleVisual::Billboard { .. } => particle.texture.map(|slot| {
+                        let path = u32::from(descriptor.softness_metres > 0.0) << 1
+                            | u32::from(descriptor.blend == ParticleBlendMode::Additive);
+                        (1 + path, slot)
+                    }),
                 };
-                if let Some(group) = group {
-                    order.push((group, index as u32));
+                if let Some((group, texture)) = group {
+                    soft |= group >= 3;
+                    order.push((group, texture, index as u32));
                 }
+            }
+            if soft {
+                self.effects.ensure_soft_pipelines(&self.gpu.device, format);
             }
             order.sort_unstable();
             rows.clear();
             let mut cubes = std::mem::take(&mut self.effects.cube_scratch);
             cubes.clear();
-            for (group, index) in &order {
+            for (group, texture, index) in &order {
                 let particle = self.particles.particles[*index as usize].view();
                 let color = [
                     srgb_to_linear(particle.color[0]),
@@ -1078,42 +1270,58 @@ impl Renderer {
                     particle.color[3],
                 ];
                 let p = particle.position;
-                match group.checked_sub(1) {
-                    None => {
-                        cubes.extend_from_slice(&[p.x, p.y, p.z, particle.size.max(0.0)]);
-                        cubes.extend_from_slice(&color);
-                    }
-                    Some(texture) => {
-                        let first = (rows.len() / PARTICLE_ROW_FLOATS) as u32;
-                        match pass.billboards.last_mut() {
-                            Some((last, _, count)) if *last == texture => *count += 1,
-                            _ => pass.billboards.push((texture, first, 1)),
+                if *group == 0 {
+                    cubes.extend_from_slice(&[p.x, p.y, p.z, particle.size.max(0.0)]);
+                    cubes.extend_from_slice(&color);
+                } else {
+                    let descriptor = &self.particles.particles[*index as usize].descriptor;
+                    let first = (rows.len() / PARTICLE_ROW_FLOATS) as u32;
+                    match pass.billboards.last_mut() {
+                        Some(run)
+                            if run.texture == *texture
+                                && run.blend == descriptor.blend
+                                && run.soft == (*group >= 3) =>
+                        {
+                            run.count += 1;
                         }
-                        let descriptor = &self.particles.particles[*index as usize].descriptor;
-                        let frames = match &descriptor.visual {
-                            ParticleVisual::Billboard { sprite } => {
-                                f32::from(sprite.frame_count.max(1))
-                            }
-                            ParticleVisual::Cube => 1.0,
-                        };
-                        let size = particle.size.max(0.0);
-                        // Screen size is a fixed clip offset scaled by depth in
-                        // the shader; world size is a projected half edge.
-                        let (half_x, half_y, world) = match descriptor.size_mode {
-                            ParticleSizeMode::Screen => {
-                                let size = size.max(1.0 / PARTICLE_PIXELS_PER_UNIT);
-                                (half.x * size, half.y * size, 0.0)
-                            }
-                            ParticleSizeMode::World => (
-                                0.5 * size * view.camera.projection.x_axis.x,
-                                0.5 * size * view.camera.projection.y_axis.y,
-                                1.0,
-                            ),
-                        };
-                        rows.extend_from_slice(&[p.x, p.y, p.z, half_x]);
-                        rows.extend_from_slice(&color);
-                        rows.extend_from_slice(&[half_y, particle.frame as f32, frames, world]);
+                        _ => pass.billboards.push(BillboardRun {
+                            texture: *texture,
+                            blend: descriptor.blend,
+                            soft: *group >= 3,
+                            first,
+                            count: 1,
+                        }),
                     }
+                    let frames = match &descriptor.visual {
+                        ParticleVisual::Billboard { sprite } => {
+                            f32::from(sprite.frame_count.max(1))
+                        }
+                        ParticleVisual::Cube => 1.0,
+                    };
+                    let size = particle.size.max(0.0);
+                    // Screen size is a fixed clip offset scaled by depth in
+                    // the shader; world size is a projected half edge.
+                    let (half_x, half_y, world) = match descriptor.size_mode {
+                        ParticleSizeMode::Screen => {
+                            let size = size.max(1.0 / PARTICLE_PIXELS_PER_UNIT);
+                            (half.x * size, half.y * size, 0.0)
+                        }
+                        ParticleSizeMode::World => (
+                            0.5 * size * view.camera.projection.x_axis.x,
+                            0.5 * size * view.camera.projection.y_axis.y,
+                            1.0,
+                        ),
+                    };
+                    let additive = f32::from(descriptor.blend == ParticleBlendMode::Additive);
+                    rows.extend_from_slice(&[p.x, p.y, p.z, half_x]);
+                    rows.extend_from_slice(&color);
+                    rows.extend_from_slice(&[half_y, particle.frame as f32, frames, world]);
+                    rows.extend_from_slice(&[
+                        descriptor.softness_metres.max(0.0),
+                        additive,
+                        0.0,
+                        0.0,
+                    ]);
                 }
             }
             pass.cubes = (cubes.len() / CUBE_ROW_FLOATS) as u32;

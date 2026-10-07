@@ -105,11 +105,28 @@ pub enum ParticleSizeMode {
     World,
 }
 
+/// How a billboard particle's colour reaches the frame. Cubes always blend
+/// by alpha.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ParticleBlendMode {
+    /// Over what is behind it by its alpha.
+    #[default]
+    Alpha,
+    /// Added to what is behind it, premultiplied by its alpha: flames,
+    /// sparks and glows.
+    Additive,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParticleEmitterDescriptor {
     pub anchor: ParticleAnchor,
     pub visual: ParticleVisual,
     pub size_mode: ParticleSizeMode,
+    pub blend: ParticleBlendMode,
+    /// Over how many metres a billboard fades out as it nears the opaque
+    /// scene behind it; 0 draws it with a hard depth edge.
+    pub softness_metres: f32,
     pub rate_per_second: f32,
     pub burst_count: u32,
     pub lifetime_seconds: [f32; 2],
@@ -136,6 +153,10 @@ struct ParticleEmitterDescriptorWire {
     sprite: Option<ParticleSpriteRef>,
     #[serde(default)]
     size_mode: ParticleSizeMode,
+    #[serde(default)]
+    blend: ParticleBlendMode,
+    #[serde(default)]
+    softness_metres: f32,
     rate_per_second: f32,
     burst_count: u32,
     lifetime_seconds: [f32; 2],
@@ -162,6 +183,8 @@ impl Serialize for ParticleEmitterDescriptor {
             visual: Some(self.visual.clone()),
             sprite: None,
             size_mode: self.size_mode,
+            blend: self.blend,
+            softness_metres: self.softness_metres,
             rate_per_second: self.rate_per_second,
             burst_count: self.burst_count,
             lifetime_seconds: self.lifetime_seconds,
@@ -204,6 +227,8 @@ impl<'de> Deserialize<'de> for ParticleEmitterDescriptor {
             anchor: wire.anchor,
             visual,
             size_mode: wire.size_mode,
+            blend: wire.blend,
+            softness_metres: wire.softness_metres,
             rate_per_second: wire.rate_per_second,
             burst_count: wire.burst_count,
             lifetime_seconds: wire.lifetime_seconds,
@@ -229,6 +254,8 @@ pub struct ParticleEmitterPatch {
     /// Legacy source/JSON compatibility. Prefer `visual` for new callers.
     pub sprite: Option<ParticleSpriteRef>,
     pub size_mode: Option<ParticleSizeMode>,
+    pub blend: Option<ParticleBlendMode>,
+    pub softness_metres: Option<f32>,
     pub rate_per_second: Option<f32>,
     pub burst_count: Option<u32>,
     pub lifetime_seconds: Option<[f32; 2]>,
@@ -658,6 +685,12 @@ fn apply_patch(
     }
     if let Some(value) = patch.size_mode {
         descriptor.size_mode = value;
+    }
+    if let Some(value) = patch.blend {
+        descriptor.blend = value;
+    }
+    if let Some(value) = patch.softness_metres {
+        descriptor.softness_metres = value;
     }
     if let Some(value) = patch.rate_per_second {
         descriptor.rate_per_second = value;

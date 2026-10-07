@@ -544,6 +544,8 @@ fn patched(
             .unwrap_or_else(|| descriptor.anchor.clone()),
         visual,
         size_mode: patch.size_mode.unwrap_or(descriptor.size_mode),
+        blend: patch.blend.unwrap_or(descriptor.blend),
+        softness_metres: patch.softness_metres.unwrap_or(descriptor.softness_metres),
         rate_per_second: patch.rate_per_second.unwrap_or(descriptor.rate_per_second),
         burst_count: patch.burst_count.unwrap_or(descriptor.burst_count),
         lifetime_seconds: patch
@@ -584,6 +586,8 @@ mod tests {
             },
             visual: ParticleVisual::Cube,
             size_mode: Default::default(),
+            blend: Default::default(),
+            softness_metres: 0.0,
             rate_per_second: 0.0,
             burst_count: count,
             lifetime_seconds: [1.0, 2.0],

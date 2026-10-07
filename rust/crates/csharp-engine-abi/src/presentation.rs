@@ -233,6 +233,17 @@ pub enum NativePresentationParticleSizeMode {
     World = 1,
 }
 
+/// How a billboard particle's colour reaches the frame: over what is behind
+/// it by its alpha (the zero default), or added to it, for flames and glows.
+/// Cubes always blend by alpha.
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum NativePresentationParticleBlendMode {
+    #[default]
+    Alpha = 0,
+    Additive = 1,
+}
+
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativePresentationParticleScalarKey {
@@ -323,6 +334,11 @@ pub struct NativePresentationParticleDescriptor {
     pub collision_volumes: *const NativePresentationParticleCollisionVolume,
     pub collision_volumes_len: usize,
     pub size_mode: NativePresentationParticleSizeMode,
+    pub blend: NativePresentationParticleBlendMode,
+    /// Over how many metres a billboard fades out as it nears the opaque
+    /// scene behind it, so a flame or smoke sheet meets a wall or floor
+    /// without a hard edge. 0 (the default) draws it as before.
+    pub softness_metres: f32,
 }
 
 /// Direct particle emissions are cosmetic. Valid one-shots return an

@@ -243,6 +243,20 @@ on screen at any distance, 24 CSS pixels per unit, and `World` takes metres and
 shrinks with distance like a sprite, which suits world effects such as embers or
 dust.
 
+A billboard's `Blend` is how its colour reaches the frame: `Alpha` (the zero
+default) draws it over what is behind it by its alpha, for smoke and dust;
+`Additive` adds it, premultiplied by its alpha, so flames, sparks and glows
+brighten what they overlap and a faded particle adds nothing. Cubes always
+blend by alpha. `SoftnessMetres` fades a billboard out as it nears the opaque
+world behind it, over that many metres, so a flame sheet meets the floor and a
+smoke puff meets a wall without a hard intersection line; 0 (the default) keeps
+the hard depth edge. Soft billboards draw after the world in a pass of their
+own that reads the view's depth, so they cost one more pass per view that has
+any; hard ones draw in the world pass as before. The
+[lighting fixture](../fixtures/csharp-lighting-sky/Product.cs)'s
+`lighting.torch.flame true` lights a torch of a soft additive flame flipbook,
+soft additive embers and soft alpha smoke against a wall.
+
 For billboard smoke, use an admitted `Graphics.OpenResource` image handle as
 `Sprite` and set `SpriteFrameCount = 1`. More frames require a positive
 `FlipbookFramesPerSecond`; cubes require zero. `HasCollision` enables the

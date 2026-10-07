@@ -37,12 +37,21 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     private const float NoonElevation = 55, DuskElevation = 6, SunAzimuth = 210, NoonSunIntensity = 2.5f, DuskSunIntensity = .5f;
     // Height fog over the room, hazy toward the sun, with its disc and halo.
     private static readonly AtmosphereRequest Air = new(0,6,new Color(1,.7f,.45f,1),8,1.5f,.35f);
+    // The torch's fire on the floor by the -x wall: a soft additive flame flipbook, soft additive embers and soft alpha smoke rising along the wall, so each sheet meets the stone without a hard edge. Seen from the fire viewpoint.
+    private const ulong FlameId = 10, EmberId = 11, SmokeId = 12;
+    private static readonly Vector3 FirePosition = new(1.55f,1.05f,3.5f);
+    private static readonly Vector3 FireEye = new(3.4f,1.9f,5.2f), FireTarget = new(1.5f,1.45f,3.5f);
+    private const float FlameSoftness = .3f, EmberSoftness = .1f, SmokeSoftness = .5f, FlameFramesPerSecond = 12;
+    private const ushort FlameFrames = 8;
     private readonly IEngineContext engine;
     private readonly SpatialSession scene;
     private readonly Material stone;
     private readonly Camera camera;
     private readonly Light torch, sun, hemisphere, skyAmbient;
     private readonly RenderResource day, night;
+    private RenderResource? flameSprite, emberSprite, smokeSprite;
+    private PresentationEmitter? flame, embers, smoke;
+    private PresentationParticleDescriptor flameFire, emberFire, smokeFire;
     private VoxelScenePresentation? presentation;
     private LightDescriptor descriptor;
     private uint[] room = [];
@@ -110,6 +119,49 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     private void SetTorch(bool enabled) { descriptor=descriptor with { Enabled=enabled }; engine.Graphics.UpdateLight(new(torch,new(TorchId,false,0,descriptor))); }
     [DebugCommand("lighting.torch")]
     public string Torch(bool enabled) { SetTorch(enabled); return Inspect(); }
+    // The torch's fire (flame, embers and smoke) by the wall, and the camera on it; false puts it out and keeps the camera.
+    [DebugCommand("lighting.torch.flame")]
+    public string Flame(bool burning)
+    {
+        if (burning && flame is null)
+        {
+            flameSprite ??= engine.Graphics.OpenResource(new("flame.png",TextureFilter.Linear,TextureWrap.Clamp)).Handle;
+            emberSprite ??= engine.Graphics.OpenResource(new("ember.png",TextureFilter.Linear,TextureWrap.Clamp)).Handle;
+            smokeSprite ??= engine.Graphics.OpenResource(new("smoke.png",TextureFilter.Linear,TextureWrap.Clamp)).Handle;
+            flameFire = Fire(FlameId,"lighting.flame",flameSprite,FlameFrames,FlameFramesPerSecond,24,.35f,.55f,new(-.08f,.5f,-.08f),new(.08f,.9f,.08f),Vector3.Zero,
+                [new(0,.45f),new(.5f,.6f),new(1,.15f)],[new(0,new Color(1,.85f,.5f,1)),new(.6f,new Color(1,.45f,.1f,.7f)),new(1,new Color(.5f,.1f,0,0))],PresentationParticleBlendMode.Additive,FlameSoftness,32);
+            emberFire = Fire(EmberId,"lighting.embers",emberSprite,1,0,10,1,2,new(-.35f,.8f,-.35f),new(.35f,1.6f,.35f),new(0,-.5f,0),
+                [new(0,.06f),new(1,.02f)],[new(0,new Color(1,.6f,.2f,1)),new(1,new Color(1,.2f,0,0))],PresentationParticleBlendMode.Additive,EmberSoftness,48);
+            smokeFire = Fire(SmokeId,"lighting.smoke",smokeSprite,1,0,5,2,3,new(-.25f,.45f,-.1f),new(.05f,.8f,.1f),Vector3.Zero,
+                [new(0,.3f),new(1,1.1f)],[new(0,new Color(.3f,.27f,.25f,.45f)),new(1,new Color(.25f,.25f,.25f,0))],PresentationParticleBlendMode.Alpha,SmokeSoftness,32);
+            flame = engine.Presentation.CreateEmitter(flameFire);
+            embers = engine.Presentation.CreateEmitter(emberFire);
+            smoke = engine.Presentation.CreateEmitter(smokeFire);
+            engine.CameraView.UpdateCamera(new(camera,Camera(FireEye,FireTarget)));
+        }
+        else if (!burning) { flame?.Dispose(); embers?.Dispose(); smoke?.Dispose(); flame = embers = smoke = null; }
+        return Inspect();
+    }
+    // Scale the burning fire's softness: 0 gives every sheet a hard depth edge, 1 the authored softness.
+    [DebugCommand("lighting.torch.softness")]
+    public string Softness(float scale)
+    {
+        if (flame is null || embers is null || smoke is null) return Inspect();
+        engine.Presentation.UpdateEmitter(flame,flameFire with { SoftnessMetres = FlameSoftness*scale });
+        engine.Presentation.UpdateEmitter(embers,emberFire with { SoftnessMetres = EmberSoftness*scale });
+        engine.Presentation.UpdateEmitter(smoke,smokeFire with { SoftnessMetres = SmokeSoftness*scale });
+        return Inspect();
+    }
+    private static PresentationParticleDescriptor Fire(ulong id,string signal,RenderResource sprite,ushort frames,float framesPerSecond,float rate,float lifeMin,float lifeMax,Vector3 velocityMin,Vector3 velocityMax,Vector3 acceleration,
+        PresentationParticleScalarKey[] size,PresentationParticleColorKey[] color,PresentationParticleBlendMode blend,float softness,uint max) => new()
+    {
+        LogicalId = id, SignalId = signal, Visible = true, Seed = id,
+        Anchor = new() { Kind = PresentationAnchorKind.World, Position = FirePosition },
+        Visual = PresentationParticleVisual.Billboard, Sprite = sprite, SpriteFrameCount = frames, FlipbookFramesPerSecond = framesPerSecond,
+        SizeMode = PresentationParticleSizeMode.World, Blend = blend, SoftnessMetres = softness,
+        RatePerSecond = rate, MaxParticles = max, LifetimeMinSeconds = lifeMin, LifetimeMaxSeconds = lifeMax,
+        VelocityMin = velocityMin, VelocityMax = velocityMax, Acceleration = acceleration, SizeCurve = size, ColorCurve = color,
+    };
     [DebugCommand("lighting.sky")]
     public string Sky(float amount) { clock=Math.Clamp(amount,0,1); engine.CameraView.SetSkyBackgroundBlend(new(day,night,clock)); engine.Graphics.UpdateLight(new(sun,new(SunId,false,0,Sun(clock)))); engine.CameraView.UpdateCamera(new(camera,Camera(SkyEye,SkyTarget))); return Inspect(); }
     [DebugCommand("lighting.atmosphere")]
@@ -207,7 +259,7 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     public void RegisterDebugCommands(IDebugCommandModuleRegistrar registrar)=>registrar.Register(this);
     public ProductUpdateResult Update(ProductUpdate update)=>ProductUpdateResult.None;
     public void Pause(){} public void Resume(){} public void Restart(){SetTorch(true);} public void Shutdown(){}
-    public void Dispose(){engine.CameraView.ClearSkyBackground(default); presentation?.Dispose(); torch.Dispose(); sun.Dispose(); hemisphere.Dispose(); skyAmbient.Dispose(); camera.Dispose(); stone.Dispose(); scene.Dispose(); day.Dispose(); night.Dispose();}
+    public void Dispose(){engine.CameraView.ClearSkyBackground(default); Flame(false); flameSprite?.Dispose(); emberSprite?.Dispose(); smokeSprite?.Dispose(); presentation?.Dispose(); torch.Dispose(); sun.Dispose(); hemisphere.Dispose(); skyAmbient.Dispose(); camera.Dispose(); stone.Dispose(); scene.Dispose(); day.Dispose(); night.Dispose();}
 }
 internal sealed record LightingSave(uint[] Room,LightDescriptor Torch);
 internal sealed record LightingProof(bool RoundTrip,float Lit,float Blocked,float Dark,float Current,bool Torch,float Clock);

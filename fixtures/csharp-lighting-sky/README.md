@@ -10,6 +10,7 @@ RustyEngineFixtureSdkVersion=<version> RestoreAdditionalProjectSources=<feed> \
 
 Run the staged bundle with the matching runtime pack. Debug commands and the
 bounded proof contract are in [lighting and skies](../../docs/lighting-and-sky.md).
-`generate-skies.py` regenerates the two small authored PNG fixture panoramas.
+`generate-skies.py` regenerates the two small authored PNG fixture panoramas,
+and `generate-particles.py` the torch's flame flipbook, ember and smoke sprites.
 The fixture owns the supplied clock value and source light descriptor; Engine
 owns rendering, light sampling, scene persistence primitives and GPU resources.

@@ -59,6 +59,8 @@ fn particle() -> ParticleEmitterDescriptor {
             },
         },
         size_mode: Default::default(),
+        blend: Default::default(),
+        softness_metres: 0.0,
         rate_per_second: 8.0,
         burst_count: 4,
         lifetime_seconds: [0.2, 0.6],
