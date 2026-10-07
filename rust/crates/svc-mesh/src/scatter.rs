@@ -67,12 +67,8 @@ pub fn surface_points(surface: &ChunkSurface<'_>, sampling: &SurfaceSampling) ->
     };
     for &(slot, start, count) in surface.groups {
         let end = (start + count) as usize;
-        for triangle in surface.indices[start as usize..end].chunks_exact(3) {
-            let [a, b, c] = [
-                vertex(triangle[0]),
-                vertex(triangle[1]),
-                vertex(triangle[2]),
-            ];
+        for &[i0, i1, i2] in surface.indices[start as usize..end].as_chunks::<3>().0 {
+            let [a, b, c] = [vertex(i0), vertex(i1), vertex(i2)];
             let normal = cross(sub(b, a), sub(c, a));
             let length = dot(normal, normal).sqrt();
             if length <= f64::EPSILON {

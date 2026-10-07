@@ -82,7 +82,7 @@ fn edge_error(scene: &VoxelCollisionScene) -> (f64, f64) {
     let mut sum = 0.0;
     let mut count = 0;
     for chunk in scene.mesh_chunks() {
-        for vertex in chunk.positions.chunks_exact(3) {
+        for vertex in chunk.positions.as_chunks::<3>().0 {
             let point: [f64; 3] = std::array::from_fn(|axis| {
                 f64::from(chunk.translation[axis]) + f64::from(vertex[axis])
             });
@@ -129,7 +129,9 @@ fn both_chunks_at_a_seam_place_the_same_vertices() {
         let chunk = scene.mesh_chunk(coord).expect("resident");
         chunk
             .positions
-            .chunks_exact(3)
+            .as_chunks::<3>()
+            .0
+            .iter()
             .map(|vertex| {
                 std::array::from_fn(|axis| {
                     (f64::from(chunk.translation[axis]) + f64::from(vertex[axis])) as f32
@@ -261,7 +263,7 @@ fn a_crater_rim_keeps_the_walls_it_meets() {
         let largest = |scene: &VoxelCollisionScene| -> f64 {
             let mut largest: f64 = 0.0;
             for chunk in scene.mesh_chunks() {
-                for vertex in chunk.positions.chunks_exact(3) {
+                for vertex in chunk.positions.as_chunks::<3>().0 {
                     let point: [f64; 3] = std::array::from_fn(|axis| {
                         f64::from(chunk.translation[axis]) + f64::from(vertex[axis])
                     });

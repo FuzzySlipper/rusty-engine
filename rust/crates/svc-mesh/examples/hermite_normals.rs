@@ -195,7 +195,7 @@ fn measure(world: &VoxelWorld, cut: Cut, ignore: bool) -> ([f64; 4], usize, Dura
         }
         for (coord, mesh) in meshes {
             let origin = [coord.x, coord.y, coord.z].map(|value| (value * i64::from(CHUNK)) as f64);
-            for vertex in mesh.positions.chunks_exact(3) {
+            for vertex in mesh.positions.as_chunks::<3>().0 {
                 let point: [f64; 3] =
                     std::array::from_fn(|axis| origin[axis] + f64::from(vertex[axis]));
                 let error = cut.rock(point).0.abs();

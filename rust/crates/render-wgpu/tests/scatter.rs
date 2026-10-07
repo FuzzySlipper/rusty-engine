@@ -128,7 +128,12 @@ fn render(harness: &mut Harness) -> (render_wgpu::FrameStats, Vec<u8>) {
 
 /// Pixels as bright as a lit post.
 fn bright(frame: &[u8]) -> usize {
-    frame.chunks_exact(4).filter(|pixel| pixel[1] > 150).count()
+    frame
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .filter(|pixel| pixel[1] > 150)
+        .count()
 }
 
 fn whole() -> Vec<ScatterInstance> {
@@ -323,8 +328,10 @@ fn gpu_culling_draws_the_cpu_picture_of_a_patch() {
     }
     assert!(bright(&cpu) > 1000);
     let differing = cpu
-        .chunks_exact(4)
-        .zip(gpu.chunks_exact(4))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(gpu.as_chunks::<4>().0)
         .filter(|(a, b)| a != b)
         .count();
     assert!(

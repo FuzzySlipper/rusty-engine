@@ -1698,6 +1698,10 @@ pub enum MeshMaterialSlotError {
     InvalidMaterial { slot: u16, source: RenderAssetError },
 }
 
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2121,8 +2125,4 @@ mod tests {
             } if (offset - 6.0).abs() < f64::EPSILON
         ));
     }
-}
-
-fn is_false(value: &bool) -> bool {
-    !*value
 }
