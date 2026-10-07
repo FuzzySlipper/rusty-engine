@@ -555,23 +555,65 @@ mod tests {
         });
     }
 
+    /// The struct members and array elements of `module` that are 2-row
+    /// matrices. naga's HLSL backend wraps those in a struct, which FXC (the
+    /// DX12 compiler) will not convert to and from the matrix (#9674), so a
+    /// shader that compiles on Vulkan fails on Windows.
+    fn fxc_wrapped_matrices(module: &naga::Module) -> Vec<String> {
+        let two_rows = |ty: naga::Handle<naga::Type>| {
+            matches!(
+                module.types[ty].inner,
+                naga::TypeInner::Matrix {
+                    rows: naga::VectorSize::Bi,
+                    ..
+                }
+            )
+        };
+        let mut found = Vec::new();
+        for (_, ty) in module.types.iter() {
+            let name = ty.name.clone().unwrap_or_default();
+            match &ty.inner {
+                naga::TypeInner::Struct { members, .. } => {
+                    for member in members.iter().filter(|member| two_rows(member.ty)) {
+                        found.push(format!(
+                            "{name}.{}",
+                            member.name.clone().unwrap_or_default()
+                        ));
+                    }
+                }
+                naga::TypeInner::Array { base, .. } if two_rows(*base) => {
+                    found.push(format!("an array of 2-row matrices {name}"));
+                }
+                _ => {}
+            }
+        }
+        found
+    }
+
     /// Every entry composes and validates under every feature set it can be
-    /// compiled with, without a device.
+    /// compiled with, without a device, and holds no type FXC rejects.
     #[test]
     fn every_entry_composes_under_every_feature_set() {
         let compose = |shaders: &mut Shaders, entry: Entry, features: Features| {
             let (path, source) = entry.source();
-            if let Err(error) = shaders.composer.make_naga_module(NagaModuleDescriptor {
+            match shaders.composer.make_naga_module(NagaModuleDescriptor {
                 source,
                 file_path: path,
                 shader_type: ShaderType::Wgsl,
                 shader_defs: features.defs(),
                 ..Default::default()
             }) {
-                panic!(
+                Ok(module) => {
+                    let wrapped = fxc_wrapped_matrices(&module);
+                    assert!(
+                        wrapped.is_empty(),
+                        "{entry:?} {features:?}: FXC cannot compile {wrapped:?}"
+                    );
+                }
+                Err(error) => panic!(
                     "{entry:?} {features:?}: {}",
                     error.emit_to_string(&shaders.composer)
-                );
+                ),
             }
         };
         every_feature_set(

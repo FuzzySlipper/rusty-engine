@@ -126,11 +126,13 @@ fn triplanar_normal(n: vec3<f32>, samples: array<vec3<f32>, 3>, weights: vec3<f3
 // hex-tiling (JCGT 2022): the uv plane is cut into a triangle grid; each
 // vertex carries a random offset and rotation of the texture, so its
 // hexagonal neighbourhood shows a different patch, and a point blends its
-// triangle's three vertices' patches. `rotation` takes uv to each patch's
-// texture; derivatives follow it, so filtering does not jump at tile edges.
+// triangle's three vertices' patches. `turn` (the cosine and sine of each
+// patch's rotation) takes uv to its texture; derivatives follow it, so
+// filtering does not jump at tile edges. A turn is a vector, not a mat2x2:
+// FXC (DX12) rejects a 2-row matrix inside a struct or array.
 struct HexTiles {
     uv: array<vec2<f32>, 3>,
-    rotation: array<mat2x2<f32>, 3>,
+    turn: array<vec2<f32>, 3>,
     // Barycentric distance to each vertex: 1 at it, 0 on the opposite edge.
     corner: vec3<f32>,
     dx: vec2<f32>,
@@ -157,6 +159,11 @@ fn hex_random(vertex: vec2<i32>) -> vec3<f32> {
     return vec3<f32>(v >> vec3<u32>(8u)) / 16777216.0;
 }
 
+// `v` rotated by a patch's `turn`.
+fn hex_rotate(turn: vec2<f32>, v: vec2<f32>) -> vec2<f32> {
+    return vec2<f32>(turn.x * v.x - turn.y * v.y, turn.y * v.x + turn.x * v.y);
+}
+
 fn hex_tiles(uv: vec2<f32>) -> HexTiles {
     let grid = uv * HEX_GRID_SCALE;
     let skewed = vec2<f32>(grid.x - 0.57735027 * grid.y, 1.15470054 * grid.y);
@@ -178,17 +185,18 @@ fn hex_tiles(uv: vec2<f32>) -> HexTiles {
         let center = vec2<f32>(vertex.x + 0.5 * vertex.y, vertex.y / 1.15470054) / HEX_GRID_SCALE;
         let random = hex_random(vertices[i]);
         let angle = random.z * 6.2831853;
-        let rotation = mat2x2<f32>(cos(angle), sin(angle), -sin(angle), cos(angle));
-        tiles.rotation[i] = rotation;
-        tiles.uv[i] = rotation * (uv - center) + center + random.xy;
+        let turn = vec2<f32>(cos(angle), sin(angle));
+        tiles.turn[i] = turn;
+        tiles.uv[i] = hex_rotate(turn, uv - center) + center + random.xy;
     }
     return tiles;
 }
 
 // Patch `i` of `map` at `tiles`.
 fn hex_patch(map: texture_2d<f32>, map_sampler: sampler, tiles: HexTiles, i: u32) -> vec4<f32> {
-    let rotation = tiles.rotation[i];
-    return textureSampleGrad(map, map_sampler, tiles.uv[i], rotation * tiles.dx, rotation * tiles.dy);
+    let turn = tiles.turn[i];
+    return textureSampleGrad(map, map_sampler, tiles.uv[i], hex_rotate(turn, tiles.dx),
+        hex_rotate(turn, tiles.dy));
 }
 
 // A hex-tiled colour and the share each patch took: their corner distances
@@ -229,7 +237,7 @@ fn hex_normal(map: texture_2d<f32>, map_sampler: sampler, tiles: HexTiles, share
     var blended = vec3<f32>(0.0);
     for (var i = 0u; i < 3u; i++) {
         let mapped = hex_patch(map, map_sampler, tiles, i).xyz * 2.0 - 1.0;
-        blended += vec3<f32>(tiles.rotation[i] * mapped.xy, mapped.z) * shares[i];
+        blended += vec3<f32>(hex_rotate(tiles.turn[i], mapped.xy), mapped.z) * shares[i];
     }
     return blended * 0.5 + 0.5;
 }
