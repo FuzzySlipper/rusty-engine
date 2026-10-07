@@ -3,7 +3,7 @@
 // finishes (`rusty::finish`). Each material compiles the features it uses
 // (`lib.rs` `Features`): UNLIT, MASK, VOXEL_SURFACE, NORMAL_MAP,
 // EMISSIVE_MAP, OCCLUSION_MAP, TRIPLANAR, TERRAIN_LAYERS, STOCHASTIC_TILING,
-// FLAT_SHADING, WIND; and the mesh's
+// FLAT_SHADING, WIND, WATER; and the mesh's
 // streams: VERTEX_TANGENTS, LAYER_WEIGHTS. A product shader (PRODUCT_SHADER)
 // shades the surface in place of `rusty::shade`, and may place its vertices
 // (PRODUCT_DISPLACES).
@@ -23,6 +23,10 @@
     normal_sampler,
     occlusion_map,
     occlusion_sampler,
+    product_map_a,
+    product_sampler_a,
+    product_map_b,
+    product_sampler_b,
     layer_albedo_1,
     layer_albedo_2,
     layer_albedo_3,
@@ -63,9 +67,16 @@ struct AmbientOcclusion {
     params: vec4<f32>,
 };
 
+#ifdef WATER
+// A water material draws blended, without the view's occlusion: its group 2
+// is the opaque pass's depth instead (render-wgpu `water.rs`), by target
+// pixel: what lies behind the water's surface.
+@group(2) @binding(0) var scene_depth: texture_depth_2d;
+#else
 @group(2) @binding(0) var ambient_occlusion_map: texture_2d<f32>;
 @group(2) @binding(1) var ambient_occlusion_sampler: sampler;
 @group(2) @binding(2) var<uniform> ambient_occlusion: AmbientOcclusion;
+#endif
 
 struct VsOut {
     @builtin(position) clip: vec4<f32>,
@@ -83,6 +94,10 @@ struct VsOut {
     // Texture-space position and normal, which the planes project.
     @location(7) texture_position: vec3<f32>,
     @location(8) texture_normal: vec3<f32>,
+#endif
+#ifdef WATER
+    // The clip position, for the pixel's place in the scene depth.
+    @location(9) clip_position: vec4<f32>,
 #endif
 };
 
@@ -135,6 +150,9 @@ fn vs_world(
     out.world_position = world;
     out.normal = world_normal;
     out.uv = uv;
+#ifdef WATER
+    out.clip_position = out.clip;
+#endif
     out.part = part;
     out.color = color;
 #ifdef VERTEX_TANGENTS
@@ -413,19 +431,81 @@ fn standard_surface(in: VsOut, front: bool) -> Surface {
     return surface;
 }
 
+#ifdef WATER
+// The water surface (WATER): the standard surface tinted by the depth of
+// the scene behind it along the view ray, foam where that scene lies within
+// the shoreline width below the surface, the normal rippled by two
+// scrolling normal maps (or procedural ripples when the material has none),
+// and the alpha raised toward the Fresnel reflectance at grazing angles.
+fn water_surface(in: VsOut, standard: Surface) -> Surface {
+    var surface = standard;
+    let flags = u32(material.factors.w + 0.5);
+    let time = frame.time.x;
+    let wave_uv = in.world_position.xz / max(material.water_params.w, 1e-3);
+    // The normal: the maps' slopes added in the water's own frame (its
+    // surface lies along the ground), scaled by the normal scale.
+    var slope = vec2<f32>(0.0);
+    if (flags & 4u) != 0u {
+        slope += (textureSample(normal_map, normal_sampler, wave_uv + material.water_scroll.zw * time).xy * 2.0 - 1.0);
+    }
+    if (flags & 2u) != 0u {
+        slope += (textureSample(product_map_b, product_sampler_b, wave_uv * 1.37 + material.water_params.xy * time).xy * 2.0 - 1.0);
+    }
+    if (flags & 6u) == 0u {
+        let phase = wave_uv * 6.2832;
+        slope = vec2<f32>(
+            sin(phase.x + time * 1.3) * 0.5 + sin(phase.x * 0.7 + phase.y * 0.4 + time * 0.9) * 0.3,
+            cos(phase.y * 1.1 + time * 1.7) * 0.5 + cos(phase.x * 0.3 - phase.y * 0.8 + time * 0.7) * 0.3,
+        ) * 0.25;
+    }
+    surface.normal = normalize(surface.normal + vec3<f32>(slope.x, 0.0, slope.y) * material.normal_scale);
+    // What lies behind the surface along this pixel's ray.
+    let ndc = in.clip_position.xy / in.clip_position.w;
+    let scene_z = textureLoad(scene_depth, vec2<i32>(in.clip.xy), 0);
+    let behind = frame.inv_view_proj * vec4<f32>(ndc, scene_z, 1.0);
+    let scene_world = behind.xyz / behind.w;
+    let through = distance(scene_world, in.world_position);
+    let vertical = max(in.world_position.y - scene_world.y, 0.0);
+    let absorbed = 1.0 - exp(-through / max(material.water_shallow.w, 1e-3));
+    let colour = mix(material.water_shallow.rgb, material.water_deep.rgb, absorbed);
+    var base = vec4<f32>(surface.tint.rgb * colour, mix(standard.base.a, 1.0, absorbed));
+    // Foam along the shore: the foam texture scrolled over the water, or
+    // bands rolling in, above the threshold.
+    let shoreline = max(material.water_deep.w, 1e-3);
+    let shore = 1.0 - smoothstep(0.0, shoreline, vertical);
+    var foam_mask = 0.5 + 0.5 * sin((vertical / shoreline - time * 0.8) * 9.4248);
+    if (flags & 1u) != 0u {
+        foam_mask = textureSample(product_map_a, product_sampler_a, wave_uv * 2.0 + material.water_scroll.xy * time).r;
+    }
+    let threshold = material.water_params.z;
+    let foam = shore * smoothstep(threshold - 0.15, threshold + 0.05, foam_mask);
+    base = vec4<f32>(mix(base.rgb, vec3<f32>(1.0), foam), max(base.a, foam));
+    // Grazing views reflect more than they let through.
+    let view = normalize(frame.camera.xyz - in.world_position);
+    let fresnel = 0.02 + 0.98 * pow(1.0 - max(dot(surface.normal, view), 0.0), 5.0);
+    surface.base = vec4<f32>(base.rgb, max(base.a, fresnel));
+    return surface;
+}
+#endif
+
 fn world_color(in: VsOut, front: bool, masked: bool) -> vec4<f32> {
     var surface = standard_surface(in, front);
+#ifdef WATER
+    surface = water_surface(in, surface);
+#endif
 #ifdef MASK
     if masked && surface.base.a < material.alpha_cutoff {
         discard;
     }
 #endif
 #ifndef UNLIT
+#ifndef WATER
     // Screen-space occlusion scales the ambient and hemisphere light with
     // the occlusion map, through the same term.
     let screen_occlusion = textureSample(ambient_occlusion_map, ambient_occlusion_sampler,
         in.clip.xy * ambient_occlusion.params.yz).r;
     surface.occlusion *= mix(1.0, screen_occlusion, ambient_occlusion.params.x);
+#endif
 #endif
 #ifdef PRODUCT_SHADER
     return shade(surface);

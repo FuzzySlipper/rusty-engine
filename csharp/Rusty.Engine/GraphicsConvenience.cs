@@ -39,7 +39,9 @@ public readonly partial record struct MaterialRequest
             0f,
             false,
             0f,
-            0f)
+            0f,
+            default,
+            false)
     {
     }
 
@@ -79,7 +81,9 @@ public readonly partial record struct MaterialRequest
             0f,
             false,
             0f,
-            0f)
+            0f,
+            default,
+            false)
     {
     }
 
@@ -120,7 +124,9 @@ public readonly partial record struct MaterialRequest
             0f,
             false,
             0f,
-            0f)
+            0f,
+            default,
+            false)
     {
     }
 
@@ -163,7 +169,9 @@ public readonly partial record struct MaterialRequest
             0f,
             false,
             0f,
-            0f)
+            0f,
+            default,
+            false)
     {
     }
 
@@ -207,7 +215,9 @@ public readonly partial record struct MaterialRequest
             0f,
             false,
             0f,
-            0f)
+            0f,
+            default,
+            false)
     {
     }
 
@@ -252,7 +262,9 @@ public readonly partial record struct MaterialRequest
             0f,
             false,
             0f,
-            0f)
+            0f,
+            default,
+            false)
     {
     }
 }
@@ -368,7 +380,7 @@ public readonly partial record struct AuthoredMaterialAppearanceRequest
 {
     /// <summary>An authored material appearance without a normal map.</summary>
     public AuthoredMaterialAppearanceRequest(AuthoredCatalog Catalog, string MaterialId, RenderResourceReference Texture)
-        : this(Catalog, MaterialId, Texture, default, 1, 0, default) { }
+        : this(Catalog, MaterialId, Texture, default, 1, 0, default, default) { }
 
     /// <summary>An authored material appearance read through its tile coordinates (no triplanar planes).</summary>
     public AuthoredMaterialAppearanceRequest(
@@ -377,7 +389,7 @@ public readonly partial record struct AuthoredMaterialAppearanceRequest
         RenderResourceReference Texture,
         RenderResourceReference NormalMap,
         float NormalScale)
-        : this(Catalog, MaterialId, Texture, NormalMap, NormalScale, 0, default) { }
+        : this(Catalog, MaterialId, Texture, NormalMap, NormalScale, 0, default, default) { }
 
     /// <summary>An authored material appearance shaded by the standard shader.</summary>
     public AuthoredMaterialAppearanceRequest(
@@ -387,7 +399,7 @@ public readonly partial record struct AuthoredMaterialAppearanceRequest
         RenderResourceReference NormalMap,
         float NormalScale,
         float TriplanarSharpness)
-        : this(Catalog, MaterialId, Texture, NormalMap, NormalScale, TriplanarSharpness, default) { }
+        : this(Catalog, MaterialId, Texture, NormalMap, NormalScale, TriplanarSharpness, default, default) { }
 }
 
 public readonly partial record struct LightDescriptor

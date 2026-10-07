@@ -32,6 +32,7 @@ use crate::shaders::Features;
 use crate::shadows::{self, ShadowMaps};
 use crate::tables::{Builtin, Environment, MaterialRef, NodeKind, PartId, PART_ROW_FLOATS};
 use crate::target::{ColorTarget, TargetView};
+use crate::water;
 use crate::{
     srgb_to_linear, AmbientOcclusionPath, OffscreenTarget, PresentSkip, Renderer, WindowSurface,
     DEFAULT_CLEAR_SRGB, NEUTRAL_GROUND_SRGB, NEUTRAL_HEMISPHERE_INTENSITY, NEUTRAL_KEY_INTENSITY,
@@ -1232,6 +1233,18 @@ impl Renderer {
         batches: &[batch::Batch],
         pipeline: impl Fn(batch::Pass, Features) -> &'a wgpu::RenderPipeline,
     ) -> Encoded {
+        self.draw_batches_bound(pass, batches, pipeline, |_, _| {})
+    }
+
+    /// `draw_batches`, with `bind` called after each pipeline change to
+    /// bind what that feature set's pipeline layout takes.
+    fn draw_batches_bound<'a>(
+        &'a self,
+        pass: &mut wgpu::RenderPass<'_>,
+        batches: &[batch::Batch],
+        pipeline: impl Fn(batch::Pass, Features) -> &'a wgpu::RenderPipeline,
+        bind: impl Fn(&mut wgpu::RenderPass<'_>, Features),
+    ) -> Encoded {
         let mut current: Option<(batch::Pass, Features)> = None;
         let mut encoded = Encoded::default();
         for draw in batches {
@@ -1246,6 +1259,7 @@ impl Renderer {
             if current != Some((draw.pass, features)) {
                 pass.set_pipeline(pipeline(draw.pass, features));
                 current = Some((draw.pass, features));
+                bind(pass, features);
                 encoded.pipeline_binds += 1;
             }
             // A wireframe part draws its triangles' edges: two edge indices
@@ -1280,6 +1294,7 @@ impl Renderer {
     /// are 0), then back to front.
     /// A blended surface writes no depth, so drawing either family as a
     /// block would let whatever draws second cover the other.
+    #[allow(clippy::too_many_arguments, reason = "one blended pass")]
     fn draw_blended<'a>(
         &'a self,
         pass: &mut wgpu::RenderPass<'_>,
@@ -1288,6 +1303,7 @@ impl Renderer {
         effects: &EffectsPass,
         eye: Vec3,
         pipeline: impl Fn(batch::Pass, Features) -> &'a wgpu::RenderPipeline + Copy,
+        bind: impl Fn(&mut wgpu::RenderPass<'_>, Features) + Copy,
     ) -> Encoded {
         let part_depth = |batch: &batch::Batch| {
             let bounds = &self.tables.parts.state[batch.part as usize].world_bounds;
@@ -1304,7 +1320,7 @@ impl Renderer {
                 }
             };
             if part_first {
-                encoded += self.draw_batches(pass, &parts[part..part + 1], pipeline);
+                encoded += self.draw_batches_bound(pass, &parts[part..part + 1], pipeline, bind);
                 part += 1;
             } else {
                 self.effects
@@ -1785,6 +1801,19 @@ impl Renderer {
         let candidates = cache.candidates.as_ref();
         let mut multi_draws = 0;
         let parts;
+        // Solid sprites draw between the world's opaque and blended parts.
+        let batches = &list.batches;
+        let blend_start = batches
+            .iter()
+            .position(|batch| batch.pass >= batch::Pass::Blend)
+            .unwrap_or(batches.len());
+        // A water surface among the blended parts reads the opaque depth:
+        // the pass splits there, the depth copied between its halves.
+        let water = water::WaterDepth::wanted(
+            batches[blend_start..]
+                .iter()
+                .map(|batch| self.tables.parts.state[batch.part as usize].class.features),
+        );
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some(if world_layer {
@@ -1818,7 +1847,7 @@ impl Renderer {
                     }),
                     stencil_ops: None,
                 }),
-                timestamp_writes: self.finish.world_writes(world_layer),
+                timestamp_writes: self.finish.world_writes_between(world_layer, true, !water),
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
@@ -1832,12 +1861,6 @@ impl Renderer {
             pass.set_bind_group(0, &self.frame_bind_group, &[]);
             let occlusion_bind_group = self.ambient_occlusion.apply_bind_group(occlusion.as_ref());
             pass.set_bind_group(2, occlusion_bind_group, &[]);
-            // Solid sprites draw between the world's opaque and blended parts.
-            let batches = &list.batches;
-            let blend_start = batches
-                .iter()
-                .position(|batch| batch.pass >= batch::Pass::Blend)
-                .unwrap_or(batches.len());
             let mut encoded = match candidates {
                 Some(candidates) => {
                     let (encoded, runs) = self.draw_batches_indirect(
@@ -1864,6 +1887,39 @@ impl Renderer {
             }
             self.effects
                 .draw_solid_sprites(&mut pass, hdr_format, &effects);
+            if water {
+                drop(pass);
+                self.water.capture(&self.gpu, &mut encoder, &view.target);
+                pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("render-wgpu world blended"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &hdr.color,
+                        depth_slice: None,
+                        resolve_target: hdr.resolve.as_ref(),
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Load,
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                        view: view.target.depth,
+                        depth_ops: Some(wgpu::Operations {
+                            load: wgpu::LoadOp::Load,
+                            store: wgpu::StoreOp::Store,
+                        }),
+                        stencil_ops: None,
+                    }),
+                    timestamp_writes: self.finish.world_writes_between(world_layer, false, true),
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+                in_viewport(&mut pass);
+                pass.set_bind_group(0, &self.frame_bind_group, &[]);
+                pass.set_bind_group(2, self.ambient_occlusion.apply_bind_group(None), &[]);
+            }
+            // A water batch takes the depth copy in group 2; the others the
+            // occlusion off.
+            let occlusion_off = self.ambient_occlusion.apply_bind_group(None);
             encoded += self.draw_blended(
                 &mut pass,
                 hdr_format,
@@ -1871,6 +1927,19 @@ impl Renderer {
                 &effects,
                 eye,
                 |pass, features| pipelines.get(pass, features),
+                |pass, features| {
+                    if water {
+                        pass.set_bind_group(
+                            2,
+                            if features.contains(Features::WATER) {
+                                self.water.bind_group()
+                            } else {
+                                occlusion_off
+                            },
+                            &[],
+                        );
+                    }
+                },
             );
             self.effects.draw_particles(
                 &mut pass,

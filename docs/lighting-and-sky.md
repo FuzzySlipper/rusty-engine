@@ -35,9 +35,12 @@ coarser. Each world view, a capture included, fits the cascades to its own
 camera, so a composition that draws several world views a frame renders them
 once for each.
 
-A layer re-renders only when its view changes (the light moves, turns or
-changes range; a cascade when the camera moves) or a part in it is added,
-removed, moved or posed. A lamp that flickers by changing colour or intensity
+A blended material's parts cast no shadow (a lake does not shadow its bed,
+glass throws no block of dark) unless the material sets
+`TranslucentShadow`, when they cast as opaque parts do. A layer re-renders
+only when its view changes (the light moves, turns or changes range; a
+cascade when the camera moves) or a part in it is added, removed, moved or
+posed. A lamp that flickers by changing colour or intensity
 re-renders nothing, and a moving object re-renders only the layers that see
 it.
 
@@ -303,6 +306,7 @@ material compiles only the features its contents use:
 | Triplanar | its `TriplanarSharpness` is nonzero ([three planes](smooth-voxel-surfaces.md#textures-on-reconstructed-surfaces)) |
 | Flat shading | `MaterialRequest.FlatShading` is set (or a static mesh asset's material says `flatShading`): each triangle shades from its own plane, taken from the world position's screen derivatives and turned to face the mesh's normal, so a low-poly prop with welded smooth normals reads as faceted; its normal map is ignored. A GLB's authored materials are never flat by themselves: replace a slot's material with a flat one through `Animation.UpdateAnimatedMeshMaterials` or bind it on a static mesh |
 | Stochastic tiling | its `StochasticTiling` is nonzero (three blended hex tiles per sample) |
+| Water | `MaterialRequest.Water` (or an authored material's `Water`) has a depth scale, on a blended material: the surface is tinted by the depth of the scene behind it, foams along the shore, ripples and reflects at grazing angles ([water](#water)) |
 | Wind | `MaterialRequest.WindBend` or `WindFlutter` is nonzero (or a static mesh asset's material has `wind`): the part sways in [the scene's wind](#wind) in the world and shadow passes alike. `WindBend` is how far each metre of a vertex's height above the part's origin leans with the wind at unit strength, in metres, so a trunk or stalk bends from its root; `WindFlutter` is how far a vertex circles at unit strength, in metres, times its colour's alpha, so leaves and grass tips flutter while their roots (alpha 0) hold; a mesh without vertex colours flutters whole. Masked leaves resolve anti-aliased under multisampling: a masked material covers its pixel's samples by its alpha sharpened about the cutoff, and masked sprites do the same |
 
 Materials with the same features share pipelines and batch together. A new
@@ -447,6 +451,51 @@ fn cast_shadow(caster: Caster) {
     }
 #endif
 }
+```
+
+## Water
+
+A blended material with `MaterialRequest.Water` set (`MaterialWater`; an
+authored voxel material takes the same on
+`AuthoredMaterialAppearanceRequest.Water`) draws as a water surface. The
+blend pass copies the opaque pass's depth before the surface draws, so each
+pixel knows what lies behind it along its view ray:
+
+- **Depth tint.** The view through the water turns from `ShallowColor` to
+  `DeepColor` (linear RGB, multiplied by the material's colour and texture)
+  by `e` every `DepthScale` metres of water along the ray, and turns opaque
+  with it, so a bed shows through the shallows and a lake reads deep.
+- **Foam.** Where the scene lies within `ShorelineWidth` metres below the
+  surface (a bank, a post, a swimmer) the surface foams white where
+  `FoamTexture` (any texture, read as a mask and scrolled by `FoamScroll`
+  repeats per second) exceeds `FoamThreshold` (0 to 1); without a texture,
+  bands roll in toward the shore.
+- **Ripples.** The material's normal map, scrolled by `NormalScrollA`, and
+  `RippleTexture` as a second normal map (opened with
+  `TextureColorSpace.Linear`) scrolled by `NormalScrollB`, both read over the
+  ground every `WaveScale` metres and scaled by the normal map's
+  `NormalScale`, ripple the surface; without either it ripples procedurally.
+  The two water textures take a product shader's two texture slots. The sun's specular and, with [the sky's light](#the-skys-light),
+  the sky's reflection follow the ripples.
+- **Fresnel.** The alpha rises toward the reflectance at grazing angles, so
+  a lake seen along its length mirrors the sky while the shallows under the
+  eye stay clear.
+
+The water needs no vertex motion; a product that wants waves gives the
+material a [displace stage](#product-shaders) or a wind bend. A water view
+costs one depth copy per view that draws water, and the blended parts and
+particles draw in a second pass after it; views without water draw as
+before. Blended materials cast no shadow unless `TranslucentShadow` is
+set, so a lake does not shadow its own bed.
+
+```csharp
+Material lake = engine.Graphics.CreateMaterial(new MaterialRequest(new Color(1, 1, 1, 0.35f), default, 0.08f, white, Vector3.Zero, 0, true, MaterialAlphaMode.Blend, 0) with
+{
+    NormalMap = ripples, NormalScale = 0.6f,
+    Water = new MaterialWater(new Color(0.18f, 0.55f, 0.5f, 1), new Color(0.01f, 0.08f, 0.2f, 1), DepthScale: 1.8f, ShorelineWidth: 0.35f, FoamThreshold: 0.55f,
+        FoamScroll: new Vector2(0.03f, 0.02f), NormalScrollA: new Vector2(0.04f, 0.03f), NormalScrollB: new Vector2(-0.02f, 0.035f), WaveScale: 3f,
+        FoamTexture: foam, RippleTexture: ripples),
+});
 ```
 
 ## Wind
@@ -699,8 +748,13 @@ normals on the left, the flat-shading material on the right, by the torch),
 and `lighting.wind <strength>` (the tree under a material with a wind bend,
 a clump of grass cards whose vertex alpha weights their flutter, and a
 banner a product displace stage (`content/wave.wgsl`) waves, with the
-camera on them; 0 stills the wind, below 0 clears the scene).
-`generate-particles.py` regenerates its three authored sprites.
+camera on them; 0 stills the wind, below 0 clears the scene), and
+`lighting.water 1|0|-1` (a dual-contoured sand bank sloping into a water
+slab with a cube pier, seen from the bank under the sun: 1 the water
+feature with the fixture's foam and ripple textures, 0 the same slab as a
+plain blended material, below 0 clears the scene).
+`generate-particles.py` regenerates its three authored sprites and
+`generate-water.py` the foam and ripple textures.
 `lighting.sky` also moves the fixture's sun from noon at 0 to a low dusk sun
 at 1. Debug selection is explicit fixture
 assistance; no downstream gameplay acceptance is implied.

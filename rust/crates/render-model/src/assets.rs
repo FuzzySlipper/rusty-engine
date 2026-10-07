@@ -424,6 +424,15 @@ pub struct RenderMaterialDescriptor {
     /// flutter by their colour's alpha, in the shadow maps too.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wind: Option<MaterialWindDescriptor>,
+    /// A water surface (the standard shader's `WATER`): a blended material
+    /// tinted by the depth of the scene behind it, with foam along the
+    /// shore, rippling normals and a Fresnel alpha.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub water: Option<MaterialWaterDescriptor>,
+    /// A blended material casts no shadow unless it asks to: then its parts
+    /// cast as opaque ones do.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub translucent_shadow: bool,
     /// Multiplies the emission colour and intensity, read through the same
     /// uv as the base texture.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -499,6 +508,55 @@ impl MaterialWindDescriptor {
     pub fn valid(&self) -> bool {
         let non_negative = |value: f32| value.is_finite() && value >= 0.0;
         non_negative(self.bend) && non_negative(self.flutter)
+    }
+}
+
+/// How a water material draws: the view through it turns from
+/// `shallow_color` to `deep_color` (linear RGB, multiplied by the material's
+/// colour and texture) by `e` every `depth_scale` metres of water along the
+/// view ray, and turns opaque with it; foam (white) covers the surface
+/// where the scene lies within `shoreline_width` metres below it and the
+/// foam texture (the material shader's `TextureA`, scrolled by
+/// `foam_scroll` repeats per second; rolling bands without one) exceeds
+/// `foam_threshold` (0 to 1). The material's normal map, scrolled by
+/// `normal_scroll_a`, and `ripple_texture` as a second normal map scrolled
+/// by `normal_scroll_b`, ripple the surface (procedural ripples without
+/// either), read over the ground every `wave_scale` metres and scaled by
+/// the normal map's scale. The foam and ripple textures take a product
+/// shader's two texture slots (`product_map_a`, `product_map_b`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MaterialWaterDescriptor {
+    pub shallow_color: [f32; 3],
+    pub deep_color: [f32; 3],
+    pub depth_scale: f32,
+    pub shoreline_width: f32,
+    pub foam_threshold: f32,
+    pub foam_scroll: [f32; 2],
+    pub normal_scroll_a: [f32; 2],
+    pub normal_scroll_b: [f32; 2],
+    pub wave_scale: f32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub foam_texture: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ripple_texture: Option<String>,
+}
+
+impl MaterialWaterDescriptor {
+    /// Finite values: non-negative colours, a positive depth and wave scale,
+    /// a non-negative shoreline width, a threshold within 0 to 1.
+    pub fn valid(&self) -> bool {
+        let non_negative = |value: f32| value.is_finite() && value >= 0.0;
+        let positive = |value: f32| value.is_finite() && value > 0.0;
+        self.shallow_color.iter().all(|&value| non_negative(value))
+            && self.deep_color.iter().all(|&value| non_negative(value))
+            && positive(self.depth_scale)
+            && non_negative(self.shoreline_width)
+            && (0.0..=1.0).contains(&self.foam_threshold)
+            && positive(self.wave_scale)
+            && [self.foam_scroll, self.normal_scroll_a, self.normal_scroll_b]
+                .iter()
+                .all(|scroll| scroll.iter().all(|value| value.is_finite()))
     }
 }
 
@@ -654,6 +712,11 @@ impl RenderMaterialDescriptor {
                     .flat_map(|shader| shader.textures.iter().flatten()),
             )
             .chain(
+                self.water
+                    .iter()
+                    .flat_map(|water| water.foam_texture.iter().chain(water.ripple_texture.iter())),
+            )
+            .chain(
                 self.terrain_layers
                     .iter()
                     .flat_map(|layers| &layers.layers)
@@ -698,6 +761,19 @@ impl RenderMaterialDescriptor {
         }
         if self.wind.is_some_and(|wind| !wind.valid()) {
             return Err(MaterialDescriptorError::InvalidWind);
+        }
+        if let Some(water) = &self.water {
+            let blended = match &self.voxel_surface {
+                Some(surface) => surface.alpha_mode == VoxelSurfaceAlphaModeDescriptor::Blend,
+                None => self.alpha_mode == MaterialAlphaModeDescriptor::Blend,
+            };
+            let textures_valid = [&water.foam_texture, &water.ripple_texture]
+                .into_iter()
+                .flatten()
+                .all(|id| validate_asset_id(id, RenderAssetKind::Texture).is_ok());
+            if !water.valid() || !blended || !textures_valid {
+                return Err(MaterialDescriptorError::InvalidWater);
+            }
         }
         if self.texture_transform.is_some_and(|transform| {
             !transform
@@ -789,6 +865,8 @@ pub enum MaterialDescriptorError {
     InvalidTriplanar,
     /// A wind bend and flutter must be finite and non-negative.
     InvalidWind,
+    /// A water material must be blended, with valid water values.
+    InvalidWater,
     InvalidTextureTransform,
     InvalidStochasticTiling,
     InvalidShader,
@@ -1858,6 +1936,8 @@ mod tests {
             unlit: false,
             flat_shading: false,
             wind: None,
+            water: None,
+            translucent_shadow: false,
         };
         assert_eq!(material.validate(), Ok(()));
         let material_json = serde_json::to_string(&material).unwrap();
@@ -1918,6 +1998,8 @@ mod tests {
             unlit: false,
             flat_shading: false,
             wind: None,
+            water: None,
+            translucent_shadow: false,
         };
         material.validate().unwrap();
         let encoded = serde_json::to_string(&material).unwrap();

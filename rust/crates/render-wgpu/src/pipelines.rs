@@ -33,6 +33,9 @@ pub(crate) struct Layouts {
     /// Shadow caster pass: the layer index (dynamic offset).
     pub shadow_layer: wgpu::BindGroupLayout,
     world: wgpu::PipelineLayout,
+    /// The world layout for a water material: its group 2 is the opaque
+    /// depth copy (`water.rs`) rather than the view's occlusion.
+    water: wgpu::PipelineLayout,
     sky_pipeline: wgpu::PipelineLayout,
     /// The sun pass over the background: the frame only.
     sun_pipeline: wgpu::PipelineLayout,
@@ -294,6 +297,12 @@ impl Layouts {
             bind_group_layouts: &[Some(&frame), Some(&material), Some(&ambient_occlusion)],
             immediate_size: 0,
         });
+        let water_depth = device.create_bind_group_layout(&crate::water::layout_descriptor());
+        let water = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("render-wgpu water"),
+            bind_group_layouts: &[Some(&frame), Some(&material), Some(&water_depth)],
+            immediate_size: 0,
+        });
         let sky_pipeline = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("render-wgpu sky"),
             bind_group_layouts: &[Some(&frame), Some(&sky)],
@@ -343,6 +352,7 @@ impl Layouts {
         Self {
             frame,
             material,
+            water,
             sky,
             casters,
             shadow_layer,
@@ -484,7 +494,11 @@ impl Layouts {
         };
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("render-wgpu world"),
-            layout: Some(&self.world),
+            layout: Some(if features.contains(Features::WATER) {
+                &self.water
+            } else {
+                &self.world
+            }),
             vertex: wgpu::VertexState {
                 module: shader,
                 entry_point: Some("vs_world"),

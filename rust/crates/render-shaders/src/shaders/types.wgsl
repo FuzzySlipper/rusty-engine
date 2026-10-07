@@ -123,7 +123,7 @@ struct MaterialUniform {
     occlusion_uv_u: vec4<f32>,
     occlusion_uv_v: vec4<f32>,
     // x: occlusion strength; y: triplanar sharpness; z: stochastic tiling
-    // contrast.
+    // contrast; w: the water feature's map flags.
     factors: vec4<f32>,
     // The uv set (0 or 1) each slot reads: base, emissive, normal, occlusion.
     tex_coords: vec4<u32>,
@@ -139,6 +139,17 @@ struct MaterialUniform {
     // origin at unit wind, y how far a vertex flutters at unit wind, by its
     // colour's alpha.
     wind: vec4<f32>,
+    // The water feature (WATER, `world.wgsl` water_surface): the shallow
+    // colour and w the depth over which it turns deep; the deep colour and
+    // w the shoreline width the foam fades over; xy the foam texture's
+    // scroll per second and zw the normal map's; xy the second normal
+    // map's scroll, z the foam threshold, w the wave scale in metres per
+    // repeat. `factors.w` flags the maps set: 1 foam (product_map_a), 2 a
+    // second normal map (product_map_b), 4 the normal map.
+    water_shallow: vec4<f32>,
+    water_deep: vec4<f32>,
+    water_scroll: vec4<f32>,
+    water_params: vec4<f32>,
 };
 
 // What the standard surface stages make of a world fragment, which the shade

@@ -47,7 +47,7 @@ pub struct ApplyIssue {
 /// each slot's uv set; a
 /// product shader's 16 parameters; terrain layers 1 to 3's tilings, sample
 /// rects and normal scales, and the layer contrast.
-const MATERIAL_UNIFORM_BYTES: usize = 400;
+const MATERIAL_UNIFORM_BYTES: usize = 464;
 /// Anisotropic filtering of mipmapped material textures.
 const MATERIAL_ANISOTROPY: u16 = 16;
 /// Payload groups without a voxel material are fully rough.
@@ -853,6 +853,8 @@ impl Renderer {
             let features = features | mesh.map_or(Features::default(), |mesh| mesh.features());
             let class = PartClass {
                 blend: row.color[3] < 1.0 || descriptor.is_some_and(blends),
+                shadow: descriptor
+                    .is_none_or(|descriptor| !blends(descriptor) || descriptor.translucent_shadow),
                 double_sided: descriptor.is_some_and(|descriptor| descriptor.double_sided),
                 lines: part.wireframe || mesh.is_some_and(|mesh| mesh.topology == Topology::Lines),
                 features,
@@ -1126,6 +1128,7 @@ impl Renderer {
             },
             voxel_surface: params.voxel_surface,
             product_textures: params.product_textures.clone(),
+            water: params.water.clone(),
             // Layers blend only once every layer's texture is retained.
             terrain_layers: params.terrain_layers.clone().filter(|layers| {
                 layers
@@ -1387,6 +1390,9 @@ pub(crate) struct MaterialParams {
     pub flat_shading: bool,
     /// Sway in the scene's wind (`rusty::wind`).
     pub wind: Option<render_model::MaterialWindDescriptor>,
+    /// A water surface (`world.wgsl` `water_surface`); its textures are in
+    /// `product_textures`.
+    pub water: Option<render_model::MaterialWaterDescriptor>,
     pub metalness: f32,
     pub voxel_surface: Option<VoxelSurfaceUniform>,
     /// Triplanar blend sharpness.
@@ -1502,6 +1508,7 @@ impl MaterialParams {
             unlit: descriptor.unlit,
             flat_shading: descriptor.flat_shading,
             wind: descriptor.wind,
+            water: descriptor.water.clone(),
             metalness: descriptor.metalness,
             voxel_surface,
             triplanar: descriptor.triplanar.map(|triplanar| triplanar.sharpness),
@@ -1513,10 +1520,20 @@ impl MaterialParams {
                 .shader
                 .as_ref()
                 .map_or([[0.0; 4]; 4], |shader| shader.parameters),
-            product_textures: descriptor
-                .shader
-                .as_ref()
-                .map_or([None, None], |shader| shader.textures.clone()),
+            // A water's foam and ripple textures take the shader slots.
+            product_textures: {
+                let [a, b] = descriptor
+                    .shader
+                    .as_ref()
+                    .map_or([None, None], |shader| shader.textures.clone());
+                match &descriptor.water {
+                    Some(water) => [
+                        water.foam_texture.clone().or(a),
+                        water.ripple_texture.clone().or(b),
+                    ],
+                    None => [a, b],
+                }
+            },
             terrain_layers: None,
             maps: MaterialMaps {
                 normal: descriptor.normal_map.as_ref().map(|map| {
@@ -1565,7 +1582,8 @@ impl MaterialParams {
                 Features::STOCHASTIC_TILING,
                 self.stochastic_tiling.is_some(),
             )
-            .with(Features::WIND, self.wind.is_some());
+            .with(Features::WIND, self.wind.is_some())
+            .with(Features::WATER, self.water.is_some());
         if self.unlit {
             return base | Features::UNLIT;
         }
@@ -1575,9 +1593,12 @@ impl MaterialParams {
             .filter(|_| self.voxel_surface.is_some());
         let layer_normals =
             layers.is_some_and(|layers| layers.layers.iter().any(|layer| layer.normal.is_some()));
+        // Water reads its normal maps itself, scrolled over the ground.
         base.with(
             Features::NORMAL_MAP,
-            !self.flat_shading && (self.maps.normal.is_some() || layer_normals),
+            !self.flat_shading
+                && self.water.is_none()
+                && (self.maps.normal.is_some() || layer_normals),
         )
         .with(Features::FLAT_SHADING, self.flat_shading)
         .with(Features::EMISSIVE_MAP, self.maps.emissive.is_some())
@@ -1705,6 +1726,23 @@ pub(crate) fn material_bind_group(
         floats[96] = wind.bend;
         floats[97] = wind.flutter;
     }
+    if let Some(water) = &params.water {
+        // Which maps the water reads: 1 foam (`product_map_a`), 2 a second
+        // normal map (`product_map_b`), 4 the normal map.
+        let flags = u32::from(water.foam_texture.is_some())
+            | (u32::from(water.ripple_texture.is_some()) << 1)
+            | (u32::from(params.maps.normal.is_some()) << 2);
+        floats[47] = flags as f32;
+        floats[100..103].copy_from_slice(&water.shallow_color);
+        floats[103] = water.depth_scale;
+        floats[104..107].copy_from_slice(&water.deep_color);
+        floats[107] = water.shoreline_width;
+        floats[108..110].copy_from_slice(&water.foam_scroll);
+        floats[110..112].copy_from_slice(&water.normal_scroll_a);
+        floats[112..114].copy_from_slice(&water.normal_scroll_b);
+        floats[114] = water.foam_threshold;
+        floats[115] = water.wave_scale;
+    }
     let uniform: &[u8] = bytemuck::cast_slice(&floats);
     let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some(label),
@@ -1818,6 +1856,7 @@ pub(crate) fn builtin_materials(
                 unlit: true,
                 flat_shading: false,
                 wind: None,
+                water: None,
                 metalness: 0.0,
                 voxel_surface: None,
                 triplanar: None,
@@ -1847,6 +1886,7 @@ pub(crate) fn builtin_materials(
                 unlit: false,
                 flat_shading: false,
                 wind: None,
+                water: None,
                 metalness: 0.0,
                 voxel_surface: None,
                 triplanar: None,

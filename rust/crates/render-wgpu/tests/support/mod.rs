@@ -282,6 +282,8 @@ pub fn material(id: &str, color: [f32; 4], texture: Option<&str>) -> RenderMater
         unlit: false,
         flat_shading: false,
         wind: None,
+        water: None,
+        translucent_shadow: false,
     }
 }
 

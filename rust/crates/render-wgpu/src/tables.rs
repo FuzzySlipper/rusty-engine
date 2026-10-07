@@ -377,6 +377,9 @@ pub(crate) struct PartClass {
     pub blend: bool,
     pub double_sided: bool,
     pub lines: bool,
+    /// Whether the material casts: an opaque one, or a blended one that
+    /// asks to (`translucent_shadow`).
+    pub shadow: bool,
     /// The material's features: opaque draws group by them, so parts sharing
     /// a pipeline draw together.
     pub features: crate::shaders::Features,

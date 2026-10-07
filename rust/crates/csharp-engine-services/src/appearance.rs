@@ -3181,6 +3181,8 @@ impl RuntimeAppearanceBridge {
                 request.shader.shader.value,
                 request.shader.texture_a.value,
                 request.shader.texture_b.value,
+                request.water.foam_texture.value,
+                request.water.ripple_texture.value,
             ]),
         );
         Ok(NativeMaterialHandle { value: handle })
@@ -3279,6 +3281,7 @@ impl RuntimeAppearanceBridge {
             request.normal_scale,
         )?;
         material.triplanar = triplanar_descriptor(request.triplanar_sharpness);
+        material.water = water_descriptor(&staged.state.render_resources, request.water)?;
         let shader = material_shader(&staged.state.render_resources, request.shader)?;
         material.shader = shader.as_ref().map(|(used, _)| used.clone());
         // The shader's own textures, beside the selected and normal ones.
@@ -3332,6 +3335,8 @@ impl RuntimeAppearanceBridge {
                 request.shader.shader.value,
                 request.shader.texture_a.value,
                 request.shader.texture_b.value,
+                request.water.foam_texture.value,
+                request.water.ripple_texture.value,
             ]),
         );
         Ok(NativeMaterialHandle { value: handle })
@@ -9330,6 +9335,8 @@ fn render_material(id: String, color: NativeColor) -> RenderMaterialDescriptor {
         unlit: false,
         flat_shading: false,
         wind: None,
+        water: None,
+        translucent_shadow: false,
     }
 }
 
@@ -9535,6 +9542,8 @@ fn material_descriptor(
                 flutter: request.wind_flutter,
             },
         ),
+        water: water_descriptor(resources, request.water)?,
+        translucent_shadow: request.translucent_shadow,
         emission_map,
         occlusion_map,
         triplanar: triplanar_descriptor(request.triplanar_sharpness),
@@ -9544,6 +9553,59 @@ fn material_descriptor(
         CsharpEngineServicesError::new("CSHARP_MATERIAL", format!("material is invalid: {error:?}"))
     })?;
     Ok(descriptor)
+}
+
+/// The water surface a request asks for: none at depth scale 0. Its foam
+/// texture is any texture; its ripple texture a normal map opened with a
+/// linear colour space.
+fn water_descriptor(
+    resources: &RenderResourceRegistry,
+    water: NativeMaterialWater,
+) -> Result<Option<render_model::MaterialWaterDescriptor>, CsharpEngineServicesError> {
+    if water.depth_scale == 0.0 {
+        return Ok(None);
+    }
+    let foam_texture = if water.foam_texture.value == 0 {
+        None
+    } else {
+        Some(
+            resources
+                .get(water.foam_texture.value)
+                .and_then(CsharpRenderResource::texture)
+                .map(|texture| texture.id.clone())
+                .ok_or_else(|| {
+                    CsharpEngineServicesError::new(
+                        "CSHARP_MATERIAL_WATER",
+                        "a water material's foam texture must be a texture resource",
+                    )
+                })?,
+        )
+    };
+    let ripple_texture = normal_map_descriptor(resources, water.ripple_texture, 1.0)
+        .map_err(|_| {
+            CsharpEngineServicesError::new(
+                "CSHARP_MATERIAL_WATER",
+                "a water material's ripple texture must be a texture opened with TextureColorSpace.Linear",
+            )
+        })?
+        .map(|map| map.texture);
+    Ok(Some(render_model::MaterialWaterDescriptor {
+        shallow_color: [
+            water.shallow_color.r,
+            water.shallow_color.g,
+            water.shallow_color.b,
+        ],
+        deep_color: [water.deep_color.r, water.deep_color.g, water.deep_color.b],
+        depth_scale: water.depth_scale,
+        shoreline_width: water.shoreline_width,
+        foam_threshold: water.foam_threshold,
+        foam_scroll: [water.foam_scroll.x, water.foam_scroll.y],
+        normal_scroll_a: [water.normal_scroll_a.x, water.normal_scroll_a.y],
+        normal_scroll_b: [water.normal_scroll_b.x, water.normal_scroll_b.y],
+        wave_scale: water.wave_scale,
+        foam_texture,
+        ripple_texture,
+    }))
 }
 
 fn authored_voxel_texture_hash(material: &RenderMaterialDescriptor) -> Option<&str> {
@@ -10411,6 +10473,8 @@ pub(super) mod tests {
                 flat_shading: false,
                 wind_bend: 0.0,
                 wind_flutter: 0.0,
+                water: Default::default(),
+                translucent_shadow: false,
             };
         let none = NativeRenderResourceHandle::default();
         let plain = material_descriptor(
@@ -10477,6 +10541,8 @@ pub(super) mod tests {
                 flat_shading: false,
                 wind_bend: 0.0,
                 wind_flutter: 0.0,
+                water: Default::default(),
+                translucent_shadow: false,
                 ..request(false, none, occlusion_map)
             };
         let packed =
@@ -10566,6 +10632,8 @@ pub(super) mod tests {
                 flat_shading: false,
                 wind_bend: 0.0,
                 wind_flutter: 0.0,
+                water: Default::default(),
+                translucent_shadow: false,
             })
             .unwrap();
         let bindings = [NativeMeshMaterialBinding {
@@ -10783,6 +10851,8 @@ pub(super) mod tests {
                 flat_shading: false,
                 wind_bend: 0.0,
                 wind_flutter: 0.0,
+                water: Default::default(),
+                translucent_shadow: false,
             })
             .unwrap();
         let positions = [
@@ -10993,6 +11063,8 @@ pub(super) mod tests {
                 flat_shading: false,
                 wind_bend: 0.0,
                 wind_flutter: 0.0,
+                water: Default::default(),
+                translucent_shadow: false,
             })
             .unwrap();
         let mut positions = [
@@ -11538,6 +11610,8 @@ pub(super) mod tests {
             flat_shading: false,
             wind_bend: 0.0,
             wind_flutter: 0.0,
+            water: Default::default(),
+            translucent_shadow: false,
         };
         let original = bridge.create_material(request).expect("material");
         let replacement = bridge
@@ -11599,6 +11673,8 @@ pub(super) mod tests {
             flat_shading: false,
             wind_bend: 0.0,
             wind_flutter: 0.0,
+            water: Default::default(),
+            translucent_shadow: false,
         };
         let resources = RenderResourceRegistry::default();
         let descriptor = material_descriptor("material/metal".to_owned(), metal, &resources)
@@ -11652,6 +11728,8 @@ pub(super) mod tests {
             flat_shading: false,
             wind_bend: 0.0,
             wind_flutter: 0.0,
+            water: Default::default(),
+            translucent_shadow: false,
         };
         let resources = RenderResourceRegistry::default();
         let descriptor = material_descriptor("material/plain".to_owned(), plain, &resources)
@@ -11820,6 +11898,8 @@ pub(super) mod tests {
             flat_shading: false,
             wind_bend: 0.0,
             wind_flutter: 0.0,
+            water: Default::default(),
+            translucent_shadow: false,
         };
         let refused =
             material_descriptor("material/a".to_owned(), request(colour.handle), resources)
@@ -11915,6 +11995,8 @@ fn shade(surface: Surface) -> vec4<f32> {
                 flat_shading: false,
                 wind_bend: 0.0,
                 wind_flutter: 0.0,
+                water: Default::default(),
+                translucent_shadow: false,
             })
             .unwrap();
         let resources = bridge.staged_ref().unwrap().state.projector.resources();
@@ -12033,6 +12115,8 @@ fn shade(surface: Surface) -> vec4<f32> {
             flat_shading: false,
             wind_bend: 0.0,
             wind_flutter: 0.0,
+            water: Default::default(),
+            translucent_shadow: false,
         };
         assert_eq!(
             bridge
@@ -12162,6 +12246,8 @@ fn shade(surface: Surface) -> vec4<f32> {
                     flat_shading: false,
                     wind_bend: 0.0,
                     wind_flutter: 0.0,
+                    water: Default::default(),
+                    translucent_shadow: false,
                 })
                 .unwrap();
         }
@@ -12395,6 +12481,8 @@ fn shade(surface: Surface) -> vec4<f32> {
                 flat_shading: false,
                 wind_bend: 0.0,
                 wind_flutter: 0.0,
+                water: Default::default(),
+                translucent_shadow: false,
             })
             .unwrap();
         assert_eq!(
@@ -13155,6 +13243,8 @@ fn shade(surface: Surface) -> vec4<f32> {
                 flat_shading: false,
                 wind_bend: 0.0,
                 wind_flutter: 0.0,
+                water: Default::default(),
+                translucent_shadow: false,
             })
             .expect("material");
         let bindings = [NativeMeshMaterialBinding {

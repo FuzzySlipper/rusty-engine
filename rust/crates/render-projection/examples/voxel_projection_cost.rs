@@ -150,5 +150,7 @@ fn material() -> RenderMaterialDescriptor {
         unlit: false,
         flat_shading: false,
         wind: None,
+        water: None,
+        translucent_shadow: false,
     }
 }

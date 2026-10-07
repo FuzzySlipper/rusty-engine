@@ -607,6 +607,36 @@ pub struct NativeSpritePlaybackAdvanceResult {
     pub advanced: bool,
 }
 
+/// A water surface on a blended material (the standard shader's `WATER`):
+/// the view through it turns from `shallow_color` to `deep_color` (linear
+/// RGB, times the material's colour and texture) by `e` every `depth_scale`
+/// metres of water along the view ray, and turns opaque with it; foam
+/// (white) covers the surface where the scene lies within `shoreline_width`
+/// metres below it and the foam texture (the material shader's `TextureA`,
+/// scrolled by `foam_scroll` repeats per second; rolling bands without one)
+/// exceeds `foam_threshold` (0 to 1). The material's normal map, scrolled
+/// by `normal_scroll_a`, and `ripple_texture` as a second normal map
+/// (opened with a linear colour space) scrolled by `normal_scroll_b`,
+/// ripple the surface (procedural ripples without either), read over the
+/// ground every `wave_scale` metres and scaled by the normal map's scale.
+/// `depth_scale` 0 (the default) is no water surface; the textures are 0
+/// for none.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeMaterialWater {
+    pub shallow_color: NativeColor,
+    pub deep_color: NativeColor,
+    pub depth_scale: f32,
+    pub shoreline_width: f32,
+    pub foam_threshold: f32,
+    pub foam_scroll: NativeVec2,
+    pub normal_scroll_a: NativeVec2,
+    pub normal_scroll_b: NativeVec2,
+    pub wave_scale: f32,
+    pub foam_texture: NativeRenderResourceReference,
+    pub ripple_texture: NativeRenderResourceReference,
+}
+
 /// Renderer-neutral PBR-like material values. Texture handle zero means an
 /// untextured material. The Engine resolves resource identity and validates
 /// the resulting retained material descriptor.
@@ -681,11 +711,17 @@ pub struct NativeMaterialRequest {
     /// colour's alpha (leaves, grass tips; the whole mesh without vertex
     /// colours).
     pub wind_flutter: f32,
+    /// A water surface; needs `MaterialAlphaMode.Blend`.
+    pub water: NativeMaterialWater,
+    /// A blended material casts no shadow unless this is set: then its
+    /// parts cast as opaque ones do.
+    pub translucent_shadow: bool,
 }
 
 /// A product shader resource (`.wgsl`, `NativeRenderResourceKind::Shader`),
 /// the values it reads as `material.parameters[0..4]`, and two textures of
-/// its own (`product_map_a`, `product_map_b`; 0 binds white).
+/// its own (`product_map_a`, `product_map_b`; 0 binds white; a water
+/// material's foam and ripple textures take these slots).
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct NativeMaterialShader {
@@ -719,6 +755,9 @@ pub struct NativeAuthoredMaterialAppearanceRequest {
     pub triplanar_sharpness: f32,
     /// A product shader shading the material, as in `NativeMaterialRequest`.
     pub shader: NativeMaterialShader,
+    /// A water surface, as in `NativeMaterialRequest`; the authored material
+    /// must blend.
+    pub water: NativeMaterialWater,
 }
 
 /// A material blending voxel surface materials by a voxel mesh's terrain

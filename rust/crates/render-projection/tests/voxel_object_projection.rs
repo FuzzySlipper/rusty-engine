@@ -440,6 +440,8 @@ fn material(id: &str, color: [f32; 4]) -> RenderMaterialDescriptor {
         unlit: false,
         flat_shading: false,
         wind: None,
+        water: None,
+        translucent_shadow: false,
     }
 }
 

@@ -212,7 +212,8 @@ pub(crate) fn blended_list(
 }
 
 /// Parts that may cast shadows: every shown triangle part of the scene layer
-/// whose node casts (`ShadowCasting::Cast`).
+/// whose node casts (`ShadowCasting::Cast`) and whose material does (an
+/// opaque one, or a blended one with `translucent_shadow`).
 pub(crate) fn caster_candidates(parts: &Parts) -> Vec<PartId> {
     parts
         .state
@@ -222,6 +223,7 @@ pub(crate) fn caster_candidates(parts: &Parts) -> Vec<PartId> {
             parts.meta[*id].is_some()
                 && state.shown
                 && state.casts_shadows
+                && state.class.shadow
                 && state.layer == RenderLayer::Scene
                 && !state.class.lines
         })
@@ -251,8 +253,8 @@ pub(crate) fn within_reach(
         .collect()
 }
 
-/// One shadow layer's casters: the candidates inside its frustum. Blended
-/// parts cast as opaque. Passes select the face culling: single-sided parts
+/// One shadow layer's casters: the candidates inside its frustum. A blended
+/// part that casts (`translucent_shadow`) casts as opaque. Passes select the face culling: single-sided parts
 /// render their back faces, double-sided parts both.
 pub(crate) fn caster_list(
     parts: &Parts,

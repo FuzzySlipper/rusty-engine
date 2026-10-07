@@ -17,6 +17,8 @@ and `generate-particles.py` the torch's flame flipbook, ember and smoke sprites.
 repository's `content/map-models.sources.json`), the flat-shading pair's prop
 (`lighting.facets`) and the tree the wind bends (`lighting.wind`).
 `content/wave.wgsl` is the banner's product shader: a displace stage that
-waves the card from its pole edge by the scene's wind.
+waves the card from its pole edge by the scene's wind. `generate-water.py`
+regenerates `content/foam.png` and `content/ripples.png`, the shore's foam
+mask and ripple normal map (`lighting.water`).
 The fixture owns the supplied clock value and source light descriptor; Engine
 owns rendering, light sampling, scene persistence primitives and GPU resources.

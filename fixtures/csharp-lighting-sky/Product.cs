@@ -69,6 +69,24 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     private MeshResource? grassMesh, bannerMesh, poleMesh;
     private RenderResource? windTreeMesh, waveShader;
     private Appearance? windTreeLook, grassLook, bannerLook, poleLook;
+    // The shore (#9540): a dual-contoured sand bank sloping into a water slab under the sun, with a cube pier standing in it; seen from the bank.
+    private const ulong WaterId = 50, PierBaseId = 51;
+    private const uint ShoreChunkEdge = 16, SandSlot = 1;
+    private const float ShoreVoxelSize = .5f, ShoreMinimumDensity = .001f;
+    // The shore's session lives beside the room, its chunks from x 16 (chunk 2 of 8 m): the sand falls from y 4 at the near bank to the bed across z, and the water stands at y 2.
+    private static readonly Vector3 ShoreOrigin = new(16, 0, 0);
+    private const long ShoreFirstChunkX = 2;
+    private const float ShoreSlope = .22f, ShoreBankHeight = 4f, WaterLevel = 2.05f, WaterSize = 24;
+    private const int PierPosts = 3;
+    private static readonly Color SandColor = new(.78f,.7f,.5f,1), PierColor = new(.45f,.32f,.2f,1), WaterTint = new(1,1,1,.35f);
+    private static MaterialWater ShoreWater(RenderResource foam, RenderResource ripples) => new(new(.18f,.55f,.5f,1), new(.01f,.08f,.2f,1), 1.8f, .35f, .55f, new(.03f,.02f), new(.04f,.03f), new(-.02f,.035f), 3f, foam, ripples);
+    private static readonly Vector3 ShoreEye = new(22, 5.5f, 3), ShoreTarget = new(28, 1.6f, 15);
+    private SpatialSession? shore;
+    private VoxelScenePresentation? shorePresentation;
+    private Material? sand, water, pier;
+    private RenderResource? foamSprite, ripplesMap;
+    private MeshResource? waterMesh, pierMesh;
+    private Appearance? waterLook, pierLook;
     private PresentationEmitter? flame, embers, smoke;
     private PresentationParticleDescriptor flameFire, emberFire, smokeFire;
     private VoxelScenePresentation? presentation;
@@ -244,6 +262,123 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         engine.CameraView.SetWind(new(WindDirection,strength,WindGust));
         return Inspect();
     }
+    // Show (or clear) the shore: the sand bank, the water slab (depth tint, foam at the bank and the pier, scrolling ripples, Fresnel) and the pier; 0 builds the slab without the water feature, so the plain blended material shows for comparison; below 0 clears the scene.
+    [DebugCommand("lighting.water")]
+    public string Water(float mode)
+    {
+        if (mode < 0 || shore is not null)
+        {
+            if (shore is null) return Inspect();
+            engine.Graphics.PublishSnapshot([]);
+            waterLook?.Dispose(); pierLook?.Dispose(); waterMesh?.Dispose(); pierMesh?.Dispose();
+            shorePresentation?.Dispose(); shore.Dispose();
+            water?.Dispose(); pier?.Dispose(); sand?.Dispose(); foamSprite?.Dispose(); ripplesMap?.Dispose();
+            waterLook = pierLook = null; waterMesh = pierMesh = null; shorePresentation = null; shore = null; water = pier = sand = null; foamSprite = ripplesMap = null;
+            if (mode < 0) return Inspect();
+        }
+        Color white = new(1,1,1,1);
+        ripplesMap ??= engine.Graphics.OpenResource(new("ripples.png",TextureFilter.Linear,TextureWrap.Repeat,TextureColorSpace.Linear)).Handle;
+        foamSprite ??= engine.Graphics.OpenResource(new("foam.png",TextureFilter.Linear,TextureWrap.Repeat,TextureColorSpace.Linear)).Handle;
+        // The ripple map twice: as the material's normal map and as the water's second, scrolled apart.
+        MaterialRequest slab = new MaterialRequest(WaterTint,default(RenderResourceReference),.08f,white,Vector3.Zero,0,true,MaterialAlphaMode.Blend,0) with
+        {
+            NormalMap = ripplesMap,
+            NormalScale = .6f,
+            Water = mode > 0 ? ShoreWater(foamSprite,ripplesMap) : default,
+        };
+        {
+            sand = engine.Graphics.CreateMaterial(new(SandColor,default(RenderResourceReference),.95f,white,Vector3.Zero,0,false));
+            pier = engine.Graphics.CreateMaterial(new(PierColor,default(RenderResourceReference),.9f,white,Vector3.Zero,0,false));
+            water = engine.Graphics.CreateMaterial(slab);
+            shore = engine.Spatial.CreateSession(new(ShoreVoxelSize,ShoreChunkEdge,VoxelSurfaceMode.DualContouring));
+            AdmitShore();
+            shorePresentation = engine.VoxelScenePresentation.ProjectScene(new(shore,new VoxelSceneMaterialBinding[]{new(SandSlot,sand)}));
+            waterMesh = engine.Graphics.CreateMeshResource(Slab(water,WaterSize));
+            pierMesh = engine.Graphics.CreateMeshResource(Pier(pier));
+            waterLook = engine.Graphics.CreateMeshAppearance(waterMesh);
+            pierLook = engine.Graphics.CreateMeshAppearance(pierMesh);
+            engine.Graphics.PublishSnapshot(new AppearanceFact[]
+            {
+                Fact(WaterId,waterLook,ShoreOrigin + new Vector3(WaterSize/2,WaterLevel,WaterSize/2),1),
+                Fact(PierBaseId,pierLook,ShoreOrigin + new Vector3(13,0,10),1),
+            });
+            engine.CameraView.UpdateCamera(new(camera,Camera(ShoreEye,ShoreTarget)));
+        }
+        return Inspect();
+    }
+    // The bank: sand whose surface falls from the bank height along z (toward the far side) with the slope, dual contoured at half-metre voxels over a 24 m square, 8 m high.
+    private void AdmitShore()
+    {
+        const int across = 3, high = 1;
+        int volume = (int)(ShoreChunkEdge*ShoreChunkEdge*ShoreChunkEdge);
+        List<VoxelResidencyOperation> operations = [];
+        uint[] materials = new uint[across*across*high*volume];
+        float[] densities = new float[materials.Length];
+        int next = 0;
+        for (long cz = 0; cz < across; cz++)
+        for (long cy = 0; cy < high; cy++)
+        for (long cx = ShoreFirstChunkX; cx < ShoreFirstChunkX + across; cx++)
+        {
+            uint offset = (uint)next;
+            for (long z = 0; z < ShoreChunkEdge; z++)
+            for (long y = 0; y < ShoreChunkEdge; y++)
+            for (long x = 0; x < ShoreChunkEdge; x++)
+            {
+                float worldZ = (cz*ShoreChunkEdge + z + .5f)*ShoreVoxelSize, worldY = (cy*ShoreChunkEdge + y + .5f)*ShoreVoxelSize, worldX = (cx*ShoreChunkEdge + x + .5f)*ShoreVoxelSize;
+                float surface = Math.Max(ShoreBankHeight - ShoreSlope*worldZ + .25f*MathF.Sin(worldX*.9f)*MathF.Sin(worldZ*.7f), .4f);
+                float distance = (worldY - surface)/ShoreVoxelSize;
+                bool solid = distance < 0;
+                materials[next] = solid ? SandSlot : 0;
+                densities[next] = solid ? Math.Min(distance,-ShoreMinimumDensity) : Math.Max(distance,ShoreMinimumDensity);
+                next++;
+            }
+            operations.Add(new(VoxelResidencyOperationKind.Admit,new(cx,cy,cz),offset,(uint)volume,offset,(uint)volume));
+        }
+        engine.Voxel.ApplyResidency(new(ReadOnlyMemory<uint>.Empty,shore!,operations.ToArray(),materials,densities));
+    }
+    // A horizontal slab `size` across centred on its origin, facing up, with uvs over it.
+    private static MeshResourceCreateRequest Slab(Material material, float size)
+    {
+        float h = size/2;
+        Vector3[] positions = [new(-h,0,-h), new(h,0,-h), new(h,0,h), new(-h,0,h)];
+        Vector3[] normals = [Vector3.UnitY, Vector3.UnitY, Vector3.UnitY, Vector3.UnitY];
+        Vector2[] uvs = [new(0,0), new(1,0), new(1,1), new(0,1)];
+        return new MeshResourceCreateRequest(positions, normals, uvs, new uint[]{0,2,1,0,3,2}, new MeshGroup[]{new(0,0,6)}, new MeshMaterialBinding[]{new(0,material)});
+    }
+    // A pier: a plank deck on posts standing in the water, built from boxes.
+    private static MeshResourceCreateRequest Pier(Material material)
+    {
+        List<Vector3> positions = [], normals = []; List<Vector2> uvs = []; List<uint> indices = [];
+        void Box(Vector3 min, Vector3 max)
+        {
+            Vector3[][] faces =
+            [
+                [new(min.X,min.Y,max.Z), new(max.X,min.Y,max.Z), new(max.X,max.Y,max.Z), new(min.X,max.Y,max.Z)],
+                [new(max.X,min.Y,min.Z), new(min.X,min.Y,min.Z), new(min.X,max.Y,min.Z), new(max.X,max.Y,min.Z)],
+                [new(max.X,min.Y,max.Z), new(max.X,min.Y,min.Z), new(max.X,max.Y,min.Z), new(max.X,max.Y,max.Z)],
+                [new(min.X,min.Y,min.Z), new(min.X,min.Y,max.Z), new(min.X,max.Y,max.Z), new(min.X,max.Y,min.Z)],
+                [new(min.X,max.Y,max.Z), new(max.X,max.Y,max.Z), new(max.X,max.Y,min.Z), new(min.X,max.Y,min.Z)],
+                [new(min.X,min.Y,min.Z), new(max.X,min.Y,min.Z), new(max.X,min.Y,max.Z), new(min.X,min.Y,max.Z)],
+            ];
+            Vector3[] faceNormals = [Vector3.UnitZ, -Vector3.UnitZ, Vector3.UnitX, -Vector3.UnitX, Vector3.UnitY, -Vector3.UnitY];
+            for (int face = 0; face < 6; face++)
+            {
+                uint first = (uint)positions.Count;
+                positions.AddRange(faces[face]);
+                normals.AddRange([faceNormals[face], faceNormals[face], faceNormals[face], faceNormals[face]]);
+                uvs.AddRange([new(0,1), new(1,1), new(1,0), new(0,0)]);
+                indices.AddRange([first, first+1, first+2, first, first+2, first+3]);
+            }
+        }
+        for (int post = 0; post < PierPosts; post++)
+        {
+            float z = post*2.2f;
+            Box(new(-1.1f,0,z-.15f), new(-.8f,2.6f,z+.15f));
+            Box(new(.8f,0,z-.15f), new(1.1f,2.6f,z+.15f));
+        }
+        Box(new(-1.3f,2.6f,-.6f), new(1.3f,2.85f,(PierPosts-1)*2.2f+.6f));
+        return new MeshResourceCreateRequest(positions.ToArray(), normals.ToArray(), uvs.ToArray(), indices.ToArray(), new MeshGroup[]{new(0,0,(uint)indices.Count)}, new MeshMaterialBinding[]{new(0,material)});
+    }
     // A clump of grass: cards crossed at angles over a square metre, each 0.3 m wide and GrassHeight tall, its vertex alpha 0 at the root and 1 at the tip.
     private static MeshResourceCreateRequest Grass(Material material)
     {
@@ -410,7 +545,7 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     public void RegisterDebugCommands(IDebugCommandModuleRegistrar registrar)=>registrar.Register(this);
     public ProductUpdateResult Update(ProductUpdate update)=>ProductUpdateResult.None;
     public void Pause(){} public void Resume(){} public void Restart(){SetTorch(true);} public void Shutdown(){}
-    public void Dispose(){engine.CameraView.ClearSkyBackground(default); Flame(false); Facets(false); Wind(-1); flameSprite?.Dispose(); emberSprite?.Dispose(); smokeSprite?.Dispose(); presentation?.Dispose(); torch.Dispose(); sun.Dispose(); hemisphere.Dispose(); skyAmbient.Dispose(); camera.Dispose(); stone.Dispose(); scene.Dispose(); day.Dispose(); night.Dispose();}
+    public void Dispose(){engine.CameraView.ClearSkyBackground(default); Flame(false); Facets(false); Wind(-1); Water(-1); flameSprite?.Dispose(); emberSprite?.Dispose(); smokeSprite?.Dispose(); presentation?.Dispose(); torch.Dispose(); sun.Dispose(); hemisphere.Dispose(); skyAmbient.Dispose(); camera.Dispose(); stone.Dispose(); scene.Dispose(); day.Dispose(); night.Dispose();}
 }
 internal sealed record LightingSave(uint[] Room,LightDescriptor Torch);
 internal sealed record LightingProof(bool RoundTrip,float Lit,float Blocked,float Dark,float Current,bool Torch,float Clock);

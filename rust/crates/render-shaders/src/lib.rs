@@ -69,11 +69,16 @@ impl Features {
     /// above its origin and its vertices flutter by their colour's alpha,
     /// in the world and shadow passes alike.
     pub const WIND: Self = Self::bit(8192);
+    /// A water surface (`world.wgsl` `water_surface`): tinted by the depth
+    /// of the scene behind it (the blend pass's copy of the opaque depth,
+    /// group 3), foam along the shore, scrolling normal maps or procedural
+    /// ripples, and a Fresnel alpha. Only blended materials have it.
+    pub const WATER: Self = Self::bit(16384);
     /// Every standard feature's bit.
     #[cfg(test)]
-    const ALL_BITS: u16 = 16383;
+    const ALL_BITS: u16 = 32767;
 
-    const DEFS: [(Self, &'static str); 14] = [
+    const DEFS: [(Self, &'static str); 15] = [
         (Self::UNLIT, "UNLIT"),
         (Self::MASK, "MASK"),
         (Self::VOXEL_SURFACE, "VOXEL_SURFACE"),
@@ -88,6 +93,7 @@ impl Features {
         (Self::ORM_MAP, "ORM_MAP"),
         (Self::FLAT_SHADING, "FLAT_SHADING"),
         (Self::WIND, "WIND"),
+        (Self::WATER, "WATER"),
     ];
 
     const fn bit(bits: u16) -> Self {
@@ -149,6 +155,36 @@ impl Features {
     /// redraw as it moves: the wind, or a product shader's displace stage.
     pub fn moves_with_time(self) -> bool {
         self.contains(Self::WIND) || self.product & PRODUCT_DISPLACES != 0
+    }
+
+    /// Whether a material can compile this set (render-wgpu `apply.rs`
+    /// `MaterialParams::features` and the mesh features): the exhaustive
+    /// tests compose every set that can occur. An unlit material reads no
+    /// map and shades neither flat nor layered; a material has an occlusion
+    /// map or an ORM map; flat shading drops the normal map; terrain layers
+    /// need a voxel surface; water is blended (never masked) and reads its
+    /// normal maps itself.
+    #[cfg(test)]
+    fn occurs(self) -> bool {
+        let unlit_never = Self::NORMAL_MAP
+            | Self::EMISSIVE_MAP
+            | Self::OCCLUSION_MAP
+            | Self::ORM_MAP
+            | Self::FLAT_SHADING
+            | Self::TERRAIN_LAYERS;
+        // `feature` rules `never` out.
+        let excluded =
+            |feature: Self, never: Self| self.contains(feature) && self.bits & never.bits != 0;
+        let layers_without_surface =
+            self.contains(Self::TERRAIN_LAYERS) && !self.contains(Self::VOXEL_SURFACE);
+        let exclusions = [
+            excluded(Self::UNLIT, unlit_never),
+            excluded(Self::OCCLUSION_MAP, Self::ORM_MAP),
+            excluded(Self::FLAT_SHADING, Self::NORMAL_MAP),
+            layers_without_surface,
+            excluded(Self::WATER, Self::MASK | Self::NORMAL_MAP),
+        ];
+        !exclusions.contains(&true)
     }
 
     fn defs(self) -> HashMap<String, ShaderDefValue> {
@@ -249,6 +285,9 @@ pub enum Entry {
     /// Distance-field ambient occlusion: cone traces through the chunk
     /// field atlas over a view's depth.
     DistanceField,
+    /// The opaque pass's depth copied for the blend pass's water surfaces
+    /// (`water_depth.wgsl`).
+    WaterDepth,
 }
 
 impl Entry {
@@ -278,6 +317,10 @@ impl Entry {
                 include_str!("shaders/light_clusters.wgsl"),
             ),
             Self::Cull => ("shaders/cull.wgsl", include_str!("shaders/cull.wgsl")),
+            Self::WaterDepth => (
+                "shaders/water_depth.wgsl",
+                include_str!("shaders/water_depth.wgsl"),
+            ),
             Self::DistanceField => (
                 "shaders/distance_field.wgsl",
                 include_str!("shaders/distance_field.wgsl"),
@@ -474,9 +517,10 @@ pub fn check_product_shader(path: &str, source: &str, keywords: &[String]) -> Re
 mod tests {
     use super::*;
 
-    /// Runs `check` over every standard feature set, the sets split across
-    /// the cores, each thread with its own `Shaders` that `prepare` readies
-    /// (registering the product shaders the check composes with).
+    /// Runs `check` over every standard feature set that can occur
+    /// (`Features::occurs`), the sets split across the cores, each thread
+    /// with its own `Shaders` that `prepare` readies (registering the
+    /// product shaders the check composes with).
     fn every_feature_set<T: Send>(
         prepare: impl Fn(&mut Shaders) -> T + Sync,
         check: impl Fn(&mut Shaders, &T, Features) + Sync,
@@ -494,7 +538,10 @@ mod tests {
                     let state = prepare(&mut shaders);
                     let start = chunk * per_thread;
                     for bits in start..(start + per_thread).min(sets) {
-                        check(&mut shaders, &state, Features::bit(bits as u16));
+                        let features = Features::bit(bits as u16);
+                        if features.occurs() {
+                            check(&mut shaders, &state, features);
+                        }
                     }
                 });
             }
@@ -540,9 +587,14 @@ mod tests {
             Entry::LightClusters,
             Entry::Cull,
             Entry::DistanceField,
+            Entry::WaterDepth,
         ] {
             compose(&mut shaders, entry, Features::default());
         }
+        assert!(Features::WATER.occurs() && Features::default().occurs());
+        assert!(!(Features::WATER | Features::MASK).occurs());
+        assert!(!(Features::UNLIT | Features::NORMAL_MAP).occurs());
+        assert!((Features::UNLIT | Features::VERTEX_TANGENTS | Features::WIND).occurs());
     }
 
     fn rim_shader() -> ProductShader {

@@ -44,6 +44,8 @@ fn opaque_material() -> NativeMaterialRequest {
         flat_shading: false,
         wind_bend: 0.0,
         wind_flutter: 0.0,
+        water: Default::default(),
+        translucent_shadow: false,
     }
 }
 

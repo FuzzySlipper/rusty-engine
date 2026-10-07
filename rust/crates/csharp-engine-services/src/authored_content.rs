@@ -3597,6 +3597,7 @@ mod tests {
             let atlas = material_id == b"material/atlas";
             let request = NativeAuthoredMaterialAppearanceRequest {
                 shader: Default::default(),
+                water: Default::default(),
                 triplanar_sharpness: 0.0,
                 catalog: NativeAuthoredCatalogHandle { value: 1 },
                 material_id: NativeUtf8Slice {

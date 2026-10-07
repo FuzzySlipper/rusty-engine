@@ -516,6 +516,8 @@ impl Renderer {
                 unlit: false,
                 flat_shading: false,
                 wind: None,
+                water: None,
+                translucent_shadow: false,
             };
             self.define_material_with(descriptor, material.unlit, maps);
         }

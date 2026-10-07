@@ -429,12 +429,18 @@ impl Finish {
         }
     }
 
-    /// The world pass's stamps, for a world view.
-    pub fn world_writes(&self, timed: bool) -> Option<wgpu::RenderPassTimestampWrites<'_>> {
+    /// The world pass's stamps, for a world view: `begin` on its first pass,
+    /// `end` on its last (it splits around the water depth copy).
+    pub fn world_writes_between(
+        &self,
+        timed: bool,
+        begin: bool,
+        end: bool,
+    ) -> Option<wgpu::RenderPassTimestampWrites<'_>> {
         self.world_timer
             .as_ref()
             .filter(|_| timed)
-            .and_then(PassTimer::render_writes)
+            .and_then(|timer| timer.render_writes_between(begin, end))
     }
 
     /// After a timed world pass, in its encoder.

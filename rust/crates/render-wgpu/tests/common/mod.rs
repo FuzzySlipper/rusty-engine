@@ -290,6 +290,8 @@ pub fn coloured_mesh(
                 unlit: false,
                 flat_shading: false,
                 wind: None,
+                water: None,
+                translucent_shadow: false,
             },
         },
         RenderDiff::DefineStaticMesh {

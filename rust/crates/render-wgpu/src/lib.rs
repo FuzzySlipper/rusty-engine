@@ -54,6 +54,7 @@ mod target;
 mod timing;
 mod video;
 mod voxel;
+mod water;
 #[cfg(feature = "web-overlay")]
 pub mod web;
 
@@ -332,6 +333,8 @@ pub struct Renderer {
     frame_bind_group: wgpu::BindGroup,
     caster_bind_group: wgpu::BindGroup,
     sky_bind_group: Option<wgpu::BindGroup>,
+    /// The opaque depth the blend pass's water surfaces read.
+    water: water::WaterDepth,
     /// The Engine presentation timeline animated poses advance on.
     animation_time: f64,
     animation_facts: Vec<animated::AnimationFact>,
@@ -428,6 +431,7 @@ impl Renderer {
         let (unlit_material, lit_fallback_material) =
             apply::builtin_materials(device, &layouts.material, &white);
         let finish = finish::Finish::new(gpu, &mut layouts.shaders);
+        let water = water::WaterDepth::new(device, &mut layouts.shaders);
         let effects = effects::Effects::new(
             device,
             &layouts.frame,
@@ -496,6 +500,7 @@ impl Renderer {
             frame_bind_group,
             caster_bind_group,
             sky_bind_group: None,
+            water,
             surface_size: None,
             animation_time: 0.0,
             animation_facts: Vec::new(),
