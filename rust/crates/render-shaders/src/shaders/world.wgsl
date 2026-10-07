@@ -488,7 +488,8 @@ fn water_surface(in: VsOut, standard: Surface) -> Surface {
     let vertical = max(in.world_position.y - scene_world.y, 0.0);
     let absorbed = 1.0 - exp(-through / max(material.water_shallow.w, 1e-3));
     let colour = mix(material.water_shallow.rgb, material.water_deep.rgb, absorbed);
-    var base = vec4<f32>(surface.tint.rgb * colour, mix(standard.base.a, 1.0, absorbed));
+    // Over the material's colour and texture (the standard base).
+    var base = vec4<f32>(standard.base.rgb * colour, mix(standard.base.a, 1.0, absorbed));
     // Foam along the shore: the foam texture scrolled over the water, or
     // bands rolling in, above the threshold.
     let shoreline = max(material.water_deep.w, 1e-3);

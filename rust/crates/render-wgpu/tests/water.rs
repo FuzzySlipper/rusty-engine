@@ -46,13 +46,18 @@ fn water(shoreline_width: f32, foam_threshold: f32) -> MaterialWaterDescriptor {
 }
 
 /// A blended, glossy quad 8 m across at the origin: water when `water` is
-/// set, a plain tinted sheet otherwise.
-fn sheet(water: Option<MaterialWaterDescriptor>, alpha: f32) -> Vec<RenderDiff> {
+/// set, a plain tinted sheet otherwise; `texture` names a base texture.
+fn sheet(
+    water: Option<MaterialWaterDescriptor>,
+    alpha: f32,
+    texture: Option<&str>,
+) -> Vec<RenderDiff> {
     let mut ops = coloured_mesh("sheet", floor(8.0), [1.0, 1.0, 1.0, alpha]);
     if let RenderDiff::DefineMaterial { material } = &mut ops[0] {
         material.alpha_mode = MaterialAlphaModeDescriptor::Blend;
         material.roughness = 0.1;
         material.water = water;
+        material.texture = texture.map(str::to_owned);
     }
     ops
 }
@@ -60,6 +65,10 @@ fn sheet(water: Option<MaterialWaterDescriptor>, alpha: f32) -> Vec<RenderDiff> 
 /// A shallow floor under the sheet's left half, a deep one under its right,
 /// lit from above; the camera looks down over the sheet from its near edge.
 fn shore(water: Option<MaterialWaterDescriptor>) -> Harness {
+    shore_textured(water, None)
+}
+
+fn shore_textured(water: Option<MaterialWaterDescriptor>, texture: Option<&str>) -> Harness {
     let mut harness = Harness::new(RendererOptions {
         default_world_lights: false,
         ..RendererOptions::default()
@@ -67,8 +76,19 @@ fn shore(water: Option<MaterialWaterDescriptor>) -> Harness {
     let mut ops = vec![RenderDiff::SetBackgroundColor {
         color: [0.0, 0.0, 0.0, 1.0],
     }];
+    if let Some(texture) = texture {
+        // A solid red base texture, 2 x 2.
+        let (define, _) = harness.resources.texture(
+            texture,
+            2,
+            2,
+            &[255, 40, 40, 255].repeat(4),
+            TextureFilter::Linear,
+        );
+        ops.push(define);
+    }
     ops.extend(coloured_mesh("floor", floor(4.0), [0.6, 0.6, 0.6, 1.0]));
-    ops.extend(sheet(water, 0.3));
+    ops.extend(sheet(water, 0.3, texture));
     ops.push(instance(
         1,
         None,
@@ -234,5 +254,27 @@ fn blended_parts_cast_no_shadow_unless_they_ask() {
     assert!(
         cast > none + 200,
         "the translucent shadow darkens {cast} pixels against {none}"
+    );
+}
+
+/// A base texture colours the water as the material colour does: a red
+/// texture keeps the shallows red-tinted and still turns deep over the deep
+/// floor.
+#[test]
+fn water_takes_its_base_texture_into_the_tint() {
+    let plain = shore(Some(water(0.01, 1.0))).single(&view());
+    let red = shore_textured(Some(water(0.01, 1.0)), Some("texture/red")).single(&view());
+    let (plain_shallow, red_shallow) = (
+        mean(&plain, SHALLOW.0, SHALLOW.1),
+        mean(&red, SHALLOW.0, SHALLOW.1),
+    );
+    assert!(
+        red_shallow[1] < plain_shallow[1] - 30.0 && red_shallow[0] > red_shallow[1],
+        "the red texture tints the shallows: {red_shallow:?} against {plain_shallow:?}"
+    );
+    let red_deep = mean(&red, DEEP.0, DEEP.1);
+    assert!(
+        red_deep[0] < red_shallow[0] - 30.0,
+        "the deep side still darkens: {red_deep:?} against {red_shallow:?}"
     );
 }
