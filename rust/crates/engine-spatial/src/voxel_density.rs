@@ -365,7 +365,15 @@ impl VoxelDensityEditService {
                                 } else {
                                     None
                                 };
-                                working.insert(address, Sample { material, density });
+                                let after = Sample { material, density };
+                                // An earlier edit's crossings on this voxel no
+                                // longer describe its surface.
+                                if before != after {
+                                    for edge in voxel_edges(address) {
+                                        edge_normals.insert(edge, None);
+                                    }
+                                }
+                                working.insert(address, after);
                             }
                         }
                     }
@@ -513,8 +521,10 @@ impl VoxelDensityEditService {
         }
         normals.extend(edge_normals);
         let mut hermite_normals = 0;
+        let mut normals_before = Vec::with_capacity(normals.len());
         for ((address, axis), normal) in normals {
             hermite_normals += usize::from(normal.is_some());
+            normals_before.push((address, axis, edge_normal(scene, address, axis)));
             set_edge_normal(scene, address, axis, normal);
         }
         let mut changed_chunks = BTreeSet::new();
@@ -541,6 +551,9 @@ impl VoxelDensityEditService {
                         &mut Vec::new(),
                         &mut BTreeSet::new(),
                     );
+                }
+                for (address, axis, normal) in normals_before {
+                    set_edge_normal(scene, address, axis, normal);
                 }
                 for coordinate in gained_densities {
                     if let Some(chunk) = scene.voxel_world.get_mut(coordinate) {
@@ -761,6 +774,20 @@ fn voxel_edges(address: [i64; 3]) -> [([i64; 3], usize); 6] {
 /// Store or clear the crossing normal of the edge from `address` along
 /// `axis`, in the chunk holding `address`. A chunk that is not resident has
 /// no edges to clear, and one is not created for a normal alone.
+fn edge_normal(
+    scene: &VoxelCollisionScene,
+    address: [i64; 3],
+    axis: usize,
+) -> Option<EdgeCrossing> {
+    let grid = scene.voxel_world.grid();
+    let (coordinate, local) =
+        grid.voxel_to_chunk_local(VoxelCoord::new(address[0], address[1], address[2]));
+    scene
+        .voxel_world
+        .get(coordinate)?
+        .edge_crossing(local, axis)
+}
+
 fn set_edge_normal(
     scene: &mut VoxelCollisionScene,
     address: [i64; 3],

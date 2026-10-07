@@ -35,8 +35,8 @@ fn options(ignore_stored_normals: bool) -> SurfaceMeshOptions {
     }
 }
 
-/// A rock slab, 32 × 12 × 24, in chunks of 8, with the box cut out of it.
-fn carved() -> (VoxelCollisionScene, usize) {
+/// A rock slab, 32 × 12 × 24, in chunks of 8.
+fn slab() -> VoxelCollisionScene {
     let voxels = (0..32).flat_map(|x| {
         (0..24).flat_map(move |z| {
             (0..TOP).map(move |y| MaterialVoxel {
@@ -46,22 +46,41 @@ fn carved() -> (VoxelCollisionScene, usize) {
             })
         })
     });
-    let mut scene =
-        VoxelCollisionScene::from_material_voxels_with_mesh_options(1.0, 8, voxels, options(false))
-            .unwrap();
-    let receipt = VoxelDensityEditService::apply(
-        &mut scene,
-        &[VoxelDensityEdit::Brush {
-            shape: VoxelDensityShape::Box {
-                min: CUT_MIN,
-                max: CUT_MAX,
-            },
-            operation: VoxelDensityOperation::Subtract,
-            material_slot: ROCK,
-        }],
-    )
-    .unwrap();
+    VoxelCollisionScene::from_material_voxels_with_mesh_options(1.0, 8, voxels, options(false))
+        .unwrap()
+}
+
+fn cut() -> VoxelDensityEdit {
+    VoxelDensityEdit::Brush {
+        shape: VoxelDensityShape::Box {
+            min: CUT_MIN,
+            max: CUT_MAX,
+        },
+        operation: VoxelDensityOperation::Subtract,
+        material_slot: ROCK,
+    }
+}
+
+/// The slab with the box cut out of it.
+fn carved() -> (VoxelCollisionScene, usize) {
+    let mut scene = slab();
+    let receipt = VoxelDensityEditService::apply(&mut scene, &[cut()]).unwrap();
     (scene, receipt.hermite_normals)
+}
+
+fn crossing_count(scene: &VoxelCollisionScene) -> usize {
+    scene
+        .voxel_world()
+        .resident_chunks()
+        .map(|(_, chunk)| chunk.edge_crossing_count())
+        .sum()
+}
+
+fn mesh_positions(scene: &VoxelCollisionScene) -> Vec<u32> {
+    scene
+        .mesh_chunks()
+        .flat_map(|chunk| chunk.positions.iter().map(|value| value.to_bits()))
+        .collect()
 }
 
 /// The cut's distance at a point: positive in the rock it left.
@@ -289,4 +308,50 @@ fn a_crater_rim_keeps_the_walls_it_meets() {
         worst.1,
         worst.2
     );
+}
+
+#[test]
+fn a_later_region_in_the_same_batch_clears_the_crossings_it_overwrites() {
+    let region = VoxelDensityEdit::Region {
+        min: [12, 5, 8],
+        size: [1, 1, 1],
+        densities: vec![-0.05],
+        materials: vec![],
+    };
+    let mut batched = slab();
+    VoxelDensityEditService::apply(&mut batched, &[cut(), region.clone()]).unwrap();
+    let mut separate = slab();
+    VoxelDensityEditService::apply(&mut separate, &[cut()]).unwrap();
+    VoxelDensityEditService::apply(&mut separate, &[region]).unwrap();
+    assert_eq!(crossing_count(&batched), crossing_count(&separate));
+    assert_eq!(mesh_positions(&batched), mesh_positions(&separate));
+}
+
+#[test]
+fn a_refused_rebuild_leaves_the_crossings_as_they_were() {
+    let mut scene = slab();
+    let mut limited = options(false);
+    limited.limits.max_indices = scene
+        .mesh_chunks()
+        .map(|chunk| chunk.indices.len() as u32)
+        .max()
+        .unwrap();
+    scene.set_mesh_options(limited).unwrap();
+    let crossings = crossing_count(&scene);
+    let positions = mesh_positions(&scene);
+    // The sphere's cut needs more indices than the limit allows.
+    let refused = VoxelDensityEditService::apply(
+        &mut scene,
+        &[VoxelDensityEdit::Brush {
+            shape: VoxelDensityShape::Sphere {
+                center: [3.8, 3.7, 3.9],
+                radius: 2.0,
+            },
+            operation: VoxelDensityOperation::Subtract,
+            material_slot: ROCK,
+        }],
+    );
+    assert!(refused.is_err());
+    assert_eq!(crossing_count(&scene), crossings);
+    assert_eq!(mesh_positions(&scene), positions);
 }
