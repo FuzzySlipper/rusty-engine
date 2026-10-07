@@ -197,6 +197,9 @@ pub struct NativeVoxelResidencyReceipt {
     pub reused_mesh_chunks: u32,
     pub removed_mesh_chunks: u32,
     pub mesh_microseconds: u64,
+    /// Crossing normals the replaced and evicted chunks carried; residency
+    /// payloads do not carry them (#9504).
+    pub dropped_hermite_normals: u32,
 }
 
 /// Collision policy for one occupied material slot; visuals retain the cell.
@@ -420,6 +423,9 @@ pub struct NativeVoxelDensityReceipt {
     pub reused_mesh_chunks: u32,
     pub removed_mesh_chunks: u32,
     pub mesh_microseconds: u64,
+    /// Crossing normals (#9504) the batch stored for the surfaces its brushes
+    /// and stamps cut; a voxel it changed lost its other edges' normals.
+    pub hermite_normals: u32,
 }
 
 /// Stamp an implicit field node into a session's densities (#9505): the

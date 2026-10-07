@@ -341,6 +341,7 @@ fn a_stamp_of_sampled_distances_applies_as_the_brush_it_samples() {
                 min,
                 size,
                 distances,
+                crossings: Vec::new(),
                 operation,
                 material_slot: BRICK,
             }],

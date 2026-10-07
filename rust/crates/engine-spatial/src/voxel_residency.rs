@@ -234,6 +234,11 @@ pub struct VoxelChunkResidencyReceipt {
     pub rebuilt_mesh_chunks: usize,
     pub reused_mesh_chunks: usize,
     pub removed_mesh_chunks: usize,
+    /// Crossing normals (#9504) the replaced and evicted chunks carried. A
+    /// residency payload carries voxels and densities, not normals: a chunk
+    /// admitted again draws its sharp cuts from estimated normals until a
+    /// brush or stamp cuts them again.
+    pub dropped_hermite_normals: usize,
 }
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -370,6 +375,11 @@ impl VoxelChunkResidencyService {
         for (coordinate, chunk) in previous {
             first_previous.entry(coordinate).or_insert(chunk);
         }
+        let dropped_hermite_normals = first_previous
+            .values()
+            .flatten()
+            .map(VoxelChunk::edge_crossing_count)
+            .sum();
         for (coordinate, before) in first_previous {
             if let Some(before) = before {
                 scene.account_chunk(coordinate, Some(&before), false);
@@ -394,6 +404,7 @@ impl VoxelChunkResidencyService {
             rebuilt_mesh_chunks: update.rebuilt_chunks,
             reused_mesh_chunks: update.reused_chunks,
             removed_mesh_chunks: update.removed_chunks,
+            dropped_hermite_normals,
         })
     }
 }

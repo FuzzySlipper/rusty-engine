@@ -430,4 +430,7 @@ fn write_cell(
         .expect("resident chunk")
         .set(local, value)
         .expect("local coordinate from the grid");
+    // The surface through this voxel is no longer the shape that wrote its
+    // crossing normals.
+    crate::voxel_density::clear_voxel_edge_normals(scene, address);
 }

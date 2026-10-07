@@ -219,6 +219,30 @@ takes about 37 ms, 12 of them meshing; in a CraftSurvive dungeon a rounded
 chamber took 5.8 ms by stamp against 10.5 ms for the same cut read, computed
 and written back as a region from C#.
 
+Brushes and stamps also keep the exact shape of what they cut (Hermite
+crossings, #9504). On every edge between two voxels where an Add or Subtract
+brush, or a stamp, made the voxel on its own side of the surface (the empty
+one it carved or the solid one it added), the chunk stores where the shape
+crosses the edge and the shape's normal there: a brush finds them on its own
+analytic shape, a stamp from its field's gradient. Sharp placement solves each
+cell's vertex from the stored crossings when every crossing of that cell has
+one, so a box cut's edges and corners and a sphere's facets land where the
+shape puts them rather than rounded at the cell scale (on a box cut into rock,
+edge vertices about 0.02 voxels off the true surface instead of 0.11 to 0.16,
+at most 0.1 instead of 0.24 to 0.6). A cell where the edit's surface meets
+ground it did not make mixes stored and estimated crossings, and is placed from
+the densities alone as before, so a crater's rim against existing rock looks as
+it did. Smooth placement keeps its mass point but shades from the stored
+normals. Anything else that changes a voxel (a voxel edit, a region write, a
+smoothing brush, another brush over it) clears the crossings of its six edges,
+and residency payloads do not carry them: an evicted, replaced or re-admitted
+chunk draws its cuts from estimated normals until an edit cuts them again. The
+density receipt's `HermiteNormals` counts the crossings a batch stored and the
+residency receipt's `DroppedHermiteNormals` those an eviction or replacement
+dropped. They cost about 20 bytes per crossing (some 3 KB per chunk a box cut
+crosses) and nothing to mesh. `fixtures/csharp-voxel-sharp` cuts a box and adds
+a sphere at Sharp placement with the brushes alone.
+
 Only the touched chunks' meshes and colliders are rebuilt; a failed rebuild
 restores the scene. The receipt reports changed voxels, solidity changes, rebuilt chunks
 and meshing time. `Voxel.ReadDensities(new(session, min, sizeX, sizeY,

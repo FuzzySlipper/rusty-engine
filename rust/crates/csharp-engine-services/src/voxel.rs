@@ -259,11 +259,61 @@ impl RuntimeSpatialBridge {
             }
         }
         let voxel_size = scene.voxel_size() as f32;
-        let distances = field
+        let distances: Vec<f32> = field
             .sample_gradients(node, &points)
             .map_err(|error| voxel_error("CSHARP_VOXEL_IMPLICIT_STAMP", error.0))?
             .into_iter()
             .map(|(value, gradient)| stamp_distance(value, gradient, voxel_size))
+            .collect();
+        // The field's normal where its surface crosses each voxel edge of the
+        // box (#9504), out of the solid the stamp leaves.
+        let (sx, sy) = (size[0] as usize, size[1] as usize);
+        let stride = [1, sx, sx * sy];
+        let mut crossings = Vec::new();
+        let mut crossing_points = Vec::new();
+        for (index, here) in distances.iter().enumerate() {
+            let at = [index % sx, (index / sx) % sy, index / (sx * sy)];
+            for axis in 0..3 {
+                if at[axis] + 1 >= size[axis] as usize {
+                    continue;
+                }
+                let there = distances[index + stride[axis]];
+                if (*here < 0.0) == (there < 0.0) {
+                    continue;
+                }
+                let t = here / (here - there);
+                let mut point = points[index];
+                point[axis] += t * voxel_size;
+                crossings.push((index as u32, axis as u8, t.clamp(0.0, 1.0)));
+                crossing_points.push(point);
+            }
+        }
+        let outward = if operation == VoxelDensityOperation::Subtract {
+            -1.0
+        } else {
+            1.0
+        };
+        let crossings = field
+            .sample_gradients(node, &crossing_points)
+            .map_err(|error| voxel_error("CSHARP_VOXEL_IMPLICIT_STAMP", error.0))?
+            .into_iter()
+            .zip(crossings)
+            .filter_map(|((_, gradient), (index, axis, at))| {
+                let length = (gradient[0] * gradient[0]
+                    + gradient[1] * gradient[1]
+                    + gradient[2] * gradient[2])
+                    .sqrt();
+                (length.is_finite() && length > f32::EPSILON).then(|| {
+                    engine_spatial::StampCrossing {
+                        index,
+                        axis,
+                        crossing: engine_spatial::EdgeCrossing {
+                            at,
+                            normal: gradient.map(|value| value / length * outward),
+                        },
+                    }
+                })
+            })
             .collect();
         self.apply_density(
             request.session,
@@ -271,6 +321,7 @@ impl RuntimeSpatialBridge {
                 min,
                 size,
                 distances,
+                crossings,
                 operation,
                 material_slot,
             }],
@@ -642,6 +693,7 @@ fn native_density_receipt(
         reused_mesh_chunks: narrow(receipt.reused_mesh_chunks),
         removed_mesh_chunks: narrow(receipt.removed_mesh_chunks),
         mesh_microseconds: receipt.mesh_microseconds,
+        hermite_normals: narrow(receipt.hermite_normals),
     }
 }
 
@@ -767,6 +819,7 @@ fn native_residency_receipt(
         reused_mesh_chunks: narrow(receipt.reused_mesh_chunks),
         removed_mesh_chunks: narrow(receipt.removed_mesh_chunks),
         mesh_microseconds: 0,
+        dropped_hermite_normals: narrow(receipt.dropped_hermite_normals),
     }
 }
 

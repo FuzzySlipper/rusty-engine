@@ -12,7 +12,19 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use core_space::{ChunkCoord, VoxelCoord};
 use core_voxel::{VoxelMaterialId, VoxelValue};
+pub use svc_volume::EdgeCrossing;
 use svc_volume::{VoxelChunk, DEFAULT_DENSITY_MAGNITUDE};
+
+/// A crossing a stamp's caller found on the stamp's surface (#9504).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct StampCrossing {
+    /// The voxel's index in the stamp's box, x-fastest.
+    pub index: u32,
+    /// The edge's axis toward the voxel's +axis neighbour.
+    pub axis: u8,
+    /// The crossing as the chunk stores it.
+    pub crossing: EdgeCrossing,
+}
 
 use crate::voxel_edit::{validate_voxel_address, validate_voxel_material_slot};
 use crate::{CollisionSceneError, MaterialVoxel, VoxelCollisionScene, VoxelSourceRevision};
@@ -48,6 +60,35 @@ impl VoxelDensityShape {
                 let outside = q.map(|value| value.max(0.0));
                 (outside[0] * outside[0] + outside[1] * outside[1] + outside[2] * outside[2]).sqrt()
                     + q[0].max(q[1]).max(q[2]).min(0.0)
+            }
+        }
+    }
+
+    /// The signed distance's gradient at `point`: the surface normal there,
+    /// pointing out of the shape.
+    fn gradient(self, point: [f64; 3]) -> [f64; 3] {
+        match self {
+            Self::Sphere { center, .. } => {
+                let delta: [f64; 3] = std::array::from_fn(|axis| point[axis] - center[axis]);
+                normalized(delta)
+            }
+            Self::Box { min, max } => {
+                let local: [f64; 3] =
+                    std::array::from_fn(|axis| point[axis] - (min[axis] + max[axis]) * 0.5);
+                let q: [f64; 3] =
+                    std::array::from_fn(|axis| local[axis].abs() - (max[axis] - min[axis]) * 0.5);
+                if q.iter().any(|value| *value > 0.0) {
+                    normalized(std::array::from_fn(|axis| {
+                        q[axis].max(0.0) * local[axis].signum()
+                    }))
+                } else {
+                    let axis = (0..3)
+                        .max_by(|a, b| q[*a].total_cmp(&q[*b]))
+                        .expect("three axes");
+                    let mut normal = [0.0; 3];
+                    normal[axis] = if local[axis] < 0.0 { -1.0 } else { 1.0 };
+                    normal
+                }
             }
         }
     }
@@ -117,6 +158,12 @@ pub enum VoxelDensityEdit {
         min: [i64; 3],
         size: [u32; 3],
         distances: Vec<f32>,
+        /// Crossings the caller knows (#9504): for a voxel of the box
+        /// (x-fastest index) and an axis, where the shape's surface crosses
+        /// the voxel's edge toward its +axis neighbour and its normal there.
+        /// Kept, as a brush keeps its own, where the stamp made the voxel on
+        /// its side of the crossing.
+        crossings: Vec<StampCrossing>,
         operation: VoxelDensityOperation,
         material_slot: u16,
     },
@@ -236,6 +283,10 @@ pub struct VoxelDensityReceipt {
     pub reused_mesh_chunks: usize,
     pub removed_mesh_chunks: usize,
     pub mesh_microseconds: u64,
+    /// Crossing normals the batch stored for the surfaces its brushes and
+    /// stamps cut (#9504). A voxel the batch changed loses its other edges'
+    /// normals.
+    pub hermite_normals: usize,
 }
 
 /// One voxel as an edit sees it: its material when solid, and its signed
@@ -270,6 +321,9 @@ impl VoxelDensityEditService {
 
         // Evaluate every edit against a working copy of the samples it reads.
         let mut working = BTreeMap::<[i64; 3], Sample>::new();
+        // Crossing normals the batch sets (`Some`) or clears (`None`), by an
+        // edge's lower voxel and axis (#9504).
+        let mut edge_normals = BTreeMap::<([i64; 3], usize), Option<EdgeCrossing>>::new();
         let read = |scene: &VoxelCollisionScene,
                     working: &BTreeMap<[i64; 3], Sample>,
                     address: [i64; 3]| {
@@ -324,6 +378,7 @@ impl VoxelDensityEditService {
                     let voxel_size = scene.voxel_size;
                     let (low, high) = brush_voxels(scene, *shape, operation_margin(*operation));
                     let mut updates = Vec::new();
+                    let mut won = BTreeSet::new();
                     for z in low[2]..=high[2] {
                         for y in low[1]..=high[1] {
                             for x in low[0]..=high[0] {
@@ -334,22 +389,54 @@ impl VoxelDensityEditService {
                                 if let Some(after) =
                                     operate(*operation, *material_slot, address, distance, read_at)
                                 {
+                                    if sets_density(*operation, distance, after.density) {
+                                        won.insert(address);
+                                    }
                                     updates.push((address, after));
                                 }
                             }
                         }
                     }
-                    // Smoothing reads the batch's state before this brush.
-                    working.extend(updates);
+                    let outward = if *operation == VoxelDensityOperation::Subtract {
+                        -1.0
+                    } else {
+                        1.0
+                    };
+                    // A crossing of the brush's own surface: where the shape's
+                    // distance is zero along the edge, and its normal there.
+                    let normal_at = |address: [i64; 3], axis: usize| {
+                        let start = voxel_center(scene, address);
+                        let at = |t: f64| {
+                            let mut point = start;
+                            point[axis] += t * voxel_size;
+                            point
+                        };
+                        let t = edge_root(|t| shape.distance(at(t)))?;
+                        Some(EdgeCrossing {
+                            at: t as f32,
+                            normal: shape.gradient(at(t)).map(|value| (value * outward) as f32),
+                        })
+                    };
+                    record_edits(
+                        &mut working,
+                        &mut edge_normals,
+                        scene,
+                        updates,
+                        &won,
+                        *operation,
+                        normal_at,
+                    );
                 }
                 VoxelDensityEdit::Stamp {
                     min,
                     size,
                     distances,
+                    crossings,
                     operation,
                     material_slot,
                 } => {
                     let mut updates = Vec::new();
+                    let mut won = BTreeSet::new();
                     let mut index = 0;
                     for z in 0..i64::from(size[2]) {
                         for y in 0..i64::from(size[1]) {
@@ -361,12 +448,38 @@ impl VoxelDensityEditService {
                                 if let Some(after) =
                                     operate(*operation, *material_slot, address, distance, read_at)
                                 {
+                                    if sets_density(*operation, distance, after.density) {
+                                        won.insert(address);
+                                    }
                                     updates.push((address, after));
                                 }
                             }
                         }
                     }
-                    working.extend(updates);
+                    let known: BTreeMap<([i64; 3], usize), EdgeCrossing> = crossings
+                        .iter()
+                        .map(|crossing| {
+                            let index = i64::from(crossing.index);
+                            let (sx, sy) = (i64::from(size[0]), i64::from(size[1]));
+                            let address = [
+                                min[0] + index % sx,
+                                min[1] + (index / sx) % sy,
+                                min[2] + index / (sx * sy),
+                            ];
+                            ((address, usize::from(crossing.axis)), crossing.crossing)
+                        })
+                        .collect();
+                    let normal_at =
+                        |address: [i64; 3], axis: usize| known.get(&(address, axis)).copied();
+                    record_edits(
+                        &mut working,
+                        &mut edge_normals,
+                        scene,
+                        updates,
+                        &won,
+                        *operation,
+                        normal_at,
+                    );
                 }
             }
         }
@@ -389,6 +502,20 @@ impl VoxelDensityEditService {
         let mut gained_densities = BTreeSet::new();
         for (address, _, after) in &changes {
             write(scene, *address, *after, &mut created, &mut gained_densities);
+        }
+        // A voxel the batch changed no longer carries the surface its edges'
+        // normals described, unless an edit wrote them again.
+        let mut normals: BTreeMap<([i64; 3], usize), Option<EdgeCrossing>> = BTreeMap::new();
+        for (address, _, _) in &changes {
+            for (edge, axis) in voxel_edges(*address) {
+                normals.insert((edge, axis), None);
+            }
+        }
+        normals.extend(edge_normals);
+        let mut hermite_normals = 0;
+        for ((address, axis), normal) in normals {
+            hermite_normals += usize::from(normal.is_some());
+            set_edge_normal(scene, address, axis, normal);
         }
         let mut changed_chunks = BTreeSet::new();
         let mut dirty = BTreeSet::new();
@@ -465,6 +592,7 @@ impl VoxelDensityEditService {
             reused_mesh_chunks: update.reused_chunks,
             removed_mesh_chunks: update.removed_chunks,
             mesh_microseconds: update.mesh_microseconds,
+            hermite_normals,
         })
     }
 }
@@ -526,6 +654,144 @@ fn operate(
             }
         }
     })
+}
+
+/// Where `distance` (along an edge, `t` from 0 to 1) is zero, by bisection,
+/// if it changes sign over the edge.
+fn edge_root(distance: impl Fn(f64) -> f64) -> Option<f64> {
+    let (mut low, mut high) = (0.0, 1.0);
+    let start_inside = distance(low) < 0.0;
+    if (distance(high) < 0.0) == start_inside {
+        return None;
+    }
+    for _ in 0..24 {
+        let middle = (low + high) * 0.5;
+        if (distance(middle) < 0.0) == start_inside {
+            low = middle;
+        } else {
+            high = middle;
+        }
+    }
+    Some((low + high) * 0.5)
+}
+
+/// Whether a brush's distance set a voxel's density: the brush, not what was
+/// there, places the surface at that voxel.
+fn sets_density(operation: VoxelDensityOperation, distance: f32, density: f32) -> bool {
+    match operation {
+        VoxelDensityOperation::Add => density.to_bits() == distance.to_bits(),
+        VoxelDensityOperation::Subtract => density.to_bits() == (-distance).to_bits(),
+        _ => false,
+    }
+}
+
+/// Fold one brush's updates into the batch: the voxels it changed lose their
+/// edges' crossings, then every crossing on an edge of a changed voxel that
+/// is the brush's own surface takes the brush's crossing there
+/// (`normal_at(lower voxel, axis)`: where the shape crosses the edge and its
+/// normal, `None` when it does not). A crossing is the brush's when the brush
+/// set the voxel on its own side of it (the empty one it carved, or the solid
+/// one it added): where the brush's surface passes near ground it did not
+/// make, a crossing between that ground's solid and empty voxels keeps the
+/// ground's own estimate. The mesher puts a stored crossing at its stored
+/// place, not where the densities put it, so normal and place agree even
+/// where the densities beside the brush were not its distances.
+fn record_edits(
+    working: &mut BTreeMap<[i64; 3], Sample>,
+    edge_normals: &mut BTreeMap<([i64; 3], usize), Option<EdgeCrossing>>,
+    scene: &VoxelCollisionScene,
+    updates: Vec<([i64; 3], Sample)>,
+    won: &BTreeSet<[i64; 3]>,
+    operation: VoxelDensityOperation,
+    normal_at: impl Fn([i64; 3], usize) -> Option<EdgeCrossing>,
+) {
+    let mut edges = BTreeSet::new();
+    for (address, after) in &updates {
+        let before = working
+            .get(address)
+            .copied()
+            .unwrap_or_else(|| sample(scene, *address));
+        if before != *after {
+            for edge in voxel_edges(*address) {
+                edge_normals.insert(edge, None);
+                edges.insert(edge);
+            }
+        }
+    }
+    working.extend(updates);
+    let density = |address: [i64; 3]| {
+        working
+            .get(&address)
+            .map_or_else(|| sample(scene, address).density, |sample| sample.density)
+    };
+    for (address, axis) in edges {
+        let mut next = address;
+        next[axis] += 1;
+        let (here, there) = (density(address), density(next));
+        if (here < 0.0) == (there < 0.0) {
+            continue;
+        }
+        // The brush's side: what Subtract leaves empty, what Add makes solid.
+        let own = if (here < 0.0) == (operation == VoxelDensityOperation::Add) {
+            address
+        } else {
+            next
+        };
+        if !won.contains(&own) {
+            continue;
+        }
+        if let Some(crossing) = normal_at(address, axis) {
+            edge_normals.insert((address, axis), Some(crossing));
+        }
+    }
+}
+
+/// The six edges touching a voxel, by lower voxel and axis.
+fn voxel_edges(address: [i64; 3]) -> [([i64; 3], usize); 6] {
+    std::array::from_fn(|index| {
+        let axis = index % 3;
+        let mut lower = address;
+        if index >= 3 {
+            lower[axis] -= 1;
+        }
+        (lower, axis)
+    })
+}
+
+/// Store or clear the crossing normal of the edge from `address` along
+/// `axis`, in the chunk holding `address`. A chunk that is not resident has
+/// no edges to clear, and one is not created for a normal alone.
+fn set_edge_normal(
+    scene: &mut VoxelCollisionScene,
+    address: [i64; 3],
+    axis: usize,
+    normal: Option<EdgeCrossing>,
+) {
+    let grid = scene.voxel_world.grid();
+    let (coordinate, local) =
+        grid.voxel_to_chunk_local(VoxelCoord::new(address[0], address[1], address[2]));
+    if let Some(chunk) = scene.voxel_world.get_mut(coordinate) {
+        chunk
+            .set_edge_crossing(local, axis, normal)
+            .expect("local coordinate from the grid, finite normal");
+    }
+}
+
+/// Clear the crossing normals of every edge touching a voxel: its surface is
+/// no longer the shape that wrote them.
+pub(crate) fn clear_voxel_edge_normals(scene: &mut VoxelCollisionScene, address: [i64; 3]) {
+    for (edge, axis) in voxel_edges(address) {
+        set_edge_normal(scene, edge, axis, None);
+    }
+}
+
+fn normalized(vector: [f64; 3]) -> [f64; 3] {
+    let length = (vector[0] * vector[0] + vector[1] * vector[1] + vector[2] * vector[2]).sqrt();
+    if length > f64::EPSILON {
+        vector.map(|value| value / length)
+    } else {
+        [0.0, 1.0, 0.0]
+    }
 }
 
 const SIX: [[i64; 3]; 6] = [
@@ -659,6 +925,7 @@ fn validate(
             min,
             size,
             distances,
+            crossings,
             operation,
             material_slot,
         } => {
@@ -666,7 +933,18 @@ fn validate(
             if count == 0 || distances.len() as u64 != count {
                 return Err(VoxelDensityRejection::InvalidRegion { edit_index });
             }
-            if !distances.iter().all(|value| value.is_finite()) {
+            if !distances.iter().all(|value| value.is_finite())
+                || !crossings.iter().all(|crossing| {
+                    u64::from(crossing.index) < count
+                        && crossing.axis < 3
+                        && (0.0..=1.0).contains(&crossing.crossing.at)
+                        && crossing
+                            .crossing
+                            .normal
+                            .iter()
+                            .all(|value| value.is_finite())
+                })
+            {
                 return Err(VoxelDensityRejection::InvalidDensity { edit_index });
             }
             if let VoxelDensityOperation::Smooth { strength } = operation {

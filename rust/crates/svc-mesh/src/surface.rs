@@ -147,6 +147,11 @@ pub(super) struct Lattice {
     pub explicit: bool,
     /// The see-through samples, read as empty.
     see_through: Vec<usize>,
+    /// Stored Hermite crossings (#9504): for the edge from a sample to its
+    /// neighbour along an axis, keyed `sample index * 3 + axis`, where the
+    /// surface crosses it (fraction from the sample) and the unit normal
+    /// out of the solid there.
+    pub hermite: std::collections::HashMap<usize, (f64, [f64; 3])>,
 }
 
 impl Lattice {
@@ -165,6 +170,7 @@ impl Lattice {
             materials: vec![0; count],
             explicit: false,
             see_through: Vec::new(),
+            hermite: Default::default(),
         })
     }
 
@@ -182,6 +188,25 @@ impl Lattice {
             }
             None => self.values[index] = -magnitude,
         }
+    }
+
+    /// Record a stored crossing for the edge from `global` along `axis`; one
+    /// outside the lattice, or whose edge leaves it, is ignored.
+    pub(super) fn set_edge_crossing(
+        &mut self,
+        global: [i64; 3],
+        axis: usize,
+        at: f32,
+        normal: [f32; 3],
+    ) {
+        let Some(index) = self.global_index(global) else {
+            return;
+        };
+        if global[axis] - self.origin[axis] + 1 >= self.dims[axis] as i64 {
+            return;
+        }
+        self.hermite
+            .insert(index * 3 + axis, (f64::from(at), normal.map(f64::from)));
     }
 
     /// Make the solid samples of `slots` see-through: they read as empty at
@@ -292,6 +317,7 @@ impl Lattice {
             materials,
             explicit: true,
             see_through: Vec::new(),
+            hermite: Default::default(),
         })
     }
 
@@ -592,6 +618,34 @@ impl DualContouring<'_> {
         }
         let global_cell = lattice.global(cell);
         let base = std::array::from_fn::<_, 3, _>(|axis| global_cell[axis] as f64);
+        // Crossings a shaped edit wrote keep the place and normal of the
+        // shape it cut (#9504), in a cell where every crossing is one: a
+        // cell where an edit's surface meets ground it did not make mixes
+        // exact and estimated planes, whose solve can leave the cell, so it
+        // estimates them all, as before.
+        let stored_crossings: [Option<(f64, [f64; 3])>; 12] = std::array::from_fn(|edge| {
+            let (a, b) = EDGES[edge];
+            if placement_rank >= 2 || lattice.hermite.is_empty() || inside[a] == inside[b] {
+                return None;
+            }
+            let axis = (0..3)
+                .find(|axis| CORNERS[a][*axis] != CORNERS[b][*axis])
+                .expect("an edge runs along one axis");
+            let low = if CORNERS[a][axis] < CORNERS[b][axis] {
+                a
+            } else {
+                b
+            };
+            lattice
+                .hermite
+                .get(&(corners[low] * 3 + axis))
+                .map(|(at, normal)| (if low == a { *at } else { 1.0 - *at }, *normal))
+        });
+        let all_stored = EDGES
+            .iter()
+            .enumerate()
+            .filter(|(_, (a, b))| inside[*a] != inside[*b])
+            .all(|(edge, _)| stored_crossings[edge].is_some());
         let mut samples = Vec::with_capacity(12);
         for (edge, &(a, b)) in EDGES.iter().enumerate() {
             if inside[a] == inside[b] {
@@ -601,7 +655,10 @@ impl DualContouring<'_> {
             // its sample and the outside one, whatever the densities: blocks
             // stay on the sample grid.
             let inside_corner = if inside[a] { a } else { b };
-            let t = if surfaces[inside_corner].is_some_and(|surface| sharpness(surface) >= 2) {
+            let stored = stored_crossings[edge].filter(|_| all_stored);
+            let t = if let Some((at, _)) = stored {
+                at
+            } else if surfaces[inside_corner].is_some_and(|surface| sharpness(surface) >= 2) {
                 0.5
             } else {
                 values[a] / (values[a] - values[b])
@@ -612,7 +669,9 @@ impl DualContouring<'_> {
             // crossing's normal snaps to its edge axis, so the shared vertex
             // stays on the block's planes and neighbouring materials meet
             // them there.
-            let normal = if placement_rank >= 2 {
+            let normal = if let Some((_, normal)) = stored {
+                normal
+            } else if placement_rank >= 2 {
                 let mut direction = [0.0; 3];
                 for axis in 0..3 {
                     direction[axis] = CORNERS[b][axis] as f64 - CORNERS[a][axis] as f64;

@@ -214,6 +214,10 @@ pub struct SurfaceMeshOptions {
     /// 1 the full occlusion). Reconstructed vertices look out over their
     /// normal; cube face corners take the classic voxel rule.
     pub vertex_occlusion: f32,
+    /// Ignore the chunks' stored crossing normals (#9504) and estimate every
+    /// crossing's normal from its cell's densities, as before they existed:
+    /// an A/B switch for measuring what the stored normals change.
+    pub ignore_stored_normals: bool,
 }
 
 impl SurfaceMeshOptions {
@@ -1569,7 +1573,10 @@ fn mesh_chunk_reconstructed(
     let spec = world.grid();
     let origin = spec.chunk_origin_voxel(coord).to_array();
     let size = spec.chunk_dims().to_array().map(i64::from);
-    let lattice = chunk_lattice(world, coord, 1, options.limits)?;
+    let mut lattice = chunk_lattice(world, coord, 1, options.limits)?;
+    if options.ignore_stored_normals {
+        lattice.hermite.clear();
+    }
     let owner = surface::Owner {
         min: origin,
         max: std::array::from_fn(|axis| origin[axis] + size[axis]),
@@ -1725,6 +1732,16 @@ fn chunk_lattice(
                             );
                         }
                     }
+                }
+                // Crossing normals are stored by the edge's lower voxel; every
+                // chunk meshing an edge reads the same one.
+                for (local, axis, crossing) in source.edge_crossings() {
+                    let global = [
+                        neighbour_origin[0] + i64::from(local.x),
+                        neighbour_origin[1] + i64::from(local.y),
+                        neighbour_origin[2] + i64::from(local.z),
+                    ];
+                    lattice.set_edge_crossing(global, axis, crossing.at, crossing.normal);
                 }
             }
         }

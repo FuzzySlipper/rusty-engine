@@ -25,6 +25,7 @@
 
 use core_space::{ChunkDims, Direction6, GridId, LocalVoxelCoord, VoxelGridSpec};
 use core_voxel::VoxelValue;
+use std::collections::BTreeMap;
 
 /// Monotonic edit counter for a chunk. Bumped only on a *meaningful* change
 /// (a `set`/`fill` that actually altered a cell).
@@ -90,8 +91,46 @@ pub struct VoxelChunk {
     dims: ChunkDims,
     cells: Vec<VoxelValue>,
     densities: Option<Densities>,
+    /// Hermite crossings: for a voxel's edge to its +x, +y or +z neighbour
+    /// (key `index * 3 + axis`), where the surface crosses it (the fraction
+    /// along the edge, 0 to 1) and its unit normal there, pointing out of the
+    /// solid, packed as 16-bit values. Sparse: only edges a shaped edit wrote
+    /// carry one (#9504).
+    normals: Option<BTreeMap<u32, [i16; 4]>>,
     version: ChunkVersion,
     dirty: bool,
+}
+
+/// Where a surface crosses a voxel edge, as Hermite data for the mesher
+/// (#9504).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct EdgeCrossing {
+    /// The fraction along the edge from its lower voxel's centre, 0 to 1.
+    pub at: f32,
+    /// The surface's unit normal there, pointing out of the solid.
+    pub normal: [f32; 3],
+}
+
+/// A crossing as signed 16-bit components: the normal's, then the fraction.
+fn pack_crossing(crossing: EdgeCrossing) -> [i16; 4] {
+    let scale = f32::from(i16::MAX);
+    let [x, y, z] = crossing
+        .normal
+        .map(|value| (value.clamp(-1.0, 1.0) * scale).round() as i16);
+    [
+        x,
+        y,
+        z,
+        (crossing.at.clamp(0.0, 1.0) * scale).round() as i16,
+    ]
+}
+
+fn unpack_crossing(packed: [i16; 4]) -> EdgeCrossing {
+    let scale = f32::from(i16::MAX);
+    EdgeCrossing {
+        at: f32::from(packed[3]) / scale,
+        normal: [packed[0], packed[1], packed[2]].map(|value| f32::from(value) / scale),
+    }
 }
 
 /// Per-voxel densities, compared bit for bit so a chunk stays `Eq`.
@@ -124,6 +163,7 @@ impl VoxelChunk {
             dims,
             cells: vec![value; dims.volume() as usize],
             densities: None,
+            normals: None,
             version: ChunkVersion(0),
             dirty: false,
         }
@@ -154,6 +194,7 @@ impl VoxelChunk {
             dims,
             cells: values.to_vec(),
             densities: None,
+            normals: None,
             version: ChunkVersion(0),
             dirty: false,
         })
@@ -374,6 +415,85 @@ impl VoxelChunk {
         Ok(true)
     }
 
+    /// The stored crossing of `local`'s edge toward its neighbour along `axis`
+    /// (0 x, 1 y, 2 z), if a shaped edit wrote one.
+    pub fn edge_crossing(&self, local: LocalVoxelCoord, axis: usize) -> Option<EdgeCrossing> {
+        let index = self.index(local)?;
+        self.normals
+            .as_ref()?
+            .get(&((index * 3 + axis) as u32))
+            .map(|packed| unpack_crossing(*packed))
+    }
+
+    /// Store (or with `None` clear) the crossing of `local`'s edge toward its
+    /// neighbour along `axis`. Returns whether it changed.
+    pub fn set_edge_crossing(
+        &mut self,
+        local: LocalVoxelCoord,
+        axis: usize,
+        crossing: Option<EdgeCrossing>,
+    ) -> Result<bool, VolumeError> {
+        let index = self.index(local).ok_or(VolumeError::OutOfBounds {
+            local,
+            dims: self.dims,
+        })?;
+        if axis > 2
+            || crossing.is_some_and(|value| {
+                !(value.normal.iter().all(|v| v.is_finite()) && (0.0..=1.0).contains(&value.at))
+            })
+        {
+            return Err(VolumeError::InvalidDensity);
+        }
+        let key = (index * 3 + axis) as u32;
+        let changed = match crossing {
+            Some(value) => {
+                let packed = pack_crossing(value);
+                let table = self.normals.get_or_insert_with(Default::default);
+                table.insert(key, packed) != Some(packed)
+            }
+            None => {
+                let removed = self
+                    .normals
+                    .as_mut()
+                    .is_some_and(|table| table.remove(&key).is_some());
+                if self.normals.as_ref().is_some_and(|table| table.is_empty()) {
+                    self.normals = None;
+                }
+                removed
+            }
+        };
+        if changed {
+            self.bump();
+        }
+        Ok(changed)
+    }
+
+    /// Every stored crossing: (local voxel, axis, crossing).
+    pub fn edge_crossings(
+        &self,
+    ) -> impl Iterator<Item = (LocalVoxelCoord, usize, EdgeCrossing)> + '_ {
+        self.normals.iter().flat_map(move |table| {
+            table.iter().map(move |(key, normal)| {
+                let key = *key as usize;
+                (self.delinearize(key / 3), key % 3, unpack_crossing(*normal))
+            })
+        })
+    }
+
+    /// How many crossings the chunk stores.
+    pub fn edge_crossing_count(&self) -> usize {
+        self.normals.as_ref().map_or(0, |table| table.len())
+    }
+
+    /// Drop every stored crossing. Returns whether any were stored.
+    pub fn clear_edge_crossings(&mut self) -> bool {
+        let had = self.normals.take().is_some();
+        if had {
+            self.bump();
+        }
+        had
+    }
+
     /// `true` if every cell is [`VoxelValue::Empty`].
     pub fn is_empty(&self) -> bool {
         self.cells.iter().all(|v| v.is_empty())
@@ -439,6 +559,14 @@ impl VoxelChunk {
         if let Some(densities) = &self.densities {
             for value in densities.0.iter() {
                 feed(value.to_bits());
+            }
+        }
+        if let Some(normals) = &self.normals {
+            for (key, normal) in normals.iter() {
+                feed(*key);
+                for value in normal {
+                    feed(*value as u16 as u32);
+                }
             }
         }
         ChunkHash(h)
