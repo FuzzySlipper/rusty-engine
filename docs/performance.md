@@ -97,7 +97,8 @@ median draw calls, instances and CPU microseconds spent building draw lists
 per frame, the `gpu` pass medians, and the renderer `settings` drawn (the snapshot's,
 changed by the flags below) with what the adapter refused. `--ambient-occlusion off|compute|raster|field` draws the
 snapshot with that ambient occlusion path (`field` cone-traces the voxel
-chunks' distance fields), `--render-scale S` at that fraction of the
+chunks' distance fields), `--ambient-occlusion-strength S` and
+`--ambient-occlusion-radius R` with that strength and radius, `--render-scale S` at that fraction of the
 output size, and `--indirect-light cx,cy,cz,ex,ey,ez,spacing,bounces[,floor]`
 with a probe volume baked before the frames (reported under `gpu.indirectLight`), to
 compare the paths on one scene. Compare

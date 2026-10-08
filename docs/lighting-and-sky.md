@@ -296,11 +296,33 @@ turns it on with `RustyEngineProductAmbientOcclusion` (see
 [the product project](csharp-product-project.md#screen-space-ambient-occlusion)),
 and `engine.renderer` reports its passes' GPU time.
 
+`RustyEngineProductAmbientOcclusionRadius` (0.75 m by default) is how far
+it looks; the pass costs the same at any radius (about 0.24 ms at 720p on an
+RX 9070 XT). A wider radius reaches past contact into the creases a world is
+built from: in an overcast CraftSurvive meadow, 0.75 m darkens about 8% of
+pixels by more than 8 levels, 1.25 m about 12% and 2 m about 14%, with no
+halos. The default suits props and rooms; a world built on 1 m voxels or
+pieces reads its corners better at 1 to 1.25 m.
+
 A voxel session can instead, or as well, bake occlusion into its surfaces
 at mesh time from the voxels around each vertex
 ([vertex occlusion](smooth-voxel-surfaces.md#vertex-occlusion)): no pass,
 no view dependence, and it reaches into every corner the lattice knows,
 at the scale of a voxel rather than of the screen.
+
+What each path is for:
+
+| Path | For | Not for |
+| --- | --- | --- |
+| Screen-space (`enabled`) | contact under anything drawn: props, foliage, characters, building pieces, terrain creases in view | occluders off screen; it darkens nothing a frame cannot see |
+| Distance field (`distanceField`) | voxel worlds that want occlusion from geometry out of view, out to half a chunk | props and foliage, which have no field |
+| Vertex occlusion (per voxel session) | voxel corners, crevices and cave walls at no per-frame cost, steady as the camera turns | anything that is not a voxel surface; coarse distant chunks |
+
+They combine: vertex occlusion bakes the lattice's corners and a pass adds
+the contact around what stands on them. For a voxel world the Engine
+recommends screen-space occlusion at about a voxel's radius, with vertex
+occlusion on the sessions whose corners carry the look (cubic interiors,
+dungeons, built structures).
 
 Its `distanceField` mode replaces the screen-space pass with a cone trace
 through the voxel chunks' signed distance fields, which the chunk mesher

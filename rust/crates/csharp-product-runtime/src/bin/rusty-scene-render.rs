@@ -4,7 +4,7 @@
 //!
 //! ```text
 //! rusty-scene-render <snapshot> <out.png> [--width W] [--height H] [--frames N]
-//!                    [--walk M] [--turn D] [--ambient-occlusion off|compute|raster|field]
+//!                    [--walk M] [--turn D] [--ambient-occlusion off|compute|raster|field] [--ambient-occlusion-strength S] [--ambient-occlusion-radius R]
 //!                    [--clustered-lighting on|off] [--gpu-culling on|off] [--render-scale S]
 //!                    [--rerender-shadows]
 //! ```
@@ -31,7 +31,7 @@ use render_wgpu::{
 use serde_json::json;
 
 const USAGE: &str = "usage: rusty-scene-render <snapshot> <out.png> [--width W] [--height H] \
-     [--frames N] [--walk M] [--turn D] [--ambient-occlusion off|compute|raster|field] \
+     [--frames N] [--walk M] [--turn D] [--ambient-occlusion off|compute|raster|field] [--ambient-occlusion-strength S] [--ambient-occlusion-radius R] \
      [--clustered-lighting on|off] [--gpu-culling on|off] [--render-scale S] [--rerender-shadows] \
      [--indirect-light cx,cy,cz,ex,ey,ez,spacing,bounces[,floor]]";
 
@@ -53,6 +53,8 @@ struct Arguments {
     walk: f64,
     turn: f64,
     ambient_occlusion: Option<AmbientOcclusionPath>,
+    ambient_occlusion_strength: Option<f32>,
+    ambient_occlusion_radius: Option<f32>,
     clustered_lighting: Option<bool>,
     gpu_culling: Option<bool>,
     render_scale: Option<f32>,
@@ -69,6 +71,8 @@ fn parse(arguments: impl IntoIterator<Item = String>) -> Result<Option<Arguments
     let (mut width, mut height, mut frames) = (1280_u32, 720_u32, 0_u32);
     let (mut walk, mut turn) = (0.0_f64, 0.0_f64);
     let mut ambient_occlusion: Option<AmbientOcclusionPath> = None;
+    let mut ambient_occlusion_strength: Option<f32> = None;
+    let mut ambient_occlusion_radius: Option<f32> = None;
     let mut clustered_lighting: Option<bool> = None;
     let mut gpu_culling: Option<bool> = None;
     // Render every shadow layer in each timed frame, as a still snapshot
@@ -161,6 +165,18 @@ fn parse(arguments: impl IntoIterator<Item = String>) -> Result<Option<Arguments
                     }
                 });
             }
+            "--ambient-occlusion-strength" | "--ambient-occlusion-radius" => {
+                let value = arguments
+                    .next()
+                    .and_then(|value| value.parse::<f32>().ok())
+                    .filter(|value| value.is_finite() && *value >= 0.0)
+                    .ok_or_else(|| format!("{argument} needs a number of at least 0\n{USAGE}"))?;
+                if argument == "--ambient-occlusion-strength" {
+                    ambient_occlusion_strength = Some(value);
+                } else {
+                    ambient_occlusion_radius = Some(value);
+                }
+            }
             "-h" | "--help" => return Ok(None),
             _ if argument.starts_with("--") => {
                 return Err(format!("unknown flag {argument}\n{USAGE}"))
@@ -180,6 +196,8 @@ fn parse(arguments: impl IntoIterator<Item = String>) -> Result<Option<Arguments
         walk,
         turn,
         ambient_occlusion,
+        ambient_occlusion_strength,
+        ambient_occlusion_radius,
         clustered_lighting,
         gpu_culling,
         render_scale,
@@ -198,6 +216,8 @@ fn run() -> Result<(), String> {
         walk,
         turn,
         ambient_occlusion,
+        ambient_occlusion_strength,
+        ambient_occlusion_radius,
         clustered_lighting,
         gpu_culling,
         render_scale,
@@ -236,6 +256,12 @@ fn run() -> Result<(), String> {
             strength,
             radius: options.ambient_occlusion.radius,
         };
+    }
+    if let Some(strength) = ambient_occlusion_strength {
+        options.ambient_occlusion.strength = strength;
+    }
+    if let Some(radius) = ambient_occlusion_radius {
+        options.ambient_occlusion.radius = radius;
     }
     if let Some(clustered) = clustered_lighting {
         options.clustered_lighting = clustered;
