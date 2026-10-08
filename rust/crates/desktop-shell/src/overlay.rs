@@ -18,15 +18,24 @@ use winit::{
 
 use crate::keys;
 
-/// Console lines the pointer-lock shim writes; the shell reads them from the
-/// page's console events.
+/// Console lines the pointer-lock and confinement shim writes; the shell
+/// reads them from the page's console events.
 const LOCK_REQUEST: &str = "rusty-desktop:pointer-lock";
 const LOCK_EXIT: &str = "rusty-desktop:pointer-unlock";
+const CONFINE_REQUEST: &str = "rusty-desktop:cursor-confine";
+const CONFINE_EXIT: &str = "rusty-desktop:cursor-release";
 
 /// Chromium's off-screen mode rejects the Pointer Lock API, so the page gets
 /// a shell-backed one: `requestPointerLock` asks the shell to grab the
 /// cursor, `document.pointerLockElement` reports the element, and the shell
 /// feeds raw motion back through `__rustyDesktopMotion`.
+///
+/// A browser cannot keep a visible cursor in the page, but the shell can:
+/// `__rustyDesktopCursor.confine()` asks it to confine the native cursor to
+/// the window. The shell ends a confinement (Escape, focus loss) or refuses
+/// one through `__rustyDesktopConfinementEnded`, which the page sees as a
+/// `rusty-desktop-confinement-end` event; after a refusal `confine` answers
+/// false and the page draws its own cursor under a lock.
 ///
 /// The off-screen page also keeps Chromium's focus while the native window is
 /// in the background, so the shell reports window focus through
@@ -69,6 +78,30 @@ const PAGE_SHIM: &str = r#"(() => {
     locked = null;
     change();
   };
+  let confined = false;
+  let confineRefused = false;
+  window.__rustyDesktopCursor = Object.freeze({
+    confine() {
+      if (confineRefused) return false;
+      if (!confined) {
+        confined = true;
+        console.info('rusty-desktop:cursor-confine');
+      }
+      return true;
+    },
+    release() {
+      if (!confined) return;
+      confined = false;
+      console.info('rusty-desktop:cursor-release');
+    },
+    confined: () => confined,
+  });
+  window.__rustyDesktopConfinementEnded = (refused) => {
+    if (refused) confineRefused = true;
+    if (!confined) return;
+    confined = false;
+    document.dispatchEvent(new CustomEvent('rusty-desktop-confinement-end', { detail: { refused } }));
+  };
   window.__rustyDesktopMotion = (x, y) => {
     if (locked === null) return;
     locked.dispatchEvent(new PointerEvent('pointermove', {
@@ -89,6 +122,8 @@ pub(crate) struct UiOverlay {
     modifiers: ModifiersState,
     buttons: [bool; 3],
     grabbed: bool,
+    /// The visible cursor is confined to the window.
+    confined: bool,
     /// The lock keeps the cursor in the window by warping it back to the
     /// centre, not by a pointer grab (X11).
     recentring: bool,
@@ -124,6 +159,7 @@ impl UiOverlay {
             modifiers: ModifiersState::empty(),
             buttons: [false; 3],
             grabbed: false,
+            confined: false,
             recentring: false,
             focused: window.has_focus(),
             focus_pending,
@@ -160,6 +196,7 @@ impl UiOverlay {
                     }
                     if matches!(event, NavigationEvent::LoadStart { .. }) {
                         self.release(window, false);
+                        self.unconfine(window, false);
                     }
                 }
                 NavigationEvent::ConsoleMessage { message, .. } if message == LOCK_REQUEST => {
@@ -167,6 +204,12 @@ impl UiOverlay {
                 }
                 NavigationEvent::ConsoleMessage { message, .. } if message == LOCK_EXIT => {
                     self.release(window, false);
+                }
+                NavigationEvent::ConsoleMessage { message, .. } if message == CONFINE_REQUEST => {
+                    self.confine(window);
+                }
+                NavigationEvent::ConsoleMessage { message, .. } if message == CONFINE_EXIT => {
+                    self.unconfine(window, false);
                 }
                 _ => {}
             }
@@ -242,8 +285,45 @@ impl UiOverlay {
         window.set_cursor_visible(true);
         self.grabbed = false;
         self.recentring = false;
+        // The page asked for confinement before the lock's end arrived: the
+        // lock and the confinement are one grab, so it starts now.
+        if std::mem::take(&mut self.confined) {
+            self.confine(window);
+        }
         if tell_page {
             let _ = self.page.execute_script("window.__rustyDesktopUnlocked();");
+        }
+    }
+
+    /// Keep the visible cursor in the window. Platforms without a confining
+    /// grab (macOS) refuse, and the page draws its own cursor instead. A held
+    /// lock is already a grab; the page ends it next.
+    fn confine(&mut self, window: &Window) {
+        if self.confined {
+            return;
+        }
+        if !self.grabbed && window.set_cursor_grab(CursorGrabMode::Confined).is_err() {
+            let _ = self
+                .page
+                .execute_script("window.__rustyDesktopConfinementEnded(true);");
+            return;
+        }
+        self.confined = true;
+    }
+
+    /// End a confinement. `tell_page` when the shell, not the page, ended it.
+    fn unconfine(&mut self, window: &Window, tell_page: bool) {
+        if !self.confined {
+            return;
+        }
+        self.confined = false;
+        if !self.grabbed {
+            let _ = window.set_cursor_grab(CursorGrabMode::None);
+        }
+        if tell_page {
+            let _ = self
+                .page
+                .execute_script("window.__rustyDesktopConfinementEnded(false);");
         }
     }
 
@@ -264,6 +344,7 @@ impl UiOverlay {
             }
             WindowEvent::Focused(false) => {
                 self.release(window, true);
+                self.unconfine(window, true);
                 // Buttons and modifiers released while another window has
                 // focus never reach this one; the page clears its own held
                 // input on the blur.
@@ -333,10 +414,11 @@ impl UiOverlay {
                 };
                 let pressed = event.state == ElementState::Pressed;
                 // As in a browser, Escape ends a pointer lock and the page
-                // sees the lock end, not the key.
-                if code == KeyCode::Escape && self.grabbed {
+                // sees the lock end, not the key. A confinement ends the same way.
+                if code == KeyCode::Escape && (self.grabbed || self.confined) {
                     if pressed {
                         self.release(window, true);
+                        self.unconfine(window, true);
                     }
                     return;
                 }

@@ -36,7 +36,7 @@ export type PointerButton = "primary" | "secondary" | "middle";
 /**
  * How gameplay holds the pointer.
  */
-export type ProductHostCursorMode = "pointer-lock" | "unlocked";
+export type ProductHostCursorMode = "pointer-lock" | "unlocked" | "confined";
 
 /**
  * What the page reports about its presentation.

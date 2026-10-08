@@ -154,8 +154,8 @@
            Text="RustyEngineProductDefaultWorldLights must be neutral or disabled." />
     <Error Condition="!$([System.Text.RegularExpressions.Regex]::IsMatch('$(RustyEngineProductDefaultViewmodelLights)', '\A(neutral|disabled)\z'))"
            Text="RustyEngineProductDefaultViewmodelLights must be neutral or disabled." />
-    <Error Condition="!$([System.Text.RegularExpressions.Regex]::IsMatch('$(RustyEngineProductInputCursorMode)', '\A(pointer-lock|unlocked)\z'))"
-           Text="RustyEngineProductInputCursorMode must be pointer-lock or unlocked." />
+    <Error Condition="!$([System.Text.RegularExpressions.Regex]::IsMatch('$(RustyEngineProductInputCursorMode)', '\A(pointer-lock|unlocked|confined)\z'))"
+           Text="RustyEngineProductInputCursorMode must be pointer-lock, unlocked or confined." />
     <Error Condition="!$([System.Text.RegularExpressions.Regex]::IsMatch('$(RustyEngineProductRenderOutput)', '\A(stream|window)\z'))"
            Text="RustyEngineProductRenderOutput must be stream or window." />
     <Error Condition="!$([System.Text.RegularExpressions.Regex]::IsMatch('$(RustyEngineProductAudioOutput)', '\A(stream|device-optional|device-required)\z'))"

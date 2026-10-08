@@ -724,15 +724,17 @@ pub(super) enum ProductInputCursorMode {
     #[default]
     PointerLock,
     Unlocked,
+    Confined,
 }
 impl ProductInputCursorMode {
     fn parse(value: Option<&str>) -> Result<Self, String> {
         match value {
             None | Some("pointer-lock") => Ok(Self::PointerLock),
             Some("unlocked") => Ok(Self::Unlocked),
+            Some("confined") => Ok(Self::Confined),
             Some(_) => Err(field_error(
                 "input.cursorMode",
-                "must be pointer-lock or unlocked",
+                "must be pointer-lock, unlocked or confined",
             )),
         }
     }
@@ -741,12 +743,14 @@ impl ProductInputCursorMode {
         match self {
             Self::PointerLock => NativeInputCursorMode::PointerLock,
             Self::Unlocked => NativeInputCursorMode::Unlocked,
+            Self::Confined => NativeInputCursorMode::Confined,
         }
     }
     fn bootstrap(self) -> ProductHostCursorMode {
         match self {
             Self::PointerLock => ProductHostCursorMode::PointerLock,
             Self::Unlocked => ProductHostCursorMode::Unlocked,
+            Self::Confined => ProductHostCursorMode::Confined,
         }
     }
 }
@@ -936,25 +940,29 @@ mod tests {
     }
 
     #[test]
-    fn stages_the_product_selected_unlocked_gameplay_cursor() {
-        let root = fixture_root("unlocked-cursor");
-        write_manifest(&root, "native/product.so");
-        let manifest_path = root.join(PRODUCT_MANIFEST_NAME);
-        let manifest = fs::read_to_string(&manifest_path)
-            .unwrap()
-            .replace("\"input\":{", "\"input\":{\"cursorMode\":\"unlocked\",");
-        fs::write(&manifest_path, manifest).unwrap();
+    fn stages_the_product_selected_gameplay_cursor() {
+        for mode in ["unlocked", "confined"] {
+            let root = fixture_root(&format!("{mode}-cursor"));
+            write_manifest(&root, "native/product.so");
+            let manifest_path = root.join(PRODUCT_MANIFEST_NAME);
+            let manifest = fs::read_to_string(&manifest_path).unwrap().replace(
+                "\"input\":{",
+                &format!("\"input\":{{\"cursorMode\":\"{mode}\","),
+            );
+            fs::write(&manifest_path, manifest).unwrap();
 
-        let bootstrap = read(&root)
-            .expect("unlocked cursor mode admits")
-            .browser_entries()
-            .expect("browser bootstrap stages")
-            .into_iter()
-            .find(|entry| entry.path() == PRODUCT_HOST_BOOTSTRAP_PATH)
-            .expect("browser bootstrap exists");
-        let bootstrap: serde_json::Value = serde_json::from_slice(bootstrap.bytes()).unwrap();
-        assert_eq!(bootstrap["input"]["cursorMode"], "unlocked");
-        fs::remove_dir_all(root).unwrap();
+            let bootstrap = read(&root)
+                .expect("the cursor mode admits")
+                .browser_entries()
+                .expect("browser bootstrap stages")
+                .into_iter()
+                .find(|entry| entry.path() == PRODUCT_HOST_BOOTSTRAP_PATH)
+                .expect("browser bootstrap exists");
+            let bootstrap: serde_json::Value =
+                serde_json::from_slice(bootstrap.bytes()).unwrap();
+            assert_eq!(bootstrap["input"]["cursorMode"], mode);
+            fs::remove_dir_all(root).unwrap();
+        }
     }
 
     #[test]

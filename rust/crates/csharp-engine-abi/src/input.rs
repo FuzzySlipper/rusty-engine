@@ -278,6 +278,7 @@ pub struct NativeInputMapping {
 pub enum NativeInputCursorMode {
     PointerLock = 0,
     Unlocked = 1,
+    Confined = 2,
 }
 
 /// Result of asking the Engine-owned runtime lane to stage a complete

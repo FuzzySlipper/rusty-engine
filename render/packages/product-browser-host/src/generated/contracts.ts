@@ -123,7 +123,7 @@ export type ProductHostControlRequest = { runtime: ProductHostRuntimeBinding, };
 /**
  * How gameplay holds the pointer.
  */
-export type ProductHostCursorMode = "pointer-lock" | "unlocked";
+export type ProductHostCursorMode = "pointer-lock" | "unlocked" | "confined";
 
 /**
  * Read-only product-generated descriptor data for live-debug completion and

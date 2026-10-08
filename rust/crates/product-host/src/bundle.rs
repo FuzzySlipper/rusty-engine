@@ -50,6 +50,8 @@ pub struct ProductHostBootstrapInput {
 pub enum ProductHostCursorMode {
     PointerLock,
     Unlocked,
+    /// A visible cursor kept inside the game view.
+    Confined,
 }
 
 /// The product UI projection stream and contract the page admits.

@@ -7,7 +7,7 @@ import type {
   ProductHostRenderOutput,
   RuntimeInputWireIntentValue,
 } from './generated/contracts.js';
-import { requestPointerLockWhile } from './pointer-lock.js';
+import { createGameplayCursor, type CursorPoint } from './gameplay-cursor.js';
 import { createRustyApplicationPresentationReporter } from './presentation-report.js';
 import {
   resolvePresentationFrameGeometry,
@@ -73,7 +73,7 @@ export interface RustyApplicationHostOptions {
   readonly loadingLabel?: string;
   readonly failureLabel?: string;
   readonly initialInteractionMode?: RustyApplicationInteractionMode;
-  /** Pointer lock is the existing first-person default; unlocked gameplay keeps the browser cursor. */
+  /** Pointer lock is the first-person default; unlocked keeps the browser cursor; confined keeps a visible cursor in the view. */
   readonly gameplayCursorMode?: ProductHostCursorMode;
   /** Optional browser input ingress. Omission leaves DOM capture disabled. */
   readonly runtimeInput?: RustyApplicationRuntimeInputOptions;
@@ -87,6 +87,8 @@ export interface RustyApplicationHostReadout {
   readonly compatibilityVersion: typeof RUSTY_APPLICATION_HOST_COMPATIBILITY_VERSION;
   readonly interactionMode: RustyApplicationInteractionMode;
   readonly pointerLocked: boolean;
+  /** Whether gameplay holds the pointer as its cursor mode does (locked or confined). */
+  readonly pointerCaptured: boolean;
   readonly uiProjection?: RustyApplicationUiProjectionReadout;
   readonly state: 'ready' | 'disposed';
 }
@@ -187,9 +189,15 @@ export async function mountRustyApplication(
   );
 
   const pointerLocked = (): boolean => document.pointerLockElement === canvas;
-  const releaseInput = (): void => {
-    if (pointerLocked()) document.exitPointerLock();
-  };
+  const cursor = createGameplayCursor({
+    canvas,
+    layer: layout.frame ?? layout.host,
+    mode: () => gameplayCursorMode,
+    wanted: () => interactionMode === 'gameplay' && !closing && !disposed,
+    onConfinementLost: () => input?.clear('pointer-lock-loss'),
+  });
+  removeListeners = cursor.dispose;
+  const releaseInput = (): void => cursor.release();
   const setInteractionMode = (mode: RustyApplicationInteractionMode): void => {
     if (disposed) {
       throw new RustyApplicationHostError('disposed', 'Rusty Application Host is disposed');
@@ -203,21 +211,24 @@ export async function mountRustyApplication(
     if (changed) input?.interactionModeChanged();
   };
   const setCursorMode = (mode: ProductHostCursorMode): void => {
-    if (mode !== 'pointer-lock' && mode !== 'unlocked') {
-      throw new RangeError(`cursor mode must be 'pointer-lock' or 'unlocked', not '${String(mode)}'`);
+    if (mode !== 'pointer-lock' && mode !== 'unlocked' && mode !== 'confined') {
+      throw new RangeError(
+        `cursor mode must be 'pointer-lock', 'unlocked' or 'confined', not '${String(mode)}'`,
+      );
     }
+    // A held pointer moves straight to the new mode's hold.
+    const captured = cursor.captured();
     gameplayCursorMode = mode;
-    if (mode === 'unlocked' && document.pointerLockElement === canvas) document.exitPointerLock();
+    if (mode === 'unlocked') cursor.release();
+    else if (captured) cursor.capture();
   };
-  const focusGameplay = (): void => {
+  const focusGameplay = (origin?: CursorPoint): void => {
     if (interactionMode !== 'gameplay') return;
     if (closing || disposed) {
       throw new RustyApplicationHostError('disposed', 'Rusty Application Host is disposed');
     }
     canvas.focus({ preventScroll: true });
-    if (gameplayCursorMode === 'pointer-lock') {
-      requestPointerLockWhile(canvas, () => interactionMode === 'gameplay' && !closing && !disposed);
-    }
+    cursor.capture(origin);
   };
   let uiScale = 1;
   const presentation = createRustyApplicationPresentationReporter(canvas, () => uiScale);
@@ -237,7 +248,7 @@ export async function mountRustyApplication(
       interactionMode === 'gameplay' &&
       isEventWithinPresentationFrame(event, layout.frame) &&
       !isInteractiveUiEvent(event, layout.ui),
-    focusGameplay,
+    focusGameplay: () => focusGameplay(),
     interactionMode: () => interactionMode,
     setInteractionMode,
     cursorMode: () => gameplayCursorMode,
@@ -266,6 +277,9 @@ export async function mountRustyApplication(
         gamepads: () => document.defaultView?.navigator.getGamepads?.() ?? [],
         interactionMode: () => interactionMode,
         usesPointerLock: () => gameplayCursorMode === 'pointer-lock',
+        capturesPointer: () => gameplayCursorMode !== 'unlocked',
+        pointerCaptured: cursor.captured,
+        softwareCursor: cursor.software,
         observeInterfaceInput: (observation) => {
           for (const observer of [...interfaceInputObservers]) {
             if (closing || disposed || interactionMode !== 'interface') break;
@@ -281,7 +295,7 @@ export async function mountRustyApplication(
         },
       });
     }
-    removeListeners = installInputArbitration(
+    const removeArbitration = installInputArbitration(
       layout.host,
       layout.ui,
       canvas,
@@ -294,6 +308,10 @@ export async function mountRustyApplication(
         input?.clear('focus-loss');
       },
     );
+    removeListeners = () => {
+      removeArbitration();
+      cursor.dispose();
+    };
     setInteractionMode(interactionMode);
     const uiContext: RustyApplicationUiContext = Object.freeze({
       ui,
@@ -353,6 +371,7 @@ export async function mountRustyApplication(
       compatibilityVersion: RUSTY_APPLICATION_HOST_COMPATIBILITY_VERSION,
       interactionMode,
       pointerLocked: pointerLocked(),
+      pointerCaptured: cursor.captured(),
       ...(uiProjection === null ? {} : { uiProjection: uiProjection.readout() }),
       state: disposed ? 'disposed' as const : 'ready' as const,
     }),
@@ -502,7 +521,7 @@ function installInputArbitration(
   canvas: HTMLCanvasElement,
   releaseInput: () => void,
   interactionMode: () => RustyApplicationInteractionMode,
-  focusGameplay: () => void,
+  focusGameplay: (origin?: CursorPoint) => void,
   coreOwnsFocus: boolean,
   clearRuntimeInputForFocus: (event: FocusEvent) => void,
 ): () => void {
@@ -515,7 +534,9 @@ function installInputArbitration(
     }
     // With runtime input, its ingress focuses: it must see a press before
     // the press takes the lock.
-    if (interactionMode() === 'gameplay' && coreOwnsFocus) focusGameplay();
+    if (interactionMode() === 'gameplay' && coreOwnsFocus) {
+      focusGameplay({ x: event.clientX, y: event.clientY });
+    }
   };
   const onFocusIn = (event: FocusEvent): void => {
     if (!isUiTarget(event.target, uiRoot) || !isTextEntry(event.target)) return;

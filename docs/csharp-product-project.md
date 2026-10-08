@@ -146,18 +146,34 @@ controls remain usable, and Engine input still owns focus loss, clearing, and
 rebinding. The setting is available as `context.Input.CursorMode` and is
 carried in `product.json`. Invalid values reject staging.
 
-A mouselook product can still offer a free-cursor screen (a map, a strategy
-view): its UI calls `context.ui.setCursorMode('unlocked')`, which releases
-pointer lock and keeps clicks from taking it again, and
-`context.ui.setCursorMode('pointer-lock')` to return. `context.ui.cursorMode()`
-reads the current mode.
+`confined` keeps a visible cursor inside the game view, for edge scrolling,
+cursor picking and top-down play. The first click confines it (and, like the
+click that takes a lock, is not delivered); Escape, focus loss and interface
+mode release it. Pointer input carries positions as in `unlocked`, never look
+deltas. The Engine picks how, once per capture:
 
-Whenever the pointer is not locked, pointer input carries the cursor position
-on the Engine canvas, normalized and bottom-left based like a camera viewport:
-`PointerButton` events in `unlocked` mode have `HasPosition` set with the
-position in `X`/`Y`, and cursor movement in either mode arrives as
+- The desktop window confines the real cursor to the window. Nothing is
+  added to its latency and DOM UI under it behaves normally.
+- A browser cannot confine a cursor, so it locks the pointer and draws one
+  (`[data-rusty-application-cursor]`, which product CSS may restyle) that
+  the lock's movement moves, clamped to the canvas, starting where the click
+  was. It lags the real cursor by the page's compositing, and DOM UI under
+  it gets no hover or click while it is shown: put menus in interface mode,
+  which releases it. The desktop window uses this too where the platform has
+  no confining grab (macOS).
+
+A mouselook product can still offer a free-cursor screen (a map, a strategy
+view): its UI calls `context.ui.setCursorMode('unlocked')` (or `'confined'`),
+which releases pointer lock and keeps clicks from taking it again, and
+`context.ui.setCursorMode('pointer-lock')` to return. A held pointer moves
+straight to the new mode. `context.ui.cursorMode()` reads the current mode.
+
+Whenever the pointer is not locked for look, pointer input carries the cursor
+position on the Engine canvas, normalized and bottom-left based like a camera
+viewport: `PointerButton` events in `unlocked` and `confined` mode have
+`HasPosition` set with the position in `X`/`Y`, and cursor movement arrives as
 `PointerPosition` events.
-A click with the pointer locked has no position. Pass the position to
+A click with the pointer locked for look has no position. Pass the position to
 `CameraQueries.Ray` (with the canvas aspect from `CameraView.ReadSurface`) to
 turn a click into a world ray.
 

@@ -164,6 +164,51 @@ void test('locked pointer movement reaches the Engine without per-event clipping
   ingress.dispose();
 });
 
+void test('a confined drawn cursor moves by the lock deltas and its point is the position, never a delta', () => {
+  const eventTarget = createListenerTarget();
+  const documentTarget = createListenerTarget();
+  const canvas = { getBoundingClientRect: () => ({ left: 0, top: 0, right: 200, bottom: 100, width: 200, height: 100 }) } as unknown as HTMLCanvasElement;
+  const document = {
+    ...documentTarget,
+    activeElement: canvas,
+    pointerLockElement: null as unknown,
+    defaultView: createListenerTarget(),
+  };
+  let point = { x: 0, y: 0 };
+  const software = { point: () => point, move: (dx: number, dy: number) => { point = { x: point.x + dx, y: point.y + dy }; } };
+  const origins: unknown[] = [];
+  const ingress = createRustyApplicationInputIngress({ binding: INITIAL }, {
+    canvas: () => canvas,
+    eventTarget: eventTarget as unknown as HTMLElement,
+    document: document as unknown as Document,
+    allowsGameplayInput: () => true,
+    interactionMode: () => 'gameplay',
+    active: () => true,
+    focusGameplay: (origin) => {
+      origins.push(origin);
+      if (origin !== undefined) point = origin;
+      document.pointerLockElement = canvas;
+    },
+    gamepads: () => [],
+    usesPointerLock: () => false,
+    capturesPointer: () => true,
+    pointerCaptured: () => document.pointerLockElement === canvas,
+    softwareCursor: () => document.pointerLockElement === canvas ? software : null,
+  });
+  // The confining click is consumed and starts the cursor where it was.
+  eventTarget.emit('pointerdown', { button: 0, clientX: 50, clientY: 50 } as PointerEvent);
+  documentTarget.emit('pointerup', { button: 0, clientX: 50, clientY: 50 } as PointerEvent);
+  assert.deepEqual(origins, [{ x: 50, y: 50 }]);
+  // Locked, the browser freezes clientX/Y; the drawn point moves instead.
+  documentTarget.emit('pointermove', { movementX: 100, movementY: -25, clientX: 50, clientY: 50 } as PointerEvent);
+  eventTarget.emit('pointerdown', { button: 0, clientX: 50, clientY: 50 } as PointerEvent);
+  assert.deepEqual(ingress.drain().map((entry) => 'fact' in entry ? entry.fact : entry), [
+    { kind: 'pointer-position', x: 0.75, y: 0.75 },
+    { kind: 'pointer-button', button: 'primary', edge: 'pressed', position: { x: 0.75, y: 0.75 } },
+  ]);
+  ingress.dispose();
+});
+
 void test('input ingress preserves physical and direct UI observation order with lossless sequences', () => {
   const queue = createRustyApplicationInputQueue(8);
   assert.equal(queue.bindRuntime(INITIAL), true);

@@ -39,6 +39,7 @@ export interface RustyApplicationRuntimeInputBinding {
   readonly nextSequence?: string;
 }
 
+import type { CursorPoint, SoftwareCursor } from './gameplay-cursor.js';
 import type { RustyApplicationInterfaceInputObservation } from './product-ui.js';
 export type { RustyApplicationInterfaceInputObservation } from './product-ui.js';
 
@@ -93,8 +94,15 @@ interface RustyApplicationInputIngressEnvironment {
   readonly interactionMode: () => 'gameplay' | 'interface' | 'modal';
   /** Cursor behavior is selected by the Engine-owned product host configuration. */
   readonly usesPointerLock?: () => boolean;
+  /** Whether the cursor mode holds the pointer (locks or confines it); defaults to `usesPointerLock`. */
+  readonly capturesPointer?: () => boolean;
+  /** Whether the pointer is held now; defaults to pointer lock on the canvas. */
+  readonly pointerCaptured?: () => boolean;
+  /** The drawn confined cursor while it is shown; its point replaces the frozen locked one. */
+  readonly softwareCursor?: () => SoftwareCursor | null;
   readonly active: () => boolean;
-  readonly focusGameplay: () => void;
+  /** Focus gameplay and take the pointer; `origin` is where the click was. */
+  readonly focusGameplay: (origin?: CursorPoint) => void;
   readonly gamepads: () => readonly (Gamepad | null)[];
   /** Exclusive interface delivery; these observations never enter the gameplay queue. */
   readonly observeInterfaceInput?: (observation: RustyApplicationInterfaceInputObservation) => void;
@@ -148,6 +156,9 @@ export function createRustyApplicationInputIngress(
   let controllerSamplingBlocked = false;
 
   const pointerLocked = (): boolean => environment.document.pointerLockElement === environment.canvas();
+  const capturesPointer = (): boolean =>
+    environment.capturesPointer?.() ?? environment.usesPointerLock?.() !== false;
+  const pointerCaptured = (): boolean => environment.pointerCaptured?.() ?? pointerLocked();
   const gameplayFocused = (): boolean => pointerLocked()
     || environment.document.activeElement === environment.canvas();
   const clearLocal = (): void => {
@@ -194,8 +205,9 @@ export function createRustyApplicationInputIngress(
     if (environment.usesPointerLock?.() !== false && pointerLocked()) return null;
     const bounds = environment.canvas().getBoundingClientRect();
     if (bounds.width <= 0 || bounds.height <= 0) return null;
-    const x = (event.clientX - bounds.left) / bounds.width;
-    const y = (bounds.bottom - event.clientY) / bounds.height;
+    const point = environment.softwareCursor?.()?.point() ?? { x: event.clientX, y: event.clientY };
+    const x = (point.x - bounds.left) / bounds.width;
+    const y = (bounds.bottom - point.y) / bounds.height;
     return Number.isFinite(x) && Number.isFinite(y) ? { x, y } : null;
   };
   const withPosition = (event: PointerEvent): { position?: RuntimeInputWirePointerPosition } => {
@@ -208,15 +220,20 @@ export function createRustyApplicationInputIngress(
     if (!admit(event, false)) return;
     const button = normalizePointerButton(event.button);
     if (button === null) return;
-    // A press that takes pointer lock only takes it: the product sees
-    // neither it nor its release, which finds no held button. Decided before
-    // focusing, since the desktop shell grants a lock synchronously.
-    const acquiring = environment.usesPointerLock?.() !== false && !pointerLocked();
+    // A press that takes the pointer (a lock or a confinement) only takes
+    // it: the product sees neither it nor its release, which finds no held
+    // button. Decided before focusing, since the desktop shell grants
+    // synchronously.
+    const acquiring = capturesPointer() && !pointerCaptured();
     if (!acquiring && !heldPointerButtons.has(button)) {
       heldPointerButtons.add(button);
       enqueueFact(Object.freeze({ kind: 'pointer-button', button, edge: 'pressed', ...withPosition(event) }));
     }
-    environment.focusGameplay();
+    environment.focusGameplay(
+      Number.isFinite(event.clientX) && Number.isFinite(event.clientY)
+        ? { x: event.clientX, y: event.clientY }
+        : undefined,
+    );
   };
   const onPointerUp = (event: PointerEvent): void => {
     if (!admit(event, true)) return;
@@ -230,6 +247,10 @@ export function createRustyApplicationInputIngress(
   };
   const onPointerMove = (event: PointerEvent): void => {
     if (!admit(event, false)) return;
+    const software = environment.softwareCursor?.();
+    if (software != null && Number.isFinite(event.movementX) && Number.isFinite(event.movementY)) {
+      software.move(event.movementX, event.movementY);
+    }
     const position = cursorPosition(event);
     if (position !== null) {
       // Only a change is a fact; a pointer resting over the canvas sends none.
@@ -269,7 +290,7 @@ export function createRustyApplicationInputIngress(
   const onPointerLockChange = (event: Event): void => {
     // Pointer lock changes are DOM events too, even though losing it must clear regardless.
     environment.allowsGameplayInput(event);
-    if (environment.usesPointerLock?.() !== false && !pointerLocked()) clear('pointer-lock-loss');
+    if (capturesPointer() && !pointerCaptured()) clear('pointer-lock-loss');
   };
   const onWindowBlur = (event: Event): void => {
     environment.allowsGameplayInput(event);

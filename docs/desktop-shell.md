@@ -31,7 +31,12 @@ TypeScript UI is composited over it.
   arbitration unchanged. Chromium's off-screen mode has no Pointer Lock API,
   so the shell provides it: `requestPointerLock` grabs the native cursor and
   raw mouse motion reaches the page as `pointermove` events with
-  `movementX`/`movementY`. Escape and focus loss end the lock.
+  `movementX`/`movementY`. Escape and focus loss end the lock. A product's
+  `confined` cursor mode asks the shell to confine the visible native cursor
+  to the window instead (winit's confining grab), so the page keeps ordinary
+  cursor positions and DOM hover. Escape and focus loss end it too. Where the
+  platform has no confining grab (macOS) the shell refuses, and the page
+  falls back to the browser's drawn cursor under a lock.
   The off-screen page keeps Chromium's focus while the window is in the
   background, so the shell reports window focus to it: focus loss sends the
   page a `blur` and makes `document.hasFocus()` false, and the input capture
