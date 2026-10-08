@@ -61,16 +61,23 @@ fn sky(toward: [f32; 3], color: [f32; 3]) -> Harness {
 }
 
 fn clouds(coverage: f32) -> RenderDiff {
+    clouds_sized(coverage, 600.0)
+}
+
+fn clouds_sized(coverage: f32, scale: f32) -> RenderDiff {
     RenderDiff::SetClouds {
         clouds: Some(CloudsDescriptor {
             coverage,
             drift: [12.0, 4.0],
             altitude: 1500.0,
-            scale: 600.0,
+            scale,
             color: [1.0; 3],
         }),
     }
 }
+
+/// Clouds small enough that several cast shade within the view of the ground.
+const SMALL_CLOUD: f32 = 12.0;
 
 /// The view up into the sky, at presentation time `time`.
 fn look_up(harness: &mut Harness, time: f64) -> Vec<u8> {
@@ -159,5 +166,103 @@ fn dusk_warms_the_clouds_the_noon_sun_leaves_white() {
     assert!(
         noon[0] + noon[1] + noon[2] > dusk[0] + dusk[1] + dusk[2],
         "the low sun lights them less: noon {noon:?}, dusk {dusk:?}"
+    );
+}
+
+/// The sky with a wide grey ground plane under it, lit only by the sun.
+fn ground(toward: [f32; 3], color: [f32; 3]) -> Harness {
+    let mut harness = sky(toward, color);
+    harness.apply(vec![
+        RenderDiff::DefineMaterial {
+            material: material("material/ground", [0.6, 0.6, 0.6, 1.0], None),
+        },
+        static_mesh(
+            "mesh/ground",
+            box_mesh([-400.0, -1.0, -400.0], [400.0, 0.0, 400.0], |_| 0),
+            "material/ground",
+        ),
+        instance(20, None, "mesh/ground", transform([0.0; 3], 0.0, [1.0; 3])),
+    ]);
+    harness
+}
+
+/// The view down onto the ground from above, at presentation time `time`.
+fn look_down(harness: &mut Harness, time: f64) -> Vec<u8> {
+    harness.renderer.set_animation_time(time);
+    harness.render(&camera([0.0, 30.0, 0.0], 0.0, -80.0)).1
+}
+
+/// The ground pixels' mean brightness and its spread (standard deviation).
+fn brightness(rgba: &[u8]) -> (f64, f64) {
+    let values: Vec<f64> = rgba
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|pixel| (f64::from(pixel[0]) + f64::from(pixel[1]) + f64::from(pixel[2])) / 3.0)
+        .collect();
+    let mean = values.iter().sum::<f64>() / values.len() as f64;
+    let spread = (values
+        .iter()
+        .map(|value| (value - mean).powi(2))
+        .sum::<f64>()
+        / values.len() as f64)
+        .sqrt();
+    (mean, spread)
+}
+
+#[test]
+fn clouds_shade_the_ground_by_coverage_and_their_shadows_drift() {
+    let mut harness = ground(NOON, NOON_COLOR);
+    let clear = brightness(&look_down(&mut harness, 2.0));
+    harness.apply(vec![clouds_sized(0.5, SMALL_CLOUD)]);
+    let broken_frame = look_down(&mut harness, 2.0);
+    let broken = brightness(&broken_frame);
+    harness.apply(vec![clouds_sized(1.0, SMALL_CLOUD)]);
+    let overcast = brightness(&look_down(&mut harness, 2.0));
+    assert!(
+        overcast.0 < clear.0 * 0.5,
+        "a full overcast dims the sunlit ground: clear {clear:?}, overcast {overcast:?}"
+    );
+    assert!(
+        broken.0 < clear.0 && broken.0 > overcast.0,
+        "a broken sky dims it part way: clear {clear:?}, broken {broken:?}, overcast {overcast:?}"
+    );
+    assert!(
+        broken.1 > clear.1 + 4.0 && broken.1 > overcast.1 + 4.0,
+        "a broken sky casts patches of shade: spread clear {:.1}, broken {:.1}, overcast {:.1}",
+        clear.1,
+        broken.1,
+        overcast.1
+    );
+    harness.apply(vec![clouds_sized(0.5, SMALL_CLOUD)]);
+    assert_eq!(
+        look_down(&mut harness, 2.0),
+        broken_frame,
+        "a held time shades the same"
+    );
+    assert_ne!(
+        look_down(&mut harness, 40.0),
+        broken_frame,
+        "the shadows drift with the clouds"
+    );
+}
+
+#[test]
+fn an_overcast_greys_the_panorama() {
+    let mut harness = sky(NOON, NOON_COLOR);
+    // Below the cloud plane's horizon fade, where only the panorama shows.
+    let view = |harness: &mut Harness| harness.render(&camera([0.0, 1.0, 0.0], 0.0, 2.0)).1;
+    let bare = view(&mut harness);
+    harness.apply(vec![clouds(1.0)]);
+    let grey = view(&mut harness);
+    let blue = |rgba: &[u8]| {
+        let pixel = &rgba[((HEIGHT as usize / 2 - 20) * WIDTH as usize) * 4..][..4];
+        i32::from(pixel[2]) - i32::from(pixel[0])
+    };
+    assert!(
+        blue(&grey) < blue(&bare) / 2,
+        "under a full overcast the sky's blue fades toward grey: {} then {}",
+        blue(&bare),
+        blue(&grey)
     );
 }

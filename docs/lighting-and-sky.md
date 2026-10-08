@@ -788,15 +788,28 @@ engine.CameraView.SetClouds(new(Coverage: .6f, Drift: new Vector2(8, 3),
   panoramas with the product clock ([below](#blend-authored-time-of-day-skies))
   warms them at dusk and darkens them at night with no other call.
 - The layer draws over a sky panorama (or a blend), after the sun's disc,
-  which it covers. Over a clear colour it draws nothing. The
-  [sky's light](#the-skys-light) and reflections do not see it, and it
-  casts no shadow.
+  which it covers. Over a clear colour it draws nothing.
+- It shades the ground. Every directional light (sun or moon) is met by the
+  layer where the ray toward it crosses the layer's altitude, and a cloud
+  there lets through a fifth of the light, specular included. Under a broken
+  sky the shade lies in patches that drift with `Drift`. Under a full
+  overcast every point is shaded, so the sky's light and the fills carry
+  more of the scene. A light at or below the horizon is not shaded.
+- A heavy layer greys the panorama behind it: with the square of the
+  coverage the sky loses up to 60 % of its colour toward a slightly darker
+  grey. Coverage 0 leaves the sky exactly as without clouds.
+- The [sky's light](#the-skys-light) and reflections do not see the layer:
+  they still take the panorama's own colours.
 - The layer is retained camera-view state like the wind, and survives a
   runtime restart.
 - `engine.renderer` times it as the `clouds` pass, in the frames that draw
   it. It is one pass over the screen: two four-octave noise samples and two
   panorama reads a pixel. At 1920×1080 it takes about 0.36 ms on an RX 9070
   XT and 15 to 18 ms on llvmpipe.
+  The shade on the ground is drawn in the world pass instead: a two-octave
+  sample per lit fragment facing a directional light, only while the layer
+  has coverage. On a CraftSurvive meadow at 1920×1080 it added about 0.2 ms
+  to the world pass on an RX 9070 XT.
 
 ## Fixture
 

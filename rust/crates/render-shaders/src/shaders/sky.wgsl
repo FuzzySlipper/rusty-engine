@@ -5,6 +5,7 @@
 
 #import rusty::types::PI
 #import rusty::view::frame
+#import rusty::clouds::cloud_cover
 
 struct SkyUniform {
     // x: blend amount toward the second panorama
@@ -58,54 +59,17 @@ fn fs_sky(in: SkyOut) -> @location(0) vec4<f32> {
     let uv = panorama_uv(view_direction(in.ndc));
     let first = textureSample(sky_first, sky_first_sampler, uv).rgb;
     let second = textureSample(sky_second, sky_second_sampler, uv).rgb;
-    return vec4<f32>(mix(first, second, sky.amount.x), 1.0);
+    let color = mix(first, second, sky.amount.x);
+    // An overcast sky reads grey: behind a heavy cloud layer the panorama
+    // loses its colour and some of its brightness, as much as the coverage.
+    let grey = vec3<f32>(dot(color, vec3<f32>(0.299, 0.587, 0.114)));
+    let overcast = sky.clouds.x * sky.clouds.x;
+    return vec4<f32>(mix(color, grey * OVERCAST_SKY, overcast * OVERCAST_SHARE), 1.0);
 }
 
-// A uniform value in [0, 1) for a cell of the cloud plane (pcg2d).
-fn cloud_hash(cell: vec2<i32>) -> f32 {
-    var v = vec2<u32>(bitcast<u32>(cell.x), bitcast<u32>(cell.y)) * 1664525u + 1013904223u;
-    v.x += v.y * 1664525u;
-    v.y += v.x * 1664525u;
-    v ^= v >> vec2<u32>(16u);
-    v.x += v.y * 1664525u;
-    v.y += v.x * 1664525u;
-    v ^= v >> vec2<u32>(16u);
-    return f32(v.y >> 8u) / 16777216.0;
-}
-
-// Smooth value noise over the cloud plane, in [0, 1].
-fn cloud_noise(p: vec2<f32>) -> f32 {
-    let cell = vec2<i32>(floor(p));
-    let f = fract(p);
-    let w = f * f * (3.0 - 2.0 * f);
-    let a = cloud_hash(cell);
-    let b = cloud_hash(cell + vec2<i32>(1, 0));
-    let c = cloud_hash(cell + vec2<i32>(0, 1));
-    let d = cloud_hash(cell + vec2<i32>(1, 1));
-    return mix(mix(a, b, w.x), mix(c, d, w.x), w.y);
-}
-
-// How much cloud is at `p` (in clouds): four octaves of noise, cut at the
-// coverage with a soft edge. Toward the horizon (`detail` toward 0) a pixel
-// spans many clouds, so the fine octaves fade and the edge softens rather
-// than shimmer.
-fn cloud_cover(p: vec2<f32>, detail: f32) -> f32 {
-    var sum = 0.0;
-    var total = 0.0;
-    var amplitude = 0.5;
-    var at = p;
-    for (var octave = 0; octave < 4; octave++) {
-        let weight = amplitude * mix(1.0, detail, f32(octave) / 3.0);
-        sum += cloud_noise(at) * weight;
-        total += weight;
-        at = at * 2.03 + vec2<f32>(17.1, 9.4);
-        amplitude *= 0.5;
-    }
-    let shape = sum / total;
-    let threshold = 1.0 - sky.clouds.x;
-    let soft = mix(0.45, 0.15, detail);
-    return smoothstep(threshold - 0.02, threshold + soft, shape) * step(0.0001, sky.clouds.x);
-}
+// How grey and how dark the panorama goes under a full overcast.
+const OVERCAST_SHARE: f32 = 0.6;
+const OVERCAST_SKY: f32 = 0.8;
 
 // The cloud layer, blended over the background (premultiplied alpha). The
 // view ray meets a plane at the layer's altitude above the camera, so clouds
@@ -120,11 +84,11 @@ fn fs_clouds(in: SkyOut) -> @location(0) vec4<f32> {
     let ground = frame.camera.xz + direction.xz * (sky.clouds.y / rise);
     let p = (ground - sky.cloud_drift.xy * frame.time.x) / sky.clouds.z;
     let detail = smoothstep(0.04, 0.4, direction.y);
-    let cover = cloud_cover(p, detail);
+    let cover = cloud_cover(p, detail, sky.clouds.x, 4);
     // Toward the sun across the layer, in clouds.
     let across = frame.sun.xz;
     let toward = across / max(length(across), 1e-3) * 0.35;
-    let shadowed = cloud_cover(p + toward * 0.75, detail);
+    let shadowed = cloud_cover(p + toward * 0.75, detail, sky.clouds.x, 4);
     let sun_up = smoothstep(-0.05, 0.15, frame.sun.y) * frame.sun.w;
     let sun = frame.sun_color.rgb * min(frame.sun_color.w, 1.5) * sun_up;
     let edge = 1.0 + 1.5 * pow(max(dot(direction, frame.sun.xyz), 0.0), 8.0) * (1.0 - cover);

@@ -44,10 +44,10 @@ const LIGHT_ROW_FLOATS: usize = 16;
 /// light count and first light; then exposure and fog distances, fog colour,
 /// and the tone mapping and fog modes; then the presentation time and the
 /// colour grading; then the sun, the atmosphere and the sky's light; then
-/// the indirect light volume's origin and grid and the wind; then the light
-/// cluster grid and depth range.
+/// the indirect light volume's origin and grid and the wind; then the cloud
+/// layer and its drift; then the light cluster grid and depth range.
 const FRAME_UNIFORM_BYTES: u64 =
-    (16 + 16 + 4 + 4 + 4 + 4 + 4 + 4 + 4 + 4 + 4 * 4 + 4 + 4 + 4 + 4 + 4 + 4) * 4;
+    (16 + 16 + 4 + 4 + 4 + 4 + 4 + 4 + 4 + 4 + 4 * 4 + 4 + 4 + 4 + 4 + 4 + 4 + 4 + 4) * 4;
 /// Instance regions before the shadow casters: a list and a visible region
 /// for each of the world and viewmodel layers (`update_view_list`).
 const VIEW_REGIONS: u32 = 4;
@@ -1653,6 +1653,10 @@ impl Renderer {
         for value in wind_uniform(self.tables.wind) {
             bytes.extend_from_slice(&value.to_le_bytes());
         }
+        // The cloud layer shades the directional lights (`clouds.wgsl`).
+        for value in clouds_uniform(self.tables.clouds) {
+            bytes.extend_from_slice(&value.to_le_bytes());
+        }
         // The cluster fields follow once the view's clusters are encoded.
         let cluster_offset = bytes.len() as u64;
         self.gpu.queue.write_buffer(&self.frame_buffer, 0, &bytes);
@@ -2483,6 +2487,24 @@ fn wind_uniform(wind: Option<WindDescriptor>) -> [f32; 4] {
             [x, z, wind.strength, wind.gust]
         }
         _ => [0.0; 4],
+    }
+}
+
+/// The frame uniform's cloud rows (`rusty::clouds`): coverage, altitude and
+/// cloud size, then the drift; all zero without a layer.
+fn clouds_uniform(clouds: Option<render_model::CloudsDescriptor>) -> [f32; 8] {
+    match clouds {
+        Some(clouds) if clouds.coverage > 0.0 => [
+            clouds.coverage,
+            clouds.altitude,
+            clouds.scale,
+            0.0,
+            clouds.drift[0],
+            clouds.drift[1],
+            0.0,
+            0.0,
+        ],
+        _ => [0.0; 8],
     }
 }
 

@@ -229,9 +229,10 @@ impl BitOr for Features {
 }
 
 /// Importable modules, each after the modules it imports.
-const MODULES: [(&str, &str); 9] = [
+const MODULES: [(&str, &str); 10] = [
     ("shaders/types.wgsl", include_str!("shaders/types.wgsl")),
     ("shaders/view.wgsl", include_str!("shaders/view.wgsl")),
+    ("shaders/clouds.wgsl", include_str!("shaders/clouds.wgsl")),
     (
         "shaders/material.wgsl",
         include_str!("shaders/material.wgsl"),

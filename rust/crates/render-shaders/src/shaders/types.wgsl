@@ -52,6 +52,12 @@ struct Frame {
     // (world x, z; unit length), z its strength (0: still), w its gust
     // share.
     wind: vec4<f32>,
+    // The cloud layer (`clouds.wgsl`): x its coverage (0: none), y its
+    // altitude and z the size of one cloud, in metres.
+    clouds: vec4<f32>,
+    // xy: the cloud layer's drift over the ground (world x, z), in metres
+    // per second.
+    cloud_drift: vec4<f32>,
     // Clustered lighting (`light_clusters.wgsl`): xyz: tiles across, tiles
     // down, depth slices; w: 1 when this pass's lights are read from the
     // clusters, 0 when they are looped over.
