@@ -867,6 +867,42 @@ engine.CameraView.SetPrecipitation(new(Drops: 30_000, PrecipitationShape.Streak,
   and the presentation time, so it holds while the simulation is paused. It
   draws in its own pass after the world, timed as `precipitation`.
 
+## Image effects
+
+A product can run its own WGSL over each primary view's finished picture:
+raindrops on the view, a lightning flash, a shimmer or blur.
+
+```csharp
+var shader = engine.Graphics.OpenResource(new RenderResourceRequest("flash.wgsl")).Handle;
+engine.CameraView.SetImageEffect(new ImageEffectRequest(shader, new Vector4(flash, shimmer, 0, 0)));
+```
+
+The `.wgsl` defines `fn image_effect(pixel: ImagePixel) -> vec4<f32>` and
+imports what it needs from `rusty::image`:
+
+- `ImagePixel` carries `uv` (0 to 1 across and down the picture), `color`
+  (the finished colour there, alpha its coverage), `depth` (the world's
+  depth there, 0 at the near plane, 1 at the far plane and over the sky)
+  and `time` (the presentation time in seconds, modulo a day).
+- `picture_at(uv)` samples the finished picture anywhere, filtered, so an
+  effect can refract, shift or blur it. `picture_size()` is its size in
+  pixels.
+- `effect_parameter(0..3)` reads `Parameter0` to `Parameter3`, and
+  `effect_texture_a(uv)` / `effect_texture_b(uv)` read `TextureA` and
+  `TextureB` (white when unset): a droplet normal map, a noise.
+
+The result replaces the pixel. The picture is finished first (fog, grade,
+tone mapping, bloom), so the effect works in display values, and the
+product UI draws over it. The picture is the render scale's when there is
+one, and the effect upscales it.
+
+While an effect is set, each primary view draws into a picture of its own,
+and one full-screen pass runs the effect into the view, timed as
+`image-effect`. `Shader` handle 0 removes the effect, and the views draw
+straight into the target as before. A shader that does not compose is
+refused when it is opened, with its file and line. A shader may define both
+`shade` and `image_effect`.
+
 ## Fixture
 
 `fixtures/csharp-lighting-sky` uses the packaged SDK, a voxel room, a retained
@@ -897,6 +933,8 @@ feature with the fixture's foam and ripple textures, 0 the same slab as a
 plain blended material, below 0 clears the scene), and
 `lighting.vertexocclusion <strength>` (the room's cube vertices darkened by
 the voxels around them, with the camera on the room's far corner), and
+`lighting.flash <strength> <shimmer>` (an image effect from
+`content/flash.wgsl`),
 `lighting.precipitation <drops> <shape>` (rain, shape 0, or snow, shape 1,
 around the camera; none in the room under its roof),
 `lighting.wetness <wetness> <puddles>` (the room's surfaces wet after rain),

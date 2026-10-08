@@ -83,6 +83,9 @@ pub(crate) struct RuntimeCameraViewCall {
     pub(crate) clouds: Option<Option<CloudsDescriptor>>,
     pub(crate) wetness: Option<Option<WetnessDescriptor>>,
     pub(crate) precipitation: Option<Option<PrecipitationDescriptor>>,
+    /// The image effect as the product asked for it; its resources are
+    /// resolved when the frame is built.
+    pub(crate) image_effect: Option<Option<NativeImageEffectRequest>>,
     pub(crate) indirect_light: Option<Option<IndirectLightDescriptor>>,
     pub(crate) sky_light: Option<Option<SkyLightDescriptor>>,
 }
@@ -162,6 +165,7 @@ impl RuntimeCameraViewBridge {
             clouds: None,
             wetness: None,
             precipitation: None,
+            image_effect: None,
             indirect_light: None,
             sky_light: None,
         });
@@ -221,6 +225,7 @@ impl RuntimeCameraViewBridge {
             clouds: None,
             wetness: None,
             precipitation: None,
+            image_effect: None,
             indirect_light: None,
             sky_light: None,
         };
@@ -517,6 +522,7 @@ impl RuntimeCameraViewBridge {
             clouds: None,
             wetness: None,
             precipitation: None,
+            image_effect: None,
             indirect_light: None,
             sky_light: None,
         };
@@ -868,6 +874,32 @@ impl RuntimeCameraViewBridge {
             ));
         }
         self.staged_mut()?.wetness = Some((request.wetness > 0.0).then_some(wetness));
+        Ok(())
+    }
+
+    fn set_image_effect(
+        &mut self,
+        request: NativeImageEffectRequest,
+    ) -> Result<(), CsharpEngineServicesError> {
+        let finite = [
+            request.parameter_0,
+            request.parameter_1,
+            request.parameter_2,
+            request.parameter_3,
+        ]
+        .iter()
+        .all(|row| {
+            [row.x, row.y, row.z, row.w]
+                .iter()
+                .all(|value| value.is_finite())
+        });
+        if !finite {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_IMAGE_EFFECT",
+                "an image effect's parameters must be finite",
+            ));
+        }
+        self.staged_mut()?.image_effect = Some((request.shader.value != 0).then_some(request));
         Ok(())
     }
 
@@ -1260,6 +1292,20 @@ pub(crate) fn environment_frame(
     }
     if let Some(precipitation) = call.precipitation {
         operations.push(RenderDiff::SetPrecipitation { precipitation });
+    }
+    if let Some(request) = call.image_effect {
+        let effect = match request {
+            Some(request) => {
+                let (shader, textures, effect) = appearance.image_effect(request)?;
+                operations.push(RenderDiff::DefineShader { shader });
+                for texture in textures {
+                    operations.push(RenderDiff::DefineTexture { texture });
+                }
+                Some(effect)
+            }
+            None => None,
+        };
+        operations.push(RenderDiff::SetImageEffect { effect });
     }
     if let Some(indirect_light) = call.indirect_light {
         operations.push(RenderDiff::SetIndirectLight { indirect_light });
@@ -1868,6 +1914,27 @@ pub(crate) unsafe extern "C" fn set_wind(
     }
     let bridge = unsafe { &mut *context.cast::<RuntimeCameraViewBridge>() };
     match bridge.set_wind(unsafe { *request }) {
+        Ok(()) => ABI_OK,
+        Err(error) => {
+            bridge.operation_diagnostics.retain(&error, operation_error);
+            0
+        }
+    }
+}
+
+pub(crate) unsafe extern "C" fn set_image_effect(
+    context: *mut c_void,
+    request: *const NativeImageEffectRequest,
+    operation_error: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    if !operation_error.is_null() {
+        unsafe { *operation_error = std::mem::zeroed() };
+    }
+    if context.is_null() || request.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeCameraViewBridge>() };
+    match bridge.set_image_effect(unsafe { *request }) {
         Ok(()) => ABI_OK,
         Err(error) => {
             bridge.operation_diagnostics.retain(&error, operation_error);

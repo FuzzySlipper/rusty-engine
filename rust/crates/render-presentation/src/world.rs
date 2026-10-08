@@ -135,6 +135,7 @@ struct RetainedGraphics {
     clouds: Option<CloudsDescriptor>,
     wetness: Option<WetnessDescriptor>,
     precipitation: Option<PrecipitationDescriptor>,
+    image_effect: Option<ImageEffectDescriptor>,
     indirect_light: Option<IndirectLightDescriptor>,
     sky_light: Option<SkyLightDescriptor>,
     /// The renderer settings the product selected at runtime; `None` while
@@ -275,6 +276,7 @@ impl PresentationWorld {
                 || matches!(&op, RenderDiff::SetClouds { clouds } if &self.retained.clouds == clouds)
                 || matches!(&op, RenderDiff::SetWetness { wetness } if &self.retained.wetness == wetness)
                 || matches!(&op, RenderDiff::SetPrecipitation { precipitation } if &self.retained.precipitation == precipitation)
+                || matches!(&op, RenderDiff::SetImageEffect { effect } if &self.retained.image_effect == effect)
                 || matches!(&op, RenderDiff::SetIndirectLight { indirect_light } if &self.retained.indirect_light == indirect_light)
                 || matches!(&op, RenderDiff::SetSkyLight { sky_light } if &self.retained.sky_light == sky_light)
                 || matches!(&op, RenderDiff::SetRendererSettings { settings } if self.retained.renderer_settings.as_ref() == Some(settings))
@@ -746,6 +748,11 @@ impl PresentationWorld {
         if self.retained.precipitation.is_some() {
             ops.push(RenderDiff::SetPrecipitation {
                 precipitation: self.retained.precipitation,
+            });
+        }
+        if self.retained.image_effect.is_some() {
+            ops.push(RenderDiff::SetImageEffect {
+                effect: self.retained.image_effect.clone(),
             });
         }
         if self.retained.indirect_light.is_some() {
@@ -1304,6 +1311,9 @@ impl PresentationWorld {
             }
             RenderDiff::SetPrecipitation { precipitation } => {
                 self.retained.precipitation = *precipitation;
+            }
+            RenderDiff::SetImageEffect { effect } => {
+                self.retained.image_effect = effect.clone();
             }
             RenderDiff::SetIndirectLight { indirect_light } => {
                 self.retained.indirect_light = *indirect_light;

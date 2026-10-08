@@ -438,6 +438,24 @@ pub struct NativeWetnessRequest {
     pub puddles: f32,
 }
 
+/// A product image effect over each primary view's finished picture.
+/// `shader` is a resource opened from a `.wgsl` file defining
+/// `fn image_effect(pixel: ImagePixel) -> vec4<f32>` (handle 0 removes the
+/// effect); `parameter_0` to `parameter_3` are its own values
+/// (`effect_parameter(0..3)` in WGSL); `texture_a` and `texture_b` are its
+/// own textures (`effect_texture_a`, `effect_texture_b`; white when 0).
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeImageEffectRequest {
+    pub shader: crate::NativeRenderResourceReference,
+    pub parameter_0: crate::NativeVec4,
+    pub parameter_1: crate::NativeVec4,
+    pub parameter_2: crate::NativeVec4,
+    pub parameter_3: crate::NativeVec4,
+    pub texture_a: crate::NativeRenderResourceReference,
+    pub texture_b: crate::NativeRenderResourceReference,
+}
+
 /// What falls in the precipitation around the camera: thin streaks
 /// stretched along their velocity (rain; the zero default), or round flakes
 /// facing the camera (snow, ash, glitter).

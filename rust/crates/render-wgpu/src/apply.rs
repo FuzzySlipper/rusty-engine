@@ -164,6 +164,10 @@ impl Renderer {
             RenderDiff::SetPrecipitation { precipitation } => {
                 self.tables.precipitation = *precipitation;
             }
+            RenderDiff::SetImageEffect { effect } => {
+                self.tables.image_effect = effect.clone();
+                self.compose_image_effect()?;
+            }
             RenderDiff::SetClouds { clouds } => {
                 self.tables.clouds = *clouds;
                 // The cloud layer's parameters live in the sky's uniform.
@@ -1163,6 +1167,21 @@ impl Renderer {
         self.insert_material(descriptor, &params)
     }
 
+    /// Compose the image effect from its shader as now defined, or turn it
+    /// off. A shader not yet defined, or one that does not compose, leaves
+    /// it off; the latter is an error naming its file and line.
+    pub(crate) fn compose_image_effect(&mut self) -> Result<(), String> {
+        let product = self.tables.image_effect.as_ref().and_then(|effect| {
+            self.tables
+                .shaders
+                .get(&effect.shader)
+                .map(|(_, product)| *product)
+        });
+        let device = self.gpu.device.clone();
+        self.image_effect
+            .set(&device, &mut self.layouts.shaders, product)
+    }
+
     /// Hold a product shader, and redefine the materials it shades so they
     /// compile it. Its error, if it does not compose, names its file and
     /// line; those materials draw with the standard shade stage.
@@ -1175,6 +1194,14 @@ impl Renderer {
         self.tables
             .shaders
             .insert(shader.id.clone(), (shader.clone(), product));
+        if self
+            .tables
+            .image_effect
+            .as_ref()
+            .is_some_and(|effect| effect.shader == shader.id)
+        {
+            self.compose_image_effect()?;
+        }
         let dependents: Vec<RenderMaterialDescriptor> = self
             .tables
             .materials
@@ -2445,6 +2472,7 @@ fn op_name(op: &RenderDiff) -> &'static str {
         RenderDiff::SetClouds { .. } => "setClouds",
         RenderDiff::SetWetness { .. } => "setWetness",
         RenderDiff::SetPrecipitation { .. } => "setPrecipitation",
+        RenderDiff::SetImageEffect { .. } => "setImageEffect",
         RenderDiff::SetIndirectLight { .. } => "setIndirectLight",
         RenderDiff::SetSkyLight { .. } => "setSkyLight",
         RenderDiff::SetRendererSettings { .. } => "setRendererSettings",

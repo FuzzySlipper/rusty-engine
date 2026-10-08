@@ -208,6 +208,7 @@ fn engine_api(
             set_clouds: crate::camera_view::set_clouds,
             set_wetness: crate::camera_view::set_wetness,
             set_precipitation: crate::camera_view::set_precipitation,
+            set_image_effect: crate::camera_view::set_image_effect,
             set_indirect_light: crate::camera_view::set_indirect_light,
             set_sky_light: crate::camera_view::set_sky_light,
             set_viewport_anchor: crate::camera_view::set_viewport_anchor,
@@ -1929,6 +1930,49 @@ mod tests {
             call.take_output().frames[0].ops,
             [render_model::RenderDiff::SetWind { wind: None }]
         );
+    }
+
+    #[test]
+    fn an_image_effect_refuses_unfinite_values_and_shader_zero_removes_it_or_nothing() {
+        use crate::operation_diagnostics::{empty_receipt, receipt_codes};
+        let mut services = EngineServiceSet::new(
+            parse_runtime_appearance_catalog(None).expect("default catalog"),
+            BTreeMap::new(),
+            None,
+            RuntimeDiagnosticsSink::new(Default::default()).unwrap(),
+        )
+        .expect("service set");
+        let row = |x| NativeVec4 {
+            x,
+            y: 0.0,
+            z: 0.0,
+            w: 0.0,
+        };
+        let request = |shader, first| NativeImageEffectRequest {
+            shader: NativeRenderResourceReference { value: shader },
+            parameter_0: row(first),
+            parameter_1: row(0.0),
+            parameter_2: row(0.0),
+            parameter_3: row(0.0),
+            texture_a: NativeRenderResourceReference { value: 0 },
+            texture_b: NativeRenderResourceReference { value: 0 },
+        };
+        services.begin_call(binding());
+        let api = services.api();
+        let set = |request: NativeImageEffectRequest, refusal| unsafe {
+            (api.camera_view.set_image_effect)(api.camera_view.context, &request, refusal)
+        };
+        let mut refusal = empty_receipt();
+        assert_eq!(set(request(7, f32::NAN), &mut refusal), 0);
+        assert_eq!(receipt_codes(&refusal), ["CSHARP_IMAGE_EFFECT"]);
+        assert_eq!(set(request(0, 1.0), std::ptr::null_mut()), ABI_OK);
+        // No effect was set, so removing it changes nothing.
+        let mut call = services.finish_call().expect("removal");
+        assert!(call
+            .take_output()
+            .frames
+            .iter()
+            .all(|frame| frame.ops.is_empty()));
     }
 
     #[test]

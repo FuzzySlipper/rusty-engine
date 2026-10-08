@@ -365,6 +365,31 @@ impl PrecipitationDescriptor {
     }
 }
 
+/// A product image effect over each primary view's finished picture: a
+/// defined `ShaderDescriptor` whose WGSL defines `fn image_effect`, its own
+/// values (`effect_parameter(0..3)` in WGSL) and up to two of its own
+/// textures (`effect_texture_a`, `effect_texture_b`; white when absent).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ImageEffectDescriptor {
+    pub shader: String,
+    pub parameters: [[f32; 4]; 4],
+    #[serde(default)]
+    pub textures: [Option<String>; 2],
+}
+
+impl ImageEffectDescriptor {
+    /// A named shader and finite parameters.
+    pub fn valid(&self) -> bool {
+        !self.shader.is_empty()
+            && self
+                .parameters
+                .iter()
+                .flatten()
+                .all(|value| value.is_finite())
+    }
+}
+
 /// A cloud layer drawn over the sky panorama and lit by the sun. `coverage`
 /// (0 to 1) is how much of the sky it covers; `drift` is its velocity over
 /// the ground (world x, z) in metres per second; `altitude` is the height
@@ -1000,6 +1025,11 @@ pub enum RenderDiff {
     SetPrecipitation {
         precipitation: Option<PrecipitationDescriptor>,
     },
+    /// Selects the image effect over each primary view's finished picture;
+    /// None removes it.
+    SetImageEffect {
+        effect: Option<ImageEffectDescriptor>,
+    },
     /// The indirect light volume; `None` turns it off.
     SetIndirectLight {
         indirect_light: Option<IndirectLightDescriptor>,
@@ -1191,6 +1221,10 @@ impl RenderDiff {
                 precipitation: Some(precipitation),
             } if !precipitation.valid() => Err(RenderOperationError::Precipitation),
             Self::SetPrecipitation { .. } => Ok(()),
+            Self::SetImageEffect {
+                effect: Some(effect),
+            } if !effect.valid() => Err(RenderOperationError::ImageEffect),
+            Self::SetImageEffect { .. } => Ok(()),
             Self::SetIndirectLight {
                 indirect_light: Some(indirect_light),
             } if !indirect_light.valid() => Err(RenderOperationError::IndirectLight),
@@ -1313,6 +1347,7 @@ impl RenderDiff {
             | Self::SetClouds { .. }
             | Self::SetWetness { .. }
             | Self::SetPrecipitation { .. }
+            | Self::SetImageEffect { .. }
             | Self::SetIndirectLight { .. }
             | Self::SetSkyLight { .. }
             | Self::SetRendererSettings { .. }
@@ -1361,6 +1396,7 @@ pub enum RenderOperationError {
     Clouds,
     Wetness,
     Precipitation,
+    ImageEffect,
     IndirectLight,
     SkyLight,
     RendererSettings,
@@ -1443,6 +1479,7 @@ impl RenderFrameDiff {
                 | RenderDiff::SetClouds { .. }
                 | RenderDiff::SetWetness { .. }
                 | RenderDiff::SetPrecipitation { .. }
+                | RenderDiff::SetImageEffect { .. }
                 | RenderDiff::SetIndirectLight { .. }
                 | RenderDiff::SetSkyLight { .. }
                 | RenderDiff::SetRendererSettings { .. }

@@ -1331,6 +1331,60 @@ impl RuntimeAppearanceCall {
 }
 
 impl RuntimeAppearanceCall {
+    /// An image effect's shader, its textures and its descriptor, from the
+    /// resources the product opened.
+    pub(crate) fn image_effect(
+        &self,
+        request: csharp_engine_abi::NativeImageEffectRequest,
+    ) -> Result<
+        (
+            render_model::ShaderDescriptor,
+            Vec<TextureDescriptor>,
+            render_model::ImageEffectDescriptor,
+        ),
+        CsharpEngineServicesError,
+    > {
+        let refused =
+            |message: &'static str| CsharpEngineServicesError::new("CSHARP_IMAGE_EFFECT", message);
+        let shader = self
+            .state
+            .render_resources
+            .resource(request.shader.value)
+            .ok()
+            .and_then(|resource| resource.shader())
+            .ok_or_else(|| {
+                refused("an image effect's shader must be a resource opened from a .wgsl file")
+            })?;
+        let mut textures = Vec::new();
+        let mut texture = |reference: csharp_engine_abi::NativeRenderResourceReference| {
+            if reference.value == 0 {
+                return Ok(None);
+            }
+            let texture = self
+                .state
+                .render_resources
+                .resource(reference.value)
+                .ok()
+                .and_then(|resource| resource.texture().cloned())
+                .ok_or_else(|| refused("an image effect's textures must be texture resources"))?;
+            let id = texture.id.clone();
+            textures.push(texture);
+            Ok::<_, CsharpEngineServicesError>(Some(id))
+        };
+        let row = |value: csharp_engine_abi::NativeVec4| [value.x, value.y, value.z, value.w];
+        let effect = render_model::ImageEffectDescriptor {
+            shader: shader.id.clone(),
+            parameters: [
+                row(request.parameter_0),
+                row(request.parameter_1),
+                row(request.parameter_2),
+                row(request.parameter_3),
+            ],
+            textures: [texture(request.texture_a)?, texture(request.texture_b)?],
+        };
+        Ok((shader, textures, effect))
+    }
+
     pub(crate) fn texture_descriptor(
         &self,
         handle: u64,

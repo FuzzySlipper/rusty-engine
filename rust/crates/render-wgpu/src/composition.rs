@@ -377,12 +377,17 @@ impl Renderer {
         draw: impl FnOnce(&mut Self, TargetView<'_>) -> FrameStats,
     ) -> FrameStats {
         let scale = self.options.render_scale;
-        if !(scale.is_finite() && scale < 1.0) {
+        let scaled_down = scale.is_finite() && scale < 1.0;
+        // An image effect reads the whole picture, so the view draws into a
+        // picture of its own first, as a render scale's does.
+        let effect = self.image_effect.active();
+        if !scaled_down && !effect {
             self.scaled = None;
             let mut stats = draw(self, primary);
             stats.cpu_batch_us = self.batch_time.as_micros() as u32;
             return stats;
         }
+        let scale = if scaled_down { scale } else { 1.0 };
         let width = ((primary.width as f32 * scale).round() as u32).max(1);
         let height = ((primary.height as f32 * scale).round() as u32).max(1);
         let scaled = match self.scaled.take() {
@@ -397,7 +402,32 @@ impl Renderer {
         };
         let mut stats = draw(self, scaled.view());
         stats.cpu_batch_us = self.batch_time.as_micros() as u32;
-        self.upscale(&scaled, &primary);
+        if effect {
+            let white = &self.white;
+            let texture = |slot: usize| {
+                self.tables
+                    .image_effect
+                    .as_ref()
+                    .and_then(|effect| effect.textures[slot].as_ref())
+                    .and_then(|id| self.tables.textures.get(id))
+                    .unwrap_or(white)
+            };
+            let parameters = self
+                .tables
+                .image_effect
+                .as_ref()
+                .map_or([[0.0; 4]; 4], |effect| effect.parameters);
+            self.image_effect.apply(
+                &self.gpu,
+                &scaled,
+                &primary,
+                &parameters,
+                [texture(0), texture(1)],
+                self.animation_time,
+            );
+        } else {
+            self.upscale(&scaled, &primary);
+        }
         self.scaled = Some(scaled);
         stats
     }

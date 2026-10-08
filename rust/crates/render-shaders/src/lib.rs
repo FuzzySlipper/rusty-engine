@@ -229,7 +229,7 @@ impl BitOr for Features {
 }
 
 /// Importable modules, each after the modules it imports.
-const MODULES: [(&str, &str); 10] = [
+const MODULES: [(&str, &str); 11] = [
     ("shaders/types.wgsl", include_str!("shaders/types.wgsl")),
     ("shaders/view.wgsl", include_str!("shaders/view.wgsl")),
     ("shaders/clouds.wgsl", include_str!("shaders/clouds.wgsl")),
@@ -246,6 +246,7 @@ const MODULES: [(&str, &str); 10] = [
     ("shaders/tonemap.wgsl", include_str!("shaders/tonemap.wgsl")),
     ("shaders/finish.wgsl", include_str!("shaders/finish.wgsl")),
     ("shaders/shade.wgsl", include_str!("shaders/shade.wgsl")),
+    ("shaders/image.wgsl", include_str!("shaders/image.wgsl")),
 ];
 
 /// The import path a product shader's module takes.
@@ -301,6 +302,9 @@ pub enum Entry {
     ShadowRestore,
     /// Rain or snow around the camera (`precipitation.wgsl`).
     Precipitation,
+    /// A product image effect over a view's finished picture
+    /// (`image_effect.wgsl`, with the product's `fn image_effect`).
+    ImageEffect,
 }
 
 impl Entry {
@@ -341,6 +345,10 @@ impl Entry {
             Self::Precipitation => (
                 "shaders/precipitation.wgsl",
                 include_str!("shaders/precipitation.wgsl"),
+            ),
+            Self::ImageEffect => (
+                "shaders/image_effect.wgsl",
+                include_str!("shaders/image_effect.wgsl"),
             ),
             Self::DistanceField => (
                 "shaders/distance_field.wgsl",
@@ -513,20 +521,32 @@ impl Shaders {
 }
 
 /// Check a product shader before it is admitted: its keywords, and that it
-/// composes into the world pass (and the shadow pass, if it defines a
-/// caster) with the standard features a plain material has. The error names
-/// its file and line.
+/// composes where it will run. A material shader (`fn shade`) composes into
+/// the world pass (and the shadow pass, if it defines a caster) with the
+/// standard features a plain material has; an image effect
+/// (`fn image_effect`) composes into the image effect pass. A shader that
+/// defines neither is checked as a material shader. The error names its file
+/// and line.
 pub fn check_product_shader(path: &str, source: &str, keywords: &[String]) -> Result<(), String> {
     for keyword in keywords {
         check_keyword(keyword)?;
     }
     let mut shaders = Shaders::new();
-    let product = shaders.product(ProductShader {
+    let shader = ProductShader {
         path: path.to_string(),
         source: source.to_string(),
         keywords: keywords.to_vec(),
-    });
+    };
+    let effect = shader.defines("image_effect");
+    let shades = shader.defines("shade");
+    let product = shaders.product(shader);
     let features = Features::default().with_product(product);
+    if effect {
+        shaders.compose(Entry::ImageEffect, features)?;
+        if !shades {
+            return Ok(());
+        }
+    }
     shaders.compose(Entry::World, features)?;
     if features.caster().product() != 0 {
         shaders.compose(Entry::Shadow, features.caster())?;
@@ -692,6 +712,23 @@ mod tests {
         assert!(!(Features::WATER | Features::MASK).occurs());
         assert!(!(Features::UNLIT | Features::NORMAL_MAP).occurs());
         assert!((Features::UNLIT | Features::VERTEX_TANGENTS | Features::WIND).occurs());
+    }
+
+    const VIGNETTE: &str = r#"
+#import rusty::image::{ImagePixel, effect_parameter}
+
+fn image_effect(pixel: ImagePixel) -> vec4<f32> {
+    let edge = distance(pixel.uv, vec2<f32>(0.5)) * effect_parameter(0u).x;
+    return vec4<f32>(pixel.color.rgb * (1.0 - edge), pixel.color.a);
+}
+"#;
+
+    #[test]
+    fn an_image_effect_is_checked_against_its_own_pass() {
+        check_product_shader("shaders/vignette.wgsl", VIGNETTE, &[]).unwrap();
+        let broken = VIGNETTE.replace("pixel.color.a", "pixel.colour.a");
+        let error = check_product_shader("shaders/vignette.wgsl", &broken, &[]).unwrap_err();
+        assert!(error.contains("vignette.wgsl"), "{error}");
     }
 
     fn rim_shader() -> ProductShader {

@@ -37,6 +37,7 @@ mod frame;
 mod ghost;
 mod glb;
 mod gpu;
+mod image_effect;
 mod labels;
 mod light_clusters;
 mod particles;
@@ -370,6 +371,8 @@ pub struct Renderer {
     effects: effects::Effects,
     /// Rain or snow around the camera (`precipitation.rs`).
     precipitation: precipitation::Precipitation,
+    /// The product's image effect over each primary view (`image_effect.rs`).
+    image_effect: image_effect::ImageEffect,
     particles: particles::Particles,
     labels: labels::Labels,
     video: video::Video,
@@ -534,6 +537,7 @@ impl Renderer {
             composition: Default::default(),
             effects,
             precipitation,
+            image_effect: image_effect::ImageEffect::new(gpu),
             particles: Default::default(),
             labels: Default::default(),
             video: video::Video::new(device),
@@ -696,6 +700,7 @@ impl Renderer {
                     self.light_clusters.timing(),
                     self.culling.timing(),
                     self.sky_light.timing(),
+                    self.image_effect.timing(),
                 ])
                 .collect(),
             ambient_occlusion: self.ambient_occlusion.readout(),

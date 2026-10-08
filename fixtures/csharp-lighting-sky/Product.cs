@@ -467,6 +467,20 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         engine.CameraView.UpdateCamera(new(camera,Camera(CloudsEye,CloudsTarget)));
         return Inspect();
     }
+    // An image effect over the view (content/flash.wgsl): a white flash of the given strength (0 to 1) and a rippling shimmer (0 to 1); both 0 removes it.
+    [DebugCommand("lighting.flash")]
+    public string Flash(float strength, float shimmer)
+    {
+        if (strength <= 0 && shimmer <= 0)
+        {
+            engine.CameraView.SetImageEffect(default);
+            return Inspect();
+        }
+        flashShader ??= engine.Graphics.OpenResource(new RenderResourceRequest("flash.wgsl")).Handle;
+        engine.CameraView.SetImageEffect(new ImageEffectRequest(flashShader, new Vector4(Math.Clamp(strength,0,1),Math.Clamp(shimmer,0,1),0,0)));
+        return Inspect();
+    }
+    private RenderResource? flashShader;
     // Rain (shape 0) or snow (shape 1) around the camera: the given number of drops (0 stops it). It does not fall in the room under its roof.
     [DebugCommand("lighting.precipitation")]
     public string Precipitation(uint drops, uint shape)

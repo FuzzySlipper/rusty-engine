@@ -272,6 +272,23 @@ impl ScaledPrimary {
         (self.width, self.height, self.samples) == (width.max(1), height.max(1), samples)
     }
 
+    /// The picture and its depth, for an image effect over it.
+    pub fn image(&self) -> &wgpu::TextureView {
+        &self.image
+    }
+
+    pub fn depth(&self) -> &wgpu::TextureView {
+        &self.depth
+    }
+
+    pub fn samples(&self) -> u32 {
+        self.samples
+    }
+
+    pub fn size(&self) -> (u32, u32) {
+        (self.width, self.height)
+    }
+
     pub fn view(&self) -> TargetView<'_> {
         TargetView {
             color: &self.image,

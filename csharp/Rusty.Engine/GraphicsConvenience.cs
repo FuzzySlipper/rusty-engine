@@ -534,3 +534,12 @@ public readonly partial record struct AppearanceFact
     {
     }
 }
+
+public readonly partial record struct ImageEffectRequest
+{
+    /// <summary>An image effect with its first parameter row (<c>effect_parameter(0)</c>) and no textures of its own.</summary>
+    public ImageEffectRequest(RenderResourceReference Shader, Vector4 Parameter0)
+        : this(Shader, Parameter0, default, default, default, default, default)
+    {
+    }
+}
