@@ -163,5 +163,15 @@ void test('the desktop shell confines the real cursor, and a refusal falls back 
   assert.equal(lost, 1);
   assert.equal(page.requests(), 1);
   page.grant();
-  assert.deepEqual(cursor.software()?.point(), { x: 110, y: 70 });
+  // The drawn cursor starts where the refused click was.
+  assert.deepEqual(cursor.software()?.point(), { x: 50, y: 50 });
+
+  // Disposal lets go of a native confinement, which outlives the canvas.
+  desktop.refused = false;
+  cursor.release();
+  cursor.capture({ x: 60, y: 60 });
+  assert.equal(desktop.isConfined, true);
+  cursor.dispose();
+  assert.equal(desktop.isConfined, false);
+  assert.equal(page.element.removed, true);
 });

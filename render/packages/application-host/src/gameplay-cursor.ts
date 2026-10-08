@@ -103,6 +103,9 @@ export function createGameplayCursor(options: {
     requestPointerLockWhile(canvas, () => wanted() && mode() === held);
   };
 
+  // Where the click asking for native confinement was, for a refusal's
+  // fallback to the drawn cursor.
+  let confineOrigin: CursorPoint | undefined;
   const capture = (origin?: CursorPoint): void => {
     switch (mode()) {
       case 'unlocked':
@@ -114,6 +117,7 @@ export function createGameplayCursor(options: {
         return;
       case 'confined':
         if (desktop()?.confine() === true) {
+          confineOrigin = origin;
           // The shell's lock and confinement are one grab; this replaces the lock.
           if (locked()) document.exitPointerLock();
           return;
@@ -133,7 +137,7 @@ export function createGameplayCursor(options: {
   const onConfinementEnd = (event: Event): void => {
     const refused = (event as CustomEvent<{ refused?: boolean }>).detail?.refused === true;
     // A refusal falls back to the drawn cursor, which the shell's lock carries.
-    if (refused && mode() === 'confined' && wanted()) capture();
+    if (refused && mode() === 'confined' && wanted()) capture(confineOrigin);
     else options.onConfinementLost();
   };
   document.addEventListener('pointerlockchange', onPointerLockChange);
@@ -158,6 +162,8 @@ export function createGameplayCursor(options: {
     },
     software: () => (drawing() ? software : null),
     dispose: () => {
+      // A native confinement is a window grab that outlives the canvas.
+      release();
       document.removeEventListener('pointerlockchange', onPointerLockChange);
       document.removeEventListener(DESKTOP_CONFINEMENT_END, onConfinementEnd);
       element.remove();
