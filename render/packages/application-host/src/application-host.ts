@@ -100,6 +100,8 @@ export interface RustyApplicationHost {
   readonly input?: RustyApplicationInputPort;
   /** Trusted host/composition-root ingress for Rust Product UI projections. */
   readonly uiProjection?: RustyApplicationUiProjectionPort;
+  /** Let go of a locked or confined pointer, as Escape does; the next click takes it again. */
+  readonly releasePointer: () => void;
   readonly readout: () => RustyApplicationHostReadout;
   readonly dispose: () => Promise<void>;
 }
@@ -367,6 +369,7 @@ export async function mountRustyApplication(
     ui,
     ...(input === null ? {} : { input: input as RustyApplicationInputPort }),
     ...(uiProjection === null ? {} : { uiProjection }),
+    releasePointer: releaseInput,
     readout: () => Object.freeze({
       compatibilityVersion: RUSTY_APPLICATION_HOST_COMPATIBILITY_VERSION,
       interactionMode,

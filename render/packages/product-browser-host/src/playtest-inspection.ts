@@ -15,6 +15,14 @@ export interface PlaytestInspectionRequest {
   move?: readonly [number, number, number]; lookAt?: readonly [number, number, number]; orbit?: { target: readonly [number, number, number]; yaw: number };
 }
 type InspectionState = ProductHostRendererInspection;
+/** The page's gameplay cursor, which `focus` can take or release as a click or Escape would. */
+export interface PlaytestCursor {
+  readonly capture: () => void;
+  readonly release: () => void;
+  readonly state: () => { readonly interactionMode: string; readonly cursorMode: string; readonly pointerCaptured: boolean };
+}
+/** How long `focus` waits for the browser to grant or end a capture. */
+const CAPTURE_WAIT_MS = 1000;
 type InspectionRequest = { drawing?: ProductHostRendererInspection['drawing']; simulationMs?: number | null; camera?: Camera | null };
 /** Where drawing, the observer camera and explicit frames are answered. */
 interface Presenter {
@@ -36,7 +44,7 @@ const INSPECTION_ID = /^[A-Za-z0-9_.-]{1,64}$/;
  * `engine.renderer.*` commands, and each answer waits until the canvas shows
  * the frame the command drew.
  */
-export function installPlaytestInspection(flushInput: () => Promise<void>, settle: (through?: string) => Promise<void>): () => void {
+export function installPlaytestInspection(flushInput: () => Promise<void>, settle: (through?: string) => Promise<void>, cursor?: PlaytestCursor): () => void {
   const target = globalThis as typeof globalThis & { __rustyPlaytest?: (request: PlaytestInspectionRequest) => Promise<unknown> };
   async function debug(command: string): Promise<unknown> {
     const response = await fetch('/__rusty/product/runtime/debug/execute', { method: 'POST', headers: { 'Content-Type': 'text/plain; charset=utf-8' }, body: command });
@@ -76,7 +84,24 @@ export function installPlaytestInspection(flushInput: () => Promise<void>, settl
         const names = catalog.commands.map(c => c.name);
         return { commands: names, nativeCommands: names, operations: ['discover','observe','action','look','time','advance','drawing','frame','camera','targets','route','focus', ...(names.includes('interaction.inspect') ? ['interaction'] : []), ...(names.includes('spatial.grid') ? ['grid'] : []), ...(names.includes('spatial.probe') ? ['probe'] : []), ...(names.includes('spatial.clearance') ? ['clearance'] : []), ...(names.includes('playtest.jump-plan') ? ['jump-plan'] : [])], commandNote: 'nativeCommands are debug catalog names, not assist operations; act/jump/survey/record are harness compositions', time: names.includes('engine.time'), timeModes: TIME_MODES, drawingModes: DRAWING_MODES, observer: ['pose', 'move', 'lookAt', 'orbit', 'restore'], lookAdvancesTime: false, inspection: true, product: names.includes('playtest.help') ? await debug('playtest.help') : null };
       }
-      case 'focus': return { focused: document.activeElement?.tagName === 'CANVAS', pointerLocked: document.pointerLockElement !== null };
+      case 'focus': {
+        const state = () => ({ focused: document.activeElement?.tagName === 'CANVAS', pointerLocked: document.pointerLockElement !== null, ...cursor?.state() });
+        if (request.mode === undefined) return state();
+        if (request.mode !== 'capture' && request.mode !== 'release') throw new Error("focus mode must be 'capture' or 'release'");
+        if (cursor === undefined) throw new Error('capability_unavailable: no gameplay cursor on this page');
+        // The same path as a click or Escape; a browser grants a lock asynchronously.
+        const capture = request.mode === 'capture';
+        if (capture) cursor.capture(); else cursor.release();
+        const deadline = performance.now() + CAPTURE_WAIT_MS;
+        while (cursor.state().pointerCaptured !== capture && performance.now() < deadline) {
+          await new Promise((resolve) => requestAnimationFrame(resolve));
+        }
+        const result = state();
+        if (capture && !result.pointerCaptured && result.cursorMode !== 'unlocked') {
+          return { ...result, note: result.interactionMode === 'gameplay' ? 'the browser did not grant the capture; it needs a user gesture, or follows an Escape too closely' : 'the page is not in gameplay mode' };
+        }
+        return result;
+      }
       case 'flush': await flushInput(); return { flushed: true };
       case 'observe': return debug('playtest.observe');
       case 'interaction': return debug('interaction.inspect');

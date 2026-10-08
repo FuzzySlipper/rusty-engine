@@ -85,6 +85,18 @@ operations that way (its `focus` reports that no page is involved).
 crew-services adds action orchestration, captures, surveys and recordings on
 top.
 
+`focus` is the page's own: it reports canvas focus, pointer lock, the
+interaction and cursor modes and whether gameplay holds the pointer.
+`{"op":"focus","mode":"capture"}` takes the pointer as a click on the world
+would, by the product's cursor mode (a lock, a confined cursor, or focus
+alone when unlocked), so an agent gets mouselook without clicking into the
+game; `"release"` lets go as Escape does. Each waits up to a second for the
+browser and answers with the resulting state, with a note when the browser
+did not grant it (it needs a user gesture, which the harness's page
+evaluation supplies, and refuses a lock too soon after an Escape). Assisted
+capture is not evidence that clicking takes the pointer; test that with a
+click.
+
 The world is drawn by the runtime's renderer, so the observer camera, drawing
 mode and held time are runtime state that every attached page shares
 ([architecture](architecture.md#runtime-rendered-output)):

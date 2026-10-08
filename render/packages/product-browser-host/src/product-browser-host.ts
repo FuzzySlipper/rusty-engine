@@ -1030,6 +1030,15 @@ export async function mountProductBrowserHostWithApplication(
     async (through) => {
       if (through !== undefined) await transport.waitUntilOutputSequence?.(through);
     },
+    {
+      capture: () => host.ui.focusGameplay(),
+      release: () => host.releasePointer(),
+      state: () => ({
+        interactionMode: host.ui.interactionMode(),
+        cursorMode: host.ui.cursorMode(),
+        pointerCaptured: host.readout().pointerCaptured,
+      }),
+    },
   );
 
   const readout = (): ProductBrowserHostReadout => Object.freeze({
