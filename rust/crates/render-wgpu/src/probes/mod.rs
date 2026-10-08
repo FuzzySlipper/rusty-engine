@@ -411,6 +411,7 @@ impl Volume {
                 next.field.filled[index] = self.field.filled[from];
                 next.field.opens[index] = self.field.opens[from];
                 next.field.exits[index] = self.field.exits[from];
+                next.field.reach[index] = self.field.reach[from];
                 *carried = true;
             } else {
                 next.field.filled[index] = self.field.filled[from];
@@ -1336,6 +1337,10 @@ mod tests {
         }
         volume.field.raw_valid.fill(true);
         volume.field.filled.fill(true);
+        // Walls the bake found within a spacing of each probe.
+        for (index, reach) in volume.field.reach.iter_mut().enumerate() {
+            *reach = [0.25, 0.5, 0.75].map(|fraction| fraction + (index % 3) as f32 * 0.05);
+        }
         for state in &mut volume.states {
             state.baked = true;
             state.blas = Some(Arc::new(Bvh::build(Vec::new())));
@@ -1351,6 +1356,14 @@ mod tests {
         assert_eq!(volume.grid.position([8, 1, 5]), world);
         assert_eq!(moved.field.sh[probe], volume.field.sh[old]);
         assert!(moved.field.raw_valid[probe]);
+        // It keeps the walls it saw too, so the carried region packs the
+        // same wall slab and its leak protection survives the scroll.
+        assert_eq!(moved.field.reach[probe], volume.field.reach[old]);
+        let [_, height, depth] = moved.grid.dims.map(|dim| dim - 1);
+        assert_eq!(
+            pack_region(&moved.field, [0, 0, 0], [4, height, depth], false),
+            pack_region(&volume.field, [8, 0, 0], [12, height, depth], false),
+        );
         // New probes take the nearest old value until their bricks bake.
         let new = moved.grid.index([23, 1, 5]);
         assert_eq!(
