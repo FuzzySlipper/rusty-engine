@@ -15,6 +15,7 @@ typedef struct NativeByteSlice {
 
 typedef struct NativeVec2 { float x; float y; } NativeVec2;
 typedef struct NativeVec3 { float x; float y; float z; } NativeVec3;
+typedef struct NativeVec4 { float x; float y; float z; float w; } NativeVec4;
 typedef struct NativeQuat { float x; float y; float z; float w; } NativeQuat;
 typedef struct NativeAnimationFeedbackText {
   uint8_t bytes[96];

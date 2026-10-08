@@ -34,6 +34,8 @@ if [[ "$verify_aot" == true ]]; then
   package_arguments+=(--aot)
 fi
 "$REPO_ROOT/scripts/test-csharp-sdk-package.sh" "${package_arguments[@]}"
+# The generator's borrowed-result copies and refusals, against a hand-written table.
+"$REPO_ROOT/scripts/test-csharp-binding-generator-results-fixture.sh"
 dotnet run --project "$REPO_ROOT/csharp/Rusty.Engine.Content.Example" --configuration Release
 dotnet run --project "$REPO_ROOT/csharp/Rusty.Engine.Implicit.Example" --configuration Release
 
