@@ -130,6 +130,26 @@ impl<R: ProductHostRuntime> ProductHostOperationOwner<R> {
             .map_err(|_| runtime_poisoned())
     }
 
+    /// Reads how often the runtime wants presentation between observations.
+    pub fn presentation_interval(
+        &self,
+    ) -> Result<Option<std::time::Duration>, ProductHostRuntimeError> {
+        self.session
+            .with_locked(|runtime| runtime.presentation_interval())
+            .map_err(|_| runtime_poisoned())
+    }
+
+    /// Presents Engine-owned motion between realtime observations.
+    pub fn present_realtime(
+        &self,
+        observed_time_ns: CanonicalU64,
+    ) -> Result<Option<ProductHostRuntimeReceipt<ProductHostOperationResult>>, ProductHostRuntimeError>
+    {
+        self.session
+            .with_locked(|runtime| runtime.present_realtime(observed_time_ns))
+            .map_err(|_| runtime_poisoned())?
+    }
+
     /// Runs one explicit lifecycle operation while holding the session's
     /// serialization guard for the complete owner call.
     pub fn lifecycle(

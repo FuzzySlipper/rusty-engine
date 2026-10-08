@@ -138,7 +138,9 @@ fn main() -> Result<(), String> {
     }
     #[cfg(feature = "desktop")]
     if let Some(desktop) = &desktop {
-        runtime_config = runtime_config.with_window_gpu(desktop.gpu());
+        runtime_config = runtime_config
+            .with_window_gpu(desktop.gpu())
+            .with_presentation_cadence(desktop.presentation_cadence());
     }
     let mut runtime = match args.loader {
         ProductLoader::NativeAot => {

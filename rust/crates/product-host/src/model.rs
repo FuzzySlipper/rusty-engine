@@ -1775,6 +1775,24 @@ pub trait ProductHostRuntime: Send + 'static {
         None
     }
 
+    /// How often the host should present between realtime observations, when
+    /// the runtime has Engine-owned motion to show faster than its fixed
+    /// steps (tweens on a faster display); `None` when there is none.
+    fn presentation_interval(&self) -> Option<std::time::Duration> {
+        None
+    }
+
+    /// Shows Engine-owned motion at `observed_time_ns` between realtime
+    /// observations. It admits no step, delivers no input and never calls
+    /// the product; the next observation accounts the time it showed.
+    fn present_realtime(
+        &mut self,
+        _observed_time_ns: CanonicalU64,
+    ) -> Result<Option<ProductHostRuntimeReceipt<ProductHostOperationResult>>, ProductHostRuntimeError>
+    {
+        Ok(None)
+    }
+
     /// Establishes one browser connection to the current runtime generation.
     /// A concrete runtime may start from `Created` or publish a fresh baseline
     /// for an already-active generation, but must not reset active product

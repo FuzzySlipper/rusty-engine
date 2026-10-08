@@ -816,6 +816,9 @@ impl HostInputMailbox {
 fn scheduler_loop<R: ProductHostRuntime>(state: Arc<HostState<R>>, wake: Arc<SchedulerWake>) {
     let clock = Instant::now();
     let mut next_tick = clock;
+    // When the runtime last showed the world: an observation or a
+    // presentation between observations.
+    let mut shown_at = clock;
     loop {
         if state.shutdown.load(Ordering::Acquire) {
             break;
@@ -888,7 +891,22 @@ fn scheduler_loop<R: ProductHostRuntime>(state: Arc<HostState<R>>, wake: Arc<Sch
 
         let now = Instant::now();
         if now < next_tick {
-            wake.wait_timeout(next_tick.saturating_duration_since(now));
+            // Between observations the runtime may have Engine motion to show
+            // faster than its fixed steps (tweens on a faster display). None
+            // is shown so close to the next observation that it would repeat.
+            let present = state.runtime.presentation_interval().ok().flatten();
+            let wait_until = match present {
+                Some(present) if now >= shown_at + present => {
+                    if now + present / 2 < next_tick {
+                        present_between_observations(&state, clock);
+                    }
+                    shown_at = now;
+                    continue;
+                }
+                Some(present) => (shown_at + present).min(next_tick),
+                None => next_tick,
+            };
+            wake.wait_timeout(wait_until.saturating_duration_since(now));
             continue;
         }
         let observed = clock.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64;
@@ -944,10 +962,27 @@ fn scheduler_loop<R: ProductHostRuntime>(state: Arc<HostState<R>>, wake: Arc<Sch
             }
         }
         let after = Instant::now();
+        shown_at = after;
         next_tick = next_tick
             .checked_add(fixed_interval)
             .filter(|deadline| *deadline > after)
             .unwrap_or_else(|| after + fixed_interval);
+    }
+}
+
+fn present_between_observations<R: ProductHostRuntime>(state: &HostState<R>, clock: Instant) {
+    let observed = clock.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64;
+    match state.runtime.present_realtime(CanonicalU64::new(observed)) {
+        Ok(Some(receipt)) => publish_scheduled_receipt(state, receipt),
+        Ok(None) => {}
+        Err(error) => publish_host_diagnostic(
+            &state.diagnostics,
+            ProductHostLogSeverity::Warning,
+            disposition_for_runtime_error(&error),
+            error.code(),
+            error.diagnostic(),
+            [],
+        ),
     }
 }
 
@@ -3428,6 +3463,117 @@ mod tests {
         }
     }
 
+    /// A running 60 ms realtime runtime that asks for presentation every
+    /// 10 ms when `presenting`, recording its observations and presentations.
+    struct PresentingRuntime {
+        calls: Arc<Mutex<Vec<&'static str>>>,
+        presenting: bool,
+    }
+
+    impl crate::ProductHostRuntime for PresentingRuntime {
+        fn realtime_schedule_state(&self) -> crate::ProductHostRuntimeScheduleState {
+            crate::ProductHostRuntimeScheduleState::Running
+        }
+
+        fn realtime_schedule_interval(&self) -> Option<Duration> {
+            Some(Duration::from_millis(60))
+        }
+
+        fn presentation_interval(&self) -> Option<Duration> {
+            self.presenting.then_some(Duration::from_millis(10))
+        }
+
+        fn present_realtime(
+            &mut self,
+            _observed_time_ns: CanonicalU64,
+        ) -> Result<
+            Option<crate::ProductHostRuntimeReceipt<crate::ProductHostOperationResult>>,
+            crate::ProductHostRuntimeError,
+        > {
+            self.calls.lock().unwrap().push("present");
+            Ok(None)
+        }
+
+        fn lifecycle(
+            &mut self,
+            _operation: crate::ProductHostLifecycleOperation,
+        ) -> Result<
+            crate::ProductHostRuntimeReceipt<crate::ProductHostOperationResult>,
+            crate::ProductHostRuntimeError,
+        > {
+            Err(blocking_runtime_error())
+        }
+
+        fn input(
+            &mut self,
+            _batch: crate::ProductHostInputBatch,
+        ) -> Result<
+            crate::ProductHostRuntimeReceipt<crate::ProductHostInputResult>,
+            crate::ProductHostRuntimeError,
+        > {
+            Err(blocking_runtime_error())
+        }
+
+        fn advance_realtime(
+            &mut self,
+            _observed_time_ns: CanonicalU64,
+        ) -> Result<
+            crate::ProductHostRuntimeReceipt<crate::ProductHostOperationResult>,
+            crate::ProductHostRuntimeError,
+        > {
+            self.calls.lock().unwrap().push("observe");
+            Err(blocking_runtime_error())
+        }
+
+        fn complete_timeline(
+            &mut self,
+            _completion: crate::ProductHostTimelineCompletion,
+        ) -> Result<
+            crate::ProductHostRuntimeReceipt<crate::ProductHostTimelineCompletionResult>,
+            crate::ProductHostRuntimeError,
+        > {
+            Err(blocking_runtime_error())
+        }
+    }
+
+    #[test]
+    fn the_scheduler_presents_between_observations_only_when_the_runtime_asks() {
+        for presenting in [true, false] {
+            let calls = Arc::new(Mutex::new(Vec::new()));
+            let state = test_host_state(PresentingRuntime {
+                calls: Arc::clone(&calls),
+                presenting,
+            });
+            let scheduler = {
+                let state = Arc::clone(&state);
+                let wake = Arc::clone(&state.scheduler_wake);
+                std::thread::spawn(move || scheduler_loop(state, wake))
+            };
+            std::thread::sleep(Duration::from_millis(400));
+            state.shutdown.store(true, Ordering::Release);
+            state.scheduler_wake.notify();
+            scheduler.join().unwrap();
+            let calls = calls.lock().unwrap();
+            let observations = calls.iter().filter(|call| **call == "observe").count();
+            let presentations = calls.len() - observations;
+            assert!(observations >= 4, "{calls:?}");
+            if presenting {
+                // About five 10 ms presentations fit between 60 ms observations
+                // (none in the last half interval); allow a loaded machine.
+                assert!(presentations >= 2 * observations, "{calls:?}");
+                // Each gap between observations holds some.
+                let first = calls.iter().position(|call| *call == "observe").unwrap();
+                let last = calls.iter().rposition(|call| *call == "observe").unwrap();
+                assert!(
+                    !calls[first..=last].windows(2).any(|pair| pair == ["observe", "observe"]),
+                    "{calls:?}"
+                );
+            } else {
+                assert_eq!(presentations, 0, "{calls:?}");
+            }
+        }
+    }
+
     #[test]
     fn a_debug_command_takes_the_input_queued_before_it() {
         let calls = Arc::new(Mutex::new(Vec::new()));
@@ -3485,6 +3631,10 @@ mod tests {
         calls: &Arc<Mutex<Vec<String>>>,
         schedule: crate::ProductHostRuntimeScheduleState,
     ) -> Arc<HostState<HeldRealtimeRuntime>> {
+        test_host_state(HeldRealtimeRuntime(Arc::clone(calls), schedule))
+    }
+
+    fn test_host_state<R: crate::ProductHostRuntime>(runtime: R) -> Arc<HostState<R>> {
         Arc::new(HostState {
             bundle: Arc::new(RwLock::new(
                 ProductHostBundle::new(vec![crate::ProductHostBundleEntry::new(
@@ -3495,10 +3645,7 @@ mod tests {
                 .unwrap()])
                 .unwrap(),
             )),
-            runtime: Arc::new(ProductHostOperationOwner::new(HeldRealtimeRuntime(
-                Arc::clone(calls),
-                schedule,
-            ))),
+            runtime: Arc::new(ProductHostOperationOwner::new(runtime)),
             input_mailbox: Arc::new(HostInputMailbox::default()),
             telemetry: Arc::new(Mutex::new(HostTelemetry::default())),
             realtime_scheduler_enabled: true,

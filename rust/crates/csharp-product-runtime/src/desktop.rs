@@ -48,6 +48,8 @@ pub(crate) struct Desktop {
     /// `remote-debugging-port=9333` lets a CDP client (the playtest harness,
     /// a debugger) attach to the page.
     switches: Vec<String>,
+    /// The monitor's refresh, which the window reports once it opens.
+    cadence: csharp_product_runtime::PresentationCadence,
 }
 
 impl Desktop {
@@ -65,11 +67,17 @@ impl Desktop {
             shell: DesktopShell::open()?,
             cef_dir,
             switches: switches.to_vec(),
+            cadence: csharp_product_runtime::PresentationCadence::default(),
         }))
     }
 
     pub(crate) fn gpu(&self) -> Gpu {
         self.shell.gpu().clone()
+    }
+
+    /// The display cadence the runtime presents tweens at.
+    pub(crate) fn presentation_cadence(&self) -> csharp_product_runtime::PresentationCadence {
+        self.cadence.clone()
     }
 
     /// Show the world and the host's browser shell page at `origin` until
@@ -98,6 +106,7 @@ impl Desktop {
         let scene = Arc::new(WindowScene {
             driver,
             timing,
+            cadence: self.cadence,
             stopping,
         });
         let report = self.shell.run(
@@ -156,6 +165,7 @@ fn chromium_switches(extra: &[String]) -> Vec<(String, Option<String>)> {
 struct WindowScene {
     driver: Arc<SceneDriver>,
     timing: Arc<WindowTiming>,
+    cadence: csharp_product_runtime::PresentationCadence,
     stopping: Arc<AtomicBool>,
 }
 
@@ -178,6 +188,10 @@ impl DesktopScene for WindowScene {
 
     fn input_received(&self, at: std::time::SystemTime) {
         self.timing.input_received(at);
+    }
+
+    fn refresh(&self, interval: std::time::Duration) {
+        self.cadence.set(interval);
     }
 
     fn stopped(&self) -> bool {

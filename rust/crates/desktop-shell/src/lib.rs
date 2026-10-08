@@ -68,6 +68,8 @@ pub trait DesktopScene: Send + Sync {
     fn presented(&self, frame: PresentedFrame);
     /// A key or mouse button event reached the window at `at`.
     fn input_received(&self, at: SystemTime);
+    /// The window's monitor shows a frame every `interval`.
+    fn refresh(&self, _interval: Duration) {}
     /// The runtime behind the scene has stopped; the shell closes.
     fn stopped(&self) -> bool;
     /// The window was closed; stop the runtime.
@@ -238,6 +240,7 @@ impl Shell {
             .map_or(DEFAULT_REFRESH, |millihertz| {
                 Duration::from_secs_f64(1000.0 / f64::from(millihertz))
             });
+        self.scene.refresh(refresh);
         self.window = Some(Open {
             window,
             surface,

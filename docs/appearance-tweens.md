@@ -118,15 +118,20 @@ of the steps by more than one. `Realtime` follows host time, so hover and menu
 motion keep moving while the world is held. Neither moves during a lifecycle
 pause.
 
-Tweens move at every host observation, not only at steps. A product that
-selected gameplay time already updates at every observation. For one that
-did not, the Engine advances and shows its tweens at an observation with no
-step without calling the product; markers and completions crossed there are
-reported by the next update.
+Tweens move at the display's frame rate, not only at steps. Host
+observations come at the fixed-step rate; while a tween plays and the display
+is faster (a page is taken to show 60 frames a second, a desktop window
+reports its monitor's refresh), the host also presents between them. Those
+presentations, and observations without a step for a product that did not
+select gameplay time, advance and show the tweens without calling the
+product, and the next observation counts only the time they have not shown.
+A product that selected gameplay time still updates at every observation.
+Markers and completions crossed between updates are reported by the next
+update.
 
 ## Limits
 
-- Tweens are sampled at each host observation. The rest of world
+- Tweens are sampled at each presentation. The rest of world
   presentation (particles, sprite playback, GLB animation) still moves at
   steps.
 - Spatial picking, rays, collision and gameplay use the product's own
@@ -140,11 +145,13 @@ reported by the next update.
 
 ## Cost
 
-Each host observation while a tween plays costs one timeline sample per
+Each presentation while a tween plays costs one timeline sample per
 active tween (a few segments each)
 and one transform update, plus a colour update for a tint, per object whose
-shown values changed; for a product that did not select gameplay time, the
-observations between steps add one Engine call of their own. While any tween
+shown values changed; presentations between steps (and, for a product that
+did not select gameplay time, observations without a step) add one Engine
+call of their own. Nothing is presented between observations while no tween
+plays. While any tween
 runs, the end of each call also passes
 over the render updates that call made, to find tweened objects the product
 republished. Objects without tweens are not examined. A call with no tweens

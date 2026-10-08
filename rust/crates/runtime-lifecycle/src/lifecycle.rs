@@ -279,6 +279,26 @@ impl RuntimeLifecycle {
         ))
     }
 
+    /// The step debt realtime admission would owe at `observed_time`, in
+    /// steps, without observing: where presentation between observations
+    /// stands. It stays below one step, since a due step is the next
+    /// observation's to admit; `None` while not running or before a first
+    /// observation.
+    pub fn owed_steps_at(&self, observed_time: HostMonotonicTime) -> Option<f64> {
+        if self.state != RuntimeState::Running {
+            return None;
+        }
+        let previous = self.realtime.last_observed_time?;
+        let elapsed = observed_time
+            .nanoseconds()
+            .saturating_sub(previous.nanoseconds());
+        let owed = self.realtime.scaled_remainder
+            + u128::from(elapsed)
+                * u128::from(self.config.fixed_step_hz())
+                * u128::from(self.gameplay.rate.parts_per_million());
+        Some(owed.min(SCALED_STEP - 1) as f64 / SCALED_STEP as f64)
+    }
+
     /// Admits one explicit forward step using the configured cadence. The host
     /// must suspend its automatic scheduler before calling this operation.
     pub fn admit_manual_step(&mut self) -> Result<SimulationAdmission, RuntimeLifecycleError> {
@@ -609,5 +629,32 @@ mod tests {
             lifecycle.readout().fault(),
             Some(RuntimeFault::CounterExhausted)
         );
+    }
+
+    #[test]
+    fn owed_steps_follow_host_time_between_observations_without_admitting() {
+        let mut lifecycle = RuntimeLifecycle::new(
+            RuntimeInstanceId::new(7),
+            RuntimeLifecycleConfig::new(10, 4).unwrap(),
+        );
+        let at = |ms: u64| HostMonotonicTime::from_nanoseconds(ms * 1_000_000);
+        assert_eq!(lifecycle.owed_steps_at(at(0)), None);
+        lifecycle.start().unwrap();
+        assert_eq!(lifecycle.owed_steps_at(at(0)), None);
+        lifecycle.advance_realtime(at(0)).unwrap();
+        let owed = |lifecycle: &RuntimeLifecycle, ms| lifecycle.owed_steps_at(at(ms)).unwrap();
+        assert!((owed(&lifecycle, 25) - 0.25).abs() < 1e-9);
+        // Asking admits nothing: the step stays the next observation's.
+        assert!(owed(&lifecycle, 150) < 1.0);
+        let advance = lifecycle.advance_realtime(at(130)).unwrap();
+        assert_eq!(advance.simulation().map(|s| s.step_count()), Some(1));
+        assert!((owed(&lifecycle, 130) - 0.3).abs() < 1e-9);
+        // Slow time owes in proportion; a hold owes nothing more.
+        lifecycle
+            .select_gameplay_rate(GameplayRate::from_parts_per_million(500_000).unwrap())
+            .unwrap();
+        assert!((owed(&lifecycle, 150) - 0.4).abs() < 1e-9);
+        lifecycle.select_gameplay_rate(GameplayRate::HOLD).unwrap();
+        assert!((owed(&lifecycle, 190) - 0.3).abs() < 1e-9);
     }
 }

@@ -191,6 +191,34 @@ pub struct CsharpProductRuntimeConfig {
     window_gpu: Option<render_wgpu::Gpu>,
     /// The Product a scene snapshot names.
     product: Option<scene_snapshot::SceneSnapshotProduct>,
+    presentation_cadence: PresentationCadence,
+}
+
+/// How often the display shows frames, which Engine tweens are presented at
+/// between fixed steps. A page is taken to show 60 a second; a desktop window
+/// reports its monitor's refresh once it opens.
+#[derive(Debug, Clone)]
+pub struct PresentationCadence(Arc<std::sync::atomic::AtomicU64>);
+
+impl PresentationCadence {
+    const DEFAULT_NANOSECONDS: u64 = 16_666_667;
+
+    pub fn set(&self, interval: std::time::Duration) {
+        let nanoseconds = interval.as_nanos().clamp(1, u128::from(u64::MAX)) as u64;
+        self.0.store(nanoseconds, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    pub fn interval(&self) -> std::time::Duration {
+        std::time::Duration::from_nanos(self.0.load(std::sync::atomic::Ordering::Relaxed))
+    }
+}
+
+impl Default for PresentationCadence {
+    fn default() -> Self {
+        Self(Arc::new(std::sync::atomic::AtomicU64::new(
+            Self::DEFAULT_NANOSECONDS,
+        )))
+    }
 }
 
 impl CsharpProductRuntimeConfig {
@@ -213,6 +241,7 @@ impl CsharpProductRuntimeConfig {
             audio_output: AudioOutputSelection::Device { required: false },
             window_gpu: None,
             product: None,
+            presentation_cadence: PresentationCadence::default(),
         }
     }
 
@@ -241,6 +270,12 @@ impl CsharpProductRuntimeConfig {
 
     /// The desktop shell's device: in window output the runtime's renderer
     /// is built on it and the shell draws it.
+    /// Shares the display's frame interval, which the desktop window sets.
+    pub fn with_presentation_cadence(mut self, cadence: PresentationCadence) -> Self {
+        self.presentation_cadence = cadence;
+        self
+    }
+
     pub fn with_window_gpu(mut self, gpu: render_wgpu::Gpu) -> Self {
         self.window_gpu = Some(gpu);
         self
@@ -721,6 +756,11 @@ pub struct CsharpProductRuntime {
     /// Unscaled host time observed since the Engine's tweens last advanced,
     /// in an update or in a tween call of their own.
     tween_host_ns: u64,
+    /// The last realtime observation, and how much host time after it
+    /// presentations between observations have already shown.
+    tween_observed_ns: Option<u64>,
+    tween_presented_ns: u64,
+    presentation_cadence: PresentationCadence,
     /// Present when audio plays on this process's output device.
     audio_output: Option<audio_output::AudioOutput>,
     /// The renderer, when the configuration selected an output: absent only
@@ -1009,6 +1049,9 @@ impl CsharpProductRuntime {
             staged_gameplay_time: initial_gameplay_time,
             host_elapsed_ns: 0,
             tween_host_ns: 0,
+            tween_observed_ns: None,
+            tween_presented_ns: 0,
+            presentation_cadence: config.presentation_cadence,
             audio_output,
             frame_output,
             presentation,
@@ -1827,6 +1870,15 @@ impl CsharpProductRuntime {
             return Ok(Vec::new());
         }
         let tween_time = self.take_tween_time(Some(observed_host_time_nanoseconds));
+        self.play_tweens(tween_time)
+    }
+
+    /// One Engine-only tween call: advance by `tween_time` and show the
+    /// result, without calling the product.
+    fn play_tweens(
+        &mut self,
+        tween_time: csharp_engine_services::TweenTime,
+    ) -> Result<Vec<RuntimePublication>, CsharpProductRuntimeError> {
         self.services
             .begin_tween_call(ui_binding(&self.lifecycle), tween_time);
         let finished = self.finish_product_call(None);
@@ -3200,6 +3252,58 @@ impl ProductHostRuntime for CsharpProductRuntime {
         ProductHostRuntimeReceipt::new(catalog, Vec::new()).map_err(host_runtime_error)
     }
 
+    fn presentation_interval(&self) -> Option<std::time::Duration> {
+        let presented = self.presentation_cadence.interval();
+        let shows_more = self.realtime_schedule_interval().is_some_and(|step| presented < step);
+        (shows_more
+            && self.lifecycle.state() == RuntimeState::Running
+            && self.playtest_time == playtest::TimeMode::Realtime
+            && self.services.tweens_playing())
+        .then_some(presented)
+    }
+
+    fn present_realtime(
+        &mut self,
+        observed_time_ns: CanonicalU64,
+    ) -> Result<Option<ProductHostRuntimeReceipt<ProductHostOperationResult>>, ProductHostRuntimeError>
+    {
+        let observed = observed_time_ns.get();
+        let (Some(last), Some(owed_steps)) = (
+            self.tween_observed_ns,
+            self.lifecycle
+                .owed_steps_at(HostMonotonicTime::from_nanoseconds(observed)),
+        ) else {
+            return Ok(None);
+        };
+        if self.playtest_time != playtest::TimeMode::Realtime || !self.services.tweens_playing() {
+            return Ok(None);
+        }
+        let since = observed.saturating_sub(last);
+        let shown = since.saturating_sub(self.tween_presented_ns);
+        self.tween_presented_ns = since.max(self.tween_presented_ns);
+        self.tween_host_ns = self.tween_host_ns.saturating_add(shown);
+        let tween_time = csharp_engine_services::TweenTime {
+            owed_world_seconds: Some(
+                owed_steps / f64::from(self.lifecycle.configuration().fixed_step_hz()),
+            ),
+            host_seconds: std::mem::take(&mut self.tween_host_ns) as f64 / 1e9,
+        };
+        let outputs = match self.play_tweens(tween_time) {
+            Ok(outputs) => outputs,
+            Err(error) => {
+                return self
+                    .resync_operation(ProductHostOperationKind::AdvanceRealtime, error)
+                    .map(Some);
+            }
+        };
+        match self.receipt(ProductHostOperationKind::AdvanceRealtime, outputs) {
+            Ok(receipt) => Ok(Some(receipt)),
+            Err(error) => self
+                .resync_operation_runtime_error(ProductHostOperationKind::AdvanceRealtime, error)
+                .map(Some),
+        }
+    }
+
     fn advance_realtime(
         &mut self,
         observed_time_ns: CanonicalU64,
@@ -3217,13 +3321,18 @@ impl ProductHostRuntime for CsharpProductRuntime {
             .map_err(|error| self.lifecycle_runtime_error(error))?;
         // A bounded advance counts down (and ends in a hold) here.
         self.settle_gameplay_time();
+        // Presentations since the last observation already showed part of
+        // the elapsed time.
+        let presented = std::mem::take(&mut self.tween_presented_ns);
         (self.host_elapsed_ns, self.tween_host_ns) = match admission.elapsed_nanoseconds() {
             Some(elapsed) => (
                 self.host_elapsed_ns.saturating_add(elapsed),
-                self.tween_host_ns.saturating_add(elapsed),
+                self.tween_host_ns
+                    .saturating_add(elapsed.saturating_sub(presented)),
             ),
             None => (0, 0),
         };
+        self.tween_observed_ns = Some(observed_time_ns.get());
         let outputs = match admission.simulation() {
             // The lifecycle owns admission and its readout counters. Runtime
             // Input snapshots once with the last admitted phase token; the
@@ -7871,6 +7980,79 @@ mod tests {
             (stepped.last().unwrap() - 1.036).abs() < 1.0e-3,
             "{stepped:?}"
         );
+        drop(runtime);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn presentation_between_observations_moves_tweens_without_calling_the_product() {
+        let _guard = DROP_FIXTURE_GATE
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        TWEEN_FIXTURE_UPDATES.store(0, Ordering::SeqCst);
+        let root = content_fixture_root("tween-presentation-ticks");
+        fs::create_dir_all(&root).expect("tween fixture content root");
+        let content = CsharpProductContent::admit(&root).expect("tween fixture content");
+        let cadence = PresentationCadence::default();
+        cadence.set(std::time::Duration::from_millis(10));
+        let mut runtime = CsharpProductRuntime::load_admitted_with(
+            content,
+            CsharpProductRuntimeConfig::new(
+                RuntimeInstanceId::new(1),
+                RuntimeLifecycleConfig::new(30, 2).expect("30 Hz realtime"),
+                Vec::new(),
+            )
+            .with_presentation_cadence(cadence),
+            || {
+                let mut api = drop_fixture_api();
+                api.create = tween_fixture_create;
+                api.update = tween_fixture_update;
+                Ok(api)
+            },
+        )
+        .expect("tween fixture runtime");
+        runtime
+            .lifecycle(ProductHostLifecycleOperation::Start)
+            .unwrap();
+        let ns = |milliseconds: u64| CanonicalU64::new(milliseconds * 1_000_000);
+        runtime.advance_realtime(ns(0)).unwrap();
+        // Nothing plays yet, so the host is offered no presentation.
+        assert_eq!(runtime.presentation_interval(), None);
+        let (_, publications) = runtime.advance_realtime(ns(34)).unwrap().into_parts();
+        assert!((written_x(&publications).last().unwrap() - 1.0).abs() < 1.0e-4);
+        // A hop plays and the display is faster than the 30 Hz steps.
+        assert_eq!(
+            runtime.presentation_interval(),
+            Some(std::time::Duration::from_millis(10))
+        );
+        let mut shown = Vec::new();
+        for milliseconds in [44, 54, 64] {
+            let receipt = runtime
+                .present_realtime(ns(milliseconds))
+                .unwrap()
+                .expect("a presentation while the hop plays");
+            let written = written_x(&receipt.into_parts().1);
+            assert_eq!(written.len(), 1, "at {milliseconds} ms: {written:?}");
+            shown.push(written[0]);
+        }
+        assert_eq!(TWEEN_FIXTURE_UPDATES.load(Ordering::SeqCst), 1);
+        for (x, elapsed) in shown.iter().zip([0.010_f32, 0.020, 0.030]) {
+            assert!((x - (1.0 + elapsed)).abs() < 1.0e-3, "{shown:?}");
+        }
+        // The next step neither repeats nor loses the time they showed.
+        let (_, publications) = runtime.advance_realtime(ns(70)).unwrap().into_parts();
+        assert_eq!(TWEEN_FIXTURE_UPDATES.load(Ordering::SeqCst), 2);
+        assert!(
+            (written_x(&publications).last().unwrap() - 1.036).abs() < 1.0e-3,
+            "{:?}",
+            written_x(&publications)
+        );
+        // Held inspection time shows nothing between observations.
+        runtime
+            .execute_time_debug("engine.time.mode manual")
+            .unwrap();
+        assert_eq!(runtime.presentation_interval(), None);
+        assert!(runtime.present_realtime(ns(80)).unwrap().is_none());
         drop(runtime);
         fs::remove_dir_all(root).unwrap();
     }
