@@ -31,6 +31,7 @@ use super::{content_type, parse_direct_intent, parse_physical_mapping, ProductLo
 pub(super) const PRODUCT_MANIFEST_NAME: &str = "product.json";
 const PRODUCT_ARTIFACT: &str = "rusty.product.bundle";
 const PRODUCT_UI_PREFIX: &str = "product-ui";
+const PRODUCT_CONTENT_PREFIX: &str = "product-content";
 
 #[derive(Debug)]
 pub(super) struct ProductBundle {
@@ -44,6 +45,8 @@ pub(super) struct ProductBundle {
     pub(super) content_root: String,
     /// The UI root within `source`.
     ui_root: String,
+    /// Content subtrees, relative to the content root, the page may read.
+    ui_content: Vec<String>,
     ui_entry: String,
     ui_projection: Option<ProductUiProjection>,
     renderer_settings: ProductRendererSettings,
@@ -122,6 +125,9 @@ impl ProductBundle {
         // vocabulary, while this retains an explicit assets declaration.
         product_directory(source, &ui_root, &manifest.ui.assets, "ui.assets")?;
         let content_root = product_directory(source, "", &manifest.content.root, "content.root")?;
+        for subtree in &manifest.content.ui {
+            product_directory(source, &content_root, subtree, "content.ui")?;
+        }
         let ui_projection = manifest
             .ui_projection
             .map(ProductUiProjection::from_manifest)
@@ -190,6 +196,7 @@ impl ProductBundle {
             source: source.clone(),
             content_root,
             ui_root,
+            ui_content: manifest.content.ui,
             ui_entry,
             ui_projection,
             renderer_settings,
@@ -245,6 +252,7 @@ impl ProductBundle {
     pub(super) fn browser_entries(&self) -> Result<Vec<ProductHostBundleEntry>, String> {
         let mut entries = Vec::new();
         self.collect_ui(&mut entries)?;
+        self.collect_ui_content(&mut entries)?;
         let bootstrap = ProductHostBrowserBootstrap {
             product: ProductHostBootstrapProduct {
                 id: self.id.clone(),
@@ -412,6 +420,34 @@ impl ProductBundle {
         }
         Ok(())
     }
+
+    /// The content subtrees the product opened to its UI, at
+    /// `product-content/<path within the content root>`. Overlapping subtrees
+    /// serve each file once.
+    fn collect_ui_content(&self, entries: &mut Vec<ProductHostBundleEntry>) -> Result<(), String> {
+        let content_error = |error| field_error("content.ui", error);
+        let mut paths = std::collections::BTreeSet::new();
+        for subtree in &self.ui_content {
+            paths.extend(
+                self.source
+                    .files(&join(&self.content_root, subtree))
+                    .map_err(content_error)?,
+            );
+        }
+        for path in paths {
+            let relative = &path[self.content_root.len() + 1..];
+            let bytes = self.source.read(&path).map_err(content_error)?;
+            entries.push(
+                ProductHostBundleEntry::new(
+                    format!("{PRODUCT_CONTENT_PREFIX}/{relative}"),
+                    content_type(relative),
+                    bytes.into_owned(),
+                )
+                .map_err(|error| field_error("content.ui", error.to_string()))?,
+            );
+        }
+        Ok(())
+    }
 }
 
 fn field_error(field: &str, detail: impl std::fmt::Display) -> String {
@@ -493,6 +529,9 @@ impl ProductUiProjection {
 #[derive(Debug, Deserialize)]
 struct ManifestContent {
     root: String,
+    /// Content subtrees the product UI may read.
+    #[serde(default)]
+    ui: Vec<String>,
 }
 #[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -916,6 +955,63 @@ mod tests {
             served("product-ui/assets/notes.unknown").as_deref(),
             Some("application/octet-stream")
         );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn serves_only_the_content_subtrees_the_product_opens_to_its_ui() {
+        let root = fixture_root("ui-content");
+        write_manifest(&root, "native/product.so");
+        let manifest = fs::read_to_string(root.join(PRODUCT_MANIFEST_NAME)).unwrap();
+        fs::write(
+            root.join(PRODUCT_MANIFEST_NAME),
+            manifest.replace(
+                r#""content":{"root":"content"}"#,
+                r#""content":{"root":"content","ui":["supplies/icons","supplies/icons/large"]}"#,
+            ),
+        )
+        .unwrap();
+        fs::create_dir_all(root.join("content/supplies/icons/large")).unwrap();
+        fs::write(root.join("content/supplies/items.json"), b"[]").unwrap();
+        fs::write(root.join("content/supplies/icons/lamp.svg"), b"<svg/>").unwrap();
+        fs::write(
+            root.join("content/supplies/icons/large/Lamp@2x.PNG"),
+            b"png",
+        )
+        .unwrap();
+
+        let entries = read(&root).unwrap().browser_entries().unwrap();
+        let served = |path: &str| {
+            entries
+                .iter()
+                .find(|entry| entry.path() == path)
+                .map(|entry| entry.content_type().to_owned())
+        };
+        assert_eq!(
+            served("product-content/supplies/icons/lamp.svg").as_deref(),
+            Some("image/svg+xml")
+        );
+        assert_eq!(
+            served("product-content/supplies/icons/large/Lamp@2x.PNG").as_deref(),
+            Some("image/png")
+        );
+        assert_eq!(
+            entries
+                .iter()
+                .filter(|entry| entry.path().starts_with("product-content/"))
+                .count(),
+            2
+        );
+
+        fs::write(
+            root.join(PRODUCT_MANIFEST_NAME),
+            manifest.replace(
+                r#""content":{"root":"content"}"#,
+                r#""content":{"root":"content","ui":["../ui"]}"#,
+            ),
+        )
+        .unwrap();
+        assert!(read(&root).unwrap_err().contains("content.ui"));
         fs::remove_dir_all(root).unwrap();
     }
 

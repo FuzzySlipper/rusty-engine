@@ -465,7 +465,9 @@ do not match its staged inventory fails to open; rebuild/restage it. Bundles
 are directories in a staged Product and inventory entries in a [release
 container](#release-container); both open the same way. Closing a collection does not
 free independent GPU resources or force managed garbage collection. Bundle
-discovery does not produce URLs for DOM images or fonts.
+discovery does not produce URLs for DOM images or fonts; grant them, or open a
+loose content subtree to the UI ([files the product UI
+loads](#files-the-product-ui-loads)).
 
 To show a bundle's or container's image in DOM UI (a portrait, an item icon),
 grant it to the UI: `UiImage image = engine.Ui.OpenImage(new
@@ -650,6 +652,27 @@ extension, ignoring case: HTML, JavaScript, CSS, JSON and source maps, text,
 SVG, PNG, JPEG, GIF, WebP, AVIF, ICO, TTF, OTF, WOFF, WOFF2, WAV, Ogg, MP3,
 FLAC, WebM and WebAssembly. Any other file is served as
 `application/octet-stream`. A path may use letters, digits and `. - _ @ + ~`.
+
+Presentation assets that belong beside content (an icon per item, a portrait
+per character) stay in the content root and are opened to the UI by subtree:
+
+```xml
+<ItemGroup>
+  <RustyEngineProductUiContent Include="supplies/icons" />
+</ItemGroup>
+```
+
+Each item names a directory under `RustyEngineProductContentRoot`, written
+with `/`. Its files are served read-only at `product-content/<path within the
+content root>`, so `content/supplies/icons/lamp.svg` is
+`product-content/supplies/icons/lamp.svg`. The page is at the origin root, so
+an `<img src="product-content/supplies/icons/lamp.svg">` resolves there from
+any module. Nothing else in the content root is reachable from the page, and
+the UI has no write path. The files are the ones staged with the product, in
+`rusty dev`, staged builds and release containers alike; an edit restages the
+product. These are pictures and fonts for the facts the UI shows, not world
+presentation, which stays with the Engine renderer. For images in an
+independently loaded bundle or container, use `Ui.OpenImage`.
 
 ### Release container
 
