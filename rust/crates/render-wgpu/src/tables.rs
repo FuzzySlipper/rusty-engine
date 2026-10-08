@@ -20,6 +20,8 @@
 //! | `atmosphere` | (single) | height fog, sun haze and the sun in the sky | `SetAtmosphere` |
 //! | `sun_shafts` | (single) | the finish pass's sun shafts | `SetSunShafts` |
 //! | `wind` | (single) | the scene's wind, in the frame uniform | `SetWind` |
+//! | `clouds` | (single) | the sky's cloud layer and its shade on the ground | `SetClouds` |
+//! | `wetness` | (single) | how wet the scene's surfaces are, in the frame uniform | `SetWetness` |
 //! | `sky_light` | (single) | the sky's light: the background as an environment (`sky_light.rs`) | `SetSkyLight` |
 //!
 //! | `sprites` | `RenderHandle` | membership: the nodes of kind `Sprite` | `CreateSprite`, `Destroy` (subtree) |
@@ -745,6 +747,8 @@ pub(crate) struct Tables {
     pub wind: Option<render_model::WindDescriptor>,
     /// The sky's cloud layer (`sky.wgsl` `fs_clouds`).
     pub clouds: Option<render_model::CloudsDescriptor>,
+    /// How wet the scene's surfaces are (`lighting.wgsl` `wetted`).
+    pub wetness: Option<render_model::WetnessDescriptor>,
     /// The indirect light volume requested (`probes.rs`).
     pub indirect_light: Option<render_model::IndirectLightDescriptor>,
     pub sky_light: Option<render_model::SkyLightDescriptor>,
@@ -786,6 +790,7 @@ impl Tables {
             sun_shafts: None,
             wind: None,
             clouds: None,
+            wetness: None,
             indirect_light: None,
             sky_light: None,
             dirty_nodes: HashSet::new(),

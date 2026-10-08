@@ -427,6 +427,17 @@ pub struct NativeCloudsRequest {
     pub color: NativeVec3,
 }
 
+/// How wet the scene's lit surfaces are, after rain. `wetness` (0 to 1, 0
+/// the default) darkens their diffuse colour and smooths them, most where
+/// they face up and only under the open sky; `puddles` (0 to 1) gathers
+/// standing water in patches on flat ground as they wet.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeWetnessRequest {
+    pub wetness: f32,
+    pub puddles: f32,
+}
+
 /// Which light the ambient rows give inside an indirect light volume.
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]

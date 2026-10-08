@@ -206,6 +206,7 @@ fn engine_api(
             set_sun_shafts: crate::camera_view::set_sun_shafts,
             set_wind: crate::camera_view::set_wind,
             set_clouds: crate::camera_view::set_clouds,
+            set_wetness: crate::camera_view::set_wetness,
             set_indirect_light: crate::camera_view::set_indirect_light,
             set_sky_light: crate::camera_view::set_sky_light,
             set_viewport_anchor: crate::camera_view::set_viewport_anchor,
@@ -1926,6 +1927,67 @@ mod tests {
         assert_eq!(
             call.take_output().frames[0].ops,
             [render_model::RenderDiff::SetWind { wind: None }]
+        );
+    }
+
+    #[test]
+    fn wetness_publishes_as_retained_environment_and_zero_dries() {
+        use crate::operation_diagnostics::{empty_receipt, receipt_codes};
+        let mut services = EngineServiceSet::new(
+            parse_runtime_appearance_catalog(None).expect("default catalog"),
+            BTreeMap::new(),
+            None,
+            RuntimeDiagnosticsSink::new(Default::default()).unwrap(),
+        )
+        .expect("service set");
+        services.begin_call(binding());
+        let api = services.api();
+        let set = |wetness, puddles, refusal| unsafe {
+            (api.camera_view.set_wetness)(
+                api.camera_view.context,
+                &NativeWetnessRequest { wetness, puddles },
+                refusal,
+            )
+        };
+        assert_eq!(set(0.7, 0.4, std::ptr::null_mut()), ABI_OK);
+        let mut call = services.finish_call().expect("wetness call");
+        let selected = render_model::RenderDiff::SetWetness {
+            wetness: Some(render_model::WetnessDescriptor {
+                wetness: 0.7,
+                puddles: 0.4,
+            }),
+        };
+        assert_eq!(
+            call.take_output().frames[0].ops,
+            std::slice::from_ref(&selected)
+        );
+        let attachment = services
+            .snapshot_outputs(binding())
+            .expect("fresh attachment");
+        let CsharpAppearanceCallOutput::Frame(frame) = &attachment.appearance[0] else {
+            panic!("baseline graphics frame");
+        };
+        assert!(frame.ops.contains(&selected));
+
+        services.begin_call(binding());
+        let api = services.api();
+        let set = |wetness, puddles, refusal| unsafe {
+            (api.camera_view.set_wetness)(
+                api.camera_view.context,
+                &NativeWetnessRequest { wetness, puddles },
+                refusal,
+            )
+        };
+        for (wetness, puddles) in [(1.5, 0.0), (-0.1, 0.0), (0.5, 2.0), (f32::NAN, 0.0)] {
+            let mut refusal = empty_receipt();
+            assert_eq!(set(wetness, puddles, &mut refusal), 0);
+            assert_eq!(receipt_codes(&refusal), ["CSHARP_WETNESS"]);
+        }
+        assert_eq!(set(0.0, 1.0, std::ptr::null_mut()), ABI_OK);
+        let mut call = services.finish_call().expect("dry");
+        assert_eq!(
+            call.take_output().frames[0].ops,
+            [render_model::RenderDiff::SetWetness { wetness: None }]
         );
     }
 

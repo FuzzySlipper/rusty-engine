@@ -160,6 +160,7 @@ impl Renderer {
                 self.tables.sun_shafts = *sun_shafts;
             }
             RenderDiff::SetWind { wind } => self.tables.wind = *wind,
+            RenderDiff::SetWetness { wetness } => self.tables.wetness = *wetness,
             RenderDiff::SetClouds { clouds } => {
                 self.tables.clouds = *clouds;
                 // The cloud layer's parameters live in the sky's uniform.
@@ -2439,6 +2440,7 @@ fn op_name(op: &RenderDiff) -> &'static str {
         RenderDiff::SetSunShafts { .. } => "setSunShafts",
         RenderDiff::SetWind { .. } => "setWind",
         RenderDiff::SetClouds { .. } => "setClouds",
+        RenderDiff::SetWetness { .. } => "setWetness",
         RenderDiff::SetIndirectLight { .. } => "setIndirectLight",
         RenderDiff::SetSkyLight { .. } => "setSkyLight",
         RenderDiff::SetRendererSettings { .. } => "setRendererSettings",

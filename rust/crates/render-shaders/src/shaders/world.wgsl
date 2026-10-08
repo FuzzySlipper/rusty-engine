@@ -53,6 +53,7 @@
 }
 #import rusty::types::Surface
 #import rusty::shade::standard_shade
+#import rusty::lighting::wetted
 #ifdef PRODUCT_SHADER
 #import rusty::product::shade
 #endif
@@ -528,6 +529,8 @@ fn world_color(in: VsOut, front: bool, masked: bool) -> vec4<f32> {
     let screen_occlusion = textureSample(ambient_occlusion_map, ambient_occlusion_sampler,
         in.clip.xy * ambient_occlusion.params.yz).r;
     surface.occlusion *= mix(1.0, screen_occlusion, ambient_occlusion.params.x);
+    // Rain wets what stands under the open sky (`Frame.weather`).
+    surface = wetted(surface);
 #endif
 #endif
 #ifdef PRODUCT_SHADER

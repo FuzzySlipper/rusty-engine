@@ -45,9 +45,10 @@ const LIGHT_ROW_FLOATS: usize = 16;
 /// and the tone mapping and fog modes; then the presentation time and the
 /// colour grading; then the sun, the atmosphere and the sky's light; then
 /// the indirect light volume's origin and grid and the wind; then the cloud
-/// layer and its drift; then the light cluster grid and depth range.
+/// layer and its drift, and the surfaces' wetness; then the light cluster
+/// grid and depth range.
 const FRAME_UNIFORM_BYTES: u64 =
-    (16 + 16 + 4 + 4 + 4 + 4 + 4 + 4 + 4 + 4 + 4 * 4 + 4 + 4 + 4 + 4 + 4 + 4 + 4 + 4) * 4;
+    (16 + 16 + 4 + 4 + 4 + 4 + 4 + 4 + 4 + 4 + 4 * 4 + 4 + 4 + 4 + 4 + 4 + 4 + 4 + 4 + 4) * 4;
 /// Instance regions before the shadow casters: a list and a visible region
 /// for each of the world and viewmodel layers (`update_view_list`).
 const VIEW_REGIONS: u32 = 4;
@@ -1655,6 +1656,17 @@ impl Renderer {
         }
         // The cloud layer shades the directional lights (`clouds.wgsl`).
         for value in clouds_uniform(self.tables.clouds) {
+            bytes.extend_from_slice(&value.to_le_bytes());
+        }
+        // How wet the surfaces are (`lighting.wgsl` `wetted`).
+        let wetness = self
+            .tables
+            .wetness
+            .unwrap_or(render_model::WetnessDescriptor {
+                wetness: 0.0,
+                puddles: 0.0,
+            });
+        for value in [wetness.wetness, wetness.puddles, 0.0, 0.0] {
             bytes.extend_from_slice(&value.to_le_bytes());
         }
         // The cluster fields follow once the view's clusters are encoded.

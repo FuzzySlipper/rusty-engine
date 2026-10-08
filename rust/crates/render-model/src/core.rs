@@ -274,6 +274,24 @@ impl WindDescriptor {
     }
 }
 
+/// How wet the scene's surfaces are, after rain (`CameraView.SetWetness`):
+/// `wetness` (0 to 1) darkens the diffuse colour and lowers roughness of lit
+/// surfaces under the open sky, most on up-facing ones; `puddles` (0 to 1)
+/// gathers standing water in patches on flat ground as the surfaces wet.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WetnessDescriptor {
+    pub wetness: f32,
+    pub puddles: f32,
+}
+
+impl WetnessDescriptor {
+    /// Wetness and puddles within `0..=1`.
+    pub fn valid(&self) -> bool {
+        (0.0..=1.0).contains(&self.wetness) && (0.0..=1.0).contains(&self.puddles)
+    }
+}
+
 /// A cloud layer drawn over the sky panorama and lit by the sun. `coverage`
 /// (0 to 1) is how much of the sky it covers; `drift` is its velocity over
 /// the ground (world x, z) in metres per second; `altitude` is the height
@@ -901,6 +919,10 @@ pub enum RenderDiff {
     SetClouds {
         clouds: Option<CloudsDescriptor>,
     },
+    /// Selects how wet the scene's surfaces are; None dries them.
+    SetWetness {
+        wetness: Option<WetnessDescriptor>,
+    },
     /// The indirect light volume; `None` turns it off.
     SetIndirectLight {
         indirect_light: Option<IndirectLightDescriptor>,
@@ -1084,6 +1106,10 @@ impl RenderDiff {
                 clouds: Some(clouds),
             } if !clouds.valid() => Err(RenderOperationError::Clouds),
             Self::SetClouds { .. } => Ok(()),
+            Self::SetWetness {
+                wetness: Some(wetness),
+            } if !wetness.valid() => Err(RenderOperationError::Wetness),
+            Self::SetWetness { .. } => Ok(()),
             Self::SetIndirectLight {
                 indirect_light: Some(indirect_light),
             } if !indirect_light.valid() => Err(RenderOperationError::IndirectLight),
@@ -1204,6 +1230,7 @@ impl RenderDiff {
             | Self::SetSunShafts { .. }
             | Self::SetWind { .. }
             | Self::SetClouds { .. }
+            | Self::SetWetness { .. }
             | Self::SetIndirectLight { .. }
             | Self::SetSkyLight { .. }
             | Self::SetRendererSettings { .. }
@@ -1250,6 +1277,7 @@ pub enum RenderOperationError {
     SunShafts,
     Wind,
     Clouds,
+    Wetness,
     IndirectLight,
     SkyLight,
     RendererSettings,
@@ -1330,6 +1358,7 @@ impl RenderFrameDiff {
                 | RenderDiff::SetSunShafts { .. }
                 | RenderDiff::SetWind { .. }
                 | RenderDiff::SetClouds { .. }
+                | RenderDiff::SetWetness { .. }
                 | RenderDiff::SetIndirectLight { .. }
                 | RenderDiff::SetSkyLight { .. }
                 | RenderDiff::SetRendererSettings { .. }

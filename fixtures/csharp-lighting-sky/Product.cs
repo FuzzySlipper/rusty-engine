@@ -464,6 +464,13 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         engine.CameraView.UpdateCamera(new(camera,Camera(CloudsEye,CloudsTarget)));
         return Inspect();
     }
+    // How wet the room's lit surfaces are after rain (0 to 1; 0 dries them), with puddles on the floor (0 to 1).
+    [DebugCommand("lighting.wetness")]
+    public string Wetness(float wetness, float puddles)
+    {
+        engine.CameraView.SetWetness(new(Math.Clamp(wetness,0,1),Math.Clamp(puddles,0,1)));
+        return Inspect();
+    }
     [DebugCommand("lighting.atmosphere")]
     public string Atmosphere(bool enabled) { engine.CameraView.SetAtmosphere(enabled ? Air : default); return Inspect(); }
     // A hemisphere light at the given intensity (0 disables it), read back from the Engine.

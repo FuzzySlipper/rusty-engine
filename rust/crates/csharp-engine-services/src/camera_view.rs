@@ -10,7 +10,7 @@ use render_model::{
     AtmosphereDescriptor, AutoExposureDescriptor, BloomDescriptor, CloudsDescriptor,
     ColorGradingDescriptor, FogDescriptor, IndirectAmbient, IndirectLightDescriptor, RenderDiff,
     RenderFrameDiff, SkyBackgroundDescriptor, SkyLightDescriptor, SunShaftsDescriptor,
-    ToneMappingDescriptor, ToneMappingOperator, WindDescriptor,
+    ToneMappingDescriptor, ToneMappingOperator, WetnessDescriptor, WindDescriptor,
 };
 
 use crate::{
@@ -80,6 +80,7 @@ pub(crate) struct RuntimeCameraViewCall {
     pub(crate) sun_shafts: Option<Option<SunShaftsDescriptor>>,
     pub(crate) wind: Option<Option<WindDescriptor>>,
     pub(crate) clouds: Option<Option<CloudsDescriptor>>,
+    pub(crate) wetness: Option<Option<WetnessDescriptor>>,
     pub(crate) indirect_light: Option<Option<IndirectLightDescriptor>>,
     pub(crate) sky_light: Option<Option<SkyLightDescriptor>>,
 }
@@ -157,6 +158,7 @@ impl RuntimeCameraViewBridge {
             sun_shafts: None,
             wind: None,
             clouds: None,
+            wetness: None,
             indirect_light: None,
             sky_light: None,
         });
@@ -214,6 +216,7 @@ impl RuntimeCameraViewBridge {
             sun_shafts: None,
             wind: None,
             clouds: None,
+            wetness: None,
             indirect_light: None,
             sky_light: None,
         };
@@ -508,6 +511,7 @@ impl RuntimeCameraViewBridge {
             sun_shafts: None,
             wind: None,
             clouds: None,
+            wetness: None,
             indirect_light: None,
             sky_light: None,
         };
@@ -841,6 +845,24 @@ impl RuntimeCameraViewBridge {
             ));
         }
         self.staged_mut()?.clouds = Some((request.coverage > 0.0).then_some(clouds));
+        Ok(())
+    }
+
+    fn set_wetness(
+        &mut self,
+        request: NativeWetnessRequest,
+    ) -> Result<(), CsharpEngineServicesError> {
+        let wetness = WetnessDescriptor {
+            wetness: request.wetness,
+            puddles: request.puddles,
+        };
+        if !wetness.valid() {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_WETNESS",
+                "wetness and puddles must each be within 0 to 1",
+            ));
+        }
+        self.staged_mut()?.wetness = Some((request.wetness > 0.0).then_some(wetness));
         Ok(())
     }
 
@@ -1194,6 +1216,9 @@ pub(crate) fn environment_frame(
     }
     if let Some(clouds) = call.clouds {
         operations.push(RenderDiff::SetClouds { clouds });
+    }
+    if let Some(wetness) = call.wetness {
+        operations.push(RenderDiff::SetWetness { wetness });
     }
     if let Some(indirect_light) = call.indirect_light {
         operations.push(RenderDiff::SetIndirectLight { indirect_light });
@@ -1802,6 +1827,27 @@ pub(crate) unsafe extern "C" fn set_wind(
     }
     let bridge = unsafe { &mut *context.cast::<RuntimeCameraViewBridge>() };
     match bridge.set_wind(unsafe { *request }) {
+        Ok(()) => ABI_OK,
+        Err(error) => {
+            bridge.operation_diagnostics.retain(&error, operation_error);
+            0
+        }
+    }
+}
+
+pub(crate) unsafe extern "C" fn set_wetness(
+    context: *mut c_void,
+    request: *const NativeWetnessRequest,
+    operation_error: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    if !operation_error.is_null() {
+        unsafe { *operation_error = std::mem::zeroed() };
+    }
+    if context.is_null() || request.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeCameraViewBridge>() };
+    match bridge.set_wetness(unsafe { *request }) {
         Ok(()) => ABI_OK,
         Err(error) => {
             bridge.operation_diagnostics.retain(&error, operation_error);

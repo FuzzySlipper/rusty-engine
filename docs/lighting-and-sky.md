@@ -811,6 +811,33 @@ engine.CameraView.SetClouds(new(Coverage: .6f, Drift: new Vector2(8, 3),
   has coverage. On a CraftSurvive meadow at 1920×1080 it added about 0.2 ms
   to the world pass on an RX 9070 XT.
 
+## Wet surfaces
+
+After rain, the scene's lit surfaces can read as wet:
+
+```csharp
+engine.CameraView.SetWetness(new(Wetness: .8f, Puddles: .5f));
+```
+
+- `Wetness` (0 to 1) darkens a surface's diffuse colour toward 55 % (metals
+  keep theirs) and lowers its roughness toward 0.15, so the sun and sky
+  glint off it. Up-facing surfaces take the full wetness, walls half of it,
+  and undersides none.
+- Only surfaces under the open sky get wet. Where an ambient light has a sky
+  layer ([the sky's occlusion](#the-skys-light)), what it shades (the ground
+  under a roof, a cave) stays dry. Without such a light every surface counts
+  as open.
+- `Puddles` (0 to 1) gathers standing water in patches about 2.5 m across on
+  flat ground, as much as the surface is wet: darker still, nearly smooth
+  and flat.
+- It applies to standard-lit world materials before their shade stage, so
+  a product `shade(Surface)` receives the wetted surface. Water and unlit
+  materials, sprites and particles are left as they are. Product WGSL reads
+  the values as `frame.weather.x` (wetness) and `.y` (puddles).
+- 0 (the default) draws exactly as dry. The setting is retained camera-view
+  state like the wind. It costs nothing while 0; while wet, each lit
+  fragment reads the sky layer once more.
+
 ## Fixture
 
 `fixtures/csharp-lighting-sky` uses the packaged SDK, a voxel room, a retained
@@ -841,6 +868,7 @@ feature with the fixture's foam and ripple textures, 0 the same slab as a
 plain blended material, below 0 clears the scene), and
 `lighting.vertexocclusion <strength>` (the room's cube vertices darkened by
 the voxels around them, with the camera on the room's far corner), and
+`lighting.wetness <wetness> <puddles>` (the room's surfaces wet after rain),
 `lighting.clouds <coverage>` (a drifting cloud layer over the panorama, with
 the camera up toward it; 0 clears it, and `lighting.sky` moves the sun that
 lights it from noon to dusk).

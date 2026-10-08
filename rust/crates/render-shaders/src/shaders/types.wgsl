@@ -58,6 +58,9 @@ struct Frame {
     // xy: the cloud layer's drift over the ground (world x, z), in metres
     // per second.
     cloud_drift: vec4<f32>,
+    // The surfaces' wetness (`lighting.wgsl` `wetted`): x how wet (0 dry to
+    // 1 soaked), y how much standing water gathers in puddles (0 to 1).
+    weather: vec4<f32>,
     // Clustered lighting (`light_clusters.wgsl`): xyz: tiles across, tiles
     // down, depth slices; w: 1 when this pass's lights are read from the
     // clusters, 0 when they are looped over.

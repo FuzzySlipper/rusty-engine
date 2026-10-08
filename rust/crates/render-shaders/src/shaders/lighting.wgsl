@@ -5,7 +5,8 @@
 // with no tone mapping; the sRGB target encodes the output.
 
 #import rusty::types::PI
-#import rusty::clouds::cloud_light
+#import rusty::clouds::{cloud_light, cloud_noise}
+#import rusty::types::Surface
 #import rusty::view::{frame, lights, shadow_maps, shadow_sampler, shadow_views, clusters, sky_specular, sky_sampler, sky_irradiance, probes, probes_sampler}
 
 // The shadow atlas page's side in texels (`shadows.rs` PAGE_SIZE).
@@ -469,4 +470,76 @@ fn standard_radiance(
             * environment_brdf(f0, roughness, n_dot_v);
     }
     return albedo * (1.0 - metalness) * irradiance / PI + specular + reflection;
+}
+
+// How open the sky is above `position`: the least of the ambient lights'
+// sky layers there (1 with none). Ambient lights cover the whole scene, so
+// in a clustered pass they are in the global list.
+fn open_sky(position: vec3<f32>, normal: vec3<f32>) -> f32 {
+    var open = 1.0;
+    var first = frame.counts.y;
+    var count = frame.counts.x;
+    if frame.cluster_grid.w == 1u {
+        let global_base = frame.cluster_grid.x * frame.cluster_grid.y * frame.cluster_grid.z * CLUSTER_STRIDE;
+        count = min(clusters[global_base], CLUSTER_STRIDE - 1u);
+        for (var slot = 0u; slot < count; slot = slot + 1u) {
+            open = min(open, ambient_sky(clusters[global_base + 1u + slot], position, normal));
+        }
+        return open;
+    }
+    for (var index = first; index < first + count; index = index + 1u) {
+        open = min(open, ambient_sky(index, position, normal));
+    }
+    return open;
+}
+
+// An ambient light's sky reaching `position` through its sky layer, or 1
+// for any other light.
+fn ambient_sky(index: u32, position: vec3<f32>, normal: vec3<f32>) -> f32 {
+    let light = lights[index];
+    let sky_layer = u32(light.extra.w);
+    if u32(light.color_kind.w) != 0u || sky_layer == 0u {
+        return 1.0;
+    }
+    return sky_visibility(sky_layer - 1u, position, normal);
+}
+
+// Wet surfaces (`Frame.weather`, `CameraView.SetWetness`): a wet porous
+// surface darkens to `WET_DARKENING` of its diffuse colour (metals do not)
+// and its roughness falls toward `WET_ROUGHNESS`; up-facing surfaces take
+// the full wetness, walls `WET_WALLS` of it and undersides none, and only
+// under the open sky, so ground under a roof or in a cave stays dry.
+// Puddles gather on flat ground in patches about `PUDDLE_METRES` across:
+// darker still, nearly mirror-smooth and flat.
+const WET_DARKENING: f32 = 0.55;
+const WET_ROUGHNESS: f32 = 0.15;
+const WET_WALLS: f32 = 0.5;
+const PUDDLE_METRES: f32 = 2.5;
+const PUDDLE_DARKENING: f32 = 0.7;
+const PUDDLE_ROUGHNESS: f32 = 0.03;
+fn wetted(surface: Surface) -> Surface {
+    let wetness = frame.weather.x;
+    let up = surface.normal.y;
+    if wetness <= 0.0 || up < -0.3 {
+        return surface;
+    }
+    let exposure = smoothstep(-0.3, 0.0, up) * mix(WET_WALLS, 1.0, clamp(up, 0.0, 1.0));
+    let wet = wetness * exposure * open_sky(surface.world_position, surface.normal);
+    if wet <= 0.0 {
+        return surface;
+    }
+    var result = surface;
+    result.base = vec4<f32>(result.base.rgb * mix(1.0, WET_DARKENING, wet * (1.0 - result.metalness)), result.base.a);
+    result.roughness = mix(result.roughness, WET_ROUGHNESS, wet);
+    let puddles = frame.weather.y * wet;
+    if puddles > 0.0 && up > 0.85 {
+        let p = surface.world_position.xz / PUDDLE_METRES;
+        let shape = cloud_noise(p) * 0.65 + cloud_noise(p * 2.03 + vec2<f32>(17.1, 9.4)) * 0.35;
+        let level = 1.0 - puddles * 0.6;
+        let pool = smoothstep(level - 0.04, level + 0.04, shape) * smoothstep(0.85, 0.95, up);
+        result.base = vec4<f32>(result.base.rgb * mix(1.0, PUDDLE_DARKENING, pool), result.base.a);
+        result.roughness = mix(result.roughness, PUDDLE_ROUGHNESS, pool);
+        result.normal = normalize(mix(result.normal, vec3<f32>(0.0, 1.0, 0.0), pool));
+    }
+    return result;
 }
