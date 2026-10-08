@@ -1820,9 +1820,11 @@ impl RuntimeSpatialBridge {
             })
             .and_then(|_| session.navigation.take())
             .and_then(|navigation| {
+                let vertical = navigation.vertical_mapping?;
                 Some(CollisionNavigationGraph {
                     projection: navigation.projection,
-                    supports: navigation.vertical_mapping?.support_heights,
+                    supports: vertical.support_heights,
+                    centers: vertical.cell_centers,
                     edge_admission: navigation.edge_admission?,
                     jumps: navigation
                         .edge_kinds
@@ -1834,6 +1836,7 @@ impl RuntimeSpatialBridge {
         let CollisionNavigationGraph {
             projection,
             supports: support_heights,
+            centers: cell_centers,
             edge_admission,
             jumps,
         } = graph;
@@ -1870,7 +1873,9 @@ impl RuntimeSpatialBridge {
             vertical_mapping: Some(NavigationVerticalMapping {
                 level_quantum: request.config.cell_size,
                 support_heights,
-                cell_centers: BTreeMap::new(),
+                // Supports standing off their column's centre keep their
+                // cells: positions still map to cells by column.
+                cell_centers,
                 has_continuous_horizontal_translation: false,
                 snap: Some(snap),
             }),
@@ -2376,8 +2381,8 @@ impl RuntimeSpatialBridge {
     }
 }
 
-/// When the mover, standing at the first path cell's centre, holds toward the
-/// second after jumping, as the derivation's jump model plans it.
+/// When the mover, standing on the first path cell's support, holds toward
+/// the second after jumping, as the derivation's jump model plans it.
 fn next_jump_departure(
     session: &SpatialSession,
     navigation: &NavigationState,
@@ -2386,21 +2391,23 @@ fn next_jump_departure(
     let (Some(cache), [from, to, ..]) = (session.collision_navigation.as_ref(), path) else {
         return Ok(0.0);
     };
-    let height = |cell| {
-        navigation
-            .vertical_mapping
-            .as_ref()
-            .and_then(|vertical| vertical.support_heights.get(cell))
+    let support = |cell: &VoxelCoord| {
+        let vertical = navigation.vertical_mapping.as_ref()?;
+        let height = *vertical.support_heights.get(cell)?;
+        let center = navigation.projection.grid().voxel_center_world(*cell);
+        let [x, z] = vertical
+            .cell_centers
+            .get(cell)
             .copied()
+            .unwrap_or([center.x, center.z]);
+        Some(core_space::WorldPos::new(x, height, z))
     };
-    let (Some(from_y), Some(to_y)) = (height(from), height(to)) else {
+    let (Some(from), Some(to)) = (support(from), support(to)) else {
         return Ok(0.0);
     };
     let policy = &cache.key().policy;
-    let grid = policy.grid()?;
-    let plan =
-        collision_navigation::jump_plan(&session.scene, grid, policy, (*from, from_y), (*to, to_y))
-            .map_err(collision_navigation::projection_error)?;
+    let plan = collision_navigation::jump_plan(&session.scene, policy, from, to)
+        .map_err(collision_navigation::projection_error)?;
     Ok(plan.departure as f32)
 }
 

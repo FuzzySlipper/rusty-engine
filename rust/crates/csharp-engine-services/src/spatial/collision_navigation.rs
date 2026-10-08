@@ -7,8 +7,11 @@
 use super::*;
 
 /// A scene change may reach one cell beyond its bounds: a standing capsule is
-/// narrower than a cell, and an edge sweep stays within the two cells it
-/// joins, so re-deriving every column within one cell of a change is exact.
+/// narrower than a cell, a support stands at most three eighths of a cell
+/// from its column's centre and its placement looks no farther than half a
+/// cell and the capsule's radius, and an edge sweep stays within the two
+/// cells it joins and their sides, so re-deriving every column within one
+/// cell of a change is exact.
 const DIRTY_MARGIN_CELLS: f64 = 1.0;
 /// Beyond this many recorded changes the next publication derives everything.
 const MAX_DIRTY_REGIONS: usize = 256;
@@ -231,7 +234,7 @@ pub(super) struct CollisionNavigationCache {
     /// other scene derives everything.
     scene: SceneRevisions,
     bounds: ColumnBounds,
-    columns: BTreeMap<Column, Vec<(VoxelCoord, f64)>>,
+    columns: BTreeMap<Column, Vec<Support>>,
     edges: BTreeMap<VoxelCoord, Vec<EdgeTarget>>,
     /// World-space `[min_x, min_z, max_x, max_z]` of changes since; `None`
     /// when too many were recorded.
@@ -247,6 +250,9 @@ pub(super) struct CollisionNavigationCache {
 pub(super) struct CollisionNavigationGraph {
     pub(super) projection: NavProjection,
     pub(super) supports: BTreeMap<VoxelCoord, f64>,
+    /// Where across X and Z the supports that stand off their column's
+    /// centre stand, in the grid's frame.
+    pub(super) centers: BTreeMap<VoxelCoord, [f64; 2]>,
     pub(super) edge_admission: NavEdgeAdmission,
     /// The admitted edges that are jumps.
     pub(super) jumps: BTreeSet<(VoxelCoord, VoxelCoord)>,
@@ -254,11 +260,21 @@ pub(super) struct CollisionNavigationGraph {
 
 impl CollisionNavigationGraph {
     fn from_cache(grid: VoxelGridSpec, cache: &CollisionNavigationCache) -> Self {
-        let supports: BTreeMap<VoxelCoord, f64> =
-            cache.columns.values().flatten().copied().collect();
+        let supports: BTreeMap<VoxelCoord, f64> = cache
+            .columns
+            .values()
+            .flatten()
+            .map(|support| (support.cell, support.height))
+            .collect();
         let mut graph = Self {
             projection: NavProjection::from_walkable_cells(grid, supports.keys().copied()),
             supports,
+            centers: cache
+                .columns
+                .values()
+                .flatten()
+                .filter_map(|support| off_center(grid, support))
+                .collect(),
             edge_admission: NavEdgeAdmission::from_allowed_edges(std::iter::empty()),
             jumps: BTreeSet::new(),
         };
@@ -358,7 +374,11 @@ impl CollisionNavigationCache {
             .map(|((x, z), supports)| {
                 let supports = supports
                     .into_iter()
-                    .map(|(cell, height)| (moved(cell), height + shift[1]))
+                    .map(|support| Support {
+                        cell: moved(support.cell),
+                        height: support.height + shift[1],
+                        ..support
+                    })
                     .collect();
                 ((x + dx, z + dz), supports)
             })
@@ -417,7 +437,7 @@ impl CollisionNavigationCache {
             .is_some_and(|targets| targets.iter().any(|target| target.to == to))
     }
 
-    fn supports(&self, column: Column) -> &[(VoxelCoord, f64)] {
+    fn supports(&self, column: Column) -> &[Support] {
         self.columns.get(&column).map_or(&[], Vec::as_slice)
     }
 }
@@ -432,7 +452,7 @@ pub(super) struct CollisionNavigationDelta {
     bounds: ColumnBounds,
     /// Derived against the last publication rather than from nothing.
     incremental: bool,
-    derived: BTreeMap<Column, Vec<(VoxelCoord, f64)>>,
+    derived: BTreeMap<Column, Vec<Support>>,
     removed: Vec<Column>,
     edge_columns: BTreeSet<Column>,
     edges: Vec<(VoxelCoord, Vec<EdgeTarget>)>,
@@ -477,6 +497,7 @@ impl CollisionNavigationDelta {
                 Some(CollisionNavigationGraph {
                     projection: NavProjection::from_walkable_cells(grid, std::iter::empty()),
                     supports: BTreeMap::new(),
+                    centers: BTreeMap::new(),
                     edge_admission: NavEdgeAdmission::from_allowed_edges(std::iter::empty()),
                     jumps: BTreeSet::new(),
                 }),
@@ -487,7 +508,7 @@ impl CollisionNavigationDelta {
             let Some(supports) = cache.columns.get(column) else {
                 continue;
             };
-            for &(from, _) in supports {
+            for &Support { cell: from, .. } in supports {
                 let Some(targets) = cache.edges.remove(&from) else {
                     continue;
                 };
@@ -496,18 +517,22 @@ impl CollisionNavigationDelta {
         }
         let mut walkable = Vec::new();
         for column in self.removed.iter().chain(self.derived.keys()) {
-            for (cell, _) in cache.columns.remove(column).unwrap_or_default() {
-                walkable.push((cell, false));
+            for support in cache.columns.remove(column).unwrap_or_default() {
+                walkable.push((support.cell, false));
                 if let Some(graph) = &mut graph {
-                    graph.supports.remove(&cell);
+                    graph.supports.remove(&support.cell);
+                    graph.centers.remove(&support.cell);
                 }
             }
         }
         for (column, supports) in self.derived {
-            for &(cell, height) in &supports {
-                walkable.push((cell, true));
+            for support in &supports {
+                walkable.push((support.cell, true));
                 if let Some(graph) = &mut graph {
-                    graph.supports.insert(cell, height);
+                    graph.supports.insert(support.cell, support.height);
+                    if let Some((cell, center)) = off_center(grid, support) {
+                        graph.centers.insert(cell, center);
+                    }
                 }
             }
             cache.columns.insert(column, supports);
@@ -534,8 +559,8 @@ impl CollisionNavigationDelta {
 /// Derive a conservative, finite planar projection from the session's coherent
 /// collision authority. A candidate owns no geometry: support, slope, and
 /// headroom are all tested by the same voxel/static-mesh projection used by
-/// ordinary spatial queries. Cells prove only that a capsule can stand at
-/// their center; directed edges then use the character step solver to prove a
+/// ordinary spatial queries. Cells prove only that a capsule can stand on
+/// their support; directed edges then use the character step solver to prove a
 /// wall cannot be crossed and a bounded step can be climbed. Columns and edges
 /// that `previous` holds for the same policy, range and scene are kept. This
 /// reads only; [`CollisionNavigationDelta::apply`] installs the result.
@@ -588,7 +613,7 @@ pub(super) fn derive_collision_navigation(
     for (column, supports) in to_derive.into_iter().zip(samples) {
         derived.insert(column, supports?);
     }
-    let supports_of = |column: Column| -> &[(VoxelCoord, f64)] {
+    let supports_of = |column: Column| -> &[Support] {
         match derived.get(&column) {
             Some(supports) => supports,
             None if bounds.contains(column) => previous.map_or(&[], |cache| cache.supports(column)),
@@ -598,8 +623,8 @@ pub(super) fn derive_collision_navigation(
     let support = |cell: VoxelCoord| {
         supports_of((cell.x, cell.z))
             .iter()
-            .find(|(support, _)| *support == cell)
-            .map(|&(_, height)| height)
+            .find(|support| support.cell == cell)
+            .copied()
     };
     // An edge depends on the columns it joins, and a gap jump also on the
     // columns it crosses, so a changed column changes the edges of every
@@ -619,7 +644,7 @@ pub(super) fn derive_collision_navigation(
             }
         }
     }
-    let sources: Vec<(VoxelCoord, f64)> = edge_columns
+    let sources: Vec<Support> = edge_columns
         .iter()
         .filter(|&&column| bounds.contains(column))
         .flat_map(|&column| supports_of(column).iter().copied())
@@ -628,17 +653,17 @@ pub(super) fn derive_collision_navigation(
     let near_level = |column: Column, level: i64| {
         supports_of(column)
             .iter()
-            .any(|(cell, _)| (cell.y - level).abs() <= reach)
+            .any(|support| (support.cell.y - level).abs() <= reach)
     };
-    let targets = in_parallel(&sources, |&(from, from_y)| {
-        derive_edges(scene, grid, &policy, &support, &near_level, from, from_y)
+    let targets = in_parallel(&sources, |&from| {
+        derive_edges(scene, grid, &policy, &support, &near_level, from)
     });
     let mut edges = Vec::with_capacity(sources.len());
     let mut edge_tests = 0;
-    for ((from, _), derived) in sources.into_iter().zip(targets) {
+    for (from, derived) in sources.into_iter().zip(targets) {
         let (targets, tested) = derived?;
         edge_tests += tested;
-        edges.push((from, targets));
+        edges.push((from.cell, targets));
     }
     Ok(CollisionNavigationDelta {
         key,
@@ -746,10 +771,35 @@ pub(super) struct ColumnSample {
     pub(super) overlap: Option<(CharacterCollisionSource, core_space::WorldPos)>,
 }
 
-/// The supports of one X/Z column, top down, each as its cell and the height
-/// a standing capsule's feet rest at; and whether sampling stopped at the
-/// per-column budget. With `record`, every surface hit is recorded with what
-/// became of it, and the budget flag is set only when a surface remains.
+/// One support of a column: its cell, the height a standing capsule's feet
+/// rest at, and how far across from the column's centre it stands, along X
+/// and Z.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(super) struct Support {
+    pub(super) cell: VoxelCoord,
+    pub(super) height: f64,
+    pub(super) offset: [f64; 2],
+}
+
+impl Support {
+    /// Where a standing capsule's feet rest.
+    pub(super) fn position(self, grid: VoxelGridSpec) -> core_space::WorldPos {
+        let center = grid.voxel_center_world(VoxelCoord::new(self.cell.x, 0, self.cell.z));
+        core_space::WorldPos::new(
+            center.x + self.offset[0],
+            self.height,
+            center.z + self.offset[1],
+        )
+    }
+}
+
+/// A support may stand this many eighths of a cell across from its column's
+/// centre, in steps of an eighth.
+const PLACEMENT_EIGHTHS: i32 = 3;
+
+/// The supports of one X/Z column, top down; and whether sampling stopped at
+/// the per-column budget. With `record`, every surface hit is recorded with
+/// what became of it, and the budget flag is set only when a surface remains.
 pub(super) fn sample_column(
     scene: &VoxelCollisionScene,
     grid: VoxelGridSpec,
@@ -758,23 +808,46 @@ pub(super) fn sample_column(
     x: i64,
     z: i64,
     mut record: Option<&mut Vec<ColumnSample>>,
-) -> Result<(Vec<(VoxelCoord, f64)>, bool), CharacterControllerError> {
+) -> Result<(Vec<Support>, bool), CharacterControllerError> {
     let standing = &policy.character;
     let minimum_upward_normal = f64::from(standing.surface.maximum_slope_radians).cos();
     let radius_and_skin = f64::from(standing.shape.radius + standing.shape.contact_skin);
     let center = grid.voxel_center_world(VoxelCoord::new(x, 0, z));
-    let cast = |origin_y: f64| {
-        let maximum_distance = origin_y - world_y[0] + COLLISION_NAVIGATION_EPSILON;
+    let cast_at = |at: core_space::WorldPos, origin_y: f64, floor_y: f64| {
+        let maximum_distance = origin_y - floor_y + COLLISION_NAVIGATION_EPSILON;
         scene
-            .raycast_world(
-                [center.x, origin_y, center.z],
-                [0.0, -1.0, 0.0],
-                maximum_distance,
-            )
+            .raycast_world([at.x, origin_y, at.z], [0.0, -1.0, 0.0], maximum_distance)
             .map(collision_navigation_support)
-            .filter(|&(support_y, _, _)| support_y >= world_y[0] - COLLISION_NAVIGATION_EPSILON)
+            .filter(|&(support_y, _, _)| support_y >= floor_y - COLLISION_NAVIGATION_EPSILON)
     };
-    let mut supports: Vec<(VoxelCoord, f64)> = Vec::new();
+    let cast = |origin_y: f64| cast_at(center, origin_y, world_y[0]);
+    // On a floor tilted by θ the capsule's sphere, kept its skin off the
+    // plane, rests (r + skin)(1 / cos θ - 1) higher than on flat ground.
+    let standing_on = |support_y: f64, normal_y: f64| {
+        if normal_y > 0.0 {
+            support_y + radius_and_skin * (1.0 / normal_y - 1.0)
+        } else {
+            support_y
+        }
+    };
+    let overlaps = |at: core_space::WorldPos, standing_y: f64| {
+        scene.character_capsule_intersects(collision_navigation_capsule(at, standing_y, standing))
+    };
+    // Where a capsule over the floor at `at` stands clear, if it does: a
+    // curved or filleted floor (a reconstructed surface) can rise under the
+    // capsule's rim, so it rests on it, as the character does, within one
+    // step of the support.
+    let clear_standing = |at: core_space::WorldPos, standing_y: f64| {
+        if !overlaps(at, standing_y)? {
+            return Ok(Some(standing_y));
+        }
+        match rest_height(scene, at, standing_y, standing)? {
+            Some(rest) if !overlaps(at, rest)? => Ok(Some(rest)),
+            _ => Ok::<_, CharacterControllerError>(None),
+        }
+    };
+    let step = f64::from(standing.surface.maximum_step_height);
+    let mut supports: Vec<Support> = Vec::new();
     let mut origin_y = world_y[1] + COLLISION_NAVIGATION_EPSILON;
     let mut exhausted = true;
     for _ in 0..policy.supports_per_column {
@@ -788,13 +861,7 @@ pub(super) fn sample_column(
         origin_y = scene
             .collidable_voxel_run_bottom([center.x, below, center.z], world_y[0])
             .map_or(below, |bottom| bottom - COLLISION_NAVIGATION_EPSILON);
-        // On a floor tilted by θ the capsule's sphere, kept its skin off the
-        // plane, rests (r + skin)(1 / cos θ - 1) higher than on flat ground.
-        let standing_y = if normal_y > 0.0 {
-            support_y + radius_and_skin * (1.0 / normal_y - 1.0)
-        } else {
-            support_y
-        };
+        let standing_y = standing_on(support_y, normal_y);
         let cell = grid.world_to_voxel(core_space::WorldPos::new(center.x, standing_y, center.z));
         let mut sample = ColumnSample {
             outcome: NativeCollisionNavigationSampleOutcome::Support,
@@ -805,29 +872,45 @@ pub(super) fn sample_column(
             cell,
             overlap: None,
         };
-        let overlaps = |standing_y: f64| {
-            scene.character_capsule_intersects(collision_navigation_capsule(
-                center, standing_y, standing,
-            ))
-        };
-        let mut overlapping = false;
-        if normal_y >= minimum_upward_normal && overlaps(standing_y)? {
-            // A curved or filleted floor (a reconstructed surface) can
-            // rise under the capsule's rim; rest the capsule on it, as
-            // the character does, within one step of the support.
-            match rest_height(scene, center, standing_y, standing)? {
-                Some(rest) if !overlaps(rest)? => {
-                    sample.standing_y = rest;
-                    sample.cell =
-                        grid.world_to_voxel(core_space::WorldPos::new(center.x, rest, center.z));
+        let mut placed = None;
+        if normal_y >= minimum_upward_normal {
+            let offset = placement(scene, center, standing_y, policy, grid.voxel_size())?;
+            let mut candidates = vec![offset, [offset[0], 0.0], [0.0, offset[1]], [0.0, 0.0]];
+            candidates.dedup();
+            // Off the centre the floor may lie a little higher or lower.
+            for offset in candidates {
+                let at = core_space::WorldPos::new(
+                    center.x + offset[0],
+                    standing_y,
+                    center.z + offset[1],
+                );
+                let floor = if offset == [0.0, 0.0] {
+                    Some((support_y, normal_y))
+                } else {
+                    cast_at(at, standing_y + step, standing_y - step)
+                        .filter(|&(_, normal_y, _)| normal_y >= minimum_upward_normal)
+                        .map(|(support_y, normal_y, _)| (support_y, normal_y))
+                };
+                let Some((floor_y, floor_normal_y)) = floor else {
+                    continue;
+                };
+                if let Some(rest) = clear_standing(at, standing_on(floor_y, floor_normal_y))? {
+                    placed = Some((offset, rest));
+                    break;
                 }
-                _ => overlapping = true,
             }
         }
-        let (standing_y, cell) = (sample.standing_y, sample.cell);
+        if let Some((offset, rest)) = placed {
+            sample.standing_y = rest;
+            sample.cell = grid.world_to_voxel(core_space::WorldPos::new(
+                center.x + offset[0],
+                rest,
+                center.z + offset[1],
+            ));
+        }
         if normal_y < minimum_upward_normal {
             sample.outcome = NativeCollisionNavigationSampleOutcome::TooSteep;
-        } else if overlapping {
+        } else if placed.is_none() {
             sample.outcome = NativeCollisionNavigationSampleOutcome::CapsuleOverlap;
             // Only an explanation reports what the capsule overlaps.
             if record.is_some() {
@@ -837,11 +920,15 @@ pub(super) fn sample_column(
                     ))?
                     .map(|overlap| (overlap.source, overlap.point));
             }
-        } else if supports.iter().any(|(existing, _)| *existing == cell) {
+        } else if supports.iter().any(|existing| existing.cell == sample.cell) {
             // The first support found for a cell wins, as the highest one.
             sample.outcome = NativeCollisionNavigationSampleOutcome::SameCell;
-        } else {
-            supports.push((cell, standing_y));
+        } else if let Some((offset, rest)) = placed {
+            supports.push(Support {
+                cell: sample.cell,
+                height: rest,
+                offset,
+            });
         }
         if let Some(record) = record.as_deref_mut() {
             record.push(sample);
@@ -853,6 +940,104 @@ pub(super) fn sample_column(
     Ok((supports, exhausted))
 }
 
+/// How far across from its column's centre a support standing at
+/// `standing_y` stands, along X and Z. At the centre, unless a crossing of
+/// the cell along Z (for the X offset) or X (for the Z offset), swept above
+/// the step height, is blocked there and clear beside it, as at a door jamb:
+/// then it stands in the middle of the clear crossings nearest the centre.
+/// The supports before, in and after an opening narrower than two cells so
+/// line up through it, and straight edges join them.
+fn placement(
+    scene: &VoxelCollisionScene,
+    center: core_space::WorldPos,
+    standing_y: f64,
+    policy: &CollisionNavigationPolicy,
+    cell_size: f64,
+) -> Result<[f64; 2], CharacterControllerError> {
+    let config = &policy.character;
+    let radius = f64::from(config.shape.radius);
+    // Crossings see what the step manoeuvre cannot climb: everything from
+    // the step height to the top of the standing capsule.
+    let low = standing_y
+        + f64::from(config.surface.maximum_step_height)
+        + f64::from(config.shape.contact_skin);
+    let high = standing_y + f64::from(config.shape.standing_height);
+    let probe = |x: f64, z: f64, radius: f64| {
+        let half_height = ((high - low) * 0.5 - radius).max(0.0);
+        CharacterCapsule {
+            center: core_space::WorldPos::new(x, low + radius + half_height, z),
+            half_height,
+            radius,
+        }
+    };
+    // Every crossing lies within half a cell of the centre: nothing near
+    // means the centre.
+    if !scene.character_capsule_intersects(probe(center.x, center.z, radius + cell_size * 0.5))? {
+        return Ok([0.0, 0.0]);
+    }
+    let crossing = |along_x: bool, across: f64| {
+        let half = cell_size * 0.5;
+        let at = |along: f64| {
+            if along_x {
+                probe(center.x + along, center.z + across, radius)
+            } else {
+                probe(center.x + across, center.z + along, radius)
+            }
+        };
+        // Overlap tests are far cheaper than a sweep and settle most
+        // blocked crossings: inside rock, or against a wall across the cell.
+        for along in [-half, 0.0, half] {
+            if scene.character_capsule_intersects(at(along))? {
+                return Ok(false);
+            }
+        }
+        let translation = if along_x {
+            core_space::WorldVec::new(cell_size, 0.0, 0.0)
+        } else {
+            core_space::WorldVec::new(0.0, 0.0, cell_size)
+        };
+        let start = at(-half);
+        scene
+            .cast_character_capsule(start, translation, 0.0)
+            .map(|hit| hit.is_none())
+    };
+    let mut offset = [0.0, 0.0];
+    // A crossing along Z places the support across X, and one along X
+    // across Z.
+    for (axis, along_x) in [(0, false), (1, true)] {
+        if crossing(along_x, 0.0)? {
+            continue;
+        }
+        let mut clear = Vec::new();
+        for eighth in -PLACEMENT_EIGHTHS..=PLACEMENT_EIGHTHS {
+            let across = f64::from(eighth) * cell_size / 8.0;
+            clear.push((eighth, eighth != 0 && crossing(along_x, across)?));
+        }
+        // The runs of clear crossings, by their middles; the nearest the
+        // centre wins, the lower one of two as near.
+        let mut best: Option<f64> = None;
+        let mut run_start = None;
+        for (index, &(eighth, open)) in clear.iter().enumerate() {
+            if open && run_start.is_none() {
+                run_start = Some(eighth);
+            }
+            let ends = !open || index + 1 == clear.len();
+            if let (true, Some(first)) = (ends, run_start) {
+                let last = if open { eighth } else { eighth - 1 };
+                let middle = f64::from(first + last) * 0.5 * cell_size / 8.0;
+                if best.is_none_or(|best| middle.abs() < best.abs()) {
+                    best = Some(middle);
+                }
+                run_start = None;
+            }
+        }
+        if let Some(middle) = best {
+            offset[axis] = middle;
+        }
+    }
+    Ok(offset)
+}
+
 /// The admitted edges from one support: walking edges to its neighbours,
 /// and with jumps on, jumps up a ledge too high to step onto and straight
 /// across a gap, along X or Z or with diagonal neighbours also diagonally,
@@ -862,20 +1047,20 @@ fn derive_edges(
     scene: &VoxelCollisionScene,
     grid: VoxelGridSpec,
     policy: &CollisionNavigationPolicy,
-    support: &(dyn Fn(VoxelCoord) -> Option<f64> + Sync),
+    support: &(dyn Fn(VoxelCoord) -> Option<Support> + Sync),
     near_level: &(dyn Fn(Column, i64) -> bool + Sync),
-    from: VoxelCoord,
-    from_y: f64,
+    from_support: Support,
 ) -> Result<(Vec<EdgeTarget>, u64), CharacterControllerError> {
+    let from = from_support.cell;
     let mut targets = Vec::new();
     let mut tested = 0;
-    let jump = |to: VoxelCoord, to_y: f64, tested: &mut u64| {
+    let jump = |to: Support, tested: &mut u64| {
         *tested += 1;
-        jump_outcome(scene, grid, policy, (from, from_y), (to, to_y))
+        jump_outcome(scene, grid, policy, from_support, to)
             .map(|outcome| outcome == CharacterJumpOutcome::Traversable)
     };
     for to in collision_navigation_neighbors(from, policy) {
-        let Some(to_y) = support(to) else {
+        let Some(to_support) = support(to) else {
             continue;
         };
         tested += 1;
@@ -884,14 +1069,14 @@ fn derive_edges(
         let outcome = character_edge_outcome_between_clear_supports(
             scene,
             &policy.character,
-            support_position(grid, from, from_y),
-            support_position(grid, to, to_y),
+            from_support.position(grid),
+            to_support.position(grid),
             policy.maximum_drop,
         )?;
         match outcome {
             CharacterEdgeOutcome::Traversable => targets.push(EdgeTarget { to, jump: false }),
             CharacterEdgeOutcome::RiseOverStep
-                if policy.jump.ledges && jump(to, to_y, &mut tested)? =>
+                if policy.jump.ledges && jump(to_support, &mut tested)? =>
             {
                 targets.push(EdgeTarget { to, jump: true });
             }
@@ -908,10 +1093,10 @@ fn derive_edges(
             for dy in -reach..=reach {
                 let to =
                     VoxelCoord::new(from.x + dx * distance, from.y + dy, from.z + dz * distance);
-                let Some(to_y) = support(to) else {
+                let Some(to_support) = support(to) else {
                     continue;
                 };
-                if jump(to, to_y, &mut tested)? {
+                if jump(to_support, &mut tested)? {
                     targets.push(EdgeTarget { to, jump: true });
                 }
             }
@@ -920,56 +1105,49 @@ fn derive_edges(
     Ok((targets, tested))
 }
 
-/// A jump between two supports, from their columns' centres.
+/// A jump between two supports.
 pub(super) fn jump_outcome(
     scene: &VoxelCollisionScene,
     grid: VoxelGridSpec,
     policy: &CollisionNavigationPolicy,
-    from: (VoxelCoord, f64),
-    to: (VoxelCoord, f64),
+    from: Support,
+    to: Support,
 ) -> Result<CharacterJumpOutcome, CharacterControllerError> {
-    jump_plan(scene, grid, policy, from, to).map(|plan| plan.outcome)
+    jump_plan(scene, policy, from.position(grid), to.position(grid)).map(|plan| plan.outcome)
 }
 
-/// [`jump_outcome`] with when the mover holds toward the landing.
+/// [`jump_outcome`] between two support positions, with when the mover
+/// holds toward the landing.
 pub(super) fn jump_plan(
     scene: &VoxelCollisionScene,
-    grid: VoxelGridSpec,
     policy: &CollisionNavigationPolicy,
-    (from, from_y): (VoxelCoord, f64),
-    (to, to_y): (VoxelCoord, f64),
+    from: core_space::WorldPos,
+    to: core_space::WorldPos,
 ) -> Result<CharacterJumpPlan, CharacterControllerError> {
-    let from_center = grid.voxel_center_world(VoxelCoord::new(from.x, 0, from.z));
-    let to_center = grid.voxel_center_world(VoxelCoord::new(to.x, 0, to.z));
-    character_jump_plan(
-        scene,
-        &policy.character,
-        core_space::WorldPos::new(from_center.x, from_y, from_center.z),
-        core_space::WorldPos::new(to_center.x, to_y, to_center.z),
-        policy.maximum_drop,
-    )
+    character_jump_plan(scene, &policy.character, from, to, policy.maximum_drop)
 }
 
-/// A support's world position: its column's centre at the support height.
-fn support_position(grid: VoxelGridSpec, cell: VoxelCoord, height: f64) -> core_space::WorldPos {
-    let center = grid.voxel_center_world(VoxelCoord::new(cell.x, 0, cell.z));
-    core_space::WorldPos::new(center.x, height, center.z)
+/// A support that stands off its column's centre, and where across X and Z
+/// it stands in the grid's frame.
+fn off_center(grid: VoxelGridSpec, support: &Support) -> Option<(VoxelCoord, [f64; 2])> {
+    (support.offset != [0.0, 0.0]).then(|| {
+        let at = support.position(grid);
+        (support.cell, [at.x, at.z])
+    })
 }
 
 pub(super) fn edge_outcome(
     scene: &VoxelCollisionScene,
     grid: VoxelGridSpec,
     policy: &CollisionNavigationPolicy,
-    (from, from_y): (VoxelCoord, f64),
-    (to, to_y): (VoxelCoord, f64),
+    from: Support,
+    to: Support,
 ) -> Result<CharacterEdgeOutcome, CharacterControllerError> {
-    let from_center = grid.voxel_center_world(VoxelCoord::new(from.x, 0, from.z));
-    let to_center = grid.voxel_center_world(VoxelCoord::new(to.x, 0, to.z));
     character_edge_outcome(
         scene,
         &policy.character,
-        core_space::WorldPos::new(from_center.x, from_y, from_center.z),
-        core_space::WorldPos::new(to_center.x, to_y, to_center.z),
+        from.position(grid),
+        to.position(grid),
         policy.maximum_drop,
     )
 }
@@ -1225,26 +1403,15 @@ impl RuntimeSpatialBridge {
                 cell.z,
                 None,
             )
-            .map(|(supports, _)| {
-                supports
-                    .into_iter()
-                    .find(|(support, _)| *support == cell)
-                    .map(|(_, height)| height)
-            })
+            .map(|(supports, _)| supports.into_iter().find(|support| support.cell == cell))
         };
         let (from, to) = (nav_cell(request.from), nav_cell(request.to));
         let from_y = support(from).map_err(projection_error)?;
         let to_y = support(to).map_err(projection_error)?;
-        let jump = |from_y, to_y| {
-            jump_outcome(
-                &session.scene,
-                grid,
-                &key.policy,
-                (from, from_y),
-                (to, to_y),
-            )
-            .map(native_jump_outcome)
-            .map_err(projection_error)
+        let jump = |from_support, to_support| {
+            jump_outcome(&session.scene, grid, &key.policy, from_support, to_support)
+                .map(native_jump_outcome)
+                .map_err(projection_error)
         };
         let outcome = match (from_y, to_y) {
             (None, _) => NativeCollisionNavigationEdgeOutcome::FromNotSupport,
@@ -1252,14 +1419,8 @@ impl RuntimeSpatialBridge {
             (Some(from_y), Some(to_y))
                 if collision_navigation_neighbors(from, &key.policy).any(|cell| cell == to) =>
             {
-                match edge_outcome(
-                    &session.scene,
-                    grid,
-                    &key.policy,
-                    (from, from_y),
-                    (to, to_y),
-                )
-                .map_err(projection_error)?
+                match edge_outcome(&session.scene, grid, &key.policy, from_y, to_y)
+                    .map_err(projection_error)?
                 {
                     CharacterEdgeOutcome::RiseOverStep if key.policy.jump.ledges => {
                         jump(from_y, to_y)?
@@ -1300,7 +1461,7 @@ impl RuntimeSpatialBridge {
                     .map_err(projection_error)?;
                     open = !supports
                         .iter()
-                        .any(|(cell, _)| (cell.y - from.y).abs() <= reach);
+                        .any(|support| (support.cell.y - from.y).abs() <= reach);
                 }
                 if open {
                     jump(from_y, to_y)?
@@ -1312,8 +1473,8 @@ impl RuntimeSpatialBridge {
         Ok(NativeCollisionNavigationEdgeReadout {
             outcome,
             admitted: cache.admits(from, to),
-            from_y: from_y.unwrap_or_default(),
-            to_y: to_y.unwrap_or_default(),
+            from_y: from_y.map_or(0.0, |support| support.height),
+            to_y: to_y.map_or(0.0, |support| support.height),
             navigation_revision: session.navigation_revision,
         })
     }
@@ -1991,6 +2152,113 @@ mod tests {
         scene
     }
 
+    /// A floor of 1 m voxels, its top at 1, across which runs a static-mesh
+    /// wall a quarter metre thick and 2.5 m high, its near face at
+    /// `wall_z`, with a doorway `width` wide from `door_x` and 2 m high: the
+    /// built pieces of a product on a quarter-metre grid.
+    fn doorway(door_x: f64, width: f64, wall_z: f64) -> VoxelCollisionScene {
+        const FLOOR: f64 = 1.0;
+        const THICKNESS: f64 = 0.25;
+        const HEIGHT: f64 = 2.5;
+        const HEADROOM: f64 = 2.0;
+        let floor = (-2..10).flat_map(|x| (-2..12).map(move |z| [x, 0, z]));
+        let mut scene = VoxelCollisionScene::from_solid_voxels(1.0, 16, floor).unwrap();
+        let mut positions = Vec::new();
+        let mut triangles = Vec::new();
+        let mut add_box = |min: [f64; 3], max: [f64; 3]| {
+            let first = positions.len() as u32;
+            for corner in 0..8 {
+                positions.push([
+                    if corner & 1 == 0 { min[0] } else { max[0] },
+                    if corner & 2 == 0 { min[1] } else { max[1] },
+                    if corner & 4 == 0 { min[2] } else { max[2] },
+                ]);
+            }
+            for [a, b, c, d] in [
+                [0, 2, 3, 1],
+                [4, 5, 7, 6],
+                [0, 1, 5, 4],
+                [2, 6, 7, 3],
+                [0, 4, 6, 2],
+                [1, 3, 7, 5],
+            ] {
+                triangles.push([first + a, first + b, first + c]);
+                triangles.push([first + a, first + c, first + d]);
+            }
+        };
+        let (near, far) = (wall_z, wall_z + THICKNESS);
+        add_box([-2.0, FLOOR, near], [door_x, FLOOR + HEIGHT, far]);
+        add_box([door_x + width, FLOOR, near], [10.0, FLOOR + HEIGHT, far]);
+        add_box(
+            [door_x, FLOOR + HEADROOM, near],
+            [door_x + width, FLOOR + HEIGHT, far],
+        );
+        let asset =
+            StaticMeshColliderAsset::new(StaticMeshAssetId(1), positions, triangles).unwrap();
+        scene
+            .replace_static_mesh_colliders(
+                [asset],
+                [StaticMeshColliderInstance {
+                    id: StaticMeshInstanceId(1),
+                    asset: StaticMeshAssetId(1),
+                    transform: StaticMeshTransform::IDENTITY,
+                }],
+            )
+            .unwrap();
+        scene
+    }
+
+    /// The outcome of a route from one side of [`doorway`]'s wall to the
+    /// other, away from the door along X.
+    fn through_doorway(door_x: f64, width: f64, wall_z: f64) -> NativeNavigationPathOutcome {
+        // #9735: a body of radius 0.3 and height 1.8 with its contact skin,
+        // on 1 m cells.
+        let mut config = flat_config(1.0, 1, 0.3, 1.8, 45.0);
+        let mut character = character_config(config.character).unwrap();
+        character.shape.contact_skin = 0.015;
+        character.surface.maximum_step_height = 0.5;
+        config.character = native_character_config(character);
+        config.maximum_drop = 0.5;
+        let (bridge, session) = publish_over(
+            doorway(door_x, width, wall_z),
+            config,
+            [0.0, -2.0, 0.0],
+            [8.0, 12.0, 10.0],
+        );
+        let navigation = bridge.sessions[&session.value].navigation.as_ref().unwrap();
+        let at = |x: f32, z: f32| NativeVec3 { x, y: 1.0, z };
+        evaluate_navigation_step_facts(
+            navigation,
+            NativeNavigationStepRequest {
+                session,
+                from: at(0.5, 1.5),
+                target: at(7.5, 8.5),
+                max_step_units: 1.0,
+                max_visited: 4096,
+            },
+        )
+        .0
+        .outcome
+    }
+
+    #[test]
+    fn a_one_metre_doorway_routes_at_every_quarter_metre_alignment() {
+        for door_x in [3.0, 3.25, 3.5, 3.75] {
+            for wall_z in [4.0, 4.25, 4.5, 4.75] {
+                assert_eq!(
+                    through_doorway(door_x, 1.0, wall_z),
+                    NativeNavigationPathOutcome::Reached,
+                    "door from x {door_x}, wall from z {wall_z}"
+                );
+            }
+        }
+        // An opening the body does not fit stays shut.
+        assert_eq!(
+            through_doorway(3.25, 0.6, 4.25),
+            NativeNavigationPathOutcome::NoPath
+        );
+    }
+
     /// The body #9035 reported (r 0.3, height 1.75, 50 degree slopes) with a
     /// step of `step` metres, on 1 m cells.
     fn walker(step: f32) -> NativeCollisionNavigationConfig {
@@ -2545,7 +2813,7 @@ mod tests {
             if !(1..15).contains(&x) || !(1..15).contains(&z) {
                 continue;
             }
-            for &(from, _) in supports {
+            for &Support { cell: from, .. } in supports {
                 interior += 1;
                 for (dx, dz) in [(1, 0), (0, 1), (-1, 0), (0, -1)] {
                     assert!(

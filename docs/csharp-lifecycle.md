@@ -784,9 +784,15 @@ from the session's current Engine collision scene. The request supplies a
 finite `WorldMin`/`WorldMax` volume and a `CollisionNavigationConfig`; it never
 supplies geometry. The Engine samples voxel and retained static-mesh collision
 for support and headroom, preserves supported elevations, and checks a
-standing capsule at each cell center. Directed connections between supported
-cells use the character collision capsule casts and step solver: a traversable
-floor lip can connect without admitting a thin separating wall or insufficient
+standing capsule at each cell's support. A support stands at its cell's centre
+unless a crossing of the cell along X or Z, above the step height, is blocked
+there and clear beside it, as at a door jamb: then it stands across from the
+centre (up to three eighths of a cell) in the middle of the clear crossings, so
+the supports before, in and after an opening narrower than two cells line up
+through it. A 1 m doorway on 1 m cells routes a 0.3 m body wherever it sits.
+`NextWaypoint` and `Nearest` stand on the support, off the centre where it
+is. Directed connections between supported cells use the character collision
+capsule casts and step solver: a traversable floor lip can connect without admitting a thin separating wall or insufficient
 headroom. Path, weighted-path and navigation-step queries apply these edge
 checks alongside product traversal overlays. This is a bounded route
 suggestion only: normal character collision and controls remain the authority
