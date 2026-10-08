@@ -22,7 +22,7 @@ use render_model::{
 };
 use render_projection::{
     voxel_material_id, VoxelLevelOfDetail, VoxelMaterialSlotMapping, VoxelProjectionInstance,
-    VoxelRenderProjector, VoxelScatter, VoxelScatterField,
+    VoxelRenderProjector, VoxelScatter, VoxelScatterExclusion, VoxelScatterField,
 };
 
 use crate::{
@@ -49,6 +49,9 @@ struct RetainedVoxelScenePresentation {
     coarse_distance: f64,
     /// What grows on the ground around the viewer, by the product's key.
     scatters: BTreeMap<u32, RetainedScatter>,
+    /// Boxes none of the scatters grow in, rebase-stable
+    /// (`VoxelScatterExclusion`).
+    scatter_exclusions: Arc<[VoxelScatterExclusion]>,
 }
 
 /// One scatter: the appearance it grows and its placement request. Its
@@ -260,6 +263,7 @@ impl RuntimeVoxelScenePresentationBridge {
                 base_material_count: resolved.base_material_count,
                 coarse_distance: 0.0,
                 scatters: BTreeMap::new(),
+                scatter_exclusions: Arc::default(),
             },
         );
         if let Err(error) = self.refresh(NativeVoxelScenePresentationHandle { value }) {
@@ -484,6 +488,54 @@ impl RuntimeVoxelScenePresentationBridge {
                 .hold_for_scatter(removed.appearance, false)?;
         }
         Ok(readout)
+    }
+
+    /// Replace the boxes a presentation's scatters do not grow in.
+    fn set_scatter_exclusions(
+        &mut self,
+        request: &NativeVoxelSceneScatterExclusionRequest,
+    ) -> Result<NativeVoxelScenePresentationReadout, CsharpEngineServicesError> {
+        let session = self.retained_session(request.presentation)?;
+        // SAFETY: generated C# pins this bounded typed array for the direct
+        // callback; the boxes are copied before returning.
+        let boxes = unsafe {
+            borrowed_slice(
+                request.exclusions,
+                request.exclusions_len,
+                "scatter exclusions",
+            )?
+        };
+        // The scene-space boxes are kept in the frame of the chunks' absolute
+        // cells, which a rebase does not move.
+        let origin = self.spatial.scene(session)?.world_origin().cell();
+        let absolute = |corner: NativeVec3| -> [f64; 3] {
+            let [x, y, z] = origin.map(|cell| cell as f64);
+            [
+                x + f64::from(corner.x),
+                y + f64::from(corner.y),
+                z + f64::from(corner.z),
+            ]
+        };
+        let exclusions: Arc<[VoxelScatterExclusion]> = boxes
+            .iter()
+            .map(|exclusion| VoxelScatterExclusion {
+                min: absolute(exclusion.min),
+                max: absolute(exclusion.max),
+            })
+            .collect();
+        let spatial = self.spatial.clone();
+        let staged = self.staged_mut()?;
+        let presentation = staged
+            .state
+            .presentations
+            .get_mut(&request.presentation.value)
+            .expect("presentation existence was checked above");
+        presentation.scatter_exclusions = exclusions;
+        if !presentation.scatters.is_empty() {
+            let frame = project_all_presentations(&mut staged.state, &spatial)?;
+            staged.frames.push(frame);
+        }
+        presentation_readout(request.presentation, session, &staged.state, &spatial)
     }
 
     fn retained_session(
@@ -1021,6 +1073,7 @@ fn set_levels_of_detail(state: &mut VoxelScenePresentationState) {
                     .values()
                     .map(|retained| retained.scatter.clone())
                     .collect(),
+                exclusions: presentation.scatter_exclusions.clone(),
             });
         state
             .projector
@@ -1294,6 +1347,7 @@ pub(crate) fn api(
         set_level_of_detail,
         set_scatter,
         remove_scatter,
+        set_scatter_exclusions,
     }
 }
 
@@ -1309,6 +1363,32 @@ unsafe extern "C" fn set_scatter(
     let bridge = unsafe { &mut *context.cast::<RuntimeVoxelScenePresentationBridge>() };
     let started = Instant::now();
     let result = bridge.set_scatter(unsafe { &*request });
+    let duration_us = started.elapsed().as_micros().min(u128::from(u64::MAX)) as u64;
+    bridge.record_presentation_attribution(duration_us);
+    match result {
+        Ok(readout) => {
+            unsafe { *output = readout };
+            ABI_OK
+        }
+        Err(failure) => {
+            bridge.operation_diagnostics.retain(&failure, error);
+            0
+        }
+    }
+}
+
+unsafe extern "C" fn set_scatter_exclusions(
+    context: *mut c_void,
+    request: *const NativeVoxelSceneScatterExclusionRequest,
+    output: *mut NativeVoxelScenePresentationReadout,
+    error: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    if error.is_null() || context.is_null() || request.is_null() || output.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeVoxelScenePresentationBridge>() };
+    let started = Instant::now();
+    let result = bridge.set_scatter_exclusions(unsafe { &*request });
     let duration_us = started.elapsed().as_micros().min(u128::from(u64::MAX)) as u64;
     bridge.record_presentation_attribution(duration_us);
     match result {
@@ -2033,6 +2113,44 @@ mod tests {
         );
         let call = bridge.take_staged_call().unwrap();
         bridge.commit_call(call);
+
+        // A box over chunk 0's ground keeps it bare; clearing it grows it
+        // again.
+        let total = readout.scatter_instance_count;
+        let exclude = |bridge: &mut RuntimeVoxelScenePresentationBridge,
+                       boxes: &[NativeVoxelSceneScatterExclusion]| {
+            bridge.begin_call();
+            let readout = bridge
+                .set_scatter_exclusions(&NativeVoxelSceneScatterExclusionRequest {
+                    presentation,
+                    exclusions: boxes.as_ptr(),
+                    exclusions_len: boxes.len(),
+                })
+                .unwrap();
+            let call = bridge.take_staged_call().unwrap();
+            bridge.commit_call(call);
+            readout.scatter_instance_count
+        };
+        let floor = NativeVoxelSceneScatterExclusion {
+            min: NativeVec3 {
+                x: 0.0,
+                y: 1.0,
+                z: 0.0,
+            },
+            max: NativeVec3 {
+                x: 8.0,
+                y: 3.0,
+                z: 8.0,
+            },
+        };
+        let excluded = exclude(&mut bridge, &[floor]);
+        assert!(
+            grown
+                .iter()
+                .any(|patch| patch.instances.len() as u64 == excluded),
+            "only chunk 1 grows: {excluded} of {total}"
+        );
+        assert_eq!(exclude(&mut bridge, &[]), total);
 
         // Walking to the far end places ahead and removes behind.
         bridge.begin_call();

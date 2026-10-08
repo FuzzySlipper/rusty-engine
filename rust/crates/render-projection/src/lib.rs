@@ -17,6 +17,6 @@ pub use runtime_appearance::*;
 pub use voxel::*;
 pub use voxel_object::*;
 pub use voxel_scatter::{
-    VoxelScatter, VoxelScatterError, VoxelScatterField, VoxelScatterReadout, MAX_SCATTER_DENSITY,
-    SCATTER_HYSTERESIS,
+    VoxelScatter, VoxelScatterError, VoxelScatterExclusion, VoxelScatterField, VoxelScatterReadout,
+    MAX_SCATTER_DENSITY, SCATTER_HYSTERESIS,
 };

@@ -54,6 +54,7 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     private readonly Appearance grassLook, bushLook;
     private readonly Camera camera;
     private VoxelScenePresentation? presentation;
+    private readonly List<VoxelSceneScatterExclusion> exclusions = new();
     private float grassDensity = DefaultGrassDensity, bushDensity = DefaultBushDensity, radius = DefaultRadius;
     private double admissionMs, scatterMs;
 
@@ -273,6 +274,22 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
             new(VoxelDensityEditKind.Brush, default, 0, 0, 0, 0, 0, 0, 0, VoxelDensityShape.Sphere, VoxelDensityOperation.Subtract,
                 new(x, y, z), sphere, default, default, 1, GroundSlot),
         }, ReadOnlyMemory<float>.Empty, ReadOnlyMemory<uint>.Empty));
+        return Inspect();
+    }
+
+    [DebugCommand("scatter.exclude", Description = "Keeps everything from growing in a box from one corner to the other, as under a built floor; the chunks it touches are placed again.")]
+    public string Exclude(float minX, float minY, float minZ, float maxX, float maxY, float maxZ)
+    {
+        exclusions.Add(new(new(minX, minY, minZ), new(maxX, maxY, maxZ)));
+        engine.VoxelScenePresentation.SetScatterExclusions(new(presentation!, exclusions.ToArray()));
+        return Inspect();
+    }
+
+    [DebugCommand("scatter.clearExclusions", Description = "Removes every exclusion box; the ground under them grows again.")]
+    public string ClearExclusions()
+    {
+        exclusions.Clear();
+        engine.VoxelScenePresentation.SetScatterExclusions(new(presentation!, Array.Empty<VoxelSceneScatterExclusion>()));
         return Inspect();
     }
 

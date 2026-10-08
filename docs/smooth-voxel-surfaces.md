@@ -388,6 +388,15 @@ the rest:
   follows the camera: a step that makes another chunk nearest moves the
   copies to it. A chunk the budget leaves bare is counted once and not
   sampled again until it remeshes.
+- **Keeping out.** `SetScatterExclusions(new(presentation, boxes))` replaces
+  the presentation's exclusion boxes (`VoxelSceneScatterExclusion(min, max)`,
+  axis-aligned in the scene's space), such as the ground under built floors
+  and stairs and inside walls and posts. No scatter places a copy whose base
+  falls inside a box; the ground itself is not edited. The chunks a box added
+  or removed touches are placed again, and the others keep their patches. A
+  box stays where it is when the world origin rebases, as collision meshes
+  do. A box under a floor needs to reach a little below the floor's base to
+  cover ground that dips under it.
 - **Lifetime.** The scatter keeps a copy of the material from when it was
   set, and holds the appearance: disposing the appearance while a scatter
   grows it is refused. Every mesh slot draws with the scatter's material.

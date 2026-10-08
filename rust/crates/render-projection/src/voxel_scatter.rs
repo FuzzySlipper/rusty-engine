@@ -10,6 +10,7 @@
 //! ground grows the same copies every time it comes into reach.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
 use crate::voxel::{VoxelProjectionError, VoxelRenderKey};
 use crate::StableHandleRegistry;
@@ -123,6 +124,71 @@ pub struct VoxelScatterField {
     /// The viewer, in the instance's scene space.
     pub viewer: [f64; 3],
     pub scatters: Vec<VoxelScatter>,
+    /// Boxes none of the scatters grow in.
+    pub exclusions: Arc<[VoxelScatterExclusion]>,
+}
+
+/// A box no scatter grows in, such as the ground under a built floor: a copy
+/// whose base falls inside it is not placed. Its corners are in the frame of
+/// a chunk's `origin_voxel` (a scene-space position plus the scene's world
+/// origin cell), so a rebase leaves it where it was.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct VoxelScatterExclusion {
+    pub min: [f64; 3],
+    pub max: [f64; 3],
+}
+
+impl VoxelScatterExclusion {
+    fn contains(&self, point: [f64; 3]) -> bool {
+        (0..3).all(|axis| (self.min[axis]..=self.max[axis]).contains(&point[axis]))
+    }
+
+    fn overlaps(&self, (min, max): ([f64; 3], [f64; 3])) -> bool {
+        (0..3).all(|axis| self.min[axis] <= max[axis] && min[axis] <= self.max[axis])
+    }
+
+    fn key(&self) -> [u64; 6] {
+        let [a, b, c] = self.min;
+        let [d, e, f] = self.max;
+        [a, b, c, d, e, f].map(f64::to_bits)
+    }
+}
+
+/// The boxes in one set and not the other: where growth changes when the
+/// set does.
+fn changed_exclusions(
+    before: &[VoxelScatterExclusion],
+    after: &[VoxelScatterExclusion],
+) -> Vec<VoxelScatterExclusion> {
+    let keys = |boxes: &[VoxelScatterExclusion]| -> BTreeSet<[u64; 6]> {
+        boxes.iter().map(VoxelScatterExclusion::key).collect()
+    };
+    let (before_keys, after_keys) = (keys(before), keys(after));
+    before
+        .iter()
+        .filter(|exclusion| !after_keys.contains(&exclusion.key()))
+        .chain(
+            after
+                .iter()
+                .filter(|exclusion| !before_keys.contains(&exclusion.key())),
+        )
+        .copied()
+        .collect()
+}
+
+fn same_exclusions(a: &Arc<[VoxelScatterExclusion]>, b: &Arc<[VoxelScatterExclusion]>) -> bool {
+    Arc::ptr_eq(a, b) || a[..] == b[..]
+}
+
+/// A chunk's box in the exclusions' frame, a voxel wider each way for
+/// surface that strays past it.
+fn chunk_bounds(chunk: &VoxelMeshChunk) -> ([f64; 3], [f64; 3]) {
+    let size = f64::from(chunk.voxel_size);
+    let min = std::array::from_fn(|axis| (chunk.origin_voxel[axis] as f64 - 1.0) * size);
+    let max = std::array::from_fn(|axis| {
+        (chunk.origin_voxel[axis] as f64 + f64::from(chunk.size[axis]) + 1.0) * size
+    });
+    (min, max)
 }
 
 /// A placed patch.
@@ -141,6 +207,8 @@ pub(crate) struct PatchSnapshot {
 pub(crate) struct ScatterSnapshot {
     /// The scatters the patches were placed for.
     pub scatters: Vec<VoxelScatter>,
+    /// The exclusions they were placed around.
+    pub exclusions: Arc<[VoxelScatterExclusion]>,
     /// By chunk and scatter index.
     pub patches: BTreeMap<([i64; 3], usize), PatchSnapshot>,
     /// Chunks within reach that the instance budget left bare, by scatter,
@@ -275,7 +343,9 @@ pub(crate) fn scatter_changed(
     let Some(field) = field else {
         return !snapshot.patches.is_empty();
     };
-    if field.scatters != snapshot.scatters {
+    if field.scatters != snapshot.scatters
+        || !same_exclusions(&field.exclusions, &snapshot.exclusions)
+    {
         return true;
     }
     (0..field.scatters.len()).any(|scatter| {
@@ -323,6 +393,20 @@ impl ScatterProjection<'_> {
             self.snapshot.scatters = scatters.to_vec();
             self.snapshot.over_budget.clear();
         }
+        let exclusions = field.map_or_else(Default::default, |field| field.exclusions.clone());
+        // Chunks a changed exclusion touches are placed again.
+        let moved = if rebuilt || same_exclusions(&exclusions, &self.snapshot.exclusions) {
+            Vec::new()
+        } else {
+            changed_exclusions(&self.snapshot.exclusions, &exclusions)
+        };
+        self.snapshot.exclusions = exclusions.clone();
+        let moved_over = |chunk: &VoxelMeshChunk| {
+            !moved.is_empty() && {
+                let bounds = chunk_bounds(chunk);
+                moved.iter().any(|exclusion| exclusion.overlaps(bounds))
+            }
+        };
         let mut wanted = BTreeMap::<([i64; 3], usize), &VoxelMeshChunk>::new();
         let mut placed = BTreeMap::<([i64; 3], usize), Vec<ScatterInstance>>::new();
         let mut over_budget = BTreeMap::new();
@@ -332,10 +416,13 @@ impl ScatterProjection<'_> {
                 let held = |coord: &[i64; 3]| !rebuilt && snapshot.holds(*coord, index);
                 let selection = select(scene, field, index, coarse, &held, |chunk| {
                     Some(
-                        match snapshot.known_count(chunk, index).filter(|_| !rebuilt) {
+                        match snapshot
+                            .known_count(chunk, index)
+                            .filter(|_| !rebuilt && !moved_over(chunk))
+                        {
                             Some(count) => count,
                             None => {
-                                let copies = place(chunk, scatter);
+                                let copies = place(chunk, scatter, &exclusions);
                                 let count = copies.len() as u64;
                                 placed.insert((chunk.chunk, index), copies);
                                 count
@@ -363,9 +450,9 @@ impl ScatterProjection<'_> {
             .iter()
             .filter(|(key, patch)| {
                 rebuilt
-                    || wanted
-                        .get(key)
-                        .is_none_or(|chunk| chunk.content_hash != patch.content_hash)
+                    || wanted.get(key).is_none_or(|chunk| {
+                        chunk.content_hash != patch.content_hash || moved_over(chunk)
+                    })
             })
             .map(|(key, patch)| (*key, patch.handle))
             .collect();
@@ -388,7 +475,7 @@ impl ScatterProjection<'_> {
             let scatter = &scatters[index];
             let instances = placed
                 .remove(&(coord, index))
-                .unwrap_or_else(|| place(chunk, scatter));
+                .unwrap_or_else(|| place(chunk, scatter, &exclusions));
             if instances.is_empty() {
                 self.snapshot.patches.insert(
                     (coord, index),
@@ -449,8 +536,13 @@ thread_local! {
     static PLACEMENTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-/// The copies `scatter` grows on `chunk`, in the chunk's space.
-pub(crate) fn place(chunk: &VoxelMeshChunk, scatter: &VoxelScatter) -> Vec<ScatterInstance> {
+/// The copies `scatter` grows on `chunk` outside `exclusions`, in the chunk's
+/// space.
+pub(crate) fn place(
+    chunk: &VoxelMeshChunk,
+    scatter: &VoxelScatter,
+    exclusions: &[VoxelScatterExclusion],
+) -> Vec<ScatterInstance> {
     #[cfg(test)]
     PLACEMENTS.with(|count| count.set(count.get() + 1));
     let groups: Vec<(u16, u32, u32)> = chunk
@@ -463,12 +555,18 @@ pub(crate) fn place(chunk: &VoxelMeshChunk, scatter: &VoxelScatter) -> Vec<Scatt
         return Vec::new();
     }
     let size = f64::from(chunk.voxel_size);
+    let origin: [f64; 3] = chunk.origin_voxel.map(|value| value as f64 * size);
+    let bounds = chunk_bounds(chunk);
+    let exclusions: Vec<_> = exclusions
+        .iter()
+        .filter(|exclusion| exclusion.overlaps(bounds))
+        .collect();
     let points = surface_points(
         &ChunkSurface {
             positions: &chunk.positions,
             indices: &chunk.indices,
             groups: &groups,
-            origin: chunk.origin_voxel.map(|value| value as f64 * size),
+            origin,
             band: size,
         },
         &SurfaceSampling {
@@ -479,6 +577,10 @@ pub(crate) fn place(chunk: &VoxelMeshChunk, scatter: &VoxelScatter) -> Vec<Scatt
     );
     points
         .iter()
+        .filter(|point| {
+            let base = std::array::from_fn(|axis| origin[axis] + f64::from(point.position[axis]));
+            !exclusions.iter().any(|exclusion| exclusion.contains(base))
+        })
         .take(MAX_SCATTER_PATCH_INSTANCES)
         .map(|point| {
             let draw = |salt: i64| unit(hash(point.key, salt, 0, 0)) as f32;
@@ -613,12 +715,14 @@ mod tests {
 
     struct Land {
         projector: VoxelRenderProjector,
+        exclusions: Arc<[VoxelScatterExclusion]>,
     }
 
     impl Land {
         fn new() -> Self {
             Self {
                 projector: VoxelRenderProjector::new(),
+                exclusions: Arc::default(),
             }
         }
 
@@ -633,6 +737,7 @@ mod tests {
                 Some(VoxelScatterField {
                     viewer,
                     scatters: vec![scatter],
+                    exclusions: self.exclusions.clone(),
                 }),
             );
             self.projector
@@ -661,6 +766,7 @@ mod tests {
                 Some(VoxelScatterField {
                     viewer,
                     scatters: vec![scatter],
+                    exclusions: self.exclusions.clone(),
                 }),
             );
             probe.scatter_changed(&[VoxelProjectionInstance {
@@ -921,5 +1027,67 @@ mod tests {
         let frame = land.project(&scene, [4.0 - 16.0, 4.0, 4.0], grass());
         assert!(created(&land, &frame).is_empty(), "{:?}", frame.ops.len());
         assert_eq!(destroyed(&frame), 0);
+    }
+
+    /// A box over the floor's top from (x0, z0) to (x1, z1), 2 m to 4 m up.
+    fn exclusion(x0: f64, z0: f64, x1: f64, z1: f64) -> VoxelScatterExclusion {
+        VoxelScatterExclusion {
+            min: [x0, 2.0, z0],
+            max: [x1, 4.0, z1],
+        }
+    }
+
+    #[test]
+    fn exclusions_keep_copies_out_and_changing_them_places_only_the_chunks_they_touch() {
+        let scene = floor_scene();
+        let mut land = Land::new();
+        let frame = land_project(&mut land, &scene);
+        let open = created(&land, &frame);
+        // A floor over chunk 0 from x 2 to 5 and z 1 to 6.
+        let floor = exclusion(2.0, 1.0, 5.0, 6.0);
+        land.exclusions = Arc::from([floor]);
+        assert!(land.changed(&scene, [4.0, 4.0, 4.0], grass()));
+        let frame = land_project(&mut land, &scene);
+        let built = created(&land, &frame);
+        assert_eq!(
+            built.keys().copied().collect::<Vec<_>>(),
+            [0],
+            "only chunk 0"
+        );
+        assert_eq!(destroyed(&frame), 1);
+        let inside = |copy: &ScatterInstance| floor.contains(copy.translation.map(f64::from));
+        assert!(open[&0].iter().any(inside), "grass grew there");
+        assert!(!built[&0].iter().any(inside), "and grows there no more");
+        assert_eq!(
+            built[&0],
+            open[&0]
+                .iter()
+                .filter(|copy| !inside(copy))
+                .copied()
+                .collect::<Vec<_>>(),
+            "the rest stays"
+        );
+        // The same boxes again change nothing.
+        land.exclusions = Arc::from([floor]);
+        assert!(!land.changed(&scene, [4.0, 4.0, 4.0], grass()));
+
+        // A wall along chunk 1 joins: chunk 0 keeps its patch.
+        let wall = exclusion(10.0, 0.0, 10.5, 8.0);
+        land.exclusions = Arc::from([floor, wall]);
+        let frame = land_project(&mut land, &scene);
+        assert_eq!(
+            created(&land, &frame).keys().copied().collect::<Vec<_>>(),
+            [1]
+        );
+        assert_eq!(destroyed(&frame), 1);
+
+        // Taking both down grows the open ground again.
+        land.exclusions = Arc::default();
+        let frame = land_project(&mut land, &scene);
+        assert_eq!(created(&land, &frame), open);
+    }
+
+    fn land_project(land: &mut Land, scene: &VoxelCollisionScene) -> RenderFrameDiff {
+        land.project(scene, [4.0, 4.0, 4.0], grass())
     }
 }

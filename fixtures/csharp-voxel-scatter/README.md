@@ -27,5 +27,8 @@ Live debug commands:
 - `scatter.wind <strength>`: the scene wind (`0` stills it).
 - `scatter.dig <x> <y> <z> <radius>`: subtract a sphere from the ground; the
   chunks it touches are placed again.
+- `scatter.exclude <minX> <minY> <minZ> <maxX> <maxY> <maxZ>`: keep everything
+  from growing in a box (`SetScatterExclusions`), as under a built floor;
+  `scatter.clearExclusions` removes every box.
 - `scatter.camera <x> <y> <z> <targetX> <targetY> <targetZ>`: move the camera;
   patches follow on the next update.

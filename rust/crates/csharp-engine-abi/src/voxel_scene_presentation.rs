@@ -143,6 +143,28 @@ pub struct NativeVoxelSceneScatterRemoval {
     pub scatter: u32,
 }
 
+/// A box, from `min` to `max` in the scene's space, that no scatter of a
+/// presentation grows in: a copy whose base falls inside it is not placed.
+/// It stays where it is when the world origin rebases, as the scene's
+/// collision meshes do.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeVoxelSceneScatterExclusion {
+    pub min: NativeVec3,
+    pub max: NativeVec3,
+}
+
+/// Replaces every exclusion box of a presentation's scatters, such as the
+/// ground under the product's built floors and inside its walls. The chunks
+/// a box added or removed touches are placed again.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeVoxelSceneScatterExclusionRequest {
+    pub presentation: NativeVoxelScenePresentationHandle,
+    pub exclusions: *const NativeVoxelSceneScatterExclusion,
+    pub exclusions_len: usize,
+}
+
 /// Copied provenance for one effective source-slot/face renderer selection.
 /// `material_value` identifies the selected retained Material at admission
 /// time; it is diagnostic provenance, not a live disposable handle.
@@ -247,6 +269,12 @@ pub type NativeRemoveVoxelSceneScatter = unsafe extern "C" fn(
     *mut NativeVoxelScenePresentationReadout,
     *mut NativeOperationErrorReceipt,
 ) -> i32;
+pub type NativeSetVoxelSceneScatterExclusions = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeVoxelSceneScatterExclusionRequest,
+    *mut NativeVoxelScenePresentationReadout,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
 pub type NativeReadVoxelSceneMaterialMapping = unsafe extern "C" fn(
     *mut c_void,
     NativeVoxelScenePresentationHandle,
@@ -278,4 +306,5 @@ pub struct NativeVoxelScenePresentationApi {
     pub set_level_of_detail: NativeSetVoxelSceneLevelOfDetail,
     pub set_scatter: NativeSetVoxelSceneScatter,
     pub remove_scatter: NativeRemoveVoxelSceneScatter,
+    pub set_scatter_exclusions: NativeSetVoxelSceneScatterExclusions,
 }
