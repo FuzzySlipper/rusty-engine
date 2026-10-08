@@ -137,7 +137,9 @@ Keyboard-driven products without mouselook can opt into a free cursor:
 <RustyEngineProductInputCursorMode>unlocked</RustyEngineProductInputCursorMode>
 ```
 
-The default is `pointer-lock`, for FPS-style mouselook. In `unlocked` mode,
+The default is `pointer-lock`, for FPS-style mouselook. The click that takes
+the lock only takes it: the product sees neither its press nor its release, so
+clicking into the game does not fire or use anything. In `unlocked` mode,
 clicking the world view focuses gameplay keyboard input without requesting
 pointer lock; pointer movement does not supply camera-look deltas. Marked DOM
 controls remain usable, and Engine input still owns focus loss, clearing, and
@@ -150,10 +152,11 @@ pointer lock and keeps clicks from taking it again, and
 `context.ui.setCursorMode('pointer-lock')` to return. `context.ui.cursorMode()`
 reads the current mode.
 
-Whenever the pointer is not locked, in either mode, pointer input carries the
-cursor position on the Engine canvas, normalized and bottom-left based like a
-camera viewport: `PointerButton` events have `HasPosition` set with the
-position in `X`/`Y`, and cursor movement arrives as `PointerPosition` events.
+Whenever the pointer is not locked, pointer input carries the cursor position
+on the Engine canvas, normalized and bottom-left based like a camera viewport:
+`PointerButton` events in `unlocked` mode have `HasPosition` set with the
+position in `X`/`Y`, and cursor movement in either mode arrives as
+`PointerPosition` events.
 A click with the pointer locked has no position. Pass the position to
 `CameraQueries.Ray` (with the canvas aspect from `CameraView.ReadSurface`) to
 turn a click into a world ray.

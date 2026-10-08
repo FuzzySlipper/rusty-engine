@@ -63,6 +63,7 @@ void test('a click carries its cursor position while the pointer is unlocked, an
   const documentTarget = createListenerTarget();
   const canvas = { getBoundingClientRect: () => ({ left: 0, top: 0, right: 200, bottom: 100, width: 200, height: 100 }) } as unknown as HTMLCanvasElement;
   let locked: HTMLCanvasElement | null = null;
+  let usesPointerLock = false;
   const document = {
     ...documentTarget,
     activeElement: canvas,
@@ -78,15 +79,57 @@ void test('a click carries its cursor position while the pointer is unlocked, an
     active: () => true,
     focusGameplay: () => undefined,
     gamepads: () => [],
+    usesPointerLock: () => usesPointerLock,
   });
   eventTarget.emit('pointerdown', { button: 0, clientX: 150, clientY: 80 } as PointerEvent);
   documentTarget.emit('pointerup', { button: 0, clientX: 150, clientY: 80 } as PointerEvent);
+  usesPointerLock = true;
   locked = canvas;
   eventTarget.emit('pointerdown', { button: 0, clientX: 10, clientY: 10 } as PointerEvent);
   assert.deepEqual(ingress.drain().map((entry) => 'fact' in entry ? entry.fact : entry), [
     { kind: 'pointer-button', button: 'primary', edge: 'pressed', position: { x: 0.75, y: 0.2 } },
     { kind: 'pointer-button', button: 'primary', edge: 'released', position: { x: 0.75, y: 0.2 } },
     { kind: 'pointer-button', button: 'primary', edge: 'pressed' },
+  ]);
+  ingress.dispose();
+});
+
+void test('the press that takes pointer lock reaches the product neither pressed nor released', () => {
+  const eventTarget = createListenerTarget();
+  const documentTarget = createListenerTarget();
+  const canvas = { getBoundingClientRect: () => ({ left: 0, top: 0, right: 200, bottom: 100, width: 200, height: 100 }) } as unknown as HTMLCanvasElement;
+  let locked: HTMLCanvasElement | null = null;
+  let focusRequests = 0;
+  const document = {
+    ...documentTarget,
+    activeElement: canvas,
+    get pointerLockElement() { return locked; },
+    defaultView: createListenerTarget(),
+  } as unknown as Document;
+  const ingress = createRustyApplicationInputIngress({ binding: INITIAL }, {
+    canvas: () => canvas,
+    eventTarget: eventTarget as unknown as HTMLElement,
+    document,
+    allowsGameplayInput: () => true,
+    interactionMode: () => 'gameplay',
+    active: () => true,
+    // Granted at once, as the desktop shell grants it.
+    focusGameplay: () => { focusRequests += 1; locked = canvas; },
+    gamepads: () => [],
+    usesPointerLock: () => true,
+  });
+  for (const button of [0, 2]) {
+    locked = null;
+    eventTarget.emit('pointerdown', { button, clientX: 150, clientY: 80 } as PointerEvent);
+    documentTarget.emit('pointerup', { button } as PointerEvent);
+  }
+  assert.equal(focusRequests, 2);
+  assert.deepEqual(ingress.drain(), []);
+  eventTarget.emit('pointerdown', { button: 0 } as PointerEvent);
+  documentTarget.emit('pointerup', { button: 0 } as PointerEvent);
+  assert.deepEqual(ingress.drain().map((entry) => 'fact' in entry ? entry.fact : entry), [
+    { kind: 'pointer-button', button: 'primary', edge: 'pressed' },
+    { kind: 'pointer-button', button: 'primary', edge: 'released' },
   ]);
   ingress.dispose();
 });
@@ -336,7 +379,7 @@ void test('input ingress rebaselines held keyboard and pointer state without rep
   const document = {
     ...documentTarget,
     activeElement: canvas,
-    pointerLockElement: null,
+    pointerLockElement: canvas,
     defaultView: windowTarget,
   } as unknown as Document;
   const ingress = createRustyApplicationInputIngress({ binding: INITIAL }, {

@@ -208,11 +208,15 @@ export function createRustyApplicationInputIngress(
     if (!admit(event, false)) return;
     const button = normalizePointerButton(event.button);
     if (button === null) return;
-    if (!heldPointerButtons.has(button)) {
+    // A press that takes pointer lock only takes it: the product sees
+    // neither it nor its release, which finds no held button. Decided before
+    // focusing, since the desktop shell grants a lock synchronously.
+    const acquiring = environment.usesPointerLock?.() !== false && !pointerLocked();
+    if (!acquiring && !heldPointerButtons.has(button)) {
       heldPointerButtons.add(button);
       enqueueFact(Object.freeze({ kind: 'pointer-button', button, edge: 'pressed', ...withPosition(event) }));
     }
-    if (button === 'primary') environment.focusGameplay();
+    environment.focusGameplay();
   };
   const onPointerUp = (event: PointerEvent): void => {
     if (!admit(event, true)) return;

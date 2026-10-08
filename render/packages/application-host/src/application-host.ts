@@ -503,7 +503,7 @@ function installInputArbitration(
   releaseInput: () => void,
   interactionMode: () => RustyApplicationInteractionMode,
   focusGameplay: () => void,
-  coreOwnsPrimaryFocus: boolean,
+  coreOwnsFocus: boolean,
   clearRuntimeInputForFocus: (event: FocusEvent) => void,
 ): () => void {
   const document = host.ownerDocument;
@@ -513,9 +513,9 @@ function installInputArbitration(
       releaseInput();
       return;
     }
-    if (interactionMode() === 'gameplay' && (coreOwnsPrimaryFocus || event.button !== 0)) {
-      focusGameplay();
-    }
+    // With runtime input, its ingress focuses: it must see a press before
+    // the press takes the lock.
+    if (interactionMode() === 'gameplay' && coreOwnsFocus) focusGameplay();
   };
   const onFocusIn = (event: FocusEvent): void => {
     if (!isUiTarget(event.target, uiRoot) || !isTextEntry(event.target)) return;
