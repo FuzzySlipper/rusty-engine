@@ -2176,6 +2176,44 @@ impl Renderer {
                 self.finish.resolve_particles(&mut encoder);
             }
         }
+        // Rain or snow around the camera, over the world and its particles,
+        // with the world's depth bound to hide and fade the drops.
+        let raining = self
+            .tables
+            .precipitation
+            .filter(|precipitation| precipitation.drops > 0 && world_layer);
+        if let Some(precipitation) = raining {
+            self.precipitation
+                .write(&self.gpu, &precipitation, self.animation_time);
+            let scene_depth = self.effects.scene_depth_bind_group(
+                &self.gpu.device,
+                view.target.samples,
+                view.target.depth,
+            );
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("render-wgpu precipitation"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &hdr.color,
+                    depth_slice: None,
+                    resolve_target: hdr.resolve.as_ref(),
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: self.finish.precipitation_writes(),
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            in_viewport(&mut pass);
+            pass.set_bind_group(0, &self.frame_bind_group, &[]);
+            pass.set_bind_group(2, &scene_depth, &[]);
+            self.precipitation
+                .draw(&self.gpu.device, &mut pass, hdr_format, &precipitation);
+            drop(pass);
+            self.finish.resolve_precipitation(&mut encoder);
+        }
         let draws = parts.draws + effects.draws();
         if bloom.is_some() || adapting.is_some() || shafts.is_some() {
             self.exposure_adapted |= adapting.is_some();

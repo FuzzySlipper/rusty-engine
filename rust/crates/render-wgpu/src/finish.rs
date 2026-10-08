@@ -37,6 +37,7 @@ const POST: &str = "bloom-exposure";
 const FINISH: &str = "finish";
 const PARTICLES: &str = "particles";
 const CLOUDS: &str = "clouds";
+const PRECIPITATION: &str = "precipitation";
 
 /// One size and sample count of HDR target: the colour the world draws
 /// into and the finish pass reads, and what bloom and auto exposure need of
@@ -103,6 +104,8 @@ pub(crate) struct Finish {
     particles_timer: Option<PassTimer>,
     /// The sky's cloud layer, timed in the frames that draw it.
     clouds_timer: Option<PassTimer>,
+    /// The precipitation pass, timed in the frames that draw it.
+    precipitation_timer: Option<PassTimer>,
     post_timer: Option<PassTimer>,
     finish_timer: Option<PassTimer>,
     /// The bloom and adaptation the post timer last timed.
@@ -209,6 +212,7 @@ impl Finish {
             world_timer: PassTimer::new(gpu, WORLD),
             particles_timer: PassTimer::new(gpu, PARTICLES),
             clouds_timer: PassTimer::new(gpu, CLOUDS),
+            precipitation_timer: PassTimer::new(gpu, PRECIPITATION),
             post_timer: PassTimer::new(gpu, POST),
             finish_timer: PassTimer::new(gpu, FINISH),
             timed_post: (false, false, false),
@@ -224,6 +228,7 @@ impl Finish {
             &mut self.world_timer,
             &mut self.particles_timer,
             &mut self.clouds_timer,
+            &mut self.precipitation_timer,
             &mut self.post_timer,
             &mut self.finish_timer,
         ]
@@ -484,12 +489,27 @@ impl Finish {
         }
     }
 
+    /// The precipitation pass's stamps.
+    pub fn precipitation_writes(&self) -> Option<wgpu::RenderPassTimestampWrites<'_>> {
+        self.precipitation_timer
+            .as_ref()
+            .and_then(PassTimer::render_writes)
+    }
+
+    /// After a precipitation pass, in its encoder.
+    pub fn resolve_precipitation(&mut self, encoder: &mut wgpu::CommandEncoder) {
+        if let Some(timer) = &mut self.precipitation_timer {
+            timer.resolve(encoder);
+        }
+    }
+
     /// After a view's encoder was submitted: read its timed passes back.
     pub fn submitted(&mut self) {
         for timer in [
             &mut self.world_timer,
             &mut self.particles_timer,
             &mut self.clouds_timer,
+            &mut self.precipitation_timer,
             &mut self.post_timer,
             &mut self.finish_timer,
         ]
@@ -507,6 +527,7 @@ impl Finish {
             (&self.clouds_timer, CLOUDS),
             (&self.world_timer, WORLD),
             (&self.particles_timer, PARTICLES),
+            (&self.precipitation_timer, PRECIPITATION),
             (&self.post_timer, POST),
             (&self.finish_timer, FINISH),
         ]

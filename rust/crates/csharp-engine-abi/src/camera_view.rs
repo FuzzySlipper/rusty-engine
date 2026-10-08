@@ -438,6 +438,41 @@ pub struct NativeWetnessRequest {
     pub puddles: f32,
 }
 
+/// What falls in the precipitation around the camera: thin streaks
+/// stretched along their velocity (rain; the zero default), or round flakes
+/// facing the camera (snow, ash, glitter).
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum NativePrecipitationShape {
+    #[default]
+    Streak = 0,
+    Flake = 1,
+}
+
+/// Rain or snow around the camera, drawn by the Engine with no simulation:
+/// `drops` (at most 200,000; 0 the default draws none) fall at `velocity`
+/// (world metres per second, wind included; at most 200) through a box
+/// `radius` metres to each side of the camera and `height` metres above
+/// and below it (each 1 to 500), which wraps as the camera moves so the
+/// drops stay put in the world. Each drop is `size` metres across (above 0,
+/// at most 4); a streak is as long as it travels in `streak_seconds` (0 to
+/// 1). `color` is linear radiance (0 to 16 a channel) and alpha, added to
+/// the frame when `additive`, else blended over it. No drop falls where an
+/// ambient light's sky layer says the sky is closed overhead.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativePrecipitationRequest {
+    pub drops: u32,
+    pub shape: NativePrecipitationShape,
+    pub velocity: NativeVec3,
+    pub size: f32,
+    pub streak_seconds: f32,
+    pub color: crate::NativeColor,
+    pub additive: bool,
+    pub radius: f32,
+    pub height: f32,
+}
+
 /// Which light the ambient rows give inside an indirect light volume.
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]

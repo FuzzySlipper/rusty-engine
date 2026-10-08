@@ -476,6 +476,12 @@ fn standard_radiance(
 // sky layers there (1 with none). Ambient lights cover the whole scene, so
 // in a clustered pass they are in the global list.
 fn open_sky(position: vec3<f32>, normal: vec3<f32>) -> f32 {
+    return open_sky_filtered(position, normal, 2);
+}
+
+// `open_sky` read through a (2 `radius` + 1)² filter of the sky layers: 0 for
+// one tap (a falling drop), 2 for the 5×5 the sky's light takes.
+fn open_sky_filtered(position: vec3<f32>, normal: vec3<f32>, radius: i32) -> f32 {
     var open = 1.0;
     var first = frame.counts.y;
     var count = frame.counts.x;
@@ -483,25 +489,29 @@ fn open_sky(position: vec3<f32>, normal: vec3<f32>) -> f32 {
         let global_base = frame.cluster_grid.x * frame.cluster_grid.y * frame.cluster_grid.z * CLUSTER_STRIDE;
         count = min(clusters[global_base], CLUSTER_STRIDE - 1u);
         for (var slot = 0u; slot < count; slot = slot + 1u) {
-            open = min(open, ambient_sky(clusters[global_base + 1u + slot], position, normal));
+            open = min(open, ambient_sky(clusters[global_base + 1u + slot], position, normal, radius));
         }
         return open;
     }
     for (var index = first; index < first + count; index = index + 1u) {
-        open = min(open, ambient_sky(index, position, normal));
+        open = min(open, ambient_sky(index, position, normal, radius));
     }
     return open;
 }
 
 // An ambient light's sky reaching `position` through its sky layer, or 1
 // for any other light.
-fn ambient_sky(index: u32, position: vec3<f32>, normal: vec3<f32>) -> f32 {
+fn ambient_sky(index: u32, position: vec3<f32>, normal: vec3<f32>, radius: i32) -> f32 {
     let light = lights[index];
     let sky_layer = u32(light.extra.w);
     if u32(light.color_kind.w) != 0u || sky_layer == 0u {
         return 1.0;
     }
-    return sky_visibility(sky_layer - 1u, position, normal);
+    let lookup = shadow_lookup(sky_layer - 1u, position, normal);
+    if !lookup.valid {
+        return 1.0;
+    }
+    return shadow_filter(lookup, radius, 2.0);
 }
 
 // Wet surfaces (`Frame.weather`, `CameraView.SetWetness`): a wet porous

@@ -22,6 +22,7 @@
 //! | `wind` | (single) | the scene's wind, in the frame uniform | `SetWind` |
 //! | `clouds` | (single) | the sky's cloud layer and its shade on the ground | `SetClouds` |
 //! | `wetness` | (single) | how wet the scene's surfaces are, in the frame uniform | `SetWetness` |
+//! | `precipitation` | (single) | rain or snow around the camera, drawn after the world | `SetPrecipitation` |
 //! | `sky_light` | (single) | the sky's light: the background as an environment (`sky_light.rs`) | `SetSkyLight` |
 //!
 //! | `sprites` | `RenderHandle` | membership: the nodes of kind `Sprite` | `CreateSprite`, `Destroy` (subtree) |
@@ -749,6 +750,8 @@ pub(crate) struct Tables {
     pub clouds: Option<render_model::CloudsDescriptor>,
     /// How wet the scene's surfaces are (`lighting.wgsl` `wetted`).
     pub wetness: Option<render_model::WetnessDescriptor>,
+    /// The precipitation around the camera (`precipitation.rs`).
+    pub precipitation: Option<render_model::PrecipitationDescriptor>,
     /// The indirect light volume requested (`probes.rs`).
     pub indirect_light: Option<render_model::IndirectLightDescriptor>,
     pub sky_light: Option<render_model::SkyLightDescriptor>,
@@ -791,6 +794,7 @@ impl Tables {
             wind: None,
             clouds: None,
             wetness: None,
+            precipitation: None,
             indirect_light: None,
             sky_light: None,
             dirty_nodes: HashSet::new(),

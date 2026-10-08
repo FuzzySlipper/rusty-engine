@@ -91,6 +91,10 @@ open an image with `Graphics.OpenResource`, pass its handle as `Sprite`, and set
 `SpriteFrameCount = 1` for a static sprite. Animated sprites need a positive
 frame rate. Cubes need no sprite and use zero flipbook rate.
 
+For rain or snow around the camera use `CameraView.SetPrecipitation` instead:
+a volume of up to 200,000 drops that follows the view, with no simulation
+(see `docs/lighting-and-sky.md`).
+
 Invalid descriptors raise `EngineCallException` with a named diagnostic.
 Catching an emission refusal lets the callback continue and publish its other
 output; an exception that escapes the product callback faults the lifecycle.

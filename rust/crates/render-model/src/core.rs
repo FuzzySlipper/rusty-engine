@@ -292,6 +292,79 @@ impl WetnessDescriptor {
     }
 }
 
+/// What falls in a precipitation volume (`PrecipitationDescriptor`): thin
+/// streaks stretched along their velocity (rain), or round flakes facing
+/// the camera (snow, ash, glitter).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PrecipitationShape {
+    Streak,
+    Flake,
+}
+
+/// Precipitation around the camera: `drops` (at most `MAX_DROPS`; 0 draws
+/// none) fall at `velocity` (world metres per second, wind included)
+/// through a box `radius` metres to each side of the camera and `height`
+/// metres above and below it, which wraps as the camera moves so the drops
+/// stay put in the world. Each is `size` metres across; a streak is as
+/// long as it travels in `streak_seconds`. `color` is linear radiance (0
+/// to 16 a channel) and alpha (0 to 1), added to the frame when
+/// `additive`, else blended over it. No drop falls where an ambient light's
+/// sky layer says the sky is closed overhead.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PrecipitationDescriptor {
+    pub drops: u32,
+    pub shape: PrecipitationShape,
+    pub velocity: [f32; 3],
+    pub size: f32,
+    pub streak_seconds: f32,
+    pub color: [f32; 4],
+    pub additive: bool,
+    pub radius: f32,
+    pub height: f32,
+}
+
+impl PrecipitationDescriptor {
+    /// The most drops one volume draws.
+    pub const MAX_DROPS: u32 = 200_000;
+    /// The fastest fall, metres per second.
+    pub const MAX_SPEED: f32 = 200.0;
+    /// The largest drop, metres across.
+    pub const MAX_SIZE: f32 = 4.0;
+    /// The longest streak, in seconds of travel.
+    pub const MAX_STREAK_SECONDS: f32 = 1.0;
+    /// The widest and tallest volume: half its side and half its height, in
+    /// metres.
+    pub const MAX_EXTENT: f32 = 500.0;
+    /// The largest colour channel.
+    pub const MAX_COLOR: f32 = 16.0;
+
+    /// Drops within `MAX_DROPS`; a finite velocity no faster than
+    /// `MAX_SPEED`; a size above 0 and within `MAX_SIZE`; a streak time
+    /// within `0..=MAX_STREAK_SECONDS`; colour channels within
+    /// `0..=MAX_COLOR` and alpha within `0..=1`; and a radius and height of
+    /// at least 1 m and within `MAX_EXTENT`.
+    pub fn valid(&self) -> bool {
+        let [x, y, z] = self.velocity;
+        let extent = 1.0..=Self::MAX_EXTENT;
+        self.drops <= Self::MAX_DROPS
+            && x.is_finite()
+            && y.is_finite()
+            && z.is_finite()
+            && (x * x + y * y + z * z).sqrt() <= Self::MAX_SPEED
+            && self.size > 0.0
+            && self.size <= Self::MAX_SIZE
+            && (0.0..=Self::MAX_STREAK_SECONDS).contains(&self.streak_seconds)
+            && self.color[..3]
+                .iter()
+                .all(|channel| (0.0..=Self::MAX_COLOR).contains(channel))
+            && (0.0..=1.0).contains(&self.color[3])
+            && extent.contains(&self.radius)
+            && extent.contains(&self.height)
+    }
+}
+
 /// A cloud layer drawn over the sky panorama and lit by the sun. `coverage`
 /// (0 to 1) is how much of the sky it covers; `drift` is its velocity over
 /// the ground (world x, z) in metres per second; `altitude` is the height
@@ -923,6 +996,10 @@ pub enum RenderDiff {
     SetWetness {
         wetness: Option<WetnessDescriptor>,
     },
+    /// Selects the precipitation around the camera; None stops it.
+    SetPrecipitation {
+        precipitation: Option<PrecipitationDescriptor>,
+    },
     /// The indirect light volume; `None` turns it off.
     SetIndirectLight {
         indirect_light: Option<IndirectLightDescriptor>,
@@ -1110,6 +1187,10 @@ impl RenderDiff {
                 wetness: Some(wetness),
             } if !wetness.valid() => Err(RenderOperationError::Wetness),
             Self::SetWetness { .. } => Ok(()),
+            Self::SetPrecipitation {
+                precipitation: Some(precipitation),
+            } if !precipitation.valid() => Err(RenderOperationError::Precipitation),
+            Self::SetPrecipitation { .. } => Ok(()),
             Self::SetIndirectLight {
                 indirect_light: Some(indirect_light),
             } if !indirect_light.valid() => Err(RenderOperationError::IndirectLight),
@@ -1231,6 +1312,7 @@ impl RenderDiff {
             | Self::SetWind { .. }
             | Self::SetClouds { .. }
             | Self::SetWetness { .. }
+            | Self::SetPrecipitation { .. }
             | Self::SetIndirectLight { .. }
             | Self::SetSkyLight { .. }
             | Self::SetRendererSettings { .. }
@@ -1278,6 +1360,7 @@ pub enum RenderOperationError {
     Wind,
     Clouds,
     Wetness,
+    Precipitation,
     IndirectLight,
     SkyLight,
     RendererSettings,
@@ -1359,6 +1442,7 @@ impl RenderFrameDiff {
                 | RenderDiff::SetWind { .. }
                 | RenderDiff::SetClouds { .. }
                 | RenderDiff::SetWetness { .. }
+                | RenderDiff::SetPrecipitation { .. }
                 | RenderDiff::SetIndirectLight { .. }
                 | RenderDiff::SetSkyLight { .. }
                 | RenderDiff::SetRendererSettings { .. }

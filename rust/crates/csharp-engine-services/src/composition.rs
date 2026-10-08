@@ -207,6 +207,7 @@ fn engine_api(
             set_wind: crate::camera_view::set_wind,
             set_clouds: crate::camera_view::set_clouds,
             set_wetness: crate::camera_view::set_wetness,
+            set_precipitation: crate::camera_view::set_precipitation,
             set_indirect_light: crate::camera_view::set_indirect_light,
             set_sky_light: crate::camera_view::set_sky_light,
             set_viewport_anchor: crate::camera_view::set_viewport_anchor,
@@ -1927,6 +1928,100 @@ mod tests {
         assert_eq!(
             call.take_output().frames[0].ops,
             [render_model::RenderDiff::SetWind { wind: None }]
+        );
+    }
+
+    #[test]
+    fn precipitation_publishes_as_retained_environment_and_no_drops_stops_it() {
+        use crate::operation_diagnostics::{empty_receipt, receipt_codes};
+        let mut services = EngineServiceSet::new(
+            parse_runtime_appearance_catalog(None).expect("default catalog"),
+            BTreeMap::new(),
+            None,
+            RuntimeDiagnosticsSink::new(Default::default()).unwrap(),
+        )
+        .expect("service set");
+        let request = |drops, fall: f32, size, radius| NativePrecipitationRequest {
+            drops,
+            shape: NativePrecipitationShape::Flake,
+            velocity: NativeVec3 {
+                x: 1.0,
+                y: fall,
+                z: 0.0,
+            },
+            size,
+            streak_seconds: 0.0,
+            color: NativeColor {
+                r: 1.0,
+                g: 1.0,
+                b: 1.0,
+                a: 0.8,
+            },
+            additive: true,
+            radius,
+            height: 10.0,
+        };
+        services.begin_call(binding());
+        let api = services.api();
+        let set = |request: NativePrecipitationRequest, refusal| unsafe {
+            (api.camera_view.set_precipitation)(api.camera_view.context, &request, refusal)
+        };
+        assert_eq!(
+            set(request(5_000, -1.5, 0.1, 20.0), std::ptr::null_mut()),
+            ABI_OK
+        );
+        let mut call = services.finish_call().expect("precipitation call");
+        let selected = render_model::RenderDiff::SetPrecipitation {
+            precipitation: Some(render_model::PrecipitationDescriptor {
+                drops: 5_000,
+                shape: render_model::PrecipitationShape::Flake,
+                velocity: [1.0, -1.5, 0.0],
+                size: 0.1,
+                streak_seconds: 0.0,
+                color: [1.0, 1.0, 1.0, 0.8],
+                additive: true,
+                radius: 20.0,
+                height: 10.0,
+            }),
+        };
+        assert_eq!(
+            call.take_output().frames[0].ops,
+            std::slice::from_ref(&selected)
+        );
+        let attachment = services
+            .snapshot_outputs(binding())
+            .expect("fresh attachment");
+        let CsharpAppearanceCallOutput::Frame(frame) = &attachment.appearance[0] else {
+            panic!("baseline graphics frame");
+        };
+        assert!(frame.ops.contains(&selected));
+
+        services.begin_call(binding());
+        let api = services.api();
+        let set = |request: NativePrecipitationRequest, refusal| unsafe {
+            (api.camera_view.set_precipitation)(api.camera_view.context, &request, refusal)
+        };
+        for refused in [
+            request(300_000, -1.5, 0.1, 20.0),
+            request(5_000, -500.0, 0.1, 20.0),
+            request(5_000, f32::NAN, 0.1, 20.0),
+            request(5_000, -1.5, 0.0, 20.0),
+            request(5_000, -1.5, 0.1, 0.5),
+        ] {
+            let mut refusal = empty_receipt();
+            assert_eq!(set(refused, &mut refusal), 0);
+            assert_eq!(receipt_codes(&refusal), ["CSHARP_PRECIPITATION"]);
+        }
+        assert_eq!(
+            set(request(0, -1.5, 0.1, 20.0), std::ptr::null_mut()),
+            ABI_OK
+        );
+        let mut call = services.finish_call().expect("stop");
+        assert_eq!(
+            call.take_output().frames[0].ops,
+            [render_model::RenderDiff::SetPrecipitation {
+                precipitation: None
+            }]
         );
     }
 

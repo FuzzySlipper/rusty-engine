@@ -161,6 +161,9 @@ impl Renderer {
             }
             RenderDiff::SetWind { wind } => self.tables.wind = *wind,
             RenderDiff::SetWetness { wetness } => self.tables.wetness = *wetness,
+            RenderDiff::SetPrecipitation { precipitation } => {
+                self.tables.precipitation = *precipitation;
+            }
             RenderDiff::SetClouds { clouds } => {
                 self.tables.clouds = *clouds;
                 // The cloud layer's parameters live in the sky's uniform.
@@ -2441,6 +2444,7 @@ fn op_name(op: &RenderDiff) -> &'static str {
         RenderDiff::SetWind { .. } => "setWind",
         RenderDiff::SetClouds { .. } => "setClouds",
         RenderDiff::SetWetness { .. } => "setWetness",
+        RenderDiff::SetPrecipitation { .. } => "setPrecipitation",
         RenderDiff::SetIndirectLight { .. } => "setIndirectLight",
         RenderDiff::SetSkyLight { .. } => "setSkyLight",
         RenderDiff::SetRendererSettings { .. } => "setRendererSettings",

@@ -475,6 +475,12 @@ impl Effects {
         self.formats[index].soft = Some(soft);
     }
 
+    /// The layout of the world's depth for the particle pass, single-sample
+    /// (0) and multisampled (1): the precipitation pass binds the same.
+    pub fn scene_depth_layouts(&self) -> [&wgpu::BindGroupLayout; 2] {
+        [&self.soft_layouts[0].depth, &self.soft_layouts[1].depth]
+    }
+
     /// The world's depth bound for the particle pass of a view whose depth
     /// has `samples` per pixel.
     pub fn scene_depth_bind_group(

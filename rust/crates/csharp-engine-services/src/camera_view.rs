@@ -8,9 +8,10 @@ use render_host_contracts::{
 };
 use render_model::{
     AtmosphereDescriptor, AutoExposureDescriptor, BloomDescriptor, CloudsDescriptor,
-    ColorGradingDescriptor, FogDescriptor, IndirectAmbient, IndirectLightDescriptor, RenderDiff,
-    RenderFrameDiff, SkyBackgroundDescriptor, SkyLightDescriptor, SunShaftsDescriptor,
-    ToneMappingDescriptor, ToneMappingOperator, WetnessDescriptor, WindDescriptor,
+    ColorGradingDescriptor, FogDescriptor, IndirectAmbient, IndirectLightDescriptor,
+    PrecipitationDescriptor, PrecipitationShape, RenderDiff, RenderFrameDiff,
+    SkyBackgroundDescriptor, SkyLightDescriptor, SunShaftsDescriptor, ToneMappingDescriptor,
+    ToneMappingOperator, WetnessDescriptor, WindDescriptor,
 };
 
 use crate::{
@@ -81,6 +82,7 @@ pub(crate) struct RuntimeCameraViewCall {
     pub(crate) wind: Option<Option<WindDescriptor>>,
     pub(crate) clouds: Option<Option<CloudsDescriptor>>,
     pub(crate) wetness: Option<Option<WetnessDescriptor>>,
+    pub(crate) precipitation: Option<Option<PrecipitationDescriptor>>,
     pub(crate) indirect_light: Option<Option<IndirectLightDescriptor>>,
     pub(crate) sky_light: Option<Option<SkyLightDescriptor>>,
 }
@@ -159,6 +161,7 @@ impl RuntimeCameraViewBridge {
             wind: None,
             clouds: None,
             wetness: None,
+            precipitation: None,
             indirect_light: None,
             sky_light: None,
         });
@@ -217,6 +220,7 @@ impl RuntimeCameraViewBridge {
             wind: None,
             clouds: None,
             wetness: None,
+            precipitation: None,
             indirect_light: None,
             sky_light: None,
         };
@@ -512,6 +516,7 @@ impl RuntimeCameraViewBridge {
             wind: None,
             clouds: None,
             wetness: None,
+            precipitation: None,
             indirect_light: None,
             sky_light: None,
         };
@@ -863,6 +868,39 @@ impl RuntimeCameraViewBridge {
             ));
         }
         self.staged_mut()?.wetness = Some((request.wetness > 0.0).then_some(wetness));
+        Ok(())
+    }
+
+    fn set_precipitation(
+        &mut self,
+        request: NativePrecipitationRequest,
+    ) -> Result<(), CsharpEngineServicesError> {
+        let precipitation = PrecipitationDescriptor {
+            drops: request.drops,
+            shape: match request.shape {
+                NativePrecipitationShape::Streak => PrecipitationShape::Streak,
+                NativePrecipitationShape::Flake => PrecipitationShape::Flake,
+            },
+            velocity: [request.velocity.x, request.velocity.y, request.velocity.z],
+            size: request.size,
+            streak_seconds: request.streak_seconds,
+            color: [
+                request.color.r,
+                request.color.g,
+                request.color.b,
+                request.color.a,
+            ],
+            additive: request.additive,
+            radius: request.radius,
+            height: request.height,
+        };
+        if !precipitation.valid() {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_PRECIPITATION",
+                "precipitation needs at most 200000 drops, a finite velocity of at most 200 m/s, a size above 0 and at most 4 m, a streak time within 0 to 1 s, colour channels within 0 to 16 and alpha within 0 to 1, and a radius and height within 1 to 500 m",
+            ));
+        }
+        self.staged_mut()?.precipitation = Some((request.drops > 0).then_some(precipitation));
         Ok(())
     }
 
@@ -1219,6 +1257,9 @@ pub(crate) fn environment_frame(
     }
     if let Some(wetness) = call.wetness {
         operations.push(RenderDiff::SetWetness { wetness });
+    }
+    if let Some(precipitation) = call.precipitation {
+        operations.push(RenderDiff::SetPrecipitation { precipitation });
     }
     if let Some(indirect_light) = call.indirect_light {
         operations.push(RenderDiff::SetIndirectLight { indirect_light });
@@ -1827,6 +1868,27 @@ pub(crate) unsafe extern "C" fn set_wind(
     }
     let bridge = unsafe { &mut *context.cast::<RuntimeCameraViewBridge>() };
     match bridge.set_wind(unsafe { *request }) {
+        Ok(()) => ABI_OK,
+        Err(error) => {
+            bridge.operation_diagnostics.retain(&error, operation_error);
+            0
+        }
+    }
+}
+
+pub(crate) unsafe extern "C" fn set_precipitation(
+    context: *mut c_void,
+    request: *const NativePrecipitationRequest,
+    operation_error: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    if !operation_error.is_null() {
+        unsafe { *operation_error = std::mem::zeroed() };
+    }
+    if context.is_null() || request.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeCameraViewBridge>() };
+    match bridge.set_precipitation(unsafe { *request }) {
         Ok(()) => ABI_OK,
         Err(error) => {
             bridge.operation_diagnostics.retain(&error, operation_error);

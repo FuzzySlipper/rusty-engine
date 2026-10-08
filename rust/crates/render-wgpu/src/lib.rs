@@ -42,6 +42,7 @@ mod light_clusters;
 mod particles;
 mod pipelines;
 mod post;
+mod precipitation;
 mod primitives;
 mod probes;
 mod resources;
@@ -367,6 +368,8 @@ pub struct Renderer {
     culling: culling::GpuCulling,
     composition: composition::ViewComposition,
     effects: effects::Effects,
+    /// Rain or snow around the camera (`precipitation.rs`).
+    precipitation: precipitation::Precipitation,
     particles: particles::Particles,
     labels: labels::Labels,
     video: video::Video,
@@ -444,6 +447,12 @@ impl Renderer {
                 Entry::Effects,
                 Features::default(),
             )),
+        );
+        let precipitation = precipitation::Precipitation::new(
+            device,
+            &mut layouts.shaders,
+            &layouts.frame,
+            effects.scene_depth_layouts(),
         );
         let ghost_shader = pipelines::standard(layouts.shaders.module(
             device,
@@ -524,6 +533,7 @@ impl Renderer {
             culling,
             composition: Default::default(),
             effects,
+            precipitation,
             particles: Default::default(),
             labels: Default::default(),
             video: video::Video::new(device),

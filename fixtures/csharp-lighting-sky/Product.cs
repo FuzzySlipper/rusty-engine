@@ -42,6 +42,9 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     // The cloud layer: its drift over the ground (m/s), altitude and cloud size (m), and an untinted light.
     private static readonly Vector2 CloudDrift = new(8, 3);
     private const float CloudAltitude = 1200, CloudScale = 500;
+    private static readonly Vector3 RainVelocity = new(1.5f,-14,0.5f), SnowVelocity = new(0.6f,-1.4f,0.3f);
+    private const float RainSize = 0.03f, SnowSize = 0.06f, RainStreakSeconds = 0.05f, PrecipitationRadius = 16, PrecipitationHeight = 10;
+    private static readonly Color RainColor = new(1.6f,1.7f,1.9f,0.6f), SnowColor = new(2f,2f,2.1f,0.9f);
     private static readonly Vector3 CloudTint = Vector3.One, CloudsEye = new(3.5f,8,14), CloudsTarget = new(3.5f,14,-10);
     // The torch's fire on the floor by the -x wall: a soft additive flame flipbook, soft additive embers and soft alpha smoke rising along the wall, so each sheet meets the stone without a hard edge. Seen from the fire viewpoint.
     private const ulong FlameId = 10, EmberId = 11, SmokeId = 12;
@@ -462,6 +465,16 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     {
         engine.CameraView.SetClouds(new(Math.Clamp(coverage,0,1),CloudDrift,CloudAltitude,CloudScale,CloudTint));
         engine.CameraView.UpdateCamera(new(camera,Camera(CloudsEye,CloudsTarget)));
+        return Inspect();
+    }
+    // Rain (shape 0) or snow (shape 1) around the camera: the given number of drops (0 stops it). It does not fall in the room under its roof.
+    [DebugCommand("lighting.precipitation")]
+    public string Precipitation(uint drops, uint shape)
+    {
+        bool snow = shape == 1;
+        engine.CameraView.SetPrecipitation(new(Math.Min(drops,200_000u), snow ? PrecipitationShape.Flake : PrecipitationShape.Streak,
+            snow ? SnowVelocity : RainVelocity, snow ? SnowSize : RainSize, snow ? 0f : RainStreakSeconds,
+            snow ? SnowColor : RainColor, false, PrecipitationRadius, PrecipitationHeight));
         return Inspect();
     }
     // How wet the room's lit surfaces are after rain (0 to 1; 0 dries them), with puddles on the floor (0 to 1).

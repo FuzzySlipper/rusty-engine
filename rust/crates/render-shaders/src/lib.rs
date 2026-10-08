@@ -299,6 +299,8 @@ pub enum Entry {
     /// A shadow layer's static depth restored from its cache
     /// (`shadow_restore.wgsl`).
     ShadowRestore,
+    /// Rain or snow around the camera (`precipitation.wgsl`).
+    Precipitation,
 }
 
 impl Entry {
@@ -335,6 +337,10 @@ impl Entry {
             Self::ShadowRestore => (
                 "shaders/shadow_restore.wgsl",
                 include_str!("shaders/shadow_restore.wgsl"),
+            ),
+            Self::Precipitation => (
+                "shaders/precipitation.wgsl",
+                include_str!("shaders/precipitation.wgsl"),
             ),
             Self::DistanceField => (
                 "shaders/distance_field.wgsl",
@@ -678,6 +684,7 @@ mod tests {
             Entry::DistanceField,
             Entry::WaterDepth,
             Entry::ShadowRestore,
+            Entry::Precipitation,
         ] {
             compose(&mut shaders, entry, Features::default());
         }

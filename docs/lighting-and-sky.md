@@ -838,6 +838,35 @@ engine.CameraView.SetWetness(new(Wetness: .8f, Puddles: .5f));
   state like the wind. It costs nothing while 0; while wet, each lit
   fragment reads the sky layer once more.
 
+## Precipitation
+
+Rain or snow falls around the camera:
+
+```csharp
+engine.CameraView.SetPrecipitation(new(Drops: 30_000, PrecipitationShape.Streak,
+    Velocity: new(1.5f, -14, 0.5f), Size: .03f, StreakSeconds: .05f,
+    Color: new(1.6f, 1.7f, 1.9f, .6f), Additive: false, Radius: 16, Height: 10));
+```
+
+- `Drops` (at most 200,000; 0 stops it) fall at `Velocity` (world metres per
+  second, wind included) through a box `Radius` metres to each side of the
+  camera and `Height` metres above and below it. The box is tiled across the
+  world and wraps as the camera moves, so the drops stay put in the world and
+  the density stays even. Set `Drops` each update to change how hard it falls.
+- `PrecipitationShape.Streak` draws thin streaks as long as a drop travels in
+  `StreakSeconds`, stretched along the velocity (rain).
+  `PrecipitationShape.Flake` draws round flakes facing the camera (snow, ash,
+  glitter). `Size` is a drop's width in metres.
+- `Color` is linear radiance and alpha: scale it with the time of day, as the
+  drops take no light of their own. `Additive` adds it to the frame (glints),
+  otherwise it blends over it.
+- No drop falls where an ambient light's sky layer says the sky is closed
+  overhead, so it does not rain under a roof or in a cave. Drops hide behind
+  the world and fade softly into it, and fade out toward the box's sides.
+- Nothing is simulated: each drop is one instanced quad placed by its index
+  and the presentation time, so it holds while the simulation is paused. It
+  draws in its own pass after the world, timed as `precipitation`.
+
 ## Fixture
 
 `fixtures/csharp-lighting-sky` uses the packaged SDK, a voxel room, a retained
@@ -868,6 +897,8 @@ feature with the fixture's foam and ripple textures, 0 the same slab as a
 plain blended material, below 0 clears the scene), and
 `lighting.vertexocclusion <strength>` (the room's cube vertices darkened by
 the voxels around them, with the camera on the room's far corner), and
+`lighting.precipitation <drops> <shape>` (rain, shape 0, or snow, shape 1,
+around the camera; none in the room under its roof),
 `lighting.wetness <wetness> <puddles>` (the room's surfaces wet after rain),
 `lighting.clouds <coverage>` (a drifting cloud layer over the panorama, with
 the camera up toward it; 0 clears it, and `lighting.sky` moves the sun that
