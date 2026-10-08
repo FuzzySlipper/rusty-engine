@@ -103,6 +103,10 @@ pub struct IndirectLightReadout {
     pub last_batch_bricks: u32,
     /// Bytes the last frame that uploaded bricks wrote to the texture.
     pub upload_bytes: u64,
+    /// Samples keep to their side of the walls across their cells
+    /// (`lighting.wgsl` `probe_cell_side`): hardware adapters; a software
+    /// adapter's one-read encoding samples trilinearly across them.
+    pub walls: bool,
 }
 
 /// The volume's grid as the frame uniform carries it: probes on the world
@@ -696,6 +700,7 @@ impl ProbeVolume {
         IndirectLightReadout {
             pending: self.schedule.dirty.is_some() || self.job.is_some() || pending_bricks > 0,
             bricks_pending: pending_bricks,
+            walls: self.readout.enabled && !self.compact,
             ..self.readout
         }
     }
@@ -894,6 +899,7 @@ impl ProbeVolume {
                     volume.field.filled[index] = baked.raw_valid[local];
                     volume.field.opens[index] = baked.opens[local];
                     volume.field.exits[index] = baked.exits[local];
+                    volume.field.reach[index] = baked.reach[local];
                 }
                 let dims = volume.grid.dims;
                 let lo = [0, 1, 2].map(|axis| range[axis][0].saturating_sub(1));
@@ -988,13 +994,13 @@ impl ProbeVolume {
     }
 }
 
-/// Texels a probe takes: one per colour channel, or one in the compact
-/// encoding.
+/// Texels a probe takes: one per colour channel and one for its cell's
+/// walls, or one in the compact encoding, which keeps no walls.
 fn slabs(compact: bool) -> u32 {
     if compact {
         1
     } else {
-        3
+        4
     }
 }
 

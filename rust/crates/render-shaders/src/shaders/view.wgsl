@@ -26,7 +26,9 @@
 // The indirect light volume (render-wgpu `probes`): a 3D texture of each
 // probe's four L1 irradiance coefficients (Y0, Y1 by y, z, x), the red, green
 // and blue channels' slabs following each other along its depth (one slab
-// in the compact encoding), sampled trilinearly; `Frame.probes` and
+// in the compact encoding), sampled trilinearly, then (not in the compact
+// encoding) a slab of where walls cross each probe's cell
+// (`probe_cell_side`); `Frame.probes` and
 // `Frame.probe_grid` place it.
 @group(0) @binding(11) var probes: texture_3d<f32>;
 @group(0) @binding(12) var probes_sampler: sampler;

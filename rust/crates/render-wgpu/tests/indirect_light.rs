@@ -158,6 +158,42 @@ fn a_closed_room_loses_the_ambient_sky_to_the_volume_a_floor_keeps_it_and_off_re
 }
 
 #[test]
+fn a_wall_thinner_than_the_spacing_keeps_the_sky_beyond_it_out_of_a_closed_room() {
+    // 1 m walls under probes 2 m apart that reach past them: the probes
+    // outside see the sky, and a trilinear sample at the walls' inner faces
+    // would read them across the wall.
+    let mut harness = own_lights();
+    room(&mut harness, true);
+    harness.apply(vec![
+        ambient(0.6),
+        RenderDiff::SetIndirectLight {
+            indirect_light: Some(IndirectLightDescriptor {
+                center: [0.0, 2.0, 0.0],
+                extent: [7.0, 4.0, 7.0],
+                spacing: 2.0,
+                bounces: 1,
+                ambient: IndirectAmbient::Sky,
+            }),
+        },
+    ]);
+    if !bake(&mut harness).walls {
+        // A software adapter's one-read encoding samples across walls.
+        return;
+    }
+    // Looking into a corner: two walls, the floor and the roof.
+    let (_, frame) = harness.render(&camera([2.5, 2.0, 2.5], 225.0, -10.0));
+    let mean = frame
+        .chunks(4)
+        .map(|texel| texel[..3].iter().map(|c| f64::from(*c)).sum::<f64>() / 3.0)
+        .sum::<f64>()
+        / f64::from(WIDTH * HEIGHT);
+    assert!(
+        mean < 3.0,
+        "the sky leaks through the walls: mean {mean:.2}"
+    );
+}
+
+#[test]
 fn a_torch_bounces_off_the_room_onto_a_face_it_cannot_reach() {
     let mut harness = own_lights();
     room(&mut harness, true);

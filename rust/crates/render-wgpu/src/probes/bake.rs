@@ -32,6 +32,9 @@ pub(super) struct Field {
     pub opens: Vec<Vec3>,
     /// The direction of the probe's nearest back-face hit.
     pub exits: Vec<Vec3>,
+    /// How far, in spacings, the probe's rays along +x, +y and +z travel
+    /// before they meet a surface; 1 when none does within a spacing.
+    pub reach: Vec<[f32; 3]>,
 }
 
 impl Field {
@@ -44,6 +47,7 @@ impl Field {
             filled: vec![false; probes],
             opens: vec![Vec3::ZERO; probes],
             exits: vec![Vec3::ZERO; probes],
+            reach: vec![[1.0; 3]; probes],
         }
     }
 
@@ -153,6 +157,7 @@ pub(super) struct BrickBaked {
     pub raw_valid: Vec<bool>,
     pub opens: Vec<Vec3>,
     pub exits: Vec<Vec3>,
+    pub reach: Vec<[f32; 3]>,
     /// Wall milliseconds of this brick's bake.
     pub ms: f64,
 }
@@ -206,6 +211,7 @@ pub(super) fn bake_brick(
     let mut raw_valid = vec![true; probes];
     let mut opens = vec![Vec3::ZERO; probes];
     let mut exits = vec![Vec3::ZERO; probes];
+    let mut reach = vec![[1.0_f32; 3]; probes];
     for pass in 0..bounces.max(1) {
         let (previous_sh, previous_valid) = (sh.clone(), raw_valid.clone());
         let lookup = |index: usize| -> Option<Sh> {
@@ -220,13 +226,20 @@ pub(super) fn bake_brick(
             .zip(&mut raw_valid)
             .zip(&mut opens)
             .zip(&mut exits)
+            .zip(&mut reach)
             .zip(&cells)
             .collect();
         parallel(
             &mut items,
-            |(((((records, sh), valid), open), exit), cell)| {
+            |((((((records, sh), valid), open), exit), reach), cell)| {
                 let origin = grid.position(**cell);
                 if pass == 0 {
+                    // Walls within a spacing along each axis, either face.
+                    for (axis, direction) in [Vec3::X, Vec3::Y, Vec3::Z].into_iter().enumerate() {
+                        reach[axis] = scene
+                            .trace(origin, direction, grid.spacing, false)
+                            .map_or(1.0, |(distance, _)| distance / grid.spacing);
+                    }
                     let mut backs = 0;
                     let mut open_sum = Vec3::ZERO;
                     let mut nearest_back = f32::MAX;
@@ -297,6 +310,7 @@ pub(super) fn bake_brick(
         raw_valid,
         opens,
         exits,
+        reach,
         ms: ms(started),
     }
 }
@@ -403,10 +417,11 @@ pub(super) fn dilate_region(field: &mut Field, lo: [u32; 3], hi: [u32; 3]) {
 /// probes, then green's, then blue's, each probe its four coefficients; or
 /// `compact`, one block: the ambient coefficient's colour with the vertical
 /// coefficient's luminance (`lighting.wgsl` gives it the ambient's hue; the
-/// horizontal coefficients are dropped).
+/// horizontal coefficients are dropped). Without `compact` a last block
+/// holds each probe's cell walls ([`cell_walls`]).
 pub(super) fn pack_region(field: &Field, lo: [u32; 3], hi: [u32; 3], compact: bool) -> Vec<u16> {
     let cells = cells_in([[lo[0], hi[0]], [lo[1], hi[1]], [lo[2], hi[2]]]);
-    let mut texels = Vec::with_capacity(cells.len() * 12);
+    let mut texels = Vec::with_capacity(cells.len() * 16);
     if compact {
         for cell in &cells {
             let sh = field.sh[field.grid.index(*cell)];
@@ -424,7 +439,58 @@ pub(super) fn pack_region(field: &Field, lo: [u32; 3], hi: [u32; 3], compact: bo
             }
         }
     }
+    for cell in &cells {
+        let walls = cell_walls(field, *cell);
+        for value in [walls[0], walls[1], walls[2], 0.0] {
+            texels.push(half_bits(value));
+        }
+    }
     texels
+}
+
+/// No wall across a cell's axis ([`cell_walls`]).
+pub(super) const NO_WALL: f32 = 0.0;
+
+/// Where walls cross the cell whose lowest probe is `low`, along each axis:
+/// which of the four probes of the cell's low face meet a surface along the
+/// axis within the cell (bits 1, 2, 4 and 8 for the face's corners, the
+/// next axis then the one after it varying; a probe inside geometry counts
+/// as one meeting it at the face), as the value's whole part, and
+/// the farthest of those hits as a fraction of the spacing, below 1, as its
+/// fractional part; 0 for none. `lighting.wgsl` keeps a sample on its own
+/// side of the wall by as much of the face as the hitting probes weigh at
+/// the sample, so a wall thinner than the spacing does not pass the light
+/// beyond it, and a wall with an opening keeps its light through the
+/// opening; a face's probes are shared with the neighbouring cell, so the
+/// sample stays continuous between cells.
+pub(super) fn cell_walls(field: &Field, low: [u32; 3]) -> [f32; 3] {
+    let grid = &field.grid;
+    std::array::from_fn(|axis| {
+        let (u, v) = ((axis + 1) % 3, (axis + 2) % 3);
+        let mut farthest = 0.0_f32;
+        let mut mask = 0;
+        for (bit, (du, dv)) in [(0, 0), (1, 0), (0, 1), (1, 1)].into_iter().enumerate() {
+            let mut probe = low;
+            probe[u] = (probe[u] + du).min(grid.dims[u] - 1);
+            probe[v] = (probe[v] + dv).min(grid.dims[v] - 1);
+            let index = grid.index(probe);
+            let reach = field.reach[index][axis];
+            if !field.raw_valid[index] {
+                // Inside geometry, its rays may cross no surface, and its
+                // value is a fill: it counts as a wall at the face.
+                mask |= 1 << bit;
+            } else if reach < 1.0 {
+                mask |= 1 << bit;
+                farthest = farthest.max(reach);
+            }
+        }
+        if mask == 0 {
+            NO_WALL
+        } else {
+            // Half floats keep 1/128 between 8 and 16: under 2 cm at 2 m.
+            mask as f32 + farthest.min(0.99)
+        }
+    })
 }
 
 /// Rec. 709 luminance.
@@ -573,20 +639,52 @@ mod tests {
     }
 
     #[test]
-    fn a_region_packs_its_channels_in_three_blocks_of_rows() {
+    fn a_cells_walls_name_the_face_probes_that_meet_them_and_the_farthest_hit() {
+        let grid = grid([1.0, 1.0, 1.0], 1.0);
+        let mut field = Field::new(grid);
+        field.raw_valid.fill(true);
+        // A wall across x at 0.4 from every probe of the low face of the
+        // cell at (0, 0, 0).
+        for (y, z) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
+            field.reach[grid.index([0, y, z])] = [0.4, 1.0, 1.0];
+        }
+        let walls = cell_walls(&field, [0, 0, 0]);
+        assert!((walls[0] - (15.0 + 0.4)).abs() < 1e-6, "{walls:?}");
+        assert_eq!(walls[1..], [NO_WALL, NO_WALL]);
+        // A door: the probes at y = 1 see through it; one hit farther.
+        field.reach[grid.index([0, 1, 0])] = [1.0; 3];
+        field.reach[grid.index([0, 1, 1])] = [1.0; 3];
+        field.reach[grid.index([0, 0, 1])] = [0.6, 1.0, 1.0];
+        let walls = cell_walls(&field, [0, 0, 0]);
+        // Bits: (y, z) = (0, 0) is 1 and (0, 1) is 4 (y is the next axis).
+        assert!((walls[0] - (5.0 + 0.6)).abs() < 1e-6, "{walls:?}");
+        // A probe inside geometry is a wall at the face on every axis.
+        field.raw_valid[grid.index([0, 1, 0])] = false;
+        let walls = cell_walls(&field, [0, 0, 0]);
+        assert!((walls[0] - (7.0 + 0.6)).abs() < 1e-6, "{walls:?}");
+        // It is not on the low face across y; across z it is the face's
+        // (x, y) = (0, 1) corner.
+        assert_eq!(walls[1], NO_WALL);
+        assert!((walls[2] - 4.0).abs() < 1e-6, "{walls:?}");
+    }
+
+    #[test]
+    fn a_region_packs_its_channels_and_cell_walls_in_blocks_of_rows() {
         let grid = grid([1.0, 0.5, 0.5], 1.0);
         let mut field = Field::new(grid);
+        field.raw_valid.fill(true);
         for (index, sh) in field.sh.iter_mut().enumerate() {
             *sh = [Vec3::new(index as f32, 0.0, 0.0); 4];
         }
         let texels = pack_region(&field, [1, 0, 0], [2, 1, 1], false);
-        // 2 × 2 × 2 probes, 4 halfs each, three channels.
-        assert_eq!(texels.len(), 8 * 4 * 3);
+        // 2 × 2 × 2 probes, 4 halfs each, three channels and the walls.
+        assert_eq!(texels.len(), 8 * 4 * 4);
         // The red block starts at probe (1, 0, 0) = index 1, then (2, 0, 0).
         assert_eq!(texels[0], half_bits(1.0));
         assert_eq!(texels[4], half_bits(2.0));
-        // Green and blue hold zeros.
-        assert!(texels[32..].iter().all(|t| *t == 0));
+        // Green and blue hold zeros; no probe's rays met a wall.
+        assert!(texels[32..96].iter().all(|t| *t == 0));
+        assert_eq!(texels[96..99], [half_bits(NO_WALL); 3]);
         // Compact: one block holding the ambient coefficient's colour and the
         // vertical coefficient's luminance.
         field.sh[grid.index([1, 0, 0])] = [

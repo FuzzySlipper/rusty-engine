@@ -237,11 +237,40 @@ fn probe_sh(cell: vec3<f32>, dims: vec3<f32>, d: vec3<f32>, compact: bool) -> ve
         let luminance = max(dot(a.rgb, vec3<f32>(0.2126, 0.7152, 0.0722)), 1e-4);
         return max(a.rgb * (basis.x + a.w * basis.y / luminance), vec3<f32>(0.0));
     }
-    let size = vec3<f32>(dims.x, dims.y, 3.0 * dims.z);
+    let size = vec3<f32>(dims.x, dims.y, 4.0 * dims.z);
     let r = textureSampleLevel(probes, probes_sampler, cell / size, 0.0);
     let g = textureSampleLevel(probes, probes_sampler, (cell + slab) / size, 0.0);
     let b = textureSampleLevel(probes, probes_sampler, (cell + 2.0 * slab) / size, 0.0);
     return max(vec3<f32>(dot(r, basis), dot(g, basis), dot(b, basis)), vec3<f32>(0.0));
+}
+
+// The sample `grid` (in probe cells from the first probe) kept on its side
+// of the walls across its cell. The wall slab after the irradiance slabs
+// (render-wgpu `probes` `cell_walls`) holds, per axis, which probes of the
+// cell's low face meet a wall along it (the whole part, a bit per corner)
+// and where (the fraction). On that axis the sample moves to its own side
+// of the wall by the share those probes have of it across the face, so
+// light beyond a wall thinner than the spacing does not reach it, light
+// through an opening still does, and the sample changes continuously from
+// cell to cell. One unfiltered read; hardware adapters only.
+fn probe_cell_side(grid: vec3<f32>, dims: vec3<f32>) -> vec3<f32> {
+    let low = clamp(floor(grid), vec3<f32>(0.0), max(dims - vec3<f32>(2.0), vec3<f32>(0.0)));
+    let within = grid - low;
+    let packed = textureLoad(probes, vec3<i32>(low + vec3<f32>(0.0, 0.0, 3.0 * dims.z)), 0).xyz;
+    let mask = vec3<u32>(floor(packed));
+    let wall = packed - floor(packed);
+    let side = select(vec3<f32>(0.0), vec3<f32>(1.0), within > wall);
+    // Across each axis, the face's corners vary along the next axis (u)
+    // and the one after it (v).
+    let u = within.yzx;
+    let v = within.zxy;
+    let zero = vec3<f32>(0.0);
+    let share = select(zero, (1.0 - u) * (1.0 - v), (mask & vec3<u32>(1u)) != vec3<u32>(0u))
+        + select(zero, u * (1.0 - v), (mask & vec3<u32>(2u)) != vec3<u32>(0u))
+        + select(zero, (1.0 - u) * v, (mask & vec3<u32>(4u)) != vec3<u32>(0u))
+        + select(zero, u * v, (mask & vec3<u32>(8u)) != vec3<u32>(0u));
+    let kept = mix(within, side, share);
+    return low + kept;
 }
 
 // `want_reflected` asks for the irradiance along the reflection too (metals,
@@ -262,8 +291,13 @@ fn probe_light(position: vec3<f32>, normal: vec3<f32>, reflected: vec3<f32>, wan
     if coverage <= 0.0 {
         return result;
     }
-    let cell = clamp(grid, vec3<f32>(0.0), extent) + vec3<f32>(0.5);
     let compact = mode > 2.5;
+    // The compact encoding keeps no walls: its one read is all a software
+    // adapter's world pass affords.
+    var cell = clamp(grid, vec3<f32>(0.0), extent) + vec3<f32>(0.5);
+    if !compact {
+        cell = probe_cell_side(cell - vec3<f32>(0.5), dims) + vec3<f32>(0.5);
+    }
     let floor_ambient = mode == 2.0 || mode == 4.0;
     result.diffuse = probe_sh(cell, dims, normal, compact);
     if want_reflected {

@@ -180,17 +180,27 @@ draws exactly as before.
   200 k triangles). Starting a bake while the sky's light is on reads its
   irradiance back from the device (144 bytes, a short wait on the render
   thread).
-- Trilinear sampling reads the probes within one cell of a surface, on
-  both sides of a wall thinner than the spacing: at 2 m a 1 m wall lets about
-  a fifth of the daylight beyond it onto its inner face. Where thin walls
-  matter, keep the spacing at or under their thickness (the fixture's room
-  uses 0.5 m), or thicken them.
+- Walls thinner than the spacing keep the light beyond them out. Each
+  probe's bake also casts a ray along each axis to see whether a wall lies
+  within the next spacing, and the shader moves its trilinear sample to its
+  own side of a wall across its cell, by as much of the cell's face as the
+  probes that met the wall cover there. A sample reads only probes on its
+  side of a closed wall, still reads through an opening such as a door, and
+  changes smoothly from cell to cell: a closed room with 1 m walls under
+  2 m probes stays dark in daylight, and away from walls the volume reads as
+  plain trilinear sampling does. On a software
+  adapter the one-read encoding (below) keeps no walls, so there a wall
+  thinner than the spacing still lets about a fifth of the light beyond it
+  through: keep the spacing at or under such walls' thickness if that
+  matters on software rendering.
 - It is one volume. A product moves it with the player in a large world by
   re-requesting it at a new centre; keep the spacing, extent, bounces and
   ambient the same so the move scrolls instead of starting over.
 - Per lit fragment the shader adds three trilinear reads of one small 3D
-  texture (RGBA16F, 24 bytes a probe), six for metals and under the sky's
-  light: 0.01 to 0.05 ms of world pass at 1080p on an RX 9070 XT. On a
+  texture (RGBA16F, 32 bytes a probe with its cell's walls), six for metals
+  and under the sky's light, plus one unfiltered read of the cell's walls:
+  0.01 to 0.05 ms of world pass at 1080p on an RX 9070 XT, the walls about
+  0.02 ms of it. The walls cost each probe three short rays in the bake. On a
   software adapter (llvmpipe) each filtered read costs about a twentieth of
   a cheap world pass, so there the Engine uploads a one-texel encoding
   instead, the ambient coefficient in colour and the vertical coefficient's
