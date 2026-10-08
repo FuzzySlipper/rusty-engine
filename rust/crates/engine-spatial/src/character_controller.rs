@@ -2488,16 +2488,28 @@ fn try_step(
     if lift <= f64::from(departure) {
         return Ok((None, casts));
     }
-    let raised = add_world(start, WorldVec::new(0.0, lift, 0.0));
+    let mut lift = lift;
+    let mut raised = add_world(start, WorldVec::new(0.0, lift, 0.0));
     let horizontal = Vec3::new(requested.x, 0.0, requested.z);
-    if cast_step(
-        capsule(raised),
-        vec3_world(horizontal),
-        f64::from(config.shape.contact_skin),
-    )?
-    .is_some()
-    {
-        return Ok((None, casts));
+    let forward_skin = f64::from(config.shape.contact_skin);
+    if let Some(blocked) = cast_step(capsule(raised), vec3_world(horizontal), forward_skin)? {
+        // A ceiling ahead, such as a lintel over a raised floor, can stop the
+        // forward sweep at a lift the riser does not need. A contact on the
+        // upper half of the raised capsule is that ceiling: sweep once more
+        // with the capsule's top clear of it by twice the skin.
+        if blocked.point.y <= raised.y {
+            return Ok((None, casts));
+        }
+        let raised_capsule = capsule(raised);
+        let top = raised.y + raised_capsule.half_height + raised_capsule.radius;
+        lift -= top - (blocked.point.y - 2.0 * f64::from(skin));
+        if lift <= f64::from(departure) {
+            return Ok((None, casts));
+        }
+        raised = add_world(start, WorldVec::new(0.0, lift, 0.0));
+        if cast_step(capsule(raised), vec3_world(horizontal), forward_skin)?.is_some() {
+            return Ok((None, casts));
+        }
     }
     let forward = add_world(raised, vec3_world(horizontal));
     let downward_distance = lift as f32 + config.surface.floor_snap_distance;

@@ -1399,6 +1399,93 @@ fn trench_ledge_within_step_limit_climbs_to_real_upper_support() {
     assert!(state.character_motion(entity).unwrap().grounded);
 }
 
+/// A built floor 0.4 m above the ground whose edge lies under a doorway's
+/// lintel, 2.25 m above the floor's top.
+fn ledge_under_lintel_scene() -> VoxelCollisionScene {
+    const GROUND: f64 = 1.0;
+    const LEDGE_TOP: f64 = GROUND + 0.4;
+    const LINTEL_BOTTOM: f64 = LEDGE_TOP + 2.25;
+    let mut scene = floor_scene();
+    let mut positions = Vec::new();
+    let mut triangles = Vec::new();
+    let mut add_box = |min: [f64; 3], max: [f64; 3]| {
+        let first = positions.len() as u32;
+        for corner in 0..8 {
+            positions.push([
+                if corner & 1 == 0 { min[0] } else { max[0] },
+                if corner & 2 == 0 { min[1] } else { max[1] },
+                if corner & 4 == 0 { min[2] } else { max[2] },
+            ]);
+        }
+        for [a, b, c, d] in [
+            [0, 2, 3, 1],
+            [4, 5, 7, 6],
+            [0, 1, 5, 4],
+            [2, 6, 7, 3],
+            [0, 4, 6, 2],
+            [1, 3, 7, 5],
+        ] {
+            triangles.push([first + a, first + b, first + c]);
+            triangles.push([first + a, first + c, first + d]);
+        }
+    };
+    add_box([-2.0, GROUND, -3.0], [2.0, LEDGE_TOP, -0.25]);
+    add_box(
+        [-2.0, LINTEL_BOTTOM, -0.45],
+        [2.0, LINTEL_BOTTOM + 0.5, -0.15],
+    );
+    let asset = StaticMeshColliderAsset::new(StaticMeshAssetId(43), positions, triangles).unwrap();
+    scene
+        .replace_static_mesh_colliders(
+            [asset],
+            [StaticMeshColliderInstance {
+                id: StaticMeshInstanceId(43),
+                asset: StaticMeshAssetId(43),
+                transform: StaticMeshTransform::IDENTITY,
+            }],
+        )
+        .unwrap();
+    scene
+}
+
+#[test]
+fn a_low_step_under_a_lintel_lifts_only_as_far_as_the_headroom_allows() {
+    let scene = ledge_under_lintel_scene();
+    let mut config = CharacterControllerConfig::default();
+    config.shape.standing_height = 1.75;
+    config.shape.radius = 0.3;
+    config.shape.contact_skin = 0.015;
+    config.surface.maximum_step_height = 1.05;
+    let lower = WorldPos::new(0.0, 1.0, 0.5);
+    let upper = WorldPos::new(0.0, 1.4, -0.8);
+    assert!(character_edge_is_traversable(&scene, &config, lower, upper).unwrap());
+
+    let (entity, mut state) = character_at(Vec3::new(0.0, 1.89, 1.0));
+    let mut service = CharacterControllerService::default();
+    let mut accepted_steps = 0;
+    for sequence in 1..=120 {
+        let receipt = service
+            .step(
+                &mut state,
+                &scene,
+                entity,
+                &config,
+                command(sequence, Vec2::new(0.0, 1.0)),
+            )
+            .unwrap();
+        accepted_steps += usize::from(receipt.step.is_some_and(|step| step.accepted));
+        if receipt.transform_after.translation.z < -1.0 {
+            break;
+        }
+    }
+    let transform = state.transform(entity).unwrap();
+    assert_eq!(accepted_steps, 1, "one step onto the floor");
+    assert!(
+        transform.translation.z < -1.0 && (transform.translation.y - 2.29).abs() < 0.002,
+        "walked in through the doorway onto the floor: {transform:?}"
+    );
+}
+
 #[test]
 fn thin_trailing_ledge_cannot_manufacture_an_upward_step() {
     let scene = VoxelCollisionScene::from_solid_voxels(1.0, 8, []).unwrap();
