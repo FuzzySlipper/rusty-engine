@@ -14,8 +14,6 @@ use crate::{
     content::RuntimeContentBridge,
 };
 
-const PNG_SIGNATURE: &[u8] = b"\x89PNG\r\n\x1a\n";
-
 /// One file the product granted its UI: its bytes and the content type the
 /// host serves them as.
 #[derive(Clone)]
@@ -36,6 +34,26 @@ impl UiFiles {
 
     fn lock(&self) -> std::sync::MutexGuard<'_, BTreeMap<u64, UiFile>> {
         self.0.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+/// The content type of a PNG, JPEG, GIF, WebP, AVIF or SVG image. SVG is text
+/// with no signature, so it is known by its `.svg` path.
+fn image_content_type(path: &str, bytes: &[u8]) -> Option<&'static str> {
+    if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        Some("image/png")
+    } else if bytes.starts_with(b"\xff\xd8\xff") {
+        Some("image/jpeg")
+    } else if bytes.starts_with(b"GIF8") {
+        Some("image/gif")
+    } else if bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WEBP") {
+        Some("image/webp")
+    } else if matches!(bytes.get(4..12), Some(b"ftypavif" | b"ftypavis")) {
+        Some("image/avif")
+    } else if path.to_ascii_lowercase().ends_with(".svg") {
+        Some("image/svg+xml")
+    } else {
+        None
     }
 }
 
@@ -148,15 +166,18 @@ impl RuntimeUiBridge {
         // SAFETY: pointers are valid for this synchronous callback.
         let request = unsafe { *request };
         let content = self.content(request.content, "CSHARP_UI_IMAGE_CONTENT", "image")?;
-        // The host serves these bytes as image/png.
-        if !content.bytes.starts_with(PNG_SIGNATURE) {
-            return Err(CsharpEngineServicesError::new(
-                "CSHARP_UI_IMAGE_NOT_PNG",
-                format!("C# UI image `{}` is not a PNG", content.path),
-            ));
-        }
+        // The host serves these bytes with the image's own content type.
+        let content_type = image_content_type(&content.path, &content.bytes).ok_or_else(|| {
+            CsharpEngineServicesError::new(
+                "CSHARP_UI_IMAGE_FORMAT",
+                format!(
+                    "C# UI image `{}` is not a PNG, JPEG, GIF, WebP, AVIF or SVG image",
+                    content.path
+                ),
+            )
+        })?;
         let value = self.grant(UiFile {
-            content_type: "image/png",
+            content_type,
             bytes: content.bytes,
         });
         // SAFETY: result pointer was checked above and belongs to the immediate direct call.
@@ -703,6 +724,15 @@ mod tests {
             ("skin.woff2".to_owned(), Arc::clone(&woff2)),
             ("skin.ttf".to_owned(), Arc::from(&b"\0\x01\0\0body"[..])),
             ("notes.txt".to_owned(), Arc::from(&b"text"[..])),
+            (
+                "photo.jpg".to_owned(),
+                Arc::from(&b"\xff\xd8\xff\xe0body"[..]),
+            ),
+            (
+                "icon.webp".to_owned(),
+                Arc::from(&b"RIFF\0\0\0\0WEBPVP8 "[..]),
+            ),
+            ("icon.svg".to_owned(), Arc::from(&b"<svg/>"[..])),
         ]));
         let content_api = crate::content::api(&mut content);
         let open = |path: &str| {
@@ -741,9 +771,17 @@ mod tests {
             served(portrait.value),
             Some(("image/png", Arc::clone(&png)))
         );
+        for (path, content_type) in [
+            ("photo.jpg", "image/jpeg"),
+            ("icon.webp", "image/webp"),
+            ("icon.svg", "image/svg+xml"),
+        ] {
+            image(&mut bridge, open(path), &mut handle).unwrap();
+            assert_eq!(served(handle.value).unwrap().0, content_type);
+        }
         assert_eq!(
             image(&mut bridge, open("notes.txt"), &mut handle).unwrap_err(),
-            "CSHARP_UI_IMAGE_NOT_PNG"
+            "CSHARP_UI_IMAGE_FORMAT"
         );
         assert_eq!(
             image(

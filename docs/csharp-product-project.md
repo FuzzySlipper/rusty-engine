@@ -467,14 +467,15 @@ container](#release-container); both open the same way. Closing a collection doe
 free independent GPU resources or force managed garbage collection. Bundle
 discovery does not produce URLs for DOM images or fonts.
 
-To show a bundle's or container's PNG in DOM UI (a portrait, an item icon),
+To show a bundle's or container's image in DOM UI (a portrait, an item icon),
 grant it to the UI: `UiImage image = engine.Ui.OpenImage(new
 UiImageRequest(reference))` takes an open `ContentReference` whose bytes are a
-PNG (else `CSHARP_UI_IMAGE_NOT_PNG`) and keeps them, so the reference and its
-bundle may be released. `image.Url()` is a same-origin URL the product puts in
-its projection for an `<img src>`; the host serves the PNG there until the
-product disposes the image, and answers 404 afterwards. The UI never receives
-image bytes through a projection.
+PNG, JPEG, GIF, WebP or AVIF image, or whose path ends in `.svg` (else
+`CSHARP_UI_IMAGE_FORMAT`), and keeps them, so the reference and its bundle may
+be released. `image.Url()` is a same-origin URL the product puts in its
+projection for an `<img src>`; the host serves the image there with its content
+type until the product disposes the image, and answers 404 afterwards. The UI
+never receives image bytes through a projection.
 
 A font for DOM UI (a skin's TTF, OTF, WOFF or WOFF2) is granted the same way:
 `UiFont font = engine.Ui.OpenFont(new UiFontRequest(reference))` refuses
@@ -639,6 +640,16 @@ directory, because a running worker keeps the previous files mapped until the
 supervisor replaces it. Engine JavaScript and host binaries stay in
 the runtime pack. Product UI is DOM UI and accessibility only; the Engine
 renderer owns non-UI presentation.
+
+### Files the product UI loads
+
+The host serves every file under the UI root at `product-ui/<path>`, so a
+module loads its own stylesheets, images and fonts with
+`new URL('./icons/lamp.svg', import.meta.url)`. The type comes from the
+extension, ignoring case: HTML, JavaScript, CSS, JSON and source maps, text,
+SVG, PNG, JPEG, GIF, WebP, AVIF, ICO, TTF, OTF, WOFF, WOFF2, WAV, Ogg, MP3,
+FLAC, WebM and WebAssembly. Any other file is served as
+`application/octet-stream`. A path may use letters, digits and `. - _ @ + ~`.
 
 ### Release container
 

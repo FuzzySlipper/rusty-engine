@@ -4,7 +4,7 @@ pub struct NativeUiStreamHandle {
     pub value: u64,
 }
 
-/// A PNG the product UI may show, served by the host at
+/// An image the product UI may show, served by the host at
 /// `/__rusty/product/runtime/ui-images/<value>` until it is destroyed.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -12,8 +12,9 @@ pub struct NativeUiImageHandle {
     pub value: u64,
 }
 
-/// Grants the product UI the PNG a content reference names. The image keeps
-/// its bytes, so the reference may be released afterwards.
+/// Grants the product UI the PNG, JPEG, GIF, WebP, AVIF or SVG image a content
+/// reference names. The image keeps its bytes, so the reference may be
+/// released afterwards.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeUiImageRequest {

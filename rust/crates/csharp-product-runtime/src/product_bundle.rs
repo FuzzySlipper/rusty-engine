@@ -400,17 +400,11 @@ impl ProductBundle {
         let ui_error = |error| field_error("ui.root", error);
         for path in self.source.files(&self.ui_root).map_err(ui_error)? {
             let relative = &path[self.ui_root.len() + 1..];
-            let media_type = content_type(relative).ok_or_else(|| {
-                field_error(
-                    "ui.root",
-                    format!("file `{relative}` has no admitted content type"),
-                )
-            })?;
             let bytes = self.source.read(&path).map_err(ui_error)?;
             entries.push(
                 ProductHostBundleEntry::new(
                     format!("{PRODUCT_UI_PREFIX}/{relative}"),
-                    media_type,
+                    content_type(relative),
                     bytes.into_owned(),
                 )
                 .map_err(|error| field_error("ui.root", error.to_string()))?,
@@ -896,6 +890,36 @@ mod tests {
     }
 
     #[test]
+    fn serves_every_ui_root_file_with_the_type_of_its_extension() {
+        let root = fixture_root("ui-types");
+        write_manifest(&root, "native/product.so");
+        fs::write(root.join("ui/assets/skin.ttf"), b"font").unwrap();
+        fs::write(root.join("ui/assets/Icon@2x.PNG"), b"png").unwrap();
+        fs::write(root.join("ui/assets/notes.unknown"), b"notes").unwrap();
+
+        let entries = read(&root).unwrap().browser_entries().unwrap();
+        let served = |path: &str| {
+            entries
+                .iter()
+                .find(|entry| entry.path() == path)
+                .map(|entry| entry.content_type().to_owned())
+        };
+        assert_eq!(
+            served("product-ui/assets/skin.ttf").as_deref(),
+            Some("font/ttf")
+        );
+        assert_eq!(
+            served("product-ui/assets/Icon@2x.PNG").as_deref(),
+            Some("image/png")
+        );
+        assert_eq!(
+            served("product-ui/assets/notes.unknown").as_deref(),
+            Some("application/octet-stream")
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn a_packed_product_reads_like_the_loose_one_with_native_code_beside_it() {
         let root = fixture_root("packed");
         write_manifest(&root, "native/product.so");
@@ -958,8 +982,7 @@ mod tests {
                 .into_iter()
                 .find(|entry| entry.path() == PRODUCT_HOST_BOOTSTRAP_PATH)
                 .expect("browser bootstrap exists");
-            let bootstrap: serde_json::Value =
-                serde_json::from_slice(bootstrap.bytes()).unwrap();
+            let bootstrap: serde_json::Value = serde_json::from_slice(bootstrap.bytes()).unwrap();
             assert_eq!(bootstrap["input"]["cursorMode"], mode);
             fs::remove_dir_all(root).unwrap();
         }

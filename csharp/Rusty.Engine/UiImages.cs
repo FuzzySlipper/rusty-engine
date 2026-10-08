@@ -7,7 +7,7 @@ public static class UiImageUrls
 
     /// <summary>
     /// The same-origin URL the product UI uses as an <c>&lt;img&gt;</c> source, for example
-    /// carried in a projection. The host serves the PNG there until the image is disposed,
+    /// carried in a projection. The host serves the image there until the image is disposed,
     /// and answers 404 afterwards.
     /// </summary>
     public static string Url(this UiImage image)

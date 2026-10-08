@@ -83,20 +83,6 @@ pub struct ProductHostPresentationAspect {
     pub maximum: f64,
 }
 
-fn validate_bundle_entry_metadata(
-    path: &str,
-    content_type: &str,
-) -> Result<String, ProductHostError> {
-    let path = normalize_path(path)?;
-    if !is_allowed_content_type(content_type) {
-        return Err(ProductHostError::new(
-            "PRODUCT_HOST_BUNDLE_CONTENT_TYPE",
-            "bundle resource content type is not admitted",
-        ));
-    }
-    Ok(path)
-}
-
 /// One pre-admitted immutable browser resource.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProductHostBundleEntry {
@@ -113,7 +99,7 @@ impl ProductHostBundleEntry {
     ) -> Result<Self, ProductHostError> {
         let bytes = bytes.into();
         let content_type = content_type.into();
-        let path = validate_bundle_entry_metadata(&path.into(), &content_type)?;
+        let path = normalize_path(&path.into())?;
         Ok(Self {
             path,
             content_type,
@@ -208,7 +194,12 @@ fn normalize_path(value: &str) -> Result<String, ProductHostError> {
             .any(|part| part.is_empty() || matches!(part, "." | ".."))
         || !value
             .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_' | b'/'))
+            // Bytes a browser sends unescaped in a path, since requests are
+            // matched without decoding.
+            .all(|byte| {
+                byte.is_ascii_alphanumeric()
+                    || matches!(byte, b'.' | b'-' | b'_' | b'/' | b'@' | b'+' | b'~')
+            })
     {
         return Err(ProductHostError::new(
             "PRODUCT_HOST_BUNDLE_PATH",
@@ -218,61 +209,9 @@ fn normalize_path(value: &str) -> Result<String, ProductHostError> {
     Ok(value.to_owned())
 }
 
-fn is_allowed_content_type(value: &str) -> bool {
-    matches!(
-        value,
-        "text/html; charset=utf-8"
-            | "text/javascript; charset=utf-8"
-            | "text/css; charset=utf-8"
-            | "application/json; charset=utf-8"
-            | "image/svg+xml"
-            | "image/png"
-            | "image/jpeg"
-            | "font/woff2"
-            | "audio/wav"
-            | "audio/ogg"
-            | "audio/mpeg"
-            | "audio/flac"
-            | "video/webm"
-            | "model/gltf-binary"
-            | "application/octet-stream"
-            | "application/wasm"
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::ProductHostBundleEntry;
-
-    #[test]
-    fn admits_bounded_wav_bundle_bytes_without_opening_a_product_path() {
-        let entry =
-            ProductHostBundleEntry::new("content/renderer/theme.wav", "audio/wav", vec![0_u8; 44])
-                .expect("WAV content type is an admitted immutable bundle resource");
-        assert_eq!(entry.path(), "content/renderer/theme.wav");
-        assert_eq!(entry.content_type(), "audio/wav");
-    }
-
-    #[test]
-    fn admits_bounded_packed_mesh_bundle_bytes_with_the_renderer_media_type() {
-        let entry = ProductHostBundleEntry::new(
-            "content/renderer/packed.rmesh",
-            "application/octet-stream",
-            vec![0_u8; 16],
-        )
-        .expect("packed mesh content type is an admitted immutable bundle resource");
-        assert_eq!(entry.path(), "content/renderer/packed.rmesh");
-        assert_eq!(entry.content_type(), "application/octet-stream");
-    }
-
-    #[test]
-    fn rejects_media_types_outside_the_fixed_bundle_allowlist() {
-        let error = ProductHostBundleEntry::new("content/renderer/theme.m4a", "audio/mp4", vec![1])
-            .expect_err("unadmitted media type");
-        assert!(error
-            .to_string()
-            .contains("PRODUCT_HOST_BUNDLE_CONTENT_TYPE"));
-    }
 
     #[test]
     fn bundle_accepts_large_shared_resources_and_many_entries() {

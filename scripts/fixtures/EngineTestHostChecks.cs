@@ -121,12 +121,16 @@ internal static class EngineTestHostChecks
 
         host.Call(engine =>
         {
-            // The UI gets a font file for @font-face; a picture is not a font.
+            // The UI gets a font file for @font-face and a picture for <img>; neither
+            // stands in for the other.
             using ContentReference skin = engine.Content.OpenReference(new("fonts/skin.woff2"));
             using UiFont font = engine.Ui.OpenFont(new(skin));
             Require(font.Url().StartsWith("/__rusty/product/runtime/ui-fonts/", StringComparison.Ordinal), "A UI font had no font URL.");
             using ContentReference atlas = engine.Content.OpenReference(new("textures/atlas.png"));
             ExpectRefusal(() => engine.Ui.OpenFont(new(atlas)), "CSHARP_UI_FONT_FORMAT");
+            using UiImage picture = engine.Ui.OpenImage(new(atlas));
+            Require(picture.Url().StartsWith("/__rusty/product/runtime/ui-images/", StringComparison.Ordinal), "A UI image had no image URL.");
+            ExpectRefusal(() => engine.Ui.OpenImage(new(skin)), "CSHARP_UI_IMAGE_FORMAT");
         });
 
         host.Call(engine =>

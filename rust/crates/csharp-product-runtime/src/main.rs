@@ -1477,8 +1477,7 @@ fn collect_bundle(
                 .map_err(|_| "bundle entry escaped root")?
                 .to_string_lossy()
                 .replace('\\', "/");
-            let content_type = content_type(&relative)
-                .ok_or_else(|| format!("bundle file `{relative}` has no admitted content type"))?;
+            let content_type = content_type(&relative);
             entries.push(
                 ProductHostBundleEntry::new(
                     relative,
@@ -1492,21 +1491,37 @@ fn collect_bundle(
     Ok(())
 }
 
-fn content_type(path: &str) -> Option<&'static str> {
-    match path.rsplit('.').next()? {
-        "html" => Some("text/html; charset=utf-8"),
-        "js" => Some("text/javascript; charset=utf-8"),
-        "css" => Some("text/css; charset=utf-8"),
-        "json" => Some("application/json; charset=utf-8"),
-        "svg" => Some("image/svg+xml"),
-        "png" => Some("image/png"),
-        "jpg" | "jpeg" => Some("image/jpeg"),
-        "woff2" => Some("font/woff2"),
-        "wav" => Some("audio/wav"),
-        "ogg" | "opus" => Some("audio/ogg"),
-        "mp3" => Some("audio/mpeg"),
-        "flac" => Some("audio/flac"),
-        _ => None,
+/// The type the host serves a staged browser file as, by its extension. A file
+/// the page reads some other way is served as plain bytes.
+fn content_type(path: &str) -> &'static str {
+    let extension = path
+        .rsplit_once('.')
+        .map(|(_, extension)| extension.to_ascii_lowercase())
+        .unwrap_or_default();
+    match extension.as_str() {
+        "html" => "text/html; charset=utf-8",
+        "js" | "mjs" => "text/javascript; charset=utf-8",
+        "css" => "text/css; charset=utf-8",
+        "json" | "map" => "application/json; charset=utf-8",
+        "txt" => "text/plain; charset=utf-8",
+        "svg" => "image/svg+xml",
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "avif" => "image/avif",
+        "ico" => "image/x-icon",
+        "ttf" => "font/ttf",
+        "otf" => "font/otf",
+        "woff" => "font/woff",
+        "woff2" => "font/woff2",
+        "wav" => "audio/wav",
+        "ogg" | "opus" => "audio/ogg",
+        "mp3" => "audio/mpeg",
+        "flac" => "audio/flac",
+        "webm" => "video/webm",
+        "wasm" => "application/wasm",
+        _ => "application/octet-stream",
     }
 }
 

@@ -3933,7 +3933,10 @@ fn valid_request_path(path: &str) -> bool {
         && !path.split('/').any(|part| part == "." || part == "..")
         && path.bytes().all(|byte| {
             byte.is_ascii_alphanumeric()
-                || matches!(byte, b'/' | b'.' | b'-' | b'_' | b'?' | b'&' | b'=' | b'%')
+                || matches!(
+                    byte,
+                    b'/' | b'.' | b'-' | b'_' | b'@' | b'+' | b'~' | b'?' | b'&' | b'=' | b'%'
+                )
         })
 }
 
