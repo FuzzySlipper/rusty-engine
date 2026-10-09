@@ -1122,6 +1122,10 @@ declare module "@rusty-engine/video-options/internal/video-options/src/video-opt
         readonly gameDefault: VideoOptionValue;
         /** Whether the player chose this option. */
         readonly chosen: boolean;
+        /** A change takes effect only when the game restarts. */
+        readonly restart: boolean;
+        /** What the setting costs, as measured. */
+        readonly cost: string;
         /** Why the device does not draw it as asked, in words, or null. */
         readonly refused: string | null;
     };

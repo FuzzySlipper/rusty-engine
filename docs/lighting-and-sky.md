@@ -251,6 +251,18 @@ engine.CameraView.SetSkyLight(new(Intensity: 1));
 and quality: `Read()` returns a `RendererSettingsReadout` and
 `Set(RendererSettingsRequest)` replaces every setting from the next frame,
 and `Read()` reports the change from the next product call.
+`Describe()` returns the catalogue a product's own menu is built from, the
+same one the Engine's [video options](#video-options) panel draws. Each
+`RendererSettingOptionReadout` gives:
+- the setting's id, label, group and description;
+- its kind (`Toggle`, `Choice`, or `Range` with min, max, step and unit);
+- its Engine default, requested and drawn values, as text (`true`, `4x`,
+  `none`, `0.75`);
+- its refusal;
+- whether a change needs a restart (none does);
+- its measured cost.
+
+`Choices` lists each choice setting's values and labels by option id.
 The request holds shadows on or off and their budget (0 for no limit),
 ambient occlusion (`Disabled`, `ScreenSpace` or `DistanceField`, with its
 strength and radius), antialiasing (`Off`, `Msaa2` or `Msaa4`), the render

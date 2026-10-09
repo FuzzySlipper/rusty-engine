@@ -1,6 +1,6 @@
 use std::ffi::c_void;
 
-use crate::NativeOperationErrorReceipt;
+use crate::{NativeOperationErrorReceipt, NativeUtf8Slice};
 
 /// Which pass darkens where surfaces meet.
 #[repr(u32)]
@@ -121,6 +121,78 @@ pub struct NativeRendererSettingsReadout {
     pub volumetric_clouds_refusal: NativeRendererSettingRefusal,
 }
 
+/// How a renderer setting is chosen.
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativeRendererSettingKind {
+    /// On or off: its values are `true` and `false`.
+    Toggle = 0,
+    /// One of named values (`NativeRendererSettingChoiceReadout`).
+    Choice = 1,
+    /// A number from `min` to `max` in `step`s, in `unit`.
+    Range = 2,
+}
+
+/// One renderer setting as the catalogue describes it, for a product's own
+/// menu (`RendererSettings.Describe`). Values are in their text form, as the
+/// video options and `rusty-scene-render --choose` write them: `true`, a
+/// choice's value such as `4x` or `none`, or a number.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeRendererSettingOptionReadout {
+    /// Stable identity: the video options' key for it.
+    pub id: NativeUtf8Slice,
+    pub label: NativeUtf8Slice,
+    /// Display, Quality, Lighting or Advanced.
+    pub group: NativeUtf8Slice,
+    pub description: NativeUtf8Slice,
+    pub kind: NativeRendererSettingKind,
+    pub min: f64,
+    pub max: f64,
+    pub step: f64,
+    pub unit: NativeUtf8Slice,
+    /// The Engine's default value.
+    pub engine_default: NativeUtf8Slice,
+    /// What is asked of the device: the product's value with the player's
+    /// video options over it.
+    pub requested: NativeUtf8Slice,
+    /// What draws.
+    pub value: NativeUtf8Slice,
+    /// Why the device draws it otherwise (`None` when it draws as asked).
+    pub refusal: NativeRendererSettingRefusal,
+    /// A change takes effect only when the product restarts.
+    pub restart: bool,
+    /// What it costs, as measured: a sentence for a menu.
+    pub cost: NativeUtf8Slice,
+}
+
+/// One named value of a `Choice` setting.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeRendererSettingChoiceReadout {
+    pub option_id: NativeUtf8Slice,
+    pub value: NativeUtf8Slice,
+    pub label: NativeUtf8Slice,
+}
+
+/// The renderer settings catalogue: every setting in a menu's order, and
+/// the choices of those that have them. Borrowed until the next call on this
+/// service; the generated binding copies it before returning to C#.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeRendererSettingsCatalogueResult {
+    pub options: *const NativeRendererSettingOptionReadout,
+    pub options_len: usize,
+    pub choices: *const NativeRendererSettingChoiceReadout,
+    pub choices_len: usize,
+}
+
+pub type NativeDescribeRendererSettings = unsafe extern "C" fn(
+    context: *mut c_void,
+    catalogue: *mut NativeRendererSettingsCatalogueResult,
+    operation_error: *mut NativeOperationErrorReceipt,
+) -> i32;
+
 pub type NativeReadRendererSettings = unsafe extern "C" fn(
     context: *mut c_void,
     readout: *mut NativeRendererSettingsReadout,
@@ -141,4 +213,5 @@ pub struct NativeRendererSettingsApi {
     pub context: *mut c_void,
     pub read: NativeReadRendererSettings,
     pub set: NativeSetRendererSettings,
+    pub describe: NativeDescribeRendererSettings,
 }

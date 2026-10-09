@@ -614,6 +614,20 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         engine.CameraView.SetWetness(new(Math.Clamp(wetness,0,1),Math.Clamp(puddles,0,1)));
         return Inspect();
     }
+    // The renderer settings catalogue as a product's own menu reads it (#9757): each setting's kind, Engine default, requested and drawn values, refusal, restart and cost, and its choices.
+    [DebugCommand("lighting.describe")]
+    public string Describe()
+    {
+        RendererSettingsCatalogueResult catalogue = engine.RendererSettings.Describe();
+        RendererSettingChoiceReadout[] choices = catalogue.Choices.ToArray();
+        List<string> lines = [];
+        foreach (RendererSettingOptionReadout option in catalogue.Options.Span)
+        {
+            string named = string.Join("|", choices.Where(choice => choice.OptionId == option.Id).Select(choice => choice.Value));
+            lines.Add($"{option.Id} [{option.Kind}{(named.Length > 0 ? " " + named : "")}] default={option.EngineDefault} requested={option.Requested} value={option.Value} refusal={option.Refusal} restart={option.Restart} cost={option.Cost}");
+        }
+        return string.Join("\n", lines);
+    }
     // Volumetric fog's quality, as a player's video option sets it.
     [DebugCommand("lighting.volumetric")]
     public string Volumetric(string quality)
