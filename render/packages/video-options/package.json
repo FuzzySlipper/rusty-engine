@@ -19,6 +19,7 @@
     "test:compiled": "node --test 'dist/**/*.test.js'"
   },
   "devDependencies": {
+    "@playwright/test": "^1.61.1",
     "@types/node": "^24.0.0"
   }
 }

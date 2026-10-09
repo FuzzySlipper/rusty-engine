@@ -1239,7 +1239,9 @@ declare module "@rusty-engine/video-options" {
      * draws the Engine's renderer settings catalogue (every option this Engine
      * pair has), applies a player's change at once through the product host and
      * keeps it for the install, and draws the game's own options beside them,
-     * which the game applies itself through `onChange`.
+     * which the game applies itself through `onChange`. A new catalogue or new
+     * product options update the rows in place, so the control a player is using
+     * keeps focus and position.
      */
     export function mountVideoOptions(host: HTMLElement, options?: VideoOptionsMountOptions): Promise<VideoOptionsMount>;
 }

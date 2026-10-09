@@ -620,10 +620,14 @@ const panel = await mountVideoOptions(menuElement, {
 ```
 
 The game applies its own options (through its intents, as any UI action)
-and calls `panel.setProductOptions` with their new values. The panel is
-styled by its `rusty-video-options*` classes and the
-`--rusty-video-options-*` custom properties on `.rusty-video-options`
-(background, foreground, muted, accent, border, warning, radius, font). It
+and calls `panel.setProductOptions` with their new values. A new catalogue
+(after a change, `refresh`, or another page's change) and new product options
+update the rows in place. The control a player is using keeps keyboard focus
+and its value, so arrow keys and a controller keep stepping it. The panel is
+styled by its `rusty-video-options*` classes and the `--rusty-video-options-*`
+custom properties (background, foreground, muted, accent, border, warning,
+radius, font), set on `.rusty-video-options` or any ancestor, such as the
+element the game mounts it in. It
 talks only to the product host's `/__rusty/product/runtime/video-options`
 route; the game's C# need not take part. A pair update brings the options
 that pair adds, with no change to the game; ids in `hide` or `labels` that
