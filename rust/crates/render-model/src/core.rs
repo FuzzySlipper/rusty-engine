@@ -334,7 +334,10 @@ impl VolumetricFogDescriptor {
     pub fn valid(&self) -> bool {
         let finite = |value: f32| value.is_finite();
         (0.0..=1.0).contains(&self.density)
-            && self.albedo.iter().all(|channel| (0.0..=1.0).contains(channel))
+            && self
+                .albedo
+                .iter()
+                .all(|channel| (0.0..=1.0).contains(channel))
             && (-0.9..=0.9).contains(&self.anisotropy)
             && finite(self.base_height)
             && finite(self.falloff_height)
@@ -399,10 +402,19 @@ impl FogVolumeDescriptor {
         finite(&self.center)
             && finite(&self.noise_velocity)
             && self.yaw_degrees.is_finite()
-            && self.half_extents.iter().all(|half| *half > 0.0 && *half <= 10_000.0)
+            && self
+                .half_extents
+                .iter()
+                .all(|half| *half > 0.0 && *half <= 10_000.0)
             && (0.0..=4.0).contains(&self.density)
-            && self.albedo.iter().all(|channel| (0.0..=1.0).contains(channel))
-            && self.emission.iter().all(|channel| (0.0..=16.0).contains(channel))
+            && self
+                .albedo
+                .iter()
+                .all(|channel| (0.0..=1.0).contains(channel))
+            && self
+                .emission
+                .iter()
+                .all(|channel| (0.0..=16.0).contains(channel))
             && (0.0..=1.0).contains(&self.edge)
             && self.noise_scale.is_finite()
             && self.noise_scale >= 0.0
@@ -1366,7 +1378,9 @@ impl RenderDiff {
                 wetness: Some(wetness),
             } if !wetness.valid() => Err(RenderOperationError::Wetness),
             Self::SetWetness { .. } => Ok(()),
-            Self::SetVolumetricFog { fog } if !fog.valid() => Err(RenderOperationError::VolumetricFog),
+            Self::SetVolumetricFog { fog } if !fog.valid() => {
+                Err(RenderOperationError::VolumetricFog)
+            }
             Self::SetVolumetricFog { .. } => Ok(()),
             Self::SetFogVolume { volume, .. } if !volume.valid() => {
                 Err(RenderOperationError::FogVolume)

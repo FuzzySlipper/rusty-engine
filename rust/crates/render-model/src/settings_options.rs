@@ -466,10 +466,34 @@ impl RendererSettingsOverrides {
     /// The choices a preset makes, over the player's others.
     pub fn preset(id: &str) -> Option<Self> {
         let (scale, antialiasing, budget, occlusion, fog) = match id {
-            "low" => (0.75, 1, Some(4), AmbientOcclusionMode::Disabled, VolumetricFogQuality::Off),
-            "medium" => (1.0, 2, Some(8), AmbientOcclusionMode::ScreenSpace, VolumetricFogQuality::Off),
-            "high" => (1.0, 4, Some(16), AmbientOcclusionMode::ScreenSpace, VolumetricFogQuality::Low),
-            "ultra" => (1.0, 4, None, AmbientOcclusionMode::ScreenSpace, VolumetricFogQuality::High),
+            "low" => (
+                0.75,
+                1,
+                Some(4),
+                AmbientOcclusionMode::Disabled,
+                VolumetricFogQuality::Off,
+            ),
+            "medium" => (
+                1.0,
+                2,
+                Some(8),
+                AmbientOcclusionMode::ScreenSpace,
+                VolumetricFogQuality::Off,
+            ),
+            "high" => (
+                1.0,
+                4,
+                Some(16),
+                AmbientOcclusionMode::ScreenSpace,
+                VolumetricFogQuality::Low,
+            ),
+            "ultra" => (
+                1.0,
+                4,
+                None,
+                AmbientOcclusionMode::ScreenSpace,
+                VolumetricFogQuality::High,
+            ),
             _ => return None,
         };
         Some(Self {
