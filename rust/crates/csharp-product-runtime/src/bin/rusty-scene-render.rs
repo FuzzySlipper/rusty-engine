@@ -6,7 +6,8 @@
 //! rusty-scene-render <snapshot> <out.png> [--width W] [--height H] [--frames N]
 //!                    [--walk M] [--turn D] [--ambient-occlusion off|compute|raster|field] [--ambient-occlusion-strength S] [--ambient-occlusion-radius R]
 //!                    [--clustered-lighting on|off] [--gpu-culling on|off] [--render-scale S]
-//!                    [--rerender-shadows]
+//!                    [--rerender-shadows] [--choose ID=VALUE]...
+//! rusty-scene-render <snapshot> --gallery DIR [--width W] [--height H] [--frames N]
 //! ```
 //!
 //! `--frames N` then draws N more frames into one target with readback and
@@ -15,14 +16,21 @@
 //! frames, from the snapshot's first camera, for the cost of a moving view
 //! (culling, shadow cascades). `--ambient-occlusion` overrides the
 //! snapshot's path (at its strength, or 1 when it was off), so the two paths
-//! compare on one scene. Select the adapter as for any wgpu program (for
-//! example `WGPU_BACKEND=vulkan`).
+//! compare on one scene. `--choose ID=VALUE` sets any video option of the
+//! renderer settings catalogue as a player's choice (`--choose
+//! antialiasing=off`), over the snapshot and the product's own settings.
+//! `--gallery DIR` draws the feature gallery instead: the scene as it is and
+//! once per feature it leaves off (docs/performance.md, "Feature gallery").
+//! Select the adapter as for any wgpu program (for example
+//! `WGPU_BACKEND=vulkan`).
 
 use std::{path::PathBuf, time::Instant};
 
 use csharp_product_runtime::scene_snapshot::{SceneSnapshot, SceneSnapshotChange};
 use render_host_contracts::RendererCameraPose;
-use render_model::{IndirectLightDescriptor, RendererSettingsDescriptor};
+use render_model::{
+    IndirectLightDescriptor, RendererSettingsDescriptor, RendererSettingsOverrides,
+};
 use render_presentation::PresentationWorld;
 use render_wgpu::{
     encode_png, AmbientOcclusion, AmbientOcclusionPath, Gpu, OffscreenTarget, RendererOptions,
@@ -33,7 +41,12 @@ use serde_json::json;
 const USAGE: &str = "usage: rusty-scene-render <snapshot> <out.png> [--width W] [--height H] \
      [--frames N] [--walk M] [--turn D] [--ambient-occlusion off|compute|raster|field] [--ambient-occlusion-strength S] [--ambient-occlusion-radius R] \
      [--clustered-lighting on|off] [--gpu-culling on|off] [--render-scale S] [--rerender-shadows] \
-     [--indirect-light cx,cy,cz,ex,ey,ez,spacing,bounces[,floor]]";
+     [--indirect-light cx,cy,cz,ex,ey,ez,spacing,bounces[,floor]] [--choose ID=VALUE]...\n\
+       rusty-scene-render <snapshot> --gallery DIR [--width W] [--height H] [--frames N]";
+
+/// Frames each gallery variant draws for its timings when `--frames` is not
+/// given.
+const GALLERY_FRAMES: u32 = 20;
 
 fn main() {
     if let Err(error) = run() {
@@ -60,6 +73,10 @@ struct Arguments {
     render_scale: Option<f32>,
     indirect_light: Option<IndirectLightDescriptor>,
     rerender_shadows: bool,
+    /// Video options chosen over the snapshot's settings.
+    choices: Vec<(String, serde_json::Value)>,
+    /// Draw the feature gallery into this directory instead.
+    gallery: Option<PathBuf>,
 }
 
 /// Parses the command line; `None` when it asked for help. A render scale is
@@ -80,6 +97,8 @@ fn parse(arguments: impl IntoIterator<Item = String>) -> Result<Option<Arguments
     let mut rerender_shadows = false;
     let mut render_scale: Option<f32> = None;
     let mut indirect_light: Option<IndirectLightDescriptor> = None;
+    let mut choices = Vec::new();
+    let mut gallery = None;
     while let Some(argument) = arguments.next() {
         let mut number = |name: &str| -> Result<f64, String> {
             arguments
@@ -138,6 +157,27 @@ fn parse(arguments: impl IntoIterator<Item = String>) -> Result<Option<Arguments
                 indirect_light = Some(descriptor);
             }
             "--rerender-shadows" => rerender_shadows = true,
+            "--choose" => {
+                let choice = arguments.next().unwrap_or_default();
+                let (id, value) = choice
+                    .split_once('=')
+                    .ok_or_else(|| format!("--choose needs ID=VALUE\n{USAGE}"))?;
+                // A number or true/false as itself, anything else as a name.
+                let value = serde_json::from_str::<serde_json::Value>(value)
+                    .ok()
+                    .filter(|value| value.is_number() || value.is_boolean())
+                    .unwrap_or_else(|| serde_json::Value::from(value));
+                RendererSettingsOverrides::default()
+                    .choose(id, &value)
+                    .map_err(|error| format!("--choose {choice}: {error}\n{USAGE}"))?;
+                choices.push((id.to_owned(), value));
+            }
+            "--gallery" => {
+                gallery =
+                    Some(PathBuf::from(arguments.next().ok_or_else(|| {
+                        format!("--gallery needs a directory\n{USAGE}")
+                    })?));
+            }
             "--gpu-culling" => {
                 gpu_culling = Some(match arguments.next().as_deref() {
                     Some("on") => true,
@@ -184,12 +224,14 @@ fn parse(arguments: impl IntoIterator<Item = String>) -> Result<Option<Arguments
             _ => positional.push(PathBuf::from(argument)),
         }
     }
-    let [snapshot, out] = positional.as_slice() else {
-        return Err(USAGE.to_owned());
+    let (snapshot, out) = match (positional.as_slice(), &gallery) {
+        ([snapshot, out], None) => (snapshot, out.clone()),
+        ([snapshot], Some(directory)) => (snapshot, directory.join("baseline.png")),
+        _ => return Err(USAGE.to_owned()),
     };
     Ok(Some(Arguments {
         snapshot: snapshot.clone(),
-        out: out.clone(),
+        out,
         width,
         height,
         frames,
@@ -203,6 +245,8 @@ fn parse(arguments: impl IntoIterator<Item = String>) -> Result<Option<Arguments
         render_scale,
         indirect_light,
         rerender_shadows,
+        choices,
+        gallery,
     }))
 }
 
@@ -223,11 +267,26 @@ fn run() -> Result<(), String> {
         render_scale,
         indirect_light,
         rerender_shadows,
+        choices,
+        gallery,
     }) = parse(std::env::args().skip(1))?
     else {
         println!("{USAGE}");
         return Ok(());
     };
+    if let Some(directory) = gallery {
+        let renderer = std::env::current_exe().map_err(|error| error.to_string())?;
+        let report = render_verify::gallery::run(&render_verify::gallery::GalleryRequest {
+            renderer: &renderer,
+            snapshot: &snapshot_path,
+            out: &directory,
+            width,
+            height,
+            frames: if frames == 0 { GALLERY_FRAMES } else { frames },
+        })?;
+        println!("{}", render_verify::gallery::markdown(&report));
+        return Ok(());
+    }
 
     let opened = Instant::now();
     let snapshot = SceneSnapshot::open(&snapshot_path)?;
@@ -301,6 +360,9 @@ fn run() -> Result<(), String> {
     if render_scale.is_some() {
         player.render_scale = Some(flagged.render_scale);
     }
+    for (id, value) in &choices {
+        player.choose(id, value)?;
+    }
     let driver = SceneDriver::new(gpu, options);
     if !player.is_empty() {
         driver.set_player_settings(player);
@@ -332,18 +394,20 @@ fn run() -> Result<(), String> {
     std::fs::write(&out, encode_png(width, height, &capture.rgba)?)
         .map_err(|error| format!("{}: {error}", out.display()))?;
 
+    // The snapshot's first camera: where the frames start, and what the
+    // report says the scene was seen from.
+    let start = snapshot
+        .changes
+        .iter()
+        .rev()
+        .find_map(|change| match change {
+            SceneSnapshotChange::ViewComposition(composition) => {
+                composition.cameras.first().map(|camera| camera.pose)
+            }
+            _ => None,
+        });
     let mut timing = serde_json::Value::Null;
     if frames > 0 {
-        let start = snapshot
-            .changes
-            .iter()
-            .rev()
-            .find_map(|change| match change {
-                SceneSnapshotChange::ViewComposition(composition) => {
-                    composition.cameras.first().map(|camera| camera.pose)
-                }
-                _ => None,
-            });
         let moving = walk != 0.0 || turn != 0.0;
         if moving && start.is_none() {
             return Err("--walk and --turn need a camera in the snapshot".to_owned());
@@ -426,6 +490,11 @@ fn run() -> Result<(), String> {
         "skippedOps": skipped,
         "lastSkip": last_skip,
         "image": { "path": out.display().to_string(), "width": width, "height": height },
+        "camera": start.map(|pose| json!({
+            "position": pose.position,
+            "yawDegrees": pose.yaw_degrees,
+            "pitchDegrees": pose.pitch_degrees,
+        })),
         "timing": timing,
         // The shadow atlas and the layers the last frame rendered.
         "shadows": {
@@ -576,6 +645,51 @@ mod tests {
             let error = parsed(&["--indirect-light", refused]).unwrap_err();
             assert!(error.starts_with("--indirect-light"), "{refused}: {error}");
         }
+    }
+
+    #[test]
+    fn choices_take_catalogue_ids_with_numbers_switches_or_names() {
+        let arguments = parsed(&[
+            "--choose",
+            "antialiasing=off",
+            "--choose",
+            "shadows=true",
+            "--choose",
+            "renderScale=0.75",
+        ])
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            arguments.choices,
+            [
+                ("antialiasing".to_owned(), serde_json::json!("off")),
+                ("shadows".to_owned(), serde_json::json!(true)),
+                ("renderScale".to_owned(), serde_json::json!(0.75)),
+            ]
+        );
+        for refused in [
+            "bloom=on",
+            "antialiasing=8x",
+            "renderScale",
+            "shadows=maybe",
+        ] {
+            let error = parsed(&["--choose", refused]).unwrap_err();
+            assert!(error.starts_with("--choose"), "{refused}: {error}");
+        }
+    }
+
+    #[test]
+    fn a_gallery_needs_only_the_snapshot_and_a_directory() {
+        let arguments = parse(
+            ["scene.rscene", "--gallery", "out"]
+                .iter()
+                .map(|argument| (*argument).to_owned()),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(arguments.gallery, Some(PathBuf::from("out")));
+        assert_eq!(arguments.out, PathBuf::from("out/baseline.png"));
+        assert!(parse(["scene.rscene".to_owned(), "--gallery".to_owned()]).is_err());
     }
 
     #[test]

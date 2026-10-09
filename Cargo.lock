@@ -1303,6 +1303,7 @@ dependencies = [
  "render-model",
  "render-presentation",
  "render-stream",
+ "render-verify",
  "render-wgpu",
  "runtime-input",
  "runtime-lifecycle",
@@ -5787,6 +5788,7 @@ name = "render-verify"
 version = "0.1.0"
 dependencies = [
  "png",
+ "render-model",
  "serde",
  "serde_json",
 ]

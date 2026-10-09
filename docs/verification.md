@@ -40,8 +40,10 @@ software adapter costs; they are not acceptance gates.
 `scripts/gpu-lane.sh` runs the lane on the machine it is on, for the commit
 checked out. It builds `rusty-scene-render` and `rusty-gpu-lane`, then renders
 every scene of the lane directory twice over: with the machine's accepted
-baseline renderer and with the candidate, alternating which goes first, three
-times each (`--repeats`). It prints a table and writes the run under
+baseline renderer and with the candidate, alternating which goes first, as
+many times each as `scenes.json` says (`repeats`, 3 by default; den-agents
+uses 5, since some passes run at one of two speeds there) or `--repeats`
+asks. It prints a table and writes the run under
 `runs/<machine>/<time>-<commit>/`: `report.md`, `report.json`, and for every
 scene `baseline.png`, `candidate.png` and `diff.png`. It exits 0 when every
 scene passes, 1 when one is flagged and 2 when the candidate could not render
@@ -64,7 +66,7 @@ and any settings it overrides. The defaults:
 | Setting | Default | Meaning |
 | --- | --- | --- |
 | `width`, `height` | 1280, 720 | Render size |
-| `frames`, `turn` | 30, 0.25 | Frames per render, and degrees the camera turns each, so timings cover more than one view; the image is the last frame |
+| `frames`, `turn` | 30, 0.25 | Frames per render, and degrees the camera turns each, so timings cover more than one view; the image is the snapshot's own view, drawn before them |
 | `repeats` | 3 | Renders per renderer |
 | `changedAbove` | 2 | A pixel counts as changed when a colour channel moves more than this many levels |
 | `changedShareFlag` | 0.0005 | Flag when more than this share of pixels changed |

@@ -681,6 +681,10 @@ impl ProductHostDebugCatalog {
                 "Write the committed scene and its renderer resources to a file: engine.renderer.snapshot <path> (relative to the host's working directory); rusty-scene-render draws it offline",
             ),
             (
+                "engine.renderer.gallery",
+                "Draw this view once per renderer feature it leaves off, as a labelled sheet with costs: engine.renderer.gallery <directory> [width height] (relative to the host's working directory); runs beside the game",
+            ),
+            (
                 "engine.renderer.show",
                 "Show every mounted Engine renderer metrics widget",
             ),

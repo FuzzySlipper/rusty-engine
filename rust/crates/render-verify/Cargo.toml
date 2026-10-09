@@ -9,6 +9,7 @@ edition.workspace = true
 # one machine.
 [dependencies]
 png.workspace = true
+render-model.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 

@@ -101,7 +101,13 @@ chunks' distance fields), `--ambient-occlusion-strength S` and
 `--ambient-occlusion-radius R` with that strength and radius, `--render-scale S` at that fraction of the
 output size, and `--indirect-light cx,cy,cz,ex,ey,ez,spacing,bounces[,floor]`
 with a probe volume baked before the frames (reported under `gpu.indirectLight`), to
-compare the paths on one scene. Compare
+compare the paths on one scene. `--choose ID=VALUE` (repeatable) sets any
+[video option](lighting-and-sky.md#video-options) as a player's choice, as
+`--choose antialiasing=off` or `--choose shadows=true`: choices, like the
+flags above, hold over the snapshot's own settings and over a product's
+`RendererSettings.Set` recorded in it, and a snapshot's recorded player
+choices apply first. The image is the snapshot's own view, drawn before the
+extra frames; the report's `camera` is that view. Compare
 snapshots drawn on the same adapter; `WGPU_BACKEND` selects it as for any
 wgpu program. A still camera reuses work a moving one repeats (culled lists,
 a directional light's shadow cascades): add `--walk M` or `--turn D` to move
@@ -119,6 +125,37 @@ in `product-host`) as UTF-8 JSON bytes through
 `IEngineContext.Diagnostics.ReadRenderer()`. The runtime refreshes them once a
 second; the generated binding copies the bytes before returning. Reading them
 never draws a frame or synchronizes the GPU.
+
+## Feature gallery
+
+How would this game look with a feature it leaves off? `rusty-scene-render
+<snapshot> --gallery DIR [--width W] [--height H] [--frames N]` draws the
+snapshot as it is, then once per renderer feature it leaves off or below its
+top quality, each turned on at its Engine default:
+
+- the [video options](lighting-and-sky.md#video-options) catalogue's
+  features: render scale 1, 4× antialiasing, shadows, no shadow budget, each
+  ambient occlusion mode not drawn, clustered lighting and GPU culling (vsync
+  and occlusion strength and radius are tuning, not features);
+- indirect light, when the scene has no probe volume: one 48×24×48 m around
+  the camera, labelled as a stand-in, since a game places its own;
+- everything on together.
+
+The list comes from the catalogue, so a feature added there joins the
+gallery. Each variant renders in its own process (20 timed frames unless
+`--frames` says otherwise), so its GPU timings are its own. `DIR` gets each
+variant's image and report, `sheet.png` (every image labelled with its
+frame-time change and the share of pixels it changed by more than 2 levels,
+or "no visible change"), and `gallery.md` and `gallery.json` with the frame
+times, the GPU passes that rose most, refusals and notes. A feature with no
+visible change in a scene (GPU culling, clustered lighting, distance-field
+occlusion in a mesh room) shows only its cost. A CraftSurvive meadow on an RX
+9070 XT draws seven variants in about 6 seconds.
+
+Live, `engine.renderer.gallery <directory> [width height]` snapshots the
+current view into `<directory>/scene.rscene` and starts the same gallery with
+the `rusty-scene-render` beside the host, writing its log to
+`gallery.log`; the game keeps running while it draws.
 
 ## Repeatable baseline artifacts
 

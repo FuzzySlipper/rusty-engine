@@ -125,6 +125,7 @@ enum RendererDebugCommand {
 
 /// `engine.renderer.snapshot <path>`: the one renderer command with an argument.
 const SCENE_SNAPSHOT_COMMAND: &str = "engine.renderer.snapshot";
+const GALLERY_COMMAND: &str = "engine.renderer.gallery";
 
 /// Keeps the Engine's renderer-debug vocabulary exact. Product-owned command
 /// prefixes continue through the generated callback untouched.
@@ -2648,6 +2649,69 @@ impl CsharpProductRuntime {
         scene_snapshot::write_scene_snapshot(Path::new(path), &metadata, &baseline, resources)
     }
 
+    /// Snapshots the view into `<directory>/scene.rscene` and starts
+    /// `rusty-scene-render --gallery` on it beside this host, so the game
+    /// keeps running while the gallery draws (docs/performance.md, "Feature
+    /// gallery").
+    fn start_gallery(&mut self, arguments: &str) -> Result<String, String> {
+        let usage = || format!("usage: {GALLERY_COMMAND} <directory> [width height]");
+        let mut words = arguments.split_whitespace();
+        let directory = PathBuf::from(words.next().ok_or_else(usage)?);
+        let size = words
+            .map(|word| word.parse::<u32>().ok().filter(|value| *value > 0))
+            .collect::<Option<Vec<u32>>>()
+            .ok_or_else(usage)?;
+        let (width, height) = match size.as_slice() {
+            [] => (1280, 720),
+            [width, height] => (*width, *height),
+            _ => return Err(usage()),
+        };
+        if self.frame_output.is_none() {
+            return Err("this runtime draws nothing, so it has no gallery".to_owned());
+        }
+        let renderer = std::env::current_exe()
+            .map_err(|error| error.to_string())?
+            .with_file_name(format!(
+                "rusty-scene-render{}",
+                std::env::consts::EXE_SUFFIX
+            ));
+        if !renderer.is_file() {
+            return Err(format!(
+                "{} is not beside this host: the gallery draws with it",
+                renderer.display()
+            ));
+        }
+        std::fs::create_dir_all(&directory)
+            .map_err(|error| format!("{}: {error}", directory.display()))?;
+        let scene = directory.join("scene.rscene");
+        self.write_scene_snapshot(&scene.display().to_string())?;
+        let log = std::fs::File::create(directory.join("gallery.log"))
+            .map_err(|error| format!("{}: {error}", directory.display()))?;
+        let mut child = std::process::Command::new(&renderer)
+            .arg(&scene)
+            .arg("--gallery")
+            .arg(&directory)
+            .args([
+                "--width",
+                &width.to_string(),
+                "--height",
+                &height.to_string(),
+            ])
+            .stdout(log.try_clone().map_err(|error| error.to_string())?)
+            .stderr(log)
+            .spawn()
+            .map_err(|error| format!("{}: {error}", renderer.display()))?;
+        let pid = child.id();
+        // Reaped when it ends; the game does not wait for it.
+        std::thread::spawn(move || {
+            let _ = child.wait();
+        });
+        Ok(format!(
+            "drawing the feature gallery of this view into {} (rusty-scene-render, pid {pid}): sheet.png and gallery.md appear there when it is done, about a second a feature",
+            directory.display()
+        ))
+    }
+
     fn frame_simulation(&self) -> frame_output::Simulation {
         frame_output::Simulation {
             held: !self.world_time_moves(),
@@ -3209,6 +3273,17 @@ impl ProductHostRuntime for CsharpProductRuntime {
         {
             let result = match frames.execute_inspection(command) {
                 Ok(answer) => ProductHostDebugResult::new(true, pretty_json(&answer)?),
+                Err(detail) => ProductHostDebugResult::new(false, detail),
+            };
+            return ProductHostRuntimeReceipt::new(result, Vec::new()).map_err(host_runtime_error);
+        }
+        if let Some(arguments) = command
+            .trim()
+            .strip_prefix(GALLERY_COMMAND)
+            .filter(|rest| rest.is_empty() || rest.starts_with(char::is_whitespace))
+        {
+            let result = match self.start_gallery(arguments) {
+                Ok(started) => ProductHostDebugResult::new(true, started),
                 Err(detail) => ProductHostDebugResult::new(false, detail),
             };
             return ProductHostRuntimeReceipt::new(result, Vec::new()).map_err(host_runtime_error);
