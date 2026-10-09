@@ -716,6 +716,16 @@ impl EngineServiceSet {
         );
     }
 
+    /// The joints the renderer evaluated for reporting animation instances
+    /// since the last call, oldest first. Generated C# reads the latest with
+    /// `ReadJointPose`.
+    pub fn ingest_joint_poses(
+        &mut self,
+        reports: impl IntoIterator<Item = crate::appearance::JointPoseReport>,
+    ) {
+        self.appearance.ingest_joint_poses(reports);
+    }
+
     /// Replaces the renderer's latest ghost-plate realization
     /// snapshot. Generated C# reads it during the next ordinary product call.
     pub fn ingest_ghost_plate_realization_feedback(

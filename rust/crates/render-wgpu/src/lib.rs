@@ -43,6 +43,7 @@ mod labels;
 mod light_clusters;
 mod particles;
 mod pipelines;
+mod pose;
 mod post;
 mod precipitation;
 mod primitives;

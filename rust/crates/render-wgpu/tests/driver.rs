@@ -1,6 +1,7 @@
 //! The scene driver against a real headless device: applied changes land
 //! with the step they reach, a drawn frame and a tool capture report what
-//! they showed, and an undrawn scene still ends clips on Engine time. One
+//! they showed, an undrawn scene still ends clips on Engine time, and a
+//! joint-reporting instance reports with each applied call. One
 //! test, so the binary opens one device (parallel devices can crash the
 //! Vulkan loader).
 
@@ -11,10 +12,15 @@ use render_host_contracts::{
     RendererCameraPose, RendererCameraProjection, RendererCompositionCamera,
     RendererCompositionView, RendererViewComposition, RendererViewTarget, RendererViewport,
 };
+use render_model::{
+    AnimatedMeshAsset, AnimatedMeshInstanceDescriptor, AnimatedMeshPlaybackCommand,
+    AnimatedMeshPose, AnimationLoopMode, RenderDiff, RenderFrameDiff, RenderHandle, RenderLayer,
+    RenderMetadata, Transform,
+};
 use render_presentation::{video_frame, VideoClipRef, VideoPlaybackHandle, VideoProjectionOp};
 use render_wgpu::{
-    Gpu, NoResources, OffscreenTarget, RendererOptions, ResourceSource, SceneChange, SceneDriver,
-    SceneState, VideoFact,
+    AnimationFact, Gpu, NoResources, OffscreenTarget, RendererOptions, ResourceSource, SceneChange,
+    SceneDriver, SceneState, VideoFact,
 };
 
 /// `render-video`'s synthetic fixture: 1.5 s of VP9 at 10 fps.
@@ -159,7 +165,7 @@ fn the_driver_reports_what_it_drew_and_ends_clips_undrawn() {
 
     // Undrawn, a clip still ends on Engine time: waiting advances the scene
     // to the latest call, and the completion reaches the Engine (#8871).
-    let unwatched = SceneDriver::new(gpu, RendererOptions::default());
+    let unwatched = SceneDriver::new(gpu.clone(), RendererOptions::default());
     let handle = VideoPlaybackHandle::new(7);
     let play = video_frame([VideoProjectionOp::Play {
         handle,
@@ -185,4 +191,123 @@ fn the_driver_reports_what_it_drew_and_ends_clips_undrawn() {
         unwatched.take_video_facts(),
         [VideoFact::Completed { handle }]
     );
+    drop(unwatched);
+
+    // An instance that reports its joints reports each applied call's pose
+    // with the call, drawn or not, so the Engine reads it before the next.
+    let reporting = SceneDriver::new(gpu, RendererOptions::default());
+    let body = Body::admit();
+    let create = RenderFrameDiff::try_from_ops(vec![
+        RenderDiff::DefineAnimatedMesh {
+            asset: body.asset.clone(),
+        },
+        RenderDiff::CreateAnimatedMeshInstance {
+            handle: RenderHandle::new(1),
+            parent: None,
+            instance: AnimatedMeshInstanceDescriptor {
+                inspection: Default::default(),
+                asset: body.asset.asset.clone(),
+                transform: Transform::IDENTITY,
+                visible: true,
+                material_overrides: Vec::new(),
+                playback: Some(AnimatedMeshPlaybackCommand::Play {
+                    clip: "run".to_owned(),
+                    r#loop: AnimationLoopMode::Repeat,
+                    speed: 1.0,
+                    weight: 1.0,
+                    restart: true,
+                    fade_seconds: None,
+                    start_offset_seconds: None,
+                    start_paused: false,
+                }),
+                metadata: RenderMetadata {
+                    source_entity: Some(1),
+                    ..RenderMetadata::default()
+                },
+                layer: RenderLayer::Scene,
+                shadow_casting: Default::default(),
+            },
+        },
+        RenderDiff::SetAnimatedMeshPose {
+            handle: RenderHandle::new(1),
+            pose: AnimatedMeshPose {
+                report_joints: true,
+                ..AnimatedMeshPose::default()
+            },
+        },
+    ])
+    .expect("a valid frame");
+    reporting.apply(
+        [SceneChange::Frame(&create)],
+        &body,
+        &|_| None,
+        state(1, false),
+    );
+    let reported = |facts: Vec<AnimationFact>| {
+        facts
+            .into_iter()
+            .filter_map(|fact| match fact {
+                AnimationFact::JointPose {
+                    seconds,
+                    joints,
+                    rest,
+                    ..
+                } => Some((seconds, joints, rest.is_some())),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    let first = reported(reporting.take_animation_facts());
+    assert_eq!(first.len(), 1);
+    assert_eq!((first[0].0, first[0].2), (1.0 / 60.0, true));
+    reporting.apply([], &body, &|_| None, state(2, false));
+    let second = reported(reporting.take_animation_facts());
+    assert_eq!(second.len(), 1);
+    assert_eq!((second[0].0, second[0].2), (2.0 / 60.0, false));
+    assert_ne!(first[0].1, second[0].1, "the running pose moved");
+}
+
+/// The joint attachment fixture's body, admitted as the runtime admits it.
+struct Body {
+    asset: AnimatedMeshAsset,
+    identity: String,
+    bytes: Vec<u8>,
+}
+
+impl Body {
+    fn admit() -> Self {
+        let path = "csharp-joint-attachments/content/body.glb";
+        let source = std::fs::read(
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../../../fixtures")
+                .join(path),
+        )
+        .expect("the body fixture");
+        let imported = asset_import::import_animated_glb_asset(
+            &asset_import::SourceUri::RelativePath(path.to_owned()),
+            &source,
+            &asset_import::ImportContext::default(),
+        )
+        .assets
+        .expect("the body is admitted");
+        let hash = imported
+            .animated_mesh
+            .content_hash
+            .clone()
+            .expect("content hash");
+        Self {
+            identity: format!(
+                "animated-mesh-resource/{}",
+                hash.trim_start_matches("sha256:")
+            ),
+            asset: imported.animated_mesh,
+            bytes: imported.runtime_resource_bytes,
+        }
+    }
+}
+
+impl ResourceSource for Body {
+    fn bytes(&self, identity: &str) -> Option<Cow<'_, [u8]>> {
+        (identity == self.identity).then_some(Cow::Borrowed(&self.bytes))
+    }
 }

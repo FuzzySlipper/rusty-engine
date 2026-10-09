@@ -50,7 +50,7 @@ to force a rerun.
 | `RenderOutput` | Capture offline images and export GLB from the retained appearance snapshot ([offline images](csharp-offline-images.md)). |
 | `Host` | Whether the product can end itself, and the request that ends it (a menu's Quit), in window output only ([quit](csharp-lifecycle.md#quit)). |
 | `ImplicitSurfaces` | Build scalar fields and generate retained meshes from them ([implicit surfaces](csharp-implicit-surfaces.md)). |
-| `Animation` | Own animation resources, graphs, controllers, parameters, and playback realization. |
+| `Animation` | Own animation resources, graphs, controllers, parameters, playback realization, pose controls and joint reads. |
 | `Audio` | Own audio clips, voices, control, and presentation feedback. |
 | `Video` | Own one content-backed full-viewport WebM presentation and terminal realization facts. |
 | `CameraView` | Retain cameras, offscreen targets, and ordered primary/offscreen view compositions; select one active camera as a convenience. |

@@ -1398,6 +1398,12 @@ pub enum RenderDiff {
         handle: RenderHandle,
         playback: AnimatedMeshPlaybackCommand,
     },
+    /// Replaces the instance's pose controls (`AnimatedMeshPose`); the
+    /// default value clears them.
+    SetAnimatedMeshPose {
+        handle: RenderHandle,
+        pose: crate::AnimatedMeshPose,
+    },
     CreateVoxelObjectInstance {
         handle: RenderHandle,
         parent: Option<RenderHandle>,
@@ -1613,6 +1619,9 @@ impl RenderDiff {
             Self::SetAnimatedMeshPlayback { playback, .. } => playback
                 .validate()
                 .map_err(RenderOperationError::AnimatedPlayback),
+            Self::SetAnimatedMeshPose { pose, .. } => {
+                pose.validate().map_err(RenderOperationError::AnimatedPose)
+            }
             Self::CreateVoxelObjectInstance { instance, .. } => instance
                 .validate()
                 .map_err(RenderOperationError::VoxelObjectInstance),
@@ -1652,6 +1661,7 @@ impl RenderDiff {
             | Self::SetMaterialInstanceParameters { handle, .. }
             | Self::SetAnimatedMeshInspection { handle, .. }
             | Self::SetAnimatedMeshPlayback { handle, .. }
+            | Self::SetAnimatedMeshPose { handle, .. }
             | Self::SetVoxelObjectFrame { handle, .. }
             | Self::UpdateSprite { handle, .. } => handle.validate()?,
             Self::DefineMaterial { .. }
@@ -1741,6 +1751,7 @@ pub enum RenderOperationError {
     AnimatedMeshInstance(crate::AnimatedMeshInstanceError),
     ScatterPatch(crate::ScatterPatchError),
     AnimatedPlayback(crate::AnimatedMeshPlaybackError),
+    AnimatedPose(crate::AnimatedMeshPoseError),
     VoxelObject(crate::VoxelObjectRenderAssetError),
     VoxelObjectInstance(crate::VoxelObjectInstanceError),
     Asset(crate::RenderAssetError),
@@ -1834,6 +1845,7 @@ impl RenderFrameDiff {
                 | RenderDiff::CreateScatterPatch { .. }
                 | RenderDiff::SetAnimatedMeshInspection { .. }
                 | RenderDiff::SetAnimatedMeshPlayback { .. }
+                | RenderDiff::SetAnimatedMeshPose { .. }
                 | RenderDiff::CreateVoxelObjectInstance { .. }
                 | RenderDiff::SetVoxelObjectFrame { .. }
                 | RenderDiff::CreateSprite { .. }

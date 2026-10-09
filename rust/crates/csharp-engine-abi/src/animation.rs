@@ -5,8 +5,8 @@
 //! renderer stays an implementation detail behind the generated API.
 
 use crate::{
-    NativeAppearanceHandle, NativeColor, NativeMeshMaterialBinding, NativeRenderResourceHandle,
-    NativeUtf8Slice, NativeVec3,
+    NativeAppearanceHandle, NativeColor, NativeMeshMaterialBinding, NativeQuat,
+    NativeRenderResourceHandle, NativeTransform, NativeUtf8Slice, NativeVec3,
 };
 
 #[repr(C)]
@@ -272,6 +272,104 @@ pub struct NativeAnimationPlaybackRequest {
     pub normalized_time: f32,
 }
 
+/// The space a pose value is given in: a joint's parent (`Local`), the
+/// animated instance's own space (`Model`), or the scene (`World`).
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativePoseSpace {
+    Local = 1,
+    Model = 2,
+    World = 3,
+}
+
+/// One joint's rotation and/or translation over the evaluated pose, mixed in
+/// by `weight` (0 to 1). `joint` indexes `ReadJoints`. A `Local` value
+/// replaces the joint's local value, or with `additive` composes onto it. A
+/// `Model` or `World` value places the joint there and its descendants
+/// follow; the joint keeps its evaluated scale.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeJointOverride {
+    pub joint: u32,
+    pub space: NativePoseSpace,
+    pub additive: bool,
+    pub override_rotation: bool,
+    pub rotation: NativeQuat,
+    pub override_translation: bool,
+    pub translation: NativeVec3,
+    pub weight: f32,
+}
+
+/// Rotates `root` and `mid` so `end` reaches `target`, bending toward
+/// `pole`, mixed in by `weight`. `mid` descends from `root` and `end` from
+/// `mid`. `space` is `Model` or `World`.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeTwoBoneIk {
+    pub root: u32,
+    pub mid: u32,
+    pub end: u32,
+    pub space: NativePoseSpace,
+    pub target: NativeVec3,
+    pub pole: NativeVec3,
+    pub weight: f32,
+}
+
+/// Replaces one instance's pose controls: two-bone IK then joint overrides,
+/// applied after its clips and before skinning. Empty lists clear them.
+/// `report_joints` reports the evaluated joints after each call for
+/// `ReadJointPose`.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeAnimationPoseRequest {
+    pub instance: NativeAnimationInstanceHandle,
+    pub two_bone_ik: *const NativeTwoBoneIk,
+    pub two_bone_ik_len: usize,
+    pub overrides: *const NativeJointOverride,
+    pub overrides_len: usize,
+    pub report_joints: bool,
+}
+
+/// One rig joint. Its position in `ReadJoints` is the index pose controls
+/// use; `parent` is the parent joint's index, `u32::MAX` for a root. The
+/// strings borrow the joint-info result; the safe SDK copies them.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeAnimationJointInfo {
+    pub id: NativeUtf8Slice,
+    pub parent: u32,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeAnimationJointInfoResult {
+    pub joints: *const NativeAnimationJointInfo,
+    pub joints_len: usize,
+}
+
+/// One evaluated joint, in the instance's space and in the scene.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeJointPose {
+    pub model: NativeTransform,
+    pub world: NativeTransform,
+}
+
+/// The pose the renderer evaluated for the previous call, per joint in
+/// `ReadJoints` order, with the instance's world placement and the Engine
+/// time it was evaluated at. `reported` is false until a reporting instance
+/// was first evaluated. `joints` points into Animation bridge storage until
+/// the next call on the same context.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeAnimationJointPoseResult {
+    pub joints: *const NativeJointPose,
+    pub joints_len: usize,
+    pub world: NativeTransform,
+    pub seconds: f64,
+    pub reported: bool,
+}
+
 /// Starts a retained, explicitly assembled non-legacy animation graph.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -437,5 +535,22 @@ pub type NativeReadAnimationClips = unsafe extern "C" fn(
     *mut std::ffi::c_void,
     NativeRenderResourceHandle,
     *mut NativeAnimationClipInfoResult,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeReadAnimationJoints = unsafe extern "C" fn(
+    *mut std::ffi::c_void,
+    NativeRenderResourceHandle,
+    *mut NativeAnimationJointInfoResult,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeSetAnimationPose = unsafe extern "C" fn(
+    *mut std::ffi::c_void,
+    *const NativeAnimationPoseRequest,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeReadAnimationJointPose = unsafe extern "C" fn(
+    *mut std::ffi::c_void,
+    NativeAnimationInstanceHandle,
+    *mut NativeAnimationJointPoseResult,
     *mut crate::NativeOperationErrorReceipt,
 ) -> i32;

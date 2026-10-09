@@ -35,7 +35,7 @@ use csharp_engine_abi::{
 };
 use csharp_engine_services::{
     renderer_settings_request, AnimationRealizationFact, EngineServiceSet,
-    GhostPlateRealizationFact, VideoRealizationFact,
+    GhostPlateRealizationFact, JointPoseReport, VideoRealizationFact,
 };
 use product_host::RuntimePublication;
 use product_host::{
@@ -337,13 +337,31 @@ impl FrameOutput {
     /// Call between product calls.
     pub(crate) fn report(&mut self, services: &mut EngineServiceSet) {
         services.ingest_renderer_settings(self.settings_readout());
-        let facts = self.driver.take_animation_facts();
+        let mut poses = Vec::new();
+        let mut facts = Vec::new();
+        for fact in self.driver.take_animation_facts() {
+            match fact {
+                AnimationFact::JointPose {
+                    object_id,
+                    generation,
+                    seconds,
+                    world,
+                    joints,
+                    rest,
+                } => poses.push(JointPoseReport {
+                    object_id,
+                    generation,
+                    seconds,
+                    world,
+                    joints,
+                    rest,
+                }),
+                fact => facts.extend(self.engine_fact(fact)),
+            }
+        }
+        services.ingest_joint_poses(poses);
         for chunk in facts.chunks(MAX_FACTS_PER_REPORT) {
-            let facts: Vec<_> = chunk
-                .iter()
-                .map(|fact| self.engine_fact(fact.clone()))
-                .collect();
-            services.ingest_animation_realization_feedback(false, 0, facts);
+            services.ingest_animation_realization_feedback(false, 0, chunk.iter().cloned());
         }
         let facts = self.driver.take_video_facts();
         for chunk in facts.chunks(MAX_FACTS_PER_REPORT) {
@@ -700,10 +718,14 @@ impl FrameOutput {
             .collect()
     }
 
-    fn engine_fact(&mut self, fact: AnimationFact) -> AnimationRealizationFact {
+    /// A realization fact; joint poses are reported apart (`report`).
+    fn engine_fact(&mut self, fact: AnimationFact) -> Option<AnimationRealizationFact> {
+        if matches!(fact, AnimationFact::JointPose { .. }) {
+            return None;
+        }
         let fact_id = self.next_fact_id;
         self.next_fact_id += 1;
-        match fact {
+        Some(match fact {
             AnimationFact::NaturalCompletion {
                 object_id,
                 generation,
@@ -729,7 +751,8 @@ impl FrameOutput {
                 has_bounds: bounds.is_some(),
                 voxel_normal_meshes: 0,
             },
-        }
+            AnimationFact::JointPose { .. } => return None,
+        })
     }
 }
 

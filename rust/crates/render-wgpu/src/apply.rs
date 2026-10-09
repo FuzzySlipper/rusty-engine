@@ -591,6 +591,9 @@ impl Renderer {
             RenderDiff::SetAnimatedMeshPlayback { handle, playback } => {
                 self.set_animated_playback(*handle, playback)?
             }
+            RenderDiff::SetAnimatedMeshPose { handle, pose } => {
+                self.set_animated_pose(*handle, pose)?
+            }
         }
         Ok(())
     }
@@ -2538,6 +2541,7 @@ fn op_name(op: &RenderDiff) -> &'static str {
         RenderDiff::CreateScatterPatch { .. } => "createScatterPatch",
         RenderDiff::SetAnimatedMeshInspection { .. } => "setAnimatedMeshInspection",
         RenderDiff::SetAnimatedMeshPlayback { .. } => "setAnimatedMeshPlayback",
+        RenderDiff::SetAnimatedMeshPose { .. } => "setAnimatedMeshPose",
         RenderDiff::CreateVoxelObjectInstance { .. } => "createVoxelObjectInstance",
         RenderDiff::SetVoxelObjectFrame { .. } => "setVoxelObjectFrame",
         RenderDiff::CreateSprite { .. } => "createSprite",

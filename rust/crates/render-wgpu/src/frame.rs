@@ -313,10 +313,12 @@ impl Renderer {
     /// Engine still learns of completions; the next draw catches the picture
     /// up.
     pub fn advance_undrawn(&mut self) {
+        self.propagate_transforms();
         self.advance_animations();
         self.end_finished_video();
         self.propagate_transforms();
         self.report_pending_bounds();
+        self.report_joint_poses();
         // Posing writes skinned vertices. Submit so those staged writes do
         // not pile up while nothing draws.
         self.gpu.queue.submit(std::iter::empty());
@@ -324,10 +326,12 @@ impl Renderer {
 
     /// Bring GPU rows up to date with the tables. Returns rows uploaded.
     pub(crate) fn prepare(&mut self) -> u32 {
+        self.propagate_transforms();
         self.advance_animations();
         self.advance_video();
         self.propagate_transforms();
         self.report_pending_bounds();
+        self.report_joint_poses();
         self.shadows_chosen = false;
         self.shadows_rendered = (0, 0);
         self.finish.begin_frame(&self.gpu);

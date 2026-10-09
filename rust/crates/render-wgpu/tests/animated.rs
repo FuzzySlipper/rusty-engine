@@ -4,6 +4,7 @@
 
 mod support;
 
+use std::f32::consts::FRAC_1_SQRT_2;
 use std::path::PathBuf;
 
 use asset_import::{import_animated_glb_asset, ImportContext, SourceUri};
@@ -783,4 +784,146 @@ fn a_skinned_character_and_its_held_weapon_cast_shadows_that_follow_the_pose() {
         "{changed} of {} shadowed pixels moved with the pose",
         running.len()
     );
+}
+
+/// The admitted rig's joint index of `name` (joints sorted by id).
+fn rig_joint(asset: &AnimatedMeshAsset, name: &str) -> u32 {
+    asset
+        .rig
+        .as_ref()
+        .and_then(|rig| rig.joints.iter().position(|joint| joint.id == name))
+        .unwrap_or_else(|| panic!("rig joint {name}")) as u32
+}
+
+fn joint_poses(harness: &mut Harness) -> Vec<(f64, Transform, Vec<PosedJoint>, bool)> {
+    harness
+        .renderer
+        .take_animation_facts()
+        .into_iter()
+        .filter_map(|fact| match fact {
+            AnimationFact::JointPose {
+                object_id: BODY,
+                seconds,
+                world,
+                joints,
+                rest,
+                ..
+            } => Some((seconds, world, joints, rest.is_some())),
+            _ => None,
+        })
+        .collect()
+}
+
+fn world_point(world: &Transform, local: [f32; 3]) -> [f32; 3] {
+    let [x, y, z, w] = world.rotation;
+    let scaled = [
+        local[0] * world.scale[0],
+        local[1] * world.scale[1],
+        local[2] * world.scale[2],
+    ];
+    // v + 2w(q×v) + 2q×(q×v)
+    let q = [x, y, z];
+    let cross = |a: [f32; 3], b: [f32; 3]| {
+        [
+            a[1] * b[2] - a[2] * b[1],
+            a[2] * b[0] - a[0] * b[2],
+            a[0] * b[1] - a[1] * b[0],
+        ]
+    };
+    let t = cross(q, scaled).map(|value| value * 2.0);
+    let u = cross(q, t);
+    [0, 1, 2].map(|i| scaled[i] + w * t[i] + u[i] + world.translation[i])
+}
+
+fn distance(a: [f32; 3], b: [f32; 3]) -> f32 {
+    (0..3).map(|i| (a[i] - b[i]).powi(2)).sum::<f32>().sqrt()
+}
+
+/// Pose controls on the skinned character: a two-bone IK constraint brings
+/// the right hand (and the weapon on it) to a world target, its joints are
+/// reported as drawn, and an additive finger override blends by weight.
+#[test]
+fn pose_controls_reach_a_world_target_and_report_the_drawn_joints() {
+    let mut harness = Harness::new(RendererOptions::default());
+    character_scene(&mut harness);
+    let body = admit(&mut harness, "csharp-joint-attachments/content/body.glb");
+    let (arm, forearm, hand, finger) = (
+        rig_joint(&body, "RightArm"),
+        rig_joint(&body, "RightForeArm"),
+        rig_joint(&body, "RightHand"),
+        rig_joint(&body, "RightHandIndex1"),
+    );
+    harness.apply(vec![move_body(2.0)]);
+    let view = character_view();
+    let (_, before) = harness.render(&view);
+    let reach = |target: [f32; 3], curl: f32| RenderDiff::SetAnimatedMeshPose {
+        handle: RenderHandle::new(BODY),
+        pose: AnimatedMeshPose {
+            two_bone_ik: vec![TwoBoneIkConstraint {
+                root: arm,
+                mid: forearm,
+                end: hand,
+                space: PoseSpace::World,
+                target,
+                pole: [2.0, 1.0, -3.0],
+                weight: 1.0,
+            }],
+            overrides: vec![JointOverride {
+                joint: finger,
+                space: PoseSpace::Local,
+                additive: true,
+                rotation: Some([0.0, 0.0, FRAC_1_SQRT_2, FRAC_1_SQRT_2]),
+                translation: None,
+                weight: curl,
+            }],
+            report_joints: true,
+        },
+    };
+
+    harness.apply(vec![reach([1.6, 1.4, 0.5], 0.0)]);
+    let (_, reached) = harness.render(&view);
+    assert_ne!(before, reached, "the arm moved");
+    let reports = joint_poses(&mut harness);
+    assert_eq!(reports.len(), 1, "one report per posing");
+    let (_, world, joints, first) = &reports[0];
+    assert!(*first, "the first report carries the rest pose");
+    let hand_world = world_point(world, joints[hand as usize].model.translation);
+    assert_eq!(
+        hand_world.map(|v| (v * 1e3).round()),
+        joints[hand as usize]
+            .world
+            .translation
+            .map(|v| (v * 1e3).round())
+    );
+    assert!(
+        distance(hand_world, [1.6, 1.4, 0.5]) < 1e-3,
+        "the reported hand {hand_world:?} is at the target"
+    );
+    let open_finger = joints[finger as usize].model.rotation;
+
+    // A moving target: each posing reports again, without the rest pose.
+    harness.renderer.set_animation_time(0.5);
+    harness.apply(vec![reach([1.5, 1.6, 0.6], 1.0)]);
+    harness.render(&view);
+    let reports = joint_poses(&mut harness);
+    let (seconds, _, joints, first) = &reports[0];
+    assert_eq!((*seconds, *first), (0.5, false));
+    let hand_world = joints[hand as usize].world.translation;
+    assert!(
+        distance(hand_world, [1.5, 1.6, 0.6]) < 1e-3,
+        "{hand_world:?}"
+    );
+    assert_ne!(
+        joints[finger as usize].model.rotation, open_finger,
+        "the curl weight bends the finger"
+    );
+
+    // Clearing the controls restores the clip pose exactly.
+    harness.apply(vec![RenderDiff::SetAnimatedMeshPose {
+        handle: RenderHandle::new(BODY),
+        pose: AnimatedMeshPose::default(),
+    }]);
+    let (_, cleared) = harness.render(&view);
+    assert_eq!(cleared, before);
+    assert!(joint_poses(&mut harness).is_empty(), "reporting stopped");
 }

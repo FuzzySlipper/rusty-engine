@@ -1,4 +1,8 @@
 use crate::composition::{borrowed_slice, borrowed_utf8, CsharpEngineServicesError, ABI_OK};
+
+mod animation_pose;
+pub use animation_pose::JointPoseReport;
+
 use crate::render_resources::{
     CsharpRenderResource, CsharpRenderResourceKind, GeneratedMeshes, RenderResourceImports,
     RenderResourceRegistry,
@@ -1267,6 +1271,10 @@ struct AnimationInstance {
     pending_playback: bool,
     last_playback_target: Option<RenderHandle>,
     controller: Option<u64>,
+    /// The product's pose controls (`SetPose`).
+    pose: AnimatedMeshPose,
+    /// The target and pose last sent to the renderer.
+    pose_sent: Option<(RenderHandle, AnimatedMeshPose)>,
 }
 
 #[derive(Clone)]
@@ -1426,6 +1434,8 @@ pub(crate) struct RuntimeAppearanceBridge {
     ghost_plate_realization: BTreeMap<u64, GhostPlateRealizationFact>,
     animation_realization_facts: VecDeque<AnimationRealizationFact>,
     animation_realization_evicted: u64,
+    /// The latest joints reported per animated object.
+    joint_poses: BTreeMap<u64, animation_pose::ReportedJointPose>,
     authored_content: Option<*const crate::authored_content::RuntimeAuthoredContentBridge>,
     diagnostics_sink: Option<RuntimeDiagnosticsSink>,
     reported_recoverable_codes: BTreeSet<&'static str>,
@@ -1500,6 +1510,7 @@ impl RuntimeAppearanceBridge {
             ghost_plate_realization: BTreeMap::new(),
             animation_realization_facts: VecDeque::new(),
             animation_realization_evicted: 0,
+            joint_poses: BTreeMap::new(),
             authored_content: None,
             diagnostics_sink: None,
             reported_recoverable_codes: BTreeSet::new(),
@@ -1704,6 +1715,9 @@ impl RuntimeAppearanceBridge {
             .as_mut()
             .expect("every product call begins an appearance call");
         if let Err(error) = crate::tween::settle(staged) {
+            staged.release_error.get_or_insert(error);
+        }
+        if let Err(error) = animation_pose::settle_poses(staged) {
             staged.release_error.get_or_insert(error);
         }
         self.staged
@@ -5638,6 +5652,8 @@ impl RuntimeAppearanceBridge {
                 pending_playback: false,
                 last_playback_target: None,
                 controller: None,
+                pose: AnimatedMeshPose::default(),
+                pose_sent: None,
             },
         );
         Ok(NativeAnimationInstanceHandle { value: handle })
@@ -5724,6 +5740,25 @@ impl RuntimeAppearanceBridge {
                 render_model::RenderDiff::SetAnimatedMeshPlayback {
                     handle: target,
                     playback: AnimatedMeshPlaybackCommand::Stop { fade_seconds: None },
+                },
+            ])
+            .map_err(|error| {
+                CsharpEngineServicesError::new(
+                    "CSHARP_ANIMATION_FRAME",
+                    format!("animation teardown frame is invalid: {error:?}"),
+                )
+            })?;
+            push_extra_frame(staged, frame);
+        }
+        // Leave a target that outlives the instance without its controls.
+        if let Some((target, _)) = instance.pose_sent.filter(|(target, pose)| {
+            *pose != AnimatedMeshPose::default()
+                && staged.state.projector.object_handle(instance.object_id) == Some(*target)
+        }) {
+            let frame = render_model::RenderFrameDiff::try_from_ops(vec![
+                render_model::RenderDiff::SetAnimatedMeshPose {
+                    handle: target,
+                    pose: AnimatedMeshPose::default(),
                 },
             ])
             .map_err(|error| {
@@ -9091,6 +9126,7 @@ pub(crate) fn animation_api(bridge: &mut RuntimeAppearanceBridge) -> NativeAnima
         context: (bridge as *mut RuntimeAppearanceBridge).cast(),
         read_mesh_info: read_animated_mesh_info,
         read_clips: read_animation_clips,
+        read_joints: animation_pose::read_animation_joints,
         open_animated_mesh,
         open_animated_mesh_from_content,
         open_animation_clip_pack_from_content,
@@ -9106,6 +9142,7 @@ pub(crate) fn animation_api(bridge: &mut RuntimeAppearanceBridge) -> NativeAnima
         destroy_instance: destroy_animation_instance,
         replace_instance: replace_animation_instance,
         set_playback: set_animation_playback,
+        set_pose: animation_pose::set_animation_pose,
         create_graph: create_animation_graph,
         destroy_graph: destroy_animation_graph,
         define_parameter: define_animation_parameter,
@@ -9121,6 +9158,7 @@ pub(crate) fn animation_api(bridge: &mut RuntimeAppearanceBridge) -> NativeAnima
         read_controller: read_animation_controller,
         read: read_animation,
         read_realization: read_animation_realization,
+        read_joint_pose: animation_pose::read_animation_joint_pose,
     }
 }
 
@@ -10932,7 +10970,7 @@ pub(super) mod tests {
         ));
     }
 
-    fn appearance_fact(appearance: NativeAppearanceHandle) -> NativeAppearanceFact {
+    pub(super) fn appearance_fact(appearance: NativeAppearanceHandle) -> NativeAppearanceFact {
         NativeAppearanceFact {
             object_id: 7,
             has_parent_object: false,

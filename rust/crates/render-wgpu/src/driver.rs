@@ -478,6 +478,9 @@ impl Scene {
             (self.step, self.held) = (state.step, state.held);
             applied = true;
         }
+        // Instances that report their joints report this call's pose now,
+        // before the next call reads it.
+        self.renderer.pose_reporting_instances();
         // Video playbacks that could not start end here, not in a frame.
         self.collect_facts();
         self.changed |= applied;

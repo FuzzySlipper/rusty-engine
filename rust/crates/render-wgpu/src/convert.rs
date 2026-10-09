@@ -49,6 +49,17 @@ pub(crate) fn quat_array(value: Quat) -> [f32; 4] {
     value.to_array()
 }
 
+/// A matrix written back as an Engine transform (translation, rotation,
+/// scale).
+pub(crate) fn transform_of(value: Mat4) -> Transform {
+    let (scale, rotation, translation) = value.to_scale_rotation_translation();
+    Transform {
+        translation: array(translation),
+        rotation: quat_array(rotation.normalize()),
+        scale: array(scale),
+    }
+}
+
 /// A matrix written back as its four columns.
 pub(crate) fn matrix_columns(value: Mat4) -> [[f32; 4]; 4] {
     value.to_cols_array_2d()

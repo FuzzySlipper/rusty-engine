@@ -30,13 +30,14 @@ use glam::{Mat4, Quat, Vec3};
 use render_model::{
     AnimatedMeshAsset, AnimatedMeshClipPose, AnimatedMeshInspection,
     AnimatedMeshInstanceDescriptor, AnimatedMeshPlaybackCommand, AnimatedMeshPlaybackTimeline,
-    AnimationLoopMode, MaterialAlphaModeDescriptor, MaterialInstanceParameters, MaterialUvStrategy,
-    RenderHandle, RenderMaterialDescriptor,
+    AnimatedMeshPose, AnimationLoopMode, MaterialAlphaModeDescriptor, MaterialInstanceParameters,
+    MaterialUvStrategy, PosedJoint, RenderHandle, RenderMaterialDescriptor, Transform,
 };
 
 use render_presentation::{AnimationControllerProjectionState, AnimationProjectionOp};
 
 use crate::apply::{MapSlot, MaterialMaps, MaterialParams};
+use crate::convert;
 use crate::glb::{self, GlbAlpha, GlbClip, GlbModel, Path, Trs};
 use crate::pipelines::{EXTRA_VERTEX_FLOATS, VERTEX_FLOATS};
 use crate::resources::ResourceSource;
@@ -61,6 +62,21 @@ pub enum AnimationFact {
         generation: u64,
         request: u32,
         bounds: Option<([f32; 3], [f32; 3])>,
+    },
+    /// The evaluated joints of an instance that reports them
+    /// (`AnimatedMeshPose::report_joints`), each time it is posed.
+    JointPose {
+        object_id: u64,
+        generation: u64,
+        /// The Engine time the pose was evaluated at.
+        seconds: f64,
+        /// The instance's world placement.
+        world: Transform,
+        /// Each rig joint, in rig order.
+        joints: Vec<PosedJoint>,
+        /// The rest pose, in the same form: in the first report after
+        /// reporting starts.
+        rest: Option<Vec<PosedJoint>>,
     },
 }
 
@@ -151,6 +167,9 @@ pub(crate) struct AnimatedAssetRow {
     slots: BTreeMap<u16, usize>,
     /// Joint (bone) names that resolve to exactly one node.
     joints: HashMap<String, usize>,
+    /// The node of each rig joint, in rig order (`AnimationRigSignature`):
+    /// what pose controls and joint reports index.
+    rig: Vec<Option<usize>>,
 }
 
 /// One direct-playback state, kept as it fades out.
@@ -212,6 +231,14 @@ pub(crate) struct AnimatedInstance {
     pose_dirty: bool,
     /// The Engine time the pose was evaluated at.
     posed_at: f64,
+    /// The product's IK and joint overrides, and whether joints report.
+    controls: AnimatedMeshPose,
+    /// The instance's world placement the pose was evaluated with.
+    posed_world: Mat4,
+    /// Posed since its joints were last reported.
+    joints_pending: bool,
+    /// The rest pose has been reported since reporting started.
+    rest_reported: bool,
     /// Per-instance skinned vertex buffers, by (node, primitive).
     skinned: HashMap<(u32, u32), GpuMesh>,
     /// The GLB node each of the node row's parts draws, in part order.
@@ -571,6 +598,12 @@ impl Renderer {
             }
         }
         let joints = joint_nodes(&model);
+        let rig = asset
+            .rig
+            .iter()
+            .flat_map(|rig| &rig.joints)
+            .map(|joint| joints.get(&joint.id).copied())
+            .collect();
         let slots = asset
             .embedded_material_slots
             .iter()
@@ -598,6 +631,7 @@ impl Renderer {
                 linear_textures,
                 slots,
                 joints,
+                rig,
             },
         );
         // Live instances (a redefinition keeps them) re-pose on the new asset.
@@ -676,6 +710,10 @@ impl Renderer {
                 pose: Vec::new(),
                 pose_dirty: true,
                 posed_at: f64::NAN,
+                controls: AnimatedMeshPose::default(),
+                posed_world: Mat4::IDENTITY,
+                joints_pending: false,
+                rest_reported: false,
                 skinned: HashMap::new(),
                 part_nodes: Vec::new(),
                 parameters: BTreeMap::new(),
@@ -872,26 +910,141 @@ impl Renderer {
     }
 
     /// Advance every instance whose pose can change to the current Engine
-    /// time. Called before transforms propagate.
+    /// time: by time, or for world-space pose controls by its placement.
+    /// Called between two transform propagations: the first places the
+    /// instances, the second their joint-attached children.
     pub(crate) fn advance_animations(&mut self) {
+        self.advance_animations_where(|_| true);
+    }
+
+    fn advance_animations_where(&mut self, selected: impl Fn(&AnimatedInstance) -> bool) {
         let handles: Vec<RenderHandle> = self
             .tables
             .animated
             .iter()
             .filter(|(handle, instance)| {
+                if !selected(instance) {
+                    return false;
+                }
                 let controlled = self
                     .tables
                     .controllers
                     .values()
                     .any(|controller| controller.target == **handle);
+                let moved = instance.controls.reads_world()
+                    && self
+                        .tables
+                        .nodes
+                        .get(handle)
+                        .is_some_and(|node| node.world != instance.posed_world);
                 instance.pose_dirty
-                    || ((controlled || instance.varies())
+                    || moved
+                    || ((controlled || instance.varies() || instance.controls.report_joints)
                         && instance.posed_at != self.animation_time)
             })
             .map(|(handle, _)| *handle)
             .collect();
         for handle in handles {
             self.pose_animated_instance(handle);
+        }
+    }
+
+    /// Pose and report every instance that reports its joints, at the
+    /// time of the call just applied, so the Engine reads each call's pose
+    /// before the next call whether or not a frame draws.
+    pub(crate) fn pose_reporting_instances(&mut self) {
+        if !self
+            .tables
+            .animated
+            .values()
+            .any(|instance| instance.controls.report_joints)
+        {
+            return;
+        }
+        self.propagate_transforms();
+        self.advance_animations_where(|instance| instance.controls.report_joints);
+        self.propagate_transforms();
+        self.report_joint_poses();
+    }
+
+    /// Replace an instance's pose controls.
+    pub(crate) fn set_animated_pose(
+        &mut self,
+        handle: RenderHandle,
+        pose: &AnimatedMeshPose,
+    ) -> Result<(), String> {
+        let instance = self
+            .tables
+            .animated
+            .get_mut(&handle)
+            .ok_or_else(|| format!("unknown animated mesh {}", handle.raw()))?;
+        if &instance.controls == pose {
+            return Ok(());
+        }
+        if pose.report_joints && !instance.controls.report_joints {
+            instance.rest_reported = false;
+        }
+        instance.controls = pose.clone();
+        instance.pose_dirty = true;
+        Ok(())
+    }
+
+    /// Report the joints of every reporting instance posed since its last
+    /// report. Runs after transforms propagate, so the instance's world
+    /// placement is current.
+    pub(crate) fn report_joint_poses(&mut self) {
+        let now = self.animation_time;
+        let pending: Vec<RenderHandle> = self
+            .tables
+            .animated
+            .iter()
+            .filter(|(_, instance)| instance.joints_pending)
+            .map(|(handle, _)| *handle)
+            .collect();
+        for handle in pending {
+            let world = self
+                .tables
+                .nodes
+                .get(&handle)
+                .map_or(Mat4::IDENTITY, |node| node.world);
+            let Some(instance) = self.tables.animated.get_mut(&handle) else {
+                continue;
+            };
+            instance.joints_pending = false;
+            let (Some(object_id), Some(asset)) = (
+                instance.object_id,
+                self.tables.animated_assets.get(instance.slot),
+            ) else {
+                continue;
+            };
+            let joints = |pose: &[Mat4]| {
+                asset
+                    .rig
+                    .iter()
+                    .map(|node| {
+                        let model = node
+                            .and_then(|node| pose.get(node).copied())
+                            .unwrap_or(Mat4::IDENTITY);
+                        PosedJoint {
+                            model: convert::transform_of(model),
+                            world: convert::transform_of(world * model),
+                        }
+                    })
+                    .collect::<Vec<_>>()
+            };
+            let rest = (!instance.rest_reported).then(|| {
+                let locals: Vec<Trs> = asset.model.nodes.iter().map(|node| node.rest).collect();
+                joints(&crate::pose::compose(&asset.model, &locals))
+            });
+            instance.rest_reported = true;
+            self.animation_facts.push(AnimationFact::JointPose {
+                object_id,
+                generation: instance.generation,
+                seconds: now,
+                world: convert::transform_of(world),
+                joints: joints(&instance.pose),
+                rest,
+            });
         }
     }
 
@@ -957,7 +1110,20 @@ impl Renderer {
                 .into_iter()
                 .map(|(clip, time, weight)| (clip, time, weight * fade_in)),
         );
-        let pose = evaluate_pose(&asset.model, &asset.clips, &actions);
+        let world = self
+            .tables
+            .nodes
+            .get(&handle)
+            .map_or(Mat4::IDENTITY, |node| node.world);
+        let pose = crate::pose::controlled(
+            &asset.model,
+            &asset.rig,
+            sample_locals(&asset.model, &asset.clips, &actions),
+            &instance.controls,
+            world,
+        );
+        instance.posed_world = world;
+        instance.joints_pending = instance.controls.report_joints;
         // A changed pose is a scene change: cached composition targets must
         // redraw it. An unchanged pose (held, sampled, finished) keeps them.
         let moved = pose != instance.pose;
@@ -1569,9 +1735,8 @@ fn wrap(time: f64, duration: f32, mode: AnimationLoopMode) -> f32 {
     wrapped as f32
 }
 
-/// Local TRS per node after blending the weighted clips over the rest pose,
-/// composed into instance-space node transforms.
-fn evaluate_pose(model: &GlbModel, clips: &[GlbClip], actions: &[(usize, f32, f32)]) -> Vec<Mat4> {
+/// Local TRS per node after blending the weighted clips over the rest pose.
+fn sample_locals(model: &GlbModel, clips: &[GlbClip], actions: &[(usize, f32, f32)]) -> Vec<Trs> {
     #[derive(Clone, Copy)]
     struct Mix<T> {
         value: T,
@@ -1630,10 +1795,11 @@ fn evaluate_pose(model: &GlbModel, clips: &[GlbClip], actions: &[(usize, f32, f3
         Some(mix) if mix.weight < 1.0 => rest.lerp(mix.value, mix.weight),
         Some(mix) => mix.value,
     };
-    let mut world = vec![Mat4::IDENTITY; count];
-    for &index in &model.order {
-        let node = &model.nodes[index];
-        let local = Trs {
+    model
+        .nodes
+        .iter()
+        .enumerate()
+        .map(|(index, node)| Trs {
             translation: settle_vec(node.rest.translation, translation[index]),
             rotation: match rotation[index] {
                 None => node.rest.rotation,
@@ -1641,14 +1807,8 @@ fn evaluate_pose(model: &GlbModel, clips: &[GlbClip], actions: &[(usize, f32, f3
                 Some(mix) => mix.value,
             },
             scale: settle_vec(node.rest.scale, scale[index]),
-        }
-        .matrix();
-        world[index] = match node.parent {
-            Some(parent) => world[parent] * local,
-            None => local,
-        };
-    }
-    world
+        })
+        .collect()
 }
 
 fn decode_clips(model: &GlbModel) -> Vec<Option<GlbClip>> {

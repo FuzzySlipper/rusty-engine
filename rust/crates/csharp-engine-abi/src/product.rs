@@ -1623,6 +1623,7 @@ pub struct NativeAnimationApi {
     pub context: *mut c_void,
     pub read_mesh_info: NativeReadAnimatedMeshInfo,
     pub read_clips: NativeReadAnimationClips,
+    pub read_joints: NativeReadAnimationJoints,
     pub open_animated_mesh: NativeOpenAnimatedMesh,
     pub open_animated_mesh_from_content: NativeOpenAnimationResourceFromContent,
     pub open_animation_clip_pack_from_content: NativeOpenAnimationResourceFromContent,
@@ -1638,6 +1639,7 @@ pub struct NativeAnimationApi {
     pub destroy_instance: NativeDestroyAnimationInstance,
     pub replace_instance: NativeReplaceAnimationInstance,
     pub set_playback: NativeSetAnimationPlayback,
+    pub set_pose: NativeSetAnimationPose,
     pub create_graph: NativeCreateAnimationGraph,
     pub destroy_graph: NativeDestroyAnimationGraph,
     pub define_parameter: NativeDefineAnimationParameter,
@@ -1653,6 +1655,7 @@ pub struct NativeAnimationApi {
     pub read_controller: NativeReadAnimationController,
     pub read: NativeReadAnimation,
     pub read_realization: NativeReadAnimationRealization,
+    pub read_joint_pose: NativeReadAnimationJointPose,
 }
 
 #[repr(C)]

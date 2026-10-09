@@ -429,7 +429,8 @@ engine.Animation.UpdateAnimatedMeshMaterialFactors(new(appearance, new MeshMater
 }));
 ```
 
-Use the ordinary instance/playback APIs for animation. Dispose
+Use the ordinary instance/playback APIs for animation, and
+[pose controls](skeleton-poses.md) to drive joints over them. Dispose
 instances, publish the snapshot without their appearances, then dispose
 appearances and resources. Direct-instance teardown also accepts an already
 published removal snapshot and sends no stop to that removed target. The source

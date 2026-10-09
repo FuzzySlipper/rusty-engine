@@ -34,7 +34,7 @@ mod voxel_content;
 mod voxel_scene_presentation;
 mod world_origin;
 
-pub use appearance::{AnimationRealizationFact, GhostPlateRealizationFact};
+pub use appearance::{AnimationRealizationFact, GhostPlateRealizationFact, JointPoseReport};
 pub use audio::AudioRealizationFact;
 pub use composition::{
     parse_runtime_appearance_catalog, CsharpAppearanceCallOutput, CsharpAppearanceCatalog,

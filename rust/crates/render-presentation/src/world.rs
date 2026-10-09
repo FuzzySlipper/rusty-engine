@@ -89,6 +89,7 @@ struct PresentationNode {
     material_override: Option<Material>,
     material_parameters: BTreeMap<u16, MaterialInstanceParameters>,
     playback: AnimatedMeshPlaybackTimeline,
+    pose: render_model::AnimatedMeshPose,
 }
 
 /// A complete graphics baseline and the exact continuation point it represents.
@@ -504,6 +505,7 @@ impl PresentationWorld {
             node.mesh_payload = None;
             node.material_override = None;
             node.material_parameters.clear();
+            node.pose = Default::default();
         }
 
         if !retain_background {
@@ -901,6 +903,12 @@ impl PresentationWorld {
                 parameters: Some(*parameters),
             });
         }
+        if node.pose != render_model::AnimatedMeshPose::default() {
+            ops.push(RenderDiff::SetAnimatedMeshPose {
+                handle,
+                pose: node.pose.clone(),
+            });
+        }
         emitted.insert(handle);
     }
 
@@ -938,6 +946,7 @@ impl PresentationWorld {
                 mesh_payload: None,
                 material_override: None,
                 material_parameters: BTreeMap::new(),
+                pose: Default::default(),
             }),
         );
         Ok(())
@@ -1153,6 +1162,13 @@ impl PresentationWorld {
                     NodeKind::AnimatedMesh(value) => value.playback = Some(playback.clone()),
                     _ => return Err(PresentationWorldError::WrongNodeKind(*handle)),
                 }
+            }
+            RenderDiff::SetAnimatedMeshPose { handle, pose } => {
+                let node = self.node_mut(*handle)?;
+                if !matches!(node.kind, NodeKind::AnimatedMesh(_)) {
+                    return Err(PresentationWorldError::WrongNodeKind(*handle));
+                }
+                node.pose = pose.clone();
             }
             RenderDiff::SetVoxelObjectFrame { handle, frame } => {
                 match &mut self.node_mut(*handle)?.kind {
