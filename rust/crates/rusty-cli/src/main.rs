@@ -253,13 +253,7 @@ fn dev(mut options: DevOptions) -> Result<(), String> {
         if let Some(active_child) = child.as_mut() {
             if let Some(status) = active_child.try_wait()? {
                 let exited_child = child.take().expect("observed child is present");
-                // An ordinary stop: like `rusty dev stop`, it leaves no
-                // session record.
-                if status.code() == Some(HOST_PRODUCT_STOPPED_EXIT_CODE) {
-                    diagnostic(
-                        "stopped",
-                        serde_json::json!({ "reason": "product-stopped" }),
-                    );
+                if product_stopped(status) {
                     return Ok(());
                 }
                 if status.code() == Some(HOST_BIND_FAILURE_EXIT_CODE) {
@@ -445,6 +439,9 @@ fn dev(mut options: DevOptions) -> Result<(), String> {
         let mut replacement_failed = false;
         let started_after_restage = if let Some(active_child) = child.as_mut() {
             if let Some(status) = active_child.try_wait()? {
+                if product_stopped(status) {
+                    return Ok(());
+                }
                 diagnostic(
                     "child-exited-during-restage",
                     serde_json::json!({
@@ -460,6 +457,9 @@ fn dev(mut options: DevOptions) -> Result<(), String> {
                     Ok(()) => false,
                     Err(error) => {
                         if let Some(status) = active_child.try_wait()? {
+                            if product_stopped(status) {
+                                return Ok(());
+                            }
                             diagnostic(
                                 "child-exited-during-restage",
                                 serde_json::json!({
@@ -2887,6 +2887,20 @@ fn absolute(path: &Path) -> Result<PathBuf, String> {
     }
 }
 
+/// Whether the host ended because the player closed its window or the product
+/// asked to end, and if so reports the stop. It is an ordinary stop: no
+/// restart, and like `rusty dev stop` no session record.
+fn product_stopped(status: ExitStatus) -> bool {
+    let stopped = status.code() == Some(HOST_PRODUCT_STOPPED_EXIT_CODE);
+    if stopped {
+        diagnostic(
+            "stopped",
+            serde_json::json!({ "reason": "product-stopped" }),
+        );
+    }
+    stopped
+}
+
 fn diagnostic(event: &str, detail: Value) {
     println!(
         "RUSTY_DEV {}",
@@ -2963,6 +2977,25 @@ fn terminate(child: &mut Child, grace: Duration) {
 
 #[cfg(test)]
 mod tests {
+    /// The poll loop and both restage checks stop on the host's
+    /// product-stopped code; any other exit is left to them.
+    #[cfg(unix)]
+    #[test]
+    fn only_the_product_stopped_code_is_a_product_stop() {
+        use std::os::unix::process::ExitStatusExt;
+        let exited = |code: i32| std::process::ExitStatus::from_raw(code << 8);
+        assert!(super::product_stopped(exited(
+            super::HOST_PRODUCT_STOPPED_EXIT_CODE
+        )));
+        for code in [0, 1, super::HOST_BIND_FAILURE_EXIT_CODE] {
+            assert!(!super::product_stopped(exited(code)), "{code}");
+        }
+        // Killed by SIGKILL: no code at all.
+        assert!(!super::product_stopped(std::process::ExitStatus::from_raw(
+            9
+        )));
+    }
+
     #[test]
     fn path_lookup_finds_the_platform_executable() {
         let directory = std::env::temp_dir().join(format!("rusty-path-{}", std::process::id()));
