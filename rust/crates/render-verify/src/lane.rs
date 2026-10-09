@@ -28,8 +28,10 @@ pub const BASELINE_FILE: &str = "baseline.json";
 pub struct LaneSettings {
     pub width: u32,
     pub height: u32,
-    /// Frames drawn per render: the image is the last, the timings their
-    /// medians.
+    /// Frames timed per render, their medians the timings. The image is
+    /// drawn first, before them: a view seen once, so a feature filtered
+    /// over frames (volumetric fog, volumetric clouds) shows its first
+    /// frame, with no history.
     pub frames: u32,
     /// Degrees the camera turns each frame, so timings cover more than one
     /// view, as `rusty-scene-render --turn`.
