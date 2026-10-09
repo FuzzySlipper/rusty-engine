@@ -235,6 +235,11 @@ impl FrameOutput {
         Arc::clone(&self.driver)
     }
 
+    /// Whether the world streams to a browser page rather than a window.
+    pub(crate) fn streams(&self) -> bool {
+        self.stream.is_some()
+    }
+
     pub(crate) fn frames(&self) -> Option<Arc<ProductHostFrameStream>> {
         self.stream.as_ref().map(|(_, frames)| Arc::clone(frames))
     }

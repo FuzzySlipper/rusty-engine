@@ -576,7 +576,7 @@ the UI compiler:
 
 A TypeScript UI types what the Engine passes it against the pair's own
 declarations. Pass `$(RustyEngineProductUiTypes)` to `tsc` as one more input
-(or list it in the UI tsconfig's `files`), then import from the two modules it
+(or list it in the UI tsconfig's `files`), then import from the modules it
 declares:
 
 ```ts
@@ -589,9 +589,45 @@ export const mountProductUi: RustyApplicationUiMount = (root, context) => { /* .
 `@rusty-engine/product-ui` holds the mount signature, the context ports
 (`RustyApplicationUiContext`: `ui`, `projection`, `intents`, `input`) and the
 projection envelope. A claim's product payload takes the product's own typed
-data. `@rusty-engine/live-debug` is resolved at run time by the shell's import
-map. Add the file to `RustyEngineProductUiInput` so a pair move rebuilds the
-UI.
+data. `@rusty-engine/live-debug` and `@rusty-engine/video-options` are
+resolved at run time by the shell's import map. Add the file to
+`RustyEngineProductUiInput` so a pair move rebuilds the UI.
+
+### Video options
+
+`@rusty-engine/video-options` is the Engine's video options panel, for a
+game's settings menu. `mountVideoOptions(element, options)` draws every
+renderer setting the pair has
+([video options](lighting-and-sky.md#video-options)), with presets, applies a
+player's change at once and keeps it for the install. A game opts in by
+mounting it, trims and names it, and adds its own options beside the
+Engine's:
+
+```ts
+import { mountVideoOptions } from '@rusty-engine/video-options';
+
+const panel = await mountVideoOptions(menuElement, {
+  hide: ['gpuCulling', 'clusteredLighting'],      // ids a newer pair adds are simply shown
+  labels: { Display: 'Screen' },                   // option ids or group names
+  productOptions: [{
+    id: 'fieldOfView', label: 'Field of view', group: 'Game', description: '',
+    kind: 'range', min: 60, max: 110, step: 1, value: fov,
+    onChange: (value) => context.intents?.claim('settings.fov', /* the game's payload */),
+  }],
+});
+```
+
+The game applies its own options (through its intents, as any UI action)
+and calls `panel.setProductOptions` with their new values. The panel is
+styled by its `rusty-video-options*` classes and the
+`--rusty-video-options-*` custom properties on `.rusty-video-options`
+(background, foreground, muted, accent, border, warning, radius, font). It
+talks only to the product host's `/__rusty/product/runtime/video-options`
+route; the game's C# need not take part. A pair update brings the options
+that pair adds, with no change to the game; ids in `hide` or `labels` that
+the pinned pair does not have are ignored. The `csharp-lighting-sky`
+fixture mounts it behind a "Video options" button, with one option of its
+own.
 
 The SDK runs the command with MSBuild `Exec`: under `cmd.exe` on Windows and
 `/bin/sh` on Linux. Keep it one invocation both run, with quoted paths and no

@@ -32,6 +32,7 @@ use crate::audio::ProductHostAudioStream;
 use crate::frames::ProductHostFrameStream;
 use crate::presentation::{ProductHostPresentation, ProductHostPresentationReport};
 use crate::session::ProductHostOperationOwner;
+use crate::video_options::{ProductHostVideoOptions, ProductHostVideoOptionsRequest};
 
 const SOCKET_TIMEOUT: Duration = Duration::from_millis(750);
 const SSE_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(1);
@@ -61,6 +62,7 @@ pub struct ProductHostConfig {
     frames: Option<Arc<ProductHostFrameStream>>,
     audio: Option<Arc<ProductHostAudioStream>>,
     presentation: Option<Arc<ProductHostPresentation>>,
+    video_options: Option<Arc<ProductHostVideoOptions>>,
     capture: Option<crate::ProductHostFrameCapture>,
     ui_files: Option<ProductHostUiFiles>,
     activity: Option<Arc<crate::ProductHostActivity>>,
@@ -87,6 +89,7 @@ impl ProductHostConfig {
             frames: None,
             audio: None,
             presentation: None,
+            video_options: None,
             capture: None,
             ui_files: None,
             activity: None,
@@ -133,6 +136,13 @@ impl ProductHostConfig {
     /// `/__rusty/product/runtime/presentation`.
     pub fn with_presentation(mut self, presentation: Arc<ProductHostPresentation>) -> Self {
         self.presentation = Some(presentation);
+        self
+    }
+
+    /// Answer the video options panel at
+    /// `/__rusty/product/runtime/video-options`.
+    pub fn with_video_options(mut self, video_options: Arc<ProductHostVideoOptions>) -> Self {
+        self.video_options = Some(video_options);
         self
     }
 
@@ -223,6 +233,7 @@ impl ProductHost {
             audio: config.audio,
             audio_listeners: AtomicUsize::new(0),
             presentation: config.presentation,
+            video_options: config.video_options,
             capture: config.capture,
             ui_files: config.ui_files,
             activity: config.activity,
@@ -418,6 +429,7 @@ struct HostState<R> {
     audio: Option<Arc<ProductHostAudioStream>>,
     audio_listeners: AtomicUsize,
     presentation: Option<Arc<ProductHostPresentation>>,
+    video_options: Option<Arc<ProductHostVideoOptions>>,
     capture: Option<crate::ProductHostFrameCapture>,
     ui_files: Option<ProductHostUiFiles>,
     activity: Option<Arc<crate::ProductHostActivity>>,
@@ -1389,6 +1401,16 @@ fn dispatch_request<R: ProductHostRuntime>(
             }
             return invoke_debug_catalog(state);
         }
+        if request.path == crate::video_options::PRODUCT_HOST_VIDEO_OPTIONS_PATH {
+            if !request.body.is_empty() {
+                return HttpResponse::error(
+                    400,
+                    "PRODUCT_HOST_GET_BODY",
+                    "GET requests cannot carry a body",
+                );
+            }
+            return invoke_video_options(state, ProductHostVideoOptionsRequest::Read);
+        }
         if let Some(id) = request
             .path
             .strip_prefix(UI_IMAGES_PATH)
@@ -1495,6 +1517,18 @@ fn dispatch_request<R: ProductHostRuntime>(
         }
         crate::presentation::PRODUCT_HOST_PRESENTATION_PATH => {
             invoke_presentation(state, &request.body)
+        }
+        crate::video_options::PRODUCT_HOST_VIDEO_OPTIONS_PATH => {
+            match serde_json::from_slice::<serde_json::Value>(&request.body) {
+                Ok(change) => {
+                    invoke_video_options(state, ProductHostVideoOptionsRequest::Change(change))
+                }
+                Err(error) => HttpResponse::error(
+                    400,
+                    "PRODUCT_HOST_VIDEO_OPTIONS",
+                    &format!("the change is not JSON: {error}"),
+                ),
+            }
         }
         _ => HttpResponse::error(404, "PRODUCT_HOST_ROUTE_NOT_FOUND", "route is not admitted"),
     }
@@ -1871,6 +1905,25 @@ fn telemetry_snapshot<R: ProductHostRuntime>(
         .lock()
         .map(|telemetry| telemetry.snapshot(now_ns, input, transport))
         .unwrap_or_else(|_| HostTelemetry::default().snapshot(now_ns, input, transport))
+}
+
+fn invoke_video_options<R: ProductHostRuntime>(
+    state: &HostState<R>,
+    request: ProductHostVideoOptionsRequest,
+) -> HttpResponse {
+    let answer = state
+        .video_options
+        .as_ref()
+        .and_then(|options| options.answer(request));
+    match answer {
+        None => HttpResponse::error(
+            404,
+            "PRODUCT_HOST_VIDEO_OPTIONS",
+            "this runtime draws nothing, so it has no video options",
+        ),
+        Some(Ok(value)) => json_response(200, &value),
+        Some(Err(detail)) => HttpResponse::error(400, "PRODUCT_HOST_VIDEO_OPTIONS", &detail),
+    }
 }
 
 fn invoke_presentation<R: ProductHostRuntime>(state: &HostState<R>, body: &[u8]) -> HttpResponse {
@@ -3565,7 +3618,9 @@ mod tests {
                 let first = calls.iter().position(|call| *call == "observe").unwrap();
                 let last = calls.iter().rposition(|call| *call == "observe").unwrap();
                 assert!(
-                    !calls[first..=last].windows(2).any(|pair| pair == ["observe", "observe"]),
+                    !calls[first..=last]
+                        .windows(2)
+                        .any(|pair| pair == ["observe", "observe"]),
                     "{calls:?}"
                 );
             } else {
@@ -3609,6 +3664,7 @@ mod tests {
             audio: None,
             audio_listeners: AtomicUsize::new(0),
             presentation: None,
+            video_options: None,
             capture: None,
             ui_files: None,
             activity: None,
@@ -3664,6 +3720,7 @@ mod tests {
             audio: None,
             audio_listeners: AtomicUsize::new(0),
             presentation: None,
+            video_options: None,
             capture: None,
             ui_files: None,
             activity: None,
@@ -3754,6 +3811,7 @@ mod tests {
             audio: None,
             audio_listeners: AtomicUsize::new(0),
             presentation: None,
+            video_options: None,
             capture: None,
             ui_files: None,
             activity: None,
@@ -3804,6 +3862,7 @@ mod tests {
             audio: None,
             audio_listeners: AtomicUsize::new(0),
             presentation: None,
+            video_options: None,
             capture: None,
             ui_files: None,
             activity: None,

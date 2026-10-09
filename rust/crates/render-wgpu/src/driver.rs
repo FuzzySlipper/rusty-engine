@@ -126,6 +126,8 @@ struct Scene {
     composition_revision: u64,
     observer: Option<RendererCameraPose>,
     viewport_anchors: RendererViewportAnchors,
+    /// The player's choices of renderer settings, kept across rebaselines.
+    player_settings: render_model::RendererSettingsOverrides,
 }
 
 impl SceneDriver {
@@ -150,6 +152,7 @@ impl SceneDriver {
                 composition_revision: 0,
                 observer: None,
                 viewport_anchors: RendererViewportAnchors::new(),
+                player_settings: render_model::RendererSettingsOverrides::default(),
             }),
             gpu,
             options,
@@ -194,6 +197,8 @@ impl SceneDriver {
         scene.renderer.set_observer(observer);
         let anchors = scene.viewport_anchors.clone();
         scene.renderer.set_viewport_anchors(anchors);
+        let player = scene.player_settings;
+        scene.renderer.set_player_settings(player);
         scene.renderer_id += 1;
         scene.composition = None;
         scene.composition_revision = 0;
@@ -240,6 +245,17 @@ impl SceneDriver {
         }
         scene.viewport_anchors = anchors.clone();
         scene.renderer.set_viewport_anchors(anchors);
+        scene.changed = true;
+        drop(scene);
+        self.wake.notify_all();
+    }
+
+    /// The player's choices of renderer settings (video options), over
+    /// every product request; the next frame draws with them.
+    pub fn set_player_settings(&self, player: render_model::RendererSettingsOverrides) {
+        let mut scene = self.scene();
+        scene.player_settings = player;
+        scene.renderer.set_player_settings(player);
         scene.changed = true;
         drop(scene);
         self.wake.notify_all();

@@ -284,6 +284,52 @@ those ranges.
 `lighting.occlusion`, `lighting.shadows` and `lighting.pipeline` commands
 exercise it.
 
+## Video options
+
+A player chooses renderer settings in the game's options menu: the Engine's
+video options panel
+([the product project](csharp-product-project.md#video-options)), which
+draws a catalogue of every setting this pair has. The player's choices apply
+over the game's own: over the manifest at startup and over every
+`RendererSettings.Set`, so a game that sets its settings again does not undo
+them, and a choice the player forgets returns to the game's value. `Read()`
+reports `Requested` with the player's choices in it. The choices are kept for
+the install in `engine-video-options.json` under the persistence root, read
+at startup; a game run without a persistence root keeps them for the session
+only, and a damaged file is reported and ignored.
+
+| Option | Group | Values |
+| --- | --- | --- |
+| `renderScale` | Display | 0.5 to 1 in steps of 0.05 |
+| `antialiasing` | Display | `off`, `2x`, `4x` |
+| `vsync` | Display | on or off |
+| `shadows` | Quality | on or off |
+| `shadowBudget` | Quality | `4`, `8`, `16`, `32`, `none` |
+| `ambientOcclusion` | Lighting | `disabled`, `screenSpace`, `distanceField` |
+| `ambientOcclusionStrength` | Lighting | 0 to 2 |
+| `ambientOcclusionRadius` | Lighting | 0.25 to 2 m |
+| `clusteredLighting` | Advanced | on or off |
+| `gpuCulling` | Advanced | on or off |
+
+The presets Low, Medium, High and Ultra set render scale, antialiasing,
+shadows, their budget and the occlusion mode, over the player's other
+choices. A setting the device refuses is shown with the reason, from the
+same refusals the readout carries. The panel's route,
+`/__rusty/product/runtime/video-options`, answers `GET` with the catalogue
+(each option's `value` drawn, `requested`, `gameDefault`, `chosen` and
+`refused`) and `POST` with one change: `{"choose": {"id", "value"}}`,
+`{"forget": id}`, `{"forget": null}` for every choice, or
+`{"preset": id}`. A scene snapshot records the player's choices, and
+`rusty-scene-render` applies them, with its own feature flags as choices
+over them.
+
+A new renderer setting joins the catalogue in the commit that adds it:
+its entry in `RENDERER_SETTING_OPTIONS`, its field and value mapping in
+`RendererSettingsOverrides` and `renderer_setting_value`
+(`render-model/src/settings_options.rs`), and its refusal, if it has one, in
+the runtime's video options. The panel and the feature gallery then offer it
+to every game on that pair.
+
 ## Contact darkening: screen-space ambient occlusion
 
 The sky's shadow darkens at the scale of a cave; screen-space ambient

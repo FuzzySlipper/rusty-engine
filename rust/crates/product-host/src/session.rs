@@ -143,8 +143,10 @@ impl<R: ProductHostRuntime> ProductHostOperationOwner<R> {
     pub fn present_realtime(
         &self,
         observed_time_ns: CanonicalU64,
-    ) -> Result<Option<ProductHostRuntimeReceipt<ProductHostOperationResult>>, ProductHostRuntimeError>
-    {
+    ) -> Result<
+        Option<ProductHostRuntimeReceipt<ProductHostOperationResult>>,
+        ProductHostRuntimeError,
+    > {
         self.session
             .with_locked(|runtime| runtime.present_realtime(observed_time_ns))
             .map_err(|_| runtime_poisoned())?

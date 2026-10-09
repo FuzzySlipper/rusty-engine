@@ -1788,8 +1788,10 @@ pub trait ProductHostRuntime: Send + 'static {
     fn present_realtime(
         &mut self,
         _observed_time_ns: CanonicalU64,
-    ) -> Result<Option<ProductHostRuntimeReceipt<ProductHostOperationResult>>, ProductHostRuntimeError>
-    {
+    ) -> Result<
+        Option<ProductHostRuntimeReceipt<ProductHostOperationResult>>,
+        ProductHostRuntimeError,
+    > {
         Ok(None)
     }
 

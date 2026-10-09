@@ -279,7 +279,32 @@ fn run() -> Result<(), String> {
     if let Some(scale) = render_scale {
         options.render_scale = scale;
     }
+    // The snapshot's player choices, and the flags as choices over them, so
+    // the flags hold over a product's own settings in the scene.
+    let mut player = snapshot.metadata.player_settings;
+    let flagged = options.settings();
+    if ambient_occlusion.is_some() {
+        player.ambient_occlusion = Some(flagged.ambient_occlusion.mode);
+    }
+    if ambient_occlusion_strength.is_some() {
+        player.ambient_occlusion_strength = Some(flagged.ambient_occlusion.strength);
+    }
+    if ambient_occlusion_radius.is_some() {
+        player.ambient_occlusion_radius = Some(flagged.ambient_occlusion.radius);
+    }
+    if clustered_lighting.is_some() {
+        player.clustered_lighting = Some(flagged.clustered_lighting);
+    }
+    if gpu_culling.is_some() {
+        player.gpu_culling = Some(flagged.gpu_culling);
+    }
+    if render_scale.is_some() {
+        player.render_scale = Some(flagged.render_scale);
+    }
     let driver = SceneDriver::new(gpu, options);
+    if !player.is_empty() {
+        driver.set_player_settings(player);
+    }
     let applied = Instant::now();
     driver.rebaseline(
         snapshot.scene_changes(),

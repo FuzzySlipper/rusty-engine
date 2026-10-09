@@ -23,6 +23,9 @@ importers:
       '@rusty-engine/product-browser-host':
         specifier: workspace:*
         version: link:packages/product-browser-host
+      '@rusty-engine/video-options':
+        specifier: workspace:*
+        version: link:packages/video-options
       '@types/node':
         specifier: ^25.0.0
         version: 25.9.5
@@ -62,6 +65,12 @@ importers:
       '@rusty-engine/application-host':
         specifier: workspace:*
         version: link:../application-host
+      '@types/node':
+        specifier: ^24.0.0
+        version: 24.13.3
+
+  packages/video-options:
+    devDependencies:
       '@types/node':
         specifier: ^24.0.0
         version: 24.13.3

@@ -179,6 +179,7 @@ fn main() -> Result<(), String> {
         .with_diagnostics(diagnostics)
         .with_ui_files(runtime.ui_files());
     config = config.with_presentation(runtime.presentation());
+    config = config.with_video_options(runtime.video_options());
     if let Some(audio) = runtime.audio_stream() {
         config = config.with_audio_stream(audio);
     }

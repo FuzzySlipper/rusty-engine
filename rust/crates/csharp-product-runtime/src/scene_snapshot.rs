@@ -38,6 +38,13 @@ pub struct SceneSnapshotMetadata {
     pub written_at_unix_ms: u64,
     pub state: SceneSnapshotState,
     pub options: SceneSnapshotOptions,
+    /// The player's video-option choices, over the options and any product
+    /// request; snapshots written before video options had none.
+    #[serde(
+        default,
+        skip_serializing_if = "render_model::RendererSettingsOverrides::is_empty"
+    )]
+    pub player_settings: render_model::RendererSettingsOverrides,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -510,6 +517,7 @@ mod tests {
                 held: true,
             },
             options: render_wgpu::RendererOptions::default().into(),
+            player_settings: Default::default(),
         };
         let path = directory.path().join("scene.rscene");
         let report = write_scene_snapshot(

@@ -143,6 +143,18 @@ fn the_driver_reports_what_it_drew_and_ends_clips_undrawn() {
         scene.wait_for_change(Duration::from_secs(5), |changed| changed.then_some(())),
         Some(())
     );
+
+    // The player's video-option choices survive a rebaseline, which builds
+    // a new renderer.
+    let mut player = render_model::RendererSettingsOverrides::default();
+    player
+        .choose("antialiasing", &serde_json::json!("off"))
+        .unwrap();
+    scene.set_player_settings(player);
+    scene.rebaseline([], &NoResources, &|_| None, state(4, true));
+    let readout = scene.settings_readout();
+    assert_eq!(readout.player, player);
+    assert_eq!(readout.requested.antialiasing, 1);
     drop(scene);
 
     // Undrawn, a clip still ends on Engine time: waiting advances the scene

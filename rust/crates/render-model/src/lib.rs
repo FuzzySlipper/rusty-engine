@@ -14,6 +14,7 @@ mod mesh;
 mod mesh_partition;
 mod mesh_resource;
 mod scatter;
+mod settings_options;
 mod voxel_object;
 
 pub use assets::*;
@@ -24,6 +25,7 @@ pub use mesh::*;
 pub use mesh_partition::*;
 pub use mesh_resource::*;
 pub use scatter::*;
+pub use settings_options::*;
 pub use voxel_object::*;
 
 mod irradiance;

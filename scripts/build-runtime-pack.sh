@@ -77,7 +77,7 @@ cargo build --locked --release -p rusty-cli --bin rusty
 # (Rusty.Engine.Testing.EngineTestHost).
 cargo build --locked --release -p csharp-engine-test-host --lib
 
-install -d "$STAGE/bin" "$STAGE/share/browser/engine/live-debug-panel" \
+install -d "$STAGE/bin" "$STAGE/share/browser/engine/live-debug-panel" "$STAGE/share/browser/engine/video-options" \
   "$STAGE/share/live-debug-client" "$STAGE/share/live-debug-panel" "$STAGE/symbols"
 release="${CARGO_TARGET_DIR:-target}/release"
 for binary in rusty-product-host rusty-live-debug rusty-scene-render rusty; do
@@ -92,6 +92,8 @@ install -m 644 render/artifacts/product-browser-host/product-browser-host.js \
   "$STAGE/share/browser/engine/product-browser-host.js"
 install -m 644 render/artifacts/live-debug-panel/index.js \
   "$STAGE/share/browser/engine/live-debug-panel/index.js"
+install -m 644 render/artifacts/video-options/index.js \
+  "$STAGE/share/browser/engine/video-options/index.js"
 install -m 644 render/packages/product-browser-host/runtime-pack-shell/index.html \
   "$STAGE/share/browser/index.html"
 install -m 644 render/packages/product-browser-host/runtime-pack-shell/main.js \

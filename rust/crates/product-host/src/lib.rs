@@ -48,6 +48,7 @@ mod session;
 mod timeline;
 #[cfg(test)]
 mod typescript;
+mod video_options;
 
 pub use activity::ProductHostActivity;
 pub use audio::{
@@ -112,6 +113,9 @@ pub use publication::{
 pub use scheduler::advance_realtime_with_input_and_publish;
 pub use session::{ProductHostOperationOwner, RuntimeSession};
 pub use timeline::TimelineCompletionOutcome;
+pub use video_options::{
+    ProductHostVideoOptions, ProductHostVideoOptionsRequest, PRODUCT_HOST_VIDEO_OPTIONS_PATH,
+};
 
 /// Upper bound for one HTTP request header block, including its terminator.
 pub const MAX_REQUEST_HEADER_BYTES: usize = 16 * 1024;

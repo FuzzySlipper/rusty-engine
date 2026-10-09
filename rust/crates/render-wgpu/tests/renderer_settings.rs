@@ -6,6 +6,7 @@ mod support;
 
 use render_model::{
     AmbientOcclusionMode, AmbientOcclusionSettings, RenderDiff, RendererSettingsDescriptor,
+    RendererSettingsOverrides,
 };
 use render_wgpu::{OffscreenTarget, RendererOptions, SettingRefusal};
 use support::{camera, Harness, HEIGHT, WIDTH};
@@ -70,6 +71,51 @@ fn settings_change_the_options_the_renderer_draws_with() {
         harness.renderer.settings_readout().antialiasing,
         Some(SettingRefusal::UnsupportedSampleCount)
     );
+}
+
+#[test]
+fn the_players_choices_hold_over_every_product_request() {
+    let mut harness = Harness::new(RendererOptions::default());
+    let mut player = RendererSettingsOverrides::default();
+    player
+        .choose("antialiasing", &serde_json::json!("off"))
+        .unwrap();
+    player
+        .choose("ambientOcclusion", &serde_json::json!("disabled"))
+        .unwrap();
+    harness.renderer.set_player_settings(player);
+    assert_eq!(harness.renderer.samples(), 1, "the choice applies at once");
+
+    // The product asks for 4x and screen-space occlusion: the player's
+    // choices stay, the rest of the request is taken.
+    harness.apply(vec![RenderDiff::SetRendererSettings {
+        settings: RendererSettingsDescriptor {
+            antialiasing: 4,
+            ..settings()
+        },
+    }]);
+    let readout = harness.renderer.settings_readout();
+    assert_eq!(readout.product.antialiasing, 4);
+    assert_eq!(readout.requested.antialiasing, 1);
+    assert_eq!(
+        readout.requested.ambient_occlusion.mode,
+        AmbientOcclusionMode::Disabled
+    );
+    assert_eq!(
+        readout.requested.shadow_budget,
+        Some(2),
+        "not chosen: the product's"
+    );
+    assert_eq!(readout.player, player);
+    assert_eq!(harness.renderer.samples(), 1);
+
+    // Forgetting the choices restores the product's request.
+    harness
+        .renderer
+        .set_player_settings(RendererSettingsOverrides::default());
+    let readout = harness.renderer.settings_readout();
+    assert_eq!(readout.requested, readout.product);
+    assert_eq!(harness.renderer.samples(), 4);
 }
 
 #[test]

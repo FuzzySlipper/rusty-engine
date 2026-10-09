@@ -205,7 +205,8 @@ impl PresentationCadence {
 
     pub fn set(&self, interval: std::time::Duration) {
         let nanoseconds = interval.as_nanos().clamp(1, u128::from(u64::MAX)) as u64;
-        self.0.store(nanoseconds, std::sync::atomic::Ordering::Relaxed);
+        self.0
+            .store(nanoseconds, std::sync::atomic::Ordering::Relaxed);
     }
 
     pub fn interval(&self) -> std::time::Duration {
@@ -694,6 +695,7 @@ mod audio_output;
 mod frame_output;
 mod render_output;
 pub mod scene_snapshot;
+mod video_options;
 
 pub use product_host::ProductHostRenderOutput as RenderOutput;
 
@@ -769,6 +771,9 @@ pub struct CsharpProductRuntime {
     /// How the page presents the product: its surface, UI scale and
     /// anchored rects. The renderer follows the anchors as they arrive.
     presentation: Arc<product_host::ProductHostPresentation>,
+    /// The player's video options: the renderer settings they chose, served
+    /// to the Engine's options panel and stored for the install.
+    video_options: Arc<product_host::ProductHostVideoOptions>,
     /// Runs the product's RenderOutput jobs.
     render_outputs: render_output::OutputExecutor,
     /// What a scene snapshot records about the renderer and the Product.
@@ -865,6 +870,15 @@ impl CsharpProductRuntime {
             presentation.set_anchor_listener(move |anchors| {
                 driver.set_viewport_anchors(anchors.clone());
             });
+        }
+        let video_options = product_host::ProductHostVideoOptions::new();
+        if let Some(frames) = &frame_output {
+            video_options::install(
+                &video_options,
+                frames.driver(),
+                persistence_root.as_deref(),
+                frames.streams(),
+            );
         }
         // The process that draws the world plays its sound.
         let audio_output = match frame_output {
@@ -1055,6 +1069,7 @@ impl CsharpProductRuntime {
             audio_output,
             frame_output,
             presentation,
+            video_options,
             render_outputs,
             renderer_options: config.renderer_options,
             product: config.product,
@@ -2620,6 +2635,11 @@ impl CsharpProductRuntime {
                 .map_or(0, |since| since.as_millis() as u64),
             state: frame_output::scene_state(&self.services, self.frame_simulation()).into(),
             options: self.renderer_options.into(),
+            player_settings: self
+                .frame_output
+                .as_ref()
+                .map(|frames| frames.driver().settings_readout().player)
+                .unwrap_or_default(),
         };
         let resources = self
             .services
@@ -2674,6 +2694,12 @@ impl CsharpProductRuntime {
     /// Where the page reports how it presents the product.
     pub fn presentation(&self) -> Arc<product_host::ProductHostPresentation> {
         Arc::clone(&self.presentation)
+    }
+
+    /// Where the Engine's video options panel reads and changes the
+    /// player's renderer settings.
+    pub fn video_options(&self) -> Arc<product_host::ProductHostVideoOptions> {
+        Arc::clone(&self.video_options)
     }
 
     /// The mixed audio the watching pages play, when audio output is
@@ -3254,7 +3280,9 @@ impl ProductHostRuntime for CsharpProductRuntime {
 
     fn presentation_interval(&self) -> Option<std::time::Duration> {
         let presented = self.presentation_cadence.interval();
-        let shows_more = self.realtime_schedule_interval().is_some_and(|step| presented < step);
+        let shows_more = self
+            .realtime_schedule_interval()
+            .is_some_and(|step| presented < step);
         (shows_more
             && self.lifecycle.state() == RuntimeState::Running
             && self.playtest_time == playtest::TimeMode::Realtime
@@ -3265,8 +3293,10 @@ impl ProductHostRuntime for CsharpProductRuntime {
     fn present_realtime(
         &mut self,
         observed_time_ns: CanonicalU64,
-    ) -> Result<Option<ProductHostRuntimeReceipt<ProductHostOperationResult>>, ProductHostRuntimeError>
-    {
+    ) -> Result<
+        Option<ProductHostRuntimeReceipt<ProductHostOperationResult>>,
+        ProductHostRuntimeError,
+    > {
         let observed = observed_time_ns.get();
         let (Some(last), Some(owed_steps)) = (
             self.tween_observed_ns,

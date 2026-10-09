@@ -62,7 +62,10 @@ pub mod web;
 
 use std::collections::HashMap;
 
-use render_model::{AmbientOcclusionMode, IndirectLightDescriptor, RendererSettingsDescriptor};
+use render_model::{
+    AmbientOcclusionMode, IndirectLightDescriptor, RendererSettingsDescriptor,
+    RendererSettingsOverrides,
+};
 
 /// The CPU-side realization vocabulary, for readers that need exactly the
 /// geometry and materials the renderer draws without a device
@@ -209,18 +212,24 @@ impl Default for RendererOptions {
 
 impl RendererOptions {
     /// These options with a product's settings realized. The Engine's own
-    /// choices stay here: which occlusion path draws a mode, and the
-    /// default light rigs.
+    /// choices stay here: which occlusion path draws a mode (kept while the
+    /// mode is unchanged, so a host's choice of the compute path survives),
+    /// and the default light rigs.
     pub fn with_settings(mut self, settings: &RendererSettingsDescriptor) -> Self {
         self.shadows = settings.shadows;
         self.shadow_budget = settings.shadow_budget;
+        let mode = settings.ambient_occlusion.mode;
         self.ambient_occlusion = AmbientOcclusion {
-            path: match settings.ambient_occlusion.mode {
-                AmbientOcclusionMode::Disabled => AmbientOcclusionPath::Off,
-                // The raster path draws the compute path's image and costs
-                // less on the GPUs measured (Den `compute-ao-9510`).
-                AmbientOcclusionMode::ScreenSpace => AmbientOcclusionPath::Raster,
-                AmbientOcclusionMode::DistanceField => AmbientOcclusionPath::DistanceField,
+            path: if self.settings().ambient_occlusion.mode == mode {
+                self.ambient_occlusion.path
+            } else {
+                match mode {
+                    AmbientOcclusionMode::Disabled => AmbientOcclusionPath::Off,
+                    // The raster path draws the compute path's image and
+                    // costs less on the GPUs measured (Den `compute-ao-9510`).
+                    AmbientOcclusionMode::ScreenSpace => AmbientOcclusionPath::Raster,
+                    AmbientOcclusionMode::DistanceField => AmbientOcclusionPath::DistanceField,
+                }
             },
             strength: settings.ambient_occlusion.strength,
             radius: settings.ambient_occlusion.radius,
@@ -276,8 +285,13 @@ pub enum SettingRefusal {
 /// reads back through `RendererSettings`.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct RendererSettingsReadout {
-    /// What the product (or its manifest) asked for.
+    /// What is asked of the device: the product's request with the
+    /// player's choices over it.
     pub requested: RendererSettingsDescriptor,
+    /// What the product (or its manifest) asked for.
+    pub product: RendererSettingsDescriptor,
+    /// The player's choices (video options), applied over the product's.
+    pub player: RendererSettingsOverrides,
     /// What draws: the request with each refused setting replaced by what
     /// the device does instead.
     pub effective: RendererSettingsDescriptor,
@@ -290,7 +304,11 @@ pub struct RendererSettingsReadout {
 
 pub struct Renderer {
     gpu: Gpu,
+    /// The options in effect: `product_settings` with `player_settings` over
+    /// them.
     options: RendererOptions,
+    product_settings: RendererSettingsDescriptor,
+    player_settings: RendererSettingsOverrides,
     layouts: Layouts,
     pipelines: Vec<Pipelines>,
     tables: Tables,
@@ -487,6 +505,8 @@ impl Renderer {
         );
         let mut renderer = Self {
             gpu: gpu.clone(),
+            product_settings: options.settings(),
+            player_settings: RendererSettingsOverrides::default(),
             options,
             layouts,
             pipelines: Vec::new(),
@@ -584,7 +604,22 @@ impl Renderer {
     /// Change host options; lights (and shadow layers) are re-derived on the
     /// next render. Retained chunk fields take or give up their atlas bricks
     /// as the occlusion path enters or leaves the distance-field path.
+    /// Replace the options. Their settings are the product's: the player's
+    /// choices (`set_player_settings`) still apply over them.
     pub fn set_options(&mut self, options: RendererOptions) {
+        self.product_settings = options.settings();
+        let layered = options.with_settings(&self.player_settings.apply(self.product_settings));
+        self.realize_options(layered);
+    }
+
+    /// The player's choices (video options), applied over every product
+    /// request from now on, and over the current one at once.
+    pub fn set_player_settings(&mut self, player: RendererSettingsOverrides) {
+        self.player_settings = player;
+        self.set_options(self.options.with_settings(&self.product_settings));
+    }
+
+    fn realize_options(&mut self, options: RendererOptions) {
         let traced = |options: &RendererOptions| {
             options.ambient_occlusion.path == AmbientOcclusionPath::DistanceField
         };
@@ -667,6 +702,8 @@ impl Renderer {
         });
         RendererSettingsReadout {
             requested,
+            product: self.product_settings,
+            player: self.player_settings,
             effective,
             ambient_occlusion,
             antialiasing,
