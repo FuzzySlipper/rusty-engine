@@ -706,6 +706,10 @@ pub struct NativeMaterialRequest {
     /// Shade each triangle flat from its own plane, whatever normals the
     /// mesh carries, with no normal map: low-poly props read as faceted.
     pub flat_shading: bool,
+    /// Stay dry under the scene's wetness (`CameraView.SetWetness`): shaded
+    /// as on a dry day beside surfaces that wet, such as a sheltered sign or
+    /// a waxed hull. False (the default) wets with the scene.
+    pub keep_dry: bool,
     /// Sway in the scene's wind (`CameraView.SetWind`): how far each metre
     /// of a vertex's height above the part's origin leans with the wind at
     /// unit strength, in metres (a trunk, a stalk). 0 with `wind_flutter` 0

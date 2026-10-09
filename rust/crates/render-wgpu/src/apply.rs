@@ -46,8 +46,9 @@ pub struct ApplyIssue {
 /// occlusion strength, triplanar sharpness and stochastic tiling contrast;
 /// each slot's uv set; a
 /// product shader's 16 parameters; terrain layers 1 to 3's tilings, sample
-/// rects and normal scales, and the layer contrast.
-const MATERIAL_UNIFORM_BYTES: usize = 464;
+/// rects and normal scales, and the layer contrast; the wind; the water
+/// feature's four rows; whether the surface keeps dry.
+const MATERIAL_UNIFORM_BYTES: usize = 480;
 /// Anisotropic filtering of mipmapped material textures.
 const MATERIAL_ANISOTROPY: u16 = 16;
 /// Payload groups without a voxel material are fully rough.
@@ -1696,6 +1697,8 @@ pub(crate) struct MaterialParams {
     pub alpha_cutoff: Option<f32>,
     pub unlit: bool,
     pub flat_shading: bool,
+    /// Wetness passes it by (`MaterialUniform.weather`).
+    pub keep_dry: bool,
     /// Sway in the scene's wind (`rusty::wind`).
     pub wind: Option<render_model::MaterialWindDescriptor>,
     /// A water surface (`world.wgsl` `water_surface`); its textures are in
@@ -1857,6 +1860,7 @@ impl MaterialParams {
             alpha_cutoff: cutoff,
             unlit: descriptor.unlit,
             flat_shading: descriptor.flat_shading,
+            keep_dry: descriptor.keep_dry,
             wind: descriptor.wind,
             water: descriptor.water.clone(),
             metalness: descriptor.metalness,
@@ -2093,6 +2097,7 @@ pub(crate) fn material_bind_group(
         floats[114] = water.foam_threshold;
         floats[115] = water.wave_scale;
     }
+    floats[116] = if params.keep_dry { 1.0 } else { 0.0 };
     let uniform: &[u8] = bytemuck::cast_slice(&floats);
     let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some(label),
@@ -2205,6 +2210,7 @@ pub(crate) fn builtin_materials(
                 alpha_cutoff: None,
                 unlit: true,
                 flat_shading: false,
+                keep_dry: false,
                 wind: None,
                 water: None,
                 metalness: 0.0,
@@ -2235,6 +2241,7 @@ pub(crate) fn builtin_materials(
                 alpha_cutoff: None,
                 unlit: false,
                 flat_shading: false,
+                keep_dry: false,
                 wind: None,
                 water: None,
                 metalness: 0.0,

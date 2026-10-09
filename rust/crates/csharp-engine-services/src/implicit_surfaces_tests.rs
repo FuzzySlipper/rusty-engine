@@ -42,6 +42,7 @@ fn opaque_material() -> NativeMaterialRequest {
         occlusion_strength: 0.0,
         unlit: false,
         flat_shading: false,
+        keep_dry: false,
         wind_bend: 0.0,
         wind_flutter: 0.0,
         water: Default::default(),

@@ -227,3 +227,76 @@ fn wetting_does_not_raise_an_already_smooth_materials_roughness() {
     let at = (((HEIGHT - 10) * WIDTH + WIDTH / 2) * 4) as usize;
     assert!(wet[at] <= dry[at], "dry {} wet {}", dry[at], wet[at]);
 }
+
+#[test]
+fn a_material_that_keeps_dry_stays_dry_beside_one_that_wets() {
+    // Two slabs on the ground before the camera, the same sand: the left
+    // one's material wets with the scene, the right one's keeps dry.
+    let mut harness = scene();
+    let mut dry = material("material/dry-sand", [0.8, 0.7, 0.5, 1.0], None);
+    dry.keep_dry = true;
+    harness.apply(vec![
+        RenderDiff::DefineMaterial {
+            material: material("material/wet-sand", [0.8, 0.7, 0.5, 1.0], None),
+        },
+        RenderDiff::DefineMaterial { material: dry },
+        static_mesh(
+            "mesh/wet-slab",
+            box_mesh([-3.5, 0.0, -2.0], [-0.2, 0.05, 6.0], |_| 0),
+            "material/wet-sand",
+        ),
+        static_mesh(
+            "mesh/dry-slab",
+            box_mesh([0.2, 0.0, -2.0], [3.5, 0.05, 6.0], |_| 0),
+            "material/dry-sand",
+        ),
+        instance(
+            30,
+            None,
+            "mesh/wet-slab",
+            transform([0.0; 3], 0.0, [1.0; 3]),
+        ),
+        instance(
+            31,
+            None,
+            "mesh/dry-slab",
+            transform([0.0; 3], 0.0, [1.0; 3]),
+        ),
+    ]);
+    // The middle of each slab near the camera.
+    let (rows, left_columns, right_columns) = (
+        HEIGHT - 24..HEIGHT - 4,
+        WIDTH / 4 - 15..WIDTH / 4 + 15,
+        3 * WIDTH / 4 - 15..3 * WIDTH / 4 + 15,
+    );
+    let left = |rgba: &[u8]| region(rgba, left_columns.clone(), rows.clone());
+    let right = |rgba: &[u8]| region(rgba, right_columns.clone(), rows.clone());
+    let bare = look(&mut harness);
+    harness.apply(vec![wet(1.0, 0.0)]);
+    let soaked = look(&mut harness);
+    assert!(
+        left(&soaked).0 < left(&bare).0 * 0.85,
+        "the wettable slab darkens: dry {:.1}, wet {:.1}",
+        left(&bare).0,
+        left(&soaked).0
+    );
+    let pixels = |rgba: &[u8]| -> Vec<u8> {
+        rgba.as_chunks::<4>()
+            .0
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| {
+                let (x, y) = (*index as u32 % WIDTH, *index as u32 / WIDTH);
+                right_columns.contains(&x) && rows.contains(&y)
+            })
+            .flat_map(|(_, pixel)| *pixel)
+            .collect()
+    };
+    assert_eq!(
+        pixels(&soaked),
+        pixels(&bare),
+        "the slab that keeps dry draws exactly as on a dry day: {:.1} vs {:.1}",
+        right(&bare).0,
+        right(&soaked).0
+    );
+}

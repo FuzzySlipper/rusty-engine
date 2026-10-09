@@ -419,6 +419,11 @@ pub struct RenderMaterialDescriptor {
     /// `FLAT_SHADING`): low-poly props read as faceted.
     #[serde(default, skip_serializing_if = "is_false")]
     pub flat_shading: bool,
+    /// Stay dry under the scene's wetness (`WetnessDescriptor`): the
+    /// surface is shaded as on a dry day beside wet ones, such as a
+    /// sheltered sign, an awning's underside or a waxed hull.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub keep_dry: bool,
     /// Sway in the scene's wind (`WindDescriptor`; the standard shader's
     /// `WIND`): the part leans with height above its origin and its vertices
     /// flutter by their colour's alpha, in the shadow maps too.
@@ -1937,6 +1942,7 @@ mod tests {
             occlusion_map: Default::default(),
             unlit: false,
             flat_shading: false,
+            keep_dry: false,
             wind: None,
             water: None,
             translucent_shadow: false,
@@ -1999,6 +2005,7 @@ mod tests {
             occlusion_map: Default::default(),
             unlit: false,
             flat_shading: false,
+            keep_dry: false,
             wind: None,
             water: None,
             translucent_shadow: false,

@@ -87,6 +87,7 @@ pub fn project_catalog_material(
         occlusion_map: None,
         unlit: false,
         flat_shading: false,
+        keep_dry: false,
         wind: None,
         water: None,
         translucent_shadow: false,

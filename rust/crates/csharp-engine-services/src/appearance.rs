@@ -9506,6 +9506,7 @@ fn render_material(id: String, color: NativeColor) -> RenderMaterialDescriptor {
         occlusion_map: Default::default(),
         unlit: false,
         flat_shading: false,
+        keep_dry: false,
         wind: None,
         water: None,
         translucent_shadow: false,
@@ -9708,6 +9709,7 @@ fn material_descriptor(
         normal_map,
         unlit: request.unlit,
         flat_shading: request.flat_shading,
+        keep_dry: request.keep_dry,
         wind: (request.wind_bend != 0.0 || request.wind_flutter != 0.0).then_some(
             render_model::MaterialWindDescriptor {
                 bend: request.wind_bend,
@@ -10643,6 +10645,7 @@ pub(super) mod tests {
                 orm_map: Default::default(),
                 occlusion_strength: 0.0,
                 flat_shading: false,
+                keep_dry: false,
                 wind_bend: 0.0,
                 wind_flutter: 0.0,
                 water: Default::default(),
@@ -10802,6 +10805,7 @@ pub(super) mod tests {
                 orm_map: Default::default(),
                 occlusion_strength: 0.0,
                 flat_shading: false,
+                keep_dry: false,
                 wind_bend: 0.0,
                 wind_flutter: 0.0,
                 water: Default::default(),
@@ -11021,6 +11025,7 @@ pub(super) mod tests {
                 occlusion_strength: 0.0,
                 unlit: false,
                 flat_shading: false,
+                keep_dry: false,
                 wind_bend: 0.0,
                 wind_flutter: 0.0,
                 water: Default::default(),
@@ -11233,6 +11238,7 @@ pub(super) mod tests {
                 occlusion_strength: 0.0,
                 unlit: false,
                 flat_shading: false,
+                keep_dry: false,
                 wind_bend: 0.0,
                 wind_flutter: 0.0,
                 water: Default::default(),
@@ -11780,6 +11786,7 @@ pub(super) mod tests {
             occlusion_strength: 0.0,
             unlit: false,
             flat_shading: false,
+            keep_dry: false,
             wind_bend: 0.0,
             wind_flutter: 0.0,
             water: Default::default(),
@@ -11843,6 +11850,7 @@ pub(super) mod tests {
             occlusion_strength: 0.0,
             unlit: false,
             flat_shading: false,
+            keep_dry: false,
             wind_bend: 0.0,
             wind_flutter: 0.0,
             water: Default::default(),
@@ -11852,6 +11860,20 @@ pub(super) mod tests {
         let descriptor = material_descriptor("material/metal".to_owned(), metal, &resources)
             .expect("metal material");
         assert_eq!(descriptor.metalness, 1.0);
+        assert!(
+            !descriptor.keep_dry,
+            "a material wets with the scene by default"
+        );
+        let dry = material_descriptor(
+            "material/dry".to_owned(),
+            NativeMaterialRequest {
+                keep_dry: true,
+                ..metal
+            },
+            &resources,
+        )
+        .expect("dry material");
+        assert!(dry.keep_dry, "KeepDry reaches the descriptor");
         let error = material_descriptor(
             "material/over".to_owned(),
             NativeMaterialRequest {
@@ -11898,6 +11920,7 @@ pub(super) mod tests {
             occlusion_strength: 0.0,
             unlit: false,
             flat_shading: false,
+            keep_dry: false,
             wind_bend: 0.0,
             wind_flutter: 0.0,
             water: Default::default(),
@@ -12068,6 +12091,7 @@ pub(super) mod tests {
             occlusion_strength: 0.0,
             unlit: false,
             flat_shading: false,
+            keep_dry: false,
             wind_bend: 0.0,
             wind_flutter: 0.0,
             water: Default::default(),
@@ -12165,6 +12189,7 @@ fn shade(surface: Surface) -> vec4<f32> {
                 occlusion_strength: 0.0,
                 unlit: false,
                 flat_shading: false,
+                keep_dry: false,
                 wind_bend: 0.0,
                 wind_flutter: 0.0,
                 water: Default::default(),
@@ -12285,6 +12310,7 @@ fn shade(surface: Surface) -> vec4<f32> {
             occlusion_strength: 0.0,
             unlit: false,
             flat_shading: false,
+            keep_dry: false,
             wind_bend: 0.0,
             wind_flutter: 0.0,
             water: Default::default(),
@@ -12416,6 +12442,7 @@ fn shade(surface: Surface) -> vec4<f32> {
                     occlusion_strength: 0.0,
                     unlit: false,
                     flat_shading: false,
+                    keep_dry: false,
                     wind_bend: 0.0,
                     wind_flutter: 0.0,
                     water: Default::default(),
@@ -12651,6 +12678,7 @@ fn shade(surface: Surface) -> vec4<f32> {
                 occlusion_strength: 0.0,
                 unlit: false,
                 flat_shading: false,
+                keep_dry: false,
                 wind_bend: 0.0,
                 wind_flutter: 0.0,
                 water: Default::default(),
@@ -13416,6 +13444,7 @@ fn shade(surface: Surface) -> vec4<f32> {
                 occlusion_strength: 0.0,
                 unlit: false,
                 flat_shading: false,
+                keep_dry: false,
                 wind_bend: 0.0,
                 wind_flutter: 0.0,
                 water: Default::default(),

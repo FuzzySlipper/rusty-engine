@@ -439,6 +439,7 @@ fn material(id: &str, color: [f32; 4]) -> RenderMaterialDescriptor {
         occlusion_map: Default::default(),
         unlit: false,
         flat_shading: false,
+        keep_dry: false,
         wind: None,
         water: None,
         translucent_shadow: false,

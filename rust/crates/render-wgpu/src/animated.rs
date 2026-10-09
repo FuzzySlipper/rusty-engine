@@ -515,6 +515,7 @@ impl Renderer {
                 occlusion_map: Default::default(),
                 unlit: false,
                 flat_shading: false,
+                keep_dry: false,
                 wind: None,
                 water: None,
                 translucent_shadow: false,

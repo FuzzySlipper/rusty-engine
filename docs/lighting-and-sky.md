@@ -952,6 +952,10 @@ engine.CameraView.SetWetness(new(Wetness: .8f, Puddles: .5f));
 - `Puddles` (0 to 1) gathers standing water in patches about 2.5 m across on
   flat ground, as much as the surface is wet: darker still, nearly smooth
   and flat.
+- A material can keep dry: `new MaterialRequest(...) with { KeepDry = true }`
+  shades it as on a dry day beside surfaces that wet, such as a sheltered
+  sign, an awning's underside or a waxed hull. Its product shader, if any,
+  receives the dry surface.
 - It applies to standard-lit world materials before their shade stage, so
   a product `shade(Surface)` receives the wetted surface. Water and unlit
   materials, sprites and particles are left as they are. Product WGSL reads

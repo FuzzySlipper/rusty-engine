@@ -176,6 +176,9 @@ struct MaterialUniform {
     water_deep: vec4<f32>,
     water_scroll: vec4<f32>,
     water_params: vec4<f32>,
+    // x: 1 when the material keeps dry under the scene's wetness
+    // (`rusty::lighting::wetted` passes it by).
+    weather: vec4<f32>,
 };
 
 // What the standard surface stages make of a world fragment, which the shade
