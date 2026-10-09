@@ -486,7 +486,7 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     [DebugCommand("lighting.clouds")]
     public string Clouds(float coverage)
     {
-        engine.CameraView.SetClouds(new(Math.Clamp(coverage,0,1),CloudDrift,CloudAltitude,CloudScale,CloudTint,0,CloudKind.Cumulus));
+        engine.CameraView.SetClouds(new(Math.Clamp(coverage,0,1),CloudDrift,CloudAltitude,CloudScale,CloudTint));
         engine.CameraView.UpdateCamera(new(camera,Camera(CloudsEye,CloudsTarget)));
         return Inspect();
     }

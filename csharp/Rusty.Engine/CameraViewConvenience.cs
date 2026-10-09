@@ -13,3 +13,21 @@ public readonly partial record struct CameraDescriptor
     {
     }
 }
+
+public readonly partial record struct CloudsRequest
+{
+    /// <summary>A cloud layer of the default kind (cumulus) and thickness (six tenths of its altitude).</summary>
+    public CloudsRequest(float Coverage, System.Numerics.Vector2 Drift, float Altitude, float Scale, System.Numerics.Vector3 Color)
+        : this(Coverage, Drift, Altitude, Scale, Color, 0, CloudKind.Cumulus)
+    {
+    }
+}
+
+public readonly partial record struct CloudRegionRequest
+{
+    /// <summary>A region of cumulus as thick as the layer.</summary>
+    public CloudRegionRequest(uint Id, System.Numerics.Vector2 Center, float Radius, float Coverage, float Darkness, System.Numerics.Vector2 Drift)
+        : this(Id, Center, Radius, Coverage, Darkness, Drift, CloudKind.Cumulus, 0)
+    {
+    }
+}

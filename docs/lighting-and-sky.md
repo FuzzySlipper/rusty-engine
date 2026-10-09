@@ -853,7 +853,10 @@ engine.CameraView.SetClouds(new(Coverage: .6f, Drift: new Vector2(8, 3),
     Altitude: 1200, Scale: 500, Color: Vector3.One, Thickness: 0, Kind: CloudKind.Cumulus));
 ```
 
-`Thickness` and `Kind` shape the [volumetric clouds](#volumetric-clouds).
+`Thickness` and `Kind` shape the [volumetric clouds](#volumetric-clouds). A
+product that leaves them out (`new(Coverage, Drift, Altitude, Scale, Color)`)
+gets cumulus six tenths of the altitude thick; a cloud region left without
+them is cumulus as thick as the layer.
 
 - `Coverage` (0 to 1) is how much of the sky is cloud. 0 clears the layer,
   draws no `clouds` pass and leaves the sky exactly as without it (the
