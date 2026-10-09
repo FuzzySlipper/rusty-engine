@@ -85,6 +85,9 @@ pub(crate) struct FinishPost {
     pub auto_exposure: bool,
     /// The view's volumetric fog, when it drew some.
     pub fog: Option<crate::volumetric_fog::FogLookup>,
+    /// Where the analytic fog begins, in metres along each ray: the reach of
+    /// the volumetric fog that stands in for it nearer (0: from the eye).
+    pub analytic_start: f32,
 }
 
 pub(crate) struct Finish {
@@ -738,7 +741,7 @@ impl Finish {
             if post.fog.is_some() { 1.0 } else { 0.0 },
             post.fog.map_or(1.0, |fog| fog.distance),
             post.fog.map_or(1.0, |fog| fog.slices as f32),
-            0.0,
+            post.analytic_start,
         ];
         gpu.queue
             .write_buffer(&self.params, 0, bytemuck::cast_slice(&params));

@@ -999,8 +999,11 @@ Fog that light passes through: shafts where the sun reaches past a wall or a
 tree, a torch's glow in a misty cave, a valley bank, a wall of dust. It draws
 while the renderer's `VolumetricFog` setting is `Low` or `High`
 (`RustyEngineProductVolumetricFog`, `RendererSettings`, or the player's
-[video options](#video-options)), over the analytic distance fog, which
-keeps fogging the far view.
+[video options](#video-options)). Within the medium's reach (`Distance`)
+it replaces the analytic distance fog (`SetFog`), which begins only where it
+ends, so no surface is fogged by both; the analytic fog keeps fogging the
+far view and the backdrop beyond. Refused or off, the analytic fog fogs the
+whole view as before.
 
 ```csharp
 engine.CameraView.SetVolumetricFog(new(Density: .02f, Albedo: new(.9f, .9f, .92f),

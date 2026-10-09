@@ -2,7 +2,8 @@
 //! `fs_clouds_volumetric`): a region raises the sky's cloud where it stands
 //! and nowhere else, is gone when removed, and shades the ground under it;
 //! volumetric clouds draw where the flat layer does, but differently, and
-//! off draws the flat layer exactly. Same harness as `tests/screenshots.rs`.
+//! off (or a software adapter, which refuses them) draws the flat layer
+//! exactly. Same harness as `tests/screenshots.rs`.
 
 mod support;
 
@@ -199,6 +200,14 @@ fn volumetric_clouds_draw_where_the_flat_layer_does_but_differently_and_off_is_f
         "without clouds the setting changes nothing"
     );
     assert!(changed(&bare, &flat) > 0.1, "the flat layer clouds the sky");
+    // A software adapter refuses the raymarch (a GPU-only feature) and
+    // draws the flat layer.
+    if harness.renderer.settings_readout().volumetric_clouds
+        == Some(render_wgpu::SettingRefusal::SoftwareAdapter)
+    {
+        assert_eq!(volumetric, flat, "refused, the flat layer draws");
+        return;
+    }
     assert!(
         changed(&bare, &volumetric) > 0.1,
         "so do the volumetric clouds"

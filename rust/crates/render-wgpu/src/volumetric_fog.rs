@@ -309,6 +309,17 @@ impl VolumetricFog {
         self.grid.as_ref().expect("made above")
     }
 
+    /// Whether a view would draw fog at `quality` with this medium and
+    /// this many volumes: the device takes it and there is fog to light.
+    pub fn would_draw(
+        &self,
+        quality: VolumetricFogQuality,
+        medium: &VolumetricFogDescriptor,
+        volumes: usize,
+    ) -> bool {
+        grid(quality).is_some() && self.pipelines.is_some() && (medium.density > 0.0 || volumes > 0)
+    }
+
     /// Lights and integrates a world view's fog into the grid before its
     /// finish, with the view's frame bind group, and returns what the finish
     /// pass needs to read it; `None` when the view draws none (off, refused,

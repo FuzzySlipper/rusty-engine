@@ -1610,6 +1610,18 @@ impl Renderer {
         }
     }
 
+    /// How far the volumetric fog a world view draws reaches, when it draws
+    /// some.
+    fn volumetric_fog_reach(&self) -> Option<f32> {
+        self.volumetric_fog
+            .would_draw(
+                self.options.volumetric_fog,
+                &self.tables.volumetric_fog,
+                self.tables.fog_volumes.len(),
+            )
+            .then_some(self.tables.volumetric_fog.distance)
+    }
+
     /// The backdrop camera for a world view (`SetBackdrop`): the view's
     /// rotation and field of view at the link's place for its eye, its
     /// depth range fitted around what the backdrop shows, and the pass's
@@ -2532,6 +2544,14 @@ impl Renderer {
                 shafts: shafts.map_or(0.0, |(_, _, strength)| strength),
                 auto_exposure: auto_exposure.is_some(),
                 fog,
+                // Volumetric fog replaces the analytic fog as far as it
+                // reaches: a world view's own, and for the backdrop the
+                // world's, which covers it there.
+                analytic_start: match view.layer {
+                    ViewLayer::World => fog.map_or(0.0, |fog| fog.distance),
+                    ViewLayer::Backdrop => self.volumetric_fog_reach().unwrap_or(0.0),
+                    ViewLayer::Viewmodel => 0.0,
+                },
             },
             self.volumetric_fog.lookup_view(fog.is_some()),
             &self.volumetric_fog.sampler,

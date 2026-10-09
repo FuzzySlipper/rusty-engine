@@ -68,6 +68,22 @@ fn scene(quality: VolumetricFogQuality) -> Harness {
     harness
 }
 
+/// Whether the device refuses volumetric fog: a software adapter does (a
+/// GPU-only feature) and draws the scene's analytic fog alone. Each test
+/// then checks the refusal and that nothing volumetric draws.
+fn refused_on_software(harness: &mut Harness, fog: Vec<RenderDiff>) -> bool {
+    let refusal = harness.renderer.settings_readout().volumetric_fog;
+    if refusal.is_none() {
+        return false;
+    }
+    assert_eq!(refusal, Some(render_wgpu::SettingRefusal::SoftwareAdapter));
+    let bare = look(harness);
+    harness.apply(fog);
+    assert_eq!(look(harness), bare, "refused, the fog draws nothing");
+    assert_eq!(harness.renderer.gpu_readout().volumetric_fog.grid, None);
+    true
+}
+
 fn medium(density: f32) -> RenderDiff {
     RenderDiff::SetVolumetricFog {
         fog: VolumetricFogDescriptor {
@@ -138,6 +154,9 @@ fn off_or_with_nothing_to_light_draws_exactly_as_without_it() {
 #[test]
 fn a_medium_hazes_the_ground_and_the_sky_toward_the_sun() {
     let mut harness = scene(VolumetricFogQuality::Low);
+    if refused_on_software(&mut harness, vec![medium(0.04)]) {
+        return;
+    }
     let bare = look(&mut harness);
     harness.apply(vec![medium(0.04)]);
     let fogged = look(&mut harness);
@@ -175,6 +194,9 @@ fn fog_in_a_walls_shadow_scatters_less_of_the_sun_than_fog_in_the_open() {
         ),
         instance(30, None, "mesh/wall", transform([0.0; 3], 0.0, [1.0; 3])),
     ];
+    if refused_on_software(&mut scene(VolumetricFogQuality::Low), vec![medium(0.03)]) {
+        return;
+    }
     let added = |walled: bool| {
         let mut harness = scene(VolumetricFogQuality::Low);
         if walled {
@@ -197,6 +219,9 @@ fn fog_in_a_walls_shadow_scatters_less_of_the_sun_than_fog_in_the_open() {
 #[test]
 fn a_glowing_fog_volume_brightens_where_it_stands_and_goes_when_removed() {
     let mut harness = scene(VolumetricFogQuality::Low);
+    if refused_on_software(&mut harness, vec![medium(0.02)]) {
+        return;
+    }
     let bare = look(&mut harness);
     harness.apply(vec![RenderDiff::SetFogVolume {
         id: 1,
@@ -249,4 +274,81 @@ fn invalid_fog_is_refused_by_the_model() {
     assert!(RenderDiff::SetFogVolume { id: 1, volume }
         .validate()
         .is_err());
+}
+
+#[test]
+fn volumetric_fog_replaces_the_analytic_fog_as_far_as_it_reaches() {
+    // A wall 20 m ahead on the left, inside the grid's 60 m reach, and one
+    // 95 m ahead on the right, beyond it (the camera sees 100 m), under a
+    // scene with both the analytic fog and a volumetric medium.
+    let walls = vec![
+        RenderDiff::DefineMaterial {
+            material: material("material/wall", [0.6, 0.6, 0.6, 1.0], None),
+        },
+        static_mesh(
+            "mesh/near",
+            box_mesh([-60.0, 0.0, -21.0], [0.0, 30.0, -20.0], |_| 0),
+            "material/wall",
+        ),
+        static_mesh(
+            "mesh/far",
+            box_mesh([0.0, 0.0, -96.0], [400.0, 200.0, -95.0], |_| 0),
+            "material/wall",
+        ),
+        instance(30, None, "mesh/near", transform([0.0; 3], 0.0, [1.0; 3])),
+        instance(31, None, "mesh/far", transform([0.0; 3], 0.0, [1.0; 3])),
+    ];
+    let analytic = RenderDiff::SetFog {
+        // Red, to tell it from the volumetric fog's grey.
+        fog: Some(FogDescriptor::Exponential {
+            color: [0.9, 0.1, 0.1],
+            density: 0.03,
+        }),
+    };
+    let render = |fog: Vec<RenderDiff>| {
+        let mut harness = scene(VolumetricFogQuality::Low);
+        harness.apply(walls.clone());
+        harness.apply(fog);
+        let image = look(&mut harness);
+        let refused = harness.renderer.settings_readout().volumetric_fog.is_some();
+        (image, refused)
+    };
+    let (both, refused) = render(vec![analytic.clone(), medium(0.02)]);
+    let (analytic_only, _) = render(vec![analytic.clone()]);
+    if refused {
+        // A software adapter refuses the volumetric fog: the analytic fog
+        // draws alone, all the way.
+        assert_eq!(both, analytic_only, "refused, the analytic fog alone");
+        return;
+    }
+    let (volumetric_only, _) = render(vec![medium(0.02)]);
+    keep("both", &both);
+    keep("volumetric-only", &volumetric_only);
+    let near = (70..110, 20..WIDTH / 2 - 20);
+    let far = (70..110, WIDTH / 2 + 20..WIDTH - 20);
+    // Redness: red over green, which the red analytic fog raises.
+    let red = |rgba: &[u8], (rows, columns): &(std::ops::Range<u32>, std::ops::Range<u32>)| {
+        let (mut sum, mut count) = (0.0, 0.0);
+        for y in rows.clone() {
+            for x in columns.clone() {
+                let at = ((y * WIDTH + x) * 4) as usize;
+                sum += f64::from(rgba[at]) - f64::from(rgba[at + 1]);
+                count += 1.0;
+            }
+        }
+        sum / count
+    };
+    assert!(
+        (red(&both, &near) - red(&volumetric_only, &near)).abs() < 1.5,
+        "within the grid the analytic fog adds nothing: both {:.2}, volumetric {:.2}, analytic {:.2}",
+        red(&both, &near),
+        red(&volumetric_only, &near),
+        red(&analytic_only, &near)
+    );
+    assert!(
+        red(&both, &far) > red(&volumetric_only, &far) + 5.0,
+        "beyond it the analytic fog takes over: both {:.2}, volumetric {:.2}",
+        red(&both, &far),
+        red(&volumetric_only, &far)
+    );
 }

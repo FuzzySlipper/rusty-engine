@@ -11,6 +11,8 @@
 // light it scatters toward the camera, in linear light before exposure; the
 // background is seen through the grid's whole depth.
 // A backdrop (`Frame.backdrop`) is fogged at its world-equivalent distance.
+// The analytic fog begins where the volumetric fog ends (`params.fog.w`), so
+// a surface is never fogged by both.
 
 #import rusty::view::{frame, world_equivalent}
 #import rusty::finish::finish_linear
@@ -26,7 +28,9 @@ struct FinishParams {
     // exposure; z: sun shafts' strength (0 for none).
     post: vec4<f32>,
     // x: 1 when the view drew volumetric fog; y: the grid's reach in
-    // metres; z: its depth in cells.
+    // metres; z: its depth in cells; w: where the analytic fog begins along
+    // each ray, metres (the volumetric fog's reach, which replaces it
+    // nearer; 0 from the eye).
     fog: vec4<f32>,
 };
 
@@ -94,6 +98,12 @@ fn finished(color: vec4<f32>, position: vec4<f32>, depth: f32, glow: vec3<f32>, 
         if volumetric && depth < 1.0 {
             let fog = fog_at(position, length(ray));
             linear = linear * fog.a + fog.rgb;
+        }
+        // The analytic fog takes the ray only past the volumetric fog's
+        // reach: within it the volumetric fog stands in for it, never both.
+        let reach = length(ray);
+        if params.fog.w > 0.0 && reach > 0.0 {
+            ray = ray * (max(reach - params.fog.w, 0.0) / reach);
         }
         let rgb = min(finish_linear(linear * exposure, ray), ceiling);
         result = vec4<f32>(rgb * color.a, color.a);
