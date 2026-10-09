@@ -56,29 +56,80 @@ pub(crate) fn controlled(
             by_node.entry(index).or_default().push(joint);
         }
     }
+    let places = |joint: &JointOverride| joint.space != PoseSpace::Local;
+    if !by_node.values().flatten().any(|joint| places(joint)) {
+        return evaluate(model, &locals, &by_node, true, world, to_model).0;
+    }
+    // A placing value's weight mixes its joint's local transform between the
+    // pose without placements and the placed pose, so placed joints blend as
+    // one pose and descendants keep their shape.
+    let (_, unplaced) = evaluate(model, &locals, &by_node, false, world, to_model);
+    let (_, placed) = evaluate(model, &locals, &by_node, true, world, to_model);
+    let blended: Vec<Trs> = (0..model.nodes.len())
+        .map(|index| {
+            let weight = by_node
+                .get(&index)
+                .and_then(|overrides| overrides.iter().rfind(|joint| places(joint)))
+                .map(|joint| joint.weight);
+            match weight {
+                Some(weight) => Trs {
+                    translation: unplaced[index]
+                        .translation
+                        .lerp(placed[index].translation, weight),
+                    rotation: unplaced[index]
+                        .rotation
+                        .slerp(placed[index].rotation, weight)
+                        .normalize(),
+                    scale: unplaced[index].scale.lerp(placed[index].scale, weight),
+                },
+                None => placed[index],
+            }
+        })
+        .collect();
+    compose(model, &blended)
+}
+
+/// Each node's overrides in list order, parents first: a `Local` value at its
+/// weight, a `Model` or `World` value at full weight when `placing` (else
+/// skipped). Returns the placed transforms and the local transforms that
+/// produce them.
+fn evaluate(
+    model: &GlbModel,
+    locals: &[Trs],
+    by_node: &HashMap<usize, Vec<&JointOverride>>,
+    placing: bool,
+    world: Mat4,
+    to_model: Mat4,
+) -> (Vec<Mat4>, Vec<Trs>) {
     let mut posed = vec![Mat4::IDENTITY; model.nodes.len()];
+    let mut resolved = locals.to_vec();
     for &index in &model.order {
-        let overrides = by_node.get(&index).map_or(&[][..], Vec::as_slice);
+        let parent = model.nodes[index].parent.map(|parent| posed[parent]);
+        let compose = |local: &Trs| parent.map_or(local.matrix(), |parent| parent * local.matrix());
         let mut local = locals[index];
-        for joint in overrides
-            .iter()
-            .filter(|joint| joint.space == PoseSpace::Local)
-        {
-            override_local(&mut local, joint);
-        }
-        let mut placed = match model.nodes[index].parent {
-            Some(parent) => posed[parent] * local.matrix(),
-            None => local.matrix(),
-        };
-        for joint in overrides
-            .iter()
-            .filter(|joint| joint.space != PoseSpace::Local)
-        {
-            placed = override_placed(placed, joint, world, to_model);
+        let mut placed = compose(&local);
+        for joint in by_node.get(&index).map_or(&[][..], Vec::as_slice) {
+            if joint.space == PoseSpace::Local {
+                override_local(&mut local, joint);
+                placed = compose(&local);
+            } else if placing {
+                placed = override_placed(placed, joint, world, to_model, 1.0);
+                local = trs(parent.map_or(placed, |parent| parent.inverse() * placed));
+            }
         }
         posed[index] = placed;
+        resolved[index] = local;
     }
-    posed
+    (posed, resolved)
+}
+
+fn trs(matrix: Mat4) -> Trs {
+    let (scale, rotation, translation) = matrix.to_scale_rotation_translation();
+    Trs {
+        translation,
+        rotation: rotation.normalize(),
+        scale,
+    }
 }
 
 fn override_local(local: &mut Trs, joint: &JointOverride) {
@@ -102,9 +153,15 @@ fn override_local(local: &mut Trs, joint: &JointOverride) {
     }
 }
 
-/// `placed` (instance space) moved toward a `Model` or `World` value; the
-/// joint keeps its scale.
-fn override_placed(placed: Mat4, joint: &JointOverride, world: Mat4, to_model: Mat4) -> Mat4 {
+/// `placed` (instance space) moved toward a `Model` or `World` value by
+/// `weight`; the joint keeps its scale.
+fn override_placed(
+    placed: Mat4,
+    joint: &JointOverride,
+    world: Mat4,
+    to_model: Mat4,
+    weight: f32,
+) -> Mat4 {
     let (scale, rotation, translation) = placed.to_scale_rotation_translation();
     let (target_rotation, target_translation) = match joint.space {
         PoseSpace::World => {
@@ -123,12 +180,12 @@ fn override_placed(placed: Mat4, joint: &JointOverride, world: Mat4, to_model: M
         ),
     };
     let rotation = if joint.rotation.is_some() {
-        rotation.slerp(target_rotation, joint.weight).normalize()
+        rotation.slerp(target_rotation, weight).normalize()
     } else {
         rotation
     };
     let translation = if joint.translation.is_some() {
-        translation.lerp(target_translation, joint.weight)
+        translation.lerp(target_translation, weight)
     } else {
         translation
     };
@@ -406,5 +463,109 @@ mod tests {
             position(&posed, 2).distance(Vec3::new(5.0, 1.0, 0.0)) < 1e-5,
             "the hand follows the placed elbow"
         );
+    }
+
+    fn shift(joint: u32, space: PoseSpace, additive: bool, x: f32, weight: f32) -> JointOverride {
+        JointOverride {
+            joint,
+            space,
+            additive,
+            rotation: None,
+            translation: Some([x, 0.0, 0.0]),
+            weight,
+        }
+    }
+
+    #[test]
+    fn one_joints_overrides_apply_in_list_order_across_spaces() {
+        let model = arm();
+        let placed_then_added = AnimatedMeshPose {
+            overrides: vec![
+                shift(0, PoseSpace::Model, false, 5.0, 1.0),
+                shift(0, PoseSpace::Local, true, 1.0, 1.0),
+            ],
+            ..AnimatedMeshPose::default()
+        };
+        let posed = controlled(
+            &model,
+            &RIG,
+            rest(&model),
+            &placed_then_added,
+            Mat4::IDENTITY,
+        );
+        assert!(position(&posed, 0).distance(Vec3::new(6.0, 0.0, 0.0)) < 1e-5);
+
+        let mut added_then_placed = placed_then_added.clone();
+        added_then_placed.overrides.reverse();
+        let posed = controlled(
+            &model,
+            &RIG,
+            rest(&model),
+            &added_then_placed,
+            Mat4::IDENTITY,
+        );
+        assert!(position(&posed, 0).distance(Vec3::new(5.0, 0.0, 0.0)) < 1e-5);
+
+        // An orientation, then a turn after it, keeps the turn.
+        let quarter = Quat::from_rotation_z(std::f32::consts::FRAC_PI_2);
+        let oriented_then_turned = AnimatedMeshPose {
+            overrides: vec![
+                JointOverride {
+                    joint: 1,
+                    space: PoseSpace::Model,
+                    additive: false,
+                    rotation: Some(quarter.to_array()),
+                    translation: None,
+                    weight: 1.0,
+                },
+                JointOverride {
+                    joint: 1,
+                    space: PoseSpace::Local,
+                    additive: true,
+                    rotation: Some(quarter.to_array()),
+                    translation: None,
+                    weight: 1.0,
+                },
+            ],
+            ..AnimatedMeshPose::default()
+        };
+        let posed = controlled(
+            &model,
+            &RIG,
+            rest(&model),
+            &oriented_then_turned,
+            Mat4::IDENTITY,
+        );
+        let forearm = position(&posed, 2) - position(&posed, 1);
+        assert!(forearm.distance(-Vec3::X) < 1e-5, "{forearm:?}");
+    }
+
+    #[test]
+    fn placed_joints_blend_as_one_pose_without_stretching_their_bones() {
+        let model = arm();
+        let moved = |weight: f32| AnimatedMeshPose {
+            overrides: (0..3)
+                .map(|joint| JointOverride {
+                    joint,
+                    space: PoseSpace::World,
+                    additive: false,
+                    rotation: Some([0.0, 0.0, 0.0, 1.0]),
+                    translation: Some([10.0 + joint as f32, 0.0, 0.0]),
+                    weight,
+                })
+                .collect(),
+            ..AnimatedMeshPose::default()
+        };
+        for (weight, start) in [(0.0, 0.0), (0.5, 5.0), (1.0, 10.0)] {
+            let posed = controlled(&model, &RIG, rest(&model), &moved(weight), Mat4::IDENTITY);
+            for joint in 0..3 {
+                let expected = Vec3::new(start + joint as f32, 0.0, 0.0);
+                assert!(
+                    position(&posed, joint).distance(expected) < 1e-4,
+                    "weight {weight}: joint {joint} at {:?}",
+                    position(&posed, joint)
+                );
+            }
+        }
     }
 }

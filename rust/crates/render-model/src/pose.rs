@@ -36,7 +36,10 @@ pub enum PoseSpace {
 /// by `weight`. A `Local` value replaces the joint's local value, or with
 /// `additive` composes onto it (rotation after the clip's, translation
 /// added). A `Model` or `World` value places the joint there and its
-/// descendants follow; the joint keeps its evaluated scale.
+/// descendants follow; the joint keeps its evaluated scale. Its weight mixes
+/// the joint's parent-relative transform between the pose without placements
+/// and the placed pose, so placed joints blend as one pose. One joint's
+/// overrides apply in list order across spaces.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct JointOverride {

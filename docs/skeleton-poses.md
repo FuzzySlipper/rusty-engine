@@ -68,6 +68,16 @@ over the pose below it by `weight` (0 to 1):
 - `Model` or `World`: the joint is placed there and its descendants follow.
   It keeps its evaluated scale. `Additive` is refused here.
 
+One joint's overrides apply in list order, whatever their space: a `Model`
+placement followed by an additive `Local` turn keeps the turn, and the
+reverse order keeps the placement.
+
+A placing (`Model` or `World`) value's weight mixes the joint's transform
+relative to its parent, between the pose without placements and the placed
+pose. Several placed joints therefore blend as one pose. A ragdoll's bones at
+half weight sit halfway between the clip and the bodies, with no stretched
+bones. The joint's last placing value sets its weight.
+
 `JointOverride.LocalRotation`, `AddLocalRotation`, `Place` and `Orient`
 build the common cases.
 
