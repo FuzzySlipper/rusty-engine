@@ -790,7 +790,7 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     public void RegisterDebugCommands(IDebugCommandModuleRegistrar registrar)=>registrar.Register(this);
     public ProductUpdateResult Update(ProductUpdate update)=>ProductUpdateResult.None;
     public void Pause(){} public void Resume(){} public void Restart(){SetTorch(true);} public void Shutdown(){}
-    public void Dispose(){engine.CameraView.ClearSkyBackground(default); Flame(false); Facets(false); Wind(-1); Water(-1); flameSprite?.Dispose(); emberSprite?.Dispose(); smokeSprite?.Dispose(); presentation?.Dispose(); torch.Dispose(); sun.Dispose(); hemisphere.Dispose(); skyAmbient.Dispose(); camera.Dispose(); stone.Dispose(); scene.Dispose(); day.Dispose(); night.Dispose();}
+    public void Dispose(){engine.CameraView.ClearSkyBackground(default); Flame(false); Facets(false); Wind(-1); Water(-1); Backdrop(0); flameSprite?.Dispose(); emberSprite?.Dispose(); smokeSprite?.Dispose(); presentation?.Dispose(); torch.Dispose(); sun.Dispose(); hemisphere.Dispose(); skyAmbient.Dispose(); camera.Dispose(); stone.Dispose(); scene.Dispose(); day.Dispose(); night.Dispose();}
 }
 internal sealed record LightingSave(uint[] Room,LightDescriptor Torch);
 internal sealed record LightingProof(bool RoundTrip,float Lit,float Blocked,float Dark,float Current,bool Torch,float Clock);
