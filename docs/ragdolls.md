@@ -4,8 +4,8 @@
 cone, each with limits and damping. `Dynamics.CreateRagdoll` builds a ragdoll
 from them: one body per chosen bone of an animated character. The ragdoll
 spawns at the pose the character was drawn in and moving as it moved. While
-it lives, the skeleton follows the bodies through
-[pose overrides](skeleton-poses.md), mixed over the clips by a blend weight.
+it lives, the skeleton follows the bodies as a layer over its
+[pose](skeleton-poses.md), mixed in by a blend weight.
 
 ```csharp
 // A call before the fall: the instance reports its joints.
@@ -123,9 +123,13 @@ The ragdoll's joint IDs count down from `ulong.MaxValue`, so product joints
 should use smaller IDs.
 
 **Every step.** After each `Step`, `StepAndRead` or `StepWithReactions` of its
-world, a ragdoll places each bone at its body as a `World` override with the
-ragdoll's blend weight. These overrides apply after the product's own pose
-overrides.
+world, a ragdoll places each bone at its body. The bones form one layer over
+the instance's pose, after the clips, IK and the product's own overrides. The
+blend mixes each placed bone's transform relative to its parent between that
+pose and the bodies, so the skeleton blends as one pose:
+- blend 0 leaves the product's pose unchanged;
+- bones keep their length at any blend;
+- a ragdoll lying exactly in the product's pose changes nothing.
 
 **Reading and hitting.**
 

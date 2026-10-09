@@ -17,6 +17,10 @@ pub struct AnimatedMeshPose {
     /// apply in list order.
     #[serde(default)]
     pub overrides: Vec<JointOverride>,
+    /// Applied in order after the overrides, each mixed over the pose below
+    /// it as one pose.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub layers: Vec<PlacedPoseLayer>,
     /// Report the evaluated joints after each committed call.
     #[serde(default)]
     pub report_joints: bool,
@@ -35,11 +39,10 @@ pub enum PoseSpace {
 /// One joint's rotation and/or translation over the pose below it, mixed in
 /// by `weight`. A `Local` value replaces the joint's local value, or with
 /// `additive` composes onto it (rotation after the clip's, translation
-/// added). A `Model` or `World` value places the joint there and its
-/// descendants follow; the joint keeps its evaluated scale. Its weight mixes
-/// the joint's parent-relative transform between the pose without placements
-/// and the placed pose, so placed joints blend as one pose. One joint's
-/// overrides apply in list order across spaces.
+/// added). A `Model` or `World` value moves the joint toward that placement
+/// and its descendants follow; the joint keeps its evaluated scale. Each
+/// override's weight is its own, and one joint's overrides apply in list
+/// order across spaces.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct JointOverride {
@@ -78,6 +81,29 @@ pub struct PosedJoint {
     pub world: crate::Transform,
 }
 
+/// A set of joints placed in the world together (a ragdoll's bones), mixed
+/// over the pose below by one `weight`. The mix is of each placed joint's
+/// transform relative to its parent, so the placed joints blend as one pose:
+/// weight 0 leaves the pose below unchanged, and bones keep their length at
+/// any weight. Joints the layer does not place keep their transform relative
+/// to their parent.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PlacedPoseLayer {
+    pub weight: f32,
+    pub joints: Vec<PlacedJoint>,
+}
+
+/// A joint's world-space placement in a [`PlacedPoseLayer`].
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PlacedJoint {
+    pub joint: u32,
+    /// `[x, y, z, w]`, normalized when applied.
+    pub rotation: [f32; 4],
+    pub translation: [f32; 3],
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AnimatedMeshPoseError {
     InvalidWeight,
@@ -114,6 +140,24 @@ impl AnimatedMeshPose {
                 return Err(AnimatedMeshPoseError::InvalidTarget);
             }
         }
+        for layer in &self.layers {
+            if !weight(layer.weight) {
+                return Err(AnimatedMeshPoseError::InvalidWeight);
+            }
+            for joint in &layer.joints {
+                let length = joint
+                    .rotation
+                    .iter()
+                    .map(|value| value * value)
+                    .sum::<f32>();
+                if !length.is_finite() || length < 1e-12 {
+                    return Err(AnimatedMeshPoseError::InvalidRotation);
+                }
+                if !joint.translation.iter().all(|value| value.is_finite()) {
+                    return Err(AnimatedMeshPoseError::InvalidTranslation);
+                }
+            }
+        }
         for joint in &self.overrides {
             if !weight(joint.weight) {
                 return Err(AnimatedMeshPoseError::InvalidWeight);
@@ -139,9 +183,11 @@ impl AnimatedMeshPose {
 
     /// Whether evaluating this pose reads the instance's world placement.
     pub fn reads_world(&self) -> bool {
-        self.two_bone_ik
-            .iter()
-            .any(|ik| ik.space == PoseSpace::World)
+        !self.layers.is_empty()
+            || self
+                .two_bone_ik
+                .iter()
+                .any(|ik| ik.space == PoseSpace::World)
             || self
                 .overrides
                 .iter()
@@ -150,7 +196,7 @@ impl AnimatedMeshPose {
 
     /// Whether it changes the clip pose at all.
     pub fn controls(&self) -> bool {
-        !self.two_bone_ik.is_empty() || !self.overrides.is_empty()
+        !self.two_bone_ik.is_empty() || !self.overrides.is_empty() || !self.layers.is_empty()
     }
 }
 
@@ -174,6 +220,7 @@ mod tests {
         let pose = |overrides, two_bone_ik| AnimatedMeshPose {
             two_bone_ik,
             overrides,
+            layers: Vec::new(),
             report_joints: false,
         };
         assert_eq!(

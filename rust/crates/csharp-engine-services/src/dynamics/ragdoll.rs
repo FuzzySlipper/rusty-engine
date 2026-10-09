@@ -1,12 +1,12 @@
 //! Limited joints between Dynamics bodies, and ragdolls: bodies per bone of
 //! an animation instance, spawned at its reported pose and placing its bones
-//! through world-space pose overrides after every step.
+//! as a world-space pose layer after every step.
 
 use engine_spatial::{
     DynamicsJoint, DynamicsJointFrame, DynamicsJointLimit, DynamicsPlacement, RagdollBone,
     RagdollLink, RagdollMaterial, RagdollShape, RagdollSpawn,
 };
-use render_model::{JointOverride, PoseSpace};
+use render_model::{PlacedJoint, PlacedPoseLayer};
 
 use super::*;
 
@@ -239,30 +239,31 @@ impl RuntimeDynamicsBridge {
         }
     }
 
-    /// Place the ragdoll's bones over its instance's clips from its bodies.
+    /// Place the ragdoll's bones from its bodies, as one layer over its
+    /// instance's pose mixed in by the blend.
     fn place_ragdoll(&mut self, handle: u64) -> Result<(), CsharpEngineServicesError> {
         let ragdoll = self.active_ragdoll(handle)?;
         let world = self.active_world(ragdoll.world)?;
-        let overrides = world
+        let joints = world
             .solver
             .ragdoll_placements(&ragdoll.bones)
             .into_iter()
             .zip(&ragdoll.joints)
             .filter_map(|(placement, joint)| {
                 let placement = placement?;
-                Some(JointOverride {
+                Some(PlacedJoint {
                     joint: *joint,
-                    space: PoseSpace::World,
-                    additive: false,
-                    rotation: Some(placement.rotation.map(|value| value as f32)),
-                    translation: Some(placement.translation.map(|value| value as f32)),
-                    weight: ragdoll.blend,
+                    rotation: placement.rotation.map(|value| value as f32),
+                    translation: placement.translation.map(|value| value as f32),
                 })
             })
             .collect();
+        let layer = PlacedPoseLayer {
+            weight: ragdoll.blend,
+            joints,
+        };
         let instance = ragdoll.instance;
-        self.appearance()?
-            .set_ragdoll_overrides(instance, overrides)
+        self.appearance()?.set_ragdoll_layer(instance, Some(layer))
     }
 
     /// After a step of `world`, its ragdolls place their bones again.
@@ -302,7 +303,7 @@ impl RuntimeDynamicsBridge {
         }
         if self.appearance.is_some() {
             self.appearance()?
-                .set_ragdoll_overrides(ragdoll.instance, Vec::new())?;
+                .set_ragdoll_layer(ragdoll.instance, None)?;
         }
         Ok(())
     }
@@ -505,7 +506,7 @@ mod tests {
     use render_model::{PosedJoint, Transform};
 
     use super::*;
-    use crate::appearance::{character_for_test, ragdoll_overrides_for_test, JointPoseReport};
+    use crate::appearance::{character_for_test, ragdoll_layer_for_test, JointPoseReport};
 
     const BODY_GLB: &[u8] =
         include_bytes!("../../../../../fixtures/csharp-joint-attachments/content/body.glb");
@@ -643,13 +644,11 @@ mod tests {
         let ragdoll = dynamics.create_ragdoll(&request(instance)).unwrap();
 
         // Spawned where the latest report was, falling as it fell.
-        let placed = ragdoll_overrides_for_test(&appearance, instance);
-        assert_eq!(placed.len(), 3);
-        assert!(placed
-            .iter()
-            .all(|joint| joint.space == PoseSpace::World && joint.weight == 1.0));
+        let layer = ragdoll_layer_for_test(&appearance, instance).expect("a layer");
+        assert_eq!((layer.joints.len(), layer.weight), (3, 1.0));
+        let placed = layer.joints;
         assert_eq!(placed[0].joint, joints["Hips"]);
-        let hips = placed[0].translation.unwrap();
+        let hips = placed[0].translation;
         assert!((hips[1] - 0.98).abs() < 1e-5, "{hips:?}");
         let solver = &dynamics.active_world(world.value).unwrap().solver;
         let RagdollSlot::Active(spawned) = &dynamics.ragdolls[&ragdoll.value] else {
@@ -669,17 +668,20 @@ mod tests {
                 actions_len: 0,
             })
             .unwrap();
-        let fallen = ragdoll_overrides_for_test(&appearance, instance);
-        assert!(fallen[0].translation.unwrap()[1] < hips[1] - 0.1);
+        let fallen = ragdoll_layer_for_test(&appearance, instance).unwrap();
+        assert!(fallen.joints[0].translation[1] < hips[1] - 0.1);
         dynamics
             .set_ragdoll_blend(NativeDynamicsRagdollBlendRequest {
                 ragdoll,
                 blend: 0.5,
             })
             .unwrap();
-        assert!(ragdoll_overrides_for_test(&appearance, instance)
-            .iter()
-            .all(|joint| joint.weight == 0.5));
+        assert_eq!(
+            ragdoll_layer_for_test(&appearance, instance)
+                .unwrap()
+                .weight,
+            0.5
+        );
         let read = dynamics.read_ragdoll(ragdoll).unwrap();
         assert_eq!((read.bones_len, read.resting, read.blend), (3, false, 0.5));
 
@@ -693,14 +695,15 @@ mod tests {
                 _ => None,
             })
             .expect("the ragdoll's bones are sent");
-        assert_eq!(sent.overrides.len(), 3);
+        assert_eq!((sent.overrides.len(), sent.layers.len()), (0, 1));
+        assert_eq!(sent.layers[0].joints.len(), 3);
         appearance.commit(call);
 
         // Disposing the ragdoll removes its bodies and releases the bones.
         appearance.begin_call();
         dynamics.bind_appearance(&mut appearance);
         dynamics.destroy_ragdoll(ragdoll).unwrap();
-        assert!(ragdoll_overrides_for_test(&appearance, instance).is_empty());
+        assert!(ragdoll_layer_for_test(&appearance, instance).is_none());
         let solver = &dynamics.active_world(world.value).unwrap().solver;
         assert_eq!((solver.body_count(), solver.joint_count()), (0, 0));
         assert!(dynamics.read_ragdoll(ragdoll).is_err());

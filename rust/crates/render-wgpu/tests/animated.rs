@@ -876,6 +876,7 @@ fn pose_controls_reach_a_world_target_and_report_the_drawn_joints() {
                 translation: None,
                 weight: curl,
             }],
+            layers: Vec::new(),
             report_joints: true,
         },
     };

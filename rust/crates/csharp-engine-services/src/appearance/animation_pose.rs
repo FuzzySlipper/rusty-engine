@@ -173,6 +173,7 @@ impl RuntimeAppearanceBridge {
                     weight: joint.weight,
                 })
                 .collect(),
+            layers: Vec::new(),
             report_joints: request.report_joints,
         };
         pose.validate()
@@ -337,16 +338,16 @@ impl RuntimeAppearanceBridge {
         })
     }
 
-    /// The world-space overrides a ragdoll places its bones with, applied
-    /// after the product's own. Nothing for an instance that is gone.
-    pub(crate) fn set_ragdoll_overrides(
+    /// The layer a ragdoll places its bones with, over the product's pose
+    /// controls; `None` releases them. Nothing for an instance that is gone.
+    pub(crate) fn set_ragdoll_layer(
         &mut self,
         instance: u64,
-        overrides: Vec<JointOverride>,
+        layer: Option<PlacedPoseLayer>,
     ) -> Result<(), CsharpEngineServicesError> {
         let state = &mut *self.staged_mut()?.state;
         if let Some(instance) = state.animation_instances.get_mut(&instance) {
-            instance.ragdoll = overrides;
+            instance.ragdoll = layer;
         }
         Ok(())
     }
@@ -407,7 +408,7 @@ pub(super) fn settle_poses(
             continue;
         };
         let mut pose = instance.pose.clone();
-        pose.overrides.extend(instance.ragdoll.iter().cloned());
+        pose.layers.extend(instance.ragdoll.iter().cloned());
         let changed = match &instance.pose_sent {
             Some((sent, sent_pose)) if *sent == target => *sent_pose != pose,
             // A new target starts without controls.
@@ -515,12 +516,12 @@ pub(crate) fn character_for_test(
     (instance, joints)
 }
 
-/// The ragdoll overrides the open call holds for `instance`.
+/// The ragdoll layer the open call holds for `instance`.
 #[cfg(test)]
-pub(crate) fn ragdoll_overrides_for_test(
+pub(crate) fn ragdoll_layer_for_test(
     bridge: &RuntimeAppearanceBridge,
     instance: NativeAnimationInstanceHandle,
-) -> Vec<JointOverride> {
+) -> Option<PlacedPoseLayer> {
     bridge
         .staged
         .as_ref()

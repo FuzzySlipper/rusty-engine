@@ -45,7 +45,9 @@ A pose is evaluated in this order:
 2. **Two-bone IK**, in list order.
 3. **Joint overrides.** Parents are applied before children; one joint's
    overrides apply in list order.
-4. **Skinning.** Joint attachments then hang from the result.
+4. **Ragdoll layers.** A [ragdoll](ragdolls.md) places its bones as one
+   layer over the result, mixed in by its blend weight.
+5. **Skinning.** Joint attachments then hang from the result.
 
 ## Two-bone IK
 
@@ -72,11 +74,10 @@ One joint's overrides apply in list order, whatever their space: a `Model`
 placement followed by an additive `Local` turn keeps the turn, and the
 reverse order keeps the placement.
 
-A placing (`Model` or `World`) value's weight mixes the joint's transform
-relative to its parent, between the pose without placements and the placed
-pose. Several placed joints therefore blend as one pose. A ragdoll's bones at
-half weight sit halfway between the clip and the bodies, with no stretched
-bones. The joint's last placing value sets its weight.
+Each override's weight is its own. A placing (`Model` or `World`) value
+moves its joint from where the pose below puts it toward the placement, and
+its descendants follow. A zero weight changes nothing, and a full-weight
+placement reaches its target whatever its ancestors' weights.
 
 `JointOverride.LocalRotation`, `AddLocalRotation`, `Place` and `Orient`
 build the common cases.
