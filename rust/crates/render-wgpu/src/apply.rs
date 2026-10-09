@@ -191,7 +191,7 @@ impl Renderer {
             }
             RenderDiff::SetImageEffect { effect } => {
                 self.tables.image_effect = effect.clone();
-                self.compose_image_effect()?;
+                self.compose_image_effect(false)?;
             }
             RenderDiff::SetClouds { clouds } => {
                 self.tables.clouds = *clouds;
@@ -1193,9 +1193,11 @@ impl Renderer {
     }
 
     /// Compose the image effect from its shader as now defined, or turn it
-    /// off. A shader not yet defined, or one that does not compose, leaves
-    /// it off; the latter is an error naming its file and line.
-    pub(crate) fn compose_image_effect(&mut self) -> Result<(), String> {
+    /// off; the same shader keeps its pipelines unless `recompose` (its
+    /// source was redefined). A shader not yet defined, or one that does not
+    /// compose, leaves it off; the latter is an error naming its file and
+    /// line.
+    pub(crate) fn compose_image_effect(&mut self, recompose: bool) -> Result<(), String> {
         let product = self.tables.image_effect.as_ref().and_then(|effect| {
             self.tables
                 .shaders
@@ -1204,7 +1206,7 @@ impl Renderer {
         });
         let device = self.gpu.device.clone();
         self.image_effect
-            .set(&device, &mut self.layouts.shaders, product)
+            .set(&device, &mut self.layouts.shaders, product, recompose)
     }
 
     /// Hold a product shader, and redefine the materials it shades so they
@@ -1225,7 +1227,7 @@ impl Renderer {
             .as_ref()
             .is_some_and(|effect| effect.shader == shader.id)
         {
-            self.compose_image_effect()?;
+            self.compose_image_effect(true)?;
         }
         let dependents: Vec<RenderMaterialDescriptor> = self
             .tables

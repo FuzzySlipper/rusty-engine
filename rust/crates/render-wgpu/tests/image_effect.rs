@@ -117,6 +117,47 @@ fn no_effect_and_a_pass_through_leave_the_picture() {
 }
 
 #[test]
+fn changing_parameters_reuses_the_pipeline_and_a_redefined_shader_rebuilds_it() {
+    let mut harness = scene();
+    harness.apply(vec![effect("shader/flash", 0.0, 0.0)]);
+    let plain = look(&mut harness);
+    let warm = harness.renderer.image_effect_builds();
+    assert!(warm.0 >= 1 && warm.1 >= 1, "the effect was built: {warm:?}");
+    // A decaying flash: new parameters every update.
+    let mut frames = Vec::new();
+    for flash in [0.8, 0.5, 0.2] {
+        harness.apply(vec![effect("shader/flash", flash, 0.0)]);
+        frames.push(look(&mut harness));
+    }
+    assert_eq!(
+        harness.renderer.image_effect_builds(),
+        warm,
+        "parameters alone compile nothing"
+    );
+    assert!(
+        frames[0] != plain && frames[0] != frames[2],
+        "and still draw"
+    );
+    // The shader's source replaced: the effect follows it.
+    harness.apply(vec![define(
+        "shader/flash",
+        r#"
+#import rusty::image::ImagePixel
+
+fn image_effect(pixel: ImagePixel) -> vec4<f32> {
+    return vec4<f32>(0.0, 1.0, 0.0, 1.0);
+}
+"#,
+    )]);
+    let green = look(&mut harness);
+    assert!(
+        harness.renderer.image_effect_builds().0 > warm.0,
+        "it recomposed"
+    );
+    assert_eq!(pixel(&green, WIDTH / 2, HEIGHT / 2), [0, 255, 0]);
+}
+
+#[test]
 fn parameters_flash_the_picture_and_it_samples_anywhere() {
     let mut harness = scene();
     let plain = look(&mut harness);

@@ -29,6 +29,10 @@ pub(crate) struct ImageEffect {
     /// The effect's shader module, composed with the product's WGSL, and
     /// the pipelines made from it by output format and depth samples.
     module: Option<wgpu::ShaderModule>,
+    /// The product shader the module was composed from.
+    composed: Option<u32>,
+    /// Modules composed and pipelines made so far, for diagnostics.
+    builds: (u64, u64),
     pipelines: Vec<((wgpu::TextureFormat, bool), wgpu::RenderPipeline)>,
     timer: Option<PassTimer>,
 }
@@ -112,28 +116,45 @@ impl ImageEffect {
                 mapped_at_creation: false,
             }),
             module: None,
+            composed: None,
+            builds: (0, 0),
             pipelines: Vec::new(),
             timer: PassTimer::new(gpu, PASS),
         }
     }
 
     /// Compose the effect from the product shader `product` (its id from
-    /// `Shaders::product`), or clear it with `None`. A shader that does not
-    /// compose is an error naming its file and line; the effect is then off.
+    /// `Shaders::product`), or clear it with `None`. The same shader as
+    /// before keeps its module and pipelines, so changing only the effect's
+    /// parameters or textures compiles nothing, unless `recompose` (its
+    /// source was redefined). A shader that does not compose is an error
+    /// naming its file and line; the effect is then off.
     pub fn set(
         &mut self,
         device: &wgpu::Device,
         shaders: &mut Shaders,
         product: Option<u32>,
+        recompose: bool,
     ) -> Result<(), String> {
+        if !recompose && product.is_some() && product == self.composed && self.module.is_some() {
+            return Ok(());
+        }
         self.pipelines.clear();
         self.module = None;
+        self.composed = None;
         let Some(product) = product else {
             return Ok(());
         };
         let features = Features::default().with_product(product);
         self.module = Some(shaders.module(device, Entry::ImageEffect, features)?);
+        self.composed = Some(product);
+        self.builds.0 += 1;
         Ok(())
+    }
+
+    /// Shader modules composed and pipelines made so far.
+    pub fn builds(&self) -> (u64, u64) {
+        self.builds
     }
 
     pub fn active(&self) -> bool {
@@ -191,6 +212,7 @@ impl ImageEffect {
                         cache: None,
                     });
                 self.pipelines.push((key, pipeline));
+                self.builds.1 += 1;
                 self.pipelines.len() - 1
             }
         };

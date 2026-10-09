@@ -816,6 +816,12 @@ impl Renderer {
     /// Request the indirect light volume, move the one there is, or with
     /// `None` drop it, as `RenderDiff::SetIndirectLight` does. A request
     /// bakes after the scene has been still for `probes::DEBOUNCE`.
+    /// The image effect's shader modules composed and pipelines made so
+    /// far: a parameter change builds neither.
+    pub fn image_effect_builds(&self) -> (u64, u64) {
+        self.image_effect.builds()
+    }
+
     /// The volumetric fog's medium, as `RenderDiff::SetVolumetricFog` sets
     /// it.
     pub fn set_volumetric_fog(&mut self, fog: render_model::VolumetricFogDescriptor) {
