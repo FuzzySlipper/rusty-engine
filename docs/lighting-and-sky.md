@@ -1062,10 +1062,19 @@ engine.CameraView.RemoveFogVolume(new(1));
   `volumetric-fog`; the finish pass dims each surface by the fog in front of
   it and adds the light it scatters, before exposure, and the background is
   seen through the grid's whole depth. A surface reads the grid a cell nearer
-  than itself, so fog behind it does not leak through. On an RX 9070 XT at
-  1280×720 over a CraftSurvive meadow it costs about 0.11 ms (`Low`) and
-  0.25 ms (`High`). There is no temporal filtering: a thin shaft narrower
-  than a cell is blurred to the cell.
+  than itself, so fog behind it does not leak through.
+- **Temporal filtering.** Each world view (by camera and viewport) keeps the
+  last frame's grid. Every frame each cell is sampled at a jittered point
+  within it (a 16-point Halton cycle) and blended with its centre
+  reprojected into that history: 25 % new each frame at `Low`, 10 % at
+  `High`, more as a cell's centre moves across the grid, so near fog
+  follows a moving camera without trailing. Shafts thinner than a cell
+  build up over a few frames instead of blurring to the cell.
+  - A view seen for the first time, a new grid or reach, or a camera that
+    jumps more than a tenth of the reach in a frame starts afresh. That
+    frame samples cell centres with no history, exactly as an unfiltered
+    grid would, so a still capture draws the same.
+  - The history adds one grid-sized copy a frame.
 - It needs compute shaders on a GPU: a device without them, or a software
   adapter, refuses the setting (`NoComputeShaders`, `SoftwareAdapter`) and
   draws the analytic fog alone. Off, or on with no medium and no volumes, it

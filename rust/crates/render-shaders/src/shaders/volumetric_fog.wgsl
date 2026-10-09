@@ -8,6 +8,11 @@
 // column front to back into what lies between the camera and each depth: the
 // light scattered toward the camera and the transmittance. The finish pass
 // reads that at each pixel's distance (`finish_pass.wgsl`).
+//
+// Temporally filtered: `cs_light` samples each cell at a jittered point
+// within it and blends that with the cell's centre reprojected into the
+// view's previous grid (`history`), by `fog.temporal.x` (0: no history,
+// the cell's centre alone).
 
 #import rusty::types::PI
 #import rusty::view::{frame, lights}
@@ -26,6 +31,12 @@ struct FogParams {
     // x: the share of ambient and sky light scattered; y: the Engine's
     // presentation time, seconds.
     extra: vec4<f32>,
+    // The previous frame's view-projection and eye, for reprojection.
+    prev_view_proj: mat4x4<f32>,
+    prev_eye: vec4<f32>,
+    // x: the history's weight (0: none); yzw: this frame's jitter within
+    // each cell, across, down and deep.
+    temporal: vec4<f32>,
 };
 
 struct FogVolume {
@@ -47,6 +58,8 @@ struct FogVolume {
 @group(1) @binding(2) var scatter_out: texture_storage_3d<rgba16float, write>;
 @group(1) @binding(3) var scatter_in: texture_3d<f32>;
 @group(1) @binding(4) var integrated_out: texture_storage_3d<rgba16float, write>;
+@group(1) @binding(5) var history: texture_3d<f32>;
+@group(1) @binding(6) var history_sampler: sampler;
 
 // The distance from the camera of depth `slices` (0 to the grid's depth),
 // along a cell's ray.
@@ -185,8 +198,9 @@ fn cs_light(@builtin(global_invocation_id) id: vec3<u32>) {
     if any(id >= fog.grid.xyz) {
         return;
     }
-    let ray = cell_ray(vec2<f32>(id.xy) + 0.5);
-    let p = frame.camera.xyz + ray * slice_distance(f32(id.z) + 0.5);
+    let jitter = fog.temporal.yzw;
+    let ray = cell_ray(vec2<f32>(id.xy) + jitter.xy);
+    let p = frame.camera.xyz + ray * slice_distance(f32(id.z) + jitter.z);
     var density = 0.0;
     if fog.medium.x > 0.0 {
         var height = 1.0;
@@ -206,12 +220,41 @@ fn cs_light(@builtin(global_invocation_id) id: vec3<u32>) {
             emission += volume.emission.rgb * amount;
         }
     }
-    if density <= 1e-6 {
-        textureStore(scatter_out, id, vec4<f32>(0.0));
-        return;
+    var current = vec4<f32>(0.0);
+    if density > 1e-6 {
+        current = vec4<f32>(scattering * in_scattered(p, ray) + emission, density);
     }
-    let radiance = scattering * in_scattered(p, ray) + emission;
-    textureStore(scatter_out, id, vec4<f32>(radiance, density));
+    textureStore(scatter_out, id, filtered(id, current));
+}
+
+// `current` blended with the cell's centre as the view's previous grid saw
+// it, where that lies inside the previous grid.
+fn filtered(id: vec3<u32>, current: vec4<f32>) -> vec4<f32> {
+    let weight = fog.temporal.x;
+    if weight <= 0.0 {
+        return current;
+    }
+    let centre = frame.camera.xyz
+        + cell_ray(vec2<f32>(id.xy) + 0.5) * slice_distance(f32(id.z) + 0.5);
+    let clip = fog.prev_view_proj * vec4<f32>(centre, 1.0);
+    if clip.w <= 0.0 {
+        return current;
+    }
+    let ndc = clip.xyz / clip.w;
+    let uv = vec2<f32>(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
+    let depth = sqrt(clamp(distance(centre, fog.prev_eye.xyz) / fog.medium.w, 0.0, 1.0));
+    if any(uv < vec2<f32>(0.0)) || any(uv > vec2<f32>(1.0)) || depth >= 1.0 {
+        return current;
+    }
+    let previous = textureSampleLevel(history, history_sampler, vec3<f32>(uv, depth), 0.0);
+    // A cell whose centre moved across the grid since the last frame (a
+    // near one, as the camera moves) trusts its history less, so it does
+    // not trail: a cell's move takes the current sample whole.
+    let now = (vec2<f32>(id.xy) + 0.5) / vec2<f32>(fog.grid.xy);
+    let slices = f32(fog.grid.z);
+    let moved = length(vec3<f32>((uv - now) * vec2<f32>(fog.grid.xy),
+        (depth - (f32(id.z) + 0.5) / slices) * slices));
+    return mix(previous, current, clamp(weight + moved, weight, 1.0));
 }
 
 @compute @workgroup_size(8, 8, 1)

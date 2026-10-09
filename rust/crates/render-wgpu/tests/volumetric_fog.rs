@@ -352,3 +352,130 @@ fn volumetric_fog_replaces_the_analytic_fog_as_far_as_it_reaches() {
         red(&volumetric_only, &far)
     );
 }
+
+/// The mean absolute difference of two images, per channel.
+fn mean_difference(a: &[u8], b: &[u8]) -> f64 {
+    let total: u64 = a
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(b.as_chunks::<4>().0)
+        .map(|(a, b)| (0..3).map(|c| u64::from(a[c].abs_diff(b[c]))).sum::<u64>())
+        .sum();
+    total as f64 / (a.len() / 4 * 3) as f64
+}
+
+/// From `position`, toward the low sun (yaw 0 faces -Z), slightly down.
+fn look_from(harness: &mut Harness, position: [f64; 3]) -> Vec<u8> {
+    harness.render(&camera(position, 0.0, -4.0)).1
+}
+
+#[test]
+fn a_still_view_gathers_and_holds_and_a_cut_starts_afresh() {
+    let mut harness = scene(VolumetricFogQuality::High);
+    if refused_on_software(&mut harness, vec![medium(0.03)]) {
+        return;
+    }
+    harness.apply(vec![medium(0.03)]);
+    let frames: Vec<Vec<u8>> = (0..40)
+        .map(|_| look_from(&mut harness, [0.0, 1.7, 0.0]))
+        .collect();
+    // The first frame samples cell centres; the history then gathers the
+    // jittered points across each cell, so the image moves off it...
+    let gathered = mean_difference(&frames[0], &frames[39]);
+    assert!(
+        gathered > 0.01,
+        "the history gathers more than the centres: {gathered:.3}"
+    );
+    // ...and holds steady while the view does: the jitter's flicker is
+    // filtered away.
+    let flicker = (10..39)
+        .map(|frame| mean_difference(&frames[frame], &frames[frame + 1]))
+        .fold(0.0f64, f64::max);
+    assert!(
+        flicker < 0.1,
+        "a still view holds steady: at most {flicker:.3} levels from frame to frame"
+    );
+    // A cut (30 m in one frame, half the grid's reach) drops the history:
+    // the first frame there is a fresh renderer's.
+    let cut = look_from(&mut harness, [30.0, 1.7, 0.0]);
+    let mut fresh = scene(VolumetricFogQuality::High);
+    fresh.apply(vec![medium(0.03)]);
+    assert_eq!(
+        cut,
+        look_from(&mut fresh, [30.0, 1.7, 0.0]),
+        "no history crosses a cut"
+    );
+}
+
+#[test]
+fn shafts_through_a_slatted_wall_hold_under_camera_motion() {
+    // Slats 0.5 m wide with 0.5 m gaps, 20 m ahead, between the camera and
+    // the low sun: shafts of lit fog stream through the gaps.
+    let mut slats = vec![
+        RenderDiff::DefineMaterial {
+            material: material("material/slat", [0.3, 0.25, 0.2, 1.0], None),
+        },
+        static_mesh(
+            "mesh/slat",
+            box_mesh([0.0, 0.0, -20.5], [0.5, 12.0, -20.0], |_| 0),
+            "material/slat",
+        ),
+    ];
+    for index in 0..60 {
+        slats.push(instance(
+            100 + index,
+            None,
+            "mesh/slat",
+            transform([index as f32 - 30.0, 0.0, 0.0], 0.0, [1.0; 3]),
+        ));
+    }
+    let setup = || {
+        let mut harness = scene(VolumetricFogQuality::High);
+        harness.apply(slats.clone());
+        harness
+    };
+    if refused_on_software(&mut setup(), vec![medium(0.04)]) {
+        return;
+    }
+    let mut clear = setup();
+    let unfogged = look_from(&mut clear, [0.3, 1.7, 0.0]);
+    // Strafing 3 cm a frame for 40 frames, from x 0.3 - 1.2 to 0.3.
+    let mut moving = setup();
+    moving.apply(vec![medium(0.04)]);
+    let mut last = Vec::new();
+    for frame in 0..=40 {
+        let x = 0.3 - 0.03 * f64::from(40 - frame);
+        last = look_from(&mut moving, [x, 1.7, 0.0]);
+    }
+    // The same pose held still for as long.
+    let mut still = setup();
+    still.apply(vec![medium(0.04)]);
+    let mut settled = Vec::new();
+    for _ in 0..=40 {
+        settled = look_from(&mut still, [0.3, 1.7, 0.0]);
+    }
+    keep("shafts-moving", &last);
+    keep("shafts-still", &settled);
+    let trailing = mean_difference(&last, &settled);
+    assert!(
+        trailing < 2.0,
+        "moving, the shafts match the still view without trails: {trailing:.3} levels apart"
+    );
+    // The fog's own light along a row in the air before the wall varies
+    // across the shafts and the shadowed stripes between them.
+    let row = HEIGHT / 2 - 10;
+    let added: Vec<f64> = (40..WIDTH - 40)
+        .map(|x| {
+            let at = ((row * WIDTH + x) * 4) as usize;
+            f64::from(last[at]) - f64::from(unfogged[at])
+        })
+        .collect();
+    let mean = added.iter().sum::<f64>() / added.len() as f64;
+    let spread =
+        (added.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / added.len() as f64).sqrt();
+    assert!(
+        spread > 2.0,
+        "the shafts stand out from the shadowed fog between them: spread {spread:.2} about {mean:.2}"
+    );
+}

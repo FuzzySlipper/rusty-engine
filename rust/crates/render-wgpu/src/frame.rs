@@ -2536,6 +2536,11 @@ impl Renderer {
                 &self.gpu,
                 &mut encoder,
                 &self.frame_bind_group,
+                crate::volumetric_fog::FogView {
+                    camera: view.camera_id,
+                    viewport: [area.x, area.y, area.width, area.height],
+                    matrices: &view.camera,
+                },
                 self.options.volumetric_fog,
                 &self.tables.volumetric_fog,
                 self.tables.fog_volumes.values(),
