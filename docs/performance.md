@@ -143,7 +143,8 @@ top quality, each turned on at its Engine default:
 
 The list comes from the catalogue: each entry's `gallery` experiment names
 the values to try (in turn, each that would turn the feature on or up from
-the scene's own), the one "everything on" takes, a setting it needs on
+the scene's own; for alternative paths, such as the two occlusion modes, each
+the scene is not on), the one "everything on" takes, a setting it needs on
 (the shadow budget needs shadows), and what the scene must hold. Volumetric
 fog lights the scene's fog, so a scene without any gets a stand-in haze,
 labelled. Volumetric clouds draw only what a product sets up, so their image

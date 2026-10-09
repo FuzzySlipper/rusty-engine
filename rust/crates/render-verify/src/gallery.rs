@@ -223,6 +223,7 @@ fn plan_options(
     for option in options {
         let GalleryExperiment::Try {
             values,
+            alternatives,
             everything,
             requires,
             setup,
@@ -243,11 +244,15 @@ fn plan_options(
             let Some(json) = option.kind.value_of(value) else {
                 continue;
             };
-            // Only what turns a feature on or up from the scene's own.
-            if current
-                .as_ref()
-                .is_some_and(|current| option.kind.reaches(current, &json))
-            {
+            // Only what turns a feature on or up from the scene's own, or,
+            // for alternative paths, any path but the scene's own.
+            if current.as_ref().is_some_and(|current| {
+                if alternatives {
+                    *current == json
+                } else {
+                    option.kind.reaches(current, &json)
+                }
+            }) {
                 continue;
             }
             let mut overrides = RendererSettingsOverrides::default();
@@ -573,22 +578,60 @@ mod tests {
 
     #[test]
     fn a_scene_with_everything_on_offers_only_the_other_occlusion_path() {
-        let mut settings = RendererSettingsDescriptor {
-            shadows: true,
-            clustered_lighting: true,
-            gpu_culling: true,
-            volumetric_fog: VolumetricFogQuality::High,
-            volumetric_clouds: VolumetricCloudsQuality::High,
+        // The occlusion paths are alternatives, not levels: a scene on
+        // either is offered the other.
+        for (mode, other) in [
+            (AmbientOcclusionMode::ScreenSpace, "distanceField"),
+            (AmbientOcclusionMode::DistanceField, "screenSpace"),
+        ] {
+            let mut settings = RendererSettingsDescriptor {
+                shadows: true,
+                clustered_lighting: true,
+                gpu_culling: true,
+                volumetric_fog: VolumetricFogQuality::High,
+                volumetric_clouds: VolumetricCloudsQuality::High,
+                ..RendererSettingsDescriptor::DEFAULT
+            };
+            settings.ambient_occlusion.mode = mode;
+            let variants = plan(&settings, None, true, true);
+            assert_eq!(variants.len(), 1, "{mode:?}");
+            assert_eq!(variants[0].id, format!("ambientOcclusion-{other}"));
+            assert_eq!(
+                variants[0].args,
+                ["--choose".to_owned(), format!("ambientOcclusion={other}")]
+            );
+        }
+    }
+
+    #[test]
+    fn a_scene_without_occlusion_is_offered_both_paths() {
+        let variants = plan(&RendererSettingsDescriptor::DEFAULT, None, false, false);
+        let occlusion: Vec<&str> = variants
+            .iter()
+            .map(|variant| variant.id.as_str())
+            .filter(|id| id.starts_with("ambientOcclusion-"))
+            .collect();
+        assert_eq!(
+            occlusion,
+            [
+                "ambientOcclusion-screenSpace",
+                "ambientOcclusion-distanceField"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_scene_at_a_higher_level_is_not_offered_a_lower_one() {
+        // Antialiasing's values are levels: a scene at 4x shows no 4x and
+        // nothing below it.
+        let settings = RendererSettingsDescriptor {
+            antialiasing: 4,
             ..RendererSettingsDescriptor::DEFAULT
         };
-        settings.ambient_occlusion.mode = AmbientOcclusionMode::ScreenSpace;
-        let variants = plan(&settings, None, true, true);
-        assert_eq!(variants.len(), 1);
-        assert_eq!(variants[0].id, "ambientOcclusion-distanceField");
-        assert_eq!(
-            variants[0].args,
-            ["--choose", "ambientOcclusion=distanceField"]
-        );
+        let variants = plan(&settings, None, false, false);
+        assert!(!variants
+            .iter()
+            .any(|variant| variant.id.starts_with("antialiasing-")));
     }
 
     #[test]
@@ -639,6 +682,7 @@ mod tests {
             cost: "",
             gallery: GalleryExperiment::Try {
                 values: &["true"],
+                alternatives: false,
                 everything: Some("true"),
                 requires: None,
                 setup: Some(GallerySetup::Product("a feature volume")),
