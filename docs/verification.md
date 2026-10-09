@@ -47,7 +47,9 @@ asks. It prints a table and writes the run under
 `runs/<machine>/<time>-<commit>/`: `report.md`, `report.json`, and for every
 scene `baseline.png`, `candidate.png` and `diff.png`. It exits 0 when every
 scene passes, 1 when one is flagged and 2 when the candidate could not render
-one. `--scene NAME` (repeatable) runs a subset.
+one. `--scene NAME` (repeatable) runs a subset. A name that matches no scene
+fails the run (`report.unmatched` lists it), and so does a run that renders
+nothing, so a misspelt subset never passes unrendered.
 
 The lane directory (`RUSTY_GPU_LANE_ROOT`, `/data/rusty-engine-gpu-lane` on
 den-agents) holds:
@@ -56,6 +58,8 @@ den-agents) holds:
 | --- | --- |
 | `scenes.json` | The scenes and the thresholds (below) |
 | `scenes/*.rscene` | Scene snapshots, from `engine.renderer.snapshot` on a fixture or a product |
+| `captures.json` | Each scene file's capture recipe ([recapturing](#recapturing-scenes)) |
+| `recaptures.log` | Every recapture: when, the pair, the scenes and why |
 | `machines/<machine>/` | The machine's accepted baseline: `baseline.json` (its source and why) and a copy of that renderer; earlier records stay beside it, numbered |
 | `runs/<machine>/` | Every run's report and images |
 
@@ -90,7 +94,9 @@ regression or noise with the evidence. Only flagged scenes are reviewed.
 --sha SHA` posts the run as the check run `gpu-render/<machine>` on the
 commit, through the `gpu-lane-status` workflow (a check run needs the Actions
 token). A pass posts success, a failed render failure, and a flagged run
-neutral until reviewed. After review, post again with `--conclusion success`
+neutral until reviewed. A run in which any render, baseline or candidate,
+used a software adapter is not GPU evidence: it posts neutral, and
+`--conclusion success` is refused for it. After review, post again with `--conclusion success`
 or `failure` and `--review FILE`, the subagent's verdicts, which head the
 check's summary. A review submission can then require
 `gpu-render/<machine>` beside `csharp`.
@@ -103,6 +109,37 @@ since images differ between GPUs and drivers. When the snapshot format
 changes, an older baseline cannot open newer scenes; the lane flags those
 scenes (nothing compared) until the scenes are recaptured and a new baseline
 is accepted with that reason.
+
+### Recapturing scenes
+
+`captures.json` gives each scene file a recipe: the product's project
+(`{engine}` for this checkout's fixtures), any MSBuild properties it stages
+with, seconds to settle, and steps: live-debug command lines and
+`{"wait": seconds}` pauses. `rusty-gpu-lane capture --root DIR --pair PAIR
+[--checkout DIR] [--scene NAME]...` captures each one:
+1. It stages the product on the pair's SDK, with live debug admitted.
+2. It runs the product headless on the pair's runtime.
+3. It takes the steps and writes `engine.renderer.snapshot` over the scene
+   file, keeping the replaced one as `<file>.previous`.
+
+A pair is a directory laid out as `rusty install` leaves one
+(`~/.cache/rusty-engine/pairs/<version>`: `runtime-pack/`, `sdk-feed/`), or
+as `scripts/gpu-lane-pair.sh OUT` builds one from a checkout. A capture that
+fails keeps its scene, and a `--scene` that names no recipe is refused.
+
+When the snapshot format changes, or a scene should show something new,
+recapture and rebase together:
+
+```sh
+scripts/gpu-lane-pair.sh /tmp/lane-pair
+scripts/gpu-lane-recapture.sh --pair /tmp/lane-pair --reason "snapshot format v3 (#NNNN)"
+```
+
+It captures every scene (or the `--scene` subset) from the pair, then
+accepts that pair's `rusty-scene-render` as this machine's baseline, and
+appends the reason to `recaptures.log`. If a capture fails, nothing is
+accepted. Other machines copy the new scenes and accept the same pair on
+their own GPUs.
 
 On Windows, run the two `cargo build` lines of the script and then
 `rusty-gpu-lane run` directly, or the script from Git Bash.

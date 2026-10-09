@@ -4,6 +4,7 @@
 //! rusty-gpu-lane run     --root DIR --candidate RENDERER --source TEXT --out DIR [--machine NAME] [--scene NAME]... [--repeats N] [--checkout DIR]
 //! rusty-gpu-lane accept  --root DIR --renderer RENDERER --source TEXT --reason TEXT [--machine NAME]
 //! rusty-gpu-lane status  --run DIR --repo OWNER/NAME --sha SHA [--review FILE] [--conclusion success|failure|neutral]
+//! rusty-gpu-lane capture --root DIR --pair DIR [--checkout DIR] [--scene NAME]... [--work DIR]
 //! ```
 //!
 //! `run` renders every scene in `DIR/scenes.json` with this machine's accepted
@@ -14,19 +15,25 @@
 //! render failed. `accept` makes a renderer this machine's baseline. `status`
 //! posts the run as the GitHub check run `gpu-render/<machine>` on a commit,
 //! through the `gpu-lane-status` workflow (a check run needs the Actions
-//! token).
+//! token). `capture` recaptures the scene files from a pair by their recipes
+//! in `DIR/captures.json` (`render_verify::capture`); it exits 0 when every
+//! selected scene was captured, 2 when one failed.
 
 use std::{
     path::{Path, PathBuf},
     process::{Command, ExitCode},
 };
 
-use render_verify::lane::{self, RunRequest, Verdict};
+use render_verify::{
+    capture::{self, CaptureRequest, Pair},
+    lane::{self, RunRequest, Verdict},
+};
 
 const USAGE: &str = "usage: rusty-gpu-lane run --root DIR --candidate RENDERER --source TEXT --out DIR \
 [--machine NAME] [--scene NAME]... [--repeats N] [--checkout DIR]\n       rusty-gpu-lane accept --root DIR --renderer RENDERER \
 --source TEXT --reason TEXT [--machine NAME]\n       rusty-gpu-lane status --run DIR --repo OWNER/NAME --sha SHA \
-[--review FILE] [--conclusion success|failure|neutral]";
+[--review FILE] [--conclusion success|failure|neutral]\n       rusty-gpu-lane capture --root DIR --pair DIR \
+[--checkout DIR] [--scene NAME]... [--work DIR]";
 
 /// The check-run summary GitHub accepts through a workflow input is bounded;
 /// the report is cut to this many characters.
@@ -181,6 +188,40 @@ fn dispatch(arguments: &[String]) -> Result<ExitCode, String> {
                 serde_json::from_str(&text).map_err(|error| error.to_string())?;
             post_status(&options, &run, &report)?;
             Ok(ExitCode::SUCCESS)
+        }
+        "capture" => {
+            let root = PathBuf::from(options.require("root")?);
+            let pair = Pair::open(Path::new(options.require("pair")?))?;
+            let checkout = options.get("checkout").map(PathBuf::from);
+            let work = options
+                .get("work")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| std::env::temp_dir().join("rusty-gpu-lane-capture"));
+            let only = options.all("scene");
+            let outcomes = capture::capture(&CaptureRequest {
+                root: &root,
+                pair: &pair,
+                checkout: checkout.as_deref(),
+                only: &only,
+                work: &work,
+            })?;
+            for outcome in &outcomes {
+                println!(
+                    "{} {}: {}",
+                    if outcome.captured {
+                        "captured"
+                    } else {
+                        "FAILED"
+                    },
+                    outcome.file,
+                    outcome.detail
+                );
+            }
+            Ok(if outcomes.iter().all(|outcome| outcome.captured) {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::from(2)
+            })
         }
         _ => Err(USAGE.to_owned()),
     }
