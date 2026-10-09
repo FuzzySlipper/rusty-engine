@@ -35,11 +35,11 @@ impl ContentIdentity {
 }
 
 /// The immutable files a source's relative dependencies resolve in: a
-/// snapshot, or an open container whose bodies are read once, when first used.
+/// snapshot, or an open bundle whose bodies are read once, when first used.
 #[derive(Clone)]
 pub(crate) enum ContentFiles {
     Snapshot(Arc<BTreeMap<String, Arc<[u8]>>>),
-    Container(Arc<bundles::ContainerFiles>),
+    Bundle(Arc<bundles::BundleFiles>),
 }
 
 impl ContentFiles {
@@ -47,15 +47,15 @@ impl ContentFiles {
         Self::Snapshot(Arc::new(files))
     }
 
-    /// The file's bytes, or none when there is no such file. A container file
-    /// that cannot be read refuses with the container's code.
+    /// The file's bytes, or none when there is no such file. A bundle file
+    /// that cannot be read refuses, naming the file.
     pub(crate) fn get(
         &self,
         path: &str,
     ) -> Result<Option<Arc<[u8]>>, crate::composition::CsharpEngineServicesError> {
         match self {
             Self::Snapshot(files) => Ok(files.get(path).cloned()),
-            Self::Container(container) => container.bytes(path),
+            Self::Bundle(files) => files.bytes(path),
         }
     }
 }

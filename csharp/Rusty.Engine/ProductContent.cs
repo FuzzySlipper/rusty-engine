@@ -34,7 +34,11 @@ public sealed class ProductContent
     /// <summary>Discover build-declared bundles without loading their file bodies.</summary>
     public ReadOnlyMemory<ContentBundleInfo> ListBundles() => service is null ? ReadOnlyMemory<ContentBundleInfo>.Empty : service.ListBundles();
 
-    /// <summary>Load one immutable bundle. Dispose it when its collection is no longer needed.</summary>
+    /// <summary>
+    /// Open one immutable bundle from its inventory; no file body is read until it is used. A file
+    /// missing, or of a different length, since staging throws <see cref="EngineCallException"/>
+    /// when read. Dispose the bundle when its collection is no longer needed.
+    /// </summary>
     public ProductContentBundle OpenBundle(string id)
     {
         ArgumentNullException.ThrowIfNull(id);
@@ -44,7 +48,7 @@ public sealed class ProductContent
         try { handle = service.OpenBundle(new(id)); }
         catch (EngineCallException error)
         {
-            throw new IOException($"ProductContent bundle '{id}' could not be opened. Check its ID and rebuild/restage after editing bundled files.", error);
+            throw new IOException($"ProductContent bundle '{id}' could not be opened. Check its ID.", error);
         }
         try { return new ProductContentBundle(id, service, handle); }
         catch { handle.Dispose(); throw; }

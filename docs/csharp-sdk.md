@@ -261,7 +261,7 @@ the SDK-staged `.rusty-bundles.json` with the files it lists, by their
 content-relative paths (link the staged `content/` tree, for example).
 `new ProductContent(files, engine.Content)` then lists the inventory and opens
 each bundle by bundle-relative paths. A file whose length differs from the
-inventory, or is missing, refuses the open as at run time, and an invalid
+inventory, or is missing, refuses its read as at run time, and an invalid
 inventory refuses `Create` with `CSHARP_CONTENT_BUNDLES`. Bundle files are not
 among the eager content, as in a running product.
 

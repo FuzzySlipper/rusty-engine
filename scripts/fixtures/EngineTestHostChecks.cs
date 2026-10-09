@@ -167,7 +167,7 @@ internal static class EngineTestHostChecks
 
     // Supplied content carrying the SDK's bundle inventory opens its bundles
     // as a staged Product does, by bundle-relative path; a short or missing
-    // bundle file refuses the open.
+    // bundle file refuses its read.
     private static void Bundles(string? library)
     {
         static string Inventory(params (string Path, int Length)[] files) =>
@@ -197,22 +197,22 @@ internal static class EngineTestHostChecks
                     "bundle files read by bundle-relative path");
             });
         }
-        foreach ((string inventory, string why) in new[]
+        // Opening costs the inventory alone: a bundle whose files are missing
+        // or of the wrong length opens, and only reading such a file refuses.
+        using (EngineTestHost host = Host(Inventory(("first.txt", 5), ("gone.txt", 3), ("short.txt", 9)), new()
         {
-            (Inventory(("first.txt", 6)), "a length mismatch"),
-            (Inventory(("first.txt", 5), ("gone.txt", 3)), "a missing file"),
-        })
+            ["rooms/first.txt"] = "hello"u8.ToArray(),
+            ["rooms/short.txt"] = "cut"u8.ToArray(),
+        }))
         {
-            using EngineTestHost host = Host(inventory, new() { ["rooms/first.txt"] = "hello"u8.ToArray() });
             host.Call(engine =>
             {
                 ProductContent content = new(ReadOnlyMemory<ProductContentFile>.Empty, engine.Content);
-                try
-                {
-                    content.OpenBundle("rooms").Dispose();
-                    throw new InvalidOperationException($"a bundle with {why} opened");
-                }
-                catch (System.IO.IOException) { }
+                using ProductContentBundle rooms = content.OpenBundle("rooms");
+                Require(rooms.Entries.Length == 3, "an open lists the inventory without reading bodies");
+                Require(rooms.ReadText("first.txt") == "hello", "a readable file reads beside unreadable ones");
+                ExpectRefusal(() => rooms.ReadFile("gone.txt"), "PRODUCT_SOURCE_MISSING");
+                ExpectRefusal(() => rooms.ReadFile("short.txt"), "PRODUCT_BUNDLE_FILE_CHANGED");
             });
         }
     }

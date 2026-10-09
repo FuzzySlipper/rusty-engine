@@ -289,11 +289,13 @@ using ContentReference source = bundle.OpenReference("rooms/entrance.json");
 
 Declared bundle files are excluded from the `ProductContent.Files` snapshot
 and its named reads. Discovery
-reads only the inventory. Opening a bundle reads that collection's files into
-an immutable Rust snapshot, checking each length against the inventory; the
-inventory's SHA-256 is each file's identity and is not recomputed. It does not
-load other bundles or copy
-all its bodies into C#. `Entries` exposes copied metadata; `ReadFile`, `ReadBytes`,
+reads only the inventory, and so does opening a bundle: each file is read
+once, when first used, and kept for the open bundle and its references, so an
+open costs its inventory and not its bodies. A read checks the file's length
+against the inventory; the inventory's SHA-256 is each file's identity and is
+not recomputed. A file missing or changed in length since staging throws
+`EngineCallException` (`PRODUCT_SOURCE_MISSING`, `PRODUCT_BUNDLE_FILE_CHANGED`)
+when read; reopen the bundle after restaging. `Entries` exposes copied metadata; `ReadFile`, `ReadBytes`,
 `ReadText` and `ReadDirectory` copy the requested bodies. A read borrows the Rust
 source for the call and copies it once into managed storage, with no
 intermediate chunk buffers. Bundle/file inventories already arrive in Engine UTF-8 path

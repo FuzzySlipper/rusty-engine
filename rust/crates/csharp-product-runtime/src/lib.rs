@@ -2899,8 +2899,9 @@ impl CsharpProductRuntime {
 
 impl ProductHostRuntime for CsharpProductRuntime {
     /// Re-admits the staged bundle inventory so the next `OpenBundle` sees
-    /// edited, added and deleted bundle files. Open bundles and content
-    /// references keep the bytes they were opened with. The eager loose
+    /// edited, added and deleted bundle files. Open bundles keep their
+    /// inventory and the bytes they already read; a file first read after the
+    /// restage must still have its inventoried length. The eager loose
     /// snapshot the product received at create is not reloaded; `rusty dev`
     /// replaces the runtime for loose content edits.
     fn reload_content(&mut self) -> Result<(), ProductHostRuntimeError> {

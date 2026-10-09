@@ -1,9 +1,9 @@
-//! Build content bundles, loose or packed. Discovery retains metadata only;
-//! each open owns an immutable collection, and references own independent Arc
-//! clones.
+//! Build content bundles, loose or packed, and content containers. Discovery
+//! retains metadata only; an open holds its inventory and reads each file when
+//! first used, and references own independent Arc clones.
 use super::*;
 use crate::composition::CsharpEngineServicesError;
-use product_container::{join, Container, Entry, ProductSource};
+use product_container::{join, Container, ProductSource};
 use serde::Deserialize;
 use std::{path::Path, sync::Mutex};
 
@@ -12,7 +12,7 @@ pub const INDEX: &str = ".rusty-bundles.json";
 #[derive(Debug, Default)]
 pub struct ProductContentBundles {
     /// Absent only for content with no bundle inventory.
-    source: Option<BundleSource>,
+    source: Option<Arc<BundleSource>>,
     /// The content root within `source`.
     content_root: String,
     bundles: Vec<BundleDefinition>,
@@ -23,17 +23,19 @@ pub struct ProductContentBundles {
 #[derive(Debug)]
 enum BundleSource {
     Product(ProductSource),
-    Supplied(Arc<BTreeMap<String, Arc<[u8]>>>),
+    Supplied(BTreeMap<String, Arc<[u8]>>),
 }
 
 impl BundleSource {
-    fn read(&self, path: &str) -> Option<Arc<[u8]>> {
+    fn read(&self, path: &str) -> Result<Arc<[u8]>, CsharpEngineServicesError> {
         match self {
             Self::Product(source) => source
                 .read(path)
-                .ok()
-                .map(|bytes| Arc::from(bytes.as_ref())),
-            Self::Supplied(files) => files.get(path).cloned(),
+                .map(|bytes| Arc::from(bytes.as_ref()))
+                .map_err(|failure| container_error(&failure)),
+            Self::Supplied(files) => files.get(path).cloned().ok_or_else(|| {
+                container_error(&product_container::Error::Missing(path.to_owned()))
+            }),
         }
     }
 }
@@ -92,7 +94,7 @@ impl ProductContentBundles {
         let bundles = serde_json::from_slice::<Index>(index)
             .map_err(|e| format!("invalid ProductContent bundle inventory: {e}"))?
             .bundles;
-        Self::checked(BundleSource::Supplied(Arc::new(files.clone())), "", bundles)
+        Self::checked(BundleSource::Supplied(files.clone()), "", bundles)
     }
 
     fn checked(
@@ -101,7 +103,7 @@ impl ProductContentBundles {
         bundles: Vec<BundleDefinition>,
     ) -> Result<Self, String> {
         let mut source = Self {
-            source: Some(source),
+            source: Some(Arc::new(source)),
             content_root: content_root.to_owned(),
             bundles,
         };
@@ -159,55 +161,34 @@ impl ProductContentBundles {
                 .any(|b| path.starts_with(&format!("{}/", b.root)))
     }
 
+    /// Open a bundle from its inventory alone; no file body is read until used.
     fn load(&self, id: &str) -> Option<OpenBundle> {
         let bundle = self.bundles.iter().find(|b| b.id == id)?;
-        let mut bodies = BTreeMap::new();
-        let mut hashes = BTreeMap::new();
-        let source = self.source.as_ref()?;
+        let prefix = format!("{}/", bundle.root);
+        let mut files = BTreeMap::new();
         for file in &bundle.files {
-            let path = join(
-                &self.content_root,
-                &format!("{}/{}", bundle.root, file.path),
+            files.insert(
+                format!("{prefix}{}", file.path),
+                Inventoried {
+                    byte_length: file.byte_length,
+                    digest: hex_digest(&file.sha256)?,
+                },
             );
-            let bytes = source.read(&path)?;
-            // Staging wrote the manifest's SHA-256 from these same bytes, so
-            // its identity is trusted rather than recomputed on every open. A
-            // body changed after staging gets a new identity on the next
-            // restage. The length check costs nothing and catches a file cut
-            // short by an interrupted restage.
-            if bytes.len() as u64 != file.byte_length {
-                return None;
-            }
-            hashes.insert(file.path.as_str(), sha256_words(&hex_digest(&file.sha256)?));
-            bodies.insert(format!("{}/{}", bundle.root, file.path), bytes);
         }
-        let identities = bundle
-            .files
-            .iter()
-            .map(|file| Some((file.path.as_str(), hex_digest(&file.sha256)?)))
-            .collect::<Option<Vec<_>>>()?;
-        let snapshot = super::ContentFiles::snapshot(bodies.clone());
-        let files = bundle
-            .files
-            .iter()
-            .map(|file| {
-                let path = format!("{}/{}", bundle.root, file.path);
-                let bytes = Arc::clone(&bodies[&path]);
-                (
-                    file.path.clone(),
-                    AdmittedContent {
-                        path,
-                        identity: super::ContentIdentity::known(hashes[file.path.as_str()]),
-                        bytes,
-                        transient: false,
-                        files: snapshot.clone(),
-                    },
-                )
-            })
-            .collect();
+        let identity = collection_identity(
+            files
+                .iter()
+                .map(|(path, file)| (&path[prefix.len()..], file.digest))
+                .collect(),
+        );
         Some(OpenBundle {
-            identity: collection_identity(identities),
-            files: OpenFiles::Snapshot(files),
+            identity,
+            files: Arc::new(BundleFiles::new(Store::Build {
+                source: Arc::clone(self.source.as_ref()?),
+                content_root: self.content_root.clone(),
+                prefix,
+                files,
+            })),
         })
     }
 }
@@ -250,18 +231,62 @@ fn packed_definitions(
         .collect()
 }
 
-/// An open content container. Opening checked its header and inventory; each
-/// file's bytes are read once, when first used, and shared from then on.
-/// References keep it (and its read-only map) alive after its bundle closes.
-pub(crate) struct ContainerFiles {
-    container: Container,
+/// One file's facts from a bundle inventory.
+struct Inventoried {
+    byte_length: u64,
+    digest: [u8; 32],
+}
+
+/// Where an open bundle's files come from.
+enum Store {
+    /// A container: paths are container-relative. Opening checked its header
+    /// and inventory.
+    Container(Container),
+    /// A build bundle: `files` by content-relative path (`prefix` is the
+    /// bundle root and `/`), read from `source` under `content_root`.
+    Build {
+        source: Arc<BundleSource>,
+        content_root: String,
+        prefix: String,
+        files: BTreeMap<String, Inventoried>,
+    },
+}
+
+/// An open bundle's files: its inventory, with each file's bytes read once,
+/// when first used, and shared from then on. References keep it (and the bytes
+/// it read) alive after its bundle closes.
+pub(crate) struct BundleFiles {
+    store: Store,
     read: Mutex<BTreeMap<String, Arc<[u8]>>>,
 }
 
-impl ContainerFiles {
-    /// The file's bytes, or none when the container has no such file. A file
-    /// that cannot be read (a corrupt compressed entry) refuses with the
-    /// container's code, naming the container and the entry.
+impl BundleFiles {
+    fn new(store: Store) -> Self {
+        Self {
+            store,
+            read: Mutex::default(),
+        }
+    }
+
+    /// The prefix that turns a bundle-relative path into a content path.
+    fn prefix(&self) -> &str {
+        match &self.store {
+            Store::Container(_) => "",
+            Store::Build { prefix, .. } => prefix,
+        }
+    }
+
+    /// The inventory's SHA-256 for the file at `path`, if it lists one.
+    fn digest(&self, path: &str) -> Option<[u8; 32]> {
+        match &self.store {
+            Store::Container(container) => hex_digest(&container.entry(path)?.sha256),
+            Store::Build { files, .. } => Some(files.get(path)?.digest),
+        }
+    }
+
+    /// The file's bytes, or none when the inventory has no such file. A listed
+    /// file that cannot be read (missing, a corrupt compressed entry, or a
+    /// length the inventory does not record) refuses, naming the file.
     pub(crate) fn bytes(&self, path: &str) -> Result<Option<Arc<[u8]>>, CsharpEngineServicesError> {
         let mut read = self
             .read
@@ -270,42 +295,67 @@ impl ContainerFiles {
         if let Some(bytes) = read.get(path) {
             return Ok(Some(Arc::clone(bytes)));
         }
-        let bytes: Arc<[u8]> = match self.container.get(path) {
-            Ok(bytes) => Arc::from(bytes.as_ref()),
-            Err(product_container::Error::Missing(_)) => return Ok(None),
-            Err(failure) => return Err(container_error(&failure)),
+        let bytes: Arc<[u8]> = match &self.store {
+            Store::Container(container) => match container.get(path) {
+                Ok(bytes) => Arc::from(bytes.as_ref()),
+                Err(product_container::Error::Missing(_)) => return Ok(None),
+                Err(failure) => return Err(container_error(&failure)),
+            },
+            Store::Build {
+                source,
+                content_root,
+                files,
+                ..
+            } => {
+                let Some(file) = files.get(path) else {
+                    return Ok(None);
+                };
+                let bytes = source.read(&join(content_root, path))?;
+                // Staging wrote the inventory's SHA-256 from these same bytes,
+                // so it is trusted rather than recomputed; a body changed after
+                // staging gets a new identity on the next restage. The length
+                // check costs nothing and catches a file cut short by an
+                // interrupted restage.
+                if bytes.len() as u64 != file.byte_length {
+                    return Err(CsharpEngineServicesError::new(
+                        "PRODUCT_BUNDLE_FILE_CHANGED",
+                        format!(
+                            "`{path}` is {} bytes but its bundle inventory records {}; \
+                             reopen the bundle after restaging",
+                            bytes.len(),
+                            file.byte_length
+                        ),
+                    ));
+                }
+                bytes
+            }
         };
         read.insert(path.to_owned(), Arc::clone(&bytes));
         Ok(Some(bytes))
     }
 
+    /// The file at content path `path` as admitted content, if listed.
     fn content(
         self: &Arc<Self>,
-        entry: &Entry,
+        path: &str,
     ) -> Result<Option<AdmittedContent>, CsharpEngineServicesError> {
-        let (Some(digest), Some(bytes)) = (hex_digest(&entry.sha256), self.bytes(&entry.path)?)
-        else {
+        let (Some(digest), Some(bytes)) = (self.digest(path), self.bytes(path)?) else {
             return Ok(None);
         };
         Ok(Some(AdmittedContent {
-            path: entry.path.clone(),
+            path: path.to_owned(),
             identity: super::ContentIdentity::known(sha256_words(&digest)),
             bytes,
             transient: false,
-            files: super::ContentFiles::Container(Arc::clone(self)),
+            files: super::ContentFiles::Bundle(Arc::clone(self)),
         }))
     }
 }
 
-/// One open bundle: a build bundle read whole, or a container read on use.
+/// One open bundle: a build bundle or a container, read on use.
 struct OpenBundle {
     identity: NativeContentSha256,
-    files: OpenFiles,
-}
-
-enum OpenFiles {
-    Snapshot(BTreeMap<String, AdmittedContent>),
-    Container(Arc<ContainerFiles>),
+    files: Arc<BundleFiles>,
 }
 
 impl OpenBundle {
@@ -317,22 +367,14 @@ impl OpenBundle {
             .collect::<Option<Vec<_>>>()?;
         Some(Self {
             identity: collection_identity(identities),
-            files: OpenFiles::Container(Arc::new(ContainerFiles {
-                container,
-                read: Mutex::default(),
-            })),
+            files: Arc::new(BundleFiles::new(Store::Container(container))),
         })
     }
 
-    /// Path, SHA-256 and length of every file, in path order.
+    /// Bundle-relative path, SHA-256 and length of every file, in path order.
     fn entries(&self) -> Vec<(String, NativeContentSha256, u64)> {
-        match &self.files {
-            OpenFiles::Snapshot(files) => files
-                .iter()
-                .map(|(path, file)| (path.clone(), file.sha256(), file.bytes.len() as u64))
-                .collect(),
-            OpenFiles::Container(files) => files
-                .container
+        match &self.files.store {
+            Store::Container(container) => container
                 .entries()
                 .iter()
                 .filter_map(|entry| {
@@ -340,38 +382,34 @@ impl OpenBundle {
                     Some((entry.path.clone(), sha256, entry.byte_length))
                 })
                 .collect(),
+            Store::Build { prefix, files, .. } => files
+                .iter()
+                .map(|(path, file)| {
+                    (
+                        path[prefix.len()..].to_owned(),
+                        sha256_words(&file.digest),
+                        file.byte_length,
+                    )
+                })
+                .collect(),
         }
     }
 
+    /// The file at bundle-relative `path`.
     fn reference(&self, path: &str) -> Result<Option<AdmittedContent>, CsharpEngineServicesError> {
-        match &self.files {
-            OpenFiles::Snapshot(files) => Ok(files.get(path).cloned()),
-            OpenFiles::Container(files) => match files.container.entry(path) {
-                Some(entry) => files.content(entry),
-                None => Ok(None),
-            },
-        }
+        self.files
+            .content(&format!("{}{path}", self.files.prefix()))
     }
 
+    /// The file at content path `path`, when the inventory lists it with `hash`.
     fn resolve(
         &self,
         path: &str,
         hash: NativeContentSha256,
     ) -> Result<Option<AdmittedContent>, CsharpEngineServicesError> {
-        match &self.files {
-            OpenFiles::Snapshot(files) => Ok(files
-                .values()
-                .find(|file| file.path == path && file.sha256() == hash)
-                .cloned()),
-            OpenFiles::Container(files) => match files.container.entry(path) {
-                Some(entry)
-                    if hex_digest(&entry.sha256).map(|digest| sha256_words(&digest))
-                        == Some(hash) =>
-                {
-                    files.content(entry)
-                }
-                _ => Ok(None),
-            },
+        match self.files.digest(path) {
+            Some(digest) if sha256_words(&digest) == hash => self.files.content(path),
+            _ => Ok(None),
         }
     }
 }
@@ -739,7 +777,7 @@ mod tests {
         );
         assert!(weak.upgrade().is_none());
         // Closing and reopening uses the same build identity, with no leaked
-        // implicit catalog mount and no reads of the unused bundle.
+        // implicit catalog mount.
         assert_eq!(
             unsafe {
                 open_bundle(
@@ -751,45 +789,100 @@ mod tests {
             ABI_OK
         );
         assert_eq!(unsafe { destroy_bundle(context, bundle) }, ABI_OK);
-        assert_eq!(
-            unsafe {
-                open_bundle(
-                    context,
-                    &NativeContentBundleOpenRequest { id: text("unused") },
-                    &mut bundle,
-                )
-            },
-            0
-        );
         assert!(bridge.bundles.open.is_empty());
-        // Opening trusts the staged manifest identity instead of re-hashing
-        // every file: a same-length edit after staging opens under the old
-        // identity until the next restage, while a file of the wrong length
-        // (for example cut short) is refused.
-        fs::write(directory.path().join("rules/a.json"), b"{\"id\":2}").unwrap();
+    }
+
+    fn bundle_file(path: &str, bytes: &[u8]) -> serde_json::Value {
+        serde_json::json!({"path": path, "byteLength": bytes.len(), "sha256": format!("{:x}", Sha256::digest(bytes))})
+    }
+
+    /// Opening costs the inventory: a bundle whose files are missing or
+    /// changed still opens with its inventory's entries and identity, and
+    /// each read reads only its own file, refusing one that is gone or whose
+    /// length the inventory does not record. The inventory's SHA-256 is
+    /// trusted, so a same-length edit reads under the staged identity.
+    #[test]
+    fn opening_reads_no_bodies_and_each_read_reads_only_its_file() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("world");
+        fs::create_dir(&root).unwrap();
+        let bodies: [(&str, &[u8]); 4] = [
+            ("a.json", b"{\"a\":1}"),
+            ("gone.bin", b"gone"),
+            ("short.bin", b"long enough"),
+            ("same.txt", b"before"),
+        ];
+        for (path, bytes) in bodies {
+            fs::write(root.join(path), bytes).unwrap();
+        }
+        fs::write(
+            directory.path().join(INDEX),
+            serde_json::to_vec(
+                &serde_json::json!({"bundles": [{"id": "world", "root": "world",
+                "files": bodies.map(|(path, bytes)| bundle_file(path, bytes))}]}),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let source = ProductContentBundles::admit(&loose(directory.path()), "").unwrap();
+        let intact = source.load("world").unwrap().identity;
+
+        fs::remove_file(root.join("gone.bin")).unwrap();
+        fs::write(root.join("short.bin"), b"cut").unwrap();
+        fs::write(root.join("same.txt"), b"after!").unwrap();
+        let mut bridge = RuntimeContentBridge::new(BTreeMap::new());
+        bridge.bind_bundles(source);
+        let context = (&mut bridge as *mut RuntimeContentBridge).cast();
+        let mut bundle = NativeContentBundleHandle::default();
         assert_eq!(
             unsafe {
                 open_bundle(
                     context,
-                    &NativeContentBundleOpenRequest { id: text("rules") },
+                    &NativeContentBundleOpenRequest { id: text("world") },
                     &mut bundle,
                 )
             },
             ABI_OK
         );
-        assert_eq!(unsafe { destroy_bundle(context, bundle) }, ABI_OK);
-        fs::write(directory.path().join("rules/a.json"), b"{\"id\":22}").unwrap();
+        let open = &bridge.bundles.open[&bundle.value];
+        assert_eq!(open.identity, intact);
         assert_eq!(
-            unsafe {
-                open_bundle(
-                    context,
-                    &NativeContentBundleOpenRequest { id: text("rules") },
-                    &mut bundle,
-                )
-            },
-            0
+            open.entries()
+                .into_iter()
+                .map(|(path, _, length)| (path, length))
+                .collect::<Vec<_>>(),
+            [
+                ("a.json", 7),
+                ("gone.bin", 4),
+                ("same.txt", 6),
+                ("short.bin", 11)
+            ]
+            .map(|(path, length)| (path.to_owned(), length))
         );
-        assert!(bridge.bundles.open.is_empty());
+        assert!(
+            open.files.read.lock().unwrap().is_empty(),
+            "opening read a body"
+        );
+
+        let a = open.reference("a.json").unwrap().unwrap();
+        assert_eq!(a.path, "world/a.json");
+        assert_eq!(a.bytes.as_ref(), b"{\"a\":1}");
+        assert_eq!(
+            open.files.read.lock().unwrap().keys().collect::<Vec<_>>(),
+            ["world/a.json"]
+        );
+        let same = open.reference("same.txt").unwrap().unwrap();
+        assert_eq!(same.bytes.as_ref(), b"after!");
+        assert_eq!(same.sha256(), sha256_words(&Sha256::digest(b"before")));
+        for (path, code) in [
+            ("gone.bin", "PRODUCT_SOURCE_MISSING"),
+            ("short.bin", "PRODUCT_BUNDLE_FILE_CHANGED"),
+        ] {
+            let refusal = open.reference(path).err().unwrap();
+            assert_eq!(refusal.code(), code);
+            assert!(refusal.detail().contains(path), "{}", refusal.detail());
+        }
+        assert!(open.reference("absent.json").unwrap().is_none());
     }
 
     #[test]
