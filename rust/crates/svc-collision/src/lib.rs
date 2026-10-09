@@ -37,6 +37,8 @@
 #![forbid(unsafe_code)]
 
 mod dynamics;
+mod joint;
+mod ragdoll;
 mod static_mesh;
 mod tether;
 
@@ -49,6 +51,10 @@ pub use dynamics::{
     DynamicsAction, DynamicsAnchorObservation, DynamicsBodyId, DynamicsBodyInput,
     DynamicsBodyOutput, DynamicsContact, DynamicsEnvironmentReceipt, DynamicsError,
     DynamicsMassProperties, DynamicsShape, DynamicsSolver, DynamicsStepReceipt,
+};
+pub use joint::{DynamicsJoint, DynamicsJointError, DynamicsJointFrame, DynamicsJointLimit};
+pub use ragdoll::{
+    DynamicsPlacement, RagdollBone, RagdollLink, RagdollMaterial, RagdollShape, RagdollSpawn,
 };
 
 pub use static_mesh::{

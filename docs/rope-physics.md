@@ -8,7 +8,8 @@ generated API.
 
 `svc-collision::DynamicsSolver` is the only Rapier consumer. Each Dynamics world
 keeps one live Rapier world holding its bodies, its static collision
-environment and a maximum-distance `RopeJoint` per tether. These persist between
+environment, a maximum-distance `RopeJoint` per tether and the
+[limited joints](ragdolls.md) between bodies. These persist between
 steps, so contacts, sleeping and solver warm starts carry over. Changes apply
 directly to that world.
 The Dynamics bridge in `csharp-engine-services` maps generated handles onto
@@ -37,8 +38,8 @@ ordinary bodies in the world.
 
 ## Time, lengths and readouts
 
-With any rope present, a step runs four internal substeps with eight solver
-iterations by default. `ConfigureRopes` changes them; each must be at least one.
+With any rope or limited joint present, a step runs four internal substeps
+with eight solver iterations by default. `ConfigureRopes` changes them; each must be at least one.
 These subdivide the caller's update; they are not another clock. Nothing caps
 rope, bead or body counts, or reel speed. The product chooses its own work and
 rates.
@@ -97,5 +98,5 @@ Dynamics itself.
 - The bridge tests cover chains, terrain contact, contact suppression,
   character reactions, light-anchor catch energy and world-origin rebasing.
 
-Rope meshes, cloth, general constraint graphs, climbing and animation are not
-part of this service.
+Rope meshes, cloth and climbing are not part of this service. Hinges, cones
+and ragdolls are in [limited joints and ragdolls](ragdolls.md).

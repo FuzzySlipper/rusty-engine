@@ -28,7 +28,18 @@ pub struct JointPoseReport {
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct ReportedJointPose {
     pub(crate) latest: JointPoseReport,
+    /// The report before `latest`, of the same realization.
+    pub(crate) previous: Option<JointPoseReport>,
     pub(crate) rest: Option<Vec<PosedJoint>>,
+}
+
+/// What a ragdoll spawns from: an instance's rig size and its latest
+/// reports.
+pub(crate) struct RagdollSource {
+    pub(crate) joints: usize,
+    pub(crate) rest: Vec<PosedJoint>,
+    pub(crate) latest: JointPoseReport,
+    pub(crate) previous: Option<JointPoseReport>,
 }
 
 const NO_PARENT: u32 = u32::MAX;
@@ -208,7 +219,7 @@ impl RuntimeAppearanceBridge {
         Ok(())
     }
 
-    fn read_animation_joints(
+    pub(crate) fn read_animation_joints(
         &mut self,
         resource: NativeRenderResourceHandle,
     ) -> Result<NativeAnimationJointInfoResult, CsharpEngineServicesError> {
@@ -290,6 +301,56 @@ impl RuntimeAppearanceBridge {
         Ok(result)
     }
 
+    /// The reports a ragdoll of `instance` spawns from, during a call.
+    pub(crate) fn ragdoll_source(
+        &self,
+        instance: u64,
+    ) -> Result<RagdollSource, CsharpEngineServicesError> {
+        let state = &self.staged_ref()?.state;
+        let instance = state.animation_instances.get(&instance).ok_or_else(|| {
+            CsharpEngineServicesError::new(
+                "CSHARP_ANIMATION_INSTANCE",
+                "animation instance is not live",
+            )
+        })?;
+        let joints =
+            asset_rig(&state.render_resources, &instance.asset).map_or(0, |rig| rig.joints.len());
+        let unreported = || {
+            CsharpEngineServicesError::new(
+                "CSHARP_RAGDOLL_POSE",
+                "the instance has no reported pose: set ReportJoints on it a call before",
+            )
+        };
+        let reported = self
+            .joint_poses
+            .get(&instance.object_id)
+            .ok_or_else(unreported)?;
+        let rest = reported.rest.clone().ok_or_else(unreported)?;
+        if reported.latest.joints.len() != joints || rest.len() != joints {
+            return Err(unreported());
+        }
+        Ok(RagdollSource {
+            joints,
+            rest,
+            latest: reported.latest.clone(),
+            previous: reported.previous.clone(),
+        })
+    }
+
+    /// The world-space overrides a ragdoll places its bones with, applied
+    /// after the product's own. Nothing for an instance that is gone.
+    pub(crate) fn set_ragdoll_overrides(
+        &mut self,
+        instance: u64,
+        overrides: Vec<JointOverride>,
+    ) -> Result<(), CsharpEngineServicesError> {
+        let state = &mut *self.staged_mut()?.state;
+        if let Some(instance) = state.animation_instances.get_mut(&instance) {
+            instance.ragdoll = overrides;
+        }
+        Ok(())
+    }
+
     /// Joint poses the renderer reported since the last call, oldest first.
     /// Only live instances' objects are kept.
     pub(crate) fn ingest_joint_poses(
@@ -311,12 +372,16 @@ impl RuntimeAppearanceBridge {
                     .entry(report.object_id)
                     .or_insert_with(|| ReportedJointPose {
                         latest: report.clone(),
+                        previous: None,
                         rest: None,
                     });
             if rest.is_some() {
                 entry.rest = rest;
             }
-            entry.latest = report;
+            let earlier = std::mem::replace(&mut entry.latest, report);
+            entry.previous = (earlier.generation == entry.latest.generation
+                && earlier.seconds < entry.latest.seconds)
+                .then_some(earlier);
         }
         let state = &self.state;
         self.joint_poses.retain(|object, _| {
@@ -341,15 +406,16 @@ pub(super) fn settle_poses(
         let Some(target) = state.projector.object_handle(instance.object_id) else {
             continue;
         };
+        let mut pose = instance.pose.clone();
+        pose.overrides.extend(instance.ragdoll.iter().cloned());
         let changed = match &instance.pose_sent {
-            Some((sent, pose)) if *sent == target => *pose != instance.pose,
+            Some((sent, sent_pose)) if *sent == target => *sent_pose != pose,
             // A new target starts without controls.
-            _ => instance.pose != AnimatedMeshPose::default(),
+            _ => pose != AnimatedMeshPose::default(),
         };
         if !changed {
             continue;
         }
-        let pose = instance.pose.clone();
         ops.push(RenderDiff::SetAnimatedMeshPose {
             handle: target,
             pose: pose.clone(),
@@ -408,6 +474,61 @@ pub(crate) unsafe extern "C" fn read_animation_joint_pose(
             bridge.read_animation_joint_pose(instance)
         })
     })
+}
+
+/// The joint attachment fixture's character as object 7, published in the
+/// open call, with its rig joint indices by name.
+#[cfg(test)]
+pub(crate) fn character_for_test(
+    bridge: &mut RuntimeAppearanceBridge,
+) -> (NativeAnimationInstanceHandle, BTreeMap<String, u32>) {
+    let path = b"body.glb";
+    let resource = bridge
+        .open_animated_mesh(&NativeAnimatedMeshResourceRequest {
+            path: NativeUtf8Slice {
+                bytes: path.as_ptr(),
+                len: path.len(),
+            },
+        })
+        .expect("admitted animated GLB");
+    let joints = bridge.read_animation_joints(resource).expect("rig joints");
+    // SAFETY: the result borrows bridge storage until the next call.
+    let joints = unsafe { std::slice::from_raw_parts(joints.joints, joints.joints_len) }
+        .iter()
+        .enumerate()
+        .map(|(index, joint)| {
+            let id = unsafe { std::slice::from_raw_parts(joint.id.bytes, joint.id.len) };
+            (String::from_utf8(id.to_vec()).unwrap(), index as u32)
+        })
+        .collect();
+    let appearance = bridge
+        .create_animated_mesh_appearance(NativeAnimatedMeshAppearanceRequest { resource })
+        .expect("animated appearance");
+    let instance = bridge
+        .create_animation_instance(NativeAnimationInstanceRequest {
+            appearance,
+            object_id: 7,
+        })
+        .expect("animation instance");
+    let fact = super::tests::appearance_fact(appearance);
+    unsafe { bridge.stage_snapshot(&fact, 1) }.expect("snapshot");
+    (instance, joints)
+}
+
+/// The ragdoll overrides the open call holds for `instance`.
+#[cfg(test)]
+pub(crate) fn ragdoll_overrides_for_test(
+    bridge: &RuntimeAppearanceBridge,
+    instance: NativeAnimationInstanceHandle,
+) -> Vec<JointOverride> {
+    bridge
+        .staged
+        .as_ref()
+        .expect("an open call")
+        .state
+        .animation_instances[&instance.value]
+        .ragdoll
+        .clone()
 }
 
 #[cfg(test)]

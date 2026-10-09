@@ -27,6 +27,44 @@ pub type NativeReadDynamicsTether = unsafe extern "C" fn(
     *mut NativeDynamicsTetherReadout,
     *mut NativeOperationErrorReceipt,
 ) -> i32;
+pub type NativeSetDynamicsJoint = unsafe extern "C" fn(
+    *mut c_void,
+    NativeDynamicsJointRequest,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeRemoveDynamicsJoint = unsafe extern "C" fn(
+    *mut c_void,
+    NativeDynamicsJointRemoveRequest,
+    *mut NativeDynamicsJointReleaseReceipt,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeCreateDynamicsRagdoll = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeDynamicsRagdollRequest,
+    *mut NativeDynamicsRagdollHandle,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeDestroyDynamicsRagdoll = unsafe extern "C" fn(
+    *mut c_void,
+    NativeDynamicsRagdollHandle,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeSetDynamicsRagdollBlend = unsafe extern "C" fn(
+    *mut c_void,
+    NativeDynamicsRagdollBlendRequest,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeApplyDynamicsRagdollImpulse = unsafe extern "C" fn(
+    *mut c_void,
+    NativeDynamicsRagdollImpulseRequest,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeReadDynamicsRagdoll = unsafe extern "C" fn(
+    *mut c_void,
+    NativeDynamicsRagdollHandle,
+    *mut NativeDynamicsRagdollResult,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
 pub type NativeCreateDynamicsWorld = unsafe extern "C" fn(
     *mut c_void,
     NativeDynamicsWorldConfig,
@@ -1381,6 +1419,13 @@ pub struct NativeDynamicsApi {
     pub set_body_tether: NativeSetDynamicsBodyTether,
     pub remove_tether: NativeRemoveDynamicsTether,
     pub read_tether: NativeReadDynamicsTether,
+    pub set_joint: NativeSetDynamicsJoint,
+    pub remove_joint: NativeRemoveDynamicsJoint,
+    pub create_ragdoll: NativeCreateDynamicsRagdoll,
+    pub destroy_ragdoll: NativeDestroyDynamicsRagdoll,
+    pub set_ragdoll_blend: NativeSetDynamicsRagdollBlend,
+    pub apply_ragdoll_impulse: NativeApplyDynamicsRagdollImpulse,
+    pub read_ragdoll: NativeReadDynamicsRagdoll,
     pub create_world: NativeCreateDynamicsWorld,
     pub destroy_world: NativeDestroyDynamicsWorld,
     pub create_body: NativeCreateDynamicsBody,

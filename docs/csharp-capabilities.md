@@ -33,7 +33,7 @@ to force a rerun.
 
 | Family | Product-facing purpose |
 | --- | --- |
-| `Dynamics` | Own native dynamics worlds, bodies, contacts, stepping, and collision binding. |
+| `Dynamics` | Own native dynamics worlds, bodies, contacts, stepping, collision binding, ropes, limited joints and ragdolls. |
 | `Motion` | Resolve reusable motion requests. |
 | `Kinematic` | Integrate kinematic movement and run bounded motion operations. |
 | `Spatial` | Own collision, navigation, character movement proposals, voxel picking, spatial queries, and session-owned triggers. It can atomically admit collision plus planar navigation from an immutable Engine `ContentReference`, or derive a bounded planar projection from the session's retained voxel/static-mesh collision scene under a `CollisionNavigationConfig` and explain why a column or edge is refused; navigation also includes distinct planar and volumetric traversal overlays plus bounded weighted queries. Planar path queries run A* over the published cells for the fewest steps, or the least cost when weighted; between equally good cells they prefer the one nearer the goal, then the canonical neighbour order, so a query's path is deterministic. `MaxVisited` bounds the cells a query expands. `EvaluateNavigationStep` returns bounded one-step navigation facts and its path without changing session state; path requests return their cells directly. Registered triggers support activation/retirement and fact-free restore rebasing through generated APIs. |

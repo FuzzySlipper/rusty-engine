@@ -590,3 +590,152 @@ pub struct NativeDynamicsStepWithReactionsRequest {
     pub reactions: *const NativeDynamicsAnchorReaction,
     pub reactions_len: usize,
 }
+
+/// How a limited joint may turn. Angles are radians from the rest
+/// relation of its two frames.
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativeDynamicsJointKind {
+    /// About the frames' X axis only, between `min_angle` and `max_angle`.
+    Hinge = 1,
+    /// The second frame's X axis within `swing_angle` of the first's,
+    /// twisting about it between `min_angle` and `max_angle`.
+    Cone = 2,
+}
+
+/// A joint's limits and damping. `damping` (N·m·s per radian) resists
+/// turning about the hinge or twist axis.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeDynamicsJointLimits {
+    pub kind: NativeDynamicsJointKind,
+    pub min_angle: f32,
+    pub max_angle: f32,
+    pub swing_angle: f32,
+    pub damping: f32,
+}
+
+/// Creates the limited joint `id` between two bodies of `world`, or replaces
+/// it. Each frame is body-local; its X axis is the hinge or twist axis.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeDynamicsJointRequest {
+    pub world: NativeDynamicsWorldHandle,
+    pub id: u64,
+    pub first: NativeDynamicsBodyHandle,
+    pub second: NativeDynamicsBodyHandle,
+    pub first_anchor: NativeVec3,
+    pub first_rotation: NativeQuat,
+    pub second_anchor: NativeVec3,
+    pub second_rotation: NativeQuat,
+    pub limits: NativeDynamicsJointLimits,
+    pub contacts_enabled: bool,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeDynamicsJointRemoveRequest {
+    pub world: NativeDynamicsWorldHandle,
+    pub id: u64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeDynamicsJointReleaseReceipt {
+    pub released: bool,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct NativeDynamicsRagdollHandle {
+    pub value: u64,
+}
+
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativeDynamicsRagdollShape {
+    /// A capsule of `radius` from the joint to the bone's end.
+    Capsule = 1,
+    /// A box as long as the bone, `radius` half wide (joint X) and
+    /// `half_depth` half deep (joint Z).
+    Box = 2,
+}
+
+/// One simulated bone: the rig joint (`Animation.ReadJoints` index) its body
+/// hangs from. The body spans to `end_joint` where it is at rest, or with
+/// `end_joint` `u32::MAX` `length` metres along the joint's +Y.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeDynamicsRagdollBone {
+    pub joint: u32,
+    pub end_joint: u32,
+    pub length: f32,
+    pub shape: NativeDynamicsRagdollShape,
+    pub radius: f32,
+    pub half_depth: f32,
+    pub mass: f32,
+}
+
+/// A limited joint at the `child` bone's joint, linking it to the `parent`
+/// bone (indices into the bones). `axis` is the hinge or twist axis in the
+/// child joint's frame at rest; limits are from the rest pose.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeDynamicsRagdollLink {
+    pub parent: u32,
+    pub child: u32,
+    pub axis: NativeVec3,
+    pub limits: NativeDynamicsJointLimits,
+}
+
+/// Spawns a ragdoll of `instance` in `world` at the pose drawn for the
+/// previous call, moving as that pose moved. The instance must report its
+/// joints (`Animation.SetPose` with `ReportJoints`). Linked bones never
+/// collide with each other; other bones follow `collision_groups` and
+/// `collision_mask`. `blend` (0 to 1) mixes the bodies over the clips.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeDynamicsRagdollRequest {
+    pub world: NativeDynamicsWorldHandle,
+    pub instance: NativeAnimationInstanceHandle,
+    pub bones: *const NativeDynamicsRagdollBone,
+    pub bones_len: usize,
+    pub links: *const NativeDynamicsRagdollLink,
+    pub links_len: usize,
+    pub collision_groups: u32,
+    pub collision_mask: u32,
+    pub friction: f32,
+    pub restitution: f32,
+    pub linear_damping: f32,
+    pub angular_damping: f32,
+    pub blend: f32,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeDynamicsRagdollBlendRequest {
+    pub ragdoll: NativeDynamicsRagdollHandle,
+    pub blend: f32,
+}
+
+/// An impulse (N·s) at a world point of one bone's body, as from a hit.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeDynamicsRagdollImpulseRequest {
+    pub ragdoll: NativeDynamicsRagdollHandle,
+    pub bone: u32,
+    pub point: NativeVec3,
+    pub impulse: NativeVec3,
+}
+
+/// Each bone's joint placement in the world, from its body, in bone order.
+/// `resting` is true once every body sleeps. `bones` points into Dynamics
+/// bridge storage until the next call on the same context.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeDynamicsRagdollResult {
+    pub bones: *const NativeTransform,
+    pub bones_len: usize,
+    pub resting: bool,
+    pub blend: f32,
+}

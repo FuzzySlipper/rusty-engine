@@ -2,6 +2,8 @@ use crate::composition::{borrowed_slice, borrowed_utf8, CsharpEngineServicesErro
 
 mod animation_pose;
 pub use animation_pose::JointPoseReport;
+#[cfg(test)]
+pub(crate) use animation_pose::{character_for_test, ragdoll_overrides_for_test};
 
 use crate::render_resources::{
     CsharpRenderResource, CsharpRenderResourceKind, GeneratedMeshes, RenderResourceImports,
@@ -1273,7 +1275,10 @@ struct AnimationInstance {
     controller: Option<u64>,
     /// The product's pose controls (`SetPose`).
     pose: AnimatedMeshPose,
-    /// The target and pose last sent to the renderer.
+    /// The world-space overrides a Dynamics ragdoll places its bones with.
+    ragdoll: Vec<JointOverride>,
+    /// The target and pose (the product's, then the ragdoll's overrides)
+    /// last sent to the renderer.
     pose_sent: Option<(RenderHandle, AnimatedMeshPose)>,
 }
 
@@ -5653,6 +5658,7 @@ impl RuntimeAppearanceBridge {
                 last_playback_target: None,
                 controller: None,
                 pose: AnimatedMeshPose::default(),
+                ragdoll: Vec::new(),
                 pose_sent: None,
             },
         );

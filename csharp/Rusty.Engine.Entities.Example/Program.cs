@@ -1132,6 +1132,12 @@ sealed class DynamicsServiceFake : IDynamicsService
     public void SetBodyTether(DynamicsBodyTetherRequest request) => throw new NotSupportedException();
     public DynamicsTetherReleaseReceipt RemoveTether(DynamicsTetherRequest request) => throw new NotSupportedException();
     public DynamicsTetherReadout ReadTether(DynamicsTetherRequest request) => throw new NotSupportedException();
+    public void SetJoint(DynamicsJointRequest request) => throw new NotSupportedException();
+    public DynamicsJointReleaseReceipt RemoveJoint(DynamicsJointRemoveRequest request) => throw new NotSupportedException();
+    public DynamicsRagdoll CreateRagdoll(DynamicsRagdollRequest request) => throw new NotSupportedException();
+    public void SetRagdollBlend(DynamicsRagdollBlendRequest request) => throw new NotSupportedException();
+    public void ApplyRagdollImpulse(DynamicsRagdollImpulseRequest request) => throw new NotSupportedException();
+    public DynamicsRagdollResult ReadRagdoll(DynamicsRagdoll ragdoll) => throw new NotSupportedException();
     public DynamicsBody CreateSphereBodyWithProperties(DynamicsCreateSphereBodyPropertiesRequest request) => throw new NotSupportedException();
     public DynamicsBody CreateCapsuleBody(DynamicsCreateCapsuleBodyRequest request) => throw new NotSupportedException();
     public void BindWorldCollision(DynamicsWorldCollisionBindingRequest request) => throw new NotSupportedException();

@@ -7,6 +7,7 @@ use rapier3d_f64::prelude::{
     RigidBodyHandle, RigidBodyType, Rotation, SharedShape, Vector,
 };
 
+use crate::joint::{DynamicsJoint, DynamicsJointError, SolverJoint};
 use crate::tether::{
     DynamicsRopeSolverConfig, DynamicsTether, DynamicsTetherError, DynamicsTetherReadout,
     SolverTether,
@@ -137,6 +138,7 @@ pub struct DynamicsEnvironmentReceipt {
 #[derive(Debug, Clone, PartialEq)]
 pub enum DynamicsError {
     Tether(DynamicsTetherError),
+    Joint(DynamicsJointError),
     InvalidStep { actual: f64 },
     DuplicateBody { body: DynamicsBodyId },
     UnknownBody { body: DynamicsBodyId },
@@ -148,6 +150,7 @@ impl DynamicsError {
     pub const fn code(&self) -> &'static str {
         match self {
             Self::Tether(error) => error.code(),
+            Self::Joint(error) => error.code(),
             Self::InvalidStep { .. } => "invalid-dynamics-step",
             Self::DuplicateBody { .. } => "duplicate-dynamics-body",
             Self::UnknownBody { .. } => "unknown-dynamics-body",
@@ -165,6 +168,12 @@ impl std::fmt::Display for DynamicsError {
 
 impl std::error::Error for DynamicsError {}
 
+impl From<DynamicsJointError> for DynamicsError {
+    fn from(value: DynamicsJointError) -> Self {
+        Self::Joint(value)
+    }
+}
+
 impl From<DynamicsTetherError> for DynamicsError {
     fn from(value: DynamicsTetherError) -> Self {
         Self::Tether(value)
@@ -181,9 +190,10 @@ pub struct DynamicsAnchorObservation {
     pub response: [[f64; 3]; 3],
 }
 
-/// One live Rapier world. Bodies, static environment colliders and rope
-/// joints persist between steps, so contacts, sleeping and solver warm starts
-/// carry over. Changes apply directly; nothing is staged or rolled back.
+/// One live Rapier world. Bodies, static environment colliders, rope joints
+/// and limited joints persist between steps, so contacts, sleeping and solver
+/// warm starts carry over. Changes apply directly; nothing is staged or
+/// rolled back.
 pub struct DynamicsSolver {
     world: PhysicsWorld,
     bodies: BTreeMap<DynamicsBodyId, RigidBodyHandle>,
@@ -191,6 +201,7 @@ pub struct DynamicsSolver {
     /// rebind replaces only the chunks and mesh instances that changed.
     environment: BTreeMap<usize, (SharedShape, ColliderHandle)>,
     tethers: BTreeMap<u64, SolverTether>,
+    joints: BTreeMap<u64, SolverJoint>,
     rope_solver: DynamicsRopeSolverConfig,
     contacts: Vec<DynamicsContact>,
     tether_readouts: Vec<DynamicsTetherReadout>,
@@ -207,6 +218,7 @@ impl DynamicsSolver {
             bodies: BTreeMap::new(),
             environment: BTreeMap::new(),
             tethers: BTreeMap::new(),
+            joints: BTreeMap::new(),
             rope_solver: DynamicsRopeSolverConfig::default(),
             contacts: Vec::new(),
             tether_readouts: Vec::new(),
@@ -293,12 +305,13 @@ impl DynamicsSolver {
         Ok(())
     }
 
-    /// Remove a body and every rope attached to it. Returns the removed rope
-    /// identities.
+    /// Remove a body and every rope and joint attached to it. Returns the
+    /// removed rope identities.
     pub fn remove_body(&mut self, id: DynamicsBodyId) -> Vec<u64> {
         let Some(body) = self.bodies.remove(&id) else {
             return Vec::new();
         };
+        self.joints.retain(|_, joint| !joint.attaches(id));
         let attached = self.tethers_attached_to(id);
         for tether in &attached {
             if let Some(tether) = self.tethers.remove(tether) {
@@ -326,10 +339,22 @@ impl DynamicsSolver {
             .filter_map(|id| self.tethers.remove(&id))
             .map(|tether| tether.remove(&mut self.world))
             .collect::<Vec<_>>();
+        let joints = self
+            .joints
+            .extract_if(.., |_, joint| joint.attaches(body.id))
+            .map(|(_, joint)| joint.remove(&mut self.world))
+            .collect::<Vec<_>>();
         self.world.remove_body(previous);
         let (builder, collider) = body_builders(&body);
         let (handle, _) = self.world.insert(builder, collider);
         self.bodies.insert(body.id, handle);
+        for joint in joints {
+            let (first, second) = (self.bodies[&joint.first], self.bodies[&joint.second]);
+            self.joints.insert(
+                joint.id,
+                SolverJoint::insert(joint, &mut self.world, first, second),
+            );
+        }
         for (definition, was_taut) in attached {
             let tether = SolverTether::insert(definition, was_taut, &mut self.world, |id| {
                 self.bodies.get(&id).copied()
@@ -495,6 +520,64 @@ impl DynamicsSolver {
         }
     }
 
+    pub fn joint_count(&self) -> usize {
+        self.joints.len()
+    }
+
+    pub fn joint(&self, id: u64) -> Option<DynamicsJoint> {
+        self.joints.get(&id).map(|joint| joint.definition)
+    }
+
+    /// Create a limited joint, or replace the one with its identity. The
+    /// joint holds the bodies' current placement as their frames say; bodies
+    /// that do not meet it are pulled together.
+    pub fn set_joint(&mut self, definition: DynamicsJoint) -> Result<(), DynamicsError> {
+        SolverJoint::validate(&definition)?;
+        let resolve = |body: DynamicsBodyId| {
+            self.bodies
+                .get(&body)
+                .copied()
+                .ok_or(DynamicsJointError::UnknownBody {
+                    id: definition.id,
+                    body,
+                })
+        };
+        let (first, second) = (resolve(definition.first)?, resolve(definition.second)?);
+        if let Some(previous) = self.joints.remove(&definition.id) {
+            previous.remove(&mut self.world);
+        }
+        self.joints.insert(
+            definition.id,
+            SolverJoint::insert(definition, &mut self.world, first, second),
+        );
+        Ok(())
+    }
+
+    pub fn remove_joint(&mut self, id: u64) -> bool {
+        match self.joints.remove(&id) {
+            Some(joint) => {
+                joint.remove(&mut self.world);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Apply `impulse` at the world `point` of a body, waking it.
+    pub fn apply_impulse_at_point(
+        &mut self,
+        id: DynamicsBodyId,
+        point: [f64; 3],
+        impulse: [f64; 3],
+    ) -> Result<(), DynamicsError> {
+        let handle = self.handle(id)?;
+        if !point.into_iter().chain(impulse).all(f64::is_finite) {
+            return Err(DynamicsError::InvalidAction { body: id });
+        }
+        self.world.bodies[handle].apply_impulse_at_point(vector(impulse), vector(point), true);
+        Ok(())
+    }
+
     /// Move every body and fixed rope anchor by `delta`, for a world-origin
     /// rebase. Velocities, contacts and rope state are unchanged.
     pub fn translate(&mut self, delta: [f64; 3]) {
@@ -546,7 +629,8 @@ impl DynamicsSolver {
             }
         }
 
-        let roped = !self.tethers.is_empty();
+        // Ropes and limited joints need the finer solve.
+        let roped = !self.tethers.is_empty() || !self.joints.is_empty();
         let subdivisions = if roped { self.rope_solver.substeps } else { 1 };
         let dt = step_seconds / subdivisions as f64;
         self.world.integration_parameters = IntegrationParameters {

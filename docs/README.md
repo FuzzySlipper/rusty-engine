@@ -62,6 +62,8 @@ The root [README](../README.md) is the repository landing page and
 - [Multiplayer sessions](multiplayer-sessions.md): hosting and joining by
   invitation, delivery guarantees, chat, and running a relay.
 - [Rope physics](rope-physics.md): Dynamics tethers and character coupling.
+- [Limited joints and ragdolls](ragdolls.md): hinges and cones between
+  Dynamics bodies, and animated characters that fall as ragdolls.
 - [Implicit topology on ambiguous faces](implicit-topology-diagnosis.md): how
   implicit meshing resolves ambiguous faces.
 

@@ -1,6 +1,7 @@
 mod anchor;
 mod chain;
 mod errors;
+mod ragdoll;
 use errors::{clear_receipt, refuse};
 
 use std::{
@@ -38,6 +39,15 @@ pub(crate) struct RuntimeDynamicsBridge {
     body_facts: Vec<NativeDynamicsBodyFact>,
     contacts: Vec<NativeDynamicsContact>,
     operation_diagnostics: crate::operation_diagnostics::OperationDiagnostics,
+    ragdolls: BTreeMap<u64, ragdoll::RagdollSlot>,
+    next_ragdoll: u64,
+    /// Ragdoll joint identities, counting down so they stay clear of the
+    /// product's own.
+    next_internal_joint: u64,
+    /// Backing for the latest borrowed ragdoll result.
+    ragdoll_bones: Box<[NativeTransform]>,
+    /// The sibling Animation bridge ragdolls pose (`bind_appearance`).
+    appearance: Option<*mut crate::appearance::RuntimeAppearanceBridge>,
 }
 
 #[allow(
@@ -198,6 +208,11 @@ impl RuntimeDynamicsBridge {
             body_facts: Vec::new(),
             contacts: Vec::new(),
             operation_diagnostics: Default::default(),
+            ragdolls: BTreeMap::new(),
+            next_ragdoll: 1,
+            next_internal_joint: u64::MAX,
+            ragdoll_bones: Box::new([]),
+            appearance: None,
         }
     }
 
@@ -249,6 +264,19 @@ impl RuntimeDynamicsBridge {
             Some(WorldSlot::Tombstoned) => return Ok(()),
             None => return Err(unknown("world", handle.value)),
         };
+        let ragdolls: Vec<u64> = self
+            .ragdolls
+            .iter()
+            .filter_map(|(ragdoll, slot)| match slot {
+                ragdoll::RagdollSlot::Active(active) if active.world == handle.value => {
+                    Some(*ragdoll)
+                }
+                _ => None,
+            })
+            .collect();
+        for ragdoll in ragdolls {
+            self.release_ragdoll(ragdoll)?;
+        }
         self.worlds.insert(handle.value, WorldSlot::Tombstoned);
         for body in bodies {
             self.bodies.insert(body, BodySlot::Tombstoned);
@@ -504,6 +532,7 @@ impl RuntimeDynamicsBridge {
             .step(f64::from(step_seconds), steps, actions)
             .map_err(solver_error("CSHARP_DYNAMICS_STEP"))?;
         world.contacts = contacts_by_body(world.solver.contacts());
+        self.place_ragdolls_of(world_handle)?;
         let links = receipt.rope_link_count as u32;
         let substeps = receipt.rope_substeps as u32;
         let iterations = receipt.rope_iterations as u32;
@@ -1469,6 +1498,13 @@ pub(crate) fn api(bridge: &mut RuntimeDynamicsBridge) -> NativeDynamicsApi {
         set_body_tether,
         remove_tether,
         read_tether,
+        set_joint: ragdoll::set_joint,
+        remove_joint: ragdoll::remove_joint,
+        create_ragdoll: ragdoll::create_ragdoll,
+        destroy_ragdoll: ragdoll::destroy_ragdoll,
+        set_ragdoll_blend: ragdoll::set_ragdoll_blend,
+        apply_ragdoll_impulse: ragdoll::apply_ragdoll_impulse,
+        read_ragdoll: ragdoll::read_ragdoll,
         create_world,
         destroy_world,
         create_body,
