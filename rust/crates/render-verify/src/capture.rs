@@ -94,12 +94,45 @@ fn executable(name: &str) -> String {
     }
 }
 
-/// One step of a recipe: a live-debug command line, or a pause.
+/// One step of a recipe: a live-debug command line, a pause, or a command
+/// polled until its answer contains one of some texts (a world loading, a
+/// dungeon entered).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum Step {
     Command(String),
-    Wait { wait: f64 },
+    Wait {
+        wait: f64,
+    },
+    WaitFor {
+        #[serde(rename = "waitFor")]
+        wait_for: WaitFor,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WaitFor {
+    pub command: String,
+    /// The answer contains any of these.
+    pub contains: Vec<String>,
+    pub timeout_seconds: f64,
+    #[serde(default = "default_poll_seconds")]
+    pub poll_seconds: f64,
+}
+
+fn default_poll_seconds() -> f64 {
+    1.0
+}
+
+/// A scene made from another one by a command (lights added to a captured
+/// corridor): `{from}` and `{out}` in its arguments name the two files.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Derive {
+    /// The scene file it is made from, relative to the lane directory.
+    pub from: String,
+    pub command: Vec<String>,
 }
 
 /// How one scene file is captured.
@@ -109,7 +142,8 @@ pub struct Capture {
     /// The scene file, relative to the lane directory.
     pub file: String,
     /// The product's project file. `{engine}` stands for the Engine checkout
-    /// (`--checkout`), for its fixtures.
+    /// (`--checkout`), for its fixtures. Empty for a derived scene.
+    #[serde(default)]
     pub project: String,
     /// MSBuild properties the product stages with, beyond the pair's.
     #[serde(default)]
@@ -117,7 +151,12 @@ pub struct Capture {
     /// Seconds after the product serves before the first step.
     #[serde(default)]
     pub settle: Option<f64>,
+    #[serde(default)]
     pub steps: Vec<Step>,
+    /// Made from another scene instead of captured (it is captured first
+    /// when both are selected, as recipes run in order).
+    #[serde(default)]
+    pub derive: Option<Derive>,
     /// Where the recipe came from and what it shows.
     #[serde(default)]
     pub notes: String,
@@ -246,6 +285,9 @@ pub fn project_path(recipe: &Capture, checkout: Option<&Path>) -> Result<PathBuf
 }
 
 fn capture_one(request: &CaptureRequest<'_>, recipe: &Capture) -> Result<String, String> {
+    if let Some(derive) = &recipe.derive {
+        return derive_one(request, recipe, derive);
+    }
     let pair = request.pair;
     let project = project_path(recipe, request.checkout)?;
     let name = Path::new(&recipe.file)
@@ -284,6 +326,7 @@ fn capture_one(request: &CaptureRequest<'_>, recipe: &Capture) -> Result<String,
                 Step::Command(line) => {
                     live_debug(pair, &origin, line)?;
                 }
+                Step::WaitFor { wait_for } => wait_until(pair, &origin, wait_for)?,
             }
         }
         let snapshot = work.join("scene.rscene");
@@ -302,18 +345,97 @@ fn capture_one(request: &CaptureRequest<'_>, recipe: &Capture) -> Result<String,
     })();
     stop(&mut child);
     let snapshot = result?;
-    let target = request.root.join(&recipe.file);
+    replace_scene(request.root, &recipe.file, &snapshot)?;
+    let bytes = fs::metadata(request.root.join(&recipe.file))
+        .map(|meta| meta.len())
+        .unwrap_or(0);
+    Ok(format!("{bytes} bytes on pair {}", pair.version))
+}
+
+/// Writes `scene` over the lane's `file`, keeping the one it replaces as
+/// `<file>.previous`.
+fn replace_scene(root: &Path, file: &str, scene: &Path) -> Result<(), String> {
+    let target = root.join(file);
     if target.exists() {
-        let previous = request.root.join(format!("{}.previous", recipe.file));
+        let previous = root.join(format!("{file}.previous"));
         fs::rename(&target, &previous)
             .map_err(|error| format!("{}: {error}", previous.display()))?;
     }
     if let Some(parent) = target.parent() {
         fs::create_dir_all(parent).map_err(|error| format!("{}: {error}", parent.display()))?;
     }
-    fs::copy(&snapshot, &target).map_err(|error| format!("{}: {error}", target.display()))?;
-    let bytes = fs::metadata(&target).map(|meta| meta.len()).unwrap_or(0);
-    Ok(format!("{bytes} bytes on pair {}", pair.version))
+    fs::copy(scene, &target).map_err(|error| format!("{}: {error}", target.display()))?;
+    Ok(())
+}
+
+fn derive_one(
+    request: &CaptureRequest<'_>,
+    recipe: &Capture,
+    derive: &Derive,
+) -> Result<String, String> {
+    let from = request.root.join(&derive.from);
+    if !from.exists() {
+        return Err(format!("{}: missing", from.display()));
+    }
+    let out = request.work.join(format!(
+        "{}.derived.rscene",
+        Path::new(&recipe.file)
+            .file_stem()
+            .map(|stem| stem.to_string_lossy().into_owned())
+            .unwrap_or_default()
+    ));
+    let arguments: Vec<String> = derive
+        .command
+        .iter()
+        .map(|argument| {
+            argument
+                .replace("{from}", &from.display().to_string())
+                .replace("{out}", &out.display().to_string())
+        })
+        .collect();
+    let (program, rest) = arguments
+        .split_first()
+        .ok_or_else(|| format!("{}: an empty derive command", recipe.file))?;
+    let output = Command::new(program)
+        .args(rest)
+        .output()
+        .map_err(|error| format!("{program}: {error}"))?;
+    if !output.status.success() || !out.exists() {
+        return Err(format!(
+            "deriving from {} exited {}: {}",
+            derive.from,
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    replace_scene(request.root, &recipe.file, &out)?;
+    Ok(format!("derived from {}", derive.from))
+}
+
+/// Polls `wait.command` until its answer contains one of `wait.contains`.
+fn wait_until(pair: &Pair, origin: &str, wait: &WaitFor) -> Result<(), String> {
+    let started = Instant::now();
+    let mut last = String::new();
+    while started.elapsed().as_secs_f64() < wait.timeout_seconds {
+        if let Ok(answer) = live_debug(pair, origin, &wait.command) {
+            if wait
+                .contains
+                .iter()
+                .any(|text| answer.contains(text.as_str()))
+            {
+                return Ok(());
+            }
+            last = answer;
+        }
+        pause(wait.poll_seconds);
+    }
+    Err(format!(
+        "`{}` did not answer with any of {:?} within {} s (last: {})",
+        wait.command,
+        wait.contains,
+        wait.timeout_seconds,
+        last.trim().chars().take(200).collect::<String>()
+    ))
 }
 
 /// Builds and stages `project` on the pair's SDK, live debug admitted, into
@@ -528,6 +650,28 @@ mod tests {
             r#"{"captures":[{"file":"a","project":"b","steps":[],"camera":1}]}"#
         )
         .is_err());
+        let polled: CaptureManifest = serde_json::from_str(
+            r#"{"captures":[{"file":"a","project":"b","steps":[{"waitFor":{"command":"craft.player.readout","contains":["after="],"timeoutSeconds":240}}]},{"file":"c","derive":{"from":"a","command":["add-lights","{from}","{out}"]}}]}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            polled.captures[0].steps[0],
+            Step::WaitFor {
+                wait_for: WaitFor {
+                    command: "craft.player.readout".to_owned(),
+                    contains: vec!["after=".to_owned()],
+                    timeout_seconds: 240.0,
+                    poll_seconds: 1.0,
+                }
+            }
+        );
+        assert_eq!(
+            polled.captures[1]
+                .derive
+                .as_ref()
+                .map(|derive| derive.from.as_str()),
+            Some("a")
+        );
     }
 
     #[test]
