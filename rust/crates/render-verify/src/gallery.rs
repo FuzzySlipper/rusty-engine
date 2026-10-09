@@ -15,12 +15,10 @@ use std::{
 };
 
 use render_model::{
-    AmbientOcclusionMode, RendererSettingKind, RendererSettingsDescriptor, VolumetricCloudsQuality,
-    VolumetricFogQuality, RENDERER_SETTING_OPTIONS,
+    renderer_setting_value, GalleryExperiment, GallerySetup, RendererSettingKind,
+    RendererSettingOption, RendererSettingsDescriptor, RendererSettingsOverrides,
+    RENDERER_SETTING_OPTIONS,
 };
-
-/// The stand-in fog medium for a scene with none: density and anisotropy.
-const STAND_IN_FOG: &str = "0.015,0.6";
 use serde::Serialize;
 use serde_json::Value;
 
@@ -28,6 +26,9 @@ use crate::{
     font::{draw_text, LINE},
     image::{compare, Image},
 };
+
+/// The stand-in fog medium for a scene with none: density and anisotropy.
+const STAND_IN_FOG: &str = "0.015,0.6";
 
 /// What to draw and where.
 pub struct GalleryRequest<'a> {
@@ -162,14 +163,6 @@ pub fn plan(
     has_indirect_light: bool,
     has_fog: bool,
 ) -> Vec<GalleryVariant> {
-    let choose = |id: &str, value: &str| vec!["--choose".to_owned(), format!("{id}={value}")];
-    let labelled = |id: &str, value: &str| {
-        let label = RENDERER_SETTING_OPTIONS
-            .iter()
-            .find(|option| option.id == id)
-            .map_or(id, |option| option.label);
-        format!("{label}: {}", choice_label(id, value))
-    };
     let mut variants: Vec<GalleryVariant> = Vec::new();
     let mut everything: Vec<String> = Vec::new();
     let mut push = |id: String,
@@ -187,94 +180,12 @@ pub fn plan(
             note,
         });
     };
-    for option in RENDERER_SETTING_OPTIONS {
-        let id = option.id;
-        match id {
-            "renderScale" if settings.render_scale < 1.0 => push(
-                format!("{id}-1"),
-                "Render scale 1×".to_owned(),
-                choose(id, "1"),
-                true,
-                None,
-            ),
-            "antialiasing" if settings.antialiasing != 4 => push(
-                format!("{id}-4x"),
-                labelled(id, "4x"),
-                choose(id, "4x"),
-                true,
-                None,
-            ),
-            "shadows" if !settings.shadows => push(
-                format!("{id}-true"),
-                "Shadows".to_owned(),
-                choose(id, "true"),
-                true,
-                None,
-            ),
-            "shadowBudget" if settings.shadows && settings.shadow_budget.is_some() => push(
-                format!("{id}-none"),
-                labelled(id, "none"),
-                choose(id, "none"),
-                true,
-                None,
-            ),
-            "ambientOcclusion" => {
-                for (mode, value) in [
-                    (AmbientOcclusionMode::ScreenSpace, "screenSpace"),
-                    (AmbientOcclusionMode::DistanceField, "distanceField"),
-                ] {
-                    if settings.ambient_occlusion.mode != mode {
-                        let everything_too = mode == AmbientOcclusionMode::ScreenSpace
-                            && settings.ambient_occlusion.mode == AmbientOcclusionMode::Disabled;
-                        push(
-                            format!("{id}-{value}"),
-                            labelled(id, value),
-                            choose(id, value),
-                            everything_too,
-                            None,
-                        );
-                    }
-                }
-            }
-            "volumetricFog" if settings.volumetric_fog == VolumetricFogQuality::Off => {
-                // Volumetric fog lights the scene's fog; a scene without any
-                // gets a thin stand-in haze to show what it would do.
-                let mut args = choose(id, "low");
-                let note = (!has_fog).then(|| {
-                    args.extend([
-                        "--volumetric-fog-medium".to_owned(),
-                        STAND_IN_FOG.to_owned(),
-                    ]);
-                    "A thin stand-in haze (0.015 per metre): the game sets its own fog.".to_owned()
-                });
-                push(format!("{id}-low"), labelled(id, "low"), args, true, note);
-            }
-            "volumetricClouds" if settings.volumetric_clouds == VolumetricCloudsQuality::Off => {
-                push(
-                    format!("{id}-low"),
-                    labelled(id, "low"),
-                    choose(id, "low"),
-                    true,
-                    Some("Draws only where the scene has a cloud layer or regions.".to_owned()),
-                )
-            }
-            "clusteredLighting" if !settings.clustered_lighting => push(
-                format!("{id}-true"),
-                option.label.to_owned(),
-                choose(id, "true"),
-                true,
-                None,
-            ),
-            "gpuCulling" if !settings.gpu_culling => push(
-                format!("{id}-true"),
-                option.label.to_owned(),
-                choose(id, "true"),
-                true,
-                None,
-            ),
-            _ => {}
-        }
-    }
+    plan_options(
+        RENDERER_SETTING_OPTIONS,
+        settings,
+        has_fog,
+        &mut |id, label, args, everything_too, note| push(id, label, args, everything_too, note),
+    );
     // Indirect light needs a volume the game places; the gallery puts one
     // around the camera to show what it would do.
     if let (false, Some([x, y, z])) = (has_indirect_light, camera) {
@@ -298,6 +209,84 @@ pub fn plan(
         });
     }
     variants
+}
+
+/// The variants the catalogue's options declare (`GalleryExperiment`): each
+/// value that turns a feature on or up from what `settings` draws with,
+/// labelled, with what the scene needs set up. A feature joins by its catalogue entry alone.
+fn plan_options(
+    options: &[RendererSettingOption],
+    settings: &RendererSettingsDescriptor,
+    has_fog: bool,
+    push: &mut dyn FnMut(String, String, Vec<String>, bool, Option<String>),
+) {
+    for option in options {
+        let GalleryExperiment::Try {
+            values,
+            everything,
+            requires,
+            setup,
+        } = option.gallery
+        else {
+            continue;
+        };
+        if let Some(requires) = requires {
+            if renderer_setting_value(settings, requires) != Some(serde_json::Value::Bool(true)) {
+                continue;
+            }
+        }
+        let current = renderer_setting_value(settings, option.id);
+        let already_one = values.iter().any(|value| {
+            option.kind.value_of(value).is_some() && option.kind.value_of(value) == current
+        });
+        for value in values {
+            let Some(json) = option.kind.value_of(value) else {
+                continue;
+            };
+            // Only what turns a feature on or up from the scene's own.
+            if current
+                .as_ref()
+                .is_some_and(|current| option.kind.reaches(current, &json))
+            {
+                continue;
+            }
+            let mut overrides = RendererSettingsOverrides::default();
+            if overrides.choose(option.id, &json).is_err()
+                || overrides.apply(*settings) == *settings
+            {
+                continue;
+            }
+            let mut args = vec!["--choose".to_owned(), format!("{}={value}", option.id)];
+            let note = match setup {
+                None => None,
+                Some(GallerySetup::SceneFog) if has_fog => None,
+                Some(GallerySetup::SceneFog) => {
+                    args.extend([
+                        "--volumetric-fog-medium".to_owned(),
+                        STAND_IN_FOG.to_owned(),
+                    ]);
+                    Some(
+                        "A thin stand-in haze (0.015 per metre): the game sets its own fog."
+                            .to_owned(),
+                    )
+                }
+                Some(GallerySetup::Product(what)) => {
+                    Some(format!("Needs product setup: draws only with {what}."))
+                }
+            };
+            let label = match option.kind {
+                RendererSettingKind::Toggle => option.label.to_owned(),
+                _ => format!("{}: {}", option.label, choice_label(option.id, value)),
+            };
+            push(
+                format!("{}-{value}", option.id),
+                label,
+                args,
+                !already_one && everything == Some(*value),
+                note,
+            );
+        }
+    }
 }
 
 /// Draws the gallery: `baseline.png`, one image per variant, `sheet.png`,
@@ -551,6 +540,7 @@ pub fn markdown(report: &GalleryReport) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use render_model::{AmbientOcclusionMode, VolumetricCloudsQuality, VolumetricFogQuality};
 
     #[test]
     fn a_plain_scene_offers_every_feature_it_leaves_off_then_everything() {
@@ -633,5 +623,53 @@ mod tests {
         assert_eq!(caption(&entry), "+0.40 ms - 12.3% of pixels changed");
         entry.changed_share = 0.0;
         assert_eq!(caption(&entry), "+0.40 ms - no visible change");
+    }
+
+    #[test]
+    fn a_catalogue_entry_joins_the_gallery_with_no_gallery_branch() {
+        // A feature whose entry declares an experiment, here one that needs
+        // the product to set something up, joins by that entry alone.
+        let entry = RendererSettingOption {
+            id: "gpuCulling",
+            label: "New feature",
+            group: "Advanced",
+            description: "",
+            kind: RendererSettingKind::Toggle,
+            restart: false,
+            cost: "",
+            gallery: GalleryExperiment::Try {
+                values: &["true"],
+                everything: Some("true"),
+                requires: None,
+                setup: Some(GallerySetup::Product("a feature volume")),
+            },
+        };
+        let mut variants = Vec::new();
+        plan_options(
+            &[entry],
+            &RendererSettingsDescriptor::DEFAULT,
+            false,
+            &mut |id, label, args, everything, note| {
+                variants.push((id, label, args, everything, note))
+            },
+        );
+        assert_eq!(variants.len(), 1);
+        let (id, label, args, everything, note) = &variants[0];
+        assert_eq!(id, "gpuCulling-true");
+        assert_eq!(label, "New feature");
+        assert_eq!(args, &["--choose", "gpuCulling=true"]);
+        assert!(everything);
+        assert_eq!(
+            note.as_deref(),
+            Some("Needs product setup: draws only with a feature volume.")
+        );
+        // Every catalogue entry is a feature to try or says it is not.
+        assert!(RENDERER_SETTING_OPTIONS
+            .iter()
+            .filter(|option| option.gallery == GalleryExperiment::None)
+            .all(|option| matches!(
+                option.id,
+                "vsync" | "ambientOcclusionStrength" | "ambientOcclusionRadius"
+            )));
     }
 }

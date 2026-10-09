@@ -251,7 +251,10 @@ export async function mountVideoOptions(
         line.dataset['option'] = row.option.id;
         const label = element('label', 'rusty-video-options__label', row.label);
         label.htmlFor = id;
-        label.title = row.option.description;
+        label.title =
+          row.source === 'engine'
+            ? `${row.option.description}\n${(row.option as EngineVideoOption).cost}`
+            : row.option.description;
         const controlled = control(row, id);
         if (row.source === 'engine' && (row.option as EngineVideoOption).chosen) {
           const reset = element('button', 'rusty-video-options__reset', 'Game default');

@@ -319,7 +319,8 @@ shadows, their budget, the occlusion mode, and volumetric fog and clouds
 same refusals the readout carries. The panel's route,
 `/__rusty/product/runtime/video-options`, answers `GET` with the catalogue
 (each option's `value` drawn, `requested`, `gameDefault`, `chosen` and
-`refused`) and `POST` with one change: `{"choose": {"id", "value"}}`,
+`refused`, whether a change needs a `restart` (none does) and its measured
+`cost`, which the panel shows under the description) and `POST` with one change: `{"choose": {"id", "value"}}`,
 `{"forget": id}`, `{"forget": null}` for every choice, or
 `{"preset": id}`. A scene snapshot records the player's choices, and
 `rusty-scene-render` applies them, with its own feature flags as choices
@@ -328,9 +329,10 @@ over them.
 A new renderer setting joins the catalogue in the commit that adds it:
 its entry in `RENDERER_SETTING_OPTIONS`, its field and value mapping in
 `RendererSettingsOverrides` and `renderer_setting_value`
-(`render-model/src/settings_options.rs`), and its refusal, if it has one, in
-the runtime's video options. The panel and the feature gallery then offer it
-to every game on that pair.
+(`render-model/src/settings_options.rs`), its `restart`, its measured
+`cost` and its `gallery` experiment there too, and its refusal, if it has
+one, in the runtime's video options. The panel and the feature gallery then
+offer it to every game on that pair.
 
 ## Contact darkening: screen-space ambient occlusion
 

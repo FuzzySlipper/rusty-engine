@@ -31,6 +31,8 @@ const catalogue: VideoOptionsCatalogue = {
       requested: 'off',
       gameDefault: '4x',
       chosen: true,
+      restart: false,
+      cost: '',
       refused: null,
     },
     {
@@ -43,6 +45,8 @@ const catalogue: VideoOptionsCatalogue = {
       requested: false,
       gameDefault: false,
       chosen: false,
+      restart: false,
+      cost: '',
       refused: 'no indirect draws',
     },
   ],

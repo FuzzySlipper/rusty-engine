@@ -53,6 +53,81 @@ pub struct RendererSettingOption {
     pub description: &'static str,
     #[serde(flatten)]
     pub kind: RendererSettingKind,
+    /// A change takes effect only when the product restarts. None does: the
+    /// renderer applies every setting on its next frame.
+    pub restart: bool,
+    /// What the setting costs, as measured: a sentence for a menu.
+    pub cost: &'static str,
+    /// What the feature gallery tries (render-verify `gallery::plan`). A
+    /// new feature names its experiment here and joins the gallery with no
+    /// gallery change.
+    #[serde(skip)]
+    pub gallery: GalleryExperiment,
+}
+
+/// What the feature gallery tries for an option.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum GalleryExperiment {
+    /// Not a feature to try: display pacing, or a tuning value.
+    None,
+    Try {
+        /// Each value to show, in the text form `--choose ID=VALUE` takes,
+        /// when it changes what the scene draws with.
+        values: &'static [&'static str],
+        /// The value "everything on" takes, when the scene's own is none of
+        /// `values` (so a scene on one path is not moved to another).
+        everything: Option<&'static str>,
+        /// A toggle option that must be on for this one to matter.
+        requires: Option<&'static str>,
+        /// What the scene must hold for the feature to show.
+        setup: Option<GallerySetup>,
+    },
+}
+
+/// What a feature needs from the scene to show in the gallery.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GallerySetup {
+    /// It lights the scene's fog. Without any, the gallery gives it a thin
+    /// stand-in medium, and says so.
+    SceneFog,
+    /// It draws only what the product sets up (named): the gallery shows it
+    /// labelled "needs product setup".
+    Product(&'static str),
+}
+
+impl RendererSettingKind {
+    /// A value in its `--choose` text form as the JSON the option takes.
+    pub fn value_of(&self, text: &str) -> Option<Value> {
+        match self {
+            Self::Toggle => text.parse::<bool>().ok().map(Value::from),
+            Self::Choice { choices } => choices
+                .iter()
+                .any(|choice| choice.value == text)
+                .then(|| Value::from(text)),
+            Self::Range { .. } => text.parse::<f64>().ok().map(Value::from),
+        }
+    }
+
+    /// Whether `current` is already `value` or past it: a toggle on, a
+    /// choice listed at or after it (choices run from least to most), a
+    /// number at or above it.
+    pub fn reaches(&self, current: &Value, value: &Value) -> bool {
+        match self {
+            Self::Toggle => current == value || current == &Value::Bool(true),
+            Self::Choice { choices } => {
+                let rank = |value: &Value| {
+                    choices
+                        .iter()
+                        .position(|choice| Some(choice.value) == value.as_str())
+                };
+                matches!((rank(current), rank(value)), (Some(at), Some(wanted)) if at >= wanted)
+            }
+            Self::Range { .. } => matches!(
+                (current.as_f64(), value.as_f64()),
+                (Some(at), Some(wanted)) if at >= wanted
+            ),
+        }
+    }
 }
 
 const ANTIALIASING_CHOICES: &[RendererSettingChoice] = &[
@@ -136,6 +211,9 @@ pub const RENDERER_SETTING_OPTIONS: &[RendererSettingOption] = &[
             step: 0.05,
             unit: "×",
         },
+        restart: false,
+        cost: "At 0.75 a CraftSurvive meadow at 1920×1080 on an RX 9070 XT draws in 1.7 ms less (10.7 to 9.0 ms): the world's passes cost about the share of pixels drawn.",
+        gallery: GalleryExperiment::Try { values: &["1"], everything: Some("1"), requires: None, setup: None },
     },
     RendererSettingOption {
         id: "antialiasing",
@@ -145,6 +223,9 @@ pub const RENDERER_SETTING_OPTIONS: &[RendererSettingOption] = &[
         kind: RendererSettingKind::Choice {
             choices: ANTIALIASING_CHOICES,
         },
+        restart: false,
+        cost: "4x costs about 0.3 ms over off in a CraftSurvive meadow at 1920×1080 on an RX 9070 XT (world and finish passes).",
+        gallery: GalleryExperiment::Try { values: &["4x"], everything: Some("4x"), requires: None, setup: None },
     },
     RendererSettingOption {
         id: "vsync",
@@ -152,6 +233,9 @@ pub const RENDERER_SETTING_OPTIONS: &[RendererSettingOption] = &[
         group: "Display",
         description: "Waits for the display's refresh before showing a frame: no tearing, frame rate capped at the refresh rate.",
         kind: RendererSettingKind::Toggle,
+        restart: false,
+        cost: "No GPU cost: the frame rate is capped at the display's refresh.",
+        gallery: GalleryExperiment::None,
     },
     RendererSettingOption {
         id: "shadows",
@@ -159,6 +243,9 @@ pub const RENDERER_SETTING_OPTIONS: &[RendererSettingOption] = &[
         group: "Quality",
         description: "Lights that the game asks to cast shadows do.",
         kind: RendererSettingKind::Toggle,
+        restart: false,
+        cost: "About 3.6 ms in a CraftSurvive meadow at 1920×1080 on an RX 9070 XT (the sun's cascades 0.5 ms, the rest sampling them in the world pass).",
+        gallery: GalleryExperiment::Try { values: &["true"], everything: Some("true"), requires: None, setup: None },
     },
     RendererSettingOption {
         id: "shadowBudget",
@@ -168,6 +255,9 @@ pub const RENDERER_SETTING_OPTIONS: &[RendererSettingOption] = &[
         kind: RendererSettingKind::Choice {
             choices: SHADOW_BUDGET_CHOICES,
         },
+        restart: false,
+        cost: "No limit cost 0.13 ms more than the meadow's budget at 1920×1080 on an RX 9070 XT; each layer renders only when its casters move.",
+        gallery: GalleryExperiment::Try { values: &["none"], everything: Some("none"), requires: Some("shadows"), setup: None },
     },
     RendererSettingOption {
         id: "ambientOcclusion",
@@ -177,6 +267,9 @@ pub const RENDERER_SETTING_OPTIONS: &[RendererSettingOption] = &[
         kind: RendererSettingKind::Choice {
             choices: AMBIENT_OCCLUSION_CHOICES,
         },
+        restart: false,
+        cost: "Screen space 0.6 ms and distance field 0.25 to 0.9 ms at 1920×1080 on an RX 9070 XT, across a voxel canyon, a room and a hotel corridor.",
+        gallery: GalleryExperiment::Try { values: &["screenSpace", "distanceField"], everything: Some("screenSpace"), requires: None, setup: None },
     },
     RendererSettingOption {
         id: "ambientOcclusionStrength",
@@ -189,6 +282,9 @@ pub const RENDERER_SETTING_OPTIONS: &[RendererSettingOption] = &[
             step: 0.1,
             unit: "",
         },
+        restart: false,
+        cost: "No cost of its own.",
+        gallery: GalleryExperiment::None,
     },
     RendererSettingOption {
         id: "ambientOcclusionRadius",
@@ -201,6 +297,9 @@ pub const RENDERER_SETTING_OPTIONS: &[RendererSettingOption] = &[
             step: 0.05,
             unit: "m",
         },
+        restart: false,
+        cost: "No measurable cost: a wider radius samples farther, not more.",
+        gallery: GalleryExperiment::None,
     },
     RendererSettingOption {
         id: "volumetricFog",
@@ -210,6 +309,9 @@ pub const RENDERER_SETTING_OPTIONS: &[RendererSettingOption] = &[
         kind: RendererSettingKind::Choice {
             choices: VOLUMETRIC_FOG_CHOICES,
         },
+        restart: false,
+        cost: "Low 0.15 to 0.4 ms at 1920×1080 on an RX 9070 XT across a canyon, a room and a corridor; High about 1.5 ms. Nothing while the scene has no fog.",
+        gallery: GalleryExperiment::Try { values: &["low"], everything: Some("low"), requires: None, setup: Some(GallerySetup::SceneFog) },
     },
     RendererSettingOption {
         id: "volumetricClouds",
@@ -219,6 +321,9 @@ pub const RENDERER_SETTING_OPTIONS: &[RendererSettingOption] = &[
         kind: RendererSettingKind::Choice {
             choices: VOLUMETRIC_FOG_CHOICES,
         },
+        restart: false,
+        cost: "Low about 1.0 ms and High about 1.9 ms at 1920×1080 on an RX 9070 XT in a sky-filled view. Nothing without clouds.",
+        gallery: GalleryExperiment::Try { values: &["low"], everything: Some("low"), requires: None, setup: Some(GallerySetup::Product("a cloud layer or regions (CameraView.SetClouds)")) },
     },
     RendererSettingOption {
         id: "clusteredLighting",
@@ -226,6 +331,9 @@ pub const RENDERER_SETTING_OPTIONS: &[RendererSettingOption] = &[
         group: "Advanced",
         description: "Sorts lights into screen clusters first: faster with many lights in view, a little slower with few.",
         kind: RendererSettingKind::Toggle,
+        restart: false,
+        cost: "The binning pass costs 0.01 to 0.1 ms at 1920×1080 on an RX 9070 XT; it repays itself only with dozens of ranged lights in view.",
+        gallery: GalleryExperiment::Try { values: &["true"], everything: Some("true"), requires: None, setup: None },
     },
     RendererSettingOption {
         id: "gpuCulling",
@@ -233,6 +341,9 @@ pub const RENDERER_SETTING_OPTIONS: &[RendererSettingOption] = &[
         group: "Advanced",
         description: "Decides what is in view on the graphics card instead of the processor: helps only very full scenes.",
         kind: RendererSettingKind::Toggle,
+        restart: false,
+        cost: "Slower in every scene measured at 1920×1080 on an RX 9070 XT: +0.5 ms in a hotel corridor, +0.9 ms in a canyon, +5.8 ms in a CraftSurvive meadow. Only scenes of many thousand parts could gain.",
+        gallery: GalleryExperiment::Try { values: &["true"], everything: Some("true"), requires: None, setup: None },
     },
 ];
 

@@ -141,8 +141,14 @@ top quality, each turned on at its Engine default:
   the camera, labelled as a stand-in, since a game places its own;
 - everything on together.
 
-The list comes from the catalogue, so a feature added there joins the
-gallery. Each variant renders in its own process (20 timed frames unless
+The list comes from the catalogue: each entry's `gallery` experiment names
+the values to try (in turn, each that would turn the feature on or up from
+the scene's own), the one "everything on" takes, a setting it needs on
+(the shadow budget needs shadows), and what the scene must hold. Volumetric
+fog lights the scene's fog, so a scene without any gets a stand-in haze,
+labelled. Volumetric clouds draw only what a product sets up, so their image
+is labelled "needs product setup". A feature added to the catalogue with its
+experiment joins the gallery with no gallery change. Each variant renders in its own process (20 timed frames unless
 `--frames` says otherwise), so its GPU timings are its own. `DIR` gets each
 variant's image and report, `sheet.png` (every image labelled with its
 frame-time change and the share of pixels it changed by more than 2 levels,
