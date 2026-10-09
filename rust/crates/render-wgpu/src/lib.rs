@@ -55,6 +55,7 @@ mod tables;
 mod target;
 mod timing;
 mod video;
+mod volumetric_fog;
 mod voxel;
 mod water;
 #[cfg(feature = "web-overlay")]
@@ -105,6 +106,7 @@ pub use surface::{PresentSkip, SurfaceFrame, WindowSurface};
 pub use target::OffscreenTarget;
 pub use timing::GpuPassTiming;
 pub use video::{VideoFact, VideoFailure};
+pub use volumetric_fog::VolumetricFogReadout;
 
 use pipelines::{Layouts, Pipelines};
 use shaders::{Entry, Features};
@@ -148,6 +150,8 @@ pub struct GpuReadout {
     pub gpu_culling: GpuCullingReadout,
     /// The indirect light volume (`probes.rs`).
     pub indirect_light: IndirectLightReadout,
+    /// The volumetric fog the last world view drew (`volumetric_fog.rs`).
+    pub volumetric_fog: volumetric_fog::VolumetricFogReadout,
 }
 
 /// Host choices that are not part of the retained model.
@@ -191,6 +195,10 @@ pub struct RendererOptions {
     /// The fraction of the primary destination's size the primary passes
     /// draw at (`Renderer::draw_primary`): 0.5 to 1.
     pub render_scale: f32,
+    /// Light the volumetric fog's medium and volumes in a froxel grid
+    /// (`volumetric_fog.rs`). Off by default; a device without compute
+    /// shaders, or a software one, draws without it.
+    pub volumetric_fog: render_model::VolumetricFogQuality,
 }
 
 impl Default for RendererOptions {
@@ -206,6 +214,7 @@ impl Default for RendererOptions {
             samples: RendererSettingsDescriptor::DEFAULT.antialiasing,
             vsync: RendererSettingsDescriptor::DEFAULT.vsync,
             render_scale: RendererSettingsDescriptor::DEFAULT.render_scale,
+            volumetric_fog: render_model::VolumetricFogQuality::Off,
         }
     }
 }
@@ -239,6 +248,7 @@ impl RendererOptions {
         self.render_scale = settings.render_scale;
         self.clustered_lighting = settings.clustered_lighting;
         self.gpu_culling = settings.gpu_culling;
+        self.volumetric_fog = settings.volumetric_fog;
         self
     }
 
@@ -263,6 +273,7 @@ impl RendererOptions {
             vsync: self.vsync,
             clustered_lighting: self.clustered_lighting,
             gpu_culling: self.gpu_culling,
+            volumetric_fog: self.volumetric_fog,
         }
     }
 }
@@ -279,6 +290,9 @@ pub enum SettingRefusal {
     /// The display can present only in step with its refresh, so vsync stays
     /// on.
     VsyncOnly,
+    /// A software adapter draws without the feature (a GPU-only feature,
+    /// docs/verification.md#gpu-verification).
+    SoftwareAdapter,
 }
 
 /// The settings in effect and what the device refused: what a product
@@ -300,6 +314,7 @@ pub struct RendererSettingsReadout {
     pub vsync: Option<SettingRefusal>,
     pub clustered_lighting: Option<SettingRefusal>,
     pub gpu_culling: Option<SettingRefusal>,
+    pub volumetric_fog: Option<SettingRefusal>,
 }
 
 pub struct Renderer {
@@ -389,6 +404,8 @@ pub struct Renderer {
     effects: effects::Effects,
     /// Rain or snow around the camera (`precipitation.rs`).
     precipitation: precipitation::Precipitation,
+    /// The volumetric fog over each world view (`volumetric_fog.rs`).
+    volumetric_fog: volumetric_fog::VolumetricFog,
     /// The product's image effect over each primary view (`image_effect.rs`).
     image_effect: image_effect::ImageEffect,
     particles: particles::Particles,
@@ -468,6 +485,15 @@ impl Renderer {
                 Entry::Effects,
                 Features::default(),
             )),
+        );
+        let volumetric_fog = volumetric_fog::VolumetricFog::new(
+            gpu,
+            pipelines::standard(layouts.shaders.module(
+                device,
+                Entry::VolumetricFog,
+                Features::default(),
+            )),
+            &layouts.frame,
         );
         let precipitation = precipitation::Precipitation::new(
             device,
@@ -557,6 +583,7 @@ impl Renderer {
             composition: Default::default(),
             effects,
             precipitation,
+            volumetric_fog,
             image_effect: image_effect::ImageEffect::new(gpu),
             particles: Default::default(),
             labels: Default::default(),
@@ -700,6 +727,16 @@ impl Renderer {
             effective.vsync = true;
             SettingRefusal::VsyncOnly
         });
+        let volumetric_fog = (requested.volumetric_fog != render_model::VolumetricFogQuality::Off
+            && self.volumetric_fog.refused().is_some())
+        .then(|| {
+            effective.volumetric_fog = render_model::VolumetricFogQuality::Off;
+            if self.gpu.is_software() {
+                SettingRefusal::SoftwareAdapter
+            } else {
+                SettingRefusal::NoComputeShaders
+            }
+        });
         RendererSettingsReadout {
             requested,
             product: self.product_settings,
@@ -710,6 +747,7 @@ impl Renderer {
             vsync,
             clustered_lighting,
             gpu_culling,
+            volumetric_fog,
         }
     }
 
@@ -735,6 +773,7 @@ impl Renderer {
                         .as_ref()
                         .map_or_else(|| timing::untimed("shadows"), timing::PassTimer::readout),
                     self.light_clusters.timing(),
+                    self.volumetric_fog.timing(),
                     self.culling.timing(),
                     self.sky_light.timing(),
                     self.image_effect.timing(),
@@ -745,12 +784,25 @@ impl Renderer {
             light_clusters: self.light_clusters.readout(),
             gpu_culling: self.culling.readout(),
             indirect_light: self.probes.readout(),
+            volumetric_fog: self.volumetric_fog.readout(),
         }
     }
 
     /// Request the indirect light volume, move the one there is, or with
     /// `None` drop it, as `RenderDiff::SetIndirectLight` does. A request
     /// bakes after the scene has been still for `probes::DEBOUNCE`.
+    /// The volumetric fog's medium, as `RenderDiff::SetVolumetricFog` sets
+    /// it.
+    pub fn set_volumetric_fog(&mut self, fog: render_model::VolumetricFogDescriptor) {
+        self.tables.volumetric_fog = fog;
+    }
+
+    /// Whether the scene has fog for volumetric fog to light: a medium with
+    /// density, or fog volumes.
+    pub fn has_volumetric_fog(&self) -> bool {
+        self.tables.volumetric_fog.density > 0.0 || !self.tables.fog_volumes.is_empty()
+    }
+
     pub fn set_indirect_light(&mut self, indirect_light: Option<IndirectLightDescriptor>) {
         self.tables.indirect_light = indirect_light;
         if self.probes.request(&self.gpu, indirect_light) {

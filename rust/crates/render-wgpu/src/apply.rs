@@ -161,6 +161,17 @@ impl Renderer {
             }
             RenderDiff::SetWind { wind } => self.tables.wind = *wind,
             RenderDiff::SetWetness { wetness } => self.tables.wetness = *wetness,
+            RenderDiff::SetVolumetricFog { fog } => self.tables.volumetric_fog = *fog,
+            RenderDiff::SetFogVolume { id, volume } => {
+                if self.tables.fog_volumes.len() < render_model::FogVolumeDescriptor::MAX_VOLUMES
+                    || self.tables.fog_volumes.contains_key(id)
+                {
+                    self.tables.fog_volumes.insert(*id, *volume);
+                }
+            }
+            RenderDiff::RemoveFogVolume { id } => {
+                self.tables.fog_volumes.remove(id);
+            }
             RenderDiff::SetPrecipitation { precipitation } => {
                 self.tables.precipitation = *precipitation;
             }
@@ -2471,6 +2482,9 @@ fn op_name(op: &RenderDiff) -> &'static str {
         RenderDiff::SetWind { .. } => "setWind",
         RenderDiff::SetClouds { .. } => "setClouds",
         RenderDiff::SetWetness { .. } => "setWetness",
+        RenderDiff::SetVolumetricFog { .. } => "setVolumetricFog",
+        RenderDiff::SetFogVolume { .. } => "setFogVolume",
+        RenderDiff::RemoveFogVolume { .. } => "removeFogVolume",
         RenderDiff::SetPrecipitation { .. } => "setPrecipitation",
         RenderDiff::SetImageEffect { .. } => "setImageEffect",
         RenderDiff::SetIndirectLight { .. } => "setIndirectLight",

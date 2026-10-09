@@ -2215,6 +2215,22 @@ impl Renderer {
             self.finish.resolve_precipitation(&mut encoder);
         }
         let draws = parts.draws + effects.draws();
+        // Volumetric fog: the view's froxel grid lit through its shadows and
+        // integrated, for the finish pass to read.
+        let fog = if world_layer {
+            self.volumetric_fog.encode(
+                &self.gpu,
+                &mut encoder,
+                &self.frame_bind_group,
+                self.options.volumetric_fog,
+                &self.tables.volumetric_fog,
+                self.tables.fog_volumes.values(),
+                self.animation_time,
+                world_layer,
+            )
+        } else {
+            None
+        };
         if bloom.is_some() || adapting.is_some() || shafts.is_some() {
             self.exposure_adapted |= adapting.is_some();
             self.finish.encode_post(
@@ -2239,10 +2255,16 @@ impl Renderer {
                 bloom: bloom.map_or(0.0, |bloom| bloom.intensity),
                 shafts: shafts.map_or(0.0, |(_, _, strength)| strength),
                 auto_exposure: auto_exposure.is_some(),
+                fog,
             },
+            self.volumetric_fog.lookup_view(fog.is_some()),
+            &self.volumetric_fog.sampler,
             world_layer,
         );
         self.gpu.queue.submit([encoder.finish()]);
+        if fog.is_some() {
+            self.volumetric_fog.submitted();
+        }
         if occlusion.is_some() {
             self.ambient_occlusion.submitted();
         }

@@ -198,42 +198,49 @@ fn sampler_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
 
 impl Layouts {
     pub fn new(device: &wgpu::Device) -> Self {
+        // The frame is visible to compute passes too, which light from it
+        // (`volumetric_fog.rs`).
+        let frame_entries = [
+            uniform_entry(0),
+            storage_entry(1),
+            storage_entry(2),
+            storage_entry(3),
+            depth_array_entry(4),
+            wgpu::BindGroupLayoutEntry {
+                binding: 5,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Comparison),
+                count: None,
+            },
+            storage_entry(6),
+            storage_entry(7),
+            // The sky's light (`sky_light.rs`): its cube, sampler and
+            // irradiance harmonics.
+            wgpu::BindGroupLayoutEntry {
+                binding: 8,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    view_dimension: wgpu::TextureViewDimension::Cube,
+                    multisampled: false,
+                },
+                count: None,
+            },
+            sampler_entry(9),
+            storage_entry(10),
+            // The indirect light volume (`probes.rs`): one RGBA16F 3D
+            // texture of L1 coefficients, the colour channels stacked
+            // along its depth, and its sampler.
+            probe_texture_entry(11),
+            sampler_entry(12),
+        ]
+        .map(|mut entry| {
+            entry.visibility |= wgpu::ShaderStages::COMPUTE;
+            entry
+        });
         let frame = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("render-wgpu frame"),
-            entries: &[
-                uniform_entry(0),
-                storage_entry(1),
-                storage_entry(2),
-                storage_entry(3),
-                depth_array_entry(4),
-                wgpu::BindGroupLayoutEntry {
-                    binding: 5,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Comparison),
-                    count: None,
-                },
-                storage_entry(6),
-                storage_entry(7),
-                // The sky's light (`sky_light.rs`): its cube, sampler and
-                // irradiance harmonics.
-                wgpu::BindGroupLayoutEntry {
-                    binding: 8,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::Cube,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                sampler_entry(9),
-                storage_entry(10),
-                // The indirect light volume (`probes.rs`): one RGBA16F 3D
-                // texture of L1 coefficients, the colour channels stacked
-                // along its depth, and its sampler.
-                probe_texture_entry(11),
-                sampler_entry(12),
-            ],
+            entries: &frame_entries,
         });
         let casters = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("render-wgpu casters"),

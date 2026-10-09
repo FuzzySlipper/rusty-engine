@@ -25,6 +25,7 @@ fn settings() -> RendererSettingsDescriptor {
         vsync: false,
         clustered_lighting: false,
         gpu_culling: false,
+        volumetric_fog: render_model::VolumetricFogQuality::Off,
     }
 }
 

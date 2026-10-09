@@ -145,6 +145,7 @@ fn refusal(readout: &RendererSettingsReadout, id: &str, streamed: bool) -> Optio
         "vsync" => readout.vsync,
         "clusteredLighting" => readout.clustered_lighting,
         "gpuCulling" => readout.gpu_culling,
+        "volumetricFog" => readout.volumetric_fog,
         _ => None,
     }?;
     Some(match refused {
@@ -156,6 +157,9 @@ fn refusal(readout: &RendererSettingsReadout, id: &str, streamed: bool) -> Optio
             "This graphics device cannot use that many samples."
         }
         SettingRefusal::VsyncOnly => "This display only presents in step with its refresh.",
+        SettingRefusal::SoftwareAdapter => {
+            "This is a software graphics adapter, which draws without it."
+        }
     })
 }
 
@@ -311,6 +315,7 @@ mod tests {
             vsync: None,
             clustered_lighting: Some(SettingRefusal::NoComputeShaders),
             gpu_culling: None,
+            volumetric_fog: None,
         };
         let catalogue = options.catalogue(&readout);
         assert_eq!(catalogue["stored"], false);

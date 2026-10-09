@@ -29,8 +29,8 @@ pub(crate) const HDR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Fl
 /// HDR targets unused for this many frames are dropped.
 const TARGET_FRAMES_KEPT: u64 = 120;
 
-/// Bytes of `FinishParams`: viewport, output, post.
-const PARAMS_BYTES: u64 = 48;
+/// Bytes of `FinishParams`: viewport, output, post, fog.
+const PARAMS_BYTES: u64 = 64;
 
 const WORLD: &str = "world";
 const POST: &str = "bloom-exposure";
@@ -81,6 +81,8 @@ pub(crate) struct FinishPost {
     pub shafts: f32,
     /// Scale the exposure by auto exposure's adapted value.
     pub auto_exposure: bool,
+    /// The view's volumetric fog, when it drew some.
+    pub fog: Option<crate::volumetric_fog::FogLookup>,
 }
 
 pub(crate) struct Finish {
@@ -171,6 +173,25 @@ impl Finish {
                         wgpu::TextureSampleType::Float { filterable: true },
                         false,
                     ),
+                    // The view's volumetric fog (`volumetric_fog.rs`): light
+                    // scattered toward the camera and transmittance by
+                    // distance, and its sampler.
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 9,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D3,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 10,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
                 ],
             })
         };
@@ -608,6 +629,8 @@ impl Finish {
         viewport: [u32; 4],
         frame: &wgpu::Buffer,
         post: FinishPost,
+        fog_view: &wgpu::TextureView,
+        fog_sampler: &wgpu::Sampler,
         timed: bool,
     ) {
         // The pipeline draws the image single-sample, averaging every sample
@@ -691,6 +714,10 @@ impl Finish {
             if post.auto_exposure { 1.0 } else { 0.0 },
             if shafts.is_some() { post.shafts } else { 0.0 },
             0.0,
+            if post.fog.is_some() { 1.0 } else { 0.0 },
+            post.fog.map_or(1.0, |fog| fog.distance),
+            post.fog.map_or(1.0, |fog| fog.slices as f32),
+            0.0,
         ];
         gpu.queue
             .write_buffer(&self.params, 0, bytemuck::cast_slice(&params));
@@ -745,6 +772,14 @@ impl Finish {
                     resource: wgpu::BindingResource::TextureView(
                         shafts.map_or(&self.post.black, ShaftTargets::top),
                     ),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 9,
+                    resource: wgpu::BindingResource::TextureView(fog_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 10,
+                    resource: wgpu::BindingResource::Sampler(fog_sampler),
                 },
             ],
         });

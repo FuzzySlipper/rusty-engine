@@ -82,6 +82,10 @@ pub(crate) struct RuntimeCameraViewCall {
     pub(crate) wind: Option<Option<WindDescriptor>>,
     pub(crate) clouds: Option<Option<CloudsDescriptor>>,
     pub(crate) wetness: Option<Option<WetnessDescriptor>>,
+    /// The volumetric fog medium, and fog volumes placed (`Some`) or removed
+    /// (`None`) in call order.
+    pub(crate) volumetric_fog: Option<render_model::VolumetricFogDescriptor>,
+    pub(crate) fog_volumes: Vec<(u32, Option<render_model::FogVolumeDescriptor>)>,
     pub(crate) precipitation: Option<Option<PrecipitationDescriptor>>,
     /// The image effect as the product asked for it; its resources are
     /// resolved when the frame is built.
@@ -164,6 +168,8 @@ impl RuntimeCameraViewBridge {
             wind: None,
             clouds: None,
             wetness: None,
+            volumetric_fog: None,
+            fog_volumes: Vec::new(),
             precipitation: None,
             image_effect: None,
             indirect_light: None,
@@ -224,6 +230,8 @@ impl RuntimeCameraViewBridge {
             wind: None,
             clouds: None,
             wetness: None,
+            volumetric_fog: None,
+            fog_volumes: Vec::new(),
             precipitation: None,
             image_effect: None,
             indirect_light: None,
@@ -521,6 +529,8 @@ impl RuntimeCameraViewBridge {
             wind: None,
             clouds: None,
             wetness: None,
+            volumetric_fog: None,
+            fog_volumes: Vec::new(),
             precipitation: None,
             image_effect: None,
             indirect_light: None,
@@ -874,6 +884,70 @@ impl RuntimeCameraViewBridge {
             ));
         }
         self.staged_mut()?.wetness = Some((request.wetness > 0.0).then_some(wetness));
+        Ok(())
+    }
+
+    fn set_volumetric_fog(
+        &mut self,
+        request: NativeVolumetricFogRequest,
+    ) -> Result<(), CsharpEngineServicesError> {
+        let fog = render_model::VolumetricFogDescriptor {
+            density: request.density,
+            albedo: [request.albedo.x, request.albedo.y, request.albedo.z],
+            anisotropy: request.anisotropy,
+            base_height: request.base_height,
+            falloff_height: request.falloff_height,
+            distance: request.distance,
+            ambient: request.ambient,
+        };
+        if !fog.valid() {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_VOLUMETRIC_FOG",
+                "volumetric fog needs density within 0 to 1, albedo channels within 0 to 1, anisotropy within -0.9 to 0.9, a finite base height, a non-negative falloff height, a distance of 8 to 1000 m and ambient within 0 to 4",
+            ));
+        }
+        self.staged_mut()?.volumetric_fog = Some(fog);
+        Ok(())
+    }
+
+    fn set_fog_volume(
+        &mut self,
+        request: NativeFogVolumeRequest,
+    ) -> Result<(), CsharpEngineServicesError> {
+        let vec3 = |value: NativeVec3| [value.x, value.y, value.z];
+        let volume = render_model::FogVolumeDescriptor {
+            shape: match request.shape {
+                NativeFogVolumeShape::Box => render_model::FogVolumeShape::Box,
+                NativeFogVolumeShape::Ellipsoid => render_model::FogVolumeShape::Ellipsoid,
+            },
+            center: vec3(request.center),
+            half_extents: vec3(request.half_extents),
+            yaw_degrees: request.yaw_degrees,
+            density: request.density,
+            albedo: vec3(request.albedo),
+            emission: vec3(request.emission),
+            edge: request.edge,
+            noise_scale: request.noise_scale,
+            noise_strength: request.noise_strength,
+            noise_velocity: vec3(request.noise_velocity),
+        };
+        if !volume.valid() {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_FOG_VOLUME",
+                "a fog volume needs a finite centre and drift, half extents above 0 and at most 10 km, density within 0 to 4, albedo within 0 to 1, emission within 0 to 16, edge and noise strength within 0 to 1 and a non-negative noise scale",
+            ));
+        }
+        self.staged_mut()?
+            .fog_volumes
+            .push((request.id, Some(volume)));
+        Ok(())
+    }
+
+    fn remove_fog_volume(
+        &mut self,
+        request: NativeFogVolumeRemoval,
+    ) -> Result<(), CsharpEngineServicesError> {
+        self.staged_mut()?.fog_volumes.push((request.id, None));
         Ok(())
     }
 
@@ -1289,6 +1363,18 @@ pub(crate) fn environment_frame(
     }
     if let Some(wetness) = call.wetness {
         operations.push(RenderDiff::SetWetness { wetness });
+    }
+    if let Some(fog) = call.volumetric_fog {
+        operations.push(RenderDiff::SetVolumetricFog { fog });
+    }
+    for (id, volume) in &call.fog_volumes {
+        operations.push(match volume {
+            Some(volume) => RenderDiff::SetFogVolume {
+                id: *id,
+                volume: *volume,
+            },
+            None => RenderDiff::RemoveFogVolume { id: *id },
+        });
     }
     if let Some(precipitation) = call.precipitation {
         operations.push(RenderDiff::SetPrecipitation { precipitation });
@@ -1977,6 +2063,69 @@ pub(crate) unsafe extern "C" fn set_wetness(
     }
     let bridge = unsafe { &mut *context.cast::<RuntimeCameraViewBridge>() };
     match bridge.set_wetness(unsafe { *request }) {
+        Ok(()) => ABI_OK,
+        Err(error) => {
+            bridge.operation_diagnostics.retain(&error, operation_error);
+            0
+        }
+    }
+}
+
+pub(crate) unsafe extern "C" fn set_volumetric_fog(
+    context: *mut c_void,
+    request: *const NativeVolumetricFogRequest,
+    operation_error: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    if !operation_error.is_null() {
+        unsafe { *operation_error = std::mem::zeroed() };
+    }
+    if context.is_null() || request.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeCameraViewBridge>() };
+    match bridge.set_volumetric_fog(unsafe { *request }) {
+        Ok(()) => ABI_OK,
+        Err(error) => {
+            bridge.operation_diagnostics.retain(&error, operation_error);
+            0
+        }
+    }
+}
+
+pub(crate) unsafe extern "C" fn set_fog_volume(
+    context: *mut c_void,
+    request: *const NativeFogVolumeRequest,
+    operation_error: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    if !operation_error.is_null() {
+        unsafe { *operation_error = std::mem::zeroed() };
+    }
+    if context.is_null() || request.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeCameraViewBridge>() };
+    match bridge.set_fog_volume(unsafe { *request }) {
+        Ok(()) => ABI_OK,
+        Err(error) => {
+            bridge.operation_diagnostics.retain(&error, operation_error);
+            0
+        }
+    }
+}
+
+pub(crate) unsafe extern "C" fn remove_fog_volume(
+    context: *mut c_void,
+    request: *const NativeFogVolumeRemoval,
+    operation_error: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    if !operation_error.is_null() {
+        unsafe { *operation_error = std::mem::zeroed() };
+    }
+    if context.is_null() || request.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeCameraViewBridge>() };
+    match bridge.remove_fog_volume(unsafe { *request }) {
         Ok(()) => ABI_OK,
         Err(error) => {
             bridge.operation_diagnostics.retain(&error, operation_error);

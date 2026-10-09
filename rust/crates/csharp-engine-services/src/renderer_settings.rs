@@ -8,9 +8,12 @@ use std::ffi::c_void;
 use csharp_engine_abi::{
     NativeAmbientOcclusionMode, NativeAntialiasing, NativeOperationErrorReceipt,
     NativeRendererSettingRefusal, NativeRendererSettingsApi, NativeRendererSettingsReadout,
-    NativeRendererSettingsRequest,
+    NativeRendererSettingsRequest, NativeVolumetricFogQuality,
 };
-use render_model::{AmbientOcclusionMode, AmbientOcclusionSettings, RendererSettingsDescriptor};
+use render_model::{
+    AmbientOcclusionMode, AmbientOcclusionSettings, RendererSettingsDescriptor,
+    VolumetricFogQuality,
+};
 
 use crate::composition::ABI_OK;
 use crate::CsharpEngineServicesError;
@@ -42,6 +45,7 @@ impl RuntimeRendererSettingsBridge {
                 vsync_refusal: NativeRendererSettingRefusal::None,
                 clustered_lighting_refusal: NativeRendererSettingRefusal::None,
                 gpu_culling_refusal: NativeRendererSettingRefusal::None,
+                volumetric_fog_refusal: csharp_engine_abi::NativeRendererSettingRefusal::None,
             },
             operation_diagnostics: Default::default(),
         }
@@ -110,6 +114,11 @@ pub(crate) fn renderer_settings_descriptor(
         vsync: request.vsync,
         clustered_lighting: request.clustered_lighting,
         gpu_culling: request.gpu_culling,
+        volumetric_fog: match request.volumetric_fog {
+            NativeVolumetricFogQuality::Off => VolumetricFogQuality::Off,
+            NativeVolumetricFogQuality::Low => VolumetricFogQuality::Low,
+            NativeVolumetricFogQuality::High => VolumetricFogQuality::High,
+        },
     }
 }
 
@@ -137,6 +146,11 @@ pub fn renderer_settings_request(
         vsync: settings.vsync,
         clustered_lighting: settings.clustered_lighting,
         gpu_culling: settings.gpu_culling,
+        volumetric_fog: match settings.volumetric_fog {
+            VolumetricFogQuality::Off => NativeVolumetricFogQuality::Off,
+            VolumetricFogQuality::Low => NativeVolumetricFogQuality::Low,
+            VolumetricFogQuality::High => NativeVolumetricFogQuality::High,
+        },
     }
 }
 

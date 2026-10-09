@@ -657,6 +657,10 @@ declare module "@rusty-engine/live-debug/internal/live-debug-client/src/generate
         vsync: boolean;
         clusteredLighting: boolean;
         gpuCulling: boolean;
+        /**
+         * `off`, `low` or `high`.
+         */
+        volumetricFog: string;
     };
     /**
      * The renderer settings (`RendererSettings`): what the product or its

@@ -573,6 +573,9 @@ struct ManifestRendererLighting {
     ambient_occlusion: Option<ManifestAmbientOcclusion>,
     #[serde(default)]
     clustered_lighting: Option<String>,
+    /// `off`, `low` or `high`; absent is off.
+    #[serde(default)]
+    volumetric_fog: Option<String>,
     #[serde(default)]
     default_lights: ManifestDefaultLights,
 }
@@ -697,6 +700,17 @@ impl ProductRendererSettings {
             Some("disabled") => false,
             Some(_) => return Err(field_error("renderer.vsync", "must be enabled or disabled")),
         };
+        let volumetric_fog = match value.lighting.volumetric_fog.as_deref() {
+            None | Some("off") => render_model::VolumetricFogQuality::Off,
+            Some("low") => render_model::VolumetricFogQuality::Low,
+            Some("high") => render_model::VolumetricFogQuality::High,
+            Some(_) => {
+                return Err(field_error(
+                    "renderer.lighting.volumetricFog",
+                    "must be off, low or high",
+                ))
+            }
+        };
         let render_scale = value.render_scale.unwrap_or(1.0);
         if !render_scale.is_finite()
             || !(RendererSettingsDescriptor::MIN_RENDER_SCALE..=1.0).contains(&render_scale)
@@ -719,6 +733,7 @@ impl ProductRendererSettings {
                     "renderer.lighting.clusteredLighting",
                 )?,
                 gpu_culling: switch(value.gpu_culling.as_deref(), "renderer.gpuCulling")?,
+                volumetric_fog,
             },
             world: ProductDefaultLights::parse(
                 value.lighting.default_lights.world,

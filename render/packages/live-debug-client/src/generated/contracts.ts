@@ -261,7 +261,11 @@ antialiasing: number,
 /**
  * The fraction of the primary destination's size the world draws at.
  */
-renderScale: number, vsync: boolean, clusteredLighting: boolean, gpuCulling: boolean, };
+renderScale: number, vsync: boolean, clusteredLighting: boolean, gpuCulling: boolean, 
+/**
+ * `off`, `low` or `high`.
+ */
+volumetricFog: string, };
 
 /**
  * The renderer settings (`RendererSettings`): what the product or its

@@ -329,6 +329,7 @@ impl Renderer {
                 samples: 1,
                 vsync: false,
                 render_scale: 1.0,
+                volumetric_fog: render_model::VolumetricFogQuality::Off,
             },
         ));
         source.set_animation_time(self.animation_time);

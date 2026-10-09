@@ -607,6 +607,7 @@ impl FrameOutput {
                 NativeRendererSettingRefusal::UnsupportedSampleCount
             }
             Some(SettingRefusal::VsyncOnly) => NativeRendererSettingRefusal::VsyncOnly,
+            Some(SettingRefusal::SoftwareAdapter) => NativeRendererSettingRefusal::SoftwareAdapter,
         };
         let mut effective = readout.effective;
         let vsync_refusal = if self.stream.is_some() && readout.requested.vsync {
@@ -623,6 +624,7 @@ impl FrameOutput {
             vsync_refusal,
             clustered_lighting_refusal: refusal(readout.clustered_lighting),
             gpu_culling_refusal: refusal(readout.gpu_culling),
+            volumetric_fog_refusal: refusal(readout.volumetric_fog),
         }
     }
 
@@ -810,6 +812,12 @@ fn settings_statistics(
             vsync: settings.vsync,
             clustered_lighting: settings.clustered_lighting,
             gpu_culling: settings.gpu_culling,
+            volumetric_fog: match settings.volumetric_fog {
+                render_model::VolumetricFogQuality::Off => "off",
+                render_model::VolumetricFogQuality::Low => "low",
+                render_model::VolumetricFogQuality::High => "high",
+            }
+            .to_owned(),
         };
     let reason = |refusal: SettingRefusal| match refusal {
         SettingRefusal::NoComputeShaders => "the adapter has no compute shaders",
@@ -818,6 +826,7 @@ fn settings_statistics(
         }
         SettingRefusal::UnsupportedSampleCount => "the adapter cannot multisample at that count",
         SettingRefusal::VsyncOnly => "the display presents only in step with its refresh",
+        SettingRefusal::SoftwareAdapter => "a software adapter draws without it",
     };
     let mut effective = readout.effective;
     let mut refused = std::collections::BTreeMap::new();
@@ -827,6 +836,7 @@ fn settings_statistics(
         ("vsync", readout.vsync),
         ("clusteredLighting", readout.clustered_lighting),
         ("gpuCulling", readout.gpu_culling),
+        ("volumetricFog", readout.volumetric_fog),
     ] {
         if let Some(refusal) = refusal {
             refused.insert(setting.to_owned(), reason(refusal).to_owned());

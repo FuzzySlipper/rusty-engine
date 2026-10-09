@@ -292,6 +292,124 @@ impl WetnessDescriptor {
     }
 }
 
+/// The participating medium volumetric fog lights (`CameraView.SetVolumetricFog`):
+/// how much fog there is everywhere, what colour it scatters and which way,
+/// and how far the fog grid reaches. Fog volumes (`FogVolumeDescriptor`) add
+/// to it where they stand. It draws only while the renderer's
+/// `volumetric_fog` setting is on.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct VolumetricFogDescriptor {
+    /// Extinction per metre at `base_height` (0 to 1): 0 fills no air, so
+    /// only fog volumes draw.
+    pub density: f32,
+    /// The colour the fog scatters, linear (0 to 1 a channel).
+    pub albedo: [f32; 3],
+    /// Henyey–Greenstein anisotropy (-0.9 to 0.9): positive scatters forward,
+    /// so fog glows looking toward a light and shafts read against it.
+    pub anisotropy: f32,
+    /// The height `density` holds at, in world units.
+    pub base_height: f32,
+    /// Density falls by e every this many metres up; 0 is one density
+    /// everywhere.
+    pub falloff_height: f32,
+    /// How far from the camera the fog grid reaches, metres (8 to 1000).
+    pub distance: f32,
+    /// How much of the ambient and sky light the fog scatters (0 to 4).
+    pub ambient: f32,
+}
+
+impl VolumetricFogDescriptor {
+    /// No medium, volumes only, reaching 96 m.
+    pub const DEFAULT: Self = Self {
+        density: 0.0,
+        albedo: [1.0, 1.0, 1.0],
+        anisotropy: 0.4,
+        base_height: 0.0,
+        falloff_height: 0.0,
+        distance: 96.0,
+        ambient: 1.0,
+    };
+
+    pub fn valid(&self) -> bool {
+        let finite = |value: f32| value.is_finite();
+        (0.0..=1.0).contains(&self.density)
+            && self.albedo.iter().all(|channel| (0.0..=1.0).contains(channel))
+            && (-0.9..=0.9).contains(&self.anisotropy)
+            && finite(self.base_height)
+            && finite(self.falloff_height)
+            && self.falloff_height >= 0.0
+            && (8.0..=1000.0).contains(&self.distance)
+            && (0.0..=4.0).contains(&self.ambient)
+    }
+}
+
+impl Default for VolumetricFogDescriptor {
+    fn default() -> Self {
+        Self::DEFAULT
+    }
+}
+
+/// The shape of a fog volume.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum FogVolumeShape {
+    Box,
+    Ellipsoid,
+}
+
+/// A fog volume (`CameraView.SetFogVolume`): a box or ellipsoid of fog the
+/// volumetric fog adds to its medium, for a valley bank, a dust wall or a
+/// cave's mist. Positions are in the renderer's world space, as an indirect
+/// light volume's. Its density fades to nothing over `edge` of its half
+/// extent inward from its boundary, and breaks up with 3D noise drifting at
+/// `noise_velocity`.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct FogVolumeDescriptor {
+    pub shape: FogVolumeShape,
+    pub center: [f32; 3],
+    /// Half the size along each axis, metres (above 0, at most 10 km).
+    pub half_extents: [f32; 3],
+    /// Turn about the vertical axis, degrees.
+    pub yaw_degrees: f32,
+    /// Extinction per metre at its heart (0 to 4).
+    pub density: f32,
+    /// The colour it scatters, linear (0 to 1 a channel).
+    pub albedo: [f32; 3],
+    /// Light it gives off per unit of density, linear (0 to 16 a channel):
+    /// a glowing storm or an arcane haze.
+    pub emission: [f32; 3],
+    /// The share of the half extent over which the edge fades (0 to 1).
+    pub edge: f32,
+    /// The size of one noise cell, metres (0: no noise).
+    pub noise_scale: f32,
+    /// How much the noise thins it (0 to 1).
+    pub noise_strength: f32,
+    /// The noise's drift, metres per second.
+    pub noise_velocity: [f32; 3],
+}
+
+impl FogVolumeDescriptor {
+    /// The most fog volumes a scene holds.
+    pub const MAX_VOLUMES: usize = 64;
+
+    pub fn valid(&self) -> bool {
+        let finite = |values: &[f32]| values.iter().all(|value| value.is_finite());
+        finite(&self.center)
+            && finite(&self.noise_velocity)
+            && self.yaw_degrees.is_finite()
+            && self.half_extents.iter().all(|half| *half > 0.0 && *half <= 10_000.0)
+            && (0.0..=4.0).contains(&self.density)
+            && self.albedo.iter().all(|channel| (0.0..=1.0).contains(channel))
+            && self.emission.iter().all(|channel| (0.0..=16.0).contains(channel))
+            && (0.0..=1.0).contains(&self.edge)
+            && self.noise_scale.is_finite()
+            && self.noise_scale >= 0.0
+            && (0.0..=1.0).contains(&self.noise_strength)
+    }
+}
+
 /// What falls in a precipitation volume (`PrecipitationDescriptor`): thin
 /// streaks stretched along their velocity (rain), or round flakes facing
 /// the camera (snow, ash, glitter).
@@ -538,6 +656,18 @@ pub enum AmbientOcclusionMode {
     DistanceField,
 }
 
+/// How finely volumetric fog is computed (`RendererSettingsDescriptor`):
+/// off (only the analytic distance fog), or a froxel grid lit by the scene's
+/// lights and shadows at low or high resolution.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum VolumetricFogQuality {
+    #[default]
+    Off,
+    Low,
+    High,
+}
+
 /// Ambient occlusion as a product selects it.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -598,6 +728,11 @@ pub struct RendererSettingsDescriptor {
     /// Test each view's opaque parts against its frustum on the GPU and
     /// draw them indirectly, instead of building the draw list on the CPU.
     pub gpu_culling: bool,
+    /// Light the fog medium and fog volumes in a froxel grid: shafts,
+    /// glows and banks the analytic fog cannot draw. Settings written
+    /// before it existed have it off.
+    #[serde(default)]
+    pub volumetric_fog: VolumetricFogQuality,
 }
 
 impl RendererSettingsDescriptor {
@@ -615,6 +750,7 @@ impl RendererSettingsDescriptor {
         vsync: true,
         clustered_lighting: false,
         gpu_culling: false,
+        volumetric_fog: VolumetricFogQuality::Off,
     };
 
     /// Valid occlusion values, a supported sample count and a render scale
@@ -1021,6 +1157,19 @@ pub enum RenderDiff {
     SetWetness {
         wetness: Option<WetnessDescriptor>,
     },
+    /// Selects the volumetric fog's medium.
+    SetVolumetricFog {
+        fog: VolumetricFogDescriptor,
+    },
+    /// Places or replaces fog volume `id`.
+    SetFogVolume {
+        id: u32,
+        volume: FogVolumeDescriptor,
+    },
+    /// Removes fog volume `id`.
+    RemoveFogVolume {
+        id: u32,
+    },
     /// Selects the precipitation around the camera; None stops it.
     SetPrecipitation {
         precipitation: Option<PrecipitationDescriptor>,
@@ -1217,6 +1366,12 @@ impl RenderDiff {
                 wetness: Some(wetness),
             } if !wetness.valid() => Err(RenderOperationError::Wetness),
             Self::SetWetness { .. } => Ok(()),
+            Self::SetVolumetricFog { fog } if !fog.valid() => Err(RenderOperationError::VolumetricFog),
+            Self::SetVolumetricFog { .. } => Ok(()),
+            Self::SetFogVolume { volume, .. } if !volume.valid() => {
+                Err(RenderOperationError::FogVolume)
+            }
+            Self::SetFogVolume { .. } | Self::RemoveFogVolume { .. } => Ok(()),
             Self::SetPrecipitation {
                 precipitation: Some(precipitation),
             } if !precipitation.valid() => Err(RenderOperationError::Precipitation),
@@ -1346,6 +1501,9 @@ impl RenderDiff {
             | Self::SetWind { .. }
             | Self::SetClouds { .. }
             | Self::SetWetness { .. }
+            | Self::SetVolumetricFog { .. }
+            | Self::SetFogVolume { .. }
+            | Self::RemoveFogVolume { .. }
             | Self::SetPrecipitation { .. }
             | Self::SetImageEffect { .. }
             | Self::SetIndirectLight { .. }
@@ -1395,6 +1553,8 @@ pub enum RenderOperationError {
     Wind,
     Clouds,
     Wetness,
+    VolumetricFog,
+    FogVolume,
     Precipitation,
     ImageEffect,
     IndirectLight,
@@ -1478,6 +1638,9 @@ impl RenderFrameDiff {
                 | RenderDiff::SetWind { .. }
                 | RenderDiff::SetClouds { .. }
                 | RenderDiff::SetWetness { .. }
+                | RenderDiff::SetVolumetricFog { .. }
+                | RenderDiff::SetFogVolume { .. }
+                | RenderDiff::RemoveFogVolume { .. }
                 | RenderDiff::SetPrecipitation { .. }
                 | RenderDiff::SetImageEffect { .. }
                 | RenderDiff::SetIndirectLight { .. }

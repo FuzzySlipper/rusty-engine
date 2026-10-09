@@ -10,7 +10,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::{AmbientOcclusionMode, RendererSettingsDescriptor};
+use crate::{AmbientOcclusionMode, RendererSettingsDescriptor, VolumetricFogQuality};
 
 /// One choice of a [`RendererSettingKind::Choice`] option.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize)]
@@ -106,6 +106,21 @@ const AMBIENT_OCCLUSION_CHOICES: &[RendererSettingChoice] = &[
     },
 ];
 
+const VOLUMETRIC_FOG_CHOICES: &[RendererSettingChoice] = &[
+    RendererSettingChoice {
+        value: "off",
+        label: "Off",
+    },
+    RendererSettingChoice {
+        value: "low",
+        label: "Low",
+    },
+    RendererSettingChoice {
+        value: "high",
+        label: "High",
+    },
+];
+
 /// Every renderer setting, in the order a menu shows them.
 pub const RENDERER_SETTING_OPTIONS: &[RendererSettingOption] = &[
     RendererSettingOption {
@@ -186,6 +201,15 @@ pub const RENDERER_SETTING_OPTIONS: &[RendererSettingOption] = &[
         },
     },
     RendererSettingOption {
+        id: "volumetricFog",
+        label: "Volumetric fog",
+        group: "Lighting",
+        description: "Fog lit by the sun and lamps through their shadows: light shafts, glowing haze and fog banks. Costs most on large screens.",
+        kind: RendererSettingKind::Choice {
+            choices: VOLUMETRIC_FOG_CHOICES,
+        },
+    },
+    RendererSettingOption {
         id: "clusteredLighting",
         label: "Clustered lighting",
         group: "Advanced",
@@ -252,6 +276,8 @@ pub struct RendererSettingsOverrides {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ambient_occlusion_radius: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub volumetric_fog: Option<VolumetricFogQuality>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub clustered_lighting: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub gpu_culling: Option<bool>,
@@ -311,6 +337,9 @@ impl RendererSettingsOverrides {
         if let Some(value) = self.ambient_occlusion_radius {
             settings.ambient_occlusion.radius = value;
         }
+        if let Some(value) = self.volumetric_fog {
+            settings.volumetric_fog = value;
+        }
         if let Some(value) = self.clustered_lighting {
             settings.clustered_lighting = value;
         }
@@ -331,6 +360,7 @@ impl RendererSettingsOverrides {
             "ambientOcclusion" => self.ambient_occlusion.is_some(),
             "ambientOcclusionStrength" => self.ambient_occlusion_strength.is_some(),
             "ambientOcclusionRadius" => self.ambient_occlusion_radius.is_some(),
+            "volumetricFog" => self.volumetric_fog.is_some(),
             "clusteredLighting" => self.clustered_lighting.is_some(),
             "gpuCulling" => self.gpu_culling.is_some(),
             _ => false,
@@ -400,6 +430,13 @@ impl RendererSettingsOverrides {
                 }
                 self.ambient_occlusion_radius = Some(radius);
             }
+            "volumetricFog" => {
+                self.volumetric_fog = Some(match choice()? {
+                    "low" => VolumetricFogQuality::Low,
+                    "high" => VolumetricFogQuality::High,
+                    _ => VolumetricFogQuality::Off,
+                })
+            }
             "clusteredLighting" => self.clustered_lighting = Some(toggle()?),
             "gpuCulling" => self.gpu_culling = Some(toggle()?),
             _ => return Err(format!("no renderer setting {id}")),
@@ -418,6 +455,7 @@ impl RendererSettingsOverrides {
             "ambientOcclusion" => self.ambient_occlusion = None,
             "ambientOcclusionStrength" => self.ambient_occlusion_strength = None,
             "ambientOcclusionRadius" => self.ambient_occlusion_radius = None,
+            "volumetricFog" => self.volumetric_fog = None,
             "clusteredLighting" => self.clustered_lighting = None,
             "gpuCulling" => self.gpu_culling = None,
             _ => return Err(format!("no renderer setting {id}")),
@@ -427,11 +465,11 @@ impl RendererSettingsOverrides {
 
     /// The choices a preset makes, over the player's others.
     pub fn preset(id: &str) -> Option<Self> {
-        let (scale, antialiasing, budget, occlusion) = match id {
-            "low" => (0.75, 1, Some(4), AmbientOcclusionMode::Disabled),
-            "medium" => (1.0, 2, Some(8), AmbientOcclusionMode::ScreenSpace),
-            "high" => (1.0, 4, Some(16), AmbientOcclusionMode::ScreenSpace),
-            "ultra" => (1.0, 4, None, AmbientOcclusionMode::ScreenSpace),
+        let (scale, antialiasing, budget, occlusion, fog) = match id {
+            "low" => (0.75, 1, Some(4), AmbientOcclusionMode::Disabled, VolumetricFogQuality::Off),
+            "medium" => (1.0, 2, Some(8), AmbientOcclusionMode::ScreenSpace, VolumetricFogQuality::Off),
+            "high" => (1.0, 4, Some(16), AmbientOcclusionMode::ScreenSpace, VolumetricFogQuality::Low),
+            "ultra" => (1.0, 4, None, AmbientOcclusionMode::ScreenSpace, VolumetricFogQuality::High),
             _ => return None,
         };
         Some(Self {
@@ -440,6 +478,7 @@ impl RendererSettingsOverrides {
             shadows: Some(true),
             shadow_budget: Some(budget),
             ambient_occlusion: Some(occlusion),
+            volumetric_fog: Some(fog),
             ..Self::default()
         })
     }
@@ -459,6 +498,7 @@ impl RendererSettingsOverrides {
             ambient_occlusion_radius: preset
                 .ambient_occlusion_radius
                 .or(self.ambient_occlusion_radius),
+            volumetric_fog: preset.volumetric_fog.or(self.volumetric_fog),
             clustered_lighting: preset.clustered_lighting.or(self.clustered_lighting),
             gpu_culling: preset.gpu_culling.or(self.gpu_culling),
         }
@@ -492,6 +532,11 @@ pub fn renderer_setting_value(settings: &RendererSettingsDescriptor, id: &str) -
         "ambientOcclusionRadius" => {
             Value::from(round_to(settings.ambient_occlusion.radius as f64, 0.01))
         }
+        "volumetricFog" => Value::from(match settings.volumetric_fog {
+            VolumetricFogQuality::Off => "off",
+            VolumetricFogQuality::Low => "low",
+            VolumetricFogQuality::High => "high",
+        }),
         "clusteredLighting" => Value::from(settings.clustered_lighting),
         "gpuCulling" => Value::from(settings.gpu_culling),
         _ => return None,

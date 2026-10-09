@@ -41,7 +41,8 @@ use serde_json::json;
 const USAGE: &str = "usage: rusty-scene-render <snapshot> <out.png> [--width W] [--height H] \
      [--frames N] [--walk M] [--turn D] [--ambient-occlusion off|compute|raster|field] [--ambient-occlusion-strength S] [--ambient-occlusion-radius R] \
      [--clustered-lighting on|off] [--gpu-culling on|off] [--render-scale S] [--rerender-shadows] \
-     [--indirect-light cx,cy,cz,ex,ey,ez,spacing,bounces[,floor]] [--choose ID=VALUE]...\n\
+     [--indirect-light cx,cy,cz,ex,ey,ez,spacing,bounces[,floor]] [--choose ID=VALUE]... \
+     [--volumetric-fog-medium DENSITY[,ANISOTROPY]]\n\
        rusty-scene-render <snapshot> --gallery DIR [--width W] [--height H] [--frames N]";
 
 /// Frames each gallery variant draws for its timings when `--frames` is not
@@ -75,6 +76,9 @@ struct Arguments {
     rerender_shadows: bool,
     /// Video options chosen over the snapshot's settings.
     choices: Vec<(String, serde_json::Value)>,
+    /// A volumetric fog medium in place of the snapshot's: density and
+    /// anisotropy.
+    fog_medium: Option<(f32, f32)>,
     /// Draw the feature gallery into this directory instead.
     gallery: Option<PathBuf>,
 }
@@ -99,6 +103,7 @@ fn parse(arguments: impl IntoIterator<Item = String>) -> Result<Option<Arguments
     let mut indirect_light: Option<IndirectLightDescriptor> = None;
     let mut choices = Vec::new();
     let mut gallery = None;
+    let mut fog_medium = None;
     while let Some(argument) = arguments.next() {
         let mut number = |name: &str| -> Result<f64, String> {
             arguments
@@ -171,6 +176,26 @@ fn parse(arguments: impl IntoIterator<Item = String>) -> Result<Option<Arguments
                     .choose(id, &value)
                     .map_err(|error| format!("--choose {choice}: {error}\n{USAGE}"))?;
                 choices.push((id.to_owned(), value));
+            }
+            "--volumetric-fog-medium" => {
+                let value = arguments.next().unwrap_or_default();
+                let numbers: Option<Vec<f32>> = value
+                    .split(',')
+                    .map(|field| field.trim().parse::<f32>().ok())
+                    .collect();
+                fog_medium = match numbers.as_deref() {
+                    Some([density]) => Some((*density, 0.4)),
+                    Some([density, anisotropy]) => Some((*density, *anisotropy)),
+                    _ => None,
+                }
+                .filter(|(density, anisotropy)| {
+                    (0.0..=1.0).contains(density) && (-0.9..=0.9).contains(anisotropy)
+                });
+                if fog_medium.is_none() {
+                    return Err(format!(
+                        "--volumetric-fog-medium needs a density (0 to 1) and optionally an anisotropy (-0.9 to 0.9)\n{USAGE}"
+                    ));
+                }
             }
             "--gallery" => {
                 gallery =
@@ -247,6 +272,7 @@ fn parse(arguments: impl IntoIterator<Item = String>) -> Result<Option<Arguments
         rerender_shadows,
         choices,
         gallery,
+        fog_medium,
     }))
 }
 
@@ -269,6 +295,7 @@ fn run() -> Result<(), String> {
         rerender_shadows,
         choices,
         gallery,
+        fog_medium,
     }) = parse(std::env::args().skip(1))?
     else {
         println!("{USAGE}");
@@ -383,6 +410,13 @@ fn run() -> Result<(), String> {
             if indirect_light.is_some() {
                 renderer.set_indirect_light(indirect_light);
             }
+            if let Some((density, anisotropy)) = fog_medium {
+                renderer.set_volumetric_fog(render_model::VolumetricFogDescriptor {
+                    density,
+                    anisotropy,
+                    ..render_model::VolumetricFogDescriptor::DEFAULT
+                });
+            }
             renderer.bake_indirect_light_now()
         })
         .0;
@@ -461,8 +495,14 @@ fn run() -> Result<(), String> {
             "rerenderShadows": rerender_shadows,
         });
     }
-    let (tables, memory) = driver
-        .draw(|renderer, _| (renderer.table_counts(), renderer.mesh_memory()))
+    let (tables, memory, has_fog) = driver
+        .draw(|renderer, _| {
+            (
+                renderer.table_counts(),
+                renderer.mesh_memory(),
+                renderer.has_volumetric_fog(),
+            )
+        })
         .0;
     let (skipped, last_skip) = driver.skipped_ops();
     let gpu_readout = driver.gpu_readout();
@@ -473,6 +513,7 @@ fn run() -> Result<(), String> {
         ("antialiasing", settings.antialiasing),
         ("clusteredLighting", settings.clustered_lighting),
         ("gpuCulling", settings.gpu_culling),
+        ("volumetricFog", settings.volumetric_fog),
     ];
     let report = json!({
         "snapshot": snapshot_path.display().to_string(),
@@ -538,6 +579,12 @@ fn run() -> Result<(), String> {
                 "atlasBricks": gpu_readout.distance_fields.atlas_bricks,
                 "atlasBytes": gpu_readout.distance_fields.atlas_bytes,
                 "lookupEntries": gpu_readout.distance_fields.lookup_entries,
+            },
+            "volumetricFog": {
+                "sceneHasFog": has_fog,
+                "refused": gpu_readout.volumetric_fog.refused,
+                "grid": gpu_readout.volumetric_fog.grid,
+                "volumes": gpu_readout.volumetric_fog.volumes,
             },
             "lightClusters": {
                 "enabled": gpu_readout.light_clusters.enabled,

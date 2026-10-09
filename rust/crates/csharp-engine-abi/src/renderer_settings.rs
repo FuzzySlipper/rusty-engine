@@ -25,6 +25,18 @@ pub enum NativeAntialiasing {
     Msaa4 = 4,
 }
 
+/// How finely volumetric fog is computed: off (the analytic distance fog
+/// alone), or a froxel grid lit by the scene's lights and shadows at low or
+/// high resolution. Needs compute shaders on a GPU; a software adapter draws
+/// without it.
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativeVolumetricFogQuality {
+    Off = 0,
+    Low = 1,
+    High = 2,
+}
+
 /// The renderer's settings: which pipeline features draw and at what
 /// quality. The product manifest supplies the initial values
 /// (`RustyEngineProduct*` properties); `Set` replaces them all from the next
@@ -57,6 +69,9 @@ pub struct NativeRendererSettingsRequest {
     /// Test each view's opaque parts against its frustum on the GPU and draw
     /// them indirectly, instead of building the draw list on the CPU.
     pub gpu_culling: bool,
+    /// Light the fog medium and fog volumes (`CameraView.SetVolumetricFog`,
+    /// `SetFogVolume`) in a froxel grid.
+    pub volumetric_fog: NativeVolumetricFogQuality,
 }
 
 /// Why the device draws a setting differently from the request.
@@ -72,6 +87,8 @@ pub enum NativeRendererSettingRefusal {
     /// The window's display can present only in step with its refresh, so
     /// vsync stays on.
     VsyncOnly = 5,
+    /// A software adapter draws without this GPU-only feature.
+    SoftwareAdapter = 6,
 }
 
 /// What the renderer draws with: the last request (the manifest's values
@@ -87,6 +104,7 @@ pub struct NativeRendererSettingsReadout {
     pub vsync_refusal: NativeRendererSettingRefusal,
     pub clustered_lighting_refusal: NativeRendererSettingRefusal,
     pub gpu_culling_refusal: NativeRendererSettingRefusal,
+    pub volumetric_fog_refusal: NativeRendererSettingRefusal,
 }
 
 pub type NativeReadRendererSettings = unsafe extern "C" fn(

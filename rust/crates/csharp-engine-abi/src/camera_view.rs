@@ -438,6 +438,66 @@ pub struct NativeWetnessRequest {
     pub puddles: f32,
 }
 
+/// The medium volumetric fog lights, while the renderer's `VolumetricFog`
+/// setting is on. `density` (0 to 1, extinction per metre at `base_height`;
+/// 0 fills no air, so only fog volumes draw) falls by e every
+/// `falloff_height` metres up (0: one density everywhere); `albedo` (0 to 1
+/// a channel) is the colour it scatters; `anisotropy` (-0.9 to 0.9)
+/// scatters forward when positive, so it glows toward the sun; `distance`
+/// (8 to 1000 m) is how far the fog grid reaches; `ambient` (0 to 4) scales
+/// the ambient and sky light it scatters.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeVolumetricFogRequest {
+    pub density: f32,
+    pub albedo: NativeVec3,
+    pub anisotropy: f32,
+    pub base_height: f32,
+    pub falloff_height: f32,
+    pub distance: f32,
+    pub ambient: f32,
+}
+
+/// The shape of a fog volume.
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativeFogVolumeShape {
+    Box = 0,
+    Ellipsoid = 1,
+}
+
+/// A fog volume, placed or replaced by `id`: a box or ellipsoid of fog the
+/// volumetric fog adds to its medium, in the renderer's world space (as an
+/// indirect light volume's centre). `half_extents` (above 0, at most 10 km),
+/// turned `yaw_degrees` about the vertical; `density` (0 to 4) at its heart,
+/// fading to nothing over `edge` (0 to 1) of its half extent; `albedo` (0 to
+/// 1) and `emission` (0 to 16, light per unit of density); 3D noise cells
+/// `noise_scale` metres across (0: none) thin it by `noise_strength` (0 to 1)
+/// as they drift at `noise_velocity` metres per second. At most 64 volumes.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeFogVolumeRequest {
+    pub id: u32,
+    pub shape: NativeFogVolumeShape,
+    pub center: NativeVec3,
+    pub half_extents: NativeVec3,
+    pub yaw_degrees: f32,
+    pub density: f32,
+    pub albedo: NativeVec3,
+    pub emission: NativeVec3,
+    pub edge: f32,
+    pub noise_scale: f32,
+    pub noise_strength: f32,
+    pub noise_velocity: NativeVec3,
+}
+
+/// Removes fog volume `id`; removing one not placed does nothing.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeFogVolumeRemoval {
+    pub id: u32,
+}
+
 /// A product image effect over each primary view's finished picture.
 /// `shader` is a resource opened from a `.wgsl` file defining
 /// `fn image_effect(pixel: ImagePixel) -> vec4<f32>` (handle 0 removes the

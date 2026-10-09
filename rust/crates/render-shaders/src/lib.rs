@@ -6,7 +6,8 @@
 //! and `shade` are importable modules (`#import rusty::lighting::standard_radiance`);
 //! `world`, `sky`, `shadow`, `effects`, `ghost`, `compose`,
 //! `ambient_occlusion`, `finish_pass`, `post`, `sky_light`, `light_clusters`,
-//! `cull` and `distance_field` are the entry shaders built from them.
+//! `cull`, `distance_field` and `volumetric_fog` are the entry shaders built
+//! from them.
 //! A material's features are shader defs, so a variant only carries the
 //! samples and branches its material uses.
 //!
@@ -305,6 +306,9 @@ pub enum Entry {
     /// A product image effect over a view's finished picture
     /// (`image_effect.wgsl`, with the product's `fn image_effect`).
     ImageEffect,
+    /// Volumetric fog: a view's froxel grid lit and integrated
+    /// (`volumetric_fog.wgsl`, compute).
+    VolumetricFog,
 }
 
 impl Entry {
@@ -349,6 +353,10 @@ impl Entry {
             Self::ImageEffect => (
                 "shaders/image_effect.wgsl",
                 include_str!("shaders/image_effect.wgsl"),
+            ),
+            Self::VolumetricFog => (
+                "shaders/volumetric_fog.wgsl",
+                include_str!("shaders/volumetric_fog.wgsl"),
             ),
             Self::DistanceField => (
                 "shaders/distance_field.wgsl",
@@ -705,6 +713,7 @@ mod tests {
             Entry::WaterDepth,
             Entry::ShadowRestore,
             Entry::Precipitation,
+            Entry::VolumetricFog,
         ] {
             compose(&mut shaders, entry, Features::default());
         }

@@ -207,6 +207,9 @@ fn engine_api(
             set_wind: crate::camera_view::set_wind,
             set_clouds: crate::camera_view::set_clouds,
             set_wetness: crate::camera_view::set_wetness,
+            set_volumetric_fog: crate::camera_view::set_volumetric_fog,
+            set_fog_volume: crate::camera_view::set_fog_volume,
+            remove_fog_volume: crate::camera_view::remove_fog_volume,
             set_precipitation: crate::camera_view::set_precipitation,
             set_image_effect: crate::camera_view::set_image_effect,
             set_indirect_light: crate::camera_view::set_indirect_light,
@@ -1536,6 +1539,7 @@ mod tests {
             vsync: false,
             clustered_lighting: true,
             gpu_culling: true,
+            volumetric_fog: csharp_engine_abi::NativeVolumetricFogQuality::Off,
         };
         services.begin_call(binding());
         let api = services.api();
@@ -1558,6 +1562,7 @@ mod tests {
                 vsync: false,
                 clustered_lighting: true,
                 gpu_culling: true,
+                volumetric_fog: render_model::VolumetricFogQuality::Off,
             },
         };
         assert_eq!(call.take_output().frames[0].ops, vec![selected.clone()]);
@@ -1582,6 +1587,7 @@ mod tests {
             vsync_refusal: NativeRendererSettingRefusal::NoDisplay,
             clustered_lighting_refusal: NativeRendererSettingRefusal::None,
             gpu_culling_refusal: NativeRendererSettingRefusal::None,
+            volumetric_fog_refusal: csharp_engine_abi::NativeRendererSettingRefusal::None,
         };
         readout.effective.ambient_occlusion = NativeAmbientOcclusionMode::ScreenSpace;
         services.ingest_renderer_settings(readout);
@@ -2127,6 +2133,90 @@ mod tests {
         assert_eq!(
             call.take_output().frames[0].ops,
             [render_model::RenderDiff::SetWetness { wetness: None }]
+        );
+    }
+
+    #[test]
+    fn volumetric_fog_and_fog_volumes_publish_in_call_order_and_bad_values_are_refused() {
+        use crate::operation_diagnostics::{empty_receipt, receipt_codes};
+        let mut services = EngineServiceSet::new(
+            parse_runtime_appearance_catalog(None).expect("default catalog"),
+            BTreeMap::new(),
+            None,
+            RuntimeDiagnosticsSink::new(Default::default()).unwrap(),
+        )
+        .expect("service set");
+        services.begin_call(binding());
+        let api = services.api();
+        let vec3 = |x, y, z| NativeVec3 { x, y, z };
+        let medium = |density, distance| NativeVolumetricFogRequest {
+            density,
+            albedo: vec3(0.9, 0.9, 0.9),
+            anisotropy: 0.5,
+            base_height: 0.0,
+            falloff_height: 20.0,
+            distance,
+            ambient: 1.0,
+        };
+        let volume = |id, density| NativeFogVolumeRequest {
+            id,
+            shape: NativeFogVolumeShape::Box,
+            center: vec3(1.0, 2.0, 3.0),
+            half_extents: vec3(4.0, 2.0, 4.0),
+            yaw_degrees: 30.0,
+            density,
+            albedo: vec3(0.8, 0.8, 0.8),
+            emission: vec3(0.0, 0.0, 0.0),
+            edge: 0.3,
+            noise_scale: 2.0,
+            noise_strength: 0.5,
+            noise_velocity: vec3(1.0, 0.0, 0.0),
+        };
+        unsafe {
+            let view = &api.camera_view;
+            assert_eq!(
+                (view.set_volumetric_fog)(view.context, &medium(0.02, 96.0), std::ptr::null_mut()),
+                ABI_OK
+            );
+            assert_eq!(
+                (view.set_fog_volume)(view.context, &volume(3, 0.5), std::ptr::null_mut()),
+                ABI_OK
+            );
+            assert_eq!(
+                (view.remove_fog_volume)(
+                    view.context,
+                    &NativeFogVolumeRemoval { id: 3 },
+                    std::ptr::null_mut()
+                ),
+                ABI_OK
+            );
+            let mut refusal = empty_receipt();
+            assert_eq!(
+                (view.set_volumetric_fog)(view.context, &medium(0.02, 2.0), &mut refusal),
+                0
+            );
+            assert_eq!(receipt_codes(&refusal), ["CSHARP_VOLUMETRIC_FOG"]);
+            let mut refusal = empty_receipt();
+            assert_eq!(
+                (view.set_fog_volume)(view.context, &volume(4, 9.0), &mut refusal),
+                0
+            );
+            assert_eq!(receipt_codes(&refusal), ["CSHARP_FOG_VOLUME"]);
+        }
+        let mut call = services.finish_call().expect("fog call");
+        let ops = &call.take_output().frames[0].ops;
+        assert!(
+            matches!(
+                ops.as_slice(),
+                [
+                    render_model::RenderDiff::SetVolumetricFog { fog },
+                    render_model::RenderDiff::SetFogVolume { id: 3, volume },
+                    render_model::RenderDiff::RemoveFogVolume { id: 3 },
+                ] if fog.density == 0.02 && fog.falloff_height == 20.0
+                    && volume.half_extents == [4.0, 2.0, 4.0]
+                    && volume.shape == render_model::FogVolumeShape::Box
+            ),
+            "{ops:?}"
         );
     }
 

@@ -90,6 +90,8 @@ pub struct ProductHostRendererSettingValues {
     pub vsync: bool,
     pub clustered_lighting: bool,
     pub gpu_culling: bool,
+    /// `off`, `low` or `high`.
+    pub volumetric_fog: String,
 }
 
 /// The scene's shadow layers and which requesting lights cast.

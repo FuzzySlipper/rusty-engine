@@ -308,12 +308,13 @@ only, and a damaged file is reported and ignored.
 | `ambientOcclusion` | Lighting | `disabled`, `screenSpace`, `distanceField` |
 | `ambientOcclusionStrength` | Lighting | 0 to 2 |
 | `ambientOcclusionRadius` | Lighting | 0.25 to 2 m |
+| `volumetricFog` | Lighting | `off`, `low`, `high` |
 | `clusteredLighting` | Advanced | on or off |
 | `gpuCulling` | Advanced | on or off |
 
 The presets Low, Medium, High and Ultra set render scale, antialiasing,
-shadows, their budget and the occlusion mode, over the player's other
-choices. A setting the device refuses is shown with the reason, from the
+shadows, their budget, the occlusion mode and volumetric fog (off, off, low,
+high), over the player's other choices. A setting the device refuses is shown with the reason, from the
 same refusals the readout carries. The panel's route,
 `/__rusty/product/runtime/video-options`, answers `GET` with the catalogue
 (each option's `value` drawn, `requested`, `gameDefault`, `chosen` and
@@ -934,6 +935,59 @@ engine.CameraView.SetPrecipitation(new(Drops: 30_000, PrecipitationShape.Streak,
 - Nothing is simulated: each drop is one instanced quad placed by its index
   and the presentation time, so it holds while the simulation is paused. It
   draws in its own pass after the world, timed as `precipitation`.
+
+## Volumetric fog
+
+Fog that light passes through: shafts where the sun reaches past a wall or a
+tree, a torch's glow in a misty cave, a valley bank, a wall of dust. It draws
+while the renderer's `VolumetricFog` setting is `Low` or `High`
+(`RustyEngineProductVolumetricFog`, `RendererSettings`, or the player's
+[video options](#video-options)), over the analytic distance fog, which
+keeps fogging the far view.
+
+```csharp
+engine.CameraView.SetVolumetricFog(new(Density: .02f, Albedo: new(.9f, .9f, .92f),
+    Anisotropy: .6f, BaseHeight: 0, FalloffHeight: 25, Distance: 96, Ambient: 1));
+engine.CameraView.SetFogVolume(new(Id: 1, FogVolumeShape.Ellipsoid, Center: new(40, 3, -20),
+    HalfExtents: new(30, 6, 30), YawDegrees: 0, Density: .15f, Albedo: new(.85f, .8f, .7f),
+    Emission: Vector3.Zero, Edge: .4f, NoiseScale: 6, NoiseStrength: .6f,
+    NoiseVelocity: new(2, 0, 1)));
+engine.CameraView.RemoveFogVolume(new(1));
+```
+
+- **The medium.** `SetVolumetricFog` fills the air: `Density` (0 to 1,
+  extinction per metre at `BaseHeight`; 0 fills none, so only fog volumes
+  draw) thinning by e every `FalloffHeight` metres up (0: one density
+  everywhere); `Albedo` the colour it scatters; `Anisotropy` (-0.9 to 0.9)
+  scatters forward when positive, so fog glows looking toward a light;
+  `Distance` (8 to 1000 m, 96 by default) how far the fog grid reaches;
+  `Ambient` (0 to 4) how much ambient and sky light it scatters.
+- **Fog volumes.** `SetFogVolume` places or replaces a box or ellipsoid by
+  `Id` (at most 64): `Density` (0 to 4) at its heart, fading to nothing over
+  `Edge` of its half extent; `Emission` light it gives off per unit of
+  density (a glowing storm, an arcane haze); 3D noise cells `NoiseScale`
+  metres across thin it by `NoiseStrength` as they drift at `NoiseVelocity`.
+  Positions are in the renderer's world space, as an indirect light
+  volume's. `RemoveFogVolume` takes one away.
+- **The light.** Every light of the view lights it through its shadows
+  (sun cascades, point and spot shadows), the sun and moon through the cloud
+  layer, plus the ambient and hemisphere lights and the sky's light. Light
+  shafts come from the shadows: fog in a wall's shadow stays dark.
+- **How it draws.** A froxel grid over each world view (`Low` 96×54×48 cells,
+  `High` 160×90×64, spaced quadratically in distance out to `Distance`) is
+  lit and integrated front to back in two compute dispatches, timed as
+  `volumetric-fog`; the finish pass dims each surface by the fog in front of
+  it and adds the light it scatters, before exposure, and the background is
+  seen through the grid's whole depth. A surface reads the grid a cell nearer
+  than itself, so fog behind it does not leak through. On an RX 9070 XT at
+  1280×720 over a CraftSurvive meadow it costs about 0.11 ms (`Low`) and
+  0.25 ms (`High`). There is no temporal filtering: a thin shaft narrower
+  than a cell is blurred to the cell.
+- It needs compute shaders on a GPU: a device without them, or a software
+  adapter, refuses the setting (`NoComputeShaders`, `SoftwareAdapter`) and
+  draws the analytic fog alone. Off, or on with no medium and no volumes, it
+  draws exactly as without it. The medium and the volumes are retained
+  camera-view state, kept by a rebaseline and recorded by a scene snapshot.
 
 ## Image effects
 

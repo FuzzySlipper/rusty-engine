@@ -875,6 +875,15 @@ Engine choose which requesting lights cast, by `ShadowPriority` then distance
 [shadows](lighting-and-sky.md#shadows) for resolution, softness and the
 budget.
 
+### Volumetric fog
+
+`RustyEngineProductVolumetricFog` is `off` (the default), `low` or `high`
+(`renderer.lighting.volumetricFog`): the resolution of the froxel grid that
+lights the scene's fog medium and fog volumes
+([volumetric fog](lighting-and-sky.md#volumetric-fog)). A software adapter or
+one without compute shaders draws without it and says so in the
+`RendererSettings` readout.
+
 ### Screen-space ambient occlusion
 
 `RustyEngineProductAmbientOcclusion` turns ambient occlusion on world views

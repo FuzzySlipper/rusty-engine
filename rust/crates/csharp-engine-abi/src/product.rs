@@ -1172,6 +1172,21 @@ pub type NativeSetWetness = unsafe extern "C" fn(
     *const NativeWetnessRequest,
     *mut crate::NativeOperationErrorReceipt,
 ) -> i32;
+pub type NativeSetVolumetricFog = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeVolumetricFogRequest,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeSetFogVolume = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeFogVolumeRequest,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeRemoveFogVolume = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeFogVolumeRemoval,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
 pub type NativeSetImageEffect = unsafe extern "C" fn(
     *mut c_void,
     *const NativeImageEffectRequest,
@@ -1685,6 +1700,9 @@ pub struct NativeCameraViewApi {
     pub set_wind: NativeSetWind,
     pub set_clouds: NativeSetClouds,
     pub set_wetness: NativeSetWetness,
+    pub set_volumetric_fog: NativeSetVolumetricFog,
+    pub set_fog_volume: NativeSetFogVolume,
+    pub remove_fog_volume: NativeRemoveFogVolume,
     pub set_precipitation: NativeSetPrecipitation,
     pub set_image_effect: NativeSetImageEffect,
     pub set_indirect_light: NativeSetIndirectLight,

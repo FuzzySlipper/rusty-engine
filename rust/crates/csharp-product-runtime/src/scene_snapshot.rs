@@ -118,6 +118,9 @@ pub struct SceneSnapshotOptions {
     /// Snapshots written before the render scale was a setting drew at 1.
     #[serde(default = "default_render_scale")]
     pub render_scale: f32,
+    /// Snapshots written before volumetric fog draw without it.
+    #[serde(default)]
+    pub volumetric_fog: render_model::VolumetricFogQuality,
 }
 
 fn default_render_scale() -> f32 {
@@ -217,6 +220,7 @@ impl From<SceneSnapshotOptions> for render_wgpu::RendererOptions {
             samples: options.samples,
             vsync: options.vsync,
             render_scale: options.render_scale,
+            volumetric_fog: options.volumetric_fog,
         }
     }
 }
@@ -234,6 +238,7 @@ impl From<render_wgpu::RendererOptions> for SceneSnapshotOptions {
             samples: options.samples,
             vsync: options.vsync,
             render_scale: options.render_scale,
+            volumetric_fog: options.volumetric_fog,
         }
     }
 }

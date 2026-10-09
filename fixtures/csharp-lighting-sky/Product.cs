@@ -19,6 +19,9 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     private static readonly Vector3 HemisphereSkyColor = new(.55f,.7f,1), HemisphereGroundColor = new(.35f,.3f,.25f);
     // The sky's ambient light, occluded by the room: its range is half the side of the square of sky it looks down over.
     private static readonly Vector3 SkyAmbientColor = new(.6f,.7f,.9f);
+    // Volumetric fog: a pale medium reaching 80 m; volumes glow violet and drift.
+    private static readonly Vector3 FogAlbedo = new(.9f,.9f,.92f), FogGlow = new(1,.4f,1.2f), FogDrift = new(.6f,.1f,.3f);
+    private const float FogReach = 80, FogEdge = .4f, FogNoiseCell = 1.5f, FogNoiseStrength = .6f;
     private const float SkyAmbientIntensity = .3f;
     private const float TorchIntensity = 35, TorchRange = 12, Horizon = 64;
     private static readonly Vector3 TorchPosition = new(3.5f,2.5f,3.5f);
@@ -498,6 +501,30 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         engine.CameraView.SetWetness(new(Math.Clamp(wetness,0,1),Math.Clamp(puddles,0,1)));
         return Inspect();
     }
+    // Volumetric fog's quality, as a player's video option sets it.
+    [DebugCommand("lighting.volumetric")]
+    public string Volumetric(string quality)
+    {
+        var level = quality switch { "low" => VolumetricFogQuality.Low, "high" => VolumetricFogQuality.High, _ => VolumetricFogQuality.Off };
+        engine.RendererSettings.Set(engine.RendererSettings.Read().Requested with { VolumetricFog = level });
+        return Inspect();
+    }
+    // The fog medium everywhere: density per metre and forward scattering.
+    [DebugCommand("lighting.fog.medium")]
+    public string FogMedium(float density, float anisotropy)
+    {
+        engine.CameraView.SetVolumetricFog(new(Math.Clamp(density,0,1),FogAlbedo,Math.Clamp(anisotropy,-.9f,.9f),0,0,FogReach,1));
+        return Inspect();
+    }
+    // An ellipsoid of drifting fog (radius in metres), glowing by `glow` (0 for plain fog).
+    [DebugCommand("lighting.fog.volume")]
+    public string FogVolume(long id, float x, float y, float z, float radius, float density, float glow)
+    {
+        engine.CameraView.SetFogVolume(new((uint)id,FogVolumeShape.Ellipsoid,new(x,y,z),new(radius,radius*.6f,radius),0,Math.Clamp(density,0,4),FogAlbedo,FogGlow*Math.Clamp(glow,0,4),FogEdge,FogNoiseCell,FogNoiseStrength,FogDrift));
+        return Inspect();
+    }
+    [DebugCommand("lighting.fog.remove")]
+    public string FogRemove(long id) { engine.CameraView.RemoveFogVolume(new((uint)id)); return Inspect(); }
     [DebugCommand("lighting.atmosphere")]
     public string Atmosphere(bool enabled) { engine.CameraView.SetAtmosphere(enabled ? Air : default); return Inspect(); }
     // A hemisphere light at the given intensity (0 disables it), read back from the Engine.

@@ -134,6 +134,8 @@ struct RetainedGraphics {
     wind: Option<WindDescriptor>,
     clouds: Option<CloudsDescriptor>,
     wetness: Option<WetnessDescriptor>,
+    volumetric_fog: Option<VolumetricFogDescriptor>,
+    fog_volumes: BTreeMap<u32, FogVolumeDescriptor>,
     precipitation: Option<PrecipitationDescriptor>,
     image_effect: Option<ImageEffectDescriptor>,
     indirect_light: Option<IndirectLightDescriptor>,
@@ -275,6 +277,9 @@ impl PresentationWorld {
                 || matches!(&op, RenderDiff::SetWind { wind } if &self.retained.wind == wind)
                 || matches!(&op, RenderDiff::SetClouds { clouds } if &self.retained.clouds == clouds)
                 || matches!(&op, RenderDiff::SetWetness { wetness } if &self.retained.wetness == wetness)
+                || matches!(&op, RenderDiff::SetVolumetricFog { fog } if self.retained.volumetric_fog.as_ref() == Some(fog))
+                || matches!(&op, RenderDiff::SetFogVolume { id, volume } if self.retained.fog_volumes.get(id) == Some(volume))
+                || matches!(&op, RenderDiff::RemoveFogVolume { id } if !self.retained.fog_volumes.contains_key(id))
                 || matches!(&op, RenderDiff::SetPrecipitation { precipitation } if &self.retained.precipitation == precipitation)
                 || matches!(&op, RenderDiff::SetImageEffect { effect } if &self.retained.image_effect == effect)
                 || matches!(&op, RenderDiff::SetIndirectLight { indirect_light } if &self.retained.indirect_light == indirect_light)
@@ -743,6 +748,15 @@ impl PresentationWorld {
         if self.retained.wetness.is_some() {
             ops.push(RenderDiff::SetWetness {
                 wetness: self.retained.wetness,
+            });
+        }
+        if let Some(fog) = self.retained.volumetric_fog {
+            ops.push(RenderDiff::SetVolumetricFog { fog });
+        }
+        for (id, volume) in &self.retained.fog_volumes {
+            ops.push(RenderDiff::SetFogVolume {
+                id: *id,
+                volume: *volume,
             });
         }
         if self.retained.precipitation.is_some() {
@@ -1308,6 +1322,15 @@ impl PresentationWorld {
             }
             RenderDiff::SetWetness { wetness } => {
                 self.retained.wetness = *wetness;
+            }
+            RenderDiff::SetVolumetricFog { fog } => {
+                self.retained.volumetric_fog = Some(*fog);
+            }
+            RenderDiff::SetFogVolume { id, volume } => {
+                self.retained.fog_volumes.insert(*id, *volume);
+            }
+            RenderDiff::RemoveFogVolume { id } => {
+                self.retained.fog_volumes.remove(id);
             }
             RenderDiff::SetPrecipitation { precipitation } => {
                 self.retained.precipitation = *precipitation;

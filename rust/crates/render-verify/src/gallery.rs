@@ -15,8 +15,12 @@ use std::{
 };
 
 use render_model::{
-    AmbientOcclusionMode, RendererSettingKind, RendererSettingsDescriptor, RENDERER_SETTING_OPTIONS,
+    AmbientOcclusionMode, RendererSettingKind, RendererSettingsDescriptor, VolumetricFogQuality,
+    RENDERER_SETTING_OPTIONS,
 };
+
+/// The stand-in fog medium for a scene with none: density and anisotropy.
+const STAND_IN_FOG: &str = "0.015,0.6";
 use serde::Serialize;
 use serde_json::Value;
 
@@ -156,39 +160,63 @@ pub fn plan(
     settings: &RendererSettingsDescriptor,
     camera: Option<[f64; 3]>,
     has_indirect_light: bool,
+    has_fog: bool,
 ) -> Vec<GalleryVariant> {
     let choose = |id: &str, value: &str| vec!["--choose".to_owned(), format!("{id}={value}")];
-    let mut variants = Vec::new();
-    let mut everything = Vec::new();
-    let mut add = |id: &str, value: &str, label: String, everything_too: bool| {
-        let args = choose(id, value);
+    let labelled = |id: &str, value: &str| {
+        let label = RENDERER_SETTING_OPTIONS
+            .iter()
+            .find(|option| option.id == id)
+            .map_or(id, |option| option.label);
+        format!("{label}: {}", choice_label(id, value))
+    };
+    let mut variants: Vec<GalleryVariant> = Vec::new();
+    let mut everything: Vec<String> = Vec::new();
+    let mut push = |id: String,
+                    label: String,
+                    args: Vec<String>,
+                    everything_too: bool,
+                    note: Option<String>| {
         if everything_too {
             everything.extend(args.iter().cloned());
         }
         variants.push(GalleryVariant {
-            id: format!("{id}-{value}"),
+            id,
             label,
             args,
-            note: None,
+            note,
         });
     };
     for option in RENDERER_SETTING_OPTIONS {
-        match option.id {
-            "renderScale" if settings.render_scale < 1.0 => {
-                add(option.id, "1", "Render scale 1×".to_owned(), true)
-            }
-            "antialiasing" if settings.antialiasing != 4 => add(
-                option.id,
-                "4x",
-                format!("{}: {}", option.label, choice_label(option.id, "4x")),
+        let id = option.id;
+        match id {
+            "renderScale" if settings.render_scale < 1.0 => push(
+                format!("{id}-1"),
+                "Render scale 1×".to_owned(),
+                choose(id, "1"),
                 true,
+                None,
             ),
-            "shadows" if !settings.shadows => add(option.id, "true", "Shadows".to_owned(), true),
-            "shadowBudget" if settings.shadows && settings.shadow_budget.is_some() => add(
-                option.id,
-                "none",
-                format!("{}: {}", option.label, choice_label(option.id, "none")),
+            "antialiasing" if settings.antialiasing != 4 => push(
+                format!("{id}-4x"),
+                labelled(id, "4x"),
+                choose(id, "4x"),
                 true,
+                None,
+            ),
+            "shadows" if !settings.shadows => push(
+                format!("{id}-true"),
+                "Shadows".to_owned(),
+                choose(id, "true"),
+                true,
+                None,
+            ),
+            "shadowBudget" if settings.shadows && settings.shadow_budget.is_some() => push(
+                format!("{id}-none"),
+                labelled(id, "none"),
+                choose(id, "none"),
+                true,
+                None,
             ),
             "ambientOcclusion" => {
                 for (mode, value) in [
@@ -196,23 +224,45 @@ pub fn plan(
                     (AmbientOcclusionMode::DistanceField, "distanceField"),
                 ] {
                     if settings.ambient_occlusion.mode != mode {
-                        add(
-                            option.id,
-                            value,
-                            format!("{}: {}", option.label, choice_label(option.id, value)),
-                            mode == AmbientOcclusionMode::ScreenSpace
-                                && settings.ambient_occlusion.mode
-                                    == AmbientOcclusionMode::Disabled,
+                        let everything_too = mode == AmbientOcclusionMode::ScreenSpace
+                            && settings.ambient_occlusion.mode == AmbientOcclusionMode::Disabled;
+                        push(
+                            format!("{id}-{value}"),
+                            labelled(id, value),
+                            choose(id, value),
+                            everything_too,
+                            None,
                         );
                     }
                 }
             }
-            "clusteredLighting" if !settings.clustered_lighting => {
-                add(option.id, "true", option.label.to_owned(), true)
+            "volumetricFog" if settings.volumetric_fog == VolumetricFogQuality::Off => {
+                // Volumetric fog lights the scene's fog; a scene without any
+                // gets a thin stand-in haze to show what it would do.
+                let mut args = choose(id, "low");
+                let note = (!has_fog).then(|| {
+                    args.extend([
+                        "--volumetric-fog-medium".to_owned(),
+                        STAND_IN_FOG.to_owned(),
+                    ]);
+                    "A thin stand-in haze (0.015 per metre): the game sets its own fog.".to_owned()
+                });
+                push(format!("{id}-low"), labelled(id, "low"), args, true, note);
             }
-            "gpuCulling" if !settings.gpu_culling => {
-                add(option.id, "true", option.label.to_owned(), true)
-            }
+            "clusteredLighting" if !settings.clustered_lighting => push(
+                format!("{id}-true"),
+                option.label.to_owned(),
+                choose(id, "true"),
+                true,
+                None,
+            ),
+            "gpuCulling" if !settings.gpu_culling => push(
+                format!("{id}-true"),
+                option.label.to_owned(),
+                choose(id, "true"),
+                true,
+                None,
+            ),
             _ => {}
         }
     }
@@ -220,16 +270,17 @@ pub fn plan(
     // around the camera to show what it would do.
     if let (false, Some([x, y, z])) = (has_indirect_light, camera) {
         let volume = format!("{x:.2},{y:.2},{z:.2},24,12,24,2,1");
-        everything.extend(["--indirect-light".to_owned(), volume.clone()]);
-        variants.push(GalleryVariant {
-            id: "indirectLight".to_owned(),
-            label: "Indirect light".to_owned(),
-            args: vec!["--indirect-light".to_owned(), volume],
-            note: Some(
+        push(
+            "indirectLight".to_owned(),
+            "Indirect light".to_owned(),
+            vec!["--indirect-light".to_owned(), volume],
+            true,
+            Some(
                 "A 48×24×48 m probe volume around the camera: the game places its own.".to_owned(),
             ),
-        });
+        );
     }
+    drop(push);
     if variants.len() > 1 {
         variants.push(GalleryVariant {
             id: "everything".to_owned(),
@@ -260,6 +311,9 @@ pub fn run(request: &GalleryRequest<'_>) -> Result<GalleryReport, String> {
             ])
         });
     let has_indirect = !baseline.report["gpu"]["indirectLight"].is_null();
+    let has_fog = baseline.report["gpu"]["volumetricFog"]["sceneHasFog"]
+        .as_bool()
+        .unwrap_or(false);
     let baseline_image = Image::read_png(&baseline.image)?;
     let baseline_frame = baseline.report["timing"]["medianMs"]
         .as_f64()
@@ -278,7 +332,7 @@ pub fn run(request: &GalleryRequest<'_>) -> Result<GalleryReport, String> {
         note: None,
         error: None,
     }];
-    for variant in plan(&settings, camera, has_indirect) {
+    for variant in plan(&settings, camera, has_indirect, has_fog) {
         eprintln!("rusty-scene-render gallery: {}", variant.label);
         let entry = match render(request, &variant.id, &variant.args) {
             Ok(rendered) => {
@@ -497,7 +551,7 @@ mod tests {
             render_scale: 0.75,
             ..RendererSettingsDescriptor::DEFAULT
         };
-        let ids: Vec<String> = plan(&settings, Some([1.0, 2.0, 3.0]), false)
+        let ids: Vec<String> = plan(&settings, Some([1.0, 2.0, 3.0]), false, false)
             .into_iter()
             .map(|variant| variant.id)
             .collect();
@@ -509,6 +563,7 @@ mod tests {
                 "shadows-true",
                 "ambientOcclusion-screenSpace",
                 "ambientOcclusion-distanceField",
+                "volumetricFog-low",
                 "clusteredLighting-true",
                 "gpuCulling-true",
                 "indirectLight",
@@ -523,10 +578,11 @@ mod tests {
             shadows: true,
             clustered_lighting: true,
             gpu_culling: true,
+            volumetric_fog: VolumetricFogQuality::High,
             ..RendererSettingsDescriptor::DEFAULT
         };
         settings.ambient_occlusion.mode = AmbientOcclusionMode::ScreenSpace;
-        let variants = plan(&settings, None, true);
+        let variants = plan(&settings, None, true, true);
         assert_eq!(variants.len(), 1);
         assert_eq!(variants[0].id, "ambientOcclusion-distanceField");
         assert_eq!(
@@ -537,7 +593,7 @@ mod tests {
 
     #[test]
     fn everything_on_takes_screen_space_occlusion_not_both_paths() {
-        let variants = plan(&RendererSettingsDescriptor::DEFAULT, None, false);
+        let variants = plan(&RendererSettingsDescriptor::DEFAULT, None, false, false);
         let everything = variants
             .iter()
             .find(|variant| variant.id == "everything")
