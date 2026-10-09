@@ -21,6 +21,20 @@ Run the corresponding `scripts/verify.sh`, `scripts/verify-csharp.sh`,
 dependencies; C# requires .NET, Clang/libclang and the pinned binding tools.
 The render-wgpu screenshot tests run on llvmpipe (`mesa-vulkan-drivers`) in CI.
 
+## GPU verification
+
+GitHub's runners have no GPU, so CI renders on llvmpipe, a software Vulkan
+adapter. There it proves that the renderer starts, draws correctly and
+refuses what the adapter cannot do; it says nothing about how a feature looks
+or what it costs on a GPU. A renderer feature may refuse on a software adapter
+(`Gpu::is_software`) and report the refusal through the settings readout, as
+the compute features do without compute shaders. Look and cost are verified
+on machines with GPUs, against that machine's own accepted images and
+timings. `rusty-scene-render` says on stderr and in its report
+(`softwareAdapter`) when it ran on a software adapter, so such numbers are not
+mistaken for GPU evidence. llvmpipe timings in the docs describe what a
+software adapter costs; they are not acceptance gates.
+
 NativeAOT is a separate fidelity path: `scripts/verify-csharp.sh --aot`, the
 C# workflow dispatch option, and `scripts/test-csharp-release-pair.sh PAIR --aot`.
 

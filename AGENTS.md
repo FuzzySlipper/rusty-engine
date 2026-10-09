@@ -123,6 +123,13 @@ Read [the architecture overview](docs/architecture.md) and
   and reports its cost; a product's current scenes not showing it is tuning,
   not a reason to remove it. Products choose features; the Engine chooses how
   each is implemented.
+- Renderer features are GPU features. A software adapter (llvmpipe, WARP;
+  `Gpu::is_software`) must start, draw what it draws correctly and refuse
+  expensive features cleanly through the settings readout; it is not a target
+  for look or cost, and a heavy new feature may refuse there by default.
+  Look and cost are verified on real GPUs
+  ([GPU verification](docs/verification.md#gpu-verification)); llvmpipe
+  timings in docs are information, never an acceptance gate.
 - TypeScript may own DOM UI, accessibility, and explicit Engine host/backend
   implementation. Downstream TypeScript must never render non-UI game elements
   or acquire application/gameplay state.

@@ -245,6 +245,13 @@ fn run() -> Result<(), String> {
 
     let gpu = Gpu::headless().map_err(|error| format!("{error:?}"))?;
     let adapter = gpu.adapter_summary();
+    let software_adapter = gpu.is_software();
+    if software_adapter {
+        eprintln!(
+            "rusty-scene-render: {} is a software adapter; its timings and any feature it refuses are not evidence for a GPU",
+            adapter.name
+        );
+    }
     let mut options: RendererOptions = snapshot.metadata.options.into();
     if let Some(path) = ambient_occlusion {
         let strength = match options.ambient_occlusion.path {
@@ -383,6 +390,7 @@ fn run() -> Result<(), String> {
         "product": snapshot.metadata.product,
         "writtenOnAdapter": snapshot.metadata.adapter,
         "adapter": format!("{} ({})", adapter.name, adapter.backend),
+        "softwareAdapter": software_adapter,
         "state": snapshot.metadata.state,
         "resources": snapshot.resource_count(),
         "openMs": open_ms,

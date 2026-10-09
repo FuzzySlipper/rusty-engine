@@ -137,6 +137,13 @@ impl Gpu {
         })
     }
 
+    /// Whether the adapter is a software rasterizer (llvmpipe, WARP): it
+    /// starts, draws correctly and refuses expensive features cleanly, but
+    /// its look and cost are not evidence for real GPUs.
+    pub fn is_software(&self) -> bool {
+        self.adapter.get_info().device_type == wgpu::DeviceType::Cpu
+    }
+
     pub fn adapter_summary(&self) -> AdapterSummary {
         let info = self.adapter.get_info();
         AdapterSummary {
