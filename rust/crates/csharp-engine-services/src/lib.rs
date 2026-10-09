@@ -9,6 +9,7 @@ mod content;
 mod diagnostics;
 mod dynamics;
 mod gameplay_time;
+mod host;
 mod http;
 mod implicit_surfaces;
 mod input;

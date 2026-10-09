@@ -1846,6 +1846,7 @@ pub struct NativeEngineApi {
     pub http: NativeHttpApi,
     pub session: NativeSessionApi,
     pub ui: NativeUiApi,
+    pub host: NativeHostApi,
 }
 
 /// Borrowed creation inputs plus the direct Engine API.

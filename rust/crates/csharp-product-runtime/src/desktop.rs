@@ -82,7 +82,7 @@ impl Desktop {
 
     /// Show the world and the host's browser shell page at `origin` until
     /// the window closes or `stopping` is set. Closing the window sets
-    /// `stopping`, which ends the host.
+    /// `closed`, which ends the host.
     /// The page's storage persists under `persistence_root`, as the
     /// product's own saves do.
     pub(crate) fn run(
@@ -93,6 +93,7 @@ impl Desktop {
         driver: Arc<SceneDriver>,
         timing: Arc<WindowTiming>,
         stopping: Arc<AtomicBool>,
+        closed: Arc<AtomicBool>,
     ) -> Result<(), String> {
         let cache_dir = match persistence_root {
             Some(root) => {
@@ -108,6 +109,7 @@ impl Desktop {
             timing,
             cadence: self.cadence,
             stopping,
+            closed,
         });
         let report = self.shell.run(
             DesktopShellConfig {
@@ -167,6 +169,7 @@ struct WindowScene {
     timing: Arc<WindowTiming>,
     cadence: csharp_product_runtime::PresentationCadence,
     stopping: Arc<AtomicBool>,
+    closed: Arc<AtomicBool>,
 }
 
 impl DesktopScene for WindowScene {
@@ -199,6 +202,6 @@ impl DesktopScene for WindowScene {
     }
 
     fn close(&self) {
-        self.stopping.store(true, Ordering::Relaxed);
+        self.closed.store(true, Ordering::Relaxed);
     }
 }

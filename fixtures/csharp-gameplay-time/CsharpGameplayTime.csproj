@@ -23,5 +23,6 @@
       <ExcludeAssets Condition="'$(RustyEngineUseSourceDevelopment)' == 'true'">compile;runtime</ExcludeAssets>
     </PackageReference>
     <RustyEngineProductInputIntent Include="gameplay-time.clear" Value="payload:gameplay-time.clear.v1" />
+    <RustyEngineProductInputIntent Include="gameplay-time.quit" Value="payload:gameplay-time.quit.v1" />
   </ItemGroup>
 </Project>

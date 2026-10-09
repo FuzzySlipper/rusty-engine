@@ -75,6 +75,7 @@ fn engine_api(
     http_bridge: &mut crate::http::RuntimeHttpBridge,
     session_bridge: &mut crate::session::RuntimeSessionBridge,
     ui_bridge: &mut RuntimeUiBridge,
+    host_bridge: &mut crate::host::RuntimeHostBridge,
 ) -> NativeEngineApi {
     appearance_bridge.bind_authored_content(authored_content_bridge);
     spatial_bridge.bind_appearance(appearance_bridge);
@@ -229,6 +230,7 @@ fn engine_api(
         http: crate::http::api(http_bridge),
         session: crate::session::api(session_bridge),
         ui: crate::ui::api(ui_bridge),
+        host: crate::host::api(host_bridge),
     }
 }
 
@@ -332,6 +334,7 @@ pub struct EngineServiceSet {
     http: crate::http::RuntimeHttpBridge,
     session: crate::session::RuntimeSessionBridge,
     ui: RuntimeUiBridge,
+    host: crate::host::RuntimeHostBridge,
 }
 
 /// A finished product call: its renderer work and any input mapping
@@ -462,6 +465,7 @@ impl EngineServiceSet {
             persistence: crate::persistence::RuntimePersistenceBridge::new(persistence_root),
             http: crate::http::RuntimeHttpBridge::new(),
             ui,
+            host: crate::host::RuntimeHostBridge::default(),
         })
     }
 
@@ -494,7 +498,14 @@ impl EngineServiceSet {
             &mut self.http,
             &mut self.session,
             &mut self.ui,
+            &mut self.host,
         )
+    }
+
+    /// Makes `Host.RequestExit` available, for a host with a window, and
+    /// returns the flag a request sets once the product asks to end.
+    pub fn enable_host_exit(&mut self) -> Arc<std::sync::atomic::AtomicBool> {
+        self.host.enable_exit()
     }
 
     /// The presentation surface and anchored UI rects the page last

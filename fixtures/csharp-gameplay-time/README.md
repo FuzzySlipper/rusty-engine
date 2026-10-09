@@ -33,8 +33,13 @@ dotnet restore CsharpGameplayTime.csproj --source /path/to/pair/sdk-feed
   update runs and gameplay input is discarded. Resume continues the product's
   time choice. Clear hits beside it claims `gameplay-time.clear`; the product
   clears the count running (`Update`) or paused (`HandlePausedIntents`).
+- Quit, shown only in window output (`--output window`), claims
+  `gameplay-time.quit`; the product calls `Host.RequestExit()`, which closes
+  the window and ends `rusty dev` as closing the window does. Streamed output
+  reports exit unavailable (`Host.Read().ExitAvailable`), so the button stays
+  hidden there.
 
 The HUD shows the rate (`HELD`, `ACTION` during a shot's advance), the step,
 the cooldown and hits. `gameplay.observe` (live-debug) reads the same state
 plus body, look, drone and projectile positions; it changes nothing and is not
-needed to play.
+needed to play. `gameplay.quit` does what Quit does.

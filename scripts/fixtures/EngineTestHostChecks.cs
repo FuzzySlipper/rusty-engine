@@ -149,6 +149,9 @@ internal static class EngineTestHostChecks
             Require(advance.AdvanceRemainingSteps == 6 && advance.Rate == 1.0, "A 0.1 s advance was not six 60 Hz steps.");
             ExpectRefusal(() => engine.GameplayTime.Advance(0), "CSHARP_GAMEPLAY_TIME_ADVANCE");
             ExpectRefusal(() => engine.GameplayTime.Advance(1, 0), "CSHARP_GAMEPLAY_TIME_RATE");
+            // No window to close: a Quit stays hidden, and asking refuses.
+            Require(!engine.Host.Read().ExitAvailable, "Exit was available without a window.");
+            ExpectRefusal(() => engine.Host.RequestExit(), "ENGINE_HOST_EXIT_UNAVAILABLE");
         });
 
         Bundles(library);

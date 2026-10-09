@@ -56,7 +56,7 @@ enum SupervisorCommand {
     ReloadAssets,
 }
 
-pub(crate) fn run(args: Arguments) -> Result<(), String> {
+pub(crate) fn run(args: Arguments) -> Result<std::process::ExitCode, String> {
     let termination = install_termination_signal_hook();
     let diagnostics = ProductHostLog::new(args.log_config()).map_err(|error| error.to_string())?;
     let listener = match TcpListener::bind(SocketAddr::from((args.bind_host(), args.port()))) {
@@ -150,6 +150,10 @@ pub(crate) fn run(args: Arguments) -> Result<(), String> {
             }
         } else if let Some(status) = runtime.as_mut().and_then(RuntimeProcess::exited) {
             runtime = None;
+            // The player closed the window or the product asked to end.
+            if status.code() == Some(i32::from(crate::PRODUCT_STOPPED_EXIT_CODE)) {
+                break "product-stopped";
+            }
             let detail = format!("runtime exited unexpectedly ({status})");
             publish_supervisor_diagnostic(&diagnostics, "PRODUCT_HOST_RUNTIME_EXIT", &detail);
             if !args.supervised {
@@ -234,7 +238,13 @@ pub(crate) fn run(args: Arguments) -> Result<(), String> {
     crate::print_line(&format!("RUSTY_HOST shutdown={{\"reason\":\"{reason}\"}}"));
     diagnostics.flush();
     browser_shutdown?;
-    runtime_shutdown
+    runtime_shutdown?;
+    // `rusty dev` reads the same code, so it stops rather than restarting.
+    Ok(if reason == "product-stopped" && args.supervised {
+        std::process::ExitCode::from(crate::PRODUCT_STOPPED_EXIT_CODE)
+    } else {
+        std::process::ExitCode::SUCCESS
+    })
 }
 
 /// Why a port can be taken with nothing listening on it: the kernel lends

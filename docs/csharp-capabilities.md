@@ -48,6 +48,7 @@ to force a rerun.
 | `Presentation` | Publish presentation effects and diagnostic facts without creating another renderer, including retained ghost-plate captures. |
 | `Tween` | Play eased presentation offsets (timelines of hops, squash and stretch, punches, shakes, splines and tints) over published appearance objects, with completion and marker events ([appearance tweens](appearance-tweens.md)). |
 | `RenderOutput` | Capture offline images and export GLB from the retained appearance snapshot ([offline images](csharp-offline-images.md)). |
+| `Host` | Whether the product can end itself, and the request that ends it (a menu's Quit), in window output only ([quit](csharp-lifecycle.md#quit)). |
 | `ImplicitSurfaces` | Build scalar fields and generate retained meshes from them ([implicit surfaces](csharp-implicit-surfaces.md)). |
 | `Animation` | Own animation resources, graphs, controllers, parameters, and playback realization. |
 | `Audio` | Own audio clips, voices, control, and presentation feedback. |

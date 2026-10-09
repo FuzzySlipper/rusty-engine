@@ -79,6 +79,10 @@ the product project, or for one launch on the command line:
 rusty dev --project <product.csproj> --output window
 ```
 
+- **Ending.** Closing the window, or the product's `Host.RequestExit()`
+  ([quit](csharp-lifecycle.md#quit)), disposes the product and stops the
+  host. A supervised host reports it with exit code 79, so its supervisor and
+  `rusty dev` stop rather than restart it as after a crash.
 - **Fetching.** The first window run downloads the pinned pair's desktop
   runtime pack into the cache beside the pair (`desktop-pack/`). It is the
   pair's host built with the `desktop` feature, plus Chromium's runtime.

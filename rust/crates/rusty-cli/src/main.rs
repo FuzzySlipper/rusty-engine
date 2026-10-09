@@ -51,6 +51,10 @@ const UNEXPECTED_EXIT_RESTART_BACKOFF: Duration = Duration::from_millis(100);
 /// (`BIND_FAILURE_EXIT_CODE` in csharp-product-runtime's supervisor; the two
 /// ship in one pair).
 const HOST_BIND_FAILURE_EXIT_CODE: i32 = 78;
+/// `rusty-product-host` exits with this code when the player closed its
+/// window or the product asked to end (`PRODUCT_STOPPED_EXIT_CODE` in
+/// csharp-product-runtime): a stop, not a crash to restart.
+const HOST_PRODUCT_STOPPED_EXIT_CODE: i32 = 79;
 const MAX_UNEXPECTED_EXITS_PER_ARTIFACT: u8 = 2;
 const MAX_SUPERVISOR_COMMAND_BYTES: usize = 16 * 1024;
 static NEXT_SUPERVISED_RUNTIME_INSTANCE_ID: AtomicU64 = AtomicU64::new(0);
@@ -249,6 +253,15 @@ fn dev(mut options: DevOptions) -> Result<(), String> {
         if let Some(active_child) = child.as_mut() {
             if let Some(status) = active_child.try_wait()? {
                 let exited_child = child.take().expect("observed child is present");
+                // An ordinary stop: like `rusty dev stop`, it leaves no
+                // session record.
+                if status.code() == Some(HOST_PRODUCT_STOPPED_EXIT_CODE) {
+                    diagnostic(
+                        "stopped",
+                        serde_json::json!({ "reason": "product-stopped" }),
+                    );
+                    return Ok(());
+                }
                 if status.code() == Some(HOST_BIND_FAILURE_EXIT_CODE) {
                     // Restarting cannot free the port; the host printed why.
                     if let Some(session) = session {
@@ -1281,6 +1294,8 @@ its runtime and headless browser. Never stop a host by killing processes by name
 machine they belong to other sessions. `--label` says who or what a session is for. A session that
 ends for a reason a caller must see (idle-expired, port-unavailable, project-removed) keeps its
 record for a day, listed by `rusty dev list --all`; a session that stopped or crashed leaves none.
+In window output, closing the window or the product's own Quit (`Host.RequestExit`) stops the
+session the same way, rather than restarting it.
 
 A session unused for {idle} minutes stops itself. Use is input, a control or lifecycle call, a live-debug
 command, a page attaching or a restage; a page or browser that only watches is not use. `--keep` or

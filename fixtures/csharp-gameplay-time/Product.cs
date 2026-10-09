@@ -45,6 +45,7 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     private const ulong FloorId = 1, TurretId = 2, RunnerId = 3, DroneIdBase = 10, ProjectileIdBase = 1000;
     private const int DroneCount = 3;
     private const string ClearIntent = "gameplay-time.clear";
+    private const string QuitIntent = "gameplay-time.quit";
 
     private readonly IEngineContext engine;
     private readonly Camera camera;
@@ -74,6 +75,9 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     private ProductUpdateFacts lastFacts;
     private ulong hudSequence;
     private bool turretScheduled;
+    // Window output can end from the product; streamed output cannot, so the
+    // HUD hides Quit there.
+    private readonly bool exitAvailable;
 
     private sealed class Projectile(ulong id, Vector3 position, Vector3 velocity, bool fromPlayer, float age)
     {
@@ -107,6 +111,7 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         camera = engine.CameraView.CreateCamera(CameraDescriptor());
         engine.CameraView.SetActiveCamera(camera);
         hud = engine.Ui.OpenStream(new UiStreamRequest("gameplay-time", "gameplay-time.hud.v1"));
+        exitAvailable = engine.Host.Read().ExitAvailable;
         // Opting into gameplay time: from now on every observation updates.
         engine.GameplayTime.Hold();
         Publish();
@@ -127,7 +132,10 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         bool fire = input.Physical.Pressed(PointerButton.Primary) || input.Physical.Pressed(ControllerButton.Button5);
         bool wait = input.Physical.Pressed(KeyboardControl.KeyB) || input.Physical.Pressed(ControllerButton.Button4);
         foreach (ProductInputEvent intent in update.Input)
+        {
             if (IsClear(intent)) hits = 0;
+            if (IsIntent(intent, QuitIntent)) Quit();
+        }
 
         // The world, once per admitted step.
         if (!turretScheduled && facts.AdmittedStepCount > 0)
@@ -312,6 +320,7 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         writer.Bool("realtime", realtime);
         writer.Number("hits", hits);
         writer.Number("pausedClears", pausedClears);
+        writer.Bool("exitAvailable", exitAvailable);
         engine.Ui.PublishProjection(new UiProjection(hud, ++hudSequence, writer.Value()));
     }
 
@@ -337,7 +346,22 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         lastHit = new[] { lastHit.X, lastHit.Y, lastHit.Z },
         crawl,
         realtime,
+        exitAvailable,
     });
+
+    [DebugCommand("gameplay.quit", Description = "Do what the HUD's Quit does: end the product, in window output only.")]
+    public string QuitCommand()
+    {
+        Quit();
+        return exitAvailable ? "exiting" : "exit is unavailable in this output";
+    }
+
+    // The product decides to end; the Engine closes the window and stops the
+    // host after this call, and `rusty dev` stops with it.
+    private void Quit()
+    {
+        if (exitAvailable) engine.Host.RequestExit();
+    }
 
     // The HUD's Clear button claims gameplay-time.clear: running it arrives in
     // Update, during a menu pause here; the rule is the same.
@@ -345,6 +369,7 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     {
         foreach (ProductInputEvent intent in intents)
         {
+            if (IsIntent(intent, QuitIntent)) Quit();
             if (!IsClear(intent)) continue;
             hits = 0;
             pausedClears++;
@@ -352,8 +377,10 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         PublishHud();
     }
 
-    private static bool IsClear(ProductInputEvent intent) =>
-        intent.Kind == InputEventKind.DirectProductPayload && intent.Intent.Span.SequenceEqual(Encoding.UTF8.GetBytes(ClearIntent));
+    private static bool IsClear(ProductInputEvent intent) => IsIntent(intent, ClearIntent);
+
+    private static bool IsIntent(ProductInputEvent intent, string id) =>
+        intent.Kind == InputEventKind.DirectProductPayload && intent.Intent.Span.SequenceEqual(Encoding.UTF8.GetBytes(id));
 
     public void Start() { }
     // A menu pause keeps no held controls for resume.

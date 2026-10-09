@@ -17,12 +17,21 @@ export function mountProductUi(root, context) {
   clear.addEventListener('click', () => context.intents?.claim('gameplay-time.clear', {
     kind: 'product-payload', contract: 'gameplay-time.clear.v1', data: {},
   }));
-  lifecycle.element.append(clear);
+  // Shown only where the product reports it can end (window output).
+  const quit = document.createElement('button');
+  quit.textContent = 'Quit';
+  quit.dataset.fixtureQuit = '';
+  quit.hidden = true;
+  quit.addEventListener('click', () => context.intents?.claim('gameplay-time.quit', {
+    kind: 'product-payload', contract: 'gameplay-time.quit.v1', data: {},
+  }));
+  lifecycle.element.append(clear, quit);
   root.append(help, reticle, hud, lifecycle.element);
 
   const unsubscribe = context.projection?.subscribe((projection) => {
     if (projection?.contract !== 'gameplay-time.hud.v1' || !isHud(projection.value)) return;
     const value = projection.value;
+    quit.hidden = value.exitAvailable !== true;
     const time = value.held ? 'HELD' : value.advanceSteps > 0 ? `ACTION ×${value.rate.toFixed(2)}` : `×${value.rate.toFixed(2)}`;
     hud.textContent = [
       `time ${time}`,

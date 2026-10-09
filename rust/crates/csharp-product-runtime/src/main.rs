@@ -41,6 +41,11 @@ mod supervisor;
 /// bundle content: the runtime re-reads them without restarting the product.
 /// A supervised runtime reads it on stdin on every platform.
 pub(crate) const RELOAD_ASSETS_COMMAND: &str = "reload-assets";
+/// The exit code of a supervised host or runtime that ended because the
+/// player closed its window or the product asked to end (`Host.RequestExit`).
+/// Its supervisor, and `rusty dev`, read it as a stop rather than a crash.
+#[cfg_attr(not(any(unix, feature = "desktop")), allow(dead_code))]
+pub(crate) const PRODUCT_STOPPED_EXIT_CODE: u8 = 79;
 use product_bundle::ProductBundle;
 
 const MAX_PHYSICAL_MAPPINGS: usize = 256;
@@ -90,7 +95,7 @@ fn set_fault_signal_action(action: libc::sighandler_t) {
     }
 }
 
-fn main() -> Result<(), String> {
+fn main() -> Result<std::process::ExitCode, String> {
     #[cfg(target_os = "linux")]
     set_fault_signal_action(libc::SIG_DFL);
     #[cfg(feature = "desktop")]
@@ -98,7 +103,7 @@ fn main() -> Result<(), String> {
     let mut args = match Invocation::parse()? {
         Invocation::Identity { machine_readable } => {
             print_runtime_identity(machine_readable);
-            return Ok(());
+            return Ok(std::process::ExitCode::SUCCESS);
         }
         Invocation::Launch(args) => args,
     };
@@ -211,7 +216,7 @@ fn main() -> Result<(), String> {
         let _ = std::io::stdin().lock().read_line(&mut command);
         if command.trim_end() != supervisor::SERVE_COMMAND {
             print_line("RUSTY_HOST shutdown={\"reason\":\"supervisor-stdin-closed\"}");
-            return Ok(());
+            return Ok(std::process::ExitCode::SUCCESS);
         }
         // The supervisor cleared close-on-exec so this process could inherit
         // the listener; set it again so nothing this process starts keeps
@@ -229,6 +234,8 @@ fn main() -> Result<(), String> {
     }
     #[cfg(feature = "desktop")]
     let window_scene = runtime.scene_driver().zip(runtime.window_timing());
+    #[cfg(feature = "desktop")]
+    let host_exit = runtime.host_exit();
     let host = ProductHost::start(runtime, config).map_err(|error| error.to_string())?;
     if args.exercise {
         let mut stream = TcpStream::connect(host.address()).map_err(|error| error.to_string())?;
@@ -311,18 +318,27 @@ fn main() -> Result<(), String> {
             // The window owns the main thread. The usual stop conditions
             // (signal, supervisor stdin, host stop) close it through the
             // shared flag, and closing it stops the host the same way.
+            // A closed window, or the product asking to end, stops the
+            // host the same way.
             let origin = host.origin().to_string();
-            return std::thread::scope(|scope| {
+            let ended = WindowEnd {
+                closed: Arc::default(),
+                exit: host_exit,
+            };
+            let reason = std::thread::scope(|scope| {
                 let waiter = Arc::clone(&termination);
                 let host = &host;
-                scope.spawn(move || {
-                    wait_for_process_termination(
+                let window = &ended;
+                let waiting = scope.spawn(move || {
+                    let reason = wait_for_process_termination(
                         supervised,
                         host,
                         Arc::clone(&waiter),
+                        Some(window),
                         reload_assets,
                     );
                     waiter.store(true, Ordering::Relaxed);
+                    reason
                 });
                 desktop.run(
                     title,
@@ -331,12 +347,40 @@ fn main() -> Result<(), String> {
                     driver,
                     timing,
                     Arc::clone(&termination),
+                    Arc::clone(&ended.closed),
+                )?;
+                Ok::<_, String>(
+                    waiting
+                        .join()
+                        .expect("the termination waiter does not panic"),
                 )
-            });
+            })?;
+            drop(host);
+            return Ok(stop_exit_code(supervised, reason));
         }
-        wait_for_process_termination(supervised, &host, termination, reload_assets);
+        wait_for_process_termination(supervised, &host, termination, None, reload_assets);
     }
-    Ok(())
+    Ok(std::process::ExitCode::SUCCESS)
+}
+
+/// How a window's host ends besides the usual stop conditions: the player
+/// closed the window, or the product asked to end.
+#[cfg_attr(not(feature = "desktop"), allow(dead_code))]
+struct WindowEnd {
+    closed: Arc<AtomicBool>,
+    exit: Option<Arc<AtomicBool>>,
+}
+
+/// A supervised host that the player or product ended reports it with
+/// [`PRODUCT_STOPPED_EXIT_CODE`], so its supervisor stops instead of
+/// restarting it. Every other end is a plain success.
+#[cfg(feature = "desktop")]
+fn stop_exit_code(supervised: bool, reason: &str) -> std::process::ExitCode {
+    if supervised && matches!(reason, "window-closed" | "product-exit") {
+        std::process::ExitCode::from(PRODUCT_STOPPED_EXIT_CODE)
+    } else {
+        std::process::ExitCode::SUCCESS
+    }
 }
 
 fn validate_headless_host(args: &Arguments) -> Result<(), String> {
@@ -458,8 +502,24 @@ fn wait_for_process_termination(
     supervised: bool,
     host: &RunningProductHost,
     termination: Arc<AtomicBool>,
+    window: Option<&WindowEnd>,
     reload_assets: Option<Box<dyn Fn() + Send>>,
-) {
+) -> &'static str {
+    let window_ended = || {
+        let window = window?;
+        if window.closed.load(Ordering::Relaxed) {
+            Some("window-closed")
+        } else if window
+            .exit
+            .as_ref()
+            .is_some_and(|exit| exit.load(Ordering::Acquire))
+        {
+            Some("product-exit")
+        } else {
+            None
+        }
+    };
+
     if supervised {
         // Keep stdin as the supervisor's clean-stop mechanism, but read it on
         // a helper so a terminal runtime recovery can wake this foreground
@@ -481,10 +541,13 @@ fn wait_for_process_termination(
         while !termination.load(Ordering::Relaxed)
             && !supervisor_stdin_closed.load(Ordering::Acquire)
             && !host.termination_requested()
+            && window_ended().is_none()
         {
             std::thread::park_timeout(std::time::Duration::from_millis(50));
         }
-        let reason = if host.termination_requested() {
+        let reason = if let Some(reason) = window_ended() {
+            reason
+        } else if host.termination_requested() {
             "host-stopped"
         } else if termination.load(Ordering::Relaxed) {
             "termination-signal"
@@ -492,16 +555,23 @@ fn wait_for_process_termination(
             "supervisor-stdin-closed"
         };
         print_line(&format!("RUSTY_HOST shutdown={{\"reason\":\"{reason}\"}}"));
+        reason
     } else {
-        while !termination.load(Ordering::Relaxed) && !host.termination_requested() {
+        while !termination.load(Ordering::Relaxed)
+            && !host.termination_requested()
+            && window_ended().is_none()
+        {
             std::thread::park_timeout(std::time::Duration::from_millis(100));
         }
-        let reason = if host.termination_requested() {
+        let reason = if let Some(reason) = window_ended() {
+            reason
+        } else if host.termination_requested() {
             "host-stopped"
         } else {
             "termination-signal"
         };
         println!("RUSTY_HOST shutdown={{\"reason\":\"{reason}\"}}");
+        reason
     }
 }
 

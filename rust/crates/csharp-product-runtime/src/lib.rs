@@ -769,6 +769,9 @@ pub struct CsharpProductRuntime {
     /// The renderer, when the configuration selected an output: absent only
     /// in runtimes built without one (tests).
     frame_output: Option<frame_output::FrameOutput>,
+    /// Set when the product asks to end (`Host.RequestExit`); present only
+    /// in window output, where ending closes the window.
+    host_exit: Option<Arc<std::sync::atomic::AtomicBool>>,
     /// How the page presents the product: its surface, UI scale and
     /// anchored rects. The renderer follows the anchors as they arrive.
     presentation: Arc<product_host::ProductHostPresentation>,
@@ -969,6 +972,10 @@ impl CsharpProductRuntime {
         if let Some(frames) = &frame_output {
             services.ingest_renderer_settings(frames.settings_readout());
         }
+        let host_exit = frame_output
+            .as_ref()
+            .and_then(frame_output::FrameOutput::window_timing)
+            .map(|_| services.enable_host_exit());
         let native_content: Vec<NativeContentFile> = content
             .iter()
             .map(|file| NativeContentFile {
@@ -1069,6 +1076,7 @@ impl CsharpProductRuntime {
             presentation_cadence: config.presentation_cadence,
             audio_output,
             frame_output,
+            host_exit,
             presentation,
             video_options,
             render_outputs,
@@ -2792,6 +2800,12 @@ impl CsharpProductRuntime {
         self.frame_output
             .as_ref()
             .map(frame_output::FrameOutput::driver)
+    }
+
+    /// Set once the product asks to end, in window output; the host then
+    /// closes the window and stops as closing it does.
+    pub fn host_exit(&self) -> Option<Arc<std::sync::atomic::AtomicBool>> {
+        self.host_exit.clone()
     }
 
     /// Where the desktop shell reports its frames and input, in window

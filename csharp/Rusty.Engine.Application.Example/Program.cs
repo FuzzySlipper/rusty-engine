@@ -239,4 +239,5 @@ sealed class ExampleEngineContext : IEngineContext
     public IHttpService Http => throw new NotSupportedException();
     public ISessionService Session => throw new NotSupportedException();
     public IUiService Ui => throw new NotSupportedException();
+    public IHostService Host => throw new NotSupportedException();
 }

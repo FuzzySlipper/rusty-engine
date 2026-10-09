@@ -38,6 +38,7 @@ internal sealed class EngineContext : IEngineContext
         Persistence = new PersistenceServiceImplementation(native.persistence);
         Http = new HttpServiceImplementation(native.http);
         Session = new SessionServiceImplementation(native.session);
+        Host = new HostServiceImplementation(native.host);
         Ui = new UiServiceImplementation(native.ui);
     }
 
@@ -70,6 +71,7 @@ internal sealed class EngineContext : IEngineContext
     public IHttpService Http { get; }
     public ISessionService Session { get; }
     public IUiService Ui { get; }
+    public IHostService Host { get; }
 }
 
 internal sealed class ProductLifetime

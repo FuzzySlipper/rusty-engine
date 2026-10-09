@@ -62,11 +62,32 @@ for what a rebuild keeps and what it does not replay.
 `Motion`, `Kinematic`, `Spatial`, `Perception`, `WorldOrigin`, `Voxel`,
 `VoxelContent`, `VoxelScenePresentation`, `Content`, `AuthoredContent`,
 `Graphics`, `Presentation`, `Animation`, `Audio`, `Video`, `RenderOutput`,
-`CameraView`, `Random`, `Persistence`, and `Ui`. The exact method set is the
+`CameraView`, `Random`, `Persistence`, `Ui`, and `Host`. The exact method set is the
 generated `Rusty.Engine` output. Mechanics, resolution, and state machines are
 ordinary managed helpers, not native context services. See the
 [capability map](csharp-capabilities.md) and do not assume a Rust API is
 callable from C# simply because its crate is public.
+
+### Quit
+
+A title or pause menu's Quit ends the product through `Host`. In window output
+(`--output window`) `engine.Host.Read().ExitAvailable` is true, and
+`engine.Host.RequestExit()` closes the window and stops the host once the
+current callback returns. The product is disposed as when the player closes
+the window, and `rusty dev` stops instead of restarting it. Streamed output
+has no window to close: `ExitAvailable` is false, `RequestExit` throws
+`EngineCallException` with `ENGINE_HOST_EXIT_UNAVAILABLE`, and the product
+hides its Quit. The UI asks through the product, which owns the decision:
+
+```csharp
+// Create: tell the UI whether to show Quit.
+exitAvailable = engine.Host.Read().ExitAvailable;
+
+// Update (or HandlePausedIntents, for a menu shown while paused):
+if (IsIntent(intent, "game.quit") && exitAvailable) engine.Host.RequestExit();
+```
+
+`fixtures/csharp-gameplay-time` shows Quit beside its Pause and Clear buttons.
 
 ### Gameplay time
 
