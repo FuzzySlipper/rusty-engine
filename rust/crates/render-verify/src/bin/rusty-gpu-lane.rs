@@ -196,16 +196,12 @@ fn post_status(options: &Options, run: &Path, report: &serde_json::Value) -> Res
     let verdict = report["verdict"].as_str().unwrap_or("failed");
     // An unreviewed flag is neutral, which a gate requiring success does not
     // pass; a reviewer posts success or failure with --conclusion and the
-    // review attached.
-    let conclusion = match options.get("conclusion") {
-        Some(value @ ("success" | "failure" | "neutral")) => value.to_owned(),
-        Some(other) => return Err(format!("--conclusion {other}: success, failure or neutral")),
-        None => match verdict {
-            "pass" => "success".to_owned(),
-            "flagged" => "neutral".to_owned(),
-            _ => "failure".to_owned(),
-        },
-    };
+    // review attached. A software adapter never concludes success.
+    let conclusion = lane::conclusion(
+        verdict,
+        report["softwareAdapter"].as_bool().unwrap_or(true),
+        options.get("conclusion"),
+    )?;
     let mut summary = std::fs::read_to_string(run.join("report.md")).unwrap_or_default();
     if let Some(review) = options.get("review") {
         let text = std::fs::read_to_string(review).map_err(|error| format!("{review}: {error}"))?;

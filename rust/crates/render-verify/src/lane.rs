@@ -353,8 +353,15 @@ pub struct SceneResult {
 #[serde(rename_all = "camelCase")]
 pub struct RunReport {
     pub machine: String,
+    /// Every adapter either renderer reported, joined: more than one means
+    /// a renderer fell back to another.
     pub adapter: String,
+    /// Any render, baseline or candidate, ran on a software adapter: the run
+    /// is not GPU evidence, and its status cannot be success.
     pub software_adapter: bool,
+    /// Scenes the selection named that the manifest does not have: the run
+    /// fails, so a misspelt name never passes unrendered.
+    pub unmatched: Vec<String>,
     pub baseline_source: String,
     pub candidate_source: String,
     /// The Engine checkout both sources are commits of, for the review's
@@ -387,9 +394,15 @@ pub fn run(request: &RunRequest<'_>) -> Result<RunReport, String> {
     fs::create_dir_all(request.out)
         .map_err(|error| format!("{}: {error}", request.out.display()))?;
     let started_at = unix_seconds();
-    let mut adapter = String::new();
+    let mut adapters = Vec::new();
     let mut software_adapter = false;
     let mut scenes = Vec::new();
+    let unmatched: Vec<String> = request
+        .only
+        .iter()
+        .filter(|name| !manifest.scenes.iter().any(|scene| &scene.name == *name))
+        .cloned()
+        .collect();
     for scene in &manifest.scenes {
         if !request.only.is_empty() && !request.only.contains(&scene.name) {
             continue;
@@ -403,21 +416,28 @@ pub fn run(request: &RunRequest<'_>) -> Result<RunReport, String> {
             scene,
             &settings,
             &baseline_renderer,
-            &mut adapter,
+            &mut adapters,
             &mut software_adapter,
         )?;
         eprintln!("rusty-gpu-lane: {} {}", scene.name, result.verdict.word());
         scenes.push(result);
     }
-    let verdict = scenes
-        .iter()
-        .map(|scene| scene.verdict)
-        .max()
-        .unwrap_or(Verdict::Pass);
+    // Nothing rendered, or a name that matched nothing, fails: an empty run
+    // is no evidence.
+    let verdict = if scenes.is_empty() || !unmatched.is_empty() {
+        Verdict::Failed
+    } else {
+        scenes
+            .iter()
+            .map(|scene| scene.verdict)
+            .max()
+            .unwrap_or(Verdict::Failed)
+    };
     let report = RunReport {
         machine: request.machine.to_owned(),
-        adapter,
+        adapter: adapters.join(" / "),
         software_adapter,
+        unmatched,
         baseline_source: baseline.source,
         candidate_source: request.candidate_source.to_owned(),
         checkout: request.checkout.map(|path| path.display().to_string()),
@@ -434,7 +454,7 @@ fn run_scene(
     scene: &LaneScene,
     settings: &LaneSettings,
     baseline_renderer: &Path,
-    adapter: &mut String,
+    adapters: &mut Vec<String>,
     software_adapter: &mut bool,
 ) -> Result<SceneResult, String> {
     let directory = request.out.join(&scene.name);
@@ -458,10 +478,12 @@ fn run_scene(
             let image = directory.join(format!("{}-{repeat}.png", labels[which]));
             match render(renderers[which], &snapshot, &image, settings, &scene.args) {
                 Ok(run) => {
-                    if adapter.is_empty() {
-                        adapter.clone_from(&run.adapter);
-                        *software_adapter = run.software;
+                    // Every render counts: a candidate falling back to a
+                    // software adapter after a hardware baseline is caught.
+                    if !adapters.contains(&run.adapter) {
+                        adapters.push(run.adapter.clone());
                     }
+                    *software_adapter |= run.software;
                     runs[which].push(run);
                     images[which].push(image);
                 }
@@ -650,6 +672,15 @@ pub fn markdown(report: &RunReport) -> String {
         report.baseline_source,
         report.candidate_source
     );
+    if !report.unmatched.is_empty() {
+        text.push_str(&format!(
+            "**No such scene:** {}. The run fails until the selection names only scenes in `scenes.json`.\n\n",
+            report.unmatched.join(", ")
+        ));
+    }
+    if report.scenes.is_empty() {
+        text.push_str("**Nothing was rendered.**\n\n");
+    }
     text.push_str("| Scene | Verdict | Changed | SSIM | Frame ms | Slowest pass change |\n| --- | --- | --- | --- | --- | --- |\n");
     for scene in &report.scenes {
         let (changed, ssim) = scene
@@ -747,6 +778,37 @@ fn review_prompt(report: &RunReport, flagged: &[&SceneResult]) -> String {
     text
 }
 
+/// The check run's conclusion for a run: `requested` (a reviewer's), or
+/// from the verdict (an unreviewed flag is neutral). A run on a software
+/// adapter is never success: it is not GPU evidence.
+pub fn conclusion(
+    verdict: &str,
+    software_adapter: bool,
+    requested: Option<&str>,
+) -> Result<&'static str, String> {
+    let wanted = match requested {
+        Some("success") => "success",
+        Some("failure") => "failure",
+        Some("neutral") => "neutral",
+        Some(other) => return Err(format!("--conclusion {other}: success, failure or neutral")),
+        None => match verdict {
+            "pass" => "success",
+            "flagged" => "neutral",
+            _ => "failure",
+        },
+    };
+    if software_adapter && wanted == "success" {
+        if requested.is_some() {
+            return Err(
+                "the run used a software adapter: it is not GPU evidence and cannot conclude success"
+                    .to_owned(),
+            );
+        }
+        return Ok("neutral");
+    }
+    Ok(wanted)
+}
+
 /// The commit a source names, when it starts with a full SHA.
 fn commit_of(source: &str) -> Option<&str> {
     let first = source.split_whitespace().next()?;
@@ -805,5 +867,135 @@ mod tests {
         assert_eq!(median(&mut [3.0, 1.0, 2.0]), 2.0);
         assert_eq!(median(&mut [4.0, 1.0, 2.0, 3.0]), 2.5);
         assert_eq!(median(&mut []), 0.0);
+    }
+
+    /// A lane directory with one scene, `a`, and a baseline renderer that
+    /// reports `baseline_adapter`; returns it and a candidate that reports
+    /// `candidate_adapter`. Each renderer is a script that copies a small
+    /// PNG to its output and prints a report.
+    #[cfg(unix)]
+    fn stub_lane(
+        name: &str,
+        baseline_adapter: (&str, bool),
+        candidate_adapter: (&str, bool),
+    ) -> (PathBuf, PathBuf) {
+        use std::os::unix::fs::PermissionsExt;
+        let root =
+            std::env::temp_dir().join(format!("render-verify-lane-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("scenes")).unwrap();
+        fs::write(root.join("scenes/a.rscene"), b"{}").unwrap();
+        fs::write(
+            root.join(MANIFEST_FILE),
+            r#"{"defaults":{"repeats":2},"scenes":[{"name":"a","file":"scenes/a.rscene"}]}"#,
+        )
+        .unwrap();
+        let png = root.join("frame.png");
+        Image::new(8, 8, [40, 80, 120, 255])
+            .write_png(&png)
+            .unwrap();
+        let stub = |file: &str, (adapter, software): (&str, bool)| {
+            let path = root.join(file);
+            fs::write(
+                &path,
+                format!(
+                    "#!/bin/sh\ncp '{}' \"$2\"\nprintf '%s' '{{\"adapter\":\"{adapter}\",\"softwareAdapter\":{software},\"timing\":{{\"medianMs\":1.0}},\"gpu\":{{\"passes\":[]}}}}'\n",
+                    png.display()
+                ),
+            )
+            .unwrap();
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+            path
+        };
+        let baseline = stub("baseline.sh", baseline_adapter);
+        let candidate = stub("candidate.sh", candidate_adapter);
+        accept(&root, "m", &baseline, "base", "test").unwrap();
+        (root, candidate)
+    }
+
+    #[cfg(unix)]
+    fn run_stub(root: &Path, candidate: &Path, only: &[String]) -> RunReport {
+        run(&RunRequest {
+            root,
+            machine: "m",
+            candidate,
+            candidate_source: "head",
+            out: &root.join("out"),
+            only,
+            repeats: None,
+            checkout: None,
+        })
+        .unwrap()
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_selection_that_names_no_scene_fails_and_names_what_it_missed() {
+        let gpu = ("Radeon", false);
+        let (root, candidate) = stub_lane("selection", gpu, gpu);
+        let everything = run_stub(&root, &candidate, &[]);
+        assert_eq!(everything.verdict, Verdict::Pass, "the stubs agree");
+        let unknown = run_stub(&root, &candidate, &["does-not-exist".to_owned()]);
+        assert_eq!(
+            unknown.verdict,
+            Verdict::Failed,
+            "nothing rendered is no pass"
+        );
+        assert!(unknown.scenes.is_empty());
+        assert_eq!(unknown.unmatched, ["does-not-exist"]);
+        assert!(markdown(&unknown).contains("does-not-exist"));
+        let mixed = run_stub(&root, &candidate, &["a".to_owned(), "aa".to_owned()]);
+        assert_eq!(mixed.scenes.len(), 1, "the named scene still renders");
+        assert_eq!(mixed.scenes[0].verdict, Verdict::Pass);
+        assert_eq!(
+            mixed.verdict,
+            Verdict::Failed,
+            "but the misspelt one fails the run"
+        );
+        assert_eq!(mixed.unmatched, ["aa"]);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_software_adapter_on_either_side_is_reported_and_never_concludes_success() {
+        let gpu = ("Radeon", false);
+        let software = ("llvmpipe", true);
+        for (name, baseline, candidate) in
+            [("both", software, software), ("fallback", gpu, software)]
+        {
+            let (root, stub) = stub_lane(name, baseline, candidate);
+            let report = run_stub(&root, &stub, &[]);
+            assert_eq!(report.verdict, Verdict::Pass, "{name}: the images agree");
+            assert!(
+                report.software_adapter,
+                "{name}: the software render is kept"
+            );
+            if name == "fallback" {
+                assert_eq!(
+                    report.adapter, "Radeon / llvmpipe",
+                    "both adapters are named"
+                );
+            }
+            assert_eq!(
+                conclusion(report.verdict.word(), report.software_adapter, None),
+                Ok("neutral"),
+                "{name}: a software run posts no success"
+            );
+            assert!(
+                conclusion(
+                    report.verdict.word(),
+                    report.software_adapter,
+                    Some("success")
+                )
+                .is_err(),
+                "{name}: nor can a reviewer post one"
+            );
+            let _ = fs::remove_dir_all(&root);
+        }
+        assert_eq!(conclusion("pass", false, None), Ok("success"));
+        assert_eq!(conclusion("flagged", false, None), Ok("neutral"));
+        assert_eq!(conclusion("flagged", false, Some("success")), Ok("success"));
+        assert_eq!(conclusion("pass", true, Some("failure")), Ok("failure"));
     }
 }
