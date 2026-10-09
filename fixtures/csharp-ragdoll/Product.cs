@@ -197,8 +197,10 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         {
             restedAt ??= ticks;
         }
+        // Clearance is the bodies' own: the drawn end joints it measures
+        // to move away from them while the ragdoll blends out.
         lowestNow = float.MaxValue;
-        for (int index = 0; index < placed.Length; index++)
+        for (int index = 0; index < placed.Length && !gettingUp; index++)
         {
             float low = Lowest(index, placed);
             lowestNow = MathF.Min(lowestNow, low);
@@ -288,7 +290,7 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
 
     [DebugCommand("ragdoll.inspect")]
     public string Inspect() => string.Create(CultureInfo.InvariantCulture,
-        $"falls={falls}; ragdoll={ragdoll is not null}; blend={blend:F2}; ticks={ticks}; restedAt={restedAt?.ToString(CultureInfo.InvariantCulture) ?? "-"}; lowest={(lowest == float.MaxValue ? 0 : lowest):F4} ({lowestBone}); lowestNow={lowestNow:F4}; leastFlexion={(leastFlexion == float.MaxValue ? 0 : leastFlexion):F3}; recorded=[{string.Join(" | ", recorded)}]");
+        $"falls={falls}; ragdoll={ragdoll is not null}; blend={blend:F2}; ticks={ticks}; restedAt={restedAt?.ToString(CultureInfo.InvariantCulture) ?? "-"}; lowest={(lowest == float.MaxValue ? 0 : lowest):F4} ({lowestBone}); lowestNow={(lowestNow == float.MaxValue ? 0 : lowestNow):F4}; leastFlexion={(leastFlexion == float.MaxValue ? 0 : leastFlexion):F3}; recorded=[{string.Join(" | ", recorded)}]");
 
     public void RegisterDebugCommands(IDebugCommandModuleRegistrar registrar) => registrar.Register(this);
     public void Start() { }
