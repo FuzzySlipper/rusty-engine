@@ -437,53 +437,40 @@ fn dev(mut options: DevOptions) -> Result<(), String> {
         watches = refreshed_watches;
         asset_roots = refreshed_asset_roots;
         let mut replacement_failed = false;
+        // A host that has exited fails the write (its pipe has no reader),
+        // so this one check sees an exit from before or during staging.
         let started_after_restage = if let Some(active_child) = child.as_mut() {
-            if let Some(status) = active_child.try_wait()? {
-                if product_stopped(status) {
-                    return Ok(());
-                }
-                diagnostic(
-                    "child-exited-during-restage",
-                    serde_json::json!({
-                        "pid": active_child.child.id(),
-                        "status": status.code(),
-                        "runtimeInstanceId": active_child.runtime_instance_id,
-                    }),
-                );
-                child.take();
-                true
-            } else {
-                match active_child.replace_runtime(&next_staged) {
-                    Ok(()) => false,
-                    Err(error) => {
-                        if let Some(status) = active_child.try_wait()? {
-                            if product_stopped(status) {
-                                return Ok(());
-                            }
-                            diagnostic(
-                                "child-exited-during-restage",
-                                serde_json::json!({
-                                    "pid": active_child.child.id(),
-                                    "status": status.code(),
-                                    "runtimeInstanceId": active_child.runtime_instance_id,
-                                }),
-                            );
-                            child.take();
-                            true
-                        } else {
-                            diagnostic(
-                                "restage-failed",
-                                serde_json::json!({
-                                    "phase": "replace-runtime",
-                                    "productDirectory": next_staged,
-                                    "error": error,
-                                }),
-                            );
-                            replacement_failed = true;
-                            false
+            match active_child.replace_runtime(&next_staged) {
+                Ok(()) => false,
+                Err(error) => match active_child.try_wait()? {
+                    Some(status) => {
+                        if product_stopped(status) {
+                            return Ok(());
                         }
+                        diagnostic(
+                            "child-exited-during-restage",
+                            serde_json::json!({
+                                "pid": active_child.child.id(),
+                                "status": status.code(),
+                                "runtimeInstanceId": active_child.runtime_instance_id,
+                            }),
+                        );
+                        child.take();
+                        true
                     }
-                }
+                    None => {
+                        diagnostic(
+                            "restage-failed",
+                            serde_json::json!({
+                                "phase": "replace-runtime",
+                                "productDirectory": next_staged,
+                                "error": error,
+                            }),
+                        );
+                        replacement_failed = true;
+                        false
+                    }
+                },
             }
         } else {
             child = Some(SupervisedHost::start(
