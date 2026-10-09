@@ -121,6 +121,9 @@ pub struct SceneSnapshotOptions {
     /// Snapshots written before volumetric fog draw without it.
     #[serde(default)]
     pub volumetric_fog: render_model::VolumetricFogQuality,
+    /// Snapshots written before volumetric clouds draw the flat layer.
+    #[serde(default)]
+    pub volumetric_clouds: render_model::VolumetricCloudsQuality,
 }
 
 fn default_render_scale() -> f32 {
@@ -221,6 +224,7 @@ impl From<SceneSnapshotOptions> for render_wgpu::RendererOptions {
             vsync: options.vsync,
             render_scale: options.render_scale,
             volumetric_fog: options.volumetric_fog,
+            volumetric_clouds: options.volumetric_clouds,
         }
     }
 }
@@ -239,6 +243,7 @@ impl From<render_wgpu::RendererOptions> for SceneSnapshotOptions {
             vsync: options.vsync,
             render_scale: options.render_scale,
             volumetric_fog: options.volumetric_fog,
+            volumetric_clouds: options.volumetric_clouds,
         }
     }
 }

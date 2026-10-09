@@ -146,6 +146,7 @@ fn refusal(readout: &RendererSettingsReadout, id: &str, streamed: bool) -> Optio
         "clusteredLighting" => readout.clustered_lighting,
         "gpuCulling" => readout.gpu_culling,
         "volumetricFog" => readout.volumetric_fog,
+        "volumetricClouds" => readout.volumetric_clouds,
         _ => None,
     }?;
     Some(match refused {
@@ -316,6 +317,7 @@ mod tests {
             clustered_lighting: Some(SettingRefusal::NoComputeShaders),
             gpu_culling: None,
             volumetric_fog: None,
+            volumetric_clouds: None,
         };
         let catalogue = options.catalogue(&readout);
         assert_eq!(catalogue["stored"], false);

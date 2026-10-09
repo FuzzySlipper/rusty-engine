@@ -751,6 +751,8 @@ pub(crate) struct Tables {
     pub clouds: Option<render_model::CloudsDescriptor>,
     /// How wet the scene's surfaces are (`lighting.wgsl` `wetted`).
     pub wetness: Option<render_model::WetnessDescriptor>,
+    /// The cloud regions over the cloud layer (`clouds.wgsl`).
+    pub cloud_regions: std::collections::BTreeMap<u32, render_model::CloudRegionDescriptor>,
     /// The volumetric fog's medium and its fog volumes
     /// (`volumetric_fog.rs`).
     pub volumetric_fog: render_model::VolumetricFogDescriptor,
@@ -801,6 +803,7 @@ impl Tables {
             wind: None,
             clouds: None,
             wetness: None,
+            cloud_regions: std::collections::BTreeMap::new(),
             volumetric_fog: render_model::VolumetricFogDescriptor::DEFAULT,
             fog_volumes: std::collections::BTreeMap::new(),
             precipitation: None,

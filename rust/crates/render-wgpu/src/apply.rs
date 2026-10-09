@@ -161,6 +161,20 @@ impl Renderer {
             }
             RenderDiff::SetWind { wind } => self.tables.wind = *wind,
             RenderDiff::SetWetness { wetness } => self.tables.wetness = *wetness,
+            RenderDiff::SetCloudRegion { id, region } => {
+                if self.tables.cloud_regions.len()
+                    < render_model::CloudRegionDescriptor::MAX_REGIONS
+                    || self.tables.cloud_regions.contains_key(id)
+                {
+                    self.tables.cloud_regions.insert(*id, *region);
+                }
+                // The sky's uniform holds the layer regions draw under.
+                self.tables.environment_dirty = true;
+            }
+            RenderDiff::RemoveCloudRegion { id } => {
+                self.tables.cloud_regions.remove(id);
+                self.tables.environment_dirty = true;
+            }
             RenderDiff::SetVolumetricFog { fog } => self.tables.volumetric_fog = *fog,
             RenderDiff::SetFogVolume { id, volume } => {
                 if self.tables.fog_volumes.len() < render_model::FogVolumeDescriptor::MAX_VOLUMES
@@ -2482,6 +2496,8 @@ fn op_name(op: &RenderDiff) -> &'static str {
         RenderDiff::SetWind { .. } => "setWind",
         RenderDiff::SetClouds { .. } => "setClouds",
         RenderDiff::SetWetness { .. } => "setWetness",
+        RenderDiff::SetCloudRegion { .. } => "setCloudRegion",
+        RenderDiff::RemoveCloudRegion { .. } => "removeCloudRegion",
         RenderDiff::SetVolumetricFog { .. } => "setVolumetricFog",
         RenderDiff::SetFogVolume { .. } => "setFogVolume",
         RenderDiff::RemoveFogVolume { .. } => "removeFogVolume",

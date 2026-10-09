@@ -8,11 +8,11 @@ use std::ffi::c_void;
 use csharp_engine_abi::{
     NativeAmbientOcclusionMode, NativeAntialiasing, NativeOperationErrorReceipt,
     NativeRendererSettingRefusal, NativeRendererSettingsApi, NativeRendererSettingsReadout,
-    NativeRendererSettingsRequest, NativeVolumetricFogQuality,
+    NativeRendererSettingsRequest, NativeVolumetricCloudsQuality, NativeVolumetricFogQuality,
 };
 use render_model::{
     AmbientOcclusionMode, AmbientOcclusionSettings, RendererSettingsDescriptor,
-    VolumetricFogQuality,
+    VolumetricCloudsQuality, VolumetricFogQuality,
 };
 
 use crate::composition::ABI_OK;
@@ -46,6 +46,7 @@ impl RuntimeRendererSettingsBridge {
                 clustered_lighting_refusal: NativeRendererSettingRefusal::None,
                 gpu_culling_refusal: NativeRendererSettingRefusal::None,
                 volumetric_fog_refusal: csharp_engine_abi::NativeRendererSettingRefusal::None,
+                volumetric_clouds_refusal: csharp_engine_abi::NativeRendererSettingRefusal::None,
             },
             operation_diagnostics: Default::default(),
         }
@@ -119,6 +120,11 @@ pub(crate) fn renderer_settings_descriptor(
             NativeVolumetricFogQuality::Low => VolumetricFogQuality::Low,
             NativeVolumetricFogQuality::High => VolumetricFogQuality::High,
         },
+        volumetric_clouds: match request.volumetric_clouds {
+            NativeVolumetricCloudsQuality::Off => VolumetricCloudsQuality::Off,
+            NativeVolumetricCloudsQuality::Low => VolumetricCloudsQuality::Low,
+            NativeVolumetricCloudsQuality::High => VolumetricCloudsQuality::High,
+        },
     }
 }
 
@@ -150,6 +156,11 @@ pub fn renderer_settings_request(
             VolumetricFogQuality::Off => NativeVolumetricFogQuality::Off,
             VolumetricFogQuality::Low => NativeVolumetricFogQuality::Low,
             VolumetricFogQuality::High => NativeVolumetricFogQuality::High,
+        },
+        volumetric_clouds: match settings.volumetric_clouds {
+            VolumetricCloudsQuality::Off => NativeVolumetricCloudsQuality::Off,
+            VolumetricCloudsQuality::Low => NativeVolumetricCloudsQuality::Low,
+            VolumetricCloudsQuality::High => NativeVolumetricCloudsQuality::High,
         },
     }
 }

@@ -884,6 +884,14 @@ lights the scene's fog medium and fog volumes
 one without compute shaders draws without it and says so in the
 `RendererSettings` readout.
 
+### Volumetric clouds
+
+`RustyEngineProductVolumetricClouds` is `off` (the default), `low` or `high`
+(`renderer.lighting.volumetricClouds`): the cloud layer drawn raymarched
+with thickness instead of as a sheet
+([volumetric clouds](lighting-and-sky.md#volumetric-clouds)). A software
+adapter draws the flat layer and says so in the `RendererSettings` readout.
+
 ### Screen-space ambient occlusion
 
 `RustyEngineProductAmbientOcclusion` turns ambient occlusion on world views

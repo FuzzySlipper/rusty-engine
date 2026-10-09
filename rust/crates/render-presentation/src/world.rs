@@ -135,6 +135,7 @@ struct RetainedGraphics {
     clouds: Option<CloudsDescriptor>,
     wetness: Option<WetnessDescriptor>,
     volumetric_fog: Option<VolumetricFogDescriptor>,
+    cloud_regions: BTreeMap<u32, CloudRegionDescriptor>,
     fog_volumes: BTreeMap<u32, FogVolumeDescriptor>,
     precipitation: Option<PrecipitationDescriptor>,
     image_effect: Option<ImageEffectDescriptor>,
@@ -277,6 +278,8 @@ impl PresentationWorld {
                 || matches!(&op, RenderDiff::SetWind { wind } if &self.retained.wind == wind)
                 || matches!(&op, RenderDiff::SetClouds { clouds } if &self.retained.clouds == clouds)
                 || matches!(&op, RenderDiff::SetWetness { wetness } if &self.retained.wetness == wetness)
+                || matches!(&op, RenderDiff::SetCloudRegion { id, region } if self.retained.cloud_regions.get(id) == Some(region))
+                || matches!(&op, RenderDiff::RemoveCloudRegion { id } if !self.retained.cloud_regions.contains_key(id))
                 || matches!(&op, RenderDiff::SetVolumetricFog { fog } if self.retained.volumetric_fog.as_ref() == Some(fog))
                 || matches!(&op, RenderDiff::SetFogVolume { id, volume } if self.retained.fog_volumes.get(id) == Some(volume))
                 || matches!(&op, RenderDiff::RemoveFogVolume { id } if !self.retained.fog_volumes.contains_key(id))
@@ -748,6 +751,12 @@ impl PresentationWorld {
         if self.retained.wetness.is_some() {
             ops.push(RenderDiff::SetWetness {
                 wetness: self.retained.wetness,
+            });
+        }
+        for (id, region) in &self.retained.cloud_regions {
+            ops.push(RenderDiff::SetCloudRegion {
+                id: *id,
+                region: *region,
             });
         }
         if let Some(fog) = self.retained.volumetric_fog {
@@ -1322,6 +1331,12 @@ impl PresentationWorld {
             }
             RenderDiff::SetWetness { wetness } => {
                 self.retained.wetness = *wetness;
+            }
+            RenderDiff::SetCloudRegion { id, region } => {
+                self.retained.cloud_regions.insert(*id, *region);
+            }
+            RenderDiff::RemoveCloudRegion { id } => {
+                self.retained.cloud_regions.remove(id);
             }
             RenderDiff::SetVolumetricFog { fog } => {
                 self.retained.volumetric_fog = Some(*fog);

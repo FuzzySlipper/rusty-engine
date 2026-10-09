@@ -625,6 +625,7 @@ impl FrameOutput {
             clustered_lighting_refusal: refusal(readout.clustered_lighting),
             gpu_culling_refusal: refusal(readout.gpu_culling),
             volumetric_fog_refusal: refusal(readout.volumetric_fog),
+            volumetric_clouds_refusal: refusal(readout.volumetric_clouds),
         }
     }
 
@@ -818,6 +819,12 @@ fn settings_statistics(
                 render_model::VolumetricFogQuality::High => "high",
             }
             .to_owned(),
+            volumetric_clouds: match settings.volumetric_clouds {
+                render_model::VolumetricCloudsQuality::Off => "off",
+                render_model::VolumetricCloudsQuality::Low => "low",
+                render_model::VolumetricCloudsQuality::High => "high",
+            }
+            .to_owned(),
         };
     let reason = |refusal: SettingRefusal| match refusal {
         SettingRefusal::NoComputeShaders => "the adapter has no compute shaders",
@@ -837,6 +844,7 @@ fn settings_statistics(
         ("clusteredLighting", readout.clustered_lighting),
         ("gpuCulling", readout.gpu_culling),
         ("volumetricFog", readout.volumetric_fog),
+        ("volumetricClouds", readout.volumetric_clouds),
     ] {
         if let Some(refusal) = refusal {
             refused.insert(setting.to_owned(), reason(refusal).to_owned());

@@ -92,6 +92,8 @@ pub struct ProductHostRendererSettingValues {
     pub gpu_culling: bool,
     /// `off`, `low` or `high`.
     pub volumetric_fog: String,
+    /// `off`, `low` or `high`.
+    pub volumetric_clouds: String,
 }
 
 /// The scene's shadow layers and which requesting lights cast.

@@ -22,6 +22,7 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     // Volumetric fog: a pale medium reaching 80 m; volumes glow violet and drift.
     private static readonly Vector3 FogAlbedo = new(.9f,.9f,.92f), FogGlow = new(1,.4f,1.2f), FogDrift = new(.6f,.1f,.3f);
     private const float FogReach = 80, FogEdge = .4f, FogNoiseCell = 1.5f, FogNoiseStrength = .6f;
+    private static readonly Vector2 StormDrift = new(8,0);
     private const float SkyAmbientIntensity = .3f;
     private const float TorchIntensity = 35, TorchRange = 12, Horizon = 64;
     private static readonly Vector3 TorchPosition = new(3.5f,2.5f,3.5f);
@@ -523,6 +524,23 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         engine.CameraView.SetFogVolume(new((uint)id,FogVolumeShape.Ellipsoid,new(x,y,z),new(radius,radius*.6f,radius),0,Math.Clamp(density,0,4),FogAlbedo,FogGlow*Math.Clamp(glow,0,4),FogEdge,FogNoiseCell,FogNoiseStrength,FogDrift));
         return Inspect();
     }
+    // How the sky's clouds draw (off, low, high), as a player's video option sets it.
+    [DebugCommand("lighting.clouds.volumetric")]
+    public string VolumetricClouds(string quality)
+    {
+        var level = quality switch { "low" => VolumetricCloudsQuality.Low, "high" => VolumetricCloudsQuality.High, _ => VolumetricCloudsQuality.Off };
+        engine.RendererSettings.Set(engine.RendererSettings.Read().Requested with { VolumetricClouds = level });
+        return Inspect();
+    }
+    // A storm: a cloud region over (x, z), radius metres, coverage and darkness 0..1, drifting east.
+    [DebugCommand("lighting.clouds.region")]
+    public string CloudRegion(long id, float x, float z, float radius, float coverage, float darkness)
+    {
+        engine.CameraView.SetCloudRegion(new((uint)id,new(x,z),Math.Max(radius,1),Math.Clamp(coverage,0,1),Math.Clamp(darkness,0,1),StormDrift));
+        return Inspect();
+    }
+    [DebugCommand("lighting.clouds.region.remove")]
+    public string CloudRegionRemove(long id) { engine.CameraView.RemoveCloudRegion(new((uint)id)); return Inspect(); }
     [DebugCommand("lighting.fog.remove")]
     public string FogRemove(long id) { engine.CameraView.RemoveFogVolume(new((uint)id)); return Inspect(); }
     [DebugCommand("lighting.atmosphere")]

@@ -199,6 +199,10 @@ pub struct RendererOptions {
     /// (`volumetric_fog.rs`). Off by default; a device without compute
     /// shaders, or a software one, draws without it.
     pub volumetric_fog: render_model::VolumetricFogQuality,
+    /// Draw the sky's cloud layer raymarched, with thickness (`sky.wgsl`
+    /// `fs_clouds_volumetric`). Off by default; a software adapter draws the
+    /// flat layer.
+    pub volumetric_clouds: render_model::VolumetricCloudsQuality,
 }
 
 impl Default for RendererOptions {
@@ -215,6 +219,7 @@ impl Default for RendererOptions {
             vsync: RendererSettingsDescriptor::DEFAULT.vsync,
             render_scale: RendererSettingsDescriptor::DEFAULT.render_scale,
             volumetric_fog: render_model::VolumetricFogQuality::Off,
+            volumetric_clouds: render_model::VolumetricCloudsQuality::Off,
         }
     }
 }
@@ -249,6 +254,7 @@ impl RendererOptions {
         self.clustered_lighting = settings.clustered_lighting;
         self.gpu_culling = settings.gpu_culling;
         self.volumetric_fog = settings.volumetric_fog;
+        self.volumetric_clouds = settings.volumetric_clouds;
         self
     }
 
@@ -274,6 +280,7 @@ impl RendererOptions {
             clustered_lighting: self.clustered_lighting,
             gpu_culling: self.gpu_culling,
             volumetric_fog: self.volumetric_fog,
+            volumetric_clouds: self.volumetric_clouds,
         }
     }
 }
@@ -315,6 +322,7 @@ pub struct RendererSettingsReadout {
     pub clustered_lighting: Option<SettingRefusal>,
     pub gpu_culling: Option<SettingRefusal>,
     pub volumetric_fog: Option<SettingRefusal>,
+    pub volumetric_clouds: Option<SettingRefusal>,
 }
 
 pub struct Renderer {
@@ -332,6 +340,8 @@ pub struct Renderer {
     unlit_material: wgpu::BindGroup,
     lit_fallback_material: wgpu::BindGroup,
     frame_buffer: wgpu::Buffer,
+    /// The cloud regions (`rusty::view` binding 13), rewritten each frame.
+    cloud_regions_buffer: wgpu::Buffer,
     parts_buffer: wgpu::Buffer,
     lights_buffer: wgpu::Buffer,
     lights: frame::LightRanges,
@@ -425,6 +435,11 @@ impl Renderer {
         let device = &gpu.device;
         let mut layouts = Layouts::new(device);
         let frame_buffer = frame::frame_uniform_buffer(device);
+        let cloud_regions_buffer = frame::storage_buffer(
+            device,
+            "render-wgpu cloud regions",
+            frame::CLOUD_REGION_BYTES * render_model::CloudRegionDescriptor::MAX_REGIONS as u64,
+        );
         let parts_buffer = frame::storage_buffer(device, "render-wgpu parts", INITIAL_PARTS_BYTES);
         let lights_buffer =
             frame::storage_buffer(device, "render-wgpu lights", INITIAL_LIGHTS_BYTES);
@@ -462,6 +477,7 @@ impl Renderer {
                 sky_light: &sky_light,
                 clusters: &light_clusters.clusters,
                 probes: &probes,
+                cloud_regions: &cloud_regions_buffer,
             },
         );
         let caster_bind_group = frame::caster_bind_group(
@@ -542,6 +558,7 @@ impl Renderer {
             unlit_material,
             lit_fallback_material,
             frame_buffer,
+            cloud_regions_buffer,
             parts_buffer,
             lights_buffer,
             lights: Default::default(),
@@ -737,6 +754,13 @@ impl Renderer {
                 SettingRefusal::NoComputeShaders
             }
         });
+        let volumetric_clouds = (requested.volumetric_clouds
+            != render_model::VolumetricCloudsQuality::Off
+            && self.gpu.is_software())
+        .then(|| {
+            effective.volumetric_clouds = render_model::VolumetricCloudsQuality::Off;
+            SettingRefusal::SoftwareAdapter
+        });
         RendererSettingsReadout {
             requested,
             product: self.product_settings,
@@ -748,6 +772,7 @@ impl Renderer {
             clustered_lighting,
             gpu_culling,
             volumetric_fog,
+            volumetric_clouds,
         }
     }
 
@@ -795,6 +820,13 @@ impl Renderer {
     /// it.
     pub fn set_volumetric_fog(&mut self, fog: render_model::VolumetricFogDescriptor) {
         self.tables.volumetric_fog = fog;
+    }
+
+    /// Whether the sky's clouds draw raymarched: asked for, and not on a
+    /// software adapter.
+    pub(crate) fn volumetric_clouds_drawn(&self) -> bool {
+        self.options.volumetric_clouds != render_model::VolumetricCloudsQuality::Off
+            && !self.gpu.is_software()
     }
 
     /// Whether the scene has fog for volumetric fog to light: a medium with

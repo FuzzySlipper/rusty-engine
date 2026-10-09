@@ -52,11 +52,13 @@ struct Frame {
     // (world x, z; unit length), z its strength (0: still), w its gust
     // share.
     wind: vec4<f32>,
-    // The cloud layer (`clouds.wgsl`): x its coverage (0: none), y its
-    // altitude and z the size of one cloud, in metres.
+    // The cloud layer (`clouds.wgsl`): x its coverage (0: none but its
+    // regions), y its altitude and z the size of one cloud, in metres; w the
+    // volumetric slab's thickness, metres. All zero without clouds.
     clouds: vec4<f32>,
     // xy: the cloud layer's drift over the ground (world x, z), in metres
-    // per second.
+    // per second; z: the cloud regions at `rusty::view` binding 13; w: the
+    // volumetric raymarch's steps (0: the flat layer).
     cloud_drift: vec4<f32>,
     // The surfaces' wetness (`lighting.wgsl` `wetted`): x how wet (0 dry to
     // 1 soaked), y how much standing water gathers in puddles (0 to 1).
@@ -102,6 +104,14 @@ struct Light {
     // a shadowed directional light: xyz the view axis its cascades were
     // fitted to; w: first shadow layer + 1, or 0 without a shadow
     extra: vec4<f32>,
+};
+
+// A cloud region (`rusty::clouds` `cloud_coverage`): x, z its centre and
+// z its radius in metres, w its coverage; then its drift (metres per
+// second) and its darkness.
+struct CloudRegion {
+    center_radius: vec4<f32>,
+    drift_darkness: vec4<f32>,
 };
 
 // A shadow layer (render-wgpu `shadows.rs`): its view, and where its map

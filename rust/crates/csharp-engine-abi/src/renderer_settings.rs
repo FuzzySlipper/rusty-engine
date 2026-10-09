@@ -37,6 +37,17 @@ pub enum NativeVolumetricFogQuality {
     High = 2,
 }
 
+/// How the sky's clouds are drawn: the flat layer, or raymarched clouds
+/// with thickness at low or high quality. A software adapter draws the flat
+/// layer.
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativeVolumetricCloudsQuality {
+    Off = 0,
+    Low = 1,
+    High = 2,
+}
+
 /// The renderer's settings: which pipeline features draw and at what
 /// quality. The product manifest supplies the initial values
 /// (`RustyEngineProduct*` properties); `Set` replaces them all from the next
@@ -72,6 +83,8 @@ pub struct NativeRendererSettingsRequest {
     /// Light the fog medium and fog volumes (`CameraView.SetVolumetricFog`,
     /// `SetFogVolume`) in a froxel grid.
     pub volumetric_fog: NativeVolumetricFogQuality,
+    /// Draw the cloud layer raymarched, with thickness.
+    pub volumetric_clouds: NativeVolumetricCloudsQuality,
 }
 
 /// Why the device draws a setting differently from the request.
@@ -105,6 +118,7 @@ pub struct NativeRendererSettingsReadout {
     pub clustered_lighting_refusal: NativeRendererSettingRefusal,
     pub gpu_culling_refusal: NativeRendererSettingRefusal,
     pub volumetric_fog_refusal: NativeRendererSettingRefusal,
+    pub volumetric_clouds_refusal: NativeRendererSettingRefusal,
 }
 
 pub type NativeReadRendererSettings = unsafe extern "C" fn(

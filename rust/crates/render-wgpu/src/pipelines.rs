@@ -69,6 +69,8 @@ pub(crate) struct Pipelines {
     pub sky: wgpu::RenderPipeline,
     pub sun: wgpu::RenderPipeline,
     pub clouds: wgpu::RenderPipeline,
+    /// The cloud layer raymarched, with thickness (`fs_clouds_volumetric`).
+    pub clouds_volumetric: wgpu::RenderPipeline,
     world: HashMap<(Features, Pass), wgpu::RenderPipeline>,
 }
 
@@ -233,6 +235,8 @@ impl Layouts {
             // along its depth, and its sampler.
             probe_texture_entry(11),
             sampler_entry(12),
+            // The cloud regions (`clouds.wgsl`).
+            storage_entry(13),
         ]
         .map(|mut entry| {
             entry.visibility |= wgpu::ShaderStages::COMPUTE;
@@ -512,6 +516,24 @@ impl Layouts {
                 "render-wgpu clouds",
                 &self.sky_pipeline,
                 "fs_clouds",
+                Some(wgpu::BlendState {
+                    color: wgpu::BlendComponent {
+                        src_factor: wgpu::BlendFactor::One,
+                        dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                        operation: wgpu::BlendOperation::Add,
+                    },
+                    alpha: wgpu::BlendComponent {
+                        src_factor: wgpu::BlendFactor::Zero,
+                        dst_factor: wgpu::BlendFactor::One,
+                        operation: wgpu::BlendOperation::Add,
+                    },
+                }),
+            ),
+            // The raymarched clouds, blended as the flat layer.
+            clouds_volumetric: background(
+                "render-wgpu volumetric clouds",
+                &self.sky_pipeline,
+                "fs_clouds_volumetric",
                 Some(wgpu::BlendState {
                     color: wgpu::BlendComponent {
                         src_factor: wgpu::BlendFactor::One,

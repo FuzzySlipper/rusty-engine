@@ -85,6 +85,8 @@ pub(crate) struct RuntimeCameraViewCall {
     /// The volumetric fog medium, and fog volumes placed (`Some`) or removed
     /// (`None`) in call order.
     pub(crate) volumetric_fog: Option<render_model::VolumetricFogDescriptor>,
+    /// Cloud regions placed (`Some`) or removed (`None`) in call order.
+    pub(crate) cloud_regions: Vec<(u32, Option<render_model::CloudRegionDescriptor>)>,
     pub(crate) fog_volumes: Vec<(u32, Option<render_model::FogVolumeDescriptor>)>,
     pub(crate) precipitation: Option<Option<PrecipitationDescriptor>>,
     /// The image effect as the product asked for it; its resources are
@@ -169,6 +171,7 @@ impl RuntimeCameraViewBridge {
             clouds: None,
             wetness: None,
             volumetric_fog: None,
+            cloud_regions: Vec::new(),
             fog_volumes: Vec::new(),
             precipitation: None,
             image_effect: None,
@@ -231,6 +234,7 @@ impl RuntimeCameraViewBridge {
             clouds: None,
             wetness: None,
             volumetric_fog: None,
+            cloud_regions: Vec::new(),
             fog_volumes: Vec::new(),
             precipitation: None,
             image_effect: None,
@@ -530,6 +534,7 @@ impl RuntimeCameraViewBridge {
             clouds: None,
             wetness: None,
             volumetric_fog: None,
+            cloud_regions: Vec::new(),
             fog_volumes: Vec::new(),
             precipitation: None,
             image_effect: None,
@@ -884,6 +889,37 @@ impl RuntimeCameraViewBridge {
             ));
         }
         self.staged_mut()?.wetness = Some((request.wetness > 0.0).then_some(wetness));
+        Ok(())
+    }
+
+    fn set_cloud_region(
+        &mut self,
+        request: NativeCloudRegionRequest,
+    ) -> Result<(), CsharpEngineServicesError> {
+        let region = render_model::CloudRegionDescriptor {
+            center: [request.center.x, request.center.y],
+            radius: request.radius,
+            coverage: request.coverage,
+            darkness: request.darkness,
+            drift: [request.drift.x, request.drift.y],
+        };
+        if !region.valid() {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_CLOUD_REGION",
+                "a cloud region needs a finite centre and drift, a radius above 0 and at most 1000 km, and coverage and darkness within 0 to 1",
+            ));
+        }
+        self.staged_mut()?
+            .cloud_regions
+            .push((request.id, Some(region)));
+        Ok(())
+    }
+
+    fn remove_cloud_region(
+        &mut self,
+        request: NativeCloudRegionRemoval,
+    ) -> Result<(), CsharpEngineServicesError> {
+        self.staged_mut()?.cloud_regions.push((request.id, None));
         Ok(())
     }
 
@@ -1363,6 +1399,15 @@ pub(crate) fn environment_frame(
     }
     if let Some(wetness) = call.wetness {
         operations.push(RenderDiff::SetWetness { wetness });
+    }
+    for (id, region) in &call.cloud_regions {
+        operations.push(match region {
+            Some(region) => RenderDiff::SetCloudRegion {
+                id: *id,
+                region: *region,
+            },
+            None => RenderDiff::RemoveCloudRegion { id: *id },
+        });
     }
     if let Some(fog) = call.volumetric_fog {
         operations.push(RenderDiff::SetVolumetricFog { fog });
@@ -2063,6 +2108,48 @@ pub(crate) unsafe extern "C" fn set_wetness(
     }
     let bridge = unsafe { &mut *context.cast::<RuntimeCameraViewBridge>() };
     match bridge.set_wetness(unsafe { *request }) {
+        Ok(()) => ABI_OK,
+        Err(error) => {
+            bridge.operation_diagnostics.retain(&error, operation_error);
+            0
+        }
+    }
+}
+
+pub(crate) unsafe extern "C" fn set_cloud_region(
+    context: *mut c_void,
+    request: *const NativeCloudRegionRequest,
+    operation_error: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    if !operation_error.is_null() {
+        unsafe { *operation_error = std::mem::zeroed() };
+    }
+    if context.is_null() || request.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeCameraViewBridge>() };
+    match bridge.set_cloud_region(unsafe { *request }) {
+        Ok(()) => ABI_OK,
+        Err(error) => {
+            bridge.operation_diagnostics.retain(&error, operation_error);
+            0
+        }
+    }
+}
+
+pub(crate) unsafe extern "C" fn remove_cloud_region(
+    context: *mut c_void,
+    request: *const NativeCloudRegionRemoval,
+    operation_error: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    if !operation_error.is_null() {
+        unsafe { *operation_error = std::mem::zeroed() };
+    }
+    if context.is_null() || request.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeCameraViewBridge>() };
+    match bridge.remove_cloud_region(unsafe { *request }) {
         Ok(()) => ABI_OK,
         Err(error) => {
             bridge.operation_diagnostics.retain(&error, operation_error);

@@ -15,8 +15,8 @@ use std::{
 };
 
 use render_model::{
-    AmbientOcclusionMode, RendererSettingKind, RendererSettingsDescriptor, VolumetricFogQuality,
-    RENDERER_SETTING_OPTIONS,
+    AmbientOcclusionMode, RendererSettingKind, RendererSettingsDescriptor, VolumetricCloudsQuality,
+    VolumetricFogQuality, RENDERER_SETTING_OPTIONS,
 };
 
 /// The stand-in fog medium for a scene with none: density and anisotropy.
@@ -249,6 +249,15 @@ pub fn plan(
                 });
                 push(format!("{id}-low"), labelled(id, "low"), args, true, note);
             }
+            "volumetricClouds" if settings.volumetric_clouds == VolumetricCloudsQuality::Off => {
+                push(
+                    format!("{id}-low"),
+                    labelled(id, "low"),
+                    choose(id, "low"),
+                    true,
+                    Some("Draws only where the scene has a cloud layer or regions.".to_owned()),
+                )
+            }
             "clusteredLighting" if !settings.clustered_lighting => push(
                 format!("{id}-true"),
                 option.label.to_owned(),
@@ -280,7 +289,6 @@ pub fn plan(
             ),
         );
     }
-    drop(push);
     if variants.len() > 1 {
         variants.push(GalleryVariant {
             id: "everything".to_owned(),
@@ -564,6 +572,7 @@ mod tests {
                 "ambientOcclusion-screenSpace",
                 "ambientOcclusion-distanceField",
                 "volumetricFog-low",
+                "volumetricClouds-low",
                 "clusteredLighting-true",
                 "gpuCulling-true",
                 "indirectLight",
@@ -579,6 +588,7 @@ mod tests {
             clustered_lighting: true,
             gpu_culling: true,
             volumetric_fog: VolumetricFogQuality::High,
+            volumetric_clouds: VolumetricCloudsQuality::High,
             ..RendererSettingsDescriptor::DEFAULT
         };
         settings.ambient_occlusion.mode = AmbientOcclusionMode::ScreenSpace;

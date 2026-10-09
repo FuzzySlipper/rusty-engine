@@ -438,6 +438,31 @@ pub struct NativeWetnessRequest {
     pub puddles: f32,
 }
 
+/// A cloud region, placed or replaced by `id`: where the sky holds more
+/// cloud than the layer's coverage, such as a weather front's storm.
+/// `coverage` (0 to 1) fills a disc `radius` metres across around `center`
+/// (world x, z), fading over its outer third and drifting at `drift` metres
+/// per second; `darkness` (0 to 1) darkens its clouds' undersides. The cloud
+/// layer, flat or volumetric, and its shade on the ground take the most
+/// cloud of the layer and every region. At most 32 regions.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeCloudRegionRequest {
+    pub id: u32,
+    pub center: NativeVec2,
+    pub radius: f32,
+    pub coverage: f32,
+    pub darkness: f32,
+    pub drift: NativeVec2,
+}
+
+/// Removes cloud region `id`; removing one not placed does nothing.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeCloudRegionRemoval {
+    pub id: u32,
+}
+
 /// The medium volumetric fog lights, while the renderer's `VolumetricFog`
 /// setting is on. `density` (0 to 1, extinction per metre at `base_height`;
 /// 0 fills no air, so only fog volumes draw) falls by e every
@@ -470,8 +495,8 @@ pub enum NativeFogVolumeShape {
 /// volumetric fog adds to its medium, in the renderer's world space (as an
 /// indirect light volume's centre). `half_extents` (above 0, at most 10 km),
 /// turned `yaw_degrees` about the vertical; `density` (0 to 4) at its heart,
-/// fading to nothing over `edge` (0 to 1) of its half extent; `albedo` (0 to
-/// 1) and `emission` (0 to 16, light per unit of density); 3D noise cells
+/// fading to nothing over `edge` (0 to 1) of its half extent; `albedo` (0
+/// to 1) and `emission` (0 to 16, light per unit of density); 3D noise cells
 /// `noise_scale` metres across (0: none) thin it by `noise_strength` (0 to 1)
 /// as they drift at `noise_velocity` metres per second. At most 64 volumes.
 #[repr(C)]

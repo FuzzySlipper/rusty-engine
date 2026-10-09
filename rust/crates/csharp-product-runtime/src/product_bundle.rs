@@ -576,6 +576,9 @@ struct ManifestRendererLighting {
     /// `off`, `low` or `high`; absent is off.
     #[serde(default)]
     volumetric_fog: Option<String>,
+    /// `off`, `low` or `high`; absent is off.
+    #[serde(default)]
+    volumetric_clouds: Option<String>,
     #[serde(default)]
     default_lights: ManifestDefaultLights,
 }
@@ -711,6 +714,17 @@ impl ProductRendererSettings {
                 ))
             }
         };
+        let volumetric_clouds = match value.lighting.volumetric_clouds.as_deref() {
+            None | Some("off") => render_model::VolumetricCloudsQuality::Off,
+            Some("low") => render_model::VolumetricCloudsQuality::Low,
+            Some("high") => render_model::VolumetricCloudsQuality::High,
+            Some(_) => {
+                return Err(field_error(
+                    "renderer.lighting.volumetricClouds",
+                    "must be off, low or high",
+                ))
+            }
+        };
         let render_scale = value.render_scale.unwrap_or(1.0);
         if !render_scale.is_finite()
             || !(RendererSettingsDescriptor::MIN_RENDER_SCALE..=1.0).contains(&render_scale)
@@ -734,6 +748,7 @@ impl ProductRendererSettings {
                 )?,
                 gpu_culling: switch(value.gpu_culling.as_deref(), "renderer.gpuCulling")?,
                 volumetric_fog,
+                volumetric_clouds,
             },
             world: ProductDefaultLights::parse(
                 value.lighting.default_lights.world,

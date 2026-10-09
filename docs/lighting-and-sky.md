@@ -309,12 +309,13 @@ only, and a damaged file is reported and ignored.
 | `ambientOcclusionStrength` | Lighting | 0 to 2 |
 | `ambientOcclusionRadius` | Lighting | 0.25 to 2 m |
 | `volumetricFog` | Lighting | `off`, `low`, `high` |
+| `volumetricClouds` | Lighting | `off`, `low`, `high` |
 | `clusteredLighting` | Advanced | on or off |
 | `gpuCulling` | Advanced | on or off |
 
 The presets Low, Medium, High and Ultra set render scale, antialiasing,
-shadows, their budget, the occlusion mode and volumetric fog (off, off, low,
-high), over the player's other choices. A setting the device refuses is shown with the reason, from the
+shadows, their budget, the occlusion mode, and volumetric fog and clouds
+(off, off, low, high), over the player's other choices. A setting the device refuses is shown with the reason, from the
 same refusals the readout carries. The panel's route,
 `/__rusty/product/runtime/video-options`, answers `GET` with the catalogue
 (each option's `value` drawn, `requested`, `gameDefault`, `chosen` and
@@ -879,6 +880,53 @@ engine.CameraView.SetClouds(new(Coverage: .6f, Drift: new Vector2(8, 3),
   sample per lit fragment facing a directional light, only while the layer
   has coverage. On a CraftSurvive meadow at 1920×1080 it added about 0.2 ms
   to the world pass on an RX 9070 XT.
+
+### Cloud regions
+
+A cloud region is more cloud in one place: a weather front's storm over the
+plain, a squall the player can see coming.
+
+```csharp
+engine.CameraView.SetCloudRegion(new(Id: 1, Center: new(4000, -2500), Radius: 3000,
+    Coverage: .95f, Darkness: .6f, Drift: new(6, 2)));
+engine.CameraView.RemoveCloudRegion(new(1));
+```
+
+- Within two thirds of its `Radius` (metres) of `Center` (world x, z) the sky
+  holds at least the region's `Coverage`; past that it fades to the layer's
+  own. It drifts at `Drift` metres per second from where it was placed, so
+  move it by placing it again. `Darkness` (0 to 1) darkens its clouds'
+  undersides and lets even less sun through them.
+- The flat layer, the volumetric clouds and the shade on the ground all read
+  it, so a storm overhead shades the ground under it. A region needs no layer
+  coverage: with none set, it draws under a default layer 1500 m up with
+  600 m clouds. At most 32 regions; they are retained camera-view state.
+
+### Volumetric clouds
+
+With the renderer's `VolumetricClouds` setting `Low` or `High`
+(`RustyEngineProductVolumetricClouds`, `RendererSettings`, the player's
+[video options](#video-options)), the cloud layer is raymarched through a
+slab from its altitude up by six tenths of it, instead of drawn as a sheet:
+billows of 3D noise at the cloud size, kept where they rise above the sky's
+coverage (the layer's, raised by its regions), with flat bottoms thinning
+toward the top. Each sample is lit by the sun through the cloud between it and
+the sun (Beer's law with a multiple-scattering term, a forward lobe toward the
+sun and darker edges), and by the panorama behind it; a region's darkness
+darkens it. The ground's shade samples the same density a third of the way
+up the slab, so a cloud and its shadow agree.
+
+- `Low` takes 12 steps a ray and `High` 24, with two steps toward the sun; a
+  per-pixel offset turns the steps' banding into fine noise. The clouds reach
+  30 km and fade toward the horizon as the flat layer does.
+- It is timed as the `clouds` pass. On an RX 9070 XT at 1280×720 a view
+  filled with sky costs about 1.0 ms (`Low`) and 1.9 ms (`High`); a
+  CraftSurvive view with a strip of sky about 0.2 to 0.5 ms. Off draws the
+  flat layer exactly as before; a software adapter refuses it
+  (`SoftwareAdapter`) and draws the flat layer.
+- Seen low across the sky, rays cross many clouds, so a given coverage looks
+  fuller than the flat layer's. There is no temporal filtering, and the
+  sky's light and reflections still see only the panorama.
 
 ## Wet surfaces
 

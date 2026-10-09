@@ -265,7 +265,11 @@ renderScale: number, vsync: boolean, clusteredLighting: boolean, gpuCulling: boo
 /**
  * `off`, `low` or `high`.
  */
-volumetricFog: string, };
+volumetricFog: string, 
+/**
+ * `off`, `low` or `high`.
+ */
+volumetricClouds: string, };
 
 /**
  * The renderer settings (`RendererSettings`): what the product or its

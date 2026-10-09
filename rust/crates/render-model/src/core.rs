@@ -292,6 +292,38 @@ impl WetnessDescriptor {
     }
 }
 
+/// A cloud region (`CameraView.SetCloudRegion`): where the sky holds more
+/// cloud than the layer's coverage, such as a weather front's storm. Its
+/// coverage (0 to 1) fills a disc of `radius` metres around `center` (world
+/// x, z), fading over its outer third, drifting at `drift` metres per second;
+/// `darkness` (0 to 1) darkens its clouds' undersides, for a storm. The cloud
+/// layer and its shade on the ground take the most cloud of the layer and
+/// every region, flat or volumetric.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CloudRegionDescriptor {
+    pub center: [f32; 2],
+    pub radius: f32,
+    pub coverage: f32,
+    pub darkness: f32,
+    pub drift: [f32; 2],
+}
+
+impl CloudRegionDescriptor {
+    /// The most cloud regions a scene holds.
+    pub const MAX_REGIONS: usize = 32;
+
+    pub fn valid(&self) -> bool {
+        let finite = |values: &[f32]| values.iter().all(|value| value.is_finite());
+        finite(&self.center)
+            && finite(&self.drift)
+            && self.radius > 0.0
+            && self.radius <= 1_000_000.0
+            && (0.0..=1.0).contains(&self.coverage)
+            && (0.0..=1.0).contains(&self.darkness)
+    }
+}
+
 /// The participating medium volumetric fog lights (`CameraView.SetVolumetricFog`):
 /// how much fog there is everywhere, what colour it scatters and which way,
 /// and how far the fog grid reaches. Fog volumes (`FogVolumeDescriptor`) add
@@ -680,6 +712,17 @@ pub enum VolumetricFogQuality {
     High,
 }
 
+/// How the sky's clouds are drawn (`RendererSettingsDescriptor`): the flat
+/// layer, or raymarched clouds with thickness at low or high quality.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum VolumetricCloudsQuality {
+    #[default]
+    Off,
+    Low,
+    High,
+}
+
 /// Ambient occlusion as a product selects it.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -745,6 +788,11 @@ pub struct RendererSettingsDescriptor {
     /// before it existed have it off.
     #[serde(default)]
     pub volumetric_fog: VolumetricFogQuality,
+    /// Draw the cloud layer as raymarched clouds with thickness, lit
+    /// through themselves, instead of a flat sheet. Settings written before
+    /// it existed have it off.
+    #[serde(default)]
+    pub volumetric_clouds: VolumetricCloudsQuality,
 }
 
 impl RendererSettingsDescriptor {
@@ -763,6 +811,7 @@ impl RendererSettingsDescriptor {
         clustered_lighting: false,
         gpu_culling: false,
         volumetric_fog: VolumetricFogQuality::Off,
+        volumetric_clouds: VolumetricCloudsQuality::Off,
     };
 
     /// Valid occlusion values, a supported sample count and a render scale
@@ -1169,6 +1218,15 @@ pub enum RenderDiff {
     SetWetness {
         wetness: Option<WetnessDescriptor>,
     },
+    /// Places or replaces cloud region `id`.
+    SetCloudRegion {
+        id: u32,
+        region: CloudRegionDescriptor,
+    },
+    /// Removes cloud region `id`.
+    RemoveCloudRegion {
+        id: u32,
+    },
     /// Selects the volumetric fog's medium.
     SetVolumetricFog {
         fog: VolumetricFogDescriptor,
@@ -1378,6 +1436,10 @@ impl RenderDiff {
                 wetness: Some(wetness),
             } if !wetness.valid() => Err(RenderOperationError::Wetness),
             Self::SetWetness { .. } => Ok(()),
+            Self::SetCloudRegion { region, .. } if !region.valid() => {
+                Err(RenderOperationError::CloudRegion)
+            }
+            Self::SetCloudRegion { .. } | Self::RemoveCloudRegion { .. } => Ok(()),
             Self::SetVolumetricFog { fog } if !fog.valid() => {
                 Err(RenderOperationError::VolumetricFog)
             }
@@ -1515,6 +1577,8 @@ impl RenderDiff {
             | Self::SetWind { .. }
             | Self::SetClouds { .. }
             | Self::SetWetness { .. }
+            | Self::SetCloudRegion { .. }
+            | Self::RemoveCloudRegion { .. }
             | Self::SetVolumetricFog { .. }
             | Self::SetFogVolume { .. }
             | Self::RemoveFogVolume { .. }
@@ -1569,6 +1633,7 @@ pub enum RenderOperationError {
     Wetness,
     VolumetricFog,
     FogVolume,
+    CloudRegion,
     Precipitation,
     ImageEffect,
     IndirectLight,
@@ -1652,6 +1717,8 @@ impl RenderFrameDiff {
                 | RenderDiff::SetWind { .. }
                 | RenderDiff::SetClouds { .. }
                 | RenderDiff::SetWetness { .. }
+                | RenderDiff::SetCloudRegion { .. }
+                | RenderDiff::RemoveCloudRegion { .. }
                 | RenderDiff::SetVolumetricFog { .. }
                 | RenderDiff::SetFogVolume { .. }
                 | RenderDiff::RemoveFogVolume { .. }

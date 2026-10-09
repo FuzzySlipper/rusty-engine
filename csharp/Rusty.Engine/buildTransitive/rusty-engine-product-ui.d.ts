@@ -661,6 +661,10 @@ declare module "@rusty-engine/live-debug/internal/live-debug-client/src/generate
          * `off`, `low` or `high`.
          */
         volumetricFog: string;
+        /**
+         * `off`, `low` or `high`.
+         */
+        volumetricClouds: string;
     };
     /**
      * The renderer settings (`RendererSettings`): what the product or its

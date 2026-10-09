@@ -1,11 +1,11 @@
 // The equirectangular sky behind the world pass, blending two panoramas;
 // the sun's disc and halo (`Frame.sun`, `Frame.atmosphere`), added over the
 // sky or clear colour when the atmosphere draws them; and the cloud layer
-// over both (`fs_clouds`).
+// over both, flat (`fs_clouds`) or raymarched (`fs_clouds_volumetric`).
 
 #import rusty::types::PI
 #import rusty::view::frame
-#import rusty::clouds::cloud_cover
+#import rusty::clouds::{cloud_cover, cloud_coverage, cloud_density}
 
 struct SkyUniform {
     // x: blend amount toward the second panorama
@@ -84,11 +84,13 @@ fn fs_clouds(in: SkyOut) -> @location(0) vec4<f32> {
     let ground = frame.camera.xz + direction.xz * (sky.clouds.y / rise);
     let p = (ground - sky.cloud_drift.xy * frame.time.x) / sky.clouds.z;
     let detail = smoothstep(0.04, 0.4, direction.y);
-    let cover = cloud_cover(p, detail, sky.clouds.x, 4);
+    // The layer's coverage raised by the regions over this point.
+    let coverage = cloud_coverage(ground);
+    let cover = cloud_cover(p, detail, coverage.x, 4);
     // Toward the sun across the layer, in clouds.
     let across = frame.sun.xz;
     let toward = across / max(length(across), 1e-3) * 0.35;
-    let shadowed = cloud_cover(p + toward * 0.75, detail, sky.clouds.x, 4);
+    let shadowed = cloud_cover(p + toward * 0.75, detail, coverage.x, 4);
     let sun_up = smoothstep(-0.05, 0.15, frame.sun.y) * frame.sun.w;
     let sun = frame.sun_color.rgb * min(frame.sun_color.w, 1.5) * sun_up;
     let edge = 1.0 + 1.5 * pow(max(dot(direction, frame.sun.xyz), 0.0), 8.0) * (1.0 - cover);
@@ -100,9 +102,94 @@ fn fs_clouds(in: SkyOut) -> @location(0) vec4<f32> {
     // The sky lights them too, but mostly as grey: their colour is the sun's.
     let grey = dot(behind, vec3<f32>(0.299, 0.587, 0.114));
     let ambient = mix(vec3<f32>(grey), behind, 0.5) * 0.5;
-    let color = sky.cloud_color.rgb * (direct * 0.9 + ambient);
+    // A storm region's clouds are darker underneath.
+    let color = sky.cloud_color.rgb * (direct * 0.9 + ambient) * (1.0 - 0.6 * coverage.y);
     let alpha = cover * smoothstep(0.0, 0.25, direction.y);
     return vec4<f32>(color * alpha, alpha);
+}
+
+// Extinction per metre of the volumetric clouds at full density.
+const CLOUD_EXTINCTION: f32 = 0.004;
+// Light scattered many times inside a cloud reaches deeper than Beer's law
+// alone lets it: a second, weaker, longer-reaching term (after Wrenninge).
+const CLOUD_MULTIPLE_SCATTER: f32 = 0.35;
+const CLOUD_MULTIPLE_REACH: f32 = 0.2;
+// Steps of the march toward the sun, for each sample's own shadow.
+const CLOUD_LIGHT_STEPS: i32 = 2;
+// How far the clouds reach before they fade into the panorama, metres.
+const CLOUD_REACH: f32 = 30000.0;
+
+// The cloud layer raymarched through a slab from its altitude up by its
+// thickness (`Frame.clouds`), premultiplied over the background as the flat
+// layer: each sample's density (`rusty::clouds::cloud_density`) is lit by
+// the sun through the cloud between it and the sun (Beer's law, with a
+// forward-scattering lobe and a dark-edge powder term) and by the sky behind
+// it, and dims what lies past it. Toward the horizon the clouds fade into
+// the panorama, as the flat layer's do. Steps per ray: `Frame.cloud_drift.w`.
+@fragment
+fn fs_clouds_volumetric(in: SkyOut) -> @location(0) vec4<f32> {
+    let direction = view_direction(in.ndc);
+    if direction.y <= 0.01 {
+        return vec4<f32>(0.0);
+    }
+    let base = frame.clouds.y;
+    let top = base + frame.clouds.w;
+    let camera = frame.camera.xyz;
+    let start = max((base - camera.y) / direction.y, 0.0);
+    let end = min(max((top - camera.y) / direction.y, 0.0), CLOUD_REACH);
+    if end <= start {
+        return vec4<f32>(0.0);
+    }
+    let steps = max(i32(frame.cloud_drift.w), 1);
+    let step = (end - start) / f32(steps);
+    // A per-pixel offset breaks the steps' banding into fine noise.
+    let jitter = fract(sin(dot(in.clip.xy, vec2<f32>(12.9898, 78.233))) * 43758.5453);
+    let sun_up = smoothstep(-0.05, 0.15, frame.sun.y) * frame.sun.w;
+    let sun = frame.sun_color.rgb * min(frame.sun_color.w, 1.5) * sun_up;
+    let toward_sun = normalize(frame.sun.xyz + vec3<f32>(0.0, 1e-3, 0.0));
+    let cosine = dot(direction, toward_sun);
+    // Forward scattering toward the sun, with some back scatter.
+    let g = 0.6;
+    let forward = (1.0 - g * g) / pow(1.0 + g * g - 2.0 * g * cosine, 1.5);
+    let lobe = mix(1.0, min(forward, 4.0), 0.25);
+    let light_step = frame.clouds.w * 0.18;
+    // The sky a little above the horizon, at its coarsest, lights them too.
+    let uv = panorama_uv(normalize(vec3<f32>(direction.x, max(direction.y, 0.05) + 0.2, direction.z)));
+    let behind = mix(textureSampleLevel(sky_first, sky_first_sampler, uv, 0.0).rgb,
+        textureSampleLevel(sky_second, sky_second_sampler, uv, 0.0).rgb, sky.amount.x);
+    let grey = dot(behind, vec3<f32>(0.299, 0.587, 0.114));
+    let ambient = mix(vec3<f32>(grey), behind, 0.5) * 1.05;
+    var transmittance = 1.0;
+    var color = vec3<f32>(0.0);
+    for (var index = 0; index < steps; index = index + 1) {
+        let t = start + (f32(index) + jitter) * step;
+        let position = camera + direction * t;
+        let density = cloud_density(position, 2);
+        if density <= 0.002 {
+            continue;
+        }
+        var optical = 0.0;
+        for (var k = 1; k <= CLOUD_LIGHT_STEPS; k = k + 1) {
+            optical += cloud_density(position + toward_sun * light_step * f32(k), 1) * light_step;
+        }
+        let through = exp(-CLOUD_EXTINCTION * optical)
+            + CLOUD_MULTIPLE_SCATTER * exp(-CLOUD_EXTINCTION * CLOUD_MULTIPLE_REACH * optical);
+        let extinction = density * CLOUD_EXTINCTION;
+        let powder = 1.0 - exp(-2.0 * extinction * step);
+        let height = clamp((position.y - base) / max(frame.clouds.w, 1.0), 0.0, 1.0);
+        let darkness = cloud_coverage(position.xz).y;
+        let lit = (sun * through * lobe * mix(0.7, 1.0, powder) * 0.45
+            + ambient * mix(0.6, 0.9, height)) * (1.0 - 0.6 * darkness);
+        let passes = exp(-extinction * step);
+        color += transmittance * lit * (1.0 - passes);
+        transmittance *= passes;
+        if transmittance < 0.02 {
+            break;
+        }
+    }
+    let fade = smoothstep(0.02, 0.3, direction.y) * (1.0 - smoothstep(CLOUD_REACH * 0.5, CLOUD_REACH, start));
+    let alpha = (1.0 - transmittance) * fade;
+    return vec4<f32>(sky.cloud_color.rgb * color * fade, alpha);
 }
 
 // Added onto the background (one-one blending).

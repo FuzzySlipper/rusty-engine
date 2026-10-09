@@ -4,7 +4,7 @@
 // shadow caster pass binds `parts`, `instances` and `shadow_views` at the
 // same numbers (`Layouts::casters`).
 
-#import rusty::types::{Frame, Part, Light, ShadowView}
+#import rusty::types::{Frame, Part, Light, ShadowView, CloudRegion}
 
 @group(0) @binding(0) var<uniform> frame: Frame;
 @group(0) @binding(1) var<storage, read> parts: array<Part>;
@@ -32,6 +32,8 @@
 // `Frame.probe_grid` place it.
 @group(0) @binding(11) var probes: texture_3d<f32>;
 @group(0) @binding(12) var probes_sampler: sampler;
+// The cloud regions (`rusty::clouds`), `frame.cloud_drift.z` of them.
+@group(0) @binding(13) var<storage, read> cloud_regions: array<CloudRegion>;
 
 // Coverage for a masked surface's pixel (MASK, `fs_world_opaque`): the
 // alpha sharpened about the cutoff over one pixel's change of it, as a share

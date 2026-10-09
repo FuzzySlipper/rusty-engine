@@ -947,6 +947,7 @@ impl Renderer {
                 sky_light: &self.sky_light,
                 clusters: &self.light_clusters.clusters,
                 probes: &self.probes,
+                cloud_regions: &self.cloud_regions_buffer,
             },
         );
         self.caster_bind_group = caster_bind_group(
@@ -1475,7 +1476,7 @@ impl Renderer {
         };
         // The blend amount, then the cloud layer's coverage, altitude and
         // size, drift and tint (`sky.wgsl` SkyUniform).
-        let clouds = self.tables.clouds;
+        let clouds = drawn_clouds(self.tables.clouds, self.tables.cloud_regions.len());
         let mut values = [0.0f32; 16];
         values[0] = amount;
         if let Some(clouds) = clouds {
@@ -1654,9 +1655,40 @@ impl Renderer {
         for value in wind_uniform(self.tables.wind) {
             bytes.extend_from_slice(&value.to_le_bytes());
         }
-        // The cloud layer shades the directional lights (`clouds.wgsl`).
-        for value in clouds_uniform(self.tables.clouds) {
+        // The cloud layer shades the directional lights (`clouds.wgsl`), and
+        // its regions (binding 13).
+        let steps = if self.volumetric_clouds_drawn() {
+            match self.options.volumetric_clouds {
+                render_model::VolumetricCloudsQuality::High => VOLUMETRIC_CLOUD_STEPS[1],
+                _ => VOLUMETRIC_CLOUD_STEPS[0],
+            }
+        } else {
+            0.0
+        };
+        for value in clouds_uniform(self.tables.clouds, self.tables.cloud_regions.len(), steps) {
             bytes.extend_from_slice(&value.to_le_bytes());
+        }
+        if !self.tables.cloud_regions.is_empty() {
+            let rows: Vec<[f32; 8]> = self
+                .tables
+                .cloud_regions
+                .values()
+                .map(|region| {
+                    [
+                        region.center[0],
+                        region.center[1],
+                        region.radius,
+                        region.coverage,
+                        region.drift[0],
+                        region.drift[1],
+                        region.darkness,
+                        0.0,
+                    ]
+                })
+                .collect();
+            self.gpu
+                .queue
+                .write_buffer(&self.cloud_regions_buffer, 0, bytemuck::cast_slice(&rows));
         }
         // How wet the surfaces are (`lighting.wgsl` `wetted`).
         let wetness = self
@@ -1887,10 +1919,8 @@ impl Renderer {
             // The cloud layer over the panorama and the sun, in a pass of
             // its own so `gpu.passes` times it. Without cover there is no
             // pass and the sky is drawn as before.
-            let covered = self
-                .tables
-                .clouds
-                .is_some_and(|clouds| clouds.coverage > 0.0);
+            let covered =
+                drawn_clouds(self.tables.clouds, self.tables.cloud_regions.len()).is_some();
             if let (true, true, Some(sky)) = (view.sky, covered, &self.sky_bind_group) {
                 let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("render-wgpu clouds"),
@@ -1910,7 +1940,11 @@ impl Renderer {
                 });
                 in_viewport(&mut pass);
                 pass.set_bind_group(0, &self.frame_bind_group, &[]);
-                pass.set_pipeline(&self.pipelines[sky_index].clouds);
+                pass.set_pipeline(if self.volumetric_clouds_drawn() {
+                    &self.pipelines[sky_index].clouds_volumetric
+                } else {
+                    &self.pipelines[sky_index].clouds
+                });
                 pass.set_bind_group(1, sky, &[]);
                 pass.draw(0..3, 0..1);
                 drop(pass);
@@ -2324,6 +2358,7 @@ pub(crate) struct FrameBindings<'a> {
     pub sky_light: &'a crate::sky_light::SkyLight,
     pub clusters: &'a wgpu::Buffer,
     pub probes: &'a crate::probes::ProbeVolume,
+    pub cloud_regions: &'a wgpu::Buffer,
 }
 
 pub(crate) fn frame_bind_group(
@@ -2386,6 +2421,10 @@ pub(crate) fn frame_bind_group(
             wgpu::BindGroupEntry {
                 binding: 12,
                 resource: wgpu::BindingResource::Sampler(&bindings.probes.sampler),
+            },
+            wgpu::BindGroupEntry {
+                binding: 13,
+                resource: bindings.cloud_regions.as_entire_binding(),
             },
         ],
     })
@@ -2562,21 +2601,60 @@ fn wind_uniform(wind: Option<WindDescriptor>) -> [f32; 4] {
     }
 }
 
-/// The frame uniform's cloud rows (`rusty::clouds`): coverage, altitude and
-/// cloud size, then the drift; all zero without a layer.
-fn clouds_uniform(clouds: Option<render_model::CloudsDescriptor>) -> [f32; 8] {
+/// Bytes of one cloud region row (`rusty::types::CloudRegion`).
+pub(crate) const CLOUD_REGION_BYTES: u64 = 32;
+
+/// Raymarch steps through the volumetric cloud slab: low, high.
+const VOLUMETRIC_CLOUD_STEPS: [f32; 2] = [12.0, 24.0];
+
+/// A cloud layer for regions placed without one: its altitude and cloud
+/// size, metres.
+const DEFAULT_CLOUD_ALTITUDE: f32 = 1500.0;
+const DEFAULT_CLOUD_SCALE: f32 = 600.0;
+
+/// The volumetric slab's thickness as a share of the layer's altitude.
+const CLOUD_THICKNESS_SHARE: f32 = 0.6;
+
+/// The layer the sky draws: the product's, or a default one when only
+/// regions are placed; `None` draws no clouds.
+pub(crate) fn drawn_clouds(
+    clouds: Option<render_model::CloudsDescriptor>,
+    regions: usize,
+) -> Option<render_model::CloudsDescriptor> {
     match clouds {
-        Some(clouds) if clouds.coverage > 0.0 => [
+        Some(clouds) if clouds.coverage > 0.0 || regions > 0 => Some(clouds),
+        None if regions > 0 => Some(render_model::CloudsDescriptor {
+            coverage: 0.0,
+            drift: [0.0, 0.0],
+            altitude: DEFAULT_CLOUD_ALTITUDE,
+            scale: DEFAULT_CLOUD_SCALE,
+            color: [1.0, 1.0, 1.0],
+        }),
+        _ => None,
+    }
+}
+
+/// The frame uniform's cloud rows (`rusty::clouds`): coverage, altitude,
+/// cloud size and the volumetric slab's thickness; then the drift, the
+/// number of cloud regions and the volumetric raymarch's steps (0: the flat
+/// layer). All zero without a layer or regions.
+fn clouds_uniform(
+    clouds: Option<render_model::CloudsDescriptor>,
+    regions: usize,
+    steps: f32,
+) -> [f32; 8] {
+    match drawn_clouds(clouds, regions) {
+        Some(clouds) => [
             clouds.coverage,
             clouds.altitude,
             clouds.scale,
-            0.0,
+            clouds.altitude * CLOUD_THICKNESS_SHARE,
             clouds.drift[0],
             clouds.drift[1],
-            0.0,
-            0.0,
+            regions as f32,
+            steps,
         ],
-        _ => [0.0; 8],
+        None => [0.0; 8],
     }
 }
 
