@@ -97,7 +97,7 @@ is drawn. `ReadJointPose` returns the latest report:
 - the pose drawn for the previous call, which is the clip time and the
   controls of that call;
 - each joint's transform in the instance's space (`Model`) and in the scene
-  (`World`);
+  (`World`), reported again whenever the instance or a parent moves;
 - the instance's world placement, and the Engine time it was evaluated at.
 
 `Reported` stays false until the first report. Reports need the renderer, so

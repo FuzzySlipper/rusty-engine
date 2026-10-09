@@ -14,8 +14,8 @@ use render_host_contracts::{
 };
 use render_model::{
     AnimatedMeshAsset, AnimatedMeshInstanceDescriptor, AnimatedMeshPlaybackCommand,
-    AnimatedMeshPose, AnimationLoopMode, RenderDiff, RenderFrameDiff, RenderHandle, RenderLayer,
-    RenderMetadata, Transform,
+    AnimatedMeshPose, AnimationLoopMode, Geometry, RenderDiff, RenderFrameDiff, RenderHandle,
+    RenderLayer, RenderMetadata, RenderNode, Transform,
 };
 use render_presentation::{video_frame, VideoClipRef, VideoPlaybackHandle, VideoProjectionOp};
 use render_wgpu::{
@@ -201,9 +201,14 @@ fn the_driver_reports_what_it_drew_and_ends_clips_undrawn() {
         RenderDiff::DefineAnimatedMesh {
             asset: body.asset.clone(),
         },
+        RenderDiff::Create {
+            handle: RenderHandle::new(2),
+            parent: None,
+            node: RenderNode::new(Geometry::Group),
+        },
         RenderDiff::CreateAnimatedMeshInstance {
             handle: RenderHandle::new(1),
-            parent: None,
+            parent: Some(RenderHandle::new(2)),
             instance: AnimatedMeshInstanceDescriptor {
                 inspection: Default::default(),
                 asset: body.asset.asset.clone(),
@@ -249,10 +254,11 @@ fn the_driver_reports_what_it_drew_and_ends_clips_undrawn() {
             .filter_map(|fact| match fact {
                 AnimationFact::JointPose {
                     seconds,
+                    world,
                     joints,
                     rest,
                     ..
-                } => Some((seconds, joints, rest.is_some())),
+                } => Some((seconds, joints, rest.is_some(), world)),
                 _ => None,
             })
             .collect::<Vec<_>>()
@@ -265,6 +271,44 @@ fn the_driver_reports_what_it_drew_and_ends_clips_undrawn() {
     assert_eq!(second.len(), 1);
     assert_eq!((second[0].0, second[0].2), (2.0 / 60.0, false));
     assert_ne!(first[0].1, second[0].1, "the running pose moved");
+
+    // Moving the instance, then its parent, at the same Engine time reports
+    // the placement each call drew, though the pose did not change.
+    let move_to = |handle: u64, x: f32| {
+        RenderFrameDiff::try_from_ops(vec![RenderDiff::Update {
+            handle: RenderHandle::new(handle),
+            transform: Some(Transform {
+                translation: [x, 0.0, 0.0],
+                ..Transform::IDENTITY
+            }),
+            material: None,
+            visible: None,
+            metadata: None,
+        }])
+        .expect("a valid frame")
+    };
+    let mut placed = second[0].clone();
+    for (handle, x, world_x) in [(1, 3.0, 3.0), (2, 5.0, 8.0)] {
+        let moved = move_to(handle, x);
+        reporting.apply(
+            [SceneChange::Frame(&moved)],
+            &body,
+            &|_| None,
+            state(2, false),
+        );
+        let report = reported(reporting.take_animation_facts());
+        assert_eq!(report.len(), 1, "moving handle {handle} reports");
+        let (seconds, joints, _, world) = &report[0];
+        assert_eq!((*seconds, world.translation[0]), (2.0 / 60.0, world_x));
+        let shift = world_x - placed.3.translation[0];
+        for (joint, before) in joints.iter().zip(&placed.1) {
+            assert_eq!(joint.model, before.model, "the pose is unchanged");
+            assert!(
+                (joint.world.translation[0] - before.world.translation[0] - shift).abs() < 1e-4
+            );
+        }
+        placed = report[0].clone();
+    }
 }
 
 /// The joint attachment fixture's body, admitted as the runtime admits it.

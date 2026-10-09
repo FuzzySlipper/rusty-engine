@@ -947,6 +947,19 @@ impl Renderer {
         for handle in handles {
             self.pose_animated_instance(handle);
         }
+        // A reporting instance that moved without a new pose reports again:
+        // its world joints follow its placement.
+        for (handle, instance) in self.tables.animated.iter_mut() {
+            if !selected(instance) || !instance.controls.report_joints {
+                continue;
+            }
+            if let Some(node) = self.tables.nodes.get(handle) {
+                if node.world != instance.posed_world {
+                    instance.posed_world = node.world;
+                    instance.joints_pending = true;
+                }
+            }
+        }
     }
 
     /// Pose and report every instance that reports its joints, at the
