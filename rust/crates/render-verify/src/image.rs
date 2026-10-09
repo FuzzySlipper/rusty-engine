@@ -45,12 +45,16 @@ impl Image {
         let rgba = match info.color_type {
             png::ColorType::Rgba => buffer,
             png::ColorType::Rgb => buffer
-                .chunks_exact(3)
+                .as_chunks::<3>()
+                .0
+                .iter()
                 .flat_map(|pixel| [pixel[0], pixel[1], pixel[2], 255])
                 .collect(),
             png::ColorType::Grayscale => buffer.iter().flat_map(|&v| [v, v, v, 255]).collect(),
             png::ColorType::GrayscaleAlpha => buffer
-                .chunks_exact(2)
+                .as_chunks::<2>()
+                .0
+                .iter()
                 .flat_map(|pixel| [pixel[0], pixel[0], pixel[0], pixel[1]])
                 .collect(),
             png::ColorType::Indexed => {
@@ -178,8 +182,10 @@ pub fn compare(baseline: &Image, candidate: &Image, changed_above: u8) -> ImageD
     let mut changed = 0u64;
     for (a, b) in baseline
         .rgba
-        .chunks_exact(4)
-        .zip(candidate.rgba.chunks_exact(4))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(candidate.rgba.as_chunks::<4>().0)
     {
         let mut pixel_max = 0u8;
         for channel in 0..3 {
@@ -206,7 +212,9 @@ pub fn compare(baseline: &Image, candidate: &Image, changed_above: u8) -> ImageD
 fn luminance(image: &Image) -> Vec<f64> {
     image
         .rgba
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .map(|pixel| 0.2126 * pixel[0] as f64 + 0.7152 * pixel[1] as f64 + 0.0722 * pixel[2] as f64)
         .collect()
 }

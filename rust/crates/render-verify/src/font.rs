@@ -112,7 +112,9 @@ mod tests {
         assert_eq!(width, text_width("AO +0.2%", 1));
         let lit: usize = image
             .rgba
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .filter(|pixel| pixel[0] == 255)
             .count();
         assert!(lit > 20);
