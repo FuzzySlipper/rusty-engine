@@ -25,7 +25,12 @@ TypeScript UI is composited over it.
   from the runtime's own HTTP host (`http://127.0.0.1:<port>/`). Chromium
   (CEF) renders it off-screen and `render-wgpu`'s `web` module imports each
   repaint as a texture and composites it over the frame in gamma space. An
-  idle UI costs nothing per frame.
+  idle UI costs nothing per frame. Off-screen Chromium paints popup widgets
+  (a `<select>`'s list, date and colour pickers) as a separate surface. The
+  overlay draws it over the page at its rect while it shows. A popup that
+  would reach past the window is moved inside it, and pointer events over it
+  are moved back to where Chromium placed it. Chromium routes pointer, wheel
+  and key events to the open popup itself.
 - **Input.** Window input goes to the page, whose input capture sends the
   same normalized `runtime-input` facts it sends from a browser, with its UI
   arbitration unchanged. Chromium's off-screen mode has no Pointer Lock API,
