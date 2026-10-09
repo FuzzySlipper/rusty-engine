@@ -271,7 +271,7 @@ fn an_overcast_greys_the_panorama() {
 /// shades it: from a camera 300 m up (the sky and `cloud_light` measure the
 /// layer's altitude alike), at points across the layer, the sky straight
 /// toward an oblique sun is clouded where a small plate at that point is in
-/// the cloud's shade.
+/// the cloud's shade (wisps aside).
 #[test]
 fn the_cloud_toward_the_sun_is_the_cloud_that_shades_an_elevated_point() {
     let toward = [0.6, 0.8, 0.0];
@@ -326,8 +326,9 @@ fn the_cloud_toward_the_sun_is_the_cloud_that_shades_an_elevated_point() {
         let clouded = toward_sun(&mut harness, *at) - sky_bare;
         let shade = down_on(&mut harness, *at) / plate_bare.max(1.0);
         // A thin cloud already brightens the sky well past its shade's
-        // dimming; between clear and clouded either way is left out.
-        let sky_says = if clouded > 30.0 {
+        // dimming, and a wisp of the octaves the shade leaves out casts
+        // none; between clear and clouded either way is left out.
+        let sky_says = if clouded > 50.0 {
             Some(true)
         } else if clouded.abs() < 8.0 {
             Some(false)

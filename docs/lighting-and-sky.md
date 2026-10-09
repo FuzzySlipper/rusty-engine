@@ -864,8 +864,9 @@ engine.CameraView.SetClouds(new(Coverage: .6f, Drift: new Vector2(8, 3),
 - It shades the ground. Every directional light (sun or moon) is met by the
   layer where the ray toward it crosses the layer's altitude, and a cloud
   there lets through a fifth of the light, specular included. The shade
-  takes the same cover the sky draws along that ray, so from any height
-  the cloud seen in front of the sun is the cloud that shades you. Under a broken
+  takes the sky's own noise along that ray, so from any height the cloud
+  seen in front of the sun is the cloud that shades you (a thin wisp of
+  the sky's finest detail casts none). Under a broken
   sky the shade lies in patches that drift with `Drift`. Under a full
   overcast every point is shaded, so the sky's light and the fills carry
   more of the scene. A light at or below the horizon is not shaded.
@@ -880,9 +881,10 @@ engine.CameraView.SetClouds(new(Coverage: .6f, Drift: new Vector2(8, 3),
   it. It is one pass over the screen: two four-octave noise samples and two
   panorama reads a pixel. At 1920×1080 it takes about 0.36 ms on an RX 9070
   XT and 15 to 18 ms on llvmpipe.
-  The shade on the ground is drawn in the world pass instead: a four-octave
+  The shade on the ground is drawn in the world pass instead: a two-octave
   sample per lit fragment facing a directional light, only while the layer
-  has coverage.
+  has coverage. On a CraftSurvive meadow at 1920×1080 it added about 0.2 ms
+  to the world pass on an RX 9070 XT.
 
 ### Cloud regions
 
