@@ -418,23 +418,47 @@ mod tests {
     }
 
     #[test]
-    fn a_supplied_bundle_with_a_short_or_missing_file_refuses_to_open() {
-        let short = inventory(&[("first.txt", 6)]);
+    fn a_supplied_bundle_opens_and_refuses_reading_a_short_or_missing_file() {
+        let index = inventory(&[("first.txt", 5), ("gone.txt", 3), ("short.txt", 9)]);
         let api = host_with(&[
-            (".rusty-bundles.json", short.as_bytes()),
+            (".rusty-bundles.json", index.as_bytes()),
             ("rooms/first.txt", b"hello"),
+            ("rooms/short.txt", b"cut"),
         ])
         .unwrap();
-        assert!(open_bundle(&api, "rooms").is_none(), "a length mismatch");
-        unsafe { (api.destroy)(api.context) };
-
-        let missing = inventory(&[("first.txt", 5), ("gone.txt", 3)]);
-        let api = host_with(&[
-            (".rusty-bundles.json", missing.as_bytes()),
-            ("rooms/first.txt", b"hello"),
-        ])
-        .unwrap();
-        assert!(open_bundle(&api, "rooms").is_none(), "a missing file");
+        let content = api.engine.content;
+        let bundle = open_bundle(&api, "rooms").expect("an open reads no file bodies");
+        let read = |path: &str| {
+            let mut reference = NativeContentReferenceHandle::default();
+            let mut receipt = NativeOperationErrorReceipt {
+                diagnostics: ptr::null(),
+                diagnostics_len: 0,
+            };
+            let request = NativeContentBundleReferenceRequest {
+                bundle,
+                path: slice(path),
+            };
+            let status = unsafe {
+                (content.open_bundle_reference)(
+                    content.context,
+                    &request,
+                    &mut reference,
+                    &mut receipt,
+                )
+            };
+            (status == ABI_OK)
+                .then_some(())
+                .ok_or_else(|| codes(&receipt))
+        };
+        assert_eq!(read("first.txt"), Ok(()));
+        assert_eq!(
+            read("gone.txt"),
+            Err(vec!["PRODUCT_SOURCE_MISSING".to_owned()])
+        );
+        assert_eq!(
+            read("short.txt"),
+            Err(vec!["PRODUCT_BUNDLE_FILE_CHANGED".to_owned()])
+        );
         unsafe { (api.destroy)(api.context) };
 
         let refused = host_with(&[(".rusty-bundles.json", b"{not json")]).err();
