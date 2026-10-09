@@ -266,3 +266,92 @@ fn an_overcast_greys_the_panorama() {
         blue(&grey)
     );
 }
+
+/// Whether the cloud seen toward the sun from a point is the cloud that
+/// shades it: from a camera 300 m up (the sky and `cloud_light` measure the
+/// layer's altitude alike), at points across the layer, the sky straight
+/// toward an oblique sun is clouded where a small plate at that point is in
+/// the cloud's shade.
+#[test]
+fn the_cloud_toward_the_sun_is_the_cloud_that_shades_an_elevated_point() {
+    let toward = [0.6, 0.8, 0.0];
+    let height = 300.0;
+    let plate = |harness: &mut Harness, at: [f64; 3]| {
+        harness.apply(vec![RenderDiff::Update {
+            handle: RenderHandle::new(21),
+            transform: Some(transform(at.map(|value| value as f32), 0.0, [1.0; 3])),
+            material: None,
+            visible: None,
+            metadata: None,
+        }]);
+    };
+    let mut harness = sky(toward, NOON_COLOR);
+    harness.apply(vec![
+        RenderDiff::DefineMaterial {
+            material: material("material/plate", [0.8, 0.8, 0.8, 1.0], None),
+        },
+        static_mesh(
+            "mesh/plate",
+            box_mesh([-0.5, -0.1, -0.5], [0.5, 0.0, 0.5], |_| 0),
+            "material/plate",
+        ),
+        instance(21, None, "mesh/plate", transform([0.0; 3], 0.0, [1.0; 3])),
+    ]);
+    harness.renderer.set_animation_time(2.0);
+    let centre = |rgba: &[u8]| -> f64 {
+        let at = (((HEIGHT / 2) * WIDTH + WIDTH / 2) * 4) as usize;
+        (f64::from(rgba[at]) + f64::from(rgba[at + 1]) + f64::from(rgba[at + 2])) / 3.0
+    };
+    let toward_sun =
+        |harness: &mut Harness, at: [f64; 3]| centre(&harness.render(&camera(at, 90.0, 53.13)).1);
+    let down_on = |harness: &mut Harness, at: [f64; 3]| {
+        centre(
+            &harness
+                .render(&camera([at[0], at[1] + 2.0, at[2]], 0.0, -89.9))
+                .1,
+        )
+    };
+    let points: Vec<[f64; 3]> = (0..6)
+        .flat_map(|i| (0..5).map(move |j| [f64::from(i) * 97.0, height, f64::from(j) * 113.0]))
+        .collect();
+    let mut bare = Vec::new();
+    for at in &points {
+        plate(&mut harness, *at);
+        bare.push((toward_sun(&mut harness, *at), down_on(&mut harness, *at)));
+    }
+    harness.apply(vec![clouds_sized(0.5, 200.0)]);
+    let (mut agree, mut decisive) = (0, 0);
+    for (at, (sky_bare, plate_bare)) in points.iter().zip(&bare) {
+        plate(&mut harness, *at);
+        let clouded = toward_sun(&mut harness, *at) - sky_bare;
+        let shade = down_on(&mut harness, *at) / plate_bare.max(1.0);
+        // A thin cloud already brightens the sky well past its shade's
+        // dimming; between clear and clouded either way is left out.
+        let sky_says = if clouded > 30.0 {
+            Some(true)
+        } else if clouded.abs() < 8.0 {
+            Some(false)
+        } else {
+            None
+        };
+        let ground_says = if shade < 0.95 {
+            Some(true)
+        } else if shade > 0.97 {
+            Some(false)
+        } else {
+            None
+        };
+        if let (Some(sky_says), Some(ground_says)) = (sky_says, ground_says) {
+            decisive += 1;
+            agree += usize::from(sky_says == ground_says);
+        }
+    }
+    assert!(
+        decisive >= 20,
+        "enough points are clearly clouded or clear: {decisive}"
+    );
+    assert!(
+        agree == decisive,
+        "the sky toward the sun and the shade agree at {agree} of {decisive} points"
+    );
+}

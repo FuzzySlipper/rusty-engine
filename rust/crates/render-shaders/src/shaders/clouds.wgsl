@@ -80,10 +80,14 @@ fn cloud_coverage(xz: vec2<f32>) -> vec2<f32> {
 // under a broken sky the shade drifts across the ground with the clouds. A
 // light at or below the horizon is not shaded here.
 const CLOUD_SHADE: f32 = 0.2;
-// The shadow's noise: fewer octaves than the sky draws (a shadow's edge is
-// soft anyway), at a fixed middle detail.
-const CLOUD_SHADOW_OCTAVES: i32 = 2;
-const CLOUD_SHADOW_DETAIL: f32 = 0.6;
+// The sky's flat layer (`sky.wgsl` `fs_clouds`) draws its noise in these
+// octaves, with detail by how steeply the ray rises: the shade takes the
+// same cover along the ray toward the light, so the cloud seen toward the
+// sun is the cloud that shades.
+const CLOUD_OCTAVES: i32 = 4;
+fn cloud_detail(rise: f32) -> f32 {
+    return smoothstep(0.04, 0.4, rise);
+}
 fn cloud_light(position: vec3<f32>, toward: vec3<f32>) -> f32 {
     if frame.clouds.y <= 0.0 || toward.y <= 0.0 {
         return 1.0;
@@ -103,7 +107,7 @@ fn cloud_light(position: vec3<f32>, toward: vec3<f32>) -> f32 {
         cover = smoothstep(0.0, 0.35, cloud_density(vec3<f32>(crossing.x, middle, crossing.y), 2));
     } else {
         let p = (plane - frame.cloud_drift.xy * frame.time.x) / frame.clouds.z;
-        cover = cloud_cover(p, CLOUD_SHADOW_DETAIL, coverage.x, CLOUD_SHADOW_OCTAVES);
+        cover = cloud_cover(p, cloud_detail(toward.y), coverage.x, CLOUD_OCTAVES);
     }
     // A storm's dark cloud lets less through.
     return mix(1.0, CLOUD_SHADE * (1.0 - 0.6 * coverage.y), cover);

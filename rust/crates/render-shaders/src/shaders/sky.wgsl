@@ -5,7 +5,7 @@
 
 #import rusty::types::PI
 #import rusty::view::frame
-#import rusty::clouds::{cloud_cover, cloud_coverage, cloud_density}
+#import rusty::clouds::{cloud_cover, cloud_coverage, cloud_density, cloud_detail, CLOUD_OCTAVES}
 
 struct SkyUniform {
     // x: blend amount toward the second panorama
@@ -72,25 +72,31 @@ const OVERCAST_SHARE: f32 = 0.6;
 const OVERCAST_SKY: f32 = 0.8;
 
 // The cloud layer, blended over the background (premultiplied alpha). The
-// view ray meets a plane at the layer's altitude above the camera, so clouds
-// shrink toward the horizon, where they fade into the panorama. They take
+// view ray meets a plane at the layer's altitude (absolute, as the ground's
+// shade `cloud_light` and the volumetric slab measure it), so clouds shrink
+// toward the horizon, where they fade into the panorama. A camera at or
+// above the altitude sees no flat layer overhead. They take
 // the sun's colour, less where more cloud lies between them and the sun,
 // and brighter at their thin edges toward it; and the sky's colour behind
 // them, so a dusk sky warms them and a night sky darkens them.
 @fragment
 fn fs_clouds(in: SkyOut) -> @location(0) vec4<f32> {
     let direction = view_direction(in.ndc);
+    let above = sky.clouds.y - frame.camera.y;
+    if above <= 0.0 {
+        return vec4<f32>(0.0);
+    }
     let rise = max(direction.y, 0.02);
-    let ground = frame.camera.xz + direction.xz * (sky.clouds.y / rise);
+    let ground = frame.camera.xz + direction.xz * (above / rise);
     let p = (ground - sky.cloud_drift.xy * frame.time.x) / sky.clouds.z;
-    let detail = smoothstep(0.04, 0.4, direction.y);
+    let detail = cloud_detail(direction.y);
     // The layer's coverage raised by the regions over this point.
     let coverage = cloud_coverage(ground);
-    let cover = cloud_cover(p, detail, coverage.x, 4);
+    let cover = cloud_cover(p, detail, coverage.x, CLOUD_OCTAVES);
     // Toward the sun across the layer, in clouds.
     let across = frame.sun.xz;
     let toward = across / max(length(across), 1e-3) * 0.35;
-    let shadowed = cloud_cover(p + toward * 0.75, detail, coverage.x, 4);
+    let shadowed = cloud_cover(p + toward * 0.75, detail, coverage.x, CLOUD_OCTAVES);
     let sun_up = smoothstep(-0.05, 0.15, frame.sun.y) * frame.sun.w;
     let sun = frame.sun_color.rgb * min(frame.sun_color.w, 1.5) * sun_up;
     let edge = 1.0 + 1.5 * pow(max(dot(direction, frame.sun.xyz), 0.0), 8.0) * (1.0 - cover);
