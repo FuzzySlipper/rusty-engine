@@ -1,0 +1,16 @@
+[package]
+name = "render-verify"
+version.workspace = true
+edition.workspace = true
+
+# Verifying rendered output on real GPUs: image comparison and the GPU
+# verification lane (`rusty-gpu-lane`), which drives `rusty-scene-render` as a
+# separate process so a baseline renderer and a candidate can be compared on
+# one machine.
+[dependencies]
+png.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

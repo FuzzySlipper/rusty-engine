@@ -5783,6 +5783,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "render-verify"
+version = "0.1.0"
+dependencies = [
+ "png",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "render-video"
 version = "0.1.0"
 dependencies = [

@@ -2,6 +2,7 @@
 exclude = ["rust/vendor/fidget-mesh"]
 resolver = "2"
 members = [
+    "rust/crates/render-verify",
     "rust/crates/rusty-cli",
     "rust/crates/render-host-contracts",
     "rust/crates/product-host",
@@ -56,6 +57,7 @@ version = "0.1.0"
 edition = "2021"
 
 [workspace.dependencies]
+render-verify = { path = "rust/crates/render-verify" }
 product-host = { path = "rust/crates/product-host" }
 runtime-diagnostics = { path = "rust/crates/runtime-diagnostics" }
 csharp-engine-abi = { path = "rust/crates/csharp-engine-abi" }

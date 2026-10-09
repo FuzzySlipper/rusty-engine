@@ -35,6 +35,76 @@ timings. `rusty-scene-render` says on stderr and in its report
 mistaken for GPU evidence. llvmpipe timings in the docs describe what a
 software adapter costs; they are not acceptance gates.
 
+### The GPU lane
+
+`scripts/gpu-lane.sh` runs the lane on the machine it is on, for the commit
+checked out. It builds `rusty-scene-render` and `rusty-gpu-lane`, then renders
+every scene of the lane directory twice over: with the machine's accepted
+baseline renderer and with the candidate, alternating which goes first, three
+times each (`--repeats`). It prints a table and writes the run under
+`runs/<machine>/<time>-<commit>/`: `report.md`, `report.json`, and for every
+scene `baseline.png`, `candidate.png` and `diff.png`. It exits 0 when every
+scene passes, 1 when one is flagged and 2 when the candidate could not render
+one. `--scene NAME` (repeatable) runs a subset.
+
+The lane directory (`RUSTY_GPU_LANE_ROOT`, `/data/rusty-engine-gpu-lane` on
+den-agents) holds:
+
+| Path | What |
+| --- | --- |
+| `scenes.json` | The scenes and the thresholds (below) |
+| `scenes/*.rscene` | Scene snapshots, from `engine.renderer.snapshot` on a fixture or a product |
+| `machines/<machine>/` | The machine's accepted baseline: `baseline.json` (its source and why) and a copy of that renderer; earlier records stay beside it, numbered |
+| `runs/<machine>/` | Every run's report and images |
+
+A scene names its snapshot, the `rusty-scene-render` flags it renders with
+(an occlusion path, clustered lighting, GPU culling), notes for the review,
+and any settings it overrides. The defaults:
+
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| `width`, `height` | 1280, 720 | Render size |
+| `frames`, `turn` | 30, 0.25 | Frames per render, and degrees the camera turns each, so timings cover more than one view; the image is the last frame |
+| `repeats` | 3 | Renders per renderer |
+| `changedAbove` | 2 | A pixel counts as changed when a colour channel moves more than this many levels |
+| `changedShareFlag` | 0.0005 | Flag when more than this share of pixels changed |
+| `ssimFlag` | 0.999 | Flag when the luminance SSIM falls below this |
+| `passRatioFlag`, `passDeltaFlagMs` | 1.15, 0.05 | Flag a GPU pass slower by both, in its median, with every candidate repeat slower than every baseline repeat |
+| `frameRatioFlag`, `frameDeltaFlagMs` | 1.10, 0.2 | The same for the frame median |
+
+Rendering is deterministic on one adapter (two runs of one build give
+identical images), so any image difference comes from the change. A scene
+whose own repeats differ is reported as not deterministic and judged above
+twice that noise. Timings only flag; a one-off stall on a shared machine does
+not, because every candidate repeat must be slower than every baseline one.
+
+**Review.** When a scene is flagged, the run also writes `review-prompt.md`:
+a brief for a reviewing agent listing each flagged scene's images and the
+`git log` and `git diff` of the change. The agent running the lane hands it
+to a subagent, which opens the images and answers, per scene, intended,
+regression or noise with the evidence. Only flagged scenes are reviewed.
+
+**Gate.** `rusty-gpu-lane status --run RUN --repo FuzzySlipper/rusty-engine
+--sha SHA` posts the run as the check run `gpu-render/<machine>` on the
+commit, through the `gpu-lane-status` workflow (a check run needs the Actions
+token). A pass posts success, a failed render failure, and a flagged run
+neutral until reviewed. After review, post again with `--conclusion success`
+or `failure` and `--review FILE`, the subagent's verdicts, which head the
+check's summary. A review submission can then require
+`gpu-render/<machine>` beside `csharp`.
+
+**Baselines.** `rusty-gpu-lane accept --root DIR --renderer
+target/release/rusty-scene-render --source SHA --reason TEXT` makes a renderer
+this machine's baseline. Accept when a reviewed change has landed on `main`,
+so the next run compares against it. Each machine keeps its own baseline,
+since images differ between GPUs and drivers. When the snapshot format
+changes, an older baseline cannot open newer scenes; the lane flags those
+scenes (nothing compared) until the scenes are recaptured and a new baseline
+is accepted with that reason.
+
+On Windows, run the two `cargo build` lines of the script and then
+`rusty-gpu-lane run` directly, or the script from Git Bash.
+
 NativeAOT is a separate fidelity path: `scripts/verify-csharp.sh --aot`, the
 C# workflow dispatch option, and `scripts/test-csharp-release-pair.sh PAIR --aot`.
 

@@ -1,0 +1,51 @@
+name: gpu-lane-status
+
+# Posts a GPU verification lane result (docs/verification.md#gpu-verification)
+# as a check run on the commit it verified. The lane runs on machines with GPUs,
+# outside GitHub; `rusty-gpu-lane status` dispatches this workflow, because a
+# check run can only be created with an app token such as this job's.
+on:
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: Full commit SHA the lane verified
+        required: true
+      name:
+        description: Check run name, gpu-render/<machine>
+        required: true
+      conclusion:
+        description: success, failure or neutral
+        required: true
+      title:
+        description: One-line result
+        required: true
+      summary:
+        description: Markdown report
+        required: true
+
+permissions:
+  checks: write
+  contents: read
+
+jobs:
+  post:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create the check run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ inputs.sha }}
+          NAME: ${{ inputs.name }}
+          CONCLUSION: ${{ inputs.conclusion }}
+          TITLE: ${{ inputs.title }}
+          SUMMARY: ${{ inputs.summary }}
+        run: |
+          set -euo pipefail
+          [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "sha must be a full commit SHA"; exit 1; }
+          [[ "$NAME" =~ ^gpu-render/[A-Za-z0-9._-]+$ ]] || { echo "name must be gpu-render/<machine>"; exit 1; }
+          case "$CONCLUSION" in success|failure|neutral) ;; *) echo "conclusion must be success, failure or neutral"; exit 1;; esac
+          jq -n --arg name "$NAME" --arg sha "$SHA" --arg conclusion "$CONCLUSION" \
+                --arg title "$TITLE" --arg summary "$SUMMARY" \
+                '{name: $name, head_sha: $sha, status: "completed", conclusion: $conclusion,
+                  output: {title: $title, summary: $summary}}' |
+            gh api --method POST "repos/${GITHUB_REPOSITORY}/check-runs" --input - --jq '.html_url'
