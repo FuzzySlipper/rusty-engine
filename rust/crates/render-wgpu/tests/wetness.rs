@@ -189,3 +189,41 @@ fn ground_under_a_roof_stays_dry() {
         "rain darkens the open ground but not the ground under the roof: open {exposed:.3}, sheltered {sheltered:.3}"
     );
 }
+
+/// Water only smooths: a surface smoother than wet ground stays as smooth
+/// (review R9744 probe: a product shader that shows its roughness).
+#[test]
+fn wetting_does_not_raise_an_already_smooth_materials_roughness() {
+    let mut harness = Harness::new(RendererOptions::default());
+    let mut smooth = material("smooth", [1.0; 4], None);
+    smooth.roughness = 0.05;
+    smooth.shader = Some(MaterialShaderDescriptor {
+        shader: "roughness".into(),
+        parameters: [[0.0; 4]; 4],
+        textures: [None, None],
+    });
+    harness.apply(vec![
+        RenderDiff::DefineShader {
+            shader: ShaderDescriptor {
+                id: "roughness".into(),
+                path: "roughness.wgsl".into(),
+                keywords: vec![],
+                source: "#import rusty::types::Surface\nfn shade(s: Surface) -> vec4<f32> { return vec4<f32>(vec3<f32>(s.roughness), 1.0); }".into(),
+            },
+        },
+        RenderDiff::DefineMaterial { material: smooth },
+        static_mesh("ground", box_mesh([-60.0, -1.0, -60.0], [60.0, 0.0, 60.0], |_| 0), "smooth"),
+        instance(20, None, "ground", transform([0.0; 3], 0.0, [1.0; 3])),
+    ]);
+    let view = camera([0.0, 3.0, 6.0], 0.0, -30.0);
+    let dry = harness.render(&view).1;
+    harness.apply(vec![RenderDiff::SetWetness {
+        wetness: Some(WetnessDescriptor {
+            wetness: 1.0,
+            puddles: 0.0,
+        }),
+    }]);
+    let wet = harness.render(&view).1;
+    let at = (((HEIGHT - 10) * WIDTH + WIDTH / 2) * 4) as usize;
+    assert!(wet[at] <= dry[at], "dry {} wet {}", dry[at], wet[at]);
+}

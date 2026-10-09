@@ -540,7 +540,8 @@ fn wetted(surface: Surface) -> Surface {
     }
     var result = surface;
     result.base = vec4<f32>(result.base.rgb * mix(1.0, WET_DARKENING, wet * (1.0 - result.metalness)), result.base.a);
-    result.roughness = mix(result.roughness, WET_ROUGHNESS, wet);
+    // Water only smooths: an already smoother surface keeps its roughness.
+    result.roughness = min(result.roughness, mix(result.roughness, WET_ROUGHNESS, wet));
     let puddles = frame.weather.y * wet;
     if puddles > 0.0 && up > 0.85 {
         let p = surface.world_position.xz / PUDDLE_METRES;
@@ -548,7 +549,7 @@ fn wetted(surface: Surface) -> Surface {
         let level = 1.0 - puddles * 0.6;
         let pool = smoothstep(level - 0.04, level + 0.04, shape) * smoothstep(0.85, 0.95, up);
         result.base = vec4<f32>(result.base.rgb * mix(1.0, PUDDLE_DARKENING, pool), result.base.a);
-        result.roughness = mix(result.roughness, PUDDLE_ROUGHNESS, pool);
+        result.roughness = min(result.roughness, mix(result.roughness, PUDDLE_ROUGHNESS, pool));
         result.normal = normalize(mix(result.normal, vec3<f32>(0.0, 1.0, 0.0), pool));
     }
     return result;
