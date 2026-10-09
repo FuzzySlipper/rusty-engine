@@ -333,3 +333,105 @@ fn a_tower_and_a_sheet_rise_from_one_base_to_their_own_heights() {
         bottom(&sheet_rows)
     );
 }
+
+/// The mean absolute difference of two images, per channel.
+fn mean_difference(a: &[u8], b: &[u8]) -> f64 {
+    let total: u64 = a
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(b.as_chunks::<4>().0)
+        .map(|(a, b)| (0..3).map(|c| u64::from(a[c].abs_diff(b[c]))).sum::<u64>())
+        .sum();
+    total as f64 / (a.len() / 4 * 3) as f64
+}
+
+/// A drifting broken layer under High volumetric clouds; None on a software
+/// adapter, which refuses them.
+fn drifting() -> Option<Harness> {
+    let mut harness = scene(VolumetricCloudsQuality::High);
+    if harness
+        .renderer
+        .settings_readout()
+        .volumetric_clouds
+        .is_some()
+    {
+        return None;
+    }
+    harness.apply(vec![RenderDiff::SetClouds {
+        clouds: Some(CloudsDescriptor {
+            coverage: 0.5,
+            drift: [12.0, 4.0],
+            altitude: 1500.0,
+            scale: 600.0,
+            color: [1.0; 3],
+            thickness: 0.0,
+            kind: CloudKind::Cumulus,
+        }),
+    }]);
+    Some(harness)
+}
+
+fn up_at(harness: &mut Harness, yaw: f64, time: f64) -> Vec<u8> {
+    harness.renderer.set_animation_time(time);
+    harness.render(&camera([0.0, 1.0, 0.0], yaw, 25.0)).1
+}
+
+#[test]
+fn drifting_clouds_hold_steady_from_frame_to_frame() {
+    let Some(mut harness) = drifting() else {
+        return;
+    };
+    // Thirty frames a second for a second and a third: the clouds drift
+    // 0.4 m a frame, a fraction of a reduced pixel at their 1.5 km.
+    let frames: Vec<Vec<u8>> = (0..40)
+        .map(|frame| up_at(&mut harness, 0.0, 2.0 + f64::from(frame) / 30.0))
+        .collect();
+    let flicker = (10..39)
+        .map(|frame| mean_difference(&frames[frame], &frames[frame + 1]))
+        .fold(0.0f64, f64::max);
+    assert!(
+        flicker < 0.3,
+        "drifting clouds change at most {flicker:.3} levels from frame to frame"
+    );
+    assert!(
+        mean_difference(&frames[0], &frames[39]) > 0.0,
+        "while they do drift"
+    );
+}
+
+#[test]
+fn a_turning_camera_leaves_no_trails_and_a_cut_starts_afresh() {
+    let Some(mut turning) = drifting() else {
+        return;
+    };
+    // The clouds held (time still) while the camera turns 0.3° a frame for
+    // 40 frames; then the same final view held still as long.
+    let mut last = Vec::new();
+    for frame in 0..=40 {
+        last = up_at(&mut turning, 12.0 - 0.3 * f64::from(40 - frame), 2.0);
+    }
+    let mut still = drifting().expect("hardware");
+    let mut settled = Vec::new();
+    for _ in 0..=40 {
+        settled = up_at(&mut still, 12.0, 2.0);
+    }
+    keep("turning", &last);
+    keep("settled", &settled);
+    let trailing = mean_difference(&last, &settled);
+    assert!(
+        trailing < 1.5,
+        "turning, the clouds match the still view without trails: {trailing:.3} levels apart"
+    );
+    // A 100 m jump drops the history: the first frame there is a fresh
+    // renderer's.
+    turning.renderer.set_animation_time(2.0);
+    let cut = turning.render(&camera([100.0, 1.0, 0.0], 12.0, 25.0)).1;
+    let mut fresh = drifting().expect("hardware");
+    fresh.renderer.set_animation_time(2.0);
+    assert_eq!(
+        cut,
+        fresh.render(&camera([100.0, 1.0, 0.0], 12.0, 25.0)).1,
+        "no history crosses a cut"
+    );
+}

@@ -37,6 +37,15 @@ pub(crate) struct Layouts {
     /// depth copy (`water.rs`) rather than the view's occlusion.
     water: wgpu::PipelineLayout,
     sky_pipeline: wgpu::PipelineLayout,
+    /// The volumetric clouds' reduced march (`cloud_march.rs`): its group 2
+    /// holds the view's history, and its pipeline draws into the reduced
+    /// target, whatever the view's own.
+    pub cloud_march: wgpu::BindGroupLayout,
+    pub cloud_march_pipeline: wgpu::RenderPipeline,
+    /// The composite of the reduced clouds over a view's background: its
+    /// group 2 holds the reduced target.
+    pub cloud_composite: wgpu::BindGroupLayout,
+    cloud_composite_pipeline: wgpu::PipelineLayout,
     /// The sun pass over the background: the frame only.
     sun_pipeline: wgpu::PipelineLayout,
     shadow_pipeline: wgpu::PipelineLayout,
@@ -69,8 +78,9 @@ pub(crate) struct Pipelines {
     pub sky: wgpu::RenderPipeline,
     pub sun: wgpu::RenderPipeline,
     pub clouds: wgpu::RenderPipeline,
-    /// The cloud layer raymarched, with thickness (`fs_clouds_volumetric`).
-    pub clouds_volumetric: wgpu::RenderPipeline,
+    /// The raymarched clouds' reduced target over the background
+    /// (`fs_clouds_composite`).
+    pub clouds_composite: wgpu::RenderPipeline,
     world: HashMap<(Features, Pass), wgpu::RenderPipeline>,
 }
 
@@ -329,6 +339,51 @@ impl Layouts {
             bind_group_layouts: &[Some(&frame)],
             immediate_size: 0,
         });
+        let fragment_entry = |binding, ty| wgpu::BindGroupLayoutEntry {
+            binding,
+            visibility: wgpu::ShaderStages::FRAGMENT,
+            ty,
+            count: None,
+        };
+        let filterable_2d = wgpu::BindingType::Texture {
+            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+            view_dimension: wgpu::TextureViewDimension::D2,
+            multisampled: false,
+        };
+        let filtering = wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering);
+        let cloud_march = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("render-wgpu cloud march"),
+            entries: &[
+                fragment_entry(
+                    0,
+                    wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                ),
+                fragment_entry(1, filterable_2d),
+                fragment_entry(2, filtering),
+            ],
+        });
+        let cloud_composite = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("render-wgpu cloud composite"),
+            entries: &[
+                fragment_entry(2, filtering),
+                fragment_entry(3, filterable_2d),
+            ],
+        });
+        let cloud_march_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("render-wgpu cloud march"),
+            bind_group_layouts: &[Some(&frame), Some(&sky), Some(&cloud_march)],
+            immediate_size: 0,
+        });
+        let cloud_composite_pipeline =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("render-wgpu cloud composite"),
+                bind_group_layouts: &[Some(&frame), Some(&sky), Some(&cloud_composite)],
+                immediate_size: 0,
+            });
         let shadow_pipeline = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("render-wgpu shadow"),
             bind_group_layouts: &[Some(&casters), Some(&material), Some(&shadow_layer)],
@@ -337,6 +392,32 @@ impl Layouts {
         let mut shaders = Shaders::new();
         let sky_shader = standard(shaders.module(device, Entry::Sky, Features::default()));
         let compose = standard(shaders.module(device, Entry::Compose, Features::default()));
+        // The reduced clouds: premultiplied colour and opacity, replaced.
+        let cloud_march_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("render-wgpu cloud march"),
+            layout: Some(&cloud_march_layout),
+            vertex: wgpu::VertexState {
+                module: &sky_shader,
+                entry_point: Some("vs_sky"),
+                compilation_options: Default::default(),
+                buffers: &[],
+            },
+            primitive: Default::default(),
+            depth_stencil: None,
+            multisample: Default::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &sky_shader,
+                entry_point: Some("fs_clouds_march"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: crate::cloud_march::FORMAT,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
         let shadow_clear = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("render-wgpu shadow tile clear"),
             layout: Some(
@@ -422,6 +503,10 @@ impl Layouts {
             shadow_layer,
             world,
             sky_pipeline,
+            cloud_march,
+            cloud_march_pipeline,
+            cloud_composite,
+            cloud_composite_pipeline,
             sun_pipeline,
             shadow_pipeline,
             shaders,
@@ -529,11 +614,12 @@ impl Layouts {
                     },
                 }),
             ),
-            // The raymarched clouds, blended as the flat layer.
-            clouds_volumetric: background(
+            // The raymarched clouds' reduced target, blended as the flat
+            // layer.
+            clouds_composite: background(
                 "render-wgpu volumetric clouds",
-                &self.sky_pipeline,
-                "fs_clouds_volumetric",
+                &self.cloud_composite_pipeline,
+                "fs_clouds_composite",
                 Some(wgpu::BlendState {
                     color: wgpu::BlendComponent {
                         src_factor: wgpu::BlendFactor::One,

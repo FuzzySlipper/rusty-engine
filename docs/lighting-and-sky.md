@@ -944,17 +944,29 @@ sun and darker edges), and by the panorama behind it; a region's darkness
 darkens it. The ground's shade samples the same density a third of the way
 up the slab, so a cloud and its shadow agree.
 
-- `Low` takes 12 steps a ray and `High` 24, with two steps toward the sun; a
-  per-pixel offset turns the steps' banding into fine noise. The clouds reach
-  30 km and fade toward the horizon as the flat layer does.
-- It is timed as the `clouds` pass. On an RX 9070 XT at 1280×720 a view
-  filled with sky costs about 1.0 ms (`Low`) and 1.9 ms (`High`); a
-  CraftSurvive view with a strip of sky about 0.2 to 0.5 ms. Off draws the
-  flat layer exactly as before; a software adapter refuses it
-  (`SoftwareAdapter`) and draws the flat layer.
+- The clouds are marched at half the view's resolution each way, into a
+  target each world view keeps (by camera and viewport), and drawn over the
+  sky upscaled. `Low` takes 12 steps a ray and `High` 24, with two steps
+  toward the sun.
+- Each frame the steps' per-pixel offset moves (a golden-ratio sequence),
+  and each pixel is blended with its cloud as the previous frame saw it:
+  reprojected by the camera's move, from the cloud's opacity-weighted
+  distance, and by the clouds' drift since then. That is 20 % new a frame
+  at `Low` and 10 % at `High`, more where the cloud moved across the
+  target. Banding turns into a smooth fill over a few frames, and drifting
+  clouds and a turning camera leave no trails.
+  - A view seen for the first time, a new size, or a camera that jumps
+    more than 50 m starts afresh with no history.
+- It is timed as the `clouds` pass, the march and the composite together.
+  On an RX 9070 XT, in a view filled with sky:
+  - at 1920×1080, about 0.7 ms (`Low`) and 1.3 ms (`High`), where marching
+    every pixel cost 2.2 and 4.0 ms;
+  - at 2560×1440, about 1.1 and 2.1 ms.
+- Off draws the flat layer exactly as before; a software adapter refuses
+  it (`SoftwareAdapter`) and draws the flat layer.
 - Seen low across the sky, rays cross many clouds, so a given coverage looks
-  fuller than the flat layer's. There is no temporal filtering, and the
-  sky's light and reflections still see only the panorama.
+  fuller than the flat layer's. The sky's light and reflections still see
+  only the panorama.
 
 ## Wet surfaces
 

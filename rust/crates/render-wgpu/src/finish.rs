@@ -518,11 +518,16 @@ impl Finish {
         }
     }
 
-    /// The cloud layer pass's stamps.
-    pub fn clouds_writes(&self) -> Option<wgpu::RenderPassTimestampWrites<'_>> {
+    /// The volumetric clouds' passes' stamps: `begin` on the march, `end` on
+    /// the composite.
+    pub fn clouds_writes_between(
+        &self,
+        begin: bool,
+        end: bool,
+    ) -> Option<wgpu::RenderPassTimestampWrites<'_>> {
         self.clouds_timer
             .as_ref()
-            .and_then(PassTimer::render_writes)
+            .and_then(|timer| timer.render_writes_between(begin, end))
     }
 
     /// After a cloud layer pass, in its encoder.

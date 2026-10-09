@@ -1860,7 +1860,48 @@ impl Renderer {
         // its own so `gpu.passes` times it. Without cover there is no
         // pass and the sky is drawn as before.
         let covered = drawn_clouds(self.tables.clouds, self.tables.cloud_regions.len()).is_some();
+        let volumetric = self.volumetric_clouds_drawn();
         if let (true, true, Some(sky)) = (view.sky, covered, &self.sky_bind_group) {
+            // Volumetric clouds march into the view's reduced target first,
+            // against its history, which keeps the result.
+            let reduced = volumetric.then(|| {
+                self.cloud_march.prepare(
+                    &self.gpu,
+                    &self.layouts.cloud_march,
+                    &self.layouts.cloud_composite,
+                    view.camera_id,
+                    view.viewport,
+                    &view.camera,
+                    self.options.volumetric_clouds,
+                    self.animation_time,
+                )
+            });
+            if let Some(frame) = &reduced {
+                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("render-wgpu clouds march"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: self.cloud_march.target_view(frame),
+                        depth_slice: None,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: self.finish.clouds_writes_between(true, false),
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+                pass.set_pipeline(&self.layouts.cloud_march_pipeline);
+                pass.set_bind_group(0, &self.frame_bind_group, &[]);
+                pass.set_bind_group(1, sky, &[]);
+                pass.set_bind_group(2, self.cloud_march.march_group(frame), &[]);
+                pass.draw(0..3, 0..1);
+                drop(pass);
+                self.cloud_march
+                    .keep(encoder, frame, &view.camera, self.animation_time);
+            }
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("render-wgpu clouds"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -1873,18 +1914,20 @@ impl Renderer {
                     },
                 })],
                 depth_stencil_attachment: None,
-                timestamp_writes: self.finish.clouds_writes(),
+                timestamp_writes: self.finish.clouds_writes_between(reduced.is_none(), true),
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
             in_viewport(&mut pass);
             pass.set_bind_group(0, &self.frame_bind_group, &[]);
-            pass.set_pipeline(if self.volumetric_clouds_drawn() {
-                &self.pipelines[sky_index].clouds_volumetric
-            } else {
-                &self.pipelines[sky_index].clouds
-            });
             pass.set_bind_group(1, sky, &[]);
+            match &reduced {
+                Some(frame) => {
+                    pass.set_pipeline(&self.pipelines[sky_index].clouds_composite);
+                    pass.set_bind_group(2, self.cloud_march.composite_group(frame), &[]);
+                }
+                None => pass.set_pipeline(&self.pipelines[sky_index].clouds),
+            }
             pass.draw(0..3, 0..1);
             drop(pass);
             self.finish.resolve_clouds(encoder);

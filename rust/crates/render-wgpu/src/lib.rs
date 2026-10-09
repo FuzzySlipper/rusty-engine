@@ -25,6 +25,7 @@ mod apply;
 mod batch;
 mod camera;
 mod capture;
+mod cloud_march;
 mod compose;
 mod composition;
 mod convert;
@@ -377,6 +378,8 @@ pub struct Renderer {
     views: [Option<frame::ViewCache>; 3],
     /// The backdrop camera the last world view drew its backdrop with.
     backdrop: Option<BackdropReadout>,
+    /// The volumetric clouds' reduced targets and histories, per view.
+    cloud_march: cloud_march::CloudMarch,
     shadows: shadows::ShadowMaps,
     /// World lights requesting shadows, by light row.
     shadow_candidates: Vec<shadows::ShadowCandidate>,
@@ -584,6 +587,7 @@ impl Renderer {
             casters_uploaded: false,
             views: Default::default(),
             backdrop: None,
+            cloud_march: cloud_march::CloudMarch::new(gpu),
             shadows,
             shadow_candidates: Vec::new(),
             casting: Default::default(),

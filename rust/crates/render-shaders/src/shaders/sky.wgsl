@@ -1,7 +1,8 @@
 // The equirectangular sky behind the world pass, blending two panoramas;
 // the sun's disc and halo (`Frame.sun`, `Frame.atmosphere`), added over the
 // sky or clear colour when the atmosphere draws them; and the cloud layer
-// over both, flat (`fs_clouds`) or raymarched (`fs_clouds_volumetric`).
+// over both, flat (`fs_clouds`) or raymarched (`fs_clouds_march`, drawn by
+// `fs_clouds_composite`).
 
 #import rusty::types::PI
 #import rusty::view::frame
@@ -126,17 +127,45 @@ const CLOUD_LIGHT_STEPS: i32 = 2;
 const CLOUD_REACH: f32 = 30000.0;
 
 // The cloud layer raymarched through a slab from its altitude up by its
-// thickness (`Frame.clouds`), premultiplied over the background as the flat
-// layer: each sample's density (`rusty::clouds::cloud_density`) is lit by
+// thickness, at reduced resolution (render-wgpu `cloud_march.rs`) and
+// filtered over frames: `fs_clouds_march` marches each pixel of a target
+// half the view's size, its step offset moving each frame, and blends it
+// with that pixel's cloud as the view's previous frame saw it (reprojected
+// by the camera's move and the clouds' drift); `fs_clouds_composite` draws
+// that over the background, premultiplied as the flat layer.
+
+struct CloudSample {
+    // Premultiplied colour and opacity.
+    color: vec4<f32>,
+    // The distance along the ray of the cloud it sees, metres.
+    distance: f32,
+};
+
+struct CloudMarchParams {
+    // The view's previous frame: view-projection and eye.
+    prev_view_proj: mat4x4<f32>,
+    // xyz: the previous eye; w: seconds since the previous frame (the
+    // clouds drifted that long).
+    prev_eye: vec4<f32>,
+    // x: the history's weight (0: none); y: this frame's step phase; zw:
+    // the reduced target's size, pixels.
+    temporal: vec4<f32>,
+};
+
+@group(2) @binding(0) var<uniform> cloud_march: CloudMarchParams;
+@group(2) @binding(1) var cloud_history: texture_2d<f32>;
+@group(2) @binding(2) var cloud_sampler: sampler;
+@group(2) @binding(3) var cloud_current: texture_2d<f32>;
+
+// One ray through the cloud slab (`Frame.clouds`): each sample's density (`rusty::clouds::cloud_density`) is lit by
 // the sun through the cloud between it and the sun (Beer's law, with a
 // forward-scattering lobe and a dark-edge powder term) and by the sky behind
 // it, and dims what lies past it. Toward the horizon the clouds fade into
 // the panorama, as the flat layer's do. Steps per ray: `Frame.cloud_drift.w`.
-@fragment
-fn fs_clouds_volumetric(in: SkyOut) -> @location(0) vec4<f32> {
-    let direction = view_direction(in.ndc);
+fn march_clouds(direction: vec3<f32>, pixel: vec2<f32>, phase: f32) -> CloudSample {
+    var none: CloudSample;
     if direction.y <= 0.01 {
-        return vec4<f32>(0.0);
+        return none;
     }
     let base = frame.clouds.y;
     let top = base + frame.clouds.w;
@@ -144,12 +173,13 @@ fn fs_clouds_volumetric(in: SkyOut) -> @location(0) vec4<f32> {
     let start = max((base - camera.y) / direction.y, 0.0);
     let end = min(max((top - camera.y) / direction.y, 0.0), CLOUD_REACH);
     if end <= start {
-        return vec4<f32>(0.0);
+        return none;
     }
     let steps = max(i32(frame.cloud_drift.w), 1);
     let step = (end - start) / f32(steps);
-    // A per-pixel offset breaks the steps' banding into fine noise.
-    let jitter = fract(sin(dot(in.clip.xy, vec2<f32>(12.9898, 78.233))) * 43758.5453);
+    // A per-pixel offset breaks the steps' banding into fine noise; it
+    // moves each frame (`phase`), so the temporal history gathers them.
+    let jitter = fract(fract(sin(dot(pixel, vec2<f32>(12.9898, 78.233))) * 43758.5453) + phase);
     let sun_up = smoothstep(-0.05, 0.15, frame.sun.y) * frame.sun.w;
     let sun = frame.sun_color.rgb * min(frame.sun_color.w, 1.5) * sun_up;
     let toward_sun = normalize(frame.sun.xyz + vec3<f32>(0.0, 1e-3, 0.0));
@@ -167,6 +197,7 @@ fn fs_clouds_volumetric(in: SkyOut) -> @location(0) vec4<f32> {
     let ambient = mix(vec3<f32>(grey), behind, 0.5) * 1.05;
     var transmittance = 1.0;
     var color = vec3<f32>(0.0);
+    var weighted = 0.0;
     for (var index = 0; index < steps; index = index + 1) {
         let t = start + (f32(index) + jitter) * step;
         let position = camera + direction * t;
@@ -189,14 +220,55 @@ fn fs_clouds_volumetric(in: SkyOut) -> @location(0) vec4<f32> {
             + ambient * mix(0.6, 0.9, height)) * (1.0 - 0.6 * darkness);
         let passes = exp(-extinction * step);
         color += transmittance * lit * (1.0 - passes);
+        weighted += transmittance * (1.0 - passes) * t;
         transmittance *= passes;
         if transmittance < 0.02 {
             break;
         }
     }
     let fade = smoothstep(0.02, 0.3, direction.y) * (1.0 - smoothstep(CLOUD_REACH * 0.5, CLOUD_REACH, start));
-    let alpha = (1.0 - transmittance) * fade;
-    return vec4<f32>(sky.cloud_color.rgb * color * fade, alpha);
+    let opacity = 1.0 - transmittance;
+    var sample: CloudSample;
+    sample.color = vec4<f32>(sky.cloud_color.rgb * color * fade, opacity * fade);
+    // Where the cloud the ray sees stands, for reprojection: its
+    // opacity-weighted distance, or the slab's middle through clear air.
+    sample.distance = select((start + end) * 0.5, weighted / opacity, opacity > 1e-3);
+    return sample;
+}
+
+// One pixel of the reduced clouds, blended with its history.
+@fragment
+fn fs_clouds_march(in: SkyOut) -> @location(0) vec4<f32> {
+    let direction = view_direction(in.ndc);
+    let current = march_clouds(direction, in.clip.xy, cloud_march.temporal.y);
+    let weight = cloud_march.temporal.x;
+    if weight <= 0.0 {
+        return current.color;
+    }
+    // The cloud this pixel sees, where it stood a frame ago (it drifted),
+    // as the previous view saw it.
+    let point = frame.camera.xyz + direction * current.distance;
+    let drifted = point - vec3<f32>(frame.cloud_drift.x, 0.0, frame.cloud_drift.y) * cloud_march.prev_eye.w;
+    let clip = cloud_march.prev_view_proj * vec4<f32>(drifted, 1.0);
+    if clip.w <= 0.0 {
+        return current.color;
+    }
+    let uv = vec2<f32>(clip.x / clip.w * 0.5 + 0.5, 0.5 - clip.y / clip.w * 0.5);
+    if any(uv < vec2<f32>(0.0)) || any(uv > vec2<f32>(1.0)) {
+        return current.color;
+    }
+    let previous = textureSampleLevel(cloud_history, cloud_sampler, uv, 0.0);
+    // A pixel whose cloud moved across the target trusts its history less.
+    let size = cloud_march.temporal.zw;
+    let moved = length((uv - in.clip.xy / size) * size);
+    return mix(previous, current.color, clamp(weight + moved * 0.5, weight, 1.0));
+}
+
+// The reduced clouds over the view's background, upscaled.
+@fragment
+fn fs_clouds_composite(in: SkyOut) -> @location(0) vec4<f32> {
+    let uv = vec2<f32>(in.ndc.x * 0.5 + 0.5, 0.5 - in.ndc.y * 0.5);
+    return textureSampleLevel(cloud_current, cloud_sampler, uv, 0.0);
 }
 
 // Added onto the background (one-one blending).
