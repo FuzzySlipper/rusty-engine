@@ -641,9 +641,9 @@ internal static class Emit
             string assignments = string.Join(", ", value.Fields.Select(field => $"{RawIdentifier(field.Name)} = {ToNativeFieldExpression(model, value, field, $"value.{Pascal(field.Name)}")}"));
             string arguments = string.Join(", ", value.Fields.Select(field => FromNativeExpression(field, $"value.{RawIdentifier(field.Name)}")));
             output.AppendLine($"    internal static {value.Name} ToNative({safe} value) => new() {{ {assignments} }};");
-            if (HasDisposableHandleField(model, value))
+            if (ContainsDisposableHandle(model, value))
             {
-                if (IsOwnedHandleOutputStructure(model, value)) EmitOwnedHandleFieldConversion(output, model, value);
+                if (HasDisposableHandleField(model, value) && IsOwnedHandleOutputStructure(model, value)) EmitOwnedHandleFieldConversion(output, model, value);
                 continue;
             }
             output.AppendLine($"    internal static {safe} FromNative({value.Name} value) => new({arguments});");
@@ -1211,6 +1211,14 @@ internal static class Emit
     }
     private static IEnumerable<Field> DisposableHandleFields(BindingModel model, Struct value) => value.Fields.Where(field => IsDisposableHandle(model, BindingModel.Bare(field.Type)));
     private static bool HasDisposableHandleField(BindingModel model, Struct value) => DisposableHandleFields(model, value).Any();
+    // A value holding a disposable handle, itself or in a nested value (an
+    // OptionalCamera in a request), converts only toward native: a raw handle
+    // cannot rebuild its owner.
+    private static bool ContainsDisposableHandle(BindingModel model, Struct value) => HasDisposableHandleField(model, value)
+        || value.Fields.Any(field => !field.Type.Contains('*', StringComparison.Ordinal)
+            && model.Structs.TryGetValue(BindingModel.Bare(field.Type), out Struct? nested)
+            && nested.Name != value.Name
+            && ContainsDisposableHandle(model, nested));
     private static bool IsOwnedHandleOutputStructure(BindingModel model, Struct value) => model.Services
         .SelectMany(service => service.Operations.Select(operation => model.Callbacks[operation.Callback]))
         .Select(ResultParameter)

@@ -961,10 +961,15 @@ up the slab, so a cloud and its shadow agree.
   - A view seen for the first time, a new size, or a camera that jumps
     more than 50 m starts afresh with no history.
 - It is timed as the `clouds` pass, the march and the composite together.
-  On an RX 9070 XT, in a view filled with sky:
-  - at 1920×1080, about 0.7 ms (`Low`) and 1.3 ms (`High`), where marching
-    every pixel cost 2.2 and 4.0 ms;
-  - at 2560×1440, about 1.1 and 2.1 ms.
+  In the lighting fixture's noon and dusk skies (`Low` / `High`; the flat
+  layer alone in brackets):
+
+  | GPU | 1920×1080 | 2560×1440 |
+  | --- | --- | --- |
+  | RX 9070 XT | 0.7 / 1.2–1.3 ms (0.38) | 1.1–1.2 / 2.1–2.2 ms (0.66) |
+  | RTX 3080 | 0.35 / 0.6–0.65 ms (0.19) | 0.65–0.7 / 1.1 ms (0.35) |
+
+  Marching every pixel cost 2.2 and 4.0 ms at 1920×1080 on the RX 9070 XT.
 - Off draws the flat layer exactly as before; a software adapter refuses
   it (`SoftwareAdapter`) and draws the flat layer.
 - Seen low across the sky, rays cross many clouds, so a given coverage looks
@@ -1090,6 +1095,18 @@ engine.CameraView.RemoveFogVolume(new(1));
     frame samples cell centres with no history, exactly as an unfiltered
     grid would, so a still capture draws the same.
   - The history adds one grid-sized copy a frame.
+- It is timed as the `volumetric-fog` pass. The grid does not follow the
+  resolution, so it costs the same at 1920×1080 and 2560×1440; more lights
+  in reach cost more (`Low` / `High`, under a 0.02 to 0.03 haze):
+
+  | Scene | RX 9070 XT | RTX 3080 |
+  | --- | --- | --- |
+  | CraftSurvive meadow (sun) | 0.13 / 0.29 ms | 0.12 / 0.26 ms |
+  | CraftSurvive canyon | 0.05 / 0.08 ms | 0.06 / 0.10 ms |
+  | Lighting fixture room (torch) | 0.05 / 0.09 ms | 0.05 / 0.10 ms |
+  | Hotel corridor (23 shadowed lamps) | 0.16 / 0.37 ms | 0.11 / 0.29 ms |
+
+  The finish pass reads the grid at no measurable cost.
 - It needs compute shaders on a GPU: a device without them, or a software
   adapter, refuses the setting (`NoComputeShaders`, `SoftwareAdapter`) and
   draws the analytic fog alone. Off, or on with no medium and no volumes, it
@@ -1106,7 +1123,7 @@ presentations moved there, stand in **backdrop units**. The product links
 the layer to the world's cameras:
 
 ```csharp
-// Every view without a link of its own (camera 0), anchored at a world point of the walking session.
+// Every view without a link of its own (no camera), anchored at a world point of the walking session.
 engine.CameraView.SetBackdrop(new(Camera: default, Session: walking,
     Anchor: new(CellX: 0, CellY: 0, CellZ: 0, OffsetX: 0, OffsetY: 0, OffsetZ: 0),
     Origin: Vector3.Zero, Scale: 1000));
@@ -1125,9 +1142,12 @@ engine.Presentation.CreateEmitter(smoke with { Backdrop = true });
   where it was with no product call. Without one (`default`), the anchor is
   in the cameras' local frame as given. The product moves either whenever
   it wants, for example to recentre on a region.
-- `Camera` links one camera's views (its id); `default` links every view
-  without a link of its own. Two views can take different links, or only
-  one view a backdrop. `ClearBackdrop(new(camera))` removes one.
+- `Camera` links one camera's views; `default` links every view without a
+  link of its own. Two views can take different links, or only one view a
+  backdrop. `ClearBackdrop(new(camera))` removes one, and
+  `ClearBackdrop(new(default))` the link every view takes. (`Camera` and
+  `Session` are `OptionalCamera` and `OptionalSpatialSession`: a camera or
+  session converts to one, and `default` is none.)
 - Each world view draws the backdrop with its own rotation and field of view
   from `Origin + (eye − Anchor) / Scale`, so walking 100 m at 1:1000 moves
   the backdrop camera 0.1 units, and turning turns both alike.

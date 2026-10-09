@@ -310,7 +310,7 @@ pub const RENDERER_SETTING_OPTIONS: &[RendererSettingOption] = &[
             choices: VOLUMETRIC_FOG_CHOICES,
         },
         restart: false,
-        cost: "Low 0.15 to 0.4 ms at 1920×1080 on an RX 9070 XT across a canyon, a room and a corridor; High about 1.5 ms. Nothing while the scene has no fog.",
+        cost: "Low 0.05 to 0.16 ms and High 0.08 to 0.37 ms on an RX 9070 XT across a meadow, a canyon, a room and a corridor of 23 shadowed lamps (0.05 to 0.12 and 0.10 to 0.29 on an RTX 3080), at any resolution. Nothing while the scene has no fog.",
         gallery: GalleryExperiment::Try { values: &["low"], everything: Some("low"), requires: None, setup: Some(GallerySetup::SceneFog) },
     },
     RendererSettingOption {
@@ -322,7 +322,7 @@ pub const RENDERER_SETTING_OPTIONS: &[RendererSettingOption] = &[
             choices: VOLUMETRIC_FOG_CHOICES,
         },
         restart: false,
-        cost: "Low about 1.0 ms and High about 1.9 ms at 1920×1080 on an RX 9070 XT in a sky-filled view. Nothing without clouds.",
+        cost: "In a sky-filled view at 1920×1080, Low about 0.7 ms and High about 1.3 ms on an RX 9070 XT (0.35 and 0.65 on an RTX 3080), the flat layer's 0.4 ms included. Nothing without clouds.",
         gallery: GalleryExperiment::Try { values: &["low"], everything: Some("low"), requires: None, setup: Some(GallerySetup::Product("a cloud layer or regions (CameraView.SetClouds)")) },
     },
     RendererSettingOption {

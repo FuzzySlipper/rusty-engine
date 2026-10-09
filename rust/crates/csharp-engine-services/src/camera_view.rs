@@ -1014,18 +1014,19 @@ impl RuntimeCameraViewBridge {
                 "the backdrop's origin must be finite and its scale above 0",
             ));
         }
-        if request.session.value != 0
+        let session = request.session.session;
+        if session.value != 0
             && self
                 .spatial
                 .as_ref()
-                .and_then(|spatial| spatial.world_origin(request.session))
+                .and_then(|spatial| spatial.world_origin(session))
                 .is_none()
         {
             return Err(refused(
                 "the backdrop's anchor names a spatial session that does not live",
             ));
         }
-        let camera = request.camera.value;
+        let camera = request.camera.camera.value;
         let staged = self.staged_mut()?;
         if camera != 0 && !staged.state.cameras.contains_key(&camera) {
             return Err(refused("the backdrop names a camera that does not live"));
@@ -1033,7 +1034,7 @@ impl RuntimeCameraViewBridge {
         staged.backdrops.push((
             camera,
             Some(BackdropLink {
-                session: request.session.value,
+                session: session.value,
                 anchor,
                 origin,
                 scale,
@@ -1048,7 +1049,7 @@ impl RuntimeCameraViewBridge {
     ) -> Result<(), CsharpEngineServicesError> {
         self.staged_mut()?
             .backdrops
-            .push((request.camera.value, None));
+            .push((request.camera.camera.value, None));
         Ok(())
     }
 

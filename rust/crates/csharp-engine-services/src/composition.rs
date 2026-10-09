@@ -2266,8 +2266,8 @@ mod tests {
         let mut session = NativeSpatialSessionHandle::default();
         let mut camera = NativeCameraHandle::default();
         let backdrop = |camera, session| NativeBackdropRequest {
-            camera,
-            session,
+            camera: NativeOptionalCamera { camera },
+            session: NativeOptionalSpatialSession { session },
             anchor: NativeWorldOriginGlobalPosition {
                 cell_x: 5000,
                 cell_y: 0,
@@ -2415,7 +2415,9 @@ mod tests {
             assert_eq!(
                 (view.clear_backdrop)(
                     view.context,
-                    &NativeClearBackdropRequest { camera },
+                    &NativeClearBackdropRequest {
+                        camera: NativeOptionalCamera { camera },
+                    },
                     std::ptr::null_mut()
                 ),
                 ABI_OK

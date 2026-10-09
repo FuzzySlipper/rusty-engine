@@ -480,7 +480,7 @@ convenience over this same retained composition. A perspective camera's
 `ViewmodelFovYDegrees` (0, the default, for the camera's own field of view)
 draws the viewmodel layer with a field of view of its own, so hands and a
 weapon keep the narrower one first-person games give them while the world
-keeps the player's. `SetBackdrop` links the `Backdrop` render layer to every
+keeps the player's. `SetBackdrop` links the `Backdrop` render layer to one camera's views or every
 world view: each draws it behind its world from the view's own rotation and
 field of view at a scaled place, as a "3D skybox" (see
 [the backdrop](lighting-and-sky.md#the-backdrop)). Use `CameraViewports` for

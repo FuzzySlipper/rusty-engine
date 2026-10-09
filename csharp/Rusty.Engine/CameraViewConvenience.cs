@@ -31,3 +31,15 @@ public readonly partial record struct CloudRegionRequest
     {
     }
 }
+
+public readonly partial record struct OptionalCamera
+{
+    /// <summary>The camera; <c>default</c> is none.</summary>
+    public static implicit operator OptionalCamera(Camera camera) => new(camera);
+}
+
+public readonly partial record struct OptionalSpatialSession
+{
+    /// <summary>The session; <c>default</c> is none.</summary>
+    public static implicit operator OptionalSpatialSession(SpatialSession session) => new(session);
+}
