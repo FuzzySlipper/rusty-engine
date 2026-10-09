@@ -72,6 +72,8 @@ fn clouds_sized(coverage: f32, scale: f32) -> RenderDiff {
             altitude: 1500.0,
             scale,
             color: [1.0; 3],
+            thickness: 0.0,
+            kind: CloudKind::Cumulus,
         }),
     }
 }

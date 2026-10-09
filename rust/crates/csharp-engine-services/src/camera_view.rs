@@ -867,11 +867,13 @@ impl RuntimeCameraViewBridge {
             altitude: request.altitude,
             scale: request.scale,
             color: [request.color.x, request.color.y, request.color.z],
+            thickness: request.thickness,
+            kind: cloud_kind(request.kind),
         };
         if !clouds.valid() {
             return Err(CsharpEngineServicesError::new(
                 "CSHARP_CLOUDS",
-                "clouds need coverage within 0 to 1, a finite drift of at most 1000 m/s, an altitude and scale above 0 and at most 100 km, and colour channels within 0 to 16",
+                "clouds need coverage within 0 to 1, a finite drift of at most 1000 m/s, an altitude and scale above 0 and at most 100 km, a thickness from 0 to 100 km, and colour channels within 0 to 16",
             ));
         }
         self.staged_mut()?.clouds = Some((request.coverage > 0.0).then_some(clouds));
@@ -931,11 +933,13 @@ impl RuntimeCameraViewBridge {
             coverage: request.coverage,
             darkness: request.darkness,
             drift: [request.drift.x, request.drift.y],
+            kind: cloud_kind(request.kind),
+            thickness: request.thickness,
         };
         if !region.valid() {
             return Err(CsharpEngineServicesError::new(
                 "CSHARP_CLOUD_REGION",
-                "a cloud region needs a finite centre and drift, a radius above 0 and at most 1000 km, and coverage and darkness within 0 to 1",
+                "a cloud region needs a finite centre and drift, a radius above 0 and at most 1000 km, coverage and darkness within 0 to 1, and a thickness from 0 to 100 km",
             ));
         }
         self.staged_mut()?
@@ -2292,6 +2296,14 @@ pub(crate) unsafe extern "C" fn remove_fog_volume(
             bridge.operation_diagnostics.retain(&error, operation_error);
             0
         }
+    }
+}
+
+fn cloud_kind(kind: NativeCloudKind) -> render_model::CloudKind {
+    match kind {
+        NativeCloudKind::Cumulus => render_model::CloudKind::Cumulus,
+        NativeCloudKind::Stratus => render_model::CloudKind::Stratus,
+        NativeCloudKind::Cumulonimbus => render_model::CloudKind::Cumulonimbus,
     }
 }
 

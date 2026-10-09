@@ -5,7 +5,7 @@
 
 #import rusty::types::PI
 #import rusty::view::frame
-#import rusty::clouds::{cloud_cover, cloud_coverage, cloud_density, cloud_detail, CLOUD_OCTAVES}
+#import rusty::clouds::{cloud_cover, cloud_coverage, cloud_density, cloud_detail, cloud_kind_detail, CLOUD_OCTAVES}
 
 struct SkyUniform {
     // x: blend amount toward the second panorama
@@ -89,9 +89,9 @@ fn fs_clouds(in: SkyOut) -> @location(0) vec4<f32> {
     let rise = max(direction.y, 0.02);
     let ground = frame.camera.xz + direction.xz * (above / rise);
     let p = (ground - sky.cloud_drift.xy * frame.time.x) / sky.clouds.z;
-    let detail = cloud_detail(direction.y);
     // The layer's coverage raised by the regions over this point.
     let coverage = cloud_coverage(ground);
+    let detail = cloud_kind_detail(cloud_detail(direction.y), coverage.w);
     let cover = cloud_cover(p, detail, coverage.x, CLOUD_OCTAVES);
     // Toward the sun across the layer, in clouds.
     let across = frame.sun.xz;
@@ -182,8 +182,9 @@ fn fs_clouds_volumetric(in: SkyOut) -> @location(0) vec4<f32> {
             + CLOUD_MULTIPLE_SCATTER * exp(-CLOUD_EXTINCTION * CLOUD_MULTIPLE_REACH * optical);
         let extinction = density * CLOUD_EXTINCTION;
         let powder = 1.0 - exp(-2.0 * extinction * step);
-        let height = clamp((position.y - base) / max(frame.clouds.w, 1.0), 0.0, 1.0);
-        let darkness = cloud_coverage(position.xz).y;
+        let here = cloud_coverage(position.xz);
+        let height = clamp((position.y - base) / max(here.z, 1.0), 0.0, 1.0);
+        let darkness = here.y;
         let lit = (sun * through * lobe * mix(0.7, 1.0, powder) * 0.45
             + ambient * mix(0.6, 0.9, height)) * (1.0 - 0.6 * darkness);
         let passes = exp(-extinction * step);

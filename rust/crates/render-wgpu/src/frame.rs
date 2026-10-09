@@ -45,10 +45,11 @@ const LIGHT_ROW_FLOATS: usize = 16;
 /// and the tone mapping and fog modes; then the presentation time and the
 /// colour grading; then the sun, the atmosphere and the sky's light; then
 /// the indirect light volume's origin and grid and the wind; then the cloud
-/// layer and its drift, the surfaces' wetness and the backdrop's link; then
-/// the light cluster grid and depth range.
+/// layer, its drift and its shape, the surfaces' wetness and the backdrop's
+/// link; then the light cluster grid and depth range.
 const FRAME_UNIFORM_BYTES: u64 =
-    (16 + 16 + 4 + 4 + 4 + 4 + 4 + 4 + 4 + 4 + 4 * 4 + 4 + 4 + 4 + 4 + 4 + 4 + 4 + 4 + 4 + 4) * 4;
+    (16 + 16 + 4 + 4 + 4 + 4 + 4 + 4 + 4 + 4 + 4 * 4 + 4 + 4 + 4 + 4 + 4 + 4 + 4 + 4 + 4 + 4 + 4)
+        * 4;
 /// The backdrop camera's depth range reaches this much past what it shows,
 /// either way.
 const BACKDROP_DEPTH_MARGIN: f32 = 1.01;
@@ -1936,14 +1937,15 @@ impl Renderer {
         } else {
             0.0
         };
-        for value in clouds_uniform(self.tables.clouds, self.tables.cloud_regions.len(), steps) {
+        let regions: Vec<render_model::CloudRegionDescriptor> =
+            self.tables.cloud_regions.values().copied().collect();
+        for value in clouds_uniform(self.tables.clouds, &regions, steps) {
             bytes.extend_from_slice(&value.to_le_bytes());
         }
-        if !self.tables.cloud_regions.is_empty() {
-            let rows: Vec<[f32; 8]> = self
-                .tables
-                .cloud_regions
-                .values()
+        if !regions.is_empty() {
+            let layer = drawn_clouds(self.tables.clouds, regions.len());
+            let rows: Vec<[f32; 12]> = regions
+                .iter()
                 .map(|region| {
                     [
                         region.center[0],
@@ -1953,6 +1955,10 @@ impl Renderer {
                         region.drift[0],
                         region.drift[1],
                         region.darkness,
+                        0.0,
+                        region_thickness(region, layer),
+                        region.kind.profile(),
+                        0.0,
                         0.0,
                     ]
                 })
@@ -2864,7 +2870,7 @@ fn wind_uniform(wind: Option<WindDescriptor>) -> [f32; 4] {
 }
 
 /// Bytes of one cloud region row (`rusty::types::CloudRegion`).
-pub(crate) const CLOUD_REGION_BYTES: u64 = 32;
+pub(crate) const CLOUD_REGION_BYTES: u64 = 48;
 
 /// Raymarch steps through the volumetric cloud slab: low, high.
 const VOLUMETRIC_CLOUD_STEPS: [f32; 2] = [12.0, 24.0];
@@ -2891,32 +2897,68 @@ pub(crate) fn drawn_clouds(
             altitude: DEFAULT_CLOUD_ALTITUDE,
             scale: DEFAULT_CLOUD_SCALE,
             color: [1.0, 1.0, 1.0],
+            thickness: 0.0,
+            kind: render_model::CloudKind::Cumulus,
         }),
         _ => None,
     }
 }
 
+/// The volumetric thickness of a layer: its own, or six tenths of its
+/// altitude.
+fn layer_thickness(clouds: &render_model::CloudsDescriptor) -> f32 {
+    if clouds.thickness > 0.0 {
+        clouds.thickness
+    } else {
+        clouds.altitude * CLOUD_THICKNESS_SHARE
+    }
+}
+
+/// A region's volumetric thickness: its own, or the layer's.
+fn region_thickness(
+    region: &render_model::CloudRegionDescriptor,
+    layer: Option<render_model::CloudsDescriptor>,
+) -> f32 {
+    if region.thickness > 0.0 {
+        region.thickness
+    } else {
+        layer.map_or(0.0, |layer| layer_thickness(&layer))
+    }
+}
+
 /// The frame uniform's cloud rows (`rusty::clouds`): coverage, altitude,
-/// cloud size and the volumetric slab's thickness; then the drift, the
-/// number of cloud regions and the volumetric raymarch's steps (0: the flat
-/// layer). All zero without a layer or regions.
+/// cloud size and the tallest clouds' thickness (the volumetric slab the
+/// raymarch spans); then the drift, the number of cloud regions and the
+/// volumetric raymarch's steps (0: the flat layer); then the layer's own
+/// thickness and kind. All zero without a layer or regions.
 fn clouds_uniform(
     clouds: Option<render_model::CloudsDescriptor>,
-    regions: usize,
+    regions: &[render_model::CloudRegionDescriptor],
     steps: f32,
-) -> [f32; 8] {
-    match drawn_clouds(clouds, regions) {
-        Some(clouds) => [
-            clouds.coverage,
-            clouds.altitude,
-            clouds.scale,
-            clouds.altitude * CLOUD_THICKNESS_SHARE,
-            clouds.drift[0],
-            clouds.drift[1],
-            regions as f32,
-            steps,
-        ],
-        None => [0.0; 8],
+) -> [f32; 12] {
+    match drawn_clouds(clouds, regions.len()) {
+        Some(layer) => {
+            let own = layer_thickness(&layer);
+            let tallest = regions
+                .iter()
+                .map(|region| region_thickness(region, Some(layer)))
+                .fold(own, f32::max);
+            [
+                layer.coverage,
+                layer.altitude,
+                layer.scale,
+                tallest,
+                layer.drift[0],
+                layer.drift[1],
+                regions.len() as f32,
+                steps,
+                own,
+                layer.kind.profile(),
+                0.0,
+                0.0,
+            ]
+        }
+        None => [0.0; 12],
     }
 }
 

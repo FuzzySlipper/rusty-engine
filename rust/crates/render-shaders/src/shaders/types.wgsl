@@ -60,6 +60,10 @@ struct Frame {
     // per second; z: the cloud regions at `rusty::view` binding 13; w: the
     // volumetric raymarch's steps (0: the flat layer).
     cloud_drift: vec4<f32>,
+    // The layer's own shape: x its volumetric thickness, metres; y its
+    // kind (0 stratus, 1 cumulus, 2 cumulonimbus). `clouds.w` is the
+    // tallest of it and the regions', which the raymarch spans.
+    cloud_shape: vec4<f32>,
     // The surfaces' wetness (`lighting.wgsl` `wetted`): x how wet (0 dry to
     // 1 soaked), y how much standing water gathers in puddles (0 to 1).
     weather: vec4<f32>,
@@ -116,6 +120,10 @@ struct Light {
 struct CloudRegion {
     center_radius: vec4<f32>,
     drift_darkness: vec4<f32>,
+    // x: how tall its volumetric clouds stand, metres; y: their kind
+    // (`rusty::clouds::cloud_profile`: 0 stratus, 1 cumulus, 2
+    // cumulonimbus).
+    shape: vec4<f32>,
 };
 
 // A shadow layer (render-wgpu `shadows.rs`): its view, and where its map

@@ -77,6 +77,8 @@ fn layer(coverage: f32) -> RenderDiff {
             altitude: 1500.0,
             scale: 600.0,
             color: [1.0; 3],
+            thickness: 0.0,
+            kind: CloudKind::Cumulus,
         }),
     }
 }
@@ -91,6 +93,8 @@ fn region(id: u32, center: [f32; 2], radius: f32) -> RenderDiff {
             coverage: 1.0,
             darkness: 0.5,
             drift: [0.0, 0.0],
+            thickness: 0.0,
+            kind: CloudKind::Cumulus,
         },
     }
 }
@@ -235,6 +239,8 @@ fn invalid_regions_are_refused_by_the_model() {
         coverage: 0.5,
         darkness: 0.0,
         drift: [0.0, 0.0],
+        thickness: 0.0,
+        kind: CloudKind::Cumulus,
     };
     assert!(RenderDiff::SetCloudRegion { id: 1, region }
         .validate()
@@ -248,4 +254,82 @@ fn invalid_regions_are_refused_by_the_model() {
     assert!(RenderDiff::SetCloudRegion { id: 1, region }
         .validate()
         .is_err());
+}
+
+#[test]
+fn a_tower_and_a_sheet_rise_from_one_base_to_their_own_heights() {
+    // A region 15 km ahead seen level from the ground: a 200 m stratus sheet
+    // and a 6 km cumulonimbus tower, both from the layer's 1500 m altitude.
+    let render = |kind: CloudKind, thickness: f32| {
+        let mut harness = scene(VolumetricCloudsQuality::High);
+        harness.apply(vec![layer(0.0)]);
+        harness.apply(vec![RenderDiff::SetCloudRegion {
+            id: 1,
+            region: CloudRegionDescriptor {
+                center: [0.0, -15_000.0],
+                radius: 4000.0,
+                coverage: 1.0,
+                darkness: 0.0,
+                drift: [0.0, 0.0],
+                kind,
+                thickness,
+            },
+        }]);
+        harness.renderer.set_animation_time(2.0);
+        let image = harness.render(&camera([0.0, 1.0, 0.0], 0.0, 15.0)).1;
+        let refused = harness
+            .renderer
+            .settings_readout()
+            .volumetric_clouds
+            .is_some();
+        (image, refused)
+    };
+    let mut bare = scene(VolumetricCloudsQuality::High);
+    bare.renderer.set_animation_time(2.0);
+    let bare = bare.render(&camera([0.0, 1.0, 0.0], 0.0, 15.0)).1;
+    let (sheet, refused) = render(CloudKind::Stratus, 200.0);
+    if refused {
+        // A software adapter draws the flat layer, which has no height.
+        return;
+    }
+    let (tower, _) = render(CloudKind::Cumulonimbus, 6000.0);
+    keep("sheet", &sheet);
+    keep("tower", &tower);
+    // The rows (top 0) across the middle third where the clouds changed the
+    // sky by more than a thin edge.
+    let clouded_rows = |with: &[u8]| -> Vec<u32> {
+        (0..HEIGHT)
+            .filter(|&row| {
+                let changed = (WIDTH / 3..2 * WIDTH / 3)
+                    .filter(|&column| {
+                        let at = ((row * WIDTH + column) * 4) as usize;
+                        (0..3)
+                            .map(|c| (i32::from(bare[at + c]) - i32::from(with[at + c])).abs())
+                            .sum::<i32>()
+                            > 30
+                    })
+                    .count();
+                changed * 4 > (WIDTH / 3) as usize
+            })
+            .collect()
+    };
+    let (sheet_rows, tower_rows) = (clouded_rows(&sheet), clouded_rows(&tower));
+    assert!(
+        !sheet_rows.is_empty() && !tower_rows.is_empty(),
+        "both draw"
+    );
+    let top = |rows: &[u32]| *rows.iter().min().unwrap();
+    let bottom = |rows: &[u32]| *rows.iter().max().unwrap();
+    assert!(
+        top(&tower_rows) + 30 < top(&sheet_rows),
+        "the tower stands far higher than the sheet: tops at rows {} and {}",
+        top(&tower_rows),
+        top(&sheet_rows)
+    );
+    assert!(
+        bottom(&tower_rows).abs_diff(bottom(&sheet_rows)) <= 6,
+        "from one base: bottoms at rows {} and {}",
+        bottom(&tower_rows),
+        bottom(&sheet_rows)
+    );
 }

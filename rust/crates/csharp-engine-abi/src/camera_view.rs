@@ -410,13 +410,26 @@ pub struct NativeWindRequest {
     pub gust: f32,
 }
 
+/// What clouds a layer or region holds, shaping the volumetric clouds by
+/// height: a thin flat sheet, heaped clouds with flat bottoms (the
+/// default), or towering storm cells.
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum NativeCloudKind {
+    #[default]
+    Cumulus = 0,
+    Stratus = 1,
+    Cumulonimbus = 2,
+}
+
 /// The sky's cloud layer, drawn over the sky panorama and lit by the sun.
 /// `coverage` (0 to 1) is how much of the sky it covers, and 0 (the
 /// default) draws no clouds; `drift` is its velocity over the ground (world
 /// x, z) in metres per second (at most 1000); `altitude` (above 0, at most
 /// 100 km) is the layer's height and `scale` (likewise) the size of one
 /// cloud, in metres; `color` (linear, 0 to 16 a channel) tints the light
-/// they take.
+/// they take. The volumetric clouds stand from `altitude` up by `thickness`
+/// metres (0: six tenths of the altitude), shaped by `kind`.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeCloudsRequest {
@@ -425,6 +438,8 @@ pub struct NativeCloudsRequest {
     pub altitude: f32,
     pub scale: f32,
     pub color: NativeVec3,
+    pub thickness: f32,
+    pub kind: NativeCloudKind,
 }
 
 /// How wet the scene's lit surfaces are, after rain. `wetness` (0 to 1, 0
@@ -444,7 +459,10 @@ pub struct NativeWetnessRequest {
 /// (world x, z), fading over its outer third and drifting at `drift` metres
 /// per second; `darkness` (0 to 1) darkens its clouds' undersides. The cloud
 /// layer, flat or volumetric, and its shade on the ground take the most
-/// cloud of the layer and every region. At most 32 regions.
+/// cloud of the layer and every region. At most 32 regions. Its volumetric
+/// clouds are of `kind` and stand `thickness` metres tall from the layer's
+/// altitude (0: the layer's thickness), blending into the layer's over its
+/// outer third: a towering storm front beside a thin overcast at one base.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeCloudRegionRequest {
@@ -454,6 +472,8 @@ pub struct NativeCloudRegionRequest {
     pub coverage: f32,
     pub darkness: f32,
     pub drift: NativeVec2,
+    pub kind: NativeCloudKind,
+    pub thickness: f32,
 }
 
 /// Links the backdrop layer (`RenderLayer.Backdrop`) to the world's

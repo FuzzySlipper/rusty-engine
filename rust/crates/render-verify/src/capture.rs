@@ -460,6 +460,21 @@ fn stage(
             .iter()
             .map(|(key, value)| format!("-p:{key}={value}")),
     );
+    // A product that takes its pair from the rusty cache finds this one in a
+    // private cache (RUSTY_ENGINE_CACHE), never the shared one.
+    let cache = work.join("cache");
+    let feed = cache.join("pairs").join(&pair.version).join("sdk-feed");
+    fs::create_dir_all(&feed).map_err(|error| format!("{}: {error}", feed.display()))?;
+    for entry in fs::read_dir(&pair.feed)
+        .map_err(|error| format!("{}: {error}", pair.feed.display()))?
+        .flatten()
+    {
+        let copy = feed.join(entry.file_name());
+        if !copy.exists() {
+            fs::copy(entry.path(), &copy)
+                .map_err(|error| format!("{}: {error}", copy.display()))?;
+        }
+    }
     for target in [None, Some("StageRustyEngineCoreClrProduct")] {
         let mut command = Command::new("dotnet");
         match target {
@@ -470,6 +485,7 @@ fn stage(
             .arg(project)
             .args(&common)
             .env("NUGET_PACKAGES", work.join("nuget"))
+            .env("RUSTY_ENGINE_CACHE", &cache)
             .env("DOTNET_CLI_HOME", work.join("dotnet"));
         let output = command
             .output()

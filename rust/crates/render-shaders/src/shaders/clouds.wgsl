@@ -53,13 +53,17 @@ fn cloud_cover(p: vec2<f32>, detail: f32, coverage: f32, octaves: i32) -> f32 {
     return smoothstep(threshold - 0.02, threshold + soft, shape) * step(0.0001, coverage);
 }
 
-// How much cloud the sky holds over world (x, z) `xz`, and how dark its
-// undersides are: the layer's coverage, raised by each cloud region (full
-// within two thirds of its radius, fading over the rest), drifting with the
-// region.
-fn cloud_coverage(xz: vec2<f32>) -> vec2<f32> {
+// How much cloud the sky holds over world (x, z) `xz`, and of what shape:
+// x the layer's coverage, raised by each cloud region (full within two
+// thirds of its radius, fading over the rest), drifting with the region; y
+// how dark the undersides are; z how tall the volumetric clouds stand there,
+// metres; w their kind (`cloud_profile`). A region's shape takes over from
+// the layer's as its coverage does.
+fn cloud_coverage(xz: vec2<f32>) -> vec4<f32> {
     var coverage = frame.clouds.x;
     var darkness = 0.0;
+    var thickness = frame.cloud_shape.x;
+    var kind = frame.cloud_shape.y;
     let regions = u32(frame.cloud_drift.z);
     for (var index = 0u; index < regions; index = index + 1u) {
         let region = cloud_regions[index];
@@ -69,8 +73,29 @@ fn cloud_coverage(xz: vec2<f32>) -> vec2<f32> {
         let amount = region.center_radius.w * inside;
         coverage = max(coverage, amount);
         darkness = max(darkness, region.drift_darkness.z * inside);
+        thickness = mix(thickness, region.shape.x, inside);
+        kind = mix(kind, region.shape.y, inside);
     }
-    return vec2<f32>(min(coverage, 1.0), darkness);
+    return vec4<f32>(min(coverage, 1.0), darkness, thickness, kind);
+}
+
+// How a cloud of `kind` fills its height (`height` 0 at its base, 1 at its
+// top): a stratus sheet (0) is thin and even, cumulus (1) has a flat bottom
+// thinning toward the top, cumulonimbus (2) stands full almost to its top.
+fn cloud_profile(height: f32, kind: f32) -> f32 {
+    let stratus = smoothstep(0.0, 0.25, height) * (1.0 - smoothstep(0.45, 1.0, height));
+    let cumulus = smoothstep(0.0, 0.1, height) * (1.0 - smoothstep(0.55, 1.0, height));
+    let towering = smoothstep(0.0, 0.05, height) * (1.0 - smoothstep(0.88, 1.0, height));
+    if kind < 1.0 {
+        return mix(stratus, cumulus, kind);
+    }
+    return mix(cumulus, towering, kind - 1.0);
+}
+
+// How far the flat layer's detail reaches for a cloud of `kind`: a stratus
+// sheet shows little of the fine octaves.
+fn cloud_kind_detail(detail: f32, kind: f32) -> f32 {
+    return detail * mix(0.35, 1.0, min(kind, 1.0));
 }
 
 // What share of a directional light reaches `position` through the cloud
@@ -99,17 +124,18 @@ fn cloud_light(position: vec3<f32>, toward: vec3<f32>) -> f32 {
     if coverage.x <= 0.0 {
         return 1.0;
     }
+    let detail = cloud_kind_detail(cloud_detail(toward.y), coverage.w);
     var cover: f32;
     if frame.cloud_drift.w > 0.0 {
         // Volumetric clouds: the density a third of the way up the slab,
         // where the ray toward the light crosses it, so a cloud and its
         // shadow agree.
-        let middle = frame.clouds.y + frame.clouds.w * 0.33;
+        let middle = frame.clouds.y + coverage.z * 0.33;
         let crossing = position.xz + toward.xz * ((middle - position.y) / max(toward.y, 0.05));
         cover = smoothstep(0.0, 0.35, cloud_density(vec3<f32>(crossing.x, middle, crossing.y), 2));
     } else {
         let p = (plane - frame.cloud_drift.xy * frame.time.x) / frame.clouds.z;
-        cover = cloud_cover(p, cloud_detail(toward.y), coverage.x, CLOUD_SHADE_OCTAVES);
+        cover = cloud_cover(p, detail, coverage.x, CLOUD_SHADE_OCTAVES);
     }
     // A storm's dark cloud lets less through.
     return mix(1.0, CLOUD_SHADE * (1.0 - 0.6 * coverage.y), cover);
@@ -154,23 +180,28 @@ fn cloud_fbm_3d(p: vec3<f32>, octaves: i32) -> f32 {
 // The volumetric clouds' density at `position` (0 to 1): 3D noise at the
 // cloud size, wider than tall, kept where it rises above the sky's coverage
 // there (the layer's, raised by regions), so more coverage fills more of the
-// slab; shaped by height into flat bottoms that thin toward the top. Zero
-// outside the slab from the layer's altitude up by its thickness.
+// slab; shaped by height by the kind there (`cloud_profile`). Zero outside
+// the clouds' height there, from the layer's altitude up by their
+// thickness.
 fn cloud_density(position: vec3<f32>, octaves: i32) -> f32 {
-    let height = (position.y - frame.clouds.y) / max(frame.clouds.w, 1.0);
-    if height < 0.0 || height > 1.0 {
-        return 0.0;
-    }
-    let coverage = cloud_coverage(position.xz).x;
-    if coverage <= 0.0 {
+    let at = cloud_coverage(position.xz);
+    let coverage = at.x;
+    let kind = at.w;
+    let height = (position.y - frame.clouds.y) / max(at.z, 1.0);
+    if height < 0.0 || height > 1.0 || coverage <= 0.0 {
         return 0.0;
     }
     let drifted = position.xz - frame.cloud_drift.xy * frame.time.x;
-    let p = vec3<f32>(drifted.x, (position.y - frame.clouds.y) * 2.5, drifted.y) / frame.clouds.z;
+    // A sheet's billows are flat, a tower's tall.
+    var stretch = mix(4.0, 2.5, min(kind, 1.0));
+    if kind > 1.0 {
+        stretch = mix(2.5, 1.2, kind - 1.0);
+    }
+    let p = vec3<f32>(drifted.x, (position.y - frame.clouds.y) * stretch, drifted.y) / frame.clouds.z;
     let shape = cloud_fbm_3d(p, octaves);
-    let profile = smoothstep(0.0, 0.1, height) * (1.0 - smoothstep(0.55, 1.0, height));
+    let profile = cloud_profile(height, kind);
     // The noise sits mostly between 0.3 and 0.7: no coverage keeps none of
-    // it, full coverage nearly all.
-    let threshold = mix(0.72, 0.33, coverage);
+    // it, full coverage nearly all. A sheet fills more evenly.
+    let threshold = mix(0.72, 0.33, coverage) - 0.08 * (1.0 - min(kind, 1.0));
     return clamp((shape - threshold) / (1.0 - threshold) * 3.0, 0.0, 1.0) * profile;
 }

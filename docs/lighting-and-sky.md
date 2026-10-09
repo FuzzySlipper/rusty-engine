@@ -850,8 +850,10 @@ A cloud layer drifts over the sky panorama, lit by the sun:
 
 ```csharp
 engine.CameraView.SetClouds(new(Coverage: .6f, Drift: new Vector2(8, 3),
-    Altitude: 1200, Scale: 500, Color: Vector3.One));
+    Altitude: 1200, Scale: 500, Color: Vector3.One, Thickness: 0, Kind: CloudKind.Cumulus));
 ```
+
+`Thickness` and `Kind` shape the [volumetric clouds](#volumetric-clouds).
 
 - `Coverage` (0 to 1) is how much of the sky is cloud. 0 clears the layer,
   draws no `clouds` pass and leaves the sky exactly as without it (the
@@ -907,7 +909,7 @@ plain, a squall the player can see coming.
 
 ```csharp
 engine.CameraView.SetCloudRegion(new(Id: 1, Center: new(4000, -2500), Radius: 3000,
-    Coverage: .95f, Darkness: .6f, Drift: new(6, 2)));
+    Coverage: .95f, Darkness: .6f, Drift: new(6, 2), Kind: CloudKind.Cumulonimbus, Thickness: 9000));
 engine.CameraView.RemoveCloudRegion(new(1));
 ```
 
@@ -920,16 +922,23 @@ engine.CameraView.RemoveCloudRegion(new(1));
   it, so a storm overhead shades the ground under it. A region needs no layer
   coverage: with none set, it draws under a default layer 1500 m up with
   600 m clouds. At most 32 regions; they are retained camera-view state.
+- Its volumetric clouds take its own `Kind` and `Thickness` (metres from the
+  layer's altitude; 0 for the layer's), blending into the layer's over its
+  outer third. A towering cumulonimbus front and a thin stratus overcast can
+  stand at one base height.
 
 ### Volumetric clouds
 
 With the renderer's `VolumetricClouds` setting `Low` or `High`
 (`RustyEngineProductVolumetricClouds`, `RendererSettings`, the player's
 [video options](#video-options)), the cloud layer is raymarched through a
-slab from its altitude up by six tenths of it, instead of drawn as a sheet:
+slab from its altitude up by its `Thickness` (0: six tenths of the
+altitude; a region's own where it stands), instead of drawn as a sheet:
 billows of 3D noise at the cloud size, kept where they rise above the sky's
-coverage (the layer's, raised by its regions), with flat bottoms thinning
-toward the top. Each sample is lit by the sun through the cloud between it and
+coverage (the layer's, raised by its regions), shaped by height by their
+`Kind`: `Stratus` a thin even sheet, `Cumulus` (the default) flat bottoms
+thinning toward the top, `Cumulonimbus` full almost to its top, with tall
+billows. A stratus layer also draws smoother as the flat layer. Each sample is lit by the sun through the cloud between it and
 the sun (Beer's law with a multiple-scattering term, a forward lobe toward the
 sun and darker edges), and by the panorama behind it; a region's darkness
 darkens it. The ground's shade samples the same density a third of the way

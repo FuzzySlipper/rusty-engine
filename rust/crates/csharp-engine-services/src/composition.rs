@@ -2246,6 +2246,8 @@ mod tests {
             coverage: 0.9,
             darkness: 0.5,
             drift: NativeVec2 { x: 3.0, y: 0.0 },
+            thickness: 6000.0,
+            kind: NativeCloudKind::Cumulonimbus,
         };
         unsafe {
             let view = &api.camera_view;
@@ -2276,7 +2278,10 @@ mod tests {
                 [
                     render_model::RenderDiff::SetCloudRegion { id: 7, region },
                     render_model::RenderDiff::RemoveCloudRegion { id: 7 },
-                ] if region.center == [100.0, -40.0] && region.drift == [3.0, 0.0]
+                ] if region.center == [100.0, -40.0]
+                    && region.drift == [3.0, 0.0]
+                    && region.kind == render_model::CloudKind::Cumulonimbus
+                    && region.thickness == 6000.0
             ),
             "{ops:?}"
         );
@@ -2302,6 +2307,8 @@ mod tests {
                 y: 1.0,
                 z: 1.0,
             },
+            thickness: 0.0,
+            kind: NativeCloudKind::Cumulus,
         };
         services.begin_call(binding());
         let api = services.api();
@@ -2320,6 +2327,8 @@ mod tests {
                 altitude: 1500.0,
                 scale: 600.0,
                 color: [1.0; 3],
+                thickness: 0.0,
+                kind: render_model::CloudKind::Cumulus,
             }),
         };
         assert_eq!(

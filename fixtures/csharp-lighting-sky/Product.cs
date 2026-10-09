@@ -482,7 +482,7 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     [DebugCommand("lighting.clouds")]
     public string Clouds(float coverage)
     {
-        engine.CameraView.SetClouds(new(Math.Clamp(coverage,0,1),CloudDrift,CloudAltitude,CloudScale,CloudTint));
+        engine.CameraView.SetClouds(new(Math.Clamp(coverage,0,1),CloudDrift,CloudAltitude,CloudScale,CloudTint,0,CloudKind.Cumulus));
         engine.CameraView.UpdateCamera(new(camera,Camera(CloudsEye,CloudsTarget)));
         return Inspect();
     }
@@ -658,11 +658,16 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         engine.RendererSettings.Set(engine.RendererSettings.Read().Requested with { VolumetricClouds = level });
         return Inspect();
     }
-    // A storm: a cloud region over (x, z), radius metres, coverage and darkness 0..1, drifting east.
+    // A storm: a cloud region over (x, z), radius metres, coverage and darkness 0..1, drifting east, of the layer's kind and thickness.
     [DebugCommand("lighting.clouds.region")]
     public string CloudRegion(long id, float x, float z, float radius, float coverage, float darkness)
+        => CloudRegionShaped(id, x, z, radius, coverage, darkness, "cumulus", 0);
+    // The same with its own kind (stratus, cumulus or cumulonimbus) and volumetric thickness in metres (0: the layer's): a towering front beside a thin overcast at one base.
+    [DebugCommand("lighting.clouds.region.shaped")]
+    public string CloudRegionShaped(long id, float x, float z, float radius, float coverage, float darkness, string kind, float thickness)
     {
-        engine.CameraView.SetCloudRegion(new((uint)id,new(x,z),Math.Max(radius,1),Math.Clamp(coverage,0,1),Math.Clamp(darkness,0,1),StormDrift));
+        CloudKind shape = kind switch { "stratus" => CloudKind.Stratus, "cumulonimbus" => CloudKind.Cumulonimbus, _ => CloudKind.Cumulus };
+        engine.CameraView.SetCloudRegion(new((uint)id,new(x,z),Math.Max(radius,1),Math.Clamp(coverage,0,1),Math.Clamp(darkness,0,1),StormDrift,shape,Math.Max(thickness,0)));
         return Inspect();
     }
     [DebugCommand("lighting.clouds.region.remove")]

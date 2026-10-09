@@ -343,6 +343,14 @@ pub struct CloudRegionDescriptor {
     pub coverage: f32,
     pub darkness: f32,
     pub drift: [f32; 2],
+    /// The clouds it holds (`CloudKind`), in place of the layer's within it.
+    #[serde(default)]
+    pub kind: CloudKind,
+    /// How tall its volumetric clouds stand from the layer's altitude, in
+    /// metres (0: the layer's thickness): a towering storm front beside a
+    /// thin overcast at the same base.
+    #[serde(default)]
+    pub thickness: f32,
 }
 
 impl CloudRegionDescriptor {
@@ -357,6 +365,7 @@ impl CloudRegionDescriptor {
             && self.radius <= 1_000_000.0
             && (0.0..=1.0).contains(&self.coverage)
             && (0.0..=1.0).contains(&self.darkness)
+            && (0.0..=CloudsDescriptor::MAX_DISTANCE).contains(&self.thickness)
     }
 }
 
@@ -588,12 +597,38 @@ impl ImageEffectDescriptor {
     }
 }
 
+/// What clouds a layer or a region holds, which shapes the volumetric
+/// clouds by height (`clouds.wgsl` `cloud_profile`): a thin flat sheet, heaped
+/// clouds with flat bottoms, or towering storm cells.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CloudKind {
+    Stratus,
+    #[default]
+    Cumulus,
+    Cumulonimbus,
+}
+
+impl CloudKind {
+    /// Where the kind sits on the profile the shaders blend: stratus 0,
+    /// cumulus 1, cumulonimbus 2.
+    pub fn profile(self) -> f32 {
+        match self {
+            Self::Stratus => 0.0,
+            Self::Cumulus => 1.0,
+            Self::Cumulonimbus => 2.0,
+        }
+    }
+}
+
 /// A cloud layer drawn over the sky panorama and lit by the sun. `coverage`
 /// (0 to 1) is how much of the sky it covers; `drift` is its velocity over
 /// the ground (world x, z) in metres per second; `altitude` is the height
 /// of the layer and `scale` the size of one cloud, both in metres, which
 /// together set how large clouds look and how they shrink toward the
 /// horizon; `color` (linear, 0 to 16 a channel) tints the light they take.
+/// The volumetric clouds stand from `altitude` up by `thickness` metres (0:
+/// six tenths of the altitude), shaped by `kind`.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CloudsDescriptor {
@@ -602,6 +637,10 @@ pub struct CloudsDescriptor {
     pub altitude: f32,
     pub scale: f32,
     pub color: [f32; 3],
+    #[serde(default)]
+    pub thickness: f32,
+    #[serde(default)]
+    pub kind: CloudKind,
 }
 
 impl CloudsDescriptor {
@@ -626,6 +665,7 @@ impl CloudsDescriptor {
             && distance.contains(&self.altitude)
             && self.scale > 0.0
             && distance.contains(&self.scale)
+            && distance.contains(&self.thickness)
             && self
                 .color
                 .iter()
