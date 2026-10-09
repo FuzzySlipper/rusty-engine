@@ -16,6 +16,7 @@
 
 use render_model::{AutoExposureDescriptor, BloomDescriptor};
 
+use crate::frame::ViewLayer;
 use crate::gpu::Gpu;
 use crate::pipelines::standard;
 use crate::post::{Chain, Post, ShaftTargets};
@@ -37,6 +38,7 @@ const POST: &str = "bloom-exposure";
 const FINISH: &str = "finish";
 const PARTICLES: &str = "particles";
 const CLOUDS: &str = "clouds";
+const BACKDROP: &str = "backdrop";
 const PRECIPITATION: &str = "precipitation";
 
 /// One size and sample count of HDR target: the colour the world draws
@@ -106,6 +108,8 @@ pub(crate) struct Finish {
     particles_timer: Option<PassTimer>,
     /// The sky's cloud layer, timed in the frames that draw it.
     clouds_timer: Option<PassTimer>,
+    /// The backdrop's pass, timed in the frames that draw it.
+    backdrop_timer: Option<PassTimer>,
     /// The precipitation pass, timed in the frames that draw it.
     precipitation_timer: Option<PassTimer>,
     post_timer: Option<PassTimer>,
@@ -233,6 +237,7 @@ impl Finish {
             world_timer: PassTimer::new(gpu, WORLD),
             particles_timer: PassTimer::new(gpu, PARTICLES),
             clouds_timer: PassTimer::new(gpu, CLOUDS),
+            backdrop_timer: PassTimer::new(gpu, BACKDROP),
             precipitation_timer: PassTimer::new(gpu, PRECIPITATION),
             post_timer: PassTimer::new(gpu, POST),
             finish_timer: PassTimer::new(gpu, FINISH),
@@ -249,6 +254,7 @@ impl Finish {
             &mut self.world_timer,
             &mut self.particles_timer,
             &mut self.clouds_timer,
+            &mut self.backdrop_timer,
             &mut self.precipitation_timer,
             &mut self.post_timer,
             &mut self.finish_timer,
@@ -460,23 +466,36 @@ impl Finish {
         }
     }
 
-    /// The world pass's stamps, for a world view: `begin` on its first pass,
-    /// `end` on its last (it splits around the water depth copy).
-    pub fn world_writes_between(
+    /// The timer of a view layer's pass: the world's or the backdrop's (the
+    /// viewmodel's is untimed).
+    fn layer_timer(&self, layer: ViewLayer) -> Option<&PassTimer> {
+        match layer {
+            ViewLayer::World => self.world_timer.as_ref(),
+            ViewLayer::Backdrop => self.backdrop_timer.as_ref(),
+            ViewLayer::Viewmodel => None,
+        }
+    }
+
+    /// A world or backdrop pass's stamps: `begin` on its first pass, `end`
+    /// on its last (it splits around the water depth copy).
+    pub fn layer_writes_between(
         &self,
-        timed: bool,
+        layer: ViewLayer,
         begin: bool,
         end: bool,
     ) -> Option<wgpu::RenderPassTimestampWrites<'_>> {
-        self.world_timer
-            .as_ref()
-            .filter(|_| timed)
+        self.layer_timer(layer)
             .and_then(|timer| timer.render_writes_between(begin, end))
     }
 
-    /// After a timed world pass, in its encoder.
-    pub fn resolve_world(&mut self, encoder: &mut wgpu::CommandEncoder) {
-        if let Some(timer) = &mut self.world_timer {
+    /// After a timed world or backdrop pass, in its encoder.
+    pub fn resolve_layer(&mut self, layer: ViewLayer, encoder: &mut wgpu::CommandEncoder) {
+        let timer = match layer {
+            ViewLayer::World => &mut self.world_timer,
+            ViewLayer::Backdrop => &mut self.backdrop_timer,
+            ViewLayer::Viewmodel => return,
+        };
+        if let Some(timer) = timer {
             timer.resolve(encoder);
         }
     }
@@ -530,6 +549,7 @@ impl Finish {
             &mut self.world_timer,
             &mut self.particles_timer,
             &mut self.clouds_timer,
+            &mut self.backdrop_timer,
             &mut self.precipitation_timer,
             &mut self.post_timer,
             &mut self.finish_timer,
@@ -541,11 +561,12 @@ impl Finish {
         }
     }
 
-    /// The clouds, world, bloom and exposure, and finish timings, in frame
-    /// order.
+    /// The clouds, backdrop, world, bloom and exposure, and finish timings,
+    /// in frame order.
     pub fn timings(&self) -> Vec<GpuPassTiming> {
         [
             (&self.clouds_timer, CLOUDS),
+            (&self.backdrop_timer, BACKDROP),
             (&self.world_timer, WORLD),
             (&self.particles_timer, PARTICLES),
             (&self.precipitation_timer, PRECIPITATION),

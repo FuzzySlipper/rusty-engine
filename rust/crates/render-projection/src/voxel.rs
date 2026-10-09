@@ -86,6 +86,8 @@ struct ChunkSnapshot {
 #[derive(Debug, Clone)]
 struct InstanceSnapshot {
     asset_id: String,
+    /// The layer its root was created in; a change recreates it.
+    layer: RenderLayer,
     transform: Transform,
     mesh_state: u64,
     source_revision: u64,
@@ -163,6 +165,8 @@ pub struct VoxelRenderProjector {
     last_materials: BTreeMap<u16, RenderMaterialDescriptor>,
     levels: BTreeMap<String, VoxelLevelOfDetail>,
     scatter_fields: BTreeMap<String, VoxelScatterField>,
+    /// Instances drawn in a layer other than the scene's.
+    layers: BTreeMap<String, RenderLayer>,
     publication_stream: Option<String>,
     publication_revision: u64,
 }
@@ -181,6 +185,7 @@ impl VoxelRenderProjector {
             last_materials: BTreeMap::new(),
             levels: BTreeMap::new(),
             scatter_fields: BTreeMap::new(),
+            layers: BTreeMap::new(),
             publication_stream: None,
             publication_revision: 0,
         }
@@ -206,6 +211,35 @@ impl VoxelRenderProjector {
         }
     }
 
+    /// Draw `instance_id` in `layer` from the next projection on: a change
+    /// recreates its nodes there (the layer is its root's, which its chunks
+    /// inherit).
+    pub fn set_layer(&mut self, instance_id: &str, layer: RenderLayer) {
+        if layer == RenderLayer::Scene {
+            self.layers.remove(instance_id);
+        } else {
+            self.layers.insert(instance_id.to_owned(), layer);
+        }
+    }
+
+    fn layer_of(&self, instance_id: &str) -> RenderLayer {
+        self.layers
+            .get(instance_id)
+            .copied()
+            .unwrap_or(RenderLayer::Scene)
+    }
+
+    /// The retained snapshot `instance` continues: the same asset in the
+    /// same layer.
+    fn continued(&self, instance: &VoxelProjectionInstance<'_>) -> Option<&InstanceSnapshot> {
+        self.last_instances
+            .get(&instance.instance_id)
+            .filter(|previous| {
+                previous.asset_id == instance.asset_id
+                    && previous.layer == self.layer_of(&instance.instance_id)
+            })
+    }
+
     /// Grow `field`'s scatters on `instance_id`'s chunks around its viewer
     /// from the next projection on, or nothing with `None`.
     pub fn set_scatter(&mut self, instance_id: &str, field: Option<VoxelScatterField>) {
@@ -223,17 +257,14 @@ impl VoxelRenderProjector {
     /// patch.
     pub fn scatter_changed(&self, instances: &[VoxelProjectionInstance<'_>]) -> bool {
         instances.iter().any(|instance| {
-            self.last_instances
-                .get(&instance.instance_id)
-                .filter(|previous| previous.asset_id == instance.asset_id)
-                .is_some_and(|previous| {
-                    scatter_changed(
-                        &previous.scatter,
-                        instance.scene,
-                        self.scatter_fields.get(&instance.instance_id),
-                        &previous.coarse,
-                    )
-                })
+            self.continued(instance).is_some_and(|previous| {
+                scatter_changed(
+                    &previous.scatter,
+                    instance.scene,
+                    self.scatter_fields.get(&instance.instance_id),
+                    &previous.coarse,
+                )
+            })
         })
     }
 
@@ -249,15 +280,12 @@ impl VoxelRenderProjector {
     /// projection.
     pub fn level_of_detail_changed(&self, instances: &[VoxelProjectionInstance<'_>]) -> bool {
         instances.iter().any(|instance| {
-            self.last_instances
-                .get(&instance.instance_id)
-                .filter(|previous| previous.asset_id == instance.asset_id)
-                .is_some_and(|previous| {
-                    let level = self.levels.get(&instance.instance_id);
-                    !previous.pending_coarse.is_empty()
-                        || wanted_coarse(&previous.coarse, instance.scene, level)
-                            != previous.coarse.keys().copied().collect()
-                })
+            self.continued(instance).is_some_and(|previous| {
+                let level = self.levels.get(&instance.instance_id);
+                !previous.pending_coarse.is_empty()
+                    || wanted_coarse(&previous.coarse, instance.scene, level)
+                        != previous.coarse.keys().copied().collect()
+            })
         })
     }
 
@@ -313,10 +341,7 @@ impl VoxelRenderProjector {
                 .get(&instance.instance_id)
                 .unwrap_or(&empty_mapping);
             let scene = instance.scene;
-            let previous = self
-                .last_instances
-                .get(&instance.instance_id)
-                .filter(|previous| previous.asset_id == instance.asset_id);
+            let previous = self.continued(instance);
             let replace_all = previous.is_some_and(|previous| previous.material_slots != *slots);
             let visit = match previous {
                 Some(previous) if !replace_all && previous.mesh_state == scene.mesh_state() => {
@@ -389,13 +414,17 @@ impl VoxelRenderProjector {
         let retired: Vec<String> = self
             .last_instances
             .iter()
-            .filter(|(id, previous)| current.get(id.as_str()) != Some(&previous.asset_id.as_str()))
+            .filter(|(id, previous)| {
+                current.get(id.as_str()) != Some(&previous.asset_id.as_str())
+                    || previous.layer != self.layer_of(id)
+            })
             .map(|(id, _)| id.clone())
             .collect();
         for instance_id in retired {
             if !current.contains_key(instance_id.as_str()) {
                 self.levels.remove(&instance_id);
                 self.scatter_fields.remove(&instance_id);
+                self.layers.remove(&instance_id);
             }
             let previous = self
                 .last_instances
@@ -425,6 +454,7 @@ impl VoxelRenderProjector {
             let instance = plan.instance;
             let scene = instance.scene;
             let root_key = VoxelRenderKey::Root(instance.instance_id.clone());
+            let layer = self.layer_of(&instance.instance_id);
             let (snapshot, root) = match self.last_instances.entry(instance.instance_id.clone()) {
                 Entry::Occupied(entry) => {
                     let snapshot = entry.into_mut();
@@ -455,10 +485,11 @@ impl VoxelRenderProjector {
                     operations.push(RenderDiff::Create {
                         handle,
                         parent: None,
-                        node: root_node(instance),
+                        node: root_node(instance, layer),
                     });
                     let snapshot = entry.insert(InstanceSnapshot {
                         asset_id: instance.asset_id.clone(),
+                        layer,
                         transform: instance.transform,
                         mesh_state: scene.mesh_state(),
                         source_revision: scene.source_revision().raw(),
@@ -876,13 +907,13 @@ fn instances_by_id<'a>(
     values
 }
 
-fn root_node(instance: &VoxelProjectionInstance<'_>) -> RenderNode {
+fn root_node(instance: &VoxelProjectionInstance<'_>, layer: RenderLayer) -> RenderNode {
     RenderNode {
         geometry: Geometry::Group,
         material: Material::DEFAULT,
         transform: instance.transform,
         visible: true,
-        layer: RenderLayer::Scene,
+        layer,
         shadow_casting: Default::default(),
         metadata: RenderMetadata {
             source_entity: None,

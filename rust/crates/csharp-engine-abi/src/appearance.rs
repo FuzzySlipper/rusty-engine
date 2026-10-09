@@ -135,7 +135,10 @@ pub struct NativeLightReadout {
 }
 
 /// Product-selected presentation layer. `Viewmodel` is renderer-relative;
-/// Engine still owns the retained node and render pass realization.
+/// `Backdrop` is drawn behind the world by the backdrop camera
+/// (`CameraView.SetBackdrop`), in backdrop units, lit by the world's
+/// ambient, hemisphere and directional lights without their shadows. Engine
+/// still owns the retained node and render pass realization.
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NativeRenderLayer {
@@ -143,6 +146,7 @@ pub enum NativeRenderLayer {
     Debug = 1,
     Ui = 2,
     Viewmodel = 3,
+    Backdrop = 4,
 }
 
 /// Whether an object's parts cast shadows. Receiving is unchanged.

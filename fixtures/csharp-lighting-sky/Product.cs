@@ -100,6 +100,21 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     private RenderResource? foamSprite, ripplesMap;
     private MeshResource? waterMesh, pierMesh;
     private Appearance? waterLook, pierLook;
+    // The backdrop (#9750): ranges ringing the room 1.5 to 6 km out, a heightfield mesh and a dual-contoured mesa, drawn behind the world at 1:1000 by a camera linked to the view; seen from inside the room through its doorway.
+    private const ulong BackdropRangesId = 50;
+    private const int BackdropCells = 64;
+    private const float BackdropExtent = 6, BackdropRingStart = 1.5f, BackdropRingFull = 4, BackdropPeak = .7f;
+    private const float MesaVoxelSize = .04f, MesaMinimumDensity = .001f;
+    private const uint MesaChunkEdge = 8, MesaSlot = 1;
+    private static readonly Vector3 MesaCenter = new(.8f,0,2.8f);
+    private const float MesaRadius = .55f, MesaHeight = .45f;
+    private static readonly Color RangeColor = new(.45f,.42f,.38f,1), MesaColor = new(.62f,.45f,.33f,1);
+    private static readonly Vector3 BackdropEye = new(3.5f,2.2f,1.5f), BackdropTarget = new(3.5f,2.6f,40);
+    private SpatialSession? mesa;
+    private VoxelScenePresentation? mesaPresentation;
+    private Material? rangeRock, mesaRock;
+    private MeshResource? rangesMesh;
+    private Appearance? rangesLook;
     private PresentationEmitter? flame, embers, smoke;
     private PresentationParticleDescriptor flameFire, emberFire, smokeFire;
     private VoxelScenePresentation? presentation;
@@ -494,6 +509,103 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
             snow ? SnowVelocity : RainVelocity, snow ? SnowSize : RainSize, snow ? 0f : RainStreakSeconds,
             snow ? SnowColor : RainColor, false, PrecipitationRadius, PrecipitationHeight));
         return Inspect();
+    }
+    // Draw the backdrop at 1:scale behind the room (0 or less removes it), looking out of the doorway: walking 100 m moves its camera 100/scale units.
+    [DebugCommand("lighting.backdrop")]
+    public string Backdrop(float scale)
+    {
+        if (scale <= 0)
+        {
+            engine.CameraView.ClearBackdrop(new(0));
+            if (mesa is null) return Inspect();
+            engine.Graphics.PublishSnapshot([]);
+            rangesLook?.Dispose(); rangesMesh?.Dispose(); mesaPresentation?.Dispose(); mesa.Dispose(); rangeRock?.Dispose(); mesaRock?.Dispose();
+            rangesLook = null; rangesMesh = null; mesaPresentation = null; mesa = null; rangeRock = mesaRock = null;
+            return Inspect();
+        }
+        if (mesa is null)
+        {
+            Color white = new(1,1,1,1);
+            rangeRock = engine.Graphics.CreateMaterial(new(RangeColor,default(RenderResourceReference),.95f,white,Vector3.Zero,0,false));
+            mesaRock = engine.Graphics.CreateMaterial(new(MesaColor,default(RenderResourceReference),.9f,white,Vector3.Zero,0,false));
+            rangesMesh = engine.Graphics.CreateMeshResource(Ranges(rangeRock));
+            rangesLook = engine.Graphics.CreateMeshAppearance(rangesMesh);
+            engine.Graphics.PublishSnapshot(new AppearanceFact[]
+            {
+                Fact(BackdropRangesId,rangesLook,Vector3.Zero,1) with { Layer = RenderLayer.Backdrop },
+            });
+            mesa = engine.Spatial.CreateSession(new(MesaVoxelSize,MesaChunkEdge,VoxelSurfaceMode.DualContouring));
+            AdmitMesa();
+            mesaPresentation = engine.VoxelScenePresentation.ProjectScene(new(mesa,new VoxelSceneMaterialBinding[]{new(MesaSlot,mesaRock)}));
+            engine.VoxelScenePresentation.SetLayer(new(mesaPresentation,RenderLayer.Backdrop));
+        }
+        // The room's origin is the backdrop's: the anchor and origin agree.
+        engine.CameraView.SetBackdrop(new(Vector3.Zero,Vector3.Zero,scale));
+        engine.CameraView.UpdateCamera(new(camera,Camera(BackdropEye,BackdropTarget)));
+        return Inspect();
+    }
+    // Backdrop units: ranges rising from flat ground around the room (1.5 units out) to full height 4 units out, ridged around the circle.
+    private static float RangeHeight(float x, float z)
+    {
+        float r = MathF.Sqrt(x*x + z*z), angle = MathF.Atan2(z,x);
+        float rise = Math.Clamp((r - BackdropRingStart)/(BackdropRingFull - BackdropRingStart),0,1);
+        return BackdropPeak*rise*rise*(.55f + .45f*MathF.Sin(angle*5)*MathF.Cos(r*2.3f));
+    }
+    private static MeshResourceCreateRequest Ranges(Material material)
+    {
+        int n = BackdropCells + 1;
+        float step = 2*BackdropExtent/BackdropCells, e = step*.5f;
+        Vector3[] positions = new Vector3[n*n], normals = new Vector3[n*n];
+        Vector2[] uvs = new Vector2[n*n];
+        for (int j = 0; j < n; j++)
+        for (int i = 0; i < n; i++)
+        {
+            float x = -BackdropExtent + i*step, z = -BackdropExtent + j*step;
+            positions[j*n + i] = new(x,RangeHeight(x,z),z);
+            normals[j*n + i] = Vector3.Normalize(new(RangeHeight(x - e,z) - RangeHeight(x + e,z),2*e,RangeHeight(x,z - e) - RangeHeight(x,z + e)));
+            uvs[j*n + i] = new((float)i/BackdropCells,(float)j/BackdropCells);
+        }
+        List<uint> indices = [];
+        for (int j = 0; j < BackdropCells; j++)
+        for (int i = 0; i < BackdropCells; i++)
+        {
+            uint a = (uint)(j*n + i), b = a + 1, c = a + (uint)n, d = c + 1;
+            indices.AddRange([a,c,b,b,c,d]);
+        }
+        return new MeshResourceCreateRequest(positions,normals,uvs,indices.ToArray(),new MeshGroup[]{new(0,0,(uint)indices.Count)},new MeshMaterialBinding[]{new(0,material)});
+    }
+    // A rounded mesa beyond the room's doorway, dual contoured at 40 m voxels (0.04 units).
+    private void AdmitMesa()
+    {
+        const int across = 6, high = 2;
+        int volume = (int)(MesaChunkEdge*MesaChunkEdge*MesaChunkEdge);
+        float span = MesaChunkEdge*MesaVoxelSize;
+        long firstX = (long)MathF.Floor((MesaCenter.X - across*span/2)/span), firstZ = (long)MathF.Floor((MesaCenter.Z - across*span/2)/span);
+        List<VoxelResidencyOperation> operations = [];
+        uint[] materials = new uint[across*across*high*volume];
+        float[] densities = new float[materials.Length];
+        int next = 0;
+        for (long cz = firstZ; cz < firstZ + across; cz++)
+        for (long cy = 0; cy < high; cy++)
+        for (long cx = firstX; cx < firstX + across; cx++)
+        {
+            uint offset = (uint)next;
+            for (long z = 0; z < MesaChunkEdge; z++)
+            for (long y = 0; y < MesaChunkEdge; y++)
+            for (long x = 0; x < MesaChunkEdge; x++)
+            {
+                float worldX = (cx*MesaChunkEdge + x + .5f)*MesaVoxelSize, worldY = (cy*MesaChunkEdge + y + .5f)*MesaVoxelSize, worldZ = (cz*MesaChunkEdge + z + .5f)*MesaVoxelSize;
+                float r = Vector2.Distance(new(worldX,worldZ),new(MesaCenter.X,MesaCenter.Z))/MesaRadius;
+                float surface = MesaHeight*Math.Clamp(1.6f - r*r,0,1);
+                float distance = (worldY - surface)/MesaVoxelSize;
+                bool solid = distance < 0;
+                materials[next] = solid ? MesaSlot : 0;
+                densities[next] = solid ? Math.Min(distance,-MesaMinimumDensity) : Math.Max(distance,MesaMinimumDensity);
+                next++;
+            }
+            operations.Add(new(VoxelResidencyOperationKind.Admit,new(cx,cy,cz),offset,(uint)volume,offset,(uint)volume));
+        }
+        engine.Voxel.ApplyResidency(new(ReadOnlyMemory<uint>.Empty,mesa!,operations.ToArray(),materials,densities));
     }
     // How wet the room's lit surfaces are after rain (0 to 1; 0 dries them), with puddles on the floor (0 to 1).
     [DebugCommand("lighting.wetness")]

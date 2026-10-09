@@ -565,6 +565,7 @@ impl Renderer {
             start,
             clear,
             sky: true,
+            backdrop: None,
         });
         // Depth-layer labels test the world's depth before the viewmodel
         // pass clears it.
@@ -583,6 +584,7 @@ impl Renderer {
             start: PassStart::Target,
             clear,
             sky: false,
+            backdrop: None,
         });
         let top_labels = self.draw_labels(target, area, &labels, LabelPass::OnTop);
         let mut stats = world + viewmodel;
@@ -668,6 +670,7 @@ impl Renderer {
                     },
                     clear,
                     sky: true,
+                    backdrop: None,
                 });
                 stats.offscreen_views += 1;
             }

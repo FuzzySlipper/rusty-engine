@@ -134,6 +134,7 @@ struct RetainedGraphics {
     wind: Option<WindDescriptor>,
     clouds: Option<CloudsDescriptor>,
     wetness: Option<WetnessDescriptor>,
+    backdrop: Option<render_model::BackdropDescriptor>,
     volumetric_fog: Option<VolumetricFogDescriptor>,
     cloud_regions: BTreeMap<u32, CloudRegionDescriptor>,
     fog_volumes: BTreeMap<u32, FogVolumeDescriptor>,
@@ -278,6 +279,7 @@ impl PresentationWorld {
                 || matches!(&op, RenderDiff::SetWind { wind } if &self.retained.wind == wind)
                 || matches!(&op, RenderDiff::SetClouds { clouds } if &self.retained.clouds == clouds)
                 || matches!(&op, RenderDiff::SetWetness { wetness } if &self.retained.wetness == wetness)
+                || matches!(&op, RenderDiff::SetBackdrop { backdrop } if &self.retained.backdrop == backdrop)
                 || matches!(&op, RenderDiff::SetCloudRegion { id, region } if self.retained.cloud_regions.get(id) == Some(region))
                 || matches!(&op, RenderDiff::RemoveCloudRegion { id } if !self.retained.cloud_regions.contains_key(id))
                 || matches!(&op, RenderDiff::SetVolumetricFog { fog } if self.retained.volumetric_fog.as_ref() == Some(fog))
@@ -751,6 +753,11 @@ impl PresentationWorld {
         if self.retained.wetness.is_some() {
             ops.push(RenderDiff::SetWetness {
                 wetness: self.retained.wetness,
+            });
+        }
+        if self.retained.backdrop.is_some() {
+            ops.push(RenderDiff::SetBackdrop {
+                backdrop: self.retained.backdrop,
             });
         }
         for (id, region) in &self.retained.cloud_regions {
@@ -1331,6 +1338,9 @@ impl PresentationWorld {
             }
             RenderDiff::SetWetness { wetness } => {
                 self.retained.wetness = *wetness;
+            }
+            RenderDiff::SetBackdrop { backdrop } => {
+                self.retained.backdrop = *backdrop;
             }
             RenderDiff::SetCloudRegion { id, region } => {
                 self.retained.cloud_regions.insert(*id, *region);

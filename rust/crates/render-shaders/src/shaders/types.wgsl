@@ -63,6 +63,10 @@ struct Frame {
     // The surfaces' wetness (`lighting.wgsl` `wetted`): x how wet (0 dry to
     // 1 soaked), y how much standing water gathers in puddles (0 to 1).
     weather: vec4<f32>,
+    // A backdrop pass (render-wgpu `frame.rs` `encode_backdrop`) draws in
+    // backdrop units: a backdrop point p stands at xyz + p * w in the world
+    // (`rusty::view::world_equivalent`). w is 0 in every other pass.
+    backdrop: vec4<f32>,
     // Clustered lighting (`light_clusters.wgsl`): xyz: tiles across, tiles
     // down, depth slices; w: 1 when this pass's lights are read from the
     // clusters, 0 when they are looped over.

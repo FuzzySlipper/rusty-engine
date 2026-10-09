@@ -22,6 +22,7 @@
 //! | `wind` | (single) | the scene's wind, in the frame uniform | `SetWind` |
 //! | `clouds` | (single) | the sky's cloud layer and its shade on the ground | `SetClouds` |
 //! | `wetness` | (single) | how wet the scene's surfaces are, in the frame uniform | `SetWetness` |
+//! | `backdrop` | (single) | the backdrop layer's link to the world's cameras | `SetBackdrop` |
 //! | `precipitation` | (single) | rain or snow around the camera, drawn after the world | `SetPrecipitation` |
 //! | `image_effect` | (single) | a product image effect over each primary view's picture | `SetImageEffect` |
 //! | `sky_light` | (single) | the sky's light: the background as an environment (`sky_light.rs`) | `SetSkyLight` |
@@ -751,6 +752,9 @@ pub(crate) struct Tables {
     pub clouds: Option<render_model::CloudsDescriptor>,
     /// How wet the scene's surfaces are (`lighting.wgsl` `wetted`).
     pub wetness: Option<render_model::WetnessDescriptor>,
+    /// The backdrop layer's link to the world's cameras (`frame.rs`
+    /// `backdrop_camera`).
+    pub backdrop: Option<render_model::BackdropDescriptor>,
     /// The cloud regions over the cloud layer (`clouds.wgsl`).
     pub cloud_regions: std::collections::BTreeMap<u32, render_model::CloudRegionDescriptor>,
     /// The volumetric fog's medium and its fog volumes
@@ -803,6 +807,7 @@ impl Tables {
             wind: None,
             clouds: None,
             wetness: None,
+            backdrop: None,
             cloud_regions: std::collections::BTreeMap::new(),
             volumetric_fog: render_model::VolumetricFogDescriptor::DEFAULT,
             fog_volumes: std::collections::BTreeMap::new(),

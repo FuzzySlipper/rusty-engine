@@ -1037,6 +1037,69 @@ engine.CameraView.RemoveFogVolume(new(1));
   draws exactly as without it. The medium and the volumes are retained
   camera-view state, kept by a rebaseline and recorded by a scene snapshot.
 
+## The backdrop
+
+A second scene can stand behind the world, drawn by a camera linked to each
+world view: distant ranges on the skyline at the scale of a world map, or a
+miniature of space behind a ship. This is the multi-camera "3D skybox".
+Appearances placed in the `Backdrop` render layer, and voxel scene
+presentations moved there, stand in **backdrop units**. The product links
+the layer to the world's cameras:
+
+```csharp
+engine.CameraView.SetBackdrop(new(Anchor: Vector3.Zero, Origin: Vector3.Zero, Scale: 1000));
+engine.Graphics.PublishSnapshot([new AppearanceFact(id, false, 0, at, ranges, true, RenderLayer.Backdrop)]);
+engine.VoxelScenePresentation.SetLayer(new(mapTerrain, RenderLayer.Backdrop));
+```
+
+**The link**
+- `Scale` is world metres per backdrop unit: 1 draws the backdrop at world
+  scale (a far field beyond the world's far plane), 1000 a 1:1000 miniature.
+- `Anchor` is a world point in the cameras' frame, and `Origin` is where it
+  lies in the backdrop. The product moves either whenever it wants, for
+  example to recentre on a region.
+- Each world view draws the backdrop with its own rotation and field of view
+  from `Origin + (eye − Anchor) / Scale`, so walking 100 m at 1:1000 moves
+  the backdrop camera 0.1 units, and turning turns both alike.
+- On a world-origin rebase, move the anchor by the receipt's `LocalDelta` as
+  you move the camera; the backdrop then stays where it was.
+- `ClearBackdrop` unlinks it.
+
+**Drawing**
+- The backdrop draws over the sky, the sun and the clouds and before the
+  world. The world then clears depth and draws over it, so world geometry
+  always covers it, however near the backdrop's own depth is.
+- Its camera's depth range is fitted to what the backdrop shows. The
+  world's depth precision is unchanged, and nearer backdrop than a
+  ten-thousandth of its far plane is clipped (the world covers it).
+- It is lit by the world's ambient, hemisphere and directional lights, and
+  by the sky's light, without their shadows. Lights placed in the backdrop
+  light only the backdrop.
+- Distance fog, height fog and the atmosphere's haze are reckoned at the
+  backdrop's **world-equivalent** distance and height, and the cloud layer
+  shades it where it would stand in the world. A backdrop range 5 km out at
+  1:1000 therefore draws as the same range would at world scale
+  (`tests/backdrop.rs` checks this pixel for pixel across turns and walks),
+  and fog matches at the join.
+- Volumetric fog over the world covers the backdrop, as it covers the
+  background.
+- Static meshes, animated meshes, sprites and voxel presentations can stand
+  in it, opaque, masked, blended and water alike. Particles stay the
+  world's. The backdrop casts no shadows, is never pickable, and adds
+  nothing to collision. A voxel presentation in it draws at full resolution
+  and grows no scatters (its viewer stands in the world). Its session still
+  owns its collision, apart from the walking session's.
+
+**Cost**
+- Without a link, or with nothing shown in the layer, nothing is drawn and
+  nothing changes.
+- With one it is a pass of its own, timed as `backdrop`: the backdrop's
+  parts listed on the CPU, drawn and finished. The world view's background
+  is submitted before it. On an RX 9070 XT at 1280×720 the fixture's ranges
+  (a 64×64 heightfield) and its dual-contoured mesa cost about 0.05 ms.
+- Perspective views only: an orthographic view draws no backdrop. Neither
+  the sky's light nor reflections see it.
+
 ## Image effects
 
 A product can run its own WGSL over each primary view's finished picture:
@@ -1110,7 +1173,10 @@ around the camera; none in the room under its roof),
 `lighting.wetness <wetness> <puddles>` (the room's surfaces wet after rain),
 `lighting.clouds <coverage>` (a drifting cloud layer over the panorama, with
 the camera up toward it; 0 clears it, and `lighting.sky` moves the sun that
-lights it from noon to dusk).
+lights it from noon to dusk),
+`lighting.backdrop <scale>` (ranges ringing the room 1.5 to 6 km out, a
+heightfield mesh, and a dual-contoured mesa, drawn behind the world at
+1:`scale` and seen out of the doorway; 0 removes them).
 `generate-particles.py` regenerates its three authored sprites and
 `generate-water.py` the foam and ripple textures.
 `lighting.sky` also moves the fixture's sun from noon at 0 to a low dusk sun

@@ -152,6 +152,18 @@ pub struct GpuReadout {
     pub indirect_light: IndirectLightReadout,
     /// The volumetric fog the last world view drew (`volumetric_fog.rs`).
     pub volumetric_fog: volumetric_fog::VolumetricFogReadout,
+    /// The backdrop the last world view drew, if it drew one.
+    pub backdrop: Option<BackdropReadout>,
+}
+
+/// The backdrop camera a world view drew its backdrop with (`SetBackdrop`):
+/// its eye in backdrop units and its depth range, fitted around what the
+/// backdrop shows.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BackdropReadout {
+    pub eye: [f32; 3],
+    pub near: f32,
+    pub far: f32,
 }
 
 /// Host choices that are not part of the retained model.
@@ -361,8 +373,10 @@ pub struct Renderer {
     instances_buffer: wgpu::Buffer,
     /// The shadow layers' caster ids are in the instance buffer.
     casters_uploaded: bool,
-    /// Per view layer (world, viewmodel): the last draw list.
-    views: [Option<frame::ViewCache>; 2],
+    /// Per view layer (world, viewmodel, backdrop): the last draw list.
+    views: [Option<frame::ViewCache>; 3],
+    /// The backdrop camera the last world view drew its backdrop with.
+    backdrop: Option<BackdropReadout>,
     shadows: shadows::ShadowMaps,
     /// World lights requesting shadows, by light row.
     shadow_candidates: Vec<shadows::ShadowCandidate>,
@@ -569,6 +583,7 @@ impl Renderer {
             instances_buffer,
             casters_uploaded: false,
             views: Default::default(),
+            backdrop: None,
             shadows,
             shadow_candidates: Vec::new(),
             casting: Default::default(),
@@ -810,6 +825,7 @@ impl Renderer {
             gpu_culling: self.culling.readout(),
             indirect_light: self.probes.readout(),
             volumetric_fog: self.volumetric_fog.readout(),
+            backdrop: self.backdrop,
         }
     }
 

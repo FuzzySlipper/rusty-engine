@@ -207,6 +207,8 @@ fn engine_api(
             set_wind: crate::camera_view::set_wind,
             set_clouds: crate::camera_view::set_clouds,
             set_wetness: crate::camera_view::set_wetness,
+            set_backdrop: crate::camera_view::set_backdrop,
+            clear_backdrop: crate::camera_view::clear_backdrop,
             set_cloud_region: crate::camera_view::set_cloud_region,
             remove_cloud_region: crate::camera_view::remove_cloud_region,
             set_volumetric_fog: crate::camera_view::set_volumetric_fog,

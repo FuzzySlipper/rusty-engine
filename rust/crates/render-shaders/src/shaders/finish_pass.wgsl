@@ -10,8 +10,9 @@
 // through the fog in front of it: dimmed by its transmittance and lit by the
 // light it scatters toward the camera, in linear light before exposure; the
 // background is seen through the grid's whole depth.
+// A backdrop (`Frame.backdrop`) is fogged at its world-equivalent distance.
 
-#import rusty::view::frame
+#import rusty::view::{frame, world_equivalent}
 #import rusty::finish::finish_linear
 
 struct FinishParams {
@@ -84,6 +85,10 @@ fn finished(color: vec4<f32>, position: vec4<f32>, depth: f32, glow: vec3<f32>, 
             let uv = (position.xy - params.viewport.xy) / params.viewport.zw;
             let world = frame.inv_view_proj * vec4<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, depth, 1.0);
             ray = world.xyz / world.w - frame.camera.xyz;
+        }
+        if frame.backdrop.w > 0.0 {
+            // A backdrop's distance in the world.
+            ray = world_equivalent(ray) - world_equivalent(vec3<f32>(0.0));
         }
         var linear = color.rgb / color.a + glow;
         if volumetric && depth < 1.0 {

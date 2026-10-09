@@ -8,7 +8,7 @@
 // (clear colour or sky) is drawn before the world and never finished, so a
 // fog colour equal to the background fades geometry into it exactly.
 
-#import rusty::view::frame
+#import rusty::view::{frame, world_equivalent}
 #import rusty::tonemap::{aces_filmic, neutral}
 
 const TONE_NEUTRAL: u32 = 1u;
@@ -59,7 +59,7 @@ fn height_density(ray: vec3<f32>) -> f32 {
     if falloff <= 0.0 {
         return 1.0;
     }
-    let start = min((frame.atmosphere.x - frame.camera.y) / falloff, 80.0);
+    let start = min((frame.atmosphere.x - world_equivalent(frame.camera.xyz).y) / falloff, 80.0);
     let climb = ray.y / falloff;
     if abs(climb) < 1e-4 {
         return exp(start - climb * 0.5);
@@ -78,7 +78,8 @@ fn fog_color(ray: vec3<f32>) -> vec3<f32> {
     return mix(frame.fog_color.rgb, frame.haze.rgb, pow(toward_sun, exponent));
 }
 
-// Finish linear `rgb` seen along `ray` from the camera (zero: not fogged).
+// Finish linear `rgb` seen along `ray` from the camera (zero: not fogged),
+// in the world: a backdrop pass passes its world-equivalent ray.
 fn finish_linear(rgb: vec3<f32>, ray: vec3<f32>) -> vec3<f32> {
     var toned = graded(rgb * frame.finish.x);
     if frame.modes.x == TONE_NEUTRAL {

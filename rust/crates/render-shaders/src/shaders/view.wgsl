@@ -35,6 +35,17 @@
 // The cloud regions (`rusty::clouds`), `frame.cloud_drift.z` of them.
 @group(0) @binding(13) var<storage, read> cloud_regions: array<CloudRegion>;
 
+// Where `p` stands in the world: itself, or in a backdrop pass
+// (`Frame.backdrop`) the world point the backdrop's `p` stands for, so fog
+// and the cloud layer's shade reach the backdrop at its world-equivalent
+// distance and place.
+fn world_equivalent(p: vec3<f32>) -> vec3<f32> {
+    if frame.backdrop.w > 0.0 {
+        return frame.backdrop.xyz + p * frame.backdrop.w;
+    }
+    return p;
+}
+
 // Coverage for a masked surface's pixel (MASK, `fs_world_opaque`): the
 // alpha sharpened about the cutoff over one pixel's change of it, as a share
 // of the view's samples, so a leaf's edge resolves anti-aliased where the

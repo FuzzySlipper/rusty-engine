@@ -82,6 +82,7 @@ pub(crate) struct RuntimeCameraViewCall {
     pub(crate) wind: Option<Option<WindDescriptor>>,
     pub(crate) clouds: Option<Option<CloudsDescriptor>>,
     pub(crate) wetness: Option<Option<WetnessDescriptor>>,
+    pub(crate) backdrop: Option<Option<render_model::BackdropDescriptor>>,
     /// The volumetric fog medium, and fog volumes placed (`Some`) or removed
     /// (`None`) in call order.
     pub(crate) volumetric_fog: Option<render_model::VolumetricFogDescriptor>,
@@ -170,6 +171,7 @@ impl RuntimeCameraViewBridge {
             wind: None,
             clouds: None,
             wetness: None,
+            backdrop: None,
             volumetric_fog: None,
             cloud_regions: Vec::new(),
             fog_volumes: Vec::new(),
@@ -233,6 +235,7 @@ impl RuntimeCameraViewBridge {
             wind: None,
             clouds: None,
             wetness: None,
+            backdrop: None,
             volumetric_fog: None,
             cloud_regions: Vec::new(),
             fog_volumes: Vec::new(),
@@ -533,6 +536,7 @@ impl RuntimeCameraViewBridge {
             wind: None,
             clouds: None,
             wetness: None,
+            backdrop: None,
             volumetric_fog: None,
             cloud_regions: Vec::new(),
             fog_volumes: Vec::new(),
@@ -889,6 +893,31 @@ impl RuntimeCameraViewBridge {
             ));
         }
         self.staged_mut()?.wetness = Some((request.wetness > 0.0).then_some(wetness));
+        Ok(())
+    }
+
+    fn set_backdrop(
+        &mut self,
+        request: NativeBackdropRequest,
+    ) -> Result<(), CsharpEngineServicesError> {
+        let point = |value: NativeVec3| [value.x, value.y, value.z].map(f64::from);
+        let backdrop = render_model::BackdropDescriptor {
+            anchor: point(request.anchor),
+            origin: point(request.origin),
+            scale: f64::from(request.scale),
+        };
+        if !backdrop.valid() {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_BACKDROP",
+                "the backdrop's anchor and origin must be finite and its scale above 0",
+            ));
+        }
+        self.staged_mut()?.backdrop = Some(Some(backdrop));
+        Ok(())
+    }
+
+    fn clear_backdrop(&mut self) -> Result<(), CsharpEngineServicesError> {
+        self.staged_mut()?.backdrop = Some(None);
         Ok(())
     }
 
@@ -1399,6 +1428,9 @@ pub(crate) fn environment_frame(
     }
     if let Some(wetness) = call.wetness {
         operations.push(RenderDiff::SetWetness { wetness });
+    }
+    if let Some(backdrop) = call.backdrop {
+        operations.push(RenderDiff::SetBackdrop { backdrop });
     }
     for (id, region) in &call.cloud_regions {
         operations.push(match region {
@@ -2108,6 +2140,48 @@ pub(crate) unsafe extern "C" fn set_wetness(
     }
     let bridge = unsafe { &mut *context.cast::<RuntimeCameraViewBridge>() };
     match bridge.set_wetness(unsafe { *request }) {
+        Ok(()) => ABI_OK,
+        Err(error) => {
+            bridge.operation_diagnostics.retain(&error, operation_error);
+            0
+        }
+    }
+}
+
+pub(crate) unsafe extern "C" fn set_backdrop(
+    context: *mut c_void,
+    request: *const NativeBackdropRequest,
+    operation_error: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    if !operation_error.is_null() {
+        unsafe { *operation_error = std::mem::zeroed() };
+    }
+    if context.is_null() || request.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeCameraViewBridge>() };
+    match bridge.set_backdrop(unsafe { *request }) {
+        Ok(()) => ABI_OK,
+        Err(error) => {
+            bridge.operation_diagnostics.retain(&error, operation_error);
+            0
+        }
+    }
+}
+
+pub(crate) unsafe extern "C" fn clear_backdrop(
+    context: *mut c_void,
+    request: *const NativeClearBackdropRequest,
+    operation_error: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    if !operation_error.is_null() {
+        unsafe { *operation_error = std::mem::zeroed() };
+    }
+    if context.is_null() || request.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeCameraViewBridge>() };
+    match bridge.clear_backdrop() {
         Ok(()) => ABI_OK,
         Err(error) => {
             bridge.operation_diagnostics.retain(&error, operation_error);

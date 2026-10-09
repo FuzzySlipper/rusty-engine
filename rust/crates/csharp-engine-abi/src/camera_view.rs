@@ -456,6 +456,31 @@ pub struct NativeCloudRegionRequest {
     pub drift: NativeVec2,
 }
 
+/// Links the backdrop layer (`RenderLayer.Backdrop`) to the world's
+/// cameras. Each world view draws what is placed in it behind the world,
+/// after the sky and clouds, from `origin + (eye - anchor) / scale` with the
+/// view's own rotation and field of view; the world then draws over it.
+/// `anchor` is a world point in the cameras' frame (move it by the same
+/// delta as the camera on a world-origin rebase); `origin` is the backdrop
+/// point it maps to; `scale` (above 0) is world metres per backdrop unit:
+/// 1 for a backdrop at world scale, 1000 for a 1:1000 miniature. Fog and
+/// the cloud layer's shade reach the backdrop at its world-equivalent
+/// distance and place.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeBackdropRequest {
+    pub anchor: NativeVec3,
+    pub origin: NativeVec3,
+    pub scale: f32,
+}
+
+/// Unlinks the backdrop: nothing in its layer draws.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeClearBackdropRequest {
+    pub reserved: u32,
+}
+
 /// Removes cloud region `id`; removing one not placed does nothing.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]

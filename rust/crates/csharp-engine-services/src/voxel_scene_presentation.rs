@@ -52,6 +52,8 @@ struct RetainedVoxelScenePresentation {
     /// Boxes none of the scatters grow in, rebase-stable
     /// (`VoxelScatterExclusion`).
     scatter_exclusions: Arc<[VoxelScatterExclusion]>,
+    /// The scene's layer or the backdrop's.
+    layer: render_model::RenderLayer,
 }
 
 /// One scatter: the appearance it grows and its placement request. Its
@@ -264,6 +266,7 @@ impl RuntimeVoxelScenePresentationBridge {
                 coarse_distance: 0.0,
                 scatters: BTreeMap::new(),
                 scatter_exclusions: Arc::default(),
+                layer: render_model::RenderLayer::Scene,
             },
         );
         if let Err(error) = self.refresh(NativeVoxelScenePresentationHandle { value }) {
@@ -318,6 +321,43 @@ impl RuntimeVoxelScenePresentationBridge {
         // update: only chunks that change level are projected again.
         presentation.coarse_distance = request.coarse_distance;
         if let Some(frame) = project_level_changes(&mut staged.state, &spatial)? {
+            staged.frames.push(frame);
+        }
+        presentation_readout(request.presentation, session, &staged.state, &spatial)
+    }
+
+    /// Draw a presentation in the scene's layer or the backdrop's
+    /// (`CameraView.SetBackdrop`): a change recreates its nodes there.
+    fn set_layer(
+        &mut self,
+        request: NativeVoxelSceneLayerRequest,
+    ) -> Result<NativeVoxelScenePresentationReadout, CsharpEngineServicesError> {
+        let layer = match request.layer {
+            NativeRenderLayer::Scene => render_model::RenderLayer::Scene,
+            NativeRenderLayer::Backdrop => render_model::RenderLayer::Backdrop,
+            _ => {
+                return Err(CsharpEngineServicesError::new(
+                    "CSHARP_VOXEL_SCENE_LAYER",
+                    "a voxel scene presentation draws in the Scene or the Backdrop layer",
+                ))
+            }
+        };
+        let spatial = self.spatial.clone();
+        let staged = self.staged_mut()?;
+        let presentation = staged
+            .state
+            .presentations
+            .get_mut(&request.presentation.value)
+            .ok_or_else(|| {
+                CsharpEngineServicesError::new(
+                    "CSHARP_VOXEL_SCENE_PRESENTATION_HANDLE",
+                    "voxel scene presentation handle is not retained",
+                )
+            })?;
+        let session = presentation.session;
+        if presentation.layer != layer {
+            presentation.layer = layer;
+            let frame = project_all_presentations(&mut staged.state, &spatial)?;
             staged.frames.push(frame);
         }
         presentation_readout(request.presentation, session, &staged.state, &spatial)
@@ -1053,8 +1093,15 @@ fn presentation_instances(scenes: &[PresentationScene]) -> Vec<VoxelProjectionIn
 /// known viewer.
 fn set_levels_of_detail(state: &mut VoxelScenePresentationState) {
     for (handle, presentation) in &state.presentations {
-        let level = state
+        state
+            .projector
+            .set_layer(&presentation_instance_id(*handle), presentation.layer);
+        // The viewer stands in the world: a backdrop presentation draws at
+        // full resolution and grows nothing.
+        let viewer = state
             .viewer
+            .filter(|_| presentation.layer == render_model::RenderLayer::Scene);
+        let level = viewer
             .filter(|_| presentation.coarse_distance > 0.0)
             .map(|viewer| VoxelLevelOfDetail {
                 viewer,
@@ -1063,8 +1110,7 @@ fn set_levels_of_detail(state: &mut VoxelScenePresentationState) {
         state
             .projector
             .set_level_of_detail(&presentation_instance_id(*handle), level);
-        let field = state
-            .viewer
+        let field = viewer
             .filter(|_| !presentation.scatters.is_empty())
             .map(|viewer| VoxelScatterField {
                 viewer,
@@ -1348,6 +1394,29 @@ pub(crate) fn api(
         set_scatter,
         remove_scatter,
         set_scatter_exclusions,
+        set_layer,
+    }
+}
+
+unsafe extern "C" fn set_layer(
+    context: *mut c_void,
+    request: *const NativeVoxelSceneLayerRequest,
+    output: *mut NativeVoxelScenePresentationReadout,
+    error: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    if error.is_null() || context.is_null() || request.is_null() || output.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeVoxelScenePresentationBridge>() };
+    match bridge.set_layer(unsafe { *request }) {
+        Ok(readout) => {
+            unsafe { *output = readout };
+            ABI_OK
+        }
+        Err(failure) => {
+            bridge.operation_diagnostics.retain(&failure, error);
+            0
+        }
     }
 }
 

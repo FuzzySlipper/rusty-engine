@@ -7345,6 +7345,7 @@ fn native_render_layer(value: NativeRenderLayer) -> Result<RenderLayer, CsharpEn
         NativeRenderLayer::Debug => Ok(RenderLayer::Debug),
         NativeRenderLayer::Ui => Ok(RenderLayer::Ui),
         NativeRenderLayer::Viewmodel => Ok(RenderLayer::Viewmodel),
+        NativeRenderLayer::Backdrop => Ok(RenderLayer::Backdrop),
     }
 }
 

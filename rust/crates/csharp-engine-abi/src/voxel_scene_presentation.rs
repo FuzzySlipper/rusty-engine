@@ -5,8 +5,8 @@
 //! renderer handles, or a parallel scene representation.
 
 use crate::{
-    NativeAppearanceHandle, NativeMaterialHandle, NativeOperationErrorReceipt, NativeSpatialFace,
-    NativeSpatialSessionHandle, NativeVec3,
+    NativeAppearanceHandle, NativeMaterialHandle, NativeOperationErrorReceipt, NativeRenderLayer,
+    NativeSpatialFace, NativeSpatialSessionHandle, NativeVec3,
 };
 use std::ffi::c_void;
 
@@ -96,6 +96,18 @@ pub struct NativeUpdateVoxelScenePresentationDirectionalRequest {
 pub struct NativeVoxelSceneLevelOfDetailRequest {
     pub presentation: NativeVoxelScenePresentationHandle,
     pub coarse_distance: f64,
+}
+
+/// Draws a presentation in the scene's layer or the backdrop's
+/// (`RenderLayer.Backdrop`, linked by `CameraView.SetBackdrop`): there its
+/// scene stands in backdrop units, at full resolution (no level of detail,
+/// no scatters). Its collision is the session's as ever; the presentation
+/// only changes where it draws.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeVoxelSceneLayerRequest {
+    pub presentation: NativeVoxelScenePresentationHandle,
+    pub layer: NativeRenderLayer,
 }
 
 /// Grass, stones or flowers the Engine grows on a presentation's ground
@@ -251,6 +263,12 @@ pub type NativeUpdateVoxelScenePresentationDirectional = unsafe extern "C" fn(
     *mut NativeVoxelScenePresentationReadout,
     *mut NativeOperationErrorReceipt,
 ) -> i32;
+pub type NativeSetVoxelSceneLayer = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeVoxelSceneLayerRequest,
+    *mut NativeVoxelScenePresentationReadout,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
 pub type NativeSetVoxelSceneLevelOfDetail = unsafe extern "C" fn(
     *mut c_void,
     *const NativeVoxelSceneLevelOfDetailRequest,
@@ -307,4 +325,5 @@ pub struct NativeVoxelScenePresentationApi {
     pub set_scatter: NativeSetVoxelSceneScatter,
     pub remove_scatter: NativeRemoveVoxelSceneScatter,
     pub set_scatter_exclusions: NativeSetVoxelSceneScatterExclusions,
+    pub set_layer: NativeSetVoxelSceneLayer,
 }

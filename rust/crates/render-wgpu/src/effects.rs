@@ -22,8 +22,8 @@ use std::collections::HashMap;
 
 use glam::{Mat3, Mat4, Quat, Vec3, Vec4};
 use render_model::{
-    BillboardMode, RenderLayer, SpriteAlphaMode, SpriteBlendMode, SpriteDepthPolicy,
-    SpriteInstanceDescriptor, SpriteLightingMode, SpriteSizeMode, SpriteViewportFit,
+    BillboardMode, SpriteAlphaMode, SpriteBlendMode, SpriteDepthPolicy, SpriteInstanceDescriptor,
+    SpriteLightingMode, SpriteSizeMode, SpriteViewportFit,
 };
 use render_presentation::{
     ParticleBlendMode, ParticleSizeMode, ParticleSpriteRef, ParticleVisual, PresentationFrameDiff,
@@ -1200,7 +1200,8 @@ impl Renderer {
         format: ColorTarget,
     ) -> EffectsPass {
         let mut pass = EffectsPass::default();
-        let viewmodel = view.layer == ViewLayer::Viewmodel;
+        // Particles are the world's; sprites draw in their own layer.
+        let world = view.layer == ViewLayer::World;
         let pixel_ratio = self.pixel_ratio();
         let mut draws = std::mem::take(&mut self.effects.sprite_scratch);
         draws.clear();
@@ -1212,7 +1213,7 @@ impl Renderer {
             let NodeKind::Sprite(resolved) = &node.kind else {
                 continue;
             };
-            if !node.world_visible || (node.world_layer == RenderLayer::Viewmodel) != viewmodel {
+            if !node.world_visible || ViewLayer::of(node.world_layer) != view.layer {
                 continue;
             }
             let sprite = &resolved.descriptor;
@@ -1340,7 +1341,7 @@ impl Renderer {
         self.effects.sprite_scratch = draws;
 
         // Particles draw in world passes only.
-        if !viewmodel && !self.particles.particles.is_empty() {
+        if world && !self.particles.particles.is_empty() {
             self.effects.format_index(&self.gpu.device, format);
             let points = PARTICLE_PIXELS_PER_UNIT * pixel_ratio;
             let half = Vec4::new(

@@ -7,7 +7,7 @@
 #import rusty::types::PI
 #import rusty::clouds::{cloud_light, cloud_noise}
 #import rusty::types::Surface
-#import rusty::view::{frame, lights, shadow_maps, shadow_sampler, shadow_views, clusters, sky_specular, sky_sampler, sky_irradiance, probes, probes_sampler}
+#import rusty::view::{frame, world_equivalent, lights, shadow_maps, shadow_sampler, shadow_views, clusters, sky_specular, sky_sampler, sky_irradiance, probes, probes_sampler}
 
 // The shadow atlas page's side in texels (`shadows.rs` PAGE_SIZE).
 const SHADOW_PAGE_SIZE: f32 = 2048.0;
@@ -374,7 +374,7 @@ fn add_light(
             }
             if kind == 2u && attenuation * facing > 0.0 {
                 // The cloud layer shades the sun and moon, drifting with it.
-                attenuation = attenuation * cloud_light(world_position, direction);
+                attenuation = attenuation * cloud_light(world_equivalent(world_position), direction);
             }
             let incident = color * attenuation * facing;
             *irradiance += incident;

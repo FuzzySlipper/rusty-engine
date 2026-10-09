@@ -45,13 +45,20 @@ const LIGHT_ROW_FLOATS: usize = 16;
 /// and the tone mapping and fog modes; then the presentation time and the
 /// colour grading; then the sun, the atmosphere and the sky's light; then
 /// the indirect light volume's origin and grid and the wind; then the cloud
-/// layer and its drift, and the surfaces' wetness; then the light cluster
-/// grid and depth range.
+/// layer and its drift, the surfaces' wetness and the backdrop's link; then
+/// the light cluster grid and depth range.
 const FRAME_UNIFORM_BYTES: u64 =
-    (16 + 16 + 4 + 4 + 4 + 4 + 4 + 4 + 4 + 4 + 4 * 4 + 4 + 4 + 4 + 4 + 4 + 4 + 4 + 4 + 4) * 4;
+    (16 + 16 + 4 + 4 + 4 + 4 + 4 + 4 + 4 + 4 + 4 * 4 + 4 + 4 + 4 + 4 + 4 + 4 + 4 + 4 + 4 + 4) * 4;
+/// The backdrop camera's depth range reaches this much past what it shows,
+/// either way.
+const BACKDROP_DEPTH_MARGIN: f32 = 1.01;
+/// Its near plane is at least this share of its far plane, for depth
+/// precision: nearer backdrop is clipped (the world covers it).
+const BACKDROP_NEAR_SHARE: f32 = 1e-4;
 /// Instance regions before the shadow casters: a list and a visible region
-/// for each of the world and viewmodel layers (`update_view_list`).
-const VIEW_REGIONS: u32 = 4;
+/// for each of the world, viewmodel and backdrop layers
+/// (`update_view_list`).
+const VIEW_REGIONS: u32 = 6;
 
 /// Per-frame counts for diagnostics.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -179,10 +186,23 @@ pub(crate) struct ViewCache {
 /// Which retained layers a view pass draws.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ViewLayer {
-    /// Every layer but the viewmodel.
+    /// Every layer but the viewmodel and the backdrop.
     World,
     /// Camera-relative content, after a depth break, with its own lights.
     Viewmodel,
+    /// The backdrop, behind the world, by the backdrop camera.
+    Backdrop,
+}
+
+impl ViewLayer {
+    /// The view layer that draws a retained layer.
+    pub(crate) fn of(layer: RenderLayer) -> Self {
+        match layer {
+            RenderLayer::Viewmodel => Self::Viewmodel,
+            RenderLayer::Backdrop => Self::Backdrop,
+            RenderLayer::Scene | RenderLayer::Debug | RenderLayer::Ui => Self::World,
+        }
+    }
 }
 
 /// Rows `first..first + count` of the lights buffer.
@@ -192,11 +212,13 @@ pub(crate) struct LightRange {
     pub count: u32,
 }
 
-/// World lights, then viewmodel lights, in one buffer.
+/// World lights, then viewmodel lights, then backdrop lights, in one
+/// buffer.
 #[derive(Clone, Copy, Default)]
 pub(crate) struct LightRanges {
     pub world: LightRange,
     pub viewmodel: LightRange,
+    pub backdrop: LightRange,
 }
 
 /// A pixel rectangle with its origin at the top left.
@@ -241,8 +263,11 @@ pub(crate) struct ViewPass<'a> {
     pub start: PassStart,
     /// Linear background colour a world pass clears to.
     pub clear: [f32; 4],
-    /// Draw the retained sky behind a world pass.
+    /// Draw the retained sky (and the backdrop) behind a world pass.
     pub sky: bool,
+    /// A backdrop pass's `Frame.backdrop` row: where its points stand in
+    /// the world.
+    pub backdrop: Option<[f32; 4]>,
 }
 
 impl Renderer {
@@ -646,6 +671,24 @@ impl Renderer {
             neutral_rig(&mut rows, NEUTRAL_VIEWMODEL_KEY_POSITION);
         }
         self.retained_light_rows(&mut rows, ViewLayer::Viewmodel, None);
+        let viewmodel_end = (rows.len() / LIGHT_ROW_FLOATS) as u32;
+        // The backdrop sees the world's ambient, hemisphere and directional
+        // lights (they hold at any distance), without their shadows, and the
+        // lights placed in it.
+        let backdrop_rows: Vec<[f32; LIGHT_ROW_FLOATS]> = rows
+            [..world_count as usize * LIGHT_ROW_FLOATS]
+            .as_chunks::<LIGHT_ROW_FLOATS>()
+            .0
+            .iter()
+            .filter(|row| row[3] < 3.0)
+            .map(|row| {
+                let mut row = *row;
+                row[15] = 0.0;
+                row
+            })
+            .collect();
+        rows.extend(backdrop_rows.iter().flatten());
+        self.retained_light_rows(&mut rows, ViewLayer::Backdrop, None);
         self.shadow_candidates = candidates;
         self.sun = self.brightest_sun();
         let layers_changed = self.choose_shadows(Some(&mut rows));
@@ -657,7 +700,11 @@ impl Renderer {
             },
             viewmodel: LightRange {
                 first: world_count,
-                count: total - world_count,
+                count: viewmodel_end - world_count,
+            },
+            backdrop: LightRange {
+                first: viewmodel_end,
+                count: total - viewmodel_end,
             },
         };
         let needed = rows.len().max(LIGHT_ROW_FLOATS) * 4;
@@ -788,8 +835,7 @@ impl Renderer {
         handles.sort();
         for handle in handles {
             if let Some(node) = self.tables.nodes.get(handle) {
-                let in_layer =
-                    (node.world_layer == RenderLayer::Viewmodel) == (layer == ViewLayer::Viewmodel);
+                let in_layer = ViewLayer::of(node.world_layer) == layer;
                 if let (NodeKind::Light(light), true, true) =
                     (&node.kind, node.world_visible, in_layer)
                 {
@@ -843,7 +889,7 @@ impl Renderer {
             else {
                 continue;
             };
-            if !node.world_visible || node.world_layer == RenderLayer::Viewmodel {
+            if !node.world_visible || ViewLayer::of(node.world_layer) != ViewLayer::World {
                 continue;
             }
             let toward = -node
@@ -965,7 +1011,7 @@ impl Renderer {
     /// part ids uploaded.
     fn update_view_list(&mut self, view_proj: &Mat4, eye: Vec3, layer: ViewLayer) -> u32 {
         let slot = layer as usize;
-        // Instance regions: per layer (world, viewmodel) a list region and a
+        // Instance regions: per layer (world, viewmodel, backdrop) a list region and a
         // visible region, each sized for every part slot, then each shadow
         // layer's casters. The CPU list uses the list region; GPU culling
         // puts the opaque candidates there, the blended parts after them, and
@@ -988,7 +1034,9 @@ impl Renderer {
             uploaded += self.upload_instances(VIEW_REGIONS * slots, &ids);
             self.casters_uploaded = true;
         }
-        let gpu_culled = self.options.gpu_culling && self.culling.available();
+        // The backdrop's few large parts list on the CPU.
+        let gpu_culled =
+            self.options.gpu_culling && self.culling.available() && layer != ViewLayer::Backdrop;
         if self.views[slot].as_ref().is_some_and(|view| {
             view.view_proj == *view_proj && !view.stale && view.candidates.is_some() == gpu_culled
         }) {
@@ -996,7 +1044,6 @@ impl Renderer {
         }
         let base = 2 * slot as u32 * slots;
         let visible_base = base + slots;
-        let viewmodel = layer == ViewLayer::Viewmodel;
         let frustum = Frustum::new(view_proj);
         let previous = self.views[slot].take();
         let (list, candidates) = if gpu_culled {
@@ -1010,7 +1057,7 @@ impl Renderer {
                 }) => candidates,
                 _ => {
                     let started = std::time::Instant::now();
-                    let list = batch::opaque_candidates(&self.tables.parts, viewmodel, base);
+                    let list = batch::opaque_candidates(&self.tables.parts, layer, base);
                     self.batch_time += started.elapsed();
                     uploaded += self.upload_instances(base, &list.ids);
                     let candidates = CandidateList::new(list, visible_base, |batch| {
@@ -1030,14 +1077,13 @@ impl Renderer {
             // Blended parts follow the candidates in the list region.
             let blended_base = base + candidates.list.instances();
             let started = std::time::Instant::now();
-            let list =
-                batch::blended_list(&self.tables.parts, viewmodel, &frustum, eye, blended_base);
+            let list = batch::blended_list(&self.tables.parts, layer, &frustum, eye, blended_base);
             self.batch_time += started.elapsed();
             uploaded += self.upload_instances(blended_base, &list.ids);
             (list, Some(candidates))
         } else {
             let started = std::time::Instant::now();
-            let list = batch::view_list(&self.tables.parts, viewmodel, &frustum, eye, base);
+            let list = batch::view_list(&self.tables.parts, layer, &frustum, eye, base);
             self.batch_time += started.elapsed();
             // Lists carry their instance offsets, so a moved base compares
             // different and uploads.
@@ -1564,64 +1610,271 @@ impl Renderer {
         }
     }
 
-    /// Encode and submit one view pass. Each pass writes the frame uniform
-    /// and submits on its own, so passes with different cameras never share
-    /// one uniform write.
-    pub(crate) fn encode_view(&mut self, view: ViewPass<'_>) -> ViewStats {
-        let world_layer = view.layer == ViewLayer::World;
-        let lights = if world_layer {
-            self.lights.world
-        } else {
-            self.lights.viewmodel
-        };
-        let view_proj = view.camera.view_proj;
-        let eye = view.camera.eye;
-        if world_layer {
-            // A budget chooses casting lights near the first world view of
-            // each frame.
-            if self.options.shadow_budget.is_some() && !self.shadows_chosen {
-                self.shadows_chosen = true;
-                self.shadow_eye = eye;
-                if self.choose_shadows(None) {
-                    self.cull_casters(&HashSet::new(), false);
-                }
+    /// The backdrop camera for a world view (`SetBackdrop`): the view's
+    /// rotation and field of view at the link's place for its eye, its
+    /// depth range fitted around what the backdrop shows, and the pass's
+    /// `Frame.backdrop` row. None without a link, for an orthographic view,
+    /// or with nothing shown in the backdrop.
+    pub(crate) fn backdrop_camera(
+        &self,
+        world: &CameraMatrices,
+    ) -> Option<(CameraMatrices, [f32; 4])> {
+        let link = self.tables.backdrop?;
+        // Perspective only: an orthographic view has no eye to scale about.
+        if world.projection.w_axis.w != 0.0 {
+            return None;
+        }
+        let eye = Vec3::from_array(
+            link.eye([world.eye.x, world.eye.y, world.eye.z].map(f64::from))
+                .map(|value| value as f32),
+        );
+        // The world view's rotation, which holds no position, about the
+        // backdrop's eye.
+        let view =
+            Mat4::from_mat3(glam::Mat3::from_mat4(world.view)) * Mat4::from_translation(-eye);
+        // What the backdrop shows, its parts' bounds and its sprites'
+        // places, by view depth: a box's nearest and farthest depths lie at
+        // its corners.
+        let mut extent: Option<(f32, f32)> = None;
+        let mut reach = |min: Vec3, max: Vec3| {
+            for corner in 0..8 {
+                let point = Vec3::select(
+                    glam::BVec3::new(corner & 1 != 0, corner & 2 != 0, corner & 4 != 0),
+                    max,
+                    min,
+                );
+                let depth = -view.transform_point3(point).z;
+                extent = Some(extent.map_or((depth, depth), |(near, far)| {
+                    (near.min(depth), far.max(depth))
+                }));
             }
-            self.fit_cascades(&view.camera);
-        }
-        let instances_uploaded = self.update_view_list(&view_proj, eye, view.layer);
-        // The world, sprites and particles draw into the view's HDR target,
-        // with the view's depth and its samples; the background and the
-        // finished world into the view's own image, single-sample.
-        let target = view.target.key();
-        let hdr_format = ColorTarget {
-            format: HDR_FORMAT,
-            samples: view.target.samples,
         };
-        let effects = self.prepare_effects(&view, hdr_format);
-        let slot = view.layer as usize;
-        // With GPU culling the opaque parts are candidates, not in the list.
-        if !world_layer
-            && effects.draws() == 0
-            && self.views[slot].as_ref().is_none_or(|cache| {
-                cache.list.batches.is_empty()
-                    && cache
-                        .candidates
-                        .as_ref()
-                        .is_none_or(|candidates| candidates.list.batches.is_empty())
-            })
-        {
-            return ViewStats {
-                instances_uploaded,
-                sprite_candidates: effects.sprite_candidates,
-                ..ViewStats::default()
-            };
+        let parts = &self.tables.parts;
+        for (id, state) in parts.state.iter().enumerate() {
+            if parts.meta[id].is_some()
+                && state.shown
+                && ViewLayer::of(state.layer) == ViewLayer::Backdrop
+            {
+                let bounds = parts.cull_bounds(id as PartId);
+                reach(bounds.min, bounds.max);
+            }
         }
+        for handle in &self.tables.sprites {
+            let Some(node) = self.tables.nodes.get(handle) else {
+                continue;
+            };
+            if let (NodeKind::Sprite(resolved), true, ViewLayer::Backdrop) = (
+                &node.kind,
+                node.world_visible,
+                ViewLayer::of(node.world_layer),
+            ) {
+                let [width, height] = resolved.descriptor.size;
+                let scale = node.world.x_axis.length().max(node.world.y_axis.length());
+                let radius = Vec3::splat(width.max(height) * scale);
+                let center = node.world.w_axis.truncate();
+                reach(center - radius, center + radius);
+            }
+        }
+        let (nearest, farthest) = extent?;
+        if farthest <= 0.0 {
+            // All of it behind the eye.
+            return None;
+        }
+        let far = farthest * BACKDROP_DEPTH_MARGIN;
+        let near = (nearest / BACKDROP_DEPTH_MARGIN).max(far * BACKDROP_NEAR_SHARE);
+        let mut projection = world.projection;
+        let ratio = far / (near - far);
+        projection.z_axis.z = ratio;
+        projection.w_axis.z = ratio * near;
+        let scale = link.scale as f32;
+        let offset = world.eye - eye * scale;
+        Some((
+            CameraMatrices {
+                view_proj: projection * view,
+                view,
+                projection,
+                eye,
+            },
+            [offset.x, offset.y, offset.z, scale],
+        ))
+    }
+
+    /// A world view's backdrop (`RenderLayer::Backdrop`), when it has a
+    /// link and shows something: the view's background by the world's
+    /// camera, then the backdrop by its own (`backdrop_camera`), finished
+    /// over it at its world-equivalent distance. Each is submitted before
+    /// the next frame uniform replaces its own. The world draws over it,
+    /// clearing depth first. None draws nothing: the world draws its own
+    /// background.
+    fn encode_backdrop(&mut self, view: &ViewPass<'_>) -> Option<ViewStats> {
+        self.backdrop = None;
+        if !view.sky {
+            return None;
+        }
+        let (camera, link) = self.backdrop_camera(&view.camera)?;
+        // The planes from the projection: z_axis.z is far / (near - far)
+        // and w_axis.z that times near.
+        let (ratio, offset) = (camera.projection.z_axis.z, camera.projection.w_axis.z);
+        self.backdrop = Some(crate::BackdropReadout {
+            eye: camera.eye.to_array(),
+            near: offset / ratio,
+            far: offset / (ratio + 1.0),
+        });
+        let target = view.target.key();
+        let sky_index = match self.pipelines.iter().position(|set| set.target == target) {
+            Some(index) => index,
+            None => {
+                self.pipelines
+                    .push(self.layouts.pipelines(&self.gpu.device, target));
+                self.pipelines.len() - 1
+            }
+        };
+        let bytes = self.frame_uniform(&view.camera, self.lights.world, view.target.samples, None);
+        self.gpu.queue.write_buffer(&self.frame_buffer, 0, &bytes);
+        let mut encoder = self
+            .gpu
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("render-wgpu background"),
+            });
+        self.encode_background(&mut encoder, view, sky_index);
+        self.gpu.queue.submit([encoder.finish()]);
+        self.finish.submitted();
+        Some(self.encode_view(ViewPass {
+            target: view.target,
+            viewport: view.viewport,
+            camera,
+            layer: ViewLayer::Backdrop,
+            start: view.start,
+            clear: view.clear,
+            sky: false,
+            backdrop: Some(link),
+        }))
+    }
+
+    /// A world view's background into its own image: the clear colour, the
+    /// sky and the sun, then the cloud layer in a pass of its own.
+    fn encode_background(
+        &mut self,
+        encoder: &mut wgpu::CommandEncoder,
+        view: &ViewPass<'_>,
+        sky_index: usize,
+    ) {
+        let whole = view.start == PassStart::Target;
+        let target = view.target.key();
+        if !whole {
+            self.compose
+                .prepare_clear(&self.gpu, target.format, view.clear);
+        }
+        let area = view.viewport;
+        let in_viewport = |pass: &mut wgpu::RenderPass<'_>| {
+            pass.set_viewport(
+                area.x as f32,
+                area.y as f32,
+                area.width as f32,
+                area.height as f32,
+                0.0,
+                1.0,
+            );
+            pass.set_scissor_rect(area.x, area.y, area.width, area.height);
+        };
+        // The background: the clear colour, then the sky, single-sample
+        // (they have no edges). It is never finished; the world pass
+        // clears the depth.
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("render-wgpu background"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: view.target.color,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: if whole {
+                        let [r, g, b, a] = view.clear.map(f64::from);
+                        wgpu::LoadOp::Clear(wgpu::Color { r, g, b, a })
+                    } else {
+                        wgpu::LoadOp::Load
+                    },
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        in_viewport(&mut pass);
+        if !whole {
+            self.compose.clear_viewport(&mut pass, target.format);
+        }
+        if let (true, Some(sky)) = (view.sky, &self.sky_bind_group) {
+            pass.set_bind_group(0, &self.frame_bind_group, &[]);
+            pass.set_pipeline(&self.pipelines[sky_index].sky);
+            pass.set_bind_group(1, sky, &[]);
+            pass.draw(0..3, 0..1);
+        }
+        // The sun over the sky or clear colour, when the atmosphere
+        // draws a disc or halo and there is a sun.
+        let sun_shown = self.tables.atmosphere.is_some_and(|atmosphere| {
+            atmosphere.sun_radius_degrees > 0.0 || atmosphere.sun_halo > 0.0
+        });
+        if view.sky && sun_shown && self.sun.is_some() {
+            pass.set_bind_group(0, &self.frame_bind_group, &[]);
+            pass.set_pipeline(&self.pipelines[sky_index].sun);
+            pass.draw(0..3, 0..1);
+        }
+        drop(pass);
+        // The cloud layer over the panorama and the sun, in a pass of
+        // its own so `gpu.passes` times it. Without cover there is no
+        // pass and the sky is drawn as before.
+        let covered = drawn_clouds(self.tables.clouds, self.tables.cloud_regions.len()).is_some();
+        if let (true, true, Some(sky)) = (view.sky, covered, &self.sky_bind_group) {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("render-wgpu clouds"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: view.target.color,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: self.finish.clouds_writes(),
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            in_viewport(&mut pass);
+            pass.set_bind_group(0, &self.frame_bind_group, &[]);
+            pass.set_pipeline(if self.volumetric_clouds_drawn() {
+                &self.pipelines[sky_index].clouds_volumetric
+            } else {
+                &self.pipelines[sky_index].clouds
+            });
+            pass.set_bind_group(1, sky, &[]);
+            pass.draw(0..3, 0..1);
+            drop(pass);
+            self.finish.resolve_clouds(encoder);
+        }
+    }
+
+    /// A view pass's frame uniform (`rusty::types` `Frame`) up to its
+    /// cluster fields, with the cloud regions' rows written. A backdrop
+    /// pass passes its `Frame.backdrop` row and sees no light probes.
+    fn frame_uniform(
+        &self,
+        camera: &CameraMatrices,
+        lights: LightRange,
+        samples: u32,
+        backdrop: Option<[f32; 4]>,
+    ) -> Vec<u8> {
         let mut uniform = Vec::with_capacity((FRAME_UNIFORM_BYTES / 4) as usize);
+        let (view_proj, eye) = (camera.view_proj, camera.eye);
         uniform.extend_from_slice(&view_proj.to_cols_array());
         uniform.extend_from_slice(&view_proj.inverse().to_cols_array());
         uniform.extend_from_slice(&[eye.x, eye.y, eye.z, 1.0]);
         let mut bytes: Vec<u8> = bytemuck::cast_slice(&uniform).to_vec();
-        for count in [lights.count, lights.first, view.target.samples, 0] {
+        for count in [lights.count, lights.first, samples, 0] {
             bytes.extend_from_slice(&count.to_le_bytes());
         }
         bytes.extend_from_slice(&finish_uniform(
@@ -1649,7 +1902,13 @@ impl Renderer {
         for value in [sky_intensity, roughest, 0.0, 0.0] {
             bytes.extend_from_slice(&value.to_le_bytes());
         }
-        for value in self.probes.uniform() {
+        // The light probes stand in the world, not the backdrop.
+        let probes = if backdrop.is_some() {
+            [0.0; 8]
+        } else {
+            self.probes.uniform()
+        };
+        for value in probes {
             bytes.extend_from_slice(&value.to_le_bytes());
         }
         for value in wind_uniform(self.tables.wind) {
@@ -1701,6 +1960,72 @@ impl Renderer {
         for value in [wetness.wetness, wetness.puddles, 0.0, 0.0] {
             bytes.extend_from_slice(&value.to_le_bytes());
         }
+        for value in backdrop.unwrap_or_default() {
+            bytes.extend_from_slice(&value.to_le_bytes());
+        }
+        bytes
+    }
+
+    /// Encode and submit one view pass. Each pass writes the frame uniform
+    /// and submits on its own, so passes with different cameras never share
+    /// one uniform write.
+    pub(crate) fn encode_view(&mut self, view: ViewPass<'_>) -> ViewStats {
+        let world_layer = view.layer == ViewLayer::World;
+        let lights = match view.layer {
+            ViewLayer::World => self.lights.world,
+            ViewLayer::Viewmodel => self.lights.viewmodel,
+            ViewLayer::Backdrop => self.lights.backdrop,
+        };
+        // A world view's backdrop draws first, with the background, in
+        // submissions of its own.
+        let backdrop = if world_layer {
+            self.encode_backdrop(&view)
+        } else {
+            None
+        };
+        let view_proj = view.camera.view_proj;
+        let eye = view.camera.eye;
+        if world_layer {
+            // A budget chooses casting lights near the first world view of
+            // each frame.
+            if self.options.shadow_budget.is_some() && !self.shadows_chosen {
+                self.shadows_chosen = true;
+                self.shadow_eye = eye;
+                if self.choose_shadows(None) {
+                    self.cull_casters(&HashSet::new(), false);
+                }
+            }
+            self.fit_cascades(&view.camera);
+        }
+        let instances_uploaded = self.update_view_list(&view_proj, eye, view.layer);
+        // The world, sprites and particles draw into the view's HDR target,
+        // with the view's depth and its samples; the background and the
+        // finished world into the view's own image, single-sample.
+        let target = view.target.key();
+        let hdr_format = ColorTarget {
+            format: HDR_FORMAT,
+            samples: view.target.samples,
+        };
+        let effects = self.prepare_effects(&view, hdr_format);
+        let slot = view.layer as usize;
+        // With GPU culling the opaque parts are candidates, not in the list.
+        if !world_layer
+            && effects.draws() == 0
+            && self.views[slot].as_ref().is_none_or(|cache| {
+                cache.list.batches.is_empty()
+                    && cache
+                        .candidates
+                        .as_ref()
+                        .is_none_or(|candidates| candidates.list.batches.is_empty())
+            })
+        {
+            return ViewStats {
+                instances_uploaded,
+                sprite_candidates: effects.sprite_candidates,
+                ..ViewStats::default()
+            };
+        }
+        let bytes = self.frame_uniform(&view.camera, lights, view.target.samples, view.backdrop);
         // The cluster fields follow once the view's clusters are encoded.
         let cluster_offset = bytes.len() as u64;
         self.gpu.queue.write_buffer(&self.frame_buffer, 0, &bytes);
@@ -1774,10 +2099,6 @@ impl Renderer {
             ));
         }
         let whole = view.start == PassStart::Target;
-        if !whole && world_layer {
-            self.compose
-                .prepare_clear(&self.gpu, target.format, view.clear);
-        }
         if world_layer {
             // Ghost plates snap per view; a view is known by its viewport.
             let area = view.viewport;
@@ -1870,86 +2191,8 @@ impl Renderer {
             );
             pass.set_scissor_rect(area.x, area.y, area.width, area.height);
         };
-        if world_layer {
-            // The background: the clear colour, then the sky, single-sample
-            // (they have no edges). It is never finished; the world pass
-            // clears the depth.
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("render-wgpu background"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: view.target.color,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: if whole {
-                            let [r, g, b, a] = view.clear.map(f64::from);
-                            wgpu::LoadOp::Clear(wgpu::Color { r, g, b, a })
-                        } else {
-                            wgpu::LoadOp::Load
-                        },
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            in_viewport(&mut pass);
-            if !whole {
-                self.compose.clear_viewport(&mut pass, target.format);
-            }
-            if let (true, Some(sky)) = (view.sky, &self.sky_bind_group) {
-                pass.set_bind_group(0, &self.frame_bind_group, &[]);
-                pass.set_pipeline(&self.pipelines[sky_index].sky);
-                pass.set_bind_group(1, sky, &[]);
-                pass.draw(0..3, 0..1);
-            }
-            // The sun over the sky or clear colour, when the atmosphere
-            // draws a disc or halo and there is a sun.
-            let sun_shown = self.tables.atmosphere.is_some_and(|atmosphere| {
-                atmosphere.sun_radius_degrees > 0.0 || atmosphere.sun_halo > 0.0
-            });
-            if view.sky && sun_shown && self.sun.is_some() {
-                pass.set_bind_group(0, &self.frame_bind_group, &[]);
-                pass.set_pipeline(&self.pipelines[sky_index].sun);
-                pass.draw(0..3, 0..1);
-            }
-            drop(pass);
-            // The cloud layer over the panorama and the sun, in a pass of
-            // its own so `gpu.passes` times it. Without cover there is no
-            // pass and the sky is drawn as before.
-            let covered =
-                drawn_clouds(self.tables.clouds, self.tables.cloud_regions.len()).is_some();
-            if let (true, true, Some(sky)) = (view.sky, covered, &self.sky_bind_group) {
-                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: Some("render-wgpu clouds"),
-                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                        view: view.target.color,
-                        depth_slice: None,
-                        resolve_target: None,
-                        ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Load,
-                            store: wgpu::StoreOp::Store,
-                        },
-                    })],
-                    depth_stencil_attachment: None,
-                    timestamp_writes: self.finish.clouds_writes(),
-                    occlusion_query_set: None,
-                    multiview_mask: None,
-                });
-                in_viewport(&mut pass);
-                pass.set_bind_group(0, &self.frame_bind_group, &[]);
-                pass.set_pipeline(if self.volumetric_clouds_drawn() {
-                    &self.pipelines[sky_index].clouds_volumetric
-                } else {
-                    &self.pipelines[sky_index].clouds
-                });
-                pass.set_bind_group(1, sky, &[]);
-                pass.draw(0..3, 0..1);
-                drop(pass);
-                self.finish.resolve_clouds(&mut encoder);
-            }
+        if world_layer && backdrop.is_none() {
+            self.encode_background(&mut encoder, &view, sky_index);
         }
         // Bloom spreads the world's light; auto exposure adapts at the first
         // world view of a frame. Both read the world resolved.
@@ -2037,10 +2280,10 @@ impl Renderer {
         );
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some(if world_layer {
-                    "render-wgpu world"
-                } else {
-                    "render-wgpu viewmodel"
+                label: Some(match view.layer {
+                    ViewLayer::World => "render-wgpu world",
+                    ViewLayer::Viewmodel => "render-wgpu viewmodel",
+                    ViewLayer::Backdrop => "render-wgpu backdrop",
                 }),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &hdr.color,
@@ -2058,7 +2301,8 @@ impl Renderer {
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                     view: view.target.depth,
                     depth_ops: Some(wgpu::Operations {
-                        // A viewmodel pass breaks depth here.
+                        // A viewmodel pass breaks depth here, and a world
+                        // pass clears its backdrop's.
                         load: if whole {
                             wgpu::LoadOp::Clear(1.0)
                         } else {
@@ -2068,7 +2312,7 @@ impl Renderer {
                     }),
                     stencil_ops: None,
                 }),
-                timestamp_writes: self.finish.world_writes_between(world_layer, true, !water),
+                timestamp_writes: self.finish.layer_writes_between(view.layer, true, !water),
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
@@ -2130,7 +2374,7 @@ impl Renderer {
                         }),
                         stencil_ops: None,
                     }),
-                    timestamp_writes: self.finish.world_writes_between(world_layer, false, true),
+                    timestamp_writes: self.finish.layer_writes_between(view.layer, false, true),
                     occlusion_query_set: None,
                     multiview_mask: None,
                 });
@@ -2170,9 +2414,7 @@ impl Renderer {
             );
             parts = encoded;
         }
-        if world_layer {
-            self.finish.resolve_world(&mut encoder);
-        }
+        self.finish.resolve_layer(view.layer, &mut encoder);
         if effects.soft() {
             // Soft billboards fade against the world's depth, which the world
             // pass was drawing into, so they draw over its HDR target in a

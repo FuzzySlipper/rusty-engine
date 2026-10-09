@@ -120,6 +120,7 @@ impl Renderer {
             start: PassStart::Target,
             clear,
             sky,
+            backdrop: None,
         });
         if request.viewmodel {
             self.encode_view(ViewPass {
@@ -130,6 +131,7 @@ impl Renderer {
                 start: PassStart::Target,
                 clear,
                 sky: false,
+                backdrop: None,
             });
         }
         Capture { color, depth }

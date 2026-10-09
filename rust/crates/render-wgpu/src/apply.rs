@@ -161,6 +161,7 @@ impl Renderer {
             }
             RenderDiff::SetWind { wind } => self.tables.wind = *wind,
             RenderDiff::SetWetness { wetness } => self.tables.wetness = *wetness,
+            RenderDiff::SetBackdrop { backdrop } => self.tables.backdrop = *backdrop,
             RenderDiff::SetCloudRegion { id, region } => {
                 if self.tables.cloud_regions.len()
                     < render_model::CloudRegionDescriptor::MAX_REGIONS
@@ -2498,6 +2499,7 @@ fn op_name(op: &RenderDiff) -> &'static str {
         RenderDiff::SetWind { .. } => "setWind",
         RenderDiff::SetClouds { .. } => "setClouds",
         RenderDiff::SetWetness { .. } => "setWetness",
+        RenderDiff::SetBackdrop { .. } => "setBackdrop",
         RenderDiff::SetCloudRegion { .. } => "setCloudRegion",
         RenderDiff::RemoveCloudRegion { .. } => "removeCloudRegion",
         RenderDiff::SetVolumetricFog { .. } => "setVolumetricFog",

@@ -16,6 +16,7 @@
 use glam::{Mat4, Vec3, Vec4};
 use render_model::RenderLayer;
 
+use crate::frame::ViewLayer;
 use crate::shaders::Features;
 use crate::tables::{Aabb, PartClass, PartId, Parts};
 
@@ -116,13 +117,13 @@ impl Frustum {
     }
 }
 
-/// The parts a view pass sees: shown, in the viewmodel layer or (for a world
-/// pass) any other layer, inside the frustum.
+/// The parts a view pass sees: shown, in its view layer (`ViewLayer::of`),
+/// inside the frustum.
 /// Opaque parts are grouped by pass, features and batch key; blended parts are sorted
 /// back to front from `eye`. Instance ids are offset by `base`.
 pub(crate) fn view_list(
     parts: &Parts,
-    viewmodel: bool,
+    layer: ViewLayer,
     frustum: &Frustum,
     eye: Vec3,
     base: u32,
@@ -131,7 +132,7 @@ pub(crate) fn view_list(
     for (id, state) in parts.state.iter().enumerate() {
         if parts.meta[id].is_none()
             || !state.shown
-            || (state.layer == RenderLayer::Viewmodel) != viewmodel
+            || ViewLayer::of(state.layer) != layer
             || parts.follows(id as PartId)
             || !frustum.intersects(parts.cull_bounds(id as PartId))
         {
@@ -162,13 +163,10 @@ type Entry = (Pass, Features, u32, PartId, Pass);
 /// them but not culled: the GPU cull (`culling.rs`) tests each against the
 /// frustum. Rebuilt only when the parts regroup. Scattered copies are
 /// candidates one by one: the GPU culls each by its own bounds.
-pub(crate) fn opaque_candidates(parts: &Parts, viewmodel: bool, base: u32) -> DrawList {
+pub(crate) fn opaque_candidates(parts: &Parts, layer: ViewLayer, base: u32) -> DrawList {
     let mut entries: Vec<Entry> = Vec::new();
     for (id, state) in parts.state.iter().enumerate() {
-        if parts.meta[id].is_none()
-            || !state.shown
-            || (state.layer == RenderLayer::Viewmodel) != viewmodel
-        {
+        if parts.meta[id].is_none() || !state.shown || ViewLayer::of(state.layer) != layer {
             continue;
         }
         let pass = Pass::of(state.class, state.mirrored);
@@ -185,17 +183,14 @@ pub(crate) fn opaque_candidates(parts: &Parts, viewmodel: bool, base: u32) -> Dr
 /// the camera's.
 pub(crate) fn blended_list(
     parts: &Parts,
-    viewmodel: bool,
+    layer: ViewLayer,
     frustum: &Frustum,
     eye: Vec3,
     base: u32,
 ) -> DrawList {
     let mut entries: Vec<Entry> = Vec::new();
     for (id, state) in parts.state.iter().enumerate() {
-        if parts.meta[id].is_none()
-            || !state.shown
-            || (state.layer == RenderLayer::Viewmodel) != viewmodel
-        {
+        if parts.meta[id].is_none() || !state.shown || ViewLayer::of(state.layer) != layer {
             continue;
         }
         let pass = Pass::of(state.class, state.mirrored);

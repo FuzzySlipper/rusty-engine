@@ -285,6 +285,42 @@ pub struct WetnessDescriptor {
     pub puddles: f32,
 }
 
+/// The backdrop's link to the world (`CameraView.SetBackdrop`): parts in
+/// the `Backdrop` layer are drawn behind the world, after the sky and clouds,
+/// by a camera with each world view's rotation and field of view at
+/// `origin + (eye - anchor) / scale` in backdrop space. `anchor` is a point
+/// of the world, in the same local frame as the cameras (it moves with them
+/// on an origin rebase); `origin` is where it lies in the backdrop; `scale` is
+/// world metres per backdrop unit (1: the backdrop is at world scale, 1000: a
+/// 1:1000 miniature). Fog and the cloud layer's shade reach the backdrop at
+/// its world-equivalent distance and place.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BackdropDescriptor {
+    pub anchor: [f64; 3],
+    pub origin: [f64; 3],
+    pub scale: f64,
+}
+
+impl BackdropDescriptor {
+    /// Finite points and a scale above 0.
+    pub fn valid(&self) -> bool {
+        self.anchor
+            .iter()
+            .chain(&self.origin)
+            .all(|value| value.is_finite())
+            && self.scale.is_finite()
+            && self.scale > 0.0
+    }
+
+    /// Where a world eye stands in the backdrop.
+    pub fn eye(&self, world: [f64; 3]) -> [f64; 3] {
+        std::array::from_fn(|axis| {
+            self.origin[axis] + (world[axis] - self.anchor[axis]) / self.scale
+        })
+    }
+}
+
 impl WetnessDescriptor {
     /// Wetness and puddles within `0..=1`.
     pub fn valid(&self) -> bool {
@@ -985,6 +1021,10 @@ pub enum RenderLayer {
     Debug,
     Ui,
     Viewmodel,
+    /// Drawn behind the world by the backdrop camera (`SetBackdrop`), in
+    /// backdrop coordinates: no shadows, probes or world lights but the
+    /// directional, ambient and hemisphere ones.
+    Backdrop,
 }
 
 impl RenderLayer {
@@ -1218,6 +1258,11 @@ pub enum RenderDiff {
     SetWetness {
         wetness: Option<WetnessDescriptor>,
     },
+    /// Links the `Backdrop` layer to the world's cameras; None draws no
+    /// backdrop.
+    SetBackdrop {
+        backdrop: Option<BackdropDescriptor>,
+    },
     /// Places or replaces cloud region `id`.
     SetCloudRegion {
         id: u32,
@@ -1436,6 +1481,10 @@ impl RenderDiff {
                 wetness: Some(wetness),
             } if !wetness.valid() => Err(RenderOperationError::Wetness),
             Self::SetWetness { .. } => Ok(()),
+            Self::SetBackdrop {
+                backdrop: Some(backdrop),
+            } if !backdrop.valid() => Err(RenderOperationError::Backdrop),
+            Self::SetBackdrop { .. } => Ok(()),
             Self::SetCloudRegion { region, .. } if !region.valid() => {
                 Err(RenderOperationError::CloudRegion)
             }
@@ -1577,6 +1626,7 @@ impl RenderDiff {
             | Self::SetWind { .. }
             | Self::SetClouds { .. }
             | Self::SetWetness { .. }
+            | Self::SetBackdrop { .. }
             | Self::SetCloudRegion { .. }
             | Self::RemoveCloudRegion { .. }
             | Self::SetVolumetricFog { .. }
@@ -1631,6 +1681,7 @@ pub enum RenderOperationError {
     Wind,
     Clouds,
     Wetness,
+    Backdrop,
     VolumetricFog,
     FogVolume,
     CloudRegion,
@@ -1717,6 +1768,7 @@ impl RenderFrameDiff {
                 | RenderDiff::SetWind { .. }
                 | RenderDiff::SetClouds { .. }
                 | RenderDiff::SetWetness { .. }
+                | RenderDiff::SetBackdrop { .. }
                 | RenderDiff::SetCloudRegion { .. }
                 | RenderDiff::RemoveCloudRegion { .. }
                 | RenderDiff::SetVolumetricFog { .. }
