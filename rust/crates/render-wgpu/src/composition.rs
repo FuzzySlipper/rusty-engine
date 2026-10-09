@@ -566,6 +566,7 @@ impl Renderer {
             clear,
             sky: true,
             backdrop: None,
+            camera_id: Some(camera.id.as_str()),
         });
         // Depth-layer labels test the world's depth before the viewmodel
         // pass clears it.
@@ -585,6 +586,7 @@ impl Renderer {
             clear,
             sky: false,
             backdrop: None,
+            camera_id: None,
         });
         let top_labels = self.draw_labels(target, area, &labels, LabelPass::OnTop);
         let mut stats = world + viewmodel;
@@ -629,18 +631,18 @@ impl Renderer {
             let target = &self.composition.targets[*target_index];
             let (width, height) = (target.descriptor.width, target.descriptor.height);
             let (color, depth) = (target.color.clone(), target.depth.clone());
-            let passes: Vec<(PixelRect, CameraMatrices)> = views
+            let passes: Vec<(PixelRect, CameraMatrices, usize)> = views
                 .iter()
                 .map(|(view, camera)| {
                     let area = pixel_viewport(&composition.views[*view].viewport, width, height);
                     let projection = &composition.cameras[*camera].projection;
                     let matrices =
                         camera::camera_matrices(poses[*camera], projection, area.aspect());
-                    (area, matrices)
+                    (area, matrices, *camera)
                 })
                 .collect();
             let cameras: Vec<CameraMatrices> =
-                passes.iter().map(|(_, matrices)| *matrices).collect();
+                passes.iter().map(|(_, matrices, _)| *matrices).collect();
             let fresh = !target.stale
                 && target.drawn.as_ref().is_some_and(|(generation, drawn)| {
                     *generation == self.scene_generation && *drawn == cameras
@@ -657,7 +659,7 @@ impl Renderer {
                 width,
                 height,
             };
-            for (index, (area, matrices)) in passes.iter().enumerate() {
+            for (index, (area, matrices, camera)) in passes.iter().enumerate() {
                 stats += self.encode_view(ViewPass {
                     target: view,
                     viewport: *area,
@@ -671,6 +673,7 @@ impl Renderer {
                     clear,
                     sky: true,
                     backdrop: None,
+                    camera_id: Some(composition.cameras[*camera].id.as_str()),
                 });
                 stats.offscreen_views += 1;
             }

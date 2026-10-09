@@ -140,6 +140,11 @@ pub struct ParticleEmitterDescriptor {
     pub max_particles: u32,
     pub visible: bool,
     pub collision: Option<ParticleCollisionDescriptor>,
+    /// Drawn in the backdrop (`RenderLayer::Backdrop`) by the backdrop
+    /// camera, not in the world: its anchor, velocities, acceleration and
+    /// sizes are in backdrop units (a smoke column on the skyline at
+    /// 1:1000).
+    pub backdrop: bool,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -171,6 +176,8 @@ struct ParticleEmitterDescriptorWire {
     visible: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     collision: Option<ParticleCollisionDescriptor>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    backdrop: bool,
 }
 
 impl Serialize for ParticleEmitterDescriptor {
@@ -198,6 +205,7 @@ impl Serialize for ParticleEmitterDescriptor {
             max_particles: self.max_particles,
             visible: self.visible,
             collision: self.collision.clone(),
+            backdrop: self.backdrop,
         }
         .serialize(serializer)
     }
@@ -242,6 +250,7 @@ impl<'de> Deserialize<'de> for ParticleEmitterDescriptor {
             max_particles: wire.max_particles,
             visible: wire.visible,
             collision: wire.collision,
+            backdrop: wire.backdrop,
         })
     }
 }

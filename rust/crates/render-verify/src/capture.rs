@@ -108,6 +108,21 @@ pub enum Step {
         #[serde(rename = "waitFor")]
         wait_for: WaitFor,
     },
+    Capture {
+        capture: CaptureValue,
+    },
+}
+
+/// A value read from a command's answer for later steps: the text after
+/// `after`, up to the next space. Later command lines name it `{name}`, and
+/// its comma-separated parts `{name.0}`, `{name.1}` and so on (a place's
+/// x,z).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CaptureValue {
+    pub command: String,
+    pub after: String,
+    pub name: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -320,11 +335,31 @@ fn capture_one(request: &CaptureRequest<'_>, recipe: &Capture) -> Result<String,
     let result = (|| {
         let origin = wait_for_origin(&mut child, &work.join("host.log"))?;
         pause(recipe.settle.unwrap_or(DEFAULT_SETTLE_SECONDS));
+        let mut values: BTreeMap<String, String> = BTreeMap::new();
         for step in &recipe.steps {
             match step {
                 Step::Wait { wait } => pause(*wait),
                 Step::Command(line) => {
-                    live_debug(pair, &origin, line)?;
+                    live_debug(pair, &origin, &substitute(line, &values))?;
+                }
+                Step::Capture { capture } => {
+                    let answer = live_debug(pair, &origin, &substitute(&capture.command, &values))?;
+                    let value = answer
+                        .split_once(capture.after.as_str())
+                        .and_then(|(_, rest)| rest.split_whitespace().next())
+                        .ok_or_else(|| {
+                            format!(
+                                "`{}` answered without `{}`: {}",
+                                capture.command,
+                                capture.after,
+                                answer.trim().chars().take(200).collect::<String>()
+                            )
+                        })?
+                        .to_owned();
+                    for (index, part) in value.split(',').enumerate() {
+                        values.insert(format!("{}.{index}", capture.name), part.to_owned());
+                    }
+                    values.insert(capture.name.clone(), value);
                 }
                 Step::WaitFor { wait_for } => wait_until(pair, &origin, wait_for)?,
             }
@@ -350,6 +385,13 @@ fn capture_one(request: &CaptureRequest<'_>, recipe: &Capture) -> Result<String,
         .map(|meta| meta.len())
         .unwrap_or(0);
     Ok(format!("{bytes} bytes on pair {}", pair.version))
+}
+
+/// `line` with each `{name}` of a captured value replaced.
+fn substitute(line: &str, values: &BTreeMap<String, String>) -> String {
+    values.iter().fold(line.to_owned(), |line, (name, value)| {
+        line.replace(&format!("{{{name}}}"), value)
+    })
 }
 
 /// Writes `scene` over the lane's `file`, keeping the one it replaces as
@@ -453,6 +495,7 @@ fn stage(
         format!("-p:RustyEngineFixtureSdkVersion={}", pair.version),
         format!("-p:RestoreAdditionalProjectSources={}", pair.feed.display()),
         "-p:RustyEngineProductLiveDebug=true".to_owned(),
+        format!("-p:RustyEngineCache={}", work.join("cache").display()),
         format!("-p:RustyEngineStagedProductDirectory={}", staged.display()),
     ];
     common.extend(
@@ -687,6 +730,23 @@ mod tests {
                 .as_ref()
                 .map(|derive| derive.from.as_str()),
             Some("a")
+        );
+        let captured: Step = serde_json::from_str(
+            r#"{"capture":{"command":"craft.discovery.find DungeonEntrance 3000","after":"@","name":"entrance"}}"#,
+        )
+        .unwrap();
+        assert!(matches!(captured, Step::Capture { .. }));
+        let values = BTreeMap::from([
+            ("entrance".to_owned(), "1004,605".to_owned()),
+            ("entrance.0".to_owned(), "1004".to_owned()),
+            ("entrance.1".to_owned(), "605".to_owned()),
+        ]);
+        assert_eq!(
+            substitute(
+                "craft.player.teleport {entrance.0} 130 {entrance.1}",
+                &values
+            ),
+            "craft.player.teleport 1004 130 605"
         );
     }
 

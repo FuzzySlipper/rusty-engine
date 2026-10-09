@@ -82,7 +82,9 @@ pub(crate) struct RuntimeCameraViewCall {
     pub(crate) wind: Option<Option<WindDescriptor>>,
     pub(crate) clouds: Option<Option<CloudsDescriptor>>,
     pub(crate) wetness: Option<Option<WetnessDescriptor>>,
-    pub(crate) backdrop: Option<Option<render_model::BackdropDescriptor>>,
+    /// Backdrop links set (Some) or cleared (None) this call, by camera
+    /// handle (0: every view's).
+    pub(crate) backdrops: Vec<(u64, Option<BackdropLink>)>,
     /// The volumetric fog medium, and fog volumes placed (`Some`) or removed
     /// (`None`) in call order.
     pub(crate) volumetric_fog: Option<render_model::VolumetricFogDescriptor>,
@@ -122,8 +124,25 @@ impl RuntimeCameraViewCall {
 /// Engine-owned typed camera/view projection. Product facts are copied at the
 /// ABI edge; this owner derives private renderer identifiers and publishes the
 /// complete active view against the current host surface.
+/// A backdrop link as the product gave it: an exact world anchor, resolved
+/// into the local frame of `session` (0: none, the anchor is local) each
+/// time that session's origin moves.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct BackdropLink {
+    session: u64,
+    anchor: core_space::GlobalPosition,
+    origin: [f64; 3],
+    scale: f64,
+}
+
 pub(crate) struct RuntimeCameraViewBridge {
     state: CameraState,
+    /// Every live backdrop link by camera handle (0: every view's), and the
+    /// renderer descriptors last emitted for them.
+    backdrop_links: BTreeMap<u64, BackdropLink>,
+    backdrop_emitted: BTreeMap<u64, render_model::BackdropDescriptor>,
+    /// The spatial sessions' world origins, which world anchors resolve in.
+    spatial: Option<crate::spatial::SpatialCollisionSource>,
     surface: NativeCameraSurfaceReadout,
     /// The anchored UI rects of the same report as `surface`.
     viewport_anchors: render_host_contracts::RendererViewportAnchors,
@@ -152,7 +171,79 @@ impl RuntimeCameraViewBridge {
             viewport_anchors: BTreeMap::new(),
             staged: None,
             operation_diagnostics: Default::default(),
+            backdrop_links: BTreeMap::new(),
+            backdrop_emitted: BTreeMap::new(),
+            spatial: None,
         }
+    }
+
+    pub(crate) fn bind_spatial(&mut self, spatial: crate::spatial::SpatialCollisionSource) {
+        self.spatial = Some(spatial);
+    }
+
+    /// The backdrop links this call set or cleared, applied, then every
+    /// link resolved into its session's current frame: a `SetBackdrop` for
+    /// each whose descriptor changed (a new link, or its session's origin
+    /// moved) and a removal for each that went. A link whose session ended
+    /// is dropped.
+    pub(crate) fn backdrop_operations(&mut self, call: &RuntimeCameraViewCall) -> Vec<RenderDiff> {
+        for (camera, link) in &call.backdrops {
+            match link {
+                Some(link) => {
+                    self.backdrop_links.insert(*camera, *link);
+                }
+                None => {
+                    self.backdrop_links.remove(camera);
+                }
+            }
+        }
+        let spatial = self.spatial.as_ref();
+        let desired: BTreeMap<u64, render_model::BackdropDescriptor> = self
+            .backdrop_links
+            .iter()
+            .filter_map(|(camera, link)| {
+                let origin = if link.session == 0 {
+                    core_space::WorldOrigin::ZERO
+                } else {
+                    spatial?.world_origin(NativeSpatialSessionHandle {
+                        value: link.session,
+                    })?
+                };
+                let cell = origin.cell();
+                let anchor: [f64; 3] = std::array::from_fn(|axis| {
+                    (i128::from(link.anchor.cell()[axis]) - i128::from(cell[axis])) as f64
+                        + link.anchor.offset()[axis]
+                });
+                Some((
+                    *camera,
+                    render_model::BackdropDescriptor {
+                        anchor,
+                        origin: link.origin,
+                        scale: link.scale,
+                    },
+                ))
+            })
+            .collect();
+        let camera_id = |camera: u64| (camera != 0).then(|| format!("csharp-camera-{camera}"));
+        let mut operations = Vec::new();
+        for (camera, backdrop) in &desired {
+            if self.backdrop_emitted.get(camera) != Some(backdrop) {
+                operations.push(RenderDiff::SetBackdrop {
+                    camera: camera_id(*camera),
+                    backdrop: Some(*backdrop),
+                });
+            }
+        }
+        for camera in self.backdrop_emitted.keys() {
+            if !desired.contains_key(camera) {
+                operations.push(RenderDiff::SetBackdrop {
+                    camera: camera_id(*camera),
+                    backdrop: None,
+                });
+            }
+        }
+        self.backdrop_emitted = desired;
+        operations
     }
 
     pub(crate) fn begin_call(&mut self) {
@@ -171,7 +262,7 @@ impl RuntimeCameraViewBridge {
             wind: None,
             clouds: None,
             wetness: None,
-            backdrop: None,
+            backdrops: Vec::new(),
             volumetric_fog: None,
             cloud_regions: Vec::new(),
             fog_volumes: Vec::new(),
@@ -235,7 +326,7 @@ impl RuntimeCameraViewBridge {
             wind: None,
             clouds: None,
             wetness: None,
-            backdrop: None,
+            backdrops: Vec::new(),
             volumetric_fog: None,
             cloud_regions: Vec::new(),
             fog_volumes: Vec::new(),
@@ -536,7 +627,7 @@ impl RuntimeCameraViewBridge {
             wind: None,
             clouds: None,
             wetness: None,
-            backdrop: None,
+            backdrops: Vec::new(),
             volumetric_fog: None,
             cloud_regions: Vec::new(),
             fog_volumes: Vec::new(),
@@ -902,24 +993,62 @@ impl RuntimeCameraViewBridge {
         &mut self,
         request: NativeBackdropRequest,
     ) -> Result<(), CsharpEngineServicesError> {
-        let point = |value: NativeVec3| [value.x, value.y, value.z].map(f64::from);
-        let backdrop = render_model::BackdropDescriptor {
-            anchor: point(request.anchor),
-            origin: point(request.origin),
-            scale: f64::from(request.scale),
-        };
-        if !backdrop.valid() {
-            return Err(CsharpEngineServicesError::new(
-                "CSHARP_BACKDROP",
-                "the backdrop's anchor and origin must be finite and its scale above 0",
+        let refused = |message: &str| CsharpEngineServicesError::new("CSHARP_BACKDROP", message);
+        let anchor = core_space::GlobalPosition::new(
+            [
+                request.anchor.cell_x,
+                request.anchor.cell_y,
+                request.anchor.cell_z,
+            ],
+            [
+                request.anchor.offset_x,
+                request.anchor.offset_y,
+                request.anchor.offset_z,
+            ],
+        )
+        .map_err(|_| refused("the backdrop's anchor must be a finite world position"))?;
+        let origin = [request.origin.x, request.origin.y, request.origin.z].map(f64::from);
+        let scale = f64::from(request.scale);
+        if !origin.iter().all(|value| value.is_finite()) || !scale.is_finite() || scale <= 0.0 {
+            return Err(refused(
+                "the backdrop's origin must be finite and its scale above 0",
             ));
         }
-        self.staged_mut()?.backdrop = Some(Some(backdrop));
+        if request.session.value != 0
+            && self
+                .spatial
+                .as_ref()
+                .and_then(|spatial| spatial.world_origin(request.session))
+                .is_none()
+        {
+            return Err(refused(
+                "the backdrop's anchor names a spatial session that does not live",
+            ));
+        }
+        let camera = request.camera.value;
+        let staged = self.staged_mut()?;
+        if camera != 0 && !staged.state.cameras.contains_key(&camera) {
+            return Err(refused("the backdrop names a camera that does not live"));
+        }
+        staged.backdrops.push((
+            camera,
+            Some(BackdropLink {
+                session: request.session.value,
+                anchor,
+                origin,
+                scale,
+            }),
+        ));
         Ok(())
     }
 
-    fn clear_backdrop(&mut self) -> Result<(), CsharpEngineServicesError> {
-        self.staged_mut()?.backdrop = Some(None);
+    fn clear_backdrop(
+        &mut self,
+        request: NativeClearBackdropRequest,
+    ) -> Result<(), CsharpEngineServicesError> {
+        self.staged_mut()?
+            .backdrops
+            .push((request.camera.value, None));
         Ok(())
     }
 
@@ -1432,9 +1561,6 @@ pub(crate) fn environment_frame(
     }
     if let Some(wetness) = call.wetness {
         operations.push(RenderDiff::SetWetness { wetness });
-    }
-    if let Some(backdrop) = call.backdrop {
-        operations.push(RenderDiff::SetBackdrop { backdrop });
     }
     for (id, region) in &call.cloud_regions {
         operations.push(match region {
@@ -2185,7 +2311,7 @@ pub(crate) unsafe extern "C" fn clear_backdrop(
         return 0;
     }
     let bridge = unsafe { &mut *context.cast::<RuntimeCameraViewBridge>() };
-    match bridge.clear_backdrop() {
+    match bridge.clear_backdrop(unsafe { *request }) {
         Ok(()) => ABI_OK,
         Err(error) => {
             bridge.operation_diagnostics.retain(&error, operation_error);

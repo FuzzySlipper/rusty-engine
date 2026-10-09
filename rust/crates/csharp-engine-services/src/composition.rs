@@ -420,7 +420,8 @@ impl EngineServiceSet {
         authored_content.bind_content(&content);
         let voxel_scene_presentation =
             RuntimeVoxelScenePresentationBridge::new(spatial.collision_source());
-        let camera_view = Box::new(RuntimeCameraViewBridge::new());
+        let mut camera_view = Box::new(RuntimeCameraViewBridge::new());
+        camera_view.bind_spatial(spatial.collision_source());
         let mut appearance = crate::appearance::create(catalog.0, content_resources.clone());
         appearance.bind_camera_view(&camera_view);
         appearance.bind_diagnostics_sink(diagnostics_sink.clone());
@@ -784,11 +785,31 @@ impl EngineServiceSet {
             return Err(error);
         }
         // Sky resources are owned and admitted by Appearance.
-        let sky_frame = crate::camera_view::environment_frame(
+        let mut sky_frame = crate::camera_view::environment_frame(
             &calls.camera_view,
             &calls.appearance,
             calls.renderer_settings.settings,
         )?;
+        // Backdrop links resolve into their sessions' current frames every
+        // call, so a world-origin rebase re-anchors them with no product call.
+        let backdrops = self.camera_view.backdrop_operations(&calls.camera_view);
+        if !backdrops.is_empty() {
+            match &mut sky_frame {
+                Some(frame) => frame.ops.extend(backdrops),
+                None => {
+                    sky_frame = Some(
+                        render_model::RenderFrameDiff::try_from_ops(backdrops).map_err(
+                            |error| {
+                                CsharpEngineServicesError::new(
+                                    "CSHARP_BACKDROP",
+                                    format!("backdrop frame is invalid: {error:?}"),
+                                )
+                            },
+                        )?,
+                    );
+                }
+            }
+        }
         // A selection this call builds or drops the sessions' fields now; the
         // device's answer arrives with the next report.
         if let Some(settings) = calls.renderer_settings.settings {
@@ -2225,6 +2246,183 @@ mod tests {
             ),
             "{ops:?}"
         );
+    }
+
+    /// A backdrop link anchored in a spatial session's world stays put when
+    /// that session's origin rebases, with no product call; a camera's own
+    /// link names its camera.
+    #[test]
+    fn backdrop_links_follow_their_camera_and_their_sessions_rebase() {
+        use crate::operation_diagnostics::{empty_receipt, receipt_codes};
+        let mut services = EngineServiceSet::new(
+            parse_runtime_appearance_catalog(None).expect("default catalog"),
+            BTreeMap::new(),
+            None,
+            RuntimeDiagnosticsSink::new(Default::default()).unwrap(),
+        )
+        .expect("service set");
+        services.begin_call(binding());
+        let api = services.api();
+        let mut session = NativeSpatialSessionHandle::default();
+        let mut camera = NativeCameraHandle::default();
+        let backdrop = |camera, session| NativeBackdropRequest {
+            camera,
+            session,
+            anchor: NativeWorldOriginGlobalPosition {
+                cell_x: 5000,
+                cell_y: 0,
+                cell_z: -3000,
+                offset_x: 0.5,
+                offset_y: 0.0,
+                offset_z: 0.25,
+            },
+            origin: NativeVec3 {
+                x: 1.0,
+                y: 0.0,
+                z: 0.0,
+            },
+            scale: 1000.0,
+        };
+        unsafe {
+            assert_eq!(
+                (api.spatial.create_session)(
+                    api.spatial.context,
+                    NativeSpatialSessionConfig {
+                        collision_voxel_size: 1.0,
+                        collision_chunk_size: 16,
+                        voxel_surface_mode: NativeVoxelSurfaceMode::GreedyCubes,
+                    },
+                    &mut session,
+                    std::ptr::null_mut(),
+                ),
+                ABI_OK
+            );
+            let view = &api.camera_view;
+            let descriptor = NativeCameraDescriptor {
+                pose: NativeCameraPose::default(),
+                basis_mode: NativeCameraBasisMode::Derived,
+                basis: NativeCameraBasis::default(),
+                projection: NativeCameraProjection {
+                    kind: NativeCameraProjectionKind::Perspective,
+                    fov_y_degrees: 60.0,
+                    vertical_size: 1.0,
+                    near: 0.1,
+                    far: 100.0,
+                },
+                viewport: NativeCameraViewport {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 1.0,
+                    height: 1.0,
+                },
+                viewmodel_fov_y_degrees: 0.0,
+            };
+            assert_eq!(
+                (view.create_camera)(view.context, &descriptor, &mut camera, std::ptr::null_mut()),
+                ABI_OK
+            );
+            assert_eq!(
+                (view.set_backdrop)(
+                    view.context,
+                    &backdrop(camera, session),
+                    std::ptr::null_mut()
+                ),
+                ABI_OK
+            );
+            let mut refusal = empty_receipt();
+            assert_eq!(
+                (view.set_backdrop)(
+                    view.context,
+                    &backdrop(camera, NativeSpatialSessionHandle { value: 999 }),
+                    &mut refusal
+                ),
+                0,
+                "a session that does not live is refused"
+            );
+            assert_eq!(receipt_codes(&refusal), ["CSHARP_BACKDROP"]);
+        }
+        let backdrops = |call: &mut CsharpEngineCall| -> Vec<(Option<String>, Option<[f64; 3]>)> {
+            call.take_output()
+                .frames
+                .iter()
+                .flat_map(|frame| frame.ops.iter())
+                .filter_map(|op| match op {
+                    render_model::RenderDiff::SetBackdrop { camera, backdrop } => {
+                        Some((camera.clone(), backdrop.map(|backdrop| backdrop.anchor)))
+                    }
+                    _ => None,
+                })
+                .collect()
+        };
+        let mut call = services.finish_call().expect("backdrop call");
+        let camera_id = Some(format!("csharp-camera-{}", camera.value));
+        assert_eq!(
+            backdrops(&mut call),
+            [(camera_id.clone(), Some([5000.5, 0.0, -2999.75]))],
+            "the camera's link, its anchor at the session's zero origin"
+        );
+        // A call with no backdrop call emits nothing.
+        services.begin_call(binding());
+        let mut call = services.finish_call().expect("quiet call");
+        assert!(backdrops(&mut call).is_empty());
+        // The session's origin rebases by 4096 m east and 1024 m north: the
+        // next call re-anchors the link in the new frame, untouched by the
+        // product.
+        services.begin_call(binding());
+        let api = services.api();
+        unsafe {
+            let origin = &api.world_origin;
+            let mut prepared = NativeWorldOriginPreparedHandle::default();
+            assert_eq!(
+                (origin.prepare)(
+                    origin.context,
+                    &NativeWorldOriginPrepareRequest {
+                        session,
+                        target_cell_x: 4096,
+                        target_cell_y: 0,
+                        target_cell_z: -1024,
+                        entities: std::ptr::null(),
+                        entities_len: 0,
+                        exclude_outside_envelope: false,
+                    },
+                    &mut prepared,
+                    std::ptr::null_mut(),
+                ),
+                ABI_OK
+            );
+            let mut receipt = NativeWorldOriginCommitReceipt::default();
+            assert_eq!(
+                (origin.commit)(
+                    origin.context,
+                    NativeWorldOriginCommitRequest { prepared },
+                    &mut receipt,
+                    std::ptr::null_mut(),
+                ),
+                ABI_OK
+            );
+        }
+        let mut call = services.finish_call().expect("rebase call");
+        assert_eq!(
+            backdrops(&mut call),
+            [(camera_id.clone(), Some([904.5, 0.0, -1975.75]))],
+            "re-anchored in the rebased frame"
+        );
+        // Clearing the camera's link removes it.
+        services.begin_call(binding());
+        let api = services.api();
+        unsafe {
+            let view = &api.camera_view;
+            assert_eq!(
+                (view.clear_backdrop)(
+                    view.context,
+                    &NativeClearBackdropRequest { camera },
+                    std::ptr::null_mut()
+                ),
+                ABI_OK
+            );
+        }
+        let mut call = services.finish_call().expect("clear call");
+        assert_eq!(backdrops(&mut call), [(camera_id, None)]);
     }
 
     #[test]

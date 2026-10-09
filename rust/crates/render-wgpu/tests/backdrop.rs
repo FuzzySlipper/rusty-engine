@@ -8,7 +8,10 @@
 
 mod support;
 
-use render_host_contracts::RendererCameraProjection;
+use render_host_contracts::{
+    RendererCameraProjection, RendererCompositionView, RendererViewComposition, RendererViewTarget,
+    RendererViewport,
+};
 use render_model::*;
 use render_wgpu::RendererOptions;
 use support::*;
@@ -67,6 +70,7 @@ fn scene() -> Harness {
 
 fn link(anchor: [f64; 3]) -> RenderDiff {
     RenderDiff::SetBackdrop {
+        camera: None,
         backdrop: Some(BackdropDescriptor {
             anchor,
             origin: [0.0; 3],
@@ -323,7 +327,10 @@ fn removing_the_link_removes_the_backdrop() {
     harness.apply(range(RenderLayer::Backdrop));
     harness.apply(vec![link([0.0; 3])]);
     assert_ne!(look(&mut harness, [0.0, 1.0, 0.0], 0.0, NEAR_FIELD), bare);
-    harness.apply(vec![RenderDiff::SetBackdrop { backdrop: None }]);
+    harness.apply(vec![RenderDiff::SetBackdrop {
+        camera: None,
+        backdrop: None,
+    }]);
     assert_eq!(look(&mut harness, [0.0, 1.0, 0.0], 0.0, NEAR_FIELD), bare);
 }
 
@@ -335,12 +342,14 @@ fn invalid_links_are_refused_by_the_model() {
         scale: 1000.0,
     };
     assert!(RenderDiff::SetBackdrop {
+        camera: None,
         backdrop: Some(backdrop)
     }
     .validate()
     .is_ok());
     backdrop.scale = 0.0;
     assert!(RenderDiff::SetBackdrop {
+        camera: None,
         backdrop: Some(backdrop)
     }
     .validate()
@@ -348,8 +357,220 @@ fn invalid_links_are_refused_by_the_model() {
     backdrop.scale = 1.0;
     backdrop.anchor[1] = f64::NAN;
     assert!(RenderDiff::SetBackdrop {
+        camera: None,
         backdrop: Some(backdrop)
     }
     .validate()
     .is_err());
+}
+
+#[test]
+fn each_view_takes_its_own_cameras_link() {
+    // Two cameras side by side looking the same way: the left one's view has
+    // a 1:1000 link, the right one's none, so only the left draws the range.
+    let mut harness = scene();
+    harness.apply(range(RenderLayer::Backdrop));
+    let mut left = camera([0.0, 1.0, 0.0], 0.0, 3.0);
+    left.id = "left".to_owned();
+    let mut right = left.clone();
+    right.id = "right".to_owned();
+    let view = |id: &str, x: f64| RendererCompositionView {
+        id: id.to_owned(),
+        camera_id: id.to_owned(),
+        target: RendererViewTarget::Primary,
+        viewport: RendererViewport {
+            x,
+            y: 0.0,
+            width: 0.5,
+            height: 1.0,
+        },
+        order: if x == 0.0 { 0 } else { 1 },
+        viewport_anchor: None,
+    };
+    harness.renderer.set_view_composition(
+        &RendererViewComposition {
+            cameras: vec![left, right],
+            targets: Vec::new(),
+            views: vec![view("left", 0.0), view("right", 0.5)],
+            presentations: Vec::new(),
+        },
+        0.0,
+    );
+    let draw = |harness: &mut Harness| {
+        harness
+            .renderer
+            .render_view_composition(&harness.target, 0.0);
+        harness.target.read_rgba(&harness.gpu)
+    };
+    let bare = draw(&mut harness);
+    harness.apply(vec![RenderDiff::SetBackdrop {
+        camera: Some("left".to_owned()),
+        backdrop: Some(BackdropDescriptor {
+            anchor: [0.0; 3],
+            origin: [0.0; 3],
+            scale: SCALE,
+        }),
+    }]);
+    let linked = draw(&mut harness);
+    keep("views", &linked);
+    let half = |rgba: &[u8], right: bool| -> Vec<u8> {
+        rgba.as_chunks::<4>()
+            .0
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| ((*index as u32 % WIDTH) >= WIDTH / 2) == right)
+            .flat_map(|(_, pixel)| *pixel)
+            .collect()
+    };
+    assert!(
+        changed(&half(&bare, false), &half(&linked, false), 6) > 0.02,
+        "the left camera's view draws the range"
+    );
+    assert_eq!(
+        half(&bare, true),
+        half(&linked, true),
+        "the right camera's view, with no link, draws none"
+    );
+    // Every view's link (no camera) reaches the right view too; the left
+    // keeps its own, so a link at another scale moves only the right.
+    harness.apply(vec![RenderDiff::SetBackdrop {
+        camera: None,
+        backdrop: Some(BackdropDescriptor {
+            anchor: [0.0; 3],
+            origin: [0.0; 3],
+            scale: SCALE * 2.0,
+        }),
+    }]);
+    let both = draw(&mut harness);
+    assert_eq!(
+        half(&both, false),
+        half(&linked, false),
+        "the left keeps its own link"
+    );
+    assert!(
+        changed(&half(&bare, true), &half(&both, true), 6) > 0.01,
+        "the right takes every view's link"
+    );
+}
+
+#[test]
+fn backdrop_particles_draw_only_in_the_backdrop_and_the_world_covers_them() {
+    use render_presentation::{
+        ParticleAnchor, ParticleColorKey, ParticleEmitterDescriptor, ParticleProjectionOp,
+        ParticleScalarKey, ParticleSizeMode, ParticleVisual, PresentationFrameDiff, PresentationOp,
+        PresentationOpMeta,
+    };
+    let no_entities: &dyn Fn(u64) -> Option<[f32; 3]> = &|_| None;
+    // A still cloud of cubes 300 m across (0.3 units) 4 km out on each side,
+    // as a backdrop emitter: the only thing in the backdrop.
+    let plume = |x: f32, seed: u64| ParticleEmitterDescriptor {
+        anchor: ParticleAnchor::World {
+            position: [x, 0.3, -4.0],
+        },
+        visual: ParticleVisual::Cube,
+        size_mode: ParticleSizeMode::World,
+        blend: Default::default(),
+        softness_metres: 0.0,
+        rate_per_second: 0.0,
+        burst_count: 16,
+        lifetime_seconds: [100.0, 100.0],
+        velocity_min: [0.0; 3],
+        velocity_max: [0.0; 3],
+        acceleration: [0.0; 3],
+        size_curve: vec![
+            ParticleScalarKey {
+                age: 0.0,
+                value: 0.3,
+            },
+            ParticleScalarKey {
+                age: 1.0,
+                value: 0.3,
+            },
+        ],
+        color_curve: vec![
+            ParticleColorKey {
+                age: 0.0,
+                color: [0.2, 0.2, 0.2, 1.0],
+            },
+            ParticleColorKey {
+                age: 1.0,
+                color: [0.2, 0.2, 0.2, 1.0],
+            },
+        ],
+        flipbook_frames_per_second: 0.0,
+        seed,
+        max_particles: 64,
+        visible: true,
+        collision: None,
+        backdrop: true,
+    };
+    let wall = vec![
+        RenderDiff::DefineMaterial {
+            material: material("material/wall", [0.2, 0.7, 0.3, 1.0], None),
+        },
+        static_mesh(
+            "mesh/wall",
+            box_mesh([-20.0, -10.0, -5.5], [0.0, 10.0, -5.0], |_| 0),
+            "material/wall",
+        ),
+        instance(41, None, "mesh/wall", transform([0.0; 3], 0.0, [1.0; 3])),
+    ];
+    let mut harness = scene();
+    harness.apply(wall);
+    let bare = look(&mut harness, [0.0, 1.0, 0.0], 0.0, NEAR_FIELD);
+    let ops: Vec<PresentationOp> = [plume(-0.6, 3), plume(0.6, 5)]
+        .into_iter()
+        .enumerate()
+        .map(|(sequence, descriptor)| PresentationOp::Particle {
+            meta: PresentationOpMeta::new(sequence as u32),
+            op: ParticleProjectionOp::Emit {
+                signal_id: format!("plume-{sequence}"),
+                descriptor,
+            },
+        })
+        .collect();
+    let issues = harness.renderer.apply_presentation(
+        &PresentationFrameDiff::try_from_ops(ops).expect("frame"),
+        &harness.resources,
+        no_entities,
+    );
+    assert!(issues.is_empty(), "{issues:?}");
+    harness.renderer.advance_effects(0.01, no_entities);
+    assert_eq!(
+        look(&mut harness, [0.0, 1.0, 0.0], 0.0, NEAR_FIELD),
+        bare,
+        "unlinked, backdrop particles draw nowhere: not in the world"
+    );
+    harness.apply(vec![link([0.0; 3])]);
+    let linked = look(&mut harness, [0.0, 1.0, 0.0], 0.0, NEAR_FIELD);
+    keep("particles", &linked);
+    let half = |rgba: &[u8], right: bool| -> Vec<u8> {
+        rgba.as_chunks::<4>()
+            .0
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| {
+                let x = *index as u32 % WIDTH;
+                if right {
+                    x > WIDTH / 2 + 4
+                } else {
+                    x < WIDTH / 2 - 4
+                }
+            })
+            .flat_map(|(_, pixel)| *pixel)
+            .collect()
+    };
+    assert!(
+        changed(&half(&bare, true), &half(&linked, true), 6) > 0.005,
+        "linked, the open side shows the plume"
+    );
+    assert_eq!(
+        half(&linked, false),
+        half(&bare, false),
+        "the wall covers the other"
+    );
+    assert!(
+        harness.renderer.gpu_readout().backdrop.is_some(),
+        "a particle-only backdrop draws"
+    );
 }

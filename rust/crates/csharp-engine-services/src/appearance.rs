@@ -2880,7 +2880,10 @@ impl RuntimeAppearanceBridge {
             seed: request.seed,
             max_particles: request.max_particles,
             visible: request.visible,
-            collision,
+            // Spawn-relative collision is the world's; backdrop particles
+            // take none.
+            collision: collision.filter(|_| !request.backdrop),
+            backdrop: request.backdrop,
         })
     }
 
@@ -14156,6 +14159,7 @@ fn shade(surface: Surface) -> vec4<f32> {
                 size_mode: Default::default(),
                 blend: Default::default(),
                 softness_metres: 0.0,
+                backdrop: false,
                 sprite: NativeRenderResourceReference::default(),
                 sprite_frame_count: 0,
                 rate_per_second: 1.0,
@@ -14234,6 +14238,7 @@ fn shade(surface: Surface) -> vec4<f32> {
                     visible: true,
                     has_collision: false,
                     collision: inert_particle_collision(),
+                    backdrop: false,
                     collision_volumes: std::ptr::null(),
                     collision_volumes_len: 0,
                 },
@@ -14642,6 +14647,7 @@ fn shade(surface: Surface) -> vec4<f32> {
                 size_mode: Default::default(),
                 blend: Default::default(),
                 softness_metres: 0.0,
+                backdrop: false,
                 sprite: NativeRenderResourceReference::default(),
                 sprite_frame_count: 0,
                 rate_per_second: 1.0,

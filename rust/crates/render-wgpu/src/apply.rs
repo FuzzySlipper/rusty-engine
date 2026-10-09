@@ -162,7 +162,14 @@ impl Renderer {
             }
             RenderDiff::SetWind { wind } => self.tables.wind = *wind,
             RenderDiff::SetWetness { wetness } => self.tables.wetness = *wetness,
-            RenderDiff::SetBackdrop { backdrop } => self.tables.backdrop = *backdrop,
+            RenderDiff::SetBackdrop { camera, backdrop } => match backdrop {
+                Some(backdrop) => {
+                    self.tables.backdrops.insert(camera.clone(), *backdrop);
+                }
+                None => {
+                    self.tables.backdrops.remove(camera);
+                }
+            },
             RenderDiff::SetCloudRegion { id, region } => {
                 if self.tables.cloud_regions.len()
                     < render_model::CloudRegionDescriptor::MAX_REGIONS

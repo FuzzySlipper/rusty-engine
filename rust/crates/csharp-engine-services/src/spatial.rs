@@ -536,6 +536,10 @@ impl NavigationState {
 pub(crate) struct SpatialCollisionSource {
     scenes: Rc<RefCell<BTreeMap<u64, SpatialCollisionSceneState>>>,
     next_cursor_identity: Rc<RefCell<u64>>,
+    /// Each session's world origin as of its last published scene, for the
+    /// services that resolve world positions into its local frame (a
+    /// backdrop's anchor).
+    origins: Rc<RefCell<BTreeMap<u64, core_space::WorldOrigin>>>,
 }
 
 struct SpatialCollisionSceneState {
@@ -548,7 +552,16 @@ impl SpatialCollisionSource {
         Self {
             scenes: Rc::new(RefCell::new(BTreeMap::new())),
             next_cursor_identity: Rc::new(RefCell::new(1)),
+            origins: Rc::new(RefCell::new(BTreeMap::new())),
         }
+    }
+
+    /// The session's world origin, while it lives.
+    pub(crate) fn world_origin(
+        &self,
+        handle: NativeSpatialSessionHandle,
+    ) -> Option<core_space::WorldOrigin> {
+        self.origins.borrow().get(&handle.value).copied()
     }
 
     pub(crate) fn scene(
@@ -737,6 +750,12 @@ impl RuntimeSpatialBridge {
         handle: NativeSpatialSessionHandle,
         scene: Arc<VoxelCollisionScene>,
     ) {
+        if let Some(session) = self.sessions.get(&handle.value) {
+            self.collision_source
+                .origins
+                .borrow_mut()
+                .insert(handle.value, session.world_origin.origin());
+        }
         self.collision_source.publish_scene(handle, scene);
     }
 
@@ -812,8 +831,7 @@ impl RuntimeSpatialBridge {
                 triggers: TriggerVolumeSystem::default(),
             },
         );
-        self.collision_source
-            .publish_scene(NativeSpatialSessionHandle { value }, scene);
+        self.publish_scene(NativeSpatialSessionHandle { value }, scene);
         Ok(NativeSpatialSessionHandle { value })
     }
 
@@ -4357,6 +4375,11 @@ unsafe extern "C" fn destroy_spatial_session(
         bridge
             .collision_source
             .scenes
+            .borrow_mut()
+            .remove(&handle.value);
+        bridge
+            .collision_source
+            .origins
             .borrow_mut()
             .remove(&handle.value);
         ABI_OK

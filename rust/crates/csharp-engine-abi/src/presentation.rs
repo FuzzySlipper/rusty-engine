@@ -339,6 +339,11 @@ pub struct NativePresentationParticleDescriptor {
     /// scene behind it, so a flame or smoke sheet meets a wall or floor
     /// without a hard edge. 0 (the default) draws it as before.
     pub softness_metres: f32,
+    /// Draw the particles in the backdrop (`CameraView.SetBackdrop`) by the
+    /// backdrop camera instead of in the world: the anchor, velocities,
+    /// acceleration and sizes are in backdrop units, and collision is not
+    /// taken.
+    pub backdrop: bool,
 }
 
 /// Direct particle emissions are cosmetic. Valid one-shots return an

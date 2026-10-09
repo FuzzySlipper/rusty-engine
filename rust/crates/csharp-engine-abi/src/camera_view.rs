@@ -476,29 +476,37 @@ pub struct NativeCloudRegionRequest {
     pub thickness: f32,
 }
 
-/// Links the backdrop layer (`RenderLayer.Backdrop`) to the world's
-/// cameras. Each world view draws what is placed in it behind the world,
-/// after the sky and clouds, from `origin + (eye - anchor) / scale` with the
+/// Links the backdrop layer (`RenderLayer.Backdrop`) to a camera's world
+/// views. Each such view draws what is placed in it behind the world, after
+/// the sky and clouds, from `origin + (eye - anchor) / scale` with the
 /// view's own rotation and field of view; the world then draws over it.
-/// `anchor` is a world point in the cameras' frame (move it by the same
-/// delta as the camera on a world-origin rebase); `origin` is the backdrop
-/// point it maps to; `scale` (above 0) is world metres per backdrop unit:
-/// 1 for a backdrop at world scale, 1000 for a 1:1000 miniature. Fog and
-/// the cloud layer's shade reach the backdrop at its world-equivalent
-/// distance and place.
+///
+/// `camera` is the camera whose views take this link; `0` links every view
+/// without a link of its own. `anchor` is a world point, exact (integer
+/// metres and a fraction). With `session`, it is resolved into that spatial
+/// session's local frame at its current world origin, again after every
+/// rebase, so the backdrop stays put with no product call; without one
+/// (`0`), it is in the cameras' local frame as given. `origin` is the
+/// backdrop point the anchor maps to; `scale` (above 0) is world metres per
+/// backdrop unit: 1 for a backdrop at world scale, 1000 for a 1:1000
+/// miniature. Fog and the cloud layer's shade reach the backdrop at its
+/// world-equivalent distance and place.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeBackdropRequest {
-    pub anchor: NativeVec3,
+    pub camera: NativeCameraHandle,
+    pub session: crate::NativeSpatialSessionHandle,
+    pub anchor: crate::NativeWorldOriginGlobalPosition,
     pub origin: NativeVec3,
     pub scale: f32,
 }
 
-/// Unlinks the backdrop: nothing in its layer draws.
+/// Unlinks a camera's views from the backdrop (`0`: the link every view
+/// without its own takes).
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct NativeClearBackdropRequest {
-    pub reserved: u32,
+    pub camera: NativeCameraHandle,
 }
 
 /// Removes cloud region `id`; removing one not placed does nothing.

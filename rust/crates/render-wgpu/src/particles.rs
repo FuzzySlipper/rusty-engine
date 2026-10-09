@@ -572,6 +572,8 @@ fn patched(
             Some(collision) => collision.clone(),
             None => descriptor.collision.clone(),
         },
+        // An emitter keeps its layer: the patch moves it within it.
+        backdrop: descriptor.backdrop,
     }
 }
 
@@ -613,6 +615,7 @@ mod tests {
             max_particles: 64,
             visible: true,
             collision: None,
+            backdrop: false,
         }
     }
 

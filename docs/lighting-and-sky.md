@@ -1082,23 +1082,31 @@ presentations moved there, stand in **backdrop units**. The product links
 the layer to the world's cameras:
 
 ```csharp
-engine.CameraView.SetBackdrop(new(Anchor: Vector3.Zero, Origin: Vector3.Zero, Scale: 1000));
+// Every view without a link of its own (camera 0), anchored at a world point of the walking session.
+engine.CameraView.SetBackdrop(new(Camera: default, Session: walking,
+    Anchor: new(CellX: 0, CellY: 0, CellZ: 0, OffsetX: 0, OffsetY: 0, OffsetZ: 0),
+    Origin: Vector3.Zero, Scale: 1000));
 engine.Graphics.PublishSnapshot([new AppearanceFact(id, false, 0, at, ranges, true, RenderLayer.Backdrop)]);
 engine.VoxelScenePresentation.SetLayer(new(mapTerrain, RenderLayer.Backdrop));
+engine.Presentation.CreateEmitter(smoke with { Backdrop = true });
 ```
 
 **The link**
 - `Scale` is world metres per backdrop unit: 1 draws the backdrop at world
   scale (a far field beyond the world's far plane), 1000 a 1:1000 miniature.
-- `Anchor` is a world point in the cameras' frame, and `Origin` is where it
-  lies in the backdrop. The product moves either whenever it wants, for
-  example to recentre on a region.
+- `Anchor` is a world point, exact (integer metres and a fraction), and
+  `Origin` is where it lies in the backdrop. With a `Session`, the anchor is
+  resolved into that spatial session's local frame at its current world
+  origin, and again after every `WorldOrigin.Commit`, so the backdrop stays
+  where it was with no product call. Without one (`default`), the anchor is
+  in the cameras' local frame as given. The product moves either whenever
+  it wants, for example to recentre on a region.
+- `Camera` links one camera's views (its id); `default` links every view
+  without a link of its own. Two views can take different links, or only
+  one view a backdrop. `ClearBackdrop(new(camera))` removes one.
 - Each world view draws the backdrop with its own rotation and field of view
   from `Origin + (eye − Anchor) / Scale`, so walking 100 m at 1:1000 moves
   the backdrop camera 0.1 units, and turning turns both alike.
-- On a world-origin rebase, move the anchor by the receipt's `LocalDelta` as
-  you move the camera; the backdrop then stays where it was.
-- `ClearBackdrop` unlinks it.
 
 **Drawing**
 - The backdrop draws over the sky, the sun and the clouds and before the
@@ -1118,10 +1126,11 @@ engine.VoxelScenePresentation.SetLayer(new(mapTerrain, RenderLayer.Backdrop));
   and fog matches at the join.
 - Volumetric fog over the world covers the backdrop, as it covers the
   background.
-- Static meshes, animated meshes, sprites and voxel presentations can stand
-  in it, opaque, masked, blended and water alike. Particles stay the
-  world's. The backdrop casts no shadows, is never pickable, and adds
-  nothing to collision. A voxel presentation in it draws at full resolution
+- Static meshes, animated meshes, sprites, voxel presentations and particle
+  emitters (`Backdrop = true`: anchor, velocities and sizes in backdrop
+  units, no collision) can stand in it, opaque, masked, blended, soft and
+  water alike. A backdrop of particles alone draws. The backdrop casts no
+  shadows, is never pickable, and adds nothing to collision. A voxel presentation in it draws at full resolution
   and grows no scatters (its viewer stands in the world). Its session still
   owns its collision, apart from the walking session's.
 

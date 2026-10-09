@@ -461,6 +461,7 @@ fn emitter(
         max_particles: 256,
         visible: true,
         collision: None,
+        backdrop: false,
     }
 }
 

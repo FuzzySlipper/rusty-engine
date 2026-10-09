@@ -92,6 +92,7 @@ fn particle() -> ParticleEmitterDescriptor {
         max_particles: 32,
         visible: true,
         collision: None,
+        backdrop: false,
     }
 }
 

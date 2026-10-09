@@ -111,6 +111,10 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     private static readonly Color RangeColor = new(.45f,.42f,.38f,1), MesaColor = new(.62f,.45f,.33f,1);
     private static readonly Vector3 BackdropEye = new(3.5f,2.2f,1.5f), BackdropTarget = new(3.5f,2.6f,40);
     private SpatialSession? mesa;
+    private PresentationEmitter? plume;
+    // The plume rising off the mesa, in backdrop units: 60 to 180 m puffs climbing 15 m/s, as a backdrop particle emitter.
+    private const ulong PlumeId = 51;
+    private static readonly Vector3 PlumeRise = new(0,.015f,0);
     private VoxelScenePresentation? mesaPresentation;
     private Material? rangeRock, mesaRock;
     private MeshResource? rangesMesh;
@@ -516,9 +520,10 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     {
         if (scale <= 0)
         {
-            engine.CameraView.ClearBackdrop(new(0));
+            engine.CameraView.ClearBackdrop(new(default));
             if (mesa is null) return Inspect();
             engine.Graphics.PublishSnapshot([]);
+            plume?.Dispose(); plume = null;
             rangesLook?.Dispose(); rangesMesh?.Dispose(); mesaPresentation?.Dispose(); mesa.Dispose(); rangeRock?.Dispose(); mesaRock?.Dispose();
             rangesLook = null; rangesMesh = null; mesaPresentation = null; mesa = null; rangeRock = mesaRock = null;
             return Inspect();
@@ -538,9 +543,16 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
             AdmitMesa();
             mesaPresentation = engine.VoxelScenePresentation.ProjectScene(new(mesa,new VoxelSceneMaterialBinding[]{new(MesaSlot,mesaRock)}));
             engine.VoxelScenePresentation.SetLayer(new(mesaPresentation,RenderLayer.Backdrop));
+            smokeSprite ??= engine.Graphics.OpenResource(new("smoke.png",TextureFilter.Linear,TextureWrap.Clamp)).Handle;
+            plume = engine.Presentation.CreateEmitter(Fire(PlumeId,"lighting.backdrop.plume",smokeSprite,1,0,3,20,30,PlumeRise*.8f,PlumeRise*1.2f,Vector3.Zero,
+                [new(0,.06f),new(1,.18f)],[new(0,new Color(.35f,.33f,.32f,.6f)),new(1,new Color(.3f,.3f,.3f,0))],PresentationParticleBlendMode.Alpha,0,96) with
+            {
+                Anchor = new() { Kind = PresentationAnchorKind.World, Position = MesaCenter + new Vector3(0,MesaHeight,0) },
+                Backdrop = true,
+            });
         }
-        // The room's origin is the backdrop's: the anchor and origin agree.
-        engine.CameraView.SetBackdrop(new(Vector3.Zero,Vector3.Zero,scale));
+        // Every view's link (camera 0), anchored at the world's zero: the room's origin is the backdrop's.
+        engine.CameraView.SetBackdrop(new(default,default,default,Vector3.Zero,scale));
         engine.CameraView.UpdateCamera(new(camera,Camera(BackdropEye,BackdropTarget)));
         return Inspect();
     }

@@ -269,6 +269,9 @@ pub(crate) struct ViewPass<'a> {
     /// A backdrop pass's `Frame.backdrop` row: where its points stand in
     /// the world.
     pub backdrop: Option<[f32; 4]>,
+    /// The composition camera drawing the view, whose backdrop link it
+    /// takes before every view's.
+    pub camera_id: Option<&'a str>,
 }
 
 impl Renderer {
@@ -1631,8 +1634,11 @@ impl Renderer {
     pub(crate) fn backdrop_camera(
         &self,
         world: &CameraMatrices,
+        camera_id: Option<&str>,
     ) -> Option<(CameraMatrices, [f32; 4])> {
-        let link = self.tables.backdrop?;
+        let link = *camera_id
+            .and_then(|id| self.tables.backdrops.get(&Some(id.to_owned())))
+            .or_else(|| self.tables.backdrops.get(&None))?;
         // Perspective only: an orthographic view has no eye to scale about.
         if world.projection.w_axis.w != 0.0 {
             return None;
@@ -1645,8 +1651,8 @@ impl Renderer {
         // backdrop's eye.
         let view =
             Mat4::from_mat3(glam::Mat3::from_mat4(world.view)) * Mat4::from_translation(-eye);
-        // What the backdrop shows, its parts' bounds and its sprites'
-        // places, by view depth: a box's nearest and farthest depths lie at
+        // What the backdrop shows, its parts' bounds and its sprites' and
+        // particles' places, by view depth: a box's nearest and farthest depths lie at
         // its corners.
         let mut extent: Option<(f32, f32)> = None;
         let mut reach = |min: Vec3, max: Vec3| {
@@ -1688,6 +1694,19 @@ impl Renderer {
                 reach(center - radius, center + radius);
             }
         }
+        // Backdrop particles, each a point grown by its size (sizes are at
+        // most a few times their curve's largest key; double it to be safe).
+        for particle in &self.particles.particles {
+            if particle.descriptor.backdrop {
+                let size = particle
+                    .descriptor
+                    .size_curve
+                    .iter()
+                    .fold(0.0f32, |largest, key| largest.max(key.value));
+                let radius = Vec3::splat(size.max(0.0) * 2.0);
+                reach(particle.position - radius, particle.position + radius);
+            }
+        }
         let (nearest, farthest) = extent?;
         if farthest <= 0.0 {
             // All of it behind the eye.
@@ -1724,7 +1743,7 @@ impl Renderer {
         if !view.sky {
             return None;
         }
-        let (camera, link) = self.backdrop_camera(&view.camera)?;
+        let (camera, link) = self.backdrop_camera(&view.camera, view.camera_id)?;
         // The planes from the projection: z_axis.z is far / (near - far)
         // and w_axis.z that times near.
         let (ratio, offset) = (camera.projection.z_axis.z, camera.projection.w_axis.z);
@@ -1762,6 +1781,7 @@ impl Renderer {
             clear: view.clear,
             sky: false,
             backdrop: Some(link),
+            camera_id: view.camera_id,
         }))
     }
 

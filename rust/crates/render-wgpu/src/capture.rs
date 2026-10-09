@@ -121,6 +121,7 @@ impl Renderer {
             clear,
             sky,
             backdrop: None,
+            camera_id: None,
         });
         if request.viewmodel {
             self.encode_view(ViewPass {
@@ -132,6 +133,7 @@ impl Renderer {
                 clear,
                 sky: false,
                 backdrop: None,
+                camera_id: None,
             });
         }
         Capture { color, depth }

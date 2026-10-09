@@ -1200,8 +1200,10 @@ impl Renderer {
         format: ColorTarget,
     ) -> EffectsPass {
         let mut pass = EffectsPass::default();
-        // Particles are the world's; sprites draw in their own layer.
-        let world = view.layer == ViewLayer::World;
+        // Sprites draw in their own layer; particles in the world, or in the
+        // backdrop when their emitter says so (none in the viewmodel).
+        let backdrop = view.layer == ViewLayer::Backdrop;
+        let takes_particles = view.layer != ViewLayer::Viewmodel;
         let pixel_ratio = self.pixel_ratio();
         let mut draws = std::mem::take(&mut self.effects.sprite_scratch);
         draws.clear();
@@ -1341,7 +1343,7 @@ impl Renderer {
         self.effects.sprite_scratch = draws;
 
         // Particles draw in world passes only.
-        if world && !self.particles.particles.is_empty() {
+        if takes_particles && !self.particles.particles.is_empty() {
             self.effects.format_index(&self.gpu.device, format);
             let points = PARTICLE_PIXELS_PER_UNIT * pixel_ratio;
             let half = Vec4::new(
@@ -1355,6 +1357,9 @@ impl Renderer {
             let mut soft = false;
             for (index, particle) in self.particles.particles.iter().enumerate() {
                 let descriptor = &particle.descriptor;
+                if descriptor.backdrop != backdrop {
+                    continue;
+                }
                 let group = match &descriptor.visual {
                     ParticleVisual::Cube => Some((0, 0)),
                     // Hard billboards by blend then texture, then soft ones

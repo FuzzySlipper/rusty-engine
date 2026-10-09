@@ -1298,9 +1298,12 @@ pub enum RenderDiff {
     SetWetness {
         wetness: Option<WetnessDescriptor>,
     },
-    /// Links the `Backdrop` layer to the world's cameras; None draws no
-    /// backdrop.
+    /// Links the `Backdrop` layer to the world views of camera `camera`, or
+    /// with None to every view without a link of its own; a None link
+    /// removes it.
     SetBackdrop {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        camera: Option<String>,
         backdrop: Option<BackdropDescriptor>,
     },
     /// Places or replaces cloud region `id`.
@@ -1523,6 +1526,7 @@ impl RenderDiff {
             Self::SetWetness { .. } => Ok(()),
             Self::SetBackdrop {
                 backdrop: Some(backdrop),
+                ..
             } if !backdrop.valid() => Err(RenderOperationError::Backdrop),
             Self::SetBackdrop { .. } => Ok(()),
             Self::SetCloudRegion { region, .. } if !region.valid() => {
