@@ -44,7 +44,7 @@ to force a rerun.
 | `VoxelScenePresentation` | Project Engine voxel scenes into retained renderer resources, including GreedyCubes face-directed material selection, distance level of detail for reconstructed chunks, and scatter: Engine-placed instanced grass and clutter on the ground around the camera ([smooth-voxel-surfaces.md](smooth-voxel-surfaces.md#scatter)). |
 | `Content` | Read product content admitted by the host, open content bundles and [portable assets](portable-assets.md), and admit product-owned content snapshots. |
 | `AuthoredContent` | Admit and resolve authored catalogs, scenes, prefabs, and related resources. |
-| `Graphics` | Create and update renderer-owned materials, meshes, atlas sprites, synchronized sprite playback, lights, and retained appearance state. |
+| `Graphics` | Create and update renderer-owned materials, meshes, atlas sprites, sprite batches, synchronized sprite playback, lights, and retained appearance state. |
 | `Presentation` | Publish presentation effects and diagnostic facts without creating another renderer, including retained ghost-plate captures. |
 | `Tween` | Play eased presentation offsets (timelines of hops, squash and stretch, punches, shakes, splines and tints) over published appearance objects, started part way, sought, and sampled or eased without an object, with completion and marker events ([appearance tweens](appearance-tweens.md)). |
 | `RenderOutput` | Capture offline images and export GLB from the retained appearance snapshot ([offline images](csharp-offline-images.md)). |
@@ -102,6 +102,29 @@ renderer recomputes projection for each camera. A sprite exactly on the camera
 plane has no finite projected size and contributes no pixels for that pass.
 Viewport placement overrides this sizing and authored transform, fitting the
 selected atlas frame instead.
+
+### Sprite batches
+
+`Graphics.CreateSpriteBatch` makes one appearance that draws many sprites of
+one atlas, each `SpriteBatchInstance` with its own position in the object's
+space, scale and frame: vegetation, scatter or a distant crowd. Publish it
+as one object; the renderer keeps one node and draws the batch in one
+instanced call, in the world pass with the other sprites (a soft, blended
+batch draws in the `particles` pass). The instances share pivot, frame
+size, billboard (spherical, cylindrical or the object's own axes), tint,
+render order, depth policy and material, and the object's transform moves,
+scales and hides them together. The rows are built when the batch is
+drawn first and again only when the object moves; a tint change rewrites
+four shared vertices, not the rows. A batch holds its atlas as an atlas sprite does,
+and is created and disposed as a unit: change one sprite by making the
+batch again. Each instance is 20 bytes, shared between the appearance and
+the renderer rather than copied; a batch holds up to 65,536. Blended
+batches do not sort their own sprites, so give vegetation a masked alpha
+mode. Pixel sizes, viewport placement and frame playback are per sprite.
+
+Disposing any appearance costs what it holds, not the number of live
+appearances: retiring 200,000 sprites through the SDK test host takes about
+eight times as long as 25,000.
 
 ### Ghost-plate presentation
 

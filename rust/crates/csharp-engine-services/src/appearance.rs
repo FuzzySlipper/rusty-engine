@@ -293,6 +293,119 @@ fn sprite_atlas_admits_more_frames_than_the_former_cap() {
 
 #[cfg(test)]
 #[test]
+fn a_sprite_batch_is_one_appearance_object_and_draw_over_shared_instances() {
+    let mut content_resources = BTreeMap::new();
+    content_resources.insert("atlas.png".to_owned(), Arc::from(tests::RGBA_PNG));
+    let mut bridge =
+        RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), content_resources);
+    let frames = [4_u32, 7].map(|frame_id| NativeSpriteAtlasFrame {
+        frame_id,
+        uv_min: NativeVec2::default(),
+        uv_max: NativeVec2 { x: 1.0, y: 1.0 },
+        has_size: false,
+        size: NativeVec2::default(),
+    });
+    let instances: Vec<_> = (0..10_000_u32)
+        .map(|index| NativeSpriteBatchInstance {
+            position: NativeVec3 {
+                x: (index % 100) as f32,
+                y: 0.0,
+                z: (index / 100) as f32,
+            },
+            scale: 1.0 + (index % 3) as f32 * 0.25,
+            frame_id: if index % 2 == 0 { 4 } else { 7 },
+        })
+        .collect();
+    let shared = atlas_sprite_request(NativeSpriteAtlasHandle::default(), 4);
+    let request = |atlas, instances: &[NativeSpriteBatchInstance]| NativeSpriteBatchRequest {
+        atlas,
+        instances: instances.as_ptr(),
+        instances_len: instances.len(),
+        pivot: shared.pivot,
+        size: shared.size,
+        billboard: NativeBillboardMode::Cylindrical,
+        render_order: 0,
+        depth: shared.depth,
+        tint: shared.tint,
+        material: shared.material,
+    };
+    bridge.begin_call();
+    let texture = bridge
+        .open_resource(&tests::resource_request("atlas.png"))
+        .expect("atlas texture")
+        .handle;
+    let atlas = unsafe {
+        bridge.create_sprite_atlas(&NativeSpriteAtlasCreateRequest {
+            texture,
+            frames: frames.as_ptr(),
+            frames_len: frames.len(),
+        })
+    }
+    .expect("atlas");
+    let batch = unsafe { bridge.create_sprite_batch(&request(atlas, &instances)) }
+        .expect("a 10,000-sprite batch");
+    // An undefined frame or a non-positive scale is refused.
+    let mut wrong = instances[..3].to_vec();
+    wrong[2].frame_id = 5;
+    assert_eq!(
+        unsafe { bridge.create_sprite_batch(&request(atlas, &wrong)) }
+            .unwrap_err()
+            .code(),
+        "CSHARP_SPRITE_ATLAS_FRAME"
+    );
+    wrong[2] = NativeSpriteBatchInstance {
+        scale: 0.0,
+        ..instances[0]
+    };
+    assert_eq!(
+        unsafe { bridge.create_sprite_batch(&request(atlas, &wrong)) }
+            .unwrap_err()
+            .code(),
+        "CSHARP_SPRITE_BATCH"
+    );
+    let fact = tests::appearance_fact(batch);
+    unsafe { bridge.stage_snapshot(&fact, 1) }.expect("publish the batch");
+    let call = bridge.take_staged_call();
+    let created: Vec<_> = call
+        .render_ops()
+        .into_iter()
+        .filter_map(|op| match op {
+            RenderDiff::CreateSpriteBatch { batch, .. } => Some(batch),
+            RenderDiff::CreateSprite { .. } => panic!("a batch draws no single sprites"),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(created.len(), 1, "one renderer node");
+    assert_eq!(created[0].instances.len(), 10_000);
+    assert_eq!(created[0].sprite.billboard, BillboardMode::Cylindrical);
+    assert_eq!(created[0].instances[1].frame, 7);
+    // A few bytes per instance, shared by the catalog and the renderer op.
+    assert_eq!(std::mem::size_of::<SpriteBatchInstance>(), 20);
+    let identity = &call.state.appearances[&batch.value];
+    let Some(Appearance::SpriteBatch { batch: retained }) =
+        call.state.projector.appearance(identity)
+    else {
+        panic!("a sprite batch appearance");
+    };
+    assert!(Arc::ptr_eq(&retained.instances, &created[0].instances));
+    bridge.commit(call);
+    assert_eq!(bridge.state.projector.retained_objects(), 1);
+
+    bridge.begin_call();
+    assert_eq!(
+        bridge.destroy_sprite_atlas(atlas).unwrap_err().code(),
+        "CSHARP_SPRITE_ATLAS_IN_USE"
+    );
+    unsafe { bridge.stage_snapshot(std::ptr::null(), 0) }.expect("remove the batch");
+    bridge.destroy_appearance(batch).expect("dispose the batch");
+    bridge
+        .destroy_sprite_atlas(atlas)
+        .expect("release the atlas");
+    bridge.end_call();
+}
+
+#[cfg(test)]
+#[test]
 fn sprite_atlas_copies_frames_resolves_readout_and_releases_with_appearance() {
     let mut content_resources = BTreeMap::new();
     content_resources.insert("atlas.png".to_owned(), Arc::from(tests::RGBA_PNG));
@@ -1156,13 +1269,13 @@ pub(crate) struct RuntimeAppearanceData {
     next_material: u64,
     pub(crate) render_resources: RenderResourceRegistry,
     /// Direct users hold exact resource handles, never projector catalog entries.
-    appearance_resources: BTreeMap<u64, BTreeSet<u64>>,
-    material_resources: BTreeMap<u64, BTreeSet<u64>>,
-    sprite_atlas_resources: BTreeMap<u64, BTreeSet<u64>>,
-    animation_graph_resources: BTreeMap<u64, BTreeSet<u64>>,
-    animation_clip_pack_resources: BTreeMap<u64, BTreeSet<u64>>,
-    billboard_resources: BTreeMap<u64, BTreeSet<u64>>,
-    emitter_resources: BTreeMap<u64, BTreeSet<u64>>,
+    appearance_resources: HeldResources,
+    material_resources: HeldResources,
+    sprite_atlas_resources: HeldResources,
+    animation_graph_resources: HeldResources,
+    animation_clip_pack_resources: HeldResources,
+    billboard_resources: HeldResources,
+    emitter_resources: HeldResources,
     sprite_atlases: BTreeMap<u64, RuntimeSpriteAtlas>,
     sprite_atlas_appearances: BTreeMap<u64, BTreeSet<u64>>,
     sprite_appearance_atlases: BTreeMap<u64, u64>,
@@ -1466,13 +1579,13 @@ impl RuntimeAppearanceBridge {
             appearance_materials: BTreeMap::new(),
             next_material: 1,
             render_resources: RenderResourceRegistry::default(),
-            appearance_resources: BTreeMap::new(),
-            material_resources: BTreeMap::new(),
-            sprite_atlas_resources: BTreeMap::new(),
-            animation_graph_resources: BTreeMap::new(),
-            animation_clip_pack_resources: BTreeMap::new(),
-            billboard_resources: BTreeMap::new(),
-            emitter_resources: BTreeMap::new(),
+            appearance_resources: HeldResources::default(),
+            material_resources: HeldResources::default(),
+            sprite_atlas_resources: HeldResources::default(),
+            animation_graph_resources: HeldResources::default(),
+            animation_clip_pack_resources: HeldResources::default(),
+            billboard_resources: HeldResources::default(),
+            emitter_resources: HeldResources::default(),
             sprite_atlases: BTreeMap::new(),
             sprite_atlas_appearances: BTreeMap::new(),
             sprite_appearance_atlases: BTreeMap::new(),
@@ -1879,8 +1992,7 @@ impl RuntimeAppearanceBridge {
             .insert(handle.raw(), handle);
         self.staged_mut()?
             .state
-            .billboard_resources
-            .insert(logical_id, resources);
+            .set_held(Holder::Billboard, logical_id, resources);
         Ok(NativePresentationBillboardHandle { value: logical_id })
     }
 
@@ -1964,8 +2076,7 @@ impl RuntimeAppearanceBridge {
         self.stage_billboard(BillboardProjectionOp::Update { handle, patch })?;
         self.staged_mut()?
             .state
-            .billboard_resources
-            .insert(owner.value, resources);
+            .set_held(Holder::Billboard, owner.value, resources);
         Ok(())
     }
 
@@ -1989,8 +2100,7 @@ impl RuntimeAppearanceBridge {
         self.staged_mut()?.state.billboards.remove(&owner.value);
         self.staged_mut()?
             .state
-            .billboard_resources
-            .remove(&owner.value);
+            .release_held(Holder::Billboard, owner.value);
         Ok(())
     }
 
@@ -2091,7 +2201,8 @@ impl RuntimeAppearanceBridge {
             .state
             .emitters
             .insert(handle.raw(), handle);
-        self.staged_mut()?.state.emitter_resources.insert(
+        self.staged_mut()?.state.set_held(
+            Holder::Emitter,
             handle.raw(),
             matches!(request.visual, NativePresentationParticleVisual::Billboard)
                 .then_some(request.sprite.value)
@@ -2148,7 +2259,8 @@ impl RuntimeAppearanceBridge {
             collision: Some(descriptor.collision),
         };
         self.stage_particle(ParticleProjectionOp::Update { handle, patch })?;
-        self.staged_mut()?.state.emitter_resources.insert(
+        self.staged_mut()?.state.set_held(
+            Holder::Emitter,
             owner.value,
             matches!(request.visual, NativePresentationParticleVisual::Billboard)
                 .then_some(request.sprite.value)
@@ -2178,8 +2290,7 @@ impl RuntimeAppearanceBridge {
         self.staged_mut()?.state.emitters.remove(&owner.value);
         self.staged_mut()?
             .state
-            .emitter_resources
-            .remove(&owner.value);
+            .release_held(Holder::Emitter, owner.value);
         Ok(())
     }
 
@@ -3210,8 +3321,7 @@ impl RuntimeAppearanceBridge {
         }
         staged
             .state
-            .appearance_resources
-            .insert(appearance, resources);
+            .set_held(Holder::Appearance, appearance, resources);
         Ok(())
     }
 
@@ -3352,7 +3462,8 @@ impl RuntimeAppearanceBridge {
         }
         resources.materials.push(descriptor);
         staged.state.materials.insert(handle, id);
-        staged.state.material_resources.insert(
+        staged.state.set_held(
+            Holder::Material,
             handle,
             resource_set([
                 request.texture.value,
@@ -3506,7 +3617,8 @@ impl RuntimeAppearanceBridge {
         }
         resources.materials.push(material.clone());
         staged.state.materials.insert(handle, material.id);
-        staged.state.material_resources.insert(
+        staged.state.set_held(
+            Holder::Material,
             handle,
             resource_set([
                 request.texture.value,
@@ -3577,7 +3689,7 @@ impl RuntimeAppearanceBridge {
             .flat_map(|handle| {
                 state
                     .material_resources
-                    .get(&handle.value)
+                    .get(handle.value)
                     .into_iter()
                     .flatten()
                     .copied()
@@ -3605,7 +3717,7 @@ impl RuntimeAppearanceBridge {
             .materials
             .push(material.clone());
         staged.state.materials.insert(handle, material.id);
-        staged.state.material_resources.insert(handle, resources);
+        staged.state.set_held(Holder::Material, handle, resources);
         Ok(NativeMaterialHandle { value: handle })
     }
 
@@ -3648,7 +3760,8 @@ impl RuntimeAppearanceBridge {
                 CsharpEngineServicesError::new("CSHARP_MATERIAL", "material catalog drifted")
             })?;
         *material = descriptor;
-        staged.state.material_resources.insert(
+        staged.state.set_held(
+            Holder::Material,
             request.material.value,
             resource_set([
                 request.replacement.texture.value,
@@ -3703,7 +3816,7 @@ impl RuntimeAppearanceBridge {
         }
         let resources = staged.state.projector.resources_mut();
         resources.materials.retain(|candidate| candidate.id != id);
-        staged.state.material_resources.remove(&material.value);
+        staged.state.release_held(Holder::Material, material.value);
         staged.resource_releases_pending = true;
         Ok(())
     }
@@ -3761,7 +3874,9 @@ impl RuntimeAppearanceBridge {
             // then owner disposal is safe and has no renderer side channel.
             return Ok(());
         };
-        staged.state.appearance_resources.remove(&appearance.value);
+        staged
+            .state
+            .release_held(Holder::Appearance, appearance.value);
         staged.state.appearance_materials.remove(&appearance.value);
         staged.state.mesh_appearances.remove(&appearance.value);
         staged.state.animated_appearances.remove(&appearance.value);
@@ -3778,27 +3893,36 @@ impl RuntimeAppearanceBridge {
                 appearances.remove(&appearance.value);
             }
         }
-        staged.state.projector.remove_appearance(&identity);
+        let removed = staged.state.projector.remove_appearance(&identity);
         // Inline/content static meshes and legacy sprites synthesize renderer
         // catalog entries per appearance. Once the owner is gone those entries
-        // must not become invisible resource retainers.
-        let suffix = appearance.value.to_string();
-        let mesh_asset = format!("mesh/native-{suffix}");
-        let resources = staged.state.projector.resources_mut();
-        resources
-            .static_meshes
-            .retain(|mesh| mesh.asset != mesh_asset);
-        resources.materials.retain(|material| {
-            !material
-                .id
-                .starts_with(&format!("material/native-{suffix}-"))
-        });
-        resources
-            .textures
-            .retain(|texture| texture.id != format!("texture/native-{suffix}"));
-        resources
-            .sprite_atlases
-            .retain(|atlas| atlas.id != format!("sprite/native-{suffix}"));
+        // must not become invisible resource retainers. Other appearances
+        // added none, so their disposal leaves the catalog alone.
+        let suffix = appearance.value;
+        match removed {
+            Some(Appearance::StaticMesh { .. }) => {
+                let mesh_asset = format!("mesh/native-{suffix}");
+                let materials = format!("material/native-{suffix}-");
+                let resources = staged.state.projector.resources_mut();
+                resources
+                    .static_meshes
+                    .retain(|mesh| mesh.asset != mesh_asset);
+                resources
+                    .materials
+                    .retain(|material| !material.id.starts_with(&materials));
+            }
+            Some(Appearance::Sprite { sprite })
+                if sprite.asset == format!("sprite/native-{suffix}") =>
+            {
+                let texture = format!("texture/native-{suffix}");
+                let resources = staged.state.projector.resources_mut();
+                resources.textures.retain(|entry| entry.id != texture);
+                resources
+                    .sprite_atlases
+                    .retain(|atlas| atlas.id != sprite.asset);
+            }
+            _ => {}
+        }
         release_unowned_internal_resources(&mut staged.state);
         staged.resource_releases_pending = true;
         Ok(())
@@ -4459,10 +4583,11 @@ impl RuntimeAppearanceBridge {
             .state
             .sprite_atlas_appearances
             .insert(handle, BTreeSet::new());
-        staged
-            .state
-            .sprite_atlas_resources
-            .insert(handle, BTreeSet::from([request.texture.value]));
+        staged.state.set_held(
+            Holder::SpriteAtlas,
+            handle,
+            BTreeSet::from([request.texture.value]),
+        );
         Ok(NativeSpriteAtlasHandle { value: handle })
     }
 
@@ -4505,7 +4630,7 @@ impl RuntimeAppearanceBridge {
             ));
         }
         staged.state.sprite_atlases.remove(&atlas.value);
-        staged.state.sprite_atlas_resources.remove(&atlas.value);
+        staged.state.release_held(Holder::SpriteAtlas, atlas.value);
         staged.state.sprite_atlas_appearances.remove(&atlas.value);
         staged.state.sprite_playbacks_by_atlas.remove(&atlas.value);
         let resources = staged.state.projector.resources_mut();
@@ -4661,27 +4786,100 @@ impl RuntimeAppearanceBridge {
         request: NativeSpriteFromAtlasRequest,
     ) -> Result<NativeAppearanceHandle, CsharpEngineServicesError> {
         let (_, sprite) = self.sprite_from_atlas(request)?;
-        self.retain_sprite_material_textures(request.material)?;
-        let appearance = self.allocate_appearance(Appearance::Sprite { sprite })?;
+        self.admit_atlas_appearance(
+            request.atlas,
+            request.material,
+            Appearance::Sprite { sprite },
+        )
+    }
+
+    /// An appearance drawing from a retained atlas, which it holds with its
+    /// material's textures.
+    fn admit_atlas_appearance(
+        &mut self,
+        atlas: NativeSpriteAtlasHandle,
+        material: NativeSpriteMaterialDescriptor,
+        appearance: Appearance,
+    ) -> Result<NativeAppearanceHandle, CsharpEngineServicesError> {
+        self.retain_sprite_material_textures(material)?;
+        let appearance = self.allocate_appearance(appearance)?;
         self.set_appearance_resources(
             appearance.value,
-            [
-                request.material.normal_texture.value,
-                request.material.depth_texture.value,
-            ],
+            [material.normal_texture.value, material.depth_texture.value],
         )?;
         let staged = self.staged_mut()?;
         staged
             .state
             .sprite_atlas_appearances
-            .entry(request.atlas.value)
+            .entry(atlas.value)
             .or_default()
             .insert(appearance.value);
         staged
             .state
             .sprite_appearance_atlases
-            .insert(appearance.value, request.atlas.value);
+            .insert(appearance.value, atlas.value);
         Ok(appearance)
+    }
+
+    unsafe fn create_sprite_batch(
+        &mut self,
+        request: &NativeSpriteBatchRequest,
+    ) -> Result<NativeAppearanceHandle, CsharpEngineServicesError> {
+        let instances = unsafe {
+            borrowed_slice(
+                request.instances,
+                request.instances_len,
+                "sprite batch instances",
+            )
+        }?;
+        let atlas = self.sprite_atlas(request.atlas)?;
+        if let Some(index) = instances
+            .iter()
+            .position(|instance| !atlas.frames.contains_key(&instance.frame_id))
+        {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_SPRITE_ATLAS_FRAME",
+                format!("sprite batch instance {index} names a frame the atlas does not define"),
+            ));
+        }
+        // The shared descriptor names a frame the atlas has; instances keep
+        // their own.
+        let shared_frame = *atlas
+            .frames
+            .keys()
+            .next()
+            .expect("an atlas has at least one frame");
+        let (_, sprite) = self.sprite_from_atlas(NativeSpriteFromAtlasRequest {
+            atlas: request.atlas,
+            frame_id: shared_frame,
+            pivot: request.pivot,
+            size: request.size,
+            billboard: request.billboard,
+            size_mode: NativeSpriteSizeMode::World,
+            render_order: request.render_order,
+            depth: request.depth,
+            tint: request.tint,
+            material: request.material,
+        })?;
+        let batch = SpriteBatchDescriptor {
+            sprite,
+            instances: instances
+                .iter()
+                .map(|instance| SpriteBatchInstance {
+                    position: native_vec3_array(instance.position),
+                    scale: instance.scale,
+                    frame: instance.frame_id,
+                })
+                .collect(),
+        };
+        batch.validate().map_err(|error| {
+            CsharpEngineServicesError::new("CSHARP_SPRITE_BATCH", format!("{error:?}"))
+        })?;
+        self.admit_atlas_appearance(
+            request.atlas,
+            request.material,
+            Appearance::SpriteBatch { batch },
+        )
     }
 
     fn replace_sprite_from_atlas(
@@ -5556,12 +5754,11 @@ impl RuntimeAppearanceBridge {
                     "unknown primary animated mesh resource handle",
                 )
             })? = assembled;
-        staged
-            .state
-            .animation_clip_pack_resources
-            .entry(request.primary_mesh.value)
-            .or_default()
-            .insert(request.clip_pack.value);
+        staged.state.add_held(
+            Holder::AnimationClipPack,
+            request.primary_mesh.value,
+            request.clip_pack.value,
+        );
         Ok(())
     }
 
@@ -5857,10 +6054,11 @@ impl RuntimeAppearanceBridge {
                 state_order: Vec::new(),
             },
         );
-        staged
-            .state
-            .animation_graph_resources
-            .insert(handle, BTreeSet::from([request.resource.value]));
+        staged.state.set_held(
+            Holder::AnimationGraph,
+            handle,
+            BTreeSet::from([request.resource.value]),
+        );
         Ok(NativeAnimationGraphHandle { value: handle })
     }
 
@@ -5883,7 +6081,9 @@ impl RuntimeAppearanceBridge {
         if staged.state.animation_graphs.remove(&graph.value).is_none() {
             return Ok(());
         }
-        staged.state.animation_graph_resources.remove(&graph.value);
+        staged
+            .state
+            .release_held(Holder::AnimationGraph, graph.value);
         staged
             .state
             .animation_transitions
@@ -8117,6 +8317,22 @@ pub(crate) unsafe extern "C" fn destroy_sprite_atlas(
     })
 }
 
+pub(crate) unsafe extern "C" fn create_sprite_batch(
+    context: *mut c_void,
+    request: *const NativeSpriteBatchRequest,
+    result: *mut NativeAppearanceHandle,
+    operation_error: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    appearance_operation(context, operation_error, || {
+        if request.is_null() {
+            return 0;
+        }
+        appearance_result(context, result, |bridge| unsafe {
+            bridge.create_sprite_batch(&*request)
+        })
+    })
+}
+
 pub(crate) unsafe extern "C" fn create_sprite_from_atlas(
     context: *mut c_void,
     request: NativeSpriteFromAtlasRequest,
@@ -9564,57 +9780,93 @@ fn resource_set(handles: impl IntoIterator<Item = u64>) -> BTreeSet<u64> {
     handles.into_iter().filter(|handle| *handle != 0).collect()
 }
 
+/// A kind of retained Engine object that holds renderer resources.
+#[derive(Clone, Copy)]
+enum Holder {
+    Appearance,
+    Material,
+    SpriteAtlas,
+    AnimationGraph,
+    AnimationClipPack,
+    Billboard,
+    Emitter,
+}
+
+/// The resources each holder of one kind holds.
+#[derive(Clone, Default)]
+struct HeldResources(BTreeMap<u64, BTreeSet<u64>>);
+
+impl HeldResources {
+    fn get(&self, holder: u64) -> Option<&BTreeSet<u64>> {
+        self.0.get(&holder)
+    }
+
+    fn holds(&self, handle: u64) -> bool {
+        self.0.values().any(|resources| resources.contains(&handle))
+    }
+}
+
+impl RuntimeAppearanceData {
+    fn held_resources(
+        &mut self,
+        holder: Holder,
+    ) -> (&mut HeldResources, &mut RenderResourceRegistry) {
+        let held = match holder {
+            Holder::Appearance => &mut self.appearance_resources,
+            Holder::Material => &mut self.material_resources,
+            Holder::SpriteAtlas => &mut self.sprite_atlas_resources,
+            Holder::AnimationGraph => &mut self.animation_graph_resources,
+            Holder::AnimationClipPack => &mut self.animation_clip_pack_resources,
+            Holder::Billboard => &mut self.billboard_resources,
+            Holder::Emitter => &mut self.emitter_resources,
+        };
+        (held, &mut self.render_resources)
+    }
+
+    /// `owner` now holds exactly `resources`. Every hold is counted in the
+    /// registry, so releasing an owner never scans the others.
+    fn set_held(&mut self, holder: Holder, owner: u64, resources: BTreeSet<u64>) {
+        let (held, registry) = self.held_resources(holder);
+        registry.hold(&resources);
+        if let Some(previous) = held.0.insert(owner, resources) {
+            registry.unhold(&previous);
+        }
+    }
+
+    fn add_held(&mut self, holder: Holder, owner: u64, resource: u64) {
+        let (held, registry) = self.held_resources(holder);
+        if held.0.entry(owner).or_default().insert(resource) {
+            registry.hold(&BTreeSet::from([resource]));
+        }
+    }
+
+    fn release_held(&mut self, holder: Holder, owner: u64) {
+        let (held, registry) = self.held_resources(holder);
+        if let Some(previous) = held.0.remove(&owner) {
+            registry.unhold(&previous);
+        }
+    }
+}
+
+/// The kind of live holder keeping a resource, for a refusal's message.
 fn resource_live_owner(state: &RuntimeAppearanceState, handle: u64) -> Option<&'static str> {
-    if state
-        .appearance_resources
-        .values()
-        .any(|resources| resources.contains(&handle))
-    {
-        return Some("appearance");
+    if !state.render_resources.held(handle) {
+        return None;
     }
-    if state
-        .material_resources
-        .values()
-        .any(|resources| resources.contains(&handle))
-    {
-        return Some("material");
-    }
-    if state
-        .sprite_atlas_resources
-        .values()
-        .any(|resources| resources.contains(&handle))
-    {
-        return Some("sprite atlas");
-    }
-    if state
-        .animation_graph_resources
-        .values()
-        .any(|resources| resources.contains(&handle))
-    {
-        return Some("animation graph");
-    }
-    if state
-        .animation_clip_pack_resources
-        .values()
-        .any(|resources| resources.contains(&handle))
-    {
-        return Some("animation clip-pack association");
-    }
-    if state
-        .billboard_resources
-        .values()
-        .any(|resources| resources.contains(&handle))
-    {
-        return Some("billboard");
-    }
-    if state
-        .emitter_resources
-        .values()
-        .any(|resources| resources.contains(&handle))
-    {
-        return Some("particle emitter");
-    }
-    None
+    [
+        (&state.appearance_resources, "appearance"),
+        (&state.material_resources, "material"),
+        (&state.sprite_atlas_resources, "sprite atlas"),
+        (&state.animation_graph_resources, "animation graph"),
+        (
+            &state.animation_clip_pack_resources,
+            "animation clip-pack association",
+        ),
+        (&state.billboard_resources, "billboard"),
+        (&state.emitter_resources, "particle emitter"),
+    ]
+    .into_iter()
+    .find_map(|(holders, owner)| holders.holds(handle).then_some(owner))
 }
 
 fn remove_resource(
@@ -9643,19 +9895,14 @@ fn remove_resource(
             .shaders
             .retain(|entry| entry.id != shader.id);
     }
-    state.animation_clip_pack_resources.remove(&handle);
+    state.release_held(Holder::AnimationClipPack, handle);
     Ok(resource)
 }
 
 fn release_unowned_internal_resources(state: &mut RuntimeAppearanceState) {
-    loop {
-        let orphan = state
-            .render_resources
-            .unowned(|handle| resource_live_owner(state, handle).is_some());
-        let Some(handle) = orphan else { break };
-        // The handle came from a monotonic internal slot and has no exposed
-        // owner. `resource_live_owner` establishes that no retained fact can
-        // still name it.
+    while let Some(handle) = state.render_resources.take_unowned() {
+        // The handle came from a monotonic internal slot that neither the
+        // caller nor any retained holder still names.
         remove_resource(state, handle).expect("live internal resource slot");
     }
 }
@@ -12834,9 +13081,8 @@ fn shade(surface: Surface) -> vec4<f32> {
         bridge.destroy_resource(sky.handle).unwrap();
     }
 
-    #[test]
-    fn inline_static_mesh_content_packs_one_selected_resource_for_retained_appearances() {
-        let document = StaticMeshAsset {
+    fn triangle_mesh_document() -> StaticMeshAsset {
+        StaticMeshAsset {
             asset: "mesh/test".to_owned(),
             payload: MeshPayloadDescriptor {
                 texture_space: None,
@@ -12884,15 +13130,11 @@ fn shade(surface: Surface) -> vec4<f32> {
                 material: "material/test".to_owned(),
             }],
             collision: MeshCollisionPolicy::VisualOnly,
-        };
-        let mut content_resources = BTreeMap::new();
-        content_resources.insert(
-            "mesh.json".to_owned(),
-            Arc::from(serde_json::to_vec(&document).expect("mesh JSON")),
-        );
-        let mut bridge =
-            RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), content_resources);
-        let request = NativeStaticMeshContentAppearanceRequest {
+        }
+    }
+
+    fn mesh_content_request() -> NativeStaticMeshContentAppearanceRequest {
+        NativeStaticMeshContentAppearanceRequest {
             path: NativeUtf8Slice {
                 bytes: b"mesh.json".as_ptr(),
                 len: b"mesh.json".len(),
@@ -12903,7 +13145,95 @@ fn shade(surface: Surface) -> vec4<f32> {
                 b: 0.4,
                 a: 1.0,
             },
-        };
+        }
+    }
+
+    #[test]
+    fn disposing_appearances_costs_what_they_hold_not_the_live_count() {
+        // #9801: each disposal used to scan every live holder for every
+        // internal resource, so retiring N appearances took O(N²). Content
+        // meshes are internal resources held by their appearances.
+        fn create_and_dispose(sprites: usize) -> std::time::Duration {
+            let mut content_resources = BTreeMap::new();
+            content_resources.insert("atlas.png".to_owned(), Arc::from(RGBA_PNG));
+            content_resources.insert(
+                "mesh.json".to_owned(),
+                Arc::from(serde_json::to_vec(&triangle_mesh_document()).expect("mesh JSON")),
+            );
+            let mut bridge = RuntimeAppearanceBridge::new(
+                RuntimeAppearanceCatalog::default(),
+                content_resources,
+            );
+            let frames = [NativeSpriteAtlasFrame {
+                frame_id: 7,
+                uv_min: NativeVec2::default(),
+                uv_max: NativeVec2 { x: 1.0, y: 1.0 },
+                has_size: false,
+                size: NativeVec2::default(),
+            }];
+            bridge.begin_call();
+            let texture = bridge
+                .open_resource(&resource_request("atlas.png"))
+                .expect("atlas texture")
+                .handle;
+            let atlas = unsafe {
+                bridge.create_sprite_atlas(&NativeSpriteAtlasCreateRequest {
+                    texture,
+                    frames: frames.as_ptr(),
+                    frames_len: frames.len(),
+                })
+            }
+            .expect("atlas");
+            let started = std::time::Instant::now();
+            let mut appearances = Vec::with_capacity(sprites + sprites / 100);
+            for index in 0..sprites {
+                appearances.push(
+                    bridge
+                        .create_sprite_from_atlas(atlas_sprite_request(atlas, 7))
+                        .expect("sprite"),
+                );
+                if index % 100 == 0 {
+                    appearances.push(
+                        bridge
+                            .create_static_mesh_from_content(&mesh_content_request())
+                            .expect("mesh"),
+                    );
+                }
+            }
+            for appearance in appearances {
+                bridge.destroy_appearance(appearance).expect("dispose");
+            }
+            let elapsed = started.elapsed();
+            bridge.end_call();
+            assert_eq!(
+                bridge.state.render_resources.len(),
+                1,
+                "only the atlas texture stays"
+            );
+            elapsed
+        }
+
+        create_and_dispose(500);
+        let small = create_and_dispose(2_000);
+        let large = create_and_dispose(16_000);
+        // Linear is 8×; the former quadratic cost was 64×.
+        assert!(
+            large < small * 24,
+            "16,000 appearances took {large:?}, 2,000 took {small:?}"
+        );
+    }
+
+    #[test]
+    fn inline_static_mesh_content_packs_one_selected_resource_for_retained_appearances() {
+        let document = triangle_mesh_document();
+        let mut content_resources = BTreeMap::new();
+        content_resources.insert(
+            "mesh.json".to_owned(),
+            Arc::from(serde_json::to_vec(&document).expect("mesh JSON")),
+        );
+        let mut bridge =
+            RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), content_resources);
+        let request = mesh_content_request();
 
         bridge.begin_call();
         let first = bridge

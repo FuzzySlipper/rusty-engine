@@ -759,6 +759,12 @@ pub type NativeCreateSpriteFromAtlas = unsafe extern "C" fn(
     *mut NativeAppearanceHandle,
     *mut crate::NativeOperationErrorReceipt,
 ) -> i32;
+pub type NativeCreateSpriteBatch = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeSpriteBatchRequest,
+    *mut NativeAppearanceHandle,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
 pub type NativeReplaceSpriteFromAtlas = unsafe extern "C" fn(
     *mut c_void,
     NativeSpriteFromAtlasReplaceRequest,
@@ -1568,6 +1574,7 @@ pub struct NativeGraphicsApi {
     pub destroy_sprite_atlas: NativeDestroySpriteAtlas,
     pub create_sprite_from_atlas: NativeCreateSpriteFromAtlas,
     pub replace_sprite_from_atlas: NativeReplaceSpriteFromAtlas,
+    pub create_sprite_batch: NativeCreateSpriteBatch,
     pub set_sprite_frame: NativeSetSpriteFrame,
     pub set_sprite_viewport: NativeSetSpriteViewport,
     pub read_sprite: NativeReadSprite,

@@ -84,6 +84,9 @@ pub struct FrameStats {
     /// Sprite nodes sprite preparation examined, across view passes. It
     /// follows the sprite count, not the scene's node count.
     pub sprite_candidates: u32,
+    /// Sprites drawn by sprite batches across view passes; each batch is one
+    /// draw.
+    pub sprite_batch_instances: u32,
     /// A playing video clip covered the primary target.
     pub video: bool,
     /// Pipelines bound for part draws across view passes and shadow layers:
@@ -108,6 +111,7 @@ pub(crate) struct ViewStats {
     pub shadow_layers: u32,
     pub shadow_casters: u32,
     pub sprite_candidates: u32,
+    pub sprite_batch_instances: u32,
     pub pipeline_binds: u32,
     pub pipelines_created: u32,
 }
@@ -124,6 +128,7 @@ impl Add for ViewStats {
             shadow_layers: self.shadow_layers + other.shadow_layers,
             shadow_casters: self.shadow_casters + other.shadow_casters,
             sprite_candidates: self.sprite_candidates + other.sprite_candidates,
+            sprite_batch_instances: self.sprite_batch_instances + other.sprite_batch_instances,
             pipeline_binds: self.pipeline_binds + other.pipeline_binds,
             pipelines_created: self.pipelines_created + other.pipelines_created,
         }
@@ -139,6 +144,7 @@ impl AddAssign<ViewStats> for FrameStats {
         self.shadow_layers += view.shadow_layers;
         self.shadow_casters += view.shadow_casters;
         self.sprite_candidates += view.sprite_candidates;
+        self.sprite_batch_instances += view.sprite_batch_instances;
         self.pipeline_binds += view.pipeline_binds;
         self.pipelines_created += view.pipelines_created;
     }
@@ -1691,10 +1697,15 @@ impl Renderer {
                 node.world_visible,
                 ViewLayer::of(node.world_layer),
             ) {
-                let [width, height] = resolved.descriptor.size;
                 let scale = node.world.x_axis.length().max(node.world.y_axis.length());
-                let radius = Vec3::splat(width.max(height) * scale);
-                let center = node.world.w_axis.truncate();
+                let (center, radius) = match &resolved.batch {
+                    Some(rows) => (node.world.transform_point3(rows.center), rows.radius),
+                    None => {
+                        let [width, height] = resolved.descriptor.size;
+                        (node.world.w_axis.truncate(), width.max(height))
+                    }
+                };
+                let radius = Vec3::splat(radius * scale);
                 reach(center - radius, center + radius);
             }
         }
@@ -2665,6 +2676,7 @@ impl Renderer {
             shadow_layers: shadows.layers,
             shadow_casters: shadows.casters,
             sprite_candidates: effects.sprite_candidates,
+            sprite_batch_instances: effects.batch_instances,
             pipeline_binds: parts.pipeline_binds + shadows.encoded.pipeline_binds,
             pipelines_created: pipelines_created + shadows.pipelines_created,
         }

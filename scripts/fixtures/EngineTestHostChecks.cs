@@ -19,6 +19,7 @@ internal static class EngineTestHostChecks
                 ["fonts/skin.woff2"] = "wOF2body"u8.ToArray(),
                 ["shaders/tint.wgsl"] = System.Text.Encoding.UTF8.GetBytes(TintShader),
                 ["shaders/broken.wgsl"] = System.Text.Encoding.UTF8.GetBytes(TintShader.Replace("surface.base", "missing")),
+                ["meshes/triangle.json"] = System.Text.Encoding.UTF8.GetBytes(TriangleMesh),
             },
             LibraryPath = library,
         });
@@ -32,6 +33,50 @@ internal static class EngineTestHostChecks
             atlas.Dispose();
             texture.Dispose();
             ExpectRefusal(() => engine.Graphics.ReadTextureInfo(texture), "CSHARP_GRAPHICS_OPERATION");
+        });
+
+        host.Call(engine =>
+        {
+            // Disposing an appearance costs what it holds, not how many are
+            // live: 200,000 sprites go about eight times as long as 25,000,
+            // with content meshes (internal resources) live beside them.
+            using RenderResource texture = engine.Graphics.OpenResource(new RenderResourceRequest("textures/atlas.png")).Handle;
+            using SpriteAtlas atlas = engine.Graphics.CreateSpriteAtlas(new(texture,
+                new SpriteAtlasFrame[] { new(1, Vector2.Zero, Vector2.One, false, Vector2.Zero), new(2, Vector2.Zero, Vector2.One, false, Vector2.Zero) }));
+            TimeSpan CreateAndDispose(int count)
+            {
+                var started = System.Diagnostics.Stopwatch.StartNew();
+                var appearances = new List<Appearance>(count + count / 1000);
+                for (int index = 0; index < count; index++)
+                {
+                    appearances.Add(engine.Graphics.CreateSpriteFromAtlas(new(atlas, 1, Vector2.Zero, Vector2.One,
+                        BillboardMode.Cylindrical, SpriteSizeMode.World, 0, SpriteDepthPolicy.Default, new Color(1, 1, 1, 1))));
+                    if (index % 1000 == 0)
+                        appearances.Add(engine.Graphics.CreateStaticMeshFromContent(new("meshes/triangle.json", new Color(1, 1, 1, 1))));
+                }
+                foreach (Appearance appearance in appearances) appearance.Dispose();
+                return started.Elapsed;
+            }
+            CreateAndDispose(5_000);
+            TimeSpan few = CreateAndDispose(25_000);
+            TimeSpan many = CreateAndDispose(200_000);
+            Require(many < few * 24, $"Disposal grew with the live count: 200,000 took {many}, 25,000 took {few}.");
+
+            // A batch of 10,000 sprites is one appearance and one object.
+            var instances = new SpriteBatchInstance[10_000];
+            for (int index = 0; index < instances.Length; index++)
+                instances[index] = new(new(index % 100, 0, index / 100), 1 + index % 3 * 0.25f, (uint)(1 + index % 2));
+            Appearance batch = engine.Graphics.CreateSpriteBatch(new(atlas, instances, new(0.5f, 0), Vector2.One, BillboardMode.Cylindrical));
+            ExpectRefusal(() => engine.Graphics.CreateSpriteBatch(new(atlas, new SpriteBatchInstance[] { new(Vector3.Zero, 1, 3) },
+                new(0.5f, 0), Vector2.One, BillboardMode.Cylindrical)), "CSHARP_SPRITE_ATLAS_FRAME");
+            engine.Graphics.PublishSnapshot(new AppearanceFact[]
+            {
+                new(9, false, 0, new(Vector3.Zero, Quaternion.Identity, Vector3.One), batch, true, RenderLayer.Scene),
+            });
+            Require(engine.Graphics.ReadPresentation().RetainedObjectCount == 1, "A sprite batch was not one object.");
+            ExpectRefusal(atlas.Dispose, "CSHARP_SPRITE_ATLAS_IN_USE");
+            engine.Graphics.PublishSnapshot(ReadOnlySpan<AppearanceFact>.Empty);
+            batch.Dispose();
         });
 
         host.Call(engine =>
@@ -156,6 +201,12 @@ internal static class EngineTestHostChecks
 
         Bundles(library);
     }
+
+    // One triangle: a content static mesh the Engine stages as an internal
+    // resource of each appearance made from it.
+    private const string TriangleMesh = """
+        {"asset":"mesh/test","payload":{"layout":{"vertexCount":3,"indexCount":3,"indexWidth":"u32","attributes":[{"name":"position","components":3,"kind":"f32"},{"name":"normal","components":3,"kind":"f32"}]},"groups":[{"materialSlot":0,"start":0,"count":3}],"bounds":{"min":[0.0,0.0,0.0],"max":[1.0,1.0,0.0]},"source":{"kind":"inline","positions":[0.0,0.0,0.0,1.0,0.0,0.0,0.0,1.0,0.0],"normals":[0.0,0.0,1.0,0.0,0.0,1.0,0.0,0.0,1.0],"indices":[0,1,2]},"provenance":"staticAsset"},"materialSlots":[{"slot":0,"material":"material/test"}],"collision":{"kind":"visualOnly"}}
+        """;
 
     private const string TintShader = """
         #import rusty::types::Surface

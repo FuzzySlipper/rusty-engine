@@ -1425,6 +1425,13 @@ pub enum RenderDiff {
         render_order: Option<i32>,
         visible: Option<bool>,
     },
+    /// Many sprites from one atlas drawn as one node (`sprite_batch`):
+    /// vegetation or crowds a product places as one unit.
+    CreateSpriteBatch {
+        handle: RenderHandle,
+        parent: Option<RenderHandle>,
+        batch: crate::SpriteBatchDescriptor,
+    },
 }
 
 impl RenderDiff {
@@ -1629,6 +1636,9 @@ impl RenderDiff {
             Self::CreateSprite { sprite, .. } => {
                 sprite.validate().map_err(RenderOperationError::Sprite)
             }
+            Self::CreateSpriteBatch { batch, .. } => {
+                batch.validate().map_err(RenderOperationError::SpriteBatch)
+            }
             Self::UpdateSprite { tint, .. } => {
                 if tint.is_some_and(|color| !valid_color(color)) {
                     return Err(RenderOperationError::InvalidSpriteTint);
@@ -1646,7 +1656,8 @@ impl RenderDiff {
             | Self::CreateAnimatedMeshInstance { handle, parent, .. }
             | Self::CreateScatterPatch { handle, parent, .. }
             | Self::CreateVoxelObjectInstance { handle, parent, .. }
-            | Self::CreateSprite { handle, parent, .. } => {
+            | Self::CreateSprite { handle, parent, .. }
+            | Self::CreateSpriteBatch { handle, parent, .. } => {
                 handle.validate()?;
                 if let Some(parent) = parent {
                     parent.validate()?;
@@ -1756,6 +1767,7 @@ pub enum RenderOperationError {
     VoxelObjectInstance(crate::VoxelObjectInstanceError),
     Asset(crate::RenderAssetError),
     Sprite(crate::SpriteError),
+    SpriteBatch(crate::SpriteBatchError),
     InvalidSpriteTint,
 }
 
@@ -1849,6 +1861,7 @@ impl RenderFrameDiff {
                 | RenderDiff::CreateVoxelObjectInstance { .. }
                 | RenderDiff::SetVoxelObjectFrame { .. }
                 | RenderDiff::CreateSprite { .. }
+                | RenderDiff::CreateSpriteBatch { .. }
                 | RenderDiff::UpdateSprite { .. } => Vec::new(),
             };
             payloads

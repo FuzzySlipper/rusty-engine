@@ -10,8 +10,9 @@ use render_model::{
     AnimatedMeshAsset, AnimatedMeshInstanceDescriptor, AnimatedMeshPlaybackCommand, Geometry,
     LightDescriptor, Material, MaterialInstanceParameters, MeshMaterialSlot, RenderDiff,
     RenderHandle, RenderLayer, RenderMaterialDescriptor, RenderMetadata, RenderNode,
-    ShaderDescriptor, ShadowCasting, SpriteAtlasDescriptor, SpriteInstanceDescriptor,
-    StaticMeshAsset, StaticMeshInstanceDescriptor, TextureDescriptor, Transform,
+    ShaderDescriptor, ShadowCasting, SpriteAtlasDescriptor, SpriteBatchDescriptor,
+    SpriteInstanceDescriptor, StaticMeshAsset, StaticMeshInstanceDescriptor, TextureDescriptor,
+    Transform,
 };
 
 use crate::HandleAllocationError;
@@ -53,6 +54,10 @@ pub enum Appearance {
     },
     Sprite {
         sprite: SpriteInstanceDescriptor,
+    },
+    /// Many sprites from one atlas shown as one object.
+    SpriteBatch {
+        batch: SpriteBatchDescriptor,
     },
 }
 
@@ -332,6 +337,21 @@ pub(crate) fn validate_appearance(
                 .validate()
                 .map_err(|source| AppearanceProjectionError::InvalidSprite { id, source })
         }
+        Appearance::SpriteBatch { batch } => {
+            if !resources.atlases.contains_key(&batch.sprite.asset) {
+                return Err(AppearanceProjectionError::MissingSpriteAtlas {
+                    id,
+                    asset: batch.sprite.asset.clone(),
+                });
+            }
+            let mut projected = batch.clone();
+            projected.sprite.transform = node.transform;
+            projected.sprite.visible = node.visible;
+            projected.sprite.metadata = metadata.clone();
+            projected
+                .validate()
+                .map_err(|source| AppearanceProjectionError::InvalidSpriteBatch { id, source })
+        }
     }
 }
 
@@ -474,19 +494,30 @@ pub(crate) fn requires_recreate(previous: &Appearance, next: &Appearance) -> boo
             },
         ) => previous != next || previous_slots != next_slots,
         (Appearance::Sprite { sprite: previous }, Appearance::Sprite { sprite: next }) => {
-            previous.asset != next.asset
-                || previous.pivot != next.pivot
-                || previous.size != next.size
-                || previous.size_mode != next.size_mode
-                || previous.billboard != next.billboard
-                || previous.depth != next.depth
-                || previous.viewport_placement != next.viewport_placement
-                || previous.shading != next.shading
-                || previous.material != next.material
-                || previous.attachment != next.attachment
+            sprite_requires_recreate(previous, next)
+        }
+        (Appearance::SpriteBatch { batch: previous }, Appearance::SpriteBatch { batch: next }) => {
+            sprite_requires_recreate(&previous.sprite, &next.sprite)
+                || previous.instances != next.instances
         }
         _ => true,
     }
+}
+
+fn sprite_requires_recreate(
+    previous: &SpriteInstanceDescriptor,
+    next: &SpriteInstanceDescriptor,
+) -> bool {
+    previous.asset != next.asset
+        || previous.pivot != next.pivot
+        || previous.size != next.size
+        || previous.size_mode != next.size_mode
+        || previous.billboard != next.billboard
+        || previous.depth != next.depth
+        || previous.viewport_placement != next.viewport_placement
+        || previous.shading != next.shading
+        || previous.material != next.material
+        || previous.attachment != next.attachment
 }
 
 pub(crate) fn light_kind(light: &LightDescriptor) -> u8 {
@@ -567,6 +598,18 @@ pub(crate) fn create_node(
                 handle,
                 parent,
                 sprite,
+            }
+        }
+        Appearance::SpriteBatch { batch } => {
+            let mut batch = batch.clone();
+            batch.sprite.transform = node.transform;
+            batch.sprite.visible = node.visible;
+            batch.sprite.layer = node.layer;
+            batch.sprite.metadata = metadata;
+            RenderDiff::CreateSpriteBatch {
+                handle,
+                parent,
+                batch,
             }
         }
     }
@@ -704,31 +747,60 @@ pub(crate) fn append_node_updates(
             append_material_parameters(operations, handle, old_parameters, new_parameters);
         }
         (Appearance::Sprite { sprite: old }, Appearance::Sprite { sprite: new }) => {
-            if transform.is_some() || metadata.is_some() {
-                operations.push(RenderDiff::Update {
-                    handle,
-                    transform,
-                    material: None,
-                    visible: None,
-                    metadata,
-                });
-            }
-            if old.frame != new.frame
-                || old.tint != new.tint
-                || old.render_order != new.render_order
-                || visible.is_some()
-            {
-                operations.push(RenderDiff::UpdateSprite {
-                    handle,
-                    frame: (old.frame != new.frame).then_some(new.frame),
-                    tint: (old.tint != new.tint).then_some(new.tint),
-                    render_order: (old.render_order != new.render_order)
-                        .then_some(new.render_order),
-                    visible,
-                });
-            }
+            append_sprite_updates(
+                operations, handle, old, new, transform, visible, metadata, true,
+            );
+        }
+        (Appearance::SpriteBatch { batch: old }, Appearance::SpriteBatch { batch: new }) => {
+            // Each instance keeps its own frame.
+            append_sprite_updates(
+                operations,
+                handle,
+                &old.sprite,
+                &new.sprite,
+                transform,
+                visible,
+                metadata,
+                false,
+            );
         }
         _ => unreachable!("appearance kind changes require recreation"),
+    }
+}
+
+#[allow(clippy::too_many_arguments, reason = "one sprite's changed values")]
+fn append_sprite_updates(
+    operations: &mut Vec<RenderDiff>,
+    handle: RenderHandle,
+    old: &SpriteInstanceDescriptor,
+    new: &SpriteInstanceDescriptor,
+    transform: Option<Transform>,
+    visible: Option<bool>,
+    metadata: Option<RenderMetadata>,
+    frames: bool,
+) {
+    if transform.is_some() || metadata.is_some() {
+        operations.push(RenderDiff::Update {
+            handle,
+            transform,
+            material: None,
+            visible: None,
+            metadata,
+        });
+    }
+    let frame = (frames && old.frame != new.frame).then_some(new.frame);
+    if frame.is_some()
+        || old.tint != new.tint
+        || old.render_order != new.render_order
+        || visible.is_some()
+    {
+        operations.push(RenderDiff::UpdateSprite {
+            handle,
+            frame,
+            tint: (old.tint != new.tint).then_some(new.tint),
+            render_order: (old.render_order != new.render_order).then_some(new.render_order),
+            visible,
+        });
     }
 }
 
@@ -831,6 +903,10 @@ pub enum AppearanceProjectionError {
     InvalidSprite {
         id: u64,
         source: render_model::SpriteError,
+    },
+    InvalidSpriteBatch {
+        id: u64,
+        source: render_model::SpriteBatchError,
     },
     DuplicateLight {
         id: u64,

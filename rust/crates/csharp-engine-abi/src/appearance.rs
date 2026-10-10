@@ -437,6 +437,38 @@ pub struct NativeSpriteFromAtlasRequest {
     pub material: NativeSpriteMaterialDescriptor,
 }
 
+/// One sprite of a batch, in the batch object's space.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeSpriteBatchInstance {
+    pub position: NativeVec3,
+    /// Multiplies the frame's size; positive.
+    pub scale: f32,
+    pub frame_id: u32,
+}
+
+/// One appearance that draws many camera-facing sprites from a retained
+/// atlas in one draw, created and disposed as a unit: vegetation, scatter or
+/// a distant crowd. Every instance shares the presentation fields, which
+/// mirror the atlas sprite request; sizes are in world units.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeSpriteBatchRequest {
+    pub atlas: NativeSpriteAtlasHandle,
+    /// Borrowed only for this direct call; Rust copies the instances.
+    pub instances: *const NativeSpriteBatchInstance,
+    pub instances_len: usize,
+    pub pivot: NativeVec2,
+    /// The size of a frame that has none of its own, before each instance's
+    /// scale.
+    pub size: NativeVec2,
+    pub billboard: NativeBillboardMode,
+    pub render_order: i32,
+    pub depth: NativeSpriteDepthPolicy,
+    pub tint: NativeColor,
+    pub material: NativeSpriteMaterialDescriptor,
+}
+
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeSpriteFromAtlasReplaceRequest {

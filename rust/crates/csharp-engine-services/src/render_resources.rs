@@ -432,6 +432,13 @@ pub(crate) struct RenderResourceRegistry {
     identities: BTreeMap<String, u64>,
     /// Each explicit resource admission gives the caller one releasable owner.
     open_counts: BTreeMap<u64, u32>,
+    /// How many Engine holders (appearances, materials, atlases and the like)
+    /// hold each resource.
+    holds: BTreeMap<u64, u32>,
+    /// Resources that may have no owner left: freshly staged, or released by
+    /// their last holder. [`Self::take_unowned`] looks only at these, so a
+    /// release costs the released resources, not every live holder.
+    unheld: Vec<u64>,
 }
 
 impl RenderResourceRegistry {
@@ -544,6 +551,7 @@ impl RenderResourceRegistry {
             self.entries.insert(self.next, resource);
             self.next += 1;
             self.identities.insert(identity, handle);
+            self.unheld.push(handle);
             handle
         };
         for path in paths {
@@ -620,13 +628,41 @@ impl RenderResourceRegistry {
         Ok(resource)
     }
 
-    /// A live resource with no caller-owned admission that `in_use` does not
-    /// claim.
-    pub(crate) fn unowned(&self, in_use: impl Fn(u64) -> bool) -> Option<u64> {
-        self.identities
-            .values()
-            .copied()
-            .find(|handle| !self.open_counts.contains_key(handle) && !in_use(*handle))
+    /// One more Engine holder holds each of these resources.
+    pub(crate) fn hold(&mut self, handles: &BTreeSet<u64>) {
+        for handle in handles {
+            *self.holds.entry(*handle).or_default() += 1;
+        }
+    }
+
+    /// One Engine holder no longer holds these resources.
+    pub(crate) fn unhold(&mut self, handles: &BTreeSet<u64>) {
+        for handle in handles {
+            if let Some(count) = self.holds.get_mut(handle) {
+                *count -= 1;
+                if *count == 0 {
+                    self.holds.remove(handle);
+                    self.unheld.push(*handle);
+                }
+            }
+        }
+    }
+
+    /// Whether an Engine holder holds this resource.
+    pub(crate) fn held(&self, handle: u64) -> bool {
+        self.holds.contains_key(&handle)
+    }
+
+    /// A live resource that neither a caller-owned admission nor an Engine
+    /// holder keeps.
+    pub(crate) fn take_unowned(&mut self) -> Option<u64> {
+        while let Some(handle) = self.unheld.pop() {
+            let live = resource_slot(handle).is_ok_and(|slot| self.entries.contains_key(&slot));
+            if live && !self.open_counts.contains_key(&handle) && !self.held(handle) {
+                return Some(handle);
+            }
+        }
+        None
     }
 
     pub(crate) fn info(
@@ -1684,7 +1720,10 @@ pub(crate) mod tests {
                 "pub(crate) fn admit",
                 "pub(crate) fn release_owner",
                 "pub(crate) fn remove",
-                "pub(crate) fn unowned",
+                "pub(crate) fn hold",
+                "pub(crate) fn unhold",
+                "pub(crate) fn held",
+                "pub(crate) fn take_unowned",
                 "pub(crate) fn info",
                 "pub(crate) struct RenderResourceImports",
                 "pub(crate) fn file",

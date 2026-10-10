@@ -69,6 +69,80 @@ fn vs_sprite(in: SpriteIn) -> SpriteOut {
     return out;
 }
 
+// Sprite batch: many quads of one atlas drawn by one instanced call. The
+// rows are built once (world centre, atlas frame, quad around the centre)
+// and each view turns them to face its camera here.
+struct SpriteBatchIn {
+    @location(0) corner: vec2<f32>,
+    // What every instance shares, repeated on each corner.
+    @location(1) tint: vec4<f32>,
+    @location(2) params: vec4<f32>,
+    // x: softness in metres, y: 1 when added to the frame, z: facing
+    // (0 the node's axes, 1 spherical, 2 cylindrical).
+    @location(3) soft: vec4<f32>,
+    // The node's x and y axes, for a batch that does not face the camera.
+    @location(4) right: vec4<f32>,
+    @location(5) up: vec4<f32>,
+    @location(6) center: vec4<f32>,
+    @location(7) uv_rect: vec4<f32>,
+    @location(8) quad: vec4<f32>,
+};
+
+fn unproject(ndc: vec3<f32>) -> vec3<f32> {
+    let world = frame.inv_view_proj * vec4<f32>(ndc, 1.0);
+    return world.xyz / world.w;
+}
+
+@vertex
+fn vs_sprite_batch(in: SpriteBatchIn) -> SpriteOut {
+    var right = in.right.xyz;
+    var up = in.up.xyz;
+    let facing = u32(in.soft.z + 0.5);
+    if facing != 0u {
+        // The camera's axes, from a plane between near and far in either
+        // depth convention.
+        let origin = unproject(vec3<f32>(0.0, 0.0, 0.5));
+        let camera_right = normalize(unproject(vec3<f32>(1.0, 0.0, 0.5)) - origin);
+        let camera_up = normalize(unproject(vec3<f32>(0.0, 1.0, 0.5)) - origin);
+        right = camera_right;
+        up = camera_up;
+        if facing == 2u {
+            // Turn about world up toward the eye, or against the view
+            // direction for an orthographic camera.
+            let orthographic = frame.view_proj[0].w == 0.0 && frame.view_proj[1].w == 0.0
+                && frame.view_proj[2].w == 0.0;
+            var toward = frame.camera.xyz - in.center.xyz;
+            if orthographic {
+                toward = cross(camera_right, camera_up);
+            }
+            toward.y = 0.0;
+            if dot(toward, toward) <= 1e-12 {
+                toward = vec3<f32>(0.0, 0.0, 1.0);
+            }
+            toward = normalize(toward);
+            up = vec3<f32>(0.0, 1.0, 0.0);
+            right = normalize(cross(up, toward));
+        }
+    }
+    let local = mix(in.quad.xy, in.quad.zw, in.corner);
+    let world = in.center.xyz + right * local.x + up * local.y;
+    var out: SpriteOut;
+    out.clip = frame.view_proj * vec4<f32>(world, 1.0);
+    out.world_position = world;
+    out.normal = normalize(cross(right, up));
+    out.uv = vec2<f32>(
+        mix(in.uv_rect.x, in.uv_rect.z, in.corner.x),
+        mix(in.uv_rect.w, in.uv_rect.y, in.corner.y),
+    );
+    let frame_min = min(in.uv_rect.xy, in.uv_rect.zw);
+    let frame_size = max(abs(in.uv_rect.zw - in.uv_rect.xy), vec2<f32>(1e-6));
+    out.cell = (out.uv - frame_min) / frame_size;
+    out.tint = in.tint;
+    out.params = in.params;
+    out.soft = vec4<f32>(in.soft.xy, 0.0, 0.0);
+    return out;
+}
+
 const SPRITE_ROUGHNESS: f32 = 0.82;
 
 // Screen-space derivatives in GL orientation (y up), the orientation the

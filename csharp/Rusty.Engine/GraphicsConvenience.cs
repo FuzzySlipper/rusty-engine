@@ -340,6 +340,20 @@ public readonly partial record struct SpriteFromAtlasRequest
     }
 }
 
+public readonly partial record struct SpriteBatchRequest
+{
+    /// <summary>Unlit sprites of <paramref name="Atlas"/>, each at its own position, scale and frame in the object's space, facing the camera by <paramref name="Billboard"/>. <paramref name="Size"/> is the size of a frame with none of its own.</summary>
+    public SpriteBatchRequest(
+        SpriteAtlas Atlas,
+        ReadOnlyMemory<SpriteBatchInstance> Instances,
+        Vector2 Pivot,
+        Vector2 Size,
+        BillboardMode Billboard)
+        : this(Atlas, Instances, Pivot, Size, Billboard, 0, SpriteDepthPolicy.Default, new Color(1, 1, 1, 1), GraphicsDefaults.SpriteMaterial)
+    {
+    }
+}
+
 /// <summary>Managed span count representation for generated mesh inputs; not allocation guarantees.</summary>
 public static class GraphicsMeshLimits
 {

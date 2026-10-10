@@ -359,6 +359,17 @@ pub(crate) struct SpriteRow {
     pub atlas: u32,
     /// Name id of an authored normal or depth texture, by lighting mode.
     pub detail: Option<u32>,
+    /// A sprite batch's instances: the descriptor is what they share.
+    pub batch: Option<SpriteBatchRows>,
+}
+
+/// A sprite batch's instances, in the node's space, with their reach.
+pub(crate) struct SpriteBatchRows {
+    pub instances: std::sync::Arc<[render_model::SpriteBatchInstance]>,
+    /// The centre of the instances' positions and how far from it any of
+    /// their quads reaches, before the node's scale.
+    pub center: glam::Vec3,
+    pub radius: f32,
 }
 
 pub(crate) struct NodeRow {

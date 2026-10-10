@@ -1318,3 +1318,153 @@ fn additive_sprites_add_to_the_scene_behind_them() {
         "additive sprite is brighter than the alpha one it replaces: {additive} vs {alpha}"
     );
 }
+
+#[test]
+fn a_sprite_batch_draws_what_its_sprites_would_in_one_draw() {
+    // A grid of masked sprites of both frames and three scales, drawn as
+    // single sprites and as one batch whose node is moved and scaled.
+    let node = [0.4, -0.2, -1.0];
+    let node_scale = 1.5;
+    let instances: Vec<SpriteBatchInstance> = (0..48)
+        .map(|index| SpriteBatchInstance {
+            position: [
+                (index % 8) as f32 * 0.6 - 2.1,
+                (index / 8) as f32 * 0.35 - 0.6,
+                -3.0 - (index % 5) as f32 * 0.7,
+            ],
+            scale: [0.3, 0.45, 0.6][index % 3],
+            frame: (index % 2) as u32,
+        })
+        .collect();
+    let eye = camera("eye", [0.3, 1.2, 1.5], 12.0, -12.0);
+    for billboard in [
+        BillboardMode::Spherical,
+        BillboardMode::Cylindrical,
+        BillboardMode::None,
+    ] {
+        let mut shared = sprite(0, node, billboard);
+        shared.pivot = [0.5, 0.0];
+        shared.material.alpha = SpriteAlphaMode::Mask { cutoff: 0.5 };
+
+        let mut singles = Harness::new(RendererOptions::default());
+        let mut ops = scene();
+        ops.extend(atlas_ops(&mut singles.resources));
+        ops.extend(instances.iter().enumerate().map(|(index, instance)| {
+            let mut single = shared.clone();
+            single.frame = instance.frame;
+            single.size = [instance.scale * node_scale; 2];
+            single.transform = transform(
+                std::array::from_fn(|axis| node[axis] + instance.position[axis] * node_scale),
+                0.0,
+                1.0,
+            );
+            create(100 + index as u64, single)
+        }));
+        singles.apply(ops);
+        let single_stats = singles.renderer.render_offscreen(&eye, &singles.target);
+        let expected = singles.target.read_rgba(&singles.gpu);
+
+        let mut batched = Harness::new(RendererOptions::default());
+        let mut ops = scene();
+        ops.extend(atlas_ops(&mut batched.resources));
+        let mut template = shared.clone();
+        template.transform = transform(node, 0.0, node_scale);
+        ops.push(RenderDiff::CreateSpriteBatch {
+            handle: RenderHandle::new(100),
+            parent: None,
+            batch: SpriteBatchDescriptor {
+                sprite: template,
+                instances: instances.clone().into(),
+            },
+        });
+        batched.apply(ops);
+        let stats = batched.renderer.render_offscreen(&eye, &batched.target);
+        let pixels = batched.target.read_rgba(&batched.gpu);
+        assert_eq!(
+            stats.sprite_candidates * 48,
+            single_stats.sprite_candidates,
+            "{billboard:?}: one node"
+        );
+        assert_eq!(
+            stats.draws + 47,
+            single_stats.draws,
+            "{billboard:?}: one draw"
+        );
+        assert_eq!(stats.sprite_batch_instances, 48, "{billboard:?}");
+        // The same quads to within rounding at their edges.
+        let differing = expected
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(pixels.as_chunks::<4>().0)
+            .filter(|(a, b)| a.iter().zip(b.iter()).any(|(a, b)| a.abs_diff(*b) > 8))
+            .count();
+        let drawn = expected
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(scene_only(&eye).as_chunks::<4>().0)
+            .filter(|(a, b)| a != b)
+            .count();
+        assert!(
+            drawn > 2_000,
+            "{billboard:?}: the sprites show ({drawn} pixels)"
+        );
+        assert!(
+            differing * 100 < drawn,
+            "{billboard:?}: {differing} of {drawn} sprite pixels differ"
+        );
+
+        // A tint change rewrites the shared values, not the rows.
+        batched.apply(vec![RenderDiff::UpdateSprite {
+            handle: RenderHandle::new(100),
+            frame: None,
+            tint: Some([0.2, 0.2, 1.0, 1.0]),
+            render_order: None,
+            visible: None,
+        }]);
+        assert_ne!(batched.single(&eye), pixels, "{billboard:?}: tinted");
+        // Hidden, and gone with its node.
+        batched.apply(vec![RenderDiff::Destroy {
+            handle: RenderHandle::new(100),
+        }]);
+        assert_eq!(batched.single(&eye), scene_only(&eye), "{billboard:?}");
+    }
+}
+
+#[test]
+fn a_soft_sprite_batch_draws_in_the_particle_pass() {
+    let mut harness = Harness::new(RendererOptions::default());
+    let mut ops = scene();
+    ops.extend(atlas_ops(&mut harness.resources));
+    let mut shared = sprite(0, [0.0, 0.0, -4.0], BillboardMode::Spherical);
+    shared.tint = [1.0, 1.0, 1.0, 0.8];
+    shared.material.softness_metres = 0.5;
+    ops.push(RenderDiff::CreateSpriteBatch {
+        handle: RenderHandle::new(100),
+        parent: None,
+        batch: SpriteBatchDescriptor {
+            sprite: shared,
+            instances: (0..6)
+                .map(|index| SpriteBatchInstance {
+                    position: [index as f32 * 0.5 - 1.25, 0.0, 0.0],
+                    scale: 0.6,
+                    frame: index % 2,
+                })
+                .collect(),
+        },
+    });
+    harness.apply(ops);
+    let eye = camera("eye", [0.0, 0.6, 1.0], 0.0, -4.0);
+    let stats = harness.renderer.render_offscreen(&eye, &harness.target);
+    assert_eq!(stats.sprite_batch_instances, 6);
+    assert_ne!(harness.target.read_rgba(&harness.gpu), scene_only(&eye));
+}
+
+fn scene_only(eye: &render_host_contracts::RendererCompositionCamera) -> Vec<u8> {
+    let mut harness = Harness::new(RendererOptions::default());
+    let mut ops = scene();
+    ops.extend(atlas_ops(&mut harness.resources));
+    harness.apply(ops);
+    harness.single(eye)
+}

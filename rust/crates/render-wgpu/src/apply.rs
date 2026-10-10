@@ -135,6 +135,7 @@ impl Renderer {
                         texture,
                     },
                 );
+                self.effects.forget_sprite_batches();
             }
             RenderDiff::ReleaseSpriteAtlas { id } => {
                 if let Some(id) = self.tables.names.get(id) {
@@ -332,6 +333,7 @@ impl Renderer {
                     detail: crate::effects::sprite_detail_texture(sprite)
                         .map(|name| self.tables.names.id(name)),
                     descriptor: sprite.clone(),
+                    batch: None,
                 };
                 self.insert_node(
                     *handle,
@@ -342,6 +344,31 @@ impl Renderer {
                         layer: sprite.layer,
                         shadow_casting: // Sprites cast by their own shadow policy.
                     ShadowCasting::Cast,
+                    },
+                    NodeKind::Sprite(Box::new(row)),
+                )
+            }
+            RenderDiff::CreateSpriteBatch {
+                handle,
+                parent,
+                batch,
+            } => {
+                let sprite = &batch.sprite;
+                let row = crate::tables::SpriteRow {
+                    atlas: self.tables.names.id(&sprite.asset),
+                    detail: crate::effects::sprite_detail_texture(sprite)
+                        .map(|name| self.tables.names.id(name)),
+                    descriptor: sprite.clone(),
+                    batch: Some(self.sprite_batch_rows(batch)),
+                };
+                self.insert_node(
+                    *handle,
+                    *parent,
+                    NodePlacement {
+                        local: crate::convert::transform_matrix(&sprite.transform),
+                        visible: sprite.visible,
+                        layer: sprite.layer,
+                        shadow_casting: ShadowCasting::Cast,
                     },
                     NodeKind::Sprite(Box::new(row)),
                 )
@@ -2492,6 +2519,7 @@ fn op_name(op: &RenderDiff) -> &'static str {
     match op {
         RenderDiff::SetParentJoint { .. } => "setParentJoint",
         RenderDiff::Create { .. } => "create",
+        RenderDiff::CreateSpriteBatch { .. } => "createSpriteBatch",
         RenderDiff::Update { .. } => "update",
         RenderDiff::Destroy { .. } => "destroy",
         RenderDiff::ReplaceMeshPayload { .. } => "replaceMeshPayload",

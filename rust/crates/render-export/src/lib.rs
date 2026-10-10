@@ -219,6 +219,17 @@ impl Frozen {
                     sprite.metadata.label.clone(),
                     Kind::Sprite,
                 ),
+                RenderDiff::CreateSpriteBatch {
+                    handle,
+                    parent,
+                    batch,
+                } => (
+                    *handle,
+                    *parent,
+                    batch.sprite.transform,
+                    batch.sprite.metadata.label.clone(),
+                    Kind::Sprite,
+                ),
                 RenderDiff::CreateLight {
                     handle,
                     parent,

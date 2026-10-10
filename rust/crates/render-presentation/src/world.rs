@@ -19,6 +19,8 @@ enum NodeKind {
     AnimatedMesh(AnimatedMeshInstanceDescriptor),
     VoxelObject(VoxelObjectInstanceDescriptor),
     Sprite(SpriteInstanceDescriptor),
+    /// Many sprites drawn as one node; its sprite holds what they share.
+    SpriteBatch(SpriteBatchDescriptor),
     Light(LightDescriptor),
     /// A patch of scattered copies: drawn at its parent, never addressed by
     /// transform or metadata.
@@ -26,6 +28,15 @@ enum NodeKind {
 }
 
 impl NodeKind {
+    /// A sprite's descriptor, or what a batch's sprites share.
+    fn sprite(&self) -> Option<&SpriteInstanceDescriptor> {
+        match self {
+            Self::Sprite(sprite) => Some(sprite),
+            Self::SpriteBatch(batch) => Some(&batch.sprite),
+            _ => None,
+        }
+    }
+
     fn transform(&self) -> Option<&Transform> {
         match self {
             Self::Primitive(node) => Some(&node.transform),
@@ -33,6 +44,7 @@ impl NodeKind {
             Self::AnimatedMesh(instance) => Some(&instance.transform),
             Self::VoxelObject(instance) => Some(&instance.transform),
             Self::Sprite(instance) => Some(&instance.transform),
+            Self::SpriteBatch(batch) => Some(&batch.sprite.transform),
             Self::Light(_) | Self::Scatter(_) => None,
         }
     }
@@ -48,6 +60,7 @@ impl NodeKind {
             Self::AnimatedMesh(instance) => Some(&instance.metadata),
             Self::VoxelObject(instance) => Some(&instance.metadata),
             Self::Sprite(instance) => Some(&instance.metadata),
+            Self::SpriteBatch(batch) => Some(&batch.sprite.metadata),
             Self::Light(_) | Self::Scatter(_) => None,
         }
     }
@@ -498,6 +511,7 @@ impl PresentationWorld {
                 NodeKind::AnimatedMesh(value) => group!(value, RenderLayer::Scene),
                 NodeKind::VoxelObject(value) => group!(value, RenderLayer::Scene),
                 NodeKind::Sprite(value) => group!(value, value.layer),
+                NodeKind::SpriteBatch(batch) => group!(batch.sprite, batch.sprite.layer),
                 NodeKind::Scatter(_) => RenderNode::new(Geometry::Group),
                 NodeKind::Light(_) => continue,
             };
@@ -558,7 +572,8 @@ impl PresentationWorld {
                             .map(|slot| slot.material.clone()),
                     );
                 }
-                NodeKind::Sprite(sprite) => {
+                NodeKind::Sprite(sprite)
+                | NodeKind::SpriteBatch(SpriteBatchDescriptor { sprite, .. }) => {
                     atlases.insert(sprite.asset.clone());
                     textures.extend(sprite.material.normal_texture.iter().cloned());
                     textures.extend(sprite.material.depth_texture.iter().cloned());
@@ -864,6 +879,11 @@ impl PresentationWorld {
                 parent,
                 sprite: sprite.clone(),
             },
+            NodeKind::SpriteBatch(batch) => RenderDiff::CreateSpriteBatch {
+                handle,
+                parent,
+                batch: batch.clone(),
+            },
             NodeKind::Scatter(patch) => RenderDiff::CreateScatterPatch {
                 handle,
                 parent,
@@ -1024,6 +1044,11 @@ impl PresentationWorld {
                 parent,
                 sprite,
             } => self.insert(*handle, *parent, NodeKind::Sprite(sprite.clone()))?,
+            RenderDiff::CreateSpriteBatch {
+                handle,
+                parent,
+                batch,
+            } => self.insert(*handle, *parent, NodeKind::SpriteBatch(batch.clone()))?,
             RenderDiff::CreateScatterPatch {
                 handle,
                 parent,
@@ -1106,6 +1131,9 @@ impl PresentationWorld {
                     NodeKind::Sprite(value) => {
                         update!(value);
                     }
+                    NodeKind::SpriteBatch(batch) => {
+                        update!(batch.sprite);
+                    }
                     NodeKind::Light(_) | NodeKind::Scatter(_) => {
                         return Err(PresentationWorldError::WrongNodeKind(*handle))
                     }
@@ -1182,23 +1210,26 @@ impl PresentationWorld {
                 tint,
                 render_order,
                 visible,
-            } => match &mut self.node_mut(*handle)?.kind {
-                NodeKind::Sprite(value) => {
-                    if let Some(frame) = frame {
-                        value.frame = *frame;
-                    }
-                    if let Some(tint) = tint {
-                        value.tint = *tint;
-                    }
-                    if let Some(render_order) = render_order {
-                        value.render_order = *render_order;
-                    }
-                    if let Some(visible) = visible {
-                        value.visible = *visible;
-                    }
+            } => {
+                let value = match &mut self.node_mut(*handle)?.kind {
+                    NodeKind::Sprite(value) => value,
+                    // A batch's instances keep their own frames.
+                    NodeKind::SpriteBatch(batch) if frame.is_none() => &mut batch.sprite,
+                    _ => return Err(PresentationWorldError::WrongNodeKind(*handle)),
+                };
+                if let Some(frame) = frame {
+                    value.frame = *frame;
                 }
-                _ => return Err(PresentationWorldError::WrongNodeKind(*handle)),
-            },
+                if let Some(tint) = tint {
+                    value.tint = *tint;
+                }
+                if let Some(render_order) = render_order {
+                    value.render_order = *render_order;
+                }
+                if let Some(visible) = visible {
+                    value.visible = *visible;
+                }
+            }
             RenderDiff::ReleaseMaterial { id } => {
                 if !self.retained.materials.contains_key(id) {
                     return Err(PresentationWorldError::UndefinedResource(id.clone()));
@@ -1229,7 +1260,7 @@ impl PresentationWorld {
                     }))
                     || self.retained.atlases.values().any(|atlas| &atlas.texture == id)
                     || self.retained.sky.as_ref().is_some_and(|sky| &sky.texture == id || sky.blend.as_ref().is_some_and(|blend| &blend.texture == id))
-                    || self.retained.nodes.values().any(|node| matches!(&node.kind, NodeKind::Sprite(sprite) if sprite.material.normal_texture.as_ref() == Some(id) || sprite.material.depth_texture.as_ref() == Some(id)))
+                    || self.retained.nodes.values().any(|node| node.kind.sprite().is_some_and(|sprite| sprite.material.normal_texture.as_ref() == Some(id) || sprite.material.depth_texture.as_ref() == Some(id)))
                     || self.retained.ghost_captures.values().any(|frame| frame.ops.iter().any(|op| matches!(op, RenderDiff::DefineTexture { texture } if &texture.id == id)));
                 if bound {
                     return Err(PresentationWorldError::ReferencedResource(id.clone()));
@@ -1240,7 +1271,7 @@ impl PresentationWorld {
                 if !self.retained.atlases.contains_key(id) {
                     return Err(PresentationWorldError::UndefinedResource(id.clone()));
                 }
-                if self.retained.nodes.values().any(|node| matches!(&node.kind, NodeKind::Sprite(sprite) if &sprite.asset == id))
+                if self.retained.nodes.values().any(|node| node.kind.sprite().is_some_and(|sprite| &sprite.asset == id))
                     || self.retained.ghost_captures.values().any(|frame| frame.ops.iter().any(|op| matches!(op, RenderDiff::DefineSpriteAtlas { atlas } if &atlas.id == id))) {
                     return Err(PresentationWorldError::ReferencedResource(id.clone()));
                 }

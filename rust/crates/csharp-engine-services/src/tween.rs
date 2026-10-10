@@ -232,9 +232,9 @@ pub(crate) fn settle(staged: &mut RuntimeAppearanceCall) -> Result<(), CsharpEng
         };
         for op in &frame.ops {
             let handle = match op {
-                RenderDiff::Create { handle, .. } | RenderDiff::CreateSprite { handle, .. } => {
-                    *handle
-                }
+                RenderDiff::Create { handle, .. }
+                | RenderDiff::CreateSprite { handle, .. }
+                | RenderDiff::CreateSpriteBatch { handle, .. } => *handle,
                 RenderDiff::Update {
                     handle,
                     transform,
@@ -293,7 +293,7 @@ pub(crate) fn settle(staged: &mut RuntimeAppearanceCall) -> Result<(), CsharpEng
             None
         };
         match appearance {
-            Appearance::Sprite { .. } => {
+            Appearance::Sprite { .. } | Appearance::SpriteBatch { .. } => {
                 if transform_changed {
                     ops.push(transform_update(handle, transform, None));
                 }
@@ -371,6 +371,7 @@ fn tinted_color(offset: &TweenOffset, color: [f32; 4]) -> [f32; 4] {
 fn appearance_color(appearance: &Appearance) -> Option<[f32; 4]> {
     match appearance {
         Appearance::Sprite { sprite } => Some(sprite.tint),
+        Appearance::SpriteBatch { batch } => Some(batch.sprite.tint),
         Appearance::Primitive { material, .. } => Some(material.color),
         _ => None,
     }

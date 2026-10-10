@@ -22,8 +22,8 @@ use std::collections::HashMap;
 
 use glam::{Mat3, Mat4, Quat, Vec3, Vec4};
 use render_model::{
-    BillboardMode, SpriteAlphaMode, SpriteBlendMode, SpriteDepthPolicy, SpriteInstanceDescriptor,
-    SpriteLightingMode, SpriteSizeMode, SpriteViewportFit,
+    BillboardMode, RenderHandle, SpriteAlphaMode, SpriteBlendMode, SpriteDepthPolicy,
+    SpriteInstanceDescriptor, SpriteLightingMode, SpriteSizeMode, SpriteViewportFit,
 };
 use render_presentation::{
     ParticleBlendMode, ParticleSizeMode, ParticleSpriteRef, ParticleVisual, PresentationFrameDiff,
@@ -44,6 +44,11 @@ const PARTICLE_PIXELS_PER_UNIT: f32 = 24.0;
 const SPRITE_ROW_FLOATS: usize = 36;
 const PARTICLE_ROW_FLOATS: usize = 16;
 const CUBE_ROW_FLOATS: usize = 8;
+/// A sprite batch instance's row: world centre, atlas frame, quad.
+const BATCH_ROW_FLOATS: usize = 12;
+/// A sprite batch's corner vertex: corner, then what every instance shares
+/// (tint, lighting, softness and facing, the node's axes).
+const BATCH_CORNER_FLOATS: usize = 22;
 /// Viewport-placed sprites sit mid-depth (GL clip z 0).
 const PLACEMENT_DEPTH: f32 = 0.5;
 
@@ -58,6 +63,8 @@ struct SpriteState {
     /// A blended sprite fading against the world's depth: drawn in the
     /// particle pass after the world, by its own depth test.
     soft: bool,
+    /// A sprite batch: its instances' rows are its own buffer, drawn at once.
+    batch: bool,
 }
 
 /// Colour texture id and detail (normal or height) texture id; `None` is the
@@ -70,7 +77,9 @@ struct SpriteDraw {
     textures: SpriteTextures,
     render_order: i32,
     depth: f32,
+    /// Unused by a batch, which draws its own rows.
     row: [f32; SPRITE_ROW_FLOATS],
+    batch: Option<RenderHandle>,
 }
 
 /// What one view pass draws of this family, prepared before the pass.
@@ -87,6 +96,8 @@ pub(crate) struct EffectsPass {
     billboards: Vec<BillboardRun>,
     /// Sprite nodes examined for this pass.
     pub sprite_candidates: u32,
+    /// Sprites the pass's batches draw.
+    pub batch_instances: u32,
 }
 
 /// Billboard particles drawn by one call: they share a texture, a blend and
@@ -109,14 +120,29 @@ struct BlendedSprite {
     /// Squared distance from the view's eye.
     depth: f32,
     instance: u32,
+    batch: Option<RenderHandle>,
 }
 
-/// One sprite's draw: its pipeline state, textures and row.
+/// One sprite's draw: its pipeline state, textures and row, or the batch
+/// whose rows it draws.
 #[derive(Clone, Copy)]
 struct SpriteInstance {
     state: SpriteState,
     textures: SpriteTextures,
     instance: u32,
+    batch: Option<RenderHandle>,
+}
+
+/// A sprite batch's buffers, built when the batch, its node's place or its
+/// shared values change, not per view.
+struct BatchBuffers {
+    /// The instances, node matrix and atlas the rows were built from.
+    instances: std::sync::Arc<[render_model::SpriteBatchInstance]>,
+    world: Mat4,
+    rows: wgpu::Buffer,
+    count: u32,
+    corner_values: [f32; BATCH_CORNER_FLOATS * 4],
+    corners: wgpu::Buffer,
 }
 
 impl EffectsPass {
@@ -224,6 +250,8 @@ pub(crate) struct Effects {
     cube_rows: Rows,
     formats: Vec<FormatPipelines>,
     sprite_bind_groups: HashMap<SpriteTextures, wgpu::BindGroup>,
+    /// Sprite batches' buffers, by node.
+    batches: HashMap<RenderHandle, BatchBuffers>,
     /// Particle sprite textures by slot, and each content hash's slot. A slot
     /// lives while an emitter or live particle holds it (`Particles`), then
     /// its binding is dropped and the slot reused.
@@ -350,6 +378,7 @@ impl Effects {
             cube_rows: Rows::new(device, "render-wgpu particle cube rows"),
             formats: Vec::new(),
             sprite_bind_groups: HashMap::new(),
+            batches: HashMap::new(),
             particle_textures: Vec::new(),
             particle_texture_ids: HashMap::new(),
             free_particle_slots: Vec::new(),
@@ -362,6 +391,12 @@ impl Effects {
             cube_scratch: Vec::new(),
             order_scratch: Vec::new(),
         }
+    }
+
+    /// Rebuild every sprite batch's rows at its next draw: an atlas, and so
+    /// its frames, changed.
+    pub fn forget_sprite_batches(&mut self) {
+        self.batches.clear();
     }
 
     /// Drop cached sprite bindings of a texture that was redefined or released.
@@ -520,6 +555,36 @@ impl Effects {
             5 => Float32x4, 6 => Float32x4, 7 => Float32x4, 8 => Float32x4,
             9 => Float32x4
         ];
+        let batch_corner = wgpu::vertex_attr_array![
+            0 => Float32x2, 1 => Float32x4, 2 => Float32x4, 3 => Float32x4,
+            4 => Float32x4, 5 => Float32x4
+        ];
+        let batch_instance =
+            wgpu::vertex_attr_array![6 => Float32x4, 7 => Float32x4, 8 => Float32x4];
+        let buffers = if state.batch {
+            [
+                wgpu::VertexBufferLayout {
+                    array_stride: (BATCH_CORNER_FLOATS * 4) as u64,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &batch_corner,
+                },
+                wgpu::VertexBufferLayout {
+                    array_stride: (BATCH_ROW_FLOATS * 4) as u64,
+                    step_mode: wgpu::VertexStepMode::Instance,
+                    attributes: &batch_instance,
+                },
+            ]
+        } else {
+            [
+                corner,
+                wgpu::VertexBufferLayout {
+                    array_stride: (SPRITE_ROW_FLOATS * 4) as u64,
+                    step_mode: wgpu::VertexStepMode::Instance,
+                    attributes: &instance,
+                },
+            ]
+        };
+        let [first, second] = buffers;
         // Solid sprites cover their pixel (`finish.rs`); soft ones test the
         // world's depth themselves in the particle pass.
         let (layout, fragment, depth) = if state.soft {
@@ -557,15 +622,15 @@ impl Effects {
             device,
             "render-wgpu sprite",
             layout,
-            ("vs_sprite", fragment),
-            &[
-                Some(corner),
-                Some(wgpu::VertexBufferLayout {
-                    array_stride: (SPRITE_ROW_FLOATS * 4) as u64,
-                    step_mode: wgpu::VertexStepMode::Instance,
-                    attributes: &instance,
-                }),
-            ],
+            (
+                if state.batch {
+                    "vs_sprite_batch"
+                } else {
+                    "vs_sprite"
+                },
+                fragment,
+            ),
+            &[Some(first), Some(second)],
             wgpu::PrimitiveTopology::TriangleStrip,
             None,
             format,
@@ -628,13 +693,7 @@ impl Effects {
         effects: &EffectsPass,
     ) {
         for sprite in &effects.solid {
-            self.draw_sprite(
-                pass,
-                format,
-                sprite.state,
-                &sprite.textures,
-                sprite.instance,
-            );
+            self.draw_sprite(pass, format, sprite);
         }
     }
 
@@ -651,9 +710,12 @@ impl Effects {
             self.draw_sprite(
                 pass,
                 format,
-                sprite.state,
-                &sprite.textures,
-                sprite.instance,
+                &SpriteInstance {
+                    state: sprite.state,
+                    textures: sprite.textures,
+                    instance: sprite.instance,
+                    batch: sprite.batch,
+                },
             );
         }
     }
@@ -667,13 +729,7 @@ impl Effects {
         effects: &EffectsPass,
     ) {
         for sprite in &effects.soft_sprites {
-            self.draw_sprite(
-                pass,
-                format,
-                sprite.state,
-                &sprite.textures,
-                sprite.instance,
-            );
+            self.draw_sprite(pass, format, sprite);
         }
     }
 
@@ -681,24 +737,34 @@ impl Effects {
         &self,
         pass: &mut wgpu::RenderPass<'_>,
         format: ColorTarget,
-        state: SpriteState,
-        textures: &SpriteTextures,
-        instance: u32,
+        sprite: &SpriteInstance,
     ) {
         let Some(set) = self.formats.iter().find(|set| set.format == format) else {
             return;
         };
         let (Some(pipeline), Some(bind_group)) = (
-            set.sprites.get(&state),
-            self.sprite_bind_groups.get(textures),
+            set.sprites.get(&sprite.state),
+            self.sprite_bind_groups.get(&sprite.textures),
         ) else {
             return;
         };
         pass.set_pipeline(pipeline);
-        pass.set_vertex_buffer(0, self.corners.slice(..));
-        pass.set_vertex_buffer(1, self.sprite_rows.buffer.slice(..));
         pass.set_bind_group(1, bind_group, &[]);
-        pass.draw(0..4, instance..instance + 1);
+        match sprite.batch {
+            Some(handle) => {
+                let Some(batch) = self.batches.get(&handle) else {
+                    return;
+                };
+                pass.set_vertex_buffer(0, batch.corners.slice(..));
+                pass.set_vertex_buffer(1, batch.rows.slice(..));
+                pass.draw(0..4, 0..batch.count);
+            }
+            None => {
+                pass.set_vertex_buffer(0, self.corners.slice(..));
+                pass.set_vertex_buffer(1, self.sprite_rows.buffer.slice(..));
+                pass.draw(0..4, sprite.instance..sprite.instance + 1);
+            }
+        }
     }
 
     pub fn draw_particles(
@@ -819,6 +885,7 @@ fn sprite_state(sprite: &SpriteInstanceDescriptor) -> (SpriteState, f32) {
             soft: transparent
                 && material.softness_metres > 0.0
                 && sprite.depth != SpriteDepthPolicy::DepthTestOff,
+            batch: false,
         },
         cutoff,
     )
@@ -848,6 +915,129 @@ pub(crate) fn sprite_detail_texture(sprite: &SpriteInstanceDescriptor) -> Option
         SpriteLightingMode::AuthoredNormal => material.normal_texture.as_deref(),
         SpriteLightingMode::AuthoredDepth => material.depth_texture.as_deref(),
         _ => None,
+    }
+}
+
+/// A sprite batch's corner vertices: each corner with what the instances
+/// share (`effects.wgsl` `SpriteBatchIn`).
+fn batch_corners(
+    sprite: &SpriteInstanceDescriptor,
+    world: &Mat4,
+    params: [f32; 4],
+    additive: bool,
+) -> [f32; BATCH_CORNER_FLOATS * 4] {
+    let facing = match sprite.billboard {
+        BillboardMode::None => 0.0,
+        BillboardMode::Spherical => 1.0,
+        BillboardMode::Cylindrical => 2.0,
+    };
+    let right = world.x_axis.truncate().try_normalize().unwrap_or(Vec3::X);
+    let up = world.y_axis.truncate().try_normalize().unwrap_or(Vec3::Y);
+    let mut values = [0.0; BATCH_CORNER_FLOATS * 4];
+    for (index, corner) in [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]]
+        .into_iter()
+        .enumerate()
+    {
+        let vertex = &mut values[index * BATCH_CORNER_FLOATS..][..BATCH_CORNER_FLOATS];
+        vertex[..2].copy_from_slice(&corner);
+        vertex[2..6].copy_from_slice(&sprite.tint);
+        vertex[6..10].copy_from_slice(&params);
+        vertex[10..14].copy_from_slice(&[
+            sprite.material.softness_metres,
+            f32::from(additive),
+            facing,
+            0.0,
+        ]);
+        vertex[14..18].copy_from_slice(&right.extend(0.0).to_array());
+        vertex[18..22].copy_from_slice(&up.extend(0.0).to_array());
+    }
+    values
+}
+
+/// A sprite batch's instance rows: world centre, atlas frame and the quad
+/// around the centre, the node's scale and the instance's applied.
+fn batch_rows(
+    sprite: &SpriteInstanceDescriptor,
+    rows: &crate::tables::SpriteBatchRows,
+    world: &Mat4,
+    atlas: Option<&crate::tables::AtlasRow>,
+) -> Vec<f32> {
+    let scale = [
+        world.x_axis.truncate().length(),
+        world.y_axis.truncate().length(),
+    ];
+    let mut values = Vec::with_capacity(rows.instances.len() * BATCH_ROW_FLOATS);
+    for instance in rows.instances.iter() {
+        let rect = atlas.and_then(|atlas| atlas.descriptor.frame_rect(instance.frame));
+        let uv = rect.map_or([0.0, 0.0, 1.0, 1.0], |rect| {
+            [
+                rect.uv_min[0],
+                rect.uv_min[1],
+                rect.uv_max[0],
+                rect.uv_max[1],
+            ]
+        });
+        let [w, h] = rect.and_then(|rect| rect.size).unwrap_or(sprite.size);
+        let (w, h) = (w * instance.scale * scale[0], h * instance.scale * scale[1]);
+        let center = world.transform_point3(Vec3::from(instance.position));
+        values.extend_from_slice(&center.extend(1.0).to_array());
+        values.extend_from_slice(&uv);
+        values.extend_from_slice(&[
+            -sprite.pivot[0] * w,
+            -sprite.pivot[1] * h,
+            (1.0 - sprite.pivot[0]) * w,
+            (1.0 - sprite.pivot[1]) * h,
+        ]);
+    }
+    values
+}
+
+impl Renderer {
+    /// A sprite batch's instances with their reach, for the backdrop's
+    /// depth range.
+    pub(crate) fn sprite_batch_rows(
+        &self,
+        batch: &render_model::SpriteBatchDescriptor,
+    ) -> crate::tables::SpriteBatchRows {
+        let instances = &batch.instances;
+        let (min, max) = instances.iter().fold(
+            (Vec3::splat(f32::INFINITY), Vec3::splat(f32::NEG_INFINITY)),
+            |(min, max), instance| {
+                let position = Vec3::from(instance.position);
+                (min.min(position), max.max(position))
+            },
+        );
+        let center = if instances.is_empty() {
+            Vec3::ZERO
+        } else {
+            (min + max) * 0.5
+        };
+        // The largest frame any instance may show, at its scale.
+        let largest_frame = self
+            .tables
+            .names
+            .get(&batch.sprite.asset)
+            .and_then(|id| self.tables.atlases.get(id))
+            .map_or(0.0, |atlas| {
+                atlas
+                    .descriptor
+                    .frames
+                    .iter()
+                    .filter_map(|frame| frame.size)
+                    .fold(0.0f32, |largest, [w, h]| largest.max(w).max(h))
+            })
+            .max(batch.sprite.size[0])
+            .max(batch.sprite.size[1]);
+        let radius = instances.iter().fold(0.0f32, |radius, instance| {
+            radius.max(
+                Vec3::from(instance.position).distance(center) + largest_frame * instance.scale,
+            )
+        });
+        crate::tables::SpriteBatchRows {
+            instances: instances.clone(),
+            center,
+            radius,
+        }
     }
 }
 
@@ -1207,6 +1397,11 @@ impl Renderer {
         let pixel_ratio = self.pixel_ratio();
         let mut draws = std::mem::take(&mut self.effects.sprite_scratch);
         draws.clear();
+        // Buffers of batches that are gone.
+        let sprites = &self.tables.sprites;
+        self.effects
+            .batches
+            .retain(|handle, _| sprites.contains(handle));
         for handle in &self.tables.sprites {
             pass.sprite_candidates += 1;
             let Some(node) = self.tables.nodes.get(handle) else {
@@ -1220,6 +1415,85 @@ impl Renderer {
             }
             let sprite = &resolved.descriptor;
             let atlas = self.tables.atlases.get(resolved.atlas);
+            if let Some(rows) = &resolved.batch {
+                let color = atlas.map(|atlas| atlas.texture);
+                let ([mode, strength, bias], detail) = sprite_lighting(resolved, color);
+                let (mut state, cutoff) = sprite_state(sprite);
+                state.batch = true;
+                let corner_values = batch_corners(
+                    sprite,
+                    &node.world,
+                    [mode, cutoff, strength, bias],
+                    state.additive,
+                );
+                let stale = self.effects.batches.get(handle).is_none_or(|buffers| {
+                    !std::sync::Arc::ptr_eq(&buffers.instances, &rows.instances)
+                        || buffers.world != node.world
+                });
+                if stale {
+                    let rows_values = batch_rows(sprite, rows, &node.world, atlas);
+                    let buffer = |label, contents: &[f32]| {
+                        use wgpu::util::DeviceExt;
+                        self.gpu
+                            .device
+                            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                                label: Some(label),
+                                contents: bytemuck::cast_slice(contents),
+                                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                            })
+                    };
+                    // An empty batch still binds a buffer of one row.
+                    let rows_buffer = buffer(
+                        "render-wgpu sprite batch rows",
+                        if rows_values.is_empty() {
+                            &[0.0; BATCH_ROW_FLOATS]
+                        } else {
+                            &rows_values
+                        },
+                    );
+                    self.effects.batches.insert(
+                        *handle,
+                        BatchBuffers {
+                            instances: rows.instances.clone(),
+                            world: node.world,
+                            rows: rows_buffer,
+                            count: rows.instances.len() as u32,
+                            corner_values,
+                            corners: buffer("render-wgpu sprite batch corners", &corner_values),
+                        },
+                    );
+                }
+                let buffers = self
+                    .effects
+                    .batches
+                    .get_mut(handle)
+                    .expect("a drawn batch has buffers");
+                if buffers.corner_values != corner_values {
+                    // A tint or lighting change: four vertices, not the rows.
+                    self.gpu.queue.write_buffer(
+                        &buffers.corners,
+                        0,
+                        bytemuck::cast_slice(&corner_values),
+                    );
+                    buffers.corner_values = corner_values;
+                }
+                if buffers.count == 0 {
+                    continue;
+                }
+                pass.batch_instances += buffers.count;
+                draws.push(SpriteDraw {
+                    state,
+                    textures: (color, detail),
+                    render_order: sprite.render_order,
+                    depth: node
+                        .world
+                        .transform_point3(rows.center)
+                        .distance_squared(view.camera.eye),
+                    row: [0.0; SPRITE_ROW_FLOATS],
+                    batch: Some(*handle),
+                });
+                continue;
+            }
             let rect = atlas.and_then(|atlas| atlas.descriptor.frame_rect(sprite.frame));
             let uv = rect.map_or([0.0, 0.0, 1.0, 1.0], |rect| {
                 [
@@ -1261,6 +1535,7 @@ impl Renderer {
                 render_order: sprite.render_order,
                 depth: model.w_axis.truncate().distance_squared(view.camera.eye),
                 row,
+                batch: None,
             });
         }
         // Solid front to back, blended back to front, each by render order.
@@ -1316,12 +1591,15 @@ impl Renderer {
                     .insert(draw.textures, bind_group);
             }
             let instance = (rows.len() / SPRITE_ROW_FLOATS) as u32;
-            rows.extend_from_slice(&draw.row);
+            if draw.batch.is_none() {
+                rows.extend_from_slice(&draw.row);
+            }
             if draw.state.soft {
                 pass.soft_sprites.push(SpriteInstance {
                     state: draw.state,
                     textures: draw.textures,
                     instance,
+                    batch: draw.batch,
                 });
             } else if draw.state.blend {
                 pass.blended.push(BlendedSprite {
@@ -1330,12 +1608,14 @@ impl Renderer {
                     render_order: draw.render_order,
                     depth: draw.depth,
                     instance,
+                    batch: draw.batch,
                 });
             } else {
                 pass.solid.push(SpriteInstance {
                     state: draw.state,
                     textures: draw.textures,
                     instance,
+                    batch: draw.batch,
                 });
             }
         }
