@@ -138,17 +138,17 @@ pub(crate) fn update_resources(
     retained: &mut ResourceSnapshot,
 ) -> Result<ResourceUpdate, AppearanceProjectionError> {
     let mut update = ResourceUpdate::default();
-    let applied = apply_changes(input, retained, &mut update);
-    if applied.is_ok() {
-        update.count_references(retained, true);
+    if let Err(error) = apply_changes(input, retained, &mut update) {
+        // Refused part way: the values applied so far, and no counts.
+        update.restore(retained);
+        return Err(error);
     }
-    match applied.and_then(|()| check_references(&update, retained)) {
-        Ok(()) => Ok(update),
-        Err(error) => {
-            update.undo(retained);
-            Err(error)
-        }
+    update.count_references(retained, true);
+    if let Err(error) = check_references(&update, retained) {
+        update.undo(retained);
+        return Err(error);
     }
+    Ok(update)
 }
 
 fn apply_changes(
@@ -363,6 +363,12 @@ impl ResourceUpdate {
     /// Puts `retained` back as it was before this update.
     pub(crate) fn undo(self, retained: &mut ResourceSnapshot) {
         self.count_references(retained, false);
+        self.restore(retained);
+    }
+
+    /// Puts back the values this update replaced; its reference counts are
+    /// not, or no longer, counted.
+    fn restore(self, retained: &mut ResourceSnapshot) {
         fn restore<T>(retained: &mut BTreeMap<String, T>, record: Vec<(String, Option<T>)>) {
             for (id, previous) in record.into_iter().rev() {
                 match previous {

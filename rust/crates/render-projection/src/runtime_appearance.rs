@@ -1017,6 +1017,126 @@ mod tests {
     const MESH: &str = "appearance/mesh";
     const BODY: &str = "appearance/body";
 
+    fn texture(id: &str) -> render_model::TextureDescriptor {
+        render_model::TextureDescriptor {
+            id: id.to_owned(),
+            width: 1,
+            height: 1,
+            filter: render_model::TextureFilter::Nearest,
+            wrap: render_model::TextureWrap::Repeat,
+            content_hash: None,
+            version: 1,
+            payload: None,
+        }
+    }
+
+    fn textured(id: &str, texture: &str) -> RenderMaterialDescriptor {
+        RenderMaterialDescriptor {
+            id: id.to_owned(),
+            texture: Some(texture.to_owned()),
+            ..material()
+        }
+    }
+
+    #[test]
+    fn a_resource_update_refused_part_way_leaves_the_retained_resources_and_their_users() {
+        let invalid = || RenderMaterialDescriptor {
+            id: "material/z-invalid".to_owned(),
+            roughness: f32::NAN,
+            ..material()
+        };
+        // A texture no one uses yet: the refused material's use is not taken
+        // back from nothing.
+        let mut projector = RuntimeAppearanceProjector::new(RuntimeAppearanceCatalog::default());
+        projector
+            .resources_mut()
+            .textures
+            .push(texture("texture/new"));
+        projector.reconcile().expect("a texture");
+        let resources = projector.resources_mut();
+        resources
+            .materials
+            .push(textured("material/a-valid", "texture/new"));
+        resources.materials.push(invalid());
+        assert!(matches!(
+            projector.reconcile(),
+            Err(AppearanceProjectionError::InvalidMaterial { .. })
+        ));
+        let resources = projector.resources_mut();
+        resources.materials.remove("material/a-valid");
+        resources.materials.remove("material/z-invalid");
+        assert!(projector
+            .reconcile()
+            .expect("nothing changed")
+            .ops
+            .is_empty());
+
+        let mut projector = RuntimeAppearanceProjector::new(RuntimeAppearanceCatalog::default());
+        projector
+            .resources_mut()
+            .textures
+            .push(texture("texture/held"));
+        projector
+            .resources_mut()
+            .materials
+            .push(textured("material/holder", "texture/held"));
+        projector.reconcile().expect("a texture and its material");
+
+        // A valid material is applied before an invalid one is refused.
+        let resources = projector.resources_mut();
+        resources
+            .materials
+            .push(textured("material/a-valid", "texture/held"));
+        resources.materials.push(invalid());
+        resources.textures.remove("texture/held");
+        assert!(matches!(
+            projector.reconcile(),
+            Err(AppearanceProjectionError::InvalidMaterial { id, .. }) if id == "material/z-invalid"
+        ));
+
+        // Without the new materials, the texture's retained user still
+        // refuses its removal.
+        let resources = projector.resources_mut();
+        resources.materials.remove("material/a-valid");
+        resources.materials.remove("material/z-invalid");
+        assert_eq!(
+            projector.reconcile(),
+            Err(AppearanceProjectionError::MissingTexture {
+                owner: "material/holder".to_owned(),
+                texture: "texture/held".to_owned(),
+            })
+        );
+        projector
+            .resources_mut()
+            .textures
+            .push(texture("texture/held"));
+        assert!(
+            projector
+                .reconcile()
+                .expect("nothing changed")
+                .ops
+                .is_empty(),
+            "the refused changes were never projected"
+        );
+
+        // Released together, the user goes first.
+        let resources = projector.resources_mut();
+        resources.materials.remove("material/holder");
+        resources.textures.remove("texture/held");
+        let ops = projector.reconcile().expect("both released").ops;
+        assert_eq!(
+            ops,
+            [
+                RenderDiff::ReleaseMaterial {
+                    id: "material/holder".to_owned()
+                },
+                RenderDiff::ReleaseTexture {
+                    id: "texture/held".to_owned()
+                },
+            ]
+        );
+    }
+
     fn material() -> RenderMaterialDescriptor {
         RenderMaterialDescriptor {
             texture_transform: None,
