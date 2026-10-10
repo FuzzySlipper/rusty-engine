@@ -6,6 +6,7 @@ use std::{
     cell::RefCell,
     collections::{BTreeMap, BTreeSet},
     ffi::c_void,
+    ops::RangeInclusive,
     rc::Rc,
     sync::Arc,
     time::Instant,
@@ -365,6 +366,59 @@ struct NavigationVerticalMapping {
     /// Collision-derived navigation maps a point to a nearby support; an
     /// admitted artifact maps it to the level its height rounds to.
     snap: Option<SupportSnap>,
+    /// Every supported cell, ordered by the X/Z column a position looks it
+    /// up in: the cell's own column, or with continuous translation the grid
+    /// column its centre lies in. A position reads only the columns near it,
+    /// whatever the session's cell count.
+    columns: Box<[([i64; 2], VoxelCoord)]>,
+}
+
+impl NavigationVerticalMapping {
+    fn new(
+        level_quantum: f64,
+        support_heights: BTreeMap<VoxelCoord, f64>,
+        cell_centers: BTreeMap<VoxelCoord, [f64; 2]>,
+        has_continuous_horizontal_translation: bool,
+        snap: Option<SupportSnap>,
+        cell_size: f64,
+    ) -> Self {
+        let mut columns: Box<[_]> = support_heights
+            .keys()
+            .map(|&cell| {
+                let key = match cell_centers.get(&cell) {
+                    Some(center) if has_continuous_horizontal_translation => {
+                        center.map(|at| (at / cell_size).floor() as i64)
+                    }
+                    _ => [cell.x, cell.z],
+                };
+                (key, cell)
+            })
+            .collect();
+        columns.sort_unstable();
+        Self {
+            level_quantum,
+            support_heights,
+            cell_centers,
+            has_continuous_horizontal_translation,
+            snap,
+            columns,
+        }
+    }
+
+    /// The cells looked up in column `x` at rows `z`.
+    fn column_cells(
+        &self,
+        x: i64,
+        z: RangeInclusive<i64>,
+    ) -> impl Iterator<Item = VoxelCoord> + '_ {
+        let start = self
+            .columns
+            .partition_point(|(key, _)| *key < [x, *z.start()]);
+        let end = self
+            .columns
+            .partition_point(|(key, _)| *key <= [x, *z.end()]);
+        self.columns[start..end].iter().map(|&(_, cell)| cell)
+    }
 }
 
 impl NavigationState {
@@ -408,8 +462,17 @@ impl NavigationState {
         if vertical.has_continuous_horizontal_translation {
             let cell_size = self.projection.grid().voxel_size();
             let half_cell = cell_size * 0.5;
+            // A containing footprint's centre lies within half a cell, so in
+            // the position's own grid column or a neighbour.
+            let [column_x, column_z] = [px, pz].map(|at| (at / cell_size).floor() as i64);
             let mut best: Option<(f64, f64, VoxelCoord)> = None;
-            for (&cell, &[center_x, center_z]) in &vertical.cell_centers {
+            let nearby = (column_x.saturating_sub(1)..=column_x.saturating_add(1)).flat_map(|x| {
+                vertical.column_cells(x, column_z.saturating_sub(1)..=column_z.saturating_add(1))
+            });
+            for cell in nearby {
+                let Some(&[center_x, center_z]) = vertical.cell_centers.get(&cell) else {
+                    continue;
+                };
                 let across_x = (center_x - half_cell - px)
                     .max(px - (center_x + half_cell))
                     .max(0.0);
@@ -442,13 +505,12 @@ impl NavigationState {
             // The column's nearest support at any height, else the level the
             // height rounds to.
             return vertical
-                .support_heights
-                .iter()
-                .filter(|(cell, _)| cell.x == x && cell.z == z)
-                .min_by(|(_, left), (_, right)| (y - **left).abs().total_cmp(&(y - **right).abs()))
+                .column_cells(x, z..=z)
+                .filter_map(|cell| Some((cell, *vertical.support_heights.get(&cell)?)))
+                .min_by(|(_, left), (_, right)| (y - left).abs().total_cmp(&(y - right).abs()))
                 .map_or_else(
                     || VoxelCoord::new(x, (y / vertical.level_quantum).round() as i64, z),
-                    |(cell, _)| *cell,
+                    |(cell, _)| cell,
                 );
         };
         // The nearest support across, then up or down, within the snap: the
@@ -459,12 +521,10 @@ impl NavigationState {
         let point = [px, pz];
         let mut best: Option<(f64, f64, VoxelCoord)> = None;
         for cx in x - ring..=x + ring {
-            let lowest = VoxelCoord::new(cx, i64::MIN, i64::MIN);
-            let highest = VoxelCoord::new(cx, i64::MAX, i64::MAX);
-            for (&cell, &support) in vertical.support_heights.range(lowest..=highest) {
-                if (cell.z - z).abs() > ring {
+            for cell in vertical.column_cells(cx, z - ring..=z + ring) {
+                let Some(&support) = vertical.support_heights.get(&cell) else {
                     continue;
-                }
+                };
                 let min = grid.voxel_min_world(VoxelCoord::new(cell.x, 0, cell.z));
                 let across = [(point[0], min.x), (point[1], min.z)]
                     .map(|(at, low)| (low - at).max(at - (low + cell_size)).max(0.0));
@@ -1163,9 +1223,9 @@ impl RuntimeSpatialBridge {
         let navigation_projection_hash = navigation_projection.projection_hash();
         let navigation_traversal = NavTraversalOverlay::empty(&navigation_projection);
         let base_cells = Arc::new(content_navigation_cells(&artifact));
-        let navigation_vertical_mapping = NavigationVerticalMapping {
-            level_quantum: artifact.navigation.config.level_quantum,
-            support_heights: artifact
+        let navigation_vertical_mapping = NavigationVerticalMapping::new(
+            artifact.navigation.config.level_quantum,
+            artifact
                 .navigation
                 .cells
                 .iter()
@@ -1177,7 +1237,7 @@ impl RuntimeSpatialBridge {
                     )
                 })
                 .collect(),
-            cell_centers: artifact
+            artifact
                 .navigation
                 .cells
                 .iter()
@@ -1192,9 +1252,10 @@ impl RuntimeSpatialBridge {
                     )
                 })
                 .collect(),
-            has_continuous_horizontal_translation: false,
-            snap: None,
-        };
+            false,
+            None,
+            artifact.navigation.config.cell_size,
+        );
 
         let asset_id = spatial_content_asset_id(content.sha256());
         let (assets, instances) = if artifact.collision.positions.is_empty() {
@@ -1875,6 +1936,16 @@ impl RuntimeSpatialBridge {
                 .unwrap_or(u64::MAX),
             component_count: components.len() as u64,
         };
+        // Supports standing off their column's centre keep their cells:
+        // positions still map to cells by column.
+        let vertical_mapping = NavigationVerticalMapping::new(
+            request.config.cell_size,
+            support_heights,
+            cell_centers,
+            false,
+            Some(snap),
+            request.config.cell_size,
+        );
         cache.set_installed(navigation_revision);
         session.collision_navigation = Some(cache);
         session.navigation = Some(NavigationState {
@@ -1888,15 +1959,7 @@ impl RuntimeSpatialBridge {
             require_solid_floor: true,
             traversal,
             volumetric_traversal: VolumetricNavTraversalOverlay::empty(),
-            vertical_mapping: Some(NavigationVerticalMapping {
-                level_quantum: request.config.cell_size,
-                support_heights,
-                // Supports standing off their column's centre keep their
-                // cells: positions still map to cells by column.
-                cell_centers,
-                has_continuous_horizontal_translation: false,
-                snap: Some(snap),
-            }),
+            vertical_mapping: Some(vertical_mapping),
             revision: navigation_revision,
             grid_origin: [0.0; 3],
             edge_kinds: Some(NavigationEdgeKinds { jumps, step_height }),
@@ -5557,13 +5620,14 @@ fn compose_content_navigation<'a>(
     let projection = NavProjection::from_walkable_cells(grid, supports.keys().copied());
     Ok((
         projection,
-        NavigationVerticalMapping {
-            level_quantum: level_quantum.unwrap_or(1.0),
-            support_heights: supports,
+        NavigationVerticalMapping::new(
+            level_quantum.unwrap_or(1.0),
+            supports,
             cell_centers,
             has_continuous_horizontal_translation,
-            snap: None,
-        },
+            None,
+            grid.voxel_size(),
+        ),
     ))
 }
 

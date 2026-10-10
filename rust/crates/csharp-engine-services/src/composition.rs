@@ -3830,6 +3830,195 @@ mod tests {
         let _ = services.finish_call();
     }
 
+    /// A navigation step on a 64-block composed city of about a million
+    /// walkable cells, against one block alone, aligned and translated.
+    /// `cargo test --release -p csharp-engine-services --lib measure_composed_navigation_step -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "timing measurement"]
+    fn measure_composed_navigation_step() {
+        const BLOCK: usize = 128;
+        const BLOCKS_PER_SIDE: i64 = 8;
+        const STEPS: u32 = 200;
+        let cells: Vec<String> = (0..BLOCK * BLOCK)
+            .map(|index| {
+                let (column, row) = (index % BLOCK, index / BLOCK);
+                format!(r#"{{"column":{column},"row":{row},"level":0,"supportHeight":0.0,"walkable":true}}"#)
+            })
+            .collect();
+        let block = format!(
+            r#"{{"schemaVersion":1,"staticMeshArtifactId":"mesh/block","bounds":{{"min":[0.0,-1.0,0.0],"max":[{BLOCK}.0,1.0,{BLOCK}.0]}},"collision":{{"positions":[[0.0,0.0,0.0],[{BLOCK}.0,0.0,0.0],[0.0,0.0,{BLOCK}.0],[{BLOCK}.0,0.0,{BLOCK}.0]],"triangles":[[0,1,2],[1,3,2]]}},"navigation":{{"id":"navigation/block","config":{{"schemaVersion":1,"cellSize":1.0,"levelQuantum":0.25,"maximumSlopeDegrees":45.0,"requiredHeadroom":1.0,"supportProbeDrop":0.1}},"cells":[{}]}}}}"#,
+            cells.join(",")
+        );
+        let mut content = BTreeMap::new();
+        content.insert(
+            "spatial/block.json".to_owned(),
+            Arc::<[u8]>::from(block.as_bytes()),
+        );
+        let mut services = EngineServiceSet::new(
+            parse_runtime_appearance_catalog(None).expect("default catalog"),
+            content,
+            None,
+            RuntimeDiagnosticsSink::new(Default::default()).unwrap(),
+        )
+        .expect("service set");
+        services.begin_call(binding());
+        let api = services.api();
+        let mut session = NativeSpatialSessionHandle::default();
+        assert_eq!(
+            unsafe {
+                (api.spatial.create_session)(
+                    api.spatial.context,
+                    NativeSpatialSessionConfig {
+                        collision_voxel_size: 1.0,
+                        collision_chunk_size: 8,
+                        voxel_surface_mode: NativeVoxelSurfaceMode::GreedyCubes,
+                    },
+                    &mut session,
+                    std::ptr::null_mut(),
+                )
+            },
+            ABI_OK
+        );
+        let path = "spatial/block.json";
+        let mut reference = NativeContentReferenceHandle::default();
+        assert_eq!(
+            unsafe {
+                (api.content.open_reference)(
+                    api.content.context,
+                    &NativeContentOpenRequest {
+                        path: NativeUtf8Slice {
+                            bytes: path.as_ptr(),
+                            len: path.len(),
+                        },
+                    },
+                    &mut reference,
+                    std::ptr::null_mut(),
+                )
+            },
+            ABI_OK
+        );
+        let instance = |index: i64, translation| NativeSpatialContentArtifactInstance {
+            id: index as u64 + 1,
+            content: reference,
+            column_offset: (index % BLOCKS_PER_SIDE) * BLOCK as i64,
+            level_offset: 0,
+            row_offset: (index / BLOCKS_PER_SIDE) * BLOCK as i64,
+            quarter_turns: 0,
+            translation,
+        };
+        let residency = |admitted: &[NativeSpatialContentArtifactInstance], removed: &[u64]| {
+            let mut receipt = NativeSpatialContentArtifactResidencyReceipt::default();
+            assert_eq!(
+                unsafe {
+                    (api.spatial.apply_content_artifact_residency)(
+                        api.spatial.context,
+                        &NativeSpatialContentArtifactResidencyRequest {
+                            session,
+                            admitted: admitted.as_ptr(),
+                            admitted_len: admitted.len(),
+                            removed: removed.as_ptr(),
+                            removed_len: removed.len(),
+                            navigation_grid_id: 7,
+                            navigation_chunk_size: 8,
+                            navigation_max_step_cells: 1,
+                        },
+                        &mut receipt,
+                        std::ptr::null_mut(),
+                    )
+                },
+                ABI_OK
+            );
+            receipt
+        };
+        let step = |from: [f32; 3], target: [f32; 3]| {
+            let vec3 = |[x, y, z]: [f32; 3]| NativeVec3 { x, y, z };
+            let mut step = NativeNavigationStepResult::default();
+            assert_eq!(
+                unsafe {
+                    (api.spatial.evaluate_navigation_step)(
+                        api.spatial.context,
+                        NativeNavigationStepRequest {
+                            session,
+                            from: vec3(from),
+                            target: vec3(target),
+                            max_step_units: 0.5,
+                            max_visited: 64,
+                        },
+                        &mut step,
+                        std::ptr::null_mut(),
+                    )
+                },
+                ABI_OK
+            );
+            step
+        };
+        // Steps a few cells across the last block, which every layout holds.
+        let last = BLOCKS_PER_SIDE * BLOCKS_PER_SIDE - 1;
+        let corner = [last % BLOCKS_PER_SIDE, last / BLOCKS_PER_SIDE]
+            .map(|offset| (offset * BLOCK as i64) as f32 + 10.5);
+        let measure = |label: &str| {
+            let from = [corner[0], 0.0, corner[1]];
+            let target = [corner[0] + 3.0, 0.0, corner[1]];
+            assert_eq!(
+                step(from, target).outcome,
+                NativeNavigationPathOutcome::Reached
+            );
+            let started = std::time::Instant::now();
+            for _ in 0..STEPS {
+                std::hint::black_box(step(from, target));
+            }
+            let per_step = started.elapsed() / STEPS;
+            println!("{label}: {per_step:?} per step");
+            per_step
+        };
+        let shifted = NativeVec3 {
+            x: 0.25,
+            y: 0.0,
+            z: 0.25,
+        };
+        let mut results = Vec::new();
+        for (layout, translation) in [("aligned", NativeVec3::default()), ("translated", shifted)] {
+            let started = std::time::Instant::now();
+            let one = residency(&[instance(last, translation)], &[]);
+            println!(
+                "{layout} single block: {} cells admitted in {:?}",
+                one.navigation_cell_count,
+                started.elapsed()
+            );
+            let single = measure(&format!("{layout} single block"));
+            let rest: Vec<_> = (0..last)
+                .map(|index| instance(index, translation))
+                .collect();
+            let started = std::time::Instant::now();
+            let city = residency(&rest, &[]);
+            println!(
+                "{layout} city: {} cells admitted in {:?}",
+                city.navigation_cell_count,
+                started.elapsed()
+            );
+            let composed = measure(&format!("{layout} city"));
+            results.push((layout, single, composed));
+            let every: Vec<u64> = (0..=last).map(|index| index as u64 + 1).collect();
+            residency(&[], &every);
+            assert_eq!(
+                step(
+                    [corner[0], 0.0, corner[1]],
+                    [corner[0] + 3.0, 0.0, corner[1]]
+                )
+                .outcome,
+                NativeNavigationPathOutcome::StartNotWalkable,
+                "removed blocks leave the lookup"
+            );
+        }
+        let _ = services.finish_call();
+        for (layout, single, composed) in results {
+            assert!(
+                composed < single * 4,
+                "{layout}: a step on the city ({composed:?}) is not within a small factor of one block ({single:?})"
+            );
+        }
+    }
+
     fn assert_spatial_admission_diagnostic(error: NativeOperationErrorReceipt, expected: &str) {
         assert_eq!(error.diagnostics_len, 1);
         let diagnostic = unsafe { *error.diagnostics };
