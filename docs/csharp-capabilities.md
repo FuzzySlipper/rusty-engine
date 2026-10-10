@@ -122,9 +122,12 @@ the renderer rather than copied; a batch holds up to 65,536. Blended
 batches do not sort their own sprites, so give vegetation a masked alpha
 mode. Pixel sizes, viewport placement and frame playback are per sprite.
 
-Disposing any appearance costs what it holds, not the number of live
-appearances: retiring 200,000 sprites through the SDK test host takes about
-eight times as long as 25,000.
+Disposing any appearance or resource costs what it holds and the catalog
+entries it added, not the number of live appearances: through the SDK test
+host, disposing 200,000 atlas sprites takes about eight times as long as
+25,000, and 80,000 content meshes about five times as long as 10,000. A
+call that changed resources still checks the whole renderer catalog once at
+its end.
 
 ### Ghost-plate presentation
 

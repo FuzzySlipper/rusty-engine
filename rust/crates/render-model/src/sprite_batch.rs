@@ -45,8 +45,13 @@ pub enum SpriteBatchError {
     Sprite(SpriteError),
     /// Pixel sizes, viewport placement and attachment are per sprite.
     UnsupportedSprite,
-    TooManyInstances { instances: usize, limit: usize },
-    InvalidInstance { index: usize },
+    TooManyInstances {
+        instances: usize,
+        limit: usize,
+    },
+    InvalidInstance {
+        index: usize,
+    },
 }
 
 impl SpriteBatchDescriptor {

@@ -15,7 +15,7 @@ use render_model::{
     Transform,
 };
 
-use crate::HandleAllocationError;
+use crate::{HandleAllocationError, ResourceList};
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(
@@ -65,20 +65,20 @@ pub enum Appearance {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AppearanceResources {
     #[serde(default)]
-    pub materials: Vec<RenderMaterialDescriptor>,
+    pub materials: ResourceList<RenderMaterialDescriptor>,
     #[serde(default)]
-    pub textures: Vec<TextureDescriptor>,
+    pub textures: ResourceList<TextureDescriptor>,
     /// Product shaders the materials name.
     #[serde(default)]
-    pub shaders: Vec<ShaderDescriptor>,
+    pub shaders: ResourceList<ShaderDescriptor>,
     #[serde(default)]
-    pub sprite_atlases: Vec<SpriteAtlasDescriptor>,
+    pub sprite_atlases: ResourceList<SpriteAtlasDescriptor>,
     /// Admitted mesh bodies are immutable and shared; cloning a catalog
     /// copies pointers, not vertex data.
     #[serde(default)]
-    pub static_meshes: Vec<Arc<StaticMeshAsset>>,
+    pub static_meshes: ResourceList<Arc<StaticMeshAsset>>,
     #[serde(default)]
-    pub animated_meshes: Vec<Arc<AnimatedMeshAsset>>,
+    pub animated_meshes: ResourceList<Arc<AnimatedMeshAsset>>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]

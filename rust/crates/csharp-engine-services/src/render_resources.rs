@@ -416,6 +416,9 @@ impl CsharpRenderResource {
     }
 }
 
+/// A renderer path with the sampling it was opened with.
+type RendererPath = (String, NativeTextureFilter, NativeTextureWrap);
+
 /// Admitted renderer resources by handle. Monotonic slots keep stale handles
 /// invalid while released payloads leave memory.
 #[derive(Clone, Default)]
@@ -428,7 +431,9 @@ pub(crate) struct RenderResourceRegistry {
     /// for one more call instead of forcing a renderer rebaseline.
     released_this_call: Vec<CsharpRenderResource>,
     released_last_call: Vec<CsharpRenderResource>,
-    paths: BTreeMap<(String, NativeTextureFilter, NativeTextureWrap), u64>,
+    paths: BTreeMap<RendererPath, u64>,
+    /// The renderer paths mapped to each handle, so removing it costs its own.
+    handle_paths: BTreeMap<u64, Vec<RendererPath>>,
     identities: BTreeMap<String, u64>,
     /// Each explicit resource admission gives the caller one releasable owner.
     open_counts: BTreeMap<u64, u32>,
@@ -555,7 +560,10 @@ impl RenderResourceRegistry {
             handle
         };
         for path in paths {
-            self.paths.insert((path, filter, wrap), handle);
+            let key = (path, filter, wrap);
+            if self.paths.insert(key.clone(), handle) != Some(handle) {
+                self.handle_paths.entry(handle).or_default().push(key);
+            }
         }
         Ok(handle)
     }
@@ -622,7 +630,12 @@ impl RenderResourceRegistry {
             )
         })?;
         self.identities.remove(resource.asset_identity());
-        self.paths.retain(|_, mapped| *mapped != handle);
+        for key in self.handle_paths.remove(&handle).unwrap_or_default() {
+            // A path a later resource took over stays with it.
+            if self.paths.get(&key) == Some(&handle) {
+                self.paths.remove(&key);
+            }
+        }
         self.open_counts.remove(&handle);
         self.released_this_call.push(resource.clone());
         Ok(resource)

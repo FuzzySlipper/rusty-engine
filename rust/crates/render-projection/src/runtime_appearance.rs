@@ -1126,9 +1126,9 @@ mod tests {
     fn projector() -> RuntimeAppearanceProjector {
         let mut projector = RuntimeAppearanceProjector::new(RuntimeAppearanceCatalog {
             resources: AppearanceResources {
-                materials: vec![material()],
-                static_meshes: vec![Arc::new(mesh())],
-                animated_meshes: vec![Arc::new(animated_mesh())],
+                materials: vec![material()].into(),
+                static_meshes: vec![Arc::new(mesh())].into(),
+                animated_meshes: vec![Arc::new(animated_mesh())].into(),
                 ..AppearanceResources::default()
             },
             appearances: BTreeMap::from([
@@ -1485,10 +1485,17 @@ mod tests {
             .apply_lights(&[ambient_light(3, Some(1))], &[])
             .unwrap();
 
-        Arc::make_mut(&mut projector.resources_mut().static_meshes[0])
-            .payload
-            .bounds
-            .max[0] = 2.0;
+        let mesh = projector.resources().static_meshes[0].asset.clone();
+        Arc::make_mut(
+            projector
+                .resources_mut()
+                .static_meshes
+                .get_mut(&mesh)
+                .expect("the mesh"),
+        )
+        .payload
+        .bounds
+        .max[0] = 2.0;
         let frame = projector.reconcile().unwrap();
         assert_eq!(
             kinds(&frame),

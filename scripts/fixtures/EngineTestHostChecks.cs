@@ -38,29 +38,40 @@ internal static class EngineTestHostChecks
         host.Call(engine =>
         {
             // Disposing an appearance costs what it holds, not how many are
-            // live: 200,000 sprites go about eight times as long as 25,000,
-            // with content meshes (internal resources) live beside them.
+            // live: disposing eight times as many takes about eight times as
+            // long, for atlas sprites beside content meshes (internal
+            // resources) and for content meshes, which each add a catalog
+            // mesh and material.
             using RenderResource texture = engine.Graphics.OpenResource(new RenderResourceRequest("textures/atlas.png")).Handle;
             using SpriteAtlas atlas = engine.Graphics.CreateSpriteAtlas(new(texture,
                 new SpriteAtlasFrame[] { new(1, Vector2.Zero, Vector2.One, false, Vector2.Zero), new(2, Vector2.Zero, Vector2.One, false, Vector2.Zero) }));
-            TimeSpan CreateAndDispose(int count)
+            Appearance Mesh() => engine.Graphics.CreateStaticMeshFromContent(new("meshes/triangle.json", new Color(1, 1, 1, 1)));
+            TimeSpan Dispose(bool meshes, int count)
             {
-                var started = System.Diagnostics.Stopwatch.StartNew();
-                var appearances = new List<Appearance>(count + count / 1000);
+                var appearances = new List<Appearance>(count + count / 1000 + 1);
                 for (int index = 0; index < count; index++)
                 {
+                    if (meshes)
+                    {
+                        appearances.Add(Mesh());
+                        continue;
+                    }
                     appearances.Add(engine.Graphics.CreateSpriteFromAtlas(new(atlas, 1, Vector2.Zero, Vector2.One,
                         BillboardMode.Cylindrical, SpriteSizeMode.World, 0, SpriteDepthPolicy.Default, new Color(1, 1, 1, 1))));
-                    if (index % 1000 == 0)
-                        appearances.Add(engine.Graphics.CreateStaticMeshFromContent(new("meshes/triangle.json", new Color(1, 1, 1, 1))));
+                    if (index % 1000 == 0) appearances.Add(Mesh());
                 }
+                var started = System.Diagnostics.Stopwatch.StartNew();
                 foreach (Appearance appearance in appearances) appearance.Dispose();
                 return started.Elapsed;
             }
-            CreateAndDispose(5_000);
-            TimeSpan few = CreateAndDispose(25_000);
-            TimeSpan many = CreateAndDispose(200_000);
-            Require(many < few * 24, $"Disposal grew with the live count: 200,000 took {many}, 25,000 took {few}.");
+            foreach ((bool meshes, int few) in new[] { (false, 25_000), (true, 10_000) })
+            {
+                Dispose(meshes, few / 5);
+                TimeSpan fewer = Dispose(meshes, few);
+                TimeSpan many = Dispose(meshes, few * 8);
+                Require(many < fewer * 24,
+                    $"Disposal grew with the live count ({(meshes ? "content meshes" : "atlas sprites")}): {few * 8} took {many}, {few} took {fewer}.");
+            }
 
             // A batch of 10,000 sprites is one appearance and one object.
             var instances = new SpriteBatchInstance[10_000];

@@ -2559,48 +2559,33 @@ impl RuntimeAppearanceBridge {
             )
         })?;
         let resources = state.projector.resources();
-        let material = resources
-            .materials
-            .iter()
-            .find(|candidate| candidate.id == *id)
-            .cloned()
-            .ok_or_else(|| {
-                CsharpEngineServicesError::new(
-                    "CSHARP_VOXEL_PRESENTATION_MATERIAL",
-                    "voxel-object material descriptor is not retained",
-                )
-            })?;
+        let material = resources.materials.get(id).cloned().ok_or_else(|| {
+            CsharpEngineServicesError::new(
+                "CSHARP_VOXEL_PRESENTATION_MATERIAL",
+                "voxel-object material descriptor is not retained",
+            )
+        })?;
         let textures = material
             .textures()
             .map(|identity| {
-                resources
-                    .textures
-                    .iter()
-                    .find(|texture| texture.id == *identity)
-                    .cloned()
-                    .ok_or_else(|| {
-                        CsharpEngineServicesError::new(
-                            "CSHARP_VOXEL_PRESENTATION_TEXTURE",
-                            "voxel material texture descriptor is not retained",
-                        )
-                    })
+                resources.textures.get(identity).cloned().ok_or_else(|| {
+                    CsharpEngineServicesError::new(
+                        "CSHARP_VOXEL_PRESENTATION_TEXTURE",
+                        "voxel material texture descriptor is not retained",
+                    )
+                })
             })
             .collect::<Result<Vec<_>, _>>()?;
         let shader = material
             .shader
             .as_ref()
             .map(|used| {
-                resources
-                    .shaders
-                    .iter()
-                    .find(|shader| shader.id == used.shader)
-                    .cloned()
-                    .ok_or_else(|| {
-                        CsharpEngineServicesError::new(
-                            "CSHARP_VOXEL_PRESENTATION_SHADER",
-                            "voxel material shader is not retained",
-                        )
-                    })
+                resources.shaders.get(&used.shader).cloned().ok_or_else(|| {
+                    CsharpEngineServicesError::new(
+                        "CSHARP_VOXEL_PRESENTATION_SHADER",
+                        "voxel material shader is not retained",
+                    )
+                })
             })
             .transpose()?;
         Ok((material, textures, shader))
@@ -2630,8 +2615,7 @@ impl RuntimeAppearanceBridge {
             .projector
             .resources()
             .static_meshes
-            .iter()
-            .find(|mesh| mesh.asset == *asset)
+            .get(asset)
             .ok_or_else(|| refusal("scatter appearance mesh is not retained"))?;
         let slots = mesh
             .material_slots
@@ -3651,8 +3635,7 @@ impl RuntimeAppearanceBridge {
                 .projector
                 .resources()
                 .materials
-                .iter()
-                .find(|candidate| candidate.id == *id)
+                .get(id)
                 .ok_or_else(|| invalid("a layer material descriptor is not retained"))?;
             if descriptor.voxel_surface.is_none() || descriptor.terrain_layers.is_some() {
                 return Err(invalid(
@@ -3752,13 +3735,9 @@ impl RuntimeAppearanceBridge {
         if let Some((_, shader)) = shader {
             retain_shader_descriptor(&mut resources.shaders, shader);
         }
-        let material = resources
-            .materials
-            .iter_mut()
-            .find(|material| material.id == id)
-            .ok_or_else(|| {
-                CsharpEngineServicesError::new("CSHARP_MATERIAL", "material catalog drifted")
-            })?;
+        let material = resources.materials.get_mut(&id).ok_or_else(|| {
+            CsharpEngineServicesError::new("CSHARP_MATERIAL", "material catalog drifted")
+        })?;
         *material = descriptor;
         staged.state.set_held(
             Holder::Material,
@@ -3815,7 +3794,7 @@ impl RuntimeAppearanceBridge {
             ));
         }
         let resources = staged.state.projector.resources_mut();
-        resources.materials.retain(|candidate| candidate.id != id);
+        resources.materials.remove(&id);
         staged.state.release_held(Holder::Material, material.value);
         staged.resource_releases_pending = true;
         Ok(())
@@ -3901,25 +3880,28 @@ impl RuntimeAppearanceBridge {
         let suffix = appearance.value;
         match removed {
             Some(Appearance::StaticMesh { .. }) => {
-                let mesh_asset = format!("mesh/native-{suffix}");
-                let materials = format!("material/native-{suffix}-");
+                // Its synthesized materials are its mesh's slot materials.
                 let resources = staged.state.projector.resources_mut();
-                resources
+                if let Some(mesh) = resources
                     .static_meshes
-                    .retain(|mesh| mesh.asset != mesh_asset);
-                resources
-                    .materials
-                    .retain(|material| !material.id.starts_with(&materials));
+                    .remove(&format!("mesh/native-{suffix}"))
+                {
+                    let materials = format!("material/native-{suffix}-");
+                    for slot in &mesh.material_slots {
+                        if slot.material.starts_with(&materials) {
+                            resources.materials.remove(&slot.material);
+                        }
+                    }
+                }
             }
             Some(Appearance::Sprite { sprite })
                 if sprite.asset == format!("sprite/native-{suffix}") =>
             {
-                let texture = format!("texture/native-{suffix}");
                 let resources = staged.state.projector.resources_mut();
-                resources.textures.retain(|entry| entry.id != texture);
                 resources
-                    .sprite_atlases
-                    .retain(|atlas| atlas.id != sprite.asset);
+                    .textures
+                    .remove(&format!("texture/native-{suffix}"));
+                resources.sprite_atlases.remove(&sprite.asset);
             }
             _ => {}
         }
@@ -4287,7 +4269,7 @@ impl RuntimeAppearanceBridge {
             .projector
             .resources_mut()
             .static_meshes
-            .retain(|mesh| mesh.asset != asset);
+            .remove(&asset);
         staged.state.generated_meshes.remove(resource.value);
         // The release is published with the call's other resource changes.
         staged.resource_releases_pending = true;
@@ -4634,12 +4616,8 @@ impl RuntimeAppearanceBridge {
         staged.state.sprite_atlas_appearances.remove(&atlas.value);
         staged.state.sprite_playbacks_by_atlas.remove(&atlas.value);
         let resources = staged.state.projector.resources_mut();
-        resources
-            .sprite_atlases
-            .retain(|candidate| candidate.id != entry.asset);
-        resources
-            .textures
-            .retain(|candidate| candidate.id != entry.texture_asset);
+        resources.sprite_atlases.remove(&entry.asset);
+        resources.textures.remove(&entry.texture_asset);
         staged.resource_releases_pending = true;
         Ok(())
     }
@@ -9875,25 +9853,17 @@ fn remove_resource(
 ) -> Result<CsharpRenderResource, CsharpEngineServicesError> {
     let resource = state.render_resources.remove(handle)?;
     if let Some(texture) = resource.texture() {
-        state
-            .projector
-            .resources_mut()
-            .textures
-            .retain(|entry| entry.id != texture.id);
+        state.projector.resources_mut().textures.remove(&texture.id);
     }
     if let Some(animated) = resource.animated_mesh() {
         state
             .projector
             .resources_mut()
             .animated_meshes
-            .retain(|entry| entry.asset != animated.asset);
+            .remove(&animated.asset);
     }
     if let Some(shader) = resource.shader() {
-        state
-            .projector
-            .resources_mut()
-            .shaders
-            .retain(|entry| entry.id != shader.id);
+        state.projector.resources_mut().shaders.remove(&shader.id);
     }
     state.release_held(Holder::AnimationClipPack, handle);
     Ok(resource)
@@ -10247,10 +10217,10 @@ fn material_shader(
 
 /// Keep `shader` among the definitions published with the materials.
 fn retain_shader_descriptor(
-    shaders: &mut Vec<render_model::ShaderDescriptor>,
+    shaders: &mut render_projection::ResourceList<render_model::ShaderDescriptor>,
     shader: render_model::ShaderDescriptor,
 ) {
-    if !shaders.iter().any(|retained| retained.id == shader.id) {
+    if !shaders.contains(&shader.id) {
         shaders.push(shader);
     }
 }
@@ -10331,10 +10301,10 @@ fn texture_descriptors_for_material(
 }
 
 fn retain_texture_descriptor(
-    textures: &mut Vec<TextureDescriptor>,
+    textures: &mut render_projection::ResourceList<TextureDescriptor>,
     texture: TextureDescriptor,
 ) -> Result<(), CsharpEngineServicesError> {
-    if let Some(retained) = textures.iter().find(|retained| retained.id == texture.id) {
+    if let Some(retained) = textures.get(&texture.id) {
         if retained != &texture {
             return Err(CsharpEngineServicesError::new(
                 "CSHARP_MATERIAL_TEXTURE",
@@ -13151,9 +13121,18 @@ fn shade(surface: Surface) -> vec4<f32> {
     #[test]
     fn disposing_appearances_costs_what_they_hold_not_the_live_count() {
         // #9801: each disposal used to scan every live holder for every
-        // internal resource, so retiring N appearances took O(N²). Content
-        // meshes are internal resources held by their appearances.
-        fn create_and_dispose(sprites: usize) -> std::time::Duration {
+        // internal resource, and the renderer catalog and paths for entries
+        // it removed, so retiring N appearances took O(N²). Content meshes
+        // are internal resources, and each content mesh and legacy sprite
+        // adds catalog entries of its own.
+        #[derive(Clone, Copy, Debug)]
+        enum Kind {
+            /// Atlas sprites with a content mesh every 100.
+            AtlasSprites,
+            ContentMeshes,
+            LegacySprites,
+        }
+        fn dispose(kind: Kind, count: usize) -> std::time::Duration {
             let mut content_resources = BTreeMap::new();
             content_resources.insert("atlas.png".to_owned(), Arc::from(RGBA_PNG));
             content_resources.insert(
@@ -13184,43 +13163,54 @@ fn shade(surface: Surface) -> vec4<f32> {
                 })
             }
             .expect("atlas");
-            let started = std::time::Instant::now();
-            let mut appearances = Vec::with_capacity(sprites + sprites / 100);
-            for index in 0..sprites {
-                appearances.push(
-                    bridge
-                        .create_sprite_from_atlas(atlas_sprite_request(atlas, 7))
-                        .expect("sprite"),
-                );
-                if index % 100 == 0 {
-                    appearances.push(
-                        bridge
-                            .create_static_mesh_from_content(&mesh_content_request())
-                            .expect("mesh"),
-                    );
-                }
+            let mut appearances = Vec::with_capacity(count + count / 100 + 1);
+            for index in 0..count {
+                let created = match kind {
+                    Kind::AtlasSprites => {
+                        if index % 100 == 0 {
+                            appearances.push(
+                                bridge
+                                    .create_static_mesh_from_content(&mesh_content_request())
+                                    .expect("mesh"),
+                            );
+                        }
+                        bridge.create_sprite_from_atlas(atlas_sprite_request(atlas, 7))
+                    }
+                    Kind::ContentMeshes => {
+                        bridge.create_static_mesh_from_content(&mesh_content_request())
+                    }
+                    Kind::LegacySprites => bridge.create_sprite(legacy_sprite_request(texture)),
+                };
+                appearances.push(created.expect("appearance"));
             }
+            let started = std::time::Instant::now();
             for appearance in appearances {
                 bridge.destroy_appearance(appearance).expect("dispose");
             }
             let elapsed = started.elapsed();
+            let resources = bridge.staged_ref().unwrap().state.projector.resources();
+            assert!(resources.static_meshes.is_empty() && resources.materials.is_empty());
+            assert_eq!(resources.textures.len(), 1, "{kind:?}: the atlas's texture");
+            assert_eq!(resources.sprite_atlases.len(), 1, "{kind:?}: the atlas");
             bridge.end_call();
             assert_eq!(
                 bridge.state.render_resources.len(),
                 1,
-                "only the atlas texture stays"
+                "{kind:?}: only the atlas texture stays"
             );
             elapsed
         }
 
-        create_and_dispose(500);
-        let small = create_and_dispose(2_000);
-        let large = create_and_dispose(16_000);
-        // Linear is 8×; the former quadratic cost was 64×.
-        assert!(
-            large < small * 24,
-            "16,000 appearances took {large:?}, 2,000 took {small:?}"
-        );
+        for kind in [Kind::AtlasSprites, Kind::ContentMeshes, Kind::LegacySprites] {
+            dispose(kind, 500);
+            let small = dispose(kind, 2_000);
+            let large = dispose(kind, 16_000);
+            // Linear is 8×; the former quadratic cost was 64×.
+            assert!(
+                large < small * 24,
+                "{kind:?}: disposing 16,000 took {large:?}, 2,000 took {small:?}"
+            );
+        }
     }
 
     #[test]

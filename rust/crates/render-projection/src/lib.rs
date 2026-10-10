@@ -4,6 +4,7 @@
 
 mod appearance;
 mod material;
+mod resource_list;
 mod retained;
 mod runtime_appearance;
 mod voxel;
@@ -12,6 +13,7 @@ mod voxel_scatter;
 
 pub use appearance::*;
 pub use material::*;
+pub use resource_list::*;
 pub use retained::*;
 pub use runtime_appearance::*;
 pub use voxel::*;
