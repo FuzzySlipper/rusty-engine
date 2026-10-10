@@ -1,6 +1,6 @@
 use std::ffi::c_void;
 
-use crate::{NativeOperationErrorReceipt, NativeVec3, NativeVec4};
+use crate::{NativeOperationErrorReceipt, NativeQuat, NativeVec3, NativeVec4};
 
 /// One tween the Engine plays over a published object. Handles are values:
 /// a tween that ended reads as `Ended` and needs no release.
@@ -180,6 +180,10 @@ pub struct NativeTweenStartRequest {
     pub yoyo: bool,
     pub clock: NativeTweenClock,
     pub start: NativeTweenStart,
+    /// Starts as if this many seconds had already elapsed: the pose shown
+    /// is the one an update advancing by them would show. Markers before
+    /// it are not reported.
+    pub elapsed_seconds: f64,
 }
 
 #[repr(u32)]
@@ -204,6 +208,10 @@ pub enum NativeTweenControl {
     Complete = 2,
     /// Ends now: the published values show from the end of the call.
     Cancel = 3,
+    /// Moves to `elapsed_seconds` after the start, clamped to the timeline,
+    /// and shows that pose at the end of the call. A paused tween stays
+    /// paused there. Markers between are not reported.
+    Seek = 4,
 }
 
 #[repr(C)]
@@ -211,6 +219,8 @@ pub enum NativeTweenControl {
 pub struct NativeTweenControlRequest {
     pub tween: NativeTweenHandle,
     pub control: NativeTweenControl,
+    /// The time `Seek` moves to; the other controls ignore it.
+    pub elapsed_seconds: f64,
 }
 
 /// `total_seconds` is infinite for a tween that plays forever.
@@ -252,6 +262,47 @@ pub struct NativeTweenEventResult {
     pub events_len: usize,
 }
 
+/// An easing curve at a linear progress in [0, 1].
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeTweenEasingSampleRequest {
+    pub easing: NativeTweenEasing,
+    pub progress: f32,
+}
+
+/// The eased progress: 0 at 0 and 1 at 1; back, elastic and an underdamped
+/// spring overshoot between.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeTweenEasingSample {
+    pub value: f32,
+}
+
+/// A timeline sampled `elapsed_seconds` after its start, as a tween playing
+/// it would show it.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeTweenSampleRequest {
+    pub segments: *const NativeTweenSegment,
+    pub segments_len: usize,
+    /// Iterations to play; 0 and 1 both play once.
+    pub iterations: u32,
+    pub forever: bool,
+    pub yoyo: bool,
+    pub elapsed_seconds: f64,
+}
+
+/// A timeline's offset: translation added in parent space, rotation and
+/// scale applied in the object's local frame, tint multiplying its colour.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeTweenSample {
+    pub translation: NativeVec3,
+    pub rotation: NativeQuat,
+    pub scale: NativeVec3,
+    pub tint: NativeVec4,
+}
+
 pub type NativeStartTween = unsafe extern "C" fn(
     context: *mut c_void,
     request: *const NativeTweenStartRequest,
@@ -279,6 +330,20 @@ pub type NativeReadTweenEvents = unsafe extern "C" fn(
     operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32;
 
+pub type NativeEvaluateTweenEasing = unsafe extern "C" fn(
+    context: *mut c_void,
+    request: NativeTweenEasingSampleRequest,
+    result: *mut NativeTweenEasingSample,
+    operation_error: *mut NativeOperationErrorReceipt,
+) -> i32;
+
+pub type NativeSampleTween = unsafe extern "C" fn(
+    context: *mut c_void,
+    request: *const NativeTweenSampleRequest,
+    result: *mut NativeTweenSample,
+    operation_error: *mut NativeOperationErrorReceipt,
+) -> i32;
+
 /// Engine-played presentation tweens over published appearance objects.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -288,4 +353,8 @@ pub struct NativeTweenApi {
     pub control: NativeControlTween,
     pub read: NativeReadTween,
     pub read_events: NativeReadTweenEvents,
+    /// The Engine's easing curves, as tweens play them.
+    pub evaluate_easing: NativeEvaluateTweenEasing,
+    /// A timeline's offset at a time, as a tween playing it shows it.
+    pub sample: NativeSampleTween,
 }

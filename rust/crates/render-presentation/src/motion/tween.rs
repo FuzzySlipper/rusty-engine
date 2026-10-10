@@ -626,6 +626,18 @@ impl TweenPlayback {
         }
     }
 
+    /// Moves to `elapsed` seconds after the start, clamped to the timeline,
+    /// keeping whether it plays or is paused. Markers between are not
+    /// crossed: the pose jumps there. A tween moved to its end completes at
+    /// its next advance. A completed tween stays where it ended.
+    pub fn seek(&mut self, elapsed: f64) {
+        if self.state == TweenState::Completed {
+            return;
+        }
+        let total = self.definition.total_seconds().unwrap_or(f64::INFINITY);
+        self.elapsed_seconds = elapsed.clamp(0.0, total);
+    }
+
     /// Jumps to the end. A tween that plays forever stops where it is.
     pub fn complete(&mut self) {
         if let Some(total) = self.definition.total_seconds() {

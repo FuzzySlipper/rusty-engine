@@ -436,6 +436,71 @@ fn playback_follows_its_own_clock_and_reports_completion() {
 }
 
 #[test]
+fn seeking_shows_the_pose_an_advance_by_that_time_shows() {
+    let squash = TweenSegment {
+        easing: Easing::Ease(EaseFamily::Back, EaseMode::Out),
+        ..segment(
+            TweenChannel::Scale,
+            0.4,
+            0.2,
+            [1.3, 0.7, 1.3, 1.0],
+            [1.0; 4],
+        )
+    };
+    let timeline = || {
+        TweenDefinition::new(
+            vec![hop(), squash],
+            vec![TweenMarker {
+                marker_id: 1,
+                time_seconds: 0.1,
+            }],
+            TweenRepeat::Count(2),
+            true,
+        )
+        .unwrap()
+    };
+    let mut crossed = Vec::new();
+    for elapsed in [0.0, 0.05, 0.3, 0.45, 0.6, 0.7, 0.95] {
+        let mut advanced = TweenPlayback::new(timeline(), TweenClock::World);
+        advanced.advance(elapsed, 0.0, &mut crossed);
+        let mut sought = TweenPlayback::new(timeline(), TweenClock::World);
+        sought.seek(elapsed);
+        assert_eq!(sought.offset(), advanced.offset(), "at {elapsed}");
+        assert_eq!(sought.iteration(), advanced.iteration());
+    }
+
+    // A paused tween stays paused where it is moved, and crosses no marker.
+    let mut playback = TweenPlayback::new(timeline(), TweenClock::World);
+    playback.pause();
+    playback.seek(0.5);
+    crossed.clear();
+    assert!(!playback.advance(1.0, 1.0, &mut crossed));
+    assert_eq!(
+        (playback.state(), playback.elapsed_seconds()),
+        (TweenState::Paused, 0.5)
+    );
+    assert!(crossed.is_empty());
+    // Markers after the new position are crossed as it plays on.
+    playback.resume();
+    playback.seek(0.0);
+    playback.advance(0.2, 0.0, &mut crossed);
+    assert_eq!(crossed, [(1, 0)]);
+
+    // Clamped to the timeline; at the end it completes at the next advance.
+    playback.seek(-1.0);
+    assert_eq!(playback.elapsed_seconds(), 0.0);
+    playback.seek(5.0);
+    assert_eq!(playback.elapsed_seconds(), f64::from(0.6_f32) * 2.0);
+    assert!(playback.advance(0.0, 0.0, &mut crossed));
+    playback.seek(0.1);
+    assert_eq!(
+        playback.state(),
+        TweenState::Completed,
+        "a completed tween stays ended"
+    );
+}
+
+#[test]
 fn starting_from_a_carried_offset_replaces_each_base_tracks_start() {
     let squash = segment(
         TweenChannel::Scale,

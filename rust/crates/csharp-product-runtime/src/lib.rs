@@ -8010,6 +8010,7 @@ mod tests {
                 yoyo: false,
                 clock: NativeTweenClock::World,
                 start: NativeTweenStart::Replace,
+                elapsed_seconds: 0.0,
             };
             let mut readout = std::mem::zeroed::<NativeTweenReadout>();
             assert_eq!(

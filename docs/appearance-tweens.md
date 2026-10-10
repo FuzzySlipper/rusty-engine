@@ -65,7 +65,14 @@ and a damped spring (`TweenEasing.Spring(stiffness, damping)`). The spring's
 whole settle time, to within 0.1%, is stretched over the segment, so its
 shape does not depend on the duration. Back, elastic and an underdamped
 spring overshoot; the others stay within the segment's values. The curves
-live in `render-presentation`; products do not reimplement them.
+live in `render-presentation`; products do not reimplement them. Presentation
+code that needs a curve's value asks the Engine:
+`engine.Tween.Evaluate(TweenEasingKind.BackOut, progress)` returns what a
+segment with that easing plays at linear progress `progress`, and
+`engine.Tween.Sample(timeline, seconds)` returns the offset (translation,
+rotation, scale and tint) a start request's timeline shows that long after it
+starts, such as the pose to place a muzzle flash at. Neither needs a
+published object or starts anything.
 
 `Yoyo` plays every second iteration backwards. A marker is reported each
 iteration the timeline passes its time, backwards ones included, so it fires
@@ -89,6 +96,10 @@ changes. `TweenSegment` has `Move`, `Hop`, `Rotate`, `Scale`, `Tint`,
   mid-flight continues without a jump. With no tween running it plays as
   given. `Layer` plays alongside the object's tweens; their offsets compose in
   start order.
+- `ElapsedSeconds` on the request starts the tween as if that much time had
+  already passed: it shows the pose an update advancing by that time would
+  show, and reports only the markers after it. An action already part way
+  along when the product publishes starts where it is.
 - A republish moves the published values under a running tween; the offset
   keeps showing over the new values.
 - When a tween ends, its offset stops showing: the object shows its published
@@ -97,7 +108,12 @@ changes. `TweenSegment` has `Move`, `Hop`, `Rotate`, `Scale`, `Tint`,
   builders do; a fade out that should stay invisible ends by the product
   hiding or removing the object when it completes.
 - `ReadEvents` returns this update's events, markers crossed and tweens
-  completed, tween by tween in start order and each tween's in time order. `Control` pauses, resumes, completes or cancels.
+  completed, tween by tween in start order and each tween's in time order. `Control` pauses, resumes, completes, cancels
+  or seeks. `TweenControlRequest.Seek(tween, seconds)` moves to that time
+  after the start, clamped to the timeline, and the call shows that pose; a
+  paused tween stays paused there, so a viewer can jog and step a timeline.
+  A seek reports no markers it jumps over. A playing tween sought to its end
+  completes at the next update.
   Complete jumps to the end, ends with the call, and is reported as completed
   by the next update. A tween that plays forever stops where it is. Cancel
   ends it with no event. Removing the object ends its tweens with no event.

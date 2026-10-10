@@ -405,6 +405,7 @@ impl RuntimeAppearanceBridge {
                     format!("tween is invalid: {error:?}"),
                 )
             })?;
+        let elapsed = elapsed_seconds(request.elapsed_seconds)?;
         let staged = self.staged_mut()?;
         let RuntimeAppearanceData {
             projector, tweens, ..
@@ -441,11 +442,13 @@ impl RuntimeAppearanceBridge {
             NativeTweenClock::World => TweenClock::World,
             NativeTweenClock::Realtime => TweenClock::Realtime,
         };
+        let mut playback = TweenPlayback::new(definition, clock);
+        playback.seek(elapsed);
         tweens.insert(
             handle,
             RuntimeTween {
                 object_id,
-                playback: TweenPlayback::new(definition, clock),
+                playback,
             },
         );
         Ok(readout(handle, &tweens.tweens[&handle]))
@@ -475,6 +478,11 @@ impl RuntimeAppearanceBridge {
                 tweens.remove(handle);
                 return Ok(ended(handle));
             }
+            NativeTweenControl::Seek => {
+                tween
+                    .playback
+                    .seek(elapsed_seconds(request.elapsed_seconds)?);
+            }
         }
         tweens.dirty.insert(object_id);
         Ok(readout(handle, &tweens.tweens[&handle]))
@@ -502,6 +510,79 @@ impl RuntimeAppearanceBridge {
         };
         self.borrowed.hold(events);
         Ok(result)
+    }
+}
+
+impl RuntimeAppearanceBridge {
+    pub(crate) fn tween_sample(
+        &self,
+        request: &NativeTweenSampleRequest,
+    ) -> Result<NativeTweenSample, CsharpEngineServicesError> {
+        let native_segments =
+            unsafe { borrowed_slice(request.segments, request.segments_len, "tween segments") }?;
+        let repeat = if request.forever {
+            TweenRepeat::Forever
+        } else {
+            TweenRepeat::Count(request.iterations)
+        };
+        let definition = TweenDefinition::new(
+            native_segments.iter().map(segment).collect(),
+            Vec::new(),
+            repeat,
+            request.yoyo,
+        )
+        .map_err(|error| {
+            tween_error(
+                "CSHARP_TWEEN_DEFINITION",
+                format!("tween is invalid: {error:?}"),
+            )
+        })?;
+        // Where a tween playing the timeline would be.
+        let mut playback = TweenPlayback::new(definition, TweenClock::World);
+        playback.seek(elapsed_seconds(request.elapsed_seconds)?);
+        let offset = playback.offset();
+        let [x, y, z] = offset.translation;
+        let [rx, ry, rz, rw] = offset.rotation;
+        let [sx, sy, sz] = offset.scale;
+        let [r, g, b, a] = offset.tint;
+        Ok(NativeTweenSample {
+            translation: NativeVec3 { x, y, z },
+            rotation: NativeQuat {
+                x: rx,
+                y: ry,
+                z: rz,
+                w: rw,
+            },
+            scale: NativeVec3 {
+                x: sx,
+                y: sy,
+                z: sz,
+            },
+            tint: NativeVec4 {
+                x: r,
+                y: g,
+                z: b,
+                w: a,
+            },
+        })
+    }
+}
+
+/// The curve a tween segment with this easing plays.
+pub(crate) fn evaluate_easing(request: NativeTweenEasingSampleRequest) -> NativeTweenEasingSample {
+    NativeTweenEasingSample {
+        value: easing(&request.easing).sample(request.progress),
+    }
+}
+
+fn elapsed_seconds(seconds: f64) -> Result<f64, CsharpEngineServicesError> {
+    if seconds.is_finite() && seconds >= 0.0 {
+        Ok(seconds)
+    } else {
+        Err(tween_error(
+            "CSHARP_TWEEN_DEFINITION",
+            format!("elapsed seconds must be finite and not negative, not {seconds}"),
+        ))
     }
 }
 
@@ -707,6 +788,33 @@ unsafe extern "C" fn read_events(
     })
 }
 
+unsafe extern "C" fn evaluate_easing_operation(
+    context: *mut c_void,
+    request: NativeTweenEasingSampleRequest,
+    result: *mut NativeTweenEasingSample,
+    operation_error: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    crate::appearance::appearance_operation(context, operation_error, || {
+        respond(context, result, |_| Ok(evaluate_easing(request)))
+    })
+}
+
+unsafe extern "C" fn sample(
+    context: *mut c_void,
+    request: *const NativeTweenSampleRequest,
+    result: *mut NativeTweenSample,
+    operation_error: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    crate::appearance::appearance_operation(context, operation_error, || {
+        if request.is_null() {
+            return 0;
+        }
+        respond(context, result, |bridge| {
+            bridge.tween_sample(unsafe { &*request })
+        })
+    })
+}
+
 pub(crate) fn api(bridge: &mut RuntimeAppearanceBridge) -> NativeTweenApi {
     NativeTweenApi {
         context: (bridge as *mut RuntimeAppearanceBridge).cast(),
@@ -714,5 +822,7 @@ pub(crate) fn api(bridge: &mut RuntimeAppearanceBridge) -> NativeTweenApi {
         control,
         read,
         read_events,
+        evaluate_easing: evaluate_easing_operation,
+        sample,
     }
 }

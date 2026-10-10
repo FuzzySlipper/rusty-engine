@@ -97,6 +97,7 @@ fn request(
         yoyo: false,
         clock,
         start,
+        elapsed_seconds: 0.0,
     }
 }
 
@@ -326,6 +327,7 @@ fn layered_tweens_compose_and_controls_pause_complete_and_cancel() {
         .tween_control(NativeTweenControlRequest {
             tween: hop.tween,
             control: NativeTweenControl::Pause,
+            elapsed_seconds: 0.0,
         })
         .unwrap();
     assert_eq!(paused.state, NativeTweenState::Paused);
@@ -343,6 +345,7 @@ fn layered_tweens_compose_and_controls_pause_complete_and_cancel() {
         .tween_control(NativeTweenControlRequest {
             tween: hop.tween,
             control: NativeTweenControl::Complete,
+            elapsed_seconds: 0.0,
         })
         .unwrap();
     assert_eq!(skipped.state, NativeTweenState::Completed);
@@ -373,6 +376,7 @@ fn layered_tweens_compose_and_controls_pause_complete_and_cancel() {
         .tween_control(NativeTweenControlRequest {
             tween: again.tween,
             control: NativeTweenControl::Cancel,
+            elapsed_seconds: 0.0,
         })
         .unwrap();
     assert_eq!(cancelled.state, NativeTweenState::Ended);
@@ -553,4 +557,274 @@ fn world_tweens_move_between_steps_by_the_world_time_owed() {
         vec![(NativeTweenEventKind::Completed, 0, 0)]
     );
     assert_near(shown(&mut bridge), [2.0, 0.0, 0.0]);
+}
+
+fn control(
+    bridge: &mut RuntimeAppearanceBridge,
+    tween: NativeTweenHandle,
+    control: NativeTweenControl,
+    elapsed_seconds: f64,
+) -> Result<NativeTweenReadout, CsharpEngineServicesError> {
+    bridge.tween_control(NativeTweenControlRequest {
+        tween,
+        control,
+        elapsed_seconds,
+    })
+}
+
+#[test]
+fn a_tween_started_part_way_shows_what_one_advanced_that_far_shows() {
+    let markers = [
+        NativeTweenMarker {
+            marker_id: 1,
+            time_seconds: 0.1,
+        },
+        NativeTweenMarker {
+            marker_id: 2,
+            time_seconds: 0.4,
+        },
+    ];
+    let (mut from_zero, _) = published_cube();
+    from_zero.begin_call();
+    from_zero
+        .tween_start(&request(
+            &[hop()],
+            &markers,
+            NativeTweenClock::World,
+            NativeTweenStart::Replace,
+        ))
+        .unwrap();
+    end(&mut from_zero);
+    from_zero.begin_update_call(update(1, STEP_SECONDS));
+    let advanced = shown(&mut from_zero);
+
+    let (mut part_way, _) = published_cube();
+    part_way.begin_call();
+    let started = part_way
+        .tween_start(&NativeTweenStartRequest {
+            elapsed_seconds: STEP_SECONDS,
+            ..request(
+                &[hop()],
+                &markers,
+                NativeTweenClock::World,
+                NativeTweenStart::Replace,
+            )
+        })
+        .unwrap();
+    assert_eq!(started.elapsed_seconds, STEP_SECONDS);
+    assert_eq!(shown(&mut part_way), advanced);
+    assert_near(advanced, [1.5, 1.0, 0.0]);
+    // Markers before the start are not reported; later ones are.
+    part_way.begin_update_call(update(1, STEP_SECONDS));
+    assert_eq!(
+        events(&mut part_way),
+        vec![
+            (NativeTweenEventKind::Marker, 2, 0),
+            (NativeTweenEventKind::Completed, 0, 0)
+        ]
+    );
+    part_way.end_call();
+
+    part_way.begin_call();
+    for refused in [-1.0, f64::NAN, f64::INFINITY] {
+        let error = part_way
+            .tween_start(&NativeTweenStartRequest {
+                elapsed_seconds: refused,
+                ..request(
+                    &[hop()],
+                    &[],
+                    NativeTweenClock::World,
+                    NativeTweenStart::Replace,
+                )
+            })
+            .unwrap_err();
+        assert_eq!(error.code(), "CSHARP_TWEEN_DEFINITION");
+    }
+    part_way.end_call();
+}
+
+#[test]
+fn a_paused_tween_sought_shows_that_pose_and_stays_paused() {
+    let (mut bridge, _) = published_cube();
+    bridge.begin_call();
+    let hop = bridge
+        .tween_start(&request(
+            &[hop()],
+            &[],
+            NativeTweenClock::World,
+            NativeTweenStart::Replace,
+        ))
+        .unwrap()
+        .tween;
+    control(&mut bridge, hop, NativeTweenControl::Pause, 0.0).unwrap();
+    let sought = control(&mut bridge, hop, NativeTweenControl::Seek, STEP_SECONDS).unwrap();
+    assert_eq!(
+        (sought.state, sought.elapsed_seconds),
+        (NativeTweenState::Paused, STEP_SECONDS)
+    );
+    // The call that seeks shows the pose.
+    assert_near(shown(&mut bridge), [1.5, 1.0, 0.0]);
+    bridge.begin_update_call(update(1, STEP_SECONDS));
+    assert_eq!(shown(&mut bridge), None, "paused: nothing moves");
+    // Jog back and step forward while paused.
+    bridge.begin_call();
+    control(&mut bridge, hop, NativeTweenControl::Seek, 0.0).unwrap();
+    assert_near(shown(&mut bridge), [1.0, 0.0, 0.0]);
+    bridge.begin_call();
+    let past_end = control(&mut bridge, hop, NativeTweenControl::Seek, 9.0).unwrap();
+    assert_eq!(past_end.elapsed_seconds, f64::from(HOP_SECONDS));
+    assert_eq!(past_end.state, NativeTweenState::Paused);
+    assert_near(shown(&mut bridge), [2.0, 0.0, 0.0]);
+    bridge.begin_call();
+    assert_eq!(
+        control(&mut bridge, hop, NativeTweenControl::Seek, -0.5)
+            .unwrap_err()
+            .code(),
+        "CSHARP_TWEEN_DEFINITION"
+    );
+    // Resumed at its end, it completes at the next update.
+    control(&mut bridge, hop, NativeTweenControl::Resume, 0.0).unwrap();
+    end(&mut bridge);
+    bridge.begin_update_call(update(1, STEP_SECONDS));
+    assert_eq!(
+        events(&mut bridge),
+        vec![(NativeTweenEventKind::Completed, 0, 0)]
+    );
+    bridge.end_call();
+}
+
+fn easing_of(kind: NativeTweenEasingKind) -> NativeTweenEasing {
+    let [parameter_0, parameter_1, parameter_2, parameter_3] = match kind {
+        NativeTweenEasingKind::CubicBezier => [0.3, -0.4, 0.6, 1.5],
+        NativeTweenEasingKind::Steps => [4.0, 0.0, 0.0, 0.0],
+        NativeTweenEasingKind::Spring => [120.0, 6.0, 0.0, 0.0],
+        _ => [0.0; 4],
+    };
+    NativeTweenEasing {
+        kind,
+        parameter_0,
+        parameter_1,
+        parameter_2,
+        parameter_3,
+    }
+}
+
+#[test]
+fn evaluated_easings_and_sampled_timelines_match_what_tweens_show() {
+    use NativeTweenEasingKind as Kind;
+    let kinds = [
+        Kind::Linear,
+        Kind::QuadIn,
+        Kind::QuadOut,
+        Kind::QuadInOut,
+        Kind::CubicIn,
+        Kind::CubicOut,
+        Kind::CubicInOut,
+        Kind::QuartIn,
+        Kind::QuartOut,
+        Kind::QuartInOut,
+        Kind::QuintIn,
+        Kind::QuintOut,
+        Kind::QuintInOut,
+        Kind::SineIn,
+        Kind::SineOut,
+        Kind::SineInOut,
+        Kind::ExpoIn,
+        Kind::ExpoOut,
+        Kind::ExpoInOut,
+        Kind::CircIn,
+        Kind::CircOut,
+        Kind::CircInOut,
+        Kind::BackIn,
+        Kind::BackOut,
+        Kind::BackInOut,
+        Kind::ElasticIn,
+        Kind::ElasticOut,
+        Kind::ElasticInOut,
+        Kind::BounceIn,
+        Kind::BounceOut,
+        Kind::BounceInOut,
+        Kind::CubicBezier,
+        Kind::Steps,
+        Kind::Spring,
+    ];
+    let (mut bridge, _) = published_cube();
+    // A call writes only a changed pose.
+    let mut last = [2.0, 0.0, 0.0];
+    for kind in kinds {
+        // A unit move over one second, so the eased progress is the offset.
+        let segments = [NativeTweenSegment {
+            duration_seconds: 1.0,
+            easing: easing_of(kind),
+            ..segment(
+                NativeTweenChannel::Translation,
+                vec4(0.0, 0.0, 0.0, 0.0),
+                vec4(1.0, 0.0, 0.0, 0.0),
+            )
+        }];
+        for progress in [0.0_f32, 0.1, 0.25, 0.5, 0.7, 0.9, 1.0] {
+            bridge.begin_call();
+            bridge
+                .tween_start(&NativeTweenStartRequest {
+                    elapsed_seconds: f64::from(progress),
+                    ..request(
+                        &segments,
+                        &[],
+                        NativeTweenClock::World,
+                        NativeTweenStart::Replace,
+                    )
+                })
+                .unwrap();
+            let evaluated = crate::tween::evaluate_easing(NativeTweenEasingSampleRequest {
+                easing: easing_of(kind),
+                progress,
+            })
+            .value;
+            let sampled = bridge
+                .tween_sample(&NativeTweenSampleRequest {
+                    segments: segments.as_ptr(),
+                    segments_len: segments.len(),
+                    iterations: 1,
+                    forever: false,
+                    yoyo: false,
+                    elapsed_seconds: f64::from(progress),
+                })
+                .unwrap();
+            let shown = shown(&mut bridge).unwrap_or(last);
+            last = shown;
+            // The shown pose is the sample over the published x = 2.
+            assert!(
+                (shown[0] - 2.0 - sampled.translation.x).abs() < 1.0e-5,
+                "{kind:?} at {progress}"
+            );
+            assert!(
+                (evaluated - sampled.translation.x).abs() < 1.0e-6,
+                "{kind:?} at {progress}: evaluated {evaluated}, shown {}",
+                sampled.translation.x
+            );
+        }
+    }
+    // A sample holds every channel: unit scale and white where none plays.
+    bridge.begin_call();
+    let sampled = bridge
+        .tween_sample(&NativeTweenSampleRequest {
+            segments: [hop()].as_ptr(),
+            segments_len: 1,
+            iterations: 1,
+            forever: false,
+            yoyo: false,
+            elapsed_seconds: STEP_SECONDS,
+        })
+        .unwrap();
+    assert_eq!(
+        [
+            sampled.translation.x,
+            sampled.translation.y,
+            sampled.scale.y,
+            sampled.tint.w,
+            sampled.rotation.w
+        ],
+        [-0.5, 1.0, 1.0, 1.0, 1.0]
+    );
+    bridge.end_call();
 }

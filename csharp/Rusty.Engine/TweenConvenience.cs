@@ -124,9 +124,42 @@ public readonly partial record struct TweenStartRequest
 {
     /// <summary>Plays <paramref name="segments"/> once on world time, replacing the object's tweens.</summary>
     public TweenStartRequest(ulong objectId, ReadOnlyMemory<TweenSegment> segments)
-        : this(objectId, segments, ReadOnlyMemory<TweenMarker>.Empty, 1, false, false, TweenClock.World, TweenStart.Replace)
+        : this(objectId, segments, ReadOnlyMemory<TweenMarker>.Empty, 1, false, false, TweenClock.World, TweenStart.Replace, 0)
     {
     }
+}
+
+public readonly partial record struct TweenControlRequest
+{
+    /// <summary>Pauses, resumes, completes or cancels <paramref name="tween"/>.</summary>
+    public TweenControlRequest(TweenHandle tween, TweenControl control)
+        : this(tween, control, 0)
+    {
+    }
+
+    /// <summary>Moves <paramref name="tween"/> to <paramref name="elapsedSeconds"/> after its start and shows that pose at the end of the call; a paused tween stays paused there.</summary>
+    public static TweenControlRequest Seek(TweenHandle tween, double elapsedSeconds) =>
+        new(tween, TweenControl.Seek, elapsedSeconds);
+}
+
+public readonly partial record struct TweenSampleRequest
+{
+    /// <summary>The timeline <paramref name="timeline"/> would play, <paramref name="elapsedSeconds"/> after its start. Its object, clock, start mode and markers do not matter.</summary>
+    public TweenSampleRequest(TweenStartRequest timeline, double elapsedSeconds)
+        : this(timeline.Segments, timeline.Iterations, timeline.Forever, timeline.Yoyo, elapsedSeconds)
+    {
+    }
+}
+
+public static class TweenServiceConvenience
+{
+    /// <summary>The Engine's <paramref name="easing"/> curve at linear <paramref name="progress"/> in [0, 1], as tweens play it.</summary>
+    public static float Evaluate(this ITweenService tween, TweenEasing easing, float progress) =>
+        tween.EvaluateEasing(new TweenEasingSampleRequest(easing, progress)).Value;
+
+    /// <summary>The offset <paramref name="timeline"/> shows <paramref name="elapsedSeconds"/> after its start, as a tween playing it would show it.</summary>
+    public static TweenSample Sample(this ITweenService tween, TweenStartRequest timeline, double elapsedSeconds) =>
+        tween.Sample(new TweenSampleRequest(timeline, elapsedSeconds));
 }
 
 /// <summary>Common tween timelines. Each returns an ordinary request to adjust with <c>with</c> and pass to <see cref="ITweenService.Start"/>.</summary>
