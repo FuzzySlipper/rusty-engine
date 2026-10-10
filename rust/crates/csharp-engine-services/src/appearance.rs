@@ -13214,6 +13214,70 @@ fn shade(surface: Surface) -> vec4<f32> {
     }
 
     #[test]
+    fn a_call_reconciles_the_resources_it_changed_not_the_whole_catalog() {
+        // #9809: every call that changed resources used to validate and diff
+        // the whole renderer catalog, so a content mesh created, or disposed,
+        // per call took O(N) each.
+        fn one_per_call(count: usize) -> (std::time::Duration, std::time::Duration) {
+            let mut content_resources = BTreeMap::new();
+            content_resources.insert(
+                "mesh.json".to_owned(),
+                Arc::from(serde_json::to_vec(&triangle_mesh_document()).expect("mesh JSON")),
+            );
+            let mut bridge = RuntimeAppearanceBridge::new(
+                RuntimeAppearanceCatalog::default(),
+                content_resources,
+            );
+            let no_attachments = BTreeMap::new();
+            let mut published = Vec::with_capacity(count);
+            let started = std::time::Instant::now();
+            for index in 0..count {
+                bridge.begin_call();
+                let mesh = bridge
+                    .create_static_mesh_from_content(&mesh_content_request())
+                    .expect("mesh");
+                let fact = NativeAppearanceFact {
+                    object_id: index as u64 + 1,
+                    ..appearance_fact(mesh)
+                };
+                bridge
+                    .stage_changes(&[fact], Some(&[]), &no_attachments)
+                    .expect("publish the mesh");
+                bridge.end_call();
+                published.push((fact.object_id, mesh));
+            }
+            let created = started.elapsed();
+            let started = std::time::Instant::now();
+            for (object, mesh) in published {
+                bridge.begin_call();
+                bridge
+                    .stage_changes(&[], Some(&[object]), &no_attachments)
+                    .expect("remove the object");
+                bridge.destroy_appearance(mesh).expect("dispose");
+                bridge.end_call();
+            }
+            let disposed = started.elapsed();
+            let resources = bridge.state.projector.resources();
+            assert!(resources.static_meshes.is_empty() && resources.materials.is_empty());
+            assert!(bridge.state.render_resources.is_empty());
+            (created, disposed)
+        }
+
+        one_per_call(200);
+        let (few_created, few_disposed) = one_per_call(1_000);
+        let (many_created, many_disposed) = one_per_call(8_000);
+        // Linear is 8×; a pass over the catalog per call is 64×.
+        assert!(
+            many_created < few_created * 24,
+            "creating 8,000 took {many_created:?}, 1,000 took {few_created:?}"
+        );
+        assert!(
+            many_disposed < few_disposed * 24,
+            "disposing 8,000 took {many_disposed:?}, 1,000 took {few_disposed:?}"
+        );
+    }
+
+    #[test]
     fn inline_static_mesh_content_packs_one_selected_resource_for_retained_appearances() {
         let document = triangle_mesh_document();
         let mut content_resources = BTreeMap::new();

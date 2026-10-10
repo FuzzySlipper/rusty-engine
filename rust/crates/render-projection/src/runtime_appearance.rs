@@ -14,9 +14,9 @@ use render_model::{
 use serde::Deserialize;
 
 use crate::appearance::{
-    append_material_parameters, append_node_updates, changed_shared_ids, create_node, light_kind,
-    requires_recreate, resource_diffs, validate_appearance, validate_resources, NodeUpdate,
-    NodeValues, ResourceSnapshot,
+    append_material_parameters, append_node_updates, create_node, light_kind, requires_recreate,
+    resource_diffs, update_resources, validate_appearance, NodeUpdate, NodeValues,
+    ResourceSnapshot, ResourceUpdate,
 };
 use crate::{
     Appearance, AppearanceProjectionError, AppearanceResources, HandleAllocationError,
@@ -150,7 +150,9 @@ pub struct RuntimeAppearanceProjector {
 }
 
 impl RuntimeAppearanceProjector {
-    pub fn new(catalog: RuntimeAppearanceCatalog) -> Self {
+    pub fn new(mut catalog: RuntimeAppearanceCatalog) -> Self {
+        // The projection holds none of the catalog yet.
+        catalog.resources.mark_whole();
         Self {
             catalog,
             registry: StableHandleRegistry::new(RenderHandleNamespace::AUTHORED),
@@ -308,6 +310,8 @@ impl RuntimeAppearanceProjector {
         self.lights.len()
     }
 
+    /// Brings the retained resources up to the catalog's changes, then
+    /// projects; a failure leaves both as they were.
     fn change(
         &mut self,
         facts: &[RuntimeAppearanceFact<'_>],
@@ -315,15 +319,46 @@ impl RuntimeAppearanceProjector {
         light_facts: &[RuntimeLightFact],
         light_removals: &[u64],
     ) -> Result<RenderFrameDiff, AppearanceProjectionError> {
-        let next_resources = if self.resources_dirty {
-            Some(validate_resources(
+        let update = if self.resources_dirty {
+            Some(update_resources(
                 &self.catalog.resources,
-                &self.resources,
+                &mut self.resources,
             )?)
         } else {
             None
         };
-        let resources = next_resources.as_ref().unwrap_or(&self.resources);
+        match self.project_changes(
+            facts,
+            removals,
+            light_facts,
+            light_removals,
+            update.as_ref(),
+        ) {
+            Ok(frame) => {
+                if update.is_some() {
+                    self.catalog.resources.clear_changes();
+                    self.resources_dirty = false;
+                }
+                Ok(frame)
+            }
+            Err(error) => {
+                if let Some(update) = update {
+                    update.undo(&mut self.resources);
+                }
+                Err(error)
+            }
+        }
+    }
+
+    fn project_changes(
+        &mut self,
+        facts: &[RuntimeAppearanceFact<'_>],
+        removals: &[u64],
+        light_facts: &[RuntimeLightFact],
+        light_removals: &[u64],
+        update: Option<&ResourceUpdate>,
+    ) -> Result<RenderFrameDiff, AppearanceProjectionError> {
+        let resources = &self.resources;
         let objects = &self.objects;
 
         reject_duplicates(facts.iter().map(|fact| fact.object_id), removals)
@@ -550,11 +585,9 @@ impl RuntimeAppearanceProjector {
         // object. The renderer removes a destroyed object's children with it,
         // so every retained descendant is recreated too.
         let mut recreate = BTreeSet::new();
-        if let Some(next) = &next_resources {
-            let static_meshes =
-                changed_shared_ids(&self.resources.static_meshes, &next.static_meshes);
-            let animated_meshes =
-                changed_shared_ids(&self.resources.animated_meshes, &next.animated_meshes);
+        if let Some(update) = update {
+            let static_meshes = update.redefined_static_meshes(&self.resources);
+            let animated_meshes = update.redefined_animated_meshes(&self.resources);
             if !static_meshes.is_empty() || !animated_meshes.is_empty() {
                 for id in objects.keys() {
                     let redefined = match next_appearance(*id) {
@@ -673,8 +706,8 @@ impl RuntimeAppearanceProjector {
         }
         // A redefined definition cannot replace a live instance: dependents
         // are destroyed above and created again below.
-        if let Some(next) = &next_resources {
-            operations.extend(resource_diffs(&self.resources, next));
+        if let Some(update) = update {
+            operations.extend(resource_diffs(update, &self.resources));
         }
         let mut joints = Vec::new();
         for (id, change) in &changes {
@@ -731,10 +764,6 @@ impl RuntimeAppearanceProjector {
                 Change::Put(fact) => (id, Change::Put(fact.clone())),
             })
             .collect();
-        if let Some(next) = next_resources {
-            self.resources = next;
-            self.resources_dirty = false;
-        }
         self.dirty_appearances.clear();
         for id in &destroyed {
             self.registry.remove(&RetainedKey::Object(*id));
@@ -1531,7 +1560,7 @@ mod tests {
         projector
             .resources_mut()
             .static_meshes
-            .retain(|mesh| mesh.asset != "mesh/triangle");
+            .remove("mesh/triangle");
         assert_eq!(kinds(&projector.reconcile().unwrap()), ["release-mesh"]);
         assert!(projector.reconcile().unwrap().is_empty());
     }

@@ -15,7 +15,8 @@ use render_model::{
     Transform,
 };
 
-use crate::{HandleAllocationError, ResourceList};
+use crate::resource_list::ResourceChanges;
+use crate::{CatalogEntry, HandleAllocationError, ResourceList};
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(
@@ -89,132 +90,403 @@ pub(crate) struct ResourceSnapshot {
     pub(crate) atlases: BTreeMap<String, SpriteAtlasDescriptor>,
     pub(crate) static_meshes: BTreeMap<String, Arc<StaticMeshAsset>>,
     pub(crate) animated_meshes: BTreeMap<String, Arc<AnimatedMeshAsset>>,
+    /// How many retained materials and atlases name each texture.
+    texture_users: BTreeMap<String, u32>,
+    /// How many retained meshes' slots name each material.
+    material_users: BTreeMap<String, u32>,
 }
 
-/// Meshes are validated when first projected; a body already retained by the
-/// previous projection (the same shared allocation) is not scanned again.
-pub(crate) fn validate_resources(
+/// What one projection changed in the retained resources: each changed id,
+/// in id order per kind, with the value it had before.
+#[derive(Default)]
+pub(crate) struct ResourceUpdate {
+    materials: Vec<(String, Option<RenderMaterialDescriptor>)>,
+    textures: Vec<(String, Option<TextureDescriptor>)>,
+    shaders: Vec<(String, Option<ShaderDescriptor>)>,
+    atlases: Vec<(String, Option<SpriteAtlasDescriptor>)>,
+    static_meshes: Vec<(String, Option<Arc<StaticMeshAsset>>)>,
+    animated_meshes: Vec<(String, Option<Arc<AnimatedMeshAsset>>)>,
+}
+
+impl AppearanceResources {
+    /// Every entry counts as changed, for a projection that holds none.
+    pub(crate) fn mark_whole(&mut self) {
+        self.materials.mark_whole();
+        self.textures.mark_whole();
+        self.shaders.mark_whole();
+        self.sprite_atlases.mark_whole();
+        self.static_meshes.mark_whole();
+        self.animated_meshes.mark_whole();
+    }
+
+    /// The projection holds every change so far.
+    pub(crate) fn clear_changes(&mut self) {
+        self.materials.clear_changes();
+        self.textures.clear_changes();
+        self.shaders.clear_changes();
+        self.sprite_atlases.clear_changes();
+        self.static_meshes.clear_changes();
+        self.animated_meshes.clear_changes();
+    }
+}
+
+/// Brings `retained` up to the catalog's changed entries, validating each
+/// changed entry and the references to and from it. The work follows the
+/// changes, not the catalog. On failure `retained` is as it was.
+pub(crate) fn update_resources(
     input: &AppearanceResources,
-    previous: &ResourceSnapshot,
-) -> Result<ResourceSnapshot, AppearanceProjectionError> {
-    let mut resources = ResourceSnapshot::default();
-    for material in &input.materials {
-        material
-            .validate()
-            .map_err(|source| AppearanceProjectionError::InvalidMaterial {
-                id: material.id.clone(),
-                source,
-            })?;
-        insert_unique(
-            &mut resources.materials,
-            &material.id,
-            material.clone(),
-            "material",
-        )?;
+    retained: &mut ResourceSnapshot,
+) -> Result<ResourceUpdate, AppearanceProjectionError> {
+    let mut update = ResourceUpdate::default();
+    let applied = apply_changes(input, retained, &mut update);
+    if applied.is_ok() {
+        update.count_references(retained, true);
     }
-    for texture in &input.textures {
-        texture
-            .validate()
-            .map_err(|source| AppearanceProjectionError::InvalidTexture {
-                id: texture.id.clone(),
-                source,
-            })?;
-        insert_unique(
-            &mut resources.textures,
-            &texture.id,
-            texture.clone(),
-            "texture",
-        )?;
+    match applied.and_then(|()| check_references(&update, retained)) {
+        Ok(()) => Ok(update),
+        Err(error) => {
+            update.undo(retained);
+            Err(error)
+        }
     }
-    for shader in &input.shaders {
-        shader
-            .validate()
-            .map_err(|source| AppearanceProjectionError::InvalidShader {
-                id: shader.id.clone(),
-                source,
-            })?;
-        insert_unique(&mut resources.shaders, &shader.id, shader.clone(), "shader")?;
-    }
-    for atlas in &input.sprite_atlases {
-        atlas
-            .validate()
-            .map_err(|source| AppearanceProjectionError::InvalidAtlas {
-                id: atlas.id.clone(),
-                source,
-            })?;
-        insert_unique(&mut resources.atlases, &atlas.id, atlas.clone(), "atlas")?;
-    }
-    for mesh in &input.static_meshes {
-        if !retained(&previous.static_meshes, &mesh.asset, mesh) {
+}
+
+fn apply_changes(
+    input: &AppearanceResources,
+    retained: &mut ResourceSnapshot,
+    update: &mut ResourceUpdate,
+) -> Result<(), AppearanceProjectionError> {
+    apply_kind(
+        &input.materials,
+        &mut retained.materials,
+        &mut update.materials,
+        |a, b| a == b,
+        |material| {
+            material
+                .validate()
+                .map_err(|source| AppearanceProjectionError::InvalidMaterial {
+                    id: material.id.clone(),
+                    source,
+                })
+        },
+    )?;
+    apply_kind(
+        &input.textures,
+        &mut retained.textures,
+        &mut update.textures,
+        |a, b| a == b,
+        |texture| {
+            texture
+                .validate()
+                .map_err(|source| AppearanceProjectionError::InvalidTexture {
+                    id: texture.id.clone(),
+                    source,
+                })
+        },
+    )?;
+    apply_kind(
+        &input.shaders,
+        &mut retained.shaders,
+        &mut update.shaders,
+        |a, b| a == b,
+        |shader| {
+            shader
+                .validate()
+                .map_err(|source| AppearanceProjectionError::InvalidShader {
+                    id: shader.id.clone(),
+                    source,
+                })
+        },
+    )?;
+    apply_kind(
+        &input.sprite_atlases,
+        &mut retained.atlases,
+        &mut update.atlases,
+        |a, b| a == b,
+        |atlas| {
+            atlas
+                .validate()
+                .map_err(|source| AppearanceProjectionError::InvalidAtlas {
+                    id: atlas.id.clone(),
+                    source,
+                })
+        },
+    )?;
+    // A mesh body is validated when it first changes; the same shared
+    // allocation is not compared or scanned again.
+    apply_kind(
+        &input.static_meshes,
+        &mut retained.static_meshes,
+        &mut update.static_meshes,
+        |a, b| unchanged(Some(a), b),
+        |mesh| {
             mesh.validate()
                 .map_err(|source| AppearanceProjectionError::InvalidStaticMesh {
                     id: mesh.asset.clone(),
                     source,
-                })?;
-        }
-        insert_unique(
-            &mut resources.static_meshes,
-            &mesh.asset,
-            Arc::clone(mesh),
-            "static mesh",
-        )?;
-    }
-    for mesh in &input.animated_meshes {
-        if !retained(&previous.animated_meshes, &mesh.asset, mesh) {
+                })
+        },
+    )?;
+    apply_kind(
+        &input.animated_meshes,
+        &mut retained.animated_meshes,
+        &mut update.animated_meshes,
+        |a, b| unchanged(Some(a), b),
+        |mesh| {
             mesh.validate()
                 .map_err(|source| AppearanceProjectionError::InvalidAnimatedMesh {
                     id: mesh.asset.clone(),
                     source,
-                })?;
+                })
+        },
+    )
+}
+
+/// Applies one kind's changed entries to `retained`, recording each with
+/// the value it replaced.
+fn apply_kind<T: Clone + CatalogEntry>(
+    input: &ResourceList<T>,
+    retained: &mut BTreeMap<String, T>,
+    record: &mut Vec<(String, Option<T>)>,
+    same: impl Fn(&T, &T) -> bool,
+    validate: impl Fn(&T) -> Result<(), AppearanceProjectionError>,
+) -> Result<(), AppearanceProjectionError> {
+    let ids: BTreeSet<String> = match input.changes() {
+        ResourceChanges::Ids(ids) => ids.clone(),
+        ResourceChanges::Whole => input
+            .iter()
+            .map(|entry| entry.catalog_id().to_owned())
+            .chain(retained.keys().cloned())
+            .collect(),
+    };
+    for id in ids {
+        let next = input.get(&id);
+        match (retained.get(&id), next) {
+            (None, None) => continue,
+            (Some(previous), Some(next)) if same(previous, next) => continue,
+            _ => {}
         }
-        insert_unique(
-            &mut resources.animated_meshes,
-            &mesh.asset,
-            Arc::clone(mesh),
-            "animated mesh",
-        )?;
+        let previous = match next {
+            Some(next) => {
+                validate(next)?;
+                retained.insert(id.clone(), next.clone())
+            }
+            None => retained.remove(&id),
+        };
+        record.push((id, previous));
+    }
+    Ok(())
+}
+
+impl ResourceUpdate {
+    /// Adds (or with `add` false, takes back) the references the changed
+    /// entries make now in place of those they made before.
+    fn count_references(&self, retained: &mut ResourceSnapshot, add: bool) {
+        let adjust = |users: &mut BTreeMap<String, u32>, id: &str, more: bool| {
+            let count = users.entry(id.to_owned()).or_default();
+            if more {
+                *count += 1;
+            } else {
+                *count -= 1;
+            }
+            if *count == 0 {
+                users.remove(id);
+            }
+        };
+        for (id, previous) in &self.materials {
+            let next = retained.materials.get(id).and_then(|m| m.texture.clone());
+            let previous = previous.as_ref().and_then(|m| m.texture.clone());
+            if let Some(texture) = &previous {
+                adjust(&mut retained.texture_users, texture, !add);
+            }
+            if let Some(texture) = &next {
+                adjust(&mut retained.texture_users, texture, add);
+            }
+        }
+        for (id, previous) in &self.atlases {
+            let next = retained.atlases.get(id).map(|atlas| atlas.texture.clone());
+            if let Some(previous) = previous {
+                adjust(&mut retained.texture_users, &previous.texture, !add);
+            }
+            if let Some(texture) = &next {
+                adjust(&mut retained.texture_users, texture, add);
+            }
+        }
+        let slots = |slots: Option<&[MeshMaterialSlot]>| -> Vec<String> {
+            slots
+                .into_iter()
+                .flatten()
+                .map(|slot| slot.material.clone())
+                .collect()
+        };
+        let mut mesh_slots = Vec::new();
+        for (id, previous) in &self.static_meshes {
+            mesh_slots.push((
+                slots(
+                    previous
+                        .as_deref()
+                        .map(|mesh| mesh.material_slots.as_slice()),
+                ),
+                slots(
+                    retained
+                        .static_meshes
+                        .get(id)
+                        .map(|mesh| mesh.material_slots.as_slice()),
+                ),
+            ));
+        }
+        for (id, previous) in &self.animated_meshes {
+            mesh_slots.push((
+                slots(
+                    previous
+                        .as_deref()
+                        .map(|mesh| mesh.material_slots.as_slice()),
+                ),
+                slots(
+                    retained
+                        .animated_meshes
+                        .get(id)
+                        .map(|mesh| mesh.material_slots.as_slice()),
+                ),
+            ));
+        }
+        for (previous, next) in mesh_slots {
+            for material in &previous {
+                adjust(&mut retained.material_users, material, !add);
+            }
+            for material in &next {
+                adjust(&mut retained.material_users, material, add);
+            }
+        }
     }
 
-    for material in resources.materials.values() {
-        if material
-            .texture
-            .as_ref()
-            .is_some_and(|id| !resources.textures.contains_key(id))
+    /// Puts `retained` back as it was before this update.
+    pub(crate) fn undo(self, retained: &mut ResourceSnapshot) {
+        self.count_references(retained, false);
+        fn restore<T>(retained: &mut BTreeMap<String, T>, record: Vec<(String, Option<T>)>) {
+            for (id, previous) in record.into_iter().rev() {
+                match previous {
+                    Some(previous) => retained.insert(id, previous),
+                    None => retained.remove(&id),
+                };
+            }
+        }
+        restore(&mut retained.materials, self.materials);
+        restore(&mut retained.textures, self.textures);
+        restore(&mut retained.shaders, self.shaders);
+        restore(&mut retained.atlases, self.atlases);
+        restore(&mut retained.static_meshes, self.static_meshes);
+        restore(&mut retained.animated_meshes, self.animated_meshes);
+    }
+
+    /// Meshes whose definition changed while staying retained: their
+    /// instances are created again.
+    pub(crate) fn redefined_static_meshes(&self, retained: &ResourceSnapshot) -> BTreeSet<String> {
+        redefined(&self.static_meshes, &retained.static_meshes)
+    }
+
+    pub(crate) fn redefined_animated_meshes(
+        &self,
+        retained: &ResourceSnapshot,
+    ) -> BTreeSet<String> {
+        redefined(&self.animated_meshes, &retained.animated_meshes)
+    }
+}
+
+fn redefined<T>(
+    record: &[(String, Option<T>)],
+    retained: &BTreeMap<String, T>,
+) -> BTreeSet<String> {
+    record
+        .iter()
+        .filter(|(id, previous)| previous.is_some() && retained.contains_key(id))
+        .map(|(id, _)| id.clone())
+        .collect()
+}
+
+/// Every changed entry's references resolve, and no removed texture or
+/// material is still named.
+fn check_references(
+    update: &ResourceUpdate,
+    retained: &ResourceSnapshot,
+) -> Result<(), AppearanceProjectionError> {
+    for (id, _) in &update.materials {
+        if let Some(texture) = retained
+            .materials
+            .get(id)
+            .and_then(|material| material.texture.as_ref())
+            .filter(|texture| !retained.textures.contains_key(*texture))
         {
             return Err(AppearanceProjectionError::MissingTexture {
-                owner: material.id.clone(),
-                texture: material.texture.clone().unwrap_or_default(),
+                owner: id.clone(),
+                texture: texture.clone(),
             });
         }
     }
-    for atlas in resources.atlases.values() {
-        if !resources.textures.contains_key(&atlas.texture) {
+    for (id, _) in &update.atlases {
+        if let Some(atlas) = retained
+            .atlases
+            .get(id)
+            .filter(|atlas| !retained.textures.contains_key(&atlas.texture))
+        {
             return Err(AppearanceProjectionError::MissingTexture {
-                owner: atlas.id.clone(),
+                owner: id.clone(),
                 texture: atlas.texture.clone(),
             });
         }
     }
-    for mesh in resources.static_meshes.values() {
-        validate_material_references(&mesh.asset, &mesh.material_slots, &resources.materials)?;
+    for (id, _) in &update.textures {
+        if !retained.textures.contains_key(id) && retained.texture_users.contains_key(id) {
+            // Refused, so the owner is found the slow way.
+            let owner = retained
+                .materials
+                .values()
+                .find(|material| material.texture.as_ref() == Some(id))
+                .map(|material| material.id.clone())
+                .or_else(|| {
+                    retained
+                        .atlases
+                        .values()
+                        .find(|atlas| &atlas.texture == id)
+                        .map(|atlas| atlas.id.clone())
+                })
+                .unwrap_or_default();
+            return Err(AppearanceProjectionError::MissingTexture {
+                owner,
+                texture: id.clone(),
+            });
+        }
     }
-    for mesh in resources.animated_meshes.values() {
-        validate_material_references(&mesh.asset, &mesh.material_slots, &resources.materials)?;
+    for (id, _) in &update.static_meshes {
+        if let Some(mesh) = retained.static_meshes.get(id) {
+            validate_material_references(&mesh.asset, &mesh.material_slots, &retained.materials)?;
+        }
     }
-    Ok(resources)
-}
-
-fn insert_unique<T>(
-    map: &mut BTreeMap<String, T>,
-    id: &str,
-    value: T,
-    kind: &'static str,
-) -> Result<(), AppearanceProjectionError> {
-    if map.insert(id.to_string(), value).is_some() {
-        return Err(AppearanceProjectionError::DuplicateResource {
-            kind,
-            id: id.to_string(),
-        });
+    for (id, _) in &update.animated_meshes {
+        if let Some(mesh) = retained.animated_meshes.get(id) {
+            validate_material_references(&mesh.asset, &mesh.material_slots, &retained.materials)?;
+        }
+    }
+    for (id, _) in &update.materials {
+        if !retained.materials.contains_key(id) && retained.material_users.contains_key(id) {
+            let owner = retained
+                .static_meshes
+                .values()
+                .map(|mesh| (&mesh.asset, &mesh.material_slots))
+                .chain(
+                    retained
+                        .animated_meshes
+                        .values()
+                        .map(|mesh| (&mesh.asset, &mesh.material_slots)),
+                )
+                .find(|(_, slots)| slots.iter().any(|slot| &slot.material == id))
+                .map(|(asset, _)| asset.clone())
+                .unwrap_or_default();
+            return Err(AppearanceProjectionError::MissingMaterial {
+                owner,
+                material: id.clone(),
+            });
+        }
     }
     Ok(())
 }
@@ -355,108 +627,94 @@ pub(crate) fn validate_appearance(
     }
 }
 
+/// The definitions and releases that take the renderer to `retained`
+/// after `update`: definitions by kind (each kind in id order), then
+/// releases with dependents before their sources.
 pub(crate) fn resource_diffs(
-    previous: &ResourceSnapshot,
-    next: &ResourceSnapshot,
+    update: &ResourceUpdate,
+    retained: &ResourceSnapshot,
 ) -> Vec<RenderDiff> {
     let mut operations = Vec::new();
-    for (id, value) in &next.textures {
-        if previous.textures.get(id) != Some(value) {
+    for (id, _) in &update.textures {
+        if let Some(texture) = retained.textures.get(id) {
             operations.push(RenderDiff::DefineTexture {
-                texture: value.clone(),
+                texture: texture.clone(),
             });
         }
     }
-    for (id, value) in &next.shaders {
-        if previous.shaders.get(id) != Some(value) {
+    for (id, _) in &update.shaders {
+        if let Some(shader) = retained.shaders.get(id) {
             operations.push(RenderDiff::DefineShader {
-                shader: value.clone(),
+                shader: shader.clone(),
             });
         }
     }
-    for (id, value) in &next.materials {
-        if previous.materials.get(id) != Some(value) {
+    for (id, _) in &update.materials {
+        if let Some(material) = retained.materials.get(id) {
             operations.push(RenderDiff::DefineMaterial {
-                material: value.clone(),
+                material: material.clone(),
             });
         }
     }
-    for (id, value) in &next.atlases {
-        if previous.atlases.get(id) != Some(value) {
+    for (id, _) in &update.atlases {
+        if let Some(atlas) = retained.atlases.get(id) {
             operations.push(RenderDiff::DefineSpriteAtlas {
-                atlas: value.clone(),
+                atlas: atlas.clone(),
             });
         }
     }
-    for (id, value) in &next.static_meshes {
-        if !unchanged(previous.static_meshes.get(id), value) {
+    for (id, _) in &update.static_meshes {
+        if let Some(mesh) = retained.static_meshes.get(id) {
             operations.push(RenderDiff::DefineStaticMesh {
-                asset: StaticMeshAsset::clone(value),
+                asset: StaticMeshAsset::clone(mesh),
             });
         }
     }
-    for (id, value) in &next.animated_meshes {
-        if !unchanged(previous.animated_meshes.get(id), value) {
+    for (id, _) in &update.animated_meshes {
+        if let Some(mesh) = retained.animated_meshes.get(id) {
             operations.push(RenderDiff::DefineAnimatedMesh {
-                asset: AnimatedMeshAsset::clone(value),
+                asset: AnimatedMeshAsset::clone(mesh),
             });
         }
     }
     // Replacements may stop referring to a removed dependency. Install them
     // before releasing old definitions, then retire dependents before sources.
-    for id in previous.static_meshes.keys() {
-        if !next.static_meshes.contains_key(id) {
-            operations.push(RenderDiff::ReleaseStaticMesh { asset: id.clone() });
-        }
+    fn released<'a, T, U>(
+        record: &'a [(String, Option<T>)],
+        retained: &'a BTreeMap<String, U>,
+    ) -> impl Iterator<Item = String> + 'a {
+        record
+            .iter()
+            .filter(|(id, previous)| previous.is_some() && !retained.contains_key(id))
+            .map(|(id, _)| id.clone())
     }
-    for id in previous.animated_meshes.keys() {
-        if !next.animated_meshes.contains_key(id) {
-            operations.push(RenderDiff::ReleaseAnimatedMesh { asset: id.clone() });
-        }
-    }
-    for id in previous.atlases.keys() {
-        if !next.atlases.contains_key(id) {
-            operations.push(RenderDiff::ReleaseSpriteAtlas { id: id.clone() });
-        }
-    }
-    for id in previous.materials.keys() {
-        if !next.materials.contains_key(id) {
-            operations.push(RenderDiff::ReleaseMaterial { id: id.clone() });
-        }
-    }
-    for id in previous.textures.keys() {
-        if !next.textures.contains_key(id) {
-            operations.push(RenderDiff::ReleaseTexture { id: id.clone() });
-        }
-    }
-    for id in previous.shaders.keys() {
-        if !next.shaders.contains_key(id) {
-            operations.push(RenderDiff::ReleaseShader { id: id.clone() });
-        }
-    }
+    operations.extend(
+        released(&update.static_meshes, &retained.static_meshes)
+            .map(|asset| RenderDiff::ReleaseStaticMesh { asset }),
+    );
+    operations.extend(
+        released(&update.animated_meshes, &retained.animated_meshes)
+            .map(|asset| RenderDiff::ReleaseAnimatedMesh { asset }),
+    );
+    operations.extend(
+        released(&update.atlases, &retained.atlases)
+            .map(|id| RenderDiff::ReleaseSpriteAtlas { id }),
+    );
+    operations.extend(
+        released(&update.materials, &retained.materials)
+            .map(|id| RenderDiff::ReleaseMaterial { id }),
+    );
+    operations.extend(
+        released(&update.textures, &retained.textures).map(|id| RenderDiff::ReleaseTexture { id }),
+    );
+    operations.extend(
+        released(&update.shaders, &retained.shaders).map(|id| RenderDiff::ReleaseShader { id }),
+    );
     operations
-}
-
-/// Ids of shared resources whose definition changed. The same allocation is
-/// unchanged without comparing its body.
-pub(crate) fn changed_shared_ids<T: PartialEq>(
-    previous: &BTreeMap<String, Arc<T>>,
-    next: &BTreeMap<String, Arc<T>>,
-) -> BTreeSet<String> {
-    next.iter()
-        .filter(|(id, value)| previous.contains_key(*id) && !unchanged(previous.get(*id), value))
-        .map(|(id, _)| id.clone())
-        .collect()
 }
 
 fn unchanged<T: PartialEq>(previous: Option<&Arc<T>>, next: &Arc<T>) -> bool {
     previous.is_some_and(|previous| Arc::ptr_eq(previous, next) || **previous == **next)
-}
-
-fn retained<T>(previous: &BTreeMap<String, Arc<T>>, id: &str, next: &Arc<T>) -> bool {
-    previous
-        .get(id)
-        .is_some_and(|previous| Arc::ptr_eq(previous, next))
 }
 
 /// Whether an appearance change needs a new renderer object rather than an
@@ -806,10 +1064,6 @@ fn append_sprite_updates(
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum AppearanceProjectionError {
-    DuplicateResource {
-        kind: &'static str,
-        id: String,
-    },
     InvalidMaterial {
         id: String,
         source: render_model::MaterialDescriptorError,

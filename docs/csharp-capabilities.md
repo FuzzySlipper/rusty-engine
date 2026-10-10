@@ -125,9 +125,10 @@ mode. Pixel sizes, viewport placement and frame playback are per sprite.
 Disposing any appearance or resource costs what it holds and the catalog
 entries it added, not the number of live appearances: through the SDK test
 host, disposing 200,000 atlas sprites takes about eight times as long as
-25,000, and 80,000 content meshes about five times as long as 10,000. A
-call that changed resources still checks the whole renderer catalog once at
-its end.
+25,000, and 80,000 content meshes about five times as long as 10,000. The
+end of a call checks and defines only the renderer resources it changed, so
+creating or disposing one content mesh per call stays the same cost however
+many are live.
 
 ### Ghost-plate presentation
 

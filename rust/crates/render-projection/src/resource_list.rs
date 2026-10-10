@@ -1,7 +1,11 @@
 //! A catalog list whose entries are found by id: adding or removing one
 //! entry costs that entry, not a pass over the list.
 
-use std::{collections::HashMap, ops::Deref, sync::Arc};
+use std::{
+    collections::{BTreeSet, HashMap},
+    ops::Deref,
+    sync::Arc,
+};
 
 use render_model::{
     AnimatedMeshAsset, RenderMaterialDescriptor, ShaderDescriptor, SpriteAtlasDescriptor,
@@ -52,12 +56,22 @@ impl CatalogEntry for Arc<AnimatedMeshAsset> {
 
 /// Catalog entries in a list, each id's position indexed. Removal moves the
 /// last entry into the gap, so the order is not insertion order; the
-/// projection reads entries by id. A list with duplicate ids (which
-/// projection refuses) indexes the last of them.
+/// projection reads entries by id. The list remembers which ids changed
+/// since the projection last took them, so it reconciles only those.
 #[derive(Debug, Clone)]
 pub struct ResourceList<T> {
     entries: Vec<T>,
     positions: HashMap<String, usize>,
+    changed: BTreeSet<String>,
+    /// Built or replaced as a whole: every id, and every id the projection
+    /// held before, may have changed.
+    whole: bool,
+}
+
+/// The ids of a list that changed since the projection last took them.
+pub(crate) enum ResourceChanges<'a> {
+    Ids(&'a BTreeSet<String>),
+    Whole,
 }
 
 impl<T> Default for ResourceList<T> {
@@ -65,15 +79,24 @@ impl<T> Default for ResourceList<T> {
         Self {
             entries: Vec::new(),
             positions: HashMap::new(),
+            changed: BTreeSet::new(),
+            whole: true,
         }
     }
 }
 
 impl<T: CatalogEntry> ResourceList<T> {
+    /// Adds an entry, or replaces the entry with the same id.
     pub fn push(&mut self, entry: T) {
-        self.positions
-            .insert(entry.catalog_id().to_owned(), self.entries.len());
-        self.entries.push(entry);
+        let id = entry.catalog_id().to_owned();
+        match self.positions.get(&id) {
+            Some(position) => self.entries[*position] = entry,
+            None => {
+                self.positions.insert(id.clone(), self.entries.len());
+                self.entries.push(entry);
+            }
+        }
+        self.changed.insert(id);
     }
 
     pub fn get(&self, id: &str) -> Option<&T> {
@@ -84,9 +107,9 @@ impl<T: CatalogEntry> ResourceList<T> {
 
     /// The entry with this id, to change in place. Its id must not change.
     pub fn get_mut(&mut self, id: &str) -> Option<&mut T> {
-        self.positions
-            .get(id)
-            .map(|position| &mut self.entries[*position])
+        let position = *self.positions.get(id)?;
+        self.changed.insert(id.to_owned());
+        Some(&mut self.entries[position])
     }
 
     pub fn contains(&self, id: &str) -> bool {
@@ -100,22 +123,44 @@ impl<T: CatalogEntry> ResourceList<T> {
             self.positions
                 .insert(moved.catalog_id().to_owned(), position);
         }
+        self.changed.insert(id.to_owned());
         Some(entry)
     }
 
-    /// Keeps the entries `keep` accepts: a pass over the list.
-    pub fn retain(&mut self, keep: impl FnMut(&T) -> bool) {
-        self.entries.retain(keep);
-        self.reindex();
+    pub(crate) fn changes(&self) -> ResourceChanges<'_> {
+        if self.whole {
+            ResourceChanges::Whole
+        } else {
+            ResourceChanges::Ids(&self.changed)
+        }
+    }
+
+    /// Every entry counts as changed, for a projection that holds none.
+    pub(crate) fn mark_whole(&mut self) {
+        self.whole = true;
+    }
+
+    /// The projection holds every change so far.
+    pub(crate) fn clear_changes(&mut self) {
+        self.changed.clear();
+        self.whole = false;
     }
 
     fn reindex(&mut self) {
-        self.positions = self
-            .entries
-            .iter()
-            .enumerate()
-            .map(|(position, entry)| (entry.catalog_id().to_owned(), position))
-            .collect();
+        self.positions.clear();
+        let mut kept = Vec::with_capacity(self.entries.len());
+        for entry in std::mem::take(&mut self.entries) {
+            // A later entry with the same id replaces an earlier one.
+            match self.positions.get(entry.catalog_id()) {
+                Some(position) => kept[*position] = entry,
+                None => {
+                    self.positions
+                        .insert(entry.catalog_id().to_owned(), kept.len());
+                    kept.push(entry);
+                }
+            }
+        }
+        self.entries = kept;
     }
 }
 
@@ -153,7 +198,7 @@ impl<T: CatalogEntry> From<Vec<T>> for ResourceList<T> {
     fn from(entries: Vec<T>) -> Self {
         let mut list = Self {
             entries,
-            positions: HashMap::new(),
+            ..Self::default()
         };
         list.reindex();
         list
@@ -211,7 +256,30 @@ mod tests {
         assert!(["a", "c", "e"]
             .iter()
             .all(|id| list.get(id).is_some_and(|entry| entry.id == *id)));
-        list.retain(|entry| entry.id != "a");
-        assert!(!list.contains("a") && list.contains("c") && list.contains("e"));
+    }
+
+    #[test]
+    fn a_pushed_id_replaces_its_entry_and_changes_are_remembered() {
+        let mut list: ResourceList<ShaderDescriptor> =
+            vec![shader("a"), shader("b"), shader("a")].into();
+        assert_eq!(list.len(), 2, "a later entry replaces an earlier one");
+        assert!(matches!(list.changes(), ResourceChanges::Whole));
+        list.clear_changes();
+        assert!(matches!(list.changes(), ResourceChanges::Ids(ids) if ids.is_empty()));
+        let mut replaced = shader("b");
+        replaced.path = "shaders/b.wgsl".to_owned();
+        list.push(replaced);
+        assert_eq!(list.len(), 2);
+        assert_eq!(list.get("b").unwrap().path, "shaders/b.wgsl");
+        list.remove("a");
+        list.get_mut("b");
+        list.get_mut("missing");
+        let ResourceChanges::Ids(ids) = list.changes() else {
+            panic!("only some ids changed");
+        };
+        assert_eq!(
+            ids.iter().map(String::as_str).collect::<Vec<_>>(),
+            ["a", "b"]
+        );
     }
 }
