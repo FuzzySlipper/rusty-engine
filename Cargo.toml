@@ -127,6 +127,12 @@ pollster = "0.4"
 [workspace.lints.rust]
 unsafe_code = "forbid"
 
+# Dev and test builds retain file/line information for backtraces at about
+# half the size of full debug info. A debugger session requests full
+# locals/types with CARGO_PROFILE_DEV_DEBUG=2.
+[profile.dev]
+debug = "line-tables-only"
+
 # Optimized runtime packs retain file/line information for native sampling.
 # Contributors can request full locals/types with CARGO_PROFILE_RELEASE_DEBUG=2.
 [profile.release]

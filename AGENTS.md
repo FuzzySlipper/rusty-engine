@@ -205,6 +205,11 @@ not evidence that physical picking works. Keep product action rules downstream.
   preserve or migrate it across pair updates. Copy a save that must survive
   into a committed fixture or your evidence location and load it from there
   ([development state](docs/csharp-sdk.md#development-state-is-disposable)).
+- Build output is disposable and the disk is shared. Remove a worktree you
+  created (`git worktree remove`, which takes its `target/`) once its commits
+  are pushed and its task is submitted, and start review fixes from a fresh
+  one. Keep extra `CARGO_TARGET_DIR`s (stable clippy, A/B builds) under that
+  worktree's own `target/`, never in the main checkout, so they go with it.
 
 ### Playtest warning deltas
 
