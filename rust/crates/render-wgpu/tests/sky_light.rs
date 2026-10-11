@@ -662,3 +662,39 @@ fn a_storm_overhead_darkens_the_sky_light_on_the_ground() {
         "under the storm {storm:?}, clear {clear:?}"
     );
 }
+
+#[test]
+fn the_backdrop_stays_in_the_sky_light_when_the_camera_turns_away_from_it() {
+    // Facing away from the range (+Z), toward a mirror wall 10 m ahead that
+    // faces back: the wall reflects the range behind the camera.
+    let render = |linked: bool| {
+        let mut harness = mirrored(true);
+        let mut glass = material("material/wall", [1.0; 4], None);
+        glass.roughness = 0.0;
+        glass.metalness = 1.0;
+        harness.apply(vec![
+            RenderDiff::DefineMaterial { material: glass },
+            static_mesh(
+                "mesh/wall",
+                box_mesh([-30.0, -5.0, 10.0], [30.0, 20.0, 11.0], |_| 0),
+                "material/wall",
+            ),
+            instance(2, None, "mesh/wall", transform([0.0; 3], 0.0, [1.0; 3])),
+        ]);
+        if linked {
+            harness.apply(backdrop_range());
+            // Facing the range first: it is in view and captured.
+            settle(&mut harness, &camera([0.0, 1.0, 0.0], 0.0, 0.0));
+        }
+        settle(&mut harness, &camera([0.0, 1.0, 0.0], 180.0, 0.0))
+    };
+    let open = render(false);
+    let behind = render(true);
+    // The wall's rows from the horizon to 10° above it hold the range.
+    let share = changed_in(&open, &behind, HEIGHT / 2 - 25..HEIGHT / 2 - 2);
+    assert!(
+        share > 0.8,
+        "the wall reflects the range behind the camera: {:.1}%",
+        share * 100.0
+    );
+}

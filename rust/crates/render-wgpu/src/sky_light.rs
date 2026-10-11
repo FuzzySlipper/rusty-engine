@@ -9,9 +9,10 @@
 //! blend that moves every tick costs a share of a build per frame. The
 //! compute pipelines are made on first use.
 //!
-//! While the cloud layer or a backdrop draws, the light is built instead from
-//! a capture of what the first primary view's background and backdrop draw
-//! around its eye (`frame.rs` `capture_sky`): six 128² faces, two a frame
+//! While the cloud layer draws or a backdrop shows anything, the light is
+//! built instead from a capture of what the first primary view's
+//! background and backdrop draw around its eye (`frame.rs` `capture_sky`),
+//! wherever the view looks: six 128² faces, two a frame
 //! once a first capture exists, never while a build is under way, then
 //! their mips. A capture begins again once the last one is built if the eye,
 //! the scene or (for drifting clouds and backdrop particles) the time moved.

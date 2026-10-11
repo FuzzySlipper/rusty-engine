@@ -1875,6 +1875,40 @@ impl Renderer {
         })
     }
 
+    /// Whether a perspective view by `camera_id` has a backdrop link and
+    /// something is shown in the backdrop, wherever the view looks (a
+    /// backdrop wholly behind it still stands around its eye).
+    fn backdrop_shown(&self, world: &CameraMatrices, camera_id: Option<&str>) -> bool {
+        let linked = camera_id
+            .is_some_and(|id| self.tables.backdrops.contains_key(&Some(id.to_owned())))
+            || self.tables.backdrops.contains_key(&None);
+        if !linked || world.projection.w_axis.w != 0.0 {
+            return false;
+        }
+        let parts = &self.tables.parts;
+        let part = parts.state.iter().enumerate().any(|(id, state)| {
+            parts.meta[id].is_some()
+                && state.shown
+                && ViewLayer::of(state.layer) == ViewLayer::Backdrop
+        });
+        let sprite = || {
+            self.tables.sprites.iter().any(|handle| {
+                self.tables.nodes.get(handle).is_some_and(|node| {
+                    matches!(node.kind, NodeKind::Sprite(_))
+                        && node.world_visible
+                        && ViewLayer::of(node.world_layer) == ViewLayer::Backdrop
+                })
+            })
+        };
+        let particle = || {
+            self.particles
+                .particles
+                .iter()
+                .any(|particle| particle.descriptor.backdrop)
+        };
+        part || sprite() || particle()
+    }
+
     /// A world view's backdrop (`RenderLayer::Backdrop`), when it has a
     /// link and shows something: the view's background by the world's
     /// camera, then the backdrop by its own (`backdrop_camera`), finished
@@ -1945,7 +1979,8 @@ impl Renderer {
 
     /// For the sky's light, after the frame's first primary world view
     /// (`camera`, drawn by `camera_id`'s link): while the light is on and
-    /// the cloud layer or that view's backdrop draws, the capture faces due
+    /// the cloud layer draws or that view has a backdrop showing anything
+    /// (`backdrop_shown`, in view or not), the capture faces due
     /// this frame (`SkyLight::capture_faces`), each a 90° view from its eye
     /// of its background and its backdrop without the world. After the
     /// view's own passes, so their timers keep the view's cost; the
@@ -1967,7 +2002,7 @@ impl Renderer {
             .sky_light
             .is_some_and(|sky_light| sky_light.intensity > 0.0);
         let clouds = drawn_clouds(self.tables.clouds, self.tables.cloud_regions.len()).is_some();
-        let wanted = on && (clouds || self.backdrop.is_some());
+        let wanted = on && (clouds || self.backdrop_shown(camera, camera_id));
         let moving = clouds
             || self
                 .particles

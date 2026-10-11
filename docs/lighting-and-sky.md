@@ -243,9 +243,10 @@ engine.CameraView.SetSkyLight(new(Intensity: 1));
   last light holds, about 0.2 ms (6 ms on llvmpipe) a frame. A still sky
   costs a cube sample and nine coefficients per shaded fragment.
   `engine.renderer` times the build as `sky-light`.
-- While the [cloud layer](#clouds) (flat or volumetric, with its regions) or
-  [the backdrop](#the-backdrop) draws, the light is built instead from what
-  the first primary view draws around its eye: its background (the panorama
+- While the [cloud layer](#clouds) (flat or volumetric, with its regions)
+  draws, or the first primary view has [a backdrop](#the-backdrop) linked
+  with anything shown in it (in view or behind it), the light is built
+  instead from what that view draws around its eye: its background (the panorama
   or colour, the sun and the clouds) and its backdrop, finished as drawn,
   captured into six 128² faces without the world. A mirror reflects the
   ranges on the horizon and the cover overhead, and a storm overhead
