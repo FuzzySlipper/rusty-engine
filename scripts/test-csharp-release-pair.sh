@@ -69,7 +69,19 @@ cat > "$consumer/PairConsumer.csproj" <<EOF
   <ItemGroup>
     <PackageReference Include="Rusty.Engine" Version="$version" />
     <RustyEngineProductInputIntent Include="pair.use" Value="digital" />
-    <RustyEngineProductInputMapping Include="pair.use.key" Intent="pair.use" Trigger="key:key-e:pressed" />
+    <RustyEngineProductInputMapping Include="pair.use.key" Intent="pair.use" Trigger="key:backspace:pressed" />
+    <RustyEngineProductInputMapping Include="pair.use.f1" Intent="pair.use" Trigger="key:f1:pressed" />
+    <RustyEngineProductInputMapping Include="pair.use.f2" Intent="pair.use" Trigger="key:f2:pressed" />
+    <RustyEngineProductInputMapping Include="pair.use.f3" Intent="pair.use" Trigger="key:f3:pressed" />
+    <RustyEngineProductInputMapping Include="pair.use.f4" Intent="pair.use" Trigger="key:f4:pressed" />
+    <RustyEngineProductInputMapping Include="pair.use.f5" Intent="pair.use" Trigger="key:f5:pressed" />
+    <RustyEngineProductInputMapping Include="pair.use.f6" Intent="pair.use" Trigger="key:f6:pressed" />
+    <RustyEngineProductInputMapping Include="pair.use.f7" Intent="pair.use" Trigger="key:f7:pressed" />
+    <RustyEngineProductInputMapping Include="pair.use.f8" Intent="pair.use" Trigger="key:f8:pressed" />
+    <RustyEngineProductInputMapping Include="pair.use.f9" Intent="pair.use" Trigger="key:f9:pressed" />
+    <RustyEngineProductInputMapping Include="pair.use.f10" Intent="pair.use" Trigger="key:f10:pressed" />
+    <RustyEngineProductInputMapping Include="pair.use.f11" Intent="pair.use" Trigger="key:f11:pressed" />
+    <RustyEngineProductInputMapping Include="pair.use.f12" Intent="pair.use" Trigger="key:f12:pressed" />
   </ItemGroup>
 </Project>
 EOF
@@ -94,18 +106,25 @@ public sealed class Product : IEngineProduct
         if (context.Input.CursorMode != InputCursorMode.Unlocked)
             throw new System.InvalidOperationException("Packaged cursor mode did not reach C# composition.");
         IInputService input = context.Engine.Input;
-        ProductInputMapping initialMapping = context.Input.PhysicalMappings.Span[0];
+        ProductInputMapping[] initialMappings = context.Input.PhysicalMappings.ToArray();
+        KeyboardControl[] keys = [KeyboardControl.Backspace, KeyboardControl.F1, KeyboardControl.F2, KeyboardControl.F3, KeyboardControl.F4, KeyboardControl.F5, KeyboardControl.F6, KeyboardControl.F7, KeyboardControl.F8, KeyboardControl.F9, KeyboardControl.F10, KeyboardControl.F11, KeyboardControl.F12];
+        if (initialMappings.Length != keys.Length)
+            throw new InvalidOperationException("Packaged keyboard mappings did not reach C# composition.");
+        for (int index = 0; index < keys.Length; index++)
+            if (initialMappings[index].Keyboard != keys[index])
+                throw new InvalidOperationException("Packaged Backspace/function key changed identity.");
         JsonPersistenceChecks.Run(context.Engine);
         SpatialResidencyChecks.Run(context.Engine);
         CharacterMeshChecks.Run(context.Engine);
         AddressableInventoryStacksExercise.Run();
         ItemCapacityCostExercise.Run();
-        ProductInputMapping replacement = initialMapping with { Keyboard = KeyboardControl.KeyF };
-        if (input.ReplacePhysicalMappings([replacement]) != InputMappingReplacementOutcome.Staged)
+        ProductInputMapping[] replacement = initialMappings.Select((mapping, index) =>
+            mapping with { Keyboard = keys[(index + 1) % keys.Length] }).ToArray();
+        if (input.ReplacePhysicalMappings(replacement) != InputMappingReplacementOutcome.Staged)
             throw new InvalidOperationException("Packaged input replacement did not stage.");
-        if (input.ReplacePhysicalMappings([replacement, replacement]) != InputMappingReplacementOutcome.InvalidMappings)
+        if (input.ReplacePhysicalMappings([replacement[0], replacement[0]]) != InputMappingReplacementOutcome.InvalidMappings)
             throw new InvalidOperationException("Duplicate mapping IDs did not return a recoverable outcome.");
-        if (initialMapping.Keyboard != KeyboardControl.KeyE)
+        if (initialMappings[0].Keyboard != KeyboardControl.Backspace)
             throw new InvalidOperationException("Runtime replacement mutated the initial composition snapshot.");
     }
     public void Start() { }

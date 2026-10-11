@@ -93,9 +93,13 @@ owning service.
 ### Runtime input remapping
 
 Keyboard mappings use `key-a`–`key-z`, `digit-0`–`digit-9`, `space`, `enter`,
-`escape`, `arrow-up`, `arrow-down`, `arrow-left`, `arrow-right`, and the
+`escape`, `backspace`, `f1` through `f12`, `arrow-up`, `arrow-down`,
+`arrow-left`, `arrow-right`, and the
 `shift-left/right`, `control-left/right`, `alt-left/right` pairs. In C#, use
-`KeyboardControl.ArrowUp` (and the other directions) or `KeyboardControl.Enter`.
+`KeyboardControl.ArrowUp` (and the other directions), `KeyboardControl.Enter`,
+`KeyboardControl.Backspace`, and `KeyboardControl.F1` through `KeyboardControl.F12`.
+Backspace and function-key browser shortcuts are consumed during gameplay; text
+entry and interface focus keep their normal Engine-owned input handling.
 The manifest name for Enter is `enter`, not `key-enter`; arrow names use
 `arrow-`, not `key-`. Arrow keys use the same Engine input path as other
 keys.

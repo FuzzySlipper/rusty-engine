@@ -5060,6 +5060,19 @@ fn keyboard_control(value: runtime_input_model::KeyboardControl) -> NativeKeyboa
         runtime_input_model::KeyboardControl::ArrowDown => NativeKeyboardControl::ArrowDown,
         runtime_input_model::KeyboardControl::ArrowLeft => NativeKeyboardControl::ArrowLeft,
         runtime_input_model::KeyboardControl::ArrowRight => NativeKeyboardControl::ArrowRight,
+        runtime_input_model::KeyboardControl::Backspace => NativeKeyboardControl::Backspace,
+        runtime_input_model::KeyboardControl::F1 => NativeKeyboardControl::F1,
+        runtime_input_model::KeyboardControl::F2 => NativeKeyboardControl::F2,
+        runtime_input_model::KeyboardControl::F3 => NativeKeyboardControl::F3,
+        runtime_input_model::KeyboardControl::F4 => NativeKeyboardControl::F4,
+        runtime_input_model::KeyboardControl::F5 => NativeKeyboardControl::F5,
+        runtime_input_model::KeyboardControl::F6 => NativeKeyboardControl::F6,
+        runtime_input_model::KeyboardControl::F7 => NativeKeyboardControl::F7,
+        runtime_input_model::KeyboardControl::F8 => NativeKeyboardControl::F8,
+        runtime_input_model::KeyboardControl::F9 => NativeKeyboardControl::F9,
+        runtime_input_model::KeyboardControl::F10 => NativeKeyboardControl::F10,
+        runtime_input_model::KeyboardControl::F11 => NativeKeyboardControl::F11,
+        runtime_input_model::KeyboardControl::F12 => NativeKeyboardControl::F12,
     }
 }
 
@@ -5268,6 +5281,66 @@ fn host_runtime_error(error: product_host::ProductHostError) -> ProductHostRunti
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn backspace_and_function_keys_cross_to_the_product_abi() {
+        for (code, native) in [
+            (
+                runtime_input_model::KeyboardControl::Backspace,
+                NativeKeyboardControl::Backspace,
+            ),
+            (
+                runtime_input_model::KeyboardControl::F1,
+                NativeKeyboardControl::F1,
+            ),
+            (
+                runtime_input_model::KeyboardControl::F2,
+                NativeKeyboardControl::F2,
+            ),
+            (
+                runtime_input_model::KeyboardControl::F3,
+                NativeKeyboardControl::F3,
+            ),
+            (
+                runtime_input_model::KeyboardControl::F4,
+                NativeKeyboardControl::F4,
+            ),
+            (
+                runtime_input_model::KeyboardControl::F5,
+                NativeKeyboardControl::F5,
+            ),
+            (
+                runtime_input_model::KeyboardControl::F6,
+                NativeKeyboardControl::F6,
+            ),
+            (
+                runtime_input_model::KeyboardControl::F7,
+                NativeKeyboardControl::F7,
+            ),
+            (
+                runtime_input_model::KeyboardControl::F8,
+                NativeKeyboardControl::F8,
+            ),
+            (
+                runtime_input_model::KeyboardControl::F9,
+                NativeKeyboardControl::F9,
+            ),
+            (
+                runtime_input_model::KeyboardControl::F10,
+                NativeKeyboardControl::F10,
+            ),
+            (
+                runtime_input_model::KeyboardControl::F11,
+                NativeKeyboardControl::F11,
+            ),
+            (
+                runtime_input_model::KeyboardControl::F12,
+                NativeKeyboardControl::F12,
+            ),
+        ] {
+            assert_eq!(keyboard_control(code), native);
+        }
+    }
 
     /// A publication's kind with its graphics or presentation frame, as JSON
     /// to inspect.

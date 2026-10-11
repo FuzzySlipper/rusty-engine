@@ -166,6 +166,32 @@ mod tests {
         assert_eq!(windows_key_code(KeyCode::Digit1), Some(0x31));
     }
 
+    #[test]
+    fn backspace_and_function_keys_reach_chromium() {
+        assert_eq!(windows_key_code(KeyCode::Backspace), Some(0x08));
+        for (index, code) in [
+            KeyCode::F1,
+            KeyCode::F2,
+            KeyCode::F3,
+            KeyCode::F4,
+            KeyCode::F5,
+            KeyCode::F6,
+            KeyCode::F7,
+            KeyCode::F8,
+            KeyCode::F9,
+            KeyCode::F10,
+            KeyCode::F11,
+            KeyCode::F12,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            assert_eq!(windows_key_code(code), Some(0x70 + index as i32));
+            assert_ne!(native_key_code(code), 0, "{code:?}");
+        }
+        assert_ne!(native_key_code(KeyCode::Backspace), 0);
+    }
+
     #[cfg(target_os = "linux")]
     #[test]
     fn linux_native_codes_are_xkb_keycodes() {

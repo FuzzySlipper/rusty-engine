@@ -163,6 +163,19 @@ pub enum NativeKeyboardControl {
     ArrowDown = 47,
     ArrowLeft = 48,
     ArrowRight = 49,
+    Backspace = 50,
+    F1 = 51,
+    F2 = 52,
+    F3 = 53,
+    F4 = 54,
+    F5 = 55,
+    F6 = 56,
+    F7 = 57,
+    F8 = 58,
+    F9 = 59,
+    F10 = 60,
+    F11 = 61,
+    F12 = 62,
 }
 
 #[repr(u32)]

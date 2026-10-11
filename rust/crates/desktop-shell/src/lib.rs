@@ -22,7 +22,7 @@
 
 #![forbid(unsafe_code)]
 
-#[cfg(feature = "web-overlay")]
+#[cfg(any(feature = "web-overlay", test))]
 mod keys;
 #[cfg(feature = "web-overlay")]
 mod overlay;

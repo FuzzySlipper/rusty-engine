@@ -29,7 +29,7 @@ export type ControllerButton = "button-0" | "button-1" | "button-2" | "button-3"
 
 export type JsonValue = number | string | boolean | Array<JsonValue> | { [key in string]?: JsonValue } | null;
 
-export type KeyboardControl = "key-a" | "key-b" | "key-c" | "key-d" | "key-e" | "key-f" | "key-g" | "key-h" | "key-i" | "key-j" | "key-k" | "key-l" | "key-m" | "key-n" | "key-o" | "key-p" | "key-q" | "key-r" | "key-s" | "key-t" | "key-u" | "key-v" | "key-w" | "key-x" | "key-y" | "key-z" | "digit-0" | "digit-1" | "digit-2" | "digit-3" | "digit-4" | "digit-5" | "digit-6" | "digit-7" | "digit-8" | "digit-9" | "space" | "enter" | "escape" | "shift-left" | "shift-right" | "control-left" | "control-right" | "alt-left" | "alt-right" | "arrow-up" | "arrow-down" | "arrow-left" | "arrow-right";
+export type KeyboardControl = "key-a" | "key-b" | "key-c" | "key-d" | "key-e" | "key-f" | "key-g" | "key-h" | "key-i" | "key-j" | "key-k" | "key-l" | "key-m" | "key-n" | "key-o" | "key-p" | "key-q" | "key-r" | "key-s" | "key-t" | "key-u" | "key-v" | "key-w" | "key-x" | "key-y" | "key-z" | "digit-0" | "digit-1" | "digit-2" | "digit-3" | "digit-4" | "digit-5" | "digit-6" | "digit-7" | "digit-8" | "digit-9" | "space" | "enter" | "escape" | "shift-left" | "shift-right" | "control-left" | "control-right" | "alt-left" | "alt-right" | "arrow-up" | "arrow-down" | "arrow-left" | "arrow-right" | "backspace" | "f1" | "f2" | "f3" | "f4" | "f5" | "f6" | "f7" | "f8" | "f9" | "f10" | "f11" | "f12";
 
 export type PointerButton = "primary" | "secondary" | "middle";
 

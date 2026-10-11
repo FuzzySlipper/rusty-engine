@@ -62,7 +62,7 @@ const PHYSICAL_MAPPING_USAGE: &str = "--physical-mapping <mapping-id>=<intent-id
   controller-axis:<axis-0..axis-3>[:context=<identity>]\n\
 keyboard controls: key-a..key-z, digit-0..digit-9, space, enter, escape, shift-left,\n\
   shift-right, control-left, control-right, alt-left, alt-right,
-  arrow-up, arrow-down, arrow-left, arrow-right";
+  arrow-up, arrow-down, arrow-left, arrow-right, backspace, f1 through f12";
 
 /// CoreCLR and NativeAOT turn a managed null dereference (SIGSEGV) into a
 /// `NullReferenceException` in a handler that runs on the thread's alternate
@@ -1440,6 +1440,19 @@ fn parse_keyboard_control(value: &str) -> Result<KeyboardControl, String> {
         "arrow-down" => KeyboardControl::ArrowDown,
         "arrow-left" => KeyboardControl::ArrowLeft,
         "arrow-right" => KeyboardControl::ArrowRight,
+        "backspace" => KeyboardControl::Backspace,
+        "f1" => KeyboardControl::F1,
+        "f2" => KeyboardControl::F2,
+        "f3" => KeyboardControl::F3,
+        "f4" => KeyboardControl::F4,
+        "f5" => KeyboardControl::F5,
+        "f6" => KeyboardControl::F6,
+        "f7" => KeyboardControl::F7,
+        "f8" => KeyboardControl::F8,
+        "f9" => KeyboardControl::F9,
+        "f10" => KeyboardControl::F10,
+        "f11" => KeyboardControl::F11,
+        "f12" => KeyboardControl::F12,
         _ => {
             return Err(format!(
                 "--physical-mapping keyboard control `{value}` is unsupported"
@@ -1747,13 +1760,26 @@ mod tests {
     }
 
     #[test]
-    fn parser_admits_arrow_mappings_and_matches_wire_names() {
+    fn parser_admits_keyboard_mappings_and_matches_wire_names() {
         for (name, expected) in [
             ("arrow-up", KeyboardControl::ArrowUp),
             ("arrow-down", KeyboardControl::ArrowDown),
             ("arrow-left", KeyboardControl::ArrowLeft),
             ("arrow-right", KeyboardControl::ArrowRight),
             ("enter", KeyboardControl::Enter),
+            ("backspace", KeyboardControl::Backspace),
+            ("f1", KeyboardControl::F1),
+            ("f2", KeyboardControl::F2),
+            ("f3", KeyboardControl::F3),
+            ("f4", KeyboardControl::F4),
+            ("f5", KeyboardControl::F5),
+            ("f6", KeyboardControl::F6),
+            ("f7", KeyboardControl::F7),
+            ("f8", KeyboardControl::F8),
+            ("f9", KeyboardControl::F9),
+            ("f10", KeyboardControl::F10),
+            ("f11", KeyboardControl::F11),
+            ("f12", KeyboardControl::F12),
         ] {
             let mapping =
                 parse_physical_mapping(&format!("navigate=menu.navigate:key:{name}:pressed"))

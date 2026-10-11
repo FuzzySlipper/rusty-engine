@@ -165,7 +165,7 @@ fn axis(value: NativeInputAxis) -> Option<InputAxis> {
 }
 
 fn keyboard(value: NativeKeyboardControl) -> Option<KeyboardControl> {
-    const VALUES: [KeyboardControl; 49] = [
+    const VALUES: [KeyboardControl; 62] = [
         KeyboardControl::KeyA,
         KeyboardControl::KeyB,
         KeyboardControl::KeyC,
@@ -215,6 +215,19 @@ fn keyboard(value: NativeKeyboardControl) -> Option<KeyboardControl> {
         KeyboardControl::ArrowDown,
         KeyboardControl::ArrowLeft,
         KeyboardControl::ArrowRight,
+        KeyboardControl::Backspace,
+        KeyboardControl::F1,
+        KeyboardControl::F2,
+        KeyboardControl::F3,
+        KeyboardControl::F4,
+        KeyboardControl::F5,
+        KeyboardControl::F6,
+        KeyboardControl::F7,
+        KeyboardControl::F8,
+        KeyboardControl::F9,
+        KeyboardControl::F10,
+        KeyboardControl::F11,
+        KeyboardControl::F12,
     ];
     let index = (value as u32).checked_sub(1)? as usize;
     VALUES.get(index).copied()
@@ -310,6 +323,32 @@ mod tests {
             keyboard(NativeKeyboardControl::Enter),
             Some(KeyboardControl::Enter)
         );
+    }
+
+    #[test]
+    fn backspace_and_function_keys_decode_without_changing_existing_abi_values() {
+        assert_eq!(NativeKeyboardControl::ArrowRight as u32, 49);
+        for (index, (native, expected)) in [
+            (NativeKeyboardControl::Backspace, KeyboardControl::Backspace),
+            (NativeKeyboardControl::F1, KeyboardControl::F1),
+            (NativeKeyboardControl::F2, KeyboardControl::F2),
+            (NativeKeyboardControl::F3, KeyboardControl::F3),
+            (NativeKeyboardControl::F4, KeyboardControl::F4),
+            (NativeKeyboardControl::F5, KeyboardControl::F5),
+            (NativeKeyboardControl::F6, KeyboardControl::F6),
+            (NativeKeyboardControl::F7, KeyboardControl::F7),
+            (NativeKeyboardControl::F8, KeyboardControl::F8),
+            (NativeKeyboardControl::F9, KeyboardControl::F9),
+            (NativeKeyboardControl::F10, KeyboardControl::F10),
+            (NativeKeyboardControl::F11, KeyboardControl::F11),
+            (NativeKeyboardControl::F12, KeyboardControl::F12),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            assert_eq!(native as u32, 50 + index as u32);
+            assert_eq!(keyboard(native), Some(expected));
+        }
     }
 
     #[test]

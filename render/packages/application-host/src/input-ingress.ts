@@ -277,7 +277,11 @@ export function createRustyApplicationInputIngress(
   const onKeyDown = (event: KeyboardEvent): void => {
     if (!admit(event, true)) return;
     const code = normalizeRustyApplicationKeyboardControl(event.code);
-    if (code === null || heldKeys.has(code)) return;
+    if (code === null) return;
+    // Gameplay owns these keys, including repeats: do not reload, open browser
+    // tools/help, or navigate back. UI/text entry returns before this point.
+    if (code === 'backspace' || code.startsWith('f')) event.preventDefault();
+    if (heldKeys.has(code)) return;
     heldKeys.add(code);
     enqueueFact(Object.freeze({ kind: 'key', code, edge: 'pressed' }));
   };
@@ -814,4 +818,17 @@ const KEYBOARD_CODE_MAP: ReadonlyMap<string, KeyboardControl> = new Map([
   ['AltLeft', 'alt-left'], ['AltRight', 'alt-right'],
   ['ArrowUp', 'arrow-up'], ['ArrowDown', 'arrow-down'],
   ['ArrowLeft', 'arrow-left'], ['ArrowRight', 'arrow-right'],
+  ['Backspace', 'backspace'],
+  ['F1', 'f1'],
+  ['F2', 'f2'],
+  ['F3', 'f3'],
+  ['F4', 'f4'],
+  ['F5', 'f5'],
+  ['F6', 'f6'],
+  ['F7', 'f7'],
+  ['F8', 'f8'],
+  ['F9', 'f9'],
+  ['F10', 'f10'],
+  ['F11', 'f11'],
+  ['F12', 'f12'],
 ]);

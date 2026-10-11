@@ -23,6 +23,10 @@ void test('input ingress normalizes exactly the Engine keyboard catalog', () => 
   assert.equal(normalizeRustyApplicationKeyboardControl('ArrowDown'), 'arrow-down');
   assert.equal(normalizeRustyApplicationKeyboardControl('ArrowLeft'), 'arrow-left');
   assert.equal(normalizeRustyApplicationKeyboardControl('ArrowRight'), 'arrow-right');
+  for (const code of ['Backspace', ...Array.from({ length: 12 }, (_, index) => `F${index + 1}`)]) {
+    assert.equal(normalizeRustyApplicationKeyboardControl(code), code.toLowerCase());
+  }
+  assert.equal(normalizeRustyApplicationKeyboardControl('F13'), null);
   assert.equal(normalizeRustyApplicationKeyboardControl('Tab'), null);
   assert.equal(normalizeRustyApplicationKeyboardControl('KeyAA'), null);
 });

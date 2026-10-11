@@ -1329,3 +1329,152 @@ fn a_snapshot_without_a_step_consumes_edges_once_and_repeats_held_state() {
         RuntimeInputError::LifecycleValidation
     );
 }
+
+#[test]
+fn backspace_and_function_keys_deliver_edges_rebind_and_clear() {
+    for code in [
+        KeyboardControl::Backspace,
+        KeyboardControl::F1,
+        KeyboardControl::F2,
+        KeyboardControl::F3,
+        KeyboardControl::F4,
+        KeyboardControl::F5,
+        KeyboardControl::F6,
+        KeyboardControl::F7,
+        KeyboardControl::F8,
+        KeyboardControl::F9,
+        KeyboardControl::F10,
+        KeyboardControl::F11,
+        KeyboardControl::F12,
+    ] {
+        let (mut lifecycle, mut binding) = lifecycle_and_binding();
+        let mappings = |mapped_code| {
+            CompiledInputMappings::standard(
+                vec![DirectInputIntentDescriptor::new("use", IntentValueKind::Digital).unwrap()],
+                [InputEdge::Pressed, InputEdge::Released, InputEdge::Held]
+                    .into_iter()
+                    .map(|edge| {
+                        RuntimeInputMapping::new(
+                            format!("use-{edge:?}").to_ascii_lowercase(),
+                            "use",
+                            RuntimeInputTrigger::Key {
+                                code: mapped_code,
+                                edge,
+                                chord: Vec::new(),
+                                context: Some(context()),
+                            },
+                        )
+                        .unwrap()
+                    }),
+            )
+            .unwrap()
+        };
+        let mut lane = RuntimeInputLane::new(mappings(code), binding, context());
+        let mut sequence = 0;
+        {
+            fn send(
+                lane: &mut RuntimeInputLane,
+                sequence: &mut u64,
+                code: KeyboardControl,
+                edge: PhysicalEdge,
+            ) {
+                lane.ingest(physical(
+                    lane.binding(),
+                    *sequence,
+                    RuntimeInputFact::Key { code, edge },
+                ))
+                .unwrap();
+                *sequence += 1;
+            }
+            for (edge, phase) in [
+                (PhysicalEdge::Pressed, IntentPhase::Pressed),
+                (PhysicalEdge::Released, IntentPhase::Released),
+            ] {
+                send(&mut lane, &mut sequence, code, edge);
+                let (frame, intents) = snapshot(&mut lane, &mut lifecycle).unwrap();
+                let button = frame
+                    .keyboard()
+                    .iter()
+                    .find(|button| button.control() == code)
+                    .unwrap();
+                assert_eq!(button.pressed(), edge == PhysicalEdge::Pressed);
+                assert_eq!(button.released(), edge == PhysicalEdge::Released);
+                assert_eq!(button.held(), edge == PhysicalEdge::Pressed);
+                assert!(
+                    intents
+                        .iter()
+                        .any(|intent| intent.intent() == "use" && intent.phase() == phase),
+                    "{code:?}"
+                );
+            }
+            // Replace while held; the old key remains observable but no longer maps.
+            send(&mut lane, &mut sequence, code, PhysicalEdge::Pressed);
+            snapshot(&mut lane, &mut lifecycle).unwrap();
+            lane.replace_physical_mappings(mappings(KeyboardControl::KeyP))
+                .unwrap();
+            lifecycle
+                .change_control(RuntimeControlOperation::Replace)
+                .unwrap();
+            binding = RuntimeInputBinding::new(
+                lifecycle.instance_id(),
+                lifecycle.generation(),
+                lifecycle.control_revision(),
+            );
+            lane.rebind(binding, context(), InputClearReason::ControlRevisionChange)
+                .unwrap();
+            sequence = 1;
+            let (frame, intents) = snapshot(&mut lane, &mut lifecycle).unwrap();
+            assert!(frame.keyboard().is_empty());
+            assert!(intents.is_empty());
+            send(&mut lane, &mut sequence, code, PhysicalEdge::Pressed);
+            let (frame, intents) = snapshot(&mut lane, &mut lifecycle).unwrap();
+            assert!(frame
+                .keyboard()
+                .iter()
+                .any(|button| button.control() == code && button.pressed()));
+            assert!(intents.is_empty());
+            send(
+                &mut lane,
+                &mut sequence,
+                KeyboardControl::KeyP,
+                PhysicalEdge::Pressed,
+            );
+            let (_, intents) = snapshot(&mut lane, &mut lifecycle).unwrap();
+            assert!(intents
+                .iter()
+                .any(|intent| intent.phase() == IntentPhase::Pressed));
+        }
+        for reason in [
+            InputClearReason::FocusLoss,
+            InputClearReason::InteractionModeLoss,
+        ] {
+            lane.replace_physical_mappings(mappings(code)).unwrap();
+            lane.ingest(physical(
+                binding,
+                sequence,
+                RuntimeInputFact::Key {
+                    code,
+                    edge: PhysicalEdge::Pressed,
+                },
+            ))
+            .unwrap();
+            sequence += 1;
+            snapshot(&mut lane, &mut lifecycle).unwrap();
+            lane.ingest(RuntimeInputEvent::Physical(RuntimeInputIngress::new(
+                binding,
+                sequence,
+                if reason == InputClearReason::InteractionModeLoss {
+                    InputContext::new("interface.menu").unwrap()
+                } else {
+                    context()
+                },
+                RuntimeInputFact::Clear { reason },
+            )))
+            .unwrap();
+            sequence += 1;
+            let (frame, intents) = snapshot(&mut lane, &mut lifecycle).unwrap();
+            assert!(frame.keyboard().is_empty());
+            assert!(intents.is_empty());
+        }
+    }
+}
