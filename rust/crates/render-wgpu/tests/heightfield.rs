@@ -100,28 +100,32 @@ impl Terrain {
             .unwrap();
         ops.extend(self.projector.focus(1, self.tiles.focus()));
         for key in changes.evicted {
-            ops.extend(self.projector.remove_tile(1, key));
+            let removals = self.projector.remove_tile(1, key);
+            ops.extend(removals.early.into_iter().chain(removals.late));
         }
         for key in changes.meshed {
             let origin = self.tiles.layout().origin(key);
-            ops.extend(
-                self.projector
-                    .mesh(
-                        1,
-                        key,
-                        origin,
-                        self.tiles.mesh_of(key).map(AsRef::as_ref),
-                        &self.materials,
-                        self.tiles.is_drawn(key),
-                    )
-                    .unwrap(),
-            );
+            match self.tiles.mesh_of(key) {
+                Some(mesh) => ops.extend(
+                    self.projector
+                        .mesh(
+                            1,
+                            key,
+                            origin,
+                            mesh,
+                            &self.materials,
+                            self.tiles.is_drawn(key),
+                        )
+                        .unwrap(),
+                ),
+                None => {
+                    let removals = self.projector.remove_tile(1, key);
+                    ops.extend(removals.early.into_iter().chain(removals.late));
+                }
+            }
         }
-        for key in changes.shown {
-            ops.extend(self.projector.show(1, key, true));
-        }
-        for key in changes.hidden {
-            ops.extend(self.projector.show(1, key, false));
+        for key in changes.shown.into_iter().chain(changes.hidden) {
+            ops.extend(self.projector.show(1, key, self.tiles.is_drawn(key)));
         }
         ops
     }

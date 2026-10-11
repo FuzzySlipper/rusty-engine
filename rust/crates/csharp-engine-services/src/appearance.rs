@@ -2674,6 +2674,12 @@ impl RuntimeAppearanceBridge {
                     "a heightfield's material must be live",
                 )
             })?;
+        if held {
+            // The heightfield's tiles name the material, defined with the
+            // catalog's pending changes, which publish with this call even
+            // when no snapshot does.
+            staged.resource_releases_pending = true;
+        }
         let holds = &mut staged.state.heightfield_materials;
         if held {
             *holds.entry(material).or_default() += 1;

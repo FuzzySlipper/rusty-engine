@@ -42,6 +42,7 @@ to force a rerun.
 | `Voxel` | Read and mutate Engine-owned voxel state: edits, residency, densities and brush edits, implicit field stamps, collision and surface modes per material ([smooth voxel surfaces](smooth-voxel-surfaces.md)). |
 | `VoxelContent` | Admit and inspect reusable voxel content resources, including bounded MagicaVoxel objects and retained object presentations. |
 | `VoxelScenePresentation` | Project Engine voxel scenes into retained renderer resources, including GreedyCubes face-directed material selection, distance level of detail for reconstructed chunks, and scatter: Engine-placed instanced grass and clutter on the ground around the camera ([smooth-voxel-surfaces.md](smooth-voxel-surfaces.md#scatter)). |
+| `Heightfield` | Draw a product-sampled height field as clipmap rings of tiles about a camera or a point, in the scene or the backdrop: the product samples heights, linear colours or terrain layer weights and material indices when asked (`HeightfieldStreamer` samples on worker threads); the Engine meshes, draws, geomorphs and picks the ground ([heightfield terrain](heightfield-terrain.md)). |
 | `Content` | Read product content admitted by the host, open content bundles and [portable assets](portable-assets.md), and admit product-owned content snapshots. |
 | `AuthoredContent` | Admit and resolve authored catalogs, scenes, prefabs, and related resources. |
 | `Graphics` | Create and update renderer-owned materials, meshes, atlas sprites, sprite batches, synchronized sprite playback, lights, and retained appearance state. |
@@ -199,6 +200,7 @@ native services or mandatory framework layers:
 | [`Rusty.Engine.StateMachine`](../csharp/Rusty.Engine/StateMachine) | Product-owned managed state-machine definitions and instances. |
 | [`Rusty.Engine.Input`](../csharp/Rusty.Engine/Input) | `PhysicalInputState`, analog deadzones and the `FpsInput` baseline ([FPS input](controller-interaction.md#fps-input-baseline)). |
 | [`Rusty.Engine.Implicit`](../csharp/Rusty.Engine/Implicit) | Managed room, wall and architectural recipes over `ImplicitSurfaces`. |
+| [`Rusty.Engine.Heightfields`](../csharp/Rusty.Engine/Heightfields) | `HeightfieldStreamer`: samples a heightfield's requested tiles with a product sampler on the thread pool and commits them from the product's update ([heightfield terrain](heightfield-terrain.md#sampling)). |
 
 Using one of these namespaces is optional. A product may organize its own
 ordinary C# architecture, and a `using` declaration is enough to ignore a

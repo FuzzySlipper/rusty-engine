@@ -2,8 +2,13 @@
 //! heightfield, placed in its layer and focused for the tiles' geomorph
 //! (`RenderDiff::SetMorphFocus`), and beneath it one static mesh instance
 //! per meshed tile, shown while the tile is drawn.
+//!
+//! Removals come back as [`HeightfieldRemovals`]: a node or mesh made before
+//! this call is removed `early`, ahead of the call's Graphics work (a
+//! material a heightfield held may be released in the same call), and one
+//! made during it `late`, after the operations that made it.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use render_model::{
     Geometry, MeshAttribute, MeshAttributeKind, MeshAttributeName, MeshBoundsDescriptor,
@@ -45,6 +50,8 @@ struct Projected {
 pub struct HeightfieldProjector {
     registry: StableHandleRegistry<NodeKey>,
     heightfields: BTreeMap<u64, Projected>,
+    /// Nodes made or meshes defined since [`Self::begin_call`].
+    fresh: BTreeSet<NodeKey>,
 }
 
 impl Default for HeightfieldProjector {
@@ -52,7 +59,30 @@ impl Default for HeightfieldProjector {
         Self {
             registry: StableHandleRegistry::new(RenderHandleNamespace::HEIGHTFIELD),
             heightfields: BTreeMap::new(),
+            fresh: BTreeSet::new(),
         }
+    }
+}
+
+/// Removal operations, by when they apply (see the module notes).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct HeightfieldRemovals {
+    pub early: Vec<RenderDiff>,
+    pub late: Vec<RenderDiff>,
+}
+
+impl HeightfieldRemovals {
+    fn push(&mut self, fresh: bool, operations: impl IntoIterator<Item = RenderDiff>) {
+        if fresh {
+            self.late.extend(operations);
+        } else {
+            self.early.extend(operations);
+        }
+    }
+
+    pub fn extend(&mut self, other: HeightfieldRemovals) {
+        self.early.extend(other.early);
+        self.late.extend(other.late);
     }
 }
 
@@ -65,6 +95,11 @@ pub fn heightfield_tile_asset(heightfield: u64, key: TileKey) -> String {
 }
 
 impl HeightfieldProjector {
+    /// A product call begins: what it makes is fresh until the next.
+    pub fn begin_call(&mut self) {
+        self.fresh.clear();
+    }
+
     /// Create the heightfield's node, or move it.
     pub fn place(
         &mut self,
@@ -96,6 +131,7 @@ impl HeightfieldProjector {
             }
             None => {
                 let handle = self.registry.allocate(NodeKey::Root(heightfield))?;
+                self.fresh.insert(NodeKey::Root(heightfield));
                 self.heightfields.insert(
                     heightfield,
                     Projected {
@@ -133,22 +169,20 @@ impl HeightfieldProjector {
     }
 
     /// Define (or redefine) a tile's mesh, with its node where it stands,
-    /// shown or hidden; without a mesh, remove the tile.
+    /// shown or hidden.
     pub fn mesh(
         &mut self,
         heightfield: u64,
         key: TileKey,
         origin: [f64; 2],
-        mesh: Option<&TileMesh>,
+        mesh: &TileMesh,
         materials: &BTreeMap<u32, String>,
         shown: bool,
     ) -> Result<Vec<RenderDiff>, HandleAllocationError> {
-        let Some(mesh) = mesh else {
-            return Ok(self.remove_tile(heightfield, key));
-        };
         let Some(projected) = self.heightfields.get_mut(&heightfield) else {
             return Ok(Vec::new());
         };
+        self.fresh.insert(NodeKey::Tile(heightfield, key));
         let asset = heightfield_tile_asset(heightfield, key);
         let mut operations = vec![RenderDiff::DefineStaticMesh {
             asset: tile_asset(&asset, origin, mesh, materials),
@@ -206,38 +240,45 @@ impl HeightfieldProjector {
     }
 
     /// Remove a tile's node and mesh.
-    pub fn remove_tile(&mut self, heightfield: u64, key: TileKey) -> Vec<RenderDiff> {
+    pub fn remove_tile(&mut self, heightfield: u64, key: TileKey) -> HeightfieldRemovals {
+        let mut removals = HeightfieldRemovals::default();
         let removed = self
             .heightfields
             .get_mut(&heightfield)
             .and_then(|projected| projected.tiles.remove(&key));
-        let handle = self.registry.remove(&NodeKey::Tile(heightfield, key));
-        match (removed, handle) {
-            (Some(_), Some(handle)) => vec![
-                RenderDiff::Destroy { handle },
-                RenderDiff::ReleaseStaticMesh {
-                    asset: heightfield_tile_asset(heightfield, key),
-                },
-            ],
-            _ => Vec::new(),
+        let node = NodeKey::Tile(heightfield, key);
+        if let (Some(_), Some(handle)) = (removed, self.registry.remove(&node)) {
+            let fresh = self.fresh.remove(&node);
+            removals.push(
+                fresh,
+                [
+                    RenderDiff::Destroy { handle },
+                    RenderDiff::ReleaseStaticMesh {
+                        asset: heightfield_tile_asset(heightfield, key),
+                    },
+                ],
+            );
         }
+        removals
     }
 
     /// Remove a heightfield: its tiles and its node.
-    pub fn remove(&mut self, heightfield: u64) -> Vec<RenderDiff> {
+    pub fn remove(&mut self, heightfield: u64) -> HeightfieldRemovals {
+        let mut removals = HeightfieldRemovals::default();
         let Some(projected) = self.heightfields.get(&heightfield) else {
-            return Vec::new();
+            return removals;
         };
         let keys: Vec<TileKey> = projected.tiles.keys().copied().collect();
-        let mut operations: Vec<RenderDiff> = keys
-            .into_iter()
-            .flat_map(|key| self.remove_tile(heightfield, key))
-            .collect();
-        self.heightfields.remove(&heightfield);
-        if let Some(handle) = self.registry.remove(&NodeKey::Root(heightfield)) {
-            operations.push(RenderDiff::Destroy { handle });
+        for key in keys {
+            removals.extend(self.remove_tile(heightfield, key));
         }
-        operations
+        self.heightfields.remove(&heightfield);
+        let node = NodeKey::Root(heightfield);
+        if let Some(handle) = self.registry.remove(&node) {
+            let fresh = self.fresh.remove(&node);
+            removals.push(fresh, [RenderDiff::Destroy { handle }]);
+        }
+        removals
     }
 }
 

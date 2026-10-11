@@ -212,11 +212,18 @@ fn read(api: &NativeEngineApi, heightfield: NativeHeightfieldHandle) -> NativeHe
     readout
 }
 
+/// The call's renderer work in order: Graphics' frames, then the services'.
 fn ops(services: &mut EngineServiceSet) -> Vec<RenderDiff> {
     let mut call = services.finish_call().expect("call finishes");
-    call.take_output()
-        .frames
+    let output = call.take_output();
+    output
+        .appearance
         .into_iter()
+        .filter_map(|output| match output {
+            crate::composition::CsharpAppearanceCallOutput::Frame(frame) => Some(frame),
+            crate::composition::CsharpAppearanceCallOutput::Presentation(_) => None,
+        })
+        .chain(output.frames)
         .flat_map(|frame| frame.ops)
         .collect()
 }
@@ -253,6 +260,16 @@ fn a_heightfield_asks_for_its_tiles_meshes_them_as_the_call_ends_and_draws_its_r
         assert!(commit(&api, heightfield, request));
     }
     let created = ops(&mut services);
+    // The material the tiles name is defined first, with no snapshot published.
+    let material_defined = created
+        .iter()
+        .position(|op| matches!(op, RenderDiff::DefineMaterial { .. }))
+        .expect("the heightfield's material is defined");
+    let first_tile = created
+        .iter()
+        .position(|op| matches!(op, RenderDiff::DefineStaticMesh { .. }))
+        .unwrap();
+    assert!(material_defined < first_tile);
     let defined = created
         .iter()
         .filter(|op| {

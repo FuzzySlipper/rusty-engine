@@ -48,6 +48,8 @@ The root [README](../README.md) is the repository landing page and
 - [Smooth voxel surfaces and densities](smooth-voxel-surfaces.md): surface
   modes and characters per material, densities and brush edits, and collision
   that follows the drawn surface.
+- [Heightfield terrain](heightfield-terrain.md): product-sampled ground in
+  geomorphing clipmap rings about a focus, drawn and picked by the Engine.
 - [Lighting and skies](lighting-and-sky.md): retained torch lighting, voxel
   irradiance queries, persistence and product-clock panorama blending.
 - [Portable assets](portable-assets.md): Engine-owned sprite/model semantics

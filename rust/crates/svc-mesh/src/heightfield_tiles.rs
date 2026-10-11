@@ -31,6 +31,8 @@ struct Tile {
 }
 
 /// What changed for the renderer since the last [`HeightfieldTiles::take_changes`].
+/// A tile shown and hidden again within the span is in both lists: draw each
+/// as [`HeightfieldTiles::is_drawn`] says.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct HeightfieldChanges {
     /// Tiles meshed anew or again (a meshless result removes the mesh).

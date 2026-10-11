@@ -95,6 +95,10 @@ struct HeightfieldState {
 pub(crate) struct RuntimeHeightfieldCall {
     state: HeightfieldState,
     pub(crate) frames: Vec<RenderFrameDiff>,
+    /// Removals of nodes and meshes made before this call, applied ahead of
+    /// the call's Graphics work: a material a heightfield held may be
+    /// released in the same call.
+    pub(crate) early: Vec<render_model::RenderDiff>,
 }
 
 pub(crate) struct RuntimeHeightfieldBridge {
@@ -129,9 +133,12 @@ impl RuntimeHeightfieldBridge {
     }
 
     pub(crate) fn begin_call(&mut self) {
+        let mut state = std::mem::take(&mut self.state);
+        state.projector.begin_call();
         self.staged = Some(RuntimeHeightfieldCall {
-            state: std::mem::take(&mut self.state),
+            state,
             frames: Vec::new(),
+            early: Vec::new(),
         });
     }
 
@@ -297,8 +304,9 @@ impl RuntimeHeightfieldBridge {
         let Some(retained) = staged.state.heightfields.remove(&handle.value) else {
             return Ok(());
         };
-        let operations = staged.state.projector.remove(handle.value);
-        push_frame(&mut staged.frames, operations)?;
+        let removals = staged.state.projector.remove(handle.value);
+        staged.early.extend(removals.early);
+        push_frame(&mut staged.frames, removals.late)?;
         let appearance = self.appearance_mut()?;
         for (material, _) in retained.materials.values() {
             appearance.hold_for_heightfield(*material, false)?;
@@ -333,6 +341,7 @@ impl RuntimeHeightfieldBridge {
             .map(|waiting| {
                 let origin = layout.origin(waiting.key);
                 NativeHeightfieldTileRequest {
+                    tile_cells: layout.tile_cells,
                     ring: u32::from(waiting.key.ring),
                     x: waiting.key.x,
                     z: waiting.key.z,
@@ -511,6 +520,7 @@ impl RuntimeHeightfieldBridge {
     ) -> Result<(), CsharpEngineServicesError> {
         let state = &mut call.state;
         let mut operations = Vec::new();
+        let early = &mut call.early;
         for (handle, retained) in &mut state.heightfields {
             let placement = retained.placement(&self.spatial);
             if let Focus::Camera(camera_handle) = retained.focus {
@@ -528,30 +538,36 @@ impl RuntimeHeightfieldBridge {
                     .map_err(failed)?,
             );
             operations.extend(projector.focus(*handle, retained.tiles.focus()));
+            let mut removals = render_projection::HeightfieldRemovals::default();
             for key in changes.evicted {
-                operations.extend(projector.remove_tile(*handle, key));
+                removals.extend(projector.remove_tile(*handle, key));
             }
             let materials = retained.materials();
             for key in changes.meshed {
                 let origin = retained.tiles.layout().origin(key);
-                operations.extend(
-                    projector
-                        .mesh(
-                            *handle,
-                            key,
-                            origin,
-                            retained.tiles.mesh_of(key).map(AsRef::as_ref),
-                            &materials,
-                            retained.tiles.is_drawn(key),
-                        )
-                        .map_err(failed)?,
-                );
+                match retained.tiles.mesh_of(key) {
+                    Some(mesh) => operations.extend(
+                        projector
+                            .mesh(
+                                *handle,
+                                key,
+                                origin,
+                                mesh,
+                                &materials,
+                                retained.tiles.is_drawn(key),
+                            )
+                            .map_err(failed)?,
+                    ),
+                    // Samples that left nothing to draw (all holes).
+                    None => removals.extend(projector.remove_tile(*handle, key)),
+                }
             }
-            for key in changes.shown {
-                operations.extend(projector.show(*handle, key, true));
-            }
-            for key in changes.hidden {
-                operations.extend(projector.show(*handle, key, false));
+            early.extend(removals.early);
+            operations.extend(removals.late);
+            // A tile can be shown and hidden again within one span: each
+            // takes the visibility it ends with.
+            for key in changes.shown.into_iter().chain(changes.hidden) {
+                operations.extend(projector.show(*handle, key, retained.tiles.is_drawn(key)));
             }
         }
         push_frame(&mut call.frames, operations)

@@ -1038,6 +1038,17 @@ impl EngineServiceSet {
                 }
             })
             .collect::<Vec<_>>();
+        // Heightfield nodes made before this call go ahead of its Graphics
+        // work, which may release a material they drew with.
+        let early = std::mem::take(&mut call.heightfield.early);
+        let appearance = match render_model::RenderFrameDiff::try_from_ops(early) {
+            Ok(frame) if !frame.ops.is_empty() => {
+                std::iter::once(CsharpAppearanceCallOutput::Frame(frame))
+                    .chain(appearance)
+                    .collect()
+            }
+            _ => appearance,
+        };
         let mut frames = Vec::new();
         frames.extend(sky_frame);
         frames.append(&mut call.voxel_content.frames);

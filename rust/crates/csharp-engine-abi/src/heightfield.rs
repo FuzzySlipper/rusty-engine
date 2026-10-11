@@ -89,6 +89,7 @@ pub struct NativeHeightfieldRequestsRequest {
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct NativeHeightfieldTileRequest {
+    pub tile_cells: u32,
     pub ring: u32,
     pub x: i64,
     pub z: i64,
