@@ -141,6 +141,28 @@ fn cloud_light(position: vec3<f32>, toward: vec3<f32>) -> f32 {
     return mix(1.0, CLOUD_SHADE * (1.0 - 0.6 * coverage.y), cover);
 }
 
+// The sky's sun's light (`Frame.sun`) reaching cloud at `position`, both
+// cloud paths' sunlight. Without a twilight (`Frame.cloud_shape.z`, radians)
+// it fades out as the sun reaches the horizon. With one the cloud stays lit
+// in full while the sun is up, and below the horizon until it sinks that far
+// under a cloud at the layer's altitude: higher cloud sees it longer, as
+// over the curve of the ground (a cloud at altitude h sees a sun d down
+// while d < √(2h / R)), so its light lasts the twilight times √(h / the
+// layer's altitude). It reddens as its light crosses more air, then fades.
+const TWILIGHT_EXTINCTION: vec3<f32> = vec3<f32>(0.3, 1.5, 3.6);
+const TWILIGHT_FADE: f32 = 0.5;
+fn cloud_sunlight(position: vec3<f32>) -> vec3<f32> {
+    let sun = frame.sun_color.rgb * min(frame.sun_color.w, 1.5) * frame.sun.w;
+    let twilight = frame.cloud_shape.z;
+    if twilight <= 0.0 {
+        return sun * smoothstep(-0.05, 0.15, frame.sun.y);
+    }
+    let below = -asin(clamp(frame.sun.y, -1.0, 1.0));
+    let reach = twilight * sqrt(max(position.y, 1.0) / max(frame.clouds.y, 1.0));
+    let depth = clamp(below / reach, 0.0, 1.0);
+    return sun * exp(-TWILIGHT_EXTINCTION * depth) * (1.0 - smoothstep(TWILIGHT_FADE, 1.0, depth));
+}
+
 // Smooth value noise in 3D, in [0, 1]: the volumetric clouds' billows.
 fn cloud_noise_3d(p: vec3<f32>) -> f32 {
     let cell = vec3<i32>(floor(p));

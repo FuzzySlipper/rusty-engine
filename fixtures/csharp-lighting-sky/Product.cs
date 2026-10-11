@@ -43,6 +43,9 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     private const float NoonElevation = 55, DuskElevation = 6, SunAzimuth = 210, NoonSunIntensity = 2.5f, DuskSunIntensity = .5f;
     // Height fog over the room, hazy toward the sun, with its disc and halo.
     private static readonly AtmosphereRequest Air = new(0,6,new Color(1,.7f,.45f,1),8,1.5f,.35f);
+    // A twilight (lighting.twilight): the sky's sun's colour, the clouds' twilight depth (degrees) and bloom's threshold and intensity for the disc's radiance.
+    private static readonly Color TwilightSunColor = new(1,.6f,.35f,1);
+    private const float TwilightDegrees = 8, TwilightBloomThreshold = 1, TwilightBloomIntensity = .6f;
     // The cloud layer: its drift over the ground (m/s), altitude and cloud size (m), and an untinted light.
     private static readonly Vector2 CloudDrift = new(8, 3);
     private const float CloudAltitude = 1200, CloudScale = 500;
@@ -688,6 +691,18 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     public string FogRemove(long id) { engine.CameraView.RemoveFogVolume(new((uint)id)); return Inspect(); }
     [DebugCommand("lighting.atmosphere")]
     public string Atmosphere(bool enabled) { engine.CameraView.SetAtmosphere(enabled ? Air : default); return Inspect(); }
+    // The sky's sun placed apart from the ground's light at the given elevation (degrees, below the horizon when negative) on the light's azimuth, its disc at the given radiance with bloom, and the cloud layer lit through a twilight, the camera up toward it; lighting.atmosphere restores the light's sun.
+    [DebugCommand("lighting.twilight")]
+    public string Twilight(float elevation, float radiance)
+    {
+        float up = float.DegreesToRadians(elevation), azimuth = float.DegreesToRadians(SunAzimuth);
+        var toward = new Vector3(MathF.Cos(up)*MathF.Sin(azimuth),MathF.Sin(up),MathF.Cos(up)*MathF.Cos(azimuth));
+        engine.CameraView.SetAtmosphere(Air with { SunRadiance = radiance, SkySunDirection = toward, SkySunColor = TwilightSunColor, SkySunIntensity = 1 });
+        engine.CameraView.SetBloom(new(TwilightBloomThreshold,TwilightBloomIntensity));
+        engine.CameraView.SetClouds(new(.5f,CloudDrift,CloudAltitude,CloudScale,CloudTint,0,CloudKind.Cumulus,TwilightDegrees));
+        engine.CameraView.UpdateCamera(new(camera,Camera(CloudsEye,CloudsTarget)));
+        return Inspect();
+    }
     // A hemisphere light at the given intensity (0 disables it), read back from the Engine.
     [DebugCommand("lighting.hemisphere")]
     public string Hemisphere(float intensity)

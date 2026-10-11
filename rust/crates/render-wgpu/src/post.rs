@@ -29,7 +29,7 @@ const WHOLE: [f32; 4] = [0.0, 0.0, 1.0, 1.0];
 /// The luminance chain's first level: 128², averaged down to 1².
 const LUMINANCE_SIZE: u32 = 128;
 /// The soft knee below the bloom threshold, as a fraction of it.
-const BLOOM_KNEE: f32 = 0.5;
+pub(crate) const BLOOM_KNEE: f32 = 0.5;
 /// How far sun shafts reach when the product sets no length: this fraction
 /// of the way from each pixel to the sun.
 pub(crate) const DEFAULT_SHAFT_LENGTH: f32 = 0.6;

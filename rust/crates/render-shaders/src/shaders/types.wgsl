@@ -27,8 +27,8 @@ struct Frame {
     // Colour grading: x the contrast exponent about middle grey, y the
     // saturation factor.
     grading: vec4<f32>,
-    // The sun, the brightest directional world light: xyz toward it, w 1
-    // when there is one.
+    // The sky's sun (the atmosphere's, or the brightest directional world
+    // light): xyz toward it, w 1 when there is one.
     sun: vec4<f32>,
     // rgb: the sun's colour; w: its intensity.
     sun_color: vec4<f32>,
@@ -39,7 +39,9 @@ struct Frame {
     // rgb: the linear haze colour; w: the sun halo's strength.
     haze: vec4<f32>,
     // The sky's light: x its intensity (0: off), y the specular cube's last
-    // mip level (its roughest).
+    // mip level (its roughest); z the sun disc's and halo's radiance (0: they
+    // follow the light's intensity and do not bloom); w the least light bloom
+    // spreads, its threshold less its knee.
     sky_light: vec4<f32>,
     // The indirect light volume (render-wgpu `probes.rs`): xyz the first
     // probe's position, w the spacing between probes.
@@ -61,8 +63,10 @@ struct Frame {
     // volumetric raymarch's steps (0: the flat layer).
     cloud_drift: vec4<f32>,
     // The layer's own shape: x its volumetric thickness, metres; y its
-    // kind (0 stratus, 1 cumulus, 2 cumulonimbus). `clouds.w` is the
-    // tallest of it and the regions', which the raymarch spans.
+    // kind (0 stratus, 1 cumulus, 2 cumulonimbus); z how far below the
+    // horizon the sun still lights it, radians (0: only while it is up).
+    // `clouds.w` is the tallest of it and the regions', which the raymarch
+    // spans.
     cloud_shape: vec4<f32>,
     // The surfaces' wetness (`lighting.wgsl` `wetted`): x how wet (0 dry to
     // 1 soaked), y how much standing water gathers in puddles (0 to 1).

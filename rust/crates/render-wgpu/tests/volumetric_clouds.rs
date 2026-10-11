@@ -3,7 +3,8 @@
 //! and nowhere else, is gone when removed, and shades the ground under it;
 //! volumetric clouds draw where the flat layer does, but differently, and
 //! off (or a software adapter, which refuses them) draws the flat layer
-//! exactly. Same harness as `tests/screenshots.rs`.
+//! exactly; a sun below the horizon lights a cloud from its base. Same
+//! harness as `tests/screenshots.rs`.
 
 mod support;
 
@@ -79,6 +80,7 @@ fn layer(coverage: f32) -> RenderDiff {
             color: [1.0; 3],
             thickness: 0.0,
             kind: CloudKind::Cumulus,
+            twilight_degrees: 0.0,
         }),
     }
 }
@@ -334,6 +336,87 @@ fn a_tower_and_a_sheet_rise_from_one_base_to_their_own_heights() {
     );
 }
 
+#[test]
+fn a_sun_below_the_horizon_lights_a_tower_from_its_base_and_its_top_darkens() {
+    // The 6 km tower 15 km ahead, seen level, with the sky's sun ahead
+    // `elevation` degrees up through an 8° twilight.
+    let render = |elevation: f32| {
+        let mut harness = scene(VolumetricCloudsQuality::High);
+        let radians = elevation.to_radians();
+        harness.apply(vec![
+            RenderDiff::SetClouds {
+                clouds: Some(CloudsDescriptor {
+                    twilight_degrees: 8.0,
+                    ..match layer(0.0) {
+                        RenderDiff::SetClouds {
+                            clouds: Some(clouds),
+                        } => clouds,
+                        _ => unreachable!(),
+                    }
+                }),
+            },
+            RenderDiff::SetCloudRegion {
+                id: 1,
+                region: CloudRegionDescriptor {
+                    center: [0.0, -15_000.0],
+                    radius: 4000.0,
+                    coverage: 1.0,
+                    darkness: 0.0,
+                    drift: [0.0, 0.0],
+                    kind: CloudKind::Cumulonimbus,
+                    thickness: 6000.0,
+                },
+            },
+            RenderDiff::SetAtmosphere {
+                atmosphere: Some(AtmosphereDescriptor {
+                    sky_sun_direction: [0.0, radians.sin(), -radians.cos()],
+                    sky_sun_color: [1.0, 0.75, 0.5],
+                    sky_sun_intensity: 1.0,
+                    ..Default::default()
+                }),
+            },
+        ]);
+        harness.renderer.set_animation_time(2.0);
+        let view = camera([0.0, 1.0, 0.0], 0.0, 15.0);
+        let mut image = Vec::new();
+        for _ in 0..4 {
+            image = harness.render(&view).1;
+        }
+        let refused = harness
+            .renderer
+            .settings_readout()
+            .volumetric_clouds
+            .is_some();
+        (image, refused)
+    };
+    let (day, refused) = render(30.0);
+    if refused {
+        // A software adapter draws the flat layer, which has no height.
+        return;
+    }
+    let (twilight, _) = render(-3.0);
+    keep("tower-day", &day);
+    keep("tower-twilight", &twilight);
+    // The tower stands over rows 50 to 115 (top 0) of the middle third:
+    // its top and its base.
+    let columns = WIDTH / 3..2 * WIDTH / 3;
+    let top = |image: &[u8]| luminance(image, 55..75, columns.clone());
+    let base = |image: &[u8]| luminance(image, 100..112, columns.clone());
+    assert!(
+        top(&day) > base(&day),
+        "a high sun lights the top: {:.1} over {:.1}",
+        top(&day),
+        base(&day)
+    );
+    let share = |image: &[u8]| base(image) / top(image);
+    assert!(
+        base(&twilight) > top(&twilight) && share(&twilight) > share(&day) + 0.15,
+        "a sun below the horizon lights the base and the top darkens: {:.1} over {:.1}",
+        base(&twilight),
+        top(&twilight)
+    );
+}
+
 /// The mean absolute difference of two images, per channel.
 fn mean_difference(a: &[u8], b: &[u8]) -> f64 {
     let total: u64 = a
@@ -367,6 +450,7 @@ fn drifting() -> Option<Harness> {
             color: [1.0; 3],
             thickness: 0.0,
             kind: CloudKind::Cumulus,
+            twilight_degrees: 0.0,
         }),
     }]);
     Some(harness)

@@ -701,7 +701,9 @@ engine.CameraView.SetSunShafts(new(Intensity: 0.8f, Length: 0));
   a glow rolls off as the light does. It is off by default; an intensity of 0
   turns it off. A threshold of 1 keeps ordinary lit surfaces out and lets
   emission and highlights above white glow. The background does not bloom,
-  and each view of a split screen blooms only its own viewport.
+  except the sun's disc and halo when the atmosphere gives them a
+  `SunRadiance` (below), and each view of a split screen blooms only its own
+  viewport.
 - **Auto exposure** scales the exposure toward the one that brings the
   world's log-average luminance (weighted by coverage, background excluded)
   to middle grey, clamped to `MinExposure..MaxExposure`, closing
@@ -734,9 +736,9 @@ engine.CameraView.SetSunShafts(new(Intensity: 0.8f, Length: 0));
   blended surface takes the fog of what is behind it, and over the background
   it is not fogged.
 - **Atmosphere** makes the fog read as air, and puts the sun in the sky.
-  The sun is the brightest enabled directional world light. All zero
-  (`default(AtmosphereRequest)`) turns it off, and each part is off at
-  zero:
+  The sky's sun is the brightest enabled directional world light, unless
+  `SkySunDirection` places it. All zero (`default(AtmosphereRequest)`)
+  turns it off, and each part is off at zero:
   - Fog has its `SetFog` density at `FogBaseHeight` (render world y) and
     thins by `e` every `FogFalloffHeight` above it, thickening below.
     Each fragment takes the mean density along its ray from the camera,
@@ -748,14 +750,36 @@ engine.CameraView.SetSunShafts(new(Intensity: 0.8f, Length: 0));
     `SunRadiusDegrees` (up to 20) and a halo a few degrees wide of
     strength `SunHalo`. Both take the sun's colour, dimmed when its
     intensity is below 1, and follow its direction.
+  - `SunRadiance` (0 to 1000) gives the disc a linear HDR radiance of its
+    own, in the sun's colour, whatever its intensity: a sun dimmed toward
+    the horizon to light the ground less keeps a bright disc. The halo
+    glows at `SunHalo` as a radiance too, so a halo above bloom's threshold
+    blooms as well. The sky shows them at full brightness (at most 1), and with
+    [bloom](#exposure-tone-mapping-and-fog) on they bloom like an emissive
+    surface: their radiance goes into the world's HDR target where nothing
+    is drawn, without coverage, so bloom spreads it while exposure and the
+    finish pass do not see it. The world, the [backdrop](#the-backdrop) and
+    the clouds in front of the sun hide it and its bloom. Shafts stream
+    past them as before. It costs one fullscreen triangle in the `world`
+    pass, the flat layer's noise near the sun under flat clouds and one
+    read of the volumetric clouds under those: about 0.02 ms at 1920×1080
+    with 4× multisampling on an RX 9070 XT, 0.03 ms under flat clouds.
+  - `SkySunDirection` (world space, toward the sun, any length) places the
+    sky's sun apart from the ground's light, in `SkySunColor` (linear RGB,
+    0 to 16 a channel) at `SkySunIntensity` (0 to 16). Its disc and halo,
+    the haze, sun shafts and the [clouds](#clouds)' light take it; the
+    world stays lit by its lights. A product that keeps its twilight light
+    above the horizon, so the land stays lit after sunset, places the real
+    sun below it here. Zero takes the brightest directional light.
 - **Sun shafts** stream light from the sun past whatever stands in front of
   it: a tree line at dusk, a doorway. At half resolution, the sky the world
   leaves uncovered near the sun is blurred along rays toward the sun, and
   added in the sun's colour at `Intensity` (0 to 16; 0 turns them off)
   before exposure and the operator, as bloom is. `Length` (0 to 1) is how
   far the rays reach, as a fraction of the way from each pixel to the sun;
-  0 takes the Engine's default, 0.6. The sun is the atmosphere's: the
-  brightest enabled directional world light. The shafts fade out as the sun
+  0 takes the Engine's default, 0.6. The sun is the atmosphere's sky sun:
+  its `SkySunDirection`, or the brightest enabled directional world light.
+  The shafts fade out as the sun
   nears the horizon or moves half a view beyond its edge, and draw nothing
   below the horizon or behind the camera. Each view of a split screen
   treats its own viewport.
@@ -875,13 +899,15 @@ A cloud layer drifts over the sky panorama, lit by the sun:
 
 ```csharp
 engine.CameraView.SetClouds(new(Coverage: .6f, Drift: new Vector2(8, 3),
-    Altitude: 1200, Scale: 500, Color: Vector3.One, Thickness: 0, Kind: CloudKind.Cumulus));
+    Altitude: 1200, Scale: 500, Color: Vector3.One, Thickness: 0, Kind: CloudKind.Cumulus,
+    TwilightDegrees: 6));
 ```
 
 `Thickness` and `Kind` shape the [volumetric clouds](#volumetric-clouds). A
 product that leaves them out (`new(Coverage, Drift, Altitude, Scale, Color)`)
 gets cumulus six tenths of the altitude thick; a cloud region left without
-them is cumulus as thick as the layer.
+them is cumulus as thick as the layer. Leaving out `TwilightDegrees` lights
+the clouds only while the sun is up.
 
 - `Coverage` (0 to 1) is how much of the sky is cloud. 0 clears the layer,
   draws no `clouds` pass and leaves the sky exactly as without it (the
@@ -897,12 +923,26 @@ them is cumulus as thick as the layer.
   fade into the panorama. A camera at or above the altitude sees no flat
   layer overhead.
 - `Color` (linear, 0 to 16 a channel) tints the light the clouds take.
-- The clouds take the brightest directional light's colour and direction,
-  less where more cloud lies between them and the sun, and brighter at
-  their thin edges toward it. They also take a greyed share of the
-  panorama's colour behind them. Moving the sun and blending the
-  panoramas with the product clock ([below](#blend-authored-time-of-day-skies))
-  warms them at dusk and darkens them at night with no other call.
+- The clouds take the sky's sun's colour and direction (the atmosphere's
+  `SkySunDirection`, or the brightest directional light), less where more
+  cloud lies between them and the sun, and brighter at their thin edges
+  toward it. They also take a greyed share of the panorama's colour behind
+  them. Moving the sun and blending the panoramas with the product clock
+  ([below](#blend-authored-time-of-day-skies)) warms them at dusk and
+  darkens them at night with no other call. Without a twilight their sun
+  fades out as it reaches the horizon.
+- `TwilightDegrees` (0 to 20) keeps them lit after sunset: the sun lights
+  them in full while it is up, and below the horizon until it is that far
+  down for a cloud at the layer's altitude. A higher cloud sees it longer,
+  as over the curve of the ground (a cloud at altitude h sees a sun d down
+  while d < √(2h / R)): its light lasts `TwilightDegrees` × √(h / altitude).
+  It reddens as it sinks, through orange, then fades. Below the horizon it
+  lights the clouds from beneath: the flat layer's undersides take it
+  directly, past the other clouds, and a volumetric cloud's light crosses
+  the cloud beneath each point, so its base glows and its top darkens. Pair
+  it with an atmosphere `SkySunDirection` below the horizon to keep the
+  ground's light apart: the clouds catch the sunset while the land is in
+  shadow.
 - The layer draws over a sky panorama (or a blend), after the sun's disc,
   which it covers. Over a clear colour it draws nothing.
 - It shades the ground. Every directional light (sun or moon) is met by the
@@ -1317,6 +1357,10 @@ around the camera; none in the room under its roof),
 `lighting.clouds <coverage>` (a drifting cloud layer over the panorama, with
 the camera up toward it; 0 clears it, and `lighting.sky` moves the sun that
 lights it from noon to dusk),
+`lighting.twilight <elevation> <radiance>` (the sky's sun apart from the
+ground's light at that elevation, below the horizon when negative, its disc
+blooming at that radiance, over clouds lit through an 8° twilight;
+`lighting.atmosphere true` restores the light's sun),
 `lighting.backdrop <scale>` (ranges ringing the room 1.5 to 6 km out, a
 heightfield mesh, and a dual-contoured mesa, drawn behind the world at
 1:`scale` and seen out of the doorway; 0 removes them), with

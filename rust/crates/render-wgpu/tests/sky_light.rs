@@ -621,6 +621,7 @@ fn a_mirror_floor_reflects_the_backdrop_on_the_horizon_and_the_clouds_overhead()
             color: [1.0; 3],
             thickness: 0.0,
             kind: CloudKind::Stratus,
+            twilight_degrees: 0.0,
         }),
     }]);
     let overcast = settle(&mut clouded, &down);

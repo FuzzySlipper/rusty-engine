@@ -101,8 +101,9 @@ pub(crate) struct Finish {
     bloom_sampler: wgpu::Sampler,
     /// Finish pipelines by the image's format and the world's samples.
     pipelines: Vec<(ColorTarget, wgpu::RenderPipeline)>,
-    /// Transparent viewport clears by HDR target sample count.
-    clears: Vec<(u32, wgpu::RenderPipeline)>,
+    /// Transparent viewport clears by HDR target sample count, and whether
+    /// they keep the light where nothing covers the target.
+    clears: Vec<((u32, bool), wgpu::RenderPipeline)>,
     targets: Vec<HdrTarget>,
     pub post: Post,
     frame: u64,
@@ -591,14 +592,19 @@ impl Finish {
     }
 
     /// Clear the viewport of a multisampled or single-sample HDR target to
-    /// transparent and its depth to the far plane.
+    /// transparent and its depth to the far plane. With `keep_uncovered`
+    /// the light where the target's coverage (alpha) is zero stays, less
+    /// as much as it covers: a backdrop pass's sun glow where the backdrop
+    /// left the sky open.
     pub fn clear_viewport(
         &mut self,
         device: &wgpu::Device,
         pass: &mut wgpu::RenderPass<'_>,
         samples: u32,
+        keep_uncovered: bool,
     ) {
-        let index = match self.clears.iter().position(|(key, _)| *key == samples) {
+        let key = (samples, keep_uncovered);
+        let index = match self.clears.iter().position(|(found, _)| *found == key) {
             Some(index) => index,
             None => {
                 let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -632,12 +638,27 @@ impl Finish {
                         module: &self.shader,
                         entry_point: Some("fs_clear"),
                         compilation_options: Default::default(),
-                        targets: &[Some(HDR_FORMAT.into())],
+                        targets: &[Some(wgpu::ColorTargetState {
+                            format: HDR_FORMAT,
+                            blend: keep_uncovered.then_some(wgpu::BlendState {
+                                color: wgpu::BlendComponent {
+                                    src_factor: wgpu::BlendFactor::Zero,
+                                    dst_factor: wgpu::BlendFactor::OneMinusDstAlpha,
+                                    operation: wgpu::BlendOperation::Add,
+                                },
+                                alpha: wgpu::BlendComponent {
+                                    src_factor: wgpu::BlendFactor::Zero,
+                                    dst_factor: wgpu::BlendFactor::Zero,
+                                    operation: wgpu::BlendOperation::Add,
+                                },
+                            }),
+                            write_mask: wgpu::ColorWrites::ALL,
+                        })],
                     }),
                     multiview_mask: None,
                     cache: None,
                 });
-                self.clears.push((samples, pipeline));
+                self.clears.push((key, pipeline));
                 self.clears.len() - 1
             }
         };

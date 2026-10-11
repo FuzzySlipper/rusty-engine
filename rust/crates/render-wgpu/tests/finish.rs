@@ -689,3 +689,101 @@ fn sun_shafts_stream_past_what_covers_the_sun_and_draw_nothing_with_the_sun_out_
         render(true, below_horizon, None)
     );
 }
+
+/// Toward a low sun 25° right of the view and 4° up, and where its disc
+/// falls in the image.
+const LOW_SUN: [f32; 3] = [0.4216, 0.0698, -0.9041];
+const LOW_SUN_PIXEL: (usize, usize) = (233, 78);
+
+#[test]
+fn the_sun_blooms_at_its_radiance_where_it_shows_and_not_through_what_stands_before_it() {
+    let view = camera([0.0, 0.0, 0.0], 0.0, 0.0);
+    // The box ahead lit by a low sun dimmed toward the horizon, its disc
+    // drawn at `radiance`, with bloom or not, and a tree's crown standing
+    // before the disc or not.
+    let render = |radiance: f32, bloom: bool, tree: bool| {
+        let mut harness = Harness::new(RendererOptions {
+            default_world_lights: false,
+            ..RendererOptions::default()
+        });
+        box_ahead(&mut harness, [0.8, 0.8, 0.8, 1.0]);
+        harness.apply(vec![
+            RenderDiff::CreateLight {
+                handle: RenderHandle::new(50),
+                parent: None,
+                light: LightDescriptor::Directional {
+                    color: [1.0, 0.7, 0.4],
+                    intensity: 0.2,
+                    enabled: true,
+                    direction: LOW_SUN.map(|value| -value),
+                    range: None,
+                    shadow_intent: LightShadowIntent::Disabled,
+                    shadow: Default::default(),
+                },
+            },
+            RenderDiff::SetAtmosphere {
+                atmosphere: Some(AtmosphereDescriptor {
+                    sun_radius_degrees: 1.5,
+                    sun_radiance: radiance,
+                    ..Default::default()
+                }),
+            },
+            RenderDiff::SetBloom {
+                bloom: bloom.then_some(BloomDescriptor {
+                    threshold: 1.0,
+                    intensity: 1.0,
+                }),
+            },
+        ]);
+        if tree {
+            // 1.2 m across, 10 m off along the sun: about 7° wide.
+            harness.apply(vec![
+                static_mesh(
+                    "mesh/crown",
+                    box_mesh([-0.6, -0.6, -0.6], [0.6, 0.6, 0.6], |_| 0),
+                    "material/box",
+                ),
+                instance(
+                    2,
+                    None,
+                    "mesh/crown",
+                    transform(LOW_SUN.map(|value| value * 10.0), 0.0, [1.0; 3]),
+                ),
+            ]);
+        }
+        harness.render(&view).1
+    };
+    // In view the disc blooms past its rim at a radiance, and not without.
+    let beside = (LOW_SUN_PIXEL.0 + 12, LOW_SUN_PIXEL.1);
+    let blooming = render(40.0, true, false);
+    let plain = render(0.0, true, false);
+    assert!(
+        distance(pixel(&blooming, beside), pixel(&plain, beside)) > 15,
+        "{:?} {:?}",
+        pixel(&blooming, beside),
+        pixel(&plain, beside)
+    );
+    assert_eq!(pixel(&plain, beside), pixel(&plain, CORNER));
+    // Behind the crown neither the disc nor its bloom shows.
+    assert_eq!(render(40.0, true, true), render(0.0, true, true));
+    // The disc shows at full brightness at a radiance whatever the light's
+    // intensity, while the light on the box is unchanged.
+    let dimmed = render(0.0, false, false);
+    let full = render(1.0, false, false);
+    assert!(
+        pixel(&full, LOW_SUN_PIXEL)[1] > pixel(&dimmed, LOW_SUN_PIXEL)[1] + 40,
+        "{:?} {:?}",
+        pixel(&full, LOW_SUN_PIXEL),
+        pixel(&dimmed, LOW_SUN_PIXEL)
+    );
+    assert_ne!(
+        pixel(&dimmed, CENTER),
+        pixel(&dimmed, CORNER),
+        "the box is lit"
+    );
+    assert_eq!(pixel(&full, CENTER), pixel(&dimmed, CENTER));
+    assert_eq!(
+        pixel(&render(40.0, false, false), CENTER),
+        pixel(&dimmed, CENTER)
+    );
+}

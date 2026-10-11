@@ -178,8 +178,10 @@ pub struct ColorGradingDescriptor {
 }
 
 /// The air: distance fog thinning with height and brightening toward the
-/// sun, and the sun drawn in the sky. The sun is the brightest enabled
-/// directional light of the world. Zero leaves each part out.
+/// sun, and the sun drawn in the sky. The sky's sun (its disc and halo, the
+/// haze toward it, sun shafts and the light on the clouds) is the brightest
+/// enabled directional light of the world, unless `sky_sun_direction` places
+/// it. Zero leaves each part out.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AtmosphereDescriptor {
@@ -197,22 +199,54 @@ pub struct AtmosphereDescriptor {
     pub sun_radius_degrees: f32,
     /// The glow around the sun; 0 for none.
     pub sun_halo: f32,
+    /// The disc's radiance in the sun's colour, linear HDR (0 to
+    /// `MAX_SUN_RADIANCE`), whatever the light's intensity. 0 draws the disc
+    /// and halo at the light's intensity, at most 1, and bloom does not see
+    /// them; above 0 the sky shows them at up to full brightness, and bloom
+    /// spreads the disc at this radiance and the halo at `sun_halo` where
+    /// nothing in the world or the clouds covers them.
+    #[serde(default)]
+    pub sun_radiance: f32,
+    /// Toward the sun in the sky, in world space (any length); zero takes
+    /// the brightest enabled directional light's direction, colour and
+    /// intensity. A product whose ground light differs from the sun it
+    /// shows (a twilight light kept above the horizon) places the sky's sun
+    /// here, below the horizon if need be.
+    #[serde(default)]
+    pub sky_sun_direction: [f32; 3],
+    /// The sky's sun's linear RGB, when `sky_sun_direction` places it.
+    #[serde(default)]
+    pub sky_sun_color: [f32; 3],
+    /// The sky's sun's intensity, when `sky_sun_direction` places it.
+    #[serde(default)]
+    pub sky_sun_intensity: f32,
 }
 
 impl AtmosphereDescriptor {
     /// The largest sun disc radius a product may set, in degrees.
     pub const MAX_SUN_RADIUS_DEGREES: f32 = 20.0;
+    /// The largest disc radiance a product may set.
+    pub const MAX_SUN_RADIANCE: f32 = 1000.0;
+    /// The largest sky sun colour channel and intensity.
+    pub const MAX_SKY_SUN: f32 = 16.0;
 
     /// Finite values: a non-negative falloff, haze colour, exponent and
-    /// halo, and a sun radius within `0..=MAX_SUN_RADIUS_DEGREES`.
+    /// halo, a sun radius within `0..=MAX_SUN_RADIUS_DEGREES`, a radiance
+    /// within `0..=MAX_SUN_RADIANCE`, and a sky sun colour and intensity
+    /// within `0..=MAX_SKY_SUN`.
     pub fn valid(&self) -> bool {
         let non_negative = |value: f32| value.is_finite() && value >= 0.0;
+        let sky_sun = |value: f32| (0.0..=Self::MAX_SKY_SUN).contains(&value);
         self.fog_base_height.is_finite()
             && non_negative(self.fog_falloff_height)
             && self.haze_color.iter().all(|&value| non_negative(value))
             && non_negative(self.haze_exponent)
             && (0.0..=Self::MAX_SUN_RADIUS_DEGREES).contains(&self.sun_radius_degrees)
             && non_negative(self.sun_halo)
+            && (0.0..=Self::MAX_SUN_RADIANCE).contains(&self.sun_radiance)
+            && self.sky_sun_direction.iter().all(|value| value.is_finite())
+            && self.sky_sun_color.iter().all(|&value| sky_sun(value))
+            && sky_sun(self.sky_sun_intensity)
     }
 }
 
@@ -546,6 +580,8 @@ impl PrecipitationDescriptor {
     pub const MAX_EXTENT: f32 = 500.0;
     /// The largest colour channel.
     pub const MAX_COLOR: f32 = 16.0;
+    /// The deepest twilight, in degrees below the horizon.
+    pub const MAX_TWILIGHT_DEGREES: f32 = 20.0;
 
     /// Drops within `MAX_DROPS`; a finite velocity no faster than
     /// `MAX_SPEED`; a size above 0 and within `MAX_SIZE`; a streak time
@@ -628,7 +664,10 @@ impl CloudKind {
 /// together set how large clouds look and how they shrink toward the
 /// horizon; `color` (linear, 0 to 16 a channel) tints the light they take.
 /// The volumetric clouds stand from `altitude` up by `thickness` metres (0:
-/// six tenths of the altitude), shaped by `kind`.
+/// six tenths of the altitude), shaped by `kind`. `twilight_degrees` (0 to
+/// 20) is how far below the horizon the sky's sun still lights the clouds
+/// overhead, from below and reddening as it sinks; 0 lights them only while
+/// the sun is up.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CloudsDescriptor {
@@ -641,6 +680,8 @@ pub struct CloudsDescriptor {
     pub thickness: f32,
     #[serde(default)]
     pub kind: CloudKind,
+    #[serde(default)]
+    pub twilight_degrees: f32,
 }
 
 impl CloudsDescriptor {
@@ -650,10 +691,13 @@ impl CloudsDescriptor {
     pub const MAX_DRIFT: f32 = 1_000.0;
     /// The largest colour channel.
     pub const MAX_COLOR: f32 = 16.0;
+    /// The deepest twilight, in degrees below the horizon.
+    pub const MAX_TWILIGHT_DEGREES: f32 = 20.0;
 
     /// Coverage within `0..=1`, a finite drift no faster than `MAX_DRIFT`, an
-    /// altitude and scale above 0 and within `MAX_DISTANCE`, and colour
-    /// channels within `0..=MAX_COLOR`.
+    /// altitude and scale above 0 and within `MAX_DISTANCE`, colour
+    /// channels within `0..=MAX_COLOR`, and a twilight within
+    /// `0..=MAX_TWILIGHT_DEGREES`.
     pub fn valid(&self) -> bool {
         let [x, z] = self.drift;
         let distance = 0.0..=Self::MAX_DISTANCE;
@@ -670,6 +714,7 @@ impl CloudsDescriptor {
                 .color
                 .iter()
                 .all(|channel| (0.0..=Self::MAX_COLOR).contains(channel))
+            && (0.0..=Self::MAX_TWILIGHT_DEGREES).contains(&self.twilight_degrees)
     }
 }
 

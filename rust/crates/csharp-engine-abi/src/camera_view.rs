@@ -365,15 +365,29 @@ pub struct NativeAutoExposureRequest {
     pub max_exposure: f32,
 }
 
-/// The air and the sun in the sky. The sun is the brightest enabled
-/// directional world light. Fog thins with height: it has its `SetFog`
-/// density at `fog_base_height` (render world y) and falls by `e` every
-/// `fog_falloff_height` up (0: one density at every height). Looking toward
-/// the sun the fog turns toward `haze_color` (linear RGB, alpha ignored) by
-/// the cosine between the view and the sun raised to `haze_exponent` (0: no
-/// haze). The sky (panorama or clear colour) shows a disc of
-/// `sun_radius_degrees` (0 to 20; 0: none) and a halo of strength `sun_halo`
-/// (0: none). All zero (the default) turns the atmosphere off.
+/// The air and the sun in the sky. The sky's sun is the brightest enabled
+/// directional world light, unless `sky_sun_direction` places it. Fog thins
+/// with height: it has its `SetFog` density at `fog_base_height` (render
+/// world y) and falls by `e` every `fog_falloff_height` up (0: one density
+/// at every height). Looking toward the sun the fog turns toward
+/// `haze_color` (linear RGB, alpha ignored) by the cosine between the view
+/// and the sun raised to `haze_exponent` (0: no haze). The sky (panorama or
+/// clear colour) shows a disc of `sun_radius_degrees` (0 to 20; 0: none)
+/// and a halo of strength `sun_halo` (0: none), in the sun's colour.
+///
+/// `sun_radiance` (0 to 1000) gives the disc a linear HDR radiance of its
+/// own, whatever the light's intensity, and the halo its strength as one:
+/// the sky shows them at up to full brightness, and with bloom on they bloom
+/// where nothing in the world or the clouds covers them. 0 draws them at the
+/// light's intensity (at most 1), without bloom.
+///
+/// `sky_sun_direction` (world space, toward the sun, any length) places the
+/// sky's sun apart from the ground's light, in `sky_sun_color` (linear RGB,
+/// alpha ignored, 0 to 16 a channel) at `sky_sun_intensity` (0 to 16): its
+/// disc and halo, the haze, sun shafts and the clouds' light take it, while
+/// the world stays lit by its lights. A twilight sun may be below the
+/// horizon while the ground's light stays above it. Zero takes the brightest
+/// directional light. All zero (the default) turns the atmosphere off.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeAtmosphereRequest {
@@ -384,6 +398,11 @@ pub struct NativeAtmosphereRequest {
     pub haze_exponent: f32,
     pub sun_radius_degrees: f32,
     pub sun_halo: f32,
+    pub sun_radiance: f32,
+    pub sky_sun_direction: NativeVec3,
+    /// Linear RGB; alpha ignored.
+    pub sky_sun_color: NativeColor,
+    pub sky_sun_intensity: f32,
 }
 
 /// Sun shafts: the sky around the sun (the brightest enabled directional
@@ -433,6 +452,10 @@ pub enum NativeCloudKind {
 /// cloud, in metres; `color` (linear, 0 to 16 a channel) tints the light
 /// they take. The volumetric clouds stand from `altitude` up by `thickness`
 /// metres (0: six tenths of the altitude), shaped by `kind`.
+/// `twilight_degrees` (0 to 20) is how far below the horizon the sky's sun
+/// (`SetAtmosphere`) still lights the clouds at the layer's altitude, from
+/// below, reddening as it sinks and then fading; higher cloud keeps it a
+/// little longer. 0 (the default) lights them only while the sun is up.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeCloudsRequest {
@@ -444,6 +467,7 @@ pub struct NativeCloudsRequest {
     pub color: NativeVec3,
     pub thickness: f32,
     pub kind: NativeCloudKind,
+    pub twilight_degrees: f32,
 }
 
 /// How wet the scene's lit surfaces are, after rain. `wetness` (0 to 1, 0

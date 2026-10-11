@@ -109,8 +109,9 @@ pub(crate) struct Layouts {
 }
 
 /// One target format's pipelines: the sky, the sun added over the
-/// background, the cloud layer blended over both, and a world pipeline per
-/// feature set and pass, created as materials need them.
+/// background, the cloud layer blended over both, the sun's glow for bloom,
+/// and a world pipeline per feature set and pass, created as materials need
+/// them.
 pub(crate) struct Pipelines {
     pub target: ColorTarget,
     pub sky: wgpu::RenderPipeline,
@@ -119,6 +120,11 @@ pub(crate) struct Pipelines {
     /// The raymarched clouds' reduced target over the background
     /// (`fs_clouds_composite`).
     pub clouds_composite: wgpu::RenderPipeline,
+    /// The sun's disc and halo at their radiance, added into a world view's
+    /// HDR target where its depth is still the far plane, its coverage kept
+    /// (`fs_sun_glow`): under no clouds, the flat layer, and the raymarched
+    /// clouds, by `SkyClouds::index`.
+    pub sun_glow: [wgpu::RenderPipeline; 3],
     world: HashMap<(Features, Pass), wgpu::RenderPipeline>,
 }
 
@@ -671,6 +677,52 @@ impl Layouts {
                     },
                 }),
             ),
+            sun_glow: [
+                (&self.sun_pipeline, "fs_sun_glow"),
+                (&self.sky_pipeline, "fs_sun_glow_flat"),
+                (&self.cloud_composite_pipeline, "fs_sun_glow_marched"),
+            ]
+            .map(|(layout, fragment)| {
+                device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                    label: Some("render-wgpu sun glow"),
+                    layout: Some(layout),
+                    vertex: wgpu::VertexState {
+                        module: &self.sky_shader,
+                        entry_point: Some("vs_sky"),
+                        compilation_options: Default::default(),
+                        buffers: &[],
+                    },
+                    primitive: Default::default(),
+                    // Only where nothing in the world has drawn.
+                    depth_stencil: Some(wgpu::DepthStencilState {
+                        format: DEPTH_FORMAT,
+                        depth_write_enabled: Some(false),
+                        depth_compare: Some(wgpu::CompareFunction::LessEqual),
+                        stencil: Default::default(),
+                        bias: Default::default(),
+                    }),
+                    multisample: target.multisample(),
+                    fragment: Some(wgpu::FragmentState {
+                        module: &self.sky_shader,
+                        entry_point: Some(fragment),
+                        compilation_options: Default::default(),
+                        targets: &[Some(wgpu::ColorTargetState {
+                            format: target.format,
+                            blend: Some(wgpu::BlendState {
+                                color: added,
+                                alpha: wgpu::BlendComponent {
+                                    src_factor: wgpu::BlendFactor::Zero,
+                                    dst_factor: wgpu::BlendFactor::One,
+                                    operation: wgpu::BlendOperation::Add,
+                                },
+                            }),
+                            write_mask: wgpu::ColorWrites::ALL,
+                        })],
+                    }),
+                    multiview_mask: None,
+                    cache: None,
+                })
+            }),
             world: HashMap::new(),
         }
     }

@@ -14,11 +14,26 @@ public readonly partial record struct CameraDescriptor
     }
 }
 
+public readonly partial record struct AtmosphereRequest
+{
+    /// <summary>An atmosphere whose sky's sun is the brightest directional light, its disc and halo drawn at the light's intensity.</summary>
+    public AtmosphereRequest(float FogBaseHeight, float FogFalloffHeight, Color HazeColor, float HazeExponent, float SunRadiusDegrees, float SunHalo)
+        : this(FogBaseHeight, FogFalloffHeight, HazeColor, HazeExponent, SunRadiusDegrees, SunHalo, 0, default, default, 0)
+    {
+    }
+}
+
 public readonly partial record struct CloudsRequest
 {
-    /// <summary>A cloud layer of the default kind (cumulus) and thickness (six tenths of its altitude).</summary>
+    /// <summary>A cloud layer of the default kind (cumulus) and thickness (six tenths of its altitude), lit only while the sun is up.</summary>
     public CloudsRequest(float Coverage, System.Numerics.Vector2 Drift, float Altitude, float Scale, System.Numerics.Vector3 Color)
-        : this(Coverage, Drift, Altitude, Scale, Color, 0, CloudKind.Cumulus)
+        : this(Coverage, Drift, Altitude, Scale, Color, 0, CloudKind.Cumulus, 0)
+    {
+    }
+
+    /// <summary>A cloud layer lit only while the sun is up.</summary>
+    public CloudsRequest(float Coverage, System.Numerics.Vector2 Drift, float Altitude, float Scale, System.Numerics.Vector3 Color, float Thickness, CloudKind Kind)
+        : this(Coverage, Drift, Altitude, Scale, Color, Thickness, Kind, 0)
     {
     }
 }

@@ -920,11 +920,23 @@ impl RuntimeCameraViewBridge {
             haze_exponent: request.haze_exponent,
             sun_radius_degrees: request.sun_radius_degrees,
             sun_halo: request.sun_halo,
+            sun_radiance: request.sun_radiance,
+            sky_sun_direction: [
+                request.sky_sun_direction.x,
+                request.sky_sun_direction.y,
+                request.sky_sun_direction.z,
+            ],
+            sky_sun_color: [
+                request.sky_sun_color.r,
+                request.sky_sun_color.g,
+                request.sky_sun_color.b,
+            ],
+            sky_sun_intensity: request.sky_sun_intensity,
         };
         if !atmosphere.valid() {
             return Err(CsharpEngineServicesError::new(
                 "CSHARP_ATMOSPHERE",
-                "atmosphere values must be finite; falloff height, haze colour, haze exponent and sun halo non-negative; sun radius within 0 to 20 degrees",
+                "atmosphere values must be finite; falloff height, haze colour, haze exponent and sun halo non-negative; sun radius within 0 to 20 degrees; sun radiance within 0 to 1000; sky sun colour and intensity within 0 to 16",
             ));
         }
         // All zero is no atmosphere.
@@ -979,11 +991,12 @@ impl RuntimeCameraViewBridge {
             color: [request.color.x, request.color.y, request.color.z],
             thickness: request.thickness,
             kind: cloud_kind(request.kind),
+            twilight_degrees: request.twilight_degrees,
         };
         if !clouds.valid() {
             return Err(CsharpEngineServicesError::new(
                 "CSHARP_CLOUDS",
-                "clouds need coverage within 0 to 1, a finite drift of at most 1000 m/s, an altitude and scale above 0 and at most 100 km, a thickness from 0 to 100 km, and colour channels within 0 to 16",
+                "clouds need coverage within 0 to 1, a finite drift of at most 1000 m/s, an altitude and scale above 0 and at most 100 km, a thickness from 0 to 100 km, colour channels within 0 to 16, and a twilight within 0 to 20 degrees",
             ));
         }
         self.staged_mut()?.clouds = Some((request.coverage > 0.0).then_some(clouds));

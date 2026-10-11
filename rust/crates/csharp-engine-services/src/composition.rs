@@ -2697,6 +2697,7 @@ mod tests {
             },
             thickness: 0.0,
             kind: NativeCloudKind::Cumulus,
+            twilight_degrees: 0.0,
         };
         services.begin_call(binding());
         let api = services.api();
@@ -2717,6 +2718,7 @@ mod tests {
                 color: [1.0; 3],
                 thickness: 0.0,
                 kind: render_model::CloudKind::Cumulus,
+                twilight_degrees: 0.0,
             }),
         };
         assert_eq!(
@@ -2743,6 +2745,10 @@ mod tests {
             request(0.5, 8.0, 0.0, 600.0, 1.0),
             request(0.5, 8.0, 1500.0, -1.0, 1.0),
             request(0.5, 8.0, 1500.0, 600.0, 20.0),
+            NativeCloudsRequest {
+                twilight_degrees: 25.0,
+                ..request(0.5, 8.0, 1500.0, 600.0, 1.0)
+            },
         ] {
             let mut refusal = empty_receipt();
             assert_eq!(set(refused, &mut refusal), 0);
@@ -2781,6 +2787,19 @@ mod tests {
             haze_exponent: 8.0,
             sun_radius_degrees: radius,
             sun_halo: 0.4,
+            sun_radiance: 40.0,
+            sky_sun_direction: NativeVec3 {
+                x: 0.0,
+                y: -0.05,
+                z: -1.0,
+            },
+            sky_sun_color: NativeColor {
+                r: 1.0,
+                g: 0.5,
+                b: 0.3,
+                a: 1.0,
+            },
+            sky_sun_intensity: 2.0,
         };
         services.begin_call(binding());
         let api = services.api();
@@ -2797,6 +2816,10 @@ mod tests {
                 haze_exponent: 8.0,
                 sun_radius_degrees: 1.5,
                 sun_halo: 0.4,
+                sun_radiance: 40.0,
+                sky_sun_direction: [0.0, -0.05, -1.0],
+                sky_sun_color: [1.0, 0.5, 0.3],
+                sky_sun_intensity: 2.0,
             }),
         };
         assert_eq!(
@@ -2816,7 +2839,18 @@ mod tests {
         let set = |request: NativeAtmosphereRequest, refusal| unsafe {
             (api.camera_view.set_atmosphere)(api.camera_view.context, &request, refusal)
         };
-        for refused in [request(-1.0, 1.0), request(10.0, 30.0)] {
+        for refused in [
+            request(-1.0, 1.0),
+            request(10.0, 30.0),
+            NativeAtmosphereRequest {
+                sun_radiance: 2000.0,
+                ..request(10.0, 1.0)
+            },
+            NativeAtmosphereRequest {
+                sky_sun_intensity: 20.0,
+                ..request(10.0, 1.0)
+            },
+        ] {
             let mut refusal = empty_receipt();
             assert_eq!(set(refused, &mut refusal), 0);
             assert_eq!(receipt_codes(&refusal), ["CSHARP_ATMOSPHERE"]);
@@ -2833,6 +2867,19 @@ mod tests {
             haze_exponent: 0.0,
             sun_radius_degrees: 0.0,
             sun_halo: 0.0,
+            sun_radiance: 0.0,
+            sky_sun_direction: NativeVec3 {
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+            },
+            sky_sun_color: NativeColor {
+                r: 0.0,
+                g: 0.0,
+                b: 0.0,
+                a: 0.0,
+            },
+            sky_sun_intensity: 0.0,
         };
         assert_eq!(set(off, std::ptr::null_mut()), ABI_OK);
         let mut call = services.finish_call().expect("off");

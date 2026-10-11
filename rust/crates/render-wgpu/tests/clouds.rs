@@ -1,7 +1,9 @@
 //! The sky's cloud layer (`sky.wgsl` `fs_clouds`): it drifts over the
 //! panorama with presentation time, takes the sun's colour and direction,
 //! reports its pass, and coverage 0 draws the sky exactly as without it.
-//! Same harness as `tests/screenshots.rs`.
+//! Through a twilight the sky's sun lights it from below the horizon,
+//! reddening, flat and volumetric alike. Same harness as
+//! `tests/screenshots.rs`.
 
 mod support;
 
@@ -17,15 +19,39 @@ const DUSK_COLOR: [f32; 3] = [1.0, 0.45, 0.15];
 /// A panorama of a plain blue sky over a dark ground, and a sun toward
 /// `toward` in `color`.
 fn sky(toward: [f32; 3], color: [f32; 3]) -> Harness {
+    let mut harness = panorama(VolumetricCloudsQuality::Off, NOON_SKY);
+    harness.apply(vec![RenderDiff::CreateLight {
+        handle: RenderHandle::new(10),
+        parent: None,
+        light: LightDescriptor::Directional {
+            color,
+            intensity: 1.0,
+            enabled: true,
+            direction: toward.map(|value| -value),
+            range: None,
+            shadow_intent: LightShadowIntent::Disabled,
+            shadow: Default::default(),
+        },
+    }]);
+    harness
+}
+
+/// The panoramas' sky above the horizon: a noon blue and a dusk's darker one.
+const NOON_SKY: [u8; 4] = [90, 140, 220, 255];
+const DUSK_SKY: [u8; 4] = [60, 70, 120, 255];
+
+/// A panorama of a plain `color` sky over a dark ground, and no light.
+fn panorama(clouds: VolumetricCloudsQuality, color: [u8; 4]) -> Harness {
     let mut harness = Harness::new(RendererOptions {
         default_world_lights: false,
+        volumetric_clouds: clouds,
         ..RendererOptions::default()
     });
     let (width, height) = (64, 32);
     let rgba: Vec<u8> = (0..width * height)
         .flat_map(|texel| {
             if texel / width < height / 2 {
-                [90, 140, 220, 255]
+                color
             } else {
                 [40, 40, 40, 255]
             }
@@ -42,19 +68,6 @@ fn sky(toward: [f32; 3], color: [f32; 3]) -> Harness {
                 texture: "texture/sky".to_owned(),
                 blend: None,
             }),
-        },
-        RenderDiff::CreateLight {
-            handle: RenderHandle::new(10),
-            parent: None,
-            light: LightDescriptor::Directional {
-                color,
-                intensity: 1.0,
-                enabled: true,
-                direction: toward.map(|value| -value),
-                range: None,
-                shadow_intent: LightShadowIntent::Disabled,
-                shadow: Default::default(),
-            },
         },
     ]);
     harness
@@ -74,6 +87,7 @@ fn clouds_sized(coverage: f32, scale: f32) -> RenderDiff {
             color: [1.0; 3],
             thickness: 0.0,
             kind: CloudKind::Cumulus,
+            twilight_degrees: 0.0,
         }),
     }
 }
@@ -357,4 +371,113 @@ fn the_cloud_toward_the_sun_is_the_cloud_that_shades_an_elevated_point() {
         agree == decisive,
         "the sky toward the sun and the shade agree at {agree} of {decisive} points"
     );
+}
+
+/// The sky's sun placed by the atmosphere `elevation` degrees up (below the
+/// horizon when negative), straight ahead of `look_up`, apart from any
+/// light: the scene has none, so nothing on the ground is lit by it.
+fn sky_sun(elevation: f32) -> RenderDiff {
+    let radians = elevation.to_radians();
+    RenderDiff::SetAtmosphere {
+        atmosphere: Some(AtmosphereDescriptor {
+            sky_sun_direction: [0.0, radians.sin(), -radians.cos()],
+            sky_sun_color: [1.0, 0.75, 0.5],
+            sky_sun_intensity: 1.0,
+            ..Default::default()
+        }),
+    }
+}
+
+fn twilight_clouds(twilight_degrees: f32) -> RenderDiff {
+    RenderDiff::SetClouds {
+        clouds: Some(CloudsDescriptor {
+            coverage: 0.55,
+            drift: [0.0, 0.0],
+            altitude: 1500.0,
+            scale: 600.0,
+            color: [1.0; 3],
+            thickness: 0.0,
+            kind: CloudKind::Cumulus,
+            twilight_degrees,
+        }),
+    }
+}
+
+#[test]
+fn a_sun_below_the_horizon_lights_the_clouds_through_the_twilight_reddening_flat_and_volumetric_alike(
+) {
+    const TWILIGHT: f32 = 8.0;
+    // Up into a dusk sky toward the sun with the clouds' twilight, several
+    // frames so the volumetric history settles; None when a software
+    // adapter refuses the volumetric clouds.
+    let render = |quality, elevation: f32, twilight: f32| {
+        let mut harness = panorama(quality, DUSK_SKY);
+        harness.renderer.set_animation_time(2.0);
+        let view = camera([0.0, 1.0, 0.0], 0.0, 25.0);
+        let bare = harness.render(&view).1;
+        harness.apply(vec![sky_sun(elevation), twilight_clouds(twilight)]);
+        let mut image = Vec::new();
+        for _ in 0..4 {
+            image = harness.render(&view).1;
+        }
+        let refused = harness
+            .renderer
+            .settings_readout()
+            .volumetric_clouds
+            .is_some();
+        (!refused).then_some((bare, image))
+    };
+    let mut redness = Vec::new();
+    for quality in [VolumetricCloudsQuality::Off, VolumetricCloudsQuality::High] {
+        let Some(_) = render(quality, 0.0, TWILIGHT) else {
+            continue;
+        };
+        // The clouds' mean colour where they covered the sky.
+        let mean = |elevation, twilight| {
+            let (bare, image) = render(quality, elevation, twilight).expect("drawn");
+            clouded(&bare, &image).0
+        };
+        let sum = |color: [f64; 3]| color[0] + color[1] + color[2];
+        let unlit = mean(-3.0, 0.0);
+        let horizon = mean(0.0, TWILIGHT);
+        let below = mean(-3.0, TWILIGHT);
+        let deeper = mean(-6.0, TWILIGHT);
+        // Without a twilight a sun under the horizon lights no cloud; with
+        // one it does, warm, and redder as it sinks.
+        assert!(
+            sum(below) > sum(unlit) + 120.0 && sum(deeper) > sum(unlit) + 60.0,
+            "{quality:?}: lit below the horizon: {below:?} {deeper:?}, unlit {unlit:?}"
+        );
+        assert!(below[0] > below[2] + 30.0, "{quality:?}: warm: {below:?}");
+        let red = |color: [f64; 3]| color[0] / color[1];
+        assert!(
+            red(horizon) < red(below) && red(below) < red(deeper),
+            "{quality:?}: redder as it sinks: {horizon:?} {below:?} {deeper:?}"
+        );
+        // Past the twilight the sun is gone, as without one.
+        assert_eq!(
+            render(quality, -12.0, TWILIGHT),
+            render(quality, -12.0, 0.0),
+            "{quality:?}: gone past the twilight"
+        );
+        // While it is up a twilight lights the clouds at least as much.
+        assert!(sum(mean(5.0, TWILIGHT)) >= sum(mean(5.0, 0.0)) - 3.0);
+        redness.push((red(below), red(deeper)));
+    }
+    // The flat layer and the volumetric clouds redden alike.
+    if let [(flat_below, flat_deeper), (volumetric_below, volumetric_deeper)] = redness[..] {
+        assert!(
+            (flat_below - volumetric_below).abs() < 0.15
+                && (flat_deeper - volumetric_deeper).abs() < 0.15,
+            "flat {flat_below:.2} {flat_deeper:.2}, volumetric {volumetric_below:.2} {volumetric_deeper:.2}"
+        );
+    }
+}
+
+#[test]
+fn the_sky_sun_lights_no_ground() {
+    let mut harness = ground(NOON, NOON_COLOR);
+    let lit = look_down(&mut harness, 2.0);
+    harness.apply(vec![sky_sun(-3.0)]);
+    assert_eq!(look_down(&mut harness, 2.0), lit);
 }

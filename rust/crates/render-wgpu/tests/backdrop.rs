@@ -5,7 +5,9 @@
 //! world geometry always covers it; an origin rebase that moves the camera
 //! and the anchor together leaves it where it was; without a link or
 //! without content nothing changes; the sun shadows it as it would the same
-//! range at world scale, and with backdrop shadows off it draws as without. Same harness as `tests/screenshots.rs`.
+//! range at world scale, and with backdrop shadows off it draws as without;
+//! a sun setting behind it does not bloom through it. Same harness as
+//! `tests/screenshots.rs`.
 
 mod support;
 
@@ -779,4 +781,63 @@ fn the_sun_casts_in_the_backdrop_only_while_one_is_linked() {
         linked,
         "linked again, it shadows as before"
     );
+}
+
+#[test]
+fn a_sun_behind_the_backdrop_does_not_bloom_through_it() {
+    // The sky's sun 3° up straight ahead, behind the range (about 6° high),
+    // or 12° up, above it; its disc at a radiance or not, with bloom.
+    let render = |elevation: f32, radiance: f32, layer: Option<RenderLayer>| {
+        let mut harness = scene();
+        let radians = elevation.to_radians();
+        harness.apply(vec![
+            RenderDiff::SetAtmosphere {
+                atmosphere: Some(AtmosphereDescriptor {
+                    sun_radius_degrees: 1.5,
+                    sun_radiance: radiance,
+                    sky_sun_direction: [0.0, radians.sin(), -radians.cos()],
+                    sky_sun_color: [1.0, 0.7, 0.4],
+                    sky_sun_intensity: 1.0,
+                    ..Default::default()
+                }),
+            },
+            RenderDiff::SetBloom {
+                bloom: Some(BloomDescriptor {
+                    threshold: 1.0,
+                    intensity: 1.0,
+                }),
+            },
+        ]);
+        let far = match layer {
+            Some(layer) => {
+                harness.apply(range(layer));
+                if layer == RenderLayer::Backdrop {
+                    harness.apply(vec![link([0.0; 3])]);
+                    NEAR_FIELD
+                } else {
+                    FAR_FIELD
+                }
+            }
+            None => NEAR_FIELD,
+        };
+        look(&mut harness, [0.0, 1.0, 0.0], 0.0, far)
+    };
+    // Open sky: the disc blooms at a radiance.
+    let open = render(3.0, 40.0, None);
+    assert!(changed(&open, &render(3.0, 0.0, None), 6) > 0.002);
+    // Behind the range, in the world or in the backdrop, it does not.
+    for layer in [RenderLayer::Scene, RenderLayer::Backdrop] {
+        let hidden = render(3.0, 40.0, Some(layer));
+        keep(&format!("sun-behind-{layer:?}"), &hidden);
+        assert_eq!(hidden, render(3.0, 0.0, Some(layer)), "{layer:?}");
+        // Above it, it blooms over the backdrop's sky too.
+        assert!(
+            changed(
+                &render(12.0, 40.0, Some(layer)),
+                &render(12.0, 0.0, Some(layer)),
+                6
+            ) > 0.002,
+            "{layer:?}"
+        );
+    }
 }

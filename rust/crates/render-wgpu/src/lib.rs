@@ -386,9 +386,16 @@ pub struct Renderer {
     parts_buffer: wgpu::Buffer,
     lights_buffer: wgpu::Buffer,
     lights: frame::LightRanges,
-    /// The brightest enabled directional world light, for the sky's sun
-    /// and the fog's haze.
+    /// The brightest enabled directional world light: the sky's sun, unless
+    /// the atmosphere places one (`sky_sun`).
     sun: Option<frame::Sun>,
+    /// The clouds the current view's background drew, which the sun's glow
+    /// is seen through.
+    sky_clouds: frame::SkyClouds,
+    /// The current view's backdrop pass added the sun's glow to the HDR
+    /// target, which its world pass keeps where the backdrop left the sky
+    /// open.
+    glow_kept: bool,
     /// The sky's light: the background prefiltered for the standard shader.
     sky_light: sky_light::SkyLight,
     /// The indirect light volume and the bake that keeps it current
@@ -614,6 +621,8 @@ impl Renderer {
             lights_buffer,
             lights: Default::default(),
             sun: None,
+            sky_clouds: Default::default(),
+            glow_kept: false,
             sky_light,
             probes,
             global_lights: 0,

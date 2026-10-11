@@ -1025,6 +1025,50 @@ impl Renderer {
         sun.map(|(_, sun)| sun)
     }
 
+    /// The sky's sun: the atmosphere's when it places one, or the brightest
+    /// directional light.
+    fn sky_sun(&self) -> Option<Sun> {
+        match self.tables.atmosphere {
+            Some(atmosphere) if atmosphere.sky_sun_direction != [0.0; 3] => {
+                let toward = crate::convert::vec3(atmosphere.sky_sun_direction).normalize_or_zero();
+                (toward != Vec3::ZERO).then_some(Sun {
+                    toward,
+                    color: atmosphere.sky_sun_color,
+                    intensity: atmosphere.sky_sun_intensity,
+                })
+            }
+            _ => self.sun,
+        }
+    }
+
+    /// Whether a view adds the sun's glow for bloom: the atmosphere gives
+    /// the sun a radiance, bloom is on and the sky has a sun.
+    fn sun_glow_wanted(&self) -> bool {
+        self.tables
+            .atmosphere
+            .is_some_and(|atmosphere| atmosphere.sun_radiance > 0.0)
+            && self.tables.bloom.is_some_and(|bloom| bloom.intensity > 0.0)
+            && self.sky_sun().is_some()
+    }
+
+    /// Add the sun's glow (`sky.wgsl` `fs_sun_glow`) into the HDR target of
+    /// the pass, where its depth is still the far plane, through the clouds
+    /// the view's background drew. Leaves groups 1 and 2 to be set again.
+    fn draw_sun_glow(&self, pass: &mut wgpu::RenderPass<'_>, pipelines: &Pipelines) {
+        pass.set_pipeline(&pipelines.sun_glow[self.sky_clouds.index()]);
+        pass.set_bind_group(0, &self.frame_bind_group, &[]);
+        if let (SkyClouds::Flat | SkyClouds::Marched(_), Some(sky)) =
+            (self.sky_clouds, &self.sky_bind_group)
+        {
+            pass.set_bind_group(1, sky, &[]);
+        }
+        if let SkyClouds::Marched(index) = self.sky_clouds {
+            let frame = crate::cloud_march::CloudFrame { index };
+            pass.set_bind_group(2, self.cloud_march.composite_group(&frame), &[]);
+        }
+        pass.draw(0..3, 0..1);
+    }
+
     fn upload_parts(&mut self) -> u32 {
         let parts = &mut self.tables.parts;
         let row_bytes = (PART_ROW_FLOATS * 4) as u64;
@@ -1918,6 +1962,7 @@ impl Renderer {
     /// background.
     fn encode_backdrop(&mut self, view: &ViewPass<'_>) -> Option<ViewStats> {
         self.backdrop = None;
+        self.glow_kept = false;
         if !view.sky {
             return None;
         }
@@ -2085,6 +2130,7 @@ impl Renderer {
             );
             pass.set_scissor_rect(area.x, area.y, area.width, area.height);
         };
+        self.sky_clouds = SkyClouds::None;
         // The background: the clear colour, then the sky, single-sample
         // (they have no edges). It is never finished; the world pass
         // clears the depth.
@@ -2124,7 +2170,7 @@ impl Renderer {
         let sun_shown = self.tables.atmosphere.is_some_and(|atmosphere| {
             atmosphere.sun_radius_degrees > 0.0 || atmosphere.sun_halo > 0.0
         });
-        if view.sky && sun_shown && self.sun.is_some() {
+        if view.sky && sun_shown && self.sky_sun().is_some() {
             pass.set_bind_group(0, &self.frame_bind_group, &[]);
             pass.set_pipeline(&self.pipelines[sky_index].sun);
             pass.draw(0..3, 0..1);
@@ -2204,6 +2250,10 @@ impl Renderer {
             }
             pass.draw(0..3, 0..1);
             drop(pass);
+            self.sky_clouds = match &reduced {
+                Some(frame) => SkyClouds::Marched(frame.index),
+                None => SkyClouds::Flat,
+            };
             self.finish.resolve_clouds(encoder);
         }
     }
@@ -2240,7 +2290,8 @@ impl Renderer {
         for value in grading_uniform(self.tables.color_grading.unwrap_or_default()) {
             bytes.extend_from_slice(&value.to_le_bytes());
         }
-        for value in atmosphere_uniform(self.tables.atmosphere.unwrap_or_default(), self.sun) {
+        let atmosphere = self.tables.atmosphere.unwrap_or_default();
+        for value in atmosphere_uniform(atmosphere, self.sky_sun()) {
             bytes.extend_from_slice(&value.to_le_bytes());
         }
         // The sky's light, once its first build is in.
@@ -2249,7 +2300,12 @@ impl Renderer {
             _ => 0.0,
         };
         let roughest = (crate::sky_light::SKY_LEVELS - 1) as f32;
-        for value in [sky_intensity, roughest, 0.0, 0.0] {
+        // The least light bloom spreads (its threshold less its knee): the
+        // sun's glow below it is left out.
+        let glow_floor = self.tables.bloom.map_or(0.0, |bloom| {
+            bloom.threshold * (1.0 - crate::post::BLOOM_KNEE)
+        });
+        for value in [sky_intensity, roughest, atmosphere.sun_radiance, glow_floor] {
             bytes.extend_from_slice(&value.to_le_bytes());
         }
         // The light probes stand in the world, not the backdrop.
@@ -2567,7 +2623,7 @@ impl Renderer {
             .sun_shafts
             .filter(|shafts| world_layer && shafts.intensity > 0.0)
             .and_then(|shafts| {
-                let (uv, fade) = sun_in_view(self.sun?.toward, &view_proj)?;
+                let (uv, fade) = sun_in_view(self.sky_sun()?.toward, &view_proj)?;
                 let length = if shafts.length > 0.0 {
                     shafts.length
                 } else {
@@ -2633,6 +2689,17 @@ impl Renderer {
                 .iter()
                 .map(|batch| self.tables.parts.state[batch.part as usize].class.features),
         );
+        // The sun's glow for bloom: a world view adds it, unless its backdrop
+        // pass did, behind the backdrop, into the HDR target this pass then
+        // keeps where the backdrop left the sky open.
+        let glow_kept = world_layer && std::mem::take(&mut self.glow_kept);
+        let glow = self.sun_glow_wanted()
+            && match view.layer {
+                ViewLayer::World => view.sky && !glow_kept,
+                ViewLayer::Backdrop => true,
+                ViewLayer::Viewmodel => false,
+            };
+        self.glow_kept = glow && view.layer == ViewLayer::Backdrop;
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some(match view.layer {
@@ -2645,7 +2712,7 @@ impl Renderer {
                     depth_slice: None,
                     resolve_target: hdr.resolve.as_ref(),
                     ops: wgpu::Operations {
-                        load: if whole {
+                        load: if whole && !glow_kept {
                             wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT)
                         } else {
                             wgpu::LoadOp::Load
@@ -2672,11 +2739,16 @@ impl Renderer {
                 multiview_mask: None,
             });
             in_viewport(&mut pass);
-            if !whole {
+            if !whole || glow_kept {
                 // A viewport of a shared HDR target clears with a triangle,
-                // depth included.
-                self.finish
-                    .clear_viewport(&self.gpu.device, &mut pass, view.target.samples);
+                // depth included; one keeping the backdrop's sun glow clears
+                // only what the backdrop covers.
+                self.finish.clear_viewport(
+                    &self.gpu.device,
+                    &mut pass,
+                    view.target.samples,
+                    glow_kept,
+                );
             }
             pass.set_bind_group(0, &self.frame_bind_group, &[]);
             let occlusion_bind_group = self.ambient_occlusion.apply_bind_group(occlusion.as_ref());
@@ -2700,9 +2772,14 @@ impl Renderer {
                 encoded.draws += self.draw_ghost_plates(&mut pass, hdr_format);
                 pass.set_bind_group(0, &self.frame_bind_group, &[]);
             }
+            // After the opaque world, which hides it, and before the blended
+            // parts, which it shows through.
+            if glow {
+                self.draw_sun_glow(&mut pass, pipelines);
+            }
             // Blended parts are not in the pre-pass's depth, so the occlusion
             // under them belongs to what they cover: they draw without it.
-            if occlusion.is_some() {
+            if occlusion.is_some() || glow {
                 pass.set_bind_group(2, self.ambient_occlusion.apply_bind_group(None), &[]);
             }
             self.effects
@@ -3166,6 +3243,27 @@ fn sun_in_view(toward: Vec3, view_proj: &Mat4) -> Option<([f32; 2], f32)> {
     Some((uv, fade))
 }
 
+/// The clouds a view's background drew over its sky: none, the flat layer,
+/// or the raymarched clouds in a reduced target (`CloudFrame::index`).
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) enum SkyClouds {
+    #[default]
+    None,
+    Flat,
+    Marched(usize),
+}
+
+impl SkyClouds {
+    /// The sun glow pipeline that sees through them (`Pipelines::sun_glow`).
+    fn index(self) -> usize {
+        match self {
+            Self::None => 0,
+            Self::Flat => 1,
+            Self::Marched(_) => 2,
+        }
+    }
+}
+
 /// The world's sun: the direction toward it, its colour and intensity.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Sun {
@@ -3246,6 +3344,7 @@ pub(crate) fn drawn_clouds(
             color: [1.0, 1.0, 1.0],
             thickness: 0.0,
             kind: render_model::CloudKind::Cumulus,
+            twilight_degrees: 0.0,
         }),
         _ => None,
     }
@@ -3277,7 +3376,8 @@ fn region_thickness(
 /// cloud size and the tallest clouds' thickness (the volumetric slab the
 /// raymarch spans); then the drift, the number of cloud regions and the
 /// volumetric raymarch's steps (0: the flat layer); then the layer's own
-/// thickness and kind. All zero without a layer or regions.
+/// thickness and kind and its twilight (radians). All zero without a layer
+/// or regions.
 fn clouds_uniform(
     clouds: Option<render_model::CloudsDescriptor>,
     regions: &[render_model::CloudRegionDescriptor],
@@ -3301,7 +3401,7 @@ fn clouds_uniform(
                 steps,
                 own,
                 layer.kind.profile(),
-                0.0,
+                layer.twilight_degrees.to_radians(),
                 0.0,
             ]
         }

@@ -2,11 +2,12 @@
 // the sun's disc and halo (`Frame.sun`, `Frame.atmosphere`), added over the
 // sky or clear colour when the atmosphere draws them; and the cloud layer
 // over both, flat (`fs_clouds`) or raymarched (`fs_clouds_march`, drawn by
-// `fs_clouds_composite`).
+// `fs_clouds_composite`). With a disc radiance the sun's light also goes into
+// the world's HDR target for bloom (`fs_sun_glow`).
 
 #import rusty::types::PI
-#import rusty::view::frame
-#import rusty::clouds::{cloud_cover, cloud_coverage, cloud_density, cloud_detail, cloud_kind_detail, CLOUD_OCTAVES}
+#import rusty::view::{frame, world_equivalent}
+#import rusty::clouds::{cloud_cover, cloud_coverage, cloud_density, cloud_detail, cloud_kind_detail, cloud_sunlight, CLOUD_OCTAVES}
 
 struct SkyUniform {
     // x: blend amount toward the second panorama
@@ -72,37 +73,64 @@ fn fs_sky(in: SkyOut) -> @location(0) vec4<f32> {
 const OVERCAST_SHARE: f32 = 0.6;
 const OVERCAST_SKY: f32 = 0.8;
 
-// The cloud layer, blended over the background (premultiplied alpha). The
-// view ray meets a plane at the layer's altitude (absolute, as the ground's
-// shade `cloud_light` and the volumetric slab measure it), so clouds shrink
-// toward the horizon, where they fade into the panorama. A camera at or
-// above the altitude sees no flat layer overhead. They take
-// the sun's colour, less where more cloud lies between them and the sun,
-// and brighter at their thin edges toward it; and the sky's colour behind
-// them, so a dusk sky warms them and a night sky darkens them.
+// The flat layer seen along `direction`: where the view ray meets the
+// layer's altitude (absolute, as the ground's shade `cloud_light` and the
+// volumetric slab measure it), in clouds (`p`) and over the ground
+// (`ground`), the coverage there (`rusty::clouds::cloud_coverage`), the
+// noise's detail, and how much cloud the ray sees (`alpha`, fading toward
+// the horizon). A camera at or above the altitude sees none overhead. The
+// camera stands at its world place in a backdrop pass too.
+struct FlatLayer {
+    p: vec2<f32>,
+    ground: vec2<f32>,
+    coverage: vec4<f32>,
+    detail: f32,
+    cover: f32,
+    alpha: f32,
+};
+
+fn flat_layer(direction: vec3<f32>) -> FlatLayer {
+    var layer: FlatLayer;
+    let camera = world_equivalent(frame.camera.xyz);
+    let above = sky.clouds.y - camera.y;
+    if above <= 0.0 {
+        return layer;
+    }
+    let rise = max(direction.y, 0.02);
+    layer.ground = camera.xz + direction.xz * (above / rise);
+    layer.p = (layer.ground - sky.cloud_drift.xy * frame.time.x) / sky.clouds.z;
+    // The layer's coverage raised by the regions over this point.
+    layer.coverage = cloud_coverage(layer.ground);
+    layer.detail = cloud_kind_detail(cloud_detail(direction.y), layer.coverage.w);
+    layer.cover = cloud_cover(layer.p, layer.detail, layer.coverage.x, CLOUD_OCTAVES);
+    layer.alpha = layer.cover * smoothstep(0.0, 0.25, direction.y);
+    return layer;
+}
+
+// The cloud layer, blended over the background (premultiplied alpha), so
+// clouds shrink toward the horizon, where they fade into the panorama. They
+// take the sun's light (`cloud_sunlight`), less where more cloud lies
+// between them and a sun above the layer, and brighter at their thin edges
+// toward it; and the sky's colour behind them, so a dusk sky warms them and
+// a night sky darkens them. A sun below the layer lights the undersides the
+// camera sees directly, past the other clouds.
 @fragment
 fn fs_clouds(in: SkyOut) -> @location(0) vec4<f32> {
     let direction = view_direction(in.ndc);
-    let above = sky.clouds.y - frame.camera.y;
-    if above <= 0.0 {
+    let layer = flat_layer(direction);
+    if layer.alpha <= 0.0 {
         return vec4<f32>(0.0);
     }
-    let rise = max(direction.y, 0.02);
-    let ground = frame.camera.xz + direction.xz * (above / rise);
-    let p = (ground - sky.cloud_drift.xy * frame.time.x) / sky.clouds.z;
-    // The layer's coverage raised by the regions over this point.
-    let coverage = cloud_coverage(ground);
-    let detail = cloud_kind_detail(cloud_detail(direction.y), coverage.w);
-    let cover = cloud_cover(p, detail, coverage.x, CLOUD_OCTAVES);
     // Toward the sun across the layer, in clouds.
     let across = frame.sun.xz;
     let toward = across / max(length(across), 1e-3) * 0.35;
-    let shadowed = cloud_cover(p + toward * 0.75, detail, coverage.x, CLOUD_OCTAVES);
-    let sun_up = smoothstep(-0.05, 0.15, frame.sun.y) * frame.sun.w;
-    let sun = frame.sun_color.rgb * min(frame.sun_color.w, 1.5) * sun_up;
-    let edge = 1.0 + 1.5 * pow(max(dot(direction, frame.sun.xyz), 0.0), 8.0) * (1.0 - cover);
-    let direct = sun * mix(1.0, 0.55, shadowed) * edge;
+    let shadowed = cloud_cover(layer.p + toward * 0.75, layer.detail, layer.coverage.x, CLOUD_OCTAVES);
+    let underlit = smoothstep(UNDERLIT_EDGE, -UNDERLIT_EDGE, frame.sun.y);
+    let sun = cloud_sunlight(vec3<f32>(layer.ground.x, sky.clouds.y, layer.ground.y));
+    let edge = 1.0 + 1.5 * pow(max(dot(direction, frame.sun.xyz), 0.0), 8.0) * (1.0 - layer.cover);
+    let direct = sun * mix(mix(1.0, 0.55, shadowed), 1.0, underlit) * edge;
     // The sky a little above the cloud, read at its coarsest detail.
+    let rise = max(direction.y, 0.02);
     let uv = panorama_uv(normalize(vec3<f32>(direction.x, rise + 0.2, direction.z)));
     let behind = mix(textureSampleLevel(sky_first, sky_first_sampler, uv, 0.0).rgb,
         textureSampleLevel(sky_second, sky_second_sampler, uv, 0.0).rgb, sky.amount.x);
@@ -110,10 +138,13 @@ fn fs_clouds(in: SkyOut) -> @location(0) vec4<f32> {
     let grey = dot(behind, vec3<f32>(0.299, 0.587, 0.114));
     let ambient = mix(vec3<f32>(grey), behind, 0.5) * 0.5;
     // A storm region's clouds are darker underneath.
-    let color = sky.cloud_color.rgb * (direct * 0.9 + ambient) * (1.0 - 0.6 * coverage.y);
-    let alpha = cover * smoothstep(0.0, 0.25, direction.y);
-    return vec4<f32>(color * alpha, alpha);
+    let color = sky.cloud_color.rgb * (direct * 0.9 + ambient) * (1.0 - 0.6 * layer.coverage.y);
+    return vec4<f32>(color * layer.alpha, layer.alpha);
 }
+
+// How far either side of the horizontal the sun turns from lighting the
+// clouds from above to lighting them from below (`Frame.sun.y`).
+const UNDERLIT_EDGE: f32 = 0.02;
 
 // Extinction per metre of the volumetric clouds at full density.
 const CLOUD_EXTINCTION: f32 = 0.004;
@@ -158,7 +189,8 @@ struct CloudMarchParams {
 @group(2) @binding(3) var cloud_current: texture_2d<f32>;
 
 // One ray through the cloud slab (`Frame.clouds`): each sample's density (`rusty::clouds::cloud_density`) is lit by
-// the sun through the cloud between it and the sun (Beer's law, with a
+// the sun through the cloud between it and the sun, or beneath it while the
+// sun is below the layer (Beer's law, with a
 // forward-scattering lobe and a dark-edge powder term) and by the sky behind
 // it, and dims what lies past it. Toward the horizon the clouds fade into
 // the panorama, as the flat layer's do. Steps per ray: `Frame.cloud_drift.w`.
@@ -180,9 +212,12 @@ fn march_clouds(direction: vec3<f32>, pixel: vec2<f32>, phase: f32) -> CloudSamp
     // A per-pixel offset breaks the steps' banding into fine noise; it
     // moves each frame (`phase`), so the temporal history gathers them.
     let jitter = fract(fract(sin(dot(pixel, vec2<f32>(12.9898, 78.233))) * 43758.5453) + phase);
-    let sun_up = smoothstep(-0.05, 0.15, frame.sun.y) * frame.sun.w;
-    let sun = frame.sun_color.rgb * min(frame.sun_color.w, 1.5) * sun_up;
     let toward_sun = normalize(frame.sun.xyz + vec3<f32>(0.0, 1e-3, 0.0));
+    // A sun below the layer lights the clouds through their bases: each
+    // sample's light then crosses the cloud beneath it, so the bases light
+    // and the tops shade.
+    let underlit = smoothstep(UNDERLIT_EDGE, -UNDERLIT_EDGE, frame.sun.y);
+    let toward_light = normalize(mix(toward_sun, vec3<f32>(0.0, -1.0, 0.0), underlit));
     let cosine = dot(direction, toward_sun);
     // Forward scattering toward the sun, with some back scatter.
     let g = 0.6;
@@ -207,7 +242,7 @@ fn march_clouds(direction: vec3<f32>, pixel: vec2<f32>, phase: f32) -> CloudSamp
         }
         var optical = 0.0;
         for (var k = 1; k <= CLOUD_LIGHT_STEPS; k = k + 1) {
-            optical += cloud_density(position + toward_sun * light_step * f32(k), 1) * light_step;
+            optical += cloud_density(position + toward_light * light_step * f32(k), 1) * light_step;
         }
         let through = exp(-CLOUD_EXTINCTION * optical)
             + CLOUD_MULTIPLE_SCATTER * exp(-CLOUD_EXTINCTION * CLOUD_MULTIPLE_REACH * optical);
@@ -216,7 +251,7 @@ fn march_clouds(direction: vec3<f32>, pixel: vec2<f32>, phase: f32) -> CloudSamp
         let here = cloud_coverage(position.xz);
         let height = clamp((position.y - base) / max(here.z, 1.0), 0.0, 1.0);
         let darkness = here.y;
-        let lit = (sun * through * lobe * mix(0.7, 1.0, powder) * 0.45
+        let lit = (cloud_sunlight(position) * through * lobe * mix(0.7, 1.0, powder) * 0.45
             + ambient * mix(0.6, 0.9, height)) * (1.0 - 0.6 * darkness);
         let passes = exp(-extinction * step);
         color += transmittance * lit * (1.0 - passes);
@@ -274,25 +309,85 @@ fn fs_clouds_composite(in: SkyOut) -> @location(0) vec4<f32> {
 // Added onto the background (one-one blending).
 @fragment
 fn fs_sun(in: SkyOut) -> @location(0) vec4<f32> {
-    return vec4<f32>(sun_light(view_direction(in.ndc)), 0.0);
+    let sun = sun_seen(view_direction(in.ndc));
+    return vec4<f32>(frame.sun_color.rgb * sun_display() * (sun.x + sun.y), 0.0);
 }
 
-// The sun seen along `direction`: a disc of the set angular radius with an
-// antialiased rim, and a halo a few degrees wide, in the sun's colour
-// dimmed by an intensity below 1. The background is never finished, so
-// these are display values.
-fn sun_light(direction: vec3<f32>) -> vec3<f32> {
+// The sun seen along `direction`, in its colour once scaled: x its disc,
+// of the set angular radius with an antialiased rim; y its halo a few
+// degrees wide, at its strength (`Frame.haze.w`).
+fn sun_seen(direction: vec3<f32>) -> vec2<f32> {
     let cosine = dot(direction, frame.sun.xyz);
     let angle = acos(clamp(cosine, -1.0, 1.0));
     let rim = max(fwidth(angle), 1e-5);
     let radius = frame.atmosphere.w;
     if frame.sun.w <= 0.0 {
-        return vec3<f32>(0.0);
+        return vec2<f32>(0.0);
     }
-    var light = 0.0;
+    var disc = 0.0;
     if radius > 0.0 {
-        light = 1.0 - smoothstep(radius - rim, radius + rim, angle);
+        disc = 1.0 - smoothstep(radius - rim, radius + rim, angle);
     }
-    light += frame.haze.w * pow(max(cosine, 0.0), 128.0);
-    return frame.sun_color.rgb * min(frame.sun_color.w, 1.0) * light;
+    return vec2<f32>(disc, frame.haze.w * pow(max(cosine, 0.0), 128.0));
+}
+
+// How bright the background shows the disc and halo: the background is
+// never finished, so these are display values, at most 1. Without a
+// radiance (`Frame.sky_light.z`) they follow the light's intensity.
+fn sun_display() -> f32 {
+    let radiance = frame.sky_light.z;
+    if radiance > 0.0 {
+        return min(radiance, 1.0);
+    }
+    return min(frame.sun_color.w, 1.0);
+}
+
+// The sun's light in the world's HDR target, in its colour: the disc at its
+// radiance (`Frame.sky_light.z`) and the halo at its strength. It is added
+// with the target's coverage (alpha) left as it is, where the depth is
+// still the far plane (render-wgpu `frame.rs` `draw_sun_glow`): bloom
+// spreads it as it does the world's light, while the finish pass and auto
+// exposure, which weigh the world by its coverage, do not see it. What the
+// clouds cover of it is taken away: the flat layer's cover along the view
+// (`fs_sun_glow_flat`), or the raymarched clouds' opacity at the pixel
+// (`fs_sun_glow_marched`). Glow below the least light bloom spreads
+// (`Frame.sky_light.w`) would add nothing, so the halo's faint reach is left
+// out before the clouds are read.
+fn sun_glow(direction: vec3<f32>) -> vec3<f32> {
+    let sun = sun_seen(direction);
+    return frame.sun_color.rgb * (frame.sky_light.z * sun.x + sun.y);
+}
+
+fn spread(glow: vec3<f32>) -> bool {
+    return max(glow.r, max(glow.g, glow.b)) >= frame.sky_light.w;
+}
+
+@fragment
+fn fs_sun_glow(in: SkyOut) -> @location(0) vec4<f32> {
+    let glow = sun_glow(view_direction(in.ndc));
+    if !spread(glow) {
+        discard;
+    }
+    return vec4<f32>(glow, 0.0);
+}
+
+@fragment
+fn fs_sun_glow_flat(in: SkyOut) -> @location(0) vec4<f32> {
+    let direction = view_direction(in.ndc);
+    let glow = sun_glow(direction);
+    if !spread(glow) {
+        discard;
+    }
+    return vec4<f32>(glow * (1.0 - flat_layer(direction).alpha), 0.0);
+}
+
+@fragment
+fn fs_sun_glow_marched(in: SkyOut) -> @location(0) vec4<f32> {
+    let glow = sun_glow(view_direction(in.ndc));
+    if !spread(glow) {
+        discard;
+    }
+    let uv = vec2<f32>(in.ndc.x * 0.5 + 0.5, 0.5 - in.ndc.y * 0.5);
+    let clouds = textureSampleLevel(cloud_current, cloud_sampler, uv, 0.0).a;
+    return vec4<f32>(glow * (1.0 - clouds), 0.0);
 }

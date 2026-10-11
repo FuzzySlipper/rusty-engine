@@ -26,7 +26,10 @@ mask and ripple normal map (`lighting.water`).
 `lighting.fog.remove <id>` a drifting, glowing fog volume;
 `lighting.clouds.volumetric off|low|high` draws the cloud layer raymarched,
 and `lighting.clouds.region <id> <x> <z> <radius> <coverage> <darkness>` and
-`lighting.clouds.region.remove <id>` a drifting storm over the layer; the panel behind
+`lighting.clouds.region.remove <id>` a drifting storm over the layer;
+`lighting.twilight <elevation> <radiance>` places the sky's sun apart from the
+ground's light (below the horizon when negative), its disc blooming at that
+radiance, over clouds lit through an 8° twilight; the panel behind
 the "Video options" button is the Engine's video options panel with one
 option of the fixture's own.
 The fixture owns the supplied clock value and source light descriptor; Engine
