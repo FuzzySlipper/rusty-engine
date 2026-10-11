@@ -1584,6 +1584,7 @@ mod tests {
         .expect("service set");
         let request = NativeRendererSettingsRequest {
             shadows: true,
+            backdrop_shadows: false,
             shadow_budget: 3,
             ambient_occlusion: NativeAmbientOcclusionMode::DistanceField,
             ambient_occlusion_strength: 0.8,
@@ -1606,6 +1607,7 @@ mod tests {
         let selected = render_model::RenderDiff::SetRendererSettings {
             settings: render_model::RendererSettingsDescriptor {
                 shadows: true,
+                backdrop_shadows: false,
                 shadow_budget: Some(3),
                 ambient_occlusion: render_model::AmbientOcclusionSettings {
                     mode: render_model::AmbientOcclusionMode::DistanceField,

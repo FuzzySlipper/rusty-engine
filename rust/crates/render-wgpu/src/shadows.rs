@@ -63,7 +63,7 @@ const MIN_LAYER_SIZE: u32 = 256;
 const DEFAULT_LAYER_SIZE: u32 = 512;
 const DEFAULT_CASCADE_SIZE: u32 = 1024;
 const SHADOW_NEAR: f32 = 0.5;
-const SHADOW_FAR: f32 = 500.0;
+pub(crate) const SHADOW_FAR: f32 = 500.0;
 /// A directional light's cascades, as `lighting.wgsl` reads them.
 pub(crate) const CASCADES: u32 = 4;
 /// How far from the camera a directional light's shadow reaches without a
@@ -114,13 +114,15 @@ pub(crate) enum LayerSource {
         settings: LayerSettings,
     },
     /// Cascade `index` of the directional light in light row `row`, fitted
-    /// to each world view's camera.
+    /// to each world view's camera, or in `backdrop` to each backdrop camera
+    /// (`frame.rs` `backdrop_camera`) and cast by the backdrop's parts.
     Cascade {
         direction: Vec3,
         distance: f32,
         index: u32,
         row: u32,
         settings: LayerSettings,
+        backdrop: bool,
     },
 }
 
@@ -201,6 +203,7 @@ pub(crate) fn light_layers(light: &LightDescriptor, world: &Mat4, row: u32) -> V
                     index,
                     row,
                     settings: LayerSettings::of(light, DEFAULT_CASCADE_SIZE),
+                    backdrop: false,
                 })
                 .collect()
         }
@@ -245,6 +248,32 @@ pub(crate) fn light_layers(light: &LightDescriptor, world: &Mat4, row: u32) -> V
     }
 }
 
+/// A directional light's cascades in the backdrop, for its backdrop copy in
+/// light row `row`: one more for each of its world cascades `layers`, each
+/// fitted over the whole of the backdrop camera's depth range.
+pub(crate) fn backdrop_cascades(layers: &[LayerSource], row: u32) -> Vec<LayerSource> {
+    layers
+        .iter()
+        .filter_map(|source| match *source {
+            LayerSource::Cascade {
+                direction,
+                index,
+                settings,
+                backdrop: false,
+                ..
+            } => Some(LayerSource::Cascade {
+                direction,
+                distance: f32::INFINITY,
+                index,
+                row,
+                settings,
+                backdrop: true,
+            }),
+            _ => None,
+        })
+        .collect()
+}
+
 /// The camera's near and far view depths.
 pub(crate) fn view_depths(projection: &Mat4) -> (f32, f32) {
     let inverse = projection.inverse();
@@ -268,14 +297,15 @@ pub(crate) fn cascade_splits(near: f32, far: f32) -> [f32; CASCADES as usize] {
 /// A cascade's view-projection: an orthographic box looking along
 /// `direction` around the bounding sphere of `camera`'s frustum between view
 /// depths `from` and `to`, its centre snapped to whole texels of a `size`
-/// map, reaching
-/// `SHADOW_FAR` toward the light.
+/// map, reaching `toward_light` further toward the light (`SHADOW_FAR` in
+/// the world), so casters outside the slice still cast into it.
 pub(crate) fn cascade_view(
     direction: Vec3,
     camera: &CameraMatrices,
     from: f32,
     to: f32,
     size: u32,
+    toward_light: f32,
 ) -> Mat4 {
     // The slice's corners in view space, by depth along each frustum edge.
     let inverse = camera.projection.inverse();
@@ -315,7 +345,7 @@ pub(crate) fn cascade_view(
         x + radius,
         y - radius,
         y + radius,
-        -(at.z + radius + SHADOW_FAR),
+        -(at.z + radius + toward_light),
         -(at.z - radius),
     );
     projection * light
@@ -331,6 +361,9 @@ pub(crate) struct ShadowCandidate {
     /// A point or spot light's position; a directional or ambient light
     /// counts as nearest.
     pub position: Option<Vec3>,
+    /// The light's backdrop copy's row, when it also casts in the backdrop
+    /// (its layers then end with `backdrop_cascades`).
+    pub backdrop_row: Option<u32>,
 }
 
 /// How much nearer a light that already casts counts, so the choice does
@@ -476,9 +509,10 @@ pub(crate) struct ShadowMaps {
     pub layer_bind_group: wgpu::BindGroup,
     /// Layers in use.
     pub layers: Vec<ShadowLayer>,
-    /// A product's caster stage drew the maps, at presentation `time`.
-    pub timed: bool,
-    pub time: f64,
+    /// A product's caster stage drew the maps, at presentation `time`: the
+    /// world's layers, then the backdrop's (each rendered in its own pass).
+    pub timed: [bool; 2],
+    pub time: [f64; 2],
     /// Built once a layer first has moving casters; a new atlas drops it.
     pub cache: Option<StaticCache>,
     /// Counts the caches built, so a layer's `CachedStatic` names its own.
@@ -511,6 +545,11 @@ impl ShadowLayer {
 
     pub fn is_cascade(&self) -> bool {
         matches!(self.source, LayerSource::Cascade { .. })
+    }
+
+    /// A cascade fitted to the backdrop, drawn by its casters.
+    pub fn is_backdrop(&self) -> bool {
+        matches!(self.source, LayerSource::Cascade { backdrop: true, .. })
     }
 
     /// A cascade has a view once a world view fitted it.
@@ -633,8 +672,8 @@ impl ShadowMaps {
             layer_capacity,
             layer_bind_group,
             layers: Vec::new(),
-            timed: false,
-            time: 0.0,
+            timed: [false; 2],
+            time: [0.0; 2],
             cache: None,
             cache_generation: 0,
         }
@@ -1068,6 +1107,7 @@ mod tests {
             layers: (0..6).map(|_| layer(512).source).collect(),
             priority,
             position: Some(Vec3::new(x, 0.0, 0.0)),
+            backdrop_row: None,
         };
         let candidates = [lamp(1, 10.0, 0), lamp(2, 3.0, 0), lamp(3, 20.0, 1)];
         let none = HashSet::new();
@@ -1106,7 +1146,7 @@ mod tests {
         let sun = Vec3::new(-0.4, -1.0, 0.3).normalize();
         let view = camera(Vec3::new(3.0, 1.7, -2.0), 30.0);
         let (from, to) = (6.0, 15.0);
-        let cascade = cascade_view(sun, &view, from, to, SIZE);
+        let cascade = cascade_view(sun, &view, from, to, SIZE, SHADOW_FAR);
         // Every corner of the slice falls inside the box.
         let inverse = view.view_proj.inverse();
         let (near, far) = view_depths(&view.projection);
@@ -1133,7 +1173,7 @@ mod tests {
 
         // Turning the camera keeps the box's size; moving it shifts a fixed
         // world point by whole texels only.
-        let turned = cascade_view(sun, &camera(view.eye, 75.0), from, to, SIZE);
+        let turned = cascade_view(sun, &camera(view.eye, 75.0), from, to, SIZE, SHADOW_FAR);
         assert!((turned.x_axis.x - cascade.x_axis.x).abs() < 1e-6);
         let texels = |m: Mat4| m.project_point3(Vec3::new(4.0, 0.0, -9.0)) * (SIZE as f32 / 2.0);
         for step in [0.013, 0.21, 0.5, 1.37] {
@@ -1143,6 +1183,7 @@ mod tests {
                 from,
                 to,
                 SIZE,
+                SHADOW_FAR,
             );
             let shift = texels(moved) - texels(cascade);
             assert!(

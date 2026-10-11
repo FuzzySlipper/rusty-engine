@@ -566,6 +566,9 @@ struct ManifestAudio {
 struct ManifestRendererLighting {
     #[serde(default)]
     shadows: Option<String>,
+    /// `enabled` or `disabled`; absent is enabled.
+    #[serde(default)]
+    backdrop_shadows: Option<String>,
     /// Shadow layers at once; 0 or absent for no limit.
     #[serde(default)]
     shadow_budget: Option<u32>,
@@ -654,6 +657,16 @@ impl ProductRendererSettings {
             value.lighting.shadows.as_deref(),
             "renderer.lighting.shadows",
         )?;
+        let backdrop_shadows = match value.lighting.backdrop_shadows.as_deref() {
+            None | Some("enabled") => true,
+            Some("disabled") => false,
+            Some(_) => {
+                return Err(field_error(
+                    "renderer.lighting.backdropShadows",
+                    "must be enabled or disabled",
+                ))
+            }
+        };
         let ambient_occlusion = match value.lighting.ambient_occlusion {
             None => AmbientOcclusionSettings::DEFAULT,
             Some(ambient_occlusion) => {
@@ -737,6 +750,7 @@ impl ProductRendererSettings {
         Ok(Self {
             settings: RendererSettingsDescriptor {
                 shadows,
+                backdrop_shadows,
                 shadow_budget: value.lighting.shadow_budget.filter(|&budget| budget > 0),
                 ambient_occlusion,
                 antialiasing,

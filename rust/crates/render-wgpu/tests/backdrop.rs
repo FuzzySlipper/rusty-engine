@@ -4,7 +4,8 @@
 //! at its world-equivalent distance, at any turn and as the camera walks;
 //! world geometry always covers it; an origin rebase that moves the camera
 //! and the anchor together leaves it where it was; without a link or
-//! without content nothing changes. Same harness as `tests/screenshots.rs`.
+//! without content nothing changes; the sun shadows it as it would the same
+//! range at world scale, and with backdrop shadows off it draws as without. Same harness as `tests/screenshots.rs`.
 
 mod support;
 
@@ -572,5 +573,210 @@ fn backdrop_particles_draw_only_in_the_backdrop_and_the_world_covers_them() {
     assert!(
         harness.renderer.gpu_readout().backdrop.is_some(),
         "a particle-only backdrop draws"
+    );
+}
+
+/// A ridge 300 m high running 3 to 5 km ahead, on ground out to 6 km,
+/// under a sun from the left that casts its shadow about 600 m over the
+/// ground to its right: in backdrop units at `scale` in the backdrop layer,
+/// or at world scale in the scene. The camera stands 1.5 km up, looking
+/// down at it.
+fn ridge(scale: f32, layer: RenderLayer, options: RendererOptions) -> Harness {
+    let mut harness = Harness::new(options);
+    let s = if layer == RenderLayer::Backdrop {
+        1000.0 / scale
+    } else {
+        1000.0
+    };
+    let mut ops = vec![
+        RenderDiff::SetBackgroundColor {
+            color: [0.45, 0.6, 0.85, 1.0],
+        },
+        RenderDiff::CreateLight {
+            handle: RenderHandle::new(10),
+            parent: None,
+            light: LightDescriptor::Directional {
+                color: [1.0, 0.95, 0.85],
+                intensity: 2.5,
+                enabled: true,
+                direction: [1.0, -0.5, -0.2],
+                // The world's cascades reach the ground's far end; the
+                // backdrop's cover its camera's depth range whatever this is.
+                range: Some(6_500.0),
+                shadow_intent: LightShadowIntent::Requested,
+                shadow: Default::default(),
+            },
+        },
+        RenderDiff::CreateLight {
+            handle: RenderHandle::new(11),
+            parent: None,
+            light: LightDescriptor::Ambient {
+                color: [0.5, 0.55, 0.65],
+                intensity: 0.3,
+                enabled: true,
+                range: None,
+                shadow_intent: LightShadowIntent::Disabled,
+                shadow: Default::default(),
+            },
+        },
+        RenderDiff::DefineMaterial {
+            material: material("material/rock", [0.55, 0.45, 0.35, 1.0], None),
+        },
+    ];
+    for (index, (min, max)) in [
+        ([-2.0f32, -0.01, -6.0], [2.0f32, 0.0, -2.5]),
+        ([-0.1, 0.0, -5.0], [0.1, 0.3, -3.0]),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let asset = format!("mesh/ridge-{index}");
+        ops.push(static_mesh(
+            &asset,
+            box_mesh(
+                min.map(|value| value * s),
+                max.map(|value| value * s),
+                |_| 0,
+            ),
+            "material/rock",
+        ));
+        ops.push(placed(50 + index as u64, &asset, layer));
+    }
+    if layer == RenderLayer::Backdrop {
+        ops.push(RenderDiff::SetBackdrop {
+            camera: None,
+            backdrop: Some(BackdropDescriptor {
+                anchor: [0.0; 3],
+                origin: [0.0; 3],
+                scale: f64::from(scale),
+            }),
+        });
+    }
+    harness.apply(ops);
+    harness
+}
+
+fn overlook(harness: &mut Harness, far: f64) -> Vec<u8> {
+    let mut camera = camera([0.0, 1500.0, 0.0], 0.0, -22.0);
+    camera.projection = RendererCameraProjection::Perspective {
+        fov_y_degrees: 60.0,
+        near: 0.1,
+        far,
+    };
+    harness.render(&camera).1
+}
+
+#[test]
+fn a_backdrop_ridge_shades_the_ground_behind_it_as_the_world_scale_ridge_would() {
+    let shadowed = RendererOptions {
+        default_world_lights: false,
+        shadows: true,
+        ..RendererOptions::default()
+    };
+    let world = overlook(&mut ridge(1000.0, RenderLayer::Scene, shadowed), FAR_FIELD);
+    let mut backdrop = ridge(1000.0, RenderLayer::Backdrop, shadowed);
+    let drawn = overlook(&mut backdrop, NEAR_FIELD);
+    let unshaded = overlook(
+        &mut ridge(
+            1000.0,
+            RenderLayer::Backdrop,
+            RendererOptions {
+                backdrop_shadows: false,
+                ..shadowed
+            },
+        ),
+        NEAR_FIELD,
+    );
+    keep("ridge-world", &world);
+    keep("ridge-backdrop", &drawn);
+    keep("ridge-unshaded", &unshaded);
+    assert!(
+        changed(&unshaded, &drawn, 12) > 0.008,
+        "the ridge's shadow darkens the ground behind it: {:.2}%",
+        changed(&unshaded, &drawn, 12) * 100.0
+    );
+    // The world's last cascade is coarser over 6.5 km than the backdrop's
+    // over its few units, so their edges differ a little.
+    let differs = changed(&world, &drawn, 12);
+    assert!(
+        differs < 0.004,
+        "the backdrop's shadow falls as the world-scale ridge's: {:.2}% differ",
+        differs * 100.0
+    );
+    // The cascades are fitted as the world would fit them at its scale, so
+    // the same backdrop at 1:1 (a far field) draws the same shadow.
+    let full = overlook(&mut ridge(1.0, RenderLayer::Backdrop, shadowed), NEAR_FIELD);
+    keep("ridge-full-scale", &full);
+    let differs = changed(&full, &drawn, 6);
+    assert!(
+        differs < 0.001,
+        "1:1000 shadows as 1:1: {:.3}% differ",
+        differs * 100.0
+    );
+    let readout = backdrop.renderer.gpu_readout();
+    assert!(
+        readout
+            .passes
+            .iter()
+            .any(|pass| pass.pass == "backdrop-shadows"),
+        "the backdrop's cascades report their cost"
+    );
+}
+
+#[test]
+fn backdrop_shadows_off_draws_as_without_shadows() {
+    let plain = RendererOptions {
+        default_world_lights: false,
+        ..RendererOptions::default()
+    };
+    let without = overlook(&mut ridge(1000.0, RenderLayer::Backdrop, plain), NEAR_FIELD);
+    let mut off = ridge(
+        1000.0,
+        RenderLayer::Backdrop,
+        RendererOptions {
+            shadows: true,
+            backdrop_shadows: false,
+            ..plain
+        },
+    );
+    assert_eq!(overlook(&mut off, NEAR_FIELD), without);
+    assert_eq!(
+        off.renderer.shadow_report().layers,
+        4,
+        "only the world's cascades"
+    );
+}
+
+#[test]
+fn the_sun_casts_in_the_backdrop_only_while_one_is_linked() {
+    let mut harness = ridge(
+        1000.0,
+        RenderLayer::Backdrop,
+        RendererOptions {
+            default_world_lights: false,
+            shadows: true,
+            ..RendererOptions::default()
+        },
+    );
+    let linked = overlook(&mut harness, NEAR_FIELD);
+    assert_eq!(harness.renderer.shadow_report().layers, 8);
+    harness.apply(vec![RenderDiff::SetBackdrop {
+        camera: None,
+        backdrop: None,
+    }]);
+    overlook(&mut harness, NEAR_FIELD);
+    assert_eq!(harness.renderer.shadow_report().layers, 4);
+    harness.apply(vec![RenderDiff::SetBackdrop {
+        camera: None,
+        backdrop: Some(BackdropDescriptor {
+            anchor: [0.0; 3],
+            origin: [0.0; 3],
+            scale: 1000.0,
+        }),
+    }]);
+    assert_eq!(
+        overlook(&mut harness, NEAR_FIELD),
+        linked,
+        "linked again, it shadows as before"
     );
 }

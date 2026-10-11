@@ -822,6 +822,7 @@ fn settings_statistics(
     let values =
         |settings: &render_model::RendererSettingsDescriptor| ProductHostRendererSettingValues {
             shadows: settings.shadows,
+            backdrop_shadows: settings.backdrop_shadows,
             shadow_budget: settings.shadow_budget,
             ambient_occlusion: match settings.ambient_occlusion.mode {
                 render_model::AmbientOcclusionMode::Disabled => "disabled",

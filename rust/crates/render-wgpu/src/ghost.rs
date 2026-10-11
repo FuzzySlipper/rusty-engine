@@ -321,6 +321,7 @@ impl Renderer {
                 default_world_lights: self.options.default_world_lights && !isolated_lighting,
                 default_viewmodel_lights: false,
                 shadows: false,
+                backdrop_shadows: false,
                 shadow_budget: None,
                 // A capture is isolated geometry: no screen-space occlusion.
                 ambient_occlusion: Default::default(),

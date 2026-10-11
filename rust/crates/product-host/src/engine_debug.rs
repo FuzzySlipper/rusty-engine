@@ -78,6 +78,7 @@ pub struct ProductHostRendererSettings {
 #[serde(rename_all = "camelCase")]
 pub struct ProductHostRendererSettingValues {
     pub shadows: bool,
+    pub backdrop_shadows: bool,
     pub shadow_budget: Option<u32>,
     /// `disabled`, `screenSpace` or `distanceField`.
     pub ambient_occlusion: String,

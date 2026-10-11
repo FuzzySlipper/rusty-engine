@@ -878,7 +878,10 @@ sky layer for an ambient light. A directional light's cascades follow the
 camera out to its `Range` (100 m by default). Set
 `RustyEngineProductShadowBudget` to a number of shadow layers to have the
 Engine choose which requesting lights cast, by `ShadowPriority` then distance
-(`renderer.lighting.shadowBudget`; 0, the default, for no limit). See
+(`renderer.lighting.shadowBudget`; 0, the default, for no limit).
+`RustyEngineProductBackdropShadows`, `enabled` (the default) or `disabled`
+(`renderer.lighting.backdropShadows`), lets the brightest casting sun shadow
+[the backdrop](lighting-and-sky.md#the-backdrop) too. See
 [shadows](lighting-and-sky.md#shadows) for resolution, softness and the
 budget.
 

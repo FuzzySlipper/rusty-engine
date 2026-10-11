@@ -249,7 +249,7 @@ export type ProductHostOperationKind = "connect" | "start" | "pause" | "resume" 
  */
 export type ProductHostRenderOutput = "stream" | "window";
 
-export type ProductHostRendererSettingValues = { shadows: boolean, shadowBudget: number | null, 
+export type ProductHostRendererSettingValues = { shadows: boolean, backdropShadows: boolean, shadowBudget: number | null, 
 /**
  * `disabled`, `screenSpace` or `distanceField`.
  */

@@ -163,14 +163,21 @@ impl Renderer {
             }
             RenderDiff::SetWind { wind } => self.tables.wind = *wind,
             RenderDiff::SetWetness { wetness } => self.tables.wetness = *wetness,
-            RenderDiff::SetBackdrop { camera, backdrop } => match backdrop {
-                Some(backdrop) => {
-                    self.tables.backdrops.insert(camera.clone(), *backdrop);
+            RenderDiff::SetBackdrop { camera, backdrop } => {
+                let linked = !self.tables.backdrops.is_empty();
+                match backdrop {
+                    Some(backdrop) => {
+                        self.tables.backdrops.insert(camera.clone(), *backdrop);
+                    }
+                    None => {
+                        self.tables.backdrops.remove(camera);
+                    }
                 }
-                None => {
-                    self.tables.backdrops.remove(camera);
+                // The sun casts in the backdrop only while one is linked.
+                if linked == self.tables.backdrops.is_empty() {
+                    self.tables.lights_dirty = true;
                 }
-            },
+            }
             RenderDiff::SetCloudRegion { id, region } => {
                 if self.tables.cloud_regions.len()
                     < render_model::CloudRegionDescriptor::MAX_REGIONS

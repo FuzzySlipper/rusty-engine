@@ -216,6 +216,7 @@ pub(crate) fn renderer_settings_descriptor(
 ) -> RendererSettingsDescriptor {
     RendererSettingsDescriptor {
         shadows: request.shadows,
+        backdrop_shadows: request.backdrop_shadows,
         shadow_budget: (request.shadow_budget > 0).then_some(request.shadow_budget),
         ambient_occlusion: AmbientOcclusionSettings {
             mode: match request.ambient_occlusion {
@@ -251,6 +252,7 @@ pub fn renderer_settings_request(
 ) -> NativeRendererSettingsRequest {
     NativeRendererSettingsRequest {
         shadows: settings.shadows,
+        backdrop_shadows: settings.backdrop_shadows,
         shadow_budget: settings.shadow_budget.unwrap_or(0),
         ambient_occlusion: match settings.ambient_occlusion.mode {
             AmbientOcclusionMode::Disabled => NativeAmbientOcclusionMode::Disabled,

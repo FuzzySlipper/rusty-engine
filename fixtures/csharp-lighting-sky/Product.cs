@@ -781,6 +781,13 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         engine.RendererSettings.Set(engine.RendererSettings.Read().Requested with { Shadows = enabled, ShadowBudget = budget });
         return Settings();
     }
+    // The sun's shadow over the backdrop's ranges (with lighting.shadows on).
+    [DebugCommand("lighting.backdrop.shadows")]
+    public string BackdropShadows(bool enabled)
+    {
+        engine.RendererSettings.Set(engine.RendererSettings.Read().Requested with { BackdropShadows = enabled });
+        return Settings();
+    }
     [DebugCommand("lighting.pipeline")]
     public string Pipeline(bool clusteredLighting,bool gpuCulling,bool vsync)
     {

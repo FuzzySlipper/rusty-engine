@@ -253,6 +253,16 @@ pub const RENDERER_SETTING_OPTIONS: &[RendererSettingOption] = &[
         gallery: GalleryExperiment::Try { values: &["true"], alternatives: false, everything: Some("true"), requires: None, setup: None },
     },
     RendererSettingOption {
+        id: "backdropShadows",
+        label: "Backdrop shadows",
+        group: "Quality",
+        description: "The sun shades distant ranges and valleys in the backdrop the game draws beyond the world.",
+        kind: RendererSettingKind::Toggle,
+        restart: false,
+        cost: "About 0.06 ms with a 64×64 heightfield of ranges at 1280×720 on an RX 9070 XT while the camera moves (its cascades 0.025 ms, the rest sampling them), 0.03 ms while it stands. Nothing without a backdrop.",
+        gallery: GalleryExperiment::Try { values: &["true"], alternatives: false, everything: Some("true"), requires: Some("shadows"), setup: Some(GallerySetup::Product("a backdrop (CameraView.SetBackdrop)")) },
+    },
+    RendererSettingOption {
         id: "shadowBudget",
         label: "Shadow budget",
         group: "Quality",
@@ -393,6 +403,8 @@ pub struct RendererSettingsOverrides {
     pub vsync: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub shadows: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub backdrop_shadows: Option<bool>,
     /// `Some(None)` is a chosen "no limit".
     #[serde(skip_serializing_if = "Option::is_none", with = "double_option")]
     pub shadow_budget: Option<Option<u32>>,
@@ -454,6 +466,9 @@ impl RendererSettingsOverrides {
         if let Some(value) = self.shadows {
             settings.shadows = value;
         }
+        if let Some(value) = self.backdrop_shadows {
+            settings.backdrop_shadows = value;
+        }
         if let Some(value) = self.shadow_budget {
             settings.shadow_budget = value;
         }
@@ -488,6 +503,7 @@ impl RendererSettingsOverrides {
             "antialiasing" => self.antialiasing.is_some(),
             "vsync" => self.vsync.is_some(),
             "shadows" => self.shadows.is_some(),
+            "backdropShadows" => self.backdrop_shadows.is_some(),
             "shadowBudget" => self.shadow_budget.is_some(),
             "ambientOcclusion" => self.ambient_occlusion.is_some(),
             "ambientOcclusionStrength" => self.ambient_occlusion_strength.is_some(),
@@ -544,6 +560,7 @@ impl RendererSettingsOverrides {
             }
             "vsync" => self.vsync = Some(toggle()?),
             "shadows" => self.shadows = Some(toggle()?),
+            "backdropShadows" => self.backdrop_shadows = Some(toggle()?),
             "shadowBudget" => {
                 let text = choice()?;
                 self.shadow_budget = Some(text.parse::<u32>().ok());
@@ -591,6 +608,7 @@ impl RendererSettingsOverrides {
             "antialiasing" => self.antialiasing = None,
             "vsync" => self.vsync = None,
             "shadows" => self.shadows = None,
+            "backdropShadows" => self.backdrop_shadows = None,
             "shadowBudget" => self.shadow_budget = None,
             "ambientOcclusion" => self.ambient_occlusion = None,
             "ambientOcclusionStrength" => self.ambient_occlusion_strength = None,
@@ -660,6 +678,7 @@ impl RendererSettingsOverrides {
             antialiasing: preset.antialiasing.or(self.antialiasing),
             vsync: preset.vsync.or(self.vsync),
             shadows: preset.shadows.or(self.shadows),
+            backdrop_shadows: preset.backdrop_shadows.or(self.backdrop_shadows),
             shadow_budget: preset.shadow_budget.or(self.shadow_budget),
             ambient_occlusion: preset.ambient_occlusion.or(self.ambient_occlusion),
             ambient_occlusion_strength: preset
@@ -687,6 +706,7 @@ pub fn renderer_setting_value(settings: &RendererSettingsDescriptor, id: &str) -
         }),
         "vsync" => Value::from(settings.vsync),
         "shadows" => Value::from(settings.shadows),
+        "backdropShadows" => Value::from(settings.backdrop_shadows),
         "shadowBudget" => Value::from(
             settings
                 .shadow_budget

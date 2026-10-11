@@ -57,6 +57,9 @@ pub enum NativeVolumetricCloudsQuality {
 pub struct NativeRendererSettingsRequest {
     /// Render shadow maps for lights whose shadow intent requests them.
     pub shadows: bool,
+    /// With `shadows`, the brightest casting sun also shadows the backdrop
+    /// (`CameraView.SetBackdrop`) through cascades of its own.
+    pub backdrop_shadows: bool,
     /// At most this many shadow layers at once, the requesting lights chosen
     /// by priority then distance from the camera; 0 for no limit.
     pub shadow_budget: u32,

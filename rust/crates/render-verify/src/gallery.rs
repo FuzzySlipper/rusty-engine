@@ -586,6 +586,7 @@ mod tests {
         ] {
             let mut settings = RendererSettingsDescriptor {
                 shadows: true,
+                backdrop_shadows: true,
                 clustered_lighting: true,
                 gpu_culling: true,
                 volumetric_fog: VolumetricFogQuality::High,

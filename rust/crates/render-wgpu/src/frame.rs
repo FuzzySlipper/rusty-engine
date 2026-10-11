@@ -190,6 +190,15 @@ pub(crate) struct ViewCache {
     regrouped: bool,
 }
 
+/// A world view's backdrop camera (`Renderer::backdrop_camera`).
+pub(crate) struct BackdropCamera {
+    pub camera: CameraMatrices,
+    /// The pass's `Frame.backdrop` row: where its points stand in the world.
+    pub link: [f32; 4],
+    /// The diagonal of the box around everything the backdrop shows.
+    pub extent: f32,
+}
+
 /// Which retained layers a view pass draws.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ViewLayer {
@@ -341,7 +350,10 @@ impl Renderer {
         self.shadows_chosen = false;
         self.shadows_rendered = (0, 0);
         self.finish.begin_frame(&self.gpu);
-        if let Some(timer) = &mut self.shadow_timer {
+        for timer in [&mut self.shadow_timer, &mut self.backdrop_shadow_timer]
+            .into_iter()
+            .flatten()
+        {
             timer.collect(&self.gpu);
         }
         self.exposure_adapted = false;
@@ -433,7 +445,12 @@ impl Renderer {
         }
         let started = std::time::Instant::now();
         let parts = &self.tables.parts;
-        let candidates = batch::caster_candidates(parts);
+        let candidates = batch::caster_candidates(parts, RenderLayer::Scene);
+        let backdrop_candidates = if self.shadows.layers.iter().any(|layer| layer.is_backdrop()) {
+            batch::caster_candidates(parts, RenderLayer::Backdrop)
+        } else {
+            Vec::new()
+        };
         // A point light's six faces share one reach.
         let mut reached: Option<((Vec3, f32), Vec<PartId>)> = None;
         // Casters follow the world and viewmodel lists in the instance
@@ -452,6 +469,7 @@ impl Renderer {
                 }
                 let inside = match layer.reach() {
                     _ if !layer.has_view() => &Vec::new(),
+                    None if layer.is_backdrop() => &backdrop_candidates,
                     None => &candidates,
                     Some(reach) => {
                         if reached.as_ref().is_none_or(|(at, _)| *at != reach) {
@@ -521,11 +539,12 @@ impl Renderer {
         self.reserve_instances();
     }
 
-    /// Fit each directional light's cascades to a world view's camera, and
-    /// give its light row the split depths and the view axis receivers pick
-    /// a cascade by. A cascade whose view changed is culled again and
-    /// re-renders.
-    fn fit_cascades(&mut self, camera: &CameraMatrices) {
+    /// Fit each directional light's cascades to a world view's camera, or
+    /// with `backdrop` (the extent of what it shows) the backdrop cascades
+    /// to a backdrop camera, and give the light row the split depths and the
+    /// view axis receivers pick a cascade by. A cascade whose view changed
+    /// is culled again and re-renders.
+    fn fit_cascades(&mut self, camera: &CameraMatrices, backdrop: Option<f32>) {
         let (near, far) = shadows::view_depths(&camera.projection);
         let forward = -camera.view.row(2).truncate();
         let mut fitted = false;
@@ -536,10 +555,17 @@ impl Renderer {
                 index: cascade,
                 row,
                 settings,
+                backdrop: in_backdrop,
             } = self.shadows.layers[index].source
             else {
                 continue;
             };
+            if in_backdrop != backdrop.is_some() {
+                continue;
+            }
+            // A backdrop cascade reaches across everything the backdrop
+            // shows toward the light.
+            let toward_light = backdrop.unwrap_or(shadows::SHADOW_FAR);
             let splits = shadows::cascade_splits(near, far.min(distance));
             let cascade = cascade as usize;
             let from = if cascade == 0 {
@@ -547,8 +573,14 @@ impl Renderer {
             } else {
                 splits[cascade - 1]
             };
-            let view_proj =
-                shadows::cascade_view(direction, camera, from, splits[cascade], settings.size);
+            let view_proj = shadows::cascade_view(
+                direction,
+                camera,
+                from,
+                splits[cascade],
+                settings.size,
+                toward_light,
+            );
             let layer = &mut self.shadows.layers[index];
             if layer.view_proj != view_proj {
                 layer.view_proj = view_proj;
@@ -686,21 +718,56 @@ impl Renderer {
         }
         self.retained_light_rows(&mut rows, ViewLayer::Viewmodel, None);
         let viewmodel_end = (rows.len() / LIGHT_ROW_FLOATS) as u32;
-        // The backdrop sees the world's ambient, hemisphere and directional
-        // lights (they hold at any distance), without their shadows, and the
-        // lights placed in it.
-        let backdrop_rows: Vec<[f32; LIGHT_ROW_FLOATS]> = rows
-            [..world_count as usize * LIGHT_ROW_FLOATS]
+        // The backdrop sees copies of the world's ambient, hemisphere and
+        // directional lights (they hold at any distance), and the lights
+        // placed in it. The copies cast no shadow but the brightest casting
+        // sun's (`backdrop_shadows`), through cascades of its own.
+        let world_rows = rows[..world_count as usize * LIGHT_ROW_FLOATS]
             .as_chunks::<LIGHT_ROW_FLOATS>()
-            .0
+            .0;
+        let copied: Vec<u32> = (0..world_count)
+            .filter(|&row| world_rows[row as usize][3] < 3.0)
+            .collect();
+        let backdrop_rows: Vec<[f32; LIGHT_ROW_FLOATS]> = copied
             .iter()
-            .filter(|row| row[3] < 3.0)
-            .map(|row| {
-                let mut row = *row;
+            .map(|&row| {
+                let mut row = world_rows[row as usize];
                 row[15] = 0.0;
                 row
             })
             .collect();
+        if self.options.shadows
+            && self.options.backdrop_shadows
+            && !self.tables.backdrops.is_empty()
+        {
+            let brightness = |candidate: &shadows::ShadowCandidate| {
+                world_rows[candidate.row as usize][..3]
+                    .iter()
+                    .copied()
+                    .fold(0.0, f32::max)
+            };
+            let mut sun: Option<(f32, usize)> = None;
+            for (index, candidate) in candidates.iter().enumerate() {
+                let directional = candidate
+                    .layers
+                    .first()
+                    .is_some_and(|source| matches!(source, shadows::LayerSource::Cascade { .. }));
+                if directional && sun.is_none_or(|(best, _)| brightness(candidate) > best) {
+                    sun = Some((brightness(candidate), index));
+                }
+            }
+            if let Some((_, index)) = sun {
+                let candidate = &mut candidates[index];
+                let copy = viewmodel_end
+                    + copied
+                        .iter()
+                        .position(|&row| row == candidate.row)
+                        .expect("a directional row is copied") as u32;
+                let cascades = shadows::backdrop_cascades(&candidate.layers, copy);
+                candidate.layers.extend(cascades);
+                candidate.backdrop_row = Some(copy);
+            }
+        }
         rows.extend(backdrop_rows.iter().flatten());
         self.retained_light_rows(&mut rows, ViewLayer::Backdrop, None);
         self.shadow_candidates = candidates;
@@ -783,17 +850,17 @@ impl Renderer {
         }
         match rows {
             Some(rows) => {
-                for (candidate, first) in self.shadow_candidates.iter().zip(&firsts) {
-                    rows[candidate.row as usize * LIGHT_ROW_FLOATS + 15] = *first;
+                for (row, first) in Self::shadow_firsts(&self.shadow_candidates, &firsts) {
+                    rows[row as usize * LIGHT_ROW_FLOATS + 15] = first;
                 }
             }
             None => {
-                for (candidate, first) in self.shadow_candidates.iter().zip(&firsts) {
-                    let at = (candidate.row as usize * LIGHT_ROW_FLOATS + 15) * 4;
+                for (row, first) in Self::shadow_firsts(&self.shadow_candidates, &firsts) {
+                    let at = (row as usize * LIGHT_ROW_FLOATS + 15) * 4;
                     self.gpu.queue.write_buffer(
                         &self.lights_buffer,
                         at as u64,
-                        bytemuck::cast_slice(&[*first]),
+                        bytemuck::cast_slice(&[first]),
                     );
                 }
             }
@@ -809,6 +876,29 @@ impl Renderer {
             self.rebind_frame();
         }
         changed
+    }
+
+    /// Each candidate's light row with its first layer + 1 (0 when it does
+    /// not cast), and its backdrop copy's row with the first backdrop
+    /// cascade + 1: they follow its world cascades.
+    fn shadow_firsts<'a>(
+        candidates: &'a [shadows::ShadowCandidate],
+        firsts: &'a [f32],
+    ) -> impl Iterator<Item = (u32, f32)> + 'a {
+        candidates
+            .iter()
+            .zip(firsts)
+            .flat_map(|(candidate, &first)| {
+                let backdrop = candidate.backdrop_row.map(|row| {
+                    let cascade = if first > 0.0 {
+                        first + shadows::CASCADES as f32
+                    } else {
+                        0.0
+                    };
+                    (row, cascade)
+                });
+                std::iter::once((candidate.row, first)).chain(backdrop)
+            })
     }
 
     /// The resident distance fields of the shown scene-layer payload meshes,
@@ -865,6 +955,7 @@ impl Renderer {
                                     row: index,
                                     layers,
                                     priority: light.shadow_settings().priority,
+                                    backdrop_row: None,
                                     position: match light {
                                         LightDescriptor::Point { position, .. }
                                         | LightDescriptor::Spot { position, .. } => Some(
@@ -1220,17 +1311,31 @@ impl Renderer {
 
     /// Render each stale shadow layer's casters, or every layer when
     /// presentation time moved and a product's caster stage (which may read
-    /// it) draws.
-    fn encode_shadows(&mut self, encoder: &mut wgpu::CommandEncoder) -> ShadowsEncoded {
-        let retimed = self.shadows.timed && self.shadows.time != self.animation_time;
-        if !retimed && self.shadows.layers.iter().all(|layer| !layer.stale) {
+    /// it) draws: the world's layers, or with `backdrop` the backdrop's,
+    /// each timed as a pass of its own.
+    fn encode_shadows(
+        &mut self,
+        encoder: &mut wgpu::CommandEncoder,
+        backdrop: bool,
+    ) -> ShadowsEncoded {
+        let kind = usize::from(backdrop);
+        let ours = |layer: &shadows::ShadowLayer| layer.is_backdrop() == backdrop;
+        let retimed = self.shadows.timed[kind] && self.shadows.time[kind] != self.animation_time;
+        if !retimed
+            && self
+                .shadows
+                .layers
+                .iter()
+                .all(|layer| !ours(layer) || !layer.stale)
+        {
             return Default::default();
         }
-        self.shadows.time = self.animation_time;
+        self.shadows.time[kind] = self.animation_time;
         let batches: Vec<batch::Batch> = self
             .shadows
             .layers
             .iter()
+            .filter(|layer| ours(layer))
             .flat_map(|layer| {
                 layer
                     .casters
@@ -1241,7 +1346,7 @@ impl Renderer {
             })
             .collect();
         let variants = self.batch_variants(&batches);
-        self.shadows.timed = variants.iter().any(|(features, _)| {
+        self.shadows.timed[kind] = variants.iter().any(|(features, _)| {
             let caster = features.caster();
             caster.product() != 0 || caster.moves_with_time()
         });
@@ -1260,7 +1365,7 @@ impl Renderer {
             .shadows
             .layers
             .iter()
-            .any(|layer| (retimed || layer.stale) && cached_path(layer))
+            .any(|layer| ours(layer) && (retimed || layer.stale) && cached_path(layer))
         {
             self.shadows
                 .ensure_cache(&self.gpu.device, &self.layouts.shadow_restore_layout)
@@ -1270,7 +1375,10 @@ impl Renderer {
         // The frame's first pass and last pass carry the shadows timer's
         // stamps.
         let rendered: Vec<usize> = (0..self.shadows.layers.len())
-            .filter(|&index| retimed || self.shadows.layers[index].stale)
+            .filter(|&index| {
+                let layer = &self.shadows.layers[index];
+                ours(layer) && (retimed || layer.stale)
+            })
             .collect();
         let last = rendered.last().copied();
         let mut begun = false;
@@ -1289,7 +1397,11 @@ impl Renderer {
             };
             let rebuild = use_cache && layer.cached.as_ref() != Some(&token);
             // One pass into a tile of the atlas or of the static cache.
-            let timer = self.shadow_timer.as_ref();
+            let timer = if backdrop {
+                self.backdrop_shadow_timer.as_ref()
+            } else {
+                self.shadow_timer.as_ref()
+            };
             let mut stamps = |end: bool| {
                 let begin = !std::mem::replace(&mut begun, true);
                 timer.and_then(|timer| timer.render_writes_between(begin, end))
@@ -1362,6 +1474,9 @@ impl Renderer {
             }
         }
         for (index, layer) in self.shadows.layers.iter_mut().enumerate() {
+            if layer.is_backdrop() != backdrop {
+                continue;
+            }
             layer.stale = false;
             if retimed || layer.dynamic.instances() == 0 {
                 layer.cached = None;
@@ -1371,7 +1486,12 @@ impl Renderer {
             }
         }
         if drawn.layers > 0 {
-            if let Some(timer) = &mut self.shadow_timer {
+            let timer = if backdrop {
+                &mut self.backdrop_shadow_timer
+            } else {
+                &mut self.shadow_timer
+            };
+            if let Some(timer) = timer {
                 timer.resolve(encoder);
             }
         }
@@ -1645,7 +1765,7 @@ impl Renderer {
         &self,
         world: &CameraMatrices,
         camera_id: Option<&str>,
-    ) -> Option<(CameraMatrices, [f32; 4])> {
+    ) -> Option<BackdropCamera> {
         let link = *camera_id
             .and_then(|id| self.tables.backdrops.get(&Some(id.to_owned())))
             .or_else(|| self.tables.backdrops.get(&None))?;
@@ -1665,7 +1785,9 @@ impl Renderer {
         // particles' places, by view depth: a box's nearest and farthest depths lie at
         // its corners.
         let mut extent: Option<(f32, f32)> = None;
+        let mut bounds = (Vec3::INFINITY, Vec3::NEG_INFINITY);
         let mut reach = |min: Vec3, max: Vec3| {
+            bounds = (bounds.0.min(min), bounds.1.max(max));
             for corner in 0..8 {
                 let point = Vec3::select(
                     glam::BVec3::new(corner & 1 != 0, corner & 2 != 0, corner & 4 != 0),
@@ -1735,15 +1857,16 @@ impl Renderer {
         projection.w_axis.z = ratio * near;
         let scale = link.scale as f32;
         let offset = world.eye - eye * scale;
-        Some((
-            CameraMatrices {
+        Some(BackdropCamera {
+            camera: CameraMatrices {
                 view_proj: projection * view,
                 view,
                 projection,
                 eye,
             },
-            [offset.x, offset.y, offset.z, scale],
-        ))
+            link: [offset.x, offset.y, offset.z, scale],
+            extent: (bounds.1 - bounds.0).length(),
+        })
     }
 
     /// A world view's backdrop (`RenderLayer::Backdrop`), when it has a
@@ -1758,7 +1881,11 @@ impl Renderer {
         if !view.sky {
             return None;
         }
-        let (camera, link) = self.backdrop_camera(&view.camera, view.camera_id)?;
+        let BackdropCamera {
+            camera,
+            link,
+            extent,
+        } = self.backdrop_camera(&view.camera, view.camera_id)?;
         // The planes from the projection: z_axis.z is far / (near - far)
         // and w_axis.z that times near.
         let (ratio, offset) = (camera.projection.z_axis.z, camera.projection.w_axis.z);
@@ -1787,6 +1914,7 @@ impl Renderer {
         self.encode_background(&mut encoder, view, sky_index);
         self.gpu.queue.submit([encoder.finish()]);
         self.finish.submitted();
+        self.fit_cascades(&camera, Some(extent));
         Some(self.encode_view(ViewPass {
             target: view.target,
             viewport: view.viewport,
@@ -2091,7 +2219,7 @@ impl Renderer {
                     self.cull_casters(&HashSet::new(), false);
                 }
             }
-            self.fit_cascades(&view.camera);
+            self.fit_cascades(&view.camera, None);
         }
         let instances_uploaded = self.update_view_list(&view_proj, eye, view.layer);
         // The world, sprites and particles draw into the view's HDR target,
@@ -2210,10 +2338,10 @@ impl Renderer {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("render-wgpu view"),
             });
-        let shadows = if world_layer {
-            self.encode_shadows(&mut encoder)
-        } else {
-            Default::default()
+        let shadows = match view.layer {
+            ViewLayer::World => self.encode_shadows(&mut encoder, false),
+            ViewLayer::Backdrop => self.encode_shadows(&mut encoder, true),
+            ViewLayer::Viewmodel => Default::default(),
         };
         // The GPU cull writes the opaque visible runs and indirect arguments
         // every pass, before anything draws them.
@@ -2654,7 +2782,11 @@ impl Renderer {
             self.ambient_occlusion.submitted();
         }
         if shadows.layers > 0 {
-            if let Some(timer) = &mut self.shadow_timer {
+            let timer = match view.layer {
+                ViewLayer::Backdrop => &mut self.backdrop_shadow_timer,
+                _ => &mut self.shadow_timer,
+            };
+            if let Some(timer) = timer {
                 timer.submitted();
             }
         }

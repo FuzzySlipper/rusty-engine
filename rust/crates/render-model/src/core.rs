@@ -841,6 +841,11 @@ impl Default for AmbientOcclusionSettings {
 pub struct RendererSettingsDescriptor {
     /// Render shadow maps for lights whose shadow intent requests them.
     pub shadows: bool,
+    /// With `shadows`, the brightest casting sun also shadows the backdrop
+    /// (`SetBackdrop`) through cascades of its own. Settings written before
+    /// it existed have it on.
+    #[serde(default = "enabled")]
+    pub backdrop_shadows: bool,
     /// At most this many shadow layers at once, the requesting lights
     /// chosen by priority then distance from the camera; `None` for no
     /// limit.
@@ -871,6 +876,10 @@ pub struct RendererSettingsDescriptor {
     pub volumetric_clouds: VolumetricCloudsQuality,
 }
 
+fn enabled() -> bool {
+    true
+}
+
 impl RendererSettingsDescriptor {
     /// The sample counts a primary destination may have.
     pub const SAMPLE_COUNTS: [u32; 3] = [1, 2, 4];
@@ -879,6 +888,7 @@ impl RendererSettingsDescriptor {
 
     pub const DEFAULT: Self = Self {
         shadows: false,
+        backdrop_shadows: true,
         shadow_budget: None,
         ambient_occlusion: AmbientOcclusionSettings::DEFAULT,
         antialiasing: 4,

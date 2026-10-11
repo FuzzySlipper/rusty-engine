@@ -639,6 +639,7 @@ declare module "@rusty-engine/live-debug/internal/live-debug-client/src/generate
     export type ProductHostRenderOutput = "stream" | "window";
     export type ProductHostRendererSettingValues = {
         shadows: boolean;
+        backdropShadows: boolean;
         shadowBudget: number | null;
         /**
          * `disabled`, `screenSpace` or `distanceField`.

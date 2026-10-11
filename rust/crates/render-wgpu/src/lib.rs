@@ -180,6 +180,10 @@ pub struct RendererOptions {
     /// Render shadow maps for world lights whose `shadow_intent` requests
     /// them. Off by default; C# products enable it in their manifest.
     pub shadows: bool,
+    /// The brightest casting sun also casts in the backdrop, through
+    /// cascades fitted to each backdrop camera (`SetBackdrop`). On by
+    /// default; it needs `shadows`.
+    pub backdrop_shadows: bool,
     /// `RustyEngineProductShadowBudget`: at most this many shadow layers
     /// at once, the requesting lights chosen by priority then distance from
     /// the camera (`shadows::choose`); unlimited without one.
@@ -225,6 +229,7 @@ impl Default for RendererOptions {
             default_world_lights: true,
             default_viewmodel_lights: true,
             shadows: false,
+            backdrop_shadows: true,
             shadow_budget: None,
             ambient_occlusion: AmbientOcclusion::default(),
             clustered_lighting: false,
@@ -245,6 +250,7 @@ impl RendererOptions {
     /// and the default light rigs.
     pub fn with_settings(mut self, settings: &RendererSettingsDescriptor) -> Self {
         self.shadows = settings.shadows;
+        self.backdrop_shadows = settings.backdrop_shadows;
         self.shadow_budget = settings.shadow_budget;
         let mode = settings.ambient_occlusion.mode;
         self.ambient_occlusion = AmbientOcclusion {
@@ -276,6 +282,7 @@ impl RendererOptions {
     pub fn settings(&self) -> RendererSettingsDescriptor {
         RendererSettingsDescriptor {
             shadows: self.shadows,
+            backdrop_shadows: self.backdrop_shadows,
             shadow_budget: self.shadow_budget,
             ambient_occlusion: render_model::AmbientOcclusionSettings {
                 mode: match self.ambient_occlusion.path {
@@ -394,6 +401,8 @@ pub struct Renderer {
     /// The frame's shadow-layer passes, first to last, in the frames that
     /// render layers.
     shadow_timer: Option<timing::PassTimer>,
+    /// The backdrop's cascades (`backdrop_shadows`), in their own passes.
+    backdrop_shadow_timer: Option<timing::PassTimer>,
     /// Auto exposure adapted in this frame's first world view.
     exposure_adapted: bool,
     frame_bind_group: wgpu::BindGroup,
@@ -466,6 +475,7 @@ impl Renderer {
         let shadows = shadows::ShadowMaps::new(device, &layouts.shadow_layer);
         let sky_light = sky_light::SkyLight::new(gpu);
         let shadow_timer = timing::PassTimer::new(gpu, "shadows");
+        let backdrop_shadow_timer = timing::PassTimer::new(gpu, "backdrop-shadows");
         let probes = probes::ProbeVolume::new(gpu);
         let light_clusters = light_clusters::LightClusters::new(
             gpu,
@@ -596,6 +606,7 @@ impl Renderer {
             shadows_chosen: false,
             shadows_rendered: (0, 0),
             shadow_timer,
+            backdrop_shadow_timer,
             exposure_adapted: false,
             frame_bind_group,
             caster_bind_group,
@@ -817,6 +828,10 @@ impl Renderer {
                     self.shadow_timer
                         .as_ref()
                         .map_or_else(|| timing::untimed("shadows"), timing::PassTimer::readout),
+                    self.backdrop_shadow_timer.as_ref().map_or_else(
+                        || timing::untimed("backdrop-shadows"),
+                        timing::PassTimer::readout,
+                    ),
                     self.light_clusters.timing(),
                     self.volumetric_fog.timing(),
                     self.culling.timing(),

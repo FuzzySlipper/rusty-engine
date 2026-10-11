@@ -214,7 +214,7 @@ pub(crate) fn blended_list(
 /// whose node casts (`ShadowCasting::Cast`) and whose material does (an
 /// opaque one, or a blended one with `translucent_shadow`). A scattered run
 /// is one candidate, its leader.
-pub(crate) fn caster_candidates(parts: &Parts) -> Vec<PartId> {
+pub(crate) fn caster_candidates(parts: &Parts, layer: RenderLayer) -> Vec<PartId> {
     parts
         .state
         .iter()
@@ -224,7 +224,7 @@ pub(crate) fn caster_candidates(parts: &Parts) -> Vec<PartId> {
                 && state.shown
                 && state.casts_shadows
                 && state.class.shadow
-                && state.layer == RenderLayer::Scene
+                && state.layer == layer
                 && !state.class.lines
                 && !parts.follows(*id as PartId)
         })

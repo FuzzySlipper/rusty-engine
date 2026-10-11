@@ -14,6 +14,7 @@ use support::{camera, Harness, HEIGHT, WIDTH};
 fn settings() -> RendererSettingsDescriptor {
     RendererSettingsDescriptor {
         shadows: true,
+        backdrop_shadows: true,
         shadow_budget: Some(2),
         ambient_occlusion: AmbientOcclusionSettings {
             mode: AmbientOcclusionMode::ScreenSpace,

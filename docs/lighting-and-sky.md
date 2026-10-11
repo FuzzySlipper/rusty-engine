@@ -33,7 +33,8 @@ blend from one cascade into the next, and the shadow fades out at the range.
 A longer range spreads the same maps over more ground, so near shadows get
 coarser. Each world view, a capture included, fits the cascades to its own
 camera, so a composition that draws several world views a frame renders them
-once for each.
+once for each. The brightest casting sun also casts in
+[the backdrop](#the-backdrop), through four cascades of its own.
 
 A blended material's parts cast no shadow (a lake does not shadow its bed,
 glass throws no block of dark) unless the material sets
@@ -316,6 +317,7 @@ only, and a damaged file is reported and ignored.
 | `antialiasing` | Display | `off`, `2x`, `4x` |
 | `vsync` | Display | on or off |
 | `shadows` | Quality | on or off |
+| `backdropShadows` | Quality | on or off |
 | `shadowBudget` | Quality | `4`, `8`, `16`, `32`, `none` |
 | `ambientOcclusion` | Lighting | `disabled`, `screenSpace`, `distanceField` |
 | `ambientOcclusionStrength` | Lighting | 0 to 2 |
@@ -1160,8 +1162,20 @@ engine.Presentation.CreateEmitter(smoke with { Backdrop = true });
   world's depth precision is unchanged, and nearer backdrop than a
   ten-thousandth of its far plane is clipped (the world covers it).
 - It is lit by the world's ambient, hemisphere and directional lights, and
-  by the sky's light, without their shadows. Lights placed in the backdrop
-  light only the backdrop.
+  by the sky's light. Lights placed in the backdrop light only the backdrop.
+- The brightest directional light that casts in the world (`shadows` on,
+  `LightShadowIntent.Requested`, kept by the budget) also casts in the
+  backdrop, through four more cascades fitted to each backdrop camera over
+  its whole depth range, the light's `Range` aside. Every shown backdrop
+  part casts (unless its fact says `ShadowCasting.None`) and every backdrop
+  surface receives, so a range shades itself and the valleys behind it. The
+  cascades are fitted as the world would fit them at world scale, so a 1:1000
+  range's shadow falls as the same range's would at 1:1 (`tests/backdrop.rs`
+  checks both), its texels a thousand times finer in backdrop units. Other
+  lights cast no shadow there. The renderer setting `BackdropShadows`
+  (`RustyEngineProductBackdropShadows`, the `backdropShadows` video option;
+  on by default) turns it off, which draws the backdrop exactly as without
+  shadows.
 - Distance fog, height fog and the atmosphere's haze are reckoned at the
   backdrop's **world-equivalent** distance and height, and the cloud layer
   shades it where it would stand in the world. A backdrop range 5 km out at
@@ -1174,9 +1188,9 @@ engine.Presentation.CreateEmitter(smoke with { Backdrop = true });
   emitters (`Backdrop = true`: anchor, velocities and sizes in backdrop
   units, no collision) can stand in it, opaque, masked, blended, soft and
   water alike. A backdrop of particles alone draws. The backdrop casts no
-  shadows, is never pickable, and adds nothing to collision. A voxel
-  presentation's session still owns its collision, apart from the walking
-  session's.
+  shadow on the world, is never pickable, and adds nothing to collision. A
+  voxel presentation's session still owns its collision, apart from the
+  walking session's.
 - A voxel presentation in it measures its level of detail and its scatters
   from the backdrop's eye: where the camera of the lowest-ordered primary
   view stands in the backdrop under that view's link, as each update
@@ -1194,6 +1208,12 @@ engine.Presentation.CreateEmitter(smoke with { Backdrop = true });
   parts listed on the CPU, drawn and finished. The world view's background
   is submitted before it. On an RX 9070 XT at 1280×720 the fixture's ranges
   (a 64×64 heightfield) and its dual-contoured mesa cost about 0.05 ms.
+- Its cascades render in a pass of their own, timed as `backdrop-shadows`,
+  when the backdrop camera's fit moves them or a caster in them changes:
+  about 0.025 ms a frame for a 64×64 heightfield of ranges on an RX 9070 XT
+  while the camera walks, nothing while it stands. Sampling them adds about
+  0.03 ms to the `backdrop` pass at 1280×720. They take four more 1024²
+  atlas layers while a backdrop is linked.
 - Perspective views only: an orthographic view draws no backdrop. Neither
   the sky's light nor reflections see it.
 
@@ -1273,7 +1293,9 @@ the camera up toward it; 0 clears it, and `lighting.sky` moves the sun that
 lights it from noon to dusk),
 `lighting.backdrop <scale>` (ranges ringing the room 1.5 to 6 km out, a
 heightfield mesh, and a dual-contoured mesa, drawn behind the world at
-1:`scale` and seen out of the doorway; 0 removes them).
+1:`scale` and seen out of the doorway; 0 removes them), with
+`lighting.backdrop.shadows <enabled>` (the sun's shadow over them, under
+`lighting.shadows`).
 `generate-particles.py` regenerates its three authored sprites and
 `generate-water.py` the foam and ripple textures.
 `lighting.sky` also moves the fixture's sun from noon at 0 to a low dusk sun

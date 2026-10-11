@@ -98,6 +98,10 @@ pub struct SceneSnapshotOptions {
     pub default_world_lights: bool,
     pub default_viewmodel_lights: bool,
     pub shadows: bool,
+    /// Snapshots written before backdrop shadows draw the backdrop without
+    /// them.
+    #[serde(default)]
+    pub backdrop_shadows: bool,
     #[serde(default)]
     pub shadow_budget: Option<u32>,
     /// Snapshots written before ambient occlusion existed draw without it.
@@ -216,6 +220,7 @@ impl From<SceneSnapshotOptions> for render_wgpu::RendererOptions {
             default_world_lights: options.default_world_lights,
             default_viewmodel_lights: options.default_viewmodel_lights,
             shadows: options.shadows,
+            backdrop_shadows: options.backdrop_shadows,
             shadow_budget: options.shadow_budget,
             ambient_occlusion: options.ambient_occlusion.into(),
             clustered_lighting: options.clustered_lighting,
@@ -235,6 +240,7 @@ impl From<render_wgpu::RendererOptions> for SceneSnapshotOptions {
             default_world_lights: options.default_world_lights,
             default_viewmodel_lights: options.default_viewmodel_lights,
             shadows: options.shadows,
+            backdrop_shadows: options.backdrop_shadows,
             shadow_budget: options.shadow_budget,
             ambient_occlusion: options.ambient_occlusion.into(),
             clustered_lighting: options.clustered_lighting,
