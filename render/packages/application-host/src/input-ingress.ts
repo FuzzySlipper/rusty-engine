@@ -663,10 +663,12 @@ export function createRustyApplicationInputQueue(
       return true;
     },
     clear: (reason) => {
-      if (reason === 'interaction-mode-loss') {
-        // Same-context physical loss must not discard an accepted DOM action.
-        // Keep ordering (including any earlier context transition), and coalesce
-        // repeated disallowed pointer events instead of filling the queue.
+      if (reason === 'interaction-mode-loss' || reason === 'pointer-lock-loss' || reason === 'focus-loss') {
+        // Losing physical input within an epoch must not discard an accepted
+        // DOM action: opening a menu claims it, then loses pointer lock and
+        // focus asynchronously. The clear follows what was queued, releasing
+        // held input after it; coalesce repeats (disallowed pointer events)
+        // instead of filling the queue.
         const last = entries.at(-1);
         if (last !== undefined && 'fact' in last && last.fact.kind === 'clear'
           && last.fact.reason === reason) return;

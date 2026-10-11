@@ -816,7 +816,10 @@ meaning; these are not Rust-mapped gameplay intents. Unsubscribe on UI disposal.
 
 Interface observations never enter the gameplay queue or consume its sequence
 numbers. Use `context.intents.claim` for actions that need product processing;
-it is the sole ordered command lane. No downstream gamepad polling or
+it is the sole ordered command lane. Losing pointer lock, focus or gameplay
+mode releases held input but keeps the claims already made, so a menu that
+claims and then asks for the interface reaches the product exactly once; a
+restart or control change before delivery drops them. No downstream gamepad polling or
 animation loop is needed. Gameplay mode keeps ordinary Engine input delivery;
 modal mode and loss of browser focus suppress controller observation. Mode
 changes adopt already-held controller state without replaying its press, so a

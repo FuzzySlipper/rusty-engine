@@ -419,7 +419,7 @@ fn fast_pointer_movement_accumulates_without_a_magnitude_cap() {
 }
 
 #[test]
-fn same_context_interface_clear_releases_physical_input_and_delivers_one_direct_payload() {
+fn same_context_input_losses_release_physical_input_and_deliver_one_direct_payload() {
     let (mut lifecycle, binding) = lifecycle_and_binding();
     let mut lane = RuntimeInputLane::new(compiled_mappings(), binding, context());
     lane.ingest(physical(
@@ -448,13 +448,17 @@ fn same_context_interface_clear_releases_physical_input_and_delivers_one_direct_
         .unwrap(),
     ))
     .unwrap();
-    for sequence in [2, 3] {
+    // Opening a menu: the mode changes, then pointer lock and focus go.
+    for (sequence, reason) in [
+        (2, InputClearReason::InteractionModeLoss),
+        (3, InputClearReason::InteractionModeLoss),
+        (4, InputClearReason::PointerLockLoss),
+        (5, InputClearReason::FocusLoss),
+    ] {
         lane.ingest(physical(
             binding,
             sequence,
-            RuntimeInputFact::Clear {
-                reason: InputClearReason::InteractionModeLoss,
-            },
+            RuntimeInputFact::Clear { reason },
         ))
         .unwrap();
     }
@@ -482,7 +486,7 @@ fn same_context_interface_clear_releases_physical_input_and_delivers_one_direct_
 }
 
 #[test]
-fn focus_restart_and_context_invalidation_cancel_pending_direct_payloads() {
+fn restart_and_context_invalidation_cancel_pending_direct_payloads() {
     let payload = || RuntimeIntentValue::ProductPayload {
         payload: RuntimeProductPayload::new(
             "example.inventory.drop.v1",
@@ -490,28 +494,6 @@ fn focus_restart_and_context_invalidation_cancel_pending_direct_payloads() {
         )
         .unwrap(),
     };
-
-    let (mut focus_lifecycle, focus_binding) = lifecycle_and_binding();
-    let mut focus_lane = RuntimeInputLane::new(compiled_mappings(), focus_binding, context());
-    focus_lane
-        .ingest(RuntimeInputEvent::DirectIntent(
-            RuntimeDirectIntentClaim::new(focus_binding, 0, context(), "inventory.drop", payload())
-                .unwrap(),
-        ))
-        .unwrap();
-    focus_lane
-        .ingest(physical(
-            focus_binding,
-            1,
-            RuntimeInputFact::Clear {
-                reason: InputClearReason::FocusLoss,
-            },
-        ))
-        .unwrap();
-    assert!(snapshot(&mut focus_lane, &mut focus_lifecycle)
-        .unwrap()
-        .1
-        .is_empty());
 
     let (mut restart_lifecycle, restart_binding) = lifecycle_and_binding();
     let mut restart_lane = RuntimeInputLane::new(compiled_mappings(), restart_binding, context());

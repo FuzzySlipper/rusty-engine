@@ -383,7 +383,7 @@ void test('managed interface events preserve a claimed product payload while rel
   ingress.dispose();
 });
 
-void test('focus, context, and restart invalidation discard queued direct product payloads', () => {
+void test('focus and pointer-lock loss keep a queued direct product payload; context and restart invalidation discard it', () => {
   const queue = createRustyApplicationInputQueue(8);
   queue.bindRuntime(INITIAL);
   const claim = (): void => {
@@ -395,9 +395,12 @@ void test('focus, context, and restart invalidation discard queued direct produc
   };
 
   claim();
+  queue.clear('pointer-lock-loss');
   queue.clear('focus-loss');
-  assert.deepEqual(queue.drain().map((entry) => 'fact' in entry ? entry.fact : entry), [
-    { kind: 'clear', reason: 'focus-loss' },
+  assert.deepEqual(queue.drain().map((entry) => 'fact' in entry ? entry.fact.kind : entry.intent), [
+    'inventory.drop',
+    'clear',
+    'clear',
   ]);
 
   claim();
@@ -704,26 +707,89 @@ void test('input ingress fails closed on bounded-queue overflow', () => {
   }]);
 });
 
-void test('same-epoch clears replace undispatched input at its first sequence without gaps', () => {
-  const queue = createRustyApplicationInputQueue(4);
+void test('same-epoch losses clear after undispatched input; a restart replaces it at its first sequence without gaps', () => {
+  const queue = createRustyApplicationInputQueue(8);
   queue.bindRuntime(INITIAL);
   queue.enqueueFact({ kind: 'key', code: 'key-w', edge: 'pressed' });
-  queue.enqueueFact({ kind: 'wheel', x: 0, y: 1 });
+  queue.claim('menu', { kind: 'product-payload', contract: 'example.menu.v1', data: { open: true } });
+  queue.clear('focus-loss');
   queue.clear('focus-loss');
   queue.clear('pointer-lock-loss');
+  assert.deepEqual(queue.drain().map((entry) => [entry.sequence, 'fact' in entry ? entry.fact : entry.intent]), [
+    ['0', { kind: 'key', code: 'key-w', edge: 'pressed' }],
+    ['1', 'menu'],
+    ['2', { kind: 'clear', reason: 'focus-loss' }],
+    ['3', { kind: 'clear', reason: 'pointer-lock-loss' }],
+  ]);
+  queue.enqueueFact({ kind: 'key', code: 'key-w', edge: 'pressed' });
+  queue.claim('menu', { kind: 'product-payload', contract: 'example.menu.v1', data: { open: false } });
+  queue.clear('restart');
   assert.deepEqual(queue.drain(), [{
     runtime: INITIAL.runtime,
+    sequence: '4',
+    context: INITIAL.context,
+    fact: { kind: 'clear', reason: 'restart' },
+  }]);
+  queue.enqueueFact({ kind: 'key', code: 'key-w', edge: 'released' });
+  assert.deepEqual(queue.drain().map((entry) => entry.sequence), ['5']);
+});
+
+void test('opening a menu from pointer-locked gameplay delivers its claim once and releases held input', () => {
+  const eventTarget = createListenerTarget();
+  const documentTarget = createListenerTarget();
+  const windowTarget = createListenerTarget();
+  const canvas = { getBoundingClientRect: () => ({ left: 0, top: 0, right: 200, bottom: 100, width: 200, height: 100 }) } as unknown as HTMLCanvasElement;
+  const state = { ...documentTarget, activeElement: canvas as unknown, pointerLockElement: canvas as unknown, defaultView: windowTarget };
+  const document = state as unknown as Document;
+  let mode: 'gameplay' | 'interface' = 'gameplay';
+  let wakeups = 0;
+  const ingress = createRustyApplicationInputIngress({ binding: INITIAL, onAvailable: () => { wakeups += 1; } }, {
+    canvas: () => canvas,
+    eventTarget: eventTarget as unknown as HTMLElement,
+    document,
+    allowsGameplayInput: () => mode === 'gameplay',
+    interactionMode: () => mode,
+    active: () => true,
+    focusGameplay: () => undefined,
+    gamepads: () => [],
+  });
+
+  documentTarget.emit('keydown', { code: 'KeyW' } as KeyboardEvent);
+  // The product's Escape handler: claim, then ask for the interface. Pointer
+  // lock and focus go later, as the browser reports them.
+  ingress.claim('menu', { kind: 'product-payload', contract: 'example.menu.v1', data: { open: true } });
+  mode = 'interface';
+  ingress.interactionModeChanged();
+  state.pointerLockElement = null;
+  documentTarget.emit('pointerlockchange', {} as Event);
+  state.activeElement = null;
+  windowTarget.emit('blur', {} as Event);
+  // Releasing the key in the interface is no gameplay fact, only another clear.
+  documentTarget.emit('keyup', { code: 'KeyW' } as KeyboardEvent);
+
+  const drained = ingress.drain();
+  assert.deepEqual(drained.map((entry) => [entry.sequence, 'fact' in entry ? entry.fact : entry.intent]), [
+    ['0', { kind: 'key', code: 'key-w', edge: 'pressed' }],
+    ['1', 'menu'],
+    ['2', { kind: 'clear', reason: 'interaction-mode-loss' }],
+    ['3', { kind: 'clear', reason: 'pointer-lock-loss' }],
+    ['4', { kind: 'clear', reason: 'focus-loss' }],
+    ['5', { kind: 'clear', reason: 'interaction-mode-loss' }],
+  ]);
+  assert.ok(wakeups > 0);
+  assert.deepEqual(ingress.drain(), []);
+
+  // A claim queued before a restart does not cross into the new generation.
+  ingress.claim('menu', { kind: 'product-payload', contract: 'example.menu.v1', data: { open: false } });
+  const restarted = { instanceId: '7', generation: '4', controlRevision: '12' };
+  ingress.bindRuntime({ runtime: restarted, context: INITIAL.context });
+  assert.deepEqual(ingress.drain(), [{
+    runtime: restarted,
     sequence: '0',
     context: INITIAL.context,
-    fact: { kind: 'clear', reason: 'pointer-lock-loss' },
+    fact: { kind: 'clear', reason: 'restart' },
   }]);
-  queue.enqueueFact({ kind: 'key', code: 'key-w', edge: 'pressed' });
-  assert.deepEqual(queue.drain(), [{
-    runtime: INITIAL.runtime,
-    sequence: '1',
-    context: INITIAL.context,
-    fact: { kind: 'key', code: 'key-w', edge: 'pressed' },
-  }]);
+  ingress.dispose();
 });
 
 void test('input ingress reserves u64 maximum for one terminal fail-closed clear until rebind', () => {

@@ -494,9 +494,16 @@ impl RuntimeInputLane {
         );
         match ingress.fact() {
             RuntimeInputFact::Clear { reason } => {
-                if *reason == InputClearReason::InteractionModeLoss
-                    && ingress.context() == &self.context
-                {
+                // Losing physical input within a context (opening a menu
+                // loses pointer lock and focus after it claims) releases held
+                // input but keeps the product UI's accepted claims.
+                let physical_loss = matches!(
+                    reason,
+                    InputClearReason::InteractionModeLoss
+                        | InputClearReason::PointerLockLoss
+                        | InputClearReason::FocusLoss
+                );
+                if physical_loss && ingress.context() == &self.context {
                     self.clear_physical_state();
                     self.pending_intents
                         .retain(|intent| matches!(intent.provenance, IntentProvenance::DirectUi));
