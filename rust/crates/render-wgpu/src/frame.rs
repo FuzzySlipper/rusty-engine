@@ -348,6 +348,7 @@ impl Renderer {
         self.report_pending_bounds();
         self.report_joint_poses();
         self.shadows_chosen = false;
+        self.sky_captured = false;
         self.shadows_rendered = (0, 0);
         self.finish.begin_frame(&self.gpu);
         for timer in [&mut self.shadow_timer, &mut self.backdrop_shadow_timer]
@@ -368,12 +369,17 @@ impl Renderer {
             self.rebuild_sky();
             self.tables.environment_dirty = false;
         }
-        // The sky's light follows the background while it is on.
+        // The sky's light follows the background while it is on, or its
+        // capture while the clouds or a backdrop draw (`capture_sky`).
         let wanted = self
             .tables
             .sky_light
             .filter(|sky_light| sky_light.intensity > 0.0)
-            .map(|_| self.sky_source());
+            .map(|_| {
+                self.sky_light
+                    .captured()
+                    .unwrap_or_else(|| self.sky_source())
+            });
         let textures = &self.tables.textures;
         if self
             .sky_light
@@ -1881,19 +1887,24 @@ impl Renderer {
         if !view.sky {
             return None;
         }
-        let BackdropCamera {
-            camera,
-            link,
-            extent,
-        } = self.backdrop_camera(&view.camera, view.camera_id)?;
+        let backdrop = self.backdrop_camera(&view.camera, view.camera_id)?;
         // The planes from the projection: z_axis.z is far / (near - far)
         // and w_axis.z that times near.
-        let (ratio, offset) = (camera.projection.z_axis.z, camera.projection.w_axis.z);
+        let projection = backdrop.camera.projection;
+        let (ratio, offset) = (projection.z_axis.z, projection.w_axis.z);
         self.backdrop = Some(crate::BackdropReadout {
-            eye: camera.eye.to_array(),
+            eye: backdrop.camera.eye.to_array(),
             near: offset / ratio,
             far: offset / (ratio + 1.0),
         });
+        self.submit_background(view);
+        self.fit_cascades(&backdrop.camera, Some(backdrop.extent));
+        Some(self.encode_backdrop_view(view, backdrop))
+    }
+
+    /// A world view's background by its own camera, submitted before the
+    /// next frame uniform replaces its own.
+    fn submit_background(&mut self, view: &ViewPass<'_>) {
         let target = view.target.key();
         let sky_index = match self.pipelines.iter().position(|set| set.target == target) {
             Some(index) => index,
@@ -1914,18 +1925,103 @@ impl Renderer {
         self.encode_background(&mut encoder, view, sky_index);
         self.gpu.queue.submit([encoder.finish()]);
         self.finish.submitted();
-        self.fit_cascades(&camera, Some(extent));
-        Some(self.encode_view(ViewPass {
+    }
+
+    /// A world view's backdrop pass by its backdrop camera, finished over
+    /// the view's background.
+    fn encode_backdrop_view(&mut self, view: &ViewPass<'_>, backdrop: BackdropCamera) -> ViewStats {
+        self.encode_view(ViewPass {
             target: view.target,
             viewport: view.viewport,
-            camera,
+            camera: backdrop.camera,
             layer: ViewLayer::Backdrop,
             start: view.start,
             clear: view.clear,
             sky: false,
-            backdrop: Some(link),
+            backdrop: Some(backdrop.link),
             camera_id: view.camera_id,
-        }))
+        })
+    }
+
+    /// For the sky's light, after the frame's first primary world view
+    /// (`camera`, drawn by `camera_id`'s link): while the light is on and
+    /// the cloud layer or that view's backdrop draws, the capture faces due
+    /// this frame (`SkyLight::capture_faces`), each a 90° view from its eye
+    /// of its background and its backdrop without the world. After the
+    /// view's own passes, so their timers keep the view's cost; the
+    /// capture's is timed as `sky-light`.
+    pub(crate) fn capture_sky(
+        &mut self,
+        camera: &CameraMatrices,
+        camera_id: Option<&str>,
+        clear: [f32; 4],
+    ) {
+        if std::mem::replace(&mut self.sky_captured, true) {
+            return;
+        }
+        use crate::sky_light::{
+            CaptureState, CAPTURE_FACES, CAPTURE_FORMAT, CAPTURE_SIZE, CAPTURE_VIEWS,
+        };
+        let on = self
+            .tables
+            .sky_light
+            .is_some_and(|sky_light| sky_light.intensity > 0.0);
+        let clouds = drawn_clouds(self.tables.clouds, self.tables.cloud_regions.len()).is_some();
+        let wanted = on && (clouds || self.backdrop.is_some());
+        let moving = clouds
+            || self
+                .particles
+                .particles
+                .iter()
+                .any(|particle| particle.descriptor.backdrop);
+        let eye = camera.eye;
+        let state = CaptureState {
+            eye: eye.to_array(),
+            scene: self.scene_generation,
+            time: moving.then_some(self.animation_time),
+        };
+        let faces = self.sky_light.capture_faces(&self.gpu, wanted, state);
+        if faces.is_empty() {
+            return;
+        }
+        self.sky_light.begin_capture(&self.gpu);
+        let (near, far) = shadows::view_depths(&camera.projection);
+        let projection = Mat4::perspective_rh(std::f32::consts::FRAC_PI_2, 1.0, near, far);
+        for face in faces.clone() {
+            let (forward, up) = CAPTURE_FACES[face as usize];
+            let look = Mat4::look_to_rh(eye, forward, up);
+            let face_camera = CameraMatrices {
+                view_proj: projection * look,
+                view: look,
+                projection,
+                eye,
+            };
+            let (color, depth) = self.sky_light.capture_target(face);
+            let face_view = ViewPass {
+                target: TargetView {
+                    color: &color,
+                    depth: &depth,
+                    format: CAPTURE_FORMAT,
+                    samples: 1,
+                    width: CAPTURE_SIZE,
+                    height: CAPTURE_SIZE,
+                },
+                viewport: PixelRect::whole(CAPTURE_SIZE, CAPTURE_SIZE),
+                camera: face_camera,
+                layer: ViewLayer::World,
+                start: PassStart::Target,
+                clear,
+                sky: true,
+                backdrop: None,
+                camera_id: Some(CAPTURE_VIEWS[face as usize]),
+            };
+            self.submit_background(&face_view);
+            if let Some(backdrop) = self.backdrop_camera(&face_camera, camera_id) {
+                self.encode_backdrop_view(&face_view, backdrop);
+            }
+        }
+        self.sky_light
+            .captured_faces(&self.gpu, &mut self.layouts.shaders, faces.end);
     }
 
     /// A world view's background into its own image: the clear colour, the

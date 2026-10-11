@@ -400,6 +400,9 @@ pub struct Renderer {
     shadows_rendered: (u32, u32),
     /// The frame's shadow-layer passes, first to last, in the frames that
     /// render layers.
+    /// The sky's light was captured after the first primary view of this
+    /// frame (`frame.rs` `capture_sky`).
+    sky_captured: bool,
     shadow_timer: Option<timing::PassTimer>,
     /// The backdrop's cascades (`backdrop_shadows`), in their own passes.
     backdrop_shadow_timer: Option<timing::PassTimer>,
@@ -605,6 +608,7 @@ impl Renderer {
             shadow_eye: glam::Vec3::ZERO,
             shadows_chosen: false,
             shadows_rendered: (0, 0),
+            sky_captured: false,
             shadow_timer,
             backdrop_shadow_timer,
             exposure_adapted: false,

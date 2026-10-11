@@ -8,6 +8,17 @@
 //! frame; later ones take a few mip levels a frame and then swap in, so a
 //! blend that moves every tick costs a share of a build per frame. The
 //! compute pipelines are made on first use.
+//!
+//! While the cloud layer or a backdrop draws, the light is built instead from
+//! a capture of what the first primary view's background and backdrop draw
+//! around its eye (`frame.rs` `capture_sky`): six 128² faces, two a frame
+//! once a first capture exists, never while a build is under way, then
+//! their mips. A capture begins again once the last one is built if the eye,
+//! the scene or (for drifting clouds and backdrop particles) the time moved.
+
+use std::ops::Range;
+
+use glam::Vec3;
 
 use crate::gpu::Gpu;
 use crate::pipelines::standard;
@@ -26,6 +37,30 @@ const LEVELS_PER_FRAME: u32 = 3;
 const PARAMS_STRIDE: u64 = 256;
 const PARAMS_BYTES: u64 = 48;
 const PASS: &str = "sky-light";
+/// The capture's faces, as `sky_light.wgsl` looks them up: +X, -X, +Y, -Y,
+/// +Z, -Z, each a 90° square view along its axis with its up.
+pub(crate) const CAPTURE_FACES: [(Vec3, Vec3); 6] = [
+    (Vec3::X, Vec3::Y),
+    (Vec3::NEG_X, Vec3::Y),
+    (Vec3::Y, Vec3::NEG_Z),
+    (Vec3::NEG_Y, Vec3::Z),
+    (Vec3::Z, Vec3::Y),
+    (Vec3::NEG_Z, Vec3::Y),
+];
+/// Each face's view, for the cloud march's history (`cloud_march.rs`).
+pub(crate) const CAPTURE_VIEWS: [&str; 6] = [
+    "sky-light +x",
+    "sky-light -x",
+    "sky-light +y",
+    "sky-light -y",
+    "sky-light +z",
+    "sky-light -z",
+];
+/// A capture face's side in texels and its format.
+pub(crate) const CAPTURE_SIZE: u32 = SKY_CUBE_SIZE;
+pub(crate) const CAPTURE_FORMAT: wgpu::TextureFormat = FORMAT;
+/// Faces a capture renders a frame once a first one exists.
+const FACES_PER_FRAME: u32 = 2;
 
 /// What the sky's light is built from.
 #[derive(Debug, Clone, PartialEq)]
@@ -38,6 +73,99 @@ pub(crate) enum SkySource {
         second: String,
         amount: f32,
     },
+    /// The capture of what the background, the clouds and the backdrop
+    /// draw around the camera, by its count of finished captures.
+    Captured { generation: u64 },
+}
+
+/// What the scene was when a capture began: a capture begins again only
+/// once this moves.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct CaptureState {
+    /// The world view's eye.
+    pub eye: [f32; 3],
+    /// The renderer's count of applied changes (`scene_generation`).
+    pub scene: u64,
+    /// The presentation time, while what the capture sees moves with it.
+    pub time: Option<f64>,
+}
+
+/// The six faces (`CAPTURE_FACES`) as the layers of one array with mips,
+/// rendered a face at a time, which a build reads in place of the
+/// panorama.
+struct Capture {
+    /// Each face's base level, a colour attachment.
+    faces: Vec<wgpu::TextureView>,
+    /// Each mip level of every face.
+    levels: Vec<wgpu::TextureView>,
+    /// Every level of every face, sampled.
+    whole: wgpu::TextureView,
+    depth: wgpu::TextureView,
+    /// The next face to render.
+    next: u32,
+    /// Captures finished.
+    generation: u64,
+    /// The scene when the capture under way, or the last, began.
+    began: Option<CaptureState>,
+}
+
+impl Capture {
+    fn new(gpu: &Gpu) -> Self {
+        let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("render-wgpu sky capture"),
+            size: wgpu::Extent3d {
+                width: CAPTURE_SIZE,
+                height: CAPTURE_SIZE,
+                depth_or_array_layers: 6,
+            },
+            mip_level_count: SKY_LEVELS,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: CAPTURE_FORMAT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::STORAGE_BINDING,
+            view_formats: &[],
+        });
+        let faces = (0..6)
+            .map(|face| {
+                texture.create_view(&wgpu::TextureViewDescriptor {
+                    label: Some("render-wgpu sky capture face"),
+                    dimension: Some(wgpu::TextureViewDimension::D2),
+                    base_mip_level: 0,
+                    mip_level_count: Some(1),
+                    base_array_layer: face,
+                    array_layer_count: Some(1),
+                    ..Default::default()
+                })
+            })
+            .collect();
+        let levels = (0..SKY_LEVELS)
+            .map(|level| {
+                texture.create_view(&wgpu::TextureViewDescriptor {
+                    label: Some("render-wgpu sky capture level"),
+                    dimension: Some(wgpu::TextureViewDimension::D2Array),
+                    base_mip_level: level,
+                    mip_level_count: Some(1),
+                    ..Default::default()
+                })
+            })
+            .collect();
+        let whole = texture.create_view(&wgpu::TextureViewDescriptor {
+            label: Some("render-wgpu sky capture"),
+            dimension: Some(wgpu::TextureViewDimension::D2Array),
+            ..Default::default()
+        });
+        Self {
+            faces,
+            levels,
+            whole,
+            depth: crate::target::depth_texture(gpu, CAPTURE_SIZE, CAPTURE_SIZE),
+            next: 0,
+            generation: 0,
+            began: None,
+        }
+    }
 }
 
 /// One copy of the light: the cube (sampled whole, written a level at a
@@ -103,8 +231,13 @@ struct Pipelines {
     params: wgpu::Buffer,
     /// Panoramas wrap around and clamp at the poles.
     panorama_sampler: wgpu::Sampler,
+    downsample: wgpu::ComputePipeline,
     /// A 1×1 texture standing in for the panoramas of a colour.
     blank: wgpu::TextureView,
+    /// A 1×1 array standing in for the capture of a background.
+    blank_capture: wgpu::TextureView,
+    /// The capture's faces clamp at their edges.
+    capture_sampler: wgpu::Sampler,
 }
 
 pub(crate) struct SkyLight {
@@ -116,6 +249,10 @@ pub(crate) struct SkyLight {
     building: Option<(SkySource, u32)>,
     pub sampler: wgpu::Sampler,
     timer: Option<PassTimer>,
+    /// Made when first wanted, kept after.
+    capture: Option<Capture>,
+    /// The scene wanted a capture when last asked (`capture_faces`).
+    capturing: bool,
 }
 
 impl SkyLight {
@@ -134,6 +271,114 @@ impl SkyLight {
                 ..Default::default()
             }),
             timer: PassTimer::new(gpu, PASS),
+            capture: None,
+            capturing: false,
+        }
+    }
+
+    /// The finished capture a build reads, while the scene wants one.
+    pub fn captured(&self) -> Option<SkySource> {
+        let capture = self.capture.as_ref().filter(|_| self.capturing)?;
+        (capture.generation > 0).then_some(SkySource::Captured {
+            generation: capture.generation,
+        })
+    }
+
+    /// The faces to capture this frame while the scene wants a capture
+    /// (`wanted`; none otherwise, and the light goes back to the
+    /// background): all six for the first, then two a frame of one begun
+    /// when `state` differs from the last one's, never while a build is
+    /// under way. Each renders into `capture_target`; `captured_faces`
+    /// follows.
+    pub fn capture_faces(&mut self, gpu: &Gpu, wanted: bool, state: CaptureState) -> Range<u32> {
+        self.capturing = wanted;
+        if !wanted || self.building.is_some() {
+            return 0..0;
+        }
+        let capture = self.capture.get_or_insert_with(|| Capture::new(gpu));
+        if capture.next == 0 {
+            if capture.generation > 0 && capture.began == Some(state) {
+                return 0..0;
+            }
+            capture.began = Some(state);
+        }
+        let count = if capture.generation == 0 {
+            CAPTURE_FACES.len() as u32
+        } else {
+            FACES_PER_FRAME
+        };
+        capture.next..(capture.next + count).min(CAPTURE_FACES.len() as u32)
+    }
+
+    /// A capture face's colour target and the capture's depth.
+    pub fn capture_target(&self, face: u32) -> (wgpu::TextureView, wgpu::TextureView) {
+        let capture = self.capture.as_ref().expect("a capture is under way");
+        (capture.faces[face as usize].clone(), capture.depth.clone())
+    }
+
+    /// Before a frame's capture faces: the `sky-light` timer's first stamp.
+    pub fn begin_capture(&mut self, gpu: &Gpu) {
+        let Some(timer) = &self.timer else {
+            return;
+        };
+        let mut encoder = gpu
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("render-wgpu sky capture"),
+            });
+        drop(encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some("render-wgpu sky capture begins"),
+            timestamp_writes: timer.compute_writes_between(true, false),
+        }));
+        gpu.queue.submit([encoder.finish()]);
+    }
+
+    /// After the faces up to `end` rendered: once all six have, their mips,
+    /// and the capture is finished. The timer's last stamp follows.
+    pub fn captured_faces(&mut self, gpu: &Gpu, shaders: &mut Shaders, end: u32) {
+        let finished = end == CAPTURE_FACES.len() as u32;
+        let pipelines = self
+            .pipelines
+            .get_or_insert_with(|| Pipelines::new(gpu, shaders));
+        let capture = self.capture.as_mut().expect("a capture is under way");
+        let mut encoder = gpu
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("render-wgpu sky capture"),
+            });
+        if finished {
+            for level in 1..SKY_LEVELS as usize {
+                let group = pipelines.bind_group(
+                    gpu,
+                    &capture.levels[level],
+                    &self.copies[0].irradiance,
+                    &capture.levels[level - 1],
+                    None,
+                );
+                let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: Some("render-wgpu sky capture mips"),
+                    timestamp_writes: None,
+                });
+                pass.set_bind_group(0, &group, &[0]);
+                pass.set_pipeline(&pipelines.downsample);
+                let size = (CAPTURE_SIZE >> level).max(1);
+                pass.dispatch_workgroups(size.div_ceil(8), size.div_ceil(8), 6);
+            }
+            capture.next = 0;
+            capture.generation += 1;
+        } else {
+            capture.next = end;
+        }
+        if let Some(timer) = &mut self.timer {
+            drop(encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("render-wgpu sky capture ends"),
+                timestamp_writes: timer.compute_writes_between(false, true),
+            }));
+            timer.resolve(&mut encoder);
+        }
+        gpu.queue.submit([encoder.finish()]);
+        if let Some(timer) = &mut self.timer {
+            timer.submitted();
         }
     }
 
@@ -218,6 +463,12 @@ impl SkyLight {
         };
         let textures = match &source {
             SkySource::Color(_) => None,
+            // A capture that went cannot be built from.
+            SkySource::Captured { .. } if self.capture.is_none() => {
+                self.building = None;
+                return false;
+            }
+            SkySource::Captured { .. } => None,
             SkySource::Panorama { first, second, .. } => {
                 match (panorama(first), panorama(second)) {
                     (Some(first), Some(second)) => Some((first, second)),
@@ -237,6 +488,10 @@ impl SkyLight {
             write_params(gpu, &pipelines.params, &source);
         }
         let (first, second) = textures.unwrap_or((&pipelines.blank, &pipelines.blank));
+        let capture = match &source {
+            SkySource::Captured { .. } => self.capture.as_ref().map(|capture| &capture.whole),
+            _ => None,
+        };
         // The first build finishes now; later ones take a few levels a
         // frame, the harmonics with the last (step `SKY_LEVELS`).
         let end = if built {
@@ -255,40 +510,13 @@ impl SkyLight {
         for (index, &step) in steps.iter().enumerate() {
             let harmonics = step == SKY_LEVELS;
             let output = &self.copies[back].levels[step.min(SKY_LEVELS - 1) as usize];
-            let group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("render-wgpu sky light"),
-                layout: &pipelines.layout,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                            buffer: &pipelines.params,
-                            offset: 0,
-                            size: wgpu::BufferSize::new(PARAMS_BYTES),
-                        }),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: wgpu::BindingResource::TextureView(first),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 2,
-                        resource: wgpu::BindingResource::TextureView(second),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 3,
-                        resource: wgpu::BindingResource::Sampler(&pipelines.panorama_sampler),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 4,
-                        resource: wgpu::BindingResource::TextureView(output),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 5,
-                        resource: self.copies[back].irradiance.as_entire_binding(),
-                    },
-                ],
-            });
+            let group = pipelines.bind_group(
+                gpu,
+                output,
+                &self.copies[back].irradiance,
+                capture.unwrap_or(&pipelines.blank_capture),
+                Some((first, second)),
+            );
             let timer = self.timer.as_ref().and_then(|timer| {
                 timer.compute_writes_between(index == 0, index + 1 == steps.len())
             });
@@ -339,6 +567,12 @@ impl Pipelines {
             },
             count: None,
         };
+        let sampler = |binding| wgpu::BindGroupLayoutEntry {
+            binding,
+            visibility: wgpu::ShaderStages::COMPUTE,
+            ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+            count: None,
+        };
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("render-wgpu sky light"),
             entries: &[
@@ -354,12 +588,7 @@ impl Pipelines {
                 },
                 texture(1),
                 texture(2),
-                wgpu::BindGroupLayoutEntry {
-                    binding: 3,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
+                sampler(3),
                 wgpu::BindGroupLayoutEntry {
                     binding: 4,
                     visibility: wgpu::ShaderStages::COMPUTE,
@@ -380,6 +609,17 @@ impl Pipelines {
                     },
                     count: None,
                 },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 6,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2Array,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                sampler(7),
             ],
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -415,9 +655,25 @@ impl Pipelines {
                 &[0; 4],
             )
             .create_view(&Default::default());
+        let blank_capture = device
+            .create_texture(&wgpu::TextureDescriptor {
+                label: Some("render-wgpu sky capture blank"),
+                size: crate::target::extent(1, 1),
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: CAPTURE_FORMAT,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            })
+            .create_view(&wgpu::TextureViewDescriptor {
+                dimension: Some(wgpu::TextureViewDimension::D2Array),
+                ..Default::default()
+            });
         Self {
             prefilter: pipeline("cs_prefilter"),
             irradiance: pipeline("cs_irradiance"),
+            downsample: pipeline("cs_downsample"),
             layout,
             params: device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("render-wgpu sky light params"),
@@ -434,7 +690,71 @@ impl Pipelines {
                 ..Default::default()
             }),
             blank,
+            blank_capture,
+            capture_sampler: device.create_sampler(&wgpu::SamplerDescriptor {
+                label: Some("render-wgpu sky capture"),
+                mag_filter: wgpu::FilterMode::Linear,
+                min_filter: wgpu::FilterMode::Linear,
+                mipmap_filter: wgpu::MipmapFilterMode::Linear,
+                ..Default::default()
+            }),
         }
+    }
+
+    /// A step's bindings: its parameters, the panoramas (blank without),
+    /// the level it writes, the harmonics, and the capture (or the one
+    /// level of it a mip is made from).
+    fn bind_group(
+        &self,
+        gpu: &Gpu,
+        output: &wgpu::TextureView,
+        irradiance: &wgpu::Buffer,
+        capture: &wgpu::TextureView,
+        panoramas: Option<(&wgpu::TextureView, &wgpu::TextureView)>,
+    ) -> wgpu::BindGroup {
+        let (first, second) = panoramas.unwrap_or((&self.blank, &self.blank));
+        gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("render-wgpu sky light"),
+            layout: &self.layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                        buffer: &self.params,
+                        offset: 0,
+                        size: wgpu::BufferSize::new(PARAMS_BYTES),
+                    }),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(first),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(second),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::Sampler(&self.panorama_sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: wgpu::BindingResource::TextureView(output),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: irradiance.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: wgpu::BindingResource::TextureView(capture),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 7,
+                    resource: wgpu::BindingResource::Sampler(&self.capture_sampler),
+                },
+            ],
+        })
     }
 }
 
@@ -444,6 +764,7 @@ fn write_params(gpu: &Gpu, buffer: &wgpu::Buffer, source: &SkySource) {
     let (mode, amount, color) = match source {
         SkySource::Color(color) => (0.0, 0.0, *color),
         SkySource::Panorama { amount, .. } => (1.0, *amount, [0.0; 3]),
+        SkySource::Captured { .. } => (2.0, 0.0, [0.0; 3]),
     };
     let mut bytes = vec![0u8; ((SKY_LEVELS + 1) as u64 * PARAMS_STRIDE) as usize];
     for level in 0..=SKY_LEVELS {

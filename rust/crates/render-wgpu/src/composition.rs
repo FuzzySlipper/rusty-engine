@@ -568,6 +568,7 @@ impl Renderer {
             backdrop: None,
             camera_id: Some(camera.id.as_str()),
         });
+        self.capture_sky(&world_camera, Some(camera.id.as_str()), clear);
         // Depth-layer labels test the world's depth before the viewmodel
         // pass clears it.
         let depth_labels = self.draw_labels(target, area, &labels, LabelPass::Depth);

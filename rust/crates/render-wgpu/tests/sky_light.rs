@@ -1,6 +1,7 @@
 //! The sky's light (`sky_light.rs`): the background (a clear colour, a sky
 //! panorama or two blended) lighting the world through the standard shader,
-//! off by default. Same harness as `tests/screenshots.rs`.
+//! off by default; while clouds or a backdrop draw, built from a capture of
+//! them around the camera. Same harness as `tests/screenshots.rs`.
 
 mod support;
 
@@ -473,4 +474,191 @@ fn the_sky_light_build_is_timed_whole_and_spread_over_frames() {
     if readout.timestamps {
         assert!(pass.timed_frames > 0 && pass.median_gpu_ms.is_finite());
     }
+}
+
+/// A blue panorama sky over a dark ground, the sky's light on, a mirror
+/// floor, and (with `sun`) a sun from behind the camera.
+fn mirrored(sun: bool) -> Harness {
+    let mut harness = unlit_world();
+    let (width, height) = (64, 32);
+    let rgba: Vec<u8> = (0..width * height)
+        .flat_map(|texel| {
+            if texel / width < height / 2 {
+                [90, 140, 220, 255]
+            } else {
+                [40, 40, 40, 255]
+            }
+        })
+        .collect();
+    let texture =
+        harness
+            .resources
+            .texture("texture/blue", width, height, &rgba, TextureWrap::Clamp);
+    harness.apply(vec![
+        RenderDiff::DefineTexture { texture },
+        RenderDiff::SetSkyBackground {
+            background: Some(SkyBackgroundDescriptor {
+                texture: "texture/blue".to_owned(),
+                blend: None,
+            }),
+        },
+        sky_light(1.0),
+    ]);
+    if sun {
+        harness.apply(vec![RenderDiff::CreateLight {
+            handle: RenderHandle::new(10),
+            parent: None,
+            light: LightDescriptor::Directional {
+                color: [1.0, 0.95, 0.85],
+                intensity: 2.0,
+                enabled: true,
+                direction: [0.2, -0.6, -0.7],
+                range: None,
+                shadow_intent: LightShadowIntent::Disabled,
+                shadow: Default::default(),
+            },
+        }]);
+    }
+    harness
+}
+
+/// A dark range 4 to 6 km ahead, 800 m high and 6 km wide, in the backdrop
+/// at 1:1000.
+fn backdrop_range() -> Vec<RenderDiff> {
+    vec![
+        RenderDiff::DefineMaterial {
+            material: material("material/range", [0.3, 0.22, 0.15, 1.0], None),
+        },
+        static_mesh(
+            "mesh/range",
+            box_mesh([-3.0, 0.0, -6.0], [3.0, 0.8, -4.0], |_| 0),
+            "material/range",
+        ),
+        RenderDiff::CreateStaticMeshInstance {
+            handle: RenderHandle::new(30),
+            parent: None,
+            instance: StaticMeshInstanceDescriptor {
+                asset: "mesh/range".to_owned(),
+                transform: transform([0.0; 3], 0.0, [1.0; 3]),
+                visible: true,
+                material_overrides: Vec::new(),
+                metadata: RenderMetadata::default(),
+                layer: RenderLayer::Backdrop,
+                shadow_casting: Default::default(),
+            },
+        },
+        RenderDiff::SetBackdrop {
+            camera: None,
+            backdrop: Some(BackdropDescriptor {
+                anchor: [0.0; 3],
+                origin: [0.0; 3],
+                scale: 1000.0,
+            }),
+        },
+    ]
+}
+
+/// Enough frames from `camera` for a capture and its build to land.
+fn settle(
+    harness: &mut Harness,
+    camera: &render_host_contracts::RendererCompositionCamera,
+) -> Vec<u8> {
+    for _ in 0..8 {
+        harness.render(camera);
+    }
+    harness.render(camera).1
+}
+
+/// The share of the pixels in rows `rows` (and the middle three quarters of
+/// each) that differ by more than 24 summed over the channels.
+fn changed_in(a: &[u8], b: &[u8], rows: std::ops::Range<u32>) -> f64 {
+    let (mut pixels, mut changed) = (0, 0);
+    for y in rows {
+        for x in WIDTH / 8..WIDTH * 7 / 8 {
+            let (p, q) = (pixel(a, (x, y)), pixel(b, (x, y)));
+            let difference: i32 = (0..3).map(|c| (p[c] - q[c]).abs()).sum();
+            pixels += 1;
+            changed += usize::from(difference > 24);
+        }
+    }
+    changed as f64 / pixels as f64
+}
+
+#[test]
+fn a_mirror_floor_reflects_the_backdrop_on_the_horizon_and_the_clouds_overhead() {
+    // A metre above the mirror looking 4° down: the floor's reflections
+    // between about 2° and 10° above the horizon fall on the range.
+    let level = camera([0.0, 1.0, 0.0], 0.0, -4.0);
+    let mut plain = mirrored(true);
+    slab(&mut plain, [1.0; 4], 0.0, 1.0);
+    let open = settle(&mut plain, &level);
+    let mut ranged = mirrored(true);
+    slab(&mut ranged, [1.0; 4], 0.0, 1.0);
+    ranged.apply(backdrop_range());
+    let reflected = settle(&mut ranged, &level);
+    // Rows 85 to 105 hold the floor just below the horizon.
+    let share = changed_in(&open, &reflected, 85..105);
+    assert!(
+        share > 0.8,
+        "the floor reflects the range: {:.1}%",
+        share * 100.0
+    );
+
+    // Looking well down, the floor reflects the sky overhead: a cloud layer
+    // there shows in it.
+    let down = camera([0.0, 1.0, 0.0], 0.0, -60.0);
+    let mut clear = mirrored(true);
+    slab(&mut clear, [1.0; 4], 0.0, 1.0);
+    let blue = settle(&mut clear, &down);
+    let mut clouded = mirrored(true);
+    slab(&mut clouded, [1.0; 4], 0.0, 1.0);
+    clouded.apply(vec![RenderDiff::SetClouds {
+        clouds: Some(CloudsDescriptor {
+            coverage: 0.9,
+            drift: [0.0, 0.0],
+            altitude: 1500.0,
+            scale: 600.0,
+            color: [1.0; 3],
+            thickness: 0.0,
+            kind: CloudKind::Stratus,
+        }),
+    }]);
+    let overcast = settle(&mut clouded, &down);
+    let share = changed_in(&blue, &overcast, HEIGHT / 4..HEIGHT);
+    assert!(
+        share > 0.8,
+        "the floor reflects the clouds: {:.1}%",
+        share * 100.0
+    );
+}
+
+#[test]
+fn a_storm_overhead_darkens_the_sky_light_on_the_ground() {
+    // No sun: the floor takes the sky's light alone.
+    let render = |storm: bool| {
+        let mut harness = mirrored(false);
+        slab(&mut harness, [0.8, 0.8, 0.8, 1.0], 1.0, 0.0);
+        if storm {
+            harness.apply(vec![RenderDiff::SetCloudRegion {
+                id: 1,
+                region: CloudRegionDescriptor {
+                    center: [0.0, 0.0],
+                    radius: 20_000.0,
+                    coverage: 1.0,
+                    darkness: 1.0,
+                    drift: [0.0, 0.0],
+                    kind: CloudKind::Cumulonimbus,
+                    thickness: 0.0,
+                },
+            }]);
+        }
+        pixel(&settle(&mut harness, &over_the_floor()), FLOOR)
+    };
+    let clear = render(false);
+    let storm = render(true);
+    let brightness = |rgb: [i32; 3]| rgb.iter().sum::<i32>();
+    assert!(
+        brightness(storm) < brightness(clear) * 2 / 3,
+        "under the storm {storm:?}, clear {clear:?}"
+    );
 }

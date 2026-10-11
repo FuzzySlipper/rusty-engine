@@ -1,13 +1,16 @@
 // The sky's light (render-wgpu `sky_light.rs`): from the background (a sky
-// panorama, two blended, or the clear colour) a cube whose mips hold its
-// radiance prefiltered for rising roughness (GGX importance sampling with
-// filtered lookups, N = V = R), and nine spherical-harmonics coefficients of
-// its irradiance, already convolved with the cosine lobe.
+// panorama, two blended, or the clear colour), or from a capture of what the
+// background, the clouds and the backdrop draw around the camera, a cube
+// whose mips hold its radiance prefiltered for rising roughness (GGX
+// importance sampling with filtered lookups, N = V = R), and nine
+// spherical-harmonics coefficients of its irradiance, already convolved with
+// the cosine lobe.
 
 #import rusty::types::PI
 
 struct SkyLightParams {
-    // x: 1 for panoramas, 0 for the clear colour; y: the blend amount toward
+    // x: 1 for panoramas, 0 for the clear colour, 2 for the capture; y: the
+    // blend amount toward
     // the second panorama; z: this level's roughness; w: samples per texel.
     source: vec4<f32>,
     // rgb: the clear colour (linear).
@@ -24,6 +27,50 @@ struct SkyLightParams {
 @group(0) @binding(4) var level: texture_storage_2d_array<rgba16float, write>;
 // The irradiance coefficients (rgb each).
 @group(0) @binding(5) var<storage, read_write> irradiance: array<vec4<f32>, 9>;
+// The capture's six faces as layers, with their mips (a single level of
+// them while its mips are made).
+@group(0) @binding(6) var capture: texture_2d_array<f32>;
+@group(0) @binding(7) var capture_sampler: sampler;
+
+// The capture's faces (`sky_light.rs` CAPTURE_FACES): each one's view axis
+// and up, looked along with a 90° square view.
+const CAPTURE_FORWARD = array<vec3<f32>, 6>(
+    vec3<f32>(1.0, 0.0, 0.0),
+    vec3<f32>(-1.0, 0.0, 0.0),
+    vec3<f32>(0.0, 1.0, 0.0),
+    vec3<f32>(0.0, -1.0, 0.0),
+    vec3<f32>(0.0, 0.0, 1.0),
+    vec3<f32>(0.0, 0.0, -1.0),
+);
+const CAPTURE_UP = array<vec3<f32>, 6>(
+    vec3<f32>(0.0, 1.0, 0.0),
+    vec3<f32>(0.0, 1.0, 0.0),
+    vec3<f32>(0.0, 0.0, -1.0),
+    vec3<f32>(0.0, 0.0, 1.0),
+    vec3<f32>(0.0, 1.0, 0.0),
+    vec3<f32>(0.0, 1.0, 0.0),
+);
+
+// The captured radiance along `direction`, from capture mip `lod`: the face
+// of its largest axis, at the point its view projects it to.
+fn captured(direction: vec3<f32>, lod: f32) -> vec3<f32> {
+    let a = abs(direction);
+    var face = 0u;
+    if a.y >= a.x && a.y >= a.z {
+        face = select(3u, 2u, direction.y > 0.0);
+    } else if a.z >= a.x {
+        face = select(5u, 4u, direction.z > 0.0);
+    } else {
+        face = select(1u, 0u, direction.x > 0.0);
+    }
+    let forward = CAPTURE_FORWARD[face];
+    let up = CAPTURE_UP[face];
+    let right = cross(forward, up);
+    let depth = dot(direction, forward);
+    let ndc = vec2<f32>(dot(direction, right), dot(direction, up)) / depth;
+    let uv = vec2<f32>(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
+    return textureSampleLevel(capture, capture_sampler, uv, face, lod).rgb;
+}
 
 // Where a direction falls on the panorama: the mapping `sky.wgsl` draws with.
 fn panorama_uv(direction: vec3<f32>) -> vec2<f32> {
@@ -33,10 +80,14 @@ fn panorama_uv(direction: vec3<f32>) -> vec2<f32> {
     );
 }
 
-// The background's linear radiance along `direction`, from panorama mip `lod`.
+// The background's linear radiance along `direction`, from panorama (or
+// capture) mip `lod`.
 fn radiance(direction: vec3<f32>, lod: f32) -> vec3<f32> {
     if params.source.x < 0.5 {
         return params.color.rgb;
+    }
+    if params.source.x > 1.5 {
+        return captured(direction, lod);
     }
     let uv = panorama_uv(direction);
     let near = textureSampleLevel(first, panorama_sampler, uv, lod).rgb;
@@ -97,10 +148,9 @@ fn cs_prefilter(@builtin(global_invocation_id) id: vec3<u32>) {
     } else {
         let alpha = roughness * roughness;
         let samples = u32(params.source.w);
-        // Each sample reads a panorama mip whose texels cover about its
-        // share of the lobe (filtered importance sampling).
-        let dimensions = vec2<f32>(textureDimensions(first));
-        let texel_angle = 4.0 * PI / (dimensions.x * dimensions.y);
+        // Each sample reads a panorama (or capture) mip whose texels cover
+        // about its share of the lobe (filtered importance sampling).
+        let texel_angle = source_texel_angle();
         var weight = 0.0;
         for (var index = 0u; index < samples; index = index + 1u) {
             let halfway = ggx_half(hammersley(index, samples), normal, alpha);
@@ -117,6 +167,34 @@ fn cs_prefilter(@builtin(global_invocation_id) id: vec3<u32>) {
         color = color / max(weight, 1e-4);
     }
     textureStore(level, vec2<i32>(id.xy), i32(id.z), vec4<f32>(color, 1.0));
+}
+
+// The solid angle of one texel of the source's base level: the panorama's,
+// or a capture face's.
+fn source_texel_angle() -> f32 {
+    if params.source.x > 1.5 {
+        let face = vec2<f32>(textureDimensions(capture));
+        return 4.0 * PI / (6.0 * face.x * face.y);
+    }
+    let dimensions = vec2<f32>(textureDimensions(first));
+    return 4.0 * PI / (dimensions.x * dimensions.y);
+}
+
+// One mip level of the capture from the level above (bound alone as
+// `capture`): each texel the mean of the four it covers, on every face.
+@compute @workgroup_size(8, 8, 1)
+fn cs_downsample(@builtin(global_invocation_id) id: vec3<u32>) {
+    let size = textureDimensions(level);
+    if id.x >= size.x || id.y >= size.y {
+        return;
+    }
+    let above = vec2<i32>(id.xy) * 2;
+    let face = i32(id.z);
+    let sum = textureLoad(capture, above, face, 0)
+        + textureLoad(capture, above + vec2<i32>(1, 0), face, 0)
+        + textureLoad(capture, above + vec2<i32>(0, 1), face, 0)
+        + textureLoad(capture, above + vec2<i32>(1, 1), face, 0);
+    textureStore(level, vec2<i32>(id.xy), face, vec4<f32>(sum.rgb * 0.25, 1.0));
 }
 
 // The real spherical harmonics up to band 2 at `d`.
@@ -146,7 +224,12 @@ var<workgroup> partial: array<vec3<f32>, 256>;
 @compute @workgroup_size(256, 1, 1)
 fn cs_irradiance(@builtin(local_invocation_index) thread: u32) {
     var sums: array<vec3<f32>, 9>;
-    let lod = max(log2(f32(textureDimensions(first).x) / f32(SH_COLUMNS)), 0.0);
+    var lod = max(log2(f32(textureDimensions(first).x) / f32(SH_COLUMNS)), 0.0);
+    if params.source.x > 1.5 {
+        // The capture mip whose texels cover about a grid cell's solid angle.
+        let cell_angle = 4.0 * PI / f32(SH_COLUMNS * SH_ROWS);
+        lod = max(0.5 * log2(cell_angle / source_texel_angle()), 0.0);
+    }
     let per_thread = SH_COLUMNS * SH_ROWS / SH_THREADS;
     for (var step = 0u; step < per_thread; step = step + 1u) {
         let cell = thread * per_thread + step;

@@ -243,6 +243,24 @@ engine.CameraView.SetSkyLight(new(Intensity: 1));
   last light holds, about 0.2 ms (6 ms on llvmpipe) a frame. A still sky
   costs a cube sample and nine coefficients per shaded fragment.
   `engine.renderer` times the build as `sky-light`.
+- While the [cloud layer](#clouds) (flat or volumetric, with its regions) or
+  [the backdrop](#the-backdrop) draws, the light is built instead from what
+  the first primary view draws around its eye: its background (the panorama
+  or colour, the sun and the clouds) and its backdrop, finished as drawn,
+  captured into six 128² faces without the world. A mirror reflects the
+  ranges on the horizon and the cover overhead, and a storm overhead
+  darkens what faces up. The first capture renders all six faces in one
+  frame; later ones two a frame, never while the last is being built, and
+  the build then takes its three frames, so the light follows the scene a
+  few times a second. A capture begins again when the camera moved, the
+  scene changed, or (with clouds, which drift, or backdrop particles)
+  presentation time moved since the last began; a still scene with a
+  backdrop and no clouds settles and costs nothing more. With neither, the
+  light is built from the background as before. On an RX 9070 XT a
+  capture frame costs about 0.09 ms with the flat clouds, 0.15 ms with a
+  64×64 heightfield of backdrop ranges, 0.18 ms with both and 0.28 ms with
+  low volumetric clouds; a build frame about 0.12 ms; together about 0.1
+  to 0.2 ms a frame while it follows. Both are timed as `sky-light`.
 - Product shaders that call `standard_shade` get it with the rest of the
   standard lighting.
 
@@ -894,8 +912,8 @@ them is cumulus as thick as the layer.
 - A heavy layer greys the panorama behind it: with the square of the
   coverage the sky loses up to 60 % of its colour toward a slightly darker
   grey. Coverage 0 leaves the sky exactly as without clouds.
-- The [sky's light](#the-skys-light) and reflections do not see the layer:
-  they still take the panorama's own colours.
+- The [sky's light](#the-skys-light) and reflections see the layer while
+  the sky's light is on: it is built from a capture of the sky as drawn.
 - The layer is retained camera-view state like the wind, and survives a
   runtime restart.
 - `engine.renderer` times it as the `clouds` pass, in the frames that draw
@@ -975,8 +993,8 @@ up the slab, so a cloud and its shadow agree.
 - Off draws the flat layer exactly as before; a software adapter refuses
   it (`SoftwareAdapter`) and draws the flat layer.
 - Seen low across the sky, rays cross many clouds, so a given coverage looks
-  fuller than the flat layer's. The sky's light and reflections still see
-  only the panorama.
+  fuller than the flat layer's. The sky's light and reflections see them
+  as drawn ([the sky's light](#the-skys-light)).
 
 ## Wet surfaces
 
@@ -1214,8 +1232,11 @@ engine.Presentation.CreateEmitter(smoke with { Backdrop = true });
   while the camera walks, nothing while it stands. Sampling them adds about
   0.03 ms to the `backdrop` pass at 1280×720. They take four more 1024²
   atlas layers while a backdrop is linked.
-- Perspective views only: an orthographic view draws no backdrop. Neither
-  the sky's light nor reflections see it.
+- Perspective views only: an orthographic view draws no backdrop.
+- With the sky's light on, the light and reflections see the backdrop as
+  the first primary view draws it around its eye
+  ([the sky's light](#the-skys-light)): water and wet ground reflect the
+  ranges on the horizon.
 
 ## Image effects
 
