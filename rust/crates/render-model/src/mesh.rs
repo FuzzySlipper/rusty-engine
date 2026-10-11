@@ -171,7 +171,7 @@ pub struct MeshPayloadDescriptor {
     pub distance_field: Option<MeshDistanceField>,
     /// Where each vertex morphs to with distance from its parent node's
     /// focus (`RenderDiff::SetMorphFocus`): a heightfield tile's coarser
-    /// surface beneath it. Inline sources only.
+    /// surface beneath it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub morph: Option<MeshMorph>,
 }
@@ -266,9 +266,6 @@ impl MeshPayloadDescriptor {
             field.validate()?;
         }
         if let Some(morph) = &self.morph {
-            if !matches!(self.source, MeshPayloadSource::Inline { .. }) {
-                return Err(MeshDescriptorError::InvalidMorph);
-            }
             morph.validate(self.layout.vertex_count)?;
         }
         match &self.source {

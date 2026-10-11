@@ -207,19 +207,7 @@ pub fn pack_mesh_resources(
                 colors_byte_offset,
                 indices_byte_offset,
             };
-            packed_payloads.push(MeshPayloadDescriptor {
-                texture_space: None,
-                distance_field: None,
-                layout: payload.layout.clone(),
-                groups: payload.groups.clone(),
-                bounds: payload.bounds,
-                provenance: payload.provenance,
-                layer_weights: payload.layer_weights,
-                layer_palette: payload.layer_palette.clone(),
-                vertex_occlusion: payload.vertex_occlusion,
-                morph: None,
-                source,
-            });
+            packed_payloads.push(with_source(payload, source));
         }
 
         resources_by_id
@@ -238,6 +226,40 @@ pub fn pack_mesh_resources(
         payloads: packed_payloads,
         resources,
     })
+}
+
+/// `payload` with its streams at `source` instead: every other field is
+/// named here, so a new one cannot be left behind by packing or decoding.
+fn with_source(
+    payload: &MeshPayloadDescriptor,
+    source: MeshPayloadSource,
+) -> MeshPayloadDescriptor {
+    let MeshPayloadDescriptor {
+        layout,
+        groups,
+        bounds,
+        source: _,
+        provenance,
+        layer_weights,
+        layer_palette,
+        vertex_occlusion,
+        texture_space,
+        distance_field,
+        morph,
+    } = payload;
+    MeshPayloadDescriptor {
+        layout: layout.clone(),
+        groups: groups.clone(),
+        bounds: *bounds,
+        source,
+        provenance: *provenance,
+        layer_weights: *layer_weights,
+        layer_palette: layer_palette.clone(),
+        vertex_occlusion: *vertex_occlusion,
+        texture_space: *texture_space,
+        distance_field: distance_field.clone(),
+        morph: morph.clone(),
+    }
 }
 
 pub fn validate_mesh_resource_identity(
@@ -411,25 +433,16 @@ pub fn decode_mesh_resource_payload(
         *byte_length,
     )?;
 
-    let decoded = MeshPayloadDescriptor {
-        texture_space: None,
-        distance_field: None,
-        layout: payload.layout.clone(),
-        groups: payload.groups.clone(),
-        bounds: payload.bounds,
-        source: MeshPayloadSource::Inline {
+    let decoded = with_source(
+        payload,
+        MeshPayloadSource::Inline {
             positions,
             normals,
             uvs,
             colors,
             indices,
         },
-        provenance: payload.provenance,
-        layer_weights: payload.layer_weights,
-        layer_palette: payload.layer_palette.clone(),
-        vertex_occlusion: payload.vertex_occlusion,
-        morph: None,
-    };
+    );
     decoded
         .validate()
         .map_err(|source| MeshResourceError::DecodedPayloadInvalid { source })?;
@@ -981,5 +994,32 @@ mod tests {
                 },
             })
         ));
+    }
+
+    #[test]
+    fn packing_and_decoding_keep_texture_space_distance_field_and_morph() {
+        let mut payload = colored_triangle(1.0);
+        payload.texture_space = Some(crate::MeshTextureSpace {
+            cell_size: 0.5,
+            origin: [64.0, -32.0, 128.0],
+        });
+        payload.distance_field = Some(crate::MeshDistanceField {
+            cells: 2,
+            origin: [0.0, 0.0, 0.0],
+            extent: [4.0, 4.0, 4.0],
+            data: vec![1, 2, 3, 4, 5, 6, 7, 8],
+        });
+        payload.morph = Some(crate::MeshMorph {
+            targets: vec![0.5, 0.0, 0.0, -0.25, 0.1, 0.1, 0.0, 0.0, 0.0],
+            start: 10.0,
+            end: 20.0,
+        });
+        let packed = pack_mesh_resources(std::slice::from_ref(&payload), 1024).unwrap();
+        let resource = &packed.payloads[0];
+        assert_eq!(resource.texture_space, payload.texture_space);
+        assert_eq!(resource.distance_field, payload.distance_field);
+        assert_eq!(resource.morph, payload.morph);
+        let decoded = decode_mesh_resource_payload(resource, &packed.resources[0].bytes).unwrap();
+        assert_eq!(decoded, payload);
     }
 }

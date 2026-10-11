@@ -2,7 +2,9 @@
 //! assigned whole by centroid; boundaries may overlap but geometry never changes.
 use std::collections::{BTreeMap, HashMap};
 
-use crate::{MeshBoundsDescriptor, MeshGroupDescriptor, MeshPayloadDescriptor, MeshPayloadSource};
+use crate::{
+    MeshBoundsDescriptor, MeshGroupDescriptor, MeshMorph, MeshPayloadDescriptor, MeshPayloadSource,
+};
 
 /// Partition a valid inline triangle mesh in its local coordinate space.
 /// Every source triangle occurs exactly once. Attribute values and winding are
@@ -65,6 +67,7 @@ pub fn partition_mesh_spatially(
         let mut out_normals = Vec::new();
         let mut out_uvs = uvs.as_ref().map(|_| Vec::new());
         let mut out_colors = colors.as_ref().map(|_| Vec::new());
+        let mut out_morph = mesh.morph.as_ref().map(|_| Vec::new());
         let mut out_indices = Vec::with_capacity(triangles.len() * 3);
         let mut groups: Vec<MeshGroupDescriptor> = Vec::new();
         let mut bounds = MeshBoundsDescriptor {
@@ -97,6 +100,12 @@ pub fn partition_mesh_spatially(
                         bounds.min[axis] = bounds.min[axis].min(value);
                         bounds.max[axis] = bounds.max[axis].max(value);
                     }
+                    if let (Some(src), Some(dst)) = (&mesh.morph, &mut out_morph) {
+                        let target = &src.targets[old * 3..old * 3 + 3];
+                        dst.extend_from_slice(target);
+                        bounds.min[1] = bounds.min[1].min(point[1] + target[0]);
+                        bounds.max[1] = bounds.max[1].max(point[1] + target[0]);
+                    }
                     next
                 });
                 out_indices.push(index);
@@ -106,8 +115,8 @@ pub fn partition_mesh_spatially(
         layout.vertex_count = (out_positions.len() / 3) as u32;
         layout.index_count = out_indices.len() as u32;
         parts.push(MeshPayloadDescriptor {
-            texture_space: None,
-            distance_field: None,
+            texture_space: mesh.texture_space,
+            distance_field: mesh.distance_field.clone(),
             layout,
             groups,
             bounds,
@@ -115,7 +124,15 @@ pub fn partition_mesh_spatially(
             layer_weights: mesh.layer_weights,
             layer_palette: mesh.layer_palette.clone(),
             vertex_occlusion: mesh.vertex_occlusion,
-            morph: None,
+            morph: mesh
+                .morph
+                .as_ref()
+                .zip(out_morph)
+                .map(|(morph, targets)| MeshMorph {
+                    targets,
+                    start: morph.start,
+                    end: morph.end,
+                }),
             source: MeshPayloadSource::Inline {
                 positions: out_positions,
                 normals: out_normals,

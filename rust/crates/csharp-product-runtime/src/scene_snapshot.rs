@@ -466,9 +466,18 @@ mod tests {
             components: 3,
             kind: MeshAttributeKind::F32,
         };
+        // A voxel chunk's: where its textures project from, and its field.
         MeshPayloadDescriptor {
-            texture_space: None,
-            distance_field: None,
+            texture_space: Some(render_model::MeshTextureSpace {
+                cell_size: 1.0,
+                origin: [32.0, 0.0, -16.0],
+            }),
+            distance_field: Some(render_model::MeshDistanceField {
+                cells: 1,
+                origin: [0.0; 3],
+                extent: [1.0; 3],
+                data: vec![128],
+            }),
             layout: MeshBufferLayout {
                 vertex_count: 3,
                 index_count: 3,
@@ -562,6 +571,7 @@ mod tests {
         let MeshPayloadSource::Resource { resource, .. } = &asset.payload.source else {
             panic!("the mesh is a resource");
         };
+        assert_eq!(asset.payload.texture_space, inline_mesh().texture_space);
         let bytes = snapshot.bytes(resource).expect("the packed mesh is stored");
         let decoded = render_model::decode_mesh_resource_payload(&asset.payload, &bytes).unwrap();
         assert_eq!(decoded, inline_mesh());

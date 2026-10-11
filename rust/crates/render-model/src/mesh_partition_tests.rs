@@ -245,3 +245,54 @@ fn rejects_invalid_cells_and_non_inline_sources() {
         Err("spatial mesh partition requires an inline mesh")
     );
 }
+
+#[test]
+fn parts_keep_the_texture_space_distance_field_and_each_vertex_morph() {
+    let mut mesh = attributed_mesh();
+    let MeshPayloadSource::Inline { positions, .. } = &mesh.source else {
+        unreachable!()
+    };
+    // Each vertex's target is a function of where it stands.
+    let targets = positions
+        .as_chunks::<3>()
+        .0
+        .iter()
+        .flat_map(|p| [p[0] + 100.0, p[1], p[2]])
+        .collect();
+    mesh.morph = Some(crate::MeshMorph {
+        targets,
+        start: 1.0,
+        end: 2.0,
+    });
+    mesh.texture_space = Some(crate::MeshTextureSpace {
+        cell_size: 0.25,
+        origin: [8.0, 0.0, -8.0],
+    });
+    mesh.distance_field = Some(crate::MeshDistanceField {
+        cells: 1,
+        origin: [-4.0; 3],
+        extent: [8.0; 3],
+        data: vec![7],
+    });
+    let parts = partition_mesh_spatially(&mesh, [0.0; 3], [2.0, 10.0, 10.0]).unwrap();
+    assert_eq!(parts.len(), 3);
+    for part in parts {
+        part.validate().unwrap();
+        assert_eq!(part.texture_space, mesh.texture_space);
+        assert_eq!(part.distance_field, mesh.distance_field);
+        let MeshPayloadSource::Inline { positions, .. } = &part.source else {
+            unreachable!()
+        };
+        let morph = part.morph.as_ref().unwrap();
+        assert_eq!((morph.start, morph.end), (1.0, 2.0));
+        for (p, target) in positions
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .zip(morph.targets.as_chunks::<3>().0)
+        {
+            assert_eq!(target, &[p[0] + 100.0, p[1], p[2]]);
+            assert!(part.bounds.max[1] >= p[1] + target[0]);
+        }
+    }
+}
