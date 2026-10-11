@@ -498,6 +498,7 @@ mod tests {
             layer_weights: false,
             layer_palette: Vec::new(),
             vertex_occlusion: false,
+            morph: None,
         }
     }
 

@@ -89,7 +89,8 @@ struct Part {
     // w: texture-space cells per model unit.
     emission: vec4<f32>,
     // The distance fade (scattered copies): the part shrinks into its origin
-    // between x and y metres from the camera; y 0 keeps it whole.
+    // between x and y metres from the camera; y 0 keeps it whole. A MORPH
+    // part's morph instead (`rusty::view::morph_share`).
     fade: vec4<f32>,
 };
 

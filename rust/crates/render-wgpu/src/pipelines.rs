@@ -19,6 +19,44 @@ pub const VERTEX_FLOATS: usize = 12;
 /// The optional second stream (`GpuMesh::extra`): tangent (4), uv1 (2).
 pub const EXTRA_VERTEX_FLOATS: usize = 6;
 
+/// A morphing mesh's second stream instead (`GpuMesh::morph`): height
+/// change, target normal x and z.
+pub const MORPH_VERTEX_FLOATS: usize = 3;
+
+const MESH_ATTRIBUTES: [wgpu::VertexAttribute; 4] =
+    wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x2, 3 => Float32x4];
+const EXTRA_ATTRIBUTES: [wgpu::VertexAttribute; 2] =
+    wgpu::vertex_attr_array![4 => Float32x4, 5 => Float32x2];
+const MORPH_ATTRIBUTES: [wgpu::VertexAttribute; 1] = wgpu::vertex_attr_array![6 => Float32x3];
+
+/// The vertex streams a mesh with `features` binds: the interleaved one,
+/// then its tangents (VERTEX_TANGENTS) or its morph targets (MORPH). The
+/// shadow and pre-pass pipelines take tangents never.
+fn mesh_buffers(
+    features: Features,
+    tangents: bool,
+) -> Vec<Option<wgpu::VertexBufferLayout<'static>>> {
+    let mut buffers = vec![Some(wgpu::VertexBufferLayout {
+        array_stride: (VERTEX_FLOATS * 4) as u64,
+        step_mode: wgpu::VertexStepMode::Vertex,
+        attributes: &MESH_ATTRIBUTES,
+    })];
+    if tangents && features.contains(Features::VERTEX_TANGENTS) {
+        buffers.push(Some(wgpu::VertexBufferLayout {
+            array_stride: (EXTRA_VERTEX_FLOATS * 4) as u64,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &EXTRA_ATTRIBUTES,
+        }));
+    } else if features.contains(Features::MORPH) {
+        buffers.push(Some(wgpu::VertexBufferLayout {
+            array_stride: (MORPH_VERTEX_FLOATS * 4) as u64,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &MORPH_ATTRIBUTES,
+        }));
+    }
+    buffers
+}
+
 /// A standard-family module, which always composes.
 pub(crate) fn standard(module: Result<wgpu::ShaderModule, String>) -> wgpu::ShaderModule {
     module.unwrap_or_else(|error| panic!("{error}"))
@@ -661,25 +699,7 @@ impl Layouts {
             Pass::BlendMirrored => (TRIANGLES, BACK, CW, true),
             Pass::BlendDoubleSided => (TRIANGLES, None, CCW, true),
         };
-        let attributes = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x2, 3 => Float32x4];
-        let extra_attributes = wgpu::vertex_attr_array![4 => Float32x4, 5 => Float32x2];
-        let buffers = [
-            Some(wgpu::VertexBufferLayout {
-                array_stride: (VERTEX_FLOATS * 4) as u64,
-                step_mode: wgpu::VertexStepMode::Vertex,
-                attributes: &attributes,
-            }),
-            Some(wgpu::VertexBufferLayout {
-                array_stride: (EXTRA_VERTEX_FLOATS * 4) as u64,
-                step_mode: wgpu::VertexStepMode::Vertex,
-                attributes: &extra_attributes,
-            }),
-        ];
-        let streams = if features.contains(Features::VERTEX_TANGENTS) {
-            2
-        } else {
-            1
-        };
+        let buffers = mesh_buffers(features, true);
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("render-wgpu world"),
             layout: Some(if features.contains(Features::WATER) {
@@ -691,7 +711,7 @@ impl Layouts {
                 module: shader,
                 entry_point: Some("vs_world"),
                 compilation_options: Default::default(),
-                buffers: &buffers[..streams],
+                buffers: &buffers,
             },
             primitive: wgpu::PrimitiveState {
                 topology,
@@ -742,7 +762,7 @@ impl Layouts {
             .shadow_shaders
             .entry(features)
             .or_insert_with(|| standard(self.shaders.module(device, Entry::Shadow, features)));
-        let attributes = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x2, 3 => Float32x4];
+        let buffers = mesh_buffers(features, false);
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("render-wgpu shadow"),
             layout: Some(&self.shadow_pipeline),
@@ -750,11 +770,7 @@ impl Layouts {
                 module: shader,
                 entry_point: Some("vs_shadow"),
                 compilation_options: Default::default(),
-                buffers: &[Some(wgpu::VertexBufferLayout {
-                    array_stride: (VERTEX_FLOATS * 4) as u64,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &attributes,
-                })],
+                buffers: &buffers,
             },
             primitive: wgpu::PrimitiveState {
                 cull_mode,
@@ -813,7 +829,7 @@ impl Layouts {
             Pass::OpaqueDoubleSided | Pass::BlendDoubleSided | Pass::Lines => (None, CCW),
             Pass::Opaque | Pass::Blend => (BACK, CCW),
         };
-        let attributes = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x2, 3 => Float32x4];
+        let buffers = mesh_buffers(features, false);
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("render-wgpu ambient occlusion pre-pass"),
             layout: Some(&self.shadow_pipeline),
@@ -821,11 +837,7 @@ impl Layouts {
                 module: shader,
                 entry_point: Some("vs_shadow"),
                 compilation_options: Default::default(),
-                buffers: &[Some(wgpu::VertexBufferLayout {
-                    array_stride: (VERTEX_FLOATS * 4) as u64,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &attributes,
-                })],
+                buffers: &buffers,
             },
             primitive: wgpu::PrimitiveState {
                 cull_mode,

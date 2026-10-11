@@ -6,7 +6,7 @@
 // product's `cast_shadow` may discard.
 
 #import rusty::types::{texture_space_position, Caster, Vertex}
-#import rusty::view::{parts, instances, shadow_views, fade_toward_origin}
+#import rusty::view::{parts, instances, shadow_views, fade_toward_origin, morph_share, morph_normal}
 #import rusty::material::{material, albedo, albedo_sampler}
 #import rusty::surface::{transform_uv, voxel_uv, triplanar_uvs, triplanar_weights, hex_tiles, hex_texture}
 #ifdef WIND
@@ -39,15 +39,27 @@ struct VsOut {
 
 @vertex
 fn vs_shadow(
-    @location(0) position: vec3<f32>,
-    @location(1) normal: vec3<f32>,
+    @location(0) mesh_position: vec3<f32>,
+    @location(1) mesh_normal: vec3<f32>,
     @location(2) uv: vec2<f32>,
     @location(3) color: vec4<f32>,
+#ifdef MORPH
+    @location(6) morph: vec3<f32>,
+#endif
     @builtin(instance_index) instance: u32,
 ) -> VsOut {
     let part = instances[instance];
     let row = parts[part];
+#ifdef MORPH
+    let share = morph_share(row, mesh_position);
+    let position = mesh_position + vec3<f32>(0.0, morph.x * share, 0.0);
+    let normal = normalize(mix(mesh_normal, morph_normal(morph), share));
+    var world = (row.model * vec4<f32>(position, 1.0)).xyz;
+#else
+    let position = mesh_position;
+    let normal = mesh_normal;
     var world = fade_toward_origin(row, (row.model * vec4<f32>(position, 1.0)).xyz);
+#endif
 #ifdef LAYER_WEIGHTS
     // The vertex colour holds layer weights.
     let alpha = 1.0;

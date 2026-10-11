@@ -34,7 +34,7 @@ use naga_oil::compose::{
 /// contains, and the product shader (if any) that shades it.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Features {
-    bits: u16,
+    bits: u32,
     /// `Shaders::product` id; 0 for the standard shade stage.
     product: u32,
 }
@@ -80,11 +80,17 @@ impl Features {
     /// ambient, hemisphere and sky light; with LAYER_WEIGHTS the fourth
     /// layer's weight is the remainder of the first three.
     pub const VERTEX_OCCLUSION: Self = Self::bit(32768);
+    /// The mesh morphs toward a target with distance from a focus (a mesh
+    /// feature, not a material one; a heightfield tile's geomorph): its
+    /// second stream holds each vertex's height change and target normal,
+    /// and the part's `fade` row is the morph's range and focus
+    /// (`rusty::view::morph_share`). It has no tangents or occlusion.
+    pub const MORPH: Self = Self::bit(65536);
     /// Every standard feature's bit.
     #[cfg(test)]
-    const ALL_BITS: u16 = 65535;
+    const ALL_BITS: u32 = 131071;
 
-    const DEFS: [(Self, &'static str); 16] = [
+    const DEFS: [(Self, &'static str); 17] = [
         (Self::UNLIT, "UNLIT"),
         (Self::MASK, "MASK"),
         (Self::VOXEL_SURFACE, "VOXEL_SURFACE"),
@@ -101,9 +107,10 @@ impl Features {
         (Self::WIND, "WIND"),
         (Self::WATER, "WATER"),
         (Self::VERTEX_OCCLUSION, "VERTEX_OCCLUSION"),
+        (Self::MORPH, "MORPH"),
     ];
 
-    const fn bit(bits: u16) -> Self {
+    const fn bit(bits: u32) -> Self {
         Self { bits, product: 0 }
     }
 
@@ -144,7 +151,8 @@ impl Features {
                     | Self::STOCHASTIC_TILING.bits
                     | Self::LAYER_WEIGHTS.bits
                     | Self::VERTEX_OCCLUSION.bits
-                    | Self::WIND.bits),
+                    | Self::WIND.bits
+                    | Self::MORPH.bits),
             product: if self.product & (PRODUCT_CASTS | PRODUCT_DISPLACES) != 0 {
                 self.product
             } else {
@@ -171,7 +179,8 @@ impl Features {
     /// map and shades neither flat nor layered; a material has an occlusion
     /// map or an ORM map; flat shading drops the normal map; terrain layers
     /// need a voxel surface; water is blended (never masked) and reads its
-    /// normal maps itself.
+    /// normal maps itself; a morphing mesh (a heightfield tile) has neither
+    /// tangents nor vertex occlusion.
     #[cfg(test)]
     fn occurs(self) -> bool {
         let unlit_never = Self::NORMAL_MAP
@@ -191,6 +200,7 @@ impl Features {
             excluded(Self::FLAT_SHADING, Self::NORMAL_MAP),
             layers_without_surface,
             excluded(Self::WATER, Self::MASK | Self::NORMAL_MAP),
+            excluded(Self::MORPH, Self::VERTEX_TANGENTS | Self::VERTEX_OCCLUSION),
         ];
         !exclusions.contains(&true)
     }
@@ -587,7 +597,7 @@ mod tests {
                     let state = prepare(&mut shaders);
                     let start = chunk * per_thread;
                     for bits in start..(start + per_thread).min(sets) {
-                        let features = Features::bit(bits as u16);
+                        let features = Features::bit(bits as u32);
                         if features.occurs() {
                             check(&mut shaders, &state, features);
                         }

@@ -1050,6 +1050,7 @@ fn voxel_mesh_payload_with_material_slots(
             origin: chunk.origin_voxel.map(|cell| cell as f32),
         }),
         distance_field: chunk_distance_field(chunk),
+        morph: None,
     }
 }
 

@@ -64,6 +64,24 @@ fn fade_toward_origin(row: Part, world: vec3<f32>) -> vec3<f32> {
     return origin + (world - origin) * keep;
 }
 
+// A morphing part's share of its targets at model-space position `p`
+// (MORPH, a heightfield tile): `Part::fade` is then the range (x, y) and the
+// focus (z, w: x and z in the part's own space). 0 within x of the focus, 1
+// from y, linear between, by the larger horizontal distance; 0 without a
+// focus (y 0).
+fn morph_share(row: Part, p: vec3<f32>) -> f32 {
+    if (row.fade.y <= 0.0) {
+        return 0.0;
+    }
+    let reach = max(abs(p.x - row.fade.z), abs(p.z - row.fade.w));
+    return clamp((reach - row.fade.x) / (row.fade.y - row.fade.x), 0.0, 1.0);
+}
+
+// A morph target's normal from its x and z (the positive remainder is y).
+fn morph_normal(goal: vec3<f32>) -> vec3<f32> {
+    return vec3<f32>(goal.y, sqrt(max(1.0 - goal.y * goal.y - goal.z * goal.z, 0.0)), goal.z);
+}
+
 fn mask_coverage(alpha: f32, cutoff: f32) -> u32 {
     let sharpened = clamp((alpha - cutoff) / max(fwidth(alpha), 1e-5) + 0.5, 0.0, 1.0);
     let samples = max(frame.counts.z, 1u);

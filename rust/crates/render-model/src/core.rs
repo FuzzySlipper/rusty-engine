@@ -1393,6 +1393,13 @@ pub enum RenderDiff {
         parent: Option<RenderHandle>,
         instance: crate::AnimatedMeshInstanceDescriptor,
     },
+    /// The focus `handle`'s child nodes morph their meshes about
+    /// (`MeshMorph`): a point (x, z) in `handle`'s own space, such as where
+    /// a heightfield's rings centre. None draws them unmorphed.
+    SetMorphFocus {
+        handle: RenderHandle,
+        focus: Option<[f64; 2]>,
+    },
     /// Many copies of a static mesh drawn as one node (`scatter`): grass,
     /// stones and flowers the Engine placed over a piece of ground.
     CreateScatterPatch {
@@ -1467,6 +1474,12 @@ impl RenderDiff {
                 }
                 Ok(())
             }
+            Self::SetMorphFocus {
+                focus: Some(focus), ..
+            } if !focus.iter().all(|value| value.is_finite()) => {
+                Err(RenderOperationError::MorphFocus)
+            }
+            Self::SetMorphFocus { .. } => Ok(()),
             Self::SetParentJoint { joint, .. } => {
                 if joint.as_ref().is_some_and(|name| name.trim().is_empty()) {
                     Err(RenderOperationError::InvalidParentJoint)
@@ -1675,6 +1688,7 @@ impl RenderDiff {
             }
             Self::Update { handle, .. }
             | Self::SetParentJoint { handle, .. }
+            | Self::SetMorphFocus { handle, .. }
             | Self::Destroy { handle }
             | Self::ReplaceMeshPayload { handle, .. }
             | Self::ReplaceMeshDistanceField { handle, .. }
@@ -1736,6 +1750,7 @@ fn valid_color<const N: usize>(color: [f32; N]) -> bool {
 #[derive(Debug, Clone, PartialEq)]
 pub enum RenderOperationError {
     InvalidParentJoint,
+    MorphFocus,
     Handle(RenderHandleError),
     Node(NodeError),
     Transform(TransformError),
@@ -1820,6 +1835,7 @@ impl RenderFrameDiff {
                     .collect(),
                 // Listed so that a new op carrying a payload is added here.
                 RenderDiff::SetParentJoint { .. }
+                | RenderDiff::SetMorphFocus { .. }
                 | RenderDiff::ReplaceMeshDistanceField { .. }
                 | RenderDiff::Create { .. }
                 | RenderDiff::Update { .. }

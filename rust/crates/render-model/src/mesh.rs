@@ -169,6 +169,46 @@ pub struct MeshPayloadDescriptor {
     /// (`svc_mesh::distance_field`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub distance_field: Option<MeshDistanceField>,
+    /// Where each vertex morphs to with distance from its parent node's
+    /// focus (`RenderDiff::SetMorphFocus`): a heightfield tile's coarser
+    /// surface beneath it. Inline sources only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub morph: Option<MeshMorph>,
+}
+
+/// A geomorph (a heightfield tile's, render-wgpu `MORPH`): each vertex's
+/// target as three floats, its height change (along the mesh's y) and its
+/// target normal's x and z (the normal's y is the positive remainder). A
+/// vertex is drawn whole at a horizontal (x, z) Chebyshev distance of
+/// `start` or less from the parent's focus, in the mesh's own units, at its
+/// target from `end` on, and between them by the linear share. Without a
+/// focus it is drawn whole.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MeshMorph {
+    pub targets: Vec<f32>,
+    pub start: f32,
+    pub end: f32,
+}
+
+impl MeshMorph {
+    fn validate(&self, vertex_count: u32) -> Result<(), MeshDescriptorError> {
+        let expected = vertex_count as usize * 3;
+        if self.targets.len() != expected {
+            return Err(MeshDescriptorError::MorphLengthMismatch {
+                expected,
+                actual: self.targets.len(),
+            });
+        }
+        if !self.targets.iter().all(|value| value.is_finite())
+            || !(self.start.is_finite() && self.end.is_finite())
+            || self.start < 0.0
+            || self.end <= self.start
+        {
+            return Err(MeshDescriptorError::InvalidMorph);
+        }
+        Ok(())
+    }
 }
 
 /// A mesh's signed distance field: `cells`³ bytes, x fastest, over the box
@@ -223,6 +263,12 @@ impl MeshPayloadDescriptor {
         validate_attributes(&self.layout)?;
         if let Some(field) = &self.distance_field {
             field.validate()?;
+        }
+        if let Some(morph) = &self.morph {
+            if !matches!(self.source, MeshPayloadSource::Inline { .. }) {
+                return Err(MeshDescriptorError::InvalidMorph);
+            }
+            morph.validate(self.layout.vertex_count)?;
         }
         match &self.source {
             MeshPayloadSource::Inline {
@@ -597,6 +643,11 @@ pub enum MeshDescriptorError {
         actual: usize,
     },
     InvalidDistanceFieldBox,
+    MorphLengthMismatch {
+        expected: usize,
+        actual: usize,
+    },
+    InvalidMorph,
     OptionalAttributeSourceMismatch {
         name: MeshAttributeName,
     },
@@ -1753,6 +1804,7 @@ mod tests {
             layer_weights: false,
             layer_palette: Vec::new(),
             vertex_occlusion: false,
+            morph: None,
         }
     }
 

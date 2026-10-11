@@ -443,6 +443,9 @@ impl Renderer {
                 }
                 if rebuild {
                     self.rebuild_parts(*handle);
+                } else if transform.is_some() {
+                    // A morph's focus is in the node's own space.
+                    self.refresh_morph(*handle);
                 }
                 if unrealized_material {
                     return Err(
@@ -452,6 +455,13 @@ impl Renderer {
                 }
             }
             RenderDiff::Destroy { handle } => self.destroy_node(*handle),
+            RenderDiff::SetMorphFocus { handle, focus } => {
+                let node = self.node_mut(*handle)?;
+                node.morph_focus = *focus;
+                for child in node.children.clone() {
+                    self.refresh_morph(child);
+                }
+            }
             RenderDiff::SetParentJoint { handle, joint } => {
                 // The child follows the named joint of its animated parent.
                 self.node_mut(*handle)?.parent_joint = joint.clone();
@@ -499,6 +509,7 @@ impl Renderer {
                     BTreeMap::new(),
                 );
                 mesh.texture_space = payload.texture_space;
+                self.attach_morph(&mut mesh, payload, &format!("payload {}", handle.raw()));
                 mesh.layer_weights = layer_weights;
                 if layer_weights {
                     mesh.layer_palette = payload.layer_palette.clone();
@@ -695,6 +706,7 @@ impl Renderer {
                 shadow_casting,
                 kind,
                 parts: Vec::new(),
+                morph_focus: None,
             },
         );
         self.tables.dirty_nodes.insert(handle);
@@ -1013,7 +1025,7 @@ impl Renderer {
                                 ],
                                 emission,
                             );
-                            row.fade = [patch.fade.start, patch.fade.end];
+                            row.fade = [patch.fade.start, patch.fade.end, 0.0, 0.0];
                             parts.push((
                                 Part {
                                     node: handle,
@@ -1049,6 +1061,9 @@ impl Renderer {
                     space.origin[2],
                     1.0 / space.cell_size,
                 ];
+            }
+            if let Some(morph) = mesh.and_then(|mesh| mesh.morph.as_ref()) {
+                row.fade = self.morph_fade(handle, morph);
             }
             let bounds = mesh.map_or(Aabb::EMPTY, |mesh| mesh.bounds);
             if let (true, Some(mesh)) = (part.wireframe, mesh) {
@@ -1551,6 +1566,7 @@ impl Renderer {
         // A product mesh's colours can be terrain layer weights, as a voxel
         // chunk's are: layers 0 to 3 of its slots' terrain layer materials.
         mesh.layer_weights = asset.payload.layer_weights && streams.colors.is_some();
+        self.attach_morph(&mut mesh, &asset.payload, &asset.asset);
         let id = self.tables.names.id(&asset.asset);
         let redefined = self.tables.static_meshes.insert(id, mesh).is_some();
         // A redefinition redraws every user; a first definition the scatter
@@ -1571,6 +1587,83 @@ impl Renderer {
             self.rebuild_parts(handle);
         }
         Ok(())
+    }
+
+    /// Upload a payload's morph targets as the mesh's second stream, its
+    /// bounds grown to hold every target.
+    fn attach_morph(
+        &self,
+        mesh: &mut GpuMesh,
+        payload: &render_model::MeshPayloadDescriptor,
+        label: &str,
+    ) {
+        let Some(morph) = &payload.morph else {
+            return;
+        };
+        for (position, target) in mesh
+            .cpu
+            .positions
+            .iter()
+            .zip(morph.targets.as_chunks::<3>().0)
+        {
+            mesh.bounds
+                .include(*position + Vec3::new(0.0, target[0], 0.0));
+        }
+        mesh.morph = Some(crate::tables::MorphStream {
+            targets: self
+                .gpu
+                .device
+                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some(label),
+                    contents: bytemuck::cast_slice(&morph.targets),
+                    usage: wgpu::BufferUsages::VERTEX,
+                }),
+            start: morph.start,
+            end: morph.end,
+        });
+    }
+
+    /// A morphing mesh's part row under `handle`: the morph's range and its
+    /// parent's focus in the node's own x and z; whole without a focus.
+    fn morph_fade(&self, handle: RenderHandle, morph: &crate::tables::MorphStream) -> [f32; 4] {
+        let Some(node) = self.tables.nodes.get(&handle) else {
+            return [0.0; 4];
+        };
+        let focus = node
+            .parent
+            .and_then(|parent| self.tables.nodes.get(&parent))
+            .and_then(|parent| parent.morph_focus);
+        match focus {
+            Some([x, z]) => {
+                let origin = node.local.w_axis;
+                [
+                    morph.start,
+                    morph.end,
+                    (x - f64::from(origin.x)) as f32,
+                    (z - f64::from(origin.z)) as f32,
+                ]
+            }
+            None => [0.0; 4],
+        }
+    }
+
+    /// Rewrite the morph rows of `handle`'s parts (its focus or place moved).
+    fn refresh_morph(&mut self, handle: RenderHandle) {
+        let Some(node) = self.tables.nodes.get(&handle) else {
+            return;
+        };
+        let rows: Vec<(crate::tables::PartId, [f32; 4])> = node
+            .parts
+            .iter()
+            .filter_map(|id| {
+                let part = self.tables.parts.meta[*id as usize].as_ref()?;
+                let morph = self.mesh(&part.mesh)?.morph.as_ref()?;
+                Some((*id, self.morph_fade(handle, morph)))
+            })
+            .collect();
+        for (id, fade) in rows {
+            self.tables.parts.set_fade(id, fade);
+        }
     }
 
     pub(crate) fn upload_mesh(
@@ -1639,6 +1732,7 @@ impl Renderer {
             layer_weights: false,
             layer_palette: Vec::new(),
             vertex_occlusion: false,
+            morph: None,
             vertices: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some(label),
                 contents: bytemuck::cast_slice(vertices),
@@ -2528,6 +2622,7 @@ fn dedup(mut handles: Vec<RenderHandle>) -> Vec<RenderHandle> {
 fn op_name(op: &RenderDiff) -> &'static str {
     match op {
         RenderDiff::SetParentJoint { .. } => "setParentJoint",
+        RenderDiff::SetMorphFocus { .. } => "setMorphFocus",
         RenderDiff::Create { .. } => "create",
         RenderDiff::CreateSpriteBatch { .. } => "createSpriteBatch",
         RenderDiff::Update { .. } => "update",

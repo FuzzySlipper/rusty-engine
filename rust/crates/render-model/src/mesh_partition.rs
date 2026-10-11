@@ -115,6 +115,7 @@ pub fn partition_mesh_spatially(
             layer_weights: mesh.layer_weights,
             layer_palette: mesh.layer_palette.clone(),
             vertex_occlusion: mesh.vertex_occlusion,
+            morph: None,
             source: MeshPayloadSource::Inline {
                 positions: out_positions,
                 normals: out_normals,

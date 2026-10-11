@@ -1211,6 +1211,7 @@ mod tests {
                 layer_weights: false,
                 layer_palette: Vec::new(),
                 vertex_occlusion: false,
+                morph: None,
             },
             material_slots: vec![MeshMaterialSlot {
                 slot: 0,

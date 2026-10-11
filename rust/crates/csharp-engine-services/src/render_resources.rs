@@ -1513,6 +1513,7 @@ unsafe fn generated_mesh_payload(
         layer_weights: !weights.is_empty(),
         layer_palette: Vec::new(),
         vertex_occlusion: false,
+        morph: None,
     };
     Ok((payload, slots, bindings))
 }
@@ -1970,6 +1971,7 @@ pub(crate) mod tests {
                 layer_weights: false,
                 layer_palette: Vec::new(),
                 vertex_occlusion: false,
+                morph: None,
             },
             material_slots: vec![MeshMaterialSlot {
                 slot: 0,

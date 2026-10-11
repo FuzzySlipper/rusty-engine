@@ -4392,6 +4392,7 @@ impl RuntimeAppearanceBridge {
                 layer_weights: false,
                 layer_palette: Vec::new(),
                 vertex_occlusion: false,
+                morph: None,
             },
             material_slots: material_slots.clone(),
             collision: MeshCollisionPolicy::VisualOnly,
@@ -13100,6 +13101,7 @@ fn shade(surface: Surface) -> vec4<f32> {
                 layer_weights: false,
                 layer_palette: Vec::new(),
                 vertex_occlusion: false,
+                morph: None,
             },
             material_slots: vec![MeshMaterialSlot {
                 slot: 0,

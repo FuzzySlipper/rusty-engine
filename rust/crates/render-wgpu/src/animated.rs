@@ -1573,6 +1573,7 @@ impl Renderer {
             layer_weights: false,
             layer_palette: Vec::new(),
             vertex_occlusion: false,
+            morph: None,
             vertices: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some(label),
                 contents: bytemuck::cast_slice(vertices),

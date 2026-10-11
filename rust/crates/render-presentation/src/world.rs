@@ -96,6 +96,8 @@ fn transform_point(transform: &Transform, point: [f32; 3]) -> [f32; 3] {
 #[derive(Debug, Clone, PartialEq)]
 struct PresentationNode {
     parent_joint: Option<String>,
+    /// The focus the node's children morph about (`SetMorphFocus`).
+    morph_focus: Option<[f64; 2]>,
     parent: Option<RenderHandle>,
     kind: NodeKind,
     mesh_payload: Option<MeshPayloadDescriptor>,
@@ -280,6 +282,7 @@ impl PresentationWorld {
             // (for example, the active sky). Retain that fact once rather than
             // publishing a stale texture-version update to the realization.
             if matches!(&op, RenderDiff::SetParentJoint { handle, joint } if self.retained.nodes.get(handle).is_some_and(|node| &node.parent_joint == joint))
+                || matches!(&op, RenderDiff::SetMorphFocus { handle, focus } if self.retained.nodes.get(handle).is_some_and(|node| &node.morph_focus == focus))
                 || matches!(&op, RenderDiff::DefineTexture { texture }
                 if self.retained.textures.get(&texture.id).is_some_and(|current| current.as_ref() == texture))
                 || matches!(&op, RenderDiff::SetSkyBackground { background } if &self.retained.sky == background && self.retained.background_color.is_none())
@@ -901,6 +904,12 @@ impl PresentationWorld {
                 joint: Some(joint.clone()),
             });
         }
+        if let Some(focus) = node.morph_focus {
+            ops.push(RenderDiff::SetMorphFocus {
+                handle,
+                focus: Some(focus),
+            });
+        }
         if let Some(material) = node.material_override {
             ops.push(RenderDiff::Update {
                 handle,
@@ -960,6 +969,7 @@ impl PresentationWorld {
             handle,
             Arc::new(PresentationNode {
                 parent_joint: None,
+                morph_focus: None,
                 playback,
                 parent,
                 kind,
@@ -1018,6 +1028,9 @@ impl PresentationWorld {
                     }
                 }
                 self.node_mut(*handle)?.parent_joint = joint.clone();
+            }
+            RenderDiff::SetMorphFocus { handle, focus } => {
+                self.node_mut(*handle)?.morph_focus = *focus;
             }
             RenderDiff::Create {
                 handle,
@@ -1482,6 +1495,7 @@ mod tests {
                 layer_weights: false,
                 layer_palette: Vec::new(),
                 vertex_occlusion: false,
+                morph: None,
             },
             material_slots: vec![MeshMaterialSlot {
                 slot: 0,
@@ -2068,5 +2082,54 @@ mod joint_attachment_tests {
             .ops
             .iter()
             .any(|op| matches!(op, RenderDiff::SetParentJoint { .. })));
+    }
+
+    #[test]
+    fn a_morph_focus_is_retained_once_and_replayed_after_its_node() {
+        let root = RenderHandle::new(7);
+        let mut world = PresentationWorld::default();
+        let focus = |focus| {
+            RenderFrameDiff::try_from_ops(vec![RenderDiff::SetMorphFocus {
+                handle: root,
+                focus,
+            }])
+            .unwrap()
+        };
+        world
+            .apply(
+                RenderFrameDiff::try_from_ops(vec![RenderDiff::Create {
+                    handle: root,
+                    parent: None,
+                    node: RenderNode::new(Geometry::Group),
+                }])
+                .unwrap(),
+            )
+            .unwrap();
+        assert_eq!(world.apply(focus(Some([3.0, -4.0]))).unwrap().ops.len(), 1);
+        assert!(world
+            .apply(focus(Some([3.0, -4.0])))
+            .unwrap()
+            .ops
+            .is_empty());
+        let ops = world.snapshot().frame.ops;
+        let created = ops
+            .iter()
+            .position(|op| matches!(op, RenderDiff::Create { handle, .. } if *handle == root))
+            .unwrap();
+        let focused = ops
+            .iter()
+            .position(|op| {
+                matches!(op, RenderDiff::SetMorphFocus { handle, focus: Some([x, z]) }
+                    if *handle == root && *x == 3.0 && *z == -4.0)
+            })
+            .unwrap();
+        assert!(created < focused);
+        world.apply(focus(None)).unwrap();
+        assert!(!world
+            .snapshot()
+            .frame
+            .ops
+            .iter()
+            .any(|op| matches!(op, RenderDiff::SetMorphFocus { .. })));
     }
 }

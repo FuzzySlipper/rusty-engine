@@ -250,6 +250,7 @@ pub fn import_with_context(source: &SourceMesh, context: &ImportContext) -> Impo
             layer_weights: false,
             layer_palette: Vec::new(),
             vertex_occlusion: false,
+            morph: None,
         },
         material_slots: source
             .materials

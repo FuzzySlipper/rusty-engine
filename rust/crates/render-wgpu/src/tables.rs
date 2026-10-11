@@ -133,6 +133,17 @@ pub(crate) struct GpuMesh {
     /// Its vertex colours' alpha is ambient occlusion: a voxel chunk meshed
     /// with vertex occlusion.
     pub vertex_occlusion: bool,
+    /// Its geomorph (`render_model::MeshMorph`): the targets' vertex stream
+    /// and the range, in the mesh's own units, over which it morphs.
+    pub morph: Option<MorphStream>,
+}
+
+/// A mesh's morph targets on the GPU (`MORPH`, the second vertex stream:
+/// height change, target normal x and z) and its range.
+pub(crate) struct MorphStream {
+    pub targets: wgpu::Buffer,
+    pub start: f32,
+    pub end: f32,
 }
 
 impl GpuMesh {
@@ -148,6 +159,15 @@ impl GpuMesh {
                 crate::shaders::Features::VERTEX_OCCLUSION,
                 self.vertex_occlusion,
             )
+            .with(crate::shaders::Features::MORPH, self.morph.is_some())
+    }
+
+    /// The vertex stream bound after the interleaved one: tangents, or a
+    /// morph's targets.
+    pub fn second_stream(&self) -> Option<&wgpu::Buffer> {
+        self.extra
+            .as_ref()
+            .or(self.morph.as_ref().map(|morph| &morph.targets))
     }
 }
 
@@ -391,6 +411,9 @@ pub(crate) struct NodeRow {
     pub shadow_casting: ShadowCasting,
     pub kind: NodeKind,
     pub parts: Vec<PartId>,
+    /// The focus its children's morphing meshes morph about, in its own
+    /// space (`RenderDiff::SetMorphFocus`).
+    pub morph_focus: Option<[f64; 2]>,
 }
 
 pub(crate) type PartId = u32;
@@ -447,7 +470,7 @@ pub(crate) struct PartState {
 
 /// GPU row per part: model matrix, normal matrix (3 columns), linear colour
 /// (rgb, alpha), emission (rgb pre-multiplied by intensity) and the distance
-/// fade (start, end).
+/// fade (start, end), or a morphing part's morph (start, end, focus x, z).
 pub(crate) const PART_ROW_FLOATS: usize = 16 + 12 + 4 + 4 + 4;
 
 #[derive(Clone, Copy)]
@@ -458,8 +481,10 @@ pub(crate) struct PartRow {
     /// materials project the part's positions from. Set from its mesh.
     pub texture_space: [f32; 4],
     /// The part shrinks into its origin between these distances from the
-    /// camera (`ScatterFade`); an end of 0 keeps it whole.
-    pub fade: [f32; 2],
+    /// camera (`ScatterFade`); an end of 0 keeps it whole. A morphing
+    /// mesh's part: its morph's range and its focus in the part's own x and
+    /// z (`rusty::view::morph_share`).
+    pub fade: [f32; 4],
 }
 
 impl PartRow {
@@ -468,7 +493,7 @@ impl PartRow {
             color,
             emission,
             texture_space: OBJECT_TEXTURE_SPACE,
-            fade: [0.0; 2],
+            fade: [0.0; 4],
         }
     }
 }
@@ -573,6 +598,14 @@ impl Parts {
         self.regrouped = true;
     }
 
+    /// Replace a part's fade (a morph's focus moved) and mark it for upload.
+    pub fn set_fade(&mut self, id: PartId, fade: [f32; 4]) {
+        self.rows[id as usize].fade = fade;
+        let start = id as usize * PART_ROW_FLOATS + 36;
+        self.gpu[start..start + 4].copy_from_slice(&fade);
+        self.dirty.insert(id);
+    }
+
     /// Write a part's world state into its GPU row and mark it for upload.
     pub fn write(
         &mut self,
@@ -602,7 +635,7 @@ impl Parts {
         out[28..32].copy_from_slice(&row.color);
         out[32..35].copy_from_slice(&row.emission);
         out[35] = row.texture_space[3];
-        out[36..38].copy_from_slice(&row.fade);
+        out[36..40].copy_from_slice(&row.fade);
         let state = &mut self.state[id as usize];
         let mirrored = world.determinant() < 0.0;
         if state.mirrored != mirrored || state.shown != shown || state.layer != layer {

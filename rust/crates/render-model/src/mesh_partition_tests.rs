@@ -86,6 +86,7 @@ fn attributed_mesh() -> MeshPayloadDescriptor {
         layer_weights: false,
         layer_palette: Vec::new(),
         vertex_occlusion: false,
+        morph: None,
     }
 }
 

@@ -217,6 +217,7 @@ pub fn pack_mesh_resources(
                 layer_weights: payload.layer_weights,
                 layer_palette: payload.layer_palette.clone(),
                 vertex_occlusion: payload.vertex_occlusion,
+                morph: None,
                 source,
             });
         }
@@ -427,6 +428,7 @@ pub fn decode_mesh_resource_payload(
         layer_weights: payload.layer_weights,
         layer_palette: payload.layer_palette.clone(),
         vertex_occlusion: payload.vertex_occlusion,
+        morph: None,
     };
     decoded
         .validate()
@@ -674,6 +676,7 @@ mod tests {
             layer_weights: false,
             layer_palette: Vec::new(),
             vertex_occlusion: false,
+            morph: None,
         }
     }
 

@@ -1261,8 +1261,8 @@ impl Renderer {
             };
             pass.set_bind_group(1, material, &[]);
             pass.set_vertex_buffer(0, mesh.vertices.slice(..));
-            if let Some(extra) = &mesh.extra {
-                pass.set_vertex_buffer(1, extra.slice(..));
+            if let Some(second) = mesh.second_stream() {
+                pass.set_vertex_buffer(1, second.slice(..));
             }
             pass.set_index_buffer(indices.slice(..), wgpu::IndexFormat::Uint32);
             // Following batches with the same pipeline, material and mesh
@@ -1590,8 +1590,8 @@ impl Renderer {
             };
             pass.set_bind_group(1, material, &[]);
             pass.set_vertex_buffer(0, mesh.vertices.slice(..));
-            if let Some(extra) = &mesh.extra {
-                pass.set_vertex_buffer(1, extra.slice(..));
+            if let Some(second) = mesh.second_stream() {
+                pass.set_vertex_buffer(1, second.slice(..));
             }
             pass.set_index_buffer(indices.slice(..), wgpu::IndexFormat::Uint32);
             pass.draw_indexed(

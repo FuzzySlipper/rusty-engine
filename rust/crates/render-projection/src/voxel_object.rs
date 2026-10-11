@@ -555,6 +555,7 @@ pub fn voxel_object_mesh_payload(
         vertex_occlusion: false,
         texture_space: Some(texture_space),
         distance_field: None,
+        morph: None,
     }
 }
 
