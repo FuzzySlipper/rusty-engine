@@ -19,6 +19,8 @@ use svc_volume::VoxelChunk;
 use texture_mapping::{project_voxel_surface_tile_point, VoxelTextureMappingError};
 
 pub mod distance_field;
+pub mod heightfield;
+pub mod heightfield_tiles;
 mod occlusion;
 pub mod scatter;
 mod surface;

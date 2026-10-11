@@ -1285,6 +1285,9 @@ pub(crate) struct RuntimeAppearanceData {
     sprite_playbacks_by_appearance: BTreeMap<u64, BTreeSet<u64>>,
     /// Static-mesh appearances voxel scatters grow, with how many do.
     scatter_appearances: BTreeMap<u64, u32>,
+    /// Heightfields drawing with each material, by material handle: a
+    /// material a heightfield draws with is not disposed under it.
+    heightfield_materials: BTreeMap<u64, u32>,
     next_sprite_playback: u64,
     animated_appearances: BTreeMap<u64, u64>,
     animation_instances: BTreeMap<u64, AnimationInstance>,
@@ -1594,6 +1597,7 @@ impl RuntimeAppearanceBridge {
             sprite_playbacks_by_atlas: BTreeMap::new(),
             sprite_playbacks_by_appearance: BTreeMap::new(),
             scatter_appearances: BTreeMap::new(),
+            heightfield_materials: BTreeMap::new(),
             next_sprite_playback: 1,
             animated_appearances: BTreeMap::new(),
             animation_instances: BTreeMap::new(),
@@ -2649,6 +2653,37 @@ impl RuntimeAppearanceBridge {
             }
         }
         Ok(())
+    }
+
+    /// Count a heightfield drawing with `material` (or one fewer), and
+    /// return its catalog id: a material a heightfield draws with is not
+    /// disposed under it.
+    pub(crate) fn hold_for_heightfield(
+        &mut self,
+        material: u64,
+        held: bool,
+    ) -> Result<String, CsharpEngineServicesError> {
+        let staged = self.staged_mut()?;
+        let id = staged
+            .state
+            .material_id(material)
+            .map(str::to_owned)
+            .ok_or_else(|| {
+                CsharpEngineServicesError::new(
+                    "CSHARP_HEIGHTFIELD_MATERIAL",
+                    "a heightfield's material must be live",
+                )
+            })?;
+        let holds = &mut staged.state.heightfield_materials;
+        if held {
+            *holds.entry(material).or_default() += 1;
+        } else if let Some(count) = holds.get_mut(&material) {
+            *count -= 1;
+            if *count == 0 {
+                holds.remove(&material);
+            }
+        }
+        Ok(id)
     }
 
     pub(crate) fn voxel_material_descriptor(
@@ -3786,11 +3821,15 @@ impl RuntimeAppearanceBridge {
             .values()
             .any(|bindings| bindings.contains(&material.value))
             || staged.state.generated_meshes.uses_material(material.value)
+            || staged
+                .state
+                .heightfield_materials
+                .contains_key(&material.value)
         {
             staged.state.materials.insert(material.value, id);
             return Err(CsharpEngineServicesError::new(
                 "CSHARP_MATERIAL_IN_USE",
-                "dispose appearances and mesh resources using this material before disposing the material",
+                "dispose appearances, mesh resources and heightfields using this material before disposing the material",
             ));
         }
         let resources = staged.state.projector.resources_mut();

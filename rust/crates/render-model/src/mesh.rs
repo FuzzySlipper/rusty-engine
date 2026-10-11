@@ -200,8 +200,9 @@ impl MeshMorph {
                 actual: self.targets.len(),
             });
         }
-        if !self.targets.iter().all(|value| value.is_finite())
-            || !(self.start.is_finite() && self.end.is_finite())
+        if !(self.targets.iter().all(|value| value.is_finite())
+            && self.start.is_finite()
+            && self.end.is_finite())
             || self.start < 0.0
             || self.end <= self.start
         {

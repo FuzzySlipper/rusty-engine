@@ -100,6 +100,12 @@ pub(crate) struct RuntimeCameraViewCall {
 }
 
 impl RuntimeCameraViewCall {
+    /// Where a live camera stands, as the call leaves it.
+    pub(crate) fn camera_position(&self, camera: u64) -> Option<[f64; 3]> {
+        let position = self.state.cameras.get(&camera)?.descriptor.pose.position;
+        Some([position.x, position.y, position.z].map(f64::from))
+    }
+
     /// The camera of the lowest-ordered primary view and where it stands,
     /// as the call leaves it.
     pub(crate) fn primary_camera(&self) -> Option<(u64, [f64; 3])> {

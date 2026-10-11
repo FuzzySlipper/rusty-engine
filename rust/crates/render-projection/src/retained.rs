@@ -15,6 +15,7 @@ impl RenderHandleNamespace {
     pub const VOXEL: Self = Self(2);
     pub const AUTHORED: Self = Self(3);
     pub const VOXEL_OBJECT: Self = Self(6);
+    pub const HEIGHTFIELD: Self = Self(7);
 
     pub const fn new(value: u8) -> Option<Self> {
         if value == 0 {

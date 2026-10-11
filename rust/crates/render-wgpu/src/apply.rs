@@ -1566,6 +1566,7 @@ impl Renderer {
         // A product mesh's colours can be terrain layer weights, as a voxel
         // chunk's are: layers 0 to 3 of its slots' terrain layer materials.
         mesh.layer_weights = asset.payload.layer_weights && streams.colors.is_some();
+        mesh.texture_space = asset.payload.texture_space;
         self.attach_morph(&mut mesh, &asset.payload, &asset.asset);
         let id = self.tables.names.id(&asset.asset);
         let redefined = self.tables.static_meshes.insert(id, mesh).is_some();

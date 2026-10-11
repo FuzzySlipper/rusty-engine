@@ -69,6 +69,7 @@ fn engine_api(
     perception_bridge: &mut crate::perception::RuntimePerceptionBridge,
     voxel_content_bridge: &mut RuntimeVoxelContentBridge,
     voxel_scene_presentation_bridge: &mut RuntimeVoxelScenePresentationBridge,
+    heightfield_bridge: &mut crate::heightfield::RuntimeHeightfieldBridge,
     implicit_bridge: &mut crate::implicit_surfaces::RuntimeImplicitBridge,
     rng_bridge: &mut RuntimeRngBridge,
     persistence_bridge: &mut RuntimePersistenceBridge,
@@ -102,6 +103,7 @@ fn engine_api(
             voxel_scene_presentation_bridge,
             appearance_bridge,
         ),
+        heightfield: crate::heightfield::api(heightfield_bridge, appearance_bridge),
         content: crate::content::api(content_bridge),
         authored_content: crate::authored_content::api(authored_content_bridge),
         graphics: NativeGraphicsApi {
@@ -330,6 +332,7 @@ pub struct EngineServiceSet {
     perception: crate::perception::RuntimePerceptionBridge,
     voxel_content: RuntimeVoxelContentBridge,
     voxel_scene_presentation: RuntimeVoxelScenePresentationBridge,
+    heightfield: crate::heightfield::RuntimeHeightfieldBridge,
     implicit: crate::implicit_surfaces::RuntimeImplicitBridge,
     rng: RuntimeRngBridge,
     persistence: RuntimePersistenceBridge,
@@ -360,6 +363,7 @@ struct ServiceCalls {
     ui: Vec<RuntimeUiProjectionEnvelope>,
     voxel_content: crate::voxel_content::RuntimeVoxelContentCall,
     voxel_scene_presentation: crate::voxel_scene_presentation::RuntimeVoxelScenePresentationCall,
+    heightfield: crate::heightfield::RuntimeHeightfieldCall,
 }
 
 /// Engine observations from one product call.
@@ -425,6 +429,8 @@ impl EngineServiceSet {
         authored_content.bind_content(&content);
         let voxel_scene_presentation =
             RuntimeVoxelScenePresentationBridge::new(spatial.collision_source());
+        let heightfield =
+            crate::heightfield::RuntimeHeightfieldBridge::new(spatial.collision_source());
         let mut camera_view = Box::new(RuntimeCameraViewBridge::new());
         camera_view.bind_spatial(spatial.collision_source());
         let mut appearance = crate::appearance::create(catalog.0, content_resources.clone());
@@ -461,6 +467,7 @@ impl EngineServiceSet {
             perception,
             voxel_content,
             voxel_scene_presentation,
+            heightfield,
             implicit: crate::implicit_surfaces::RuntimeImplicitBridge::new(),
             rng: crate::rng::RuntimeRngBridge::new(),
             session: crate::session::RuntimeSessionBridge::new(persistence_root.clone()),
@@ -494,6 +501,7 @@ impl EngineServiceSet {
             &mut self.perception,
             &mut self.voxel_content,
             &mut self.voxel_scene_presentation,
+            &mut self.heightfield,
             &mut self.implicit,
             &mut self.rng,
             &mut self.persistence,
@@ -680,6 +688,7 @@ impl EngineServiceSet {
         self.ui.begin_call(ui_binding);
         self.voxel_content.begin_call();
         self.voxel_scene_presentation.begin_call();
+        self.heightfield.begin_call();
         self.implicit.begin_call();
     }
 
@@ -782,6 +791,7 @@ impl EngineServiceSet {
             ui: self.ui.finish_call(),
             voxel_content: self.voxel_content.take_staged_call()?,
             voxel_scene_presentation: self.voxel_scene_presentation.take_staged_call()?,
+            heightfield: self.heightfield.take_staged_call()?,
         };
         let output = self.settle_call(&mut calls);
         self.presentation_world = calls.presentation_world;
@@ -794,6 +804,7 @@ impl EngineServiceSet {
         self.voxel_content.commit_call(calls.voxel_content);
         self.voxel_scene_presentation
             .commit_call(calls.voxel_scene_presentation);
+        self.heightfield.commit_call(calls.heightfield);
         Ok(CsharpEngineCall {
             input_mapping_replacement,
             output: output?,
@@ -854,6 +865,19 @@ impl EngineServiceSet {
         });
         self.voxel_scene_presentation
             .settle_level_of_detail(&mut calls.voxel_scene_presentation, viewer)?;
+        // Heightfields focused on a camera measure from where it stands now,
+        // in the backdrop under its link for one drawn there.
+        let camera_view = &self.camera_view;
+        let cameras = &calls.camera_view;
+        self.heightfield
+            .settle(&mut calls.heightfield, |camera, backdrop| {
+                let world = cameras.camera_position(camera)?;
+                if backdrop {
+                    camera_view.backdrop_eye(camera, world)
+                } else {
+                    Some(world)
+                }
+            })?;
         calls
             .presentation_world
             .advance_elapsed(self.call_elapsed_seconds);
@@ -1018,6 +1042,7 @@ impl EngineServiceSet {
         frames.extend(sky_frame);
         frames.append(&mut call.voxel_content.frames);
         frames.append(&mut call.voxel_scene_presentation.frames);
+        frames.append(&mut call.heightfield.frames);
         CsharpEngineCallOutput {
             render_output: Vec::new(),
             appearance,

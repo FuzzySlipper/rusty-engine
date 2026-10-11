@@ -1885,6 +1885,7 @@ pub struct NativeEngineApi {
     pub voxel: NativeVoxelApi,
     pub voxel_content: NativeVoxelContentApi,
     pub voxel_scene_presentation: NativeVoxelScenePresentationApi,
+    pub heightfield: NativeHeightfieldApi,
     pub content: NativeContentApi,
     pub authored_content: NativeAuthoredContentApi,
     pub graphics: NativeGraphicsApi,

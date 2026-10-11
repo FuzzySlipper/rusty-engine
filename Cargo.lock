@@ -5826,6 +5826,7 @@ dependencies = [
  "render-video",
  "serde",
  "serde_json",
+ "svc-mesh",
  "welding",
  "wgpu",
  "winit",

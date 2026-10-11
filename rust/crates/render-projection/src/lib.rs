@@ -3,6 +3,7 @@
 #![forbid(unsafe_code)]
 
 mod appearance;
+mod heightfield;
 mod material;
 mod resource_list;
 mod retained;
@@ -12,6 +13,7 @@ mod voxel_object;
 mod voxel_scatter;
 
 pub use appearance::*;
+pub use heightfield::*;
 pub use material::*;
 pub use resource_list::*;
 pub use retained::*;
