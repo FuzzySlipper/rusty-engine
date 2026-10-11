@@ -221,10 +221,12 @@ pub struct NativeMeshMaterialFactors {
     /// Replace the slot's `baseColorFactor` with `base_color` (linear RGBA,
     /// each 0 to 1).
     pub override_base_color: bool,
+    /// Linear RGBA, each 0 to 1.
     pub base_color: NativeColor,
     /// Replace the slot's `emissiveFactor` (each 0 to 1) and emissive
     /// strength (finite, not negative).
     pub override_emission: bool,
+    /// Linear RGB, each 0 to 1.
     pub emissive_factor: NativeVec3,
     pub emissive_strength: f32,
     /// Replace the slot's texture tint (the material's own without; a GLB

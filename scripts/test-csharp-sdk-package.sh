@@ -76,10 +76,15 @@ grep -qx 'lib/net10.0/Rusty.Engine.xml' <<<"$package_entries" || {
     exit 1
 }
 package_docs=$(unzip -p "$package_path" lib/net10.0/Rusty.Engine.xml)
-grep -q '<param name="Color">The base colour, linear RGBA' <<<"$package_docs" || {
-    echo "test-csharp-sdk-package: the XML docs do not carry the ABI's colour spaces." >&2
-    exit 1
-}
+for colour_doc in \
+    '<param name="Color">The base colour, linear RGBA' \
+    '<param name="BaseColor">Linear RGBA, each 0 to 1.</param>' \
+    '<param name="EmissiveFactor">Linear RGB, each 0 to 1.</param>'; do
+    grep -qF "$colour_doc" <<<"$package_docs" || {
+        echo "test-csharp-sdk-package: the XML docs do not carry the ABI's colour spaces ($colour_doc)." >&2
+        exit 1
+    }
+done
 grep -qx 'buildTransitive/analyzers/Rusty.Engine.ProductGenerator.dll' <<<"$package_entries" || {
     echo "test-csharp-sdk-package: package is missing the product generator analyzer." >&2
     exit 1
