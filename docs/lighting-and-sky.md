@@ -1174,9 +1174,18 @@ engine.Presentation.CreateEmitter(smoke with { Backdrop = true });
   emitters (`Backdrop = true`: anchor, velocities and sizes in backdrop
   units, no collision) can stand in it, opaque, masked, blended, soft and
   water alike. A backdrop of particles alone draws. The backdrop casts no
-  shadows, is never pickable, and adds nothing to collision. A voxel presentation in it draws at full resolution
-  and grows no scatters (its viewer stands in the world). Its session still
-  owns its collision, apart from the walking session's.
+  shadows, is never pickable, and adds nothing to collision. A voxel
+  presentation's session still owns its collision, apart from the walking
+  session's.
+- A voxel presentation in it measures its level of detail and its scatters
+  from the backdrop's eye: where the camera of the lowest-ordered primary
+  view stands in the backdrop under that view's link, as each update
+  settles. Its coarse distance and its scatters' radius, fade and density
+  (copies per square unit) are in backdrop units, as its voxels are: a
+  1:1000 continent coarse beyond 20 units is coarse beyond 20 km
+  world-equivalent. Moving or clearing the link updates it on the next
+  update; without a link it draws every chunk at full resolution and grows
+  nothing.
 
 **Cost**
 - Without a link, or with nothing shown in the layer, nothing is drawn and

@@ -844,10 +844,16 @@ impl EngineServiceSet {
             self.voxel_scene_presentation
                 .refresh_all(&mut calls.voxel_scene_presentation)?;
         }
-        self.voxel_scene_presentation.settle_level_of_detail(
-            &mut calls.voxel_scene_presentation,
-            calls.camera_view.primary_camera_position(),
-        )?;
+        // Backdrop presentations measure from where the camera stands in
+        // the backdrop, under the links resolved above.
+        let viewer = calls.camera_view.primary_camera().map(|(camera, world)| {
+            crate::voxel_scene_presentation::PresentationViewer {
+                world,
+                backdrop: self.camera_view.backdrop_eye(camera, world),
+            }
+        });
+        self.voxel_scene_presentation
+            .settle_level_of_detail(&mut calls.voxel_scene_presentation, viewer)?;
         calls
             .presentation_world
             .advance_elapsed(self.call_elapsed_seconds);
@@ -2448,6 +2454,127 @@ mod tests {
         }
         let mut call = services.finish_call().expect("clear call");
         assert_eq!(backdrops(&mut call), [(camera_id, None)]);
+    }
+
+    /// Backdrop voxel presentations measure their level of detail from where
+    /// the primary camera stands in the backdrop, under the link its view
+    /// takes as each call settles: walking 100 m at 1:1000 moves that eye
+    /// 0.1 units, and clearing the link leaves only the world camera.
+    #[test]
+    fn backdrop_presentations_measure_from_the_primary_cameras_backdrop_eye() {
+        let mut services = EngineServiceSet::new(
+            parse_runtime_appearance_catalog(None).expect("default catalog"),
+            BTreeMap::new(),
+            None,
+            RuntimeDiagnosticsSink::new(Default::default()).unwrap(),
+        )
+        .expect("service set");
+        let descriptor = |z: f32| NativeCameraDescriptor {
+            pose: NativeCameraPose {
+                position: NativeVec3 { x: 0.0, y: 1.0, z },
+                pitch_degrees: 0.0,
+                yaw_degrees: 0.0,
+            },
+            basis_mode: NativeCameraBasisMode::Derived,
+            basis: NativeCameraBasis::default(),
+            projection: NativeCameraProjection {
+                kind: NativeCameraProjectionKind::Perspective,
+                fov_y_degrees: 60.0,
+                vertical_size: 1.0,
+                near: 0.1,
+                far: 100.0,
+            },
+            viewport: NativeCameraViewport {
+                x: 0.0,
+                y: 0.0,
+                width: 1.0,
+                height: 1.0,
+            },
+            viewmodel_fov_y_degrees: 0.0,
+        };
+        services.begin_call(binding());
+        let api = services.api();
+        let mut camera = NativeCameraHandle::default();
+        unsafe {
+            let view = &api.camera_view;
+            assert_eq!(
+                (view.create_camera)(
+                    view.context,
+                    &descriptor(0.0),
+                    &mut camera,
+                    std::ptr::null_mut()
+                ),
+                ABI_OK
+            );
+            assert_eq!(
+                (view.set_active_camera)(view.context, camera, std::ptr::null_mut()),
+                ABI_OK
+            );
+            assert_eq!(
+                (view.set_backdrop)(
+                    view.context,
+                    &NativeBackdropRequest {
+                        camera: NativeOptionalCamera::default(),
+                        session: NativeOptionalSpatialSession::default(),
+                        anchor: NativeWorldOriginGlobalPosition::default(),
+                        origin: NativeVec3 {
+                            x: 2.0,
+                            y: 0.0,
+                            z: 0.0,
+                        },
+                        scale: 1000.0,
+                    },
+                    std::ptr::null_mut()
+                ),
+                ABI_OK
+            );
+        }
+        services.finish_call().expect("link call");
+        let viewer = services.voxel_scene_presentation.viewer().expect("viewer");
+        assert_eq!(viewer.world, [0.0, 1.0, 0.0]);
+        assert_eq!(viewer.backdrop, Some([2.0, 0.001, 0.0]));
+
+        // Walking 100 m north moves the backdrop's eye 0.1 units.
+        services.begin_call(binding());
+        let api = services.api();
+        unsafe {
+            let view = &api.camera_view;
+            assert_eq!(
+                (view.update_camera)(
+                    view.context,
+                    &NativeCameraUpdateRequest {
+                        camera,
+                        descriptor: descriptor(-100.0),
+                    },
+                    std::ptr::null_mut()
+                ),
+                ABI_OK
+            );
+        }
+        services.finish_call().expect("walk call");
+        let viewer = services.voxel_scene_presentation.viewer().expect("viewer");
+        assert_eq!(viewer.backdrop, Some([2.0, 0.001, -0.1]));
+
+        // Clearing the link leaves the world camera alone.
+        services.begin_call(binding());
+        let api = services.api();
+        unsafe {
+            let view = &api.camera_view;
+            assert_eq!(
+                (view.clear_backdrop)(
+                    view.context,
+                    &NativeClearBackdropRequest {
+                        camera: NativeOptionalCamera::default(),
+                    },
+                    std::ptr::null_mut()
+                ),
+                ABI_OK
+            );
+        }
+        services.finish_call().expect("clear call");
+        let viewer = services.voxel_scene_presentation.viewer().expect("viewer");
+        assert_eq!(viewer.world, [0.0, 1.0, -100.0]);
+        assert_eq!(viewer.backdrop, None);
     }
 
     #[test]

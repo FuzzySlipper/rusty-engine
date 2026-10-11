@@ -72,7 +72,16 @@ struct VoxelScenePresentationState {
     next_presentation: u64,
     /// The camera of the lowest-ordered primary view when a call last
     /// settled, which levels of detail are measured from.
-    viewer: Option<[f64; 3]>,
+    viewer: Option<PresentationViewer>,
+}
+
+/// Where levels of detail and scatters are measured from: the camera of the
+/// lowest-ordered primary view in the world, and where it stands in the
+/// backdrop under its link (`CameraView.SetBackdrop`), if it has one.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct PresentationViewer {
+    pub world: [f64; 3],
+    pub backdrop: Option<[f64; 3]>,
 }
 
 pub(crate) struct RuntimeVoxelScenePresentationCall {
@@ -381,10 +390,16 @@ impl RuntimeVoxelScenePresentationBridge {
         Ok(())
     }
 
+    /// Where levels of detail were last measured from.
+    #[cfg(test)]
+    pub(crate) fn viewer(&self) -> Option<PresentationViewer> {
+        self.state.viewer
+    }
+
     pub(crate) fn settle_level_of_detail(
         &mut self,
         call: &mut RuntimeVoxelScenePresentationCall,
-        viewer: Option<[f64; 3]>,
+        viewer: Option<PresentationViewer>,
     ) -> Result<(), CsharpEngineServicesError> {
         let state = &mut call.state;
         if viewer.is_some() {
@@ -1096,11 +1111,12 @@ fn set_levels_of_detail(state: &mut VoxelScenePresentationState) {
         state
             .projector
             .set_layer(&presentation_instance_id(*handle), presentation.layer);
-        // The viewer stands in the world: a backdrop presentation draws at
-        // full resolution and grows nothing.
-        let viewer = state
-            .viewer
-            .filter(|_| presentation.layer == render_model::RenderLayer::Scene);
+        // A backdrop presentation measures from the backdrop's eye; without
+        // a link it draws at full resolution and grows nothing.
+        let viewer = state.viewer.and_then(|viewer| match presentation.layer {
+            render_model::RenderLayer::Backdrop => viewer.backdrop,
+            _ => Some(viewer.world),
+        });
         let level = viewer
             .filter(|_| presentation.coarse_distance > 0.0)
             .map(|viewer| VoxelLevelOfDetail {
@@ -1834,10 +1850,10 @@ mod tests {
         handle
     }
 
-    #[test]
-    fn distant_chunks_draw_coarse_from_the_primary_camera_until_turned_off() {
-        let mut spatial = RuntimeSpatialBridge::new();
-        let session = session_with_voxel_mode(&mut spatial, NativeVoxelSurfaceMode::DualContouring);
+    /// A dual-contoured session holding a floor across four chunks of 8
+    /// along x.
+    fn four_chunk_floor(spatial: &mut RuntimeSpatialBridge) -> NativeSpatialSessionHandle {
+        let session = session_with_voxel_mode(spatial, NativeVoxelSurfaceMode::DualContouring);
         // A floor across four chunks of 8 along x.
         let edits: Vec<_> = (0..32)
             .flat_map(|x| {
@@ -1851,7 +1867,7 @@ mod tests {
                 })
             })
             .collect();
-        let voxel = crate::voxel::api(&mut spatial);
+        let voxel = crate::voxel::api(spatial);
         let mut receipt = NativeVoxelEditReceipt::default();
         let mut error = unsafe { std::mem::zeroed::<NativeOperationErrorReceipt>() };
         assert_eq!(
@@ -1869,6 +1885,13 @@ mod tests {
             },
             ABI_OK
         );
+        session
+    }
+
+    #[test]
+    fn distant_chunks_draw_coarse_from_the_primary_camera_until_turned_off() {
+        let mut spatial = RuntimeSpatialBridge::new();
+        let session = four_chunk_floor(&mut spatial);
         let mut appearance =
             RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), BTreeMap::new());
         appearance.begin_call();
@@ -1909,14 +1932,14 @@ mod tests {
         let mut call = bridge.take_staged_call().unwrap();
         let before = call.frames.len();
         bridge
-            .settle_level_of_detail(&mut call, Some([0.0, 4.0, 4.0]))
+            .settle_level_of_detail(&mut call, standing([0.0, 4.0, 4.0]))
             .unwrap();
         // Chunks 2 and 3 lie beyond 10 × 1.1.
         assert_eq!(replaced(&call.frames[before..]), 2);
         bridge.commit_call(call);
 
         // The same viewer, or a call without a primary camera, changes nothing.
-        for viewer in [Some([0.0, 4.0, 4.0]), None] {
+        for viewer in [standing([0.0, 4.0, 4.0]), None] {
             bridge.begin_call();
             let mut call = bridge.take_staged_call().unwrap();
             bridge.settle_level_of_detail(&mut call, viewer).unwrap();
@@ -1948,6 +1971,87 @@ mod tests {
         assert_eq!(off.coarse_chunk_count, 0);
         let call = bridge.take_staged_call().unwrap();
         assert_eq!(replaced(&call.frames), 2);
+    }
+
+    /// A primary camera at `world`, with no backdrop link.
+    fn standing(world: [f64; 3]) -> Option<PresentationViewer> {
+        Some(PresentationViewer {
+            world,
+            backdrop: None,
+        })
+    }
+
+    #[test]
+    fn a_backdrop_presentation_draws_coarse_by_distance_from_the_backdrop_eye() {
+        let mut spatial = RuntimeSpatialBridge::new();
+        let session = four_chunk_floor(&mut spatial);
+        let mut appearance =
+            RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), BTreeMap::new());
+        appearance.begin_call();
+        let stone = material(&mut appearance);
+        let mut bridge = RuntimeVoxelScenePresentationBridge::new(spatial.collision_source());
+        bridge.bind_appearance(&mut appearance);
+        bridge.begin_call();
+        let bindings = [NativeVoxelSceneMaterialBinding {
+            material_slot: 1,
+            material: stone,
+        }];
+        let presentation = bridge
+            .project_scene(NativeProjectVoxelSceneRequest {
+                session,
+                materials: bindings.as_ptr(),
+                materials_len: bindings.len(),
+            })
+            .unwrap();
+        bridge
+            .set_layer(NativeVoxelSceneLayerRequest {
+                presentation,
+                layer: NativeRenderLayer::Backdrop,
+            })
+            .unwrap();
+        bridge
+            .set_level_of_detail(NativeVoxelSceneLevelOfDetailRequest {
+                presentation,
+                coarse_distance: 10.0,
+            })
+            .unwrap();
+        let call = bridge.take_staged_call().unwrap();
+        bridge.commit_call(call);
+        // The chunks a settle projects again, and how many are coarse after.
+        let settle = |bridge: &mut RuntimeVoxelScenePresentationBridge, viewer| {
+            bridge.begin_call();
+            let mut call = bridge.take_staged_call().unwrap();
+            bridge.settle_level_of_detail(&mut call, viewer).unwrap();
+            let replaced = call
+                .frames
+                .iter()
+                .flat_map(|frame| &frame.ops)
+                .filter(|operation| matches!(operation, RenderDiff::ReplaceMeshPayload { .. }))
+                .count();
+            bridge.commit_call(call);
+            bridge.begin_call();
+            let coarse = bridge.refresh(presentation).unwrap().coarse_chunk_count;
+            let call = bridge.take_staged_call().unwrap();
+            bridge.commit_call(call);
+            (replaced, coarse)
+        };
+        // Without a link the world camera's place says nothing about the
+        // backdrop: however far away, every chunk stays full.
+        assert_eq!(settle(&mut bridge, standing([5000.0, 4.0, 4.0])), (0, 0));
+        // Linked, the backdrop's eye at the floor's near end: chunks 2 and 3
+        // lie beyond 10 × 1.1 backdrop units.
+        let linked = |eye| {
+            Some(PresentationViewer {
+                world: [5000.0, 4.0, 4.0],
+                backdrop: Some(eye),
+            })
+        };
+        assert_eq!(settle(&mut bridge, linked([0.0, 4.0, 4.0])), (2, 2));
+        // The link moves the eye to the far end: chunks 0 and 1 go coarse,
+        // 2 and 3 full.
+        assert_eq!(settle(&mut bridge, linked([32.0, 4.0, 4.0])), (4, 2));
+        // Clearing the link draws it full again.
+        assert_eq!(settle(&mut bridge, standing([5000.0, 4.0, 4.0])), (2, 0));
     }
 
     /// A card mesh (a 0.2 × 0.5 m quad) as a static mesh appearance.
@@ -2139,7 +2243,7 @@ mod tests {
         )));
         let before = call.frames.len();
         bridge
-            .settle_level_of_detail(&mut call, Some([4.0, 3.0, 4.0]))
+            .settle_level_of_detail(&mut call, standing([4.0, 3.0, 4.0]))
             .unwrap();
         let grown = patches(&call.frames[before..]);
         // Chunks 0 and 1 lie within 10 m.
@@ -2226,7 +2330,7 @@ mod tests {
         bridge.begin_call();
         let mut call = bridge.take_staged_call().unwrap();
         bridge
-            .settle_level_of_detail(&mut call, Some([28.0, 3.0, 4.0]))
+            .settle_level_of_detail(&mut call, standing([28.0, 3.0, 4.0]))
             .unwrap();
         assert_eq!(patches(&call.frames).len(), 2);
         bridge.commit_call(call);

@@ -87,7 +87,8 @@ pub struct NativeUpdateVoxelScenePresentationDirectionalRequest {
 
 /// Draws a retained presentation's distant chunks from their coarse meshes.
 /// A chunk farther than `coarse_distance` world units from the camera of the
-/// lowest-ordered primary view is drawn from a lattice twice as coarse; zero
+/// lowest-ordered primary view (in the backdrop, backdrop units from where
+/// that camera stands in it) is drawn from a lattice twice as coarse; zero
 /// draws every chunk at full resolution. Collision and picking keep the full
 /// mesh. Sessions whose materials are all cubes, or whose chunk edge is odd,
 /// draw at full resolution.
@@ -100,9 +101,10 @@ pub struct NativeVoxelSceneLevelOfDetailRequest {
 
 /// Draws a presentation in the scene's layer or the backdrop's
 /// (`RenderLayer.Backdrop`, linked by `CameraView.SetBackdrop`): there its
-/// scene stands in backdrop units, at full resolution (no level of detail,
-/// no scatters). Its collision is the session's as ever; the presentation
-/// only changes where it draws.
+/// scene stands in backdrop units, and its level of detail and scatters
+/// measure from where the primary camera stands in the backdrop (full
+/// resolution and no scatters without a link). Its collision is the
+/// session's as ever; the presentation only changes where it draws.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeVoxelSceneLayerRequest {

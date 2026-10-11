@@ -100,9 +100,9 @@ pub(crate) struct RuntimeCameraViewCall {
 }
 
 impl RuntimeCameraViewCall {
-    /// Where the camera of the lowest-ordered primary view stands, as the
-    /// call leaves it.
-    pub(crate) fn primary_camera_position(&self) -> Option<[f64; 3]> {
+    /// The camera of the lowest-ordered primary view and where it stands,
+    /// as the call leaves it.
+    pub(crate) fn primary_camera(&self) -> Option<(u64, [f64; 3])> {
         let (_, view) = self
             .state
             .views
@@ -117,7 +117,10 @@ impl RuntimeCameraViewCall {
             .descriptor
             .pose
             .position;
-        Some([position.x, position.y, position.z].map(f64::from))
+        Some((
+            view.camera.value,
+            [position.x, position.y, position.z].map(f64::from),
+        ))
     }
 }
 
@@ -244,6 +247,16 @@ impl RuntimeCameraViewBridge {
         }
         self.backdrop_emitted = desired;
         operations
+    }
+
+    /// Where a camera at world `position` stands in the backdrop under
+    /// the link its views take (its own, else every view's) as last
+    /// resolved by `backdrop_operations`; None without one.
+    pub(crate) fn backdrop_eye(&self, camera: u64, position: [f64; 3]) -> Option<[f64; 3]> {
+        self.backdrop_emitted
+            .get(&camera)
+            .or_else(|| self.backdrop_emitted.get(&0))
+            .map(|backdrop| backdrop.eye(position))
     }
 
     pub(crate) fn begin_call(&mut self) {

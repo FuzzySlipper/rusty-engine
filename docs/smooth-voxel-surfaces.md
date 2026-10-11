@@ -310,7 +310,11 @@ tread above that contact. A ledge above the step height stays a wall.
 draws a presentation's distant chunks from coarse meshes. Each update, the
 Engine measures every chunk's cube from the camera of the lowest-ordered
 primary view; a chunk farther than `coarseDistance` metres (by 10% more when it
-switches, so a camera at the boundary does not flip it) is drawn coarse. Zero
+switches, so a camera at the boundary does not flip it) is drawn coarse. A
+presentation in the backdrop (`SetLayer`, `RenderLayer.Backdrop`) measures from
+where that camera stands in the backdrop under its view's `SetBackdrop` link,
+in backdrop units, and draws at full resolution without a link
+([the backdrop](lighting-and-sky.md#the-backdrop)). Zero
 draws every chunk at full resolution. Set the distance whenever the view calls
 for another (a map view, open ground, caves): a call projects only the chunks
 that change level, and repeating a distance costs nothing. Only the drawing
@@ -352,7 +356,9 @@ presentation, scatter, appearance, material, slots, density, radius))`. The
 product names what grows (a static-mesh `Appearance` drawn with a
 `Material`), on which material slots (all when none are named), how densely
 (copies per square metre of ground) and how far from the camera of the
-lowest-ordered primary view; `with` sets the rest: `Fade` (the last metres of
+lowest-ordered primary view (for a backdrop presentation, from where that
+camera stands in the backdrop, in backdrop units, as the level of detail
+measures); `with` sets the rest: `Fade` (the last metres of
 the radius over which copies shrink into the ground, a quarter of it by
 default), `ScaleMin` and `ScaleMax`, `TintLow` and `TintHigh` (linear colours
 each copy's colour is drawn between), `SlopeLimitDegrees` (35 by default),
