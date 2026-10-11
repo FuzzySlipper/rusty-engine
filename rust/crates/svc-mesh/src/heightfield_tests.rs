@@ -317,3 +317,65 @@ fn a_pick_meets_the_drawn_surface_with_its_morph_applied() {
         .is_none());
     assert!(mesh.pick([100.0, 50.0, 10.0], down, |_, _| 0.0).is_none());
 }
+
+#[test]
+fn a_pick_keeps_the_drawn_diagonal_when_a_morph_would_prefer_the_other() {
+    let layout = two_rings();
+    let rough = |x: f64, z: f64| (8.0 * (x * 0.7).sin() * (z * 0.5).cos()) as f32;
+    let fine = TileKey {
+        ring: 0,
+        x: -3,
+        z: -3,
+    };
+    let parent = layout.parent(fine).unwrap();
+    let coarse = TileSurface::new(&layout, 1, sample(&layout, parent, rough));
+    let mesh = mesh_tile(
+        &layout,
+        fine,
+        &TileSurface::new(&layout, 0, sample(&layout, fine, rough)),
+        Some((&coarse, layout.origin(parent))),
+    )
+    .unwrap();
+    let morph = mesh.morph.as_ref().unwrap();
+    let morphed = |index: u32| {
+        let k = index as usize * 3;
+        let p = &mesh.positions[k..k + 3];
+        [f64::from(p[0]), f64::from(p[1] + morph[k]), f64::from(p[2])]
+    };
+    let down = [0.0, -1.0, 0.0];
+    let mut flipped = 0;
+    let cells = layout.tile_cells as usize;
+    for j in 0..cells {
+        for i in 0..cells {
+            let corner = |di: usize, dj: usize| (j + dj) * (cells + 1) + i + di;
+            let height = |at: usize| mesh.positions[at * 3 + 1];
+            let target = |at: usize| height(at) + morph[at * 3];
+            let [a, b, c, d] = [corner(0, 0), corner(1, 0), corner(0, 1), corner(1, 1)];
+            let falls = |h: &dyn Fn(usize) -> f32| (h(a) - h(d)).abs() <= (h(b) - h(c)).abs();
+            if falls(&height) != falls(&target) {
+                flipped += 1;
+            }
+            let origin = [(i as f64 + 0.5) * 2.0, 100.0, (j as f64 + 0.5) * 2.0];
+            // What the renderer draws: the mesh's own triangles, morphed.
+            let drawn = mesh
+                .indices
+                .as_chunks::<3>()
+                .0
+                .iter()
+                .filter_map(|t| intersect(origin, down, &t.map(morphed)))
+                .min_by(|x, y| x.distance.total_cmp(&y.distance))
+                .unwrap();
+            let picked = mesh.pick(origin, down, |_, _| 1.0).unwrap();
+            assert!(
+                (picked.point[1] - drawn.point[1]).abs() < 1e-5,
+                "cell {i},{j}: picked {} drawn {}",
+                picked.point[1],
+                drawn.point[1]
+            );
+        }
+    }
+    assert!(
+        flipped > 0,
+        "no cell's preferred diagonal changes in the morph"
+    );
+}

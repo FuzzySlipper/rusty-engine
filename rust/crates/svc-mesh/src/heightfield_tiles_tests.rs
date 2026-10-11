@@ -52,12 +52,15 @@ fn sample_all(heightfield: &mut HeightfieldTiles, ring: Option<u8>) {
     heightfield.mesh();
 }
 
-/// How many drawn tiles cover each half-metre point of the coarse ring's
-/// region: every point exactly once means no overlap and no gap.
+/// How many drawn tiles cover each point of the coarsest ring's region, two
+/// to a finest tile's side: every point exactly once means no overlap and no
+/// gap.
 fn coverage(heightfield: &HeightfieldTiles) -> BTreeMap<usize, usize> {
     let layout = heightfield.layout();
-    let region = layout.region(1, heightfield.focus().unwrap());
-    let size = layout.rings[1].tile_size;
+    let top = layout.rings.len() - 1;
+    let region = layout.region(top, heightfield.focus().unwrap());
+    let size = layout.rings[top].tile_size;
+    let step = layout.rings[0].tile_size / 2.0;
     let mut counts = BTreeMap::new();
     let (lo, hi) = (
         region.min.map(|v| v as f64 * size),
@@ -76,9 +79,9 @@ fn coverage(heightfield: &HeightfieldTiles) -> BTreeMap<usize, usize> {
                 })
                 .count();
             *counts.entry(covering).or_insert(0) += 1;
-            x += 0.5;
+            x += step;
         }
-        z += 0.5;
+        z += step;
     }
     counts
 }
@@ -237,4 +240,58 @@ fn a_pick_finds_the_nearest_drawn_tile_along_the_ray() {
         .is_none());
     let footprint = heightfield.footprint();
     assert!(footprint.vertices > 0 && footprint.sample_bytes == (121 + 144) * 49 * 4);
+}
+
+#[test]
+fn with_three_rings_tiles_landing_in_any_order_cover_the_region_exactly_once() {
+    let spec = |cell_size, reach| HeightfieldRingSpec { cell_size, reach };
+    let layout =
+        HeightfieldLayout::new(4, &[spec(1.0, 6.0), spec(4.0, 24.0), spec(16.0, 80.0)]).unwrap();
+    let mut heightfield = HeightfieldTiles::new(layout);
+    heightfield.set_focus(Some([3.0, 3.0]));
+    sample_all(&mut heightfield, Some(2));
+    assert_eq!(
+        coverage(&heightfield).keys().copied().collect::<Vec<_>>(),
+        [1]
+    );
+    // A middle tile and all its fine tiles land before the middle tile's
+    // siblings: the coarse tile above them still draws, so they wait.
+    let middle = TileKey {
+        ring: 1,
+        x: 0,
+        z: 0,
+    };
+    let first: Vec<TileKey> = std::iter::once(middle)
+        .chain(heightfield.layout().children(middle))
+        .collect();
+    for request in heightfield.requests(0) {
+        if first.contains(&request.key) {
+            let samples = samples(heightfield.layout(), request.key);
+            assert!(heightfield.commit(request.key, request.revision, samples));
+        }
+    }
+    heightfield.mesh();
+    assert!(!heightfield.is_drawn(middle) && first.iter().all(|key| !heightfield.is_drawn(*key)));
+    assert_eq!(
+        coverage(&heightfield).keys().copied().collect::<Vec<_>>(),
+        [1]
+    );
+    // The rest land scrambled, a few at a time.
+    let mut rest = heightfield.requests(0);
+    rest.sort_by_key(|request| {
+        (request.key.x * 7919 + request.key.z * 104_729 + i64::from(request.key.ring) * 31)
+            .rem_euclid(97)
+    });
+    for batch in rest.chunks(5) {
+        for request in batch {
+            let samples = samples(heightfield.layout(), request.key);
+            assert!(heightfield.commit(request.key, request.revision, samples));
+        }
+        heightfield.mesh();
+        assert_eq!(
+            coverage(&heightfield).keys().copied().collect::<Vec<_>>(),
+            [1]
+        );
+    }
+    assert!(heightfield.settled() && heightfield.is_drawn(first[1]));
 }

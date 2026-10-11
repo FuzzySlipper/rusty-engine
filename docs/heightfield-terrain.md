@@ -105,8 +105,10 @@ and `SampleMilliseconds` report its work.
   samples; new samples remesh the tile and the finer tiles within it.
 - **What draws.** A ring draws the tiles of its region; a coarser tile keeps
   drawing until every finer tile within it is meshed, then gives way to them
-  all at once, so the ground has no holes while a ring loads (after a teleport
-  the coarsest ring covers everything first) and nothing overlaps. Tiles are
+  all at once, and a finer tile draws only where every coarser tile above it
+  has given way. So the ground has no holes while a ring loads (after a
+  teleport the coarsest ring covers everything first) and nothing overlaps,
+  whatever order tiles land in. Tiles are
   kept a region tile beyond the region, so a focus wavering on a boundary
   samples nothing twice; beyond that they are let go.
 - **Textures.** A tile's uvs are the heightfield's own x and z, which a voxel

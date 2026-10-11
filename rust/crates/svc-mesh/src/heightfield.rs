@@ -730,7 +730,12 @@ impl TileMesh {
                 vertex(ci + 1, cj + 1),
             ];
             if let [Some(a), Some(b), Some(c), Some(d)] = corners {
-                let falling = (a[1] - d[1]).abs() <= (b[1] - c[1]).abs();
+                // The diagonal `mesh_tile` drew, chosen from the unmorphed
+                // heights: a morph moves the corners, not the indices.
+                let base =
+                    |i: usize, j: usize| self.positions[self.grid[j * side + i] as usize * 3 + 1];
+                let falling = (base(ci, cj) - base(ci + 1, cj + 1)).abs()
+                    <= (base(ci + 1, cj) - base(ci, cj + 1)).abs();
                 let triangles = if falling {
                     [[a, c, d], [a, d, b]]
                 } else {

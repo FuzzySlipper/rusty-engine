@@ -10,7 +10,8 @@
 //! tile has them too (its morph targets lie on that surface); new samples
 //! remesh the tile and the finer tiles within it. A coarser tile stays
 //! drawn until every finer tile within it is meshed, then gives way to
-//! them all at once, so nothing overlaps and nothing goes missing.
+//! them all at once; a finer tile draws only where every coarser tile above
+//! it has given way, so nothing overlaps and nothing goes missing.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -310,34 +311,42 @@ impl HeightfieldTiles {
         })
     }
 
+    /// Whether `key` hands its square down to its finer tiles: the finer
+    /// ring's region covers it, they are all meshed, and every coarser tile
+    /// above it hands down too. Otherwise the nearest coarser tile that does
+    /// not draws there, and nothing finer may.
+    fn handed_down(&self, key: TileKey, regions: &[TileRect]) -> bool {
+        let ring = usize::from(key.ring);
+        ring > 0
+            && {
+                let k = self.layout.rings[ring - 1].per_parent;
+                let finer = &regions[ring - 1];
+                finer.contains(key.x * k, key.z * k)
+                    && finer.contains(key.x * k + k - 1, key.z * k + k - 1)
+            }
+            && self.complete(key)
+            && self
+                .layout
+                .parent(key)
+                .is_none_or(|parent| self.handed_down(parent, regions))
+    }
+
     fn redraw(&mut self) {
         let Some(focus) = self.focus else {
             return;
         };
         let regions = self.regions(focus);
-        let top = self.layout.rings.len() - 1;
         let mut drawn = BTreeSet::new();
         for (key, tile) in &self.tiles {
             let ring = usize::from(key.ring);
             if tile.mesh.is_none() || !regions[ring].contains(key.x, key.z) {
                 continue;
             }
-            if ring < top
-                && !self
-                    .layout
-                    .parent(*key)
-                    .is_some_and(|parent| self.complete(parent))
-            {
-                continue;
-            }
-            let covered = ring > 0 && {
-                let k = self.layout.rings[ring - 1].per_parent;
-                let finer = &regions[ring - 1];
-                finer.contains(key.x * k, key.z * k)
-                    && finer.contains(key.x * k + k - 1, key.z * k + k - 1)
-                    && self.complete(*key)
-            };
-            if !covered {
+            let exposed = self
+                .layout
+                .parent(*key)
+                .is_none_or(|parent| self.handed_down(parent, &regions));
+            if exposed && !self.handed_down(*key, &regions) {
                 drawn.insert(*key);
             }
         }
