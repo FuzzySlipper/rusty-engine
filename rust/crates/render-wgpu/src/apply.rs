@@ -1532,7 +1532,7 @@ impl Renderer {
         resources: &dyn ResourceSource,
     ) -> Result<(), String> {
         let streams = resources::mesh_streams(&asset.payload, resources)?;
-        let mesh = self.upload_mesh(
+        let mut mesh = self.upload_mesh(
             &asset.asset,
             &streams,
             Topology::Triangles,
@@ -1548,6 +1548,9 @@ impl Renderer {
                 .map(|slot| (slot.slot, slot.material.clone()))
                 .collect(),
         );
+        // A product mesh's colours can be terrain layer weights, as a voxel
+        // chunk's are: layers 0 to 3 of its slots' terrain layer materials.
+        mesh.layer_weights = asset.payload.layer_weights && streams.colors.is_some();
         let id = self.tables.names.id(&asset.asset);
         let redefined = self.tables.static_meshes.insert(id, mesh).is_some();
         // A redefinition redraws every user; a first definition the scatter

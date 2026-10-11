@@ -160,6 +160,11 @@ or noise); the Engine only blends what it chose:
   than four layers reach one chunk, it draws the four with the most weight, a
   vertex's share of the others goes to those four, and its seams can then
   show. A vertex of a slot outside the set takes the chunk's first layer.
+- **Product meshes.** A mesh made with `Graphics.CreateMeshResource` blends
+  the same materials by the weights it gives each vertex (its `LayerWeights`
+  stream, [runtime-generated
+  geometry](csharp-lifecycle.md#runtime-generated-geometry)): layers 0 to 3,
+  with no palette.
 - **What stays.** Geometry, groups, material slots, collision, navigation and
   voxel readouts are unchanged: blending is drawn only. A slot outside the layers, bound to an
   ordinary material, draws as before.

@@ -6609,6 +6609,8 @@ mod tests {
                         groups_len: groups.len(),
                         bindings: bindings.as_ptr(),
                         bindings_len: bindings.len(),
+                        layer_weights: std::ptr::null(),
+                        layer_weights_len: 0,
                     },
                     &mut mesh,
                     std::ptr::null_mut(),

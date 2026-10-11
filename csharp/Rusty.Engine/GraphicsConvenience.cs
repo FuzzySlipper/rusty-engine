@@ -303,6 +303,19 @@ public readonly partial record struct MeshResourceCreateRequest
         : this(Positions, Normals, Uvs, ReadOnlyMemory<Color>.Empty, Indices, Groups, Bindings)
     {
     }
+
+    /// <summary>A mesh with linear vertex colours (or none) and no layer weights.</summary>
+    public MeshResourceCreateRequest(
+        ReadOnlyMemory<Vector3> Positions,
+        ReadOnlyMemory<Vector3> Normals,
+        ReadOnlyMemory<Vector2> Uvs,
+        ReadOnlyMemory<Color> Colors,
+        ReadOnlyMemory<uint> Indices,
+        ReadOnlyMemory<MeshGroup> Groups,
+        ReadOnlyMemory<MeshMaterialBinding> Bindings)
+        : this(Positions, Normals, Uvs, Colors, Indices, Groups, Bindings, ReadOnlyMemory<Vector4>.Empty)
+    {
+    }
 }
 
 public readonly partial record struct SpriteAppearanceRequest

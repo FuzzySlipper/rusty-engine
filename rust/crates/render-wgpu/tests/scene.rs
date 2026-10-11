@@ -832,6 +832,88 @@ fn static_mesh_vertex_colours_multiply_the_material_and_payloads_ignore_them() {
 }
 
 #[test]
+fn static_mesh_layer_weights_blend_a_terrain_layer_material_across_the_mesh() {
+    const SAND: [u8; 4] = [230, 200, 80, 255];
+    const ROCK: [u8; 4] = [70, 80, 110, 255];
+    let mut harness = Harness::new(RendererOptions {
+        default_world_lights: false,
+        ..RendererOptions::default()
+    });
+    let mut plain = |id: &str, color: [u8; 4]| {
+        harness
+            .resources
+            .texture(id, 4, 4, &image(4, 4, |_, _| color), TextureWrap::Repeat)
+    };
+    let (sand, rock) = (plain("texture/sand", SAND), plain("texture/rock", ROCK));
+    let repeat = |texture: &TextureDescriptor| VoxelSurfaceMappingDescriptor::Repeat {
+        texture: texture.id.clone(),
+        texture_version: texture.version,
+        texture_content_hash: texture.content_hash.clone().unwrap(),
+        tile_scale_cells: [1.0, 1.0],
+        tile_origin_cells: [0.0, 0.0],
+    };
+    let rock_layer = voxel_material(0, [1.0; 4], Some(&rock), Some(repeat(&rock)));
+    let mut ground = voxel_material(0, [1.0; 4], Some(&sand), Some(repeat(&sand)));
+    ground.id = "material/ground".to_owned();
+    ground.terrain_layers = Some(MaterialTerrainLayersDescriptor {
+        layers: vec![MaterialTerrainLayerDescriptor {
+            voxel_surface: rock_layer.voxel_surface.unwrap(),
+            normal_map: None,
+        }],
+        contrast: 1.0,
+    });
+    // All sand at the panel's left edge, all rock at its right.
+    let mut panel = with_colors(box_mesh([-1.0, -0.8, -3.0], [1.0, 0.8, -2.9], |_| 0), |p| {
+        let rock = (p[0] + 1.0) / 2.0;
+        [1.0 - rock, rock, 0.0, 0.0]
+    });
+    panel.layer_weights = true;
+    harness.apply(vec![
+        RenderDiff::DefineTexture { texture: sand },
+        RenderDiff::DefineTexture { texture: rock },
+        RenderDiff::DefineMaterial { material: ground },
+        static_mesh("mesh/ground", panel, "material/ground"),
+        instance(1, None, "mesh/ground", Transform::IDENTITY),
+        // Ambient π: the surface shows exactly its texture.
+        RenderDiff::CreateLight {
+            handle: RenderHandle::new(4),
+            parent: None,
+            light: LightDescriptor::Ambient {
+                color: [1.0; 3],
+                intensity: std::f32::consts::PI,
+                enabled: true,
+                shadow_intent: LightShadowIntent::Disabled,
+                shadow: Default::default(),
+                range: None,
+            },
+        },
+    ]);
+    let (_, pixels) = harness.render(&camera([0.0, 0.0, 0.0], 0.0, 0.0));
+    let project = |x: f32| {
+        (WIDTH as f32 * 0.5 + x / 2.9 * (HEIGHT as f32 * 0.5) / (30f32.to_radians().tan())) as u32
+    };
+    // How far a pixel of the middle row is from sand toward rock.
+    let toward_rock = |x: f32| {
+        let at = ((HEIGHT / 2 * WIDTH + project(x)) * 4) as usize;
+        let (along, length) = (0..3).fold((0.0, 0.0), |(along, length), c| {
+            let span = f32::from(ROCK[c]) - f32::from(SAND[c]);
+            (
+                along + (f32::from(pixels[at + c]) - f32::from(SAND[c])) * span,
+                length + span * span,
+            )
+        });
+        along / length
+    };
+    let (left, middle, right) = (toward_rock(-0.9), toward_rock(0.0), toward_rock(0.9));
+    assert!(left < 0.15, "the left edge is sand: {left}");
+    assert!(right > 0.85, "the right edge is rock: {right}");
+    assert!(
+        (0.3..0.7).contains(&middle),
+        "the middle blends the two: {middle}"
+    );
+}
+
+#[test]
 fn materials_share_a_pipeline_per_feature_set_made_when_the_material_is_defined() {
     let mut harness = Harness::new(RendererOptions::default());
     let masked = |id: &str, color| RenderMaterialDescriptor {

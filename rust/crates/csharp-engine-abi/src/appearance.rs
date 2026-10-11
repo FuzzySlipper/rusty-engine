@@ -904,6 +904,12 @@ pub struct NativeMeshPartitionPartRequest {
 /// bindings supply every used material slot. Empty UV/color streams omit those
 /// attributes. The Engine bounds a fully attributed inline mesh to its named
 /// admission budget before copying.
+///
+/// Vertex colours are linear RGBA, drawn as given. `layer_weights` instead
+/// gives each vertex the weights of a terrain layer material's first four
+/// layers (`create_terrain_layer_material`), which slots bound to such a
+/// material blend by; the uvs are then the layers' tile coordinates. A mesh
+/// has colours or layer weights, not both.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeMeshResourceCreateRequest {
@@ -921,6 +927,8 @@ pub struct NativeMeshResourceCreateRequest {
     pub groups_len: usize,
     pub bindings: *const NativeMeshMaterialBinding,
     pub bindings_len: usize,
+    pub layer_weights: *const NativeVec4,
+    pub layer_weights_len: usize,
 }
 
 #[repr(C)]

@@ -2111,6 +2111,8 @@ mod tests {
             groups_len: groups.len(),
             bindings: bindings.as_ptr(),
             bindings_len: bindings.len(),
+            layer_weights: std::ptr::null(),
+            layer_weights_len: 0,
         };
         let resource =
             unsafe { crate::render_resources::create_generated_mesh(appearance, &request) }

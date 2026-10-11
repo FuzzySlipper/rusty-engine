@@ -1389,17 +1389,29 @@ unsafe fn generated_mesh_payload(
         || request.normals_len != request.positions_len
         || (request.uvs_len != 0 && request.uvs_len != request.positions_len)
         || (request.colors_len != 0 && request.colors_len != request.positions_len)
+        || (request.layer_weights_len != 0 && request.layer_weights_len != request.positions_len)
         || request.indices_len < 3
         || !request.indices_len.is_multiple_of(3)
         || request.groups_len == 0
         || request.bindings_len == 0
     {
-        return Err(invalid("mesh requires at least 3 vertices, matching normals/optional UV/color streams, complete triangle indices, and nonempty groups/bindings"));
+        return Err(invalid("mesh requires at least 3 vertices, matching normals/optional UV/color/layer weight streams, complete triangle indices, and nonempty groups/bindings"));
+    }
+    // Layer weights travel in the colour stream, as a voxel chunk's do.
+    if request.colors_len != 0 && request.layer_weights_len != 0 {
+        return Err(invalid(
+            "a mesh has vertex colours or layer weights, not both",
+        ));
     }
     let positions = borrowed_slice(request.positions, request.positions_len, "mesh positions")?;
     let normals = borrowed_slice(request.normals, request.normals_len, "mesh normals")?;
     let uvs = borrowed_slice(request.uvs, request.uvs_len, "mesh UVs")?;
     let colors = borrowed_slice(request.colors, request.colors_len, "mesh colors")?;
+    let weights = borrowed_slice(
+        request.layer_weights,
+        request.layer_weights_len,
+        "mesh layer weights",
+    )?;
     let indices = borrowed_slice(request.indices, request.indices_len, "mesh indices")?;
     let groups = borrowed_slice(request.groups, request.groups_len, "mesh groups")?;
     let bindings = borrowed_slice(request.bindings, request.bindings_len, "mesh bindings")?;
@@ -1451,7 +1463,7 @@ unsafe fn generated_mesh_payload(
             kind: MeshAttributeKind::F32,
         });
     }
-    if !colors.is_empty() {
+    if !colors.is_empty() || !weights.is_empty() {
         attributes.push(MeshAttribute {
             name: MeshAttributeName::Color,
             components: 4,
@@ -1480,16 +1492,25 @@ unsafe fn generated_mesh_payload(
                 .collect(),
             uvs: (!uvs.is_empty())
                 .then(|| uvs.iter().flat_map(|value| [value.x, value.y]).collect()),
-            colors: (!colors.is_empty()).then(|| {
-                colors
-                    .iter()
-                    .flat_map(|value| [value.r, value.g, value.b, value.a])
-                    .collect()
-            }),
+            colors: if !weights.is_empty() {
+                Some(
+                    weights
+                        .iter()
+                        .flat_map(|value| [value.x, value.y, value.z, value.w])
+                        .collect(),
+                )
+            } else {
+                (!colors.is_empty()).then(|| {
+                    colors
+                        .iter()
+                        .flat_map(|value| [value.r, value.g, value.b, value.a])
+                        .collect()
+                })
+            },
             indices: indices.to_vec(),
         },
         provenance: MeshProvenance::Generated,
-        layer_weights: false,
+        layer_weights: !weights.is_empty(),
         layer_palette: Vec::new(),
         vertex_occlusion: false,
     };
@@ -2068,6 +2089,75 @@ pub(crate) mod tests {
     }; 3];
 
     #[test]
+    fn generated_mesh_layer_weights_travel_as_flagged_colours() {
+        let mut meshes = GeneratedMeshes::default();
+        let positions = triangle_positions();
+        let normals = TRIANGLE_NORMALS;
+        let weight = |x, y| csharp_engine_abi::NativeVec4 {
+            x,
+            y,
+            z: 0.0,
+            w: 0.0,
+        };
+        let weights = [weight(1.0, 0.0), weight(0.0, 1.0), weight(0.5, 0.5)];
+        let colors = [NativeColor {
+            r: 1.0,
+            g: 1.0,
+            b: 1.0,
+            a: 1.0,
+        }; 3];
+        let indices = [0, 1, 2];
+        let groups = [NativeMeshGroup {
+            material_slot: 3,
+            start: 0,
+            count: 3,
+        }];
+        let bindings = [NativeMeshMaterialBinding {
+            material_slot: 3,
+            material: MATERIAL,
+        }];
+        let request = NativeMeshResourceCreateRequest {
+            positions: positions.as_ptr(),
+            positions_len: positions.len(),
+            normals: normals.as_ptr(),
+            normals_len: normals.len(),
+            uvs: std::ptr::null(),
+            uvs_len: 0,
+            colors: std::ptr::null(),
+            colors_len: 0,
+            indices: indices.as_ptr(),
+            indices_len: indices.len(),
+            groups: groups.as_ptr(),
+            groups_len: groups.len(),
+            bindings: bindings.as_ptr(),
+            bindings_len: bindings.len(),
+            layer_weights: weights.as_ptr(),
+            layer_weights_len: weights.len(),
+        };
+        let resource = admit_generated(&mut meshes, &request).unwrap();
+        let payload = &meshes.resources[&resource.value].definition.payload;
+        assert!(payload.layer_weights);
+        let MeshPayloadSource::Inline { colors: stream, .. } = &payload.source else {
+            panic!("generated streams are retained inline");
+        };
+        assert_eq!(
+            stream.as_deref(),
+            Some(&[1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.5, 0.5, 0.0, 0.0][..])
+        );
+        // A mesh has colours or layer weights, not both.
+        let both = NativeMeshResourceCreateRequest {
+            colors: colors.as_ptr(),
+            colors_len: colors.len(),
+            ..request
+        };
+        assert_eq!(
+            admit_generated(&mut meshes, &both).unwrap_err().code(),
+            "CSHARP_MESH_ADMISSION"
+        );
+        assert_eq!(meshes.len(), 1);
+    }
+
+    #[test]
     fn generated_mesh_copies_streams_and_refuses_atomically() {
         let mut meshes = GeneratedMeshes::default();
         let mut positions = triangle_positions();
@@ -2117,6 +2207,8 @@ pub(crate) mod tests {
             groups_len: groups.len(),
             bindings: bindings.as_ptr(),
             bindings_len: bindings.len(),
+            layer_weights: std::ptr::null(),
+            layer_weights_len: 0,
         };
         let resource = admit_generated(&mut meshes, &request).unwrap();
         positions[1].x = 99.0;
@@ -2163,6 +2255,8 @@ pub(crate) mod tests {
             groups_len: 1,
             bindings: bindings.as_ptr(),
             bindings_len: 1,
+            layer_weights: std::ptr::null(),
+            layer_weights_len: 0,
         };
         assert_eq!(
             admit_generated(&mut meshes, &unrepresentable)
@@ -2237,6 +2331,8 @@ pub(crate) mod tests {
             groups_len: groups.len(),
             bindings: bindings.as_ptr(),
             bindings_len: bindings.len(),
+            layer_weights: std::ptr::null(),
+            layer_weights_len: 0,
         };
 
         let resource = admit_generated(&mut meshes, &request).unwrap();

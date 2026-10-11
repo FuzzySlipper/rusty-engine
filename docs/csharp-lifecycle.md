@@ -453,7 +453,20 @@ an immutable retained mesh. Positions/normals are `Vector3`; optional UVs are
 `MeshGroup` ranges tile the triangle index list, and `MeshMaterialBinding`
 selects an existing Engine material for every used slot. Bounds are computed by
 Rust. The mesh needs at least three vertices, matching normal and optional
-UV/color streams, complete triangles, and nonempty groups and bindings. Vertex
+UV/color/layer weight streams, complete triangles, and nonempty groups and
+bindings.
+
+The eighth stream, `LayerWeights` (a `Vector4` per vertex), replaces the
+colours: it gives each vertex the weights of a terrain layer material's first
+four layers, so slots bound to a
+[`CreateTerrainLayerMaterial`](smooth-voxel-surfaces.md#blending-terrain-layers)
+material blend their layers across the mesh as a voxel chunk does, by the
+material's `Contrast`. A mesh has colours or layer weights, not both. The uvs
+are the layers' tile coordinates (the layer materials are voxel surface
+materials); a triplanar layer material projects the mesh's own positions, so
+tiles of one ground placed at different origins line up only where the origin
+is a whole number of texture repeats. A slot bound to an ordinary material
+ignores the weights and draws untinted. Vertex
 and index counts are stored as `u32`; there is no other size cap.
 `GraphicsMeshLimits` describes only the managed span representation. Packed
 mesh resources use `u32` byte lengths and offsets.
