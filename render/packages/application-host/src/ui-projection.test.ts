@@ -53,7 +53,7 @@ void test('a projection freezes the envelope every subscriber shares', () => {
   projection.dispose();
 });
 
-void test('projection admits its stream, contract and binding, in increasing sequence', () => {
+void test('projection admits its stream, contract and binding', () => {
   const projection = createRustyApplicationUiProjection(OPTIONS);
   assert.throws(
     () => projection.ingest({ ...envelope('0'), stream: 'product.other' }),
@@ -65,17 +65,19 @@ void test('projection admits its stream, contract and binding, in increasing seq
     (error: unknown) => error instanceof RustyApplicationUiProjectionError
       && error.code === 'runtime_mismatch',
   );
-  projection.ingest(envelope('4'));
-  assert.throws(
-    () => projection.ingest(envelope('4')),
-    (error: unknown) => error instanceof RustyApplicationUiProjectionError
-      && error.code === 'sequence_not_increasing',
-  );
-  assert.throws(
-    () => projection.ingest(envelope('3')),
-    (error: unknown) => error instanceof RustyApplicationUiProjectionError
-      && error.code === 'sequence_not_increasing',
-  );
+  projection.dispose();
+});
+
+void test('a replayed baseline and a reopened product stream are admitted under one binding', () => {
+  const projection = createRustyApplicationUiProjection(OPTIONS);
+  projection.ingest(envelope('4', { health: 72 }));
+  // A fresh output baseline replays the latest envelope with its sequence.
+  assert.equal(projection.ingest(envelope('4', { health: 72 })), true);
+  // A product that closes and reopens its stream (a new game) starts again at 1.
+  assert.equal(projection.ingest(envelope('1', { health: 100 })), true);
+  assert.deepEqual(projection.current()?.value, { health: 100 });
+  assert.equal(projection.readout().sequence, '1');
+  assert.equal(projection.readout().rejectedCount, 0);
   projection.dispose();
 });
 

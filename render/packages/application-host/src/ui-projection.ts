@@ -48,7 +48,6 @@ export type RustyApplicationUiProjectionErrorCode =
   | 'contract_mismatch'
   | 'runtime_unbound'
   | 'runtime_mismatch'
-  | 'sequence_not_increasing'
   | 'subscriber_limit_exceeded';
 
 export class RustyApplicationUiProjectionError extends Error {
@@ -159,11 +158,11 @@ export function createRustyApplicationUiProjection(
     if (!sameRuntime(runtime, envelope.runtime)) {
       reject('runtime_mismatch', 'UI projection envelope runtime does not match the bound runtime');
     }
-    const sequence = BigInt(envelope.sequence);
-    if (lastSequence !== null && sequence <= lastSequence) {
-      reject('sequence_not_increasing', 'UI projection sequence must strictly increase within one runtime epoch');
-    }
-    lastSequence = sequence;
+    // Output arrives in order on one stream, and Rust holds each product stream
+    // to an advancing sequence. A fresh output baseline replays the latest
+    // envelope, and a product that reopens a stream starts its sequence again,
+    // so the page admits whatever sequence it is given.
+    lastSequence = BigInt(envelope.sequence);
     // Every subscriber shares this value, so none may change it.
     current = Object.freeze({ ...envelope, value: deepFreeze(envelope.value) });
     acceptedCount += 1;
