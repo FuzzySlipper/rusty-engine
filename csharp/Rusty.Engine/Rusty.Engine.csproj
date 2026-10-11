@@ -17,6 +17,11 @@
     <PackageTags>rusty-engine;csharp;nativeaot</PackageTags>
     <PackageReleaseNotes Condition="'$(RustyEnginePackageAbiIdentity)' != ''">Product ABI identity: $(RustyEnginePackageAbiIdentity).</PackageReleaseNotes>
     <PackageReadmeFile>PACKAGE_README.md</PackageReadmeFile>
+    <!-- Ship the XML docs (the generated ones carry the ABI's comments, colour
+         spaces among them) so a product's editor shows them. Not every public
+         member or parameter is documented. -->
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591;CS1573</NoWarn>
   </PropertyGroup>
   <ItemGroup>
     <Compile Remove="buildTransitive/Tasks/**/*.cs" />

@@ -21,7 +21,7 @@ pub enum NativeTweenChannel {
     Rotation = 1,
     /// Local scale multiplying the published scale.
     Scale = 2,
-    /// Multiplies a sprite's tint or a primitive's colour.
+    /// Multiplies a sprite's tint or a primitive's colour, linear RGBA.
     Tint = 3,
 }
 
@@ -300,6 +300,7 @@ pub struct NativeTweenSample {
     pub translation: NativeVec3,
     pub rotation: NativeQuat,
     pub scale: NativeVec3,
+    /// Linear RGBA multiplier.
     pub tint: NativeVec4,
 }
 

@@ -140,7 +140,9 @@ pub struct NativeVoxelSceneScatterRequest {
     pub fade: f32,
     pub scale_min: f32,
     pub scale_max: f32,
+    /// Linear RGB.
     pub tint_low: NativeVec3,
+    /// Linear RGB.
     pub tint_high: NativeVec3,
     pub slope_limit_degrees: f32,
     pub align: f32,

@@ -225,6 +225,7 @@ pub struct NativeAuthoredMaterialInput {
     pub collidable: bool,
     pub occludes: bool,
     pub structural_class: NativeAuthoredStructuralClass,
+    /// Linear RGBA.
     pub color: NativeColor,
     pub has_texture: bool,
     pub texture_id: NativeUtf8Slice,
@@ -233,7 +234,9 @@ pub struct NativeAuthoredMaterialInput {
     pub texture_has_hash: bool,
     pub texture_hash: NativeUtf8Slice,
     pub roughness: f32,
+    /// Linear RGBA.
     pub texture_tint: NativeColor,
+    /// Linear RGB; alpha unused.
     pub emission_color: NativeColor,
     pub emissive: f32,
     pub uv_strategy: NativeAuthoredUvStrategy,
@@ -498,6 +501,7 @@ pub struct NativeAuthoredSceneEntityInstanceInput {
 pub struct NativeAuthoredSceneLightInput {
     pub node_id: u64,
     pub kind: NativeAuthoredSceneLightKind,
+    /// Linear RGB.
     pub color: NativeVec3,
     pub intensity: f32,
     pub enabled: bool,
@@ -636,11 +640,14 @@ pub struct NativeAuthoredMaterialReadout {
     pub collidable: bool,
     pub occludes: bool,
     pub structural_class: NativeAuthoredStructuralClass,
+    /// Linear RGBA.
     pub color: NativeColor,
     pub has_texture: bool,
     pub texture: NativeAuthoredAssetReference,
     pub roughness: f32,
+    /// Linear RGBA.
     pub texture_tint: NativeColor,
+    /// Linear RGB; alpha unused.
     pub emission_color: NativeColor,
     pub emissive: f32,
     pub uv_strategy: NativeAuthoredUvStrategy,
@@ -895,6 +902,7 @@ pub struct NativeAuthoredScenePlannedLightReadout {
     pub node_id: u64,
     pub entity_id: u64,
     pub kind: NativeAuthoredSceneLightKind,
+    /// Linear RGB.
     pub color: NativeVec3,
     pub intensity: f32,
     pub enabled: bool,

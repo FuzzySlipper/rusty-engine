@@ -230,6 +230,7 @@ pub struct NativeMeshMaterialFactors {
     /// Replace the slot's texture tint (the material's own without; a GLB
     /// slot's is 1) with `texture_tint`, which multiplies the colour.
     pub override_texture_tint: bool,
+    /// Linear RGBA.
     pub texture_tint: NativeColor,
 }
 

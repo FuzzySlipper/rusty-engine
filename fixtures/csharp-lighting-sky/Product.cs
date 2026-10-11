@@ -198,11 +198,11 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
             emberSprite ??= engine.Graphics.OpenResource(new("ember.png",TextureFilter.Linear,TextureWrap.Clamp)).Handle;
             smokeSprite ??= engine.Graphics.OpenResource(new("smoke.png",TextureFilter.Linear,TextureWrap.Clamp)).Handle;
             flameFire = Fire(FlameId,"lighting.flame",flameSprite,FlameFrames,FlameFramesPerSecond,24,.35f,.55f,new(-.08f,.5f,-.08f),new(.08f,.9f,.08f),Vector3.Zero,
-                [new(0,.45f),new(.5f,.6f),new(1,.15f)],[new(0,new Color(1,.85f,.5f,1)),new(.6f,new Color(1,.45f,.1f,.7f)),new(1,new Color(.5f,.1f,0,0))],PresentationParticleBlendMode.Additive,FlameSoftness,32);
+                [new(0,.45f),new(.5f,.6f),new(1,.15f)],[new(0,Color.FromSrgb(1,.85f,.5f,1)),new(.6f,Color.FromSrgb(1,.45f,.1f,.7f)),new(1,Color.FromSrgb(.5f,.1f,0,0))],PresentationParticleBlendMode.Additive,FlameSoftness,32);
             emberFire = Fire(EmberId,"lighting.embers",emberSprite,1,0,10,1,2,new(-.35f,.8f,-.35f),new(.35f,1.6f,.35f),new(0,-.5f,0),
-                [new(0,.06f),new(1,.02f)],[new(0,new Color(1,.6f,.2f,1)),new(1,new Color(1,.2f,0,0))],PresentationParticleBlendMode.Additive,EmberSoftness,48);
+                [new(0,.06f),new(1,.02f)],[new(0,Color.FromSrgb(1,.6f,.2f,1)),new(1,Color.FromSrgb(1,.2f,0,0))],PresentationParticleBlendMode.Additive,EmberSoftness,48);
             smokeFire = Fire(SmokeId,"lighting.smoke",smokeSprite,1,0,5,2,3,new(-.25f,.45f,-.1f),new(.05f,.8f,.1f),Vector3.Zero,
-                [new(0,.3f),new(1,1.1f)],[new(0,new Color(.3f,.27f,.25f,.45f)),new(1,new Color(.25f,.25f,.25f,0))],PresentationParticleBlendMode.Alpha,SmokeSoftness,32);
+                [new(0,.3f),new(1,1.1f)],[new(0,Color.FromSrgb(.3f,.27f,.25f,.45f)),new(1,Color.FromSrgb(.25f,.25f,.25f,0))],PresentationParticleBlendMode.Alpha,SmokeSoftness,32);
             flame = engine.Presentation.CreateEmitter(flameFire);
             embers = engine.Presentation.CreateEmitter(emberFire);
             smoke = engine.Presentation.CreateEmitter(smokeFire);
@@ -545,7 +545,7 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
             engine.VoxelScenePresentation.SetLayer(new(mesaPresentation,RenderLayer.Backdrop));
             smokeSprite ??= engine.Graphics.OpenResource(new("smoke.png",TextureFilter.Linear,TextureWrap.Clamp)).Handle;
             plume = engine.Presentation.CreateEmitter(Fire(PlumeId,"lighting.backdrop.plume",smokeSprite,1,0,3,20,30,PlumeRise*.8f,PlumeRise*1.2f,Vector3.Zero,
-                [new(0,.06f),new(1,.18f)],[new(0,new Color(.35f,.33f,.32f,.6f)),new(1,new Color(.3f,.3f,.3f,0))],PresentationParticleBlendMode.Alpha,0,96) with
+                [new(0,.06f),new(1,.18f)],[new(0,Color.FromSrgb(.35f,.33f,.32f,.6f)),new(1,Color.FromSrgb(.3f,.3f,.3f,0))],PresentationParticleBlendMode.Alpha,0,96) with
             {
                 Anchor = new() { Kind = PresentationAnchorKind.World, Position = MesaCenter + new Vector3(0,MesaHeight,0) },
                 Backdrop = true,

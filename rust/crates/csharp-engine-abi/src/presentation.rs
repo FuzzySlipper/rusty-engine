@@ -64,9 +64,13 @@ pub struct NativePresentationBillboardMeter {
     pub preview: f32,
     pub fill_direction: NativePresentationBillboardMeterFillDirection,
     pub segments: u8,
+    /// sRGB RGBA, as in CSS: labels draw into an sRGB canvas.
     pub fill: NativeColor,
+    /// sRGB RGBA, as in CSS: labels draw into an sRGB canvas.
     pub preview_fill: NativeColor,
+    /// sRGB RGBA, as in CSS: labels draw into an sRGB canvas.
     pub back: NativeColor,
+    /// sRGB RGBA, as in CSS: labels draw into an sRGB canvas.
     pub border: NativeColor,
 }
 
@@ -84,7 +88,9 @@ pub struct NativePresentationBillboardStatusCue {
 #[derive(Debug, Clone, Copy)]
 pub struct NativePresentationBillboardStyle {
     pub opacity: f32,
+    /// sRGB RGBA, as in CSS: labels draw into an sRGB canvas.
     pub backing: NativeColor,
+    /// sRGB RGBA, as in CSS: labels draw into an sRGB canvas.
     pub border: NativeColor,
     pub radius_pixels: f32,
 }
@@ -174,7 +180,9 @@ pub struct NativePresentationBillboardDescriptor {
     pub font_asset: NativeRenderResourceReference,
     pub font_family: NativeUtf8Slice,
     pub height_pixels: f32,
+    /// sRGB RGBA, as in CSS: labels draw into an sRGB canvas.
     pub color: NativeColor,
+    /// sRGB RGBA, as in CSS: labels draw into an sRGB canvas.
     pub background: NativeColor,
     pub max_distance: f32,
     pub layer: NativePresentationBillboardLayer,
@@ -208,7 +216,9 @@ pub struct NativePresentationStructuredBillboardDescriptor {
     pub font_asset: NativeRenderResourceReference,
     pub font_family: NativeUtf8Slice,
     pub height_pixels: f32,
+    /// sRGB RGBA, as in CSS: labels draw into an sRGB canvas.
     pub color: NativeColor,
+    /// sRGB RGBA, as in CSS: labels draw into an sRGB canvas.
     pub background: NativeColor,
     pub max_distance: f32,
     pub layer: NativePresentationBillboardLayer,
@@ -255,6 +265,7 @@ pub struct NativePresentationParticleScalarKey {
 #[derive(Debug, Clone, Copy)]
 pub struct NativePresentationParticleColorKey {
     pub age: f32,
+    /// Linear RGBA, as every world colour is; keys interpolate in linear space.
     pub color: NativeColor,
 }
 
@@ -439,12 +450,15 @@ pub enum NativeGhostPlateCaptureLightingMode {
 #[derive(Debug, Clone, Copy)]
 pub struct NativeGhostPlateCaptureLighting {
     pub mode: NativeGhostPlateCaptureLightingMode,
+    /// Linear RGB.
     pub ambient_color: NativeVec3,
     pub ambient_intensity: f32,
     pub key_direction: NativeVec3,
+    /// Linear RGB.
     pub key_color: NativeVec3,
     pub key_intensity: f32,
     pub fill_direction: NativeVec3,
+    /// Linear RGB.
     pub fill_color: NativeVec3,
     pub fill_intensity: f32,
 }

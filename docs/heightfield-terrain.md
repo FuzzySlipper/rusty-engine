@@ -67,7 +67,8 @@ index, its first vertex's place (`OriginX`, `OriginZ`), `CellSize`,
   colour), or `LayerWeights` (a terrain layer material's first four layers,
   as on [voxel ground](smooth-voxel-surfaces.md#blending-terrain-layers)), or
   neither: `(TileCells + 1)²`, from vertex (0, 0). Every colour the
-  heightfield takes is linear.
+  heightfield takes is linear: decode a palette's sRGB colours with
+  `Color.FromSrgb` ([colours](csharp-lifecycle.md#colours)).
 - `Materials`: a material index per vertex, `(TileCells + 1)²`; 0 when
   empty. Every index used must be bound when the heightfield is made. A
   triangle draws with the index most of its corners have, or the highest of

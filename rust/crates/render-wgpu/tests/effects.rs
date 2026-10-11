@@ -797,6 +797,24 @@ fn soft_particles_fade_into_the_scene_they_meet() {
 /// An additive billboard adds its colour to the lit wall behind it, where an
 /// alpha one of the same opaque colour replaces it, and over nothing lit the
 /// two are the same; a faded additive particle adds nothing.
+/// Particle colour keys are linear, as every other world colour is: a key
+/// of 0.5 draws as linear 0.5 (188 once the frame is sRGB-encoded), not as
+/// an sRGB 0.5 (128).
+#[test]
+fn particle_colour_keys_are_linear() {
+    let at = |rgba: &[u8]| pixel(rgba, WIDTH, WIDTH / 2, HEIGHT / 2 - 20);
+    let drawn = at(&still_particle(
+        4,
+        false,
+        [0.5, 0.5, 0.5, 1.0],
+        ParticleBlendMode::Alpha,
+        0.0,
+    ));
+    for channel in &drawn[..3] {
+        assert!(channel.abs_diff(188) <= 3, "linear 0.5 draws as {drawn:?}");
+    }
+}
+
 #[test]
 fn additive_particles_add_to_the_scene_behind_them() {
     let grey = [0.4, 0.4, 0.4, 1.0];

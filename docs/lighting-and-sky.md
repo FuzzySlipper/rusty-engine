@@ -13,6 +13,10 @@ color makes a surface visible but does not emit light onto other surfaces. Pair
 a torch's emissive appearance with a retained point light when it should light
 its surroundings. Updating or disabling that light changes the same retained light.
 
+Every colour on this page (lights, the hemisphere's ground, fog, haze, clouds,
+volumetric fog, precipitation, water, the background) is linear; decode an
+sRGB colour with `Color.FromSrgb` ([colours](csharp-lifecycle.md#colours)).
+
 ## Shadows
 
 Each shadowed light renders the scene into layers of a shadow atlas: four

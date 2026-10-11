@@ -124,6 +124,7 @@ pub struct NativeHeightfieldTileCommit {
     pub revision: u32,
     pub heights: *const f32,
     pub heights_len: usize,
+    /// Linear RGBA.
     pub colors: *const NativeColor,
     pub colors_len: usize,
     pub layer_weights: *const NativeVec4,

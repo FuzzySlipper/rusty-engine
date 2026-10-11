@@ -127,11 +127,31 @@ pub(crate) const NEUTRAL_VIEWMODEL_KEY_POSITION: [f32; 3] = [2.0, 3.0, 2.0];
 /// Clear colour with no background or sky selected: 0x101820, sRGB.
 pub(crate) const DEFAULT_CLEAR_SRGB: [f32; 3] = [16.0 / 255.0, 24.0 / 255.0, 32.0 / 255.0];
 
+/// The sRGB transfer function, as an sRGB texture is decoded. The C# SDK's
+/// `Color.SrgbToLinear` is the same (`scripts/fixtures/ColorSpaceChecks.cs`
+/// pins it at these values).
 pub(crate) fn srgb_to_linear(value: f32) -> f32 {
     if value <= 0.040_45 {
         value / 12.92
     } else {
         ((value + 0.055) / 1.055).powf(2.4)
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn srgb_decodes_as_the_sdk_helper_does() {
+    for (srgb, linear) in [
+        (0.0, 0.0),
+        (0.040_45, 0.003_130_805),
+        (0.5, 0.214_041_14),
+        (1.0, 1.0),
+    ] {
+        assert!(
+            (srgb_to_linear(srgb) - linear).abs() <= 1e-6,
+            "{srgb} decodes to {}",
+            srgb_to_linear(srgb)
+        );
     }
 }
 

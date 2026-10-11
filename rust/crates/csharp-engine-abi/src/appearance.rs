@@ -42,6 +42,10 @@ pub struct NativeMaterialHandle {
     pub value: u64,
 }
 
+/// RGBA, each 0 to 1. Colours are linear, drawn as given, unless a field
+/// says otherwise: billboard and label colours are sRGB, as in CSS. Decode an
+/// sRGB colour (a palette, a picker, a hex code) with `Color.FromSrgb`.
+/// Alpha is coverage and never encoded.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct NativeColor {
@@ -78,6 +82,7 @@ pub enum NativeLightShadowIntent {
 #[derive(Debug, Clone, Copy)]
 pub struct NativeLightDescriptor {
     pub kind: NativeLightKind,
+    /// Linear RGB, times `intensity`; a hemisphere light's sky colour.
     pub color: NativeVec3,
     pub intensity: f32,
     pub enabled: bool,
@@ -102,6 +107,7 @@ pub struct NativeLightDescriptor {
     /// the other kinds. An ambient light with a requested shadow uses
     /// `has_range`/`range` as half the side of the square of sky it looks
     /// down over (32 m without).
+    /// Linear RGB.
     pub ground_color: NativeVec3,
 }
 
@@ -433,6 +439,7 @@ pub struct NativeSpriteFromAtlasRequest {
     pub size_mode: NativeSpriteSizeMode,
     pub render_order: i32,
     pub depth: NativeSpriteDepthPolicy,
+    /// Linear RGBA multiplying the sprite's texture.
     pub tint: NativeColor,
     pub material: NativeSpriteMaterialDescriptor,
 }
@@ -465,6 +472,7 @@ pub struct NativeSpriteBatchRequest {
     pub billboard: NativeBillboardMode,
     pub render_order: i32,
     pub depth: NativeSpriteDepthPolicy,
+    /// Linear RGBA multiplying the sprites' texture.
     pub tint: NativeColor,
     pub material: NativeSpriteMaterialDescriptor,
 }
@@ -660,7 +668,9 @@ pub struct NativeSpritePlaybackAdvanceResult {
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct NativeMaterialWater {
+    /// Linear RGBA: the water over shallow ground.
     pub shallow_color: NativeColor,
+    /// Linear RGBA: the water over deep ground.
     pub deep_color: NativeColor,
     pub depth_scale: f32,
     pub shoreline_width: f32,
@@ -679,10 +689,13 @@ pub struct NativeMaterialWater {
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeMaterialRequest {
+    /// The base colour, linear RGBA. The surface is it times `texture_tint` times the texture (an sRGB colour texture is decoded when opened), so one colour passed as both is squared.
     pub color: NativeColor,
     pub texture: NativeRenderResourceReference,
     pub roughness: f32,
+    /// Linear RGBA multiplying `color` and the texture.
     pub texture_tint: NativeColor,
+    /// Linear RGB, times `emission_intensity`.
     pub emission_color: NativeVec3,
     pub emission_intensity: f32,
     pub double_sided: bool,
@@ -829,6 +842,7 @@ pub struct NativeMaterialUpdateRequest {
 pub struct NativePrimitiveAppearanceRequest {
     pub geometry: NativePrimitiveGeometry,
     pub wireframe: bool,
+    /// Linear RGBA.
     pub color: NativeColor,
 }
 
@@ -919,6 +933,7 @@ pub struct NativeMeshResourceCreateRequest {
     pub normals_len: usize,
     pub uvs: *const NativeVec2,
     pub uvs_len: usize,
+    /// Linear RGBA vertex colours, multiplying the slots' materials.
     pub colors: *const NativeColor,
     pub colors_len: usize,
     pub indices: *const u32,
@@ -946,6 +961,7 @@ pub struct NativeStaticMeshAppearanceRequest {
     pub indices_byte_offset: u32,
     pub bounds_min: NativeVec3,
     pub bounds_max: NativeVec3,
+    /// Linear RGBA: the plain material the mesh's slots draw with.
     pub color: NativeColor,
     pub groups: *const NativeMeshGroup,
     pub groups_len: usize,
@@ -957,6 +973,7 @@ pub struct NativeStaticMeshAppearanceRequest {
 #[derive(Debug, Clone, Copy)]
 pub struct NativeStaticMeshContentAppearanceRequest {
     pub path: NativeUtf8Slice,
+    /// Linear RGBA: the plain material the mesh's slots draw with.
     pub color: NativeColor,
 }
 
@@ -992,6 +1009,7 @@ pub struct NativeSpriteAppearanceRequest {
     pub size_mode: NativeSpriteSizeMode,
     pub render_order: i32,
     pub depth: NativeSpriteDepthPolicy,
+    /// Linear RGBA multiplying the sprite's texture.
     pub tint: NativeColor,
     pub material: NativeSpriteMaterialDescriptor,
 }
@@ -1053,6 +1071,7 @@ pub struct NativeAnimationContentRequest {
 #[derive(Debug, Clone, Copy)]
 pub struct NativeStaticMeshContentReferenceRequest {
     pub content: NativeContentReferenceHandle,
+    /// Linear RGBA: the plain material the mesh's slots draw with.
     pub color: NativeColor,
 }
 

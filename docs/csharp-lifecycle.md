@@ -259,7 +259,8 @@ The zero-initialized descriptor is incomplete: enum zero is not World or
 Billboard, lifetime and capacity are zero, and curves are empty. Set the enums
 explicitly. Each curve needs at least two keys with finite ages strictly
 increasing from 0 to 1; sizes must be finite and nonnegative, color channels
-in 0–1. Lifetimes must be positive and ordered, velocity bounds ordered and
+in 0–1. Colour keys are linear and blend in linear light
+([colours](#colours)). Lifetimes must be positive and ordered, velocity bounds ordered and
 finite, and acceleration finite. A burst needs `0 < BurstCount <= MaxParticles`
 and `Seed <= 9007199254740991` (53 bits).
 
@@ -381,6 +382,33 @@ with it.
 endpoint, rotate local +Y toward the second, and scale Y by their distance.
 Publish it as an ordinary appearance fact; Engine owns line realization and
 cleanup.
+
+### Colours
+
+Every colour the Engine draws in the world is **linear**, drawn as given:
+material `Color`, `TextureTint` and `EmissionColor`, primitive and static mesh
+colours and `MeshMaterialFactors`, mesh and heightfield vertex colours, sprite
+and sprite batch tints, light and hemisphere colours, ghost plate lighting, the
+background colour, fog, haze, clouds, volumetric fog and fog volumes,
+precipitation, water, scatter tints, particle colour keys, tween tints and
+offline capture backgrounds. A gradient between linear colours (a particle's
+colour curve, a tween) blends in linear light.
+
+Billboards, labels and meters are the exception: their colours are **sRGB**, as
+in CSS, because they draw into an sRGB canvas. Textures carry their own space:
+a colour texture opened as sRGB (the default) is decoded when drawn, and a data
+texture (a normal map) is opened with `TextureColorSpace.Linear`.
+
+A colour from a palette, a colour picker or a hex code is sRGB. Decode it with
+`Color.FromSrgb(r, g, b, a)` or `Color.FromSrgbHex(0xRRGGBB)`; `ToSrgb()`
+encodes a linear colour for a label, and `Color.SrgbToLinear` and
+`LinearToSrgb` convert one channel. They use the transfer function the renderer
+decodes textures with. Alpha is coverage in every space and is never encoded.
+Each colour field's generated documentation names its space.
+
+A material's surface is `Color × TextureTint × texture`, so one colour passed
+as both `Color` and `TextureTint` is squared: give the colour once and leave
+the tint white.
 
 ### Look and controller input
 

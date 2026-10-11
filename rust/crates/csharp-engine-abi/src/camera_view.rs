@@ -287,6 +287,7 @@ pub struct NativeClearSkyBackgroundRequest {
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct NativeSetBackgroundColorRequest {
+    /// Linear RGBA.
     pub color: NativeColor,
 }
 
@@ -312,6 +313,7 @@ pub enum NativeFogMode {
 #[derive(Debug, Clone, Copy)]
 pub struct NativeFogRequest {
     pub mode: NativeFogMode,
+    /// Linear RGB; alpha ignored.
     pub color: NativeColor,
     pub start: f32,
     pub end: f32,
@@ -377,6 +379,7 @@ pub struct NativeAutoExposureRequest {
 pub struct NativeAtmosphereRequest {
     pub fog_base_height: f32,
     pub fog_falloff_height: f32,
+    /// Linear RGB; alpha ignored.
     pub haze_color: NativeColor,
     pub haze_exponent: f32,
     pub sun_radius_degrees: f32,
@@ -437,6 +440,7 @@ pub struct NativeCloudsRequest {
     pub drift: NativeVec2,
     pub altitude: f32,
     pub scale: f32,
+    /// Linear RGB.
     pub color: NativeVec3,
     pub thickness: f32,
     pub kind: NativeCloudKind,
@@ -542,6 +546,7 @@ pub struct NativeCloudRegionRemoval {
 #[derive(Debug, Clone, Copy)]
 pub struct NativeVolumetricFogRequest {
     pub density: f32,
+    /// Linear RGB.
     pub albedo: NativeVec3,
     pub anisotropy: f32,
     pub base_height: f32,
@@ -575,7 +580,9 @@ pub struct NativeFogVolumeRequest {
     pub half_extents: NativeVec3,
     pub yaw_degrees: f32,
     pub density: f32,
+    /// Linear RGB.
     pub albedo: NativeVec3,
+    /// Linear RGB light per unit of density.
     pub emission: NativeVec3,
     pub edge: f32,
     pub noise_scale: f32,
@@ -637,6 +644,7 @@ pub struct NativePrecipitationRequest {
     pub velocity: NativeVec3,
     pub size: f32,
     pub streak_seconds: f32,
+    /// Linear RGBA.
     pub color: crate::NativeColor,
     pub additive: bool,
     pub radius: f32,

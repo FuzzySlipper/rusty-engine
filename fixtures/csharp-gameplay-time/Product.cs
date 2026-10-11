@@ -252,7 +252,7 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         Acceleration = new(0, -6, 0),
         Seed = (ulong)hits,
         SizeCurve = new PresentationParticleScalarKey[] { new(0, .3f), new(1, .05f) },
-        ColorCurve = new PresentationParticleColorKey[] { new(0, new Color(1, .85f, .3f, 1)), new(1, new Color(1, .2f, 0, 0)) },
+        ColorCurve = new PresentationParticleColorKey[] { new(0, Color.FromSrgb(1, .85f, .3f, 1)), new(1, Color.FromSrgb(1, .2f, 0, 0)) },
     });
 
     private PresentationParticleDescriptor Smoke() => new()
@@ -270,7 +270,7 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         VelocityMax = new(.2f, 1f, .2f),
         Seed = TurretId,
         SizeCurve = new PresentationParticleScalarKey[] { new(0, .12f), new(1, .4f) },
-        ColorCurve = new PresentationParticleColorKey[] { new(0, new Color(.6f, .6f, .6f, .9f)), new(1, new Color(.3f, .3f, .3f, 0)) },
+        ColorCurve = new PresentationParticleColorKey[] { new(0, Color.FromSrgb(.6f, .6f, .6f, .9f)), new(1, Color.FromSrgb(.3f, .3f, .3f, 0)) },
     };
 
     private void Publish()

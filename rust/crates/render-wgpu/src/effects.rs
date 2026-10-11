@@ -37,7 +37,7 @@ use crate::pipelines::VERTEX_FLOATS;
 use crate::resources::{self, ResourceSource};
 use crate::tables::{GpuMesh, GpuTexture, NodeKind, SpriteRow};
 use crate::target::{ColorTarget, DEPTH_FORMAT};
-use crate::{srgb_to_linear, ApplyIssue, Gpu, Renderer};
+use crate::{ApplyIssue, Gpu, Renderer};
 
 /// Particle billboards are drawn `size × 24` pixels across.
 const PARTICLE_PIXELS_PER_UNIT: f32 = 24.0;
@@ -1664,12 +1664,8 @@ impl Renderer {
             cubes.clear();
             for (group, texture, index) in &order {
                 let particle = self.particles.particles[*index as usize].view();
-                let color = [
-                    srgb_to_linear(particle.color[0]),
-                    srgb_to_linear(particle.color[1]),
-                    srgb_to_linear(particle.color[2]),
-                    particle.color[3],
-                ];
+                // Linear, as every other world colour is.
+                let color = particle.color;
                 let p = particle.position;
                 if *group == 0 {
                     cubes.extend_from_slice(&[p.x, p.y, p.z, particle.size.max(0.0)]);

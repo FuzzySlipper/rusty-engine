@@ -70,6 +70,16 @@ package_entries=$(unzip -Z1 "$package_path")
     echo "test-csharp-sdk-package: package split the runtime into additional public assemblies." >&2
     exit 1
 }
+# The XML docs ship, carrying the ABI's comments: a colour states its space.
+grep -qx 'lib/net10.0/Rusty.Engine.xml' <<<"$package_entries" || {
+    echo "test-csharp-sdk-package: package is missing the SDK's XML docs." >&2
+    exit 1
+}
+package_docs=$(unzip -p "$package_path" lib/net10.0/Rusty.Engine.xml)
+grep -q '<param name="Color">The base colour, linear RGBA' <<<"$package_docs" || {
+    echo "test-csharp-sdk-package: the XML docs do not carry the ABI's colour spaces." >&2
+    exit 1
+}
 grep -qx 'buildTransitive/analyzers/Rusty.Engine.ProductGenerator.dll' <<<"$package_entries" || {
     echo "test-csharp-sdk-package: package is missing the product generator analyzer." >&2
     exit 1
@@ -155,6 +165,7 @@ cp "$consumer_dir/Library.cs" "$source_override_dir/Library.cs"
 cp "$repo_root/scripts/fixtures/ImplicitRecipeChecks.cs" "$consumer_dir/ImplicitRecipeChecks.cs"
 cp "$repo_root/scripts/fixtures/ImplicitAuditChecks.cs" "$consumer_dir/ImplicitAuditChecks.cs"
 cp "$repo_root/scripts/fixtures/DynamicsResultChecks.cs" "$consumer_dir/DynamicsResultChecks.cs"
+cp "$repo_root/scripts/fixtures/ColorSpaceChecks.cs" "$consumer_dir/ColorSpaceChecks.cs"
 cp "$repo_root/scripts/fixtures/ProductContentBundleChecks.cs" "$consumer_dir/ProductContentBundleChecks.cs"
 cp "$repo_root/scripts/fixtures/ProductContentMixedBundleChecks.cs" "$consumer_dir/ProductContentMixedBundleChecks.cs"
 cp "$repo_root/scripts/fixtures/ContentContainerChecks.cs" "$consumer_dir/ContentContainerChecks.cs"
@@ -186,6 +197,7 @@ public sealed class Product : IEngineProduct
         ImplicitRecipeChecks.Run();
         ImplicitAuditChecks.Run(context.Engine);
         DynamicsResultChecks.Run(context.Engine);
+        ColorSpaceChecks.Run();
         ProductContentBundleChecks.Run(context);
         ContentContainerChecks.Run(context.Engine, context.Content.ReadText("module-library.txt").Trim());
         _mixedBundleChecks = new ProductContentMixedBundleChecks(context);

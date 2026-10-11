@@ -24,10 +24,12 @@ static void WriteIfChanged(string path, string content)
 }
 
 internal sealed record FixedArray(string ElementType, long Length);
-internal sealed record Field(string Name, string Type, FixedArray? Array = null, long Offset = 0);
-internal sealed record Struct(string Name, IReadOnlyList<Field> Fields, long Size, long Alignment);
-internal sealed record EnumMember(string Name, long Value);
-internal sealed record Enum(string Name, IReadOnlyList<EnumMember> Members, string UnderlyingType);
+// Doc is the declaration's Rust doc comment as cbindgen carried it, cleaned for
+// C# XML docs; it is not part of the ABI identity.
+internal sealed record Field(string Name, string Type, FixedArray? Array = null, long Offset = 0, string? Doc = null);
+internal sealed record Struct(string Name, IReadOnlyList<Field> Fields, long Size, long Alignment, string? Doc = null);
+internal sealed record EnumMember(string Name, long Value, string? Doc = null);
+internal sealed record Enum(string Name, IReadOnlyList<EnumMember> Members, string UnderlyingType, string? Doc = null);
 internal sealed record Callback(string Name, string ReturnType, IReadOnlyList<string> Parameters);
 internal sealed record Service(string Name, IReadOnlyList<(string Name, string Callback)> Operations);
 internal sealed record DestroyOperation(Service Owner, string Name);
@@ -79,10 +81,10 @@ internal sealed class BindingModel
             ["-x", "c", "-std=c11", "--target=x86_64-unknown-linux-gnu", $"-resource-dir={clangResourceDirectory}"], [], CXTranslationUnit_Flags.CXTranslationUnit_None);
         List<CXCursor> declarations = Children(unit.Cursor);
         Dictionary<string, Struct> structs = declarations.Where(cursor => cursor.Kind == CXCursorKind.CXCursor_StructDecl && cursor.IsDefinition && cursor.Spelling.ToString().StartsWith("Native", StringComparison.Ordinal))
-            .Select(cursor => new Struct(cursor.Spelling.ToString(), Children(cursor).Where(field => field.Kind == CXCursorKind.CXCursor_FieldDecl).Select(ParseField).ToArray(), cursor.Type.SizeOf, cursor.Type.AlignOf))
+            .Select(cursor => new Struct(cursor.Spelling.ToString(), Children(cursor).Where(field => field.Kind == CXCursorKind.CXCursor_FieldDecl).Select(ParseField).ToArray(), cursor.Type.SizeOf, cursor.Type.AlignOf, Doc(cursor)))
             .GroupBy(value => value.Name).ToDictionary(group => group.Key, group => group.First(), StringComparer.Ordinal);
         Dictionary<string, Enum> enums = declarations.Where(cursor => cursor.Kind == CXCursorKind.CXCursor_EnumDecl && cursor.IsDefinition && cursor.Spelling.ToString().StartsWith("Native", StringComparison.Ordinal))
-            .Select(cursor => new Enum(cursor.Spelling.ToString(), Children(cursor).Where(member => member.Kind == CXCursorKind.CXCursor_EnumConstantDecl).Select(member => new EnumMember(member.Spelling.ToString(), member.EnumConstantDeclValue)).ToArray(), cursor.EnumDecl_IntegerType.Spelling.ToString()))
+            .Select(cursor => new Enum(cursor.Spelling.ToString(), Children(cursor).Where(member => member.Kind == CXCursorKind.CXCursor_EnumConstantDecl).Select(member => new EnumMember(member.Spelling.ToString(), member.EnumConstantDeclValue, Doc(member))).ToArray(), cursor.EnumDecl_IntegerType.Spelling.ToString(), Doc(cursor)))
             .GroupBy(value => value.Name).ToDictionary(group => group.Key, group => group.First(), StringComparer.Ordinal);
         Dictionary<string, Callback> callbacks = declarations.Where(cursor => cursor.Kind == CXCursorKind.CXCursor_TypedefDecl && cursor.Spelling.ToString().StartsWith("Native", StringComparison.Ordinal))
             .Select(cursor => new Callback(cursor.Spelling.ToString(), cursor.Type.CanonicalType.Spelling.ToString().Split(" (*)", StringSplitOptions.None)[0], Children(cursor).Where(parameter => parameter.Kind == CXCursorKind.CXCursor_ParmDecl).Select(parameter => parameter.Type.Spelling.ToString()).ToArray()))
@@ -103,6 +105,52 @@ internal sealed class BindingModel
         return new BindingModel { Structs = structs, Enums = enums, Callbacks = callbacks, Services = services };
     }
 
+    /// <summary>
+    /// A declaration's doc comment as XML doc text: comment markers and line
+    /// breaks dropped, `code` as &lt;c&gt;, blank lines as paragraph breaks.
+    /// </summary>
+    private static string? Doc(CXCursor cursor)
+    {
+        string raw = cursor.RawCommentText.ToString();
+        if (string.IsNullOrWhiteSpace(raw)) return null;
+        List<string> paragraphs = [];
+        StringBuilder current = new();
+        foreach (string line in raw.Replace("\r", "").Split('\n'))
+        {
+            string text = line.Trim();
+            if (text.StartsWith("/**", StringComparison.Ordinal)) text = text[3..];
+            else if (text.StartsWith("///", StringComparison.Ordinal)) text = text[3..];
+            if (text.EndsWith("*/", StringComparison.Ordinal)) text = text[..^2];
+            text = text.Trim();
+            if (text.StartsWith('*')) text = text[1..].Trim();
+            if (text.Length == 0)
+            {
+                if (current.Length > 0) paragraphs.Add(current.ToString());
+                current.Clear();
+                continue;
+            }
+            if (current.Length > 0) current.Append(' ');
+            current.Append(text);
+        }
+        if (current.Length > 0) paragraphs.Add(current.ToString());
+        if (paragraphs.Count == 0) return null;
+        static string Xml(string text)
+        {
+            string escaped = text.Replace("&", "&amp;").Replace("<", "&lt;").Replace(">", "&gt;");
+            string[] parts = escaped.Split('`');
+            StringBuilder output = new();
+            for (int index = 0; index < parts.Length; index++)
+            {
+                // Odd parts were between backticks; an unpaired one stays literal.
+                if (index % 2 == 1 && index < parts.Length - 1) output.Append("<c>").Append(parts[index]).Append("</c>");
+                else if (index % 2 == 1) output.Append('`').Append(parts[index]);
+                else output.Append(parts[index]);
+            }
+            return output.ToString();
+        }
+        return string.Join("<para/>", paragraphs.Select(Xml));
+    }
+
     private static Field ParseField(CXCursor cursor)
     {
         CXType type = cursor.Type;
@@ -121,7 +169,7 @@ internal sealed class BindingModel
             }
             array = new FixedArray(element.Spelling.ToString(), length);
         }
-        return new Field(cursor.Spelling.ToString(), type.Spelling.ToString(), array, cursor.OffsetOfField);
+        return new Field(cursor.Spelling.ToString(), type.Spelling.ToString(), array, cursor.OffsetOfField, Doc(cursor));
     }
 
     private static void Validate(string family, string method, Callback callback, IReadOnlyDictionary<string, Struct> structs, IReadOnlyDictionary<string, Enum> enums)
@@ -427,18 +475,20 @@ internal static class Emit
         output.AppendLine("}").AppendLine();
         foreach (Service service in model.Services)
         {
+            Struct table = model.Structs[$"Native{service.Name}Api"];
+            string? summary = table.Doc;
             if (service.Name is "Spatial" or "Voxel")
             {
-                output.AppendLine("/// <summary>");
-                output.AppendLine("/// Mutable operations in this service are operation-atomic and commit immediately.");
-                output.AppendLine("/// A later failure in the same product callback does not roll them back; a product callback is not a transaction over Spatial/Voxel state.");
-                output.AppendLine("/// </summary>");
+                const string atomic = "Mutable operations in this service are operation-atomic and commit immediately. A later failure in the same product callback does not roll them back; a product callback is not a transaction over Spatial/Voxel state.";
+                summary = summary is null ? atomic : $"{summary}<para/>{atomic}";
             }
+            XmlDoc(output, "", CSharpNames(summary, []), []);
             output.AppendLine($"public interface I{SafeServiceName(service.Name)}Service").AppendLine("{");
             foreach ((string name, string callbackName) in service.Operations)
             {
                 Callback callback = model.Callbacks[callbackName];
                 if (IsDestroy(callback)) continue;
+                XmlDoc(output, "    ", CSharpNames(table.Fields.FirstOrDefault(field => field.Name == name)?.Doc, []), []);
                 output.AppendLine($"    {SafeReturn(model, callback)} {Pascal(name)}({SafeParameters(model, callback)});");
             }
             output.AppendLine("}").AppendLine();
@@ -492,14 +542,23 @@ internal static class Emit
         output.AppendLine("namespace Rusty.Engine;").AppendLine();
         foreach (Enum value in model.Enums.Values.OrderBy(value => value.Name, StringComparer.Ordinal))
         {
+            XmlDoc(output, "", CSharpNames(value.Doc, []), []);
             output.AppendLine($"public enum {SafeType(value.Name)} : uint").AppendLine("{");
-            foreach (EnumMember member in value.Members) output.AppendLine($"    {SafeEnumMember(value.Name, member.Name)} = {member.Value},");
+            foreach (EnumMember member in value.Members)
+            {
+                XmlDoc(output, "    ", CSharpNames(member.Doc, []), []);
+                output.AppendLine($"    {SafeEnumMember(value.Name, member.Name)} = {member.Value},");
+            }
             output.AppendLine("}").AppendLine();
         }
         foreach (Struct value in model.Structs.Values.Where(value => IsSafeValue(value, model)).OrderBy(value => value.Name, StringComparer.Ordinal))
         {
             string safeName = SafeType(value.Name);
             IReadOnlyList<(Field Field, string Type)> fields = SafeFields(value, model);
+            string? Named(string? doc) => CSharpNames(doc, value.Fields.Select(field => field.Name));
+            XmlDoc(output, "", Named(value.Doc), value.Name.EndsWith("Handle", StringComparison.Ordinal)
+                ? []
+                : fields.Select(field => (Pascal(field.Field.Name), Named(field.Field.Doc))));
             if (value.Name.EndsWith("Handle", StringComparison.Ordinal))
             {
                 output.AppendLine($"public readonly record struct {safeName}(ulong Value);").AppendLine();
@@ -513,6 +572,8 @@ internal static class Emit
         {
             IEnumerable<string> collections = ResultPointers(copied).Select(pointer => $"ReadOnlyMemory<{SafeType(model, BindingModel.Bare(pointer.Type))}> {Pascal(pointer.Name)}");
             IEnumerable<string> metadata = ResultMetadataFields(copied).Select(field => $"{SafeResultMetadataType(model, field)} {Pascal(field.Name)}");
+            string? Copied(string? doc) => CSharpNames(doc, copied.Fields.Select(field => field.Name));
+            XmlDoc(output, "", Copied(copied.Doc), ResultPointers(copied).Concat(ResultMetadataFields(copied)).Select(field => (Pascal(field.Name), Copied(field.Doc))));
             output.Append($"public readonly partial record struct {ResultReceiptType(copied)}(")
                 .Append(string.Join(", ", collections.Concat(metadata)))
                 .AppendLine(");")
@@ -1345,6 +1406,31 @@ internal static class Emit
         string element = new(RawType(array.ElementType).Select(character => char.IsLetterOrDigit(character) ? character : '_').ToArray());
         return $"NativeInlineArray_{element}_{array.Length}";
     }
+    /// <summary>
+    /// <paramref name="doc"/> with its code spans in C# names: a snake_case
+    /// identifier, or one of <paramref name="fields"/>, becomes PascalCase.
+    /// </summary>
+    private static string? CSharpNames(string? doc, IEnumerable<string> fields)
+    {
+        if (doc is null) return null;
+        HashSet<string> names = [.. fields];
+        return System.Text.RegularExpressions.Regex.Replace(doc, "<c>([a-z][a-z0-9_]*)</c>", match =>
+        {
+            string name = match.Groups[1].Value;
+            return name.Contains('_') || names.Contains(name) ? $"<c>{Pascal(name)}</c>" : match.Value;
+        });
+    }
+
+    /// <summary>Writes a summary and the documented parameters, if any.</summary>
+    private static void XmlDoc(StringBuilder output, string indent, string? summary, IEnumerable<(string Name, string? Doc)> parameters)
+    {
+        if (summary is not null) output.AppendLine($"{indent}/// <summary>{summary}</summary>");
+        foreach ((string name, string? doc) in parameters)
+        {
+            if (doc is not null) output.AppendLine($"{indent}/// <param name=\"{name}\">{doc}</param>");
+        }
+    }
+
     private static string Pascal(string value) => string.Concat(value.Split('_', StringSplitOptions.RemoveEmptyEntries).Select(part => char.ToUpperInvariant(part[0]) + part[1..]));
     private static readonly HashSet<string> CSharpKeywords = new(StringComparer.Ordinal)
     {
