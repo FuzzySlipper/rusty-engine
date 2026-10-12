@@ -481,3 +481,88 @@ fn the_sky_sun_lights_no_ground() {
     harness.apply(vec![sky_sun(-3.0)]);
     assert_eq!(look_down(&mut harness, 2.0), lit);
 }
+
+#[test]
+fn a_cloud_region_under_a_clear_twilight_layer_catches_the_sunset_as_under_a_broken_one() {
+    // A storm region ahead, under a twilight layer of `coverage` (None: no
+    // layer, so the default one), with the sky's sun `elevation` degrees up.
+    let render = |quality, coverage: Option<f32>, elevation: f32| {
+        let mut harness = panorama(quality, DUSK_SKY);
+        harness.renderer.set_animation_time(2.0);
+        let mut ops = vec![
+            sky_sun(elevation),
+            RenderDiff::SetCloudRegion {
+                id: 1,
+                region: CloudRegionDescriptor {
+                    center: [0.0, -6000.0],
+                    radius: 5000.0,
+                    coverage: 1.0,
+                    darkness: 0.0,
+                    drift: [0.0, 0.0],
+                    kind: CloudKind::Cumulus,
+                    thickness: 0.0,
+                },
+            },
+        ];
+        if let Some(coverage) = coverage {
+            ops.push(RenderDiff::SetClouds {
+                clouds: Some(CloudsDescriptor {
+                    coverage,
+                    ..match twilight_clouds(8.0) {
+                        RenderDiff::SetClouds {
+                            clouds: Some(clouds),
+                        } => clouds,
+                        _ => unreachable!(),
+                    }
+                }),
+            });
+        }
+        harness.apply(ops);
+        let view = camera([0.0, 1.0, 0.0], 0.0, 25.0);
+        let mut image = Vec::new();
+        for _ in 0..4 {
+            image = harness.render(&view).1;
+        }
+        let refused = harness
+            .renderer
+            .settings_readout()
+            .volumetric_clouds
+            .is_some();
+        (!refused).then_some(image)
+    };
+    // The mean colour of the view's middle, inside the region.
+    let middle = |image: &[u8]| {
+        let mut sum = [0.0f64; 3];
+        let mut count = 0.0;
+        for y in 50..130u32 {
+            for x in 100..220u32 {
+                let at = ((y * WIDTH + x) * 4) as usize;
+                for channel in 0..3 {
+                    sum[channel] += f64::from(image[at + channel]);
+                }
+                count += 1.0;
+            }
+        }
+        sum.map(|value| value / count)
+    };
+    for quality in [VolumetricCloudsQuality::Off, VolumetricCloudsQuality::High] {
+        if render(quality, Some(0.0), 0.0).is_none() {
+            continue;
+        }
+        for elevation in [0.0, -3.0] {
+            let clear = middle(&render(quality, Some(0.0), elevation).unwrap());
+            let broken = middle(&render(quality, Some(0.3), elevation).unwrap());
+            let unlit = middle(&render(quality, None, elevation).unwrap());
+            assert!(
+                (0..3).all(|channel| (clear[channel] - broken[channel]).abs() < 6.0),
+                "{quality:?} at {elevation}°: under a clear layer {clear:.1?}, under a broken one {broken:.1?}"
+            );
+            if elevation < 0.0 {
+                assert!(
+                    clear[0] > unlit[0] + 20.0,
+                    "{quality:?} at {elevation}°: the twilight lights it: {clear:.1?}, without {unlit:.1?}"
+                );
+            }
+        }
+    }
+}

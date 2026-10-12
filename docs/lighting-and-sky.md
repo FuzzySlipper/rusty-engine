@@ -912,7 +912,8 @@ the clouds only while the sun is up.
 
 - `Coverage` (0 to 1) is how much of the sky is cloud. 0 clears the layer,
   draws no `clouds` pass and leaves the sky exactly as without it (the
-  default).
+  default). [Cloud regions](#cloud-regions) under it still take the layer's
+  altitude, size, drift, kind and twilight.
 - `Drift` is the layer's velocity over the ground (world x, z) in metres per
   second, at most 1000. Pass the [wind](#wind)'s direction to have clouds
   follow it. Clouds move with presentation time, so they hold while the
@@ -990,8 +991,10 @@ engine.CameraView.RemoveCloudRegion(new(1));
   undersides and lets even less sun through them.
 - The flat layer, the volumetric clouds and the shade on the ground all read
   it, so a storm overhead shades the ground under it. A region needs no layer
-  coverage: with none set, it draws under a default layer 1500 m up with
-  600 m clouds. At most 32 regions; they are retained camera-view state.
+  coverage: it draws under the layer at coverage 0, lit as the layer would
+  be (its twilight included), and with no layer set, under a default one
+  1500 m up with 600 m clouds. At most 32 regions; they are retained
+  camera-view state.
 - Its volumetric clouds take its own `Kind` and `Thickness` (metres from the
   layer's altitude; 0 for the layer's), blending into the layer's over its
   outer third. A towering cumulonimbus front and a thin stratus overcast can

@@ -999,7 +999,9 @@ impl RuntimeCameraViewBridge {
                 "clouds need coverage within 0 to 1, a finite drift of at most 1000 m/s, an altitude and scale above 0 and at most 100 km, a thickness from 0 to 100 km, colour channels within 0 to 16, and a twilight within 0 to 20 degrees",
             ));
         }
-        self.staged_mut()?.clouds = Some((request.coverage > 0.0).then_some(clouds));
+        // Coverage 0 draws no layer, but its altitude, scale, drift, kind and
+        // twilight still shape the cloud regions under it.
+        self.staged_mut()?.clouds = Some(Some(clouds));
         Ok(())
     }
 

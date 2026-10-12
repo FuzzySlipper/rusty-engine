@@ -2676,7 +2676,7 @@ mod tests {
     }
 
     #[test]
-    fn clouds_publish_as_retained_environment_and_zero_coverage_clears_them() {
+    fn clouds_publish_as_retained_environment_and_zero_coverage_keeps_the_layer_for_regions() {
         use crate::operation_diagnostics::{empty_receipt, receipt_codes};
         let mut services = EngineServiceSet::new(
             parse_runtime_appearance_catalog(None).expect("default catalog"),
@@ -2758,10 +2758,23 @@ mod tests {
             set(request(0.0, 8.0, 1500.0, 600.0, 1.0), std::ptr::null_mut()),
             ABI_OK
         );
+        // Coverage 0 draws no layer; its settings and twilight still reach
+        // the cloud regions under it.
         let mut call = services.finish_call().expect("clear");
         assert_eq!(
             call.take_output().frames[0].ops,
-            [render_model::RenderDiff::SetClouds { clouds: None }]
+            [render_model::RenderDiff::SetClouds {
+                clouds: Some(render_model::CloudsDescriptor {
+                    coverage: 0.0,
+                    drift: [8.0, 2.0],
+                    altitude: 1500.0,
+                    scale: 600.0,
+                    color: [1.0; 3],
+                    thickness: 0.0,
+                    kind: render_model::CloudKind::Cumulus,
+                    twilight_degrees: 0.0,
+                }),
+            }]
         );
     }
 

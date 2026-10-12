@@ -446,7 +446,9 @@ pub enum NativeCloudKind {
 
 /// The sky's cloud layer, drawn over the sky panorama and lit by the sun.
 /// `coverage` (0 to 1) is how much of the sky it covers, and 0 (the
-/// default) draws no clouds; `drift` is its velocity over the ground (world
+/// default) draws no layer, though the layer still shapes and lights the
+/// cloud regions under it (`SetCloudRegion`); `drift` is its velocity over
+/// the ground (world
 /// x, z) in metres per second (at most 1000); `altitude` (above 0, at most
 /// 100 km) is the layer's height and `scale` (likewise) the size of one
 /// cloud, in metres; `color` (linear, 0 to 16 a channel) tints the light
