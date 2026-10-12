@@ -275,8 +275,9 @@ as files or directories relative to the content root:
 </ItemGroup>
 ```
 
-An edit to a declared file restages that file and re-admits it in the running
-product: `ProductContent` reads the new bytes from then on (earlier reads keep
+Staging writes the list into `product.json` as `content.live`, which
+`rusty dev` reads. An edit to a declared file restages that file and
+re-admits it in the running product: `ProductContent` reads the new bytes from then on (earlier reads keep
 theirs), and the next `Update` lists it in `ProductUpdate.ContentChanges` with
 its path, new SHA-256 and length. The owner of that file reads it again and
 applies it (Read, Decide, Apply, Publish). Held time, the camera, the runtime
@@ -631,7 +632,9 @@ When declared inputs change, `rusty dev` routes the edit:
   read fails, the old file stays in place and the failure is printed.
 - **Already staged.** A content file whose bytes equal its staged copy needs
   no restage and no reload: the [content source](#content-source) service
-  writes both, so its saves stay quiet.
+  writes both, so its saves stay quiet. A file that an asset restage copied
+  while it was being edited is not quiet: the next poll still reloads it, or
+  replaces the runtime for undeclared content.
 - **Anything else** (C# in the product or a referenced project, a project
   file, undeclared loose content) restages the whole
   Product and replaces the runtime. Loose content is the create-time snapshot

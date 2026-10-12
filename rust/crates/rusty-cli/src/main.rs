@@ -10,7 +10,7 @@ mod pair;
 mod session;
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     env, fs,
     io::Write,
     path::{Path, PathBuf},
@@ -38,7 +38,6 @@ const UI_SOURCE_ROOT_PROPERTY: &str = "RustyEngineProductUiSourceRoot";
 const UI_ROOT_PROPERTY: &str = "RustyEngineProductUiRoot";
 const CONTENT_ROOT_PROPERTY: &str = "RustyEngineProductContentRoot";
 const CONTENT_BUNDLE_ITEM: &str = "RustyEngineContentBundle";
-const LIVE_CONTENT_ITEM: &str = "RustyEngineLiveContent";
 const REQUIRED_DOTNET_MAJOR: u32 = 10;
 #[cfg(not(windows))]
 const BOOTSTRAP: &str =
@@ -191,6 +190,10 @@ fn dev(mut options: DevOptions) -> Result<(), String> {
     let mut watches = initial.watches;
     let mut asset_roots = initial.asset_roots;
     let mut content = initial.content;
+    // Files an asset stage copied while it ran, after their edits were routed:
+    // the staged bytes already match, so only this set says they still need
+    // their reload or replacement.
+    let mut unrouted = BTreeSet::new();
     let mut snapshot = FileSnapshot::capture(&watches)?;
     let mut last_capture = Duration::ZERO;
     let mut child = Some(SupervisedHost::start(
@@ -366,29 +369,23 @@ fn dev(mut options: DevOptions) -> Result<(), String> {
             continue;
         }
 
-        // A content file whose bytes the staged Product already holds (the
-        // content source service writes both) needs no restage and no reload.
-        let (unchanged, changed): (Vec<_>, Vec<_>) = changed
-            .into_iter()
-            .partition(|path| content.already_staged(path, &staged));
+        let Routing {
+            quiet,
+            changed,
+            live,
+            assets,
+            assets_only,
+        } = route(changed, &unrouted, &content, &staged, &asset_roots);
+        for path in quiet.iter().chain(&changed) {
+            unrouted.remove(path);
+        }
         if changed.is_empty() {
             diagnostic(
                 "change-already-staged",
-                serde_json::json!({ "changed": unchanged }),
+                serde_json::json!({ "changed": quiet }),
             );
             continue;
         }
-        let under_asset_root =
-            |path: &PathBuf| asset_roots.iter().any(|root| path.starts_with(root));
-        let live = changed
-            .iter()
-            .filter(|path| !under_asset_root(path))
-            .filter_map(|path| content.live(path))
-            .collect::<Vec<_>>();
-        let assets = changed.iter().any(under_asset_root);
-        let assets_only = changed
-            .iter()
-            .all(|path| under_asset_root(path) || content.live(path).is_some());
         diagnostic(
             "change-detected",
             serde_json::json!({
@@ -403,6 +400,14 @@ fn dev(mut options: DevOptions) -> Result<(), String> {
         if assets_only {
             if let Some(active_child) = child.as_mut() {
                 let reloaded = stage_assets(&options)
+                    .and_then(|()| {
+                        // The stage copies every changed UI and content file,
+                        // so one edited while it ran is staged but not yet
+                        // routed: the next poll routes it.
+                        let after = FileSnapshot::capture(&watches)?;
+                        unrouted.extend(snapshot.changed_paths(&after));
+                        Ok(())
+                    })
                     .and_then(|()| match assets {
                         true => active_child.reload_assets(),
                         false => Ok(()),
@@ -2319,8 +2324,73 @@ struct StagedProduct {
     content: ContentRoots,
 }
 
+/// How one batch of watched changes is handled.
+#[derive(Debug, Default, PartialEq)]
+struct Routing {
+    /// Content files whose bytes the staged Product already holds: no
+    /// restage and no reload (the content source service writes both).
+    quiet: Vec<PathBuf>,
+    /// The rest, which need a restage.
+    changed: Vec<PathBuf>,
+    /// Content-relative paths of the live loose content among them.
+    live: Vec<String>,
+    /// Whether UI or bundle files are among them.
+    assets: bool,
+    /// Whether all of them reload in place: UI, bundles and live content.
+    assets_only: bool,
+}
+
+/// Routes watched changes. A file in `unrouted` was staged by an earlier
+/// asset stage without its reload, so it is never quiet.
+fn route(
+    changed: Vec<PathBuf>,
+    unrouted: &BTreeSet<PathBuf>,
+    content: &ContentRoots,
+    staged: &Path,
+    asset_roots: &[PathBuf],
+) -> Routing {
+    let (quiet, changed): (Vec<_>, Vec<_>) = changed
+        .into_iter()
+        .partition(|path| !unrouted.contains(path) && content.already_staged(path, staged));
+    let under_asset_root = |path: &PathBuf| asset_roots.iter().any(|root| path.starts_with(root));
+    let live = changed
+        .iter()
+        .filter(|path| !under_asset_root(path))
+        .filter_map(|path| content.live(path))
+        .collect();
+    let assets = changed.iter().any(under_asset_root);
+    let assets_only = changed
+        .iter()
+        .all(|path| under_asset_root(path) || content.live(path).is_some());
+    Routing {
+        quiet,
+        changed,
+        live,
+        assets,
+        assets_only,
+    }
+}
+
+/// `path` with `.` and `..` resolved without touching the file system, as
+/// MSBuild's `GetFullPath` spells the watched paths: a content root declared
+/// as `$(MSBuildProjectDirectory)/../../content` must match them.
+fn lexical(path: &Path) -> PathBuf {
+    let mut resolved = PathBuf::new();
+    for part in path.components() {
+        match part {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                resolved.pop();
+            }
+            part => resolved.push(part),
+        }
+    }
+    resolved
+}
+
 /// The source content root and the loose content the product declared live
-/// (`RustyEngineLiveContent`): files and directories it reloads in place.
+/// (`RustyEngineLiveContent`, staged as the manifest's `content.live`): files
+/// and directories it reloads in place.
 #[derive(Debug, Default)]
 struct ContentRoots {
     root: Option<PathBuf>,
@@ -2328,28 +2398,28 @@ struct ContentRoots {
 }
 
 impl ContentRoots {
-    fn read(project: &Path, result: &Value) -> Result<Self, String> {
+    fn read(project: &Path, result: &Value, staged: &Path) -> Result<Self, String> {
         let Some(root) = result["Properties"][CONTENT_ROOT_PROPERTY]
             .as_str()
             .map(str::trim)
             .filter(|value| !value.is_empty())
-            .map(|value| project.parent().unwrap_or(project).join(value))
+            .map(|value| lexical(&project.parent().unwrap_or(project).join(value)))
         else {
             return Ok(Self::default());
         };
-        let live = result["Items"][LIVE_CONTENT_ITEM]
+        let manifest = fs::read(staged.join("product.json")).map_err(|error| {
+            format!("RUSTY_DEV_STAGE: the staged product.json could not be read: {error}")
+        })?;
+        let manifest: Value = serde_json::from_slice(&manifest).map_err(|error| {
+            format!("RUSTY_DEV_STAGE: the staged product.json is not JSON: {error}")
+        })?;
+        let live = manifest["content"]["live"]
             .as_array()
             .into_iter()
             .flatten()
-            .map(|item| {
-                item["Identity"]
-                    .as_str()
-                    .map(|path| root.join(path))
-                    .ok_or_else(|| {
-                        "RUSTY_DEV_MSBUILD: live content item has no identity".to_owned()
-                    })
-            })
-            .collect::<Result<_, _>>()?;
+            .filter_map(Value::as_str)
+            .map(|path| lexical(&root.join(path)))
+            .collect();
         Ok(Self {
             root: Some(root),
             live,
@@ -2432,7 +2502,6 @@ fn stage_product(options: &DevOptions) -> Result<StagedProduct, String> {
         arguments.push(format!("-getProperty:{property}"));
     }
     arguments.push(format!("-getItem:{CONTENT_BUNDLE_ITEM}"));
-    arguments.push(format!("-getItem:{LIVE_CONTENT_ITEM}"));
     arguments.push(format!("-getResultOutputFile:{result_argument}"));
     let _ = fs::remove_file(&result_file);
     run_dotnet(&arguments)?;
@@ -2449,11 +2518,12 @@ fn stage_product(options: &DevOptions) -> Result<StagedProduct, String> {
             .filter(|value| !value.trim().is_empty())
             .ok_or_else(|| format!("RUSTY_DEV_MSBUILD: property {name} produced no value"))
     };
+    let directory = absolute(Path::new(property(STAGED_PRODUCT_PROPERTY)?.trim()))?;
     Ok(StagedProduct {
-        directory: absolute(Path::new(property(STAGED_PRODUCT_PROPERTY)?.trim()))?,
         watches: parse_watch_paths(property(WATCH_PATHS_PROPERTY)?)?,
         asset_roots: asset_roots(&project, &result)?,
-        content: ContentRoots::read(&project, &result)?,
+        content: ContentRoots::read(&project, &result, &directory)?,
+        directory,
     })
 }
 
@@ -2464,7 +2534,7 @@ fn asset_roots(project: &Path, result: &Value) -> Result<Vec<PathBuf>, String> {
             .as_str()
             .map(str::trim)
             .filter(|value| !value.is_empty())
-            .map(|value| project_directory.join(value))
+            .map(|value| lexical(&project_directory.join(value)))
     };
     let mut roots: Vec<PathBuf> = [UI_SOURCE_ROOT_PROPERTY, UI_ROOT_PROPERTY]
         .into_iter()
@@ -2478,7 +2548,7 @@ fn asset_roots(project: &Path, result: &Value) -> Result<Vec<PathBuf>, String> {
                 .filter(|root| !root.is_empty())
                 .or_else(|| bundle["Identity"].as_str())
                 .ok_or("RUSTY_DEV_MSBUILD: content bundle item has no identity")?;
-            roots.push(content_root.join(root));
+            roots.push(lexical(&content_root.join(root)));
         }
     }
     Ok(roots)
@@ -3718,13 +3788,15 @@ mod tests {
         );
     }
 
-    #[test]
-    fn live_content_and_already_staged_files_route_by_content_path() {
-        let base = env::temp_dir().join(format!("rusty-live-content-{}", std::process::id()));
+    /// The documented layout: the project in src/Game, the content root
+    /// declared as `$(MSBuildProjectDirectory)/../../content`, the live
+    /// declaration staged in product.json.
+    fn live_content_layout(name: &str) -> (PathBuf, PathBuf, PathBuf, ContentRoots) {
+        let base = env::temp_dir().join(format!("rusty-{name}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&base);
-        let project = base.join("product/Product.csproj");
-        let content = base.join("product/content");
-        let staged = base.join("staged");
+        let project = base.join("src/Game/Game.csproj");
+        let content = base.join("content");
+        let staged = base.join("src/Game/obj/Rusty.Engine/Product");
         fs::create_dir_all(content.join("tuning")).unwrap();
         fs::create_dir_all(staged.join("content/tuning")).unwrap();
         for (path, source, copy) in [
@@ -3735,18 +3807,29 @@ mod tests {
             fs::write(content.join(path), source).unwrap();
             fs::write(staged.join("content").join(path), copy).unwrap();
         }
-        let roots = ContentRoots::read(
-            &project,
-            &serde_json::json!({
-                "Properties": { "RustyEngineProductContentRoot": "content" },
-                "Items": { "RustyEngineLiveContent": [{ "Identity": "tuning" }] },
-            }),
+        fs::write(
+            staged.join("product.json"),
+            r#"{"content":{"root":"content","ui":[],"live":["tuning"]}}"#,
         )
         .unwrap();
+        let declared = format!("{}/../../content", base.join("src/Game").display());
+        let roots = ContentRoots::read(
+            &project,
+            &serde_json::json!({ "Properties": { "RustyEngineProductContentRoot": declared } }),
+            &staged,
+        )
+        .unwrap();
+        (base, content, staged, roots)
+    }
+
+    #[test]
+    fn live_content_and_already_staged_files_route_by_content_path() {
+        let (base, content, staged, roots) = live_content_layout("live-content");
+        assert_eq!(roots.root.as_deref(), Some(content.as_path()));
         assert!(roots.already_staged(&content.join("tuning/a.json"), &staged));
         assert!(!roots.already_staged(&content.join("tuning/b.json"), &staged));
         assert!(!roots.already_staged(&content.join("tuning/new.json"), &staged));
-        assert!(!roots.already_staged(&base.join("product/Product.cs"), &staged));
+        assert!(!roots.already_staged(&base.join("src/Game/Product.cs"), &staged));
         assert_eq!(
             roots.live(&content.join("tuning/b.json")).as_deref(),
             Some("tuning/b.json")
@@ -3754,6 +3837,49 @@ mod tests {
         assert_eq!(roots.live(&content.join("rules.json")), None);
         assert_eq!(roots.live(&content.join("tuning/deleted.json")), None);
         fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[test]
+    fn files_an_asset_stage_copied_before_their_routing_are_never_quiet() {
+        let (base, content, staged, roots) = live_content_layout("unrouted-content");
+        let (a, rules) = (content.join("tuning/a.json"), content.join("rules.json"));
+        // A content source save: staged already, nothing to do.
+        let quiet = route(
+            vec![a.clone(), rules.clone()],
+            &BTreeSet::new(),
+            &roots,
+            &staged,
+            &[],
+        );
+        assert_eq!(quiet.quiet, [a.clone(), rules.clone()]);
+        assert!(quiet.changed.is_empty());
+        // The same bytes, copied by a stage that ran while they were edited:
+        // the live file reloads and the undeclared one replaces the runtime.
+        let unrouted = BTreeSet::from([a.clone(), rules.clone()]);
+        let routed = route(
+            vec![a.clone(), rules.clone()],
+            &unrouted,
+            &roots,
+            &staged,
+            &[],
+        );
+        assert!(routed.quiet.is_empty());
+        assert_eq!(routed.live, ["tuning/a.json"]);
+        assert!(
+            !routed.assets_only,
+            "undeclared loose content replaces the runtime"
+        );
+        let live_only = route(vec![a.clone()], &unrouted, &roots, &staged, &[]);
+        assert!(live_only.assets_only && !live_only.assets);
+        fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[test]
+    fn lexical_paths_resolve_dots_like_get_full_path() {
+        assert_eq!(
+            lexical(Path::new("/repo/src/Game/../../content/./tuning")),
+            Path::new("/repo/content/tuning")
+        );
     }
 
     #[test]
