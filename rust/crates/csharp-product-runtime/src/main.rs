@@ -485,10 +485,7 @@ type ReloadLine = Box<dyn Fn(&str) + Send>;
 /// inventory, keeping the old bundle and inventory on failure.
 /// `reload-content` re-admits the named loose files, keeping the old ones on
 /// failure.
-fn asset_reloader(
-    reload: ProductHostAssetReload,
-    product: ProductBundle,
-) -> ReloadLine {
+fn asset_reloader(reload: ProductHostAssetReload, product: ProductBundle) -> ReloadLine {
     Box::new(move |line| {
         if let Some(paths) = line
             .strip_prefix(RELOAD_CONTENT_COMMAND)

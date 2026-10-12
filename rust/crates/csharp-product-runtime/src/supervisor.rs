@@ -221,8 +221,9 @@ pub(crate) fn run(args: Arguments) -> Result<std::process::ExitCode, String> {
                 }
             }
             Ok(Ok(SupervisorCommand::ReloadContent { paths })) => {
-                if let Some(Err(error)) =
-                    runtime.as_mut().map(|runtime| runtime.reload_content(paths))
+                if let Some(Err(error)) = runtime
+                    .as_mut()
+                    .map(|runtime| runtime.reload_content(paths))
                 {
                     publish_supervisor_diagnostic(
                         &diagnostics,

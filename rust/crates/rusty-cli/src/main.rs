@@ -378,7 +378,8 @@ fn dev(mut options: DevOptions) -> Result<(), String> {
             );
             continue;
         }
-        let under_asset_root = |path: &PathBuf| asset_roots.iter().any(|root| path.starts_with(root));
+        let under_asset_root =
+            |path: &PathBuf| asset_roots.iter().any(|root| path.starts_with(root));
         let live = changed
             .iter()
             .filter(|path| !under_asset_root(path))
@@ -2344,7 +2345,9 @@ impl ContentRoots {
                 item["Identity"]
                     .as_str()
                     .map(|path| root.join(path))
-                    .ok_or_else(|| "RUSTY_DEV_MSBUILD: live content item has no identity".to_owned())
+                    .ok_or_else(|| {
+                        "RUSTY_DEV_MSBUILD: live content item has no identity".to_owned()
+                    })
             })
             .collect::<Result<_, _>>()?;
         Ok(Self {
@@ -2368,7 +2371,10 @@ impl ContentRoots {
         let Some(relative) = self.relative(path) else {
             return false;
         };
-        match (fs::read(path), fs::read(staged.join("content").join(relative))) {
+        match (
+            fs::read(path),
+            fs::read(staged.join("content").join(relative)),
+        ) {
             (Ok(source), Ok(staged)) => source == staged,
             _ => false,
         }

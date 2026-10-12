@@ -825,7 +825,7 @@ mod tests {
                 .map(|(path, _, length)| (path, length))
                 .collect::<Vec<_>>(),
             [("a.json", 7), ("gone.bin", 4), ("same.txt", 6)]
-            .map(|(path, length)| (path.to_owned(), length))
+                .map(|(path, length)| (path.to_owned(), length))
         );
         assert!(
             open.files.read.lock().unwrap().is_empty(),

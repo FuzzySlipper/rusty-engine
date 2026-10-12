@@ -8268,8 +8268,12 @@ mod tests {
         let changes = (0..args.content_change_count)
             .map(|index| {
                 let change = unsafe { &*args.content_changes.add(index) };
-                let path = unsafe { std::slice::from_raw_parts(change.path.bytes, change.path.len) };
-                (String::from_utf8(path.to_vec()).unwrap(), change.byte_length)
+                let path =
+                    unsafe { std::slice::from_raw_parts(change.path.bytes, change.path.len) };
+                (
+                    String::from_utf8(path.to_vec()).unwrap(),
+                    change.byte_length,
+                )
             })
             .collect();
         CONTENT_CHANGE_UPDATES
@@ -8352,7 +8356,10 @@ mod tests {
             [(0, steps, vec![("tuning/marker.json".to_owned(), 12)])],
             "one update, admitting no step, carries the change once"
         );
-        assert_eq!(runtime.lifecycle.readout().admitted_simulation_steps(), steps);
+        assert_eq!(
+            runtime.lifecycle.readout().admitted_simulation_steps(),
+            steps
+        );
         let missing = runtime
             .reload_content_files(&["tuning/none.json".to_owned()])
             .unwrap_err();

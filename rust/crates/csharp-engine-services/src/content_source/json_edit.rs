@@ -54,23 +54,36 @@ fn apply_one(text: &str, edit: &JsonEdit) -> Result<String, JsonEditError> {
         let node = root.find(&tokens).ok_or_else(missing)?;
         return Ok(splice(node.start, node.end, &compact(value)));
     }
-    let (last, parent_tokens) = tokens
-        .split_last()
-        .ok_or_else(|| JsonEditError::Pointer("the whole document cannot be added or removed".into()))?;
+    let (last, parent_tokens) = tokens.split_last().ok_or_else(|| {
+        JsonEditError::Pointer("the whole document cannot be added or removed".into())
+    })?;
     let parent = root.find(parent_tokens).ok_or_else(missing)?;
     match (&parent.kind, edit) {
         (Kind::Object(members), JsonEdit::Add { value, .. }) => {
             if let Some(member) = members.iter().find(|member| &member.key == last) {
-                return Ok(splice(member.value.start, member.value.end, &compact(value)));
+                return Ok(splice(
+                    member.value.start,
+                    member.value.end,
+                    &compact(value),
+                ));
             }
             let key = compact(&Value::String(last.clone()));
             Ok(match members.last() {
-                None => splice(parent.start + 1, parent.end - 1, &format!("{key}: {}", compact(value))),
+                None => splice(
+                    parent.start + 1,
+                    parent.end - 1,
+                    &format!("{key}: {}", compact(value)),
+                ),
                 Some(previous) => {
-                    let separator = separator(text, parent, members.iter().map(|m| (m.start, m.value.end)));
+                    let separator =
+                        separator(text, parent, members.iter().map(|m| (m.start, m.value.end)));
                     let colon = &text[previous.key_end..previous.value.start];
                     let at = previous.value.end;
-                    splice(at, at, &format!("{separator}{key}{colon}{}", compact(value)))
+                    splice(
+                        at,
+                        at,
+                        &format!("{separator}{key}{colon}{}", compact(value)),
+                    )
                 }
             })
         }
@@ -78,7 +91,9 @@ fn apply_one(text: &str, edit: &JsonEdit) -> Result<String, JsonEditError> {
             let index = if last == "-" {
                 elements.len()
             } else {
-                array_index(last).filter(|index| *index <= elements.len()).ok_or_else(missing)?
+                array_index(last)
+                    .filter(|index| *index <= elements.len())
+                    .ok_or_else(missing)?
             };
             let value = compact(value);
             let separator = separator(text, parent, elements.iter().map(|e| (e.start, e.end)));
@@ -91,13 +106,18 @@ fn apply_one(text: &str, edit: &JsonEdit) -> Result<String, JsonEditError> {
             })
         }
         (Kind::Object(members), JsonEdit::Remove { .. }) => {
-            let index = members.iter().position(|member| &member.key == last).ok_or_else(missing)?;
+            let index = members
+                .iter()
+                .position(|member| &member.key == last)
+                .ok_or_else(missing)?;
             let spans: Vec<_> = members.iter().map(|m| (m.start, m.value.end)).collect();
             let (start, end) = removal(parent, &spans, index);
             Ok(splice(start, end, ""))
         }
         (Kind::Array(elements), JsonEdit::Remove { .. }) => {
-            let index = array_index(last).filter(|index| *index < elements.len()).ok_or_else(missing)?;
+            let index = array_index(last)
+                .filter(|index| *index < elements.len())
+                .ok_or_else(missing)?;
             let spans: Vec<_> = elements.iter().map(|e| (e.start, e.end)).collect();
             let (start, end) = removal(parent, &spans, index);
             Ok(splice(start, end, ""))
@@ -153,9 +173,14 @@ fn tokens(pointer: &str) -> Result<Vec<String>, JsonEditError> {
         return Ok(Vec::new());
     }
     let rest = pointer.strip_prefix('/').ok_or_else(|| {
-        JsonEditError::Pointer(format!("`{pointer}` is not a JSON pointer: it must start with `/`"))
+        JsonEditError::Pointer(format!(
+            "`{pointer}` is not a JSON pointer: it must start with `/`"
+        ))
     })?;
-    Ok(rest.split('/').map(|token| token.replace("~1", "/").replace("~0", "~")).collect())
+    Ok(rest
+        .split('/')
+        .map(|token| token.replace("~1", "/").replace("~0", "~"))
+        .collect())
 }
 
 /// A JSON value and where its text lies.
@@ -380,8 +405,16 @@ mod tests {
         assert_eq!(edited, TEXT.replace("0.250", "0.5"));
         let edited = apply(TEXT, &[replace("/keys/1", json!({"at": 3}))]).unwrap();
         assert_eq!(edited, TEXT.replace("    2\n", "    {\"at\":3}\n"));
-        let edited = apply(TEXT, &[replace("/a~1b", json!(2)), replace("/t~0/0", json!(false))]).unwrap();
-        assert_eq!(edited, TEXT.replace("\"a/b\": 1", "\"a/b\": 2").replace("[true]", "[false]"));
+        let edited = apply(
+            TEXT,
+            &[replace("/a~1b", json!(2)), replace("/t~0/0", json!(false))],
+        )
+        .unwrap();
+        assert_eq!(
+            edited,
+            TEXT.replace("\"a/b\": 1", "\"a/b\": 2")
+                .replace("[true]", "[false]")
+        );
         assert_eq!(apply("[1]", &[replace("", json!(2))]).unwrap(), "2");
     }
 
@@ -392,7 +425,10 @@ mod tests {
         let edited = apply(TEXT, &[add("/keys/0", json!(0))]).unwrap();
         assert_eq!(edited, TEXT.replace("    1,\n", "    0,\n    1,\n"));
         let edited = apply(TEXT, &[add("/stance/z", json!(1))]).unwrap();
-        assert_eq!(edited, TEXT.replace("\"y\": -1e-2", "\"y\": -1e-2, \"z\": 1"));
+        assert_eq!(
+            edited,
+            TEXT.replace("\"y\": -1e-2", "\"y\": -1e-2, \"z\": 1")
+        );
         let edited = apply(TEXT, &[add("/stance/x", json!(9))]).unwrap();
         assert_eq!(edited, TEXT.replace("0.250", "9"));
         assert_eq!(apply("{}", &[add("/a", json!(1))]).unwrap(), r#"{"a": 1}"#);
@@ -424,7 +460,10 @@ mod tests {
             remove("/keys/-"),
             remove(""),
         ] {
-            assert!(matches!(apply(TEXT, &[edit]), Err(JsonEditError::Pointer(_))));
+            assert!(matches!(
+                apply(TEXT, &[edit]),
+                Err(JsonEditError::Pointer(_))
+            ));
         }
         assert!(matches!(
             apply("{\"a\": 1,}", &[replace("/a", json!(2))]),

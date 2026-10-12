@@ -174,7 +174,8 @@ fn servable_path(value: &str) -> Result<String, ProductHostError> {
     // Bytes a browser sends unescaped in a path, since requests are matched
     // without decoding: any other byte could never be requested.
     if !value.bytes().all(|byte| {
-        byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_' | b'/' | b'@' | b'+' | b'~')
+        byte.is_ascii_alphanumeric()
+            || matches!(byte, b'.' | b'-' | b'_' | b'/' | b'@' | b'+' | b'~')
     }) {
         return Err(ProductHostError::new(
             "PRODUCT_HOST_BUNDLE_PATH",

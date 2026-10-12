@@ -1894,9 +1894,7 @@ mod tests {
         let mut required = RuntimeAudioBridge::new(BTreeMap::new());
         required.begin_call();
         assert!(
-            required
-                .open_clip(&request(b"audio/missing.wav"))
-                .is_err(),
+            required.open_clip(&request(b"audio/missing.wav")).is_err(),
             "the required admission path remains strict"
         );
     }

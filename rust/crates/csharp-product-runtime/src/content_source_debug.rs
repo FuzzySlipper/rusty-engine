@@ -65,7 +65,8 @@ impl CsharpProductRuntime {
             }
             EDIT_COMMAND => {
                 let mut parts = rest.splitn(3, char::is_whitespace);
-                let (Some(path), Some(sha256), Some(edits)) = (parts.next(), parts.next(), parts.next())
+                let (Some(path), Some(sha256), Some(edits)) =
+                    (parts.next(), parts.next(), parts.next())
                 else {
                     return Some(usage(EDIT_COMMAND, "<path> <sha256> <edits>"));
                 };

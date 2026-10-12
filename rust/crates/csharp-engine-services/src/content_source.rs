@@ -85,8 +85,12 @@ impl ContentSource {
                 format!("`{path}` changed since it was read; read it again"),
             ));
         }
-        let text = std::str::from_utf8(&bytes)
-            .map_err(|_| error("CONTENT_SOURCE_NOT_JSON", format!("`{path}` is not UTF-8 JSON")))?;
+        let text = std::str::from_utf8(&bytes).map_err(|_| {
+            error(
+                "CONTENT_SOURCE_NOT_JSON",
+                format!("`{path}` is not UTF-8 JSON"),
+            )
+        })?;
         let edited = json_edit::apply(text, edits).map_err(|failure| match failure {
             json_edit::JsonEditError::Text(detail) => {
                 error("CONTENT_SOURCE_NOT_JSON", format!("`{path}`: {detail}"))
@@ -127,9 +131,17 @@ pub fn parse_edits(text: &str) -> Result<Vec<JsonEdit>, CsharpEngineServicesErro
     #[derive(serde::Deserialize)]
     #[serde(tag = "op", rename_all = "lowercase", deny_unknown_fields)]
     enum Operation {
-        Replace { path: String, value: serde_json::Value },
-        Add { path: String, value: serde_json::Value },
-        Remove { path: String },
+        Replace {
+            path: String,
+            value: serde_json::Value,
+        },
+        Add {
+            path: String,
+            value: serde_json::Value,
+        },
+        Remove {
+            path: String,
+        },
     }
     let operations: Vec<Operation> = serde_json::from_str(text).map_err(|failure| {
         error(
@@ -156,7 +168,11 @@ pub fn parse_edits(text: &str) -> Result<Vec<JsonEdit>, CsharpEngineServicesErro
 /// SHA-256 as the four big-endian words the ABI carries.
 pub fn sha256_words(digest: &[u8; 32]) -> NativeContentSha256 {
     let word = |index: usize| {
-        u64::from_be_bytes(digest[index * 8..index * 8 + 8].try_into().expect("8 bytes"))
+        u64::from_be_bytes(
+            digest[index * 8..index * 8 + 8]
+                .try_into()
+                .expect("8 bytes"),
+        )
     };
     NativeContentSha256 {
         word0: word(0),
@@ -197,7 +213,10 @@ impl RuntimeContentSourceBridge {
         self.source = source;
     }
 
-    pub(crate) fn read(&self, path: &str) -> Result<(Vec<u8>, [u8; 32]), CsharpEngineServicesError> {
+    pub(crate) fn read(
+        &self,
+        path: &str,
+    ) -> Result<(Vec<u8>, [u8; 32]), CsharpEngineServicesError> {
         self.source.read(path)
     }
 
@@ -317,15 +336,22 @@ mod tests {
         let (directory, source) = session();
         let (bytes, sha256) = source.read("tuning/marker.json").unwrap();
         assert_eq!(bytes, TEXT.as_bytes());
-        let edits = parse_edits(r#"[{"op":"replace","path":"/marker/size","value":1.25}]"#).unwrap();
+        let edits =
+            parse_edits(r#"[{"op":"replace","path":"/marker/size","value":1.25}]"#).unwrap();
         let written = source.edit("tuning/marker.json", sha256, &edits).unwrap();
         let expected = TEXT.replace("0.8", "1.25");
         for root in ["source", "staged"] {
             let file = directory.path().join(root).join("tuning/marker.json");
             assert_eq!(fs::read_to_string(file).unwrap(), expected);
         }
-        assert_eq!(written, <[u8; 32]>::from(Sha256::digest(expected.as_bytes())));
-        assert!(!directory.path().join("source/tuning/.marker.json.rusty-edit").exists());
+        assert_eq!(
+            written,
+            <[u8; 32]>::from(Sha256::digest(expected.as_bytes()))
+        );
+        assert!(!directory
+            .path()
+            .join("source/tuning/.marker.json.rusty-edit")
+            .exists());
         assert_eq!(digest_of(sha256_words(&written)), written);
     }
 
@@ -334,15 +360,36 @@ mod tests {
         let (_directory, source) = session();
         let (_, sha256) = source.read("tuning/marker.json").unwrap();
         let replace = parse_edits(r#"[{"op":"replace","path":"/marker/size","value":2}]"#).unwrap();
-        assert_eq!(code(source.edit("tuning/marker.json", [0; 32], &replace)), "CONTENT_SOURCE_STALE");
-        assert_eq!(code(source.read("tuning/none.json")), "CONTENT_SOURCE_MISSING");
+        assert_eq!(
+            code(source.edit("tuning/marker.json", [0; 32], &replace)),
+            "CONTENT_SOURCE_STALE"
+        );
+        assert_eq!(
+            code(source.read("tuning/none.json")),
+            "CONTENT_SOURCE_MISSING"
+        );
         let (_, notes) = source.read("notes.txt").unwrap();
-        assert_eq!(code(source.edit("notes.txt", notes, &replace)), "CONTENT_SOURCE_NOT_JSON");
+        assert_eq!(
+            code(source.edit("notes.txt", notes, &replace)),
+            "CONTENT_SOURCE_NOT_JSON"
+        );
         let missing = parse_edits(r#"[{"op":"replace","path":"/marker/none","value":2}]"#).unwrap();
-        assert_eq!(code(source.edit("tuning/marker.json", sha256, &missing)), "CONTENT_SOURCE_POINTER");
-        assert_eq!(code(parse_edits(r#"[{"op":"move","path":"/a","from":"/b"}]"#)), "CONTENT_SOURCE_EDITS");
+        assert_eq!(
+            code(source.edit("tuning/marker.json", sha256, &missing)),
+            "CONTENT_SOURCE_POINTER"
+        );
+        assert_eq!(
+            code(parse_edits(r#"[{"op":"move","path":"/a","from":"/b"}]"#)),
+            "CONTENT_SOURCE_EDITS"
+        );
         let packaged = ContentSource::default();
-        assert_eq!(code(packaged.read("tuning/marker.json")), "CONTENT_SOURCE_UNAVAILABLE");
-        assert_eq!(code(packaged.edit("tuning/marker.json", sha256, &replace)), "CONTENT_SOURCE_UNAVAILABLE");
+        assert_eq!(
+            code(packaged.read("tuning/marker.json")),
+            "CONTENT_SOURCE_UNAVAILABLE"
+        );
+        assert_eq!(
+            code(packaged.edit("tuning/marker.json", sha256, &replace)),
+            "CONTENT_SOURCE_UNAVAILABLE"
+        );
     }
 }

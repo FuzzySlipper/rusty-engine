@@ -145,7 +145,11 @@ impl RuntimeContentBridge {
             unreachable!("loose content is a snapshot");
         };
         let mut files = (**previous).clone();
-        files.extend(changed.iter().map(|(path, bytes)| (path.clone(), Arc::clone(bytes))));
+        files.extend(
+            changed
+                .iter()
+                .map(|(path, bytes)| (path.clone(), Arc::clone(bytes))),
+        );
         self.snapshot = ContentFiles::snapshot(files);
         for content in self.catalog.values_mut() {
             content.files = self.snapshot.clone();
@@ -520,10 +524,7 @@ mod tests {
         assert_eq!(identity, sha256_words(&Sha256::digest(b"first body")));
         assert_eq!(body_hashes(), before + 1, "first request hashes once");
         assert_eq!(bridge.retained_content(second).unwrap().sha256(), identity);
-        assert_eq!(
-            bridge.retained_path("used.bin").unwrap().sha256(),
-            identity
-        );
+        assert_eq!(bridge.retained_path("used.bin").unwrap().sha256(), identity);
         assert_eq!(bridge.catalog["used.bin"].sha256(), identity);
         assert_eq!(
             body_hashes(),
@@ -728,14 +729,19 @@ mod tests {
             ("other.json".to_owned(), Arc::from(&b"[]"[..])),
         ]);
         let mut bridge = RuntimeContentBridge::new(files);
-        let before = bridge.retain(bridge.catalog["tuning.json"].clone()).unwrap();
+        let before = bridge
+            .retain(bridge.catalog["tuning.json"].clone())
+            .unwrap();
         let changed = bridge.reload(BTreeMap::from([(
             "tuning.json".to_owned(),
             Arc::from(&b"{\"a\":2}"[..]),
         )]));
         let sha = sha256_words(&Sha256::digest(b"{\"a\":2}"));
         assert_eq!(changed, [("tuning.json".to_owned(), sha, 7)]);
-        assert_eq!(bridge.references[&before.value].bytes.as_ref(), b"{\"a\":1}");
+        assert_eq!(
+            bridge.references[&before.value].bytes.as_ref(),
+            b"{\"a\":1}"
+        );
         let after = bridge.retained_path("tuning.json").unwrap();
         assert_eq!(after.bytes.as_ref(), b"{\"a\":2}");
         assert_eq!(after.sha256(), sha);
