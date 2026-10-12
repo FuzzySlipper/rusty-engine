@@ -276,7 +276,14 @@ fn fields_advance_only_by_admitted_time() {
     assert!((readout.time - 2.0).abs() < 1.0e-6, "{readout:?}");
     assert!((readout.admitted_time - 2.0).abs() < 1.0e-9);
     assert!(readout.snapshots >= 1);
-    assert!(readout.boundary_inflow > 0.0);
+    // The inflow is the discharge over the admitted time, however it is
+    // spread over the channel's edge cells.
+    let expected = f64::from(BASE_FLOW) * readout.time;
+    assert!(
+        (readout.boundary_inflow - expected).abs() < 1.0e-3 * expected,
+        "{} m³ entered, {expected} m³ expected",
+        readout.boundary_inflow
+    );
 
     // A held update admits no steps; calls without an update admit none.
     for _ in 0..5 {

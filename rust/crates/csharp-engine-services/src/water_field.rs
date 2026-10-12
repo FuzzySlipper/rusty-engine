@@ -673,9 +673,14 @@ impl RuntimeWaterFieldBridge {
             }
             NativeWaterFieldBoundaryKind::Open => Boundary::Open,
         };
+        // Kept per edge cell: an inflow's discharge is spread over its run.
+        let per_cell = match boundary {
+            Boundary::Inflow(discharge) => Boundary::Inflow(discharge / (end - first) as f32),
+            other => other,
+        };
         self.change(request.field, |changes| {
             for cell in first..end {
-                changes.boundaries.insert((side.index(), cell), boundary);
+                changes.boundaries.insert((side.index(), cell), per_cell);
             }
         })?;
         self.readout(request.field)
