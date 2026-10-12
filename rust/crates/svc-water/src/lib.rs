@@ -154,7 +154,8 @@ pub struct StepReport {
     pub boundary_outflow: [f64; 4],
     /// Cells deeper than the dry depth after the step.
     pub wet_cells: usize,
-    /// Fastest wave speed plus flow speed after the step, m/s.
+    /// Fastest wave speed plus flow speed after the step, Stage reservoirs
+    /// included, m/s.
     pub max_celerity: f32,
 }
 
@@ -411,10 +412,18 @@ impl WaterGrid {
 
     fn measure_celerity(&self) -> f32 {
         let g = self.params.gravity;
-        let mut max = 0.0f32;
+        let mut max = self.stage_celerity();
         for (&d, v) in self.depth.iter().zip(&self.velocity) {
             max = max.max(celerity(g, d, *v));
         }
+        max
+    }
+
+    /// The fastest wave a Stage reservoir sends in: as deep as its surface
+    /// stands over the edge cell's bed.
+    fn stage_celerity(&self) -> f32 {
+        let g = self.params.gravity;
+        let mut max = 0.0f32;
         for side in Side::ALL {
             for (k, edge) in self.edges[side.index()].iter().enumerate() {
                 if let Edge::Stage(surface) = *edge {
@@ -514,6 +523,7 @@ impl WaterGrid {
             sum.max_celerity = sum.max_celerity.max(row.max_celerity);
         }
         self.time += f64::from(dt);
+        sum.max_celerity = sum.max_celerity.max(self.stage_celerity());
         self.max_celerity = Some(sum.max_celerity);
         StepReport {
             dt,

@@ -348,3 +348,27 @@ fn results_do_not_depend_on_thread_count() {
         assert!(runs[0] == *other, "thread count changed the result");
     }
 }
+
+/// A drained cell beside a deep Stage reservoir: the stable step cached after
+/// a step keeps the reservoir's wave, as a fresh measurement does, so the
+/// next step cannot overshoot the reservoir (#9882 review).
+#[test]
+fn the_cached_stable_step_keeps_stage_reservoirs() {
+    const STAGE: f32 = 10.0;
+    const DRAIN: f32 = -100.0;
+    let mut grid = WaterGrid::new(1, 1, 1.0, vec![0.0]);
+    grid.set_boundary(Side::XMin, 0..1, Boundary::Stage(STAGE));
+    grid.sources_mut()[0] = DRAIN;
+    for _ in 0..4 {
+        let cached = grid.stable_step(DEFAULT_COURANT);
+        grid.set_params(grid.params());
+        let measured = grid.stable_step(DEFAULT_COURANT);
+        assert_eq!(cached, measured);
+        grid.step(cached, 1);
+        assert!(
+            grid.depth()[0] <= STAGE,
+            "depth {} past the {STAGE} m reservoir",
+            grid.depth()[0]
+        );
+    }
+}
