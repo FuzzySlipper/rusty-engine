@@ -85,6 +85,4 @@ The root [README](../README.md) is the repository landing page and
 
 ## Working on the Engine
 
-- [Parallel lanes](handoffs/README.md): the worktree and landing protocol for
-  agents working at the same time.
 - [Agent review](agent-review/README.md): reviewer lanes and packets.
