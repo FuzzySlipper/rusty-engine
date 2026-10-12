@@ -8,20 +8,12 @@
 //! latest one without waiting. Drawn surfaces are projected by
 //! `render_projection::WaterSurfaceProjector`.
 
-use std::{
-    collections::BTreeMap,
-    ffi::c_void,
-    ops::Range,
-    sync::{mpsc, Arc, Mutex},
-    thread::JoinHandle,
-    time::Instant,
-};
+use std::{collections::BTreeMap, ffi::c_void, sync::Arc};
 
 use csharp_engine_abi::*;
 use render_model::{RenderDiff, RenderFrameDiff, RenderLayer};
 use render_projection::{
-    water_surface_mesh, WaterSurfaceCells, WaterSurfaceMesh, WaterSurfacePlacement,
-    WaterSurfaceProjector,
+    water_surface_mesh, WaterSurfaceCells, WaterSurfacePlacement, WaterSurfaceProjector,
 };
 use svc_water::{Boundary, FlowParams, Side, WaterGrid};
 
@@ -39,15 +31,15 @@ const DEFAULT_MAX_BACKLOG_SECONDS: f64 = 1.0;
 const DEFAULT_DRAWN_DEPTH: f32 = 0.01;
 /// Admitted time a field may leave unadvanced at the end of a batch: the
 /// last step lands on the admitted boundary to within this.
-const TIME_EPSILON: f64 = 1.0e-9;
+pub(crate) const TIME_EPSILON: f64 = 1.0e-9;
 
-fn refused(message: impl Into<String>) -> CsharpEngineServicesError {
+pub(crate) fn refused(message: impl Into<String>) -> CsharpEngineServicesError {
     CsharpEngineServicesError::new("CSHARP_WATER_FIELD", message)
 }
 
 /// A field's advancement policy, defaults resolved.
 #[derive(Debug, Clone, Copy, PartialEq)]
-struct Policy {
+pub(crate) struct Policy {
     courant: f32,
     max_step: f32,
     threads: usize,
@@ -56,7 +48,7 @@ struct Policy {
 }
 
 impl Policy {
-    fn of(policy: NativeWaterFieldPolicy) -> Result<Self, CsharpEngineServicesError> {
+    pub(crate) fn of(policy: NativeWaterFieldPolicy) -> Result<Self, CsharpEngineServicesError> {
         let NativeWaterFieldPolicy {
             courant,
             max_step_seconds,
@@ -98,296 +90,9 @@ impl Policy {
     }
 }
 
-/// Volumes since creation, m³.
-#[derive(Debug, Clone, Copy, Default, PartialEq)]
-struct Totals {
-    inflow: f64,
-    outflow: f64,
-    source: f64,
-    sink: f64,
-}
-
-/// A complete field, published at an admitted step boundary and never
-/// changed after.
-#[derive(Debug)]
-struct Snapshot {
-    incarnation: u64,
-    sequence: u64,
-    time: f64,
-    bed: Arc<[f32]>,
-    depth: Vec<f32>,
-    velocity: Vec<[f32; 2]>,
-    volume: f64,
-    totals: Totals,
-    wet_cells: u32,
-    dropped_seconds: f64,
-    steps: u32,
-    step_microseconds: u64,
-    load: f32,
-    /// Built by the worker while the field is drawn, at that depth.
-    surface: Option<(f32, Option<WaterSurfaceMesh>)>,
-}
-
-/// Where the worker leaves a field's latest snapshot.
-type Slot = Arc<Mutex<Arc<Snapshot>>>;
-
-enum Command {
-    Create {
-        field: u64,
-        grid: Box<WaterGrid>,
-        policy: Policy,
-        slot: Slot,
-        bed: Arc<[f32]>,
-    },
-    Destroy {
-        field: u64,
-    },
-    EditBed {
-        field: u64,
-        incarnation: u64,
-        edits: Vec<(usize, f32)>,
-    },
-    Sources {
-        field: u64,
-        rates: Vec<f32>,
-    },
-    Boundary {
-        field: u64,
-        side: Side,
-        cells: Range<usize>,
-        boundary: Boundary,
-    },
-    Policy {
-        field: u64,
-        policy: Policy,
-    },
-    Draw {
-        field: u64,
-        drawn_depth: Option<f32>,
-    },
-    Advance {
-        field: u64,
-        seconds: f64,
-    },
-}
-
-/// A field as its worker holds it.
-struct WorkerField {
-    grid: Box<WaterGrid>,
-    policy: Policy,
-    slot: Slot,
-    bed: Arc<[f32]>,
-    incarnation: u64,
-    owed: f64,
-    /// Worker seconds per simulated second, as the last advance measured.
-    load: f64,
-    dropped: f64,
-    totals: Totals,
-    sequence: u64,
-    drawn_depth: Option<f32>,
-}
-
-impl WorkerField {
-    fn advance(&mut self) {
-        // The backlog bounds work, not time: owed seconds at what a simulated
-        // second last cost. Until a first advance measures it, nothing drops.
-        if self.owed * self.load > self.policy.max_backlog {
-            let kept = self.policy.max_backlog / self.load;
-            self.dropped += self.owed - kept;
-            self.owed = kept;
-        }
-        let started = Instant::now();
-        let advanced = self.owed;
-        let mut steps = 0;
-        while self.owed > TIME_EPSILON {
-            let dt = self
-                .grid
-                .stable_step(self.policy.courant)
-                .min(self.policy.max_step)
-                .min(self.owed as f32);
-            let report = self.grid.step(dt, self.policy.threads);
-            self.totals.inflow += report.boundary_inflow.iter().sum::<f64>();
-            self.totals.outflow += report.boundary_outflow.iter().sum::<f64>();
-            self.totals.source += report.source_volume;
-            self.totals.sink += report.sink_volume;
-            self.owed -= f64::from(dt);
-            steps += 1;
-        }
-        self.owed = 0.0;
-        self.publish(steps, started, advanced);
-    }
-
-    /// Publishes the field as it stands; the advance's wall time and load
-    /// include building the snapshot (and the drawn surface's mesh).
-    fn publish(&mut self, steps: u32, started: Instant, advanced: f64) {
-        self.sequence += 1;
-        let grid = &self.grid;
-        let surface = self.drawn_depth.map(|drawn_depth| {
-            (
-                drawn_depth,
-                water_surface_mesh(WaterSurfaceCells {
-                    width: grid.width(),
-                    length: grid.length(),
-                    cell_size: grid.cell_size(),
-                    bed: grid.bed(),
-                    depth: grid.depth(),
-                    drawn_depth,
-                }),
-            )
-        });
-        let depth = grid.depth().to_vec();
-        let velocity = grid.velocity().to_vec();
-        let elapsed = started.elapsed();
-        if advanced > 0.0 {
-            self.load = elapsed.as_secs_f64() / advanced;
-        }
-        let snapshot = Snapshot {
-            incarnation: self.incarnation,
-            sequence: self.sequence,
-            time: grid.time(),
-            bed: self.bed.clone(),
-            depth,
-            velocity,
-            volume: grid.total_volume(),
-            totals: self.totals,
-            wet_cells: (0..grid.cell_count()).filter(|&i| grid.is_wet(i)).count() as u32,
-            dropped_seconds: self.dropped,
-            steps,
-            step_microseconds: elapsed.as_micros() as u64,
-            load: self.load as f32,
-            surface,
-        };
-        *self.slot.lock().expect("water field slot") = Arc::new(snapshot);
-    }
-}
-
-/// The worker loop: apply every waiting command in order, then advance each
-/// field by the time it was handed and publish it.
-fn run_worker(commands: mpsc::Receiver<Command>) {
-    let mut fields: BTreeMap<u64, WorkerField> = BTreeMap::new();
-    while let Ok(first) = commands.recv() {
-        let mut next = Some(first);
-        while let Some(command) = next {
-            apply(&mut fields, command);
-            next = commands.try_recv().ok();
-        }
-        for field in fields.values_mut() {
-            if field.owed > 0.0 {
-                field.advance();
-            }
-        }
-    }
-}
-
-fn apply(fields: &mut BTreeMap<u64, WorkerField>, command: Command) {
-    match command {
-        Command::Create {
-            field,
-            grid,
-            policy,
-            slot,
-            bed,
-        } => {
-            fields.insert(
-                field,
-                WorkerField {
-                    grid,
-                    policy,
-                    slot,
-                    bed,
-                    incarnation: 0,
-                    owed: 0.0,
-                    load: 0.0,
-                    dropped: 0.0,
-                    totals: Totals::default(),
-                    sequence: 0,
-                    drawn_depth: None,
-                },
-            );
-        }
-        Command::Destroy { field } => {
-            fields.remove(&field);
-        }
-        Command::EditBed {
-            field,
-            incarnation,
-            edits,
-        } => {
-            if let Some(field) = fields.get_mut(&field) {
-                field.grid.edit_bed(edits);
-                field.bed = field.grid.bed().into();
-                field.incarnation = incarnation;
-            }
-        }
-        Command::Sources { field, rates } => {
-            if let Some(field) = fields.get_mut(&field) {
-                field.grid.sources_mut().copy_from_slice(&rates);
-            }
-        }
-        Command::Boundary {
-            field,
-            side,
-            cells,
-            boundary,
-        } => {
-            if let Some(field) = fields.get_mut(&field) {
-                field.grid.set_boundary(side, cells, boundary);
-            }
-        }
-        Command::Policy { field, policy } => {
-            if let Some(field) = fields.get_mut(&field) {
-                field.grid.set_params(policy.flow());
-                field.policy = policy;
-            }
-        }
-        Command::Draw { field, drawn_depth } => {
-            if let Some(field) = fields.get_mut(&field) {
-                field.drawn_depth = drawn_depth;
-            }
-        }
-        Command::Advance { field, seconds } => {
-            if let Some(field) = fields.get_mut(&field) {
-                field.owed += seconds;
-            }
-        }
-    }
-}
-
-/// The worker thread; dropping it closes the channel and joins the thread.
-struct Worker {
-    commands: Option<mpsc::Sender<Command>>,
-    thread: Option<JoinHandle<()>>,
-}
-
-impl Worker {
-    fn spawn() -> Result<Self, CsharpEngineServicesError> {
-        let (sender, receiver) = mpsc::channel();
-        let thread = std::thread::Builder::new()
-            .name("rusty-water-field".to_owned())
-            .spawn(move || run_worker(receiver))
-            .map_err(|error| refused(format!("the water field worker did not start: {error}")))?;
-        Ok(Self {
-            commands: Some(sender),
-            thread: Some(thread),
-        })
-    }
-
-    fn send(&self, command: Command) -> Result<(), CsharpEngineServicesError> {
-        self.commands
-            .as_ref()
-            .and_then(|commands| commands.send(command).ok())
-            .ok_or_else(|| refused("the water field worker has stopped"))
-    }
-}
-
-impl Drop for Worker {
-    fn drop(&mut self) {
-        drop(self.commands.take());
-        if let Some(thread) = self.thread.take() {
-            let _ = thread.join();
-        }
-    }
-}
+#[path = "water_field_worker.rs"]
+mod worker;
+use worker::{FieldShared, Snapshot, Totals, Worker};
 
 /// How a presented field is drawn.
 #[derive(Debug, Clone)]
@@ -411,7 +116,9 @@ struct Field {
     origin: [f64; 3],
     incarnation: u64,
     admitted: f64,
-    slot: Slot,
+    /// The policy the latest change selected; its backlog bounds pending work.
+    policy: Policy,
+    shared: Arc<FieldShared>,
     latest: Arc<Snapshot>,
     drawn: Option<Drawn>,
 }
@@ -447,6 +154,7 @@ impl Field {
 
     fn readout(&self, placement: [f64; 3]) -> NativeWaterFieldReadout {
         let latest = &self.latest;
+        let pending = self.shared.pending.lock().expect("water field pending");
         NativeWaterFieldReadout {
             origin: NativeVec3 {
                 x: placement[0] as f32,
@@ -462,7 +170,9 @@ impl Field {
             time: latest.time,
             admitted_time: self.admitted,
             age: (self.admitted - latest.time).max(0.0),
-            dropped_seconds: latest.dropped_seconds,
+            dropped_seconds: latest.dropped_seconds + pending.dropped,
+            pending_seconds: pending.seconds(),
+            coalesced_changes: pending.coalesced,
             volume: latest.volume,
             boundary_inflow: latest.totals.inflow,
             boundary_outflow: latest.totals.outflow,
@@ -592,7 +302,12 @@ impl RuntimeWaterFieldBridge {
         });
         self.projector.begin_call();
         for field in self.fields.values_mut() {
-            let published = field.slot.lock().expect("water field slot").clone();
+            let published = field
+                .shared
+                .published
+                .lock()
+                .expect("water field slot")
+                .clone();
             // A snapshot finished before the latest bed edit reached the
             // worker is dropped: the field reads the edit from its next one.
             if published.sequence != field.latest.sequence
@@ -612,12 +327,13 @@ impl RuntimeWaterFieldBridge {
         for (&handle, field) in &mut self.fields {
             if seconds > 0.0 {
                 field.admitted += seconds;
-                if let Some(worker) = &self.worker {
-                    worker.send(Command::Advance {
-                        field: handle,
-                        seconds,
-                    })?;
-                }
+                let load = field.shared.load();
+                field
+                    .shared
+                    .pending
+                    .lock()
+                    .expect("water field pending")
+                    .admit(seconds, load, field.policy.max_backlog);
             }
             let placement = field.placement(&self.spatial);
             let Some(drawn) = &mut field.drawn else {
@@ -656,7 +372,31 @@ impl RuntimeWaterFieldBridge {
             );
             drawn.drawn = Some(key);
         }
+        if seconds > 0.0 {
+            if let Some(worker) = &self.worker {
+                worker.wake();
+            }
+        }
         push_frame(&mut self.frames, operations)
+    }
+
+    /// Records changes a call made to a field, in effect from the next
+    /// admitted time, and wakes the worker for them.
+    fn change(
+        &mut self,
+        handle: NativeWaterFieldHandle,
+        apply: impl FnOnce(&mut worker::Changes),
+    ) -> Result<(), CsharpEngineServicesError> {
+        self.field(handle)?
+            .shared
+            .pending
+            .lock()
+            .expect("water field pending")
+            .change(apply);
+        if let Some(worker) = &self.worker {
+            worker.wake();
+        }
+        Ok(())
     }
 
     /// Whether a field lives, for Dynamics water entries.
@@ -799,15 +539,9 @@ impl RuntimeWaterFieldBridge {
             load: 0.0,
             surface: None,
         });
-        let slot = Arc::new(Mutex::new(first.clone()));
+        let shared = Arc::new(FieldShared::new(Box::new(grid), first.clone()));
         let value = self.next;
-        self.worker()?.send(Command::Create {
-            field: value,
-            grid: Box::new(grid),
-            policy,
-            slot: slot.clone(),
-            bed: shared_bed,
-        })?;
+        self.worker()?.register(value, shared.clone(), policy);
         self.next += 1;
         self.fields.insert(
             value,
@@ -820,7 +554,8 @@ impl RuntimeWaterFieldBridge {
                 origin,
                 incarnation: 0,
                 admitted: 0.0,
-                slot,
+                policy,
+                shared,
                 latest: first,
                 drawn: None,
             },
@@ -834,9 +569,7 @@ impl RuntimeWaterFieldBridge {
             return Ok(());
         };
         if let Some(worker) = &self.worker {
-            worker.send(Command::Destroy {
-                field: handle.value,
-            })?;
+            worker.retire(handle.value);
         }
         if let Some(drawn) = field.drawn {
             self.stop_drawing(handle.value, drawn.material)?;
@@ -870,10 +603,9 @@ impl RuntimeWaterFieldBridge {
             })
             .collect::<Result<Vec<_>, _>>()?;
         let incarnation = field.incarnation + 1;
-        self.worker()?.send(Command::EditBed {
-            field: request.field.value,
-            incarnation,
-            edits,
+        self.change(request.field, |changes| {
+            changes.bed.extend(edits);
+            changes.incarnation = Some(incarnation);
         })?;
         self.field_mut(request.field)?.incarnation = incarnation;
         self.readout(request.field)
@@ -897,10 +629,7 @@ impl RuntimeWaterFieldBridge {
             }
             rates[field.index(cell.x, cell.z)?] = cell.value;
         }
-        self.worker()?.send(Command::Sources {
-            field: request.field.value,
-            rates,
-        })?;
+        self.change(request.field, |changes| changes.sources = Some(rates))?;
         self.readout(request.field)
     }
 
@@ -944,11 +673,10 @@ impl RuntimeWaterFieldBridge {
             }
             NativeWaterFieldBoundaryKind::Open => Boundary::Open,
         };
-        self.worker()?.send(Command::Boundary {
-            field: request.field.value,
-            side,
-            cells: first..end,
-            boundary,
+        self.change(request.field, |changes| {
+            for cell in first..end {
+                changes.boundaries.insert((side.index(), cell), boundary);
+            }
         })?;
         self.readout(request.field)
     }
@@ -959,10 +687,8 @@ impl RuntimeWaterFieldBridge {
     ) -> Result<NativeWaterFieldReadout, CsharpEngineServicesError> {
         self.field(request.field)?;
         let policy = Policy::of(request.policy)?;
-        self.worker()?.send(Command::Policy {
-            field: request.field.value,
-            policy,
-        })?;
+        self.change(request.field, |changes| changes.policy = Some(policy))?;
+        self.field_mut(request.field)?.policy = policy;
         self.readout(request.field)
     }
 
@@ -980,10 +706,7 @@ impl RuntimeWaterFieldBridge {
             if let Some(material) = previous {
                 self.field_mut(request.field)?.drawn = None;
                 self.stop_drawing(handle, material)?;
-                self.worker()?.send(Command::Draw {
-                    field: handle,
-                    drawn_depth: None,
-                })?;
+                self.change(request.field, |changes| changes.draw = Some(None))?;
             }
             return self.readout(request.field);
         }
@@ -1030,9 +753,8 @@ impl RuntimeWaterFieldBridge {
             self.early.extend(removals.early);
             push_frame(&mut self.frames, removals.late)?;
         }
-        self.worker()?.send(Command::Draw {
-            field: handle,
-            drawn_depth: Some(drawn_depth),
+        self.change(request.field, |changes| {
+            changes.draw = Some(Some(drawn_depth))
         })?;
         self.readout(request.field)
     }

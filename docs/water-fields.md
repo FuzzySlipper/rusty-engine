@@ -80,20 +80,32 @@ admitted steps (`FixedDeltaSeconds × AdmittedStepCount`). It pauses with a
 and catches up with a bounded advance. A call with no update (create, debug
 commands, lifecycle calls) admits nothing.
 
-The worker applies the call's changes in order, steps through the admitted
-time at the stable step its Courant number allows, and publishes a snapshot
-at that admitted boundary. The next call reads the latest snapshot without
-waiting for the worker. A snapshot finished before a bed edit reached the
-worker is not published to the product; samples come from the previous one
-until the worker publishes one with the edit.
+Changes a call makes (sources, edges, bed edits, policy, drawing) take effect
+from the next admitted time, and the worker keeps them in that order: each
+field's pending work is a queue of changes, each followed by the admitted time
+that runs under it, so rain set for one update and stopped the next falls for
+exactly that update however late the worker gets to it. The worker steps
+through the admitted time at the stable step its Courant number allows and
+publishes a snapshot at the admitted boundary it reaches. The next call reads
+the latest snapshot without waiting for the worker. A snapshot finished before
+a bed edit reached the worker is not published to the product; samples come
+from the previous one until the worker publishes one with the edit.
 
-A field that costs more than it advances falls behind. The policy's backlog
-bounds the work a field may owe its worker: owed time × what a simulated
-second last cost, in worker seconds (1 by default). Admitted time beyond that
-is dropped and reported in `DroppedSeconds`, so the field falls behind by a
-bounded amount instead of queuing work. A cheap field fast-forwarded far ahead
-of the wall clock drops nothing. When a field reports a load above 1 or drops
-time, give it fewer cells or a larger cell size.
+A field that costs more than it advances falls behind, by a bounded amount.
+The policy's backlog bounds the work a field may owe its worker: owed time ×
+what a simulated second last cost, in worker seconds (1 by default).
+
+- Admitted time past it is dropped from the oldest waiting intervals, whose
+  changes still apply, and reported in `DroppedSeconds`; a batch the worker
+  runs also stops once it has spent the backlog in wall time.
+- At most 16 intervals wait per field: past that the oldest two merge into one
+  span of time, the later one's changes applying at its end, counted in
+  `CoalescedChanges`. Pending memory stays bounded even before the first
+  advance has measured a cost.
+- A cheap field fast-forwarded far ahead of the wall clock drops nothing.
+
+When a field reports a load above 1, drops time or coalesces changes, give it
+fewer cells or a larger cell size.
 
 ## Samples and reads
 
@@ -111,6 +123,7 @@ the field's frame) and velocity. `Read` returns the diagnostics:
 | `Incarnation`, `SnapshotIncarnation` | The field's bed edits, and those the snapshot carries. |
 | `Time`, `AdmittedTime`, `Age` | The snapshot's simulated time, the admitted time handed to the field, the gap. |
 | `DroppedSeconds` | Admitted time dropped past the backlog. |
+| `PendingSeconds`, `CoalescedChanges` | Admitted time waiting for the worker, and changes applied later than their boundary because too many intervals waited. |
 | `Volume`, `BoundaryInflow`, `BoundaryOutflow`, `SourceVolume`, `SinkVolume` | Water in the field, and in total through its edges, sources and sinks. |
 | `WetCells`, `DrawnCells` | Cells holding water, and those the drawn surface shows. |
 | `Steps`, `StepMicroseconds`, `Load` | The worker's last advance: steps, wall time, worker seconds per simulated second. |
@@ -141,10 +154,12 @@ carry the character.
 `Present(field, material, layer, drawnDepth)` draws the field's wet cells as
 one mesh with the product's material, redrawn from each new snapshot. Give it
 a blended material with water settings
-([water](lighting-and-sky.md#water)) for depth tint and shore foam. Each cell
-deeper than `drawnDepth` (0.01 by default) is a quad whose corners stand at
-the mean surface of the wet cells around them; a shoreline quad meets the bank
-at the cell's edge and the ground hides the rest. The material is held while
+([water](lighting-and-sky.md#water)) for depth tint and shore foam. The
+surface spans the cells deeper than `drawnDepth` (0.01 by default), each
+corner at the mean surface of the wet cells around it, and is trimmed to the
+bed along the shore: each corner's bed is the mean of the cells around it, as
+ground interpolated between cell centres runs, and the surface ends where that
+bed rises through the water, partway across the first dry cell. The material is held while
 the field draws with it. A zero material stops drawing. A product may instead
 read cells and draw its own surface.
 

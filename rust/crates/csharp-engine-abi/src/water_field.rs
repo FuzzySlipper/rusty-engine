@@ -245,6 +245,10 @@ pub struct NativeWaterFieldReadout {
     /// Admitted seconds dropped because the field owed its worker more work
     /// than its policy's backlog allows.
     pub dropped_seconds: f64,
+    /// Admitted seconds waiting for the worker, and changes it applied later
+    /// than their admitted boundary because too many intervals were waiting.
+    pub pending_seconds: f64,
+    pub coalesced_changes: u64,
     /// Cubic metres in the field, and in total since creation: entered and
     /// left through its edges, added by sources and taken by sinks.
     pub volume: f64,
