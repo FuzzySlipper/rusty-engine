@@ -50,6 +50,7 @@ members = [
     "rust/crates/svc-rng",
     "rust/crates/svc-spatial",
     "rust/crates/svc-volume",
+    "rust/crates/svc-water",
 ]
 
 [workspace.package]
@@ -101,6 +102,7 @@ svc-mesh = { path = "rust/crates/svc-mesh" }
 svc-implicit = { path = "rust/crates/svc-implicit" }
 svc-spatial = { path = "rust/crates/svc-spatial" }
 svc-volume = { path = "rust/crates/svc-volume" }
+svc-water = { path = "rust/crates/svc-water" }
 svc-http = { path = "rust/crates/svc-http" }
 svc-session = { path = "rust/crates/svc-session" }
 ryu-js = "1"
