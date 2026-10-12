@@ -276,7 +276,9 @@ impl SunShaftsDescriptor {
 /// times `color` (linear HDR). `phase` is the lit fraction, 0 (new) to 1
 /// (full); the lit limb turns toward the sky's sun. `earthshine` (0 to 1)
 /// lights the dark part by that share of the radiance, and `halo` adds a
-/// glow a few degrees wide of that strength.
+/// glow a few degrees wide of that strength. `light_intensity` (0 to 16)
+/// lights the clouds from the moon in its colour, a second light beside the
+/// sky's sun; 0 lights nothing.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct MoonDescriptor {
@@ -287,6 +289,8 @@ pub struct MoonDescriptor {
     pub phase: f32,
     pub earthshine: f32,
     pub halo: f32,
+    #[serde(default)]
+    pub light_intensity: f32,
 }
 
 impl MoonDescriptor {
@@ -299,8 +303,9 @@ impl MoonDescriptor {
 
     /// A finite direction with some length, a radius within
     /// `0..=MAX_RADIUS_DEGREES`, colour channels and a halo within
-    /// `0..=MAX_COLOR`, a radiance within `0..=MAX_RADIANCE`, and a phase and
-    /// earthshine within `0..=1`.
+    /// `0..=MAX_COLOR`, a radiance within `0..=MAX_RADIANCE`, a phase and
+    /// earthshine within `0..=1`, and a light intensity within
+    /// `0..=MAX_COLOR`.
     pub fn valid(&self) -> bool {
         let [x, y, z] = self.direction;
         let unit = 0.0..=1.0;
@@ -313,6 +318,7 @@ impl MoonDescriptor {
             && unit.contains(&self.phase)
             && unit.contains(&self.earthshine)
             && color.contains(&self.halo)
+            && color.contains(&self.light_intensity)
     }
 }
 

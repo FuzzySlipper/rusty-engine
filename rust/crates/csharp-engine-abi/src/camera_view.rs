@@ -416,9 +416,12 @@ pub struct NativeAtmosphereRequest {
 /// (full), with its lit limb toward the sky's sun (`SetAtmosphere`'s, or the
 /// brightest directional light; up without one). `earthshine` (0 to 1)
 /// lights the dark part by that share of the radiance, and `halo` (0 to 16)
-/// adds a glow a few degrees wide. The moon lights nothing: the clouds and
-/// haze keep the sky's sun, and a product lights the world with its own
-/// moonlight.
+/// adds a glow a few degrees wide. `light_intensity` (0 to 16; 0 for none)
+/// lights the cloud layer and regions from the moon in its colour, a second
+/// light beside the sky's sun with the same self-shadowing (a full moon's is
+/// about 0.2 to 0.3 against a sun's 1.5; a product scales it with the
+/// phase). The moon lights nothing else: the haze keeps the sky's sun, and a
+/// product lights the world with its own moonlight.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeMoonRequest {
@@ -430,6 +433,7 @@ pub struct NativeMoonRequest {
     pub phase: f32,
     pub earthshine: f32,
     pub halo: f32,
+    pub light_intensity: f32,
 }
 
 /// Sun shafts: the sky around the sun (the brightest enabled directional

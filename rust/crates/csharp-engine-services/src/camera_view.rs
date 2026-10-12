@@ -993,6 +993,7 @@ impl RuntimeCameraViewBridge {
             phase: request.phase,
             earthshine: request.earthshine,
             halo: request.halo,
+            light_intensity: request.light_intensity,
         };
         // Radiance 0 (the default request) takes the moon away, whatever else.
         if request.radiance == 0.0 {
@@ -1002,7 +1003,7 @@ impl RuntimeCameraViewBridge {
         if !moon.valid() {
             return Err(CsharpEngineServicesError::new(
                 "CSHARP_MOON",
-                "the moon needs a finite direction with some length, a radius within 0 to 20 degrees, colour channels and a halo within 0 to 16, a radiance within 0 to 1000, and a phase and earthshine within 0 to 1",
+                "the moon needs a finite direction with some length, a radius within 0 to 20 degrees, colour channels, a halo and a light intensity within 0 to 16, a radiance within 0 to 1000, and a phase and earthshine within 0 to 1",
             ));
         }
         self.staged_mut()?.moon = Some(Some(moon));

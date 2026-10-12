@@ -44,7 +44,8 @@ struct Frame {
     // rgb: its linear colour; w: its radiance.
     moon_color: vec4<f32>,
     // x: its lit fraction (0 new, 1 full); y: the earthshine on its dark
-    // part, a share of its radiance; z: its halo's strength.
+    // part, a share of its radiance; z: its halo's strength; w: its light's
+    // intensity on the clouds (0: none).
     moon_shape: vec4<f32>,
     // The sky's light: x its intensity (0: off), y the specular cube's last
     // mip level (its roughest); z the sun disc's and halo's radiance (0: they

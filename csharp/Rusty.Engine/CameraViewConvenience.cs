@@ -23,6 +23,15 @@ public readonly partial record struct AtmosphereRequest
     }
 }
 
+public readonly partial record struct MoonRequest
+{
+    /// <summary>A moon that lights no clouds.</summary>
+    public MoonRequest(System.Numerics.Vector3 Direction, float RadiusDegrees, System.Numerics.Vector3 Color, float Radiance, float Phase, float Earthshine, float Halo)
+        : this(Direction, RadiusDegrees, Color, Radiance, Phase, Earthshine, Halo, 0)
+    {
+    }
+}
+
 public readonly partial record struct CloudsRequest
 {
     /// <summary>A cloud layer of the default kind (cumulus) and thickness (six tenths of its altitude), lit only while the sun is up.</summary>

@@ -73,6 +73,7 @@ fn moon(phase: f32, radiance: f32, earthshine: f32) -> RenderDiff {
             phase,
             earthshine,
             halo: 0.0,
+            light_intensity: 0.0,
         }),
     }
 }
@@ -267,6 +268,7 @@ fn an_overcast_covers_it_as_much_as_it_covers_the_sky() {
                     phase: 1.0,
                     earthshine: 0.0,
                     halo: 0.0,
+                    light_intensity: 0.0,
                 }),
             }]);
         }
@@ -344,6 +346,7 @@ fn it_changes_nothing_else() {
                     phase: 1.0,
                     earthshine: 0.0,
                     halo: 0.5,
+                    light_intensity: 0.0,
                 }),
             }]);
         }
@@ -363,6 +366,7 @@ fn invalid_moons_are_refused_by_the_model() {
         phase: 0.5,
         earthshine: 0.0,
         halo: 0.0,
+        light_intensity: 0.0,
     };
     let check = |moon| RenderDiff::SetMoon { moon: Some(moon) }.validate();
     assert!(check(valid).is_ok());
@@ -385,5 +389,134 @@ fn invalid_moons_are_refused_by_the_model() {
         },
     ] {
         assert!(check(refused).is_err(), "{refused:?}");
+    }
+}
+
+#[test]
+fn its_light_lights_the_clouds_at_night_toward_it_and_none_leaves_them_as_they_were() {
+    // Broken cumulus at midnight (the sky's sun far below the horizon), a
+    // full moon 60° up to the right (`side` 1) or left (-1), flat and
+    // volumetric; mean colour of the left and right halves of the view up
+    // into the clouds.
+    let render = |quality, light: f32, side: f32| {
+        let mut harness = Harness::new(RendererOptions {
+            default_world_lights: false,
+            volumetric_clouds: quality,
+            ..RendererOptions::default()
+        });
+        let (width, height) = (64, 32);
+        let sky: Vec<u8> = (0..width * height)
+            .flat_map(|texel| {
+                if texel / width < height / 2 {
+                    NIGHT
+                } else {
+                    [10, 10, 10, 255]
+                }
+            })
+            .collect();
+        let texture =
+            harness
+                .resources
+                .texture("texture/sky", width, height, &sky, TextureWrap::Clamp);
+        let up = 60.0f32.to_radians();
+        harness.apply(vec![
+            RenderDiff::DefineTexture { texture },
+            RenderDiff::SetSkyBackground {
+                background: Some(SkyBackgroundDescriptor {
+                    texture: "texture/sky".to_owned(),
+                    blend: None,
+                }),
+            },
+            RenderDiff::SetAtmosphere {
+                atmosphere: Some(AtmosphereDescriptor {
+                    sky_sun_direction: [0.0, -0.7, 0.7],
+                    sky_sun_color: [1.0; 3],
+                    sky_sun_intensity: 1.0,
+                    ..Default::default()
+                }),
+            },
+            RenderDiff::SetClouds {
+                clouds: Some(CloudsDescriptor {
+                    coverage: 0.55,
+                    drift: [0.0, 0.0],
+                    altitude: 1500.0,
+                    scale: 600.0,
+                    color: [1.0; 3],
+                    thickness: 0.0,
+                    kind: CloudKind::Cumulus,
+                    twilight_degrees: 8.0,
+                }),
+            },
+            RenderDiff::SetMoon {
+                moon: Some(MoonDescriptor {
+                    direction: [side * up.cos() * 0.7, up.sin(), -up.cos() * 0.7],
+                    radius_degrees: 1.0,
+                    color: [0.85, 0.9, 1.0],
+                    radiance: 1.0,
+                    phase: 1.0,
+                    earthshine: 0.0,
+                    halo: 0.0,
+                    light_intensity: light,
+                }),
+            },
+        ]);
+        harness.renderer.set_animation_time(2.0);
+        let view = camera([0.0, 1.0, 0.0], 0.0, 30.0);
+        let mut image = Vec::new();
+        for _ in 0..4 {
+            image = harness.render(&view).1;
+        }
+        let refused = harness
+            .renderer
+            .settings_readout()
+            .volumetric_clouds
+            .is_some();
+        (!refused).then_some(image)
+    };
+    let mean = |image: &[u8], columns: std::ops::Range<usize>| {
+        let mut sum = 0.0;
+        let mut count = 0.0;
+        for y in 20..140usize {
+            for x in columns.clone() {
+                sum += f64::from(image[(y * WIDTH as usize + x) * 4 + 2]);
+                count += 1.0;
+            }
+        }
+        sum / count
+    };
+    let (left, right) = (0..WIDTH as usize / 2, WIDTH as usize / 2..WIDTH as usize);
+    for quality in [VolumetricCloudsQuality::Off, VolumetricCloudsQuality::High] {
+        let Some(dark) = render(quality, 0.0, 1.0) else {
+            continue;
+        };
+        // No light leaves them as a moon never lit them.
+        assert_eq!(
+            dark,
+            render(quality, 0.0, -1.0).expect("drawn"),
+            "{quality:?}"
+        );
+        let (on_right, on_left) = (
+            render(quality, 0.3, 1.0).expect("drawn"),
+            render(quality, 0.3, -1.0).expect("drawn"),
+        );
+        let gain = |lit: &[u8], columns: std::ops::Range<usize>| {
+            mean(lit, columns.clone()) - mean(&dark, columns)
+        };
+        let whole = 0..WIDTH as usize;
+        assert!(
+            gain(&on_right, whole.clone()) > 8.0,
+            "{quality:?}: the moon lights the clouds: {:.1}",
+            gain(&on_right, whole)
+        );
+        // Each half takes more of its light with the moon on its side.
+        assert!(
+            gain(&on_right, right.clone()) > gain(&on_left, right.clone())
+                && gain(&on_left, left.clone()) > gain(&on_right, left.clone()),
+            "{quality:?}: toward the moon: right {:.1} against {:.1}, left {:.1} against {:.1}",
+            gain(&on_right, right.clone()),
+            gain(&on_left, right.clone()),
+            gain(&on_left, left.clone()),
+            gain(&on_right, left.clone())
+        );
     }
 }

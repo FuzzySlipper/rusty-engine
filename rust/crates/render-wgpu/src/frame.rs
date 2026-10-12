@@ -3391,7 +3391,7 @@ fn atmosphere_uniform(atmosphere: AtmosphereDescriptor, sun: Option<Sun>) -> [f3
 
 /// The frame uniform's moon rows (`rusty::types::Frame`): toward it (unit)
 /// and its angular radius in radians (0: no moon); its colour and radiance;
-/// its phase, earthshine and halo.
+/// its phase, earthshine, halo and light on the clouds.
 fn moon_uniform(moon: Option<render_model::MoonDescriptor>) -> [f32; 12] {
     let Some(moon) = moon else {
         return [0.0; 12];
@@ -3410,7 +3410,7 @@ fn moon_uniform(moon: Option<render_model::MoonDescriptor>) -> [f32; 12] {
         moon.phase,
         moon.earthshine,
         moon.halo,
-        0.0,
+        moon.light_intensity,
     ]
 }
 

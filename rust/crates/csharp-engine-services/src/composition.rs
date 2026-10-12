@@ -1925,6 +1925,7 @@ mod tests {
             phase,
             earthshine: 0.05,
             halo: 0.2,
+            light_intensity: 0.25,
         };
         services.begin_call(binding());
         let api = services.api();
@@ -1942,6 +1943,7 @@ mod tests {
                 phase: 0.25,
                 earthshine: 0.05,
                 halo: 0.2,
+                light_intensity: 0.25,
             }),
         };
         assert_eq!(

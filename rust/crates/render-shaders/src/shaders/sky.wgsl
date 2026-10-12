@@ -8,7 +8,7 @@
 
 #import rusty::types::PI
 #import rusty::view::{frame, world_equivalent}
-#import rusty::clouds::{cloud_cover, cloud_coverage, cloud_density, cloud_detail, cloud_kind_detail, cloud_sunlight, CLOUD_OCTAVES}
+#import rusty::clouds::{cloud_cover, cloud_coverage, cloud_density, cloud_detail, cloud_kind_detail, cloud_moonlight, cloud_sunlight, CLOUD_OCTAVES}
 
 struct SkyUniform {
     // x: blend amount toward the second panorama
@@ -122,14 +122,12 @@ fn fs_clouds(in: SkyOut) -> @location(0) vec4<f32> {
     if layer.alpha <= 0.0 {
         return vec4<f32>(0.0);
     }
-    // Toward the sun across the layer, in clouds.
-    let across = frame.sun.xz;
-    let toward = across / max(length(across), 1e-3) * 0.35;
-    let shadowed = cloud_cover(layer.p + toward * 0.75, layer.detail, layer.coverage.x, CLOUD_OCTAVES);
-    let underlit = smoothstep(UNDERLIT_EDGE, -UNDERLIT_EDGE, frame.sun.y);
     let sun = cloud_sunlight(vec3<f32>(layer.ground.x, sky.clouds.y, layer.ground.y));
-    let edge = 1.0 + 1.5 * pow(max(dot(direction, frame.sun.xyz), 0.0), 8.0) * (1.0 - layer.cover);
-    let direct = sun * mix(mix(1.0, 0.55, shadowed), 1.0, underlit) * edge;
+    var direct = flat_direct(layer, direction, frame.sun.xyz, sun);
+    let moon = cloud_moonlight();
+    if any(moon > vec3<f32>(0.0)) {
+        direct += flat_direct(layer, direction, frame.moon.xyz, moon);
+    }
     // The sky a little above the cloud, read at its coarsest detail.
     let rise = max(direction.y, 0.02);
     let uv = panorama_uv(normalize(vec3<f32>(direction.x, rise + 0.2, direction.z)));
@@ -143,8 +141,20 @@ fn fs_clouds(in: SkyOut) -> @location(0) vec4<f32> {
     return vec4<f32>(color * layer.alpha, layer.alpha);
 }
 
-// How far either side of the horizontal the sun turns from lighting the
-// flat layer from above to lighting it from below (`Frame.sun.y`).
+// The light `light` from `toward` (unit) on the flat layer: less where more
+// cloud lies between the cloud and a light above the layer (across the
+// layer toward it, in clouds), and brighter at its thin edges toward it. A
+// light below the layer lights the undersides the camera sees directly.
+fn flat_direct(layer: FlatLayer, direction: vec3<f32>, toward: vec3<f32>, light: vec3<f32>) -> vec3<f32> {
+    let across = toward.xz / max(length(toward.xz), 1e-3) * 0.35;
+    let shadowed = cloud_cover(layer.p + across * 0.75, layer.detail, layer.coverage.x, CLOUD_OCTAVES);
+    let underlit = smoothstep(UNDERLIT_EDGE, -UNDERLIT_EDGE, toward.y);
+    let edge = 1.0 + 1.5 * pow(max(dot(direction, toward), 0.0), 8.0) * (1.0 - layer.cover);
+    return light * mix(mix(1.0, 0.55, shadowed), 1.0, underlit) * edge;
+}
+
+// How far either side of the horizontal a light turns from lighting the
+// flat layer from above to lighting it from below.
 const UNDERLIT_EDGE: f32 = 0.02;
 
 // Extinction per metre of the volumetric clouds at full density.
@@ -215,11 +225,12 @@ fn march_clouds(direction: vec3<f32>, pixel: vec2<f32>, phase: f32) -> CloudSamp
     // Toward the sun, below the horizon too: a sun under the layer lights
     // the side of each cloud facing it, through the cloud between them.
     let toward_sun = normalize(frame.sun.xyz + vec3<f32>(0.0, 1e-3, 0.0));
-    let cosine = dot(direction, toward_sun);
-    // Forward scattering toward the sun, with some back scatter.
-    let g = 0.6;
-    let forward = (1.0 - g * g) / pow(1.0 + g * g - 2.0 * g * cosine, 1.5);
-    let lobe = mix(1.0, min(forward, 4.0), 0.25);
+    let lobe = scattering_lobe(direction, toward_sun);
+    // The moon, a second light when it has one.
+    let moon = cloud_moonlight();
+    let moonlit = any(moon > vec3<f32>(0.0));
+    let toward_moon = normalize(frame.moon.xyz + vec3<f32>(0.0, 1e-3, 0.0));
+    let moon_lobe = scattering_lobe(direction, toward_moon);
     let light_step = frame.clouds.w * 0.18;
     // The sky a little above the horizon, at its coarsest, lights them too.
     let uv = panorama_uv(normalize(vec3<f32>(direction.x, max(direction.y, 0.05) + 0.2, direction.z)));
@@ -237,18 +248,16 @@ fn march_clouds(direction: vec3<f32>, pixel: vec2<f32>, phase: f32) -> CloudSamp
         if density <= 0.002 {
             continue;
         }
-        var optical = 0.0;
-        for (var k = 1; k <= CLOUD_LIGHT_STEPS; k = k + 1) {
-            optical += cloud_density(position + toward_sun * light_step * f32(k), 1) * light_step;
-        }
-        let through = exp(-CLOUD_EXTINCTION * optical)
-            + CLOUD_MULTIPLE_SCATTER * exp(-CLOUD_EXTINCTION * CLOUD_MULTIPLE_REACH * optical);
         let extinction = density * CLOUD_EXTINCTION;
         let powder = 1.0 - exp(-2.0 * extinction * step);
         let here = cloud_coverage(position.xz);
         let height = clamp((position.y - base) / max(here.z, 1.0), 0.0, 1.0);
         let darkness = here.y;
-        let lit = (cloud_sunlight(position) * through * lobe * mix(0.7, 1.0, powder) * 0.45
+        var direct = cloud_sunlight(position) * light_through(position, toward_sun, light_step) * lobe;
+        if moonlit {
+            direct += moon * light_through(position, toward_moon, light_step) * moon_lobe;
+        }
+        let lit = (direct * mix(0.7, 1.0, powder) * 0.45
             + ambient * mix(0.6, 0.9, height)) * (1.0 - 0.6 * darkness);
         let passes = exp(-extinction * step);
         color += transmittance * lit * (1.0 - passes);
@@ -266,6 +275,25 @@ fn march_clouds(direction: vec3<f32>, pixel: vec2<f32>, phase: f32) -> CloudSamp
     // opacity-weighted distance, or the slab's middle through clear air.
     sample.distance = select((start + end) * 0.5, weighted / opacity, opacity > 1e-3);
     return sample;
+}
+
+// Forward scattering toward a light at `toward` seen along `direction`, with
+// some back scatter.
+fn scattering_lobe(direction: vec3<f32>, toward: vec3<f32>) -> f32 {
+    let g = 0.6;
+    let forward = (1.0 - g * g) / pow(1.0 + g * g - 2.0 * g * dot(direction, toward), 1.5);
+    return mix(1.0, min(forward, 4.0), 0.25);
+}
+
+// The share of a light from `toward` reaching `position` through the cloud
+// between them (Beer's law, with the longer-reaching multiple scattering).
+fn light_through(position: vec3<f32>, toward: vec3<f32>, light_step: f32) -> f32 {
+    var optical = 0.0;
+    for (var k = 1; k <= CLOUD_LIGHT_STEPS; k = k + 1) {
+        optical += cloud_density(position + toward * light_step * f32(k), 1) * light_step;
+    }
+    return exp(-CLOUD_EXTINCTION * optical)
+        + CLOUD_MULTIPLE_SCATTER * exp(-CLOUD_EXTINCTION * CLOUD_MULTIPLE_REACH * optical);
 }
 
 // One pixel of the reduced clouds, blended with its history.

@@ -900,7 +900,8 @@ A moon of its own stands in the sky beside the sun, with a phase:
 
 ```csharp
 engine.CameraView.SetMoon(new(Direction: towardMoon, RadiusDegrees: 0.8f,
-    Color: new Vector3(1, 0.95f, 0.85f), Radiance: 2, Phase: 0.3f, Earthshine: 0.05f, Halo: 0.2f));
+    Color: new Vector3(1, 0.95f, 0.85f), Radiance: 2, Phase: 0.3f, Earthshine: 0.05f, Halo: 0.2f,
+    LightIntensity: 0.25f * 0.3f));
 engine.CameraView.SetMoon(default); // no moon
 ```
 
@@ -924,9 +925,16 @@ engine.CameraView.SetMoon(default); // no moon
 - With [bloom](#exposure-tone-mapping-and-fog) on, a radiance above bloom's
   threshold blooms as the sun's disc does, through the same pass: only
   where the world leaves the sky open, less what the clouds cover.
-- It lights nothing and changes nothing else: the clouds, the haze and sun
-  shafts keep the sky's sun. A product lights its world at night with its
-  own directional moonlight.
+- `LightIntensity` (0 to 16; 0, the default, for none) lights the
+  [clouds](#clouds) from the moon in its colour: a second light beside the
+  sky's sun, layer and regions, flat and volumetric, with the same
+  self-shadowing, fading as the moon nears the horizon. A full moon's is
+  about 0.2 to 0.3 against a sun's 1.5. A product scales it with the phase.
+  A cloud field under a high full moon reads silver at its edges toward it,
+  where a moon without light leaves it dark. The volumetric clouds march a
+  second light ray a sample while it is on.
+- It lights nothing else: the haze and sun shafts keep the sky's sun, and a
+  product lights its world at night with its own directional moonlight.
 - It is retained camera-view state, like the atmosphere. It costs one
   fullscreen draw in the background pass, as the sun's disc does, and with
   bloom a share of the sun's glow pass.
@@ -1011,7 +1019,8 @@ the clouds only while the sun is up.
   them. Moving the sun and blending the panoramas with the product clock
   ([below](#blend-authored-time-of-day-skies)) warms them at dusk and
   darkens them at night with no other call. Without a twilight their sun
-  fades out as it reaches the horizon.
+  fades out as it reaches the horizon. At night the [moon](#the-moon)'s
+  `LightIntensity` lights them as a second light.
 - `TwilightDegrees` (0 to 20) keeps them lit after sunset: the sun lights
   them in full while it is up, and below the horizon until it is that far
   down for a cloud at the layer's altitude. A higher cloud sees it longer,
