@@ -144,8 +144,7 @@ An installer is chosen when a product asks for one.
   browser's rate on both.
   Wayland locks the pointer. X11 hides the cursor and recentres it rather than
   grabbing it, because during a grab XInput delivers every raw motion twice.
-- **Windows:** measured on an RTX 3080 with Windows 11
-  ([evidence](evidence/desktop-shell-windows/README.md)). That machine is the
+- **Windows:** measured on an RTX 3080 with Windows 11. That machine is the
   shared Windows test box: agents playtest on it through crew-services
   (`environment: "windows-desktop"`), and its access, agent and build setup are
   in crew-services `docs/playtest-windows.md`. The device is DX12,

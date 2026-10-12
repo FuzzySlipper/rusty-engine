@@ -6,8 +6,6 @@ mechanisms and the host that makes that product run.
 
 > The product decides. The Engine guarantees.
 
-The paired proving product is `/home/dev/rusty-dagger`.
-
 ## Start here
 
 - [Architecture overview](docs/architecture.md) — ownership, layers, and data
