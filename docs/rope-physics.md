@@ -107,11 +107,14 @@ fraction. A light body on a stiff waterline bobs quickly; its drag settles it
 (`DynamicsWaterPlane.SettlingDrag`, 3 a second, settles a 180 kg raft within a
 few seconds).
 
-- Submerged volumes are exact for spheres and boxes; a capsule is integrated in
-  48 slices along its axis, within half a percent of its volume at any tilt.
+- Submerged volumes and centres of buoyancy are exact for spheres and boxes,
+  and for capsules upright or lying down; a tilted capsule's cylinder and
+  ends are integrated in slices cut exactly by the surface, within 1e-6 of the
+  submerged volume, from the first centimetre of immersion.
 - `DynamicsReadout.Water` reports, for the body's latest step, whether it
   floats, its submerged fraction at the last substep, and the buoyancy, drag
-  and buoyancy torque averaged over the step's substeps.
+  and water torque (the buoyant moment and the angular drag) averaged over the
+  step's substeps.
 - The coupling is one way: the water does not feel the body, and the body does
   not displace it.
 - A floating body stays awake while in the water.
@@ -137,7 +140,8 @@ river current on a tether.
 - The bridge tests cover chains, terrain contact, contact suppression,
   character reactions, light-anchor catch energy and world-origin rebasing.
 - `svc-collision` floating tests cover box, sphere and lying-capsule drafts
-  against Archimedes, tipping under an offset load against hydrostatics and
+  against Archimedes, capsule ends against closed forms and fine sampling,
+  angular drag in the reported torque, tipping under an offset load against hydrostatics and
   righting, a current carrying a raft, and bodies outside the water or not
   named; the water field tests float a box on a field's river.
 

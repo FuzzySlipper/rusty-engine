@@ -527,7 +527,8 @@ pub struct NativeDynamicsWaterFact {
     pub submerged_fraction: f32,
     pub buoyancy: NativeVec3,
     pub drag: NativeVec3,
-    /// The buoyant force's torque about the centre of mass.
+    /// The water's torque about the centre of mass: the buoyant force's
+    /// moment and the angular drag.
     pub torque: NativeVec3,
 }
 

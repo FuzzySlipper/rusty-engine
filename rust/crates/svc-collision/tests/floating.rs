@@ -305,3 +305,31 @@ fn bodies_out_of_the_water_or_not_named_fall() {
     );
     assert!(solver.water_readout(DynamicsBodyId(3)).is_none());
 }
+
+/// R9883-3: a spinning sphere held under water with no buoyant moment: the
+/// reported torque is the angular drag slowing it, against its spin.
+#[test]
+fn angular_drag_shows_in_the_water_torque() {
+    let radius = 0.3;
+    let volume = 4.0 / 3.0 * PI * radius * radius * radius;
+    let mass = WATER_DENSITY * volume;
+    let spin = 3.0;
+    let mut input = body(
+        1,
+        DynamicsShape::Sphere { radius },
+        mass,
+        [0.0, SURFACE - 2.0, 0.0],
+    );
+    input.angular_velocity = [0.0, spin, 0.0];
+    let mut solver = world(&[input], [0.0, 0.0]);
+    solver.step(STEP, 1, &[]).unwrap();
+    let water = solver.water_readout(DynamicsBodyId(1)).unwrap();
+    assert!((water.submerged_fraction - 1.0).abs() < 1.0e-12);
+    let inertia = 0.4 * mass * radius * radius;
+    let expected = -inertia * spin * (1.0 - (-DRAG * STEP).exp()) / STEP;
+    assert!(
+        (water.torque[1] - expected).abs() < 0.01 * expected.abs(),
+        "{water:?} against {expected}"
+    );
+    assert!(water.torque[0].abs() < 1.0e-9 && water.torque[2].abs() < 1.0e-9);
+}

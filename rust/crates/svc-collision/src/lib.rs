@@ -43,9 +43,7 @@ mod static_mesh;
 mod tether;
 mod water;
 
-pub use water::{
-    shape_volume, submerged, DynamicsWaterPlane, DynamicsWaterReadout, Submerged, CAPSULE_SLICES,
-};
+pub use water::{shape_volume, submerged, DynamicsWaterPlane, DynamicsWaterReadout, Submerged};
 
 pub use tether::{
     DynamicsRopeSolverConfig, DynamicsTether, DynamicsTetherEndpoint, DynamicsTetherError,

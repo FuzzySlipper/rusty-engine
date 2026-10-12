@@ -8,16 +8,15 @@
 //! velocity toward the current and slows its spin, both in proportion to the
 //! submerged fraction. The water does not feel the body.
 //!
-//! Submerged volumes: a sphere's cap and a box's clipped tetrahedra are exact;
-//! a capsule is integrated in [`CAPSULE_SLICES`] slices along its axis, each
-//! slice's disk cut exactly by the surface.
+//! Submerged volumes: a sphere's cap and a box's clipped tetrahedra are exact.
+//! A capsule is its cylinder and two hemispheres: exact when upright or level,
+//! otherwise each integrated by piecewise Gauss-Legendre in slices cut exactly
+//! by the surface, split where the surface is tangent to a slice, to within
+//! 1e-6 of the submerged volume.
 
 use rapier3d_f64::prelude::{Rotation, Vector};
 
 use crate::DynamicsShape;
-
-/// Slices a capsule is integrated in along its axis.
-pub const CAPSULE_SLICES: usize = 48;
 
 /// A flat stretch of water.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -76,7 +75,8 @@ pub struct DynamicsWaterReadout {
     /// The buoyant force, and the drag force toward the current.
     pub buoyancy: [f64; 3],
     pub drag: [f64; 3],
-    /// The buoyant force's torque about the centre of mass.
+    /// The water's torque about the centre of mass: the buoyant force's
+    /// moment and the angular drag.
     pub torque: [f64; 3],
 }
 
@@ -244,6 +244,75 @@ fn clip_tetrahedron(points: [Vector; 4], surface: f64) -> (f64, Vector) {
     }
 }
 
+/// Gauss-Legendre nodes and weights on [-1, 1], the positive half of 16.
+const GAUSS: [(f64, f64); 8] = [
+    (0.095_012_509_837_637_44, 0.189_450_610_455_068_5),
+    (0.281_603_550_779_258_9, 0.182_603_415_044_923_6),
+    (0.458_016_777_657_227_4, 0.169_156_519_395_002_5),
+    (0.617_876_244_402_643_7, 0.149_595_988_816_576_7),
+    (0.755_404_408_355_003, 0.124_628_971_255_533_9),
+    (0.865_631_202_387_831_7, 0.095_158_511_682_492_78),
+    (0.944_575_023_073_232_6, 0.062_253_523_938_647_89),
+    (0.989_400_934_991_649_9, 0.027_152_459_411_754_09),
+];
+
+/// Composite Gauss-Legendre of a volume density and its first moment over
+/// `[a, b]`, split at `breaks` (where the integrand's derivative is not
+/// smooth) and each piece into [`GAUSS_PIECES`].
+fn integrate(
+    a: f64,
+    b: f64,
+    breaks: &[f64],
+    density: impl Fn(f64) -> (f64, Vector),
+) -> (f64, Vector) {
+    let mut cuts: Vec<f64> = std::iter::once(a)
+        .chain(breaks.iter().copied().filter(|&x| x > a && x < b))
+        .chain(std::iter::once(b))
+        .collect();
+    cuts.sort_by(f64::total_cmp);
+    let (mut volume, mut moment) = (0.0, Vector::ZERO);
+    for pair in cuts.windows(2) {
+        let step = (pair[1] - pair[0]) / GAUSS_PIECES as f64;
+        for piece in 0..GAUSS_PIECES {
+            let low = pair[0] + piece as f64 * step;
+            let (middle, half) = (low + 0.5 * step, 0.5 * step);
+            for (node, weight) in GAUSS {
+                for x in [middle - half * node, middle + half * node] {
+                    let (v, m) = density(x);
+                    volume += weight * half * v;
+                    moment += m * (weight * half);
+                }
+            }
+        }
+    }
+    (volume, moment)
+}
+
+/// Pieces each smooth stretch is split into.
+const GAUSS_PIECES: usize = 2;
+
+/// Below this, an axis counts as upright or level and its exact closed form
+/// is used.
+const LEVEL: f64 = 1.0e-9;
+
+/// The part of a disk of radius `r` on one side of a chord at signed
+/// distance `t` from its centre: its area, and the first moment of that
+/// part along the chord's normal (pointing to the side kept).
+fn beyond_chord(r: f64, t: f64) -> (f64, f64) {
+    if t >= r {
+        return (0.0, 0.0);
+    }
+    if t <= -r {
+        return (std::f64::consts::PI * r * r, 0.0);
+    }
+    let root = (r * r - t * t).sqrt();
+    (r * r * (t / r).acos() - t * root, 2.0 / 3.0 * root.powi(3))
+}
+
+/// A capsule: a cylinder along its axis and a hemisphere at each end, each
+/// integrated exactly where a closed form exists (upright or level) and by
+/// piecewise Gauss-Legendre elsewhere, split where the surface is tangent
+/// to a slice.
 fn capsule(
     centre: Vector,
     rotation: Rotation,
@@ -252,8 +321,6 @@ fn capsule(
     surface: f64,
 ) -> Submerged {
     let axis = rotation * Vector::Y;
-    let reach = half_height + radius;
-    // Wholly above or below: no slicing.
     let extent = half_height * axis.y.abs() + radius;
     if centre.y - extent >= surface {
         return Submerged::NONE;
@@ -267,54 +334,101 @@ fn capsule(
             centroid: centre,
         };
     }
-    // The in-disk direction that rises fastest, and how fast.
-    let tilt = Vector::Y - axis * axis.y;
-    let rise = tilt.length();
-    let up = if rise > 0.0 {
-        tilt / rise
-    } else {
-        Vector::ZERO
-    };
-    let thickness = 2.0 * reach / CAPSULE_SLICES as f64;
-    let (mut volume, mut moment) = (0.0, Vector::ZERO);
-    for slice in 0..CAPSULE_SLICES {
-        let s = -reach + (slice as f64 + 0.5) * thickness;
-        let beyond = s.abs() - half_height;
-        let r2 = if beyond > 0.0 {
-            radius * radius - beyond * beyond
-        } else {
-            radius * radius
-        };
-        if r2 <= 0.0 {
-            continue;
-        }
-        let r = r2.sqrt();
-        let at = centre + axis * s;
-        // A slice also spans its thickness along the axis; nearly level
-        // slices are cut by how much of that span lies under the surface.
-        let span = thickness * axis.y.abs();
-        let (area, offset) = if r * rise < 0.5 * span {
-            let low = at.y - 0.5 * span;
-            let fraction = if span > 0.0 {
-                ((surface - low) / span).clamp(0.0, 1.0)
-            } else if at.y <= surface {
-                1.0
-            } else {
-                0.0
-            };
-            (std::f64::consts::PI * r2 * fraction, Vector::ZERO)
-        } else {
-            // The disk below a chord at distance t from its centre along `up`.
-            let t = ((surface - at.y) / rise).clamp(-r, r);
-            let root = (r2 - t * t).max(0.0).sqrt();
-            let area = r2 * (std::f64::consts::PI - (t / r).acos()) + t * root;
-            let first = -2.0 / 3.0 * (r2 - t * t).max(0.0).powf(1.5);
-            (area, up * first)
-        };
-        volume += area * thickness;
-        moment += (at * area + offset) * thickness;
+    let (mut volume, mut moment) = cylinder(centre, axis, half_height, radius, surface);
+    for sign in [1.0, -1.0] {
+        let (v, m) = hemisphere(
+            centre + axis * (sign * half_height),
+            axis * sign,
+            radius,
+            surface,
+        );
+        volume += v;
+        moment += m;
     }
     finish(volume, moment)
+}
+
+/// The cylinder between `centre ± axis·half_height` below the surface.
+fn cylinder(
+    centre: Vector,
+    axis: Vector,
+    half_height: f64,
+    radius: f64,
+    surface: f64,
+) -> (f64, Vector) {
+    let area = std::f64::consts::PI * radius * radius;
+    let tilt = Vector::Y - axis * axis.y;
+    let rise = tilt.length();
+    if rise < LEVEL {
+        // Upright: whole disks, below the surface along part of the axis.
+        let below = (surface - centre.y) / axis.y;
+        let (low, high) = if axis.y > 0.0 {
+            (-half_height, below.min(half_height))
+        } else {
+            (below.max(-half_height), half_height)
+        };
+        if high <= low {
+            return (0.0, Vector::ZERO);
+        }
+        let volume = area * (high - low);
+        return (volume, (centre + axis * (0.5 * (low + high))) * volume);
+    }
+    // Each slice's disk, cut by the chord where it meets the surface, at
+    // distance t along the in-disk direction that rises fastest.
+    let up = tilt / rise;
+    let chord = |s: f64| (surface - centre.y - s * axis.y) / rise;
+    let density = |s: f64| {
+        // The part below the surface lies beyond the chord at -t looking
+        // down the disk.
+        let (part, first) = beyond_chord(radius, -chord(s));
+        (part, (centre + axis * s) * part - up * first)
+    };
+    let mut breaks = Vec::new();
+    if axis.y.abs() > 0.0 {
+        for t in [radius, -radius] {
+            breaks.push((surface - centre.y - t * rise) / axis.y);
+        }
+    }
+    integrate(-half_height, half_height, &breaks, density)
+}
+
+/// The hemisphere of radius `radius` about `end`, on the side `outward`
+/// points to, below the surface: integrated in horizontal slices, each a
+/// disk cut by the hemisphere's flat face.
+fn hemisphere(end: Vector, outward: Vector, radius: f64, surface: f64) -> (f64, Vector) {
+    use std::f64::consts::PI;
+    let top = (surface - end.y).min(radius);
+    if top <= -radius {
+        return (0.0, Vector::ZERO);
+    }
+    let flat = outward - Vector::Y * outward.y;
+    let sideways = flat.length();
+    if sideways < LEVEL {
+        // Upright: the slices are whole disks on the outward side of the
+        // centre's height.
+        let (low, high) = if outward.y > 0.0 {
+            (0.0, top)
+        } else {
+            (-radius, top.min(0.0))
+        };
+        if high <= low {
+            return (0.0, Vector::ZERO);
+        }
+        let r2 = radius * radius;
+        let volume = PI * (r2 * (high - low) - (high.powi(3) - low.powi(3)) / 3.0);
+        let height =
+            PI * (r2 * (high * high - low * low) / 2.0 - (high.powi(4) - low.powi(4)) / 4.0);
+        return (volume, end * volume + Vector::Y * height);
+    }
+    let across = flat / sideways;
+    let density = |z: f64| {
+        let r = (radius * radius - z * z).max(0.0).sqrt();
+        // Within the slice, the flat face keeps w·across >= -z·outward.y / sideways.
+        let (part, first) = beyond_chord(r, -z * outward.y / sideways);
+        (part, (end + Vector::Y * z) * part + across * first)
+    };
+    let tangent = radius * sideways;
+    integrate(-radius, top, &[-tangent, tangent], density)
 }
 
 #[cfg(test)]
@@ -369,10 +483,79 @@ mod tests {
         assert!(close(half.centroid.y, -3.0 * r / 8.0, 1.0e-12));
     }
 
-    /// The capsule's slices against a fine integration, upright, lying and
-    /// tilted, at several depths.
+    /// R9883-2: an upright capsule dipped 1 cm is a spherical cap, volume
+    /// and centroid exact; lying down its cylinder is a segment prism and its
+    /// ends a sphere's cap, exact too.
     #[test]
-    fn capsule_slices_stay_within_half_a_percent_of_its_volume() {
+    fn capsule_ends_and_lying_capsules_match_their_closed_forms() {
+        let (hh, r) = (0.6, 0.4);
+        let shape = DynamicsShape::CapsuleY {
+            half_height: hh,
+            radius: r,
+        };
+        for (rotation, bottom) in [
+            (Rotation::IDENTITY, Vector::new(0.0, -hh, 0.0)),
+            (Rotation::from_rotation_z(PI), Vector::new(0.0, -hh, 0.0)),
+        ] {
+            let h = 0.01;
+            let surface = bottom.y - r + h;
+            let part = submerged(shape, Vector::ZERO, rotation, surface);
+            let exact = PI * h * h * (3.0 * r - h) / 3.0;
+            assert!(
+                close(part.volume, exact, 1.0e-9),
+                "{} against {exact}",
+                part.volume
+            );
+            let below = 3.0 * (2.0 * r - h).powi(2) / (4.0 * (3.0 * r - h));
+            assert!(close(part.centroid.y, bottom.y - below, 1.0e-9), "{part:?}");
+            assert!(part.centroid.y < surface);
+        }
+        let lying = Rotation::from_rotation_z(FRAC_PI_2);
+        for d in [0.01, 0.2, 0.5, 0.79] {
+            let part = submerged(shape, Vector::ZERO, lying, d - r);
+            let t = d - r;
+            let segment = r * r * (PI - (t / r).acos()) + t * (r * r - t * t).sqrt();
+            let exact = 2.0 * hh * segment + PI * d * d * (3.0 * r - d) / 3.0;
+            assert!(
+                close(part.volume, exact, 1.0e-9),
+                "depth {d}: {} against {exact}",
+                part.volume
+            );
+        }
+    }
+
+    /// A tilted capsule dipped by its lowest tip, against a fine sampling of
+    /// the region around that tip: the buoyancy and its centre are right at
+    /// first contact, not only on average.
+    #[test]
+    fn a_tilted_capsule_tip_matches_a_fine_sampling() {
+        let (hh, r) = (0.6, 0.4);
+        let shape = DynamicsShape::CapsuleY {
+            half_height: hh,
+            radius: r,
+        };
+        let rotation = Rotation::from_rotation_z(0.5);
+        let lowest = -(hh * 0.5f64.cos() + r);
+        for dip in [0.02, 0.1] {
+            let surface = lowest + dip;
+            let part = submerged(shape, Vector::ZERO, rotation, surface);
+            let (volume, centroid) = sampled_region(hh, r, rotation, surface, lowest);
+            assert!(
+                close(part.volume, volume, 0.01),
+                "dip {dip}: {} against {volume}",
+                part.volume
+            );
+            assert!(
+                (part.centroid - centroid).length() < 0.01 * r,
+                "{part:?} against {centroid:?}"
+            );
+            assert!(part.centroid.y < surface);
+        }
+    }
+
+    /// Across tilts and depths, within a fine sampling's own resolution.
+    #[test]
+    fn capsule_volumes_match_a_fine_sampling_at_any_tilt() {
         let (half_height, radius) = (0.6, 0.4);
         let shape = DynamicsShape::CapsuleY {
             half_height,
@@ -385,7 +568,7 @@ mod tests {
                 let part = submerged(shape, Vector::ZERO, rotation, depth);
                 let reference = sampled(half_height, radius, rotation, depth);
                 assert!(
-                    (part.volume - reference).abs() < 0.005 * whole,
+                    (part.volume - reference).abs() < 0.003 * whole,
                     "tilt {angle}, surface {depth}: {} against {reference}",
                     part.volume
                 );
@@ -393,9 +576,48 @@ mod tests {
         }
     }
 
+    /// Volume and centroid of the capsule below `surface`, by a fine grid
+    /// over the slab between its lowest point and the surface.
+    fn sampled_region(
+        half_height: f64,
+        radius: f64,
+        rotation: Rotation,
+        surface: f64,
+        lowest: f64,
+    ) -> (f64, Vector) {
+        const N: i32 = 400;
+        let reach = half_height + radius;
+        let (dx, dy) = (
+            2.0 * reach / f64::from(N),
+            (surface - lowest) / f64::from(N),
+        );
+        let inverse = rotation.inverse();
+        let (mut volume, mut moment) = (0.0, Vector::ZERO);
+        for i in 0..N {
+            for j in 0..N {
+                for k in 0..N {
+                    let p = Vector::new(
+                        -reach + (f64::from(i) + 0.5) * dx,
+                        lowest + (f64::from(j) + 0.5) * dy,
+                        -reach + (f64::from(k) + 0.5) * dx,
+                    );
+                    let local = inverse * p;
+                    let along = local.y.clamp(-half_height, half_height);
+                    let d2 = local.x * local.x + (local.y - along).powi(2) + local.z * local.z;
+                    if d2 <= radius * radius {
+                        let cell = dx * dy * dx;
+                        volume += cell;
+                        moment += p * cell;
+                    }
+                }
+            }
+        }
+        (volume, moment / volume)
+    }
+
     /// The submerged volume by a fine grid of points.
     fn sampled(half_height: f64, radius: f64, rotation: Rotation, surface: f64) -> f64 {
-        const N: i32 = 160;
+        const N: i32 = 240;
         let reach = half_height + radius;
         let step = 2.0 * reach / f64::from(N);
         let inverse = rotation.inverse();

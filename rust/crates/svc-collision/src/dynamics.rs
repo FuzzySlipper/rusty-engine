@@ -708,11 +708,19 @@ impl DynamicsSolver {
             let change = relative * ((-plane.linear_drag * fraction * dt).exp() - 1.0);
             let drag = change * (body.mass() / dt);
             body.apply_impulse(drag * dt, true);
-            let spin = body.angvel() * (-plane.angular_drag * fraction * dt).exp();
-            body.set_angvel(spin, true);
+            let spin = body.angvel();
+            let slowed = spin * (-plane.angular_drag * fraction * dt).exp();
+            body.set_angvel(slowed, true);
+            // The torque that slowing took: the change in angular momentum,
+            // through the body's inertia in its principal frame.
+            let mass = &body.mass_properties().local_mprops;
+            let frame = *body.rotation() * mass.principal_inertia_local_frame;
+            let change = frame.inverse() * (slowed - spin);
+            let spin_drag = frame * (change * mass.principal_inertia()) / dt;
             sum.buoyancy = add(sum.buoyancy, buoyancy.to_array());
             sum.drag = add(sum.drag, drag.to_array());
-            sum.torque = add(sum.torque, (part.centroid - com).cross(buoyancy).to_array());
+            let torque = (part.centroid - com).cross(buoyancy) + spin_drag;
+            sum.torque = add(sum.torque, torque.to_array());
         }
     }
 
