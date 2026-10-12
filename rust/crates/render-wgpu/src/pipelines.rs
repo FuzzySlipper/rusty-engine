@@ -112,13 +112,15 @@ pub(crate) struct Layouts {
     pub shader_errors: Vec<String>,
 }
 
-/// One target format's pipelines: the sky, the sun added over the
+/// One target format's pipelines: the sky, the sun and moon added over the
 /// background, the cloud layer blended over both, and a world pipeline per
 /// feature set and pass, created as materials need them.
 pub(crate) struct Pipelines {
     pub target: ColorTarget,
     pub sky: wgpu::RenderPipeline,
     pub sun: wgpu::RenderPipeline,
+    /// The moon added over the background after the sun (`fs_moon`).
+    pub moon: wgpu::RenderPipeline,
     pub clouds: wgpu::RenderPipeline,
     /// The raymarched clouds' reduced target over the background
     /// (`fs_clouds_composite`).
@@ -663,6 +665,15 @@ impl Layouts {
                 "render-wgpu sun",
                 &self.sun_pipeline,
                 "fs_sun",
+                Some(wgpu::BlendState {
+                    color: added,
+                    alpha: added,
+                }),
+            ),
+            moon: background(
+                "render-wgpu moon",
+                &self.sun_pipeline,
+                "fs_moon",
                 Some(wgpu::BlendState {
                     color: added,
                     alpha: added,

@@ -46,6 +46,9 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     // A twilight (lighting.twilight): the sky's sun's colour, the clouds' twilight depth (degrees) and bloom's threshold and intensity for the disc's radiance.
     private static readonly Color TwilightSunColor = new(1,.6f,.35f,1);
     private const float TwilightDegrees = 8, TwilightBloomThreshold = 1, TwilightBloomIntensity = .6f;
+    // The moon (lighting.moon): over the room toward the sun's azimuth plus a quarter turn, its size, colour, earthshine and halo.
+    private const float MoonElevation = 30, MoonAzimuthOffset = 90, MoonRadiusDegrees = 1.5f, MoonEarthshine = .05f, MoonHalo = .2f;
+    private static readonly Vector3 MoonColor = new(1,.95f,.85f);
     // The cloud layer: its drift over the ground (m/s), altitude and cloud size (m), and an untinted light.
     private static readonly Vector2 CloudDrift = new(8, 3);
     private const float CloudAltitude = 1200, CloudScale = 500;
@@ -692,6 +695,16 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     [DebugCommand("lighting.atmosphere")]
     public string Atmosphere(bool enabled) { engine.CameraView.SetAtmosphere(enabled ? Air : default); return Inspect(); }
     // The sky's sun placed apart from the ground's light at the given elevation (degrees, below the horizon when negative) on the light's azimuth, its disc at the given radiance with bloom, and the cloud layer lit through a twilight, the camera up toward it; lighting.atmosphere restores the light's sun.
+    // The moon in the sky beside the sun, lit fraction 0 (new) to 1 (full) at the given radiance (0 takes it away), with the camera up toward it.
+    [DebugCommand("lighting.moon")]
+    public string Moon(float phase, float radiance)
+    {
+        float up = float.DegreesToRadians(MoonElevation), azimuth = float.DegreesToRadians(SunAzimuth + MoonAzimuthOffset);
+        var toward = new Vector3(MathF.Cos(up)*MathF.Sin(azimuth),MathF.Sin(up),MathF.Cos(up)*MathF.Cos(azimuth));
+        engine.CameraView.SetMoon(new(toward,MoonRadiusDegrees,MoonColor,radiance,Math.Clamp(phase,0,1),MoonEarthshine,MoonHalo));
+        engine.CameraView.UpdateCamera(new(camera,Camera(SkyEye,SkyEye+toward*Horizon)));
+        return Inspect();
+    }
     [DebugCommand("lighting.twilight")]
     public string Twilight(float elevation, float radiance)
     {

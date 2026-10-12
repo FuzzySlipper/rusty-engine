@@ -405,6 +405,33 @@ pub struct NativeAtmosphereRequest {
     pub sky_sun_intensity: f32,
 }
 
+/// The moon in the sky, apart from the sun, when `radiance` is above 0 (0,
+/// the default, takes it away). A disc of `radius_degrees` (0 to 20) toward
+/// `direction` (world space, toward the moon, any length), its lit part
+/// `radiance` (0 to 1000, linear HDR) times `color` (linear, 0 to 16 a
+/// channel). The sky shows it at up to full brightness, added over the sky
+/// so it reads as a pale disc by day, under the clouds and behind the world
+/// and the backdrop; with bloom on, a radiance above bloom's threshold
+/// blooms as the sun's does. `phase` is the lit fraction, 0 (new) to 1
+/// (full), with its lit limb toward the sky's sun (`SetAtmosphere`'s, or the
+/// brightest directional light; up without one). `earthshine` (0 to 1)
+/// lights the dark part by that share of the radiance, and `halo` (0 to 16)
+/// adds a glow a few degrees wide. The moon lights nothing: the clouds and
+/// haze keep the sky's sun, and a product lights the world with its own
+/// moonlight.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeMoonRequest {
+    pub direction: NativeVec3,
+    pub radius_degrees: f32,
+    /// Linear RGB.
+    pub color: NativeVec3,
+    pub radiance: f32,
+    pub phase: f32,
+    pub earthshine: f32,
+    pub halo: f32,
+}
+
 /// Sun shafts: the sky around the sun (the brightest enabled directional
 /// world light) blurred along rays from it, so light streams past whatever
 /// stands in front of it. `intensity` (0 to 16) scales the light added; 0

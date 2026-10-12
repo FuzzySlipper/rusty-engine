@@ -161,6 +161,7 @@ impl Renderer {
             RenderDiff::SetSunShafts { sun_shafts } => {
                 self.tables.sun_shafts = *sun_shafts;
             }
+            RenderDiff::SetMoon { moon } => self.tables.moon = *moon,
             RenderDiff::SetWind { wind } => self.tables.wind = *wind,
             RenderDiff::SetWetness { wetness } => self.tables.wetness = *wetness,
             RenderDiff::SetBackdrop { camera, backdrop } => {
@@ -2647,6 +2648,7 @@ fn op_name(op: &RenderDiff) -> &'static str {
         RenderDiff::SetColorGrading { .. } => "setColorGrading",
         RenderDiff::SetAtmosphere { .. } => "setAtmosphere",
         RenderDiff::SetSunShafts { .. } => "setSunShafts",
+        RenderDiff::SetMoon { .. } => "setMoon",
         RenderDiff::SetWind { .. } => "setWind",
         RenderDiff::SetClouds { .. } => "setClouds",
         RenderDiff::SetWetness { .. } => "setWetness",

@@ -894,6 +894,43 @@ to the Engine default. Selecting one replaces the other. Both selected blend
 textures stay live until the selection changes; clear the sky before releasing
 them. The Engine owns GPU lifetime and panorama orientation.
 
+## The moon
+
+A moon of its own stands in the sky beside the sun, with a phase:
+
+```csharp
+engine.CameraView.SetMoon(new(Direction: towardMoon, RadiusDegrees: 0.8f,
+    Color: new Vector3(1, 0.95f, 0.85f), Radiance: 2, Phase: 0.3f, Earthshine: 0.05f, Halo: 0.2f));
+engine.CameraView.SetMoon(default); // no moon
+```
+
+- `Direction` (world space, toward the moon, any length) places it, and
+  `RadiusDegrees` (0 to 20) sizes its disc. `Color` (linear, 0 to 16 a
+  channel) and `Radiance` (0 to 1000; 0, the default, takes the moon away)
+  light it. A product warms and enlarges a rising moon by changing them.
+- `Phase` is the lit fraction, 0 (new) to 1 (full). The lit limb turns
+  toward the sky's sun (the [atmosphere](#exposure-tone-mapping-and-fog)'s
+  `SkySunDirection`, or the brightest directional light; up without one):
+  a crescent at dusk faces the setting sun. The terminator softens over a
+  few pixels. The dark part shows the sky behind it, lit by `Earthshine`
+  (0 to 1, a share of the radiance), and `Halo` (0 to 16) adds a glow a few
+  degrees wide.
+- It is added over the sky, panorama or clear colour, after the sun's disc:
+  by day its lit part is a pale disc over the blue and its dark part is the
+  sky. The background is never finished, so it shows at most at full
+  brightness. The cloud layer covers it as it covers the sky, toward the
+  horizon fading into it, and the world and the [backdrop](#the-backdrop)
+  hide it.
+- With [bloom](#exposure-tone-mapping-and-fog) on, a radiance above bloom's
+  threshold blooms as the sun's disc does, through the same pass: only
+  where the world leaves the sky open, less what the clouds cover.
+- It lights nothing and changes nothing else: the clouds, the haze and sun
+  shafts keep the sky's sun. A product lights its world at night with its
+  own directional moonlight.
+- It is retained camera-view state, like the atmosphere. It costs one
+  fullscreen draw in the background pass, as the sun's disc does, and with
+  bloom a share of the sun's glow pass.
+
 ## Clouds
 
 A cloud layer drifts over the sky panorama, lit by the sun:
@@ -1362,6 +1399,8 @@ around the camera; none in the room under its roof),
 `lighting.clouds <coverage>` (a drifting cloud layer over the panorama, with
 the camera up toward it; 0 clears it, and `lighting.sky` moves the sun that
 lights it from noon to dusk),
+`lighting.moon <phase> <radiance>` (the moon beside the sun, with the
+camera up toward it; radiance 0 takes it away),
 `lighting.twilight <elevation> <radiance>` (the sky's sun apart from the
 ground's light at that elevation, below the horizon when negative, its disc
 blooming at that radiance, over clouds lit through an 8° twilight;

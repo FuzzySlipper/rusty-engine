@@ -79,6 +79,7 @@ pub(crate) struct RuntimeCameraViewCall {
     pub(crate) color_grading: Option<Option<ColorGradingDescriptor>>,
     pub(crate) atmosphere: Option<Option<AtmosphereDescriptor>>,
     pub(crate) sun_shafts: Option<Option<SunShaftsDescriptor>>,
+    pub(crate) moon: Option<Option<render_model::MoonDescriptor>>,
     pub(crate) wind: Option<Option<WindDescriptor>>,
     pub(crate) clouds: Option<Option<CloudsDescriptor>>,
     pub(crate) wetness: Option<Option<WetnessDescriptor>>,
@@ -278,6 +279,7 @@ impl RuntimeCameraViewBridge {
             color_grading: None,
             atmosphere: None,
             sun_shafts: None,
+            moon: None,
             wind: None,
             clouds: None,
             wetness: None,
@@ -342,6 +344,7 @@ impl RuntimeCameraViewBridge {
             color_grading: None,
             atmosphere: None,
             sun_shafts: None,
+            moon: None,
             wind: None,
             clouds: None,
             wetness: None,
@@ -643,6 +646,7 @@ impl RuntimeCameraViewBridge {
             color_grading: None,
             atmosphere: None,
             sun_shafts: None,
+            moon: None,
             wind: None,
             clouds: None,
             wetness: None,
@@ -960,6 +964,35 @@ impl RuntimeCameraViewBridge {
             ));
         }
         self.staged_mut()?.sun_shafts = Some((request.intensity > 0.0).then_some(shafts));
+        Ok(())
+    }
+
+    fn set_moon(&mut self, request: NativeMoonRequest) -> Result<(), CsharpEngineServicesError> {
+        let moon = render_model::MoonDescriptor {
+            direction: [
+                request.direction.x,
+                request.direction.y,
+                request.direction.z,
+            ],
+            radius_degrees: request.radius_degrees,
+            color: [request.color.x, request.color.y, request.color.z],
+            radiance: request.radiance,
+            phase: request.phase,
+            earthshine: request.earthshine,
+            halo: request.halo,
+        };
+        // Radiance 0 (the default request) takes the moon away, whatever else.
+        if request.radiance == 0.0 {
+            self.staged_mut()?.moon = Some(None);
+            return Ok(());
+        }
+        if !moon.valid() {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_MOON",
+                "the moon needs a finite direction with some length, a radius within 0 to 20 degrees, colour channels and a halo within 0 to 16, a radiance within 0 to 1000, and a phase and earthshine within 0 to 1",
+            ));
+        }
+        self.staged_mut()?.moon = Some(Some(moon));
         Ok(())
     }
 
@@ -1587,6 +1620,9 @@ pub(crate) fn environment_frame(
     }
     if let Some(sun_shafts) = call.sun_shafts {
         operations.push(RenderDiff::SetSunShafts { sun_shafts });
+    }
+    if let Some(moon) = call.moon {
+        operations.push(RenderDiff::SetMoon { moon });
     }
     if let Some(wind) = call.wind {
         operations.push(RenderDiff::SetWind { wind });
@@ -2221,6 +2257,27 @@ pub(crate) unsafe extern "C" fn set_sun_shafts(
     }
     let bridge = unsafe { &mut *context.cast::<RuntimeCameraViewBridge>() };
     match bridge.set_sun_shafts(unsafe { *request }) {
+        Ok(()) => ABI_OK,
+        Err(error) => {
+            bridge.operation_diagnostics.retain(&error, operation_error);
+            0
+        }
+    }
+}
+
+pub(crate) unsafe extern "C" fn set_moon(
+    context: *mut c_void,
+    request: *const NativeMoonRequest,
+    operation_error: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    if !operation_error.is_null() {
+        unsafe { *operation_error = std::mem::zeroed() };
+    }
+    if context.is_null() || request.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeCameraViewBridge>() };
+    match bridge.set_moon(unsafe { *request }) {
         Ok(()) => ABI_OK,
         Err(error) => {
             bridge.operation_diagnostics.retain(&error, operation_error);

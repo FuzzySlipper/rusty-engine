@@ -38,6 +38,14 @@ struct Frame {
     atmosphere: vec4<f32>,
     // rgb: the linear haze colour; w: the sun halo's strength.
     haze: vec4<f32>,
+    // The moon (`sky.wgsl` `moon_seen`): xyz toward it, w its angular radius
+    // in radians (0: no moon).
+    moon: vec4<f32>,
+    // rgb: its linear colour; w: its radiance.
+    moon_color: vec4<f32>,
+    // x: its lit fraction (0 new, 1 full); y: the earthshine on its dark
+    // part, a share of its radiance; z: its halo's strength.
+    moon_shape: vec4<f32>,
     // The sky's light: x its intensity (0: off), y the specular cube's last
     // mip level (its roughest); z the sun disc's and halo's radiance (0: they
     // follow the light's intensity and do not bloom); w the least light bloom

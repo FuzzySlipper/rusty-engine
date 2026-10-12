@@ -19,6 +19,7 @@
 //! | `color_grading` | (single) | white balance, contrast and saturation before the tone mapping operator | `SetColorGrading` |
 //! | `atmosphere` | (single) | height fog, sun haze and the sun in the sky | `SetAtmosphere` |
 //! | `sun_shafts` | (single) | the finish pass's sun shafts | `SetSunShafts` |
+//! | `moon` | (single) | the moon in the sky | `SetMoon` |
 //! | `wind` | (single) | the scene's wind, in the frame uniform | `SetWind` |
 //! | `clouds` | (single) | the sky's cloud layer and its shade on the ground | `SetClouds` |
 //! | `wetness` | (single) | how wet the scene's surfaces are, in the frame uniform | `SetWetness` |
@@ -791,6 +792,8 @@ pub(crate) struct Tables {
     pub color_grading: Option<render_model::ColorGradingDescriptor>,
     pub atmosphere: Option<render_model::AtmosphereDescriptor>,
     pub sun_shafts: Option<render_model::SunShaftsDescriptor>,
+    /// The moon in the sky (`sky.wgsl` `fs_moon`).
+    pub moon: Option<render_model::MoonDescriptor>,
     pub wind: Option<render_model::WindDescriptor>,
     /// The sky's cloud layer (`sky.wgsl` `fs_clouds`).
     pub clouds: Option<render_model::CloudsDescriptor>,
@@ -848,6 +851,7 @@ impl Tables {
             color_grading: None,
             atmosphere: None,
             sun_shafts: None,
+            moon: None,
             wind: None,
             clouds: None,
             wetness: None,

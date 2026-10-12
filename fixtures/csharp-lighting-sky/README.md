@@ -27,6 +27,7 @@ mask and ripple normal map (`lighting.water`).
 `lighting.clouds.volumetric off|low|high` draws the cloud layer raymarched,
 and `lighting.clouds.region <id> <x> <z> <radius> <coverage> <darkness>` and
 `lighting.clouds.region.remove <id>` a drifting storm over the layer;
+`lighting.moon <phase> <radiance>` puts the moon in the sky beside the sun;
 `lighting.twilight <elevation> <radiance>` places the sky's sun apart from the
 ground's light (below the horizon when negative), its disc blooming at that
 radiance, over clouds lit through an 8° twilight; the panel behind

@@ -209,6 +209,7 @@ fn engine_api(
             set_color_grading: crate::camera_view::set_color_grading,
             set_atmosphere: crate::camera_view::set_atmosphere,
             set_sun_shafts: crate::camera_view::set_sun_shafts,
+            set_moon: crate::camera_view::set_moon,
             set_wind: crate::camera_view::set_wind,
             set_clouds: crate::camera_view::set_clouds,
             set_wetness: crate::camera_view::set_wetness,
@@ -1894,6 +1895,91 @@ mod tests {
         assert_eq!(
             call.take_output().frames[0].ops,
             [render_model::RenderDiff::SetSkyLight { sky_light: None }]
+        );
+    }
+
+    #[test]
+    fn the_moon_publishes_as_retained_environment_and_zero_radiance_takes_it_away() {
+        use crate::operation_diagnostics::{empty_receipt, receipt_codes};
+        let mut services = EngineServiceSet::new(
+            parse_runtime_appearance_catalog(None).expect("default catalog"),
+            BTreeMap::new(),
+            None,
+            RuntimeDiagnosticsSink::new(Default::default()).unwrap(),
+        )
+        .expect("service set");
+        let request = |radiance, phase| NativeMoonRequest {
+            direction: NativeVec3 {
+                x: 0.3,
+                y: 0.4,
+                z: -1.0,
+            },
+            radius_degrees: 1.2,
+            color: NativeVec3 {
+                x: 1.0,
+                y: 0.95,
+                z: 0.85,
+            },
+            radiance,
+            phase,
+            earthshine: 0.05,
+            halo: 0.2,
+        };
+        services.begin_call(binding());
+        let api = services.api();
+        let set = |request: NativeMoonRequest, refusal| unsafe {
+            (api.camera_view.set_moon)(api.camera_view.context, &request, refusal)
+        };
+        assert_eq!(set(request(4.0, 0.25), std::ptr::null_mut()), ABI_OK);
+        let mut call = services.finish_call().expect("moon call");
+        let selected = render_model::RenderDiff::SetMoon {
+            moon: Some(render_model::MoonDescriptor {
+                direction: [0.3, 0.4, -1.0],
+                radius_degrees: 1.2,
+                color: [1.0, 0.95, 0.85],
+                radiance: 4.0,
+                phase: 0.25,
+                earthshine: 0.05,
+                halo: 0.2,
+            }),
+        };
+        assert_eq!(
+            call.take_output().frames[0].ops,
+            std::slice::from_ref(&selected)
+        );
+        let attachment = services
+            .snapshot_outputs(binding())
+            .expect("fresh attachment");
+        let CsharpAppearanceCallOutput::Frame(frame) = &attachment.appearance[0] else {
+            panic!("baseline graphics frame");
+        };
+        assert!(frame.ops.contains(&selected));
+
+        services.begin_call(binding());
+        let api = services.api();
+        let set = |request: NativeMoonRequest, refusal| unsafe {
+            (api.camera_view.set_moon)(api.camera_view.context, &request, refusal)
+        };
+        let nowhere = NativeMoonRequest {
+            direction: NativeVec3 {
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+            },
+            ..request(4.0, 0.5)
+        };
+        for refused in [request(4.0, 1.5), request(2000.0, 0.5), nowhere] {
+            let mut refusal = empty_receipt();
+            assert_eq!(set(refused, &mut refusal), 0);
+            assert_eq!(receipt_codes(&refusal), ["CSHARP_MOON"]);
+        }
+        // The default request takes it away.
+        let off: NativeMoonRequest = unsafe { std::mem::zeroed() };
+        assert_eq!(set(off, std::ptr::null_mut()), ABI_OK);
+        let mut call = services.finish_call().expect("off");
+        assert_eq!(
+            call.take_output().frames[0].ops,
+            [render_model::RenderDiff::SetMoon { moon: None }]
         );
     }
 

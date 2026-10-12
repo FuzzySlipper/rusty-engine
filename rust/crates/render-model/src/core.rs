@@ -271,6 +271,51 @@ impl SunShaftsDescriptor {
     }
 }
 
+/// The moon in the sky, apart from the sun: a disc of `radius_degrees`
+/// toward `direction` (world space, any length), its lit part `radiance`
+/// times `color` (linear HDR). `phase` is the lit fraction, 0 (new) to 1
+/// (full); the lit limb turns toward the sky's sun. `earthshine` (0 to 1)
+/// lights the dark part by that share of the radiance, and `halo` adds a
+/// glow a few degrees wide of that strength.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MoonDescriptor {
+    pub direction: [f32; 3],
+    pub radius_degrees: f32,
+    pub color: [f32; 3],
+    pub radiance: f32,
+    pub phase: f32,
+    pub earthshine: f32,
+    pub halo: f32,
+}
+
+impl MoonDescriptor {
+    /// The largest disc radius a product may set, in degrees.
+    pub const MAX_RADIUS_DEGREES: f32 = 20.0;
+    /// The largest colour channel and halo.
+    pub const MAX_COLOR: f32 = 16.0;
+    /// The largest radiance a product may set.
+    pub const MAX_RADIANCE: f32 = 1000.0;
+
+    /// A finite direction with some length, a radius within
+    /// `0..=MAX_RADIUS_DEGREES`, colour channels and a halo within
+    /// `0..=MAX_COLOR`, a radiance within `0..=MAX_RADIANCE`, and a phase and
+    /// earthshine within `0..=1`.
+    pub fn valid(&self) -> bool {
+        let [x, y, z] = self.direction;
+        let unit = 0.0..=1.0;
+        let color = 0.0..=Self::MAX_COLOR;
+        [x, y, z].iter().all(|value| value.is_finite())
+            && x * x + y * y + z * z > 0.0
+            && (0.0..=Self::MAX_RADIUS_DEGREES).contains(&self.radius_degrees)
+            && self.color.iter().all(|channel| color.contains(channel))
+            && (0.0..=Self::MAX_RADIANCE).contains(&self.radiance)
+            && unit.contains(&self.phase)
+            && unit.contains(&self.earthshine)
+            && color.contains(&self.halo)
+    }
+}
+
 /// The scene's wind, which materials with the wind feature
 /// (`RenderMaterialDescriptor::wind`) and product displace stages sway in.
 /// `direction` is over the ground (world x, z; any length, normalized when
@@ -1341,6 +1386,10 @@ pub enum RenderDiff {
     SetSunShafts {
         sun_shafts: Option<SunShaftsDescriptor>,
     },
+    /// Selects the moon in the sky; None takes it away.
+    SetMoon {
+        moon: Option<MoonDescriptor>,
+    },
     /// Selects the scene's wind; None stills it.
     SetWind {
         wind: Option<WindDescriptor>,
@@ -1595,6 +1644,8 @@ impl RenderDiff {
                 sun_shafts: Some(sun_shafts),
             } if !sun_shafts.valid() => Err(RenderOperationError::SunShafts),
             Self::SetSunShafts { .. } => Ok(()),
+            Self::SetMoon { moon: Some(moon) } if !moon.valid() => Err(RenderOperationError::Moon),
+            Self::SetMoon { .. } => Ok(()),
             Self::SetWind { wind: Some(wind) } if !wind.valid() => Err(RenderOperationError::Wind),
             Self::SetWind { .. } => Ok(()),
             Self::SetClouds {
@@ -1757,6 +1808,7 @@ impl RenderDiff {
             | Self::SetColorGrading { .. }
             | Self::SetAtmosphere { .. }
             | Self::SetSunShafts { .. }
+            | Self::SetMoon { .. }
             | Self::SetWind { .. }
             | Self::SetClouds { .. }
             | Self::SetWetness { .. }
@@ -1813,6 +1865,7 @@ pub enum RenderOperationError {
     ColorGrading,
     Atmosphere,
     SunShafts,
+    Moon,
     Wind,
     Clouds,
     Wetness,
@@ -1903,6 +1956,7 @@ impl RenderFrameDiff {
                 | RenderDiff::SetColorGrading { .. }
                 | RenderDiff::SetAtmosphere { .. }
                 | RenderDiff::SetSunShafts { .. }
+                | RenderDiff::SetMoon { .. }
                 | RenderDiff::SetWind { .. }
                 | RenderDiff::SetClouds { .. }
                 | RenderDiff::SetWetness { .. }

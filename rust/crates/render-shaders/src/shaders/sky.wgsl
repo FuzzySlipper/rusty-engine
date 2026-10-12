@@ -1,9 +1,10 @@
 // The equirectangular sky behind the world pass, blending two panoramas;
 // the sun's disc and halo (`Frame.sun`, `Frame.atmosphere`), added over the
-// sky or clear colour when the atmosphere draws them; and the cloud layer
+// sky or clear colour when the atmosphere draws them, and the moon's
+// (`Frame.moon`, `fs_moon`); and the cloud layer
 // over both, flat (`fs_clouds`) or raymarched (`fs_clouds_march`, drawn by
-// `fs_clouds_composite`). With a disc radiance the sun's light also goes to
-// bloom (`fs_sun_glow`).
+// `fs_clouds_composite`). With a disc radiance the sun's light, and the
+// moon's, also go to bloom (`fs_sun_glow`).
 
 #import rusty::types::PI
 #import rusty::view::{frame, world_equivalent}
@@ -338,8 +339,10 @@ fn sun_display() -> f32 {
     return min(frame.sun_color.w, 1.0);
 }
 
-// The sun's light for bloom, in its colour: the disc at its radiance
-// (`Frame.sky_light.z`) and the halo at its strength, drawn into a bloom
+// The sun's and the moon's light for bloom, each in its colour: the sun's
+// disc at its radiance (`Frame.sky_light.z`) and its halo at its strength
+// when it has one, and the moon's lit disc at its radiance and its halo at
+// its strength (`moon_glow`), drawn into a bloom
 // chain's glow at its first mip's size (render-wgpu `frame.rs`
 // `draw_sun_glow`). Bloom's prefilter adds it where the world leaves the sky
 // open (`post.wgsl` `fs_bloom_prefilter`); no other pass sees it. What the
@@ -350,7 +353,59 @@ fn sun_display() -> f32 {
 // out before the clouds are read.
 fn sun_glow(direction: vec3<f32>) -> vec3<f32> {
     let sun = sun_seen(direction);
-    return frame.sun_color.rgb * (frame.sky_light.z * sun.x + sun.y);
+    let moon = moon_seen(direction);
+    var glow = frame.moon_color.rgb * (frame.moon_color.w * moon.x + moon.y);
+    if frame.sky_light.z > 0.0 {
+        glow += frame.sun_color.rgb * (frame.sky_light.z * sun.x + sun.y);
+    }
+    return glow;
+}
+
+// Added onto the background (one-one blending), after the sun.
+@fragment
+fn fs_moon(in: SkyOut) -> @location(0) vec4<f32> {
+    let moon = moon_seen(view_direction(in.ndc));
+    return vec4<f32>(frame.moon_color.rgb * min(frame.moon_color.w, 1.0) * (moon.x + moon.y), 0.0);
+}
+
+// The moon seen along `direction` (`Frame.moon`), in its colour once
+// scaled: x its disc, of the set angular radius with an antialiased rim, lit
+// by its phase (`Frame.moon_shape`) with the earthshine on its dark part; y
+// its halo a few degrees wide, at its strength. The sky's sun lights it:
+// its lit limb turns toward the sun (up without one), and its lit fraction
+// sets the angle the light comes from, from behind it (new) to the eye
+// (full). The terminator softens over a couple of pixels.
+fn moon_seen(direction: vec3<f32>) -> vec2<f32> {
+    let toward = frame.moon.xyz;
+    let radius = frame.moon.w;
+    let cosine = dot(direction, toward);
+    let angle = acos(clamp(cosine, -1.0, 1.0));
+    let rim = max(fwidth(angle), 1e-5);
+    // The moon's face: x toward its lit limb, y across it, z toward the eye.
+    var limb = frame.sun.xyz - toward * dot(frame.sun.xyz, toward);
+    if frame.sun.w <= 0.0 || dot(limb, limb) < 1e-8 {
+        limb = vec3<f32>(0.0, 1.0, 0.0) - toward * toward.y;
+    }
+    if dot(limb, limb) < 1e-8 {
+        limb = vec3<f32>(1.0, 0.0, 0.0) - toward * toward.x;
+    }
+    let along = normalize(limb);
+    let across = cross(toward, along);
+    let offset = direction - toward * cosine;
+    let face = vec2<f32>(dot(offset, along), dot(offset, across)) / max(sin(radius), 1e-5);
+    let normal = vec3<f32>(face, sqrt(max(1.0 - dot(face, face), 0.0)));
+    let phase = 2.0 * frame.moon_shape.x - 1.0;
+    let light = vec3<f32>(sqrt(max(1.0 - phase * phase, 0.0)), 0.0, phase);
+    let facing = dot(normal, light);
+    // Lit from the terminator inward, so a new moon's rim stays dark.
+    let soft = max(fwidth(facing) * 3.0, 0.04);
+    let lit = smoothstep(0.0, soft, facing);
+    if radius <= 0.0 {
+        return vec2<f32>(0.0);
+    }
+    let disc = 1.0 - smoothstep(radius - rim, radius + rim, angle);
+    let halo = frame.moon_shape.z * pow(max(cosine, 0.0), 128.0);
+    return vec2<f32>(disc * mix(frame.moon_shape.y, 1.0, lit), halo);
 }
 
 fn spread(glow: vec3<f32>) -> bool {

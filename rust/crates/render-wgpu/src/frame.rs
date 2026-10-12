@@ -43,13 +43,35 @@ const LIGHT_ROW_FLOATS: usize = 16;
 /// Frame uniform (`rusty::types` `Frame`): two matrices, camera position,
 /// light count and first light; then exposure and fog distances, fog colour,
 /// and the tone mapping and fog modes; then the presentation time and the
-/// colour grading; then the sun, the atmosphere and the sky's light; then
+/// colour grading; then the sun, the atmosphere, the moon and the sky's
+/// light; then
 /// the indirect light volume's origin and grid and the wind; then the cloud
 /// layer, its drift and its shape, the surfaces' wetness and the backdrop's
 /// link; then the light cluster grid and depth range.
-const FRAME_UNIFORM_BYTES: u64 =
-    (16 + 16 + 4 + 4 + 4 + 4 + 4 + 4 + 4 + 4 + 4 * 4 + 4 + 4 + 4 + 4 + 4 + 4 + 4 + 4 + 4 + 4 + 4)
-        * 4;
+const FRAME_UNIFORM_BYTES: u64 = (16
+    + 16
+    + 4
+    + 4
+    + 4
+    + 4
+    + 4
+    + 4
+    + 4
+    + 4
+    + 4 * 4
+    + 3 * 4
+    + 4
+    + 4
+    + 4
+    + 4
+    + 4
+    + 4
+    + 4
+    + 4
+    + 4
+    + 4
+    + 4)
+    * 4;
 /// The backdrop camera's depth range reaches this much past what it shows,
 /// either way.
 const BACKDROP_DEPTH_MARGIN: f32 = 1.01;
@@ -1041,14 +1063,17 @@ impl Renderer {
         }
     }
 
-    /// Whether a view adds the sun's glow for bloom: the atmosphere gives
-    /// the sun a radiance, bloom is on and the sky has a sun.
+    /// Whether a view adds the sun's and the moon's glow for bloom: bloom is
+    /// on, and the atmosphere gives the sky's sun a radiance or the moon
+    /// has one.
     fn sun_glow_wanted(&self) -> bool {
-        self.tables
+        let sun = self
+            .tables
             .atmosphere
             .is_some_and(|atmosphere| atmosphere.sun_radiance > 0.0)
-            && self.tables.bloom.is_some_and(|bloom| bloom.intensity > 0.0)
-            && self.sky_sun().is_some()
+            && self.sky_sun().is_some();
+        let moon = self.tables.moon.is_some_and(|moon| moon.radiance > 0.0);
+        self.tables.bloom.is_some_and(|bloom| bloom.intensity > 0.0) && (sun || moon)
     }
 
     /// Draw the sun's glow (`sky.wgsl` `fs_sun_glow`), through the clouds
@@ -2197,6 +2222,12 @@ impl Renderer {
             pass.set_pipeline(&self.pipelines[sky_index].sun);
             pass.draw(0..3, 0..1);
         }
+        // The moon over them, under the clouds, when it is set.
+        if view.sky && self.tables.moon.is_some() {
+            pass.set_bind_group(0, &self.frame_bind_group, &[]);
+            pass.set_pipeline(&self.pipelines[sky_index].moon);
+            pass.draw(0..3, 0..1);
+        }
         drop(pass);
         // The cloud layer over the panorama and the sun, in a pass of
         // its own so `gpu.passes` times it. Without cover there is no
@@ -2314,6 +2345,9 @@ impl Renderer {
         }
         let atmosphere = self.tables.atmosphere.unwrap_or_default();
         for value in atmosphere_uniform(atmosphere, self.sky_sun()) {
+            bytes.extend_from_slice(&value.to_le_bytes());
+        }
+        for value in moon_uniform(self.tables.moon) {
             bytes.extend_from_slice(&value.to_le_bytes());
         }
         // The sky's light, once its first build is in.
@@ -3327,6 +3361,31 @@ fn atmosphere_uniform(atmosphere: AtmosphereDescriptor, sun: Option<Sun>) -> [f3
         haze_g,
         haze_b,
         atmosphere.sun_halo,
+    ]
+}
+
+/// The frame uniform's moon rows (`rusty::types::Frame`): toward it (unit)
+/// and its angular radius in radians (0: no moon); its colour and radiance;
+/// its phase, earthshine and halo.
+fn moon_uniform(moon: Option<render_model::MoonDescriptor>) -> [f32; 12] {
+    let Some(moon) = moon else {
+        return [0.0; 12];
+    };
+    let toward = crate::convert::vec3(moon.direction).normalize_or_zero();
+    let [r, g, b] = moon.color;
+    [
+        toward.x,
+        toward.y,
+        toward.z,
+        moon.radius_degrees.to_radians(),
+        r,
+        g,
+        b,
+        moon.radiance,
+        moon.phase,
+        moon.earthshine,
+        moon.halo,
+        0.0,
     ]
 }
 
