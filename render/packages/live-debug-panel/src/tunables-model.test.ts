@@ -7,6 +7,7 @@ import {
   controlValueOf,
   fillTemplate,
   isUnsaved,
+  LiveValues,
   parseDescription,
   resolvePointer,
   saveEdits,
@@ -75,4 +76,62 @@ test('descriptions parse and name their bound files once', () => {
   assert.deepEqual(boundFiles(description), ['tuning/marker.json']);
   assert.equal(fillTemplate(description.commands['set'] ?? '', { id: 'marker.size', value: 1.5 }), 'tunables.set marker.size 1.5');
   assert.throws(() => parseDescription('{"contract":"other"}'));
+});
+
+test('a fractional step above one keeps its fraction when shown and saved', () => {
+  const quarter: TunableControl = { ...slider, min: 0, max: 10, step: 2.5, value: 2.5 };
+  assert.equal(stepDecimals(2.5), 1);
+  assert.equal(atStep(quarter, 2.5), 2.5);
+  assert.equal(isUnsaved(quarter, 2.5, 0), true);
+  assert.deepEqual(saveEdits([quarter], new Map([['marker.size', 2.5]]), { sha256: 'x', document: { marker: { size: 0 } } }), [
+    { op: 'replace', path: '/marker/size', value: 2.5 },
+  ]);
+  assert.equal(isUnsaved(quarter, 2.5, 2.5), false);
+});
+
+/** A set the test answers when it chooses: kept value or refusal. */
+function deferredSends() {
+  const calls: { id: string; value: number; answer: (kept: number) => void; refuse: (error: Error) => void }[] = [];
+  const send = (id: string, value: number) =>
+    new Promise<number>((answer, refuse) => calls.push({ id, value, answer, refuse }));
+  return { calls, send };
+}
+
+test('saving waits for pending sets and keeps only the value the product accepted', async () => {
+  const { calls, send } = deferredSends();
+  const live = new LiveValues(send);
+  live.reset([['marker.size', 0.8]]);
+  const set = live.set('marker.size', 9);
+  assert.equal(live.shown('marker.size'), 9, 'the request shows while it is in flight');
+  let settled = false;
+  const saving = live.settled(['marker.size']).then(() => (settled = true));
+  await Promise.resolve();
+  assert.equal(settled, false, 'a save waits for the set to answer');
+  calls[0]!.answer(2);
+  await set;
+  await saving;
+  assert.equal(live.accepted.get('marker.size'), 2);
+  assert.equal(live.shown('marker.size'), 2, 'the control shows the clamped value');
+  const file = { sha256: 'x', document: { marker: { size: 0.8 } } };
+  assert.deepEqual(saveEdits([slider], live.accepted, file), [{ op: 'replace', path: '/marker/size', value: 2 }]);
+});
+
+test('a newer request replaces a waiting one and a refusal keeps the accepted value', async () => {
+  const { calls, send } = deferredSends();
+  const live = new LiveValues(send);
+  live.reset([['marker.size', 0.8]]);
+  const first = live.set('marker.size', 1);
+  void live.set('marker.size', 1.2);
+  void live.set('marker.size', 1.5);
+  calls[0]!.answer(1);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.deepEqual(calls.map((call) => call.value), [1, 1.5], 'only the latest waiting value is sent');
+  calls[1]!.answer(1.5);
+  await first;
+  assert.equal(live.accepted.get('marker.size'), 1.5);
+  const refused = live.set('marker.size', 1.9);
+  calls[2]!.refuse(new Error('CSHARP_DEBUG: refused'));
+  await assert.rejects(refused, /refused/);
+  assert.equal(live.accepted.get('marker.size'), 1.5);
+  assert.equal(live.shown('marker.size'), 1.5, 'a refused request no longer shows');
 });

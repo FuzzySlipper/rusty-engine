@@ -1096,7 +1096,7 @@ declare module "@rusty-engine/live-debug/internal/live-debug-panel/src/tunables-
     export function resolvePointer(document: unknown, pointer: string): unknown;
     /** The control value a source JSON value stands for, or undefined when it cannot be compared. */
     export function controlValueOf(control: TunableControl, source: unknown): number | undefined;
-    /** The decimals a step shows: 0.05 shows two. */
+    /** The decimals a step shows: 0.05 and 2.5 show two and one, 1 and 10 none. */
     export function stepDecimals(step: number): number;
     /** A value as the step spells it, so a saved slider writes 0.25, not 0.25000000372529. */
     export function atStep(control: TunableControl, value: number): number;
@@ -1114,6 +1114,29 @@ declare module "@rusty-engine/live-debug/internal/live-debug-panel/src/tunables-
     }[];
     /** Parses a describe answer, refusing anything that is not a `tunables.v1` description. */
     export function parseDescription(message: string): TunablesDescription;
+    /**
+     * Live control values: the value each control shows, and the value the
+     * product accepted (from the description or a set's answer). One set per
+     * control is in flight; a newer request replaces one still waiting. Save
+     * persists accepted values only, after the controls' sets settle.
+     */
+    export class LiveValues {
+        #private;
+        /** `send` applies one value and answers the value the product kept. */
+        constructor(send: (id: string, value: number) => Promise<number>);
+        /** Takes the accepted values of a new description. */
+        reset(values: Iterable<readonly [string, number]>): void;
+        /** What the control shows: the latest request, else the accepted value. */
+        shown(id: string): number | undefined;
+        get accepted(): ReadonlyMap<string, number>;
+        /**
+         * Requests a value. Settles when the control has no set in flight; a
+         * refusal rejects, and the control shows its accepted value again.
+         */
+        set(id: string, value: number): Promise<void>;
+        /** Waits until none of these controls has a set in flight or waiting. */
+        settled(ids: Iterable<string>): Promise<void>;
+    }
 }
 declare module "@rusty-engine/live-debug/internal/live-debug-panel/src/tunables-panel" {
     import { type LiveDebugTransport } from "@rusty-engine/live-debug/internal/live-debug-client/src/index";

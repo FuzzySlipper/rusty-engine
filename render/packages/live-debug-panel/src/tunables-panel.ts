@@ -6,6 +6,7 @@ import {
   controlValueOf,
   fillTemplate,
   isUnsaved,
+  LiveValues,
   parseDescription,
   resolvePointer,
   saveEdits,
@@ -91,7 +92,7 @@ export class TunablesPanel {
   readonly #describe: string;
   readonly #abort = new AbortController();
   readonly #folded = new Set<string>();
-  readonly #values = new Map<string, number>();
+  readonly #live = new LiveValues((id, value) => this.#applyValue(id, value));
   readonly #files = new Map<string, SourceFile>();
   readonly #views = new Map<string, ControlView>();
   /** Per key, the work waiting behind the request in flight (null: none). */
@@ -142,10 +143,9 @@ export class TunablesPanel {
 
   async #apply(description: TunablesDescription): Promise<void> {
     this.#description = description;
-    this.#values.clear();
-    for (const group of description.groups) {
-      for (const control of group.controls) this.#values.set(control.id, control.value);
-    }
+    this.#live.reset(
+      description.groups.flatMap((group) => group.controls.map((control) => [control.id, control.value] as const)),
+    );
     await this.#readFiles();
     this.#render();
   }
@@ -329,7 +329,7 @@ export class TunablesPanel {
     }
     label.title = control.source ? `${control.source.path} ${control.source.pointer}` : 'Not saved to a file';
     row.append(label, input, reset);
-    show(this.#values.get(control.id) ?? control.value);
+    show(this.#live.shown(control.id) ?? control.value);
     this.#views.set(control.id, { control, row, show });
     return row;
   }
@@ -354,22 +354,30 @@ export class TunablesPanel {
       .finally(() => this.#queued.delete(key));
   }
 
-  /** Applies a value live: one set per control in flight, then its latest value. */
+  /** Sends one set and answers the value the product kept. */
+  async #applyValue(id: string, value: number): Promise<number> {
+    const command = this.#command('set', { id, value });
+    if (command === null) throw new Error('This page has no set command.');
+    const kept = Number(await this.#send(command));
+    if (!Number.isFinite(kept)) throw new Error(`The set of ${id} answered no value.`);
+    return kept;
+  }
+
+  /** Applies a value live; the control then shows what the product kept. */
   #set(control: TunableControl, value: number, committed: boolean): void {
-    this.#values.set(control.id, value);
+    const settled = this.#live.set(control.id, value);
     this.#updateMarks();
-    this.#latest(control.id, async () => {
-      const command = this.#command('set', { id: control.id, value });
-      if (command === null) return;
-      const kept = Number(await this.#send(command));
-      // A newer value waiting to be sent wins over this answer.
-      if (Number.isFinite(kept) && !this.#queued.get(control.id)) {
-        this.#values.set(control.id, kept);
-        this.#views.get(control.id)?.show(kept);
-      }
-      this.#updateMarks();
-      if (committed && control.reshapes) await this.refresh();
-    });
+    void settled
+      .then(() => {
+        if (committed && control.reshapes) return this.refresh();
+        return undefined;
+      })
+      .catch((error: unknown) => this.#report(error, true))
+      .finally(() => {
+        const shown = this.#live.shown(control.id);
+        if (shown !== undefined) this.#views.get(control.id)?.show(shown);
+        this.#updateMarks();
+      });
   }
 
   #reset(control: TunableControl): void {
@@ -384,7 +392,10 @@ export class TunablesPanel {
   async #save(path: string): Promise<void> {
     const file = this.#files.get(path);
     if (!file) return;
-    const edits = saveEdits(this.#controlsOf(path), this.#values, file);
+    // Save what the product accepted, once the file's sets have answered.
+    const controls = this.#controlsOf(path);
+    await this.#live.settled(controls.map((control) => control.id));
+    const edits = saveEdits(controls, this.#live.accepted, file);
     if (edits.length === 0) return;
     const command =
       this.#command('edit', { path, sha256: file.sha256, edits: JSON.stringify(edits) }) ??
@@ -415,7 +426,7 @@ export class TunablesPanel {
       const dirty =
         !!file &&
         !!control.source &&
-        isUnsaved(control, this.#values.get(control.id) ?? control.value, resolvePointer(file.document, control.source.pointer));
+        isUnsaved(control, this.#live.shown(control.id) ?? control.value, resolvePointer(file.document, control.source.pointer));
       row.classList.toggle('rusty-tunables__control--unsaved', dirty);
       if (dirty && control.source) unsaved.set(control.source.path, (unsaved.get(control.source.path) ?? 0) + 1);
     }

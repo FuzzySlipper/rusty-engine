@@ -90,13 +90,12 @@ export function controlValueOf(control: TunableControl, source: unknown): number
   return undefined;
 }
 
-/** The decimals a step shows: 0.05 shows two. */
+/** The decimals a step shows: 0.05 and 2.5 show two and one, 1 and 10 none. */
 export function stepDecimals(step: number): number {
-  if (!(step > 0) || step >= 1) return 0;
-  const text = String(step);
-  const exponent = /e-(\d+)$/.exec(text);
-  if (exponent) return Number(exponent[1]);
-  return text.split('.')[1]?.length ?? 0;
+  if (!(step > 0) || Number.isInteger(step)) return 0;
+  const [mantissa = '', exponent] = String(step).split('e-');
+  const fraction = mantissa.split('.')[1]?.length ?? 0;
+  return fraction + (exponent === undefined ? 0 : Number(exponent));
 }
 
 /** A value as the step spells it, so a saved slider writes 0.25, not 0.25000000372529. */
@@ -167,4 +166,71 @@ export function parseDescription(message: string): TunablesDescription {
     commands: value.commands ?? {},
     notice: value.notice ?? '',
   };
+}
+
+/**
+ * Live control values: the value each control shows, and the value the
+ * product accepted (from the description or a set's answer). One set per
+ * control is in flight; a newer request replaces one still waiting. Save
+ * persists accepted values only, after the controls' sets settle.
+ */
+export class LiveValues {
+  readonly #send: (id: string, value: number) => Promise<number>;
+  readonly #accepted = new Map<string, number>();
+  readonly #requested = new Map<string, number>();
+  readonly #waiting = new Map<string, number>();
+  readonly #running = new Map<string, Promise<void>>();
+
+  /** `send` applies one value and answers the value the product kept. */
+  constructor(send: (id: string, value: number) => Promise<number>) {
+    this.#send = send;
+  }
+
+  /** Takes the accepted values of a new description. */
+  reset(values: Iterable<readonly [string, number]>): void {
+    this.#accepted.clear();
+    this.#requested.clear();
+    for (const [id, value] of values) this.#accepted.set(id, value);
+  }
+
+  /** What the control shows: the latest request, else the accepted value. */
+  shown(id: string): number | undefined {
+    return this.#requested.get(id) ?? this.#accepted.get(id);
+  }
+
+  get accepted(): ReadonlyMap<string, number> {
+    return this.#accepted;
+  }
+
+  /**
+   * Requests a value. Settles when the control has no set in flight; a
+   * refusal rejects, and the control shows its accepted value again.
+   */
+  set(id: string, value: number): Promise<void> {
+    this.#requested.set(id, value);
+    const running = this.#running.get(id);
+    if (running) {
+      this.#waiting.set(id, value);
+      return running;
+    }
+    const run = (async () => {
+      try {
+        for (let next: number | undefined = value; next !== undefined; next = this.#waiting.get(id)) {
+          this.#waiting.delete(id);
+          this.#accepted.set(id, await this.#send(id, next));
+        }
+      } finally {
+        this.#waiting.delete(id);
+        this.#requested.delete(id);
+        this.#running.delete(id);
+      }
+    })();
+    this.#running.set(id, run);
+    return run;
+  }
+
+  /** Waits until none of these controls has a set in flight or waiting. */
+  async settled(ids: Iterable<string>): Promise<void> {
+    await Promise.allSettled([...ids].map((id) => this.#running.get(id)));
+  }
 }
