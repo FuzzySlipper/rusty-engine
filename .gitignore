@@ -10,5 +10,6 @@ __pycache__/
 *.log
 .DS_Store
 .codex
+.runtime
 # Local validation audit reports
 /artifacts/validation-audit-787*/
