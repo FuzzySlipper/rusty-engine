@@ -72,9 +72,11 @@ itself, beside the pin. Either path separator works on Windows and Linux:
 `rusty dev` builds and stages the product, runs it on CoreCLR, and watches the
 declared inputs: by default the product project, its referenced projects, the
 UI source and the content (see
-[run and package](csharp-product-project.md#run-and-package)). UI and
-content-bundle edits reload into the running product; C#, project and
-loose-content edits rebuild and replace the runtime. Useful flags:
+[run and package](csharp-product-project.md#run-and-package)). UI,
+content-bundle and declared [live loose
+content](csharp-product-project.md#live-loose-content) edits reload into the
+running product; C#, project and other loose-content edits rebuild and
+replace the runtime. Useful flags:
 `--live-debug`, `--debugger` (managed breakpoints, see
 [CoreCLR diagnostics](coreclr-diagnostics.md)) and `--headless`.
 

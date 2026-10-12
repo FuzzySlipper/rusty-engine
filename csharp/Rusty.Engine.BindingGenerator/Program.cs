@@ -499,9 +499,12 @@ internal static class Emit
         output.AppendLine("    private static string Describe(string service, string operation, int status, ReadOnlyMemory<EngineDiagnostic> diagnostics) { var text = new System.Text.StringBuilder($\"Rusty Engine {service}.{operation} returned status {status}.\"); foreach (EngineDiagnostic diagnostic in diagnostics.Span) text.Append(\" \").Append(diagnostic.Code).Append(\": \").Append(diagnostic.Message); return text.ToString(); }");
         output.AppendLine("    public string Service { get; }").AppendLine("    public string Operation { get; }").AppendLine("    public int Status { get; }").AppendLine("    public ReadOnlyMemory<EngineDiagnostic> Diagnostics { get; }").AppendLine("}").AppendLine();
         output.AppendLine("public readonly ref struct ProductUpdate").AppendLine("{");
-        output.AppendLine("    public ProductUpdate(ProductUpdateFacts facts, ReadOnlySpan<ProductInputEvent> input) { Facts = facts; Input = input; }");
+        output.AppendLine("    public ProductUpdate(ProductUpdateFacts facts, ReadOnlySpan<ProductInputEvent> input) : this(facts, input, default) { }");
+        output.AppendLine("    public ProductUpdate(ProductUpdateFacts facts, ReadOnlySpan<ProductInputEvent> input, ReadOnlySpan<ContentReferenceInfo> contentChanges) { Facts = facts; Input = input; ContentChanges = contentChanges; }");
         output.AppendLine("    public ProductUpdateFacts Facts { get; }");
-        output.AppendLine("    public ReadOnlySpan<ProductInputEvent> Input { get; }").AppendLine("}").AppendLine();
+        output.AppendLine("    public ReadOnlySpan<ProductInputEvent> Input { get; }");
+        output.AppendLine("    /// <summary>Live loose content files `rusty dev` re-admitted since the last update, with their new identity. <see cref=\"ProductContent\"/> already reads the new bytes.</summary>");
+        output.AppendLine("    public ReadOnlySpan<ContentReferenceInfo> ContentChanges { get; }").AppendLine("}").AppendLine();
         output.AppendLine("public sealed class ProductCreateContext").AppendLine("{");
         output.AppendLine("    public ProductCreateContext(IEngineContext engine, ProductContent content, ProductInputConfiguration input, Debugging.DebugExecutionContext? debugging = null) { Engine = engine ?? throw new ArgumentNullException(nameof(engine)); Content = content ?? throw new ArgumentNullException(nameof(content)); Input = input ?? throw new ArgumentNullException(nameof(input)); Debugging = debugging ?? new Debugging.DebugExecutionContext(); }");
         output.AppendLine("    public IEngineContext Engine { get; }").AppendLine("    public ProductContent Content { get; }").AppendLine("    public ProductInputConfiguration Input { get; }").AppendLine("    public Debugging.DebugExecutionContext Debugging { get; }").AppendLine("}").AppendLine();

@@ -93,6 +93,9 @@ impl RetainedContent {
 
 pub(crate) struct RuntimeContentBridge {
     portable: portable::PortableState,
+    /// Every loose file by content-relative path: the dependency context of
+    /// each catalog entry.
+    snapshot: ContentFiles,
     catalog: BTreeMap<String, AdmittedContent>,
     references: BTreeMap<u64, AdmittedContent>,
     /// Backing of the latest borrowed Content result.
@@ -121,12 +124,47 @@ impl RuntimeContentBridge {
             .collect();
         Self {
             portable: portable::PortableState::default(),
+            snapshot: files,
             catalog,
             references: BTreeMap::new(),
             borrowed: Default::default(),
             bundles: bundles::BundleState::default(),
             next_reference: 1,
         }
+    }
+
+    /// Re-admits changed loose files in place: later opens by path read the
+    /// new bytes under new identities, in a new dependency snapshot. Open
+    /// references keep the content they hold. Returns each file's path,
+    /// identity and length.
+    pub(crate) fn reload(
+        &mut self,
+        changed: BTreeMap<String, Arc<[u8]>>,
+    ) -> Vec<(String, NativeContentSha256, u64)> {
+        let ContentFiles::Snapshot(previous) = &self.snapshot else {
+            unreachable!("loose content is a snapshot");
+        };
+        let mut files = (**previous).clone();
+        files.extend(changed.iter().map(|(path, bytes)| (path.clone(), Arc::clone(bytes))));
+        self.snapshot = ContentFiles::snapshot(files);
+        for content in self.catalog.values_mut() {
+            content.files = self.snapshot.clone();
+        }
+        changed
+            .into_iter()
+            .map(|(path, bytes)| {
+                let content = AdmittedContent {
+                    path: path.clone(),
+                    identity: ContentIdentity::default(),
+                    bytes,
+                    transient: false,
+                    files: self.snapshot.clone(),
+                };
+                let identity = (content.sha256(), content.bytes.len() as u64);
+                self.catalog.insert(path.clone(), content);
+                (path, identity.0, identity.1)
+            })
+            .collect()
     }
 
     fn retain(&mut self, content: AdmittedContent) -> Option<NativeContentReferenceHandle> {
@@ -680,6 +718,32 @@ mod tests {
         assert_eq!(
             unsafe { std::slice::from_raw_parts(bytes.bytes, bytes.len) },
             b"rsis"
+        );
+    }
+
+    #[test]
+    fn a_reloaded_file_opens_with_new_bytes_while_old_references_keep_theirs() {
+        let files = BTreeMap::from([
+            ("tuning.json".to_owned(), Arc::from(&b"{\"a\":1}"[..])),
+            ("other.json".to_owned(), Arc::from(&b"[]"[..])),
+        ]);
+        let mut bridge = RuntimeContentBridge::new(files);
+        let before = bridge.retain(bridge.catalog["tuning.json"].clone()).unwrap();
+        let changed = bridge.reload(BTreeMap::from([(
+            "tuning.json".to_owned(),
+            Arc::from(&b"{\"a\":2}"[..]),
+        )]));
+        let sha = sha256_words(&Sha256::digest(b"{\"a\":2}"));
+        assert_eq!(changed, [("tuning.json".to_owned(), sha, 7)]);
+        assert_eq!(bridge.references[&before.value].bytes.as_ref(), b"{\"a\":1}");
+        let after = bridge.retained_path("tuning.json").unwrap();
+        assert_eq!(after.bytes.as_ref(), b"{\"a\":2}");
+        assert_eq!(after.sha256(), sha);
+        let other = bridge.retained_path("other.json").unwrap();
+        assert_eq!(
+            other.files.get("tuning.json").unwrap().unwrap().as_ref(),
+            b"{\"a\":2}",
+            "dependencies resolve in the new snapshot"
         );
     }
 }

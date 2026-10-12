@@ -15,7 +15,10 @@ runtime is paused ([actions while paused](#actions-while-paused)).
   admitted product content, and input configuration.
 - `Update(ProductUpdate)` receives Engine-owned update facts and copied input
   events, then returns `ProductUpdateResult` when it needs a supported host
-  action.
+  action. Under `rusty dev`, `ContentChanges` lists the [live loose
+  content](csharp-product-project.md#live-loose-content) files re-admitted
+  since the last update (path, SHA-256, length); `ProductContent` already reads
+  their new bytes.
 - `ProductCreateContext.Debugging.Snapshot` holds the latest lifecycle state
   and runtime binding, including host-only fault and control transitions, and
   the facts of the last delivered update.

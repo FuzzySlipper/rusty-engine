@@ -1655,6 +1655,17 @@ pub struct NativeContentApi {
     pub read_bytes: NativeReadContentBytes,
 }
 
+/// A `rusty dev` session's source content: reads, and format-preserving JSON
+/// pointer edits written to the source file and its staged copy. Every call
+/// outside `rusty dev` refuses with `CONTENT_SOURCE_UNAVAILABLE`.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeContentSourceApi {
+    pub context: *mut c_void,
+    pub read: NativeReadContentSource,
+    pub edit: NativeEditContentSource,
+}
+
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeAuthoredContentApi {
@@ -1899,6 +1910,7 @@ pub struct NativeEngineApi {
     pub voxel_scene_presentation: NativeVoxelScenePresentationApi,
     pub heightfield: NativeHeightfieldApi,
     pub content: NativeContentApi,
+    pub content_source: NativeContentSourceApi,
     pub authored_content: NativeAuthoredContentApi,
     pub graphics: NativeGraphicsApi,
     pub presentation: NativePresentationApi,

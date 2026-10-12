@@ -33,6 +33,10 @@ internal static class EngineTestHostChecks
             atlas.Dispose();
             texture.Dispose();
             ExpectRefusal(() => engine.Graphics.ReadTextureInfo(texture), "CSHARP_GRAPHICS_OPERATION");
+            // Only a `rusty dev` session has source content to read or edit.
+            ExpectRefusal(() => engine.ContentSource.ReadDocument("textures/atlas.png"), "CONTENT_SOURCE_UNAVAILABLE");
+            ExpectRefusal(() => engine.ContentSource.Edit(new ContentSourceDocument("meshes/triangle.json", default, default),
+                ContentSourceEdit.Remove("/positions")), "CONTENT_SOURCE_UNAVAILABLE");
         });
 
         host.Call(engine =>

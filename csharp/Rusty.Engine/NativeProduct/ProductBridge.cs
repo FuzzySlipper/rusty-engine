@@ -27,6 +27,7 @@ internal sealed class EngineContext : IEngineContext
         VoxelScenePresentation = new VoxelScenePresentationServiceImplementation(native.voxel_scene_presentation);
         Heightfield = new HeightfieldServiceImplementation(native.heightfield);
         Content = new ContentServiceImplementation(native.content);
+        ContentSource = new ContentSourceServiceImplementation(native.content_source);
         AuthoredContent = new AuthoredContentServiceImplementation(native.authored_content);
         Graphics = new GraphicsServiceImplementation(native.graphics);
         ImplicitSurfaces = new ImplicitSurfacesServiceImplementation(native.implicit_surfaces, native.graphics);
@@ -60,6 +61,7 @@ internal sealed class EngineContext : IEngineContext
     public IVoxelScenePresentationService VoxelScenePresentation { get; }
     public IHeightfieldService Heightfield { get; }
     public IContentService Content { get; }
+    public IContentSourceService ContentSource { get; }
     public IAuthoredContentService AuthoredContent { get; }
     public IGraphicsService Graphics { get; }
     public IImplicitSurfacesService ImplicitSurfaces { get; }
@@ -81,7 +83,8 @@ internal sealed class ProductLifetime
     private IEngineProduct? _product;
     private Exception? _lastCallError;
     private readonly IDebugCommandCatalog _debugCatalog;
-    internal ProductLifetime(IEngineProduct product, IDebugCommandCatalog debugCatalog, ProductDebugExecutionContext debugging) { _product = product; _debugCatalog = debugCatalog; Debugging = debugging; }
+    internal ProductLifetime(IEngineProduct product, IDebugCommandCatalog debugCatalog, ProductDebugExecutionContext debugging, ProductContent content) { _product = product; _debugCatalog = debugCatalog; Debugging = debugging; Content = content; }
+    internal ProductContent Content { get; }
     internal IEngineProduct Product => _product ?? throw new ObjectDisposedException(nameof(ProductLifetime));
     internal IDebugCommandCatalog DebugCatalog => _product is null ? throw new ObjectDisposedException(nameof(ProductLifetime)) : _debugCatalog;
     internal ProductDebugExecutionContext Debugging { get; }
@@ -246,7 +249,7 @@ public static unsafe class ProductBridge
             ProductContent content = new(CopyContent(args->content, args->content_len), engine.Content);
             Func<ProductCreateContext, IEngineProduct> createProduct = s_createProduct ?? throw new InvalidOperationException("The product was created before it was bound.");
             IEngineProduct product = createProduct(new ProductCreateContext(engine, content, input, debugging));
-            lifetime = new ProductLifetime(product, s_createDebugCatalog!(product), debugging);
+            lifetime = new ProductLifetime(product, s_createDebugCatalog!(product), debugging, content);
             *handle = (void*)GCHandle.ToIntPtr(GCHandle.Alloc(lifetime));
             return 1;
         }
@@ -268,11 +271,13 @@ public static unsafe class ProductBridge
     {
         try
         {
-            if (args is null || result is null || (args->event_count != 0 && args->events is null)) return 2;
+            if (args is null || result is null || (args->event_count != 0 && args->events is null) || (args->content_change_count != 0 && args->content_changes is null)) return 2;
             *result = NativeProductUpdateResult.NativeProductUpdateResult_None;
             ProductLifetime lifetime = Get(handle);
             ProductUpdateFacts facts = NativeConversions.FromNative(args->facts);
-            ProductUpdateResult productResult = lifetime.Product.Update(new ProductUpdate(facts, CopyInput(args->events, args->event_count)));
+            ContentReferenceInfo[] contentChanges = CopyContentChanges(args->content_changes, args->content_change_count);
+            lifetime.Content.Reload(contentChanges);
+            ProductUpdateResult productResult = lifetime.Product.Update(new ProductUpdate(facts, CopyInput(args->events, args->event_count), contentChanges));
             *result = productResult switch
             {
                 ProductUpdateResult.None => NativeProductUpdateResult.NativeProductUpdateResult_None,
@@ -601,6 +606,21 @@ public static unsafe class ProductBridge
     }
 
     private static readonly UTF8Encoding StrictUtf8 = new(false, true);
+
+    private static ContentReferenceInfo[] CopyContentChanges(NativeContentReferenceInfo* source, nuint count)
+    {
+        if (count == 0) return [];
+        ContentReferenceInfo[] changes = new ContentReferenceInfo[checked((int)count)];
+        for (nuint index = 0; index < count; index++)
+        {
+            NativeContentReferenceInfo change = source[index];
+            changes[checked((int)index)] = new ContentReferenceInfo(
+                Encoding.UTF8.GetString(CopyBytes(change.path.bytes, change.path.len).Span),
+                NativeConversions.FromNative(change.sha256),
+                change.byte_length);
+        }
+        return changes;
+    }
 
     private static ProductContentFile[] CopyContent(NativeContentFile* source, nuint count)
     {

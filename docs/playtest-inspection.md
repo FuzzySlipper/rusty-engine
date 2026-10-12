@@ -17,6 +17,9 @@ Native live-debug commands (require the ordinary live-debug opt-in):
 - `engine.time.mode realtime|manual|action-driven`.
 - `engine.time.advance MS`: positive duration up to 2000 ms, rounded up to fixed
   steps, returning actual advancement. Both held modes allow explicit advances.
+- `engine.content.source.read PATH` and `engine.content.source.edit PATH
+  SHA256 EDITS`: read a source content file and save JSON pointer edits into
+  it under `rusty dev` ([content source](csharp-product-project.md#content-source)).
 
 A playtest harness drives the runtime directly: debug commands through
 `/__rusty/product/runtime/debug/execute`, input through a

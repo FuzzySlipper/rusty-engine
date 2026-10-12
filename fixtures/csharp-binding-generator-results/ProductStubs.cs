@@ -3,6 +3,7 @@ namespace Rusty.Engine
 
 public sealed class ProductContent { }
 public readonly record struct ProductUpdateFacts;
+public readonly record struct ContentReferenceInfo;
 public readonly record struct ProductTimelineOutcome;
 public readonly record struct StructuredValueNode;
 public enum ProductUpdateResult : uint { None }

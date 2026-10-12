@@ -278,9 +278,11 @@ impl ProductHost {
             }
         };
         let content_owner = Arc::clone(&state.runtime);
+        let files_owner = Arc::clone(&state.runtime);
         let asset_reload = ProductHostAssetReload {
             bundle,
             content: Arc::new(move || content_owner.reload_content()),
+            content_files: Arc::new(move |paths| files_owner.reload_content_files(paths)),
             outputs: Arc::clone(&state.outputs),
             output_wake: Arc::clone(&output_wake),
         };
@@ -378,6 +380,7 @@ impl RunningProductHost {
 pub struct ProductHostAssetReload {
     bundle: Arc<RwLock<ProductHostBundle>>,
     content: Arc<dyn Fn() -> Result<(), ProductHostRuntimeError> + Send + Sync>,
+    content_files: ContentFilesReload,
     outputs: Arc<Mutex<OutputBus>>,
     output_wake: Arc<OutputWake>,
 }
@@ -398,7 +401,17 @@ impl ProductHostAssetReload {
         self.output_wake.notify();
         Ok(())
     }
+
+    /// Re-admits named loose content files (content-root-relative) in the
+    /// running product. The served UI and attached pages are untouched; the
+    /// product hears of the files on its next update.
+    pub fn reload_content_files(&self, paths: &[String]) -> Result<(), ProductHostRuntimeError> {
+        (self.content_files)(paths)
+    }
 }
+
+type ContentFilesReload =
+    Arc<dyn Fn(&[String]) -> Result<(), ProductHostRuntimeError> + Send + Sync>;
 
 impl Drop for RunningProductHost {
     fn drop(&mut self) {
@@ -2923,6 +2936,7 @@ mod tests {
         let reload = |content: Result<(), ProductHostRuntimeError>| ProductHostAssetReload {
             bundle: Arc::clone(&served),
             content: Arc::new(move || content.clone()),
+            content_files: Arc::new(|_| Ok(())),
             outputs: Arc::clone(&outputs),
             output_wake: Arc::new(OutputWake::default()),
         };

@@ -63,6 +63,8 @@ pub(super) struct ProductBundle {
     pub(super) bind_host: Ipv4Addr,
     pub(super) port: u16,
     pub(super) live_debug: bool,
+    /// The source content root a `rusty dev` staging named.
+    pub(super) content_source: Option<PathBuf>,
 }
 
 impl ProductBundle {
@@ -210,6 +212,9 @@ impl ProductBundle {
             bind_host,
             port: manifest.server.port,
             live_debug: manifest.server.live_debug,
+            content_source: manifest
+                .development
+                .map(|development| development.content_source),
         })
     }
 
@@ -473,6 +478,14 @@ struct Manifest {
     input: ManifestInput,
     #[serde(default)]
     server: ManifestServer,
+    development: Option<ManifestDevelopment>,
+}
+
+/// Written only by `rusty dev` staging.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ManifestDevelopment {
+    content_source: PathBuf,
 }
 
 #[derive(Debug, Deserialize)]

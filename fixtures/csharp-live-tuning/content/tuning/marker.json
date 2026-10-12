@@ -1,0 +1,11 @@
+{
+  "marker": {
+    "size": 0.8,
+    "height": 0.5,
+    "spin": true,
+    "color": "orange"
+  },
+  "floor": {
+    "shade": 0.25
+  }
+}

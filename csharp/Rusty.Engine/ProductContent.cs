@@ -12,7 +12,7 @@ namespace Rusty.Engine;
 public sealed class ProductContent
 {
     private readonly Dictionary<string, ProductContentFile> byPath;
-    private readonly KeyValuePair<string, ProductContentFile>[] orderedFiles;
+    private KeyValuePair<string, ProductContentFile>[] orderedFiles;
     private readonly IContentService? service;
 
     public ProductContent(ReadOnlyMemory<ProductContentFile> files)
@@ -29,7 +29,30 @@ public sealed class ProductContent
     }
 
     /// <summary>The admitted entries in their original order, for existing bulk consumers.</summary>
-    public ReadOnlyMemory<ProductContentFile> Files { get; }
+    public ReadOnlyMemory<ProductContentFile> Files { get; private set; }
+
+    /// <summary>
+    /// Takes the new bytes of live loose content files the Engine re-admitted (`rusty dev` with
+    /// <c>RustyEngineLiveContent</c>), before the update that reports them. Earlier reads keep the
+    /// memory they returned.
+    /// </summary>
+    internal void Reload(ReadOnlySpan<ContentReferenceInfo> changes)
+    {
+        if (changes.IsEmpty || service is null) return;
+        ProductContentFile[] files = Files.ToArray();
+        foreach (ContentReferenceInfo change in changes)
+        {
+            using ContentReference reference = service.OpenReference(new(change.Path));
+            ReadOnlyMemory<byte> bytes = service.ReadBytes(new(reference, 0, checked((uint)change.ByteLength)));
+            ProductContentFile file = new(Encoding.UTF8.GetBytes(change.Path), bytes);
+            int index = Array.FindIndex(files, existing => existing.RelativePath == change.Path);
+            if (index < 0) files = [.. files, file];
+            else files[index] = file;
+            byPath[change.Path] = file;
+        }
+        Files = files;
+        orderedFiles = byPath.OrderBy(pair => pair.Key, StringComparer.Ordinal).ToArray();
+    }
 
     /// <summary>Discover build-declared bundles without loading their file bodies.</summary>
     public ReadOnlyMemory<ContentBundleInfo> ListBundles() => service is null ? ReadOnlyMemory<ContentBundleInfo>.Empty : service.ListBundles();

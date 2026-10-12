@@ -228,6 +228,7 @@ sealed class ExampleEngineContext : IEngineContext
     public IVoxelScenePresentationService VoxelScenePresentation => throw new NotSupportedException();
     public IHeightfieldService Heightfield => throw new NotSupportedException();
     public IContentService Content => throw new NotSupportedException();
+    public IContentSourceService ContentSource => throw new NotSupportedException();
     public IAuthoredContentService AuthoredContent => throw new NotSupportedException();
     public IGraphicsService Graphics => throw new NotSupportedException();
     public IPresentationService Presentation => throw new NotSupportedException();

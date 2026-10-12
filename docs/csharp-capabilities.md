@@ -44,6 +44,7 @@ to force a rerun.
 | `VoxelScenePresentation` | Project Engine voxel scenes into retained renderer resources, including GreedyCubes face-directed material selection, distance level of detail for reconstructed chunks, and scatter: Engine-placed instanced grass and clutter on the ground around the camera ([smooth-voxel-surfaces.md](smooth-voxel-surfaces.md#scatter)). |
 | `Heightfield` | Draw a product-sampled height field as clipmap rings of tiles about a camera or a point, in the scene or the backdrop: the product samples heights, linear colours or terrain layer weights and material indices when asked (`HeightfieldStreamer` samples on worker threads); the Engine meshes, draws, geomorphs and picks the ground ([heightfield terrain](heightfield-terrain.md)). |
 | `Content` | Read product content admitted by the host, open content bundles and [portable assets](portable-assets.md), and admit product-owned content snapshots. |
+| `ContentSource` | Under `rusty dev`, read the product's source content and save format-preserving JSON pointer edits into it ([content source](csharp-product-project.md#content-source)). |
 | `AuthoredContent` | Admit and resolve authored catalogs, scenes, prefabs, and related resources. |
 | `Graphics` | Create and update renderer-owned materials, meshes, atlas sprites, sprite batches, synchronized sprite playback, lights, and retained appearance state. |
 | `Presentation` | Publish presentation effects and diagnostic facts without creating another renderer, including retained ghost-plate captures. |

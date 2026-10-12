@@ -658,6 +658,37 @@ impl ProductHostDebugCatalog {
         self
     }
 
+    /// Adds the developer content source commands. Outside `rusty dev` they
+    /// refuse with `CONTENT_SOURCE_UNAVAILABLE`.
+    pub fn with_content_source(mut self) -> Self {
+        let parameter = |name: &str| ProductHostDebugCommandParameterDescriptor {
+            name: name.to_owned(),
+            type_name: "string".to_owned(),
+        };
+        for (name, description, parameters) in [
+            (
+                "engine.content.source.read",
+                "Read a source content file under rusty dev: its text and SHA-256",
+                vec![parameter("path")],
+            ),
+            (
+                "engine.content.source.edit",
+                "Apply a JSON array of RFC 6902 replace, add and remove operations to a source JSON file still at the SHA-256 read, keeping every other byte; writes the source and staged copy",
+                vec![parameter("path"), parameter("sha256"), parameter("edits")],
+            ),
+        ] {
+            if self.commands.iter().any(|command| command.name == name) {
+                continue;
+            }
+            self.commands.push(ProductHostDebugCommandDescriptor {
+                name: name.to_owned(),
+                description: description.to_owned(),
+                parameters,
+            });
+        }
+        self
+    }
+
     pub fn with_renderer_diagnostics(mut self) -> Self {
         self.available = true;
         for (name, description) in [
@@ -1723,6 +1754,13 @@ pub trait ProductHostRuntime: Send + 'static {
     /// without restarting the product. A runtime without reloadable content
     /// has nothing to do.
     fn reload_content(&mut self) -> Result<(), ProductHostRuntimeError> {
+        Ok(())
+    }
+
+    /// Re-admits the named staged loose content files (content-root-relative)
+    /// after a development edit, and tells the product on its next update. A
+    /// runtime without reloadable content has nothing to do.
+    fn reload_content_files(&mut self, _paths: &[String]) -> Result<(), ProductHostRuntimeError> {
         Ok(())
     }
 

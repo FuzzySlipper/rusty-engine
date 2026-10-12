@@ -41,6 +41,10 @@ mod supervisor;
 /// bundle content: the runtime re-reads them without restarting the product.
 /// A supervised runtime reads it on stdin on every platform.
 pub(crate) const RELOAD_ASSETS_COMMAND: &str = "reload-assets";
+/// Forwarded with a JSON array of content-root-relative paths after `rusty
+/// dev` restaged live loose content: the runtime re-admits those files and
+/// tells the product, without reloading the UI or restarting the product.
+pub(crate) const RELOAD_CONTENT_COMMAND: &str = "reload-content";
 /// The exit code of a supervised host or runtime that ended because the
 /// player closed its window or the product asked to end (`Host.RequestExit`).
 /// Its supervisor, and `rusty dev`, read it as a stop rather than a crash.
@@ -473,10 +477,44 @@ fn print_runtime_identity(machine_readable: bool) {
     }
 }
 
-/// Re-reads the staged UI into a fresh browser bundle and reloads the
-/// runtime's content, keeping the old bundle and inventory on failure.
-fn asset_reloader(reload: ProductHostAssetReload, product: ProductBundle) -> Box<dyn Fn() + Send> {
-    Box::new(move || {
+/// Handles one reload line the supervisor forwards.
+type ReloadLine = Box<dyn Fn(&str) + Send>;
+
+/// Handles one reload line from the supervisor. `reload-assets` re-reads the
+/// staged UI into a fresh browser bundle and reloads the runtime's bundle
+/// inventory, keeping the old bundle and inventory on failure.
+/// `reload-content` re-admits the named loose files, keeping the old ones on
+/// failure.
+fn asset_reloader(
+    reload: ProductHostAssetReload,
+    product: ProductBundle,
+) -> ReloadLine {
+    Box::new(move |line| {
+        if let Some(paths) = line
+            .strip_prefix(RELOAD_CONTENT_COMMAND)
+            .and_then(|rest| rest.strip_prefix(' '))
+        {
+            let result = serde_json::from_str::<Vec<String>>(paths)
+                .map_err(|error| error.to_string())
+                .and_then(|paths| {
+                    reload
+                        .reload_content_files(&paths)
+                        .map(|()| paths)
+                        .map_err(|error| format!("{}: {}", error.code(), error.diagnostic()))
+                });
+            match result {
+                Ok(paths) => {
+                    for path in paths {
+                        print_line(&format!("RUSTY_HOST content-reloaded {path}"));
+                    }
+                }
+                Err(error) => eprintln!("RUSTY_HOST PRODUCT_HOST_CONTENT_RELOAD: {error}"),
+            }
+            return;
+        }
+        if line != RELOAD_ASSETS_COMMAND {
+            return;
+        }
         let result = runtime_browser_root()
             .and_then(|root| load_bundle(&root, &product))
             .and_then(|bundle| {
@@ -503,7 +541,7 @@ fn wait_for_process_termination(
     host: &RunningProductHost,
     termination: Arc<AtomicBool>,
     window: Option<&WindowEnd>,
-    reload_assets: Option<Box<dyn Fn() + Send>>,
+    reload_assets: Option<ReloadLine>,
 ) -> &'static str {
     let window_ended = || {
         let window = window?;
@@ -530,10 +568,8 @@ fn wait_for_process_termination(
         std::thread::spawn(move || {
             for line in std::io::stdin().lock().lines() {
                 let Ok(line) = line else { break };
-                if line == RELOAD_ASSETS_COMMAND {
-                    if let Some(reload) = &reload_assets {
-                        reload();
-                    }
+                if let Some(reload) = &reload_assets {
+                    reload(&line);
                 }
             }
             reader_closed.store(true, Ordering::Release);
@@ -876,6 +912,9 @@ impl Arguments {
                 .with_renderer_settings(&product.renderer_settings())
                 .with_audio_output(product.audio_output)
                 .with_product(&product.id, &product.title);
+            if let Some(source) = &product.content_source {
+                config = config.with_content_source(source.clone());
+            }
         }
         if let Some(root) = &self.persistence_root {
             config = config.with_persistence_root(root.clone());

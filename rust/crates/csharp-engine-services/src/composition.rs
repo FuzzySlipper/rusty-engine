@@ -58,6 +58,7 @@ fn engine_api(
     diagnostics_bridge: &mut crate::diagnostics::RuntimeDiagnosticsBridge,
     appearance_bridge: &mut RuntimeAppearanceBridge,
     content_bridge: &mut RuntimeContentBridge,
+    content_source_bridge: &mut crate::content_source::RuntimeContentSourceBridge,
     authored_content_bridge: &mut RuntimeAuthoredContentBridge,
     audio_bridge: &mut RuntimeAudioBridge,
     video_bridge: &mut RuntimeVideoBridge,
@@ -105,6 +106,7 @@ fn engine_api(
         ),
         heightfield: crate::heightfield::api(heightfield_bridge, appearance_bridge),
         content: crate::content::api(content_bridge),
+        content_source: crate::content_source::api(content_source_bridge),
         authored_content: crate::authored_content::api(authored_content_bridge),
         graphics: NativeGraphicsApi {
             publish_changes: crate::appearance::publish_appearance_changes,
@@ -323,6 +325,7 @@ pub struct EngineServiceSet {
     diagnostics: crate::diagnostics::RuntimeDiagnosticsBridge,
     appearance: RuntimeAppearanceBridge,
     content: Box<RuntimeContentBridge>,
+    content_source: crate::content_source::RuntimeContentSourceBridge,
     authored_content: RuntimeAuthoredContentBridge,
     audio: RuntimeAudioBridge,
     video: RuntimeVideoBridge,
@@ -400,6 +403,40 @@ impl EngineServiceSet {
         self.content.bind_bundles(bundles);
     }
 
+    /// Binds the `rusty dev` source content the ContentSource service reads
+    /// and edits. Without one, every ContentSource call refuses.
+    pub fn bind_content_source(&mut self, source: crate::ContentSource) {
+        self.content_source.bind(source);
+    }
+
+    /// Reads the bound source content, for the Engine's own debug commands.
+    pub fn read_content_source(
+        &self,
+        path: &str,
+    ) -> Result<(Vec<u8>, [u8; 32]), CsharpEngineServicesError> {
+        self.content_source.read(path)
+    }
+
+    /// Edits the bound source content, for the Engine's own debug commands.
+    pub fn edit_content_source(
+        &self,
+        path: &str,
+        expected: [u8; 32],
+        edits: &[crate::JsonEdit],
+    ) -> Result<[u8; 32], CsharpEngineServicesError> {
+        self.content_source.edit(path, expected, edits)
+    }
+
+    /// Re-admits changed loose content files after a development edit: later
+    /// opens by path read the new bytes; open references keep theirs. Returns
+    /// each file's path, new identity and length.
+    pub fn reload_content_files(
+        &mut self,
+        changed: BTreeMap<String, Arc<[u8]>>,
+    ) -> Vec<(String, NativeContentSha256, u64)> {
+        self.content.reload(changed)
+    }
+
     pub fn new(
         catalog: CsharpAppearanceCatalog,
         content_resources: BTreeMap<String, Arc<[u8]>>,
@@ -455,6 +492,9 @@ impl EngineServiceSet {
             presentation_world: render_presentation::PresentationWorld::default(),
             input: crate::input::RuntimeInputBridge::new(direct_intents),
             gameplay_time: crate::gameplay_time::RuntimeGameplayTimeBridge::new(),
+            content_source: crate::content_source::RuntimeContentSourceBridge::new(Some(
+                diagnostics_sink.clone(),
+            )),
             diagnostics: crate::diagnostics::RuntimeDiagnosticsBridge::new(diagnostics_sink),
             appearance,
             content,
@@ -492,6 +532,7 @@ impl EngineServiceSet {
             &mut self.diagnostics,
             &mut self.appearance,
             &mut self.content,
+            &mut self.content_source,
             &mut self.authored_content,
             &mut self.audio,
             &mut self.video,

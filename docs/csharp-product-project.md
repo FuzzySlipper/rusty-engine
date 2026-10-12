@@ -259,8 +259,75 @@ definition's filename in code. Do not depend on an index occupying element zero.
 is an eagerly admitted memory snapshot copied across the generated boundary;
 these helpers add no filesystem reads, streaming, parsing framework or writable
 store. Treat retained path/payload memory as read-only. A loose content edit
-under `rusty dev` replaces the runtime to supply a new snapshot; bundle content
-(below) reloads without one.
+under `rusty dev` replaces the runtime to supply a new snapshot, unless the
+product declared the file live (below); bundle content (below) reloads without
+one.
+
+### Live loose content
+
+A product declares the loose content it reloads in place under `rusty dev`,
+as files or directories relative to the content root:
+
+```xml
+<ItemGroup>
+  <RustyEngineLiveContent Include="tuning" />
+  <RustyEngineLiveContent Include="rules/arms.json" />
+</ItemGroup>
+```
+
+An edit to a declared file restages that file and re-admits it in the running
+product: `ProductContent` reads the new bytes from then on (earlier reads keep
+theirs), and the next `Update` lists it in `ProductUpdate.ContentChanges` with
+its path, new SHA-256 and length. The owner of that file reads it again and
+applies it (Read, Decide, Apply, Publish). Held time, the camera, the runtime
+binding and the step count are untouched. A product whose time is held, by
+`GameplayTime` or by `engine.time.mode manual`, gets the change in an `Update`
+that admits no step. Deleting a declared file, and editing undeclared loose
+content, restage the whole Product as before. `fixtures/csharp-live-tuning`
+is the example.
+
+### Content source
+
+In a `rusty dev` session a product, or a developer tool through live debug,
+can read its source content and save edits into it. `rusty dev` staging names
+the source content root in the staged `product.json`
+(`development.contentSource`); no other staging does, so in packaged, AOT,
+`rusty build` and direct launches every call refuses with
+`CONTENT_SOURCE_UNAVAILABLE`.
+
+```csharp
+ContentSourceDocument read = engine.ContentSource.ReadDocument("tuning/marker.json");
+engine.ContentSource.Edit(read,
+    ContentSourceEdit.Replace("/marker/size", JsonValue.Create(1.25f)),
+    ContentSourceEdit.Add("/marker/tags/-", JsonValue.Create("tuned")));
+```
+
+Paths are content-root-relative. `Read` returns the source bytes;
+`ReadDocument` adds their SHA-256. `Edit` takes the SHA-256 of what was read
+and JSON pointer edits: replace a value, add an object member or array element
+(`-` appends), or remove one. The Engine changes only the text of the edited
+values and keeps every other byte: key order, indentation, number spelling and
+untouched lines, so saving one slider is a one-line diff. New values are
+written compactly. It writes the staged copy and then the source file, each
+atomically (a temporary file, then a rename), and reports the write in the
+runtime diagnostics (`CONTENT_SOURCE_WRITTEN`). Because the staged copy
+already holds the new bytes, `rusty dev` neither restages nor reloads for the
+write, and the session keeps running; the product applies the value itself.
+
+Refusals: `CONTENT_SOURCE_STALE` (the file changed since it was read),
+`CONTENT_SOURCE_MISSING`, `CONTENT_SOURCE_NOT_JSON` (not JSON text, so no
+pointer edit), `CONTENT_SOURCE_POINTER` (a pointer names no value),
+`CONTENT_SOURCE_EDITS` (malformed edits) and `CONTENT_SOURCE_WRITE`.
+
+The same service is two Engine live-debug commands, for pages, agents and
+crew-services:
+
+- `engine.content.source.read <path>` answers
+  `{"path","sha256","text"}`, with the SHA-256 as hex.
+- `engine.content.source.edit <path> <sha256> <edits>` takes the rest of the
+  line as a JSON array of RFC 6902 `replace`, `add` and `remove` operations
+  (`{"op":"replace","path":"/marker/size","value":1.25}`) and answers
+  `{"path","sha256"}`.
 
 ### Independently loaded content bundles
 
@@ -556,8 +623,17 @@ When declared inputs change, `rusty dev` routes the edit:
     their bytes.
   - If the stage or the reload fails, the old UI and bundle inventory stay in
     place until the next edit.
+- **Live loose content.** Files under a `RustyEngineLiveContent` path, when
+  they still exist. They restage with the UI and bundles, the runtime
+  re-admits each one and prints `RUSTY_HOST content-reloaded <path>`, and the
+  product hears of them on its next update ([live loose
+  content](#live-loose-content)). The page is not reloaded. If the stage or the
+  read fails, the old file stays in place and the failure is printed.
+- **Already staged.** A content file whose bytes equal its staged copy needs
+  no restage and no reload: the [content source](#content-source) service
+  writes both, so its saves stay quiet.
 - **Anything else** (C# in the product or a referenced project, a project
-  file, loose content) restages the whole
+  file, undeclared loose content) restages the whole
   Product and replaces the runtime. Loose content is the create-time snapshot
   described above.
 

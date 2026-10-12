@@ -38,6 +38,7 @@ const UI_SOURCE_ROOT_PROPERTY: &str = "RustyEngineProductUiSourceRoot";
 const UI_ROOT_PROPERTY: &str = "RustyEngineProductUiRoot";
 const CONTENT_ROOT_PROPERTY: &str = "RustyEngineProductContentRoot";
 const CONTENT_BUNDLE_ITEM: &str = "RustyEngineContentBundle";
+const LIVE_CONTENT_ITEM: &str = "RustyEngineLiveContent";
 const REQUIRED_DOTNET_MAJOR: u32 = 10;
 #[cfg(not(windows))]
 const BOOTSTRAP: &str =
@@ -189,6 +190,7 @@ fn dev(mut options: DevOptions) -> Result<(), String> {
     }
     let mut watches = initial.watches;
     let mut asset_roots = initial.asset_roots;
+    let mut content = initial.content;
     let mut snapshot = FileSnapshot::capture(&watches)?;
     let mut last_capture = Duration::ZERO;
     let mut child = Some(SupervisedHost::start(
@@ -364,23 +366,59 @@ fn dev(mut options: DevOptions) -> Result<(), String> {
             continue;
         }
 
+        // A content file whose bytes the staged Product already holds (the
+        // content source service writes both) needs no restage and no reload.
+        let (unchanged, changed): (Vec<_>, Vec<_>) = changed
+            .into_iter()
+            .partition(|path| content.already_staged(path, &staged));
+        if changed.is_empty() {
+            diagnostic(
+                "change-already-staged",
+                serde_json::json!({ "changed": unchanged }),
+            );
+            continue;
+        }
+        let under_asset_root = |path: &PathBuf| asset_roots.iter().any(|root| path.starts_with(root));
+        let live = changed
+            .iter()
+            .filter(|path| !under_asset_root(path))
+            .filter_map(|path| content.live(path))
+            .collect::<Vec<_>>();
+        let assets = changed.iter().any(under_asset_root);
         let assets_only = changed
             .iter()
-            .all(|path| asset_roots.iter().any(|root| path.starts_with(root)));
+            .all(|path| under_asset_root(path) || content.live(path).is_some());
         diagnostic(
             "change-detected",
-            serde_json::json!({ "watchPaths": watches, "changed": changed, "assetsOnly": assets_only }),
+            serde_json::json!({
+                "watchPaths": watches,
+                "changed": changed,
+                "assetsOnly": assets_only,
+                "liveContent": live,
+            }),
         );
-        // UI and bundle content edits restage only those files and reload
-        // them into the running product: no C# build, no replacement.
+        // UI, bundle and live content edits restage only those files and
+        // reload them into the running product: no C# build, no replacement.
         if assets_only {
             if let Some(active_child) = child.as_mut() {
-                let reloaded = stage_assets(&options).and_then(|()| active_child.reload_assets());
+                let reloaded = stage_assets(&options)
+                    .and_then(|()| match assets {
+                        true => active_child.reload_assets(),
+                        false => Ok(()),
+                    })
+                    .and_then(|()| match live.is_empty() {
+                        true => Ok(()),
+                        false => active_child.reload_content(live.clone()),
+                    });
                 match reloaded {
                     // The runtime reports its own reload result.
                     Ok(()) => diagnostic(
                         "assets-restaged",
-                        serde_json::json!({ "productDirectory": staged, "changed": changed }),
+                        serde_json::json!({
+                            "productDirectory": staged,
+                            "changed": changed,
+                            "liveContent": live,
+                        }),
                     ),
                     Err(error) => diagnostic(
                         "restage-failed",
@@ -394,6 +432,7 @@ fn dev(mut options: DevOptions) -> Result<(), String> {
             directory: next_staged,
             watches: refreshed_watches,
             asset_roots: refreshed_asset_roots,
+            content: refreshed_content,
         } = match stage_product(&options) {
             Ok(staged) => staged,
             Err(error) => {
@@ -435,6 +474,7 @@ fn dev(mut options: DevOptions) -> Result<(), String> {
         snapshot = refreshed_snapshot;
         watches = refreshed_watches;
         asset_roots = refreshed_asset_roots;
+        content = refreshed_content;
         let mut replacement_failed = false;
         // A host that has exited fails the write (its pipe has no reader),
         // so this one check sees an exit from before or during staging.
@@ -1259,8 +1299,9 @@ Without --project, the product is the one the nearest Directory.Build.props at o
 directory names, relative to itself, with <RustyEngineProject>src/Game/Game.csproj</RustyEngineProject>.
 
 Builds and stages the product through its SDK, starts it on CoreCLR, and restages when declared
-C#, UI or content inputs change. UI and content-bundle edits reload into the running product; other
-edits replace the runtime.
+C#, UI or content inputs change. UI, content-bundle and RustyEngineLiveContent edits reload into the
+running product; other edits replace the runtime. A content file whose bytes its staged copy already
+holds (a content source save) needs neither.
 
 One session runs per project, foreground or background: a second is refused while one runs.
 `--instance <name>` runs another beside it under its own name (crew playtest runs one host per
@@ -2274,6 +2315,73 @@ struct StagedProduct {
     /// and output roots, and each content bundle root. Loose content is part
     /// of the product's create-time snapshot, so it is not an asset root.
     asset_roots: Vec<PathBuf>,
+    content: ContentRoots,
+}
+
+/// The source content root and the loose content the product declared live
+/// (`RustyEngineLiveContent`): files and directories it reloads in place.
+#[derive(Debug, Default)]
+struct ContentRoots {
+    root: Option<PathBuf>,
+    live: Vec<PathBuf>,
+}
+
+impl ContentRoots {
+    fn read(project: &Path, result: &Value) -> Result<Self, String> {
+        let Some(root) = result["Properties"][CONTENT_ROOT_PROPERTY]
+            .as_str()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|value| project.parent().unwrap_or(project).join(value))
+        else {
+            return Ok(Self::default());
+        };
+        let live = result["Items"][LIVE_CONTENT_ITEM]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|item| {
+                item["Identity"]
+                    .as_str()
+                    .map(|path| root.join(path))
+                    .ok_or_else(|| "RUSTY_DEV_MSBUILD: live content item has no identity".to_owned())
+            })
+            .collect::<Result<_, _>>()?;
+        Ok(Self {
+            root: Some(root),
+            live,
+        })
+    }
+
+    /// `path` relative to the content root, `/`-separated.
+    fn relative(&self, path: &Path) -> Option<String> {
+        let relative = path.strip_prefix(self.root.as_ref()?).ok()?;
+        let parts = relative
+            .components()
+            .map(|part| part.as_os_str().to_str())
+            .collect::<Option<Vec<_>>>()?;
+        Some(parts.join("/"))
+    }
+
+    /// Whether the staged Product already holds this content file's bytes.
+    fn already_staged(&self, path: &Path, staged: &Path) -> bool {
+        let Some(relative) = self.relative(path) else {
+            return false;
+        };
+        match (fs::read(path), fs::read(staged.join("content").join(relative))) {
+            (Ok(source), Ok(staged)) => source == staged,
+            _ => false,
+        }
+    }
+
+    /// The content-relative path of an existing file declared live. A
+    /// deleted file is not: the product's snapshot would still name it.
+    fn live(&self, path: &Path) -> Option<String> {
+        if !self.live.iter().any(|live| path.starts_with(live)) || !path.is_file() {
+            return None;
+        }
+        self.relative(path)
+    }
 }
 
 /// Restore, build, stage and read the staged directory and watch declaration
@@ -2318,6 +2426,7 @@ fn stage_product(options: &DevOptions) -> Result<StagedProduct, String> {
         arguments.push(format!("-getProperty:{property}"));
     }
     arguments.push(format!("-getItem:{CONTENT_BUNDLE_ITEM}"));
+    arguments.push(format!("-getItem:{LIVE_CONTENT_ITEM}"));
     arguments.push(format!("-getResultOutputFile:{result_argument}"));
     let _ = fs::remove_file(&result_file);
     run_dotnet(&arguments)?;
@@ -2338,6 +2447,7 @@ fn stage_product(options: &DevOptions) -> Result<StagedProduct, String> {
         directory: absolute(Path::new(property(STAGED_PRODUCT_PROPERTY)?.trim()))?,
         watches: parse_watch_paths(property(WATCH_PATHS_PROPERTY)?)?,
         asset_roots: asset_roots(&project, &result)?,
+        content: ContentRoots::read(&project, &result)?,
     })
 }
 
@@ -2423,6 +2533,9 @@ fn source_properties(engine_source: Option<&Path>) -> Result<Vec<String>, String
 fn stage_properties(options: &DevOptions) -> Result<Vec<String>, String> {
     let mut properties = source_properties(options.engine_source.as_deref())?;
     properties.extend(DevelopmentRoots::of(&options.project)?.msbuild_properties()?);
+    // The staged manifest names the source content root, which the runtime's
+    // content source service reads and edits; no other staging writes it.
+    properties.push("-p:RustyEngineProductContentSource=true".to_owned());
     if let Some(bind_host) = &options.bind_host {
         properties.push(format!("-p:RustyEngineProductBindHost={bind_host}"));
     }
@@ -2647,6 +2760,11 @@ impl SupervisedHost {
         self.send(&SupervisedHostCommand::ReloadAssets)
     }
 
+    /// Asks the running product to re-admit restaged live content files.
+    fn reload_content(&mut self, paths: Vec<String>) -> Result<(), String> {
+        self.send(&SupervisedHostCommand::ReloadContent { paths })
+    }
+
     fn send(&mut self, command: &SupervisedHostCommand) -> Result<(), String> {
         let frame = encode_supervisor_command(command)?;
         let stdin = self
@@ -2663,8 +2781,8 @@ impl SupervisedHost {
 /// The commands the long-lived `rusty dev` shell accepts after startup. They
 /// carry no generic method name, options bag, or compatibility negotiation:
 /// successful staging either replaces exactly one C# runtime incarnation with
-/// the next staged Product directory, or reloads restaged UI and content into
-/// the running one.
+/// the next staged Product directory, or reloads restaged UI, bundles and
+/// live loose content files into the running one.
 #[derive(serde::Serialize)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
 enum SupervisedHostCommand {
@@ -2673,6 +2791,9 @@ enum SupervisedHostCommand {
         product_directory: String,
     },
     ReloadAssets,
+    ReloadContent {
+        paths: Vec<String>,
+    },
 }
 
 fn encode_supervisor_command(command: &SupervisedHostCommand) -> Result<Vec<u8>, String> {
@@ -3389,6 +3510,7 @@ mod tests {
             "/logs/diagnostics.ndjson",
         ]);
         let properties = stage_properties(&options).expect("staging properties");
+        assert!(properties.contains(&"-p:RustyEngineProductContentSource=true".to_owned()));
         assert!(properties.contains(&"-p:RustyEngineProductRenderOutput=window".to_owned()));
         assert!(properties.contains(&"-p:RustyEngineProductAudioOutput=device-required".to_owned()));
         let host = supervised_host_arguments(
@@ -3575,6 +3697,57 @@ mod tests {
             encode_supervisor_command(&SupervisedHostCommand::ReloadAssets).expect("reload frame");
         let payload: Value = serde_json::from_slice(&frame[4..]).expect("reload payload");
         assert_eq!(payload, serde_json::json!({ "kind": "reload-assets" }));
+    }
+
+    #[test]
+    fn content_reload_names_its_paths() {
+        let frame = encode_supervisor_command(&SupervisedHostCommand::ReloadContent {
+            paths: vec!["tuning/a.json".to_owned()],
+        })
+        .expect("reload frame");
+        let payload: Value = serde_json::from_slice(&frame[4..]).expect("reload payload");
+        assert_eq!(
+            payload,
+            serde_json::json!({ "kind": "reload-content", "paths": ["tuning/a.json"] })
+        );
+    }
+
+    #[test]
+    fn live_content_and_already_staged_files_route_by_content_path() {
+        let base = env::temp_dir().join(format!("rusty-live-content-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        let project = base.join("product/Product.csproj");
+        let content = base.join("product/content");
+        let staged = base.join("staged");
+        fs::create_dir_all(content.join("tuning")).unwrap();
+        fs::create_dir_all(staged.join("content/tuning")).unwrap();
+        for (path, source, copy) in [
+            ("tuning/a.json", "{\"a\":1}", "{\"a\":1}"),
+            ("tuning/b.json", "{\"b\":2}", "{\"b\":1}"),
+            ("rules.json", "[]", "[]"),
+        ] {
+            fs::write(content.join(path), source).unwrap();
+            fs::write(staged.join("content").join(path), copy).unwrap();
+        }
+        let roots = ContentRoots::read(
+            &project,
+            &serde_json::json!({
+                "Properties": { "RustyEngineProductContentRoot": "content" },
+                "Items": { "RustyEngineLiveContent": [{ "Identity": "tuning" }] },
+            }),
+        )
+        .unwrap();
+        assert!(roots.already_staged(&content.join("tuning/a.json"), &staged));
+        assert!(!roots.already_staged(&content.join("tuning/b.json"), &staged));
+        assert!(!roots.already_staged(&content.join("tuning/new.json"), &staged));
+        assert!(!roots.already_staged(&base.join("product/Product.cs"), &staged));
+        assert_eq!(
+            roots.live(&content.join("tuning/b.json")).as_deref(),
+            Some("tuning/b.json")
+        );
+        assert_eq!(roots.live(&content.join("rules.json")), None);
+        assert_eq!(roots.live(&content.join("tuning/deleted.json")), None);
+        fs::remove_dir_all(&base).unwrap();
     }
 
     #[test]

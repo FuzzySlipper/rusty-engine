@@ -8,6 +8,7 @@
 pub use csharp_engine_abi::*;
 
 use std::{
+    collections::BTreeMap,
     ffi::c_void,
     fs,
     path::{Path, PathBuf},
@@ -193,6 +194,9 @@ pub struct CsharpProductRuntimeConfig {
     /// The Product a scene snapshot names.
     product: Option<scene_snapshot::SceneSnapshotProduct>,
     presentation_cadence: PresentationCadence,
+    /// `rusty dev`'s source content root, which the ContentSource service
+    /// reads and edits.
+    content_source: Option<PathBuf>,
 }
 
 /// How often the display shows frames, which Engine tweens are presented at
@@ -244,7 +248,16 @@ impl CsharpProductRuntimeConfig {
             window_gpu: None,
             product: None,
             presentation_cadence: PresentationCadence::default(),
+            content_source: None,
         }
+    }
+
+    /// The source content root a `rusty dev` staging named
+    /// (`development.contentSource`): the ContentSource service reads and
+    /// edits it, keeping the staged content equal.
+    pub fn with_content_source(mut self, root: impl Into<PathBuf>) -> Self {
+        self.content_source = Some(root.into());
+        self
     }
 
     /// The Product's manifest identity, which a scene snapshot records.
@@ -703,6 +716,7 @@ pub use product_host::ProductHostRenderOutput as RenderOutput;
 pub use frame_output::{WindowFrame, WindowTiming};
 pub use render_wgpu::{Gpu, Renderer, SceneDriver};
 
+mod content_source_debug;
 mod playtest;
 
 /// A finished product call: what it published, any input mapping it
@@ -742,9 +756,12 @@ pub struct CsharpProductRuntime {
     pending_recovery_outputs: Vec<RuntimePublication>,
     services: Box<EngineServiceSet>,
     /// The Product and content root whose bundle inventory `reload_content`
-    /// re-admits.
+    /// and loose files `reload_content_files` re-admit.
     content_source: ProductSource,
     content_root: String,
+    /// Loose content files re-admitted since the last update, by path, with
+    /// their new identity and length; the next update hands them over.
+    content_changes: BTreeMap<String, (NativeContentSha256, u64)>,
     initial_output: Option<Vec<RuntimePublication>>,
     renderer_metrics_visible: bool,
     shutdown_called: bool,
@@ -969,6 +986,16 @@ impl CsharpProductRuntime {
             config.direct_intents.clone(),
         )?);
         services.bind_content_bundles(bundles);
+        if let (Some(source), ProductSource::Directory(staged)) =
+            (&config.content_source, &content_source)
+        {
+            services.bind_content_source(csharp_engine_services::ContentSource::new(Some(
+                csharp_engine_services::ContentSourceRoots {
+                    source: source.clone(),
+                    staged: staged.join(&content_root),
+                },
+            )));
+        }
         if let Some(frames) = &frame_output {
             services.ingest_renderer_settings(frames.settings_readout());
         }
@@ -1059,6 +1086,7 @@ impl CsharpProductRuntime {
             input_lane,
             direct_intents: config.direct_intents,
             pending_inputs: Vec::new(),
+            content_changes: BTreeMap::new(),
             pending_recovery_outputs: Vec::new(),
             services,
             content_source,
@@ -1687,6 +1715,19 @@ impl CsharpProductRuntime {
             .iter()
             .map(NativeInputOwned::as_native)
             .collect();
+        // Handed over once, whatever the callback does with them.
+        let content_changes = std::mem::take(&mut self.content_changes);
+        let content_changes = content_changes
+            .iter()
+            .map(|(path, (sha256, byte_length))| NativeContentReferenceInfo {
+                path: NativeUtf8Slice {
+                    bytes: path.as_ptr(),
+                    len: path.len(),
+                },
+                sha256: *sha256,
+                byte_length: *byte_length,
+            })
+            .collect::<Vec<_>>();
         if let Some(audio) = &mut self.audio_output {
             audio.report(&mut self.services)?;
         }
@@ -1731,6 +1772,8 @@ impl CsharpProductRuntime {
                 facts,
                 events: events.as_ptr(),
                 event_count: events.len(),
+                content_changes: content_changes.as_ptr(),
+                content_change_count: content_changes.len(),
             },
         );
         let callback_duration_us = callback_started
@@ -1917,7 +1960,7 @@ impl CsharpProductRuntime {
     /// and choose, with no world time.
     fn update_without_step(
         &mut self,
-        observed_host_time_nanoseconds: u64,
+        observed_host_time_nanoseconds: Option<u64>,
     ) -> Result<Vec<RuntimePublication>, CsharpProductRuntimeError> {
         // The same input owner and snapshot as a step: edges and deltas are
         // consumed once, here, and held state is reported again.
@@ -1934,11 +1977,11 @@ impl CsharpProductRuntime {
             return Ok(Vec::new());
         }
         let next_step = self.lifecycle.readout().admitted_simulation_steps();
-        let host_elapsed = self.take_host_elapsed(Some(observed_host_time_nanoseconds));
-        let tween_time = self.take_tween_time(Some(observed_host_time_nanoseconds));
+        let host_elapsed = self.take_host_elapsed(observed_host_time_nanoseconds);
+        let tween_time = self.take_tween_time(observed_host_time_nanoseconds);
         let facts = update_facts(
             &self.lifecycle,
-            Some(observed_host_time_nanoseconds),
+            observed_host_time_nanoseconds,
             (next_step, 0),
             0,
             host_elapsed,
@@ -2914,10 +2957,8 @@ impl CsharpProductRuntime {
 impl ProductHostRuntime for CsharpProductRuntime {
     /// Re-admits the staged bundle inventory so the next `OpenBundle` sees
     /// edited, added and deleted bundle files. Open bundles keep their
-    /// inventory and the bytes they already read; a file first read after the
-    /// restage must still have its inventoried length. The eager loose
-    /// snapshot the product received at create is not reloaded; `rusty dev`
-    /// replaces the runtime for loose content edits.
+    /// inventory and the bytes they already read. Loose content reloads by
+    /// file (`reload_content_files`).
     fn reload_content(&mut self) -> Result<(), ProductHostRuntimeError> {
         let bundles = csharp_engine_services::ProductContentBundles::admit(
             &self.content_source,
@@ -2928,6 +2969,26 @@ impl ProductHostRuntime for CsharpProductRuntime {
         Ok(())
     }
 
+    /// Re-admits the named loose files from the staged content root: opens by
+    /// path read the new bytes, open references keep theirs, and the next
+    /// update carries each path and new identity. Every file is read before
+    /// any is swapped, so a failed read leaves the old ones in place.
+    fn reload_content_files(&mut self, paths: &[String]) -> Result<(), ProductHostRuntimeError> {
+        let changed = paths
+            .iter()
+            .map(|path| {
+                self.content_source
+                    .read(&product_container::join(&self.content_root, path))
+                    .map(|bytes| (path.clone(), Arc::from(bytes.as_ref())))
+                    .map_err(|error| ProductHostRuntimeError::new(error.code(), error.to_string()))
+            })
+            .collect::<Result<BTreeMap<_, Arc<[u8]>>, _>>()?;
+        for (path, sha256, length) in self.services.reload_content_files(changed) {
+            self.content_changes.insert(path, (sha256, length));
+        }
+        Ok(())
+    }
+
     fn take_update_attribution(&mut self) -> Option<ProductHostUpdateAttribution> {
         self.pending_update_attribution.take()
     }
@@ -2935,7 +2996,12 @@ impl ProductHostRuntime for CsharpProductRuntime {
     fn realtime_schedule_state(&self) -> ProductHostRuntimeScheduleState {
         match self.lifecycle.state() {
             RuntimeState::Created => ProductHostRuntimeScheduleState::Created,
-            RuntimeState::Running if self.playtest_time != playtest::TimeMode::Realtime => {
+            // Held, unless reloaded content waits: the next observation then
+            // hands it to the product in an update that admits no step.
+            RuntimeState::Running
+                if self.playtest_time != playtest::TimeMode::Realtime
+                    && self.content_changes.is_empty() =>
+            {
                 ProductHostRuntimeScheduleState::Held
             }
             RuntimeState::Running => ProductHostRuntimeScheduleState::Running,
@@ -3281,6 +3347,9 @@ impl ProductHostRuntime for CsharpProductRuntime {
         }) {
             return self.execute_time_debug(command);
         }
+        if let Some(result) = self.execute_content_source_debug(command) {
+            return ProductHostRuntimeReceipt::new(result, Vec::new()).map_err(host_runtime_error);
+        }
         if let Some(frames) = self
             .frame_output
             .as_ref()
@@ -3359,7 +3428,7 @@ impl ProductHostRuntime for CsharpProductRuntime {
                         error.detail().to_owned(),
                     ))
                 })?;
-        let catalog = catalog.with_renderer_diagnostics();
+        let catalog = catalog.with_renderer_diagnostics().with_content_source();
         let catalog = if self.frame_output.is_some() {
             catalog.with_runtime_renderer_inspection()
         } else {
@@ -3432,8 +3501,25 @@ impl ProductHostRuntime for CsharpProductRuntime {
         // An expired claim's release is this observation's whole output; the
         // next observation simulates.
         let released = self.expire_input_claim()?;
-        if !released.is_empty() || self.playtest_time != playtest::TimeMode::Realtime {
+        if !released.is_empty() {
             return self.receipt(ProductHostOperationKind::AdvanceRealtime, released);
+        }
+        // Held inspection time admits nothing, but reloaded content still
+        // reaches the product: one update with no step, like an inspection
+        // step's owed nothing.
+        if self.playtest_time != playtest::TimeMode::Realtime {
+            let outputs = if self.content_changes.is_empty() {
+                Vec::new()
+            } else {
+                match self.update_without_step(None) {
+                    Ok(outputs) => outputs,
+                    Err(error) => {
+                        return self
+                            .resync_operation(ProductHostOperationKind::AdvanceRealtime, error);
+                    }
+                }
+            };
+            return self.receipt(ProductHostOperationKind::AdvanceRealtime, outputs);
         }
         let admission = self
             .lifecycle
@@ -3469,9 +3555,13 @@ impl ProductHostRuntime for CsharpProductRuntime {
                 }
             },
             // A product that selected gameplay time updates at every
-            // observation, so it can look, present and choose while held.
-            None if self.lifecycle.gameplay_time().selected() => {
-                match self.update_without_step(observed_time_ns.get()) {
+            // observation, so it can look, present and choose while held,
+            // and reloaded content reaches any product without waiting for
+            // a step.
+            None if self.lifecycle.gameplay_time().selected()
+                || !self.content_changes.is_empty() =>
+            {
+                match self.update_without_step(Some(observed_time_ns.get())) {
                     Ok(outputs) => outputs,
                     Err(error) => {
                         return self
@@ -8159,6 +8249,114 @@ mod tests {
             (stepped.last().unwrap() - 1.036).abs() < 1.0e-3,
             "{stepped:?}"
         );
+        drop(runtime);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    /// One update's admitted steps, simulation step, and content changes
+    /// (path, length).
+    type ContentChangeUpdate = (u32, u64, Vec<(String, u64)>);
+    static CONTENT_CHANGE_UPDATES: Mutex<Vec<ContentChangeUpdate>> = Mutex::new(Vec::new());
+
+    unsafe extern "C" fn content_change_fixture_update(
+        _handle: *mut c_void,
+        args: *const NativeProductUpdateArgs,
+        result: *mut NativeProductUpdateResult,
+    ) -> i32 {
+        unsafe { *result = NativeProductUpdateResult::None };
+        let args = unsafe { &*args };
+        let changes = (0..args.content_change_count)
+            .map(|index| {
+                let change = unsafe { &*args.content_changes.add(index) };
+                let path = unsafe { std::slice::from_raw_parts(change.path.bytes, change.path.len) };
+                (String::from_utf8(path.to_vec()).unwrap(), change.byte_length)
+            })
+            .collect();
+        CONTENT_CHANGE_UPDATES
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push((
+                args.facts.admitted_step_count,
+                args.facts.simulation_step,
+                changes,
+            ));
+        ABI_OK
+    }
+
+    #[test]
+    fn reloaded_live_content_reaches_a_held_product_without_a_step() {
+        let _guard = DROP_FIXTURE_GATE
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        CONTENT_CHANGE_UPDATES
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clear();
+        let root = content_fixture_root("live-content-reload");
+        fs::create_dir_all(root.join("tuning")).expect("content root");
+        fs::write(root.join("tuning/marker.json"), b"{\"size\":1}").unwrap();
+        let content = CsharpProductContent::admit(&root).expect("fixture content");
+        let mut runtime = CsharpProductRuntime::load_admitted_with(
+            content,
+            CsharpProductRuntimeConfig::new(
+                RuntimeInstanceId::new(1),
+                RuntimeLifecycleConfig::new(30, 2).expect("30 Hz realtime"),
+                Vec::new(),
+            ),
+            || {
+                let mut api = drop_fixture_api();
+                api.update = content_change_fixture_update;
+                Ok(api)
+            },
+        )
+        .expect("fixture runtime");
+        runtime
+            .lifecycle(ProductHostLifecycleOperation::Start)
+            .unwrap();
+        let ns = |milliseconds: u64| CanonicalU64::new(milliseconds * 1_000_000);
+        runtime.advance_realtime(ns(0)).unwrap();
+        runtime.advance_realtime(ns(40)).unwrap();
+        runtime
+            .execute_time_debug("engine.time.mode manual")
+            .unwrap();
+        let updates = || {
+            CONTENT_CHANGE_UPDATES
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .clone()
+        };
+        let before = updates();
+        let steps = runtime.lifecycle.readout().admitted_simulation_steps();
+        assert_eq!(
+            runtime.realtime_schedule_state(),
+            ProductHostRuntimeScheduleState::Held
+        );
+        fs::write(root.join("tuning/marker.json"), b"{\"size\":2.5}").unwrap();
+        runtime
+            .reload_content_files(&["tuning/marker.json".to_owned()])
+            .unwrap();
+        assert_eq!(
+            runtime.realtime_schedule_state(),
+            ProductHostRuntimeScheduleState::Running,
+            "the host observes a held runtime that has content to hand over"
+        );
+        runtime.advance_realtime(ns(80)).unwrap();
+        assert_eq!(
+            runtime.realtime_schedule_state(),
+            ProductHostRuntimeScheduleState::Held
+        );
+        runtime.advance_realtime(ns(120)).unwrap();
+        let after = updates();
+        assert_eq!(
+            &after[before.len()..],
+            [(0, steps, vec![("tuning/marker.json".to_owned(), 12)])],
+            "one update, admitting no step, carries the change once"
+        );
+        assert_eq!(runtime.lifecycle.readout().admitted_simulation_steps(), steps);
+        let missing = runtime
+            .reload_content_files(&["tuning/none.json".to_owned()])
+            .unwrap_err();
+        assert_eq!(missing.code(), "PRODUCT_SOURCE_MISSING");
         drop(runtime);
         fs::remove_dir_all(root).unwrap();
     }

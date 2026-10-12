@@ -6,6 +6,7 @@ mod authored_content;
 mod camera_view;
 mod composition;
 mod content;
+mod content_source;
 mod diagnostics;
 mod dynamics;
 mod gameplay_time;
@@ -49,4 +50,7 @@ pub use tween::TweenTime;
 pub use video::VideoRealizationFact;
 
 pub use content::ProductContentBundles;
+pub use content_source::{
+    parse_edits as parse_content_source_edits, ContentSource, ContentSourceRoots, JsonEdit,
+};
 pub use ui::{UiFile, UiFiles};

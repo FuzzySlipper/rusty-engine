@@ -1,0 +1,1 @@
+Loose content not declared live: editing it restages the whole Product.

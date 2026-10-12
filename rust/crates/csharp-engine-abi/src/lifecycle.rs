@@ -108,11 +108,15 @@ pub struct NativeProductRuntimeFacts {
     pub control_revision: u64,
 }
 
-/// Explicit typed update facts and its borrowed input slice.
+/// Explicit typed update facts, its borrowed input slice, and the loose
+/// content files re-admitted since the last update (`rusty dev` live content),
+/// each with its new identity. Both slices are borrowed for this update.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeProductUpdateArgs {
     pub facts: NativeProductUpdateFacts,
     pub events: *const NativeInputEvent,
     pub event_count: usize,
+    pub content_changes: *const crate::NativeContentReferenceInfo,
+    pub content_change_count: usize,
 }

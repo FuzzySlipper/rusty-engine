@@ -25,7 +25,7 @@ use product_host::ProductHostLog;
 
 use crate::{
     browser_url, headless_browser, install_termination_signal_hook, Arguments, ProductLoader,
-    RELOAD_ASSETS_COMMAND,
+    RELOAD_ASSETS_COMMAND, RELOAD_CONTENT_COMMAND,
 };
 
 /// Cold managed products can spend longer loading content than one callback.
@@ -41,9 +41,10 @@ pub(crate) const SERVE_COMMAND: &str = "serve";
 /// as a configuration error: restarting cannot help, so it stops at once.
 pub(crate) const BIND_FAILURE_EXIT_CODE: i32 = 78;
 
-/// `rusty dev` writes one command over stdin after each restage: a new
-/// Product directory replaces the runtime, restaged UI or bundle content is
-/// reloaded into it. EOF is a clean stop. Browser input cannot reach it.
+/// `rusty dev` writes commands over stdin after each restage: a new Product
+/// directory replaces the runtime, restaged UI or bundle content is reloaded
+/// into it, and restaged live loose content files (content-root-relative) are
+/// re-admitted in it. EOF is a clean stop. Browser input cannot reach it.
 #[derive(Debug, serde::Deserialize)]
 #[serde(
     tag = "kind",
@@ -54,6 +55,7 @@ pub(crate) const BIND_FAILURE_EXIT_CODE: i32 = 78;
 enum SupervisorCommand {
     ReplaceRuntime { product_directory: PathBuf },
     ReloadAssets,
+    ReloadContent { paths: Vec<String> },
 }
 
 pub(crate) fn run(args: Arguments) -> Result<std::process::ExitCode, String> {
@@ -214,6 +216,17 @@ pub(crate) fn run(args: Arguments) -> Result<std::process::ExitCode, String> {
                     publish_supervisor_diagnostic(
                         &diagnostics,
                         "PRODUCT_HOST_ASSET_RELOAD",
+                        &error,
+                    );
+                }
+            }
+            Ok(Ok(SupervisorCommand::ReloadContent { paths })) => {
+                if let Some(Err(error)) =
+                    runtime.as_mut().map(|runtime| runtime.reload_content(paths))
+                {
+                    publish_supervisor_diagnostic(
+                        &diagnostics,
+                        "PRODUCT_HOST_CONTENT_RELOAD",
                         &error,
                     );
                 }
@@ -405,8 +418,8 @@ fn path_argument(path: &Path) -> Result<String, String> {
 }
 
 /// One runtime incarnation. Its stdin is the control pipe: one `serve`
-/// line, any number of `reload-assets` lines, then EOF as the clean-stop
-/// request.
+/// line, any number of `reload-assets` and `reload-content <paths>` lines,
+/// then EOF as the clean-stop request.
 struct RuntimeProcess {
     child: Child,
     stdin: Option<ChildStdin>,
@@ -414,6 +427,7 @@ struct RuntimeProcess {
     startup_deadline: Option<Instant>,
     serving: bool,
     reload_after_serve: bool,
+    content_after_serve: Vec<String>,
 }
 
 impl RuntimeProcess {
@@ -457,6 +471,7 @@ impl RuntimeProcess {
             startup_deadline: None,
             serving: false,
             reload_after_serve: false,
+            content_after_serve: Vec::new(),
         })
     }
 
@@ -470,6 +485,10 @@ impl RuntimeProcess {
             self.serving = true;
             if self.reload_after_serve {
                 self.reload_assets()?;
+            }
+            let content = std::mem::take(&mut self.content_after_serve);
+            if !content.is_empty() {
+                self.reload_content(content)?;
             }
             return Ok(());
         }
@@ -515,6 +534,24 @@ impl RuntimeProcess {
         writeln!(stdin, "{RELOAD_ASSETS_COMMAND}")
             .and_then(|_| stdin.flush())
             .map_err(|error| format!("PRODUCT_HOST_ASSET_RELOAD: {error}"))
+    }
+
+    /// A starting runtime may already have read the previous files; it gets
+    /// them right after `serve`.
+    fn reload_content(&mut self, paths: Vec<String>) -> Result<(), String> {
+        if !self.serving {
+            self.content_after_serve.extend(paths);
+            return Ok(());
+        }
+        let stdin = self
+            .stdin
+            .as_mut()
+            .ok_or("PRODUCT_HOST_CONTENT_RELOAD: runtime stdin is closed")?;
+        let paths = serde_json::to_string(&paths)
+            .map_err(|error| format!("PRODUCT_HOST_CONTENT_RELOAD: {error}"))?;
+        writeln!(stdin, "{RELOAD_CONTENT_COMMAND} {paths}")
+            .and_then(|_| stdin.flush())
+            .map_err(|error| format!("PRODUCT_HOST_CONTENT_RELOAD: {error}"))
     }
 
     fn exited(&mut self) -> Option<ExitStatus> {
@@ -733,6 +770,7 @@ mod tests {
         for body in [
             br#"{"kind":"replace-runtime","productDirectory":"/tmp/product"}"#.as_slice(),
             br#"{"kind":"reload-assets"}"#.as_slice(),
+            br#"{"kind":"reload-content","paths":["tuning/a.json"]}"#.as_slice(),
         ] {
             frame.extend_from_slice(&(body.len() as u32).to_le_bytes());
             frame.extend_from_slice(body);
@@ -748,6 +786,11 @@ mod tests {
             read_supervisor_frame(&mut input),
             Ok(SupervisorCommand::ReloadAssets)
         ));
+        let Ok(SupervisorCommand::ReloadContent { paths }) = read_supervisor_frame(&mut input)
+        else {
+            panic!("expected a content reload");
+        };
+        assert_eq!(paths, ["tuning/a.json"]);
         assert_eq!(
             read_supervisor_frame(&mut input).unwrap_err(),
             SUPERVISOR_EOF
