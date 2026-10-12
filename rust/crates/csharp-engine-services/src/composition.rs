@@ -83,6 +83,7 @@ fn engine_api(
     appearance_bridge.bind_authored_content(authored_content_bridge);
     spatial_bridge.bind_appearance(appearance_bridge);
     dynamics_bridge.bind_appearance(appearance_bridge);
+    dynamics_bridge.bind_water_fields(water_field_bridge);
     spatial_bridge.bind_implicit(implicit_bridge);
     NativeEngineApi {
         input: crate::input::api(input_bridge),

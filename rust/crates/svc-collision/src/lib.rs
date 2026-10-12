@@ -41,6 +41,11 @@ mod joint;
 mod ragdoll;
 mod static_mesh;
 mod tether;
+mod water;
+
+pub use water::{
+    shape_volume, submerged, DynamicsWaterPlane, DynamicsWaterReadout, Submerged, CAPSULE_SLICES,
+};
 
 pub use tether::{
     DynamicsRopeSolverConfig, DynamicsTether, DynamicsTetherEndpoint, DynamicsTetherError,

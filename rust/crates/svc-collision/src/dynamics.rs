@@ -12,6 +12,7 @@ use crate::tether::{
     DynamicsRopeSolverConfig, DynamicsTether, DynamicsTetherError, DynamicsTetherReadout,
     SolverTether,
 };
+use crate::water::{shape_volume, submerged, DynamicsWaterPlane, DynamicsWaterReadout};
 use crate::CollisionProjection;
 
 const MASS_PROPERTIES_FRAME_NORMALIZATION_TOLERANCE: f64 = 1.0e-3;
@@ -144,6 +145,7 @@ pub enum DynamicsError {
     UnknownBody { body: DynamicsBodyId },
     InvalidBody { body: DynamicsBodyId },
     InvalidAction { body: DynamicsBodyId },
+    InvalidWater { plane: usize },
 }
 
 impl DynamicsError {
@@ -156,6 +158,7 @@ impl DynamicsError {
             Self::UnknownBody { .. } => "unknown-dynamics-body",
             Self::InvalidBody { .. } => "invalid-dynamics-body",
             Self::InvalidAction { .. } => "invalid-dynamics-action",
+            Self::InvalidWater { .. } => "invalid-dynamics-water",
         }
     }
 }
@@ -205,6 +208,11 @@ pub struct DynamicsSolver {
     rope_solver: DynamicsRopeSolverConfig,
     contacts: Vec<DynamicsContact>,
     tether_readouts: Vec<DynamicsTetherReadout>,
+    /// Every body's shape, for the water to measure.
+    shapes: BTreeMap<DynamicsBodyId, DynamicsShape>,
+    water: Vec<DynamicsWaterPlane>,
+    /// The bodies the water acts on.
+    floating: BTreeMap<DynamicsBodyId, Floating>,
     generation: u64,
 }
 
@@ -222,6 +230,9 @@ impl DynamicsSolver {
             rope_solver: DynamicsRopeSolverConfig::default(),
             contacts: Vec::new(),
             tether_readouts: Vec::new(),
+            shapes: BTreeMap::new(),
+            water: Vec::new(),
+            floating: BTreeMap::new(),
             generation: 0,
         }
     }
@@ -302,6 +313,7 @@ impl DynamicsSolver {
         let (builder, collider) = body_builders(&body);
         let (handle, _) = self.world.insert(builder, collider);
         self.bodies.insert(body.id, handle);
+        self.shapes.insert(body.id, body.shape);
         Ok(())
     }
 
@@ -312,6 +324,8 @@ impl DynamicsSolver {
             return Vec::new();
         };
         self.joints.retain(|_, joint| !joint.attaches(id));
+        self.shapes.remove(&id);
+        self.floating.remove(&id);
         let attached = self.tethers_attached_to(id);
         for tether in &attached {
             if let Some(tether) = self.tethers.remove(tether) {
@@ -348,6 +362,7 @@ impl DynamicsSolver {
         let (builder, collider) = body_builders(&body);
         let (handle, _) = self.world.insert(builder, collider);
         self.bodies.insert(body.id, handle);
+        self.shapes.insert(body.id, body.shape);
         for joint in joints {
             let (first, second) = (self.bodies[&joint.first], self.bodies[&joint.second]);
             self.joints.insert(
@@ -596,6 +611,111 @@ impl DynamicsSolver {
         }
     }
 
+    /// Replace the world's water and the bodies it acts on. A body takes its
+    /// own plane ([`Self::set_body_water`]) if it has one, else the first
+    /// plane whose rectangle holds its centre; out of every plane, or above
+    /// its surface, nothing acts on it.
+    pub fn set_water(
+        &mut self,
+        planes: Vec<DynamicsWaterPlane>,
+        bodies: impl IntoIterator<Item = DynamicsBodyId>,
+    ) -> Result<(), DynamicsError> {
+        if let Some(plane) = planes.iter().position(|plane| !plane.is_valid()) {
+            return Err(DynamicsError::InvalidWater { plane });
+        }
+        let mut floating = BTreeMap::new();
+        for body in bodies {
+            self.handle(body)?;
+            let readout = self
+                .floating
+                .get(&body)
+                .map(|f| f.readout)
+                .unwrap_or_default();
+            floating.insert(
+                body,
+                Floating {
+                    readout,
+                    local: None,
+                },
+            );
+        }
+        self.water = planes;
+        self.floating = floating;
+        Ok(())
+    }
+
+    /// Give a floating body its own plane for the following steps, wherever
+    /// it moves (the water a field reports under it), or clear it.
+    pub fn set_body_water(
+        &mut self,
+        id: DynamicsBodyId,
+        plane: Option<DynamicsWaterPlane>,
+    ) -> Result<(), DynamicsError> {
+        if plane.is_some_and(|plane| !plane.is_valid()) {
+            return Err(DynamicsError::InvalidWater { plane: 0 });
+        }
+        let floating = self
+            .floating
+            .get_mut(&id)
+            .ok_or(DynamicsError::UnknownBody { body: id })?;
+        floating.local = plane;
+        Ok(())
+    }
+
+    /// What the water did to a floating body over the latest step.
+    pub fn water_readout(&self, id: DynamicsBodyId) -> Option<DynamicsWaterReadout> {
+        self.floating.get(&id).map(|floating| floating.readout)
+    }
+
+    /// One substep of water on every floating body: buoyancy as an impulse at
+    /// the submerged centroid, drag as the velocity change toward the current.
+    /// Adds to `sums`, one entry per floating body in order.
+    fn apply_water(&mut self, dt: f64, sums: &mut [DynamicsWaterReadout]) {
+        let gravity = self.world.gravity;
+        let weight = gravity.length();
+        let up = if weight > 0.0 {
+            -gravity / weight
+        } else {
+            Vector::Y
+        };
+        for ((id, floating), sum) in self.floating.iter_mut().zip(sums.iter_mut()) {
+            let last = &mut floating.readout;
+            let (Some(&handle), Some(&shape)) = (self.bodies.get(id), self.shapes.get(id)) else {
+                continue;
+            };
+            let body = &mut self.world.bodies[handle];
+            if !body.is_enabled() {
+                continue;
+            }
+            let centre = body.translation();
+            let local = floating.local.as_ref();
+            let Some(plane) = local.or_else(|| self.water.iter().find(|plane| plane.holds(centre)))
+            else {
+                last.submerged_fraction = 0.0;
+                continue;
+            };
+            let part = submerged(shape, centre, *body.rotation(), plane.surface);
+            let fraction = (part.volume / shape_volume(shape)).min(1.0);
+            last.submerged_fraction = fraction;
+            if fraction <= 0.0 {
+                continue;
+            }
+            let buoyancy = up * (plane.density * weight * part.volume);
+            let com = body.center_of_mass();
+            body.apply_impulse_at_point(buoyancy * dt, part.centroid, true);
+            let current = Vector::new(plane.current[0], 0.0, plane.current[1]);
+            let relative = body.linvel() - current;
+            let change = relative * ((-plane.linear_drag * fraction * dt).exp() - 1.0);
+            let drag = change * (body.mass() / dt);
+            body.apply_impulse(drag * dt, true);
+            let spin = body.angvel() * (-plane.angular_drag * fraction * dt).exp();
+            body.set_angvel(spin, true);
+            sum.buoyancy = add(sum.buoyancy, buoyancy.to_array());
+            sum.drag = add(sum.drag, drag.to_array());
+            sum.torque = add(sum.torque, (part.centroid - com).cross(buoyancy).to_array());
+        }
+    }
+
     pub fn step(
         &mut self,
         step_seconds: f64,
@@ -645,14 +765,26 @@ impl DynamicsSolver {
         for tether in self.tethers.values_mut() {
             tether.begin_step();
         }
-        for _ in 0..steps as usize * subdivisions {
+        let substeps = steps as usize * subdivisions;
+        let mut water = vec![DynamicsWaterReadout::default(); self.floating.len()];
+        for _ in 0..substeps {
             for tether in self.tethers.values_mut() {
                 tether.reel(&mut self.world, dt);
+            }
+            if !self.floating.is_empty() {
+                self.apply_water(dt, &mut water);
             }
             self.world.step();
             for tether in self.tethers.values_mut() {
                 tether.accumulate(&self.world);
             }
+        }
+        let average = |value: [f64; 3]| value.map(|component| component / substeps.max(1) as f64);
+        for (floating, sum) in self.floating.values_mut().zip(water) {
+            let last = &mut floating.readout;
+            last.buoyancy = average(sum.buoyancy);
+            last.drag = average(sum.drag);
+            last.torque = average(sum.torque);
         }
         // Rapier keeps user forces until reset; an action's force lasts one call.
         for handle in forced {
@@ -851,6 +983,18 @@ fn shared_shape(shape: DynamicsShape) -> SharedShape {
             radius,
         } => SharedShape::capsule_y(half_height, radius),
     }
+}
+
+/// A body the water acts on.
+#[derive(Debug, Clone, Copy, Default)]
+struct Floating {
+    readout: DynamicsWaterReadout,
+    /// Its own plane, ahead of the world's.
+    local: Option<DynamicsWaterPlane>,
+}
+
+fn add(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
+    std::array::from_fn(|axis| a[axis] + b[axis])
 }
 
 fn vector(value: [f64; 3]) -> Vector {

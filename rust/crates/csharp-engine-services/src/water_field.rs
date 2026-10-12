@@ -659,6 +659,20 @@ impl RuntimeWaterFieldBridge {
         push_frame(&mut self.frames, operations)
     }
 
+    /// Whether a field lives, for Dynamics water entries.
+    pub(crate) fn lives(&self, field: u64) -> bool {
+        self.fields.contains_key(&field)
+    }
+
+    /// The water at a scene point (x, z) of a live field's latest snapshot,
+    /// for Dynamics water; `None` outside it.
+    pub(crate) fn sample_at(&self, field: u64, x: f32, z: f32) -> Option<NativeWaterFieldSample> {
+        let field = self.fields.get(&field)?;
+        let placement = field.placement(&self.spatial).map(|value| value as f32);
+        let sample = field.sample(x - placement[0], z - placement[2], placement[1]);
+        sample.inside.then_some(sample)
+    }
+
     fn require_call(&self) -> Result<(), CsharpEngineServicesError> {
         if self.in_call {
             Ok(())

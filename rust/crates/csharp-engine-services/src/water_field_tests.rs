@@ -566,3 +566,172 @@ fn material(api: &NativeEngineApi) -> NativeMaterialHandle {
     );
     handle
 }
+
+/// A box named as floating in a Dynamics world whose water is this field
+/// floats on the river at its Archimedes draft and drifts downstream.
+#[test]
+fn dynamics_bodies_float_on_a_water_field() {
+    const HALF: f32 = 0.5;
+    const MASS: f32 = 300.0;
+    const DENSITY: f32 = 1000.0;
+    let mut valley = Valley::new();
+    valley.run(300.0);
+    let start = over(20, 11);
+    let river = valley.sample(&[start])[0];
+    assert!(river.wet && river.depth > 0.3, "{river:?}");
+
+    valley.services.begin_call(binding());
+    let api = valley.services.api();
+    let dynamics = &api.dynamics;
+    let mut world = NativeDynamicsWorldHandle::default();
+    let config = NativeDynamicsWorldConfig {
+        gravity: NativeVec3 {
+            x: 0.0,
+            y: -9.81,
+            z: 0.0,
+        },
+    };
+    assert_eq!(
+        unsafe {
+            (dynamics.create_world)(dynamics.context, config, &mut world, std::ptr::null_mut())
+        },
+        ABI_OK
+    );
+    let request = NativeDynamicsCreateBodyRequest {
+        world,
+        body: NativeDynamicsBodyConfig {
+            transform: NativeTransform {
+                translation: NativeVec3 {
+                    x: start.x,
+                    y: river.surface + 0.5,
+                    z: start.z,
+                },
+                rotation: NativeQuat {
+                    x: 0.0,
+                    y: 0.0,
+                    z: 0.0,
+                    w: 1.0,
+                },
+                scale: NativeVec3 {
+                    x: 1.0,
+                    y: 1.0,
+                    z: 1.0,
+                },
+            },
+            half_extents: NativeVec3 {
+                x: HALF,
+                y: HALF,
+                z: HALF,
+            },
+            properties: NativeDynamicsBodyProperties {
+                mass: MASS,
+                mass_policy: NativeDynamicsMassPolicy::default(),
+                linear_velocity: NativeVec3::default(),
+                angular_velocity: NativeVec3::default(),
+                axis_locks: NativeAxisLocks::default(),
+                linear_damping: 0.0,
+                angular_damping: 0.0,
+                gravity_scale: 1.0,
+                friction: 0.5,
+                restitution: 0.0,
+                collision_groups: u32::MAX,
+                collision_mask: u32::MAX,
+                enabled: true,
+                sleeping: false,
+                continuous_collision: false,
+            },
+        },
+    };
+    let mut body = NativeDynamicsBodyHandle::default();
+    assert_eq!(
+        unsafe {
+            (dynamics.create_body)(dynamics.context, &request, &mut body, std::ptr::null_mut())
+        },
+        ABI_OK
+    );
+    let fields = [NativeDynamicsWaterFieldEntry {
+        field: valley.field,
+        density: DENSITY,
+        linear_drag: 4.0,
+        angular_drag: 4.0,
+    }];
+    let bodies = [body];
+    let water = NativeDynamicsWaterRequest {
+        world,
+        planes: std::ptr::null(),
+        planes_len: 0,
+        fields: fields.as_ptr(),
+        fields_len: fields.len(),
+        bodies: bodies.as_ptr(),
+        bodies_len: bodies.len(),
+    };
+    let mut receipt = NativeDynamicsWaterReceipt::default();
+    assert_eq!(
+        unsafe {
+            (dynamics.set_water)(dynamics.context, &water, &mut receipt, std::ptr::null_mut())
+        },
+        ABI_OK
+    );
+    assert_eq!((receipt.fields, receipt.bodies), (1, 1));
+    valley.services.finish_call().unwrap();
+
+    let read = |valley: &mut Valley| {
+        valley.services.begin_call(binding());
+        let api = valley.services.api();
+        let dynamics = &api.dynamics;
+        let mut readout = NativeDynamicsReadout::default();
+        assert_eq!(
+            unsafe {
+                (dynamics.read)(
+                    dynamics.context,
+                    NativeDynamicsReadRequest { body },
+                    &mut readout,
+                    std::ptr::null_mut(),
+                )
+            },
+            ABI_OK
+        );
+        valley.services.finish_call().unwrap();
+        readout
+    };
+    for _ in 0..(10 * STEP_HZ / STEPS_PER_CALL) {
+        valley.step += u64::from(STEPS_PER_CALL);
+        valley
+            .services
+            .begin_update_call(binding(), update(valley.step, STEPS_PER_CALL));
+        let api = valley.services.api();
+        let dynamics = &api.dynamics;
+        let step = NativeDynamicsStepRequest {
+            world,
+            step_seconds: 1.0 / STEP_HZ as f32,
+            steps: STEPS_PER_CALL,
+            actions: std::ptr::null(),
+            actions_len: 0,
+        };
+        let mut receipt = NativeDynamicsStepReceipt::default();
+        assert_eq!(
+            unsafe { (dynamics.step)(dynamics.context, &step, &mut receipt, std::ptr::null_mut()) },
+            ABI_OK
+        );
+        valley.services.finish_call().unwrap();
+    }
+    let readout = read(&mut valley);
+    let at = readout.transform.translation;
+    let surface = valley.sample(&[NativeWaterFieldPoint { x: at.x, z: at.z }])[0].surface;
+    let draft = surface - (at.y - HALF);
+    let expected = MASS / (DENSITY * 4.0 * HALF * HALF);
+    assert!(readout.water.floating, "{readout:?}");
+    assert!(
+        (draft - expected).abs() < 0.05,
+        "draft {draft}, Archimedes {expected}"
+    );
+    assert!(
+        at.x > start.x + 2.0,
+        "the river carries the box downstream: {at:?}"
+    );
+    assert!(
+        readout.water.submerged_fraction > 0.2,
+        "{:?}",
+        readout.water
+    );
+}

@@ -1120,6 +1120,7 @@ sealed class DynamicsServiceFake : IDynamicsService
     public int StepAndReadCalls { get; private set; }
 
     public DynamicsWorld CreateWorld(DynamicsWorldConfig request) => throw new NotSupportedException();
+    public DynamicsWaterReceipt SetWater(DynamicsWaterRequest request) => throw new NotSupportedException();
     public DynamicsBody CreateBody(DynamicsCreateBodyRequest request) => throw new NotSupportedException();
     public DynamicsBody CreateSphereBody(DynamicsCreateSphereBodyRequest request) => throw new NotSupportedException();
     public DynamicsBody CreateCuboidBody(DynamicsCreateCuboidBodyRequest request) => throw new NotSupportedException();
@@ -1174,6 +1175,7 @@ sealed class DynamicsServiceFake : IDynamicsService
             false,
             default,
             0,
+            default,
             default);
         return new DynamicsStepAndReadResult(
             new[] { new DynamicsBodyFact(new DynamicsBodyReference(body.Handle.Value), readout) },

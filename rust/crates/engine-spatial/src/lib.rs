@@ -77,7 +77,8 @@ pub use svc_collision::{
     DynamicsJointError, DynamicsJointFrame, DynamicsJointLimit, DynamicsMassProperties,
     DynamicsPlacement, DynamicsRopeSolverConfig, DynamicsShape, DynamicsSolver,
     DynamicsStepReceipt, DynamicsTether, DynamicsTetherEndpoint, DynamicsTetherError,
-    DynamicsTetherReadout, RagdollBone, RagdollLink, RagdollMaterial, RagdollShape, RagdollSpawn,
+    DynamicsTetherReadout, DynamicsWaterPlane, DynamicsWaterReadout, RagdollBone, RagdollLink,
+    RagdollMaterial, RagdollShape, RagdollSpawn,
 };
 pub use trigger::{
     KinematicTriggerDefinition, TriggerCollider, TriggerGeometrySource, TriggerLifecycleReceipt,

@@ -14,7 +14,7 @@ use csharp_engine_abi::*;
 use engine_spatial::{
     rigid_body_component_mass_properties, DynamicsAction, DynamicsBodyId, DynamicsBodyInput,
     DynamicsBodyOutput, DynamicsError, DynamicsMassProperties, DynamicsShape, DynamicsSolver,
-    DynamicsTether, DynamicsTetherEndpoint, VoxelCollisionScene,
+    DynamicsTether, DynamicsTetherEndpoint, DynamicsWaterPlane, VoxelCollisionScene,
 };
 use entity_state::{
     EntityTransform, Quat, RigidBodyComponent, RigidBodyInertiaPolicy, RigidBodyShape,
@@ -48,6 +48,9 @@ pub(crate) struct RuntimeDynamicsBridge {
     ragdoll_bones: Box<[NativeTransform]>,
     /// The sibling Animation bridge ragdolls pose (`bind_appearance`).
     appearance: Option<*mut crate::appearance::RuntimeAppearanceBridge>,
+    /// The sibling WaterField bridge water field entries sample
+    /// (`bind_water_fields`).
+    water_fields: Option<*mut crate::water_field::RuntimeWaterFieldBridge>,
 }
 
 #[allow(
@@ -72,6 +75,11 @@ struct DynamicsWorld {
     invalidated_tethers: BTreeSet<u64>,
     chains: BTreeMap<u64, chain::DynamicsChain>,
     invalidated_chains: BTreeSet<u64>,
+    /// The product's water: flat planes, water fields sampled under each
+    /// floating body as a step begins, and the bodies it acts on.
+    water_planes: Vec<DynamicsWaterPlane>,
+    water_fields: Vec<NativeDynamicsWaterFieldEntry>,
+    floating: Vec<u64>,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -213,6 +221,7 @@ impl RuntimeDynamicsBridge {
             next_internal_joint: u64::MAX,
             ragdoll_bones: Box::new([]),
             appearance: None,
+            water_fields: None,
         }
     }
 
@@ -250,6 +259,9 @@ impl RuntimeDynamicsBridge {
                 invalidated_tethers: BTreeSet::new(),
                 chains: BTreeMap::new(),
                 invalidated_chains: BTreeSet::new(),
+                water_planes: Vec::new(),
+                water_fields: Vec::new(),
+                floating: Vec::new(),
             }),
         );
         Ok(NativeDynamicsWorldHandle { value })
@@ -519,6 +531,133 @@ impl RuntimeDynamicsBridge {
             .collect()
     }
 
+    pub(crate) fn bind_water_fields(
+        &mut self,
+        water_fields: &mut crate::water_field::RuntimeWaterFieldBridge,
+    ) {
+        // The sibling bridge is retained by EngineServiceSet; the pointer is
+        // refreshed while assembling the call table and used only during a
+        // synchronous callback.
+        self.water_fields = Some(water_fields as *mut crate::water_field::RuntimeWaterFieldBridge);
+    }
+
+    fn water_fields(&self) -> Option<&crate::water_field::RuntimeWaterFieldBridge> {
+        // SAFETY: bind_water_fields points at the sibling owner retained by
+        // EngineServiceSet; it is only read during this synchronous call.
+        self.water_fields.map(|bridge| unsafe { &*bridge })
+    }
+
+    fn set_water(
+        &mut self,
+        request: &NativeDynamicsWaterRequest,
+    ) -> Result<NativeDynamicsWaterReceipt, CsharpEngineServicesError> {
+        let refused =
+            |message: &str| CsharpEngineServicesError::new("CSHARP_DYNAMICS_WATER", message);
+        let planes =
+            unsafe { borrowed_slice(request.planes, request.planes_len, "Dynamics water planes")? };
+        let fields =
+            unsafe { borrowed_slice(request.fields, request.fields_len, "Dynamics water fields")? };
+        let bodies = unsafe {
+            borrowed_slice(
+                request.bodies,
+                request.bodies_len,
+                "Dynamics floating bodies",
+            )?
+        };
+        for body in bodies {
+            self.world_body(request.world.value, body.value, "CSHARP_DYNAMICS_WATER")?;
+        }
+        let water_fields = self.water_fields();
+        for entry in fields {
+            if !water_fields.is_some_and(|bridge| bridge.lives(entry.field.value)) {
+                return Err(refused(
+                    "a Dynamics water field entry names a water field that does not live",
+                ));
+            }
+            let finite = [entry.density, entry.linear_drag, entry.angular_drag]
+                .iter()
+                .all(|value| value.is_finite() && *value >= 0.0);
+            if !finite {
+                return Err(refused(
+                    "a water field entry's density and drags are finite and not negative",
+                ));
+            }
+        }
+        let planes: Vec<DynamicsWaterPlane> = planes
+            .iter()
+            .map(|plane| DynamicsWaterPlane {
+                min: [f64::from(plane.min_x), f64::from(plane.min_z)],
+                max: [f64::from(plane.max_x), f64::from(plane.max_z)],
+                surface: f64::from(plane.surface),
+                current: [f64::from(plane.current_x), f64::from(plane.current_z)],
+                density: f64::from(plane.density),
+                linear_drag: f64::from(plane.linear_drag),
+                angular_drag: f64::from(plane.angular_drag),
+            })
+            .collect();
+        let world = self.active_world_mut(request.world.value)?;
+        world
+            .solver
+            .set_water(planes.clone(), bodies.iter().map(|body| DynamicsBodyId(body.value)))
+            .map_err(|error| match error {
+                DynamicsError::InvalidWater { plane } => refused(&format!(
+                    "Dynamics water plane {plane} is not finite, has a negative density or drag, or a minimum past its maximum"
+                )),
+                other => solver_error("CSHARP_DYNAMICS_WATER")(other),
+            })?;
+        world.water_planes = planes;
+        world.water_fields = fields.to_vec();
+        world.floating = bodies.iter().map(|body| body.value).collect();
+        Ok(NativeDynamicsWaterReceipt {
+            planes: request.planes_len as u32,
+            fields: request.fields_len as u32,
+            bodies: request.bodies_len as u32,
+        })
+    }
+
+    /// As a step begins, give each floating body over a water field's wet
+    /// cells its own plane of the surface and current the field reports
+    /// there; other floating bodies take the product's planes.
+    fn sample_water_fields(&mut self, world_handle: u64) -> Result<(), CsharpEngineServicesError> {
+        let world = self.active_world(world_handle)?;
+        if world.water_fields.is_empty() {
+            return Ok(());
+        }
+        let Some(water_fields) = self.water_fields() else {
+            return Ok(());
+        };
+        let mut local = Vec::new();
+        for &body in &world.floating {
+            let Some(output) = world.solver.body(DynamicsBodyId(body)) else {
+                continue;
+            };
+            let [x, _, z] = output.translation;
+            let sampled = world.water_fields.iter().find_map(|entry| {
+                let sample = water_fields.sample_at(entry.field.value, x as f32, z as f32)?;
+                sample.wet.then_some((entry, sample))
+            });
+            local.push((
+                DynamicsBodyId(body),
+                sampled.map(|(entry, sample)| DynamicsWaterPlane {
+                    min: [x, z],
+                    max: [x, z],
+                    surface: f64::from(sample.surface),
+                    current: [f64::from(sample.velocity_x), f64::from(sample.velocity_z)],
+                    density: f64::from(entry.density),
+                    linear_drag: f64::from(entry.linear_drag),
+                    angular_drag: f64::from(entry.angular_drag),
+                }),
+            ));
+        }
+        let solver = &mut self.active_world_mut(world_handle)?.solver;
+        for (body, plane) in local {
+            solver
+                .set_body_water(body, plane)
+                .map_err(solver_error("CSHARP_DYNAMICS_WATER"))?;
+        }
+        Ok(())
+    }
+
     fn execute_step(
         &mut self,
         world_handle: u64,
@@ -526,6 +665,7 @@ impl RuntimeDynamicsBridge {
         steps: u32,
         actions: &[DynamicsAction],
     ) -> Result<NativeDynamicsStepReceipt, CsharpEngineServicesError> {
+        self.sample_water_fields(world_handle)?;
         let world = self.active_world_mut(world_handle)?;
         let receipt = world
             .solver
@@ -781,6 +921,18 @@ impl DynamicsWorld {
             },
             contact_count: contact.count,
             first_contact: contact.latest,
+            water: self
+                .solver
+                .water_readout(DynamicsBodyId(handle))
+                .map_or_else(NativeDynamicsWaterFact::default, |water| {
+                    NativeDynamicsWaterFact {
+                        floating: true,
+                        submerged_fraction: water.submerged_fraction as f32,
+                        buoyancy: native_vec3(vec3_f32(water.buoyancy)),
+                        drag: native_vec3(vec3_f32(water.drag)),
+                        torque: native_vec3(vec3_f32(water.torque)),
+                    }
+                }),
         }
     }
 }
@@ -1525,6 +1677,26 @@ pub(crate) fn api(bridge: &mut RuntimeDynamicsBridge) -> NativeDynamicsApi {
         replace_cuboid_body,
         replace_sphere_body,
         replace_capsule_body,
+        set_water,
+    }
+}
+
+unsafe extern "C" fn set_water(
+    context: *mut c_void,
+    request: *const NativeDynamicsWaterRequest,
+    receipt: *mut NativeDynamicsWaterReceipt,
+    operation_error: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    clear_receipt(operation_error);
+    if context.is_null() || request.is_null() || receipt.is_null() {
+        return 0;
+    }
+    match unsafe { &mut *context.cast::<RuntimeDynamicsBridge>() }.set_water(unsafe { &*request }) {
+        Ok(value) => {
+            unsafe { *receipt = value };
+            ABI_OK
+        }
+        Err(error) => refuse(context, &error, operation_error),
     }
 }
 

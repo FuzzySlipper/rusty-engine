@@ -160,4 +160,6 @@ read cells and draw its own surface.
 - The GPU does not step fields.
 - Nothing is saved: a product that must keep a field captures its own bed
   edits and forcing and replays them.
-- Bodies in Dynamics do not float on a field.
+- Dynamics bodies float on a field through `Dynamics.SetWater`
+  ([floating bodies](rope-physics.md#floating-bodies)); the field does not
+  feel them.

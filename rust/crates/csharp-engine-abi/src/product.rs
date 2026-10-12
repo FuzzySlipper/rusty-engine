@@ -127,6 +127,12 @@ pub type NativeStepDynamics = unsafe extern "C" fn(
     *mut NativeDynamicsStepReceipt,
     *mut NativeOperationErrorReceipt,
 ) -> i32;
+pub type NativeSetDynamicsWater = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeDynamicsWaterRequest,
+    *mut NativeDynamicsWaterReceipt,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
 pub type NativeStepAndReadDynamics = unsafe extern "C" fn(
     *mut c_void,
     *const NativeDynamicsStepAndReadRequest,
@@ -1462,6 +1468,7 @@ pub struct NativeDynamicsApi {
     pub replace_cuboid_body: NativeReplaceDynamicsCuboidBody,
     pub replace_sphere_body: NativeReplaceDynamicsSphereBody,
     pub replace_capsule_body: NativeReplaceDynamicsCapsuleBody,
+    pub set_water: NativeSetDynamicsWater,
 }
 
 #[repr(C)]

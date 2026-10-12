@@ -81,6 +81,45 @@ order. The reaction is an ordinary impulse plus torque about the observed centre
 of mass; applying it twice applies it twice. The character step never steps
 Dynamics itself.
 
+## Floating bodies
+
+`Dynamics.SetWater` gives a world water and names the bodies it acts on; it
+replaces both each time and holds until replaced. Water is flat planes
+(`DynamicsWaterPlane`: a horizontal surface over a rectangle of x and z, a
+horizontal current, a density, and linear and angular drag rates) and
+[water fields](water-fields.md) (`DynamicsWaterFieldEntry`). A floating body
+takes the first field whose wet cells lie under its centre (the surface and
+current that field's latest snapshot reports there, read as each step begins),
+else the first plane whose rectangle holds its centre.
+
+```csharp
+engine.Dynamics.SetWater(new DynamicsWaterRequest(world,
+    new[] { DynamicsWaterPlane.Still(min, max, surface).Flowing(new Vector2(1, 0)) },
+    new[] { raft, barrel }));
+```
+
+Every solver substep, the part of the body's shape under the surface pushes up
+at its centroid with the weight of the water it displaces, so an offset load
+tips a raft until the shifted centre of buoyancy balances it, and it rights
+itself when the load goes. Drag moves the body's velocity toward the current
+and slows its spin, at the plane's rates per second scaled by the submerged
+fraction. A light body on a stiff waterline bobs quickly; its drag settles it
+(`DynamicsWaterPlane.SettlingDrag`, 3 a second, settles a 180 kg raft within a
+few seconds).
+
+- Submerged volumes are exact for spheres and boxes; a capsule is integrated in
+  48 slices along its axis, within half a percent of its volume at any tilt.
+- `DynamicsReadout.Water` reports, for the body's latest step, whether it
+  floats, its submerged fraction at the last substep, and the buoyancy, drag
+  and buoyancy torque averaged over the step's substeps.
+- The coupling is one way: the water does not feel the body, and the body does
+  not displace it.
+- A floating body stays awake while in the water.
+
+`fixtures/csharp-floating-bodies` floats a raft, a ball and a lying capsule at
+their Archimedes drafts, tips the raft under a load, and holds a raft in a
+river current on a tether.
+
 ## Evidence
 
 - `svc-collision` solver tests cover:
@@ -97,6 +136,10 @@ Dynamics itself.
   - translation.
 - The bridge tests cover chains, terrain contact, contact suppression,
   character reactions, light-anchor catch energy and world-origin rebasing.
+- `svc-collision` floating tests cover box, sphere and lying-capsule drafts
+  against Archimedes, tipping under an offset load against hydrostatics and
+  righting, a current carrying a raft, and bodies outside the water or not
+  named; the water field tests float a box on a field's river.
 
 Rope meshes, cloth and climbing are not part of this service. Hinges, cones
 and ragdolls are in [limited joints and ragdolls](ragdolls.md).

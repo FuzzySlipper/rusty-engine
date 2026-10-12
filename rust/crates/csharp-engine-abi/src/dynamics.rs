@@ -458,6 +458,77 @@ pub struct NativeDynamicsReadout {
     pub mass_properties: NativeMassProperties,
     pub contact_count: u32,
     pub first_contact: NativeDynamicsContactFact,
+    pub water: NativeDynamicsWaterFact,
+}
+
+/// A flat stretch of water: a horizontal surface over a rectangle of x and z,
+/// with a horizontal current. Densities are mass per unit volume (1000 for
+/// fresh water in kilograms and metres); drags are the rates, per second at
+/// full immersion, at which a body's velocity relative to the current and its
+/// spin decay.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeDynamicsWaterPlane {
+    pub min_x: f32,
+    pub min_z: f32,
+    pub max_x: f32,
+    pub max_z: f32,
+    pub surface: f32,
+    pub current_x: f32,
+    pub current_z: f32,
+    pub density: f32,
+    pub linear_drag: f32,
+    pub angular_drag: f32,
+}
+
+/// A water field as Dynamics water: as each step begins, every floating body
+/// over the field's wet cells takes the surface and current its latest
+/// snapshot reports there.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeDynamicsWaterFieldEntry {
+    pub field: NativeWaterFieldHandle,
+    pub density: f32,
+    pub linear_drag: f32,
+    pub angular_drag: f32,
+}
+
+/// Replaces a world's water and the bodies it acts on. A floating body takes
+/// the first water field whose wet cells lie under its centre, else the
+/// first plane whose rectangle holds its centre; the water does not feel the
+/// body.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeDynamicsWaterRequest {
+    pub world: NativeDynamicsWorldHandle,
+    pub planes: *const NativeDynamicsWaterPlane,
+    pub planes_len: usize,
+    pub fields: *const NativeDynamicsWaterFieldEntry,
+    pub fields_len: usize,
+    pub bodies: *const NativeDynamicsBodyHandle,
+    pub bodies_len: usize,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeDynamicsWaterReceipt {
+    pub planes: u32,
+    pub fields: u32,
+    pub bodies: u32,
+}
+
+/// What the water did to a body over its latest step, averaged over the
+/// step's substeps; all zero for a body the water does not act on.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeDynamicsWaterFact {
+    pub floating: bool,
+    /// The part of the body under the surface at its last substep, 0 to 1.
+    pub submerged_fraction: f32,
+    pub buoyancy: NativeVec3,
+    pub drag: NativeVec3,
+    /// The buoyant force's torque about the centre of mass.
+    pub torque: NativeVec3,
 }
 
 /// Whole-body values that can change without replacing the retained shape.
