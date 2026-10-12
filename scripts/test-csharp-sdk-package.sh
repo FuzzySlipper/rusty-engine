@@ -381,23 +381,38 @@ mkdir -p "$consumer_home" "$consumer_packages"
 
 # Every fixture product that consumes the package must still compile against
 # it. They build from a copy of fixtures/ (some share sibling content), so the
-# checkout gets no obj/ or bin/. csharp-crossover-performance compiles the SDK
-# source instead; the performance regression script builds it.
+# checkout gets no obj/ or bin/. csharp-crossover-performance takes the
+# package's targets but compiles the Engine's C# from the checkout, which the
+# copy names explicitly.
 fixture_root="$work_dir/fixtures"
 cp -a "$repo_root/fixtures" "$fixture_root"
 find "$fixture_root" -type d \( -name obj -o -name bin \) -prune -exec rm -rf -- {} +
 while IFS= read -r fixture_project; do
+    source_development=()
+    if [[ "$fixture_project" == fixtures/csharp-crossover-performance/* ]]; then
+        source_development=(-p:RustyEngineSourceDevelopmentPath="$repo_root")
+    fi
     DOTNET_CLI_HOME="$consumer_home" NUGET_PACKAGES="$consumer_packages" \
         dotnet build "$fixture_root/${fixture_project#fixtures/}" \
             -p:RustyEngineFixtureSdkVersion="$package_version" \
             -p:RestoreAdditionalProjectSources="$feed_dir" \
+            "${source_development[@]}" \
             > "$work_dir/fixture-build.log" 2>&1 || {
         echo "test-csharp-sdk-package: $fixture_project does not build against the package." >&2
         cat "$work_dir/fixture-build.log" >&2
         exit 1
     }
-done < <(cd "$repo_root" && git grep -l 'Version="$(RustyEngineFixtureSdkVersion)"' -- 'fixtures/csharp-*/*.csproj' \
-    | grep -v '^fixtures/csharp-crossover-performance/')
+done < <(cd "$repo_root" && git grep -l 'Version="$(RustyEngineFixtureSdkVersion)"' -- 'fixtures/csharp-*/*.csproj')
+# That build restored the checkout's Engine projects into this run's package
+# cache, which goes when it ends. Restore them from the user's again, so later
+# builds of them find their packages.
+for engine_project in Rusty.Engine.BindingGenerator Rusty.Engine.ProductGenerator Rusty.Engine; do
+    dotnet restore "$repo_root/csharp/$engine_project/$engine_project.csproj" > "$work_dir/engine-restore.log" 2>&1 || {
+        echo "test-csharp-sdk-package: $engine_project did not restore again." >&2
+        cat "$work_dir/engine-restore.log" >&2
+        exit 1
+    }
+done
 
 # The derived watch declaration that `rusty dev` reads after staging lists the
 # directories of the product's referenced projects, transitive ones included,
