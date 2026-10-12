@@ -1,11 +1,12 @@
 //! Water field surfaces as renderer nodes (#9884): one static mesh instance
 //! per drawn field, its mesh redefined from each new snapshot.
 //!
-//! [`water_surface_mesh`] builds the mesh from a snapshot's cells: each cell's
-//! two triangles over corners at the mean surface of the wet cells around
-//! them, so neighbouring cells join without cracks, clipped where that
-//! surface falls below the bed (each corner's bed the mean of its cells), so
-//! the shore follows the line where the bank rises through the water.
+//! [`water_surface_mesh`] builds the mesh from a snapshot's cells: each wet
+//! cell's two triangles over corners at the mean surface of the wet cells
+//! around them, so neighbouring cells join without cracks, clipped where that
+//! surface falls below the bed (each corner's bed the mean of its cells, as
+//! ground interpolated between cell centres runs). The shore is the wet
+//! cells' edge, or where a bank rises through the water within a wet cell.
 //!
 //! Removals follow the heightfield's rule ([`HeightfieldRemovals`]): what was
 //! made before this call goes `early`, ahead of the call's Graphics work.
@@ -71,9 +72,8 @@ pub fn water_surface_mesh(cells: WaterSurfaceCells<'_>) -> Option<WaterSurfaceMe
             .map(|(x, z)| (x as usize, z as usize))
     };
     // Each corner's bed: the mean of the cells around it. Its surface: the
-    // mean surface of the wet cells around it; a corner with none takes the
-    // level of the surfaced corners beside it, so water reaching up a bank
-    // stops where the bank rises through that level.
+    // mean surface of the wet cells around it (every corner of a wet cell has
+    // one).
     let mut corner_bed = vec![0.0f32; corner_count];
     let mut surface = vec![f32::NAN; corner_count];
     let mut drawn_cells = 0;
@@ -105,36 +105,7 @@ pub fn water_surface_mesh(cells: WaterSurfaceCells<'_>) -> Option<WaterSurfaceMe
     if drawn_cells == 0 {
         return None;
     }
-    let surfaced = surface.clone();
-    for (corner, level) in surface.iter_mut().enumerate() {
-        if !level.is_nan() {
-            continue;
-        }
-        let (cx, cz) = ((corner % corners) as isize, (corner / corners) as isize);
-        let (mut sum, mut count) = (0.0, 0.0);
-        for (dx, dz) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
-            let (nx, nz) = (cx + dx, cz + dz);
-            if nx < 0 || nz < 0 || nx as usize > width || nz as usize > length {
-                continue;
-            }
-            let neighbour = surfaced[nz as usize * corners + nx as usize];
-            if !neighbour.is_nan() {
-                sum += neighbour;
-                count += 1.0;
-            }
-        }
-        if count > 0.0 {
-            *level = sum / count;
-        }
-    }
-    let water_depth = |corner: usize| {
-        let level = surface[corner];
-        if level.is_nan() {
-            f32::NEG_INFINITY
-        } else {
-            level - corner_bed[corner]
-        }
-    };
+    let water_depth = |corner: usize| surface[corner] - corner_bed[corner];
     let normal_at = |corner: usize| {
         let (cx, cz) = ((corner % corners) as isize, (corner / corners) as isize);
         let own = surface[corner];
@@ -201,7 +172,9 @@ pub fn water_surface_mesh(cells: WaterSurfaceCells<'_>) -> Option<WaterSurfaceMe
         for x in 0..width {
             let a = z * corners + x;
             let (b, c, d) = (a + 1, a + corners, a + corners + 1);
-            if [a, b, c, d].iter().all(|&corner| surface[corner].is_nan()) {
+            // Only wet cells hold water: a dry cell is dry however low its
+            // ground, as the field's samples say.
+            if !wet(x, z) {
                 continue;
             }
             for triangle in [[a, c, b], [b, c, d]] {
@@ -214,7 +187,7 @@ pub fn water_surface_mesh(cells: WaterSurfaceCells<'_>) -> Option<WaterSurfaceMe
                     if dp >= 0.0 {
                         polygon.push((p, p));
                     }
-                    if (dp >= 0.0) != (dq >= 0.0) && dp.is_finite() && dq.is_finite() {
+                    if (dp >= 0.0) != (dq >= 0.0) {
                         polygon.push((p, q));
                     }
                 }
@@ -494,48 +467,92 @@ mod tests {
         assert_eq!(mesh.max, [6.0, 0.7, 4.0]);
     }
 
-    /// R9884-1: water standing at 0.6 against a bank rising a unit a cell
-    /// ends where the bank, interpolated between cell centres as ground
-    /// drawn from them is, rises through 0.6, and nothing is drawn under
-    /// the bank.
+    /// R9884-4: one wet cell on flat ground draws that cell and nothing of
+    /// its dry neighbours.
     #[test]
-    fn a_shore_is_trimmed_where_the_bank_rises_through_the_water() {
-        const LEVEL: f32 = 0.6;
-        let bed = [0.0, 0.0, 0.0, 1.0, 2.0, 3.0];
-        let depth: Vec<f32> = bed.iter().map(|b| (LEVEL - b).max(0.0)).collect();
+    fn an_isolated_wet_cell_draws_only_itself() {
+        let bed = [0.0; 25];
+        let mut depth = [0.0; 25];
+        depth[12] = 1.0;
         let cells = WaterSurfaceCells {
-            width: 6,
-            length: 1,
-            cell_size: 2.0,
+            width: 5,
+            length: 5,
+            cell_size: 1.0,
             bed: &bed,
             depth: &depth,
             drawn_depth: 0.01,
         };
-        let mesh = water_surface_mesh(cells).expect("three wet cells");
-        assert_eq!(mesh.drawn_cells, 3);
-        // Ground through the cell centres (x = 1, 3, 5, ...) reaches 0.6 at
-        // x = 5 + 2 * 0.6 = 6.2; the corners interpolate it along cell edges.
-        let shore = mesh.max[0];
-        assert!(
-            (shore - 6.2).abs() < 1.0e-4,
-            "the shore stands at x = {shore}"
-        );
-        let ground = |x: f32| {
-            let centre = (x / 2.0 - 0.5).clamp(0.0, 5.0);
-            let low = centre.floor() as usize;
-            let high = (low + 1).min(5);
-            bed[low] + (bed[high] - bed[low]) * (centre - low as f32)
-        };
-        for p in mesh.positions.chunks(3) {
+        let mesh = water_surface_mesh(cells).expect("one wet cell");
+        assert_eq!(mesh.drawn_cells, 1);
+        assert_eq!(mesh.min, [2.0, 1.0, 2.0]);
+        assert_eq!(mesh.max, [3.0, 1.0, 3.0]);
+        assert!((projected_area(&mesh) - 1.0).abs() < 1.0e-6);
+    }
+
+    /// Water standing at 0.6 over cells whose ground, interpolated between
+    /// cell centres as ground drawn from them is, rises through 0.6 within
+    /// the last wet cell: the shore is that crossing, with nothing drawn
+    /// under the bank. Where the bank rises only in the dry cell beyond, the
+    /// shore is the wet cells' edge.
+    #[test]
+    fn a_shore_ends_where_the_bank_rises_through_the_water_or_at_the_wet_edge() {
+        const LEVEL: f32 = 0.6;
+        for (bed, shore) in [
+            // Cell 2 (x 4..6) is wet 0.1 deep; ground through the centres
+            // (x = 1, 3, 5, ...) reaches 0.6 at x = 5 + 2 * 0.1 / 0.5 = 5.4.
+            ([0.0, 0.0, 0.5, 1.0, 2.0, 3.0], 5.4),
+            // The bank rises in dry cell 3: the water ends at its edge, x = 6.
+            ([0.0, 0.0, 0.0, 1.0, 2.0, 3.0], 6.0),
+        ] {
+            let depth: Vec<f32> = bed.iter().map(|b| (LEVEL - b).max(0.0)).collect();
+            let cells = WaterSurfaceCells {
+                width: 6,
+                length: 1,
+                cell_size: 2.0,
+                bed: &bed,
+                depth: &depth,
+                drawn_depth: 0.01,
+            };
+            let mesh = water_surface_mesh(cells).expect("wet cells");
             assert!(
-                p[1] >= ground(p[0]) - 1.0e-5,
-                "water under the bank at {p:?}"
+                (mesh.max[0] - shore).abs() < 1.0e-4,
+                "shore at x = {}, not {shore}",
+                mesh.max[0]
             );
-            assert!(p[1] <= LEVEL + 1.0e-5);
+            let ground = |x: f32| {
+                let centre = (x / 2.0 - 0.5).clamp(0.0, 5.0);
+                let low = centre.floor() as usize;
+                let high = (low + 1).min(5);
+                bed[low] + (bed[high] - bed[low]) * (centre - low as f32)
+            };
+            for p in mesh.positions.chunks(3) {
+                assert!(
+                    p[1] >= ground(p[0]) - 1.0e-5,
+                    "water under the bank at {p:?}"
+                );
+                assert!(p[1] <= LEVEL + 1.0e-5);
+            }
+            for normal in mesh.normals.chunks(3) {
+                assert!(normal[1] > 0.9, "the surface faces up: {normal:?}");
+            }
         }
-        for normal in mesh.normals.chunks(3) {
-            assert!(normal[1] > 0.9, "the surface faces up: {normal:?}");
-        }
+    }
+
+    /// The mesh's area seen from above.
+    fn projected_area(mesh: &WaterSurfaceMesh) -> f32 {
+        mesh.indices
+            .chunks(3)
+            .map(|t| {
+                let p = |i: u32| {
+                    [
+                        mesh.positions[i as usize * 3],
+                        mesh.positions[i as usize * 3 + 2],
+                    ]
+                };
+                let (a, b, c) = (p(t[0]), p(t[1]), p(t[2]));
+                0.5 * ((b[0] - a[0]) * (c[1] - a[1]) - (c[0] - a[0]) * (b[1] - a[1])).abs()
+            })
+            .sum()
     }
 
     #[test]

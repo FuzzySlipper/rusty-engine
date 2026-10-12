@@ -155,11 +155,13 @@ carry the character.
 one mesh with the product's material, redrawn from each new snapshot. Give it
 a blended material with water settings
 ([water](lighting-and-sky.md#water)) for depth tint and shore foam. The
-surface spans the cells deeper than `drawnDepth` (0.01 by default), each
+surface covers the cells deeper than `drawnDepth` (0.01 by default), each
 corner at the mean surface of the wet cells around it, and is trimmed to the
-bed along the shore: each corner's bed is the mean of the cells around it, as
-ground interpolated between cell centres runs, and the surface ends where that
-bed rises through the water, partway across the first dry cell. The material is held while
+bed: each corner's bed is the mean of the cells around it, as ground
+interpolated between cell centres runs, and where that bed rises through the
+water inside a wet cell the surface ends there. Otherwise it ends at the wet
+cells' edge, so the drawn water never reaches a cell the samples call dry.
+The material is held while
 the field draws with it. A zero material stops drawing. A product may instead
 read cells and draw its own surface.
 
