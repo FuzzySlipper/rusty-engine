@@ -77,10 +77,18 @@ public sealed class RustyEngineContentBundleManifestTask : Task
                 root = id;
             }
 
-            // The inventory records content paths with '/' on every OS.
-            root = root.Replace('\\', '/');
             var sourceRoot = Path.GetFullPath(Path.Combine(sourceContentRoot, root));
             var stagedRoot = Path.GetFullPath(Path.Combine(stagedContentRoot, root));
+            // The inventory records the directory the root names, relative to
+            // the content root and with '/' on every OS, as the Engine matches
+            // content paths: "./rooms/" and "rooms/../rooms" are "rooms".
+            var contentPrefix = sourceContentRoot.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+            if (sourceRoot.StartsWith(contentPrefix, StringComparison.Ordinal))
+            {
+                root = sourceRoot.Substring(contentPrefix.Length).TrimEnd(Path.DirectorySeparatorChar);
+            }
+
+            root = root.Replace('\\', '/');
 
             if (!Directory.Exists(sourceRoot))
             {

@@ -182,7 +182,9 @@ impl ProductContentBundles {
 }
 
 /// A container's bundles under `content_root`, with content-relative roots and
-/// bundle-relative file paths, as the loose inventory records them.
+/// bundle-relative file paths, as the loose inventory records them. A bundle
+/// holds every entry under its root, as staging inventoried it: an entry names
+/// one bundle, and overlapping roots share their files.
 fn packed_definitions(
     container: &product_container::Container,
     content_root: &str,
@@ -203,7 +205,7 @@ fn packed_definitions(
             let files = container
                 .entries()
                 .iter()
-                .filter(|entry| entry.bundle.as_deref() == Some(bundle.id.as_str()))
+                .filter(|entry| entry.path.starts_with(&under))
                 .map(|entry| FileDefinition {
                     path: entry.path[under.len()..].to_owned(),
                     byte_length: entry.byte_length,
@@ -941,6 +943,71 @@ mod tests {
             packed.reference("a.json").unwrap().unwrap().sha256(),
             loose.reference("a.json").unwrap().unwrap().sha256()
         );
+    }
+
+    /// Overlapping and identical roots share their files: each bundle opens
+    /// the same entries, identities and bytes loose and packed, though a
+    /// packed entry names only the first bundle it falls under.
+    #[test]
+    fn overlapping_bundles_open_alike_loose_and_packed() {
+        use product_container::{write, Body, Bundle, NewEntry};
+        let directory = tempfile::tempdir().unwrap();
+        let files: [(&str, &[u8]); 2] =
+            [("rooms/hall.json", b"[1]"), ("rooms/sub/item.json", b"[2]")];
+        for (path, bytes) in files {
+            let file = directory.path().join(path);
+            fs::create_dir_all(file.parent().unwrap()).unwrap();
+            fs::write(file, bytes).unwrap();
+        }
+        let roots = [("a", "rooms"), ("b", "rooms/sub"), ("c", "rooms")];
+        let inventory = roots.map(|(id, root)| {
+            let files: Vec<_> = files
+                .iter()
+                .filter_map(|(path, bytes)| {
+                    let relative = path.strip_prefix(&format!("{root}/"))?;
+                    Some(bundle_file(relative, bytes))
+                })
+                .collect();
+            serde_json::json!({"id": id, "root": root, "files": files})
+        });
+        fs::write(
+            directory.path().join(INDEX),
+            serde_json::to_vec(&serde_json::json!({"bundles": inventory})).unwrap(),
+        )
+        .unwrap();
+        let out = directory.path().join("product.rpak");
+        let entries = files
+            .iter()
+            .map(|(path, bytes)| NewEntry {
+                path: format!("content/{path}"),
+                bundle: Some("a".into()),
+                body: Body::Bytes(bytes),
+            })
+            .collect();
+        let bundles = roots
+            .iter()
+            .map(|(id, root)| Bundle {
+                id: (*id).into(),
+                root: format!("content/{root}"),
+            })
+            .collect();
+        write(&out, entries, bundles, false).unwrap();
+        let packed =
+            ProductContentBundles::admit(&ProductSource::open(&out).unwrap(), "content").unwrap();
+        let loose = ProductContentBundles::admit(&loose(directory.path()), "").unwrap();
+        for (id, _) in roots {
+            let (packed, loose) = (packed.load(id).unwrap(), loose.load(id).unwrap());
+            assert_eq!(packed.identity, loose.identity, "{id}");
+            assert_eq!(packed.entries(), loose.entries(), "{id}");
+            for (path, _, _) in loose.entries() {
+                assert_eq!(
+                    packed.reference(&path).unwrap().unwrap().bytes,
+                    loose.reference(&path).unwrap().unwrap().bytes,
+                    "{id}/{path}"
+                );
+            }
+        }
+        assert_eq!(packed.load("b").unwrap().entries().len(), 1);
     }
 
     fn diagnostic_code(receipt: NativeOperationErrorReceipt) -> (String, String) {

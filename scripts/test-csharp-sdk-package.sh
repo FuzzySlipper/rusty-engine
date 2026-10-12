@@ -131,7 +131,8 @@ cat > "$consumer_dir/Consumer.csproj" <<EOF
   <ItemGroup>
     <PackageReference Include="Rusty.Engine" Version="$package_version" />
     <RustyEngineContentBundle Include="rules" />
-    <RustyEngineContentBundle Include="mixed" />
+    <!-- An unnormalized root spelling stages as the directory it names. -->
+    <RustyEngineContentBundle Include="mixed" Root="./mixed/" />
     <RustyEngineProductInputIntent Include="runtime.exercise" Value="payload:runtime.exercise.payload" />
     <RustyEngineProductInputIntent Include="runtime.exercise.move" Value="digital" />
     <RustyEngineProductInputMapping Include="runtime.exercise.move" Intent="runtime.exercise.move" Trigger="key:key-w:held" />
@@ -505,7 +506,7 @@ fi
     echo "test-csharp-sdk-package: Product UI/content were not staged." >&2
     exit 1
 }
-jq -e '.bundles | map(.id) == ["mixed", "rules"] and
+jq -e '.bundles | map(.id) == ["mixed", "rules"] and map(.root) == ["mixed", "rules"] and
        ([.[] | select(.id == "mixed") | .files[].path] | sort) ==
          ["NotoSans-LICENSE.txt", "NotoSans-Regular.woff2", "character.glb", "clip-pack.glb", "general.bin", "readme.txt", "texture.png", "tone.wav", "triangle.rstatmsh", "triangle.static-mesh.json", "wall.voxel.json"]' \
     "$staged_product_directory/content/.rusty-bundles.json" >/dev/null || {
