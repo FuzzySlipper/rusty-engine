@@ -2576,7 +2576,7 @@ fn parse_watch_paths(value: &str) -> Result<Vec<PathBuf>, String> {
     let paths = value
         .split(';')
         .filter(|value| !value.trim().is_empty())
-        .map(|value| absolute(Path::new(value.trim())))
+        .map(|value| absolute(Path::new(value.trim())).map(|path| lexical(&path)))
         .collect::<Result<Vec<_>, _>>()?;
     if paths.is_empty() {
         return Err(format!("RUSTY_DEV_WATCH_DECLARATION: SDK property {WATCH_PATHS_PROPERTY} was empty; declare the C#/UI/content inputs in the product project"));
@@ -3871,6 +3871,27 @@ mod tests {
         );
         let live_only = route(vec![a.clone()], &unrouted, &roots, &staged, &[]);
         assert!(live_only.assets_only && !live_only.assets);
+        fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[test]
+    fn watch_paths_through_dots_route_like_the_content_root() {
+        // #9886: a content root watched as written, through `..`, never
+        // matched the resolved content root, so every change replaced the
+        // runtime.
+        let (base, content, staged, roots) = live_content_layout("dotted-watch");
+        let declared = format!("{}/../../content", base.join("src/Game").display());
+        let watches = parse_watch_paths(&declared).unwrap();
+        assert_eq!(watches, std::slice::from_ref(&content));
+        let before = FileSnapshot::capture(&watches).unwrap();
+        fs::write(content.join("tuning/b.json"), "{\"b\":22}").unwrap();
+        fs::write(content.join("rules.json"), "[ ]").unwrap();
+        fs::write(staged.join("content/rules.json"), "[ ]").unwrap();
+        let changed = before.changed_paths(&FileSnapshot::capture(&watches).unwrap());
+        let routed = route(changed, &BTreeSet::new(), &roots, &staged, &[]);
+        assert_eq!(routed.quiet, [content.join("rules.json")]);
+        assert_eq!(routed.live, ["tuning/b.json"]);
+        assert!(routed.assets_only, "the live edit reloads in place");
         fs::remove_dir_all(&base).unwrap();
     }
 
