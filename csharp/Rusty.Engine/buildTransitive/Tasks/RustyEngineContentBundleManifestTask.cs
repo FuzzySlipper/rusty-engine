@@ -65,39 +65,22 @@ public sealed class RustyEngineContentBundleManifestTask : Task
         foreach (var bundle in Bundles)
         {
             var id = bundle.ItemSpec;
-            if (!IsSafeBundleId(id))
-            {
-                Log.LogError(
-                    "RustyEngineContentBundle ID '{0}' is unsafe. IDs must start with an ASCII letter or digit and contain only ASCII letters, digits, '.', '_', or '-'.",
-                    id);
-                continue;
-            }
-
             if (!bundleIds.Add(id))
             {
                 Log.LogError("RustyEngineContentBundle ID '{0}' is declared more than once.", id);
                 continue;
             }
 
-            var declaredRoot = bundle.GetMetadata("Root");
-            if (string.IsNullOrEmpty(declaredRoot))
+            var root = bundle.GetMetadata("Root");
+            if (string.IsNullOrEmpty(root))
             {
-                declaredRoot = id;
+                root = id;
             }
 
-            if (!TryCanonicalizeRelativeRoot(declaredRoot, out var root, out var rootError))
-            {
-                Log.LogError("RustyEngineContentBundle '{0}' has an unsafe Root '{1}': {2}", id, declaredRoot, rootError);
-                continue;
-            }
-
+            // The inventory records content paths with '/' on every OS.
+            root = root.Replace('\\', '/');
             var sourceRoot = Path.GetFullPath(Path.Combine(sourceContentRoot, root));
             var stagedRoot = Path.GetFullPath(Path.Combine(stagedContentRoot, root));
-            if (!IsUnderRoot(sourceRoot, sourceContentRoot) || !IsUnderRoot(stagedRoot, stagedContentRoot))
-            {
-                Log.LogError("RustyEngineContentBundle '{0}' Root '{1}' must stay under RustyEngineProductContentRoot.", id, declaredRoot);
-                continue;
-            }
 
             if (!Directory.Exists(sourceRoot))
             {
@@ -112,28 +95,6 @@ public sealed class RustyEngineContentBundleManifestTask : Task
             }
 
             bundleDefinitions.Add(new BundleDefinition(id, root, stagedRoot));
-        }
-
-        if (Log.HasLoggedErrors)
-        {
-            return false;
-        }
-
-        for (var left = 0; left < bundleDefinitions.Count; left++)
-        {
-            for (var right = left + 1; right < bundleDefinitions.Count; right++)
-            {
-                if (IsSameOrDescendantRoot(bundleDefinitions[left].Root, bundleDefinitions[right].Root) ||
-                    IsSameOrDescendantRoot(bundleDefinitions[right].Root, bundleDefinitions[left].Root))
-                {
-                    Log.LogError(
-                        "RustyEngineContentBundle roots overlap: '{0}' ({1}) and '{2}' ({3}). Each bundle must own a nonoverlapping ProductContent directory.",
-                        bundleDefinitions[left].Id,
-                        bundleDefinitions[left].Root,
-                        bundleDefinitions[right].Id,
-                        bundleDefinitions[right].Root);
-                }
-            }
         }
 
         if (Log.HasLoggedErrors)
@@ -189,88 +150,9 @@ public sealed class RustyEngineContentBundleManifestTask : Task
         return true;
     }
 
-    private static bool IsSafeBundleId(string value)
-    {
-        if (string.IsNullOrEmpty(value) || !IsAsciiLetterOrDigit(value[0]))
-        {
-            return false;
-        }
-
-        for (var index = 1; index < value.Length; index++)
-        {
-            var character = value[index];
-            if (!IsAsciiLetterOrDigit(character) && character != '.' && character != '_' && character != '-')
-            {
-                return false;
-            }
-        }
-
-        return true;
-    }
-
-    private static bool TryCanonicalizeRelativeRoot(string value, out string root, out string error)
-    {
-        root = string.Empty;
-        error = string.Empty;
-        if (string.IsNullOrWhiteSpace(value) || Path.IsPathRooted(value))
-        {
-            error = "the path must be a nonempty relative directory";
-            return false;
-        }
-
-        var segments = value.Replace('\\', '/').Split('/');
-        var canonicalSegments = new List<string>(segments.Length);
-        foreach (var segment in segments)
-        {
-            if (string.IsNullOrEmpty(segment) || segment == "." || segment == "..")
-            {
-                error = "the path cannot contain empty, '.' or '..' segments";
-                return false;
-            }
-
-            foreach (var character in segment)
-            {
-                if (character < ' ' || character == '<' || character == '>' || character == ':' || character == '"' ||
-                    character == '|' || character == '?' || character == '*')
-                {
-                    error = "the path contains an unsafe directory character";
-                    return false;
-                }
-            }
-
-            canonicalSegments.Add(segment);
-        }
-
-        root = string.Join("/", canonicalSegments);
-        return true;
-    }
-
-    private static bool IsUnderRoot(string path, string root)
-    {
-        var comparison = Path.DirectorySeparatorChar == '\\' ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
-        var normalizedRoot = root.EndsWith(Path.DirectorySeparatorChar.ToString(), StringComparison.Ordinal)
-            ? root
-            : root + Path.DirectorySeparatorChar;
-        return path.StartsWith(normalizedRoot, comparison);
-    }
-
-    private static bool IsSameOrDescendantRoot(string root, string possibleParent)
-    {
-        return string.Equals(root, possibleParent, StringComparison.Ordinal) ||
-               root.StartsWith(possibleParent + "/", StringComparison.Ordinal);
-    }
-
     private static string ToBundleRelativePath(string bundleRoot, string path)
     {
-        var normalizedRoot = bundleRoot.EndsWith(Path.DirectorySeparatorChar.ToString(), StringComparison.Ordinal)
-            ? bundleRoot
-            : bundleRoot + Path.DirectorySeparatorChar;
-        if (!path.StartsWith(normalizedRoot, StringComparison.Ordinal))
-        {
-            throw new InvalidOperationException("Staged bundle file escaped its declared root.");
-        }
-
-        return path.Substring(normalizedRoot.Length).Replace(Path.DirectorySeparatorChar, '/');
+        return path.Substring(bundleRoot.Length).TrimStart(Path.DirectorySeparatorChar).Replace(Path.DirectorySeparatorChar, '/');
     }
 
     private static string ComputeSha256(string path)
@@ -317,13 +199,6 @@ public sealed class RustyEngineContentBundleManifestTask : Task
         }
 
         builder.Append('"');
-    }
-
-    private static bool IsAsciiLetterOrDigit(char value)
-    {
-        return (value >= 'a' && value <= 'z') ||
-               (value >= 'A' && value <= 'Z') ||
-               (value >= '0' && value <= '9');
     }
 
     private sealed class BundleDefinition

@@ -287,8 +287,6 @@ internal static class DebugCommandCatalogGenerator
             string variable = ModuleVariable(module);
             source.Append("        if (module is ").Append(TypeName(module)).Append(' ').Append(variable).AppendLine(")");
             source.AppendLine("        {");
-            source.Append("            if (").Append(field).Append(" is not null) return new(DebugCommandRegistrationStatus.AlreadyRegistered, \"")
-                .Append(Escape(TypeDisplay(module))).AppendLine(" is already registered.\");");
             source.Append("            ").Append(field).Append(" = ").Append(variable).AppendLine(";");
             source.Append("            return new(DebugCommandRegistrationStatus.Registered, \"").Append(Escape(TypeDisplay(module))).AppendLine(" registered.\");");
             source.AppendLine("        }");

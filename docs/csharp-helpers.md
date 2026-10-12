@@ -43,7 +43,7 @@ Adapter receipts follow their owning adapter name.
 store revision; its `InventoryRevision` identifies the individual owner
 inventory revision. Item receipts use `InventoryRevisionBefore` and
 `InventoryRevisionAfter`. Debug registration uses
-`RegisterStore`, `ReplaceStore` and `UnregisterStore`; `entity.stores` lists
+`RegisterStore` (again for a name replaces its store) and `UnregisterStore`; `entity.stores` lists
 registrations and debug output identifies them with `store=` / `stores=`.
 
 `DynamicsWorld` is a disposable native simulation owner. `WorldOrigin` is the

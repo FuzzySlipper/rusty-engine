@@ -5,16 +5,12 @@ namespace Rusty.Engine.Debugging;
 
 public sealed partial class EntityStoreDebugModule
 {
-    /// <summary>Explicitly registers bounded live Stats, Effects, Inventory and Equipment projections.
-    /// Call once on this module; it neither discovers nor registers stores or components.</summary>
+    /// <summary>Explicitly registers bounded live Stats, Effects, Inventory and Equipment projections,
+    /// replacing earlier ones; it neither discovers nor registers stores or components.</summary>
     public void RegisterMechanicsProjections(int maximumEntries = 16)
     {
         if (maximumEntries is < 1 or > MaximumPageSize)
             throw new ArgumentOutOfRangeException(nameof(maximumEntries));
-        // Validate the entire registration before changing this module.
-        Type[] types = [typeof(StatsComponent), typeof(EffectsComponent), typeof(InventoryComponent), typeof(EquipmentComponent)];
-        if (types.Any(_typedProjections.ContainsKey))
-            throw new InvalidOperationException("A mechanics component projection is already registered.");
         RegisterProjection<StatsComponent>((in StatsComponent value) => FormatStats(value, maximumEntries));
         RegisterProjection<EffectsComponent>((in EffectsComponent value) => FormatEffects(value, maximumEntries));
         RegisterProjection<InventoryComponent>((in InventoryComponent value) => FormatInventory(value, maximumEntries));

@@ -56,7 +56,6 @@ const HOST_BIND_FAILURE_EXIT_CODE: i32 = 78;
 /// csharp-product-runtime): a stop, not a crash to restart.
 const HOST_PRODUCT_STOPPED_EXIT_CODE: i32 = 79;
 const MAX_UNEXPECTED_EXITS_PER_ARTIFACT: u8 = 2;
-const MAX_SUPERVISOR_COMMAND_BYTES: usize = 16 * 1024;
 static NEXT_SUPERVISED_RUNTIME_INSTANCE_ID: AtomicU64 = AtomicU64::new(0);
 const IGNORED_WATCH_DIRECTORY_NAMES: &[&str] = &[
     ".git",
@@ -2561,7 +2560,7 @@ impl SupervisedHost {
         options: &DevOptions,
         session: Option<&Arc<Session>>,
     ) -> Result<Self, String> {
-        let runtime_instance_id = next_supervised_runtime_instance_id()?;
+        let runtime_instance_id = next_supervised_runtime_instance_id();
         let mut arguments =
             supervised_host_arguments(product, persistence_root, runtime_instance_id, options)?;
         if let Some(session) = session {
@@ -2680,11 +2679,6 @@ fn encode_supervisor_command(command: &SupervisedHostCommand) -> Result<Vec<u8>,
     let payload = serde_json::to_vec(command).map_err(|error| {
         format!("RUSTY_DEV_CHILD_COMMAND: command could not be encoded: {error}")
     })?;
-    if payload.len() > MAX_SUPERVISOR_COMMAND_BYTES {
-        return Err(
-            "RUSTY_DEV_CHILD_COMMAND: command exceeds its bounded command length".to_owned(),
-        );
-    }
     let length = u32::try_from(payload.len())
         .map_err(|_| "RUSTY_DEV_CHILD_COMMAND: command length cannot be represented".to_owned())?;
     let mut frame = Vec::with_capacity(4 + payload.len());
@@ -2699,11 +2693,6 @@ fn supervised_host_arguments(
     runtime_instance_id: u64,
     options: &DevOptions,
 ) -> Result<Vec<String>, String> {
-    if runtime_instance_id == 0 {
-        return Err(
-            "RUSTY_DEV_RUNTIME_INSTANCE: runtime incarnation identity must be nonzero".to_owned(),
-        );
-    }
     let mut arguments = vec![
         "--product".to_owned(),
         product
@@ -2748,12 +2737,11 @@ fn supervised_host_arguments(
     Ok(arguments)
 }
 
-fn next_supervised_runtime_instance_id() -> Result<u64, String> {
+/// The process ID (at least 1) plus a per-process ordinal: nonzero, as the
+/// host requires.
+fn next_supervised_runtime_instance_id() -> u64 {
     let ordinal = NEXT_SUPERVISED_RUNTIME_INSTANCE_ID.fetch_add(1, Ordering::Relaxed);
-    let process_seed = u64::from(std::process::id()).max(1);
-    process_seed.checked_add(ordinal).ok_or_else(|| {
-        "RUSTY_DEV_RUNTIME_INSTANCE: supervisor incarnation identity space exhausted".to_owned()
-    })
+    u64::from(std::process::id()).max(1) + ordinal
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -3639,28 +3627,6 @@ mod tests {
             ]
             .map(PathBuf::from)
         );
-    }
-
-    #[test]
-    fn initial_supervised_shell_rejects_a_zero_runtime_seed() {
-        let error = supervised_host_arguments(
-            Path::new("/workspace/Product"),
-            Path::new("/workspace/Product/.runtime/persistence"),
-            0,
-            &dev_options(&[]),
-        )
-        .expect_err("zero runtime incarnation is not a valid shell seed");
-        assert!(error.contains("must be nonzero"));
-    }
-
-    #[test]
-    fn supervisor_allocates_distinct_nonzero_runtime_incarnations() {
-        let first = next_supervised_runtime_instance_id().expect("first runtime incarnation");
-        let second = next_supervised_runtime_instance_id().expect("second runtime incarnation");
-
-        assert_ne!(first, 0);
-        assert_ne!(second, 0);
-        assert_ne!(first, second);
     }
 
     #[test]

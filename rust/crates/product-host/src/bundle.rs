@@ -99,7 +99,7 @@ impl ProductHostBundleEntry {
     ) -> Result<Self, ProductHostError> {
         let bytes = bytes.into();
         let content_type = content_type.into();
-        let path = normalize_path(&path.into())?;
+        let path = servable_path(&path.into())?;
         Ok(Self {
             path,
             content_type,
@@ -135,25 +135,11 @@ pub struct ProductHostBundle {
 
 impl ProductHostBundle {
     pub fn new(entries: Vec<ProductHostBundleEntry>) -> Result<Self, ProductHostError> {
-        if entries.is_empty() {
-            return Err(ProductHostError::new(
-                "PRODUCT_HOST_BUNDLE_ENTRY_BOUNDS",
-                "bundle must contain at least one resource",
-            ));
-        }
-        let mut map = BTreeMap::new();
-        let mut total_bytes = 0_usize;
-        for entry in entries {
-            total_bytes = total_bytes.checked_add(entry.bytes.len()).ok_or_else(|| {
-                ProductHostError::new("PRODUCT_HOST_BUNDLE_BOUNDS", "bundle byte total overflowed")
-            })?;
-            if map.insert(entry.path.clone(), entry).is_some() {
-                return Err(ProductHostError::new(
-                    "PRODUCT_HOST_BUNDLE_DUPLICATE",
-                    "bundle contains duplicate normalized paths",
-                ));
-            }
-        }
+        let total_bytes = entries.iter().map(|entry| entry.bytes.len()).sum();
+        let map: BTreeMap<_, _> = entries
+            .into_iter()
+            .map(|entry| (entry.path.clone(), entry))
+            .collect();
         if !map.contains_key(PRODUCT_HOST_INDEX_PATH) {
             return Err(ProductHostError::new(
                 "PRODUCT_HOST_BUNDLE_INDEX_REQUIRED",
@@ -184,26 +170,15 @@ impl ProductHostBundle {
     }
 }
 
-fn normalize_path(value: &str) -> Result<String, ProductHostError> {
-    if value.is_empty()
-        || value.len() > 512
-        || value.starts_with('/')
-        || value.contains('\\')
-        || value
-            .split('/')
-            .any(|part| part.is_empty() || matches!(part, "." | ".."))
-        || !value
-            .bytes()
-            // Bytes a browser sends unescaped in a path, since requests are
-            // matched without decoding.
-            .all(|byte| {
-                byte.is_ascii_alphanumeric()
-                    || matches!(byte, b'.' | b'-' | b'_' | b'/' | b'@' | b'+' | b'~')
-            })
-    {
+fn servable_path(value: &str) -> Result<String, ProductHostError> {
+    // Bytes a browser sends unescaped in a path, since requests are matched
+    // without decoding: any other byte could never be requested.
+    if !value.bytes().all(|byte| {
+        byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_' | b'/' | b'@' | b'+' | b'~')
+    }) {
         return Err(ProductHostError::new(
             "PRODUCT_HOST_BUNDLE_PATH",
-            "bundle path must be a bounded normalized relative ASCII path",
+            format!("bundle path `{value}` has a byte a browser would escape"),
         ));
     }
     Ok(value.to_owned())

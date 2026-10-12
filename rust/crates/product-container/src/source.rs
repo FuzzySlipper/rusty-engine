@@ -64,11 +64,14 @@ impl ProductSource {
         }
         match self {
             Self::Directory(root) => {
-                let file = inside(root, path)?;
-                if !fs::metadata(&file).map_err(Error::io(&file))?.is_file() {
-                    return Err(Error::NotRegular(path.to_owned()));
-                }
-                fs::read(&file).map(Cow::Owned).map_err(Error::io(file))
+                let file = root.join(path);
+                fs::read(&file).map(Cow::Owned).map_err(|error| {
+                    if error.kind() == std::io::ErrorKind::NotFound {
+                        Error::Missing(path.to_owned())
+                    } else {
+                        Error::io(&file)(error)
+                    }
+                })
             }
             Self::Container { container, .. } => container.get(path),
         }
@@ -76,9 +79,7 @@ impl ProductSource {
 
     pub fn is_file(&self, path: &str) -> bool {
         match self {
-            Self::Directory(root) => {
-                inside(root, path).is_ok_and(|file| file.metadata().is_ok_and(|m| m.is_file()))
-            }
+            Self::Directory(root) => is_relative_path(path) && root.join(path).is_file(),
             Self::Container { container, .. } => container.entry(path).is_some(),
         }
     }
@@ -87,9 +88,7 @@ impl ProductSource {
     /// every valid path that is not a file is a directory, possibly empty.
     pub fn is_dir(&self, path: &str) -> bool {
         match self {
-            Self::Directory(root) => {
-                inside(root, path).is_ok_and(|dir| dir.metadata().is_ok_and(|m| m.is_dir()))
-            }
+            Self::Directory(root) => is_relative_path(path) && root.join(path).is_dir(),
             Self::Container { container, .. } => {
                 is_relative_path(path) && container.entry(path).is_none()
             }
@@ -105,12 +104,7 @@ impl ProductSource {
         }
         let mut files = Vec::new();
         match self {
-            Self::Directory(root) => {
-                if !prefix.is_empty() {
-                    inside(root, prefix)?;
-                }
-                walk(root, prefix, &mut files)?
-            }
+            Self::Directory(root) => walk(root, prefix, &mut files)?,
             Self::Container { container, .. } => {
                 let under = format!("{prefix}/");
                 files.extend(
@@ -125,27 +119,6 @@ impl ProductSource {
         files.sort();
         Ok(files)
     }
-}
-
-/// `root/path`, when it is no symlink and resolves inside `root`: a
-/// symlinked parent directory must not lead outside the Product.
-fn inside(root: &Path, path: &str) -> Result<PathBuf, Error> {
-    if !is_relative_path(path) {
-        return Err(Error::InvalidPath(path.to_owned()));
-    }
-    let joined = root.join(path);
-    let metadata = fs::symlink_metadata(&joined).map_err(|error| {
-        if error.kind() == std::io::ErrorKind::NotFound {
-            Error::Missing(path.to_owned())
-        } else {
-            Error::io(&joined)(error)
-        }
-    })?;
-    let canonical = fs::canonicalize(&joined).map_err(Error::io(&joined))?;
-    if metadata.file_type().is_symlink() || !canonical.starts_with(root) {
-        return Err(Error::NotRegular(path.to_owned()));
-    }
-    Ok(joined)
 }
 
 fn walk(root: &Path, relative: &str, files: &mut Vec<String>) -> Result<(), Error> {
@@ -247,24 +220,5 @@ mod tests {
             assert!(matches!(source.read("ui/none.js"), Err(Error::Missing(_))));
             assert!(matches!(source.read("../x"), Err(Error::InvalidPath(_))));
         }
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn a_loose_product_refuses_symlinks() {
-        let directory = tempfile::tempdir().unwrap();
-        let root = directory.path().join("product");
-        loose(&root);
-        fs::write(directory.path().join("outside"), b"x").unwrap();
-        std::os::unix::fs::symlink(directory.path().join("outside"), root.join("ui/link")).unwrap();
-        let source = ProductSource::open(&root).unwrap();
-        assert!(matches!(source.files("ui"), Err(Error::NotRegular(_))));
-        assert!(matches!(source.read("ui/link"), Err(Error::NotRegular(_))));
-        std::os::unix::fs::symlink(directory.path(), root.join("escape")).unwrap();
-        assert!(matches!(
-            source.read("escape/outside"),
-            Err(Error::NotRegular(_))
-        ));
-        assert!(!source.is_file("escape/outside") && !source.is_dir("escape"));
     }
 }

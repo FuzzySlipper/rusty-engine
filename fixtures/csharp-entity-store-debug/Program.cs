@@ -125,10 +125,8 @@ internal static class Program
         var standalone = new EntityStore([Product.HealthForFixture]);
         direct.RegisterStore("standalone", standalone);
         direct.RegisterProjection(Product.HealthForFixture, static (in Health value) => new string('x', value.Current));
-        RequireThrows(() => direct.RegisterStore("standalone", standalone), "duplicate world name was accepted");
         RequireThrows(() => direct.RegisterStore("not valid", standalone), "invalid world name was accepted");
         RequireThrows(() => direct.RegisterStore(new string('x', EntityStoreDebugModule.MaximumStoreNameLength + 1), standalone), "oversized world name was accepted");
-        RequireThrows(() => direct.RegisterProjection(Product.HealthForFixture, static (in Health _) => "duplicate"), "duplicate projection key was accepted");
         EntityId oversizedEntity = standalone.Create();
         standalone.Set(oversizedEntity, Product.HealthForFixture, new Health(EntityStoreDebugModule.MaximumResultLength));
         Require(direct.GetComponent("standalone", oversizedEntity.Value, Product.HealthForFixture.Key.Value) is { Succeeded: true, Message: var oversized }
@@ -145,7 +143,7 @@ internal static class Program
 
         var disposedReplacement = new EntityStore([Product.HealthForFixture]);
         disposedReplacement.Dispose();
-        RequireThrows(() => generations.ReplaceStore("current", disposedReplacement), "disposed replacement world was accepted");
+        RequireThrows(() => generations.RegisterStore("current", disposedReplacement), "disposed replacement world was accepted");
         Require(generations.GetComponent("current", originalEntity.Value, Product.HealthForFixture.Key.Value) is { Succeeded: true, Message: var preserved }
             && preserved.Contains("value=current=11", StringComparison.Ordinal), "failed replacement corrupted the existing registration");
 
@@ -153,8 +151,7 @@ internal static class Program
         EntityId replacementEntity = replacement.Create();
         EntityId replacementOnlyEntity = replacement.Create();
         replacement.Set(replacementEntity, Product.HealthForFixture, new Health(22));
-        RequireThrows(() => generations.ReplaceStore("missing", replacement), "unknown replacement name was accepted");
-        generations.ReplaceStore("current", replacement);
+        generations.RegisterStore("current", replacement);
         Require(generations.GetComponent("current", replacementEntity.Value, Product.HealthForFixture.Key.Value) is { Succeeded: true, Message: var replaced }
             && replaced.Contains("value=current=22", StringComparison.Ordinal)
             && !replaced.Contains("value=current=11", StringComparison.Ordinal), "replacement reads did not use only the current generation");

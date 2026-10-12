@@ -170,7 +170,6 @@ impl RuntimeVideoBridge {
         path: &str,
         bytes: Arc<[u8]>,
     ) -> Result<NativeVideoPlaybackHandle, CsharpEngineServicesError> {
-        let path = path.strip_prefix("content/").unwrap_or(path);
         let resource =
             CsharpRenderResource::admit_video(format!("content/{path}"), bytes.to_vec())?;
         let staged = self.staged()?;
@@ -200,11 +199,7 @@ impl RuntimeVideoBridge {
         request: &NativePlayVideoRequest,
     ) -> Result<NativeVideoPlaybackHandle, CsharpEngineServicesError> {
         let path =
-            unsafe { borrowed_utf8(request.path.bytes, request.path.len, "video resource path")? }
-                .strip_prefix("content/")
-                .unwrap_or(unsafe {
-                    borrowed_utf8(request.path.bytes, request.path.len, "video resource path")?
-                });
+            unsafe { borrowed_utf8(request.path.bytes, request.path.len, "video resource path")? };
         let bytes = self.content_resources.get(path).cloned().ok_or_else(|| {
             CsharpEngineServicesError::new(
                 "CSHARP_VIDEO_RESOURCE_UNKNOWN",

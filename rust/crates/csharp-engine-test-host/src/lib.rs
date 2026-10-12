@@ -418,12 +418,11 @@ mod tests {
     }
 
     #[test]
-    fn a_supplied_bundle_opens_and_refuses_reading_a_short_or_missing_file() {
-        let index = inventory(&[("first.txt", 5), ("gone.txt", 3), ("short.txt", 9)]);
+    fn a_supplied_bundle_opens_and_refuses_reading_a_missing_file() {
+        let index = inventory(&[("first.txt", 5), ("gone.txt", 3)]);
         let api = host_with(&[
             (".rusty-bundles.json", index.as_bytes()),
             ("rooms/first.txt", b"hello"),
-            ("rooms/short.txt", b"cut"),
         ])
         .unwrap();
         let content = api.engine.content;
@@ -454,10 +453,6 @@ mod tests {
         assert_eq!(
             read("gone.txt"),
             Err(vec!["PRODUCT_SOURCE_MISSING".to_owned()])
-        );
-        assert_eq!(
-            read("short.txt"),
-            Err(vec!["PRODUCT_BUNDLE_FILE_CHANGED".to_owned()])
         );
         unsafe { (api.destroy)(api.context) };
 

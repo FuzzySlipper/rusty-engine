@@ -31,30 +31,15 @@ public sealed partial class EntityStoreDebugModule : IDebugCommandModule
     private readonly SortedDictionary<ComponentTypeKey, Projection> _projections = [];
     private readonly Dictionary<Type, Projection> _typedProjections = [];
 
-    /// <summary>Registers one live store under a stable product-selected name.</summary>
+    /// <summary>
+    /// Registers one live store under a stable product-selected name. Registering a name
+    /// again replaces its store, as when a product installs a new store generation. The
+    /// module disposes no store; their lifetimes remain product-owned.
+    /// </summary>
     public void RegisterStore(string name, EntityStore store)
     {
         ValidateStoreName(name);
         ValidateStore(store);
-        if (!_stores.TryAdd(name, store))
-        {
-            throw new InvalidOperationException($"A debug store named '{name}' is already registered.");
-        }
-    }
-
-    /// <summary>
-    /// Replaces an existing registration after a product atomically installs a
-    /// new authoritative store generation. The module does not dispose either
-    /// store; their lifetimes remain product-owned.
-    /// </summary>
-    public void ReplaceStore(string name, EntityStore store)
-    {
-        ValidateStoreName(name);
-        ValidateStore(store);
-        if (!_stores.ContainsKey(name))
-        {
-            throw new InvalidOperationException($"A debug store named '{name}' is not registered.");
-        }
         _stores[name] = store;
     }
 
@@ -73,10 +58,7 @@ public sealed partial class EntityStoreDebugModule : IDebugCommandModule
     {
         ArgumentNullException.ThrowIfNull(componentType);
         ArgumentNullException.ThrowIfNull(projection);
-        if (!_projections.TryAdd(componentType.Key, new Projection<T>(componentType, projection)))
-        {
-            throw new InvalidOperationException($"A debug projection for component {componentType.Key.Value} is already registered.");
-        }
+        _projections[componentType.Key] = new Projection<T>(componentType, projection);
     }
 
     /// <summary>Opts one component type into inspection without assigning a numeric descriptor.
@@ -84,8 +66,7 @@ public sealed partial class EntityStoreDebugModule : IDebugCommandModule
     public void RegisterProjection<T>(EntityStoreDebugProjection<T> projection) where T : notnull
     {
         ArgumentNullException.ThrowIfNull(projection);
-        if (!_typedProjections.TryAdd(typeof(T), new Projection<T>(null, projection)))
-            throw new InvalidOperationException($"A debug projection for {typeof(T).Name} is already registered.");
+        _typedProjections[typeof(T)] = new Projection<T>(null, projection);
     }
 
     [DebugCommand("entity.stores", Description = "Lists product-registered EntityStore names.")]

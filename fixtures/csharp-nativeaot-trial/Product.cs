@@ -133,9 +133,9 @@ public sealed class Product : IEngineProduct
         RenderResourceInfo clampedTexture = _engine.Graphics.OpenResource(new RenderResourceRequest("trial.png"));
         RenderResourceInfo repeatedTexture = _engine.Graphics.OpenResource(new RenderResourceRequest(
             "trial.png", TextureFilter.Nearest, TextureWrap.Repeat));
-        RenderResourceInfo repeatedAlias = _engine.Graphics.OpenResource(new RenderResourceRequest(
-            "content/trial.png", TextureFilter.Nearest, TextureWrap.Repeat));
-        Require(clampedTexture.Handle.Handle != repeatedTexture.Handle.Handle && repeatedTexture.Handle.Handle == repeatedAlias.Handle.Handle,
+        RenderResourceInfo repeatedAgain = _engine.Graphics.OpenResource(new RenderResourceRequest(
+            "trial.png", TextureFilter.Nearest, TextureWrap.Repeat));
+        Require(clampedTexture.Handle.Handle != repeatedTexture.Handle.Handle && repeatedTexture.Handle.Handle == repeatedAgain.Handle.Handle,
             "texture sampler variants must retain distinct assets over shared content");
         _appearance = _engine.Graphics.CreatePrimitive(new PrimitiveAppearanceRequest(PrimitiveGeometry.Cube, false, new Color(0.25f, 0.75f, 1.0f, 1.0f)));
         Material createdMaterial = _engine.Graphics.CreateMaterial(new MaterialRequest(
@@ -153,7 +153,7 @@ public sealed class Product : IEngineProduct
         createdMaterial.Dispose();
         clampedTexture.Handle.Dispose();
         repeatedTexture.Handle.Dispose();
-        repeatedAlias.Handle.Dispose();
+        repeatedAgain.Handle.Dispose();
         _voxelTopMaterial = _engine.Graphics.CreateMaterial(new MaterialRequest(
             new Color(0.2f, 0.9f, 0.2f, 1), default(RenderResourceReference), 1, new Color(1, 1, 1, 1), Vector3.Zero, 0, false));
         ExerciseMagicaVoxelAdmission();

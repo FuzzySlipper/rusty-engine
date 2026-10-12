@@ -4423,20 +4423,7 @@ pub struct CsharpProductContent {
 impl CsharpProductContent {
     /// Admits a loose content directory.
     pub fn admit(root: impl AsRef<Path>) -> Result<Self, CsharpProductRuntimeError> {
-        let root = root.as_ref();
-        let root_metadata = fs::symlink_metadata(root).map_err(|error| {
-            CsharpProductRuntimeError::new("CSHARP_CONTENT_ROOT", error.to_string())
-        })?;
-        if root_metadata.file_type().is_symlink() || !root_metadata.is_dir() {
-            return Err(CsharpProductRuntimeError::new(
-                "CSHARP_CONTENT_ROOT",
-                format!(
-                    "content root must be a directory, not a symlink: {}",
-                    root.display()
-                ),
-            ));
-        }
-        let source = ProductSource::open(root).map_err(content_error)?;
+        let source = ProductSource::open(root.as_ref()).map_err(content_error)?;
         Self::admit_from(&source, "")
     }
 
@@ -5728,7 +5715,7 @@ mod tests {
         AUDIO_DISPOSE_AUDIO_CONTEXT.store(audio.context as usize, Ordering::SeqCst);
         AUDIO_DISPOSE_AUDIO_DESTROY.store(audio.destroy_clip as usize, Ordering::SeqCst);
         if AUDIO_DISPOSE_FIXTURE_ENABLED.swap(false, Ordering::SeqCst) {
-            let path = b"content/audio/dispose.wav";
+            let path = b"audio/dispose.wav";
             let request = NativeAudioClipRequest {
                 path: NativeUtf8Slice {
                     bytes: path.as_ptr(),
@@ -7888,6 +7875,18 @@ mod tests {
         fs::remove_file(&outside).expect("remove outside content");
         fs::remove_dir_all(&root).expect("remove symlink fixture");
 
+        let target = content_fixture_root("symlink-root-target");
+        let root = content_fixture_root("symlink-root");
+        fs::create_dir_all(&target).expect("target content root");
+        symlink(&target, &root).expect("root symlink fixture");
+
+        let error = CsharpProductContent::admit(&root)
+            .err()
+            .expect("reject symlink root");
+        assert_eq!(error.code(), "CSHARP_CONTENT_ENTRY");
+        fs::remove_file(&root).expect("remove root symlink");
+        fs::remove_dir_all(&target).expect("remove target root");
+
         let root = content_fixture_root("special-content");
         fs::create_dir_all(&root).expect("content root");
         let socket = UnixListener::bind(root.join("content.socket")).expect("socket fixture");
@@ -7902,11 +7901,8 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn content_admission_rejects_non_utf8_paths_and_symlink_roots() {
-        use std::{
-            ffi::OsString,
-            os::unix::{ffi::OsStringExt, fs::symlink},
-        };
+    fn content_admission_rejects_non_utf8_paths() {
+        use std::{ffi::OsString, os::unix::ffi::OsStringExt};
 
         let root = content_fixture_root("nonutf8-content");
         fs::create_dir_all(&root).expect("content root");
@@ -7921,18 +7917,6 @@ mod tests {
             .expect("reject non-UTF-8 path");
         assert_eq!(error.code(), "CSHARP_CONTENT_PATH");
         fs::remove_dir_all(&root).expect("remove non-UTF-8 fixture");
-
-        let target = content_fixture_root("symlink-root-target");
-        let root = content_fixture_root("symlink-root");
-        fs::create_dir_all(&target).expect("target content root");
-        symlink(&target, &root).expect("root symlink fixture");
-
-        let error = CsharpProductContent::admit(&root)
-            .err()
-            .expect("reject symlink root");
-        assert_eq!(error.code(), "CSHARP_CONTENT_ROOT");
-        fs::remove_file(&root).expect("remove root symlink");
-        fs::remove_dir_all(&target).expect("remove target root");
     }
 
     static MANUAL_UPDATE_FACTS: Mutex<Vec<NativeProductUpdateFacts>> = Mutex::new(Vec::new());

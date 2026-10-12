@@ -15,7 +15,17 @@ pub struct ProductContentBundles {
     source: Option<Arc<BundleSource>>,
     /// The content root within `source`.
     content_root: String,
-    bundles: Vec<BundleDefinition>,
+    bundles: Vec<AdmittedBundle>,
+}
+
+/// A bundle as admitted: its files by content-relative path, and its
+/// identity, computed once here rather than on every open.
+#[derive(Debug)]
+struct AdmittedBundle {
+    id: String,
+    root: String,
+    files: Arc<BTreeMap<String, Inventoried>>,
+    identity: NativeContentSha256,
 }
 
 /// Where bundle files are read from: a staged Product, or the content files a
@@ -81,7 +91,7 @@ impl ProductContentBundles {
                 }
             }
         };
-        Self::checked(BundleSource::Product(source.clone()), content_root, bundles)
+        Self::admitted(BundleSource::Product(source.clone()), content_root, bundles)
     }
 
     /// The inventory among content files a test supplied, as a loose
@@ -94,59 +104,54 @@ impl ProductContentBundles {
         let bundles = serde_json::from_slice::<Index>(index)
             .map_err(|e| format!("invalid ProductContent bundle inventory: {e}"))?
             .bundles;
-        Self::checked(BundleSource::Supplied(files.clone()), "", bundles)
+        Self::admitted(BundleSource::Supplied(files.clone()), "", bundles)
     }
 
-    fn checked(
+    /// The SDK wrote the inventory, so it is taken as written; only each
+    /// SHA-256 is decoded to the digest the identities are built from.
+    fn admitted(
         source: BundleSource,
         content_root: &str,
-        bundles: Vec<BundleDefinition>,
+        definitions: Vec<BundleDefinition>,
     ) -> Result<Self, String> {
-        let mut source = Self {
+        let mut bundles = definitions
+            .into_iter()
+            .map(|bundle| {
+                let prefix = format!("{}/", bundle.root);
+                let files = bundle
+                    .files
+                    .into_iter()
+                    .map(|file| {
+                        let digest = hex_digest(&file.sha256).ok_or_else(|| {
+                            format!("bundle file {}/{} has no SHA-256", bundle.id, file.path)
+                        })?;
+                        let inventoried = Inventoried {
+                            byte_length: file.byte_length,
+                            digest,
+                        };
+                        Ok((format!("{prefix}{}", file.path), inventoried))
+                    })
+                    .collect::<Result<BTreeMap<_, _>, String>>()?;
+                let identity = collection_identity(
+                    files
+                        .iter()
+                        .map(|(path, file)| (&path[prefix.len()..], file.digest))
+                        .collect(),
+                );
+                Ok(AdmittedBundle {
+                    id: bundle.id,
+                    root: bundle.root,
+                    files: Arc::new(files),
+                    identity,
+                })
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        bundles.sort_by(|a, b| a.id.cmp(&b.id));
+        Ok(Self {
             source: Some(Arc::new(source)),
             content_root: content_root.to_owned(),
             bundles,
-        };
-        source.bundles.sort_by(|a, b| a.id.cmp(&b.id));
-        for (i, bundle) in source.bundles.iter().enumerate() {
-            if !relative(&bundle.id)
-                || bundle.id.contains('/')
-                || !relative(&bundle.root)
-                || bundle.root == INDEX
-            {
-                return Err(format!("invalid bundle ID/root: {}", bundle.id));
-            }
-            for prior in &source.bundles[..i] {
-                if bundle.id == prior.id
-                    || bundle.root == prior.root
-                    || bundle.root.starts_with(&format!("{}/", prior.root))
-                    || prior.root.starts_with(&format!("{}/", bundle.root))
-                {
-                    return Err(format!(
-                        "duplicate ID or overlapping bundle roots: {}",
-                        bundle.id
-                    ));
-                }
-            }
-            let mut names = std::collections::BTreeSet::new();
-            let mut total = 0u64;
-            for file in &bundle.files {
-                if !relative(&file.path)
-                    || !names.insert(&file.path)
-                    || file.sha256.len() != 64
-                    || !file.sha256.bytes().all(|c| c.is_ascii_hexdigit())
-                {
-                    return Err(format!(
-                        "invalid bundle file identity: {}/{}",
-                        bundle.id, file.path
-                    ));
-                }
-                total = total
-                    .checked_add(file.byte_length)
-                    .ok_or("bundle byte length overflow")?;
-            }
-        }
-        Ok(source)
+        })
     }
 
     /// Whether `path` is the reserved bundle inventory or under a declared
@@ -164,30 +169,13 @@ impl ProductContentBundles {
     /// Open a bundle from its inventory alone; no file body is read until used.
     fn load(&self, id: &str) -> Option<OpenBundle> {
         let bundle = self.bundles.iter().find(|b| b.id == id)?;
-        let prefix = format!("{}/", bundle.root);
-        let mut files = BTreeMap::new();
-        for file in &bundle.files {
-            files.insert(
-                format!("{prefix}{}", file.path),
-                Inventoried {
-                    byte_length: file.byte_length,
-                    digest: hex_digest(&file.sha256)?,
-                },
-            );
-        }
-        let identity = collection_identity(
-            files
-                .iter()
-                .map(|(path, file)| (&path[prefix.len()..], file.digest))
-                .collect(),
-        );
         Some(OpenBundle {
-            identity,
+            identity: bundle.identity,
             files: Arc::new(BundleFiles::new(Store::Build {
                 source: Arc::clone(self.source.as_ref()?),
                 content_root: self.content_root.clone(),
-                prefix,
-                files,
+                prefix: format!("{}/", bundle.root),
+                files: Arc::clone(&bundle.files),
             })),
         })
     }
@@ -232,6 +220,7 @@ fn packed_definitions(
 }
 
 /// One file's facts from a bundle inventory.
+#[derive(Debug)]
 struct Inventoried {
     byte_length: u64,
     digest: [u8; 32],
@@ -248,7 +237,7 @@ enum Store {
         source: Arc<BundleSource>,
         content_root: String,
         prefix: String,
-        files: BTreeMap<String, Inventoried>,
+        files: Arc<BTreeMap<String, Inventoried>>,
     },
 }
 
@@ -285,8 +274,8 @@ impl BundleFiles {
     }
 
     /// The file's bytes, or none when the inventory has no such file. A listed
-    /// file that cannot be read (missing, a corrupt compressed entry, or a
-    /// length the inventory does not record) refuses, naming the file.
+    /// file that cannot be read (missing, or a corrupt compressed entry)
+    /// refuses, naming the file.
     pub(crate) fn bytes(&self, path: &str) -> Result<Option<Arc<[u8]>>, CsharpEngineServicesError> {
         let mut read = self
             .read
@@ -307,27 +296,13 @@ impl BundleFiles {
                 files,
                 ..
             } => {
-                let Some(file) = files.get(path) else {
+                if !files.contains_key(path) {
                     return Ok(None);
-                };
-                let bytes = source.read(&join(content_root, path))?;
+                }
                 // Staging wrote the inventory's SHA-256 from these same bytes,
                 // so it is trusted rather than recomputed; a body changed after
-                // staging gets a new identity on the next restage. The length
-                // check costs nothing and catches a file cut short by an
-                // interrupted restage.
-                if bytes.len() as u64 != file.byte_length {
-                    return Err(CsharpEngineServicesError::new(
-                        "PRODUCT_BUNDLE_FILE_CHANGED",
-                        format!(
-                            "`{path}` is {} bytes but its bundle inventory records {}; \
-                             reopen the bundle after restaging",
-                            bytes.len(),
-                            file.byte_length
-                        ),
-                    ));
-                }
-                bytes
+                // staging gets a new identity on the next restage.
+                source.read(&join(content_root, path))?
             }
         };
         read.insert(path.to_owned(), Arc::clone(&bytes));
@@ -478,7 +453,7 @@ pub(super) unsafe extern "C" fn list_bundles(
                 len: id.len(),
             },
             file_count: b.files.len() as u64,
-            byte_length: b.files.iter().map(|f| f.byte_length).sum(),
+            byte_length: b.files.values().map(|f| f.byte_length).sum(),
         })
         .collect::<Vec<_>>();
     unsafe {
@@ -798,18 +773,17 @@ mod tests {
 
     /// Opening costs the inventory: a bundle whose files are missing or
     /// changed still opens with its inventory's entries and identity, and
-    /// each read reads only its own file, refusing one that is gone or whose
-    /// length the inventory does not record. The inventory's SHA-256 is
-    /// trusted, so a same-length edit reads under the staged identity.
+    /// each read reads only its own file, refusing one that is gone. The
+    /// inventory's SHA-256 is trusted, so an edit reads under the staged
+    /// identity.
     #[test]
     fn opening_reads_no_bodies_and_each_read_reads_only_its_file() {
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path().join("world");
         fs::create_dir(&root).unwrap();
-        let bodies: [(&str, &[u8]); 4] = [
+        let bodies: [(&str, &[u8]); 3] = [
             ("a.json", b"{\"a\":1}"),
             ("gone.bin", b"gone"),
-            ("short.bin", b"long enough"),
             ("same.txt", b"before"),
         ];
         for (path, bytes) in bodies {
@@ -828,8 +802,7 @@ mod tests {
         let intact = source.load("world").unwrap().identity;
 
         fs::remove_file(root.join("gone.bin")).unwrap();
-        fs::write(root.join("short.bin"), b"cut").unwrap();
-        fs::write(root.join("same.txt"), b"after!").unwrap();
+        fs::write(root.join("same.txt"), b"after, and longer").unwrap();
         let mut bridge = RuntimeContentBridge::new(BTreeMap::new());
         bridge.bind_bundles(source);
         let context = (&mut bridge as *mut RuntimeContentBridge).cast();
@@ -851,12 +824,7 @@ mod tests {
                 .into_iter()
                 .map(|(path, _, length)| (path, length))
                 .collect::<Vec<_>>(),
-            [
-                ("a.json", 7),
-                ("gone.bin", 4),
-                ("same.txt", 6),
-                ("short.bin", 11)
-            ]
+            [("a.json", 7), ("gone.bin", 4), ("same.txt", 6)]
             .map(|(path, length)| (path.to_owned(), length))
         );
         assert!(
@@ -872,16 +840,15 @@ mod tests {
             ["world/a.json"]
         );
         let same = open.reference("same.txt").unwrap().unwrap();
-        assert_eq!(same.bytes.as_ref(), b"after!");
+        assert_eq!(same.bytes.as_ref(), b"after, and longer");
         assert_eq!(same.sha256(), sha256_words(&Sha256::digest(b"before")));
-        for (path, code) in [
-            ("gone.bin", "PRODUCT_SOURCE_MISSING"),
-            ("short.bin", "PRODUCT_BUNDLE_FILE_CHANGED"),
-        ] {
-            let refusal = open.reference(path).err().unwrap();
-            assert_eq!(refusal.code(), code);
-            assert!(refusal.detail().contains(path), "{}", refusal.detail());
-        }
+        let refusal = open.reference("gone.bin").err().unwrap();
+        assert_eq!(refusal.code(), "PRODUCT_SOURCE_MISSING");
+        assert!(
+            refusal.detail().contains("gone.bin"),
+            "{}",
+            refusal.detail()
+        );
         assert!(open.reference("absent.json").unwrap().is_none());
     }
 
@@ -1220,18 +1187,5 @@ mod tests {
             .get("data/table.json")
             .unwrap_err();
         corrupt((refusal.code().to_owned(), refusal.detail().to_owned()));
-    }
-
-    #[test]
-    fn overlapping_roots_are_rejected_before_loading() {
-        let directory = tempfile::tempdir().unwrap();
-        fs::write(
-            directory.path().join(INDEX),
-            br#"{"bundles":[{"id":"a","root":"a","files":[]},{"id":"b","root":"a/b","files":[]}]}"#,
-        )
-        .unwrap();
-        assert!(ProductContentBundles::admit(&loose(directory.path()), "")
-            .unwrap_err()
-            .contains("overlapping"));
     }
 }

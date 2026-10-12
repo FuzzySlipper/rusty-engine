@@ -36,11 +36,11 @@ internal sealed class RenderOutputChecks
             new(CameraProjectionKind.Orthographic, 55, 4, .01, 100), new(0, 0, 1, 1)));
         engine.CameraView.SetActiveCamera(_camera);
         engine.CameraView.SetBackgroundColor(new(new(.25f, .5f, .75f, 1)));
-        Appearance source = OpenGlb(_reopen ? "content/export-static.glb" : "content/static.glb");
+        Appearance source = OpenGlb(_reopen ? "export-static.glb" : "static.glb");
         _owners.Add(source);
         Appearance generated;
         if (_reopen)
-            generated = OpenGlb("content/export-generated.glb");
+            generated = OpenGlb("export-generated.glb");
         else
         {
             Material material = engine.Graphics.CreateMaterial(new(new(.2f, .8f, .3f, 1), default, 1, new(1, 1, 1, 1), default, 0, false));
@@ -55,7 +55,7 @@ internal sealed class RenderOutputChecks
             // Field disposal precedes capture and export requests below.
         }
         _owners.Add(generated);
-        RenderResource skin = engine.Animation.OpenAnimatedMesh(new(_reopen ? "content/export-animated.glb" : "content/animated.glb"));
+        RenderResource skin = engine.Animation.OpenAnimatedMesh(new(_reopen ? "export-animated.glb" : "animated.glb"));
         _owners.Add(skin);
         Appearance animated = engine.Animation.CreateAnimatedMeshAppearance(new(skin));
         _owners.Add(animated);

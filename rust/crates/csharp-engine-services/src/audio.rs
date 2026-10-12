@@ -413,11 +413,8 @@ impl RuntimeAudioBridge {
 
     fn clip_source_from_path(
         &self,
-        requested_path: &str,
+        relative_path: &str,
     ) -> Result<(String, Arc<[u8]>), CsharpEngineServicesError> {
-        let relative_path = requested_path
-            .strip_prefix("content/")
-            .unwrap_or(requested_path);
         let retained = self
             .content
             .and_then(|content| unsafe { content.as_ref() })
@@ -433,7 +430,7 @@ impl RuntimeAudioBridge {
         retained.ok_or_else(|| {
             CsharpEngineServicesError::new(
                 "CSHARP_AUDIO_RESOURCE_UNKNOWN",
-                format!("product content has no audio resource `{requested_path}`"),
+                format!("product content has no audio resource `{relative_path}`"),
             )
         })
     }
@@ -1775,7 +1772,7 @@ mod tests {
         content.insert("audio/trial.wav".to_owned(), wav());
         let mut bridge = RuntimeAudioBridge::new(content);
         bridge.begin_call();
-        let path = b"content/audio/trial.wav";
+        let path = b"audio/trial.wav";
         let request = NativeAudioClipRequest {
             path: NativeUtf8Slice {
                 bytes: path.as_ptr(),
@@ -1858,7 +1855,7 @@ mod tests {
         };
 
         let missing = bridge
-            .preload_optional(&request(b"content/audio/missing.wav"))
+            .preload_optional(&request(b"audio/missing.wav"))
             .expect("missing optional content is a receipt");
         assert_eq!(
             missing.outcome,
@@ -1867,16 +1864,16 @@ mod tests {
         assert_eq!(missing.clip.value, 0);
         assert!(
             bridge
-                .preload_optional(&request(b"content/audio/corrupt.wav"))
+                .preload_optional(&request(b"audio/corrupt.wav"))
                 .is_err(),
             "a present corrupt optional resource remains a strict admission failure"
         );
         let large = bridge
-            .preload_optional(&request(b"content/audio/large.wav"))
+            .preload_optional(&request(b"audio/large.wav"))
             .expect("a clip past the former 8 MiB budget is admitted");
         assert_eq!(large.outcome, NativeAudioOptionalPreloadOutcome::Admitted);
         let admitted = bridge
-            .preload_optional(&request(b"content/audio/valid.wav"))
+            .preload_optional(&request(b"audio/valid.wav"))
             .expect("later valid preload continues the same product call");
         assert_eq!(
             admitted.outcome,
@@ -1898,7 +1895,7 @@ mod tests {
         required.begin_call();
         assert!(
             required
-                .open_clip(&request(b"content/audio/missing.wav"))
+                .open_clip(&request(b"audio/missing.wav"))
                 .is_err(),
             "the required admission path remains strict"
         );
@@ -1910,7 +1907,7 @@ mod tests {
         content.insert("audio/trial.wav".to_owned(), wav());
         let mut bridge = RuntimeAudioBridge::new(content);
         bridge.begin_call();
-        let path = b"content/audio/trial.wav";
+        let path = b"audio/trial.wav";
         let clip = bridge
             .open_clip(&NativeAudioClipRequest {
                 path: NativeUtf8Slice {
@@ -1953,7 +1950,7 @@ mod tests {
         content.insert("audio/trial.wav".to_owned(), wav());
         let mut bridge = RuntimeAudioBridge::new(content);
         bridge.begin_call();
-        let path = b"content/audio/trial.wav";
+        let path = b"audio/trial.wav";
         let clip = bridge
             .open_clip(&NativeAudioClipRequest {
                 path: NativeUtf8Slice {
@@ -2035,7 +2032,7 @@ mod tests {
         content.insert("audio/trial.wav".to_owned(), wav());
         let mut bridge = RuntimeAudioBridge::new(content);
         bridge.begin_call();
-        let path = b"content/audio/trial.wav";
+        let path = b"audio/trial.wav";
         let clip = bridge
             .open_clip(&NativeAudioClipRequest {
                 path: NativeUtf8Slice {
@@ -2083,7 +2080,7 @@ mod tests {
         content.insert("audio/trial.wav".to_owned(), wav());
         let mut bridge = RuntimeAudioBridge::new(content);
         bridge.begin_call();
-        let path = b"content/audio/trial.wav";
+        let path = b"audio/trial.wav";
         let clip = bridge
             .open_clip(&NativeAudioClipRequest {
                 path: NativeUtf8Slice {
@@ -2152,7 +2149,7 @@ mod tests {
         content.insert("audio/trial.wav".to_owned(), wav());
         let mut bridge = RuntimeAudioBridge::new(content);
         bridge.begin_call();
-        let path = b"content/audio/trial.wav";
+        let path = b"audio/trial.wav";
         let clip = bridge
             .open_clip(&NativeAudioClipRequest {
                 path: NativeUtf8Slice {
@@ -2212,7 +2209,7 @@ mod tests {
         content.insert("audio/trial.wav".to_owned(), wav());
         let mut bridge = RuntimeAudioBridge::new(content);
         bridge.begin_call();
-        let path = b"content/audio/trial.wav";
+        let path = b"audio/trial.wav";
         let clip = bridge
             .open_clip(&NativeAudioClipRequest {
                 path: NativeUtf8Slice {
@@ -2386,7 +2383,7 @@ mod tests {
         resources.insert("audio/trial.wav".to_owned(), wav());
         let mut bridge = RuntimeAudioBridge::new(resources);
         bridge.begin_call();
-        let path = b"content/audio/trial.wav";
+        let path = b"audio/trial.wav";
         let clip = bridge
             .open_clip(&NativeAudioClipRequest {
                 path: NativeUtf8Slice {
@@ -2438,7 +2435,7 @@ mod tests {
         resources.insert("audio/trial.wav".to_owned(), wav());
         let mut bridge = RuntimeAudioBridge::new(resources);
         bridge.begin_call();
-        let path = b"content/audio/trial.wav";
+        let path = b"audio/trial.wav";
         let clip = bridge
             .open_clip(&NativeAudioClipRequest {
                 path: NativeUtf8Slice {
@@ -2487,7 +2484,7 @@ mod tests {
         resources.insert("audio/trial.wav".to_owned(), wav());
         let mut bridge = RuntimeAudioBridge::new(resources);
         bridge.begin_call();
-        let path = b"content/audio/trial.wav";
+        let path = b"audio/trial.wav";
         let clip = bridge
             .open_clip(&NativeAudioClipRequest {
                 path: NativeUtf8Slice {
@@ -2539,7 +2536,7 @@ mod tests {
         resources.insert("audio/trial.wav".to_owned(), wav());
         let mut bridge = RuntimeAudioBridge::new(resources);
         bridge.begin_call();
-        let path = b"content/audio/trial.wav";
+        let path = b"audio/trial.wav";
         let clip = bridge
             .open_clip(&NativeAudioClipRequest {
                 path: NativeUtf8Slice {
@@ -2615,7 +2612,7 @@ mod tests {
         resources.insert("audio/trial.wav".to_owned(), wav());
         let mut bridge = RuntimeAudioBridge::new(resources);
         bridge.begin_call();
-        let path = b"content/audio/trial.wav";
+        let path = b"audio/trial.wav";
         let clip = bridge
             .open_clip(&NativeAudioClipRequest {
                 path: NativeUtf8Slice {

@@ -375,7 +375,7 @@ fn product_directory(
 ) -> Result<String, String> {
     let path = product_path(parent, value, field)?;
     if !source.is_dir(&path) {
-        return Err(field_error(field, "must be a directory, not a symlink"));
+        return Err(field_error(field, "must be a directory"));
     }
     Ok(path)
 }
@@ -388,7 +388,7 @@ fn product_file(
     field: &str,
 ) -> Result<String, String> {
     if !source.is_file(&product_path(parent, value, field)?) {
-        return Err(field_error(field, "must be a regular file, not a symlink"));
+        return Err(field_error(field, "must be a regular file"));
     }
     Ok(value.to_owned())
 }

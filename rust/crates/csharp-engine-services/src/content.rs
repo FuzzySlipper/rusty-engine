@@ -163,12 +163,10 @@ impl RuntimeContentBridge {
             })
     }
 
-    /// Compatibility lookup for ordinary loose content; bundles require a
-    /// reference so another open collection cannot change path resolution.
+    /// Ordinary loose content by content-root-relative path; bundles require
+    /// a reference so another open collection cannot change path resolution.
     pub(crate) fn retained_path(&self, path: &str) -> Option<RetainedContent> {
-        let content = self
-            .catalog
-            .get(path.strip_prefix("content/").unwrap_or(path))?;
+        let content = self.catalog.get(path)?;
         Some(RetainedContent {
             path: content.path.clone(),
             identity: content.identity.clone(),
@@ -485,7 +483,7 @@ mod tests {
         assert_eq!(body_hashes(), before + 1, "first request hashes once");
         assert_eq!(bridge.retained_content(second).unwrap().sha256(), identity);
         assert_eq!(
-            bridge.retained_path("content/used.bin").unwrap().sha256(),
+            bridge.retained_path("used.bin").unwrap().sha256(),
             identity
         );
         assert_eq!(bridge.catalog["used.bin"].sha256(), identity);

@@ -527,8 +527,8 @@ var debug = new EntityStoreDebugModule();
 debug.RegisterStore("session", session.Entities);
 debug.RegisterMechanicsProjections(maximumEntries: 16);
 // Register this module with the product's debug-command catalog.
-// After adopting a restored session:
-debug.ReplaceStore("session", restoredSession.Entities);
+// After adopting a restored session, the same name takes the new store:
+debug.RegisterStore("session", restoredSession.Entities);
 // Before ending the registration's lifetime:
 debug.UnregisterStore("session");
 ```

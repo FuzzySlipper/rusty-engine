@@ -64,7 +64,7 @@ internal static class MechanicsDebugExercise
         var nextStats = new StatsComponent();
         nextStats.AddStat(StatId.Parse("health-max"), new Stat(9));
         replacement.Add(next, nextStats);
-        debug.ReplaceStore("game", replacement);
+        debug.RegisterStore("game", replacement);
         original.Dispose();
         Require(ReadComponent(debug, next, nameof(StatsComponent)).Contains("value=9"), "replacement store with different keys");
         replacement.Remove<StatsComponent>(next);

@@ -2251,24 +2251,9 @@ where
                 }, runtime.take_update_attribution()));
             }
         };
-        // Encoding is a host-owned preflight. A bad response must not first
-        // publish retained output for a runtime mutation the client cannot name.
-        let encoded_result = match encode_runtime_result(receipt.result()) {
-            Ok(bytes) => bytes,
-            Err(error) => {
-                publish_host_diagnostic(
-                    &state.diagnostics,
-                    ProductHostLogSeverity::Warning,
-                    ProductHostLogDisposition::ResyncRequired,
-                    "PRODUCT_HOST_RESPONSE_ENCODE_RESYNC",
-                    "runtime result could not be encoded after mutation; reconnect for a fresh readout instead of replaying",
-                    [("cause", error.code().to_owned())],
-                );
-                return Ok((HttpResponse::error(500, error.code(), error.detail()), runtime.take_update_attribution()));
-            }
-        };
-        let (result, mut outputs) = match receipt.into_wire_parts() {
-            Ok(parts) => parts,
+        let (result, publications) = receipt.into_parts();
+        let mut outputs = match crate::model::wire_outputs(publications) {
+            Ok(outputs) => outputs,
             Err(error) => {
                 publish_host_diagnostic(
                     &state.diagnostics,
@@ -2278,7 +2263,7 @@ where
                     "committed runtime receipt could not be encoded for output publication; reconnect for a fresh readout instead of replaying",
                     [("cause", error.code().to_owned())],
                 );
-                return Ok((HttpResponse::bytes(200, "application/json", encoded_result)
+                return Ok((json_response(200, &result)
                     .with_settled_resync_required(), runtime.take_update_attribution()));
             }
         };
@@ -2300,11 +2285,11 @@ where
                     "retained output publication failed after an authoritative runtime receipt; reconnect for a fresh readout instead of replaying",
                     [("cause", error.code().to_owned())],
                 );
-                return Ok((HttpResponse::bytes(200, "application/json", encoded_result)
+                return Ok((json_response(200, &result)
                     .with_settled_resync_required(), runtime.take_update_attribution()));
             }
         };
-        Ok((HttpResponse::bytes(200, "application/json", encoded_result)
+        Ok((json_response(200, &result)
             .with_output_through(output_through), runtime.take_update_attribution()))
         },
         || finish_telemetry(state, operation),
@@ -2317,20 +2302,6 @@ where
             response
         }
         Err(error) => HttpResponse::error(500, error.code(), error.diagnostic()),
-    }
-}
-
-fn encode_runtime_result<T: Serialize>(value: &T) -> Result<Vec<u8>, ProductHostError> {
-    match serde_json::to_vec(value) {
-        Ok(bytes) if bytes.len() <= MAX_REQUEST_BODY_BYTES => Ok(bytes),
-        Ok(_) => Err(ProductHostError::new(
-            "PRODUCT_HOST_RESPONSE_BOUNDS",
-            "runtime result exceeds response bound",
-        )),
-        Err(_) => Err(ProductHostError::new(
-            "PRODUCT_HOST_RESPONSE_ENCODE",
-            "runtime result could not be encoded",
-        )),
     }
 }
 
@@ -4448,10 +4419,8 @@ fn decode_json<T: for<'de> Deserialize<'de>>(body: &[u8]) -> Result<T, HttpRespo
 
 fn json_response<T: Serialize>(status: u16, value: &T) -> HttpResponse {
     match serde_json::to_vec(value) {
-        Ok(bytes) if bytes.len() <= MAX_REQUEST_BODY_BYTES => {
-            HttpResponse::bytes(status, "application/json", bytes)
-        }
-        _ => HttpResponse::error(
+        Ok(bytes) => HttpResponse::bytes(status, "application/json", bytes),
+        Err(_) => HttpResponse::error(
             500,
             "PRODUCT_HOST_RESPONSE_ENCODE",
             "response could not be encoded",

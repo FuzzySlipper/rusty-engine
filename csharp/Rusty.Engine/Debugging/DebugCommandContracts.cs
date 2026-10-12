@@ -51,7 +51,6 @@ public interface IDebugCommandModuleRegistrar
 public enum DebugCommandRegistrationStatus
 {
     Registered,
-    AlreadyRegistered,
     UnsupportedModule,
 }
 

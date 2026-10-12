@@ -622,10 +622,6 @@ pub struct ProductHostDebugCommandParameterDescriptor {
 }
 
 impl ProductHostDebugCatalog {
-    pub const MAX_COMMANDS: usize = 256;
-    pub const MAX_PARAMETERS_PER_COMMAND: usize = 16;
-    const MAX_TEXT_BYTES: usize = 1_024;
-
     pub const fn unavailable() -> Self {
         Self {
             available: false,
@@ -714,49 +710,13 @@ impl ProductHostDebugCatalog {
     }
 
     pub fn decode_json(bytes: &[u8]) -> Result<Self, ProductHostError> {
-        let catalog: Self = serde_json::from_slice(bytes).map_err(|_| {
+        serde_json::from_slice(bytes).map_err(|error| {
             ProductHostError::new(
                 "PRODUCT_HOST_DEBUG_CATALOG_DECODE",
-                "generated debug catalog descriptor payload is invalid",
+                format!("generated debug catalog descriptor payload is invalid: {error}"),
             )
-        })?;
-        catalog.validate()?;
-        Ok(catalog)
+        })
     }
-
-    fn validate(&self) -> Result<(), ProductHostError> {
-        if !self.available || self.commands.len() > Self::MAX_COMMANDS {
-            return Err(ProductHostError::new(
-                "PRODUCT_HOST_DEBUG_CATALOG_BOUNDS",
-                "generated debug catalog availability or command count is invalid",
-            ));
-        }
-        for command in &self.commands {
-            validate_debug_descriptor_text(&command.name)?;
-            validate_debug_descriptor_text(&command.description)?;
-            if command.parameters.len() > Self::MAX_PARAMETERS_PER_COMMAND {
-                return Err(ProductHostError::new(
-                    "PRODUCT_HOST_DEBUG_CATALOG_BOUNDS",
-                    "generated debug catalog command has too many parameters",
-                ));
-            }
-            for parameter in &command.parameters {
-                validate_debug_descriptor_text(&parameter.name)?;
-                validate_debug_descriptor_text(&parameter.type_name)?;
-            }
-        }
-        Ok(())
-    }
-}
-
-fn validate_debug_descriptor_text(value: &str) -> Result<(), ProductHostError> {
-    if value.len() > ProductHostDebugCatalog::MAX_TEXT_BYTES || value.contains('\0') {
-        return Err(ProductHostError::new(
-            "PRODUCT_HOST_DEBUG_CATALOG_BOUNDS",
-            "generated debug catalog descriptor text is invalid",
-        ));
-    }
-    Ok(())
 }
 
 impl ProductHostDebugResult {
@@ -1737,13 +1697,20 @@ impl<T> ProductHostRuntimeReceipt<T> {
     /// Engine facts; the browser shell's share is converted here.
     pub fn into_wire_parts(self) -> Result<(T, Vec<ProductHostRuntimeOutput>), ProductHostError> {
         let (result, publications) = self.receipt.into_parts();
-        let outputs = publications
-            .into_iter()
-            .filter_map(ProductHostRuntimeOutput::from_publication)
-            .collect::<Vec<_>>();
-        ProductHostRuntimeOutput::validate_output_group(&outputs)?;
-        Ok((result, outputs))
+        Ok((result, wire_outputs(publications)?))
     }
+}
+
+/// A receipt's publications as the browser shell's outputs.
+pub(crate) fn wire_outputs(
+    publications: Vec<RuntimePublication>,
+) -> Result<Vec<ProductHostRuntimeOutput>, ProductHostError> {
+    let outputs = publications
+        .into_iter()
+        .filter_map(ProductHostRuntimeOutput::from_publication)
+        .collect::<Vec<_>>();
+    ProductHostRuntimeOutput::validate_output_group(&outputs)?;
+    Ok(outputs)
 }
 
 /// Concrete runtime owner implemented by the native product.

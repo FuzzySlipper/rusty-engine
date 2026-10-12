@@ -20,7 +20,7 @@ public sealed class Product(ProductCreateContext context) : IEngineProduct, IDeb
     {
         foreach (string extension in new[] { "wav", "ogg", "opus", "mp3", "flac" })
         {
-            string path = $"content/tone.{extension}";
+            string path = $"tone.{extension}";
             AudioClip clip = context.Engine.Audio.OpenClip(new(path));
             using ContentReference content = context.Engine.Content.OpenReference(new($"tone.{extension}"));
             using AudioClip same = context.Engine.Audio.OpenClipFromContent(new(content));

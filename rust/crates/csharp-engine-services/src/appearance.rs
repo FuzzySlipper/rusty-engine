@@ -1720,7 +1720,6 @@ impl RuntimeAppearanceBridge {
         {
             return Ok(content);
         }
-        let path = path.strip_prefix("content/").unwrap_or(path);
         let bytes = self.content_resources.get(path).cloned().ok_or_else(|| {
             CsharpEngineServicesError::new(
                 "CSHARP_RENDER_RESOURCE_UNKNOWN",
@@ -12729,7 +12728,7 @@ fn shade(surface: Surface) -> vec4<f32> {
         let linear = bridge.open_resource(&linear_request).unwrap();
         assert_ne!(clamp.handle, repeat.handle);
         assert_ne!(repeat.handle, linear.handle);
-        for path in ["tiles.png", "content/tiles.png", "alias.png"] {
+        for path in ["tiles.png", "alias.png"] {
             let mut alias = resource_request(path);
             alias.wrap = NativeTextureWrap::Repeat;
             assert_eq!(bridge.open_resource(&alias).unwrap().handle, repeat.handle);
@@ -12963,10 +12962,14 @@ fn shade(surface: Surface) -> vec4<f32> {
         let selected = bridge
             .open_resource(&resource_request("selected.png"))
             .expect("selected RGBA texture");
-        let alias = bridge
-            .open_resource(&resource_request("content/selected.png"))
-            .expect("selected resource alias");
-        assert_eq!(selected.handle.value, alias.handle.value);
+        assert_eq!(
+            bridge
+                .open_resource(&resource_request("selected.png"))
+                .expect("reopened resource")
+                .handle
+                .value,
+            selected.handle.value
+        );
         assert_eq!(
             bridge.staged.as_ref().unwrap().state.render_resources.len(),
             1
@@ -13615,14 +13618,13 @@ fn shade(surface: Surface) -> vec4<f32> {
                 RuntimeAppearanceCatalog::default(),
                 content_resources,
             );
-            let request_path = format!("content/{relative_path}");
 
             bridge.begin_call();
             bridge
                 .open_animated_mesh(&NativeAnimatedMeshResourceRequest {
                     path: NativeUtf8Slice {
-                        bytes: request_path.as_ptr(),
-                        len: request_path.len(),
+                        bytes: relative_path.as_ptr(),
+                        len: relative_path.len(),
                     },
                 })
                 .expect("filename spelling is not an identity requirement");
@@ -13635,7 +13637,7 @@ fn shade(surface: Surface) -> vec4<f32> {
                 .render_resources
                 .first()
                 .expect("one admitted animated resource");
-            assert_eq!(resource.path(), request_path);
+            assert_eq!(resource.path(), format!("content/{relative_path}"));
             assert_eq!(
                 resource.animated_mesh().expect("animated descriptor").asset,
                 expected_asset
@@ -13660,7 +13662,7 @@ fn shade(surface: Surface) -> vec4<f32> {
         );
         let mut bridge =
             RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), content_resources);
-        let resource_path = b"content/actors/character.glb";
+        let resource_path = b"actors/character.glb";
         let clip = b"idle";
 
         bridge.begin_call();
@@ -13839,7 +13841,7 @@ fn shade(surface: Surface) -> vec4<f32> {
         );
         let mut bridge =
             RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), content_resources);
-        let resource_path = b"content/loading-bay/button-floor-square.glb";
+        let resource_path = b"loading-bay/button-floor-square.glb";
         let clip = b"toggle-on";
 
         bridge.begin_call();
@@ -13896,7 +13898,7 @@ fn shade(surface: Surface) -> vec4<f32> {
         );
         let mut bridge =
             RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), content_resources);
-        let resource_path = b"content/actors/character.glb";
+        let resource_path = b"actors/character.glb";
 
         bridge.begin_call();
         let error = bridge
