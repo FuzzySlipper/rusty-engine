@@ -13302,12 +13302,17 @@ fn shade(surface: Surface) -> vec4<f32> {
 
         for kind in [Kind::AtlasSprites, Kind::ContentMeshes, Kind::LegacySprites] {
             dispose(kind, 500);
-            let small = dispose(kind, 2_000);
-            let large = dispose(kind, 16_000);
-            // Linear is 8×; the former quadratic cost was 64×.
+            // Other tests share the CPU, so take each size's fastest of three
+            // interleaved runs: contention only ever adds time.
+            let (mut small, mut large) = (std::time::Duration::MAX, std::time::Duration::MAX);
+            for _ in 0..3 {
+                small = small.min(dispose(kind, 1_000));
+                large = large.min(dispose(kind, 16_000));
+            }
+            // Linear is 16×; the former quadratic cost was 256×.
             assert!(
-                large < small * 24,
-                "{kind:?}: disposing 16,000 took {large:?}, 2,000 took {small:?}"
+                large < small * 64,
+                "{kind:?}: disposing 16,000 took {large:?}, 1,000 took {small:?}"
             );
         }
     }
