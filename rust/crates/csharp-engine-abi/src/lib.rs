@@ -41,6 +41,7 @@ mod video;
 mod voxel;
 mod voxel_content;
 mod voxel_scene_presentation;
+mod water_field;
 mod world_origin;
 
 pub use animation::*;
@@ -79,4 +80,5 @@ pub use video::*;
 pub use voxel::*;
 pub use voxel_content::*;
 pub use voxel_scene_presentation::*;
+pub use water_field::*;
 pub use world_origin::*;

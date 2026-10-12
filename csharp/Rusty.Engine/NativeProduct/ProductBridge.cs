@@ -26,6 +26,7 @@ internal sealed class EngineContext : IEngineContext
         VoxelContent = new VoxelContentServiceImplementation(native.voxel_content);
         VoxelScenePresentation = new VoxelScenePresentationServiceImplementation(native.voxel_scene_presentation);
         Heightfield = new HeightfieldServiceImplementation(native.heightfield);
+        WaterField = new WaterFieldServiceImplementation(native.water_field);
         Content = new ContentServiceImplementation(native.content);
         ContentSource = new ContentSourceServiceImplementation(native.content_source);
         AuthoredContent = new AuthoredContentServiceImplementation(native.authored_content);
@@ -60,6 +61,7 @@ internal sealed class EngineContext : IEngineContext
     public IVoxelContentService VoxelContent { get; }
     public IVoxelScenePresentationService VoxelScenePresentation { get; }
     public IHeightfieldService Heightfield { get; }
+    public IWaterFieldService WaterField { get; }
     public IContentService Content { get; }
     public IContentSourceService ContentSource { get; }
     public IAuthoredContentService AuthoredContent { get; }

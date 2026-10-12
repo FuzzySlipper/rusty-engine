@@ -11,6 +11,7 @@ mod runtime_appearance;
 mod voxel;
 mod voxel_object;
 mod voxel_scatter;
+mod water_surface;
 
 pub use appearance::*;
 pub use heightfield::*;
@@ -24,3 +25,4 @@ pub use voxel_scatter::{
     VoxelScatter, VoxelScatterError, VoxelScatterExclusion, VoxelScatterField, VoxelScatterReadout,
     MAX_SCATTER_DENSITY, SCATTER_HYSTERESIS,
 };
+pub use water_surface::*;

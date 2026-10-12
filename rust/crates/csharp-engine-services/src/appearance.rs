@@ -1287,7 +1287,7 @@ pub(crate) struct RuntimeAppearanceData {
     scatter_appearances: BTreeMap<u64, u32>,
     /// Heightfields drawing with each material, by material handle: a
     /// material a heightfield draws with is not disposed under it.
-    heightfield_materials: BTreeMap<u64, u32>,
+    engine_surface_materials: BTreeMap<u64, u32>,
     next_sprite_playback: u64,
     animated_appearances: BTreeMap<u64, u64>,
     animation_instances: BTreeMap<u64, AnimationInstance>,
@@ -1640,7 +1640,7 @@ impl RuntimeAppearanceBridge {
             sprite_playbacks_by_atlas: BTreeMap::new(),
             sprite_playbacks_by_appearance: BTreeMap::new(),
             scatter_appearances: BTreeMap::new(),
-            heightfield_materials: BTreeMap::new(),
+            engine_surface_materials: BTreeMap::new(),
             next_sprite_playback: 1,
             animated_appearances: BTreeMap::new(),
             animation_instances: BTreeMap::new(),
@@ -2697,10 +2697,10 @@ impl RuntimeAppearanceBridge {
         Ok(())
     }
 
-    /// Count a heightfield drawing with `material` (or one fewer), and
-    /// return its catalog id: a material a heightfield draws with is not
-    /// disposed under it.
-    pub(crate) fn hold_for_heightfield(
+    /// Count an Engine-drawn surface (a heightfield, a water field) drawing
+    /// with `material` (or one fewer), and return its catalog id: a material
+    /// such a surface draws with is not disposed under it.
+    pub(crate) fn hold_for_engine_surface(
         &mut self,
         material: u64,
         held: bool,
@@ -2712,17 +2712,17 @@ impl RuntimeAppearanceBridge {
             .map(str::to_owned)
             .ok_or_else(|| {
                 CsharpEngineServicesError::new(
-                    "CSHARP_HEIGHTFIELD_MATERIAL",
-                    "a heightfield's material must be live",
+                    "CSHARP_SURFACE_MATERIAL",
+                    "a heightfield's or water field's material must be live",
                 )
             })?;
         if held {
-            // The heightfield's tiles name the material, defined with the
+            // The surface's meshes name the material, defined with the
             // catalog's pending changes, which publish with this call even
             // when no snapshot does.
             staged.resource_releases_pending = true;
         }
-        let holds = &mut staged.state.heightfield_materials;
+        let holds = &mut staged.state.engine_surface_materials;
         if held {
             *holds.entry(material).or_default() += 1;
         } else if let Some(count) = holds.get_mut(&material) {
@@ -3871,13 +3871,13 @@ impl RuntimeAppearanceBridge {
             || staged.state.generated_meshes.uses_material(material.value)
             || staged
                 .state
-                .heightfield_materials
+                .engine_surface_materials
                 .contains_key(&material.value)
         {
             staged.state.materials.insert(material.value, id);
             return Err(CsharpEngineServicesError::new(
                 "CSHARP_MATERIAL_IN_USE",
-                "dispose appearances, mesh resources and heightfields using this material before disposing the material",
+                "dispose appearances, mesh resources, heightfields and water field surfaces using this material before disposing the material",
             ));
         }
         let resources = staged.state.projector.resources_mut();

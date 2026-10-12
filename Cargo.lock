@@ -1267,6 +1267,7 @@ dependencies = [
  "svc-rng",
  "svc-session",
  "svc-spatial",
+ "svc-water",
  "tempfile",
  "voxel-annotation",
  "voxel-asset",

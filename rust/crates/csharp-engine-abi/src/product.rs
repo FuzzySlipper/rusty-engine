@@ -1909,6 +1909,7 @@ pub struct NativeEngineApi {
     pub voxel_content: NativeVoxelContentApi,
     pub voxel_scene_presentation: NativeVoxelScenePresentationApi,
     pub heightfield: NativeHeightfieldApi,
+    pub water_field: NativeWaterFieldApi,
     pub content: NativeContentApi,
     pub content_source: NativeContentSourceApi,
     pub authored_content: NativeAuthoredContentApi,

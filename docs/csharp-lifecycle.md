@@ -142,7 +142,8 @@ Appearances show their last published transforms (nothing is extrapolated
 between steps) under any [tweens](appearance-tweens.md) the Engine plays on
 them, which follow world time (including the time owed between steps, so
 they move at every observation) unless they select host time, and camera
-samples are presentation (see below). Anything a
+samples are presentation (see below). [Water fields](water-fields.md#time)
+advance by the same admitted steps. Anything a
 product drives from `HostElapsedSeconds` is its own presentation and keeps
 moving while held. `ProductUpdateFacts.GameplayTimeSelected`,
 `GameplayRate` and `GameplayAdvanceRemainingSteps` report the selection in

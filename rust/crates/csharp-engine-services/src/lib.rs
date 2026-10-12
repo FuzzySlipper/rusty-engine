@@ -34,6 +34,7 @@ mod video;
 mod voxel;
 mod voxel_content;
 mod voxel_scene_presentation;
+mod water_field;
 mod world_origin;
 
 pub use appearance::{AnimationRealizationFact, GhostPlateRealizationFact, JointPoseReport};

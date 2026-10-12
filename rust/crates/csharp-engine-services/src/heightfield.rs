@@ -251,13 +251,13 @@ impl RuntimeHeightfieldBridge {
         let appearance = self.appearance_mut()?;
         let mut materials = BTreeMap::new();
         for binding in bindings {
-            match appearance.hold_for_heightfield(binding.material.value, true) {
+            match appearance.hold_for_engine_surface(binding.material.value, true) {
                 Ok(id) => {
                     materials.insert(binding.index, (binding.material.value, id));
                 }
                 Err(error) => {
                     for (handle, _) in materials.values() {
-                        let _ = appearance.hold_for_heightfield(*handle, false);
+                        let _ = appearance.hold_for_engine_surface(*handle, false);
                     }
                     return Err(error);
                 }
@@ -309,7 +309,7 @@ impl RuntimeHeightfieldBridge {
         push_frame(&mut staged.frames, removals.late)?;
         let appearance = self.appearance_mut()?;
         for (material, _) in retained.materials.values() {
-            appearance.hold_for_heightfield(*material, false)?;
+            appearance.hold_for_engine_surface(*material, false)?;
         }
         Ok(())
     }
