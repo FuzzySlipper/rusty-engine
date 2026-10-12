@@ -201,6 +201,7 @@ native services or mandatory framework layers:
 | [`Rusty.Engine.StateMachine`](../csharp/Rusty.Engine/StateMachine) | Product-owned managed state-machine definitions and instances. |
 | [`Rusty.Engine.Input`](../csharp/Rusty.Engine/Input) | `PhysicalInputState`, analog deadzones and the `FpsInput` baseline ([FPS input](controller-interaction.md#fps-input-baseline)). |
 | [`Rusty.Engine.Implicit`](../csharp/Rusty.Engine/Implicit) | Managed room, wall and architectural recipes over `ImplicitSurfaces`. |
+| [`Rusty.Engine.Debugging`](../csharp/Rusty.Engine/Debugging) | Generic live-debug modules registered in the generated catalog: `PlaytestDebugModule`, `InteractionDebugModule`, `EntityStoreDebugModule`, and `TunablesDebugModule`, which serves the Engine [tunables panel](playtest-inspection.md#tunables-panel) from the product's own declarations. |
 | [`Rusty.Engine.Heightfields`](../csharp/Rusty.Engine/Heightfields) | `HeightfieldStreamer`: samples a heightfield's requested tiles with a product sampler on the thread pool and commits them from the product's update ([heightfield terrain](heightfield-terrain.md#sampling)). |
 
 Using one of these namespaces is optional. A product may organize its own

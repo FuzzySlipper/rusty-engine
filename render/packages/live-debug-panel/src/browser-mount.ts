@@ -2,6 +2,17 @@ import type { LiveDebugTransport } from '@rusty-engine/live-debug-client';
 
 import { LiveDebugPanel } from './live-debug-panel.js';
 import type { LiveDebugPanelPresentation } from './live-debug-panel-model.js';
+import { TunablesPanel, type TunablesPanelOptions } from './tunables-panel.js';
+
+export type { TunablesPanelOptions } from './tunables-panel.js';
+export type {
+  TunableChooser,
+  TunableControl,
+  TunableGroup,
+  TunableKind,
+  TunableTimeline,
+  TunablesDescription,
+} from './tunables-model.js';
 
 export {
   mountRendererMetricsWidget,
@@ -55,4 +66,29 @@ export async function mountLiveDebugPanel(
   });
   host.appendChild(panel.element);
   return { dispose: () => panel.dispose() };
+}
+
+/** A mounted tunables panel. */
+export interface TunablesPanelMount {
+  /** Describes again and re-reads the bound source files. */
+  refresh(): Promise<void>;
+  /** Removes the panel and stops its requests. */
+  dispose(): void;
+}
+
+/**
+ * Mounts the Engine tunables panel into a product-owned element. It renders
+ * the product's `tunables.v1` description (from its `TunablesDebugModule`)
+ * and sends commands: a control applies live, a control bound to a source
+ * file shows when it differs from the file, and each file has Save (written
+ * through the Engine content source under `rusty dev`) and Reset.
+ */
+export function mountTunablesPanel(host: HTMLElement, options: TunablesPanelOptions = {}): TunablesPanelMount {
+  if (!(host instanceof HTMLElement)) {
+    throw new TypeError('Tunables panel mounting requires an HTMLElement host.');
+  }
+  const panel = new TunablesPanel(host.ownerDocument, options);
+  host.appendChild(panel.element);
+  void panel.refresh();
+  return { refresh: () => panel.refresh(), dispose: () => panel.dispose() };
 }

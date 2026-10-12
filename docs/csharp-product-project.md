@@ -674,6 +674,11 @@ data. `@rusty-engine/live-debug` and `@rusty-engine/video-options` are
 resolved at run time by the shell's import map. Add the file to
 `RustyEngineProductUiInput` so a pair move rebuilds the UI.
 
+`mountTunablesPanel(element)` from `@rusty-engine/live-debug` mounts the
+[tunables panel](playtest-inspection.md#tunables-panel) over the product's
+`TunablesDebugModule`: live sliders, toggles and choices, with Save and Reset
+for values bound to source content.
+
 ### Video options
 
 `@rusty-engine/video-options` is the Engine's video options panel, for a

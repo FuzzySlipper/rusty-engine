@@ -121,7 +121,38 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         ]);
     }
 
-    public void RegisterDebugCommands(IDebugCommandModuleRegistrar registrar) => registrar.Register(this);
+    public void RegisterDebugCommands(IDebugCommandModuleRegistrar registrar)
+    {
+        registrar.Register(this);
+        registrar.Register(new TunablesDebugModule(Tunables));
+    }
+
+    /// <summary>The page the Engine tunables panel shows: each control applies to the live
+    /// product and names where Save writes it.</summary>
+    private TunablesPage Tunables()
+    {
+        static TunableSource Source(string pointer) => new(TuningPath, pointer);
+        return new TunablesPage("Live tuning",
+        [
+            new TunableGroup("marker", "Marker",
+            [
+                new(new TunableControl("marker.size", "Size", TunableKind.Slider, 0.2f, 2f, 0.05f, tuning.Size) { Source = Source("/marker/size") },
+                    value => Values = tuning with { Size = value }),
+                new(new TunableControl("marker.height", "Height", TunableKind.Slider, 0f, 2f, 0.05f, tuning.Height) { Source = Source("/marker/height") },
+                    value => Values = tuning with { Height = value }),
+                new(new TunableControl("marker.spin", "Spin", TunableKind.Toggle, 0, 1, 1, tuning.Spin ? 1 : 0) { Source = Source("/marker/spin") },
+                    value => Values = tuning with { Spin = value >= 0.5f }),
+                new(new TunableControl("marker.color", "Colour", TunableKind.Choice, 0, Colors.Length - 1, 1, Math.Max(0, Array.IndexOf(Colors, tuning.Color)))
+                    { Options = Colors, Source = Source("/marker/color") },
+                    value => Values = tuning with { Color = Colors[(int)MathF.Round(value)] }),
+            ]) { File = TuningPath },
+            new TunableGroup("floor", "Floor",
+            [
+                new(new TunableControl("floor.shade", "Shade", TunableKind.Slider, 0f, 1f, 0.05f, tuning.FloorShade) { Source = Source("/floor/shade") },
+                    value => Values = tuning with { FloorShade = value }),
+            ]) { File = TuningPath },
+        ]);
+    }
 
     [DebugCommand("livetuning.observe", Description = "Read-only: the applied tuning, the reloads the product took, and its instance name.")]
     public string Observe() => JsonSerializer.Serialize(new

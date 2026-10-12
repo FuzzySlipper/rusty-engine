@@ -1033,6 +1033,112 @@ declare module "@rusty-engine/live-debug/internal/live-debug-panel/src/live-debu
         dispose(): void;
     }
 }
+declare module "@rusty-engine/live-debug/internal/live-debug-panel/src/tunables-model" {
+    /** The `tunables.v1` description a product's `TunablesDebugModule` answers. */
+    export interface TunablesDescription {
+        readonly contract: 'tunables.v1';
+        readonly title: string;
+        readonly choosers: readonly TunableChooser[];
+        readonly timeline: TunableTimeline | null;
+        readonly groups: readonly TunableGroup[];
+        /** Command templates: `{name}` is filled from the call's values. */
+        readonly commands: Readonly<Record<string, string>>;
+        /** Shown as a warning when not empty. */
+        readonly notice: string;
+    }
+    export interface TunableChooser {
+        readonly id: string;
+        readonly label: string;
+        readonly value: string;
+        readonly options: readonly string[];
+    }
+    export interface TunableTimeline {
+        readonly keys: readonly {
+            readonly index: number;
+            readonly label: string;
+            readonly time: number;
+        }[];
+        readonly duration: number;
+        readonly key: number;
+        readonly speeds: readonly number[];
+    }
+    export interface TunableGroup {
+        readonly id: string;
+        readonly title: string;
+        readonly file?: string;
+        readonly controls: readonly TunableControl[];
+    }
+    export type TunableKind = 'slider' | 'toggle' | 'choice';
+    export interface TunableControl {
+        readonly id: string;
+        readonly label: string;
+        readonly kind: TunableKind;
+        readonly min: number;
+        readonly max: number;
+        readonly step: number;
+        readonly value: number;
+        readonly options?: readonly string[];
+        readonly reshapes: boolean;
+        /** Where Save writes the value: a content-root-relative JSON file and a JSON pointer. */
+        readonly source?: {
+            readonly path: string;
+            readonly pointer: string;
+        };
+    }
+    /** A bound source file as `engine.content.source.read` answered it. */
+    export interface SourceFile {
+        readonly sha256: string;
+        readonly document: unknown;
+    }
+    /** Fills `{name}` placeholders; a missing value fills nothing. */
+    export function fillTemplate(template: string, values: Readonly<Record<string, string | number>>): string;
+    /** The value an RFC 6901 pointer names in a parsed document, or undefined. */
+    export function resolvePointer(document: unknown, pointer: string): unknown;
+    /** The control value a source JSON value stands for, or undefined when it cannot be compared. */
+    export function controlValueOf(control: TunableControl, source: unknown): number | undefined;
+    /** The decimals a step shows: 0.05 shows two. */
+    export function stepDecimals(step: number): number;
+    /** A value as the step spells it, so a saved slider writes 0.25, not 0.25000000372529. */
+    export function atStep(control: TunableControl, value: number): number;
+    /** The JSON value to save for a control's live value, in the source value's own type. */
+    export function sourceValueOf(control: TunableControl, value: number, previous: unknown): unknown;
+    /** Whether a control's live value differs from what its source holds (floats at half a step). */
+    export function isUnsaved(control: TunableControl, value: number, source: unknown): boolean;
+    /** The files the description's controls are bound to, in first-seen order. */
+    export function boundFiles(description: TunablesDescription): string[];
+    /** The RFC 6902 replace operations that save a file's unsaved controls. */
+    export function saveEdits(controls: readonly TunableControl[], values: ReadonlyMap<string, number>, file: SourceFile): {
+        op: 'replace';
+        path: string;
+        value: unknown;
+    }[];
+    /** Parses a describe answer, refusing anything that is not a `tunables.v1` description. */
+    export function parseDescription(message: string): TunablesDescription;
+}
+declare module "@rusty-engine/live-debug/internal/live-debug-panel/src/tunables-panel" {
+    import { type LiveDebugTransport } from "@rusty-engine/live-debug/internal/live-debug-client/src/index";
+    /** Configuration for one mounted tunables panel. */
+    export interface TunablesPanelOptions {
+        /** Uses the same-origin live-debug HTTP transport when omitted. */
+        readonly transport?: LiveDebugTransport;
+        /** The command that answers the description; `tunables.describe` when omitted. */
+        readonly describe?: string;
+    }
+    /**
+     * Renders a product's `tunables.v1` description and sends commands; it holds
+     * no product state. Controls bound to a source file show unsaved changes, and
+     * each bound file has Save (the Engine content source's pointer edits) and
+     * Reset (the saved values set back live).
+     */
+    export class TunablesPanel {
+        #private;
+        readonly element: HTMLElement;
+        constructor(document: Document, options: TunablesPanelOptions);
+        /** Describes again and re-reads the bound files. */
+        refresh(): Promise<void>;
+        dispose(): void;
+    }
+}
 declare module "@rusty-engine/live-debug/internal/live-debug-panel/src/renderer-metrics-widget" {
     import { type LiveDebugTransport } from "@rusty-engine/live-debug/internal/live-debug-client/src/index";
     /** Explicit, product-owned configuration for one optional renderer metrics widget. */
@@ -1059,6 +1165,9 @@ declare module "@rusty-engine/live-debug/internal/live-debug-panel/src/renderer-
 declare module "@rusty-engine/live-debug" {
     import type { LiveDebugTransport } from "@rusty-engine/live-debug/internal/live-debug-client/src/index";
     import type { LiveDebugPanelPresentation } from "@rusty-engine/live-debug/internal/live-debug-panel/src/live-debug-panel-model";
+    import { type TunablesPanelOptions } from "@rusty-engine/live-debug/internal/live-debug-panel/src/tunables-panel";
+    export type { TunablesPanelOptions } from "@rusty-engine/live-debug/internal/live-debug-panel/src/tunables-panel";
+    export type { TunableChooser, TunableControl, TunableGroup, TunableKind, TunableTimeline, TunablesDescription, } from "@rusty-engine/live-debug/internal/live-debug-panel/src/tunables-model";
     export { mountRendererMetricsWidget, type RendererMetricsWidgetMount, type RendererMetricsWidgetMountOptions, } from "@rusty-engine/live-debug/internal/live-debug-panel/src/renderer-metrics-widget";
     export { createLiveDebugHttpTransport, type ProductHostDebugCatalog, type LiveDebugHttpTransportOptions, type LiveDebugResult, type LiveDebugTransport, } from "@rusty-engine/live-debug/internal/live-debug-client/src/index";
     /** Explicit, product-owned configuration for one optional live-debug panel. */
@@ -1080,6 +1189,21 @@ declare module "@rusty-engine/live-debug" {
      * only forwards raw command lines through the injected or same-origin client.
      */
     export function mountLiveDebugPanel(host: HTMLElement, options: LiveDebugPanelMountOptions): Promise<LiveDebugPanelMount>;
+    /** A mounted tunables panel. */
+    export interface TunablesPanelMount {
+        /** Describes again and re-reads the bound source files. */
+        refresh(): Promise<void>;
+        /** Removes the panel and stops its requests. */
+        dispose(): void;
+    }
+    /**
+     * Mounts the Engine tunables panel into a product-owned element. It renders
+     * the product's `tunables.v1` description (from its `TunablesDebugModule`)
+     * and sends commands: a control applies live, a control bound to a source
+     * file shows when it differs from the file, and each file has Save (written
+     * through the Engine content source under `rusty dev`) and Reset.
+     */
+    export function mountTunablesPanel(host: HTMLElement, options?: TunablesPanelOptions): TunablesPanelMount;
 }
 declare module "@rusty-engine/video-options/internal/video-options/src/video-options-model" {
     /**
