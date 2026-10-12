@@ -36,6 +36,11 @@ fi
 "$REPO_ROOT/scripts/test-csharp-sdk-package.sh" "${package_arguments[@]}"
 # The generator's borrowed-result copies and refusals, against a hand-written table.
 "$REPO_ROOT/scripts/test-csharp-binding-generator-results-fixture.sh"
+# The fixtures that reference the Engine's C# projects rather than the package
+# (the package's fixtures compile in the SDK smoke above) still compile.
+while IFS= read -r fixture_project; do
+  dotnet build "$REPO_ROOT/$fixture_project" --nologo --verbosity quiet
+done < <(cd "$REPO_ROOT" && git grep -l 'csharp/Rusty.Engine/Rusty.Engine.csproj' -- 'fixtures/csharp-*/*.csproj')
 dotnet run --project "$REPO_ROOT/csharp/Rusty.Engine.Content.Example" --configuration Release
 dotnet run --project "$REPO_ROOT/csharp/Rusty.Engine.Implicit.Example" --configuration Release
 
