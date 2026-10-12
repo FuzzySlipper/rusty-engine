@@ -2,8 +2,8 @@
 // the sun's disc and halo (`Frame.sun`, `Frame.atmosphere`), added over the
 // sky or clear colour when the atmosphere draws them; and the cloud layer
 // over both, flat (`fs_clouds`) or raymarched (`fs_clouds_march`, drawn by
-// `fs_clouds_composite`). With a disc radiance the sun's light also goes into
-// the world's HDR target for bloom (`fs_sun_glow`).
+// `fs_clouds_composite`). With a disc radiance the sun's light also goes to
+// bloom (`fs_sun_glow`).
 
 #import rusty::types::PI
 #import rusty::view::{frame, world_equivalent}
@@ -143,7 +143,7 @@ fn fs_clouds(in: SkyOut) -> @location(0) vec4<f32> {
 }
 
 // How far either side of the horizontal the sun turns from lighting the
-// clouds from above to lighting them from below (`Frame.sun.y`).
+// flat layer from above to lighting it from below (`Frame.sun.y`).
 const UNDERLIT_EDGE: f32 = 0.02;
 
 // Extinction per metre of the volumetric clouds at full density.
@@ -189,8 +189,7 @@ struct CloudMarchParams {
 @group(2) @binding(3) var cloud_current: texture_2d<f32>;
 
 // One ray through the cloud slab (`Frame.clouds`): each sample's density (`rusty::clouds::cloud_density`) is lit by
-// the sun through the cloud between it and the sun, or beneath it while the
-// sun is below the layer (Beer's law, with a
+// the sun through the cloud between it and the sun (Beer's law, with a
 // forward-scattering lobe and a dark-edge powder term) and by the sky behind
 // it, and dims what lies past it. Toward the horizon the clouds fade into
 // the panorama, as the flat layer's do. Steps per ray: `Frame.cloud_drift.w`.
@@ -212,12 +211,9 @@ fn march_clouds(direction: vec3<f32>, pixel: vec2<f32>, phase: f32) -> CloudSamp
     // A per-pixel offset breaks the steps' banding into fine noise; it
     // moves each frame (`phase`), so the temporal history gathers them.
     let jitter = fract(fract(sin(dot(pixel, vec2<f32>(12.9898, 78.233))) * 43758.5453) + phase);
+    // Toward the sun, below the horizon too: a sun under the layer lights
+    // the side of each cloud facing it, through the cloud between them.
     let toward_sun = normalize(frame.sun.xyz + vec3<f32>(0.0, 1e-3, 0.0));
-    // A sun below the layer lights the clouds through their bases: each
-    // sample's light then crosses the cloud beneath it, so the bases light
-    // and the tops shade.
-    let underlit = smoothstep(UNDERLIT_EDGE, -UNDERLIT_EDGE, frame.sun.y);
-    let toward_light = normalize(mix(toward_sun, vec3<f32>(0.0, -1.0, 0.0), underlit));
     let cosine = dot(direction, toward_sun);
     // Forward scattering toward the sun, with some back scatter.
     let g = 0.6;
@@ -242,7 +238,7 @@ fn march_clouds(direction: vec3<f32>, pixel: vec2<f32>, phase: f32) -> CloudSamp
         }
         var optical = 0.0;
         for (var k = 1; k <= CLOUD_LIGHT_STEPS; k = k + 1) {
-            optical += cloud_density(position + toward_light * light_step * f32(k), 1) * light_step;
+            optical += cloud_density(position + toward_sun * light_step * f32(k), 1) * light_step;
         }
         let through = exp(-CLOUD_EXTINCTION * optical)
             + CLOUD_MULTIPLE_SCATTER * exp(-CLOUD_EXTINCTION * CLOUD_MULTIPLE_REACH * optical);
@@ -342,12 +338,11 @@ fn sun_display() -> f32 {
     return min(frame.sun_color.w, 1.0);
 }
 
-// The sun's light in the world's HDR target, in its colour: the disc at its
-// radiance (`Frame.sky_light.z`) and the halo at its strength. It is added
-// with the target's coverage (alpha) left as it is, where the depth is
-// still the far plane (render-wgpu `frame.rs` `draw_sun_glow`): bloom
-// spreads it as it does the world's light, while the finish pass and auto
-// exposure, which weigh the world by its coverage, do not see it. What the
+// The sun's light for bloom, in its colour: the disc at its radiance
+// (`Frame.sky_light.z`) and the halo at its strength, drawn into a bloom
+// chain's glow at its first mip's size (render-wgpu `frame.rs`
+// `draw_sun_glow`). Bloom's prefilter adds it where the world leaves the sky
+// open (`post.wgsl` `fs_bloom_prefilter`); no other pass sees it. What the
 // clouds cover of it is taken away: the flat layer's cover along the view
 // (`fs_sun_glow_flat`), or the raymarched clouds' opacity at the pixel
 // (`fs_sun_glow_marched`). Glow below the least light bloom spreads

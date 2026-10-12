@@ -3,8 +3,8 @@
 //! and nowhere else, is gone when removed, and shades the ground under it;
 //! volumetric clouds draw where the flat layer does, but differently, and
 //! off (or a software adapter, which refuses them) draws the flat layer
-//! exactly; a sun below the horizon lights a cloud from its base. Same
-//! harness as `tests/screenshots.rs`.
+//! exactly; a sun below the horizon lights the side of a cloud facing it.
+//! Same harness as `tests/screenshots.rs`.
 
 mod support;
 
@@ -337,16 +337,17 @@ fn a_tower_and_a_sheet_rise_from_one_base_to_their_own_heights() {
 }
 
 #[test]
-fn a_sun_below_the_horizon_lights_a_tower_from_its_base_and_its_top_darkens() {
-    // The 6 km tower 15 km ahead, seen level, with the sky's sun ahead
-    // `elevation` degrees up through an 8° twilight.
-    let render = |elevation: f32| {
+fn a_sun_below_the_horizon_lights_the_side_of_a_tower_facing_it() {
+    // The 6 km tower 15 km ahead, seen level, with the sky's sun 3° below
+    // the horizon at `azimuth` degrees right of ahead, and the clouds lit
+    // through `twilight` degrees.
+    let render = |azimuth: f32, twilight: f32| {
         let mut harness = scene(VolumetricCloudsQuality::High);
-        let radians = elevation.to_radians();
+        let (elevation, azimuth) = ((-3.0f32).to_radians(), azimuth.to_radians());
         harness.apply(vec![
             RenderDiff::SetClouds {
                 clouds: Some(CloudsDescriptor {
-                    twilight_degrees: 8.0,
+                    twilight_degrees: twilight,
                     ..match layer(0.0) {
                         RenderDiff::SetClouds {
                             clouds: Some(clouds),
@@ -369,7 +370,11 @@ fn a_sun_below_the_horizon_lights_a_tower_from_its_base_and_its_top_darkens() {
             },
             RenderDiff::SetAtmosphere {
                 atmosphere: Some(AtmosphereDescriptor {
-                    sky_sun_direction: [0.0, radians.sin(), -radians.cos()],
+                    sky_sun_direction: [
+                        azimuth.sin() * elevation.cos(),
+                        elevation.sin(),
+                        -azimuth.cos() * elevation.cos(),
+                    ],
                     sky_sun_color: [1.0, 0.75, 0.5],
                     sky_sun_intensity: 1.0,
                     ..Default::default()
@@ -389,31 +394,35 @@ fn a_sun_below_the_horizon_lights_a_tower_from_its_base_and_its_top_darkens() {
             .is_some();
         (image, refused)
     };
-    let (day, refused) = render(30.0);
+    let (left_lit, refused) = render(-70.0, 8.0);
     if refused {
-        // A software adapter draws the flat layer, which has no height.
+        // A software adapter draws the flat layer, which has no sides.
         return;
     }
-    let (twilight, _) = render(-3.0);
-    keep("tower-day", &day);
-    keep("tower-twilight", &twilight);
-    // The tower stands over rows 50 to 115 (top 0) of the middle third:
-    // its top and its base.
-    let columns = WIDTH / 3..2 * WIDTH / 3;
-    let top = |image: &[u8]| luminance(image, 55..75, columns.clone());
-    let base = |image: &[u8]| luminance(image, 100..112, columns.clone());
+    let (right_lit, _) = render(70.0, 8.0);
+    let (unlit, _) = render(-70.0, 0.0);
+    keep("tower-sun-left", &left_lit);
+    keep("tower-sun-right", &right_lit);
+    // The tower stands over rows 55 to 112 (top 0) and columns 110 to 210.
+    let left = |image: &[u8]| luminance(image, 55..112, 110..160);
+    let right = |image: &[u8]| luminance(image, 55..112, 160..210);
     assert!(
-        top(&day) > base(&day),
-        "a high sun lights the top: {:.1} over {:.1}",
-        top(&day),
-        base(&day)
+        left(&left_lit) > right(&left_lit) * 1.05,
+        "a sun down to the left lights the left side: {:.1} {:.1}",
+        left(&left_lit),
+        right(&left_lit)
     );
-    let share = |image: &[u8]| base(image) / top(image);
     assert!(
-        base(&twilight) > top(&twilight) && share(&twilight) > share(&day) + 0.15,
-        "a sun below the horizon lights the base and the top darkens: {:.1} over {:.1}",
-        base(&twilight),
-        top(&twilight)
+        right(&right_lit) > left(&right_lit) * 1.05,
+        "a sun down to the right lights the right side: {:.1} {:.1}",
+        left(&right_lit),
+        right(&right_lit)
+    );
+    assert!(
+        left(&left_lit) > left(&unlit) + 10.0,
+        "without a twilight that sun lights nothing: {:.1} {:.1}",
+        left(&left_lit),
+        left(&unlit)
     );
 }
 

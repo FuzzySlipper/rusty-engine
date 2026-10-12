@@ -756,14 +756,15 @@ engine.CameraView.SetSunShafts(new(Intensity: 0.8f, Length: 0));
     glows at `SunHalo` as a radiance too, so a halo above bloom's threshold
     blooms as well. The sky shows them at full brightness (at most 1), and with
     [bloom](#exposure-tone-mapping-and-fog) on they bloom like an emissive
-    surface: their radiance goes into the world's HDR target where nothing
-    is drawn, without coverage, so bloom spreads it while exposure and the
-    finish pass do not see it. The world, the [backdrop](#the-backdrop) and
-    the clouds in front of the sun hide it and its bloom. Shafts stream
-    past them as before. It costs one fullscreen triangle in the `world`
-    pass, the flat layer's noise near the sun under flat clouds and one
-    read of the volumetric clouds under those: about 0.02 ms at 1920×1080
-    with 4× multisampling on an RX 9070 XT, 0.03 ms under flat clouds.
+    surface: their radiance is drawn at bloom's half resolution, less what
+    the clouds cover, and bloom adds it where the world leaves the sky open.
+    No other pass sees it. Opaque surfaces and the
+    [backdrop](#the-backdrop) in front of the sun hide it and its bloom, and
+    a translucent surface dims it by its opacity. Shafts stream past them as
+    before. It costs one half-resolution pass, timed with `bloom-exposure`,
+    plus the flat layer's noise near the sun under flat clouds or one read
+    of the volumetric clouds under those. That is about 0.01 ms at
+    1920×1080 with 4× multisampling on an RX 9070 XT, flat clouds included.
   - `SkySunDirection` (world space, toward the sun, any length) places the
     sky's sun apart from the ground's light, in `SkySunColor` (linear RGB,
     0 to 16 a channel) at `SkySunIntensity` (0 to 16). Its disc and halo,
@@ -939,7 +940,8 @@ the clouds only while the sun is up.
   It reddens as it sinks, through orange, then fades. Below the horizon it
   lights the clouds from beneath: the flat layer's undersides take it
   directly, past the other clouds, and a volumetric cloud's light crosses
-  the cloud beneath each point, so its base glows and its top darkens. Pair
+  the cloud between each point and the sun, so the side facing the low sun
+  glows and the far side stays in its own shadow. Pair
   it with an atmosphere `SkySunDirection` below the horizon to keep the
   ground's light apart: the clouds catch the sunset while the land is in
   shadow.

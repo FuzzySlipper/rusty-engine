@@ -787,3 +787,99 @@ fn the_sun_blooms_at_its_radiance_where_it_shows_and_not_through_what_stands_bef
         pixel(&dimmed, CENTER)
     );
 }
+
+#[test]
+fn a_translucent_surface_over_the_sun_dims_its_bloom_and_takes_none_of_its_light() {
+    let view = camera([0.0, 0.0, 0.0], 0.0, 0.0);
+    // The low sun's disc at radiance 40 under bloom of `intensity` (None:
+    // off), seen through an unlit black card 10 m off along the sun of
+    // `opacity` (None: no card; 1 opaque).
+    let render = |intensity: Option<f32>, opacity: Option<f32>| {
+        let mut harness = Harness::new(RendererOptions {
+            default_world_lights: false,
+            ..RendererOptions::default()
+        });
+        harness.apply(vec![
+            RenderDiff::SetBackgroundColor { color: BACKGROUND },
+            RenderDiff::CreateLight {
+                handle: RenderHandle::new(50),
+                parent: None,
+                light: LightDescriptor::Directional {
+                    color: [1.0, 0.7, 0.4],
+                    intensity: 0.2,
+                    enabled: true,
+                    direction: LOW_SUN.map(|value| -value),
+                    range: None,
+                    shadow_intent: LightShadowIntent::Disabled,
+                    shadow: Default::default(),
+                },
+            },
+            RenderDiff::SetAtmosphere {
+                atmosphere: Some(AtmosphereDescriptor {
+                    sun_radius_degrees: 1.5,
+                    sun_radiance: 40.0,
+                    ..Default::default()
+                }),
+            },
+            RenderDiff::SetBloom {
+                bloom: intensity.map(|intensity| BloomDescriptor {
+                    threshold: 1.0,
+                    intensity,
+                }),
+            },
+        ]);
+        if let Some(opacity) = opacity {
+            let mut card = material("material/card", [0.0, 0.0, 0.0, opacity], None);
+            card.unlit = true;
+            if opacity < 1.0 {
+                card.alpha_mode = MaterialAlphaModeDescriptor::Blend;
+            }
+            harness.apply(vec![
+                RenderDiff::DefineMaterial { material: card },
+                static_mesh(
+                    "mesh/card",
+                    box_mesh([-0.6, -0.6, -0.05], [0.6, 0.6, 0.05], |_| 0),
+                    "material/card",
+                ),
+                instance(
+                    2,
+                    None,
+                    "mesh/card",
+                    transform(LOW_SUN.map(|value| value * 10.0), 0.0, [1.0; 3]),
+                ),
+            ]);
+        }
+        harness.render(&view).1
+    };
+    let most = |a: &[u8], b: &[u8]| {
+        a.iter()
+            .zip(b)
+            .map(|(a, b)| (i32::from(*a) - i32::from(*b)).abs())
+            .max()
+            .unwrap()
+    };
+    // A faint bloom adds only faint light, through a card or not: the
+    // sun's light reaches nothing but bloom.
+    for opacity in [None, Some(0.5), Some(1.0)] {
+        let faint = render(Some(1e-4), opacity);
+        let off = render(None, opacity);
+        assert!(
+            most(&faint, &off) <= SAME,
+            "{opacity:?}: {}",
+            most(&faint, &off)
+        );
+    }
+    // The card dims the bloom around the disc by its opacity.
+    let beside = (LOW_SUN_PIXEL.0 + 12, LOW_SUN_PIXEL.1);
+    let gain = |opacity| {
+        distance(
+            pixel(&render(Some(0.05), opacity), beside),
+            pixel(&render(None, opacity), beside),
+        )
+    };
+    let (open, veiled, opaque) = (gain(None), gain(Some(0.5)), gain(Some(1.0)));
+    assert!(
+        open > veiled + 5 && veiled > opaque + 5 && opaque <= SAME,
+        "open {open}, veiled {veiled}, opaque {opaque}"
+    );
+}

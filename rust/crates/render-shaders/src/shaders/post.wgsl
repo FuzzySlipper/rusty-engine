@@ -13,7 +13,8 @@ struct PostParams {
     // exposure, w the presentation seconds since the last adaptation (a
     // negative value takes the target at once). Shafts: x how far a blur
     // pass marches toward the sun (a fraction of the way), y the view's
-    // aspect ratio.
+    // aspect ratio. Bloom's prefilter: x 1 when `previous` holds the sun's
+    // glow.
     adapt: vec4<f32>,
     // The source region the pass's uv spans: x, y, width, height in the
     // source's uv (the view's viewport in the world; the whole of a mip).
@@ -23,7 +24,8 @@ struct PostParams {
 @group(0) @binding(0) var<uniform> params: PostParams;
 @group(0) @binding(1) var source: texture_2d<f32>;
 @group(0) @binding(2) var source_sampler: sampler;
-// Auto exposure's last value (adaptation only).
+// Auto exposure's last value (adaptation), or the sun's glow at the first
+// bloom mip's size (bloom's prefilter).
 @group(0) @binding(3) var previous: texture_2d<f32>;
 
 // The luminance auto exposure aims to bring to middle grey.
@@ -69,16 +71,30 @@ fn box4(uv: vec2<f32>) -> vec4<f32> {
 }
 
 // The first bloom mip: the world's light above the threshold (a soft knee
-// below it), downsampled.
+// below it), downsampled. The sun's glow (`sky.wgsl` `fs_sun_glow`) adds
+// where the world leaves the sky open, less as much as a translucent
+// surface covers it; no other pass sees it.
 @fragment
 fn fs_bloom_prefilter(in: FullscreenOut) -> @location(0) vec4<f32> {
-    let color = box4(in.uv).rgb;
+    let world = box4(in.uv);
+    var color = world.rgb;
+    if params.adapt.x > 0.5 {
+        let glow = textureLoad(previous, vec2<i32>(in.clip.xy), 0).rgb;
+        color += glow * (1.0 - clamp(world.a, 0.0, 1.0));
+    }
     let brightness = max(color.r, max(color.g, color.b));
     let threshold = params.texel.z;
     let knee = max(params.texel.w, 1e-4);
     let soft = clamp(brightness - threshold + knee, 0.0, 2.0 * knee);
     let contribution = max(soft * soft / (4.0 * knee), brightness - threshold) / max(brightness, 1e-4);
     return vec4<f32>(color * max(contribution, 0.0), 1.0);
+}
+
+// The source's coverage at half resolution, to keep only what it leaves
+// uncovered of the target (render-wgpu `post.rs` `uncover_glow`).
+@fragment
+fn fs_coverage(in: FullscreenOut) -> @location(0) vec4<f32> {
+    return vec4<f32>(0.0, 0.0, 0.0, clamp(box4(in.uv).a, 0.0, 1.0));
 }
 
 @fragment

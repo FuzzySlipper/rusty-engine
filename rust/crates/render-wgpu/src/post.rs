@@ -47,6 +47,10 @@ const PARAMS_BYTES: u64 = 48;
 pub(crate) struct Chain {
     views: Vec<wgpu::TextureView>,
     sizes: Vec<(u32, u32)>,
+    /// Bloom's: the sun's glow at the first mip's size (`sky.wgsl`
+    /// `fs_sun_glow`), which the prefilter adds where the world leaves the
+    /// sky open.
+    pub glow: Option<wgpu::TextureView>,
     pub key: (u32, u32),
     pub used: u64,
 }
@@ -85,6 +89,7 @@ impl Chain {
         Self {
             views,
             sizes,
+            glow: None,
             key: size,
             used: 0,
         }
@@ -98,8 +103,10 @@ impl Chain {
             .take_while(|&level| size.0.min(size.1) >> (level - 1) >= 4)
             .count()
             .max(1) as u32;
+        let glow = Self::new(gpu, "render-wgpu sun glow", BLOOM_FORMAT, size, 1);
         Self {
             key: (width, height),
+            glow: glow.views.into_iter().next(),
             ..Self::new(gpu, "render-wgpu bloom", BLOOM_FORMAT, size, levels)
         }
     }
@@ -160,6 +167,15 @@ fn at(stamps: Stamps<'_>, first: bool, last: bool) -> Stamps<'_> {
     })
 }
 
+/// How a post pass writes its target: replacing it, adding to it, or
+/// keeping it where the source leaves it uncovered (its alpha).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Blend {
+    Replace,
+    Add,
+    Uncovered,
+}
+
 pub(crate) struct Post {
     shader: wgpu::ShaderModule,
     layout: wgpu::BindGroupLayout,
@@ -170,7 +186,7 @@ pub(crate) struct Post {
     slots: u64,
     slot: u64,
     pipelines: Vec<(
-        (&'static str, wgpu::TextureFormat, bool),
+        (&'static str, wgpu::TextureFormat, Blend),
         wgpu::RenderPipeline,
     )>,
     /// A 1×1 transparent black texture: no bloom.
@@ -293,12 +309,12 @@ impl Post {
         device: &wgpu::Device,
         fragment: &'static str,
         format: wgpu::TextureFormat,
-        additive: bool,
+        blend: Blend,
     ) -> usize {
         if let Some(index) = self
             .pipelines
             .iter()
-            .position(|(key, _)| *key == (fragment, format, additive))
+            .position(|(key, _)| *key == (fragment, format, blend))
         {
             return index;
         }
@@ -320,22 +336,36 @@ impl Post {
                 compilation_options: Default::default(),
                 targets: &[Some(wgpu::ColorTargetState {
                     format,
-                    blend: additive.then_some(wgpu::BlendState {
-                        color: wgpu::BlendComponent {
-                            src_factor: wgpu::BlendFactor::One,
-                            dst_factor: wgpu::BlendFactor::One,
-                            operation: wgpu::BlendOperation::Add,
-                        },
-                        alpha: wgpu::BlendComponent::REPLACE,
-                    }),
+                    blend: match blend {
+                        Blend::Replace => None,
+                        Blend::Add => Some(wgpu::BlendState {
+                            color: wgpu::BlendComponent {
+                                src_factor: wgpu::BlendFactor::One,
+                                dst_factor: wgpu::BlendFactor::One,
+                                operation: wgpu::BlendOperation::Add,
+                            },
+                            alpha: wgpu::BlendComponent::REPLACE,
+                        }),
+                        Blend::Uncovered => Some(wgpu::BlendState {
+                            color: wgpu::BlendComponent {
+                                src_factor: wgpu::BlendFactor::Zero,
+                                dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                                operation: wgpu::BlendOperation::Add,
+                            },
+                            alpha: wgpu::BlendComponent {
+                                src_factor: wgpu::BlendFactor::Zero,
+                                dst_factor: wgpu::BlendFactor::One,
+                                operation: wgpu::BlendOperation::Add,
+                            },
+                        }),
+                    },
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
             }),
             multiview_mask: None,
             cache: None,
         });
-        self.pipelines
-            .push(((fragment, format, additive), pipeline));
+        self.pipelines.push(((fragment, format, blend), pipeline));
         self.pipelines.len() - 1
     }
 
@@ -349,7 +379,7 @@ impl Post {
         encoder: &mut wgpu::CommandEncoder,
         fragment: &'static str,
         (target, format): (&wgpu::TextureView, wgpu::TextureFormat),
-        additive: bool,
+        blend: Blend,
         (source, region): (&wgpu::TextureView, [f32; 4]),
         previous: Option<&wgpu::TextureView>,
         params: [f32; 8],
@@ -368,7 +398,7 @@ impl Post {
         values[8..].copy_from_slice(&region);
         gpu.queue
             .write_buffer(&self.params, offset, bytemuck::cast_slice(&values));
-        let pipeline = self.pipeline(&gpu.device, fragment, format, additive);
+        let pipeline = self.pipeline(&gpu.device, fragment, format, blend);
         let group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("render-wgpu post"),
             layout: &self.layout,
@@ -402,10 +432,10 @@ impl Post {
                 depth_slice: None,
                 resolve_target: None,
                 ops: wgpu::Operations {
-                    load: if additive {
-                        wgpu::LoadOp::Load
-                    } else {
+                    load: if blend == Blend::Replace {
                         wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT)
+                    } else {
+                        wgpu::LoadOp::Load
                     },
                     store: wgpu::StoreOp::Store,
                 },
@@ -422,8 +452,9 @@ impl Post {
     }
 
     /// Bloom from `region` (x, y, width, height in uv) of the resolved world
-    /// (`source`, `size` texels) into `chain`; `stamps` opens on its first
-    /// pass and closes on its last as asked.
+    /// (`source`, `size` texels), with the chain's sun glow where `glow`,
+    /// into `chain`; `stamps` opens on its first pass and closes on its last
+    /// as asked.
     #[allow(clippy::too_many_arguments)]
     pub fn bloom(
         &mut self,
@@ -433,24 +464,26 @@ impl Post {
         size: (u32, u32),
         chain: &Chain,
         bloom: BloomDescriptor,
+        glow: bool,
         stamps: Stamps<'_>,
     ) {
         let texel = |(width, height): (u32, u32)| [1.0 / width as f32, 1.0 / height as f32];
         let [x, y] = texel(size);
+        let glow = chain.glow.as_ref().filter(|_| glow);
         self.pass(
             gpu,
             encoder,
             "fs_bloom_prefilter",
             (&chain.views[0], BLOOM_FORMAT),
-            false,
+            Blend::Replace,
             (source, region),
-            None,
+            glow,
             [
                 x,
                 y,
                 bloom.threshold,
                 bloom.threshold * BLOOM_KNEE,
-                0.0,
+                f32::from(u8::from(glow.is_some())),
                 0.0,
                 0.0,
                 0.0,
@@ -464,7 +497,7 @@ impl Post {
                 encoder,
                 "fs_bloom_down",
                 (&chain.views[level], BLOOM_FORMAT),
-                false,
+                Blend::Replace,
                 (&chain.views[level - 1], WHOLE),
                 None,
                 [x, y, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
@@ -478,13 +511,49 @@ impl Post {
                 encoder,
                 "fs_bloom_up",
                 (&chain.views[level], BLOOM_FORMAT),
-                true,
+                Blend::Add,
                 (&chain.views[level + 1], WHOLE),
                 None,
                 [x, y, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
                 at(stamps, false, level == 0),
             );
         }
+    }
+
+    /// Keep `chain`'s sun glow only where `region` of `source` (`size`
+    /// texels: a backdrop drawn before the world, resolved) leaves the sky
+    /// open, by its coverage.
+    pub fn uncover_glow(
+        &mut self,
+        gpu: &Gpu,
+        encoder: &mut wgpu::CommandEncoder,
+        (source, region): (&wgpu::TextureView, [f32; 4]),
+        size: (u32, u32),
+        chain: &Chain,
+    ) {
+        let Some(glow) = &chain.glow else {
+            return;
+        };
+        self.pass(
+            gpu,
+            encoder,
+            "fs_coverage",
+            (glow, BLOOM_FORMAT),
+            Blend::Uncovered,
+            (source, region),
+            None,
+            [
+                1.0 / size.0 as f32,
+                1.0 / size.1 as f32,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+            ],
+            None,
+        );
     }
 
     /// Sun shafts from `region` of the resolved world (`size` texels) into
@@ -511,7 +580,7 @@ impl Post {
             encoder,
             "fs_shafts_mask",
             (targets.first.top(), SHAFT_FORMAT),
-            false,
+            Blend::Replace,
             (source, region),
             None,
             [texel[0], texel[1], sun[0], sun[1], 0.0, aspect, 0.0, 0.0],
@@ -530,7 +599,7 @@ impl Post {
                 encoder,
                 "fs_shafts_blur",
                 (into.top(), SHAFT_FORMAT),
-                false,
+                Blend::Replace,
                 (from.top(), WHOLE),
                 None,
                 [
@@ -568,7 +637,7 @@ impl Post {
             encoder,
             "fs_luminance",
             (&chain.views[0], LUMINANCE_FORMAT),
-            false,
+            Blend::Replace,
             (source, region),
             None,
             [
@@ -589,7 +658,7 @@ impl Post {
                 encoder,
                 "fs_luminance_down",
                 (&chain.views[level], LUMINANCE_FORMAT),
-                false,
+                Blend::Replace,
                 (&chain.views[level - 1], WHOLE),
                 None,
                 [0.0; 8],
@@ -618,7 +687,7 @@ impl Post {
             encoder,
             "fs_adapt",
             (&target, EXPOSURE_FORMAT),
-            false,
+            Blend::Replace,
             (&last, WHOLE),
             Some(&previous),
             [

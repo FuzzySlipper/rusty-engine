@@ -392,9 +392,8 @@ pub struct Renderer {
     /// The clouds the current view's background drew, which the sun's glow
     /// is seen through.
     sky_clouds: frame::SkyClouds,
-    /// The current view's backdrop pass added the sun's glow to the HDR
-    /// target, which its world pass keeps where the backdrop left the sky
-    /// open.
+    /// The current view's backdrop pass drew the sun's glow for bloom, kept
+    /// where the backdrop leaves the sky open, which its world view uses.
     glow_kept: bool,
     /// The sky's light: the background prefiltered for the standard shader.
     sky_light: sky_light::SkyLight,

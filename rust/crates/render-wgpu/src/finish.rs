@@ -101,9 +101,8 @@ pub(crate) struct Finish {
     bloom_sampler: wgpu::Sampler,
     /// Finish pipelines by the image's format and the world's samples.
     pipelines: Vec<(ColorTarget, wgpu::RenderPipeline)>,
-    /// Transparent viewport clears by HDR target sample count, and whether
-    /// they keep the light where nothing covers the target.
-    clears: Vec<((u32, bool), wgpu::RenderPipeline)>,
+    /// Transparent viewport clears by HDR target sample count.
+    clears: Vec<(u32, wgpu::RenderPipeline)>,
     targets: Vec<HdrTarget>,
     pub post: Post,
     frame: u64,
@@ -118,8 +117,8 @@ pub(crate) struct Finish {
     precipitation_timer: Option<PassTimer>,
     post_timer: Option<PassTimer>,
     finish_timer: Option<PassTimer>,
-    /// The bloom and adaptation the post timer last timed.
-    timed_post: (bool, bool, bool),
+    /// The bloom, adaptation, shafts and sun glow the post timer last timed.
+    timed_post: (bool, bool, bool, bool),
 }
 
 impl Finish {
@@ -245,7 +244,7 @@ impl Finish {
             precipitation_timer: PassTimer::new(gpu, PRECIPITATION),
             post_timer: PassTimer::new(gpu, POST),
             finish_timer: PassTimer::new(gpu, FINISH),
-            timed_post: (false, false, false),
+            timed_post: (false, false, false, false),
         }
     }
 
@@ -344,11 +343,85 @@ impl Finish {
         }
     }
 
-    /// Bloom, auto exposure and sun shafts (the sun's place in the view's
-    /// uv and how far the rays reach) from `viewport` (x, y, width, height
-    /// in pixels) of the resolved world of the HDR target of this size and
-    /// sample count, as of presentation time `now`; `timed` for a world
-    /// view.
+    /// The bloom chain for `viewport` (x, y, width, height in pixels) of
+    /// the HDR target of this size and sample count, made if new.
+    fn bloom_chain(
+        &mut self,
+        gpu: &Gpu,
+        (width, height, samples): (u32, u32, u32),
+        viewport: [u32; 4],
+    ) -> Option<(usize, usize)> {
+        let index = self.index(width, height, samples)?;
+        let frame = self.frame;
+        let size = (viewport[2], viewport[3]);
+        let target = &mut self.targets[index];
+        let chain = match target.bloom.iter().position(|chain| chain.key == size) {
+            Some(chain) => chain,
+            None => {
+                target.bloom.push(Chain::bloom(gpu, size.0, size.1));
+                target.bloom.len() - 1
+            }
+        };
+        target.bloom[chain].used = frame;
+        Some((index, chain))
+    }
+
+    /// The post timer's opening stamp for a world view's sun glow pass,
+    /// which then begins its `bloom-exposure` time.
+    pub fn glow_writes(&self) -> Option<wgpu::RenderPassTimestampWrites<'_>> {
+        self.post_timer
+            .as_ref()
+            .and_then(|timer| timer.render_writes_between(true, false))
+    }
+
+    /// The sun's glow that `viewport`'s bloom adds (`Chain::glow`), at its
+    /// first mip's size.
+    pub fn glow_target(
+        &mut self,
+        gpu: &Gpu,
+        size: (u32, u32, u32),
+        viewport: [u32; 4],
+    ) -> Option<wgpu::TextureView> {
+        let (index, chain) = self.bloom_chain(gpu, size, viewport)?;
+        self.targets[index].bloom[chain].glow.clone()
+    }
+
+    /// Keep `viewport`'s sun glow only where the backdrop just drawn into
+    /// the HDR target of this size (resolved) leaves the sky open.
+    pub fn uncover_glow(
+        &mut self,
+        gpu: &Gpu,
+        encoder: &mut wgpu::CommandEncoder,
+        size: (u32, u32, u32),
+        viewport: [u32; 4],
+    ) {
+        let Some((index, chain)) = self.bloom_chain(gpu, size, viewport) else {
+            return;
+        };
+        let (width, height, _) = size;
+        let [x, y, view_width, view_height] = viewport;
+        let region = [
+            x as f32 / width as f32,
+            y as f32 / height as f32,
+            view_width as f32 / width as f32,
+            view_height as f32 / height as f32,
+        ];
+        let target = &self.targets[index];
+        self.post.uncover_glow(
+            gpu,
+            encoder,
+            (target.resolved(), region),
+            (width, height),
+            &target.bloom[chain],
+        );
+    }
+
+    /// Bloom (with the sun's glow where `glow`; `glow_drawn` when this
+    /// view's glow pass opened the time), auto exposure and sun shafts (the
+    /// sun's place in the view's uv and how far the rays reach) from
+    /// `viewport` (x, y, width, height in pixels) of the resolved world of
+    /// the HDR target of this size and sample count, as of presentation time
+    /// `now`; `timed` for a world view.
     #[allow(clippy::too_many_arguments)]
     pub fn encode_post(
         &mut self,
@@ -357,6 +430,7 @@ impl Finish {
         (width, height, samples): (u32, u32, u32),
         viewport: [u32; 4],
         bloom: Option<BloomDescriptor>,
+        (glow, glow_drawn): (bool, bool),
         auto_exposure: Option<AutoExposureDescriptor>,
         shafts: Option<([f32; 2], f32)>,
         now: f64,
@@ -416,7 +490,12 @@ impl Finish {
             view_height as f32 / height as f32,
         ];
         // A median never mixes frames that did different work.
-        let work = (bloom.is_some(), auto_exposure.is_some(), shafts.is_some());
+        let work = (
+            bloom.is_some(),
+            auto_exposure.is_some(),
+            shafts.is_some(),
+            glow_drawn,
+        );
         if timed && work != self.timed_post {
             self.timed_post = work;
             if let Some(timer) = &mut self.post_timer {
@@ -427,7 +506,7 @@ impl Finish {
         // The stamps open on the first pass and close on the last.
         let last_is_bloom = auto_exposure.is_none() && shafts.is_none();
         if let (Some(bloom), Some(chain)) = (bloom, chain) {
-            let stamps = timer.map(|timer| (timer, true, last_is_bloom));
+            let stamps = timer.map(|timer| (timer, !glow_drawn, last_is_bloom));
             self.post.bloom(
                 gpu,
                 encoder,
@@ -435,6 +514,7 @@ impl Finish {
                 (width, height),
                 &target.bloom[chain],
                 bloom,
+                glow,
                 stamps,
             );
         }
@@ -592,19 +672,14 @@ impl Finish {
     }
 
     /// Clear the viewport of a multisampled or single-sample HDR target to
-    /// transparent and its depth to the far plane. With `keep_uncovered`
-    /// the light where the target's coverage (alpha) is zero stays, less
-    /// as much as it covers: a backdrop pass's sun glow where the backdrop
-    /// left the sky open.
+    /// transparent and its depth to the far plane.
     pub fn clear_viewport(
         &mut self,
         device: &wgpu::Device,
         pass: &mut wgpu::RenderPass<'_>,
         samples: u32,
-        keep_uncovered: bool,
     ) {
-        let key = (samples, keep_uncovered);
-        let index = match self.clears.iter().position(|(found, _)| *found == key) {
+        let index = match self.clears.iter().position(|(key, _)| *key == samples) {
             Some(index) => index,
             None => {
                 let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -638,27 +713,12 @@ impl Finish {
                         module: &self.shader,
                         entry_point: Some("fs_clear"),
                         compilation_options: Default::default(),
-                        targets: &[Some(wgpu::ColorTargetState {
-                            format: HDR_FORMAT,
-                            blend: keep_uncovered.then_some(wgpu::BlendState {
-                                color: wgpu::BlendComponent {
-                                    src_factor: wgpu::BlendFactor::Zero,
-                                    dst_factor: wgpu::BlendFactor::OneMinusDstAlpha,
-                                    operation: wgpu::BlendOperation::Add,
-                                },
-                                alpha: wgpu::BlendComponent {
-                                    src_factor: wgpu::BlendFactor::Zero,
-                                    dst_factor: wgpu::BlendFactor::Zero,
-                                    operation: wgpu::BlendOperation::Add,
-                                },
-                            }),
-                            write_mask: wgpu::ColorWrites::ALL,
-                        })],
+                        targets: &[Some(HDR_FORMAT.into())],
                     }),
                     multiview_mask: None,
                     cache: None,
                 });
-                self.clears.push((key, pipeline));
+                self.clears.push((samples, pipeline));
                 self.clears.len() - 1
             }
         };

@@ -1051,11 +1051,33 @@ impl Renderer {
             && self.sky_sun().is_some()
     }
 
-    /// Add the sun's glow (`sky.wgsl` `fs_sun_glow`) into the HDR target of
-    /// the pass, where its depth is still the far plane, through the clouds
-    /// the view's background drew. Leaves groups 1 and 2 to be set again.
-    fn draw_sun_glow(&self, pass: &mut wgpu::RenderPass<'_>, pipelines: &Pipelines) {
-        pass.set_pipeline(&pipelines.sun_glow[self.sky_clouds.index()]);
+    /// Draw the sun's glow (`sky.wgsl` `fs_sun_glow`), through the clouds
+    /// the view's background drew, into `glow`, a bloom chain's
+    /// (`post.rs` `Chain::glow`).
+    /// A world view's pass opens its `bloom-exposure` time when `timed`.
+    fn draw_sun_glow(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        glow: &wgpu::TextureView,
+        timed: bool,
+    ) {
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("render-wgpu sun glow"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: glow,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: self.finish.glow_writes().filter(|_| timed),
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        pass.set_pipeline(&self.layouts.sun_glow[self.sky_clouds.index()]);
         pass.set_bind_group(0, &self.frame_bind_group, &[]);
         if let (SkyClouds::Flat | SkyClouds::Marched(_), Some(sky)) =
             (self.sky_clouds, &self.sky_bind_group)
@@ -2631,13 +2653,21 @@ impl Renderer {
                 };
                 Some((uv, length, shafts.intensity * fade))
             });
+        // The sun's glow for bloom: drawn for a world view, or for its
+        // backdrop, which then covers it (resolved to be read).
+        let glow = self.sun_glow_wanted()
+            && match view.layer {
+                ViewLayer::World => view.sky,
+                ViewLayer::Backdrop => true,
+                ViewLayer::Viewmodel => false,
+            };
         let size = (view.target.width, view.target.height, view.target.samples);
         let hdr = self.finish.target(
             &self.gpu,
             size.0,
             size.1,
             size.2,
-            bloom.is_some() || adapting.is_some() || shafts.is_some(),
+            bloom.is_some() || adapting.is_some() || shafts.is_some() || glow,
         );
         // A world pass's lights are binned into clusters when the host asks
         // and the device can; the viewmodel's few lights loop.
@@ -2689,17 +2719,6 @@ impl Renderer {
                 .iter()
                 .map(|batch| self.tables.parts.state[batch.part as usize].class.features),
         );
-        // The sun's glow for bloom: a world view adds it, unless its backdrop
-        // pass did, behind the backdrop, into the HDR target this pass then
-        // keeps where the backdrop left the sky open.
-        let glow_kept = world_layer && std::mem::take(&mut self.glow_kept);
-        let glow = self.sun_glow_wanted()
-            && match view.layer {
-                ViewLayer::World => view.sky && !glow_kept,
-                ViewLayer::Backdrop => true,
-                ViewLayer::Viewmodel => false,
-            };
-        self.glow_kept = glow && view.layer == ViewLayer::Backdrop;
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some(match view.layer {
@@ -2712,7 +2731,7 @@ impl Renderer {
                     depth_slice: None,
                     resolve_target: hdr.resolve.as_ref(),
                     ops: wgpu::Operations {
-                        load: if whole && !glow_kept {
+                        load: if whole {
                             wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT)
                         } else {
                             wgpu::LoadOp::Load
@@ -2739,16 +2758,11 @@ impl Renderer {
                 multiview_mask: None,
             });
             in_viewport(&mut pass);
-            if !whole || glow_kept {
+            if !whole {
                 // A viewport of a shared HDR target clears with a triangle,
-                // depth included; one keeping the backdrop's sun glow clears
-                // only what the backdrop covers.
-                self.finish.clear_viewport(
-                    &self.gpu.device,
-                    &mut pass,
-                    view.target.samples,
-                    glow_kept,
-                );
+                // depth included.
+                self.finish
+                    .clear_viewport(&self.gpu.device, &mut pass, view.target.samples);
             }
             pass.set_bind_group(0, &self.frame_bind_group, &[]);
             let occlusion_bind_group = self.ambient_occlusion.apply_bind_group(occlusion.as_ref());
@@ -2772,14 +2786,9 @@ impl Renderer {
                 encoded.draws += self.draw_ghost_plates(&mut pass, hdr_format);
                 pass.set_bind_group(0, &self.frame_bind_group, &[]);
             }
-            // After the opaque world, which hides it, and before the blended
-            // parts, which it shows through.
-            if glow {
-                self.draw_sun_glow(&mut pass, pipelines);
-            }
             // Blended parts are not in the pre-pass's depth, so the occlusion
             // under them belongs to what they cover: they draw without it.
-            if occlusion.is_some() || glow {
+            if occlusion.is_some() {
                 pass.set_bind_group(2, self.ambient_occlusion.apply_bind_group(None), &[]);
             }
             self.effects
@@ -2944,14 +2953,33 @@ impl Renderer {
         } else {
             None
         };
+        // The sun's glow for bloom, which adds it where the world leaves the
+        // sky open. A world view with a backdrop drew it in the backdrop's
+        // pass, kept where the backdrop leaves the sky open.
+        let viewport = [area.x, area.y, area.width, area.height];
+        let mut glow_drawn = false;
+        if glow {
+            if let Some(target) = self.finish.glow_target(&self.gpu, size, viewport) {
+                if !(world_layer && std::mem::take(&mut self.glow_kept)) {
+                    glow_drawn = world_layer;
+                    self.draw_sun_glow(&mut encoder, &target, world_layer);
+                }
+                if view.layer == ViewLayer::Backdrop {
+                    self.finish
+                        .uncover_glow(&self.gpu, &mut encoder, size, viewport);
+                    self.glow_kept = true;
+                }
+            }
+        }
         if bloom.is_some() || adapting.is_some() || shafts.is_some() {
             self.exposure_adapted |= adapting.is_some();
             self.finish.encode_post(
                 &self.gpu,
                 &mut encoder,
                 size,
-                [area.x, area.y, area.width, area.height],
+                viewport,
                 bloom,
+                (glow && world_layer, glow_drawn),
                 adapting,
                 shafts.map(|(uv, length, _)| (uv, length)),
                 self.animation_time,
