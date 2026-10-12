@@ -2674,13 +2674,26 @@ fn ground_velocity(
     } else {
         1.0
     };
-    accelerate(
+    let held = Vec3::new(current.x, 0.0, current.z).length();
+    let mut next = accelerate(
         current,
         wish,
         config.ground.acceleration * direction_change,
         config.ground.braking,
         dt,
-    )
+    );
+    // Acceleration caps only the speed along the wish, so a wall clipping
+    // the inward part away each step would let the speed along it grow past
+    // the requested speed. Acceleration never raises planar speed past the
+    // requested speed or the speed already held.
+    let limit = Vec3::new(wish.x, 0.0, wish.z).length().max(held);
+    let speed = Vec3::new(next.x, 0.0, next.z).length();
+    if speed > limit {
+        let scale = limit / speed;
+        next.x *= scale;
+        next.z *= scale;
+    }
+    next
 }
 
 fn air_velocity(current: Vec3, wish: Vec3, config: &CharacterControllerConfig, dt: f32) -> Vec3 {

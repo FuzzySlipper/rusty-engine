@@ -401,6 +401,67 @@ fn inside_corner_stops_inward_motion_and_outside_corner_preserves_progress() {
 }
 
 #[test]
+fn sustained_input_into_a_wall_slides_no_faster_than_the_requested_speed() {
+    // #9887: ground acceleration only caps speed along the wish direction,
+    // so a wall clipping away the inward part each step let the tangent
+    // speed build to 5.66 m/s from a 4.16 m/s walk.
+    const WALK_SPEED: f32 = 4.164557;
+    const STEP_SECONDS: f32 = 1.0 / 60.0;
+    let mut voxels = Vec::new();
+    for x in -40..=40 {
+        for z in -4..=4 {
+            voxels.push([x, 0, z]);
+        }
+        for y in 1..=3 {
+            voxels.push([x, y, 1]);
+        }
+    }
+    let scene = VoxelCollisionScene::from_solid_voxels(1.0, 8, voxels).unwrap();
+    let mut config = CharacterControllerConfig::default();
+    config.shape.radius = 0.25;
+    config.ground.forward_speed = WALK_SPEED;
+    config.ground.backward_speed = WALK_SPEED;
+    config.ground.strafe_speed = WALK_SPEED;
+    for (yaw_degrees, slide_sign) in [(160.0_f32, 1.0), (200.0, -1.0)] {
+        let (entity, mut state) = character(1.9);
+        let mut service = CharacterControllerService::default();
+        let mut sliding = 0;
+        for sequence in 1..=300 {
+            let receipt = service
+                .step(
+                    &mut state,
+                    &scene,
+                    entity,
+                    &config,
+                    CharacterControllerCommand {
+                        heading_yaw_radians: yaw_degrees.to_radians(),
+                        ..command(sequence, Vec2::new(0.0, 1.0))
+                    },
+                )
+                .unwrap();
+            let velocity = receipt.motion_after.controlled_velocity;
+            let planar = Vec2::new(velocity.x, velocity.z).length();
+            let moved = Vec2::new(receipt.displacement.x, receipt.displacement.z).length();
+            assert!(
+                planar <= WALK_SPEED * 1.001 && moved <= WALK_SPEED * STEP_SECONDS * 1.001,
+                "yaw {yaw_degrees}, step {sequence}: {planar} m/s, {moved} m"
+            );
+            if receipt.blocks.contains(&CharacterBlockKind::Wall) {
+                assert!(receipt.motion_after.grounded);
+                sliding += 1;
+            }
+            if sequence == 300 {
+                assert!(
+                    velocity.x * slide_sign > 0.9 * WALK_SPEED * 20.0_f32.to_radians().sin(),
+                    "yaw {yaw_degrees}: still slides along the wall at {velocity:?}"
+                );
+            }
+        }
+        assert!(sliding > 200, "yaw {yaw_degrees}: slid for {sliding} steps");
+    }
+}
+
+#[test]
 fn crouch_preserves_feet_and_standing_waits_for_clearance() {
     let mut voxels = floor_scene().solid_voxels().to_vec();
     voxels.push([0, 2, 0]);
