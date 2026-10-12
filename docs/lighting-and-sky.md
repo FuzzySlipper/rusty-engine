@@ -931,6 +931,48 @@ engine.CameraView.SetMoon(default); // no moon
   fullscreen draw in the background pass, as the sun's disc does, and with
   bloom a share of the sun's glow pass.
 
+## The stars
+
+A star field stands in the sky, turning with the product's sidereal time:
+
+```csharp
+RenderResource catalogue = engine.Graphics.OpenResource(new("sky.stars.json", TextureFilter.Linear, TextureWrap.Clamp)).Handle;
+RenderResource band = engine.Graphics.OpenResource(new("milky-way.png", TextureFilter.Linear, TextureWrap.Repeat)).Handle;
+engine.CameraView.SetStars(new(catalogue, band, Orientation: poleTilt * Quaternion.CreateFromAxisAngle(Vector3.UnitY, siderealAngle),
+    LimitingMagnitude: 4.5f, Brightness: 1, BandStrength: 0.6f, Twinkle: 0.3f));
+engine.CameraView.SetStars(default); // no stars
+```
+
+- The catalogue is a content file, `*.stars.json`, opened as a renderer
+  resource (`RenderResourceKind.StarCatalogue`). It holds at most 65536
+  stars, each `[x, y, z, magnitude, r, g, b]` under
+  `{"format": "rusty.stars.v1", "stars": [...]}`: toward the star in the
+  catalogue's frame (any length), its astronomical magnitude (smaller is
+  brighter) and its linear colour. The Engine checks it when it is opened
+  and keeps a packed copy for the renderer. A resource the field draws can't
+  be released until the field stops.
+- `Orientation` turns the catalogue's frame into the world. A product puts
+  its pole where its latitude places it and spins the field about it with
+  sidereal time; the pole star then stands still while the rest wheel.
+- Stars brighter than `LimitingMagnitude` show, fading out over half a
+  magnitude either side of it, so as the product raises it after sunset the
+  brightest come first. Each magnitude dims a star by about 1.6 times (half
+  the eye's ratio, so a sky to magnitude 6 stays readable), and
+  `Brightness` (0 to 1000) scales them all. `Twinkle` (0 to 1) flickers each
+  star on its own. A product lowers the limit and the brightness for
+  twilight, moonlight and murk.
+- Each star is a soft point about a pixel across at any resolution. As the
+  field turns, its light shifts between pixels rather than flickering.
+- `Band` (a texture resource, or `default` for none) is a 2:1
+  equirectangular image in the catalogue's frame, added over the sky at
+  `BandStrength` (0 to 1): the Milky Way, turning with the stars.
+- The field is added over the sky panorama (or the clear colour), before
+  the sun's disc and the [moon](#the-moon). The clouds cover it as they
+  cover the sky, the world and the [backdrop](#the-backdrop) hide it, and
+  it is not fogged. It is off by default and is retained camera-view state.
+- It costs one instanced draw of a five-pixel square a star into the
+  background pass, and with a band one fullscreen draw.
+
 ## Clouds
 
 A cloud layer drifts over the sky panorama, lit by the sun:
@@ -1401,6 +1443,10 @@ the camera up toward it; 0 clears it, and `lighting.sky` moves the sun that
 lights it from noon to dusk),
 `lighting.moon <phase> <radiance>` (the moon beside the sun, with the
 camera up toward it; radiance 0 takes it away),
+`lighting.stars <limit> <spin>` (the star field from
+`content/sky.stars.json` with its band, to that limiting magnitude, turned
+that many degrees about a pole 40° up, with the camera on the pole; a limit
+below -30 takes it away),
 `lighting.twilight <elevation> <radiance>` (the sky's sun apart from the
 ground's light at that elevation, below the horizon when negative, its disc
 blooming at that radiance, over clouds lit through an 8° twilight;

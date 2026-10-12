@@ -162,6 +162,12 @@ impl Renderer {
                 self.tables.sun_shafts = *sun_shafts;
             }
             RenderDiff::SetMoon { moon } => self.tables.moon = *moon,
+            RenderDiff::SetStars { stars } => {
+                if let Some(stars) = stars {
+                    self.star_field.load(&self.gpu, stars, resources)?;
+                }
+                self.tables.stars = stars.clone();
+            }
             RenderDiff::SetWind { wind } => self.tables.wind = *wind,
             RenderDiff::SetWetness { wetness } => self.tables.wetness = *wetness,
             RenderDiff::SetBackdrop { camera, backdrop } => {
@@ -2649,6 +2655,7 @@ fn op_name(op: &RenderDiff) -> &'static str {
         RenderDiff::SetAtmosphere { .. } => "setAtmosphere",
         RenderDiff::SetSunShafts { .. } => "setSunShafts",
         RenderDiff::SetMoon { .. } => "setMoon",
+        RenderDiff::SetStars { .. } => "setStars",
         RenderDiff::SetWind { .. } => "setWind",
         RenderDiff::SetClouds { .. } => "setClouds",
         RenderDiff::SetWetness { .. } => "setWetness",

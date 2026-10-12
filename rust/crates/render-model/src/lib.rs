@@ -17,6 +17,7 @@ mod pose;
 mod scatter;
 mod settings_options;
 mod sprite_batch;
+mod stars;
 mod voxel_object;
 
 pub use assets::*;
@@ -30,6 +31,7 @@ pub use pose::*;
 pub use scatter::*;
 pub use settings_options::*;
 pub use sprite_batch::*;
+pub use stars::*;
 pub use voxel_object::*;
 
 mod irradiance;

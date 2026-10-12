@@ -52,6 +52,7 @@ mod resources;
 mod shaders;
 mod shadows;
 mod sky_light;
+mod stars;
 mod surface;
 mod tables;
 mod target;
@@ -414,6 +415,8 @@ pub struct Renderer {
     backdrop: Option<BackdropReadout>,
     /// The volumetric clouds' reduced targets and histories, per view.
     cloud_march: cloud_march::CloudMarch,
+    /// The star field's loaded catalogue and parameters (`SetStars`).
+    star_field: stars::StarField,
     shadows: shadows::ShadowMaps,
     /// World lights requesting shadows, by light row.
     shadow_candidates: Vec<shadows::ShadowCandidate>,
@@ -630,6 +633,7 @@ impl Renderer {
             views: Default::default(),
             backdrop: None,
             cloud_march: cloud_march::CloudMarch::new(gpu),
+            star_field: stars::StarField::new(gpu),
             shadows,
             shadow_candidates: Vec::new(),
             casting: Default::default(),

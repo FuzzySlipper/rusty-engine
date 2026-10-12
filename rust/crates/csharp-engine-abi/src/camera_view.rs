@@ -650,6 +650,36 @@ pub struct NativeFogVolumeRemoval {
     pub id: u32,
 }
 
+/// The star field in the sky: the stars of `catalogue`, a resource opened
+/// from a `.stars.json` file (`{"format": "rusty.stars.v1", "stars": [[x,
+/// y, z, magnitude, r, g, b], ...]}`: toward each star in the catalogue's
+/// frame, its astronomical magnitude and linear colour; at most 65536;
+/// handle 0, the default, takes the field away). `orientation` turns the
+/// catalogue's frame into the world (a product turns it about its pole with
+/// sidereal time). Stars brighter than `limiting_magnitude` show, rolling
+/// off over half a magnitude, so they appear brightest first as it rises;
+/// each magnitude dims a star by about 1.6 times (half the eye's ratio, so
+/// a sky to magnitude 6 stays readable), and `brightness` (0 to 1000)
+/// scales them all. `twinkle` (0 to 1) flickers each star on its own. Each
+/// star covers about a pixel at any resolution and keeps its light as the
+/// field turns. `band` (0 for none) is a texture resource, 2:1
+/// equirectangular in the catalogue's frame (the Milky Way), added at
+/// `band_strength` (0 to 1). The field is drawn over the sky panorama,
+/// under the sun, the moon and the clouds, behind the world and the
+/// backdrop, and not fogged: a product dims it for twilight, moonlight and
+/// murk.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeStarsRequest {
+    pub catalogue: crate::NativeRenderResourceReference,
+    pub band: crate::NativeRenderResourceReference,
+    pub orientation: crate::NativeQuat,
+    pub limiting_magnitude: f32,
+    pub brightness: f32,
+    pub band_strength: f32,
+    pub twinkle: f32,
+}
+
 /// A product image effect over each primary view's finished picture.
 /// `shader` is a resource opened from a `.wgsl` file defining
 /// `fn image_effect(pixel: ImagePixel) -> vec4<f32>` (handle 0 removes the

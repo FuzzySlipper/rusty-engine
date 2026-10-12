@@ -1390,6 +1390,10 @@ pub enum RenderDiff {
     SetMoon {
         moon: Option<MoonDescriptor>,
     },
+    /// Selects the star field in the sky; None takes it away.
+    SetStars {
+        stars: Option<crate::StarsDescriptor>,
+    },
     /// Selects the scene's wind; None stills it.
     SetWind {
         wind: Option<WindDescriptor>,
@@ -1646,6 +1650,10 @@ impl RenderDiff {
             Self::SetSunShafts { .. } => Ok(()),
             Self::SetMoon { moon: Some(moon) } if !moon.valid() => Err(RenderOperationError::Moon),
             Self::SetMoon { .. } => Ok(()),
+            Self::SetStars { stars: Some(stars) } if !stars.valid() => {
+                Err(RenderOperationError::Stars)
+            }
+            Self::SetStars { .. } => Ok(()),
             Self::SetWind { wind: Some(wind) } if !wind.valid() => Err(RenderOperationError::Wind),
             Self::SetWind { .. } => Ok(()),
             Self::SetClouds {
@@ -1809,6 +1817,7 @@ impl RenderDiff {
             | Self::SetAtmosphere { .. }
             | Self::SetSunShafts { .. }
             | Self::SetMoon { .. }
+            | Self::SetStars { .. }
             | Self::SetWind { .. }
             | Self::SetClouds { .. }
             | Self::SetWetness { .. }
@@ -1866,6 +1875,7 @@ pub enum RenderOperationError {
     Atmosphere,
     SunShafts,
     Moon,
+    Stars,
     Wind,
     Clouds,
     Wetness,
@@ -1957,6 +1967,7 @@ impl RenderFrameDiff {
                 | RenderDiff::SetAtmosphere { .. }
                 | RenderDiff::SetSunShafts { .. }
                 | RenderDiff::SetMoon { .. }
+                | RenderDiff::SetStars { .. }
                 | RenderDiff::SetWind { .. }
                 | RenderDiff::SetClouds { .. }
                 | RenderDiff::SetWetness { .. }

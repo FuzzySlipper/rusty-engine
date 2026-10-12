@@ -1201,6 +1201,11 @@ pub type NativeSetSunShafts = unsafe extern "C" fn(
     *const NativeSunShaftsRequest,
     *mut crate::NativeOperationErrorReceipt,
 ) -> i32;
+pub type NativeSetStars = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeStarsRequest,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
 pub type NativeSetMoon = unsafe extern "C" fn(
     *mut c_void,
     *const NativeMoonRequest,
@@ -1778,6 +1783,7 @@ pub struct NativeCameraViewApi {
     pub set_atmosphere: NativeSetAtmosphere,
     pub set_sun_shafts: NativeSetSunShafts,
     pub set_moon: NativeSetMoon,
+    pub set_stars: NativeSetStars,
     pub set_wind: NativeSetWind,
     pub set_clouds: NativeSetClouds,
     pub set_wetness: NativeSetWetness,

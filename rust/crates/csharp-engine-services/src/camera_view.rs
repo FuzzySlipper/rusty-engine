@@ -43,6 +43,9 @@ struct CameraState {
     /// compositions clear it and own their copied viewports independently.
     active_camera: Option<u64>,
     background: CameraBackground,
+    /// The star field's catalogue and band, which may not be released while
+    /// it draws them.
+    stars: Option<NativeStarsRequest>,
     next_camera: u64,
     next_target: u64,
 }
@@ -80,6 +83,9 @@ pub(crate) struct RuntimeCameraViewCall {
     pub(crate) atmosphere: Option<Option<AtmosphereDescriptor>>,
     pub(crate) sun_shafts: Option<Option<SunShaftsDescriptor>>,
     pub(crate) moon: Option<Option<render_model::MoonDescriptor>>,
+    /// The star field as the product asked for it; its resources are
+    /// resolved when the frame is built.
+    pub(crate) stars: Option<Option<NativeStarsRequest>>,
     pub(crate) wind: Option<Option<WindDescriptor>>,
     pub(crate) clouds: Option<Option<CloudsDescriptor>>,
     pub(crate) wetness: Option<Option<WetnessDescriptor>>,
@@ -170,6 +176,7 @@ impl RuntimeCameraViewBridge {
                 presentations: Vec::new(),
                 active_camera: None,
                 background: CameraBackground::Default,
+                stars: None,
                 next_camera: 1,
                 next_target: 1,
             },
@@ -280,6 +287,7 @@ impl RuntimeCameraViewBridge {
             atmosphere: None,
             sun_shafts: None,
             moon: None,
+            stars: None,
             wind: None,
             clouds: None,
             wetness: None,
@@ -312,19 +320,22 @@ impl RuntimeCameraViewBridge {
     /// Appearance resource release must observe a sky selected earlier in the
     /// same product callback as well as the committed retained selection.
     pub(crate) fn uses_sky_texture(&self, resource: u64) -> bool {
-        match self
+        let state = self
             .staged
             .as_ref()
             .map(|staged| &staged.state)
-            .unwrap_or(&self.state)
-            .background
-        {
-            CameraBackground::Sky(id) => id == resource,
-            CameraBackground::Blend { first, second, .. } => {
-                first == resource || second == resource
+            .unwrap_or(&self.state);
+        let stars = state
+            .stars
+            .is_some_and(|stars| stars.catalogue.value == resource || stars.band.value == resource);
+        stars
+            || match state.background {
+                CameraBackground::Sky(id) => id == resource,
+                CameraBackground::Blend { first, second, .. } => {
+                    first == resource || second == resource
+                }
+                _ => false,
             }
-            _ => false,
-        }
     }
 
     /// Rebuilds the current retained camera composition without entering a
@@ -345,6 +356,7 @@ impl RuntimeCameraViewBridge {
             atmosphere: None,
             sun_shafts: None,
             moon: None,
+            stars: None,
             wind: None,
             clouds: None,
             wetness: None,
@@ -647,6 +659,7 @@ impl RuntimeCameraViewBridge {
             atmosphere: None,
             sun_shafts: None,
             moon: None,
+            stars: None,
             wind: None,
             clouds: None,
             wetness: None,
@@ -993,6 +1006,40 @@ impl RuntimeCameraViewBridge {
             ));
         }
         self.staged_mut()?.moon = Some(Some(moon));
+        Ok(())
+    }
+
+    fn set_stars(&mut self, request: NativeStarsRequest) -> Result<(), CsharpEngineServicesError> {
+        // Catalogue 0 (the default request) takes the field away.
+        if request.catalogue.value == 0 {
+            let staged = self.staged_mut()?;
+            staged.stars = Some(None);
+            staged.state.stars = None;
+            return Ok(());
+        }
+        let [x, y, z, w] = [
+            request.orientation.x,
+            request.orientation.y,
+            request.orientation.z,
+            request.orientation.w,
+        ];
+        let unit = 0.0..=1.0;
+        let valid = [x, y, z, w].iter().all(|value| value.is_finite())
+            && x * x + y * y + z * z + w * w > 0.0
+            && request.limiting_magnitude.is_finite()
+            && request.limiting_magnitude.abs() <= render_model::MAX_STAR_MAGNITUDE
+            && (0.0..=render_model::StarsDescriptor::MAX_BRIGHTNESS).contains(&request.brightness)
+            && unit.contains(&request.band_strength)
+            && unit.contains(&request.twinkle);
+        if !valid {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_STARS",
+                "a star field needs a finite orientation with some length, a limiting magnitude within -30 to 30, a brightness within 0 to 1000, and a band strength and twinkle within 0 to 1",
+            ));
+        }
+        let staged = self.staged_mut()?;
+        staged.stars = Some(Some(request));
+        staged.state.stars = Some(request);
         Ok(())
     }
 
@@ -1623,6 +1670,19 @@ pub(crate) fn environment_frame(
     }
     if let Some(moon) = call.moon {
         operations.push(RenderDiff::SetMoon { moon });
+    }
+    if let Some(request) = call.stars {
+        let stars = match request {
+            Some(request) => {
+                let (band, stars) = appearance.star_field(request)?;
+                if let Some(texture) = band {
+                    operations.push(RenderDiff::DefineTexture { texture });
+                }
+                Some(stars)
+            }
+            None => None,
+        };
+        operations.push(RenderDiff::SetStars { stars });
     }
     if let Some(wind) = call.wind {
         operations.push(RenderDiff::SetWind { wind });
@@ -2278,6 +2338,27 @@ pub(crate) unsafe extern "C" fn set_moon(
     }
     let bridge = unsafe { &mut *context.cast::<RuntimeCameraViewBridge>() };
     match bridge.set_moon(unsafe { *request }) {
+        Ok(()) => ABI_OK,
+        Err(error) => {
+            bridge.operation_diagnostics.retain(&error, operation_error);
+            0
+        }
+    }
+}
+
+pub(crate) unsafe extern "C" fn set_stars(
+    context: *mut c_void,
+    request: *const NativeStarsRequest,
+    operation_error: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    if !operation_error.is_null() {
+        unsafe { *operation_error = std::mem::zeroed() };
+    }
+    if context.is_null() || request.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeCameraViewBridge>() };
+    match bridge.set_stars(unsafe { *request }) {
         Ok(()) => ABI_OK,
         Err(error) => {
             bridge.operation_diagnostics.retain(&error, operation_error);

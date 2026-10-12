@@ -173,6 +173,9 @@ pub enum NativeRenderResourceKind {
     Font = 3,
     /// A product shader (`.wgsl`) materials may name.
     Shader = 4,
+    /// A star catalogue (`.stars.json`) a star field draws
+    /// (`CameraView.SetStars`).
+    StarCatalogue = 5,
 }
 
 #[repr(u32)]

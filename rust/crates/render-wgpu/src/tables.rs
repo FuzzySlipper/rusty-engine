@@ -20,6 +20,7 @@
 //! | `atmosphere` | (single) | height fog, sun haze and the sun in the sky | `SetAtmosphere` |
 //! | `sun_shafts` | (single) | the finish pass's sun shafts | `SetSunShafts` |
 //! | `moon` | (single) | the moon in the sky | `SetMoon` |
+//! | `stars` | (single) | the star field in the sky | `SetStars` |
 //! | `wind` | (single) | the scene's wind, in the frame uniform | `SetWind` |
 //! | `clouds` | (single) | the sky's cloud layer and its shade on the ground | `SetClouds` |
 //! | `wetness` | (single) | how wet the scene's surfaces are, in the frame uniform | `SetWetness` |
@@ -794,6 +795,8 @@ pub(crate) struct Tables {
     pub sun_shafts: Option<render_model::SunShaftsDescriptor>,
     /// The moon in the sky (`sky.wgsl` `fs_moon`).
     pub moon: Option<render_model::MoonDescriptor>,
+    /// The star field in the sky (`stars.rs`).
+    pub stars: Option<render_model::StarsDescriptor>,
     pub wind: Option<render_model::WindDescriptor>,
     /// The sky's cloud layer (`sky.wgsl` `fs_clouds`).
     pub clouds: Option<render_model::CloudsDescriptor>,
@@ -852,6 +855,7 @@ impl Tables {
             atmosphere: None,
             sun_shafts: None,
             moon: None,
+            stars: None,
             wind: None,
             clouds: None,
             wetness: None,

@@ -28,6 +28,9 @@ mask and ripple normal map (`lighting.water`).
 and `lighting.clouds.region <id> <x> <z> <radius> <coverage> <darkness>` and
 `lighting.clouds.region.remove <id>` a drifting storm over the layer;
 `lighting.moon <phase> <radiance>` puts the moon in the sky beside the sun;
+`lighting.stars <limit> <spin>` draws the star field (`content/sky.stars.json`
+with the `content/band.png` band, both from `generate-stars.py`) to that
+limiting magnitude, turned about its pole;
 `lighting.twilight <elevation> <radiance>` places the sky's sun apart from the
 ground's light (below the horizon when negative), its disc blooming at that
 radiance, over clouds lit through an 8° twilight; the panel behind

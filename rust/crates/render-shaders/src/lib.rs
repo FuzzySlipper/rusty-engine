@@ -284,6 +284,8 @@ const RESERVED_DEFS: [&str; 4] = [
 pub enum Entry {
     World,
     Sky,
+    /// The star field in the sky (`stars.wgsl`).
+    Stars,
     Shadow,
     Effects,
     Ghost,
@@ -326,6 +328,7 @@ impl Entry {
         match self {
             Self::World => ("shaders/world.wgsl", include_str!("shaders/world.wgsl")),
             Self::Sky => ("shaders/sky.wgsl", include_str!("shaders/sky.wgsl")),
+            Self::Stars => ("shaders/stars.wgsl", include_str!("shaders/stars.wgsl")),
             Self::Shadow => ("shaders/shadow.wgsl", include_str!("shaders/shadow.wgsl")),
             Self::Effects => ("shaders/effects.wgsl", include_str!("shaders/effects.wgsl")),
             Self::Ghost => ("shaders/ghost.wgsl", include_str!("shaders/ghost.wgsl")),
@@ -710,6 +713,7 @@ mod tests {
         let mut shaders = Shaders::new();
         for entry in [
             Entry::Sky,
+            Entry::Stars,
             Entry::Effects,
             Entry::Ghost,
             Entry::Compose,

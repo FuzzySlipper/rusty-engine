@@ -148,6 +148,7 @@ struct RetainedGraphics {
     atmosphere: Option<AtmosphereDescriptor>,
     sun_shafts: Option<SunShaftsDescriptor>,
     moon: Option<MoonDescriptor>,
+    stars: Option<StarsDescriptor>,
     wind: Option<WindDescriptor>,
     clouds: Option<CloudsDescriptor>,
     wetness: Option<WetnessDescriptor>,
@@ -296,6 +297,7 @@ impl PresentationWorld {
                 || matches!(&op, RenderDiff::SetAtmosphere { atmosphere } if &self.retained.atmosphere == atmosphere)
                 || matches!(&op, RenderDiff::SetSunShafts { sun_shafts } if &self.retained.sun_shafts == sun_shafts)
                 || matches!(&op, RenderDiff::SetMoon { moon } if &self.retained.moon == moon)
+                || matches!(&op, RenderDiff::SetStars { stars } if &self.retained.stars == stars)
                 || matches!(&op, RenderDiff::SetWind { wind } if &self.retained.wind == wind)
                 || matches!(&op, RenderDiff::SetClouds { clouds } if &self.retained.clouds == clouds)
                 || matches!(&op, RenderDiff::SetWetness { wetness } if &self.retained.wetness == wetness)
@@ -766,6 +768,11 @@ impl PresentationWorld {
         if self.retained.moon.is_some() {
             ops.push(RenderDiff::SetMoon {
                 moon: self.retained.moon,
+            });
+        }
+        if self.retained.stars.is_some() {
+            ops.push(RenderDiff::SetStars {
+                stars: self.retained.stars.clone(),
             });
         }
         if self.retained.wind.is_some() {
@@ -1401,6 +1408,9 @@ impl PresentationWorld {
             }
             RenderDiff::SetMoon { moon } => {
                 self.retained.moon = *moon;
+            }
+            RenderDiff::SetStars { stars } => {
+                self.retained.stars = stars.clone();
             }
             RenderDiff::SetWind { wind } => {
                 self.retained.wind = *wind;

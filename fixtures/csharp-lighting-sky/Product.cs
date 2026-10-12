@@ -46,6 +46,9 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     // A twilight (lighting.twilight): the sky's sun's colour, the clouds' twilight depth (degrees) and bloom's threshold and intensity for the disc's radiance.
     private static readonly Color TwilightSunColor = new(1,.6f,.35f,1);
     private const float TwilightDegrees = 8, TwilightBloomThreshold = 1, TwilightBloomIntensity = .6f;
+    // The star field (lighting.stars): the pole's elevation (the world's latitude), the stars' brightness, the band's strength and the twinkle.
+    private const float StarPoleElevation = 40, StarBrightness = 1, StarBandStrength = .6f, StarTwinkle = .3f;
+    private RenderResource? starCatalogue, starBand;
     // The moon (lighting.moon): over the room toward the sun's azimuth plus a quarter turn, its size, colour, earthshine and halo.
     private const float MoonElevation = 30, MoonAzimuthOffset = 90, MoonRadiusDegrees = 1.5f, MoonEarthshine = .05f, MoonHalo = .2f;
     private static readonly Vector3 MoonColor = new(1,.95f,.85f);
@@ -695,6 +698,24 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     [DebugCommand("lighting.atmosphere")]
     public string Atmosphere(bool enabled) { engine.CameraView.SetAtmosphere(enabled ? Air : default); return Inspect(); }
     // The sky's sun placed apart from the ground's light at the given elevation (degrees, below the horizon when negative) on the light's azimuth, its disc at the given radiance with bloom, and the cloud layer lit through a twilight, the camera up toward it; lighting.atmosphere restores the light's sun.
+    // The star field: stars to the given limiting magnitude (below -30 takes the field away), turned the given degrees about the pole, with the camera up toward the pole.
+    [DebugCommand("lighting.stars")]
+    public string Stars(float limit, float spin)
+    {
+        if (limit < -30)
+        {
+            engine.CameraView.SetStars(default);
+            return Inspect();
+        }
+        starCatalogue ??= engine.Graphics.OpenResource(new("sky.stars.json",TextureFilter.Linear,TextureWrap.Clamp)).Handle;
+        starBand ??= engine.Graphics.OpenResource(new("band.png",TextureFilter.Linear,TextureWrap.Repeat)).Handle;
+        // The catalogue's +Y (its pole) tilted down from the zenith toward -Z to the pole's elevation, spun about it.
+        var orientation = Quaternion.CreateFromAxisAngle(Vector3.UnitX,-float.DegreesToRadians(90-StarPoleElevation))*Quaternion.CreateFromAxisAngle(Vector3.UnitY,float.DegreesToRadians(spin));
+        engine.CameraView.SetStars(new(starCatalogue,starBand,orientation,limit,StarBrightness,StarBandStrength,StarTwinkle));
+        float up = float.DegreesToRadians(StarPoleElevation);
+        engine.CameraView.UpdateCamera(new(camera,Camera(SkyEye,SkyEye+new Vector3(0,MathF.Sin(up),-MathF.Cos(up))*Horizon)));
+        return Inspect();
+    }
     // The moon in the sky beside the sun, lit fraction 0 (new) to 1 (full) at the given radiance (0 takes it away), with the camera up toward it.
     [DebugCommand("lighting.moon")]
     public string Moon(float phase, float radiance)
@@ -825,7 +846,7 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     public void RegisterDebugCommands(IDebugCommandModuleRegistrar registrar)=>registrar.Register(this);
     public ProductUpdateResult Update(ProductUpdate update)=>ProductUpdateResult.None;
     public void Pause(){} public void Resume(){} public void Restart(){SetTorch(true);} public void Shutdown(){}
-    public void Dispose(){engine.CameraView.ClearSkyBackground(default); Flame(false); Facets(false); Wind(-1); Water(-1); Backdrop(0); flameSprite?.Dispose(); emberSprite?.Dispose(); smokeSprite?.Dispose(); presentation?.Dispose(); torch.Dispose(); sun.Dispose(); hemisphere.Dispose(); skyAmbient.Dispose(); camera.Dispose(); stone.Dispose(); scene.Dispose(); day.Dispose(); night.Dispose();}
+    public void Dispose(){engine.CameraView.ClearSkyBackground(default); engine.CameraView.SetStars(default); starCatalogue?.Dispose(); starBand?.Dispose(); Flame(false); Facets(false); Wind(-1); Water(-1); Backdrop(0); flameSprite?.Dispose(); emberSprite?.Dispose(); smokeSprite?.Dispose(); presentation?.Dispose(); torch.Dispose(); sun.Dispose(); hemisphere.Dispose(); skyAmbient.Dispose(); camera.Dispose(); stone.Dispose(); scene.Dispose(); day.Dispose(); night.Dispose();}
 }
 internal sealed record LightingSave(uint[] Room,LightDescriptor Torch);
 internal sealed record LightingProof(bool RoundTrip,float Lit,float Blocked,float Dark,float Current,bool Torch,float Clock);

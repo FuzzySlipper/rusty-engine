@@ -210,6 +210,7 @@ fn engine_api(
             set_atmosphere: crate::camera_view::set_atmosphere,
             set_sun_shafts: crate::camera_view::set_sun_shafts,
             set_moon: crate::camera_view::set_moon,
+            set_stars: crate::camera_view::set_stars,
             set_wind: crate::camera_view::set_wind,
             set_clouds: crate::camera_view::set_clouds,
             set_wetness: crate::camera_view::set_wetness,
@@ -1981,6 +1982,132 @@ mod tests {
             call.take_output().frames[0].ops,
             [render_model::RenderDiff::SetMoon { moon: None }]
         );
+    }
+
+    #[test]
+    fn a_star_field_publishes_its_catalogue_and_band_and_holds_them_while_it_draws() {
+        use crate::operation_diagnostics::{empty_receipt, receipt_codes};
+        let catalogue = br#"{"format": "rusty.stars.v1", "stars": [[0, 1, 0, 2, 1, 1, 1], [1, 0, 0, 4, 1, 0.9, 0.8]]}"#;
+        let mut services = EngineServiceSet::new(
+            parse_runtime_appearance_catalog(None).unwrap(),
+            BTreeMap::from([
+                (
+                    "band.png".to_owned(),
+                    Arc::<[u8]>::from(crate::appearance::tests::RGBA_PNG),
+                ),
+                (
+                    "sky.stars.json".to_owned(),
+                    Arc::<[u8]>::from(&catalogue[..]),
+                ),
+                ("bad.stars.json".to_owned(), Arc::<[u8]>::from(&b"{}"[..])),
+            ]),
+            None,
+            RuntimeDiagnosticsSink::new(Default::default()).unwrap(),
+        )
+        .unwrap();
+        services.begin_call(binding());
+        let api = services.api();
+        let open = |path: &'static str, refusal| {
+            let mut info = NativeRenderResourceInfo::default();
+            let status = unsafe {
+                (api.graphics.open_resource)(
+                    api.graphics.context,
+                    &crate::appearance::tests::resource_request(path),
+                    &mut info,
+                    refusal,
+                )
+            };
+            (status, info)
+        };
+        let (status, stars) = open("sky.stars.json", std::ptr::null_mut());
+        assert_eq!(status, ABI_OK);
+        assert_eq!(stars.kind, NativeRenderResourceKind::StarCatalogue);
+        let (_, band) = open("band.png", std::ptr::null_mut());
+        let mut refusal = empty_receipt();
+        assert_eq!(open("bad.stars.json", &mut refusal).0, 0);
+        assert_eq!(receipt_codes(&refusal), ["CSHARP_STAR_CATALOGUE"]);
+        let request = |limit: f32, band_strength: f32| NativeStarsRequest {
+            catalogue: NativeRenderResourceReference {
+                value: stars.handle.value,
+            },
+            band: NativeRenderResourceReference {
+                value: band.handle.value,
+            },
+            orientation: NativeQuat {
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+                w: 2.0,
+            },
+            limiting_magnitude: limit,
+            brightness: 1.0,
+            band_strength,
+            twinkle: 0.2,
+        };
+        let set = |request: NativeStarsRequest, refusal| unsafe {
+            (api.camera_view.set_stars)(api.camera_view.context, &request, refusal)
+        };
+        assert_eq!(set(request(5.0, 0.5), std::ptr::null_mut()), ABI_OK);
+        for refused in [request(f32::NAN, 0.5), request(5.0, 2.0)] {
+            let mut refusal = empty_receipt();
+            assert_eq!(set(refused, &mut refusal), 0);
+            assert_eq!(receipt_codes(&refusal), ["CSHARP_STARS"]);
+        }
+        // In use, the catalogue and the band are not released.
+        for resource in [stars.handle, band.handle] {
+            let mut refusal = empty_receipt();
+            assert_eq!(
+                unsafe {
+                    (api.graphics.destroy_resource)(api.graphics.context, resource, &mut refusal)
+                },
+                0
+            );
+            assert_eq!(receipt_codes(&refusal), ["CSHARP_RENDER_RESOURCE_IN_USE"]);
+        }
+        let mut call = services.finish_call().expect("stars call");
+        let ops = call.take_output().frames[0].ops.clone();
+        let Some(render_model::RenderDiff::SetStars { stars: Some(field) }) = ops.last() else {
+            panic!("the field is published last: {ops:?}");
+        };
+        assert!(field.catalogue.starts_with("stars/"));
+        assert_eq!(field.limiting_magnitude, 5.0);
+        let band_id = field.band.clone().expect("a band");
+        assert!(ops.iter().any(|op| matches!(op, render_model::RenderDiff::DefineTexture { texture } if texture.id == band_id)));
+        // The catalogue is the renderer's to read, packed.
+        let packed = services
+            .borrowed_renderer_resource(&field.catalogue)
+            .expect("catalogue resource");
+        assert_eq!(
+            render_model::unpack_star_catalogue(packed.bytes())
+                .unwrap()
+                .len(),
+            2
+        );
+
+        // Catalogue 0 takes the field away and frees the resources.
+        services.begin_call(binding());
+        let api = services.api();
+        let off: NativeStarsRequest = unsafe { std::mem::zeroed() };
+        assert_eq!(
+            unsafe {
+                (api.camera_view.set_stars)(api.camera_view.context, &off, std::ptr::null_mut())
+            },
+            ABI_OK
+        );
+        assert_eq!(
+            unsafe {
+                (api.graphics.destroy_resource)(
+                    api.graphics.context,
+                    stars.handle,
+                    std::ptr::null_mut(),
+                )
+            },
+            ABI_OK
+        );
+        let mut call = services.finish_call().expect("off");
+        assert!(call.take_output().frames[0]
+            .ops
+            .contains(&render_model::RenderDiff::SetStars { stars: None }));
     }
 
     #[test]

@@ -86,6 +86,10 @@ pub(crate) struct Layouts {
     cloud_composite_pipeline: wgpu::PipelineLayout,
     /// The sun pass over the background: the frame only.
     sun_pipeline: wgpu::PipelineLayout,
+    /// The star field (`stars.rs`): its parameters and band in group 1.
+    pub stars: wgpu::BindGroupLayout,
+    stars_pipeline: wgpu::PipelineLayout,
+    stars_shader: wgpu::ShaderModule,
     /// The sun's disc and halo at their radiance into a bloom chain's glow
     /// (`fs_sun_glow`, `post.rs` `Chain::glow`): under no clouds, the flat
     /// layer, and the raymarched clouds, by `SkyClouds::index`.
@@ -121,6 +125,10 @@ pub(crate) struct Pipelines {
     pub sun: wgpu::RenderPipeline,
     /// The moon added over the background after the sun (`fs_moon`).
     pub moon: wgpu::RenderPipeline,
+    /// The star field's band and stars added over the panorama
+    /// (`stars.wgsl`).
+    pub star_band: wgpu::RenderPipeline,
+    pub stars: wgpu::RenderPipeline,
     pub clouds: wgpu::RenderPipeline,
     /// The raymarched clouds' reduced target over the background
     /// (`fs_clouds_composite`).
@@ -383,6 +391,15 @@ impl Layouts {
             bind_group_layouts: &[Some(&frame)],
             immediate_size: 0,
         });
+        let stars = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("render-wgpu stars"),
+            entries: &[uniform_entry(0), texture_entry(1), sampler_entry(2)],
+        });
+        let stars_pipeline = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("render-wgpu stars"),
+            bind_group_layouts: &[Some(&frame), Some(&stars)],
+            immediate_size: 0,
+        });
         let fragment_entry = |binding, ty| wgpu::BindGroupLayoutEntry {
             binding,
             visibility: wgpu::ShaderStages::FRAGMENT,
@@ -435,6 +452,7 @@ impl Layouts {
         });
         let mut shaders = Shaders::new();
         let sky_shader = standard(shaders.module(device, Entry::Sky, Features::default()));
+        let stars_shader = standard(shaders.module(device, Entry::Stars, Features::default()));
         let compose = standard(shaders.module(device, Entry::Compose, Features::default()));
         // The reduced clouds: premultiplied colour and opacity, replaced.
         let cloud_march_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -581,6 +599,9 @@ impl Layouts {
             cloud_composite,
             cloud_composite_pipeline,
             sun_pipeline,
+            stars,
+            stars_pipeline,
+            stars_shader,
             sun_glow,
             shadow_pipeline,
             shaders,
@@ -658,6 +679,38 @@ impl Layouts {
             dst_factor: wgpu::BlendFactor::One,
             operation: wgpu::BlendOperation::Add,
         };
+        // Added over the background, as the sun is.
+        let star_pipeline =
+            |label, vertex, fragment, buffers: &[Option<wgpu::VertexBufferLayout<'_>>]| {
+                device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                    label: Some(label),
+                    layout: Some(&self.stars_pipeline),
+                    vertex: wgpu::VertexState {
+                        module: &self.stars_shader,
+                        entry_point: Some(vertex),
+                        compilation_options: Default::default(),
+                        buffers,
+                    },
+                    primitive: Default::default(),
+                    depth_stencil: None,
+                    multisample: target.multisample(),
+                    fragment: Some(wgpu::FragmentState {
+                        module: &self.stars_shader,
+                        entry_point: Some(fragment),
+                        compilation_options: Default::default(),
+                        targets: &[Some(wgpu::ColorTargetState {
+                            format: target.format,
+                            blend: Some(wgpu::BlendState {
+                                color: added,
+                                alpha: added,
+                            }),
+                            write_mask: wgpu::ColorWrites::ALL,
+                        })],
+                    }),
+                    multiview_mask: None,
+                    cache: None,
+                })
+            };
         Pipelines {
             target,
             sky: background("render-wgpu sky", &self.sky_pipeline, "fs_sky", None),
@@ -678,6 +731,21 @@ impl Layouts {
                     color: added,
                     alpha: added,
                 }),
+            ),
+            star_band: star_pipeline("render-wgpu star band", "vs_star_band", "fs_star_band", &[]),
+            stars: star_pipeline(
+                "render-wgpu stars",
+                "vs_star",
+                "fs_star",
+                &[Some(wgpu::VertexBufferLayout {
+                    array_stride: crate::stars::STAR_BYTES,
+                    step_mode: wgpu::VertexStepMode::Instance,
+                    attributes: &wgpu::vertex_attr_array![
+                        0 => Float32x3,
+                        1 => Float32,
+                        2 => Float32x3,
+                    ],
+                })],
             ),
             // Premultiplied over the background, which keeps its alpha.
             clouds: background(

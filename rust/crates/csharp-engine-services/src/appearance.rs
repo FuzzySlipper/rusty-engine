@@ -1514,6 +1514,49 @@ impl RuntimeAppearanceCall {
         Ok((shader, textures, effect))
     }
 
+    /// The star field `request` asks for: its band's texture, when it has
+    /// one, and the field naming its catalogue's resource.
+    pub(crate) fn star_field(
+        &self,
+        request: csharp_engine_abi::NativeStarsRequest,
+    ) -> Result<(Option<TextureDescriptor>, render_model::StarsDescriptor), CsharpEngineServicesError>
+    {
+        let catalogue = self
+            .state
+            .render_resources
+            .resource(request.catalogue.value)?;
+        if catalogue.kind() != CsharpRenderResourceKind::StarCatalogue {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_STARS",
+                "a star field's catalogue must be a resource opened from a .stars.json file",
+            ));
+        }
+        let band = match request.band.value {
+            0 => None,
+            band => {
+                let resource = self.state.render_resources.resource(band)?;
+                if resource.kind() != CsharpRenderResourceKind::Texture {
+                    return Err(CsharpEngineServicesError::new(
+                        "CSHARP_STARS",
+                        "a star field's band must be a texture resource",
+                    ));
+                }
+                resource.texture().cloned()
+            }
+        };
+        let orientation = request.orientation;
+        let stars = render_model::StarsDescriptor {
+            catalogue: catalogue.identity().to_owned(),
+            band: band.as_ref().map(|texture| texture.id.clone()),
+            orientation: [orientation.x, orientation.y, orientation.z, orientation.w],
+            limiting_magnitude: request.limiting_magnitude,
+            brightness: request.brightness,
+            band_strength: request.band_strength,
+            twinkle: request.twinkle,
+        };
+        Ok((band, stars))
+    }
+
     pub(crate) fn texture_descriptor(
         &self,
         handle: u64,
@@ -3291,7 +3334,7 @@ impl RuntimeAppearanceBridge {
         if sky_uses_resource {
             return Err(CsharpEngineServicesError::new(
                 "CSHARP_RENDER_RESOURCE_IN_USE",
-                "clear the active sky background before releasing its texture resource",
+                "clear the sky background or star field that uses this resource before releasing it",
             ));
         }
         remove_resource(&mut staged.state, handle)?;

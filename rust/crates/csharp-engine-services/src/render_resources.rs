@@ -56,6 +56,7 @@ pub enum CsharpRenderResourceKind {
     AnimatedMesh,
     AnimationClipPack,
     Shader,
+    StarCatalogue,
 }
 
 impl CsharpRenderResource {
@@ -230,6 +231,41 @@ impl CsharpRenderResource {
             content_hash,
             path,
             bytes,
+            texture: None,
+            animated_mesh: None,
+        })
+    }
+
+    /// A star catalogue: `rusty.stars.v1` JSON (`render_model::stars`),
+    /// checked now and packed into the binary resource the renderer reads.
+    fn admit_star_catalogue(
+        path: String,
+        relative_path: &str,
+        bytes: &[u8],
+    ) -> Result<Self, CsharpEngineServicesError> {
+        use sha2::{Digest, Sha256};
+
+        let path = renderer_path(path, ".stars.json")?;
+        let stars = render_model::parse_star_catalogue(bytes).map_err(|error| {
+            CsharpEngineServicesError::new(
+                "CSHARP_STAR_CATALOGUE",
+                format!("star catalogue `{relative_path}` is not admitted: {error:?}"),
+            )
+        })?;
+        let packed = render_model::pack_star_catalogue(&stars);
+        let content_hash = format!("sha256:{:x}", Sha256::digest(&packed));
+        let identity = format!(
+            "stars/{}",
+            content_hash
+                .strip_prefix("sha256:")
+                .expect("SHA-256 prefix")
+        );
+        Ok(Self {
+            kind: CsharpRenderResourceKind::StarCatalogue,
+            identity,
+            content_hash,
+            path,
+            bytes: Arc::from(packed),
             texture: None,
             animated_mesh: None,
         })
@@ -690,6 +726,7 @@ impl RenderResourceRegistry {
                 CsharpRenderResourceKind::Mesh => NativeRenderResourceKind::StaticMesh,
                 CsharpRenderResourceKind::Font => NativeRenderResourceKind::Font,
                 CsharpRenderResourceKind::Shader => NativeRenderResourceKind::Shader,
+                CsharpRenderResourceKind::StarCatalogue => NativeRenderResourceKind::StarCatalogue,
                 CsharpRenderResourceKind::Audio => {
                     return Err(CsharpEngineServicesError::new(
                         "CSHARP_RENDER_RESOURCE_KIND",
@@ -811,6 +848,13 @@ impl RenderResourceImports {
             _ if relative_path.ends_with(".woff2") => {
                 CsharpRenderResource::admit_font(browser_path.clone(), bytes.to_vec())
             }
+            _ if relative_path.ends_with(".stars.json") => {
+                CsharpRenderResource::admit_star_catalogue(
+                    browser_path.clone(),
+                    &relative_path,
+                    &bytes,
+                )
+            }
             _ if relative_path.ends_with(".wgsl") => {
                 CsharpRenderResource::admit_shader(
                     browser_path.clone(),
@@ -822,7 +866,7 @@ impl RenderResourceImports {
             _ => Err(CsharpEngineServicesError::new(
                 "CSHARP_RENDER_RESOURCE_KIND",
                 format!(
-                    "renderer resource `{requested_path}` must be an RGBA PNG, packed .rmesh, WOFF2 or WGSL file"
+                    "renderer resource `{requested_path}` must be an RGBA PNG, packed .rmesh, WOFF2, WGSL or .stars.json file"
                 ),
             )),
         }

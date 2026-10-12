@@ -2212,6 +2212,31 @@ impl Renderer {
             pass.set_bind_group(1, sky, &[]);
             pass.draw(0..3, 0..1);
         }
+        // The star field over the panorama: its band, then its stars.
+        if let (true, Some(field)) = (view.sky, &self.tables.stars) {
+            if let Some((stars, count)) = self.star_field.stars(field) {
+                let band = field
+                    .band
+                    .as_ref()
+                    .and_then(|band| self.tables.textures.get(band));
+                let group = self.star_field.bind(
+                    &self.gpu,
+                    &self.layouts.stars,
+                    field,
+                    band,
+                    [view.viewport.width, view.viewport.height],
+                );
+                pass.set_bind_group(0, &self.frame_bind_group, &[]);
+                pass.set_bind_group(1, &group, &[]);
+                if band.is_some() && field.band_strength > 0.0 {
+                    pass.set_pipeline(&self.pipelines[sky_index].star_band);
+                    pass.draw(0..3, 0..1);
+                }
+                pass.set_pipeline(&self.pipelines[sky_index].stars);
+                pass.set_vertex_buffer(0, stars.slice(..));
+                pass.draw(0..6, 0..count);
+            }
+        }
         // The sun over the sky or clear colour, when the atmosphere
         // draws a disc or halo and there is a sun.
         let sun_shown = self.tables.atmosphere.is_some_and(|atmosphere| {
