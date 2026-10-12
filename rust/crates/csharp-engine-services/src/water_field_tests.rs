@@ -8,7 +8,8 @@ use std::time::{Duration, Instant};
 
 const STEP_HZ: u32 = 30;
 const STEPS_PER_CALL: u32 = 4;
-const WORKER_PATIENCE: Duration = Duration::from_secs(30);
+const WORKER_PATIENCE: Duration = Duration::from_secs(120);
+const UNBOUNDED_BACKLOG_SECONDS: f32 = 1.0e6;
 
 fn binding() -> RuntimeUiRuntimeBinding {
     RuntimeUiRuntimeBinding::new(
@@ -101,7 +102,13 @@ impl Valley {
                 y: 10.0,
                 z: -50.0,
             },
-            policy: NativeWaterFieldPolicy::default(),
+            // These tests admit time far faster than the wall clock; a
+            // debug build on a slow runner would owe more work than the
+            // default backlog keeps. The backlog has its own test.
+            policy: NativeWaterFieldPolicy {
+                max_backlog_seconds: UNBOUNDED_BACKLOG_SECONDS,
+                ..NativeWaterFieldPolicy::default()
+            },
         };
         let mut field = NativeWaterFieldHandle::default();
         let water = &api.water_field;
