@@ -395,3 +395,68 @@ fn invalid_fields_are_refused_by_the_model() {
         assert!(check(refused).is_err());
     }
 }
+
+#[test]
+fn the_moons_whole_disc_hides_the_stars_and_band_behind_it() {
+    // A star straight ahead behind the moon, one 10° to its right, and the
+    // band along the horizon behind it too; the moon new (dark) or a
+    // crescent lit on its far side.
+    let stars = [
+        Star {
+            direction: [0.0, 0.0, -1.0],
+            magnitude: 0.0,
+            color: [1.0; 3],
+        },
+        Star {
+            direction: [0.17, 0.0, -0.98],
+            magnitude: 0.0,
+            color: [1.0; 3],
+        },
+    ];
+    let render = |phase: f32, field_on: bool| {
+        let mut harness = scene(&stars);
+        harness.apply(vec![
+            // The sky's sun to the left, so a crescent's lit limb is away
+            // from the star to the right.
+            RenderDiff::SetAtmosphere {
+                atmosphere: Some(AtmosphereDescriptor {
+                    sky_sun_direction: [-1.0, -0.3, 0.0],
+                    sky_sun_color: [1.0; 3],
+                    sky_sun_intensity: 1.0,
+                    ..Default::default()
+                }),
+            },
+            RenderDiff::SetMoon {
+                moon: Some(MoonDescriptor {
+                    direction: [0.0, 0.0, -1.0],
+                    radius_degrees: 4.0,
+                    color: [1.0; 3],
+                    radiance: 1.0,
+                    phase,
+                    earthshine: 0.0,
+                    halo: 0.0,
+                    light_intensity: 0.0,
+                }),
+            },
+        ]);
+        if field_on {
+            harness.apply(vec![field(IDENTITY, 6.0, 1.0)]);
+        }
+        harness.render(&camera([0.0, 0.0, 0.0], 0.0, 0.0)).1
+    };
+    let centre = (WIDTH as usize / 2, HEIGHT as usize / 2);
+    // 10° right of centre at the harness's 60° view.
+    let beside = (centre.0 + 52, centre.1);
+    for phase in [0.0, 0.15] {
+        let (with, without) = (render(phase, true), render(phase, false));
+        assert_eq!(
+            green(&with, WIDTH as usize, centre),
+            green(&without, WIDTH as usize, centre),
+            "phase {phase}: the star and band behind the moon are hidden"
+        );
+        assert!(
+            green(&with, WIDTH as usize, beside) > green(&without, WIDTH as usize, beside) + 50,
+            "phase {phase}: the star beside it shows"
+        );
+    }
+}

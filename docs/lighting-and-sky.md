@@ -975,9 +975,11 @@ engine.CameraView.SetStars(default); // no stars
   equirectangular image in the catalogue's frame, added over the sky at
   `BandStrength` (0 to 1): the Milky Way, turning with the stars.
 - The field is added over the sky panorama (or the clear colour), before
-  the sun's disc and the [moon](#the-moon). The clouds cover it as they
-  cover the sky, the world and the [backdrop](#the-backdrop) hide it, and
-  it is not fogged. It is off by default and is retained camera-view state.
+  the sun's disc and the [moon](#the-moon). The moon's whole disc, its dark
+  part too, hides the stars and band behind it, a star fading as it passes
+  behind the rim. The clouds cover the field as they cover the sky, the
+  world and the [backdrop](#the-backdrop) hide it, and it is not fogged. It
+  is off by default and is retained camera-view state.
 - It costs one instanced draw of a five-pixel square a star into the
   background pass, and with a band one fullscreen draw.
 

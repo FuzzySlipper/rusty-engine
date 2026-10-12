@@ -2,7 +2,8 @@
 // panorama before the sun, the moon and the clouds, never fogged: each star
 // of the catalogue a small soft point (`vs_star`, `fs_star`), and the band
 // texture (the Milky Way) added over the whole sky (`fs_star_band`). The
-// catalogue's frame turns into the world by `stars.orientation`.
+// catalogue's frame turns into the world by `stars.orientation`. The moon's
+// whole disc (`Frame.moon`), its dark part too, hides what lies behind it.
 
 #import rusty::types::PI
 #import rusty::view::frame
@@ -37,6 +38,20 @@ const LIMIT_SOFTNESS: f32 = 0.25;
 const TWINKLE_SWING: f32 = 0.45;
 const TWINKLE_RATE: f32 = 3.0;
 const TWINKLE_SPREAD: f32 = 4.0;
+
+// How much of the sky along `direction` the moon's disc hides: 1 inside it,
+// 0 outside, over `soft` radians at its rim; 0 without a moon.
+fn behind_moon(direction: vec3<f32>, soft: f32) -> f32 {
+    let radius = frame.moon.w;
+    if radius <= 0.0 {
+        return 0.0;
+    }
+    let angle = acos(clamp(dot(direction, frame.moon.xyz), -1.0, 1.0));
+    return 1.0 - smoothstep(radius - soft, radius + soft, angle);
+}
+
+// A star passing behind the moon's rim fades over this share of its radius.
+const OCCULTATION_SOFTNESS: f32 = 0.05;
 
 // `v` turned by the unit quaternion `q`.
 fn turned(q: vec4<f32>, v: vec3<f32>) -> vec3<f32> {
@@ -74,9 +89,12 @@ fn vs_star(
     let rate = TWINKLE_RATE + TWINKLE_SPREAD * star_hash(index, 1u);
     let twinkle = 1.0 + stars.look.w * TWINKLE_SWING
         * sin(frame.time.x * rate + 2.0 * PI * star_hash(index, 2u));
-    let light = color * stars.look.y * pow(10.0, -0.4 * MAGNITUDE_CONTRAST * magnitude) * shown * twinkle;
+    let toward = turned(stars.orientation, direction);
+    let hidden = behind_moon(toward, frame.moon.w * OCCULTATION_SOFTNESS);
+    let light = color * stars.look.y * pow(10.0, -0.4 * MAGNITUDE_CONTRAST * magnitude) * shown
+        * twinkle * (1.0 - hidden);
     // A direction projects as a point at infinity.
-    var clip = frame.view_proj * vec4<f32>(turned(stars.orientation, direction), 0.0);
+    var clip = frame.view_proj * vec4<f32>(toward, 0.0);
     if clip.w <= 0.0 || all(light <= vec3<f32>(0.0)) {
         // Behind the eye or unshown: nothing drawn.
         out.clip = vec4<f32>(0.0, 0.0, 2.0, 1.0);
@@ -132,5 +150,6 @@ fn fs_star_band(in: BandOut) -> @location(0) vec4<f32> {
         0.5 - asin(clamp(local.y, -1.0, 1.0)) / PI,
     );
     let color = textureSampleLevel(band, band_sampler, uv, 0.0).rgb;
-    return vec4<f32>(color * stars.look.z, 0.0);
+    let rim = max(fwidth(acos(clamp(dot(direction, frame.moon.xyz), -1.0, 1.0))), 1e-5);
+    return vec4<f32>(color * stars.look.z * (1.0 - behind_moon(direction, rim)), 0.0);
 }
