@@ -145,6 +145,20 @@ mod tests {
     /// model, the first cube's centre is (0, 1, 1) and the second's
     /// (0, 1, -1).
     fn two_cube_prop() -> Vec<u8> {
+        let half = std::f32::consts::FRAC_1_SQRT_2;
+        cube_glb(
+            &[0],
+            serde_json::json!([
+                {"name": "Prop", "children": [1, 2], "rotation": [0.0, half, 0.0, half], "translation": [0.0, 1.0, 0.0]},
+                {"name": "Grip", "mesh": 0, "translation": [-1.0, 0.0, 0.0]},
+                {"name": "Barrel", "mesh": 0, "translation": [1.0, 0.0, 0.0], "scale": [0.5, 0.5, 0.5]},
+            ]),
+        )
+    }
+
+    /// A GLB whose scene `roots` and `nodes` place one closed cube mesh
+    /// (side 1, about its origin, faces wound outward) as mesh 0.
+    fn cube_glb(roots: &[u32], nodes: serde_json::Value) -> Vec<u8> {
         let mut positions: Vec<f32> = Vec::new();
         let mut normals: Vec<f32> = Vec::new();
         let mut indices: Vec<u16> = Vec::new();
@@ -174,16 +188,11 @@ mod tests {
             bin.push(0);
         }
         let vertex_bytes = positions.len() * 4;
-        let half = std::f32::consts::FRAC_1_SQRT_2;
         let json = serde_json::json!({
             "asset": {"version": "2.0"},
             "scene": 0,
-            "scenes": [{"nodes": [0]}],
-            "nodes": [
-                {"name": "Prop", "children": [1, 2], "rotation": [0.0, half, 0.0, half], "translation": [0.0, 1.0, 0.0]},
-                {"name": "Grip", "mesh": 0, "translation": [-1.0, 0.0, 0.0]},
-                {"name": "Barrel", "mesh": 0, "translation": [1.0, 0.0, 0.0], "scale": [0.5, 0.5, 0.5]},
-            ],
+            "scenes": [{"nodes": roots}],
+            "nodes": nodes,
             "meshes": [{"primitives": [{"attributes": {"POSITION": 0, "NORMAL": 1}, "indices": 2}]}],
             "accessors": [
                 {"bufferView": 0, "componentType": 5126, "count": 24, "type": "VEC3",
@@ -365,5 +374,148 @@ mod tests {
             0
         );
         bridge.end_call();
+    }
+
+    /// Queries `points` and `rays` against `glb` at the identity placement.
+    fn query(
+        glb: &[u8],
+        points: &[NativeVec3],
+        rays: &[NativeModelRay],
+    ) -> (Vec<NativeModelSurfacePoint>, Vec<NativeModelRayHit>) {
+        let mut bridge = RuntimeAppearanceBridge::new(
+            RuntimeAppearanceCatalog::default(),
+            BTreeMap::from([("prop.glb".to_owned(), Arc::from(glb))]),
+        );
+        bridge.begin_call();
+        let path = "prop.glb";
+        let model = bridge
+            .open_animated_mesh(&NativeAnimatedMeshResourceRequest {
+                path: NativeUtf8Slice {
+                    bytes: path.as_ptr(),
+                    len: path.len(),
+                },
+            })
+            .unwrap();
+        let placement = NativeTransform {
+            translation: vec3(0.0, 0.0, 0.0),
+            rotation: NativeQuat {
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+                w: 1.0,
+            },
+            scale: vec3(1.0, 1.0, 1.0),
+        };
+        let context: *mut c_void = (&mut bridge as *mut RuntimeAppearanceBridge).cast();
+        let mut receipt = unsafe { std::mem::zeroed::<NativeOperationErrorReceipt>() };
+        let mut found = NativeModelSurfacePointsResult {
+            points: std::ptr::null(),
+            points_len: 0,
+        };
+        let request = NativeModelSurfaceRequest {
+            model,
+            placement,
+            points: points.as_ptr(),
+            points_len: points.len(),
+            max_distance: 5.0,
+        };
+        assert_eq!(
+            unsafe { query_model_surface(context, &request, &mut found, &mut receipt) },
+            ABI_OK
+        );
+        let found = unsafe { std::slice::from_raw_parts(found.points, found.points_len) }.to_vec();
+        let mut hits = NativeModelRayHitsResult {
+            hits: std::ptr::null(),
+            hits_len: 0,
+        };
+        let request = NativeModelRayRequest {
+            model,
+            placement,
+            rays: rays.as_ptr(),
+            rays_len: rays.len(),
+            max_distance: 10.0,
+        };
+        assert_eq!(
+            unsafe { cast_model_rays(context, &request, &mut hits, &mut receipt) },
+            ABI_OK
+        );
+        let hits = unsafe { std::slice::from_raw_parts(hits.hits, hits.hits_len) }.to_vec();
+        bridge.end_call();
+        (found, hits)
+    }
+
+    /// Nodes that mirror their mesh keep its outside out, as the renderer
+    /// draws them: a cube under a parent mirrored on x (centre (-2, 0, 0)),
+    /// a cube mirrored again under it (outward once more; centre (0, 0, 3)),
+    /// and a plain cube at the root (centre (2, 0, 0)).
+    #[test]
+    fn mirroring_nodes_keep_their_faces_outward() {
+        let glb = cube_glb(
+            &[0, 3],
+            serde_json::json!([
+                {"name": "Mirror", "children": [1, 2], "scale": [-1.0, 1.0, 1.0]},
+                {"name": "Mirrored", "mesh": 0, "translation": [2.0, 0.0, 0.0]},
+                {"name": "Twice", "mesh": 0, "translation": [0.0, 0.0, 3.0], "scale": [-1.0, 1.0, 1.0]},
+                {"name": "Plain", "mesh": 0, "translation": [2.0, 0.0, 0.0]},
+            ]),
+        );
+        let ray = |origin: [f32; 3], direction: [f32; 3]| NativeModelRay {
+            origin: vec3(origin[0], origin[1], origin[2]),
+            direction: vec3(direction[0], direction[1], direction[2]),
+        };
+        let (found, hits) = query(
+            &glb,
+            &[
+                vec3(-3.0, 0.0, 0.0),
+                vec3(-2.0, 0.0, 0.3),
+                vec3(0.0, 0.0, 4.0),
+                vec3(0.0, 0.0, 3.2),
+                vec3(3.0, 0.0, 0.0),
+            ],
+            &[
+                ray([-5.0, 0.0, 0.0], [1.0, 0.0, 0.0]),
+                ray([-2.0, 0.0, 0.0], [0.0, 1.0, 0.0]),
+                ray([0.0, 0.0, 6.0], [0.0, 0.0, -1.0]),
+            ],
+        );
+        let [mirrored_out, mirrored_in, twice_out, twice_in, plain_out] = found.as_slice() else {
+            panic!("{found:?}")
+        };
+        assert!(!mirrored_out.inside && close(mirrored_out.point, [-2.5, 0.0, 0.0]));
+        assert!(
+            close(mirrored_out.normal, [-1.0, 0.0, 0.0]),
+            "{mirrored_out:?}"
+        );
+        assert!(
+            mirrored_in.inside && close(mirrored_in.normal, [0.0, 0.0, 1.0]),
+            "{mirrored_in:?}"
+        );
+        assert!(
+            !twice_out.inside && close(twice_out.normal, [0.0, 0.0, 1.0]),
+            "{twice_out:?}"
+        );
+        assert!(twice_in.inside, "{twice_in:?}");
+        assert!(
+            !plain_out.inside && close(plain_out.normal, [1.0, 0.0, 0.0]),
+            "{plain_out:?}"
+        );
+        let [into_mirrored, out_of_mirrored, into_twice] = hits.as_slice() else {
+            panic!("{hits:?}")
+        };
+        assert!(
+            into_mirrored.hit && !into_mirrored.back_face,
+            "{into_mirrored:?}"
+        );
+        assert!(close(into_mirrored.point, [-2.5, 0.0, 0.0]));
+        assert!(close(into_mirrored.normal, [-1.0, 0.0, 0.0]));
+        assert!(
+            out_of_mirrored.hit && out_of_mirrored.back_face,
+            "{out_of_mirrored:?}"
+        );
+        assert!(close(out_of_mirrored.normal, [0.0, 1.0, 0.0]));
+        assert!(into_twice.hit && !into_twice.back_face, "{into_twice:?}");
+        assert!(
+            close(into_twice.point, [0.0, 0.0, 3.5]) && close(into_twice.normal, [0.0, 0.0, 1.0])
+        );
     }
 }

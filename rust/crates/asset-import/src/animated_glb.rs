@@ -117,21 +117,58 @@ pub fn glb_model_triangles(source: &[u8]) -> Result<GlbModelTriangles, String> {
     };
     // The static parser refuses skins and animations; the animated one
     // gives those models' bind pose.
-    let mesh = match import_mesh_source(&request) {
-        Ok(imported) => imported.mesh,
+    let imported = match import_mesh_source(&request) {
+        Ok(imported) => imported,
         Err(error) => import_animated_mesh_source_for_visual_metadata(&request)
-            .map(|imported| imported.source.mesh)
+            .map(|imported| imported.source)
             .map_err(|_| error.to_string())?,
     };
-    let triangles = mesh
+    let (scene, mesh) = (imported.scene, imported.mesh);
+    let mut triangles: Vec<[u32; 3]> = mesh
         .triangles
         .iter()
         .map(|triangle| triangle.indices)
         .collect();
+    // Flattening keeps each primitive's winding; under a node that mirrors it
+    // (a negative determinant) that winding faces inward, so turn it back
+    // out, as the renderer draws such a node.
+    let mirrored: BTreeSet<u32> = scene
+        .nodes
+        .iter()
+        .filter(|node| mirrors(&node.model_transform))
+        .map(|node| node.source_node_index)
+        .collect();
+    for group in &mesh.primitive_groups {
+        if mirrored.contains(&group.source_node_index) {
+            let start = group.triangle_start as usize;
+            let end = start + group.triangle_count as usize;
+            for triangle in triangles.get_mut(start..end).into_iter().flatten() {
+                triangle.swap(1, 2);
+            }
+        }
+    }
     Ok(GlbModelTriangles {
         positions: mesh.positions,
         triangles,
     })
+}
+
+/// Whether a column-major transform turns space inside out.
+fn mirrors(transform: &[f64; 16]) -> bool {
+    let column = |index: usize| {
+        [
+            transform[index * 4],
+            transform[index * 4 + 1],
+            transform[index * 4 + 2],
+        ]
+    };
+    let [x, y, z] = [column(0), column(1), column(2)];
+    let cross = [
+        y[1] * z[2] - y[2] * z[1],
+        y[2] * z[0] - y[0] * z[2],
+        y[0] * z[1] - y[1] * z[0],
+    ];
+    x[0] * cross[0] + x[1] * cross[1] + x[2] * cross[2] < 0.0
 }
 
 pub fn import_animated_glb_asset(
