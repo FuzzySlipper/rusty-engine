@@ -1,5 +1,3 @@
-#[cfg(unix)]
-use std::net::TcpListener;
 use std::{
     env, fs,
     io::{BufRead, Read, Write},
@@ -16,7 +14,6 @@ use csharp_product_runtime::{
     product_host_runtime_identity, CsharpProductContent, CsharpProductRuntime,
     CsharpProductRuntimeConfig,
 };
-#[cfg(unix)]
 use product_host::ProductHostRuntime;
 use product_host::{
     ProductHost, ProductHostAssetReload, ProductHostBundle, ProductHostBundleEntry,
@@ -31,16 +28,14 @@ use runtime_lifecycle::RuntimeInstanceId;
 
 #[cfg(feature = "desktop")]
 mod desktop;
-#[cfg(unix)]
 mod headless_browser;
+mod platform;
 mod product_bundle;
-#[cfg(unix)]
 mod supervisor;
-mod supervisor_command;
 
 /// Forwarded to a serving runtime after `rusty dev` restaged only UI or
 /// bundle content: the runtime re-reads them without restarting the product.
-/// The Unix supervisor forwards it to its runtime on stdin.
+/// The supervisor forwards it to its runtime on stdin.
 pub(crate) const RELOAD_ASSETS_COMMAND: &str = "reload-assets";
 /// Forwarded with a JSON array of content-root-relative paths after `rusty
 /// dev` restaged live loose content: the runtime re-admits those files and
@@ -113,7 +108,6 @@ fn main() -> Result<std::process::ExitCode, String> {
         Invocation::Launch(args) => args,
     };
     validate_headless_host(&args)?;
-    #[cfg(unix)]
     if args.uses_supervisor() {
         let mut args = args;
         if args.runtime_instance_id.is_none() {
@@ -138,6 +132,13 @@ fn main() -> Result<std::process::ExitCode, String> {
     )?;
     let diagnostics = ProductHostLog::new(args.log_config()).map_err(|error| error.to_string())?;
     let content = args.content().map_err(|error| error.to_string())?;
+    // Windows keeps a loaded assembly's file from being replaced, so a runtime
+    // under the supervisor loads its own copy and `rusty dev` can restage the
+    // Product while it runs.
+    #[cfg(windows)]
+    if let (Some(_), Some(product)) = (args.serve_listener_fd, &mut args.product) {
+        product.load_coreclr_from_private_copy()?;
+    }
     let (library, runtimeconfig) = args.selected_artifacts()?;
     #[allow(unused_mut)]
     let mut runtime_config = args.runtime_config().with_diagnostics(diagnostics.clone());
@@ -204,9 +205,7 @@ fn main() -> Result<std::process::ExitCode, String> {
     if let Some(capture) = runtime.frame_capture() {
         config = config.with_frame_capture(capture);
     }
-    #[cfg(unix)]
-    if let Some(fd) = args.serve_listener_fd {
-        use std::os::fd::FromRawFd;
+    if let Some(listener) = args.serve_listener_fd {
         // A supervised product runs from load, with or without a browser.
         let started = runtime
             .connect()
@@ -223,19 +222,9 @@ fn main() -> Result<std::process::ExitCode, String> {
             print_line("RUSTY_HOST shutdown={\"reason\":\"supervisor-stdin-closed\"}");
             return Ok(std::process::ExitCode::SUCCESS);
         }
-        // The supervisor cleared close-on-exec so this process could inherit
-        // the listener; set it again so nothing this process starts keeps
-        // the port open.
-        // SAFETY: fcntl on a descriptor this process owns.
-        if unsafe { libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC) } < 0 {
-            return Err(format!(
-                "PRODUCT_HOST_BIND: could not keep the listener private: {}",
-                std::io::Error::last_os_error()
-            ));
-        }
-        // SAFETY: the supervisor bound this listener and hands this process
-        // sole use of the descriptor number.
-        config = config.with_listener(unsafe { TcpListener::from_raw_fd(fd) });
+        // The supervisor let this process inherit the listener; keep it from
+        // anything this process starts, so nothing else holds the port open.
+        config = config.with_listener(platform::take_listener(listener)?);
     }
     #[cfg(feature = "desktop")]
     let window_scene = runtime.scene_driver().zip(runtime.window_timing());
@@ -313,14 +302,12 @@ fn main() -> Result<std::process::ExitCode, String> {
             |product| product.title.clone(),
         );
         let supervised = args.supervised || args.serve_listener_fd.is_some();
-        // Under `rusty dev`: a runtime the Unix supervisor serves through, or
-        // on Windows the supervised host itself.
+        // Only a runtime serving under the supervisor receives reloads.
         let reload_assets = args
             .product
             .take()
             .filter(|_| supervised)
             .map(|product| asset_reloader(host.asset_reload(), product, diagnostics.clone()));
-        let framed_commands = args.serve_listener_fd.is_none();
         #[cfg(feature = "desktop")]
         if let (Some(desktop), Some((driver, timing))) = (desktop, window_scene) {
             // The window owns the main thread. The usual stop conditions
@@ -345,7 +332,6 @@ fn main() -> Result<std::process::ExitCode, String> {
                         Arc::clone(&waiter),
                         Some(window),
                         reload_assets,
-                        framed_commands,
                         waiter_diagnostics,
                     );
                     waiter.store(true, Ordering::Relaxed);
@@ -375,7 +361,6 @@ fn main() -> Result<std::process::ExitCode, String> {
             termination,
             None,
             reload_assets,
-            framed_commands,
             diagnostics,
         );
     }
@@ -409,10 +394,6 @@ fn validate_headless_host(args: &Arguments) -> Result<(), String> {
     if args.product_path.is_none() {
         return Err("--headless requires a packaged --product bundle".to_owned());
     }
-    // The supervisor opens and closes the headless page; it runs on Unix.
-    if cfg!(not(unix)) {
-        return Err("--headless is not supported on this platform".to_owned());
-    }
     Ok(())
 }
 
@@ -423,7 +404,6 @@ fn print_line(line: &str) {
     let _ = writeln!(stdout, "{line}").and_then(|_| stdout.flush());
 }
 
-#[cfg(unix)]
 fn browser_url(address: SocketAddr) -> String {
     let ip = if address.ip().is_unspecified() {
         Ipv4Addr::LOCALHOST.into()
@@ -508,7 +488,7 @@ enum Reload {
 }
 
 impl Reload {
-    /// The line the Unix supervisor forwards to its runtime.
+    /// The line the supervisor forwards to its runtime.
     fn from_line(line: &str) -> Option<Result<Self, String>> {
         if line == RELOAD_ASSETS_COMMAND {
             return Some(Ok(Self::Assets));
@@ -592,40 +572,6 @@ pub(crate) fn publish_host_diagnostic(
     }
 }
 
-/// Applies `rusty dev`'s commands to a host that runs its product in process
-/// until stdin closes. Such a host cannot replace its runtime, so a
-/// replacement is reported rather than dropped.
-fn apply_framed_commands(
-    commands: impl IntoIterator<Item = Result<supervisor_command::SupervisorCommand, String>>,
-    reload: impl Fn(Reload),
-    diagnostics: &ProductHostLog,
-) {
-    for command in commands {
-        match command {
-            Ok(supervisor_command::SupervisorCommand::ReloadAssets) => reload(Reload::Assets),
-            Ok(supervisor_command::SupervisorCommand::ReloadContent { paths }) => {
-                reload(Reload::Content(paths));
-            }
-            Ok(supervisor_command::SupervisorCommand::ReplaceRuntime { .. }) => {
-                publish_host_diagnostic(
-                    diagnostics,
-                    "supervisor",
-                    "PRODUCT_HOST_SUPERVISOR_REPLACE",
-                    "this host runs its product in process and cannot replace it; stop and \
-                     start rusty dev to run the restaged product",
-                );
-            }
-            Err(error) if error == supervisor_command::SUPERVISOR_EOF => {}
-            Err(error) => publish_host_diagnostic(
-                diagnostics,
-                "supervisor",
-                "PRODUCT_HOST_SUPERVISOR_CONTROL",
-                &error,
-            ),
-        }
-    }
-}
-
 /// The standard host is owned by its foreground process supervisor. In
 /// particular, service launchers commonly provide a closed stdin, so EOF must
 /// not be interpreted as a request to shut the host down. The `rusty dev`
@@ -639,7 +585,6 @@ fn wait_for_process_termination(
     termination: Arc<AtomicBool>,
     window: Option<&WindowEnd>,
     reload_assets: Option<Reloader>,
-    framed_commands: bool,
     diagnostics: ProductHostLog,
 ) -> &'static str {
     let window_ended = || {
@@ -661,8 +606,7 @@ fn wait_for_process_termination(
         // Keep stdin as the supervisor's clean-stop mechanism, but read it on
         // a helper so a terminal runtime recovery can wake this foreground
         // owner without waiting for the supervisor to close the pipe. The
-        // Unix supervisor forwards reloads here, one line each; on Windows
-        // `rusty dev`'s own framed commands arrive here.
+        // supervisor forwards reloads here, one line each.
         let supervisor_stdin_closed = Arc::new(AtomicBool::new(false));
         let reader_closed = Arc::clone(&supervisor_stdin_closed);
         let reload = move |request| {
@@ -671,25 +615,17 @@ fn wait_for_process_termination(
             }
         };
         std::thread::spawn(move || {
-            if framed_commands {
-                apply_framed_commands(
-                    supervisor_command::read_supervisor_commands(),
-                    reload,
-                    &diagnostics,
-                );
-            } else {
-                for line in std::io::stdin().lock().lines() {
-                    let Ok(line) = line else { break };
-                    match Reload::from_line(&line) {
-                        Some(Ok(request)) => reload(request),
-                        Some(Err(error)) => publish_host_diagnostic(
-                            &diagnostics,
-                            "content-reload",
-                            "PRODUCT_HOST_CONTENT_RELOAD",
-                            &error,
-                        ),
-                        None => {}
-                    }
+            for line in std::io::stdin().lock().lines() {
+                let Ok(line) = line else { break };
+                match Reload::from_line(&line) {
+                    Some(Ok(request)) => reload(request),
+                    Some(Err(error)) => publish_host_diagnostic(
+                        &diagnostics,
+                        "content-reload",
+                        "PRODUCT_HOST_CONTENT_RELOAD",
+                        &error,
+                    ),
+                    None => {}
                 }
             }
             reader_closed.store(true, Ordering::Release);
@@ -898,8 +834,9 @@ struct Arguments {
     performance_configuration: Option<String>,
     runtime_instance_id: Option<RuntimeInstanceId>,
     /// Set on the runtime process a supervisor starts: serve this inherited
-    /// listener instead of binding one.
-    serve_listener_fd: Option<i32>,
+    /// listener (a file descriptor, or a socket handle on Windows) instead of
+    /// binding one.
+    serve_listener_fd: Option<platform::RawListener>,
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -979,7 +916,6 @@ impl Arguments {
     }
 
     /// The launch options a supervisor hands the runtime process it starts.
-    #[cfg(unix)]
     fn runtime_forwarded_arguments(&self) -> Result<Vec<String>, String> {
         let path = |path: &Path| {
             path.to_str()
@@ -1256,9 +1192,9 @@ impl Arguments {
                     serve_listener_fd = Some(
                         values
                             .next()
-                            .ok_or("--serve-listener-fd requires a file descriptor")?
-                            .parse::<i32>()
-                            .map_err(|_| "--serve-listener-fd must be a file descriptor")?,
+                            .ok_or("--serve-listener-fd requires a listener")?
+                            .parse::<platform::RawListener>()
+                            .map_err(|_| "--serve-listener-fd must be a listener handle")?,
                     )
                 }
                 "--runtime-instance-id" => {
@@ -1793,38 +1729,6 @@ mod tests {
         assert!(Reload::from_line("serve").is_none());
     }
 
-    #[test]
-    fn an_in_process_host_applies_reloads_and_reports_a_replacement() {
-        // #9898: on Windows `rusty dev`'s framed commands reach the host
-        // itself, which read them as lines and dropped every one.
-        use supervisor_command::SupervisorCommand;
-        let diagnostics = ProductHostLog::new(Default::default()).unwrap();
-        let reloads = std::cell::RefCell::new(Vec::new());
-        apply_framed_commands(
-            [
-                Ok(SupervisorCommand::ReloadContent {
-                    paths: vec!["tuning/a.json".to_owned()],
-                }),
-                Ok(SupervisorCommand::ReloadAssets),
-                Ok(SupervisorCommand::ReplaceRuntime {
-                    product_directory: PathBuf::from("/staged"),
-                }),
-                Err(supervisor_command::SUPERVISOR_EOF.to_owned()),
-            ],
-            |reload| {
-                reloads.borrow_mut().push(match reload {
-                    Reload::Assets => "assets".to_owned(),
-                    Reload::Content(paths) => paths.join(","),
-                });
-            },
-            &diagnostics,
-        );
-        assert_eq!(*reloads.borrow(), ["tuning/a.json", "assets"]);
-        let events = diagnostics.read_after(None).events;
-        let codes: Vec<_> = events.iter().map(|event| event.code()).collect();
-        assert_eq!(codes, ["PRODUCT_HOST_SUPERVISOR_REPLACE"]);
-    }
-
     fn parse_test_args(arguments: &[&str]) -> Result<Arguments, String> {
         let mut values = vec![
             "--library".to_owned(),
@@ -2235,7 +2139,6 @@ mod tests {
         );
     }
 
-    #[cfg(unix)]
     #[test]
     fn headless_browser_uses_loopback_for_a_wildcard_listener() {
         assert_eq!(

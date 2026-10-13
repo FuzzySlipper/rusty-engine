@@ -10,7 +10,6 @@ use std::{
     env,
     io::{BufRead, BufReader, Read, Write},
     net::{SocketAddr, TcpListener, TcpStream},
-    os::{fd::AsRawFd, unix::process::CommandExt},
     path::{Path, PathBuf},
     process::{Child, ChildStdin, Command, ExitStatus, Stdio},
     sync::{
@@ -25,7 +24,7 @@ use product_host::ProductHostLog;
 
 use crate::{
     browser_url, headless_browser, install_termination_signal_hook,
-    supervisor_command::{read_supervisor_commands, SupervisorCommand, SUPERVISOR_EOF},
+    platform::{self, RawListener},
     Arguments, ProductLoader, RELOAD_ASSETS_COMMAND, RELOAD_CONTENT_COMMAND,
 };
 
@@ -41,6 +40,23 @@ pub(crate) const SERVE_COMMAND: &str = "serve";
 /// The exit code of a host that could not bind its port. `rusty dev` reads it
 /// as a configuration error: restarting cannot help, so it stops at once.
 pub(crate) const BIND_FAILURE_EXIT_CODE: i32 = 78;
+
+/// `rusty dev` writes commands over stdin after each restage: a new Product
+/// directory replaces the runtime, restaged UI or bundle content is reloaded
+/// into it, and restaged live loose content files (content-root-relative) are
+/// re-admitted in it. EOF is a clean stop. Browser input cannot reach it.
+#[derive(Debug, serde::Deserialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+enum SupervisorCommand {
+    ReplaceRuntime { product_directory: PathBuf },
+    ReloadAssets,
+    ReloadContent { paths: Vec<String> },
+}
 
 pub(crate) fn run(args: Arguments) -> Result<std::process::ExitCode, String> {
     let termination = install_termination_signal_hook();
@@ -65,7 +81,7 @@ pub(crate) fn run(args: Arguments) -> Result<std::process::ExitCode, String> {
     )?;
     let mut launch = RuntimeLaunch {
         executable: env::current_exe().map_err(|error| error.to_string())?,
-        listener_fd: listener.as_raw_fd(),
+        listener: platform::shared_listener(&listener)?,
         product_directory: args.product_path.clone().ok_or(
             "PRODUCT_HOST_SUPERVISOR: a packaged --product directory or container is required",
         )?,
@@ -301,9 +317,44 @@ fn publish_supervisor_diagnostic(diagnostics: &ProductHostLog, code: &str, messa
     crate::publish_host_diagnostic(diagnostics, "supervisor", code, message);
 }
 
+const SUPERVISOR_EOF: &str = "PRODUCT_HOST_SUPERVISOR_EOF: supervisor stdin closed";
+
+fn read_supervisor_commands() -> mpsc::Receiver<Result<SupervisorCommand, String>> {
+    let (commands, received) = mpsc::sync_channel(4);
+    thread::spawn(move || {
+        let mut input = std::io::stdin().lock();
+        loop {
+            let command = read_supervisor_frame(&mut input);
+            let stop = command.is_err();
+            if commands.send(command).is_err() || stop {
+                return;
+            }
+        }
+    });
+    received
+}
+
+/// One command: a little-endian `u32` length followed by that many JSON bytes.
+fn read_supervisor_frame(input: &mut impl Read) -> Result<SupervisorCommand, String> {
+    let mut prefix = [0_u8; 4];
+    if let Err(error) = input.read_exact(&mut prefix) {
+        return Err(if error.kind() == std::io::ErrorKind::UnexpectedEof {
+            SUPERVISOR_EOF.to_owned()
+        } else {
+            format!("PRODUCT_HOST_SUPERVISOR_READ: {error}")
+        });
+    }
+    let mut bytes = vec![0_u8; u32::from_le_bytes(prefix) as usize];
+    input
+        .read_exact(&mut bytes)
+        .map_err(|_| SUPERVISOR_EOF.to_owned())?;
+    serde_json::from_slice(&bytes)
+        .map_err(|_| "PRODUCT_HOST_SUPERVISOR_DECODE: command is not a closed envelope".to_owned())
+}
+
 struct RuntimeLaunch {
     executable: PathBuf,
-    listener_fd: i32,
+    listener: RawListener,
     product_directory: PathBuf,
     loader: ProductLoader,
     next_runtime_instance_id: u64,
@@ -322,7 +373,7 @@ impl RuntimeLaunch {
         let runtime_instance_id = self.next_runtime_instance_id;
         self.next_runtime_instance_id = runtime_instance_id.saturating_add(1).max(1);
         let arguments = self.runtime_arguments(runtime_instance_id)?;
-        let mut runtime = RuntimeProcess::spawn(&self.executable, &arguments, self.listener_fd)?;
+        let mut runtime = RuntimeProcess::spawn(&self.executable, &arguments, self.listener)?;
         runtime.startup_deadline = self.startup_timeout.map(|timeout| Instant::now() + timeout);
         Ok(runtime)
     }
@@ -340,7 +391,7 @@ impl RuntimeLaunch {
             "--runtime-instance-id".to_owned(),
             runtime_instance_id.to_string(),
             "--serve-listener-fd".to_owned(),
-            self.listener_fd.to_string(),
+            self.listener.to_string(),
         ];
         if let Some(root) = &self.persistence_root {
             arguments.push("--persistence-root".to_owned());
@@ -371,25 +422,17 @@ struct RuntimeProcess {
 }
 
 impl RuntimeProcess {
-    fn spawn(executable: &Path, arguments: &[String], listener_fd: i32) -> Result<Self, String> {
+    fn spawn(
+        executable: &Path,
+        arguments: &[String],
+        listener: RawListener,
+    ) -> Result<Self, String> {
         let mut command = Command::new(executable);
         command
             .args(arguments)
             .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            // Terminal Ctrl+C and foreground-group signals reach only this
-            // supervisor; CoreCLR stops through its stdin instead.
-            .process_group(0);
-        // SAFETY: only the async-signal-safe fcntl runs between fork and
-        // exec. It clears close-on-exec so the runtime inherits the listener.
-        unsafe {
-            command.pre_exec(move || {
-                if libc::fcntl(listener_fd, libc::F_SETFD, 0) < 0 {
-                    return Err(std::io::Error::last_os_error());
-                }
-                Ok(())
-            });
-        }
+            .stdout(Stdio::piped());
+        platform::runtime_command(&mut command, listener);
         let mut child = command
             .spawn()
             .map_err(|error| format!("PRODUCT_HOST_RUNTIME_SPAWN: {error}"))?;
@@ -527,11 +570,7 @@ impl RuntimeProcess {
         if self.exited().is_some() {
             return;
         }
-        // The runtime leads its own process group.
-        // SAFETY: killpg only sends a signal to that group.
-        unsafe {
-            libc::killpg(self.child.id() as libc::pid_t, libc::SIGKILL);
-        }
+        platform::kill_runtime(&mut self.child);
         let _ = self.child.wait();
     }
 }
@@ -539,6 +578,7 @@ impl RuntimeProcess {
 impl Drop for RuntimeProcess {
     fn drop(&mut self) {
         self.kill();
+        platform::runtime_ended(self.child.id());
     }
 }
 
@@ -578,14 +618,7 @@ impl Unavailable {
                         if !answering.load(Ordering::Acquire) {
                             continue;
                         }
-                        let mut poll = libc::pollfd {
-                            fd: listener.as_raw_fd(),
-                            events: libc::POLLIN,
-                            revents: 0,
-                        };
-                        // SAFETY: one valid pollfd for the duration of the call.
-                        let ready = unsafe { libc::poll(&mut poll, 1, 100) };
-                        if ready > 0 && poll.revents & libc::POLLIN != 0 {
+                        if platform::wait_readable(&listener, 100) {
                             if let Ok((stream, _)) = listener.accept() {
                                 let current = reason
                                     .lock()
@@ -693,6 +726,39 @@ mod tests {
     use super::*;
 
     #[test]
+    fn supervisor_frames_decode_replacement_and_report_eof() {
+        let mut frame = Vec::new();
+        for body in [
+            br#"{"kind":"replace-runtime","productDirectory":"/tmp/product"}"#.as_slice(),
+            br#"{"kind":"reload-assets"}"#.as_slice(),
+            br#"{"kind":"reload-content","paths":["tuning/a.json"]}"#.as_slice(),
+        ] {
+            frame.extend_from_slice(&(body.len() as u32).to_le_bytes());
+            frame.extend_from_slice(body);
+        }
+        let mut input = frame.as_slice();
+        let Ok(SupervisorCommand::ReplaceRuntime { product_directory }) =
+            read_supervisor_frame(&mut input)
+        else {
+            panic!("expected a replacement");
+        };
+        assert_eq!(product_directory, PathBuf::from("/tmp/product"));
+        assert!(matches!(
+            read_supervisor_frame(&mut input),
+            Ok(SupervisorCommand::ReloadAssets)
+        ));
+        let Ok(SupervisorCommand::ReloadContent { paths }) = read_supervisor_frame(&mut input)
+        else {
+            panic!("expected a content reload");
+        };
+        assert_eq!(paths, ["tuning/a.json"]);
+        assert_eq!(
+            read_supervisor_frame(&mut input).unwrap_err(),
+            SUPERVISOR_EOF
+        );
+    }
+
+    #[test]
     fn a_bind_failure_inside_the_ephemeral_range_says_why() {
         let Some((low, high)) = ephemeral_port_range() else {
             return;
@@ -709,7 +775,7 @@ mod tests {
         for loader in [ProductLoader::NativeAot, ProductLoader::CoreClr] {
             let launch = RuntimeLaunch {
                 executable: PathBuf::from("/runtime/rusty-product-host"),
-                listener_fd: 3,
+                listener: 3,
                 product_directory: PathBuf::from("/tmp/product"),
                 loader,
                 next_runtime_instance_id: 7,

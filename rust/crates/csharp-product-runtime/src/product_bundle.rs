@@ -243,6 +243,28 @@ impl ProductBundle {
         }
     }
 
+    /// Points the CoreCLR artifacts at a private copy of their directory.
+    #[cfg(windows)]
+    pub(super) fn load_coreclr_from_private_copy(&mut self) -> Result<(), String> {
+        let (Some(assembly), Some(runtimeconfig)) = (
+            self.coreclr_assembly.clone(),
+            self.coreclr_runtimeconfig.clone(),
+        ) else {
+            return Ok(());
+        };
+        let directory = assembly
+            .parent()
+            .ok_or("PRODUCT_HOST_RUNTIME_COPY: the CoreCLR assembly has no directory")?;
+        let copy = crate::platform::private_loader_copy(directory)?;
+        let rebase = |path: &Path| match path.strip_prefix(directory) {
+            Ok(relative) => copy.join(relative),
+            Err(_) => path.to_owned(),
+        };
+        self.coreclr_assembly = Some(rebase(&assembly));
+        self.coreclr_runtimeconfig = Some(rebase(&runtimeconfig));
+        Ok(())
+    }
+
     /// The manifest's world and viewmodel default light rigs, on or off.
     pub(super) fn default_lights(&self) -> (bool, bool) {
         self.renderer_settings.enabled()

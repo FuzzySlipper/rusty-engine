@@ -156,7 +156,8 @@ An installer is chosen when a product asks for one.
     it exists.
   - Chromium derives `KeyboardEvent.code` from the key's scan code (0xE0-prefixed
     for extended keys), which the shell passes as the native key code.
-  - `--headless` is Unix-only: the supervisor that opens the headless page is.
+  - `--headless` needs a Chromium-based browser; `--chromium` can name Edge's
+    `msedge.exe`.
 - **macOS:** not built and not in scope. `welding` lists an IOSurface→Metal
   import, and the shell already runs the window on the main thread, as macOS
   requires.

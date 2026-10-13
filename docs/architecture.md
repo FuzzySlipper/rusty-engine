@@ -308,6 +308,10 @@ supervised or headless NativeAOT launch runs its native module:
   and SSE)
   runs in its own process group and serves that listener directly. Closing
   its stdin is the clean stop: the product is disposed before exit.
+- On Windows the runtime inherits the listener's socket handle and loads its
+  CoreCLR assemblies from a private copy in the temporary directory, because
+  Windows keeps a loaded file from being replaced; `rusty dev` can then
+  restage the Product while it runs.
 
 `rusty dev` sends the supervisor commands on its stdin. After a full restage
 it sends `replace-runtime`. After a UI-only or content-bundle-only restage it
