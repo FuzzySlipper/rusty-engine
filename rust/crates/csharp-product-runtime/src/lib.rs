@@ -2782,7 +2782,8 @@ impl CsharpProductRuntime {
     /// next call: from the world time admission owed at the latest
     /// observation, at the gameplay rate, within one step.
     fn presentation_lead(&self) -> Option<render_wgpu::PresentationLead> {
-        let observed = HostMonotonicTime::from_nanoseconds(self.presented_observation_ns?);
+        let observed_ns = self.presented_observation_ns?;
+        let observed = HostMonotonicTime::from_nanoseconds(observed_ns);
         let owed_steps = self.lifecycle.owed_steps_at(observed)?;
         let step_seconds = 1.0 / f64::from(self.lifecycle.configuration().fixed_step_hz());
         Some(render_wgpu::PresentationLead {
@@ -2791,6 +2792,7 @@ impl CsharpProductRuntime {
                 self.lifecycle.gameplay_time().rate(),
             ),
             step_seconds,
+            observed_ns,
         })
     }
 

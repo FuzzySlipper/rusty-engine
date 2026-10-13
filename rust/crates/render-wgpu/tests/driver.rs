@@ -176,6 +176,7 @@ fn the_driver_reports_what_it_drew_and_ends_clips_undrawn() {
         owed_seconds: 0.25 * STEP,
         rate: 1.0,
         step_seconds: STEP,
+        observed_ns: 1,
     };
     let drawn = |driver: &SceneDriver| {
         let ((), shown) = driver.draw(|renderer, now| {
@@ -219,6 +220,7 @@ fn the_driver_reports_what_it_drew_and_ends_clips_undrawn() {
         7,
         Some(PresentationLead {
             owed_seconds: 0.0,
+            observed_ns: 2,
             ..lead
         }),
     );
@@ -230,6 +232,24 @@ fn the_driver_reports_what_it_drew_and_ends_clips_undrawn() {
     apply(8, Some(lead));
     running.set_simulation(true, 8);
     assert_eq!(drawn(&running), 8.0 / 60.0, "paused, the committed time");
+    // A call without a new host observation (a debug command between
+    // updates) brings the same lead: the clock runs on from its anchor
+    // rather than being set back to the owed time.
+    let resumed = PresentationLead {
+        owed_seconds: 0.0,
+        observed_ns: 3,
+        ..lead
+    };
+    apply(9, Some(resumed));
+    let start = drawn(&running);
+    std::thread::sleep(Duration::from_millis(4));
+    apply(9, Some(resumed));
+    std::thread::sleep(Duration::from_millis(4));
+    let after = drawn(&running);
+    assert!(
+        after - start >= 0.007,
+        "{after} ran on from {start} across a call with no new observation"
+    );
     drop(running);
 
     // Undrawn, a clip still ends on Engine time: waiting advances the scene

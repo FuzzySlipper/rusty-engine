@@ -63,6 +63,11 @@ pub struct PresentationLead {
     pub rate: f64,
     /// One fixed step, in seconds.
     pub step_seconds: f64,
+    /// The host observation `owed_seconds` was measured at (host monotonic
+    /// nanoseconds). A later call that brings the same one, such as a debug
+    /// command between observations, leaves the frames' clock running from
+    /// where that observation's call anchored it.
+    pub observed_ns: u64,
 }
 
 /// What one drawn frame showed.
@@ -519,6 +524,7 @@ impl Scene {
             applied = true;
             self.record_issues(issues);
         }
+        let previous_seconds = self.elapsed_seconds;
         let advanced = state.elapsed_seconds - self.elapsed_seconds;
         if advanced > 0.0 {
             let issues = self.renderer.advance_effects(advanced, entities);
@@ -527,7 +533,19 @@ impl Scene {
             applied = true;
         }
         self.elapsed_seconds = state.elapsed_seconds;
-        self.lead = state.lead.filter(|_| !state.held).map(|lead| (lead, now));
+        // A call without a new host observation (a debug command, a product
+        // call between updates) carries the same owed time: anchoring it anew
+        // would set the frames' clock back to it.
+        let unobserved = |kept: &PresentationLead, lead: &PresentationLead| {
+            kept.observed_ns == lead.observed_ns && previous_seconds == state.elapsed_seconds
+        };
+        self.lead = state
+            .lead
+            .filter(|_| !state.held)
+            .map(|lead| match self.lead {
+                Some((kept, anchored)) if unobserved(&kept, &lead) => (lead, anchored),
+                _ => (lead, now),
+            });
         self.world_revision = state.world_revision;
         if (self.step, self.held) != (state.step, state.held) {
             (self.step, self.held) = (state.step, state.held);
