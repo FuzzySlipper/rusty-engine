@@ -1097,17 +1097,79 @@ impl RuntimeSpatialBridge {
             .collect::<Vec<_>>();
         let (scene, receipt) = {
             let session = self.session_mut(request.session)?;
-            let changed: Vec<u64> = removed
-                .iter()
-                .flat_map(|(_, removed_instances)| removed_instances.iter().copied())
-                .chain(instances.iter().map(|instance| instance.id.0))
-                .collect();
+            // An artifact, placed or the base, whose instance the product
+            // removes or replaces here leaves the composition, with its
+            // navigation cells and, once nothing else uses it, its asset. The
+            // base artifact's instance id is its asset id.
+            let base_asset = session.content.base.as_ref().map(|(identity, _)| {
+                StaticMeshAssetId(spatial_content_asset_id(identity.content_sha256))
+            });
+            let mut leaving = BTreeSet::new();
+            let mut base_leaves = false;
+            if let Some((_, removed_instances)) = removed {
+                if base_asset.is_some() || !session.content.placed.is_empty() {
+                    for id in removed_instances
+                        .iter()
+                        .copied()
+                        .chain(instances.iter().map(|instance| instance.id.0))
+                    {
+                        if session.content.placed.contains_key(&id) {
+                            leaving.insert(id);
+                        }
+                        base_leaves |= base_asset.is_some_and(|asset| asset.0 == id);
+                    }
+                }
+            }
+            let mut released_assets = BTreeSet::new();
+            let navigation = if leaving.is_empty() && !base_leaves {
+                None
+            } else {
+                let current = session.navigation.as_ref().ok_or_else(|| {
+                    CsharpEngineServicesError::new(
+                        "CSHARP_NAVIGATION",
+                        "composed spatial content has no navigation",
+                    )
+                })?;
+                let base = session.content.base.as_ref().filter(|_| !base_leaves);
+                let remaining = || {
+                    session
+                        .content
+                        .placed
+                        .iter()
+                        .filter(|(id, _)| !leaving.contains(id))
+                        .map(|(_, placed)| placed)
+                };
+                let in_use: BTreeSet<StaticMeshAssetId> = remaining()
+                    .filter_map(|placed| placed.asset)
+                    .chain(base_asset.filter(|_| !base_leaves))
+                    .chain(instances.iter().map(|instance| instance.asset))
+                    .collect();
+                released_assets.extend(
+                    leaving
+                        .iter()
+                        .filter_map(|id| session.content.placed[id].asset)
+                        .chain(base_asset.filter(|_| base_leaves))
+                        .filter(|asset| !in_use.contains(asset)),
+                );
+                Some(compose_content_navigation(
+                    current.projection.grid(),
+                    current.policy.max_step_cells,
+                    current.grid_origin,
+                    next_navigation_revision(session.navigation_revision)?,
+                    base.map(|(_, cells)| cells),
+                    remaining(),
+                )?)
+            };
             let mut candidate = (*session.scene).clone();
             let receipt = if let Some((removed_assets, removed_instances)) = removed {
                 candidate.apply_static_mesh_residency(
                     admitted,
                     instances,
-                    removed_assets.iter().copied().map(StaticMeshAssetId),
+                    removed_assets
+                        .iter()
+                        .copied()
+                        .map(StaticMeshAssetId)
+                        .chain(released_assets),
                     removed_instances.iter().copied().map(StaticMeshInstanceId),
                 )
             } else {
@@ -1121,11 +1183,16 @@ impl RuntimeSpatialBridge {
             if removed.is_none() {
                 session.content = SpatialContentComposition::default();
             } else {
-                // An instance the product removed or replaced here is no
-                // longer a placed artifact's collision.
-                for id in changed {
-                    session.content.placed.remove(&id);
+                for id in &leaving {
+                    session.content.placed.remove(id);
                 }
+                if base_leaves {
+                    session.content.base = None;
+                }
+            }
+            if let Some(navigation) = navigation {
+                session.navigation_revision = navigation.revision;
+                session.navigation = Some(navigation);
             }
             (candidate, receipt)
         };
@@ -1529,10 +1596,17 @@ impl RuntimeSpatialBridge {
                 chunk_size: request.navigation_chunk_size,
                 max_step_cells: request.navigation_max_step_cells,
             })?;
-            let (projection, vertical_mapping) =
-                compose_content_navigation(grid, base_cells, placed.values().copied())?;
-            let navigation_cell_count = projection.walkable_len() as u64;
-            let navigation_projection_hash = projection.projection_hash();
+            let navigation_revision = next_navigation_revision(session.navigation_revision)?;
+            let navigation = compose_content_navigation(
+                grid,
+                max_step_cells,
+                grid_origin,
+                navigation_revision,
+                base_cells,
+                placed.values().copied(),
+            )?;
+            let navigation_cell_count = navigation.projection.walkable_len() as u64;
+            let navigation_projection_hash = navigation.projection_hash;
 
             let mut candidate = (*session.scene).clone();
             let collision = candidate
@@ -1548,7 +1622,6 @@ impl RuntimeSpatialBridge {
                         format!("{error:?}"),
                     )
                 })?;
-            let navigation_revision = next_navigation_revision(session.navigation_revision)?;
             let instance_count = placed.len() as u64;
 
             // Commit.
@@ -1560,25 +1633,7 @@ impl RuntimeSpatialBridge {
             let scene = Arc::new(candidate);
             session.scene = Arc::clone(&scene);
             session.navigation_revision = navigation_revision;
-            session.navigation = Some(NavigationState {
-                source: NavigationSource::HostWalkableCells,
-                traversal: NavTraversalOverlay::empty(&projection),
-                projection,
-                projection_hash: navigation_projection_hash,
-                policy: PlanarNavNeighborPolicy {
-                    max_step_cells,
-                    diagonal: false,
-                },
-                edge_admission: None,
-                components: None,
-                agent_height_voxels: 0,
-                require_solid_floor: false,
-                volumetric_traversal: VolumetricNavTraversalOverlay::empty(),
-                vertical_mapping: Some(vertical_mapping),
-                revision: navigation_revision,
-                grid_origin,
-                edge_kinds: None,
-            });
+            session.navigation = Some(navigation);
             (
                 scene,
                 NativeSpatialContentArtifactResidencyReceipt {
@@ -5473,14 +5528,18 @@ fn content_navigation_cells(artifact: &SpatialContentArtifact) -> ContentNavigat
     }
 }
 
-/// One planar projection over the base artifact's cells and every placed
-/// artifact's, moved by its offset. A cell two artifacts both declare takes the
-/// higher support. All must share the grid's cell size and one level quantum.
+/// The composition's navigation at `revision`: one planar projection over the
+/// base artifact's cells and every placed artifact's, moved by its offset. A
+/// cell two artifacts both declare takes the higher support. All must share the
+/// grid's cell size and one level quantum.
 fn compose_content_navigation<'a>(
     grid: VoxelGridSpec,
+    max_step_cells: u8,
+    grid_origin: [f64; 3],
+    revision: u64,
     base: Option<&'a Arc<ContentNavigationCells>>,
     placed: impl IntoIterator<Item = &'a PlacedContentArtifact>,
-) -> Result<(NavProjection, NavigationVerticalMapping), CsharpEngineServicesError> {
+) -> Result<NavigationState, CsharpEngineServicesError> {
     let mut supports: BTreeMap<VoxelCoord, f64> = BTreeMap::new();
     let mut cell_centers: BTreeMap<VoxelCoord, [f64; 2]> = BTreeMap::new();
     let mut has_continuous_horizontal_translation = false;
@@ -5533,20 +5592,35 @@ fn compose_content_navigation<'a>(
         }
     }
     let projection = NavProjection::from_walkable_cells(grid, supports.keys().copied());
-    Ok((
+    Ok(NavigationState {
+        source: NavigationSource::HostWalkableCells,
+        traversal: NavTraversalOverlay::empty(&projection),
+        projection_hash: projection.projection_hash(),
         projection,
-        NavigationVerticalMapping::new(
+        policy: PlanarNavNeighborPolicy {
+            max_step_cells,
+            diagonal: false,
+        },
+        edge_admission: None,
+        components: None,
+        agent_height_voxels: 0,
+        require_solid_floor: false,
+        volumetric_traversal: VolumetricNavTraversalOverlay::empty(),
+        vertical_mapping: Some(NavigationVerticalMapping::new(
             level_quantum.unwrap_or(1.0),
             supports,
             cell_centers,
             has_continuous_horizontal_translation,
             None,
             grid.voxel_size(),
-        ),
-    ))
+        )),
+        revision,
+        grid_origin,
+        edge_kinds: None,
+    })
 }
 
-fn spatial_content_asset_id(digest: NativeContentSha256) -> u64 {
+pub(crate) fn spatial_content_asset_id(digest: NativeContentSha256) -> u64 {
     let value = digest.word0
         ^ digest.word1.rotate_left(13)
         ^ digest.word2.rotate_left(29)

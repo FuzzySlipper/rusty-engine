@@ -1230,9 +1230,11 @@ SpatialContentArtifactResidencyReceipt resident = engine.Spatial.ApplyContentArt
   `ReplaceCollisionNavigation` and `ClearNavigation` end it. Artifact
   collision then stays as ordinary static collision.
 - **Collision residency.** `ApplyCollisionResidency` that removes or
-  replaces a placed artifact's instance takes that artifact out of the
-  composition; its navigation cells leave at the next
-  `ApplyContentArtifactResidency`.
+  replaces a placed artifact's instance, or the base artifact's, takes that
+  artifact out of the composition in the same call: navigation is recomposed
+  on the same grid without its cells under a new navigation revision, and its
+  collider asset is released if no other artifact uses it. Without a base,
+  `ReadContentArtifact` reports nothing present and the placements remain.
 - **Refusals.** A malformed artifact or a non-finite translation is refused
   and changes nothing.
 - **Lifetime.** Placed artifacts with the same content share one collider

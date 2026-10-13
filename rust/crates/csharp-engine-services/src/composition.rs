@@ -3685,6 +3685,84 @@ mod tests {
             "a stale Content reference was accepted"
         );
         assert_spatial_admission_diagnostic(error, "CSHARP_SPATIAL_CONTENT_REFERENCE");
+
+        // Collision residency that removes the base artifact's instance takes
+        // the base out of the composition: its cells leave navigation in the
+        // same call and its asset is released.
+        let base_instance = [crate::spatial::spatial_content_asset_id(
+            receipt.content_sha256,
+        )];
+        let mut collision = NativeCollisionReplaceReceipt::default();
+        assert_eq!(
+            unsafe {
+                (api.spatial.apply_collision_residency)(
+                    api.spatial.context,
+                    &NativeCollisionResidencyRequest {
+                        session,
+                        assets: std::ptr::null(),
+                        assets_len: 0,
+                        vertices: std::ptr::null(),
+                        vertices_len: 0,
+                        triangles: std::ptr::null(),
+                        triangles_len: 0,
+                        instances: std::ptr::null(),
+                        instances_len: 0,
+                        removed_assets: std::ptr::null(),
+                        removed_assets_len: 0,
+                        removed_instances: base_instance.as_ptr(),
+                        removed_instances_len: base_instance.len(),
+                    },
+                    &mut collision,
+                    &mut error,
+                )
+            },
+            ABI_OK
+        );
+        assert_eq!((collision.asset_count, collision.instance_count), (0, 0));
+        let mut removed = NativeNavigationStepResult::default();
+        assert_eq!(
+            unsafe {
+                (api.spatial.evaluate_navigation_step)(
+                    api.spatial.context,
+                    NativeNavigationStepRequest {
+                        session,
+                        from: NativeVec3 {
+                            x: 0.4,
+                            y: 12.8,
+                            z: 0.4,
+                        },
+                        target: NativeVec3 {
+                            x: 2.0,
+                            y: 12.8,
+                            z: 0.4,
+                        },
+                        max_step_units: 0.5,
+                        max_visited: 32,
+                    },
+                    &mut removed,
+                    std::ptr::null_mut(),
+                )
+            },
+            ABI_OK
+        );
+        assert_eq!(
+            removed.outcome,
+            NativeNavigationPathOutcome::StartNotWalkable
+        );
+        assert!(removed.navigation_revision > step.navigation_revision);
+        let mut without_base = NativeSpatialContentArtifactReadout::default();
+        assert_eq!(
+            unsafe {
+                (api.spatial.read_content_artifact)(
+                    api.spatial.context,
+                    NativeSpatialContentArtifactReadRequest { session },
+                    &mut without_base,
+                    std::ptr::null_mut(),
+                )
+            },
+            ABI_OK
+        );
+        assert!(!without_base.present);
         let _ = services.finish_call();
     }
     /// An admitted artifact's navigation, like its collision, follows a
@@ -4110,34 +4188,39 @@ mod tests {
             asset: 500,
             transform: identity,
         }];
-        let collision_residency = |removed_instances: &[u64]| {
+        let collision_residency = |assets: &[NativeStaticMeshAsset],
+                                   instances: &[NativeStaticMeshInstance],
+                                   removed_instances: &[u64]| {
             let mut receipt = NativeCollisionReplaceReceipt::default();
             let mut error: NativeOperationErrorReceipt = unsafe { std::mem::zeroed() };
-            let adding = removed_instances.is_empty();
-            unsafe {
-                (api.spatial.apply_collision_residency)(
-                    api.spatial.context,
-                    &NativeCollisionResidencyRequest {
-                        session,
-                        assets: terrain_asset.as_ptr(),
-                        assets_len: usize::from(adding),
-                        vertices: terrain_vertices.as_ptr(),
-                        vertices_len: terrain_vertices.len(),
-                        triangles: terrain_triangle.as_ptr(),
-                        triangles_len: terrain_triangle.len(),
-                        instances: terrain_instance.as_ptr(),
-                        instances_len: usize::from(adding),
-                        removed_assets: std::ptr::null(),
-                        removed_assets_len: 0,
-                        removed_instances: removed_instances.as_ptr(),
-                        removed_instances_len: removed_instances.len(),
-                    },
-                    &mut receipt,
-                    &mut error,
-                )
-            }
+            assert_eq!(
+                unsafe {
+                    (api.spatial.apply_collision_residency)(
+                        api.spatial.context,
+                        &NativeCollisionResidencyRequest {
+                            session,
+                            assets: assets.as_ptr(),
+                            assets_len: assets.len(),
+                            vertices: terrain_vertices.as_ptr(),
+                            vertices_len: terrain_vertices.len(),
+                            triangles: terrain_triangle.as_ptr(),
+                            triangles_len: terrain_triangle.len(),
+                            instances: instances.as_ptr(),
+                            instances_len: instances.len(),
+                            removed_assets: std::ptr::null(),
+                            removed_assets_len: 0,
+                            removed_instances: removed_instances.as_ptr(),
+                            removed_instances_len: removed_instances.len(),
+                        },
+                        &mut receipt,
+                        &mut error,
+                    )
+                },
+                ABI_OK
+            );
+            receipt
         };
-        assert_eq!(collision_residency(&[]), ABI_OK);
+        collision_residency(&terrain_asset, &terrain_instance, &[]);
 
         // Two closures side by side: one navigation across their boundary.
         let translated_west = NativeVec3 {
@@ -4219,9 +4302,22 @@ mod tests {
         assert!(floor_below(&services, [1.5, 0.5]));
 
         // Collision residency may remove a placed artifact's instance; the
-        // placement leaves the composition with it.
-        assert_eq!(collision_residency(&[1]), ABI_OK);
+        // placement leaves the composition with it, its navigation cells at
+        // once and its asset with its last user.
+        let before = step([0.5, 0.0, 0.5], [4.5, 0.0, 0.5]);
+        assert_eq!(before.outcome, NativeNavigationPathOutcome::Reached);
+        let receipt = collision_residency(&[], &[], &[1]);
+        assert_eq!(
+            receipt.asset_count, 2,
+            "the terrain and east assets stay, the west one leaves"
+        );
         assert!(!has_instance(&services, 1) && !floor_below(&services, [1.5, 0.5]));
+        let removed = step([0.5, 0.0, 0.5], [4.5, 0.0, 0.5]);
+        assert_eq!(
+            removed.outcome,
+            NativeNavigationPathOutcome::StartNotWalkable
+        );
+        assert!(removed.navigation_revision > before.navigation_revision);
         let receipt = residency(&[], &[]).unwrap();
         assert_eq!(
             (receipt.instance_count, receipt.navigation_cell_count),
@@ -4232,6 +4328,31 @@ mod tests {
             (receipt.instance_count, receipt.navigation_cell_count),
             (2, 5)
         );
+        let before = step([0.5, 0.0, 0.5], [4.5, 0.0, 0.5]);
+        assert_eq!(before.outcome, NativeNavigationPathOutcome::Reached);
+
+        // So may replacing it with the product's own instance.
+        let product_instance = [NativeStaticMeshInstance {
+            id: 1,
+            asset: 500,
+            transform: identity,
+        }];
+        let receipt = collision_residency(&[], &product_instance, &[]);
+        assert_eq!(receipt.asset_count, 2);
+        assert!(has_instance(&services, 1) && !floor_below(&services, [1.5, 0.5]));
+        let replaced = step([0.5, 0.0, 0.5], [4.5, 0.0, 0.5]);
+        assert_eq!(
+            replaced.outcome,
+            NativeNavigationPathOutcome::StartNotWalkable
+        );
+        assert!(replaced.navigation_revision > before.navigation_revision);
+        // Placing the artifact again replaces the product's instance.
+        let receipt = residency(&[translated(1, west, 0, translated_west)], &[]).unwrap();
+        assert_eq!(
+            (receipt.instance_count, receipt.navigation_cell_count),
+            (2, 5)
+        );
+        assert!(floor_below(&services, [1.5, 0.5]));
 
         // Unload one closure; the other and the terrain stay.
         let receipt = residency(&[], &[1]).unwrap();
