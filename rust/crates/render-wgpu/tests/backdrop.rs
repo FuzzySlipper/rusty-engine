@@ -338,36 +338,6 @@ fn removing_the_link_removes_the_backdrop() {
 }
 
 #[test]
-fn invalid_links_are_refused_by_the_model() {
-    let mut backdrop = BackdropDescriptor {
-        anchor: [0.0; 3],
-        origin: [0.0; 3],
-        scale: 1000.0,
-    };
-    assert!(RenderDiff::SetBackdrop {
-        camera: None,
-        backdrop: Some(backdrop)
-    }
-    .validate()
-    .is_ok());
-    backdrop.scale = 0.0;
-    assert!(RenderDiff::SetBackdrop {
-        camera: None,
-        backdrop: Some(backdrop)
-    }
-    .validate()
-    .is_err());
-    backdrop.scale = 1.0;
-    backdrop.anchor[1] = f64::NAN;
-    assert!(RenderDiff::SetBackdrop {
-        camera: None,
-        backdrop: Some(backdrop)
-    }
-    .validate()
-    .is_err());
-}
-
-#[test]
 fn each_view_takes_its_own_cameras_link() {
     // Two cameras side by side looking the same way: the left one's view has
     // a 1:1000 link, the right one's none, so only the left draws the range.

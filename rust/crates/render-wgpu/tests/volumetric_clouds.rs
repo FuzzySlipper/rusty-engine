@@ -234,31 +234,6 @@ fn volumetric_clouds_draw_where_the_flat_layer_does_but_differently_and_off_is_f
 }
 
 #[test]
-fn invalid_regions_are_refused_by_the_model() {
-    let mut region = CloudRegionDescriptor {
-        center: [0.0, 0.0],
-        radius: 100.0,
-        coverage: 0.5,
-        darkness: 0.0,
-        drift: [0.0, 0.0],
-        thickness: 0.0,
-        kind: CloudKind::Cumulus,
-    };
-    assert!(RenderDiff::SetCloudRegion { id: 1, region }
-        .validate()
-        .is_ok());
-    region.radius = 0.0;
-    assert!(RenderDiff::SetCloudRegion { id: 1, region }
-        .validate()
-        .is_err());
-    region.radius = 100.0;
-    region.coverage = 1.5;
-    assert!(RenderDiff::SetCloudRegion { id: 1, region }
-        .validate()
-        .is_err());
-}
-
-#[test]
 fn a_tower_and_a_sheet_rise_from_one_base_to_their_own_heights() {
     // A region 15 km ahead seen level from the ground: a 200 m stratus sheet
     // and a 6 km cumulonimbus tower, both from the layer's 1500 m altitude.

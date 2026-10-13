@@ -323,26 +323,6 @@ fn retired_audio_signals_cross_a_rebind_as_transient_events() {
 }
 
 #[test]
-fn frame_rejects_sequence_gaps() {
-    let error = PresentationFrameDiff::try_from_ops(vec![PresentationOp::Audio {
-        meta: PresentationOpMeta::new(1),
-        op: AudioProjectionOp::Emit {
-            signal_handle: AudioSignalHandle::new(1),
-            signal_id: "late".into(),
-            descriptor: audio(),
-        },
-    }])
-    .unwrap_err();
-    assert_eq!(
-        error,
-        PresentationFrameError::NonContiguousSequence {
-            expected: 0,
-            actual: 1
-        }
-    );
-}
-
-#[test]
 fn frame_rejects_presentation_identities_outside_the_json_safe_range() {
     let unsafe_value = (1_u64 << 53) + 1;
     let frame = PresentationFrameDiff {

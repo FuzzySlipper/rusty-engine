@@ -6572,9 +6572,7 @@ mod tests {
             .ops
             .iter()
             .map(|op| {
-                RuntimePublication::Frame(
-                    render_model::RenderFrameDiff::try_from_ops(vec![op.clone()]).unwrap(),
-                )
+                RuntimePublication::Frame(render_model::RenderFrameDiff::from_ops(vec![op.clone()]))
             })
             .collect();
         let error = complete_voxel_baseline(&split).unwrap_err().to_string();
@@ -7731,12 +7729,11 @@ mod tests {
     #[test]
     fn service_frame_storage_moves_into_its_publication() {
         let frame =
-            render_model::RenderFrameDiff::try_from_ops(vec![render_model::RenderDiff::Create {
+            render_model::RenderFrameDiff::from_ops(vec![render_model::RenderDiff::Create {
                 handle: render_model::RenderHandle::new(1),
                 parent: None,
                 node: render_model::RenderNode::new(render_model::Geometry::Cube),
-            }])
-            .unwrap();
+            }]);
         let operations = frame.ops.as_ptr();
         let output = CsharpEngineCallOutput {
             frames: vec![frame],

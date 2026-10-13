@@ -1,38 +1,30 @@
 use asset_catalog::{
-    validate_catalog, AssetCatalog, ResolvedVoxelSurface, ResolvedVoxelSurfaceMapping,
+    AdmittedAssetCatalog, ResolvedVoxelSurface, ResolvedVoxelSurfaceMapping,
     TextureFilter as CatalogTextureFilter, TextureWrap as CatalogTextureWrap, VoxelAlphaMode,
 };
 use core_assets::AssetId;
 use render_model::{
-    MaterialDescriptorError, MaterialUvStrategy, RenderMaterialDescriptor, TextureFilter,
-    TextureWrap, VoxelAtlasPaddingDescriptor, VoxelAtlasRegionDescriptor,
-    VoxelSurfaceAlphaModeDescriptor, VoxelSurfaceDescriptor, VoxelSurfaceMappingDescriptor,
+    MaterialUvStrategy, RenderMaterialDescriptor, TextureFilter, TextureWrap,
+    VoxelAtlasPaddingDescriptor, VoxelAtlasRegionDescriptor, VoxelSurfaceAlphaModeDescriptor,
+    VoxelSurfaceDescriptor, VoxelSurfaceMappingDescriptor,
 };
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum CatalogMaterialProjectionError {
-    InvalidCatalog { codes: Vec<String> },
     MissingMaterial,
     UnresolvedSurface,
     MissingContentHash,
     InvalidSha256ContentHash,
-    InvalidDescriptor(MaterialDescriptorError),
 }
 
+/// One material of an admitted catalog, as the renderer draws it. The
+/// catalog was validated when it was admitted; projecting one material
+/// reads only that material and what it resolves to.
 pub fn project_catalog_material(
-    catalog: &AssetCatalog,
+    catalog: &AdmittedAssetCatalog,
     material_id: &AssetId,
 ) -> Result<RenderMaterialDescriptor, CatalogMaterialProjectionError> {
-    let report = validate_catalog(catalog);
-    if !report.is_ok() {
-        return Err(CatalogMaterialProjectionError::InvalidCatalog {
-            codes: report
-                .errors
-                .iter()
-                .map(|error| error.code().to_string())
-                .collect(),
-        });
-    }
+    let catalog = catalog.catalog();
     let entry = catalog
         .get(material_id)
         .and_then(|entry| entry.material.as_ref().map(|material| (entry, material)))
@@ -92,9 +84,6 @@ pub fn project_catalog_material(
         water: None,
         translucent_shadow: false,
     };
-    descriptor
-        .validate()
-        .map_err(CatalogMaterialProjectionError::InvalidDescriptor)?;
     // Keep the resolved texture identity as the only renderer dependency even
     // when a legacy texture field differs in an invalid candidate.
     if let Some(surface) = &descriptor.voxel_surface {

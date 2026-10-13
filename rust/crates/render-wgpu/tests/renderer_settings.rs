@@ -122,25 +122,6 @@ fn the_players_choices_hold_over_every_product_request() {
 }
 
 #[test]
-fn invalid_settings_are_refused_by_the_model() {
-    let mut invalid = settings();
-    invalid.ambient_occlusion.radius = 0.0;
-    assert!(RenderDiff::SetRendererSettings { settings: invalid }
-        .validate()
-        .is_err());
-    let mut invalid = settings();
-    invalid.antialiasing = 3;
-    assert!(RenderDiff::SetRendererSettings { settings: invalid }
-        .validate()
-        .is_err());
-    assert!(RenderDiff::SetRendererSettings {
-        settings: settings()
-    }
-    .validate()
-    .is_ok());
-}
-
-#[test]
 fn every_admitted_sample_count_draws_or_is_refused_to_four() {
     let mut harness = Harness::new(RendererOptions::default());
     harness.apply(vec![RenderDiff::SetBackgroundColor {

@@ -71,9 +71,9 @@ impl FogDescriptor {
         }
     }
 
-    pub fn validate(&self) -> Result<(), crate::RenderOperationError> {
+    pub fn valid(&self) -> bool {
         let color = self.color();
-        let valid = color.iter().all(|value| value.is_finite() && *value >= 0.0)
+        color.iter().all(|value| value.is_finite() && *value >= 0.0)
             && match *self {
                 Self::Linear { start, end, .. } => {
                     start.is_finite() && end.is_finite() && start >= 0.0 && end > start
@@ -81,12 +81,7 @@ impl FogDescriptor {
                 Self::Exponential { density, .. } | Self::ExponentialSquared { density, .. } => {
                     density.is_finite() && density > 0.0
                 }
-            };
-        if valid {
-            Ok(())
-        } else {
-            Err(crate::RenderOperationError::Fog)
-        }
+            }
     }
 }
 
@@ -1144,7 +1139,7 @@ impl Material {
         wireframe: false,
     };
 
-    fn validate(self) -> Result<(), NodeError> {
+    pub fn validate(self) -> Result<(), NodeError> {
         self.color
             .iter()
             .all(|value| value.is_finite() && (0.0..=1.0).contains(value))
@@ -1217,19 +1212,6 @@ impl RenderMetadata {
         {
             return Err(NodeError::UnsafeSourceIdentity);
         }
-        if self.tags.iter().any(|tag| tag.trim().is_empty()) {
-            return Err(NodeError::EmptyTag);
-        }
-        if self.tags.windows(2).any(|pair| pair[0] >= pair[1]) {
-            return Err(NodeError::TagsNotCanonical);
-        }
-        if self
-            .label
-            .as_ref()
-            .is_some_and(|value| value.trim().is_empty())
-        {
-            return Err(NodeError::EmptyLabel);
-        }
         Ok(())
     }
 }
@@ -1274,9 +1256,6 @@ pub enum NodeError {
     InvalidGeometry,
     InvalidMaterial,
     Transform(TransformError),
-    EmptyTag,
-    TagsNotCanonical,
-    EmptyLabel,
     UnsafeSourceIdentity,
 }
 
@@ -1555,361 +1534,6 @@ pub enum RenderDiff {
     },
 }
 
-impl RenderDiff {
-    pub fn validate(&self) -> Result<(), RenderOperationError> {
-        self.validate_handles()
-            .map_err(RenderOperationError::Handle)?;
-        match self {
-            Self::Create { node, .. } => node.validate().map_err(RenderOperationError::Node),
-            Self::Update {
-                transform,
-                material,
-                metadata,
-                ..
-            } => {
-                if let Some(value) = transform {
-                    value.validate().map_err(RenderOperationError::Transform)?;
-                }
-                if let Some(value) = material {
-                    value.validate().map_err(RenderOperationError::Node)?;
-                }
-                if let Some(value) = metadata {
-                    value.validate().map_err(RenderOperationError::Node)?;
-                }
-                Ok(())
-            }
-            Self::SetMorphFocus {
-                focus: Some(focus), ..
-            } if !focus.iter().all(|value| value.is_finite()) => {
-                Err(RenderOperationError::MorphFocus)
-            }
-            Self::SetMorphFocus { .. } => Ok(()),
-            Self::SetParentJoint { joint, .. } => {
-                if joint.as_ref().is_some_and(|name| name.trim().is_empty()) {
-                    Err(RenderOperationError::InvalidParentJoint)
-                } else {
-                    Ok(())
-                }
-            }
-            Self::Destroy { .. }
-            | Self::SetMaterialInstanceParameters {
-                parameters: None, ..
-            } => Ok(()),
-            Self::ReplaceMeshPayload { payload, .. } => {
-                payload.validate().map_err(RenderOperationError::Mesh)
-            }
-            Self::ReplaceMeshDistanceField {
-                field: Some(field), ..
-            } => field.validate().map_err(RenderOperationError::Mesh),
-            Self::ReplaceMeshDistanceField { field: None, .. } => Ok(()),
-            Self::CreateLight { light, .. } | Self::UpdateLight { light, .. } => {
-                light.validate().map_err(RenderOperationError::Light)
-            }
-            Self::DefineMaterial { material } => material
-                .validate()
-                .map_err(RenderOperationError::MaterialDescriptor),
-            Self::SetMaterialInstanceParameters {
-                parameters: Some(parameters),
-                ..
-            } => parameters
-                .validate()
-                .map_err(RenderOperationError::MaterialParameters),
-            Self::DefineTexture { texture } => {
-                texture.validate().map_err(RenderOperationError::Texture)
-            }
-            Self::DefineShader { shader } => shader.validate().map_err(RenderOperationError::Asset),
-            Self::SetSkyBackground {
-                background: Some(background),
-            } => background
-                .validate()
-                .map_err(RenderOperationError::SkyBackground),
-            Self::SetSkyBackground { background: None } => Ok(()),
-            Self::SetBackgroundColor { color } if valid_color(*color) && color[3] == 1.0 => Ok(()),
-            Self::SetBackgroundColor { .. } => Err(RenderOperationError::BackgroundColor),
-            Self::SetFog { fog: Some(fog) } => fog.validate(),
-            Self::SetFog { fog: None } => Ok(()),
-            Self::SetToneMapping { tone_mapping }
-                if tone_mapping.exposure.is_finite() && tone_mapping.exposure >= 0.0 =>
-            {
-                Ok(())
-            }
-            Self::SetToneMapping { .. } => Err(RenderOperationError::ToneMapping),
-            Self::SetBloom { bloom: Some(bloom) } if !bloom.valid() => {
-                Err(RenderOperationError::Bloom)
-            }
-            Self::SetBloom { .. } => Ok(()),
-            Self::SetAutoExposure {
-                auto_exposure: Some(auto_exposure),
-            } if !auto_exposure.valid() => Err(RenderOperationError::AutoExposure),
-            Self::SetAutoExposure { .. } => Ok(()),
-            Self::SetColorGrading {
-                color_grading: Some(color_grading),
-            } if !color_grading.valid() => Err(RenderOperationError::ColorGrading),
-            Self::SetColorGrading { .. } => Ok(()),
-            Self::SetAtmosphere {
-                atmosphere: Some(atmosphere),
-            } if !atmosphere.valid() => Err(RenderOperationError::Atmosphere),
-            Self::SetAtmosphere { .. } => Ok(()),
-            Self::SetSunShafts {
-                sun_shafts: Some(sun_shafts),
-            } if !sun_shafts.valid() => Err(RenderOperationError::SunShafts),
-            Self::SetSunShafts { .. } => Ok(()),
-            Self::SetMoon { moon: Some(moon) } if !moon.valid() => Err(RenderOperationError::Moon),
-            Self::SetMoon { .. } => Ok(()),
-            Self::SetStars { stars: Some(stars) } if !stars.valid() => {
-                Err(RenderOperationError::Stars)
-            }
-            Self::SetStars { .. } => Ok(()),
-            Self::SetWind { wind: Some(wind) } if !wind.valid() => Err(RenderOperationError::Wind),
-            Self::SetWind { .. } => Ok(()),
-            Self::SetClouds {
-                clouds: Some(clouds),
-            } if !clouds.valid() => Err(RenderOperationError::Clouds),
-            Self::SetClouds { .. } => Ok(()),
-            Self::SetWetness {
-                wetness: Some(wetness),
-            } if !wetness.valid() => Err(RenderOperationError::Wetness),
-            Self::SetWetness { .. } => Ok(()),
-            Self::SetBackdrop {
-                backdrop: Some(backdrop),
-                ..
-            } if !backdrop.valid() => Err(RenderOperationError::Backdrop),
-            Self::SetBackdrop { .. } => Ok(()),
-            Self::SetCloudRegion { region, .. } if !region.valid() => {
-                Err(RenderOperationError::CloudRegion)
-            }
-            Self::SetCloudRegion { .. } | Self::RemoveCloudRegion { .. } => Ok(()),
-            Self::SetVolumetricFog { fog } if !fog.valid() => {
-                Err(RenderOperationError::VolumetricFog)
-            }
-            Self::SetVolumetricFog { .. } => Ok(()),
-            Self::SetFogVolume { volume, .. } if !volume.valid() => {
-                Err(RenderOperationError::FogVolume)
-            }
-            Self::SetFogVolume { .. } | Self::RemoveFogVolume { .. } => Ok(()),
-            Self::SetPrecipitation {
-                precipitation: Some(precipitation),
-            } if !precipitation.valid() => Err(RenderOperationError::Precipitation),
-            Self::SetPrecipitation { .. } => Ok(()),
-            Self::SetImageEffect {
-                effect: Some(effect),
-            } if !effect.valid() => Err(RenderOperationError::ImageEffect),
-            Self::SetImageEffect { .. } => Ok(()),
-            Self::SetIndirectLight {
-                indirect_light: Some(indirect_light),
-            } if !indirect_light.valid() => Err(RenderOperationError::IndirectLight),
-            Self::SetIndirectLight { .. } => Ok(()),
-            Self::SetSkyLight {
-                sky_light: Some(sky_light),
-            } if !sky_light.valid() => Err(RenderOperationError::SkyLight),
-            Self::SetSkyLight { .. } => Ok(()),
-            Self::SetRendererSettings { settings } if !settings.valid() => {
-                Err(RenderOperationError::RendererSettings)
-            }
-            Self::SetRendererSettings { .. } => Ok(()),
-            Self::DefineSpriteAtlas { atlas } => {
-                atlas.validate().map_err(RenderOperationError::SpriteAtlas)
-            }
-            Self::DefineStaticMesh { asset } => {
-                asset.validate().map_err(RenderOperationError::StaticMesh)
-            }
-            Self::ReleaseMaterial { id } => {
-                crate::validate_asset_id(id, crate::RenderAssetKind::Material)
-                    .map_err(RenderOperationError::Asset)
-            }
-            Self::ReleaseTexture { id } => {
-                crate::validate_asset_id(id, crate::RenderAssetKind::Texture)
-                    .map_err(RenderOperationError::Asset)
-            }
-            Self::ReleaseShader { id } => {
-                crate::validate_asset_id(id, crate::RenderAssetKind::Shader)
-                    .map_err(RenderOperationError::Asset)
-            }
-            Self::ReleaseSpriteAtlas { id } => {
-                crate::validate_asset_id(id, crate::RenderAssetKind::SpriteAtlas)
-                    .map_err(RenderOperationError::Asset)
-            }
-            Self::ReleaseAnimatedMesh { asset } => {
-                crate::validate_asset_id(asset, crate::RenderAssetKind::AnimatedMesh)
-                    .map_err(RenderOperationError::Asset)
-            }
-            Self::ReleaseStaticMesh { asset } => {
-                crate::validate_asset_id(asset, crate::RenderAssetKind::StaticMesh)
-                    .map_err(RenderOperationError::Asset)
-            }
-            Self::DefineAnimatedMesh { asset } => {
-                asset.validate().map_err(RenderOperationError::AnimatedMesh)
-            }
-            Self::DefineVoxelObject { asset } => {
-                asset.validate().map_err(RenderOperationError::VoxelObject)
-            }
-            Self::ReleaseVoxelObject { asset } => {
-                crate::validate_asset_id(asset, crate::RenderAssetKind::VoxelObject)
-                    .map_err(RenderOperationError::Asset)
-            }
-            Self::CreateStaticMeshInstance { instance, .. } => instance
-                .validate()
-                .map_err(RenderOperationError::StaticMeshInstance),
-            Self::CreateAnimatedMeshInstance { instance, .. } => instance
-                .validate()
-                .map_err(RenderOperationError::AnimatedMeshInstance),
-            Self::CreateScatterPatch { patch, .. } => {
-                patch.validate().map_err(RenderOperationError::ScatterPatch)
-            }
-            Self::SetAnimatedMeshPlayback { playback, .. } => playback
-                .validate()
-                .map_err(RenderOperationError::AnimatedPlayback),
-            Self::SetAnimatedMeshPose { pose, .. } => {
-                pose.validate().map_err(RenderOperationError::AnimatedPose)
-            }
-            Self::CreateVoxelObjectInstance { instance, .. } => instance
-                .validate()
-                .map_err(RenderOperationError::VoxelObjectInstance),
-            Self::SetVoxelObjectFrame { .. } | Self::SetAnimatedMeshInspection { .. } => Ok(()),
-            Self::CreateSprite { sprite, .. } => {
-                sprite.validate().map_err(RenderOperationError::Sprite)
-            }
-            Self::CreateSpriteBatch { batch, .. } => {
-                batch.validate().map_err(RenderOperationError::SpriteBatch)
-            }
-            Self::UpdateSprite { tint, .. } => {
-                if tint.is_some_and(|color| !valid_color(color)) {
-                    return Err(RenderOperationError::InvalidSpriteTint);
-                }
-                Ok(())
-            }
-        }
-    }
-
-    fn validate_handles(&self) -> Result<(), RenderHandleError> {
-        match self {
-            Self::Create { handle, parent, .. }
-            | Self::CreateLight { handle, parent, .. }
-            | Self::CreateStaticMeshInstance { handle, parent, .. }
-            | Self::CreateAnimatedMeshInstance { handle, parent, .. }
-            | Self::CreateScatterPatch { handle, parent, .. }
-            | Self::CreateVoxelObjectInstance { handle, parent, .. }
-            | Self::CreateSprite { handle, parent, .. }
-            | Self::CreateSpriteBatch { handle, parent, .. } => {
-                handle.validate()?;
-                if let Some(parent) = parent {
-                    parent.validate()?;
-                }
-            }
-            Self::Update { handle, .. }
-            | Self::SetParentJoint { handle, .. }
-            | Self::SetMorphFocus { handle, .. }
-            | Self::Destroy { handle }
-            | Self::ReplaceMeshPayload { handle, .. }
-            | Self::ReplaceMeshDistanceField { handle, .. }
-            | Self::UpdateLight { handle, .. }
-            | Self::SetMaterialInstanceParameters { handle, .. }
-            | Self::SetAnimatedMeshInspection { handle, .. }
-            | Self::SetAnimatedMeshPlayback { handle, .. }
-            | Self::SetAnimatedMeshPose { handle, .. }
-            | Self::SetVoxelObjectFrame { handle, .. }
-            | Self::UpdateSprite { handle, .. } => handle.validate()?,
-            Self::DefineMaterial { .. }
-            | Self::DefineTexture { .. }
-            | Self::DefineShader { .. }
-            | Self::ReleaseShader { .. }
-            | Self::SetSkyBackground { .. }
-            | Self::SetBackgroundColor { .. }
-            | Self::SetFog { .. }
-            | Self::SetToneMapping { .. }
-            | Self::SetBloom { .. }
-            | Self::SetAutoExposure { .. }
-            | Self::SetColorGrading { .. }
-            | Self::SetAtmosphere { .. }
-            | Self::SetSunShafts { .. }
-            | Self::SetMoon { .. }
-            | Self::SetStars { .. }
-            | Self::SetWind { .. }
-            | Self::SetClouds { .. }
-            | Self::SetWetness { .. }
-            | Self::SetBackdrop { .. }
-            | Self::SetCloudRegion { .. }
-            | Self::RemoveCloudRegion { .. }
-            | Self::SetVolumetricFog { .. }
-            | Self::SetFogVolume { .. }
-            | Self::RemoveFogVolume { .. }
-            | Self::SetPrecipitation { .. }
-            | Self::SetImageEffect { .. }
-            | Self::SetIndirectLight { .. }
-            | Self::SetSkyLight { .. }
-            | Self::SetRendererSettings { .. }
-            | Self::DefineSpriteAtlas { .. }
-            | Self::DefineStaticMesh { .. }
-            | Self::ReleaseMaterial { .. }
-            | Self::ReleaseTexture { .. }
-            | Self::ReleaseSpriteAtlas { .. }
-            | Self::ReleaseAnimatedMesh { .. }
-            | Self::ReleaseStaticMesh { .. }
-            | Self::DefineAnimatedMesh { .. }
-            | Self::DefineVoxelObject { .. }
-            | Self::ReleaseVoxelObject { .. } => {}
-        }
-        Ok(())
-    }
-}
-
-fn valid_color<const N: usize>(color: [f32; N]) -> bool {
-    color
-        .iter()
-        .all(|value| value.is_finite() && (0.0..=1.0).contains(value))
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum RenderOperationError {
-    InvalidParentJoint,
-    MorphFocus,
-    Handle(RenderHandleError),
-    Node(NodeError),
-    Transform(TransformError),
-    Mesh(crate::MeshDescriptorError),
-    Light(crate::LightDescriptorError),
-    MaterialDescriptor(crate::MaterialDescriptorError),
-    MaterialParameters(crate::MaterialParametersError),
-    Texture(crate::TextureError),
-    SkyBackground(crate::RenderAssetError),
-    BackgroundColor,
-    Fog,
-    ToneMapping,
-    Bloom,
-    AutoExposure,
-    ColorGrading,
-    Atmosphere,
-    SunShafts,
-    Moon,
-    Stars,
-    Wind,
-    Clouds,
-    Wetness,
-    Backdrop,
-    VolumetricFog,
-    FogVolume,
-    CloudRegion,
-    Precipitation,
-    ImageEffect,
-    IndirectLight,
-    SkyLight,
-    RendererSettings,
-    SpriteAtlas(crate::SpriteAtlasError),
-    StaticMesh(crate::StaticMeshError),
-    StaticMeshInstance(crate::StaticMeshInstanceError),
-    AnimatedMesh(crate::AnimatedMeshAssetError),
-    AnimatedMeshInstance(crate::AnimatedMeshInstanceError),
-    ScatterPatch(crate::ScatterPatchError),
-    AnimatedPlayback(crate::AnimatedMeshPlaybackError),
-    AnimatedPose(crate::AnimatedMeshPoseError),
-    VoxelObject(crate::VoxelObjectRenderAssetError),
-    VoxelObjectInstance(crate::VoxelObjectInstanceError),
-    Asset(crate::RenderAssetError),
-    Sprite(crate::SpriteError),
-    SpriteBatch(crate::SpriteBatchError),
-    InvalidSpriteTint,
-}
-
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RenderFrameDiff {
@@ -2010,73 +1634,14 @@ impl RenderFrameDiff {
         })
     }
 
-    pub fn try_from_ops(ops: Vec<RenderDiff>) -> Result<Self, RenderFrameError> {
-        let frame = Self {
+    /// A frame of operations the Engine built from admitted values. Each
+    /// value was validated where it entered the Engine; the frame is not
+    /// validated again on its way to the renderer.
+    pub fn from_ops(ops: Vec<RenderDiff>) -> Self {
+        Self {
             publication: None,
             ops,
-        };
-        frame.validate()?;
-        Ok(frame)
-    }
-
-    pub fn try_from_published_ops(
-        stream: impl Into<String>,
-        base_revision: u64,
-        revision: u64,
-        ops: Vec<RenderDiff>,
-    ) -> Result<Self, RenderFrameError> {
-        let operation_count =
-            u32::try_from(ops.len()).map_err(|_| RenderFrameError::PublicationOperationCount {
-                expected: u32::MAX,
-                actual: ops.len(),
-            })?;
-        let frame = Self {
-            publication: Some(RenderFramePublication {
-                stream: stream.into(),
-                base_revision,
-                revision,
-                operation_count,
-            }),
-            ops,
-        };
-        frame.validate()?;
-        Ok(frame)
-    }
-
-    pub fn validate(&self) -> Result<(), RenderFrameError> {
-        if let Some(publication) = &self.publication {
-            if publication.stream.trim().is_empty() || publication.stream.len() > 256 {
-                return Err(RenderFrameError::InvalidPublicationStream);
-            }
-            if publication.base_revision > JSON_SAFE_U64_MAX {
-                return Err(RenderFrameError::PublicationRevisionNotJsonSafe {
-                    revision: publication.base_revision,
-                });
-            }
-            if publication.revision > JSON_SAFE_U64_MAX {
-                return Err(RenderFrameError::PublicationRevisionNotJsonSafe {
-                    revision: publication.revision,
-                });
-            }
-            if publication.base_revision.checked_add(1) != Some(publication.revision) {
-                return Err(RenderFrameError::InvalidPublicationRevisionStep {
-                    base_revision: publication.base_revision,
-                    revision: publication.revision,
-                });
-            }
-            if publication.operation_count as usize != self.ops.len() {
-                return Err(RenderFrameError::PublicationOperationCount {
-                    expected: publication.operation_count,
-                    actual: self.ops.len(),
-                });
-            }
         }
-        for (index, operation) in self.ops.iter().enumerate() {
-            operation
-                .validate()
-                .map_err(|source| RenderFrameError::Operation { index, source })?;
-        }
-        Ok(())
     }
 
     pub fn push(&mut self, operation: RenderDiff) {
@@ -2094,22 +1659,7 @@ impl RenderFrameDiff {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum RenderFrameError {
-    Operation {
-        index: usize,
-        source: RenderOperationError,
-    },
-    InvalidPublicationStream,
-    PublicationRevisionNotJsonSafe {
-        revision: u64,
-    },
-    InvalidPublicationRevisionStep {
-        base_revision: u64,
-        revision: u64,
-    },
-    PublicationOperationCount {
-        expected: u32,
-        actual: usize,
-    },
+    PublicationOperationCount { expected: u32, actual: usize },
 }
 
 #[cfg(test)]
@@ -2117,29 +1667,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn published_frame_requires_one_exact_revision_step() {
-        let frame = RenderFrameDiff::try_from_published_ops("voxel:test", 4, 5, Vec::new())
-            .expect("one exact step");
-        assert_eq!(frame.publication.unwrap().base_revision, 4);
-        assert!(matches!(
-            RenderFrameDiff::try_from_published_ops("voxel:test", 4, 6, Vec::new()),
-            Err(RenderFrameError::InvalidPublicationRevisionStep {
-                base_revision: 4,
-                revision: 6,
-            })
-        ));
-    }
-
-    #[test]
     fn camera_relative_viewmodel_layer_round_trips_without_backend_vocabulary() {
         let mut node = RenderNode::new(Geometry::Group);
         node.layer = RenderLayer::Viewmodel;
-        let frame = RenderFrameDiff::try_from_ops(vec![RenderDiff::Create {
+        let frame = RenderFrameDiff::from_ops(vec![RenderDiff::Create {
             handle: RenderHandle::new(8),
             parent: None,
             node,
-        }])
-        .unwrap();
+        }]);
 
         let json = serde_json::to_string(&frame).unwrap();
         assert!(json.contains("\"layer\":\"viewmodel\""));
@@ -2147,46 +1682,5 @@ mod tests {
             serde_json::from_str::<RenderFrameDiff>(&json).unwrap(),
             frame
         );
-    }
-
-    #[test]
-    fn invalid_operation_rejects_the_whole_frame() {
-        let invalid = RenderFrameDiff {
-            publication: None,
-            ops: vec![RenderDiff::Create {
-                handle: RenderHandle::new(1),
-                parent: None,
-                node: RenderNode {
-                    material: Material {
-                        color: [2.0, 0.0, 0.0, 1.0],
-                        wireframe: false,
-                    },
-                    ..RenderNode::new(Geometry::Cube)
-                },
-            }],
-        };
-        assert!(matches!(
-            invalid.validate(),
-            Err(RenderFrameError::Operation { index: 0, .. })
-        ));
-    }
-
-    #[test]
-    fn frame_rejects_handles_that_javascript_cannot_represent_exactly() {
-        let invalid = RenderFrameDiff {
-            publication: None,
-            ops: vec![RenderDiff::Create {
-                handle: RenderHandle::new(JSON_SAFE_U64_MAX + 1),
-                parent: None,
-                node: RenderNode::new(Geometry::Cube),
-            }],
-        };
-        assert!(matches!(
-            invalid.validate(),
-            Err(RenderFrameError::Operation {
-                index: 0,
-                source: RenderOperationError::Handle(RenderHandleError::OutsideJsonSafeRange(_))
-            })
-        ));
     }
 }

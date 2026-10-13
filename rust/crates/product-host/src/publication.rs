@@ -245,12 +245,11 @@ mod tests {
 
     #[test]
     fn typed_frame_and_binding_validate_without_wire_encoding() {
-        let frame = RenderFrameDiff::try_from_ops(vec![RenderDiff::Create {
+        let frame = RenderFrameDiff::from_ops(vec![RenderDiff::Create {
             handle: RenderHandle::new(1),
             parent: None,
             node: render_model::RenderNode::new(Geometry::Cube),
-        }])
-        .expect("fixture frame");
+        }]);
         let publication = RuntimePublication::Frame(frame);
         assert!(matches!(publication, RuntimePublication::Frame(_)));
         assert_eq!(

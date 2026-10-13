@@ -211,8 +211,7 @@ fn project_entry(
         },
     });
     operations.extend(projected.frame.ops.iter().cloned());
-    let projection = RenderFrameDiff::try_from_ops(operations)
-        .map_err(|error| format!("comparison frame failed validation: {error:?}"))?;
+    let projection = RenderFrameDiff::from_ops(operations);
     let packed_bytes = projected
         .mesh_resources
         .iter()

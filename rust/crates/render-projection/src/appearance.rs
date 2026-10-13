@@ -130,19 +130,15 @@ impl AppearanceResources {
     }
 }
 
-/// Brings `retained` up to the catalog's changed entries, validating each
-/// changed entry and the references to and from it. The work follows the
-/// changes, not the catalog. On failure `retained` is as it was.
+/// Brings `retained` up to the catalog's changed entries, checking the
+/// references to and from each. The work follows the changes, not the
+/// catalog. On failure `retained` is as it was.
 pub(crate) fn update_resources(
     input: &AppearanceResources,
     retained: &mut ResourceSnapshot,
 ) -> Result<ResourceUpdate, AppearanceProjectionError> {
     let mut update = ResourceUpdate::default();
-    if let Err(error) = apply_changes(input, retained, &mut update) {
-        // Refused part way: the values applied so far, and no counts.
-        update.restore(retained);
-        return Err(error);
-    }
+    apply_changes(input, retained, &mut update);
     update.count_references(retained, true);
     if let Err(error) = check_references(&update, retained) {
         update.undo(retained);
@@ -155,91 +151,45 @@ fn apply_changes(
     input: &AppearanceResources,
     retained: &mut ResourceSnapshot,
     update: &mut ResourceUpdate,
-) -> Result<(), AppearanceProjectionError> {
+) {
+    // Entries were validated when the services admitted them; only what
+    // changed is compared, and a shared mesh body is not compared or scanned.
     apply_kind(
         &input.materials,
         &mut retained.materials,
         &mut update.materials,
         |a, b| a == b,
-        |material| {
-            material
-                .validate()
-                .map_err(|source| AppearanceProjectionError::InvalidMaterial {
-                    id: material.id.clone(),
-                    source,
-                })
-        },
-    )?;
+    );
     apply_kind(
         &input.textures,
         &mut retained.textures,
         &mut update.textures,
         |a, b| a == b,
-        |texture| {
-            texture
-                .validate()
-                .map_err(|source| AppearanceProjectionError::InvalidTexture {
-                    id: texture.id.clone(),
-                    source,
-                })
-        },
-    )?;
+    );
     apply_kind(
         &input.shaders,
         &mut retained.shaders,
         &mut update.shaders,
         |a, b| a == b,
-        |shader| {
-            shader
-                .validate()
-                .map_err(|source| AppearanceProjectionError::InvalidShader {
-                    id: shader.id.clone(),
-                    source,
-                })
-        },
-    )?;
+    );
     apply_kind(
         &input.sprite_atlases,
         &mut retained.atlases,
         &mut update.atlases,
         |a, b| a == b,
-        |atlas| {
-            atlas
-                .validate()
-                .map_err(|source| AppearanceProjectionError::InvalidAtlas {
-                    id: atlas.id.clone(),
-                    source,
-                })
-        },
-    )?;
-    // A mesh body is validated when it first changes; the same shared
-    // allocation is not compared or scanned again.
+    );
     apply_kind(
         &input.static_meshes,
         &mut retained.static_meshes,
         &mut update.static_meshes,
         |a, b| unchanged(Some(a), b),
-        |mesh| {
-            mesh.validate()
-                .map_err(|source| AppearanceProjectionError::InvalidStaticMesh {
-                    id: mesh.asset.clone(),
-                    source,
-                })
-        },
-    )?;
+    );
     apply_kind(
         &input.animated_meshes,
         &mut retained.animated_meshes,
         &mut update.animated_meshes,
         |a, b| unchanged(Some(a), b),
-        |mesh| {
-            mesh.validate()
-                .map_err(|source| AppearanceProjectionError::InvalidAnimatedMesh {
-                    id: mesh.asset.clone(),
-                    source,
-                })
-        },
-    )
+    );
 }
 
 /// Applies one kind's changed entries to `retained`, recording each with
@@ -249,8 +199,7 @@ fn apply_kind<T: Clone + CatalogEntry>(
     retained: &mut BTreeMap<String, T>,
     record: &mut Vec<(String, Option<T>)>,
     same: impl Fn(&T, &T) -> bool,
-    validate: impl Fn(&T) -> Result<(), AppearanceProjectionError>,
-) -> Result<(), AppearanceProjectionError> {
+) {
     let ids: BTreeSet<String> = match input.changes() {
         ResourceChanges::Ids(ids) => ids.clone(),
         ResourceChanges::Whole => input
@@ -267,15 +216,11 @@ fn apply_kind<T: Clone + CatalogEntry>(
             _ => {}
         }
         let previous = match next {
-            Some(next) => {
-                validate(next)?;
-                retained.insert(id.clone(), next.clone())
-            }
+            Some(next) => retained.insert(id.clone(), next.clone()),
             None => retained.remove(&id),
         };
         record.push((id, previous));
     }
-    Ok(())
 }
 
 impl ResourceUpdate {
@@ -524,24 +469,16 @@ pub(crate) struct NodeValues<'a> {
     pub(crate) shadow_casting: ShadowCasting,
 }
 
-pub(crate) fn validate_appearance(
+/// An appearance's resources are retained: its mesh or atlas and the
+/// materials its overrides name. Its values were validated where the
+/// services admitted them.
+pub(crate) fn check_appearance_references(
     id: u64,
-    node: NodeValues<'_>,
-    metadata: &RenderMetadata,
+    appearance: &Appearance,
     resources: &ResourceSnapshot,
 ) -> Result<(), AppearanceProjectionError> {
-    match node.appearance {
-        Appearance::Primitive { geometry, material } => RenderNode {
-            geometry: *geometry,
-            material: *material,
-            transform: node.transform,
-            visible: node.visible,
-            layer: node.layer,
-            shadow_casting: node.shadow_casting,
-            metadata: metadata.clone(),
-        }
-        .validate()
-        .map_err(|source| AppearanceProjectionError::InvalidPrimitive { id, source }),
+    match appearance {
+        Appearance::Primitive { .. } => Ok(()),
         Appearance::StaticMesh {
             asset,
             material_overrides,
@@ -553,25 +490,12 @@ pub(crate) fn validate_appearance(
                     asset: asset.clone(),
                 });
             }
-            validate_material_references(asset, material_overrides, &resources.materials)?;
-            StaticMeshInstanceDescriptor {
-                asset: asset.clone(),
-                transform: node.transform,
-                visible: node.visible,
-                material_overrides: material_overrides.clone(),
-                metadata: metadata.clone(),
-                layer: node.layer,
-                shadow_casting: Default::default(),
-            }
-            .validate()
-            .map_err(|source| AppearanceProjectionError::InvalidStaticMeshInstance { id, source })
+            validate_material_references(asset, material_overrides, &resources.materials)
         }
         Appearance::AnimatedMesh {
             asset,
             material_overrides,
-            playback,
-            inspection,
-            material_parameters,
+            ..
         } => {
             if !resources.animated_meshes.contains_key(asset) {
                 return Err(AppearanceProjectionError::MissingAnimatedMesh {
@@ -579,56 +503,25 @@ pub(crate) fn validate_appearance(
                     asset: asset.clone(),
                 });
             }
-            validate_material_references(asset, material_overrides, &resources.materials)?;
-            if let Some((&slot, _)) = material_parameters
-                .iter()
-                .find(|(_, parameters)| parameters.validate().is_err())
-            {
-                return Err(AppearanceProjectionError::InvalidMaterialParameters { id, slot });
-            }
-            AnimatedMeshInstanceDescriptor {
-                inspection: inspection.clone(),
-                asset: asset.clone(),
-                transform: node.transform,
-                visible: node.visible,
-                material_overrides: material_overrides.clone(),
-                playback: playback.clone(),
-                metadata: metadata.clone(),
-                layer: node.layer,
-                shadow_casting: Default::default(),
-            }
-            .validate()
-            .map_err(|source| AppearanceProjectionError::InvalidAnimatedMeshInstance { id, source })
+            validate_material_references(asset, material_overrides, &resources.materials)
         }
-        Appearance::Sprite { sprite } => {
-            if !resources.atlases.contains_key(&sprite.asset) {
+        Appearance::Sprite {
+            sprite: SpriteInstanceDescriptor { asset, .. },
+        }
+        | Appearance::SpriteBatch {
+            batch:
+                SpriteBatchDescriptor {
+                    sprite: SpriteInstanceDescriptor { asset, .. },
+                    ..
+                },
+        } => {
+            if !resources.atlases.contains_key(asset) {
                 return Err(AppearanceProjectionError::MissingSpriteAtlas {
                     id,
-                    asset: sprite.asset.clone(),
+                    asset: asset.clone(),
                 });
             }
-            let mut projected = sprite.clone();
-            projected.transform = node.transform;
-            projected.visible = node.visible;
-            projected.metadata = metadata.clone();
-            projected
-                .validate()
-                .map_err(|source| AppearanceProjectionError::InvalidSprite { id, source })
-        }
-        Appearance::SpriteBatch { batch } => {
-            if !resources.atlases.contains_key(&batch.sprite.asset) {
-                return Err(AppearanceProjectionError::MissingSpriteAtlas {
-                    id,
-                    asset: batch.sprite.asset.clone(),
-                });
-            }
-            let mut projected = batch.clone();
-            projected.sprite.transform = node.transform;
-            projected.sprite.visible = node.visible;
-            projected.sprite.metadata = metadata.clone();
-            projected
-                .validate()
-                .map_err(|source| AppearanceProjectionError::InvalidSpriteBatch { id, source })
+            Ok(())
         }
     }
 }
@@ -1070,30 +963,6 @@ fn append_sprite_updates(
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum AppearanceProjectionError {
-    InvalidMaterial {
-        id: String,
-        source: render_model::MaterialDescriptorError,
-    },
-    InvalidTexture {
-        id: String,
-        source: render_model::TextureError,
-    },
-    InvalidAtlas {
-        id: String,
-        source: render_model::SpriteAtlasError,
-    },
-    InvalidStaticMesh {
-        id: String,
-        source: render_model::StaticMeshError,
-    },
-    InvalidAnimatedMesh {
-        id: String,
-        source: render_model::AnimatedMeshAssetError,
-    },
-    InvalidShader {
-        id: String,
-        source: render_model::RenderAssetError,
-    },
     MissingTexture {
         owner: String,
         texture: String,
@@ -1128,14 +997,6 @@ pub enum AppearanceProjectionError {
         id: u64,
         source: render_model::TransformError,
     },
-    InvalidNodeMetadata {
-        id: u64,
-        source: render_model::NodeError,
-    },
-    InvalidPrimitive {
-        id: u64,
-        source: render_model::NodeError,
-    },
     MissingStaticMesh {
         id: u64,
         asset: String,
@@ -1147,26 +1008,6 @@ pub enum AppearanceProjectionError {
     MissingSpriteAtlas {
         id: u64,
         asset: String,
-    },
-    InvalidStaticMeshInstance {
-        id: u64,
-        source: render_model::StaticMeshInstanceError,
-    },
-    InvalidAnimatedMeshInstance {
-        id: u64,
-        source: render_model::AnimatedMeshInstanceError,
-    },
-    InvalidMaterialParameters {
-        id: u64,
-        slot: u16,
-    },
-    InvalidSprite {
-        id: u64,
-        source: render_model::SpriteError,
-    },
-    InvalidSpriteBatch {
-        id: u64,
-        source: render_model::SpriteBatchError,
     },
     DuplicateLight {
         id: u64,

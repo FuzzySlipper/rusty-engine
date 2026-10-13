@@ -14,8 +14,8 @@ use render_model::{
 use serde::Deserialize;
 
 use crate::appearance::{
-    append_material_parameters, append_node_updates, create_node, light_kind, requires_recreate,
-    resource_diffs, update_resources, validate_appearance, NodeUpdate, NodeValues,
+    append_material_parameters, append_node_updates, check_appearance_references, create_node,
+    light_kind, requires_recreate, resource_diffs, update_resources, NodeUpdate, NodeValues,
     ResourceSnapshot, ResourceUpdate,
 };
 use crate::{
@@ -102,16 +102,6 @@ struct NextObject<'a> {
 }
 
 impl NextObject<'_> {
-    fn values(&self) -> NodeValues<'_> {
-        NodeValues {
-            appearance: self.appearance,
-            transform: self.transform,
-            visible: self.visible,
-            layer: self.layer,
-            shadow_casting: self.shadow_casting,
-        }
-    }
-
     fn retained(&self) -> RetainedObject {
         RetainedObject {
             parent: self.parent,
@@ -479,17 +469,8 @@ impl RuntimeAppearanceProjector {
                         previous.appearance_id != next.appearance_id
                             || previous.appearance != *next.appearance
                     });
-                    if appearance_changed
-                        || previous.is_some_and(|p| {
-                            p.layer != next.layer || p.shadow_casting != next.shadow_casting
-                        })
-                    {
-                        validate_appearance(
-                            id,
-                            next.values(),
-                            &object_metadata(id, next.appearance_id),
-                            resources,
-                        )?;
+                    if appearance_changed {
+                        check_appearance_references(id, next.appearance, resources)?;
                     }
                     if let Some(parent) = next.parent {
                         if next_parent(parent).is_none() {
@@ -1035,14 +1016,10 @@ mod tests {
     }
 
     #[test]
-    fn a_resource_update_refused_part_way_leaves_the_retained_resources_and_their_users() {
-        let invalid = || RenderMaterialDescriptor {
-            id: "material/z-invalid".to_owned(),
-            roughness: f32::NAN,
-            ..material()
-        };
-        // A texture no one uses yet: the refused material's use is not taken
-        // back from nothing.
+    fn a_refused_resource_update_leaves_the_retained_resources_and_their_users() {
+        let unresolved = || textured("material/z-unresolved", "texture/absent");
+        // A texture no one uses yet: the refused update's uses are taken
+        // back, so none is left counted against it.
         let mut projector = RuntimeAppearanceProjector::new(RuntimeAppearanceCatalog::default());
         projector
             .resources_mut()
@@ -1053,19 +1030,27 @@ mod tests {
         resources
             .materials
             .push(textured("material/a-valid", "texture/new"));
-        resources.materials.push(invalid());
-        assert!(matches!(
+        resources.materials.push(unresolved());
+        assert_eq!(
             projector.reconcile(),
-            Err(AppearanceProjectionError::InvalidMaterial { .. })
-        ));
+            Err(AppearanceProjectionError::MissingTexture {
+                owner: "material/z-unresolved".to_owned(),
+                texture: "texture/absent".to_owned(),
+            })
+        );
         let resources = projector.resources_mut();
         resources.materials.remove("material/a-valid");
-        resources.materials.remove("material/z-invalid");
-        assert!(projector
-            .reconcile()
-            .expect("nothing changed")
-            .ops
-            .is_empty());
+        resources.materials.remove("material/z-unresolved");
+        resources.textures.remove("texture/new");
+        assert_eq!(
+            projector
+                .reconcile()
+                .expect("an unused texture released")
+                .ops,
+            [RenderDiff::ReleaseTexture {
+                id: "texture/new".to_owned()
+            }]
+        );
 
         let mut projector = RuntimeAppearanceProjector::new(RuntimeAppearanceCatalog::default());
         projector
@@ -1078,23 +1063,24 @@ mod tests {
             .push(textured("material/holder", "texture/held"));
         projector.reconcile().expect("a texture and its material");
 
-        // A valid material is applied before an invalid one is refused.
+        // A new material and the removal of the texture it names are
+        // refused together.
         let resources = projector.resources_mut();
         resources
             .materials
             .push(textured("material/a-valid", "texture/held"));
-        resources.materials.push(invalid());
+        resources.materials.push(unresolved());
         resources.textures.remove("texture/held");
         assert!(matches!(
             projector.reconcile(),
-            Err(AppearanceProjectionError::InvalidMaterial { id, .. }) if id == "material/z-invalid"
+            Err(AppearanceProjectionError::MissingTexture { .. })
         ));
 
         // Without the new materials, the texture's retained user still
         // refuses its removal.
         let resources = projector.resources_mut();
         resources.materials.remove("material/a-valid");
-        resources.materials.remove("material/z-invalid");
+        resources.materials.remove("material/z-unresolved");
         assert_eq!(
             projector.reconcile(),
             Err(AppearanceProjectionError::MissingTexture {

@@ -419,8 +419,7 @@ pub(super) fn settle_poses(
     if ops.is_empty() {
         return Ok(());
     }
-    let frame = RenderFrameDiff::try_from_ops(ops)
-        .map_err(|error| pose_error(format!("animation pose frame is invalid: {error:?}")))?;
+    let frame = RenderFrameDiff::from_ops(ops);
     push_extra_frame(staged, frame);
     Ok(())
 }

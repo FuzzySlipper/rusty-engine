@@ -180,7 +180,7 @@ fn every_retained_operation_frame() -> RenderFrameDiff {
         metadata: metadata(7, "spark"),
     };
 
-    RenderFrameDiff::try_from_ops(vec![
+    RenderFrameDiff::from_ops(vec![
         RenderDiff::DefineTexture {
             texture: texture.clone(),
         },
@@ -312,71 +312,15 @@ fn every_retained_operation_frame() -> RenderFrameDiff {
             handle: RenderHandle::new(5),
         },
     ])
-    .unwrap()
 }
 
 #[test]
-fn every_retained_operation_validates_in_one_frame() {
-    assert_eq!(every_retained_operation_frame().len(), 18);
-}
-
-#[test]
-fn opaque_background_color_is_admitted_and_alpha_is_refused() {
-    RenderFrameDiff::try_from_ops(vec![RenderDiff::SetBackgroundColor {
-        color: [0.0, 0.0, 0.0, 1.0],
-    }])
-    .unwrap();
-    assert!(
-        RenderFrameDiff::try_from_ops(vec![RenderDiff::SetBackgroundColor {
-            color: [0.0, 0.0, 0.0, 0.5],
-        }])
-        .is_err()
+fn every_retained_operation_round_trips_in_one_frame() {
+    let frame = every_retained_operation_frame();
+    assert_eq!(frame.len(), 18);
+    let json = serde_json::to_string(&frame).unwrap();
+    assert_eq!(
+        serde_json::from_str::<RenderFrameDiff>(&json).unwrap(),
+        frame
     );
-}
-
-#[test]
-fn voxel_object_resource_and_frame_swap_validate() {
-    let asset = VoxelObjectRenderAsset {
-        asset: "voxel-object/runner".to_string(),
-        content_hash: "sha256:runner".to_string(),
-        meshes: vec![VoxelObjectRenderMesh {
-            payload: payload(MeshProvenance::VoxelObject),
-        }],
-        frames: vec![VoxelObjectRenderFrame {
-            id: "default".to_string(),
-            mesh: 0,
-        }],
-        material_slots: vec![MeshMaterialSlot {
-            slot: 0,
-            material: "material/plain".to_string(),
-        }],
-    };
-    RenderFrameDiff::try_from_ops(vec![
-        RenderDiff::DefineVoxelObject {
-            asset: asset.clone(),
-        },
-        RenderDiff::CreateVoxelObjectInstance {
-            handle: RenderHandle::new(9),
-            parent: None,
-            instance: VoxelObjectInstanceDescriptor {
-                asset: asset.asset,
-                frame: 0,
-                transform: Transform::IDENTITY,
-                visible: true,
-                material_overrides: Vec::new(),
-                metadata: metadata(9, "voxel object"),
-            },
-        },
-        RenderDiff::SetVoxelObjectFrame {
-            handle: RenderHandle::new(9),
-            frame: 0,
-        },
-        RenderDiff::Destroy {
-            handle: RenderHandle::new(9),
-        },
-        RenderDiff::ReleaseVoxelObject {
-            asset: "voxel-object/runner".to_string(),
-        },
-    ])
-    .unwrap();
 }

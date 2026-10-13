@@ -836,9 +836,10 @@ pub struct AnimationClipDescriptor {
 /// A semantic signature for direct clip playback against a particular rig.
 ///
 /// This is deliberately a declared, hash-addressable fact rather than a loose
-/// "humanoid" label. `asset-import` derives it at admission and decides clip-pack
-/// compatibility with it; renderer backends bind by its joint identities (skin
-/// joint node names) and do not re-validate it (see `docs/architecture.md`).
+/// "humanoid" label. `asset-import` derives and validates it once at admission
+/// and decides clip-pack compatibility with it; the asset validators and
+/// renderer backends bind by its joint identities (skin joint node names) and
+/// do not re-validate it (see `docs/architecture.md`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AnimationRigSignature {
@@ -1120,9 +1121,6 @@ impl AnimationClipPack {
         {
             return Err(AnimationClipPackError::EmptyProvenance);
         }
-        self.rig
-            .validate()
-            .map_err(|_| AnimationClipPackError::InvalidRig)?;
         if self.clips.is_empty() || self.clips.len() > 256 {
             return Err(AnimationClipPackError::InvalidClips);
         }
@@ -1163,7 +1161,6 @@ pub enum AnimationClipPackError {
     EmptyAsset,
     EmptyContentHash,
     EmptyProvenance,
-    InvalidRig,
     InvalidClips,
 }
 
@@ -1207,10 +1204,6 @@ impl AnimatedMeshAsset {
             return Err(AnimatedMeshAssetError::EmptyContentHash);
         }
         let mut ids = BTreeSet::new();
-        if let Some(rig) = &self.rig {
-            rig.validate()
-                .map_err(|_| AnimatedMeshAssetError::InvalidRig)?;
-        }
         for clip in &self.clips {
             if clip.id.trim().is_empty() {
                 return Err(AnimatedMeshAssetError::EmptyClipId);
@@ -1311,7 +1304,6 @@ pub enum AnimatedMeshAssetError {
     EmptyClipId,
     DuplicateClipId { clip: String },
     InvalidClipDuration { clip: String },
-    InvalidRig,
     ClipPack(AnimationClipPackError),
     DuplicateClipPack { asset: String },
     EffectiveClipCollision { clip: String },
@@ -2086,12 +2078,15 @@ mod tests {
             pack.rig.joints[0].id = name.to_owned();
             pack.rig.root_joint_id = name.to_owned();
             pack.rig.structural_root_ids = vec![name.to_owned()];
-            assert_eq!(pack.validate(), Ok(()));
+            assert_eq!(pack.rig.validate(), Ok(()));
         }
         for invalid in ["", " "] {
             pack.rig.joints[0].id = invalid.to_owned();
             pack.rig.root_joint_id = invalid.to_owned();
-            assert_eq!(pack.validate(), Err(AnimationClipPackError::InvalidRig));
+            assert_eq!(
+                pack.rig.validate(),
+                Err(AnimationRigSignatureError::Invalid)
+            );
         }
     }
 

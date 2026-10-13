@@ -1,8 +1,8 @@
 use asset_catalog::{
-    AssetCatalog, AtlasInset, AtlasPadding, AtlasRegionDefinition, CatalogEntry, MaterialAuthority,
-    MaterialDefinition, MaterialStyle, Rgba, StructuralClass, TextureDefinition, TextureFilter,
-    TextureWrap, UvStrategy, VoxelAlphaMode, VoxelAtlasDefinition, VoxelSurfaceBinding,
-    VoxelSurfaceMapping,
+    AdmittedAssetCatalog, AssetCatalog, AtlasInset, AtlasPadding, AtlasRegionDefinition,
+    CatalogEntry, MaterialAuthority, MaterialDefinition, MaterialStyle, Rgba, StructuralClass,
+    TextureDefinition, TextureFilter, TextureWrap, UvStrategy, VoxelAlphaMode,
+    VoxelAtlasDefinition, VoxelSurfaceBinding, VoxelSurfaceMapping,
 };
 use core_assets::{AssetHash, AssetId, AssetReference, AssetVersionReq};
 use render_model::{MaterialUvStrategy, VoxelSurfaceMappingDescriptor};
@@ -83,7 +83,8 @@ fn catalog_with_hashes(texture_hash: &str, atlas_hash: &str) -> AssetCatalog {
 
 #[test]
 fn canonical_surface_projects_exact_renderer_provenance_without_voxel_authority() {
-    let descriptor = project_catalog_material(&catalog(), &id("material/stone")).unwrap();
+    let admitted = AdmittedAssetCatalog::admit(catalog()).unwrap();
+    let descriptor = project_catalog_material(&admitted, &id("material/stone")).unwrap();
     assert_eq!(descriptor.id, "material/stone");
     assert_eq!(descriptor.texture.as_deref(), Some("texture/voxel-atlas"));
     assert_eq!(descriptor.uv_strategy, MaterialUvStrategy::Atlas);
@@ -111,52 +112,9 @@ fn canonical_surface_projects_exact_renderer_provenance_without_voxel_authority(
 
 #[test]
 fn algorithm_ambiguous_surface_hash_never_reaches_the_renderer_contract() {
-    let candidate = catalog_with_hashes("aa02", "bb03");
+    let candidate = AdmittedAssetCatalog::admit(catalog_with_hashes("aa02", "bb03")).unwrap();
     assert!(matches!(
         project_catalog_material(&candidate, &id("material/stone")),
         Err(CatalogMaterialProjectionError::InvalidSha256ContentHash)
-    ));
-}
-
-#[test]
-fn invalid_candidate_never_projects_or_mutates_the_admitted_catalog() {
-    let admitted = catalog();
-    let mut candidate = admitted.clone();
-    candidate
-        .entries
-        .iter_mut()
-        .find(|entry| entry.id.as_str() == "texture/voxel-atlas")
-        .unwrap()
-        .hash = Some(AssetHash::parse("ffff").unwrap());
-    assert!(matches!(
-        project_catalog_material(&candidate, &id("material/stone")),
-        Err(CatalogMaterialProjectionError::InvalidCatalog { .. })
-    ));
-    assert_eq!(
-        project_catalog_material(&admitted, &id("material/stone"))
-            .unwrap()
-            .texture
-            .as_deref(),
-        Some("texture/voxel-atlas")
-    );
-}
-
-#[test]
-fn conflicting_legacy_texture_never_projects_over_surface_authority() {
-    let mut candidate = catalog();
-    candidate
-        .entries
-        .iter_mut()
-        .find(|entry| entry.id.as_str() == "material/stone")
-        .unwrap()
-        .material
-        .as_mut()
-        .unwrap()
-        .style
-        .texture = Some(pinned("texture/conflicting", 1, "ffff"));
-    assert!(matches!(
-        project_catalog_material(&candidate, &id("material/stone")),
-        Err(CatalogMaterialProjectionError::InvalidCatalog { codes })
-            if codes.iter().any(|code| code == "conflicting_surface_texture")
     ));
 }

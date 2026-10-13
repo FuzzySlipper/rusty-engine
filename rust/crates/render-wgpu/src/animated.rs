@@ -1457,13 +1457,6 @@ impl Renderer {
         self.tables.animated.get(&handle)?.pose.get(node).copied()
     }
 
-    pub(crate) fn joint_pose(&self, handle: RenderHandle, joint: &str) -> Option<Mat4> {
-        let instance = self.tables.animated.get(&handle)?;
-        let asset = self.tables.animated_assets.get(instance.slot)?;
-        let node = *asset.joints.get(joint)?;
-        instance.pose.get(node).copied()
-    }
-
     /// The parts of an animated instance's node, in draw order: each GLB node
     /// with a mesh, each primitive, with its material binding.
     /// Each drawn primitive's mesh, index count, material and material slot.

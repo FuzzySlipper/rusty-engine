@@ -479,8 +479,9 @@ impl PresentationWorld {
         if operations.is_empty() {
             return Ok(RenderFrameDiff::new());
         }
-        // Every operation was validated on entry and copied without modification.
-        // Only the publication metadata is new; do not rescan the mesh bodies.
+        // Every operation carries values admitted where they entered the
+        // Engine, copied without modification. Only the publication metadata
+        // is new.
         let operation_count = u32::try_from(operations.len()).map_err(|_| {
             PresentationWorldError::Frame(RenderFrameError::PublicationOperationCount {
                 expected: u32::MAX,
@@ -1614,7 +1615,7 @@ mod tests {
     use super::*;
 
     fn frame(ops: Vec<RenderDiff>) -> RenderFrameDiff {
-        RenderFrameDiff::try_from_ops(ops).unwrap()
+        RenderFrameDiff::from_ops(ops)
     }
 
     fn static_mesh(asset: &str) -> StaticMeshAsset {
@@ -2564,7 +2565,7 @@ mod joint_attachment_tests {
             }),
         };
         let mut world = PresentationWorld::default();
-        let initial = RenderFrameDiff::try_from_ops(vec![
+        let initial = RenderFrameDiff::from_ops(vec![
             RenderDiff::DefineAnimatedMesh {
                 asset: asset.clone(),
             },
@@ -2592,25 +2593,22 @@ mod joint_attachment_tests {
                 handle: child,
                 joint: Some("Hand".into()),
             },
-        ])
-        .unwrap();
+        ]);
         world.apply(initial.clone()).unwrap();
         let baseline = world.snapshot();
         assert!(baseline.frame.ops.iter().any(|op| matches!(op, RenderDiff::SetParentJoint { handle, joint: Some(joint) } if *handle == child && joint == "Hand")));
         let mut restored = PresentationWorld::default();
         restored.apply(baseline.frame.clone()).unwrap();
         let revision = world.revision();
-        let repeated = RenderFrameDiff::try_from_ops(vec![RenderDiff::SetParentJoint {
+        let repeated = RenderFrameDiff::from_ops(vec![RenderDiff::SetParentJoint {
             handle: child,
             joint: Some("Hand".into()),
-        }])
-        .unwrap();
+        }]);
         assert!(world.apply(repeated.clone()).unwrap().ops.is_empty());
-        let bad = RenderFrameDiff::try_from_ops(vec![RenderDiff::SetParentJoint {
+        let bad = RenderFrameDiff::from_ops(vec![RenderDiff::SetParentJoint {
             handle: child,
             joint: Some("MissingHand".into()),
-        }])
-        .unwrap();
+        }]);
         assert!(world
             .apply(bad.clone())
             .unwrap_err()
@@ -2618,13 +2616,10 @@ mod joint_attachment_tests {
             .contains("MissingHand"));
         assert_eq!(world.revision(), revision);
         world
-            .apply(
-                RenderFrameDiff::try_from_ops(vec![
-                    RenderDiff::Destroy { handle: body },
-                    RenderDiff::ReleaseAnimatedMesh { asset: asset.asset },
-                ])
-                .unwrap(),
-            )
+            .apply(RenderFrameDiff::from_ops(vec![
+                RenderDiff::Destroy { handle: body },
+                RenderDiff::ReleaseAnimatedMesh { asset: asset.asset },
+            ]))
             .unwrap();
         assert!(!world
             .snapshot()
@@ -2639,21 +2634,17 @@ mod joint_attachment_tests {
         let root = RenderHandle::new(7);
         let mut world = PresentationWorld::default();
         let focus = |focus| {
-            RenderFrameDiff::try_from_ops(vec![RenderDiff::SetMorphFocus {
+            RenderFrameDiff::from_ops(vec![RenderDiff::SetMorphFocus {
                 handle: root,
                 focus,
             }])
-            .unwrap()
         };
         world
-            .apply(
-                RenderFrameDiff::try_from_ops(vec![RenderDiff::Create {
-                    handle: root,
-                    parent: None,
-                    node: RenderNode::new(Geometry::Group),
-                }])
-                .unwrap(),
-            )
+            .apply(RenderFrameDiff::from_ops(vec![RenderDiff::Create {
+                handle: root,
+                parent: None,
+                node: RenderNode::new(Geometry::Group),
+            }]))
             .unwrap();
         assert_eq!(world.apply(focus(Some([3.0, -4.0]))).unwrap().ops.len(), 1);
         assert!(world

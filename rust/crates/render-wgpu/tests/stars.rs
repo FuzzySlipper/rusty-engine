@@ -366,37 +366,6 @@ fn the_band_adds_over_the_sky_and_off_draws_nothing() {
 }
 
 #[test]
-fn invalid_fields_are_refused_by_the_model() {
-    let valid = StarsDescriptor {
-        catalogue: CATALOGUE.to_owned(),
-        band: None,
-        orientation: IDENTITY,
-        limiting_magnitude: 5.0,
-        brightness: 1.0,
-        band_strength: 0.0,
-        twinkle: 0.0,
-    };
-    let check = |stars: StarsDescriptor| RenderDiff::SetStars { stars: Some(stars) }.validate();
-    assert!(check(valid.clone()).is_ok());
-    for refused in [
-        StarsDescriptor {
-            orientation: [0.0; 4],
-            ..valid.clone()
-        },
-        StarsDescriptor {
-            band_strength: 2.0,
-            ..valid.clone()
-        },
-        StarsDescriptor {
-            catalogue: String::new(),
-            ..valid.clone()
-        },
-    ] {
-        assert!(check(refused).is_err());
-    }
-}
-
-#[test]
 fn the_moons_whole_disc_hides_the_stars_and_band_behind_it() {
     // A star straight ahead behind the moon, one 10° to its right, and the
     // band along the horizon behind it too; the moon new (dark) or a

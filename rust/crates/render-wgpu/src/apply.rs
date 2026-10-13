@@ -1,6 +1,7 @@
 //! Delta routing: each `RenderDiff` updates its table and marks what changed.
-//! A delta the backend cannot realize is reported and skipped; the retained
-//! model already validated every op, so nothing here re-validates it.
+//! A delta the backend cannot realize is reported and skipped; every op's
+//! values were validated where they entered the Engine, so nothing here
+//! re-validates them.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -478,16 +479,10 @@ impl Renderer {
                     .and_then(|(parent, joint)| self.joint_node(parent, joint));
                 self.node_mut(*handle)?.parent_joint_node = resolved;
                 self.tables.dirty_nodes.insert(*handle);
-                if let Some(joint) = joint {
-                    let parent = self.tables.nodes[handle].parent;
-                    if parent
-                        .and_then(|parent| self.joint_pose(parent, joint))
-                        .is_none()
-                    {
-                        return Err(format!(
-                            "joint {joint} is not a unique joint of the parent's animated mesh"
-                        ));
-                    }
+                if let (Some(joint), None) = (joint, resolved) {
+                    return Err(format!(
+                        "joint {joint} is not a unique joint of the parent's animated mesh"
+                    ));
                 }
             }
             RenderDiff::ReplaceMeshPayload { handle, payload } => {

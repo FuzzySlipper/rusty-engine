@@ -254,29 +254,6 @@ fn a_glowing_fog_volume_brightens_where_it_stands_and_goes_when_removed() {
 }
 
 #[test]
-fn invalid_fog_is_refused_by_the_model() {
-    let mut fog = VolumetricFogDescriptor::DEFAULT;
-    fog.distance = 2.0;
-    assert!(RenderDiff::SetVolumetricFog { fog }.validate().is_err());
-    let volume = FogVolumeDescriptor {
-        shape: FogVolumeShape::Box,
-        center: [0.0; 3],
-        half_extents: [0.0, 1.0, 1.0],
-        yaw_degrees: 0.0,
-        density: 0.5,
-        albedo: [1.0; 3],
-        emission: [0.0; 3],
-        edge: 0.2,
-        noise_scale: 0.0,
-        noise_strength: 0.0,
-        noise_velocity: [0.0; 3],
-    };
-    assert!(RenderDiff::SetFogVolume { id: 1, volume }
-        .validate()
-        .is_err());
-}
-
-#[test]
 fn volumetric_fog_replaces_the_analytic_fog_as_far_as_it_reaches() {
     // A wall 20 m ahead on the left, inside the grid's 60 m reach, and one
     // 95 m ahead on the right, beyond it (the camera sees 100 m), under a

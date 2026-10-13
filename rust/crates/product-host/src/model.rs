@@ -1948,10 +1948,9 @@ mod tests {
             }),
         );
 
-        let frame = RenderFrameDiff::try_from_ops(vec![render_model::RenderDiff::Destroy {
+        let frame = RenderFrameDiff::from_ops(vec![render_model::RenderDiff::Destroy {
             handle: render_model::RenderHandle::new(17),
-        }])
-        .unwrap();
+        }]);
         assert!(
             ProductHostRuntimeOutput::from_publication(RuntimePublication::Frame(frame)).is_none()
         );

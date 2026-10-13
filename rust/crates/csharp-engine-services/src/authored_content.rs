@@ -317,7 +317,7 @@ impl RuntimeAuthoredContentBridge {
                 "authored material projection catalog handle is not live",
             )
         })?;
-        project_catalog_material(catalog.catalog(), &material_id).map_err(|error| {
+        project_catalog_material(catalog, &material_id).map_err(|error| {
             crate::CsharpEngineServicesError::new(
                 "CSHARP_AUTHORED_MATERIAL_PROJECTION",
                 format!("authored material could not be projected: {error:?}"),

@@ -357,42 +357,6 @@ fn it_changes_nothing_else() {
 }
 
 #[test]
-fn invalid_moons_are_refused_by_the_model() {
-    let valid = MoonDescriptor {
-        direction: [0.0, 1.0, 0.0],
-        radius_degrees: 1.0,
-        color: [1.0; 3],
-        radiance: 1.0,
-        phase: 0.5,
-        earthshine: 0.0,
-        halo: 0.0,
-        light_intensity: 0.0,
-    };
-    let check = |moon| RenderDiff::SetMoon { moon: Some(moon) }.validate();
-    assert!(check(valid).is_ok());
-    for refused in [
-        MoonDescriptor {
-            direction: [0.0; 3],
-            ..valid
-        },
-        MoonDescriptor {
-            phase: 1.5,
-            ..valid
-        },
-        MoonDescriptor {
-            radius_degrees: 30.0,
-            ..valid
-        },
-        MoonDescriptor {
-            radiance: f32::NAN,
-            ..valid
-        },
-    ] {
-        assert!(check(refused).is_err(), "{refused:?}");
-    }
-}
-
-#[test]
 fn its_light_lights_the_clouds_at_night_toward_it_and_none_leaves_them_as_they_were() {
     // Broken cumulus at midnight (the sky's sun far below the horizon), a
     // full moon 60° up to the right (`side` 1) or left (-1), flat and

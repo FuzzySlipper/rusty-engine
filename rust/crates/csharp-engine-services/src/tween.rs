@@ -337,12 +337,7 @@ pub(crate) fn settle(staged: &mut RuntimeAppearanceCall) -> Result<(), CsharpEng
     if ops.is_empty() {
         return Ok(());
     }
-    let frame = RenderFrameDiff::try_from_ops(ops).map_err(|error| {
-        CsharpEngineServicesError::new(
-            "CSHARP_TWEEN_FRAME",
-            format!("tween frame is invalid: {error:?}"),
-        )
-    })?;
+    let frame = RenderFrameDiff::from_ops(ops);
     crate::appearance::push_extra_frame(staged, frame);
     Ok(())
 }

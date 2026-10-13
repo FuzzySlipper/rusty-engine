@@ -621,10 +621,7 @@ fn push_frame(
     if operations.is_empty() {
         return Ok(());
     }
-    frames.push(
-        RenderFrameDiff::try_from_ops(operations)
-            .map_err(|error| refused(format!("heightfield frame is invalid: {error:?}")))?,
-    );
+    frames.push(RenderFrameDiff::from_ops(operations));
     Ok(())
 }
 

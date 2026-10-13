@@ -3622,14 +3622,6 @@ impl RuntimeAppearanceBridge {
                         "authored material texture must be an admitted texture resource",
                     ));
                 }
-                if let Some(expected_hash) = authored_voxel_texture_hash(&material) {
-                    if resource.content_hash() != expected_hash {
-                        return Err(CsharpEngineServicesError::new(
-                            "CSHARP_AUTHORED_MATERIAL_TEXTURE_HASH",
-                            "selected texture bytes do not match the resolved authored texture hash",
-                        ));
-                    }
-                }
                 let mut texture = resource.texture().cloned().ok_or_else(|| {
                     CsharpEngineServicesError::new(
                         "CSHARP_AUTHORED_MATERIAL_TEXTURE",
@@ -4321,7 +4313,7 @@ impl RuntimeAppearanceBridge {
         self.allocate_appearance(Appearance::Primitive {
             geometry,
             material: Material {
-                color: native_color(request.color),
+                color: product_color(request.color, "CSHARP_PRIMITIVE_COLOR")?,
                 wireframe: request.wireframe,
             },
         })
@@ -4412,6 +4404,7 @@ impl RuntimeAppearanceBridge {
             });
             slots.insert(material_slot, ());
         }
+        product_color(request.color, "CSHARP_STATIC_MESH_COLOR")?;
         let handle = self.staged_mut()?.state.next_appearance;
         let mesh_id = format!("mesh/native-{handle}");
         let mut material_slots = Vec::with_capacity(slots.len());
@@ -4505,8 +4498,7 @@ impl RuntimeAppearanceBridge {
             material_slots: material_slots.clone(),
             collision: MeshCollisionPolicy::VisualOnly,
         };
-        // Every later projection revalidates catalog meshes, so refuse here rather
-        // than retaining an entry that would fail each subsequent snapshot.
+        // Admission: the projection retains catalog meshes as they are.
         asset.validate().map_err(|error| {
             CsharpEngineServicesError::new("CSHARP_STATIC_MESH_LAYOUT", format!("{error:?}"))
         })?;
@@ -4546,24 +4538,11 @@ impl RuntimeAppearanceBridge {
         content: crate::content::RetainedContent,
         color: NativeColor,
     ) -> Result<NativeAppearanceHandle, CsharpEngineServicesError> {
-        let (payload, slots, resource) = self.imports.static_mesh(content)?;
-        let browser_path = resource.path().to_owned();
-        let resource = self
-            .staged_mut()?
-            .state
-            .render_resources
-            .stage(resource, [browser_path])?;
-        let appearance = self.create_retained_static_mesh(payload, slots, color)?;
-        self.set_appearance_resources(appearance.value, [resource])?;
-        Ok(appearance)
-    }
-
-    fn create_retained_static_mesh(
-        &mut self,
-        payload: MeshPayloadDescriptor,
-        source_material_slots: Vec<MeshMaterialSlot>,
-        color: NativeColor,
-    ) -> Result<NativeAppearanceHandle, CsharpEngineServicesError> {
+        let (payload, source_material_slots, resource) = self.imports.static_mesh(content)?;
+        // Admission, before anything is retained: the product's colour, and
+        // the content's slots against its groups. The payload is the packed
+        // resource's, checked when the content was imported.
+        product_color(color, "CSHARP_STATIC_MESH_COLOR")?;
         let handle = self.staged_mut()?.state.next_appearance;
         let mesh_id = format!("mesh/native-{handle}");
         let mut material_slots = Vec::with_capacity(source_material_slots.len());
@@ -4576,21 +4555,31 @@ impl RuntimeAppearanceBridge {
             });
             materials.push(render_material(material, color));
         }
-        {
-            let resources = self.staged_mut()?.state.projector.resources_mut();
-            resources.materials.extend(materials);
-            resources.static_meshes.push(Arc::new(StaticMeshAsset {
-                asset: mesh_id.clone(),
-                payload,
-                material_slots,
-                collision: MeshCollisionPolicy::VisualOnly,
-            }));
-        }
-        self.allocate_appearance(Appearance::StaticMesh {
+        let asset = StaticMeshAsset {
+            asset: mesh_id.clone(),
+            payload,
+            material_slots,
+            collision: MeshCollisionPolicy::VisualOnly,
+        };
+        asset.validate().map_err(|error| {
+            CsharpEngineServicesError::new("CSHARP_STATIC_MESH_LAYOUT", format!("{error:?}"))
+        })?;
+        let browser_path = resource.path().to_owned();
+        let staged = self.staged_mut()?;
+        let resource = staged
+            .state
+            .render_resources
+            .stage(resource, [browser_path])?;
+        let resources = staged.state.projector.resources_mut();
+        resources.materials.extend(materials);
+        resources.static_meshes.push(Arc::new(asset));
+        let appearance = self.allocate_appearance(Appearance::StaticMesh {
             asset: mesh_id,
             material_overrides: Vec::new(),
             material_parameters: Default::default(),
-        })
+        })?;
+        self.set_appearance_resources(appearance.value, [resource])?;
+        Ok(appearance)
     }
 
     unsafe fn create_sprite_atlas(
@@ -4920,15 +4909,26 @@ impl RuntimeAppearanceBridge {
             )
         }?;
         let atlas = self.sprite_atlas(request.atlas)?;
-        if let Some(index) = instances
+        // Each instance's frame resolves in the atlas as it is copied.
+        let instances = instances
             .iter()
-            .position(|instance| !atlas.frames.contains_key(&instance.frame_id))
-        {
-            return Err(CsharpEngineServicesError::new(
-                "CSHARP_SPRITE_ATLAS_FRAME",
-                format!("sprite batch instance {index} names a frame the atlas does not define"),
-            ));
-        }
+            .enumerate()
+            .map(|(index, instance)| {
+                if !atlas.frames.contains_key(&instance.frame_id) {
+                    return Err(CsharpEngineServicesError::new(
+                        "CSHARP_SPRITE_ATLAS_FRAME",
+                        format!(
+                            "sprite batch instance {index} names a frame the atlas does not define"
+                        ),
+                    ));
+                }
+                Ok(SpriteBatchInstance {
+                    position: native_vec3_array(instance.position),
+                    scale: instance.scale,
+                    frame: instance.frame_id,
+                })
+            })
+            .collect::<Result<_, _>>()?;
         // The shared descriptor names a frame the atlas has; instances keep
         // their own.
         let shared_frame = *atlas
@@ -4948,17 +4948,7 @@ impl RuntimeAppearanceBridge {
             tint: request.tint,
             material: request.material,
         })?;
-        let batch = SpriteBatchDescriptor {
-            sprite,
-            instances: instances
-                .iter()
-                .map(|instance| SpriteBatchInstance {
-                    position: native_vec3_array(instance.position),
-                    scale: instance.scale,
-                    frame: instance.frame_id,
-                })
-                .collect(),
-        };
+        let batch = SpriteBatchDescriptor { sprite, instances };
         batch.validate().map_err(|error| {
             CsharpEngineServicesError::new("CSHARP_SPRITE_BATCH", format!("{error:?}"))
         })?;
@@ -5647,7 +5637,7 @@ impl RuntimeAppearanceBridge {
         sprite.validate().map_err(|error| {
             CsharpEngineServicesError::new("CSHARP_SPRITE_FRAME", format!("{error:?}"))
         })?;
-        // Catalog atlases are revalidated by every projection; refuse before retaining.
+        // Admission: the projection retains catalog atlases as they are.
         atlas.validate().map_err(|error| {
             CsharpEngineServicesError::new("CSHARP_SPRITE_FRAME", format!("{error:?}"))
         })?;
@@ -6014,18 +6004,12 @@ impl RuntimeAppearanceBridge {
                         .get(&instance.appearance)
                         .map(String::as_str)
         }) {
-            let frame = render_model::RenderFrameDiff::try_from_ops(vec![
+            let frame = render_model::RenderFrameDiff::from_ops(vec![
                 render_model::RenderDiff::SetAnimatedMeshPlayback {
                     handle: target,
                     playback: AnimatedMeshPlaybackCommand::Stop { fade_seconds: None },
                 },
-            ])
-            .map_err(|error| {
-                CsharpEngineServicesError::new(
-                    "CSHARP_ANIMATION_FRAME",
-                    format!("animation teardown frame is invalid: {error:?}"),
-                )
-            })?;
+            ]);
             push_extra_frame(staged, frame);
         }
         // Leave a target that outlives the instance without its controls.
@@ -6033,18 +6017,12 @@ impl RuntimeAppearanceBridge {
             *pose != AnimatedMeshPose::default()
                 && staged.state.projector.object_handle(instance.object_id) == Some(*target)
         }) {
-            let frame = render_model::RenderFrameDiff::try_from_ops(vec![
+            let frame = render_model::RenderFrameDiff::from_ops(vec![
                 render_model::RenderDiff::SetAnimatedMeshPose {
                     handle: target,
                     pose: AnimatedMeshPose::default(),
                 },
-            ])
-            .map_err(|error| {
-                CsharpEngineServicesError::new(
-                    "CSHARP_ANIMATION_FRAME",
-                    format!("animation teardown frame is invalid: {error:?}"),
-                )
-            })?;
+            ]);
             push_extra_frame(staged, frame);
         }
         staged.state.animation_instances.remove(&handle.value);
@@ -6885,15 +6863,9 @@ impl RuntimeAppearanceBridge {
         if !instance.pending_playback && instance.last_playback_target == Some(handle) {
             return Ok(());
         }
-        let frame = render_model::RenderFrameDiff::try_from_ops(vec![
+        let frame = render_model::RenderFrameDiff::from_ops(vec![
             render_model::RenderDiff::SetAnimatedMeshPlayback { handle, playback },
-        ])
-        .map_err(|error| {
-            CsharpEngineServicesError::new(
-                "CSHARP_ANIMATION_FRAME",
-                format!("animation playback frame is invalid: {error:?}"),
-            )
-        })?;
+        ]);
         push_extra_frame(staged, frame);
         let instance = staged
             .state
@@ -9556,6 +9528,24 @@ fn native_color(value: NativeColor) -> [f32; 4] {
     [value.r, value.g, value.b, value.a]
 }
 
+/// A product colour for a primitive or a mesh's own materials: finite, each
+/// channel 0 to 1. Admitted here; the projection retains it as it is.
+fn product_color(
+    value: NativeColor,
+    code: &'static str,
+) -> Result<[f32; 4], CsharpEngineServicesError> {
+    let color = native_color(value);
+    Material {
+        color,
+        wireframe: false,
+    }
+    .validate()
+    .map_err(|_| {
+        CsharpEngineServicesError::new(code, "colour channels must be finite and within 0 to 1")
+    })?;
+    Ok(color)
+}
+
 fn native_ghost_plate_placement(value: NativeGhostPlatePlacement) -> GhostPlatePlacement {
     GhostPlatePlacement {
         transform: Transform {
@@ -9773,10 +9763,8 @@ fn sprite_texture_descriptor(
             "sprite texture resource did not retain an admitted texture descriptor",
         )
     })?;
+    // Admitted with the resource; only the catalog identity changes.
     texture.id = texture_id;
-    texture.validate().map_err(|error| {
-        CsharpEngineServicesError::new("CSHARP_SPRITE_TEXTURE", format!("{error:?}"))
-    })?;
     Ok(texture)
 }
 
@@ -10128,22 +10116,6 @@ fn water_descriptor(
         foam_texture,
         ripple_texture,
     }))
-}
-
-fn authored_voxel_texture_hash(material: &RenderMaterialDescriptor) -> Option<&str> {
-    material
-        .voxel_surface
-        .as_ref()
-        .map(|surface| match &surface.mapping {
-            VoxelSurfaceMappingDescriptor::Repeat {
-                texture_content_hash,
-                ..
-            }
-            | VoxelSurfaceMappingDescriptor::Atlas {
-                texture_content_hash,
-                ..
-            } => texture_content_hash.as_str(),
-        })
 }
 
 fn authored_voxel_texture_version(surface: &VoxelSurfaceDescriptor) -> u32 {
@@ -13234,6 +13206,64 @@ fn shade(surface: Surface) -> vec4<f32> {
                 a: 1.0,
             },
         }
+    }
+
+    #[test]
+    fn colours_and_content_slots_are_admitted_by_the_call_that_supplies_them() {
+        // The projection retains admitted values as they are, so the call
+        // that supplies a value refuses it.
+        let mut unbound = triangle_mesh_document();
+        unbound.payload.groups[0].material_slot = 1;
+        let mut content_resources = BTreeMap::new();
+        content_resources.insert(
+            "mesh.json".to_owned(),
+            Arc::from(serde_json::to_vec(&triangle_mesh_document()).expect("mesh JSON")),
+        );
+        content_resources.insert(
+            "unbound.json".to_owned(),
+            Arc::from(serde_json::to_vec(&unbound).expect("mesh JSON")),
+        );
+        let mut bridge =
+            RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), content_resources);
+        bridge.begin_call();
+        let invalid = NativeColor {
+            r: f32::NAN,
+            g: 0.0,
+            b: 0.0,
+            a: 1.0,
+        };
+        let primitive = bridge.create_primitive(NativePrimitiveAppearanceRequest {
+            color: invalid,
+            ..primitive_request()
+        });
+        assert_eq!(primitive.unwrap_err().code(), "CSHARP_PRIMITIVE_COLOR");
+        let mesh =
+            bridge.create_static_mesh_from_content(&NativeStaticMeshContentAppearanceRequest {
+                color: NativeColor { r: 2.0, ..invalid },
+                ..mesh_content_request()
+            });
+        assert_eq!(mesh.unwrap_err().code(), "CSHARP_STATIC_MESH_COLOR");
+        let unbound =
+            bridge.create_static_mesh_from_content(&NativeStaticMeshContentAppearanceRequest {
+                path: NativeUtf8Slice {
+                    bytes: b"unbound.json".as_ptr(),
+                    len: b"unbound.json".len(),
+                },
+                ..mesh_content_request()
+            });
+        assert_eq!(unbound.unwrap_err().code(), "CSHARP_STATIC_MESH_LAYOUT");
+        // A refused content mesh retains nothing.
+        let state = &bridge.staged_ref().unwrap().state;
+        assert_eq!(state.render_resources.iter().count(), 0);
+        assert!(state.projector.resources().static_meshes.is_empty());
+
+        let primitive = bridge.create_primitive(primitive_request()).unwrap();
+        let mesh = bridge
+            .create_static_mesh_from_content(&mesh_content_request())
+            .unwrap();
+        let mut facts = [appearance_fact(primitive), appearance_fact(mesh)];
+        facts[1].object_id = 8;
+        unsafe { bridge.stage_snapshot(facts.as_ptr(), facts.len()) }.expect("admitted values");
     }
 
     #[test]

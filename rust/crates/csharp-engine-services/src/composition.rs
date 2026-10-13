@@ -882,18 +882,7 @@ impl EngineServiceSet {
         if !backdrops.is_empty() {
             match &mut sky_frame {
                 Some(frame) => frame.ops.extend(backdrops),
-                None => {
-                    sky_frame = Some(
-                        render_model::RenderFrameDiff::try_from_ops(backdrops).map_err(
-                            |error| {
-                                CsharpEngineServicesError::new(
-                                    "CSHARP_BACKDROP",
-                                    format!("backdrop frame is invalid: {error:?}"),
-                                )
-                            },
-                        )?,
-                    );
-                }
+                None => sky_frame = Some(render_model::RenderFrameDiff::from_ops(backdrops)),
             }
         }
         // A selection this call builds or drops the sessions' fields now; the
@@ -940,12 +929,11 @@ impl EngineServiceSet {
         // Water surfaces made before this call are removed ahead of its
         // Graphics work, which may release a material they drew with.
         let early = std::mem::take(&mut self.water_field.early);
-        if let Ok(frame) = render_model::RenderFrameDiff::try_from_ops(early) {
-            if !frame.ops.is_empty() {
-                output
-                    .appearance
-                    .insert(0, CsharpAppearanceCallOutput::Frame(frame));
-            }
+        if !early.is_empty() {
+            output.appearance.insert(
+                0,
+                CsharpAppearanceCallOutput::Frame(render_model::RenderFrameDiff::from_ops(early)),
+            );
         }
         output.frames.append(&mut self.water_field.frames);
         for item in &mut output.appearance {
@@ -1118,13 +1106,14 @@ impl EngineServiceSet {
         // Heightfield nodes made before this call go ahead of its Graphics
         // work, which may release a material they drew with.
         let early = std::mem::take(&mut call.heightfield.early);
-        let appearance = match render_model::RenderFrameDiff::try_from_ops(early) {
-            Ok(frame) if !frame.ops.is_empty() => {
-                std::iter::once(CsharpAppearanceCallOutput::Frame(frame))
-                    .chain(appearance)
-                    .collect()
-            }
-            _ => appearance,
+        let appearance = if early.is_empty() {
+            appearance
+        } else {
+            std::iter::once(CsharpAppearanceCallOutput::Frame(
+                render_model::RenderFrameDiff::from_ops(early),
+            ))
+            .chain(appearance)
+            .collect()
         };
         let mut frames = Vec::new();
         frames.extend(sky_frame);

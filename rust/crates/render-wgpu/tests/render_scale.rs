@@ -140,29 +140,3 @@ fn a_half_scale_frame_is_the_full_frame_resampled() {
         (WIDTH / 2, HEIGHT / 2)
     );
 }
-
-#[test]
-fn the_scale_must_be_within_half_and_one() {
-    for (scale, ok) in [
-        (0.25, false),
-        (0.5, true),
-        (0.75, true),
-        (1.0, true),
-        (1.5, false),
-    ] {
-        assert_eq!(
-            RenderDiff::SetRendererSettings {
-                settings: settings(scale),
-            }
-            .validate()
-            .is_ok(),
-            ok,
-            "scale {scale}"
-        );
-    }
-    assert!(RenderDiff::SetRendererSettings {
-        settings: settings(f32::NAN),
-    }
-    .validate()
-    .is_err());
-}

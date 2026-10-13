@@ -505,11 +505,7 @@ impl RuntimeVoxelScenePresentationBridge {
             },
         );
         let session = presentation.session;
-        staged.frames.push(
-            RenderFrameDiff::try_from_ops(operations).map_err(|error| {
-                refusal(format!("scatter material frame is invalid: {error:?}"))
-            })?,
-        );
+        staged.frames.push(RenderFrameDiff::from_ops(operations));
         let frame = project_all_presentations(&mut staged.state, &spatial)?;
         staged.frames.push(frame);
         let readout = presentation_readout(request.presentation, session, &staged.state, &spatial)?;
@@ -1234,21 +1230,18 @@ fn project_all_presentations(
                     })
             }))
             .collect::<Result<Vec<_>, _>>()?;
-        let publication = frame.publication.take();
+        // The definitions go ahead of the projected operations, and a
+        // published frame counts them.
         operations.append(&mut frame.ops);
-        frame = if let Some(publication) = publication {
-            RenderFrameDiff::try_from_published_ops(
-                publication.stream,
-                publication.base_revision,
-                publication.revision,
-                operations,
-            )
-        } else {
-            RenderFrameDiff::try_from_ops(operations)
+        if let Some(publication) = &mut frame.publication {
+            publication.operation_count = u32::try_from(operations.len()).map_err(|_| {
+                CsharpEngineServicesError::new(
+                    "CSHARP_VOXEL_SCENE_PRESENTATION",
+                    "a presentation frame has more than u32::MAX operations",
+                )
+            })?;
         }
-        .map_err(|error| {
-            CsharpEngineServicesError::new("CSHARP_VOXEL_SCENE_PRESENTATION", format!("{error:?}"))
-        })?;
+        frame.ops = operations;
     }
     Ok(frame)
 }

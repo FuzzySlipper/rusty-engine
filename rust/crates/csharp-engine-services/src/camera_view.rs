@@ -794,7 +794,7 @@ impl RuntimeCameraViewBridge {
                 density: request.density,
             }),
         };
-        if fog.is_some_and(|fog| fog.validate().is_err()) {
+        if fog.is_some_and(|fog| !fog.valid()) {
             return Err(CsharpEngineServicesError::new(
                 "CSHARP_FOG",
                 "fog needs a finite non-negative colour; linear fog 0 <= start < end; \
@@ -1744,14 +1744,7 @@ pub(crate) fn environment_frame(
     if operations.is_empty() {
         return Ok(None);
     }
-    RenderFrameDiff::try_from_ops(operations)
-        .map(Some)
-        .map_err(|error| {
-            CsharpEngineServicesError::new(
-                "CSHARP_SKY_BACKGROUND",
-                format!("sky frame is invalid: {error:?}"),
-            )
-        })
+    Ok(Some(RenderFrameDiff::from_ops(operations)))
 }
 
 fn background_operations(

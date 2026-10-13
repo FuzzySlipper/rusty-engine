@@ -145,36 +145,6 @@ fn project(
 }
 
 #[test]
-fn frame_border_rejects_structured_descriptor_bounds_without_projector_state() {
-    for mutate in [
-        |descriptor: &mut BillboardDescriptor| descriptor.layout = None,
-        |descriptor: &mut BillboardDescriptor| {
-            if let BillboardContent::Structured { indicator } = &mut descriptor.content {
-                indicator.width_pixels = 0.0;
-            }
-        },
-    ] {
-        let mut descriptor = structured_descriptor();
-        mutate(&mut descriptor);
-        let frame = PresentationFrameDiff {
-            publication: None,
-            schema_version: PRESENTATION_FRAME_SCHEMA_VERSION,
-            ops: vec![PresentationOp::Billboard {
-                meta: PresentationOpMeta::new(0),
-                op: BillboardProjectionOp::Create {
-                    handle: BillboardHandle::new(1),
-                    descriptor,
-                },
-            }],
-        };
-        assert!(matches!(
-            frame.validate(),
-            Err(PresentationFrameError::InvalidDescriptor { .. })
-        ));
-    }
-}
-
-#[test]
 fn structured_indicator_round_trips_and_derives_meter_fractions() {
     let descriptor = structured_descriptor();
     let meter = match &descriptor.content {
@@ -474,31 +444,5 @@ fn structured_create_replace_update_destroy_unknown_and_refused_update_are_atomi
             .unwrap_err()
             .code,
         BillboardProjectionDiagnosticCode::UnknownHandle
-    );
-}
-
-#[test]
-fn frame_rejects_nonfinite_structured_numbers() {
-    let mut invalid = structured_descriptor();
-    if let BillboardContent::Structured { indicator } = &mut invalid.content {
-        indicator.meters[0].preview = Some(f32::NAN);
-    }
-    let frame = PresentationFrameDiff {
-        publication: None,
-        schema_version: PRESENTATION_FRAME_SCHEMA_VERSION,
-        ops: vec![PresentationOp::Billboard {
-            meta: PresentationOpMeta::new(0),
-            op: BillboardProjectionOp::Create {
-                handle: BillboardHandle::new(1),
-                descriptor: invalid,
-            },
-        }],
-    };
-    assert_eq!(
-        frame.validate(),
-        Err(PresentationFrameError::NonFiniteNumber {
-            sequence: 0,
-            field: "billboard.meter.preview",
-        })
     );
 }

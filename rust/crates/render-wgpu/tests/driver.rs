@@ -286,7 +286,7 @@ fn the_driver_reports_what_it_drew_and_ends_clips_undrawn() {
     // with the call, drawn or not, so the Engine reads it before the next.
     let reporting = SceneDriver::new(gpu, RendererOptions::default());
     let body = Body::admit();
-    let create = RenderFrameDiff::try_from_ops(vec![
+    let create = RenderFrameDiff::from_ops(vec![
         RenderDiff::DefineAnimatedMesh {
             asset: body.asset.clone(),
         },
@@ -329,8 +329,7 @@ fn the_driver_reports_what_it_drew_and_ends_clips_undrawn() {
                 ..AnimatedMeshPose::default()
             },
         },
-    ])
-    .expect("a valid frame");
+    ]);
     reporting.apply(
         [SceneChange::Frame(&create)],
         &body,
@@ -364,7 +363,7 @@ fn the_driver_reports_what_it_drew_and_ends_clips_undrawn() {
     // Moving the instance, then its parent, at the same Engine time reports
     // the placement each call drew, though the pose did not change.
     let move_to = |handle: u64, x: f32| {
-        RenderFrameDiff::try_from_ops(vec![RenderDiff::Update {
+        RenderFrameDiff::from_ops(vec![RenderDiff::Update {
             handle: RenderHandle::new(handle),
             transform: Some(Transform {
                 translation: [x, 0.0, 0.0],
@@ -374,7 +373,6 @@ fn the_driver_reports_what_it_drew_and_ends_clips_undrawn() {
             visible: None,
             metadata: None,
         }])
-        .expect("a valid frame")
     };
     let mut placed = second[0].clone();
     for (handle, x, world_x) in [(1, 3.0, 3.0), (2, 5.0, 8.0)] {

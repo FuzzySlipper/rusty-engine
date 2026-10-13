@@ -5,10 +5,10 @@ use render_model::{
     MeshAttributeName, MeshBoundsDescriptor, MeshBufferLayout, MeshDescriptorError,
     MeshGroupDescriptor, MeshIndexWidth, MeshMaterialSlot, MeshPayloadDescriptor,
     MeshPayloadSource, MeshProvenance, MeshResourceError, MeshTextureSpace, PackedMeshResource,
-    RenderDiff, RenderFrameDiff, RenderFrameError, RenderHandle, RenderMaterialDescriptor,
-    RenderMetadata, Transform, TransformError, VoxelObjectInstanceDescriptor,
-    VoxelObjectRenderAsset, VoxelObjectRenderAssetError, VoxelObjectRenderFrame,
-    VoxelObjectRenderMesh, MAX_MESH_RESOURCE_BYTES,
+    RenderDiff, RenderFrameDiff, RenderHandle, RenderMaterialDescriptor, RenderMetadata, Transform,
+    TransformError, VoxelObjectInstanceDescriptor, VoxelObjectRenderAsset,
+    VoxelObjectRenderAssetError, VoxelObjectRenderFrame, VoxelObjectRenderMesh,
+    MAX_MESH_RESOURCE_BYTES,
 };
 use svc_mesh::SurfaceMode;
 use voxel_object_runtime::{AdmittedVoxelObject, VoxelObjectFrameSource, VoxelObjectRuntimeFrame};
@@ -229,8 +229,7 @@ impl VoxelObjectRenderProjector {
             }
         }
 
-        let frame =
-            RenderFrameDiff::try_from_ops(operations).map_err(VoxelObjectProjectionError::Frame)?;
+        let frame = RenderFrameDiff::from_ops(operations);
         self.registry = registry;
         self.last_instances = current_instances;
         self.last_resource_hashes = current_resource_hashes;
@@ -628,5 +627,4 @@ pub enum VoxelObjectProjectionError {
     },
     InvalidMesh(MeshDescriptorError),
     Handle(HandleAllocationError),
-    Frame(RenderFrameError),
 }

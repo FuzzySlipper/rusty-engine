@@ -272,9 +272,12 @@ Facts can form a hierarchy, so equipment and layered visuals compose with
 ordinary resources rather than feature-specific ABI calls.
 `RuntimeAppearanceProjector` (`render-projection`) retains each object's last
 fact, a parent/child index and the objects using each appearance. A batch of
-changes validates and emits operations for the named objects, plus any whose
-appearance or mesh definition changed. A complete snapshot is an adapter over
-the same path. Typed runtime mesh
+changes resolves references, parents and joints and emits operations for the
+named objects, plus any whose appearance or mesh definition changed. A
+complete snapshot is an adapter over the same path. Descriptors, colours and
+imported assets are validated once, where the services admit them; the
+projection, the frames the Engine builds and the presentation world trust
+them. Typed runtime mesh
 admission copies C# triangle streams into retained Engine resources. Mesh
 appearances reuse the existing material and static-mesh projection; explicit
 resource release removes its canonical definition and GPU realization.
