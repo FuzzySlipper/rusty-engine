@@ -20,6 +20,7 @@ internal static class EngineTestHostChecks
                 ["shaders/tint.wgsl"] = System.Text.Encoding.UTF8.GetBytes(TintShader),
                 ["shaders/broken.wgsl"] = System.Text.Encoding.UTF8.GetBytes(TintShader.Replace("surface.base", "missing")),
                 ["meshes/triangle.json"] = System.Text.Encoding.UTF8.GetBytes(TriangleMesh),
+                ["models/prop.glb"] = TwoCubeProp(),
             },
             LibraryPath = library,
         });
@@ -37,6 +38,31 @@ internal static class EngineTestHostChecks
             ExpectRefusal(() => engine.ContentSource.ReadDocument("textures/atlas.png"), "CONTENT_SOURCE_UNAVAILABLE");
             ExpectRefusal(() => engine.ContentSource.Edit(new ContentSourceDocument("meshes/triangle.json", default, default),
                 ContentSourceEdit.Remove("/positions")), "CONTENT_SOURCE_UNAVAILABLE");
+        });
+
+        host.Call(engine =>
+        {
+            // A GLB model's own triangles answer nearest points and rays
+            // where the caller places it, in the caller's space: the prop's
+            // grip cube spans x 9..11, y 1..3, z 1..3 there, its barrel cube
+            // z -2.5..-1.5.
+            using RenderResource prop = engine.Animation.OpenAnimatedMesh(new("models/prop.glb"));
+            Transform placement = new(new Vector3(10, 0, 0), Quaternion.Identity, new Vector3(2));
+            ModelSurfacePoint[] nearest = engine.Animation.QueryModelSurface(new(prop, placement,
+                new[] { new Vector3(10, 2, 3.5f), new Vector3(10, 2, 2.2f), new Vector3(10, 20, 0) }, 2f)).ToArray();
+            Require(nearest.Length == 3, "one answer per point");
+            Require(nearest[0].Found && !nearest[0].Inside && Near(nearest[0].Point, new(10, 2, 3))
+                && Near(nearest[0].Normal, Vector3.UnitZ) && MathF.Abs(nearest[0].Distance - .5f) < 1e-4f,
+                $"a point off the grip finds its face: {nearest[0]}");
+            Require(nearest[1].Found && nearest[1].Inside && MathF.Abs(nearest[1].Distance - .8f) < 1e-4f,
+                $"a point in the grip is inside: {nearest[1]}");
+            Require(!nearest[2].Found, "a point beyond reach finds nothing");
+            ModelRayHit[] hits = engine.Animation.CastModelRays(new(prop, placement,
+                new ModelRay[] { new(new(10, 2, 0), Vector3.UnitZ), new(new(10, 2, 0), -Vector3.UnitZ), new(new(10, 2, 2), Vector3.UnitY) }, 10f)).ToArray();
+            Require(hits[0].Hit && !hits[0].BackFace && Near(hits[0].Point, new(10, 2, 1)) && Near(hits[0].Normal, -Vector3.UnitZ),
+                $"a ray meets the grip: {hits[0]}");
+            Require(hits[1].Hit && Near(hits[1].Point, new(10, 2, -1.5f)), $"and the barrel: {hits[1]}");
+            Require(hits[2].Hit && hits[2].BackFace && Near(hits[2].Point, new(10, 3, 2)), $"a ray from inside meets a back face: {hits[2]}");
         });
 
         host.Call(engine =>
@@ -296,6 +322,69 @@ internal static class EngineTestHostChecks
     }
 
     private static void ExpectRefusal<T>(Func<T> operation, string code) => ExpectRefusal(() => { operation(); }, code);
+
+    private static bool Near(Vector3 a, Vector3 b) => Vector3.Distance(a, b) < 1e-4f;
+
+    /// <summary>
+    /// A GLB prop of two closed unit cubes on mesh nodes under one parent:
+    /// the parent turned 90° about y and raised 1, the children 1 to either
+    /// side of it, the second at half size. In the model the first cube's
+    /// centre is (0, 1, 1) and the second's (0, 1, -1).
+    /// </summary>
+    private static byte[] TwoCubeProp()
+    {
+        var positions = new List<float>();
+        var normals = new List<float>();
+        var indices = new List<ushort>();
+        (Vector3 Normal, Vector3 U, Vector3 V)[] faces =
+        {
+            (Vector3.UnitX, Vector3.UnitY, Vector3.UnitZ), (-Vector3.UnitX, Vector3.UnitZ, Vector3.UnitY),
+            (Vector3.UnitY, Vector3.UnitZ, Vector3.UnitX), (-Vector3.UnitY, Vector3.UnitX, Vector3.UnitZ),
+            (Vector3.UnitZ, Vector3.UnitX, Vector3.UnitY), (-Vector3.UnitZ, Vector3.UnitY, Vector3.UnitX),
+        };
+        foreach ((Vector3 normal, Vector3 u, Vector3 v) in faces)
+        {
+            ushort first = (ushort)(positions.Count / 3);
+            foreach ((float a, float b) in new[] { (-1f, -1f), (1f, -1f), (1f, 1f), (-1f, 1f) })
+            {
+                Vector3 corner = .5f * (normal + u * a + v * b);
+                positions.AddRange(new[] { corner.X, corner.Y, corner.Z });
+                normals.AddRange(new[] { normal.X, normal.Y, normal.Z });
+            }
+            indices.AddRange(new[] { first, (ushort)(first + 1), (ushort)(first + 2), first, (ushort)(first + 2), (ushort)(first + 3) });
+        }
+        var bin = new List<byte>();
+        foreach (float value in positions) bin.AddRange(BitConverter.GetBytes(value));
+        foreach (float value in normals) bin.AddRange(BitConverter.GetBytes(value));
+        foreach (ushort value in indices) bin.AddRange(BitConverter.GetBytes(value));
+        while (bin.Count % 4 != 0) bin.Add(0);
+        int vertexBytes = positions.Count * 4;
+        string half = (MathF.Sqrt(2) / 2).ToString(System.Globalization.CultureInfo.InvariantCulture);
+        string json = "{\"asset\":{\"version\":\"2.0\"},\"scene\":0,\"scenes\":[{\"nodes\":[0]}],"
+            + $"\"nodes\":[{{\"children\":[1,2],\"rotation\":[0,{half},0,{half}],\"translation\":[0,1,0]}},"
+            + "{\"mesh\":0,\"translation\":[-1,0,0]},{\"mesh\":0,\"translation\":[1,0,0],\"scale\":[0.5,0.5,0.5]}],"
+            + "\"meshes\":[{\"primitives\":[{\"attributes\":{\"POSITION\":0,\"NORMAL\":1},\"indices\":2}]}],"
+            + "\"accessors\":[{\"bufferView\":0,\"componentType\":5126,\"count\":24,\"type\":\"VEC3\",\"min\":[-0.5,-0.5,-0.5],\"max\":[0.5,0.5,0.5]},"
+            + "{\"bufferView\":1,\"componentType\":5126,\"count\":24,\"type\":\"VEC3\"},"
+            + "{\"bufferView\":2,\"componentType\":5123,\"count\":36,\"type\":\"SCALAR\"}],"
+            + $"\"bufferViews\":[{{\"buffer\":0,\"byteOffset\":0,\"byteLength\":{vertexBytes}}},"
+            + $"{{\"buffer\":0,\"byteOffset\":{vertexBytes},\"byteLength\":{vertexBytes}}},"
+            + $"{{\"buffer\":0,\"byteOffset\":{2 * vertexBytes},\"byteLength\":{indices.Count * 2}}}],"
+            + $"\"buffers\":[{{\"byteLength\":{bin.Count}}}]}}";
+        var jsonBytes = new List<byte>(System.Text.Encoding.UTF8.GetBytes(json));
+        while (jsonBytes.Count % 4 != 0) jsonBytes.Add((byte)' ');
+        var glb = new List<byte>();
+        glb.AddRange("glTF"u8.ToArray());
+        glb.AddRange(BitConverter.GetBytes(2u));
+        glb.AddRange(BitConverter.GetBytes((uint)(12 + 8 + jsonBytes.Count + 8 + bin.Count)));
+        glb.AddRange(BitConverter.GetBytes((uint)jsonBytes.Count));
+        glb.AddRange("JSON"u8.ToArray());
+        glb.AddRange(jsonBytes);
+        glb.AddRange(BitConverter.GetBytes((uint)bin.Count));
+        glb.AddRange("BIN\0"u8.ToArray());
+        glb.AddRange(bin);
+        return glb.ToArray();
+    }
 
     private static void Require(bool condition, string message)
     {

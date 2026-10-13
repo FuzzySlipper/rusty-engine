@@ -1736,6 +1736,8 @@ pub struct NativeAnimationApi {
     pub read: NativeReadAnimation,
     pub read_realization: NativeReadAnimationRealization,
     pub read_joint_pose: NativeReadAnimationJointPose,
+    pub query_model_surface: NativeQueryModelSurface,
+    pub cast_model_rays: NativeCastModelRays,
 }
 
 #[repr(C)]

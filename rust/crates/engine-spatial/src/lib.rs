@@ -91,9 +91,9 @@ pub use svc_collision::{
     cast_character_capsule_against_obstacles, character_capsule_overlap_obstacles,
     CharacterCapsule, CharacterCapsuleCastHit, CharacterCapsuleOverlap,
     CharacterCollisionQueryError, CharacterCollisionQueryStats, CharacterCollisionSource,
-    CharacterObstacle, StaticMeshAssetId, StaticMeshColliderAsset, StaticMeshColliderInstance,
-    StaticMeshCollisionError, StaticMeshCollisionReceipt, StaticMeshHit, StaticMeshInstanceId,
-    StaticMeshTransform,
+    CharacterObstacle, ModelSurface, ModelSurfaceHit, ModelSurfacePoint, StaticMeshAssetId,
+    StaticMeshColliderAsset, StaticMeshColliderInstance, StaticMeshCollisionError,
+    StaticMeshCollisionReceipt, StaticMeshHit, StaticMeshInstanceId, StaticMeshTransform,
 };
 pub use svc_mesh::distance_field;
 pub use svc_mesh::{

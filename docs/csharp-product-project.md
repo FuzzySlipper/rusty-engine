@@ -480,6 +480,35 @@ The animated-mesh path preserves materials, textures, skins and clips;
 material/joint/clip counts; `ReadClips(resource)` copies each clip ID, name and
 duration.
 
+`Animation.QueryModelSurface` and `Animation.CastModelRays` answer exact
+questions about a GLB model's own triangles. Each takes the resource, where the
+model stands (`Transform`) in a space of the caller's choosing, and a batch of
+points or rays in that same space. The model's mesh nodes are taken under
+their node transforms, at rest (an animated or skinned model in its bind
+pose).
+- A point within `MaxDistance` of the surface finds its nearest surface
+  point, the distance to it, and the outward normal (by winding) of the
+  triangle it lies on. `Inside` says the point is behind that surface: inside
+  the model when the mesh is closed.
+- A ray finds the first surface within `MaxDistance` along it, its distance
+  and normal. `BackFace` says the ray met that triangle from behind, from
+  inside a closed mesh.
+
+Nothing is retained between calls and nothing enters collision, so a held
+viewmodel can be measured in camera space against hand joints from
+[`ReadJointPose`](skeleton-poses.md#fitting-to-a-held-model). Each call reads
+the model's triangles again: about 20 ms for a 15,000-triangle prop, then
+about a microsecond per point. Batch a step's points into one call. It suits
+developer commands and fitting tools, not every frame.
+
+```csharp
+Transform shown = new(gripOffset, gripTurn, Vector3.One); // the model as drawn
+ReadOnlySpan<ModelSurfacePoint> near = engine.Animation.QueryModelSurface(
+    new(weaponResource, shown, fingertipProbes, MaxDistance: .02f)).Span;
+// near[i].Found, .Distance, .Inside: how far each probe is from the grip, and
+// whether it passed into it.
+```
+
 `Animation.UpdateAnimatedMeshMaterialFactors` gives one appearance its own
 factors for embedded material slots, keeping the slots' textures, maps and
 texture transforms. Each `MeshMaterialFactors` names a slot and replaces its

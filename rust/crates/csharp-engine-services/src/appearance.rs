@@ -1,6 +1,7 @@
 use crate::composition::{borrowed_slice, borrowed_utf8, CsharpEngineServicesError, ABI_OK};
 
 mod animation_pose;
+mod model_surface;
 pub use animation_pose::JointPoseReport;
 #[cfg(test)]
 pub(crate) use animation_pose::{character_for_test, ragdoll_layer_for_test};
@@ -9447,6 +9448,8 @@ pub(crate) fn animation_api(bridge: &mut RuntimeAppearanceBridge) -> NativeAnima
         read: read_animation,
         read_realization: read_animation_realization,
         read_joint_pose: animation_pose::read_animation_joint_pose,
+        query_model_surface: model_surface::query_model_surface,
+        cast_model_rays: model_surface::cast_model_rays,
     }
 }
 

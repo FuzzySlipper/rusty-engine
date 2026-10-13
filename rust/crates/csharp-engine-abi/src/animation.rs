@@ -551,6 +551,95 @@ pub type NativeSetAnimationPose = unsafe extern "C" fn(
     *const NativeAnimationPoseRequest,
     *mut crate::NativeOperationErrorReceipt,
 ) -> i32;
+/// Points to find a model's nearest surface to: a GLB model resource
+/// (`OpenAnimatedMesh`; its mesh nodes at rest, under their node
+/// transforms), where it stands in the caller's space, and points in that
+/// space. A point with no surface within `max_distance` finds none.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeModelSurfaceRequest {
+    pub model: NativeRenderResourceHandle,
+    pub placement: crate::NativeTransform,
+    pub points: *const crate::NativeVec3,
+    pub points_len: usize,
+    pub max_distance: f32,
+}
+
+/// The model's surface nearest one point, in the caller's space.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeModelSurfacePoint {
+    pub found: bool,
+    pub point: crate::NativeVec3,
+    /// The outward normal (by winding) of the triangle the point lies on.
+    pub normal: crate::NativeVec3,
+    pub distance: f32,
+    /// The query point lies behind the surface there: inside a closed mesh.
+    pub inside: bool,
+}
+
+/// One per point, in order; borrowed until the next Animation call.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeModelSurfacePointsResult {
+    pub points: *const NativeModelSurfacePoint,
+    pub points_len: usize,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeModelRay {
+    pub origin: crate::NativeVec3,
+    /// Any length but zero.
+    pub direction: crate::NativeVec3,
+}
+
+/// Rays to meet a model's surface with: the model and its placement as a
+/// surface request gives them, and rays in the caller's space, each reaching
+/// `max_distance`.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeModelRayRequest {
+    pub model: NativeRenderResourceHandle,
+    pub placement: crate::NativeTransform,
+    pub rays: *const NativeModelRay,
+    pub rays_len: usize,
+    pub max_distance: f32,
+}
+
+/// Where one ray first meets the model's surface, in the caller's space.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeModelRayHit {
+    pub hit: bool,
+    pub point: crate::NativeVec3,
+    /// The outward normal (by winding) of the triangle hit.
+    pub normal: crate::NativeVec3,
+    pub distance: f32,
+    /// The ray met the triangle from behind: from inside a closed mesh.
+    pub back_face: bool,
+}
+
+/// One per ray, in order; borrowed until the next Animation call.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeModelRayHitsResult {
+    pub hits: *const NativeModelRayHit,
+    pub hits_len: usize,
+}
+
+pub type NativeQueryModelSurface = unsafe extern "C" fn(
+    *mut std::ffi::c_void,
+    *const NativeModelSurfaceRequest,
+    *mut NativeModelSurfacePointsResult,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeCastModelRays = unsafe extern "C" fn(
+    *mut std::ffi::c_void,
+    *const NativeModelRayRequest,
+    *mut NativeModelRayHitsResult,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
 pub type NativeReadAnimationJointPose = unsafe extern "C" fn(
     *mut std::ffi::c_void,
     NativeAnimationInstanceHandle,

@@ -93,6 +93,47 @@ impl AnimatedGlbImportOutcome {
     }
 }
 
+/// The triangles a GLB draws at rest, in its own model space: positions and
+/// each triangle's corner indices into them.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GlbModelTriangles {
+    pub positions: Vec<[f64; 3]>,
+    pub triangles: Vec<[u32; 3]>,
+}
+
+/// The triangles an admitted GLB draws at rest, in its own model space: each
+/// mesh node's primitives under the node's model transform (an animated or
+/// skinned model in its bind pose), as a surface query builds them into a
+/// placed mesh.
+pub fn glb_model_triangles(source: &[u8]) -> Result<GlbModelTriangles, String> {
+    let request = MeshSourceImportRequest {
+        source_asset_id: "mesh/model-surface".to_owned(),
+        asset_version: 1,
+        source_path: "model.glb".to_owned(),
+        format: MeshSourceFormat::Glb,
+        source_bytes: source.to_vec(),
+        expected_source_sha256: None,
+        mesh_primitive: None,
+    };
+    // The static parser refuses skins and animations; the animated one
+    // gives those models' bind pose.
+    let mesh = match import_mesh_source(&request) {
+        Ok(imported) => imported.mesh,
+        Err(error) => import_animated_mesh_source_for_visual_metadata(&request)
+            .map(|imported| imported.source.mesh)
+            .map_err(|_| error.to_string())?,
+    };
+    let triangles = mesh
+        .triangles
+        .iter()
+        .map(|triangle| triangle.indices)
+        .collect();
+    Ok(GlbModelTriangles {
+        positions: mesh.positions,
+        triangles,
+    })
+}
+
 pub fn import_animated_glb_asset(
     source_uri: &SourceUri,
     source: &[u8],

@@ -27,6 +27,18 @@ Vector3 handAt = drawn.Joints.Span[(int)hand].World.Translation;
 curls a finger over the idle clip, and checks the reported hand against the
 target it was given (`pose.inspect`, `pose.curl <0..1>`, `pose.reach <bool>`).
 
+## Fitting to a held model
+
+To fit fingers to a held prop, read the drawn joints with `ReadJointPose` and
+place probe points along each finger segment. Then ask
+`Animation.QueryModelSurface` how far each probe is from the prop's own
+triangles, and whether it passed inside, with the prop at the transform it is
+drawn with
+([model surface queries](csharp-product-project.md#live-content-from-product-owned-sources)).
+Curl a joint until its probes come within reach. Both answers are in the
+caller's space, so a viewmodel is fitted in camera space without entering
+collision.
+
 ## Joints
 
 `ReadJoints(resource)` lists the admitted rig's skin joints, sorted by joint

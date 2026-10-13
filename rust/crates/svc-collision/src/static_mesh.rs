@@ -515,7 +515,9 @@ fn validate_geometry(
     Ok(())
 }
 
-fn validate_transform(transform: StaticMeshTransform) -> Result<(), StaticMeshCollisionError> {
+pub(crate) fn validate_transform(
+    transform: StaticMeshTransform,
+) -> Result<(), StaticMeshCollisionError> {
     if !transform
         .translation
         .iter()
@@ -540,7 +542,7 @@ fn validate_transform(transform: StaticMeshTransform) -> Result<(), StaticMeshCo
     Ok(())
 }
 
-fn transform_position(position: [f64; 3], transform: StaticMeshTransform) -> [f64; 3] {
+pub(crate) fn transform_position(position: [f64; 3], transform: StaticMeshTransform) -> [f64; 3] {
     let scaled = [
         position[0] * transform.scale[0],
         position[1] * transform.scale[1],

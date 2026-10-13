@@ -38,6 +38,7 @@
 
 mod dynamics;
 mod joint;
+mod model_surface;
 mod ragdoll;
 mod static_mesh;
 mod tether;
@@ -56,6 +57,7 @@ pub use dynamics::{
     DynamicsMassProperties, DynamicsShape, DynamicsSolver, DynamicsStepReceipt,
 };
 pub use joint::{DynamicsJoint, DynamicsJointError, DynamicsJointFrame, DynamicsJointLimit};
+pub use model_surface::{ModelSurface, ModelSurfaceHit, ModelSurfacePoint};
 pub use ragdoll::{
     DynamicsPlacement, RagdollBone, RagdollLink, RagdollMaterial, RagdollShape, RagdollSpawn,
 };

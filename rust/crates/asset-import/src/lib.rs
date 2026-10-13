@@ -18,8 +18,9 @@ mod sidecar;
 mod source;
 
 pub use animated_glb::{
-    import_animated_glb_asset, AnimatedGlbImportOutcome, AnimatedGlbImportReceipt,
-    GlbAnimationKind, ImportedAnimatedGlb, SUPPORTED_ANIMATED_GLB_VERSION,
+    glb_model_triangles, import_animated_glb_asset, AnimatedGlbImportOutcome,
+    AnimatedGlbImportReceipt, GlbAnimationKind, GlbModelTriangles, ImportedAnimatedGlb,
+    SUPPORTED_ANIMATED_GLB_VERSION,
 };
 pub use artifact::{
     render_animated_glb_artifacts, render_artifacts, ArtifactRenderError, GeneratedArtifact,
