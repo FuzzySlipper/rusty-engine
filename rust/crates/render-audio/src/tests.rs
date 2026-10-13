@@ -719,6 +719,38 @@ fn stop_all_silences_one_shots_and_voices() {
 }
 
 #[test]
+fn creating_a_live_voice_replaces_it_and_stops_the_old_playback() {
+    let mut realizer = capture_realizer();
+    let playing = restore(
+        2,
+        descriptor("sha256:wav", true),
+        AudioVoiceDesiredState::Playing,
+        0.0,
+    );
+    realizer.apply(&[playing], &Clips::fixtures(), &NoEntityPositions);
+    let before = realizer.backend_mut().render_peak(0.1);
+    assert!(before > 0.01, "fixture plays: {before}");
+    // The same handle again, paused: the old voice must not keep sounding.
+    let paused = restore(
+        2,
+        descriptor("sha256:wav", true),
+        AudioVoiceDesiredState::Paused,
+        0.0,
+    );
+    realizer.apply(&[paused], &Clips::fixtures(), &NoEntityPositions);
+    realizer.backend_mut().render_peak(0.05);
+    let after = realizer.backend_mut().render_peak(0.1);
+    assert!(after < 1e-5, "the replaced voice still emits {after}");
+    assert_eq!(realizer.readout().voices, 1);
+    realizer.refresh(&NoEntityPositions);
+    assert_eq!(
+        realizer.take_facts(),
+        [],
+        "a replacement is not a diagnostic"
+    );
+}
+
+#[test]
 fn retiring_one_shot_silences_it_without_completion() {
     let mut realizer = capture_realizer();
     realizer.apply(

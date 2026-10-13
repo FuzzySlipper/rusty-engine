@@ -867,7 +867,7 @@ fn additive_particles_add_to_the_scene_behind_them() {
 }
 
 #[test]
-fn particle_textures_are_released_when_their_last_emitter_and_particle_leave() {
+fn particle_textures_are_released_when_their_last_emitter_and_particle_leave_or_are_replaced() {
     let mut harness = Harness::new(RendererOptions::default());
     let mut ops = scene();
     // Three distinct images, so three content hashes.
@@ -943,8 +943,22 @@ fn particle_textures_are_released_when_their_last_emitter_and_particle_leave() {
     assert_eq!(harness.renderer.particle_texture_count(), 1);
     let eye = camera("eye", [0.0, 1.0, 1.5], 0.0, -10.0);
     let fountain_only = harness.single(&eye);
+    let fountain_particles = harness.renderer.particle_counts().0;
+    assert!(fountain_particles > 0);
 
-    // Destroying the emitter removes its particles, and with them C.
+    // Creating the live handle again replaces the fountain: its particles
+    // leave with it and C is released; the replacement bursts with A.
+    present(
+        &mut harness,
+        vec![ParticleProjectionOp::Create {
+            handle,
+            descriptor: emitter(a.clone(), [1.2, -0.5, -4.5], 5, 3),
+        }],
+    );
+    assert_eq!(harness.renderer.particle_counts(), (5, 1));
+    assert_eq!(harness.renderer.particle_texture_count(), 1);
+
+    // Destroying the emitter removes its particles, and with them A.
     present(&mut harness, vec![ParticleProjectionOp::Destroy { handle }]);
     assert_eq!(harness.renderer.particle_texture_count(), 0);
     assert_eq!(harness.renderer.particle_counts(), (0, 0));
@@ -1448,6 +1462,72 @@ fn a_sprite_batch_draws_what_its_sprites_would_in_one_draw() {
         }]);
         assert_eq!(batched.single(&eye), scene_only(&eye), "{billboard:?}");
     }
+}
+
+#[test]
+fn sprite_batch_buffers_go_with_their_node_when_destroyed_or_replaced() {
+    let mut harness = Harness::new(RendererOptions::default());
+    let mut ops = scene();
+    ops.extend(atlas_ops(&mut harness.resources));
+    let batch = |x: f32, count: u32| SpriteBatchDescriptor {
+        sprite: sprite(0, [x, 0.0, -4.0], BillboardMode::Spherical),
+        instances: (0..count)
+            .map(|index| SpriteBatchInstance {
+                position: [index as f32 * 0.4, 0.0, 0.0],
+                scale: 0.3,
+                frame: index % 2,
+            })
+            .collect(),
+    };
+    let (group, first, second) = (
+        RenderHandle::new(90),
+        RenderHandle::new(100),
+        RenderHandle::new(101),
+    );
+    ops.push(RenderDiff::Create {
+        handle: group,
+        parent: None,
+        node: RenderNode::new(Geometry::Group),
+    });
+    for (handle, x) in [(first, -1.5), (second, 0.5)] {
+        ops.push(RenderDiff::CreateSpriteBatch {
+            handle,
+            parent: Some(group),
+            batch: batch(x, 3),
+        });
+    }
+    harness.apply(ops);
+    let eye = camera("eye", [0.0, 0.6, 1.0], 0.0, -4.0);
+    let both = harness.single(&eye);
+    assert_eq!(harness.renderer.sprite_batch_buffer_count(), 2);
+
+    // A batch replaced by a batch: its buffers go at once and the next draw
+    // builds the replacement's (four instances, not three).
+    harness.apply(vec![RenderDiff::CreateSpriteBatch {
+        handle: first,
+        parent: Some(group),
+        batch: batch(-1.5, 4),
+    }]);
+    assert_eq!(harness.renderer.sprite_batch_buffer_count(), 1);
+    let stats = harness.renderer.render_offscreen(&eye, &harness.target);
+    assert_eq!(stats.sprite_batch_instances, 7);
+    assert_eq!(harness.renderer.sprite_batch_buffer_count(), 2);
+    assert_ne!(harness.target.read_rgba(&harness.gpu), both);
+
+    // Replaced by another kind of node: no buffers, no batch drawn.
+    harness.apply(vec![RenderDiff::Create {
+        handle: first,
+        parent: Some(group),
+        node: RenderNode::new(Geometry::Group),
+    }]);
+    assert_eq!(harness.renderer.sprite_batch_buffer_count(), 1);
+    let stats = harness.renderer.render_offscreen(&eye, &harness.target);
+    assert_eq!(stats.sprite_batch_instances, 3);
+
+    // Destroying the parent takes the surviving batch's buffers with it.
+    harness.apply(vec![RenderDiff::Destroy { handle: group }]);
+    assert_eq!(harness.renderer.sprite_batch_buffer_count(), 0);
+    assert_eq!(harness.single(&eye), scene_only(&eye));
 }
 
 #[test]

@@ -150,7 +150,6 @@ pub enum GhostPlateProjectionOp {
 #[serde(rename_all = "camelCase")]
 pub enum GhostPlateProjectionDiagnosticCode {
     InvalidDescriptor,
-    DuplicateHandle,
     UnknownHandle,
     UnknownSource,
     UnavailableHost,
@@ -257,12 +256,10 @@ impl GhostPlateProjector {
         op: &GhostPlateProjectionOp,
     ) -> Result<(), GhostPlateProjectionDiagnosticCode> {
         match op {
+            // Creating a live handle replaces its plate.
             GhostPlateProjectionOp::Create { handle, descriptor } => {
                 if handle.raw() > JSON_SAFE_U64_MAX {
                     return Err(GhostPlateProjectionDiagnosticCode::InvalidDescriptor);
-                }
-                if self.active.contains_key(handle) {
-                    return Err(GhostPlateProjectionDiagnosticCode::DuplicateHandle);
                 }
                 validate_descriptor(targets, descriptor)?;
                 self.active.insert(*handle, descriptor.clone());
@@ -408,9 +405,6 @@ const fn diagnostic_message(code: GhostPlateProjectionDiagnosticCode) -> &'stati
     match code {
         GhostPlateProjectionDiagnosticCode::InvalidDescriptor => {
             "ghost plate descriptor is invalid"
-        }
-        GhostPlateProjectionDiagnosticCode::DuplicateHandle => {
-            "ghost plate handle is already active"
         }
         GhostPlateProjectionDiagnosticCode::UnknownHandle => "ghost plate handle is not active",
         GhostPlateProjectionDiagnosticCode::UnknownSource => {

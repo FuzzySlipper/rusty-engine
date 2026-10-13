@@ -1022,6 +1022,9 @@ pub(crate) struct GeneratedMeshes {
     next_resource: u64,
     partitions: BTreeMap<u64, GeneratedMeshPartition>,
     next_partition: u64,
+    /// Live meshes and prepared partitions binding each material, with how
+    /// many.
+    material_users: BTreeMap<u64, u32>,
 }
 
 #[derive(Clone)]
@@ -1051,6 +1054,7 @@ impl Default for GeneratedMeshes {
             next_resource: 1,
             partitions: BTreeMap::new(),
             next_partition: 1,
+            material_users: BTreeMap::new(),
         }
     }
 }
@@ -1069,17 +1073,33 @@ impl GeneratedMeshes {
 
     /// A live mesh or a prepared partition binds this material.
     pub(crate) fn uses_material(&self, material: u64) -> bool {
-        self.partitions
-            .values()
-            .any(|partition| partition.material_handles.contains(&material))
-            || self
-                .resources
-                .values()
-                .any(|mesh| mesh.material_handles.contains(&material))
+        self.material_users.contains_key(&material)
+    }
+
+    /// Count one more (`add`) or one fewer user of each material.
+    fn count_materials(&mut self, materials: &BTreeSet<u64>, add: bool) {
+        for material in materials {
+            if add {
+                *self.material_users.entry(*material).or_default() += 1;
+            } else if let Some(count) = self.material_users.get_mut(material) {
+                *count -= 1;
+                if *count == 0 {
+                    self.material_users.remove(material);
+                }
+            }
+        }
     }
 
     pub(crate) fn remove(&mut self, handle: u64) {
-        self.resources.remove(&handle);
+        if let Some(mesh) = self.resources.remove(&handle) {
+            self.count_materials(&mesh.material_handles, false);
+        }
+    }
+
+    fn remove_partition(&mut self, partition: u64) {
+        if let Some(partition) = self.partitions.remove(&partition) {
+            self.count_materials(&partition.material_handles, false);
+        }
     }
 
     fn bind(
@@ -1137,6 +1157,7 @@ impl GeneratedMeshes {
         // Retain the typed definition. Delivery owns its eventual encoding;
         // do not serialize and discard an extra copy merely to measure it.
         let definition = Arc::new(bound.definition);
+        self.count_materials(&bound.material_handles, true);
         self.resources.insert(
             bound.handle,
             GeneratedMesh {
@@ -1187,6 +1208,7 @@ impl GeneratedMeshes {
         self.next_partition = handle
             .checked_add(1)
             .ok_or_else(|| invalid("mesh partition handle overflow"))?;
+        self.count_materials(&material_handles, true);
         self.partitions.insert(
             handle,
             GeneratedMeshPartition {
@@ -1232,6 +1254,7 @@ impl GeneratedMeshes {
             .ok_or_else(|| invalid("mesh partition part was already taken"))?;
         let material_handles = prepared.material_handles.clone();
         Arc::make_mut(&mut definition).asset = format!("mesh/runtime-{handle}");
+        self.count_materials(&material_handles, true);
         self.resources.insert(
             handle,
             GeneratedMesh {
@@ -1399,8 +1422,7 @@ pub(crate) unsafe extern "C" fn destroy_mesh_partition(
                 .staged_mut()?
                 .state
                 .generated_meshes
-                .partitions
-                .remove(&partition.value);
+                .remove_partition(partition.value);
             Ok(())
         })
     })

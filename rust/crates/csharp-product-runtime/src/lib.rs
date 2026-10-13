@@ -3636,9 +3636,6 @@ fn native_audio_diagnostic_code(
         render_presentation::AudioProjectionDiagnosticCode::DuplicateSignal => {
             NativeAudioDiagnosticCode::DuplicateSignal
         }
-        render_presentation::AudioProjectionDiagnosticCode::DuplicateHandle => {
-            NativeAudioDiagnosticCode::DuplicateHandle
-        }
         render_presentation::AudioProjectionDiagnosticCode::UnknownHandle => {
             NativeAudioDiagnosticCode::UnknownHandle
         }

@@ -134,7 +134,7 @@ struct SpriteInstance {
 }
 
 /// A sprite batch's buffers, built when the batch, its node's place or its
-/// shared values change, not per view.
+/// shared values change, not per view, and dropped with its node.
 struct BatchBuffers {
     /// The instances, node matrix and atlas the rows were built from.
     instances: std::sync::Arc<[render_model::SpriteBatchInstance]>,
@@ -397,6 +397,11 @@ impl Effects {
     /// its frames, changed.
     pub fn forget_sprite_batches(&mut self) {
         self.batches.clear();
+    }
+
+    /// Drop a destroyed or replaced node's sprite batch buffers.
+    pub fn forget_sprite_batch(&mut self, node: RenderHandle) {
+        self.batches.remove(&node);
     }
 
     /// Drop cached sprite bindings of a texture that was redefined or released.
@@ -1180,7 +1185,8 @@ impl Renderer {
                             .particles
                             .apply(op, texture, entities)
                             .map_err(|issue| format!("{issue:?}"));
-                        // A refused op leaves a freshly loaded slot unheld.
+                        // An update of an unknown emitter leaves a freshly
+                        // loaded slot unheld.
                         if let Some(slot) = texture {
                             if !self.particles.holds_texture(slot) {
                                 self.drop_particle_texture(slot);
@@ -1285,6 +1291,12 @@ impl Renderer {
     /// The live particle texture bindings (a readout for lifecycle checks).
     pub fn particle_texture_count(&self) -> usize {
         self.effects.particle_texture_ids.len()
+    }
+
+    /// The sprite batches holding GPU buffers (a readout for lifecycle
+    /// checks).
+    pub fn sprite_batch_buffer_count(&self) -> usize {
+        self.effects.batches.len()
     }
 
     /// Load a particle sprite once per content hash, from the admitted
@@ -1397,11 +1409,6 @@ impl Renderer {
         let pixel_ratio = self.pixel_ratio();
         let mut draws = std::mem::take(&mut self.effects.sprite_scratch);
         draws.clear();
-        // Buffers of batches that are gone.
-        let sprites = &self.tables.sprites;
-        self.effects
-            .batches
-            .retain(|handle, _| sprites.contains(handle));
         for handle in &self.tables.sprites {
             pass.sprite_candidates += 1;
             let Some(node) = self.tables.nodes.get(handle) else {

@@ -694,8 +694,6 @@ impl Renderer {
         }
         if matches!(kind, NodeKind::Sprite(_)) {
             self.tables.sprites.insert(handle);
-        } else {
-            self.tables.sprites.remove(&handle);
         }
         self.tables.nodes.insert(
             handle,
@@ -756,6 +754,7 @@ impl Renderer {
             }
             self.tables.lights.remove(&handle);
             self.tables.sprites.remove(&handle);
+            self.effects.forget_sprite_batch(handle);
             self.tables.dirty_nodes.remove(&handle);
         }
     }

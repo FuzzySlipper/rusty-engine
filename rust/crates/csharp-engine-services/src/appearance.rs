@@ -1260,6 +1260,8 @@ pub(crate) struct RuntimeAppearanceData {
     next_appearance: u64,
     pub(crate) generated_meshes: GeneratedMeshes,
     mesh_appearances: BTreeMap<u64, u64>,
+    /// Appearances drawing each mesh resource, with how many.
+    mesh_resource_appearances: BTreeMap<u64, u32>,
     lights: BTreeMap<u64, RuntimeLightFact>,
     /// Live lights whose parent object is not in the published scene: they
     /// are not projected and show once a snapshot publishes the parent.
@@ -1267,6 +1269,8 @@ pub(crate) struct RuntimeAppearanceData {
     next_light: u64,
     materials: BTreeMap<u64, String>,
     appearance_materials: BTreeMap<u64, BTreeSet<u64>>,
+    /// Appearances binding each material, by material handle, with how many.
+    material_appearances: BTreeMap<u64, u32>,
     next_material: u64,
     pub(crate) render_resources: RenderResourceRegistry,
     /// Direct users hold exact resource handles, never projector catalog entries.
@@ -1292,6 +1296,8 @@ pub(crate) struct RuntimeAppearanceData {
     next_sprite_playback: u64,
     animated_appearances: BTreeMap<u64, u64>,
     animation_instances: BTreeMap<u64, AnimationInstance>,
+    /// Animation instances on each appearance, with how many.
+    appearance_animation_instances: BTreeMap<u64, u32>,
     animation_graphs: BTreeMap<u64, AnimationGraphBuilder>,
     animation_transitions: BTreeMap<u64, AnimationTransitionRef>,
     animation_controllers: BTreeMap<u64, AnimationController>,
@@ -1404,6 +1410,10 @@ struct AnimationGraphBuilder {
     resource: u64,
     definition: AnimationGraphDefinition,
     state_order: Vec<String>,
+    /// The transition handles that name this graph.
+    transitions: Vec<u64>,
+    /// How many live controllers drive this graph.
+    controllers: u32,
 }
 
 #[derive(Clone, Copy)]
@@ -1619,11 +1629,13 @@ impl RuntimeAppearanceBridge {
             next_appearance: 1,
             generated_meshes: GeneratedMeshes::default(),
             mesh_appearances: BTreeMap::new(),
+            mesh_resource_appearances: BTreeMap::new(),
             lights: BTreeMap::new(),
             pending_lights: BTreeSet::new(),
             next_light: 1,
             materials: BTreeMap::new(),
             appearance_materials: BTreeMap::new(),
+            material_appearances: BTreeMap::new(),
             next_material: 1,
             render_resources: RenderResourceRegistry::default(),
             appearance_resources: HeldResources::default(),
@@ -1645,6 +1657,7 @@ impl RuntimeAppearanceBridge {
             next_sprite_playback: 1,
             animated_appearances: BTreeMap::new(),
             animation_instances: BTreeMap::new(),
+            appearance_animation_instances: BTreeMap::new(),
             animation_graphs: BTreeMap::new(),
             animation_transitions: BTreeMap::new(),
             animation_controllers: BTreeMap::new(),
@@ -3866,9 +3879,8 @@ impl RuntimeAppearanceBridge {
         };
         if staged
             .state
-            .appearance_materials
-            .values()
-            .any(|bindings| bindings.contains(&material.value))
+            .material_appearances
+            .contains_key(&material.value)
             || staged.state.generated_meshes.uses_material(material.value)
             || staged
                 .state
@@ -3906,9 +3918,8 @@ impl RuntimeAppearanceBridge {
         }
         if staged
             .state
-            .animation_instances
-            .values()
-            .any(|instance| instance.appearance == appearance.value)
+            .appearance_animation_instances
+            .contains_key(&appearance.value)
         {
             return Err(CsharpEngineServicesError::new(
                 "CSHARP_ANIMATION_APPEARANCE_IN_USE",
@@ -3944,8 +3955,12 @@ impl RuntimeAppearanceBridge {
         staged
             .state
             .release_held(Holder::Appearance, appearance.value);
-        staged.state.appearance_materials.remove(&appearance.value);
-        staged.state.mesh_appearances.remove(&appearance.value);
+        staged
+            .state
+            .bind_appearance_materials(appearance.value, BTreeSet::new());
+        if let Some(resource) = staged.state.mesh_appearances.remove(&appearance.value) {
+            count_user(&mut staged.state.mesh_resource_appearances, resource, false);
+        }
         staged.state.animated_appearances.remove(&appearance.value);
         staged
             .state
@@ -4073,8 +4088,7 @@ impl RuntimeAppearanceBridge {
         }
         staged
             .state
-            .appearance_materials
-            .insert(request.appearance.value, material_handles);
+            .bind_appearance_materials(request.appearance.value, material_handles);
         Ok(())
     }
 
@@ -4230,8 +4244,7 @@ impl RuntimeAppearanceBridge {
         }
         staged
             .state
-            .appearance_materials
-            .insert(request.appearance.value, material_handles);
+            .bind_appearance_materials(request.appearance.value, material_handles);
         Ok(())
     }
 
@@ -4325,10 +4338,11 @@ impl RuntimeAppearanceBridge {
             material_overrides: Vec::new(),
             material_parameters: Default::default(),
         })?;
-        self.staged_mut()?
-            .state
+        let state = &mut *self.staged_mut()?.state;
+        state
             .mesh_appearances
             .insert(appearance.value, resource.value);
+        count_user(&mut state.mesh_resource_appearances, resource.value, true);
         Ok(appearance)
     }
 
@@ -4342,9 +4356,8 @@ impl RuntimeAppearanceBridge {
         };
         if staged
             .state
-            .mesh_appearances
-            .values()
-            .any(|handle| *handle == resource.value)
+            .mesh_resource_appearances
+            .contains_key(&resource.value)
         {
             return Err(CsharpEngineServicesError::new(
                 "CSHARP_MESH_IN_USE",
@@ -5795,16 +5808,11 @@ impl RuntimeAppearanceBridge {
         })?;
 
         let staged = self.staged_mut()?;
+        // Animated appearances and graphs are what hold an animated mesh.
         if staged
             .state
-            .animated_appearances
-            .values()
-            .any(|handle| *handle == request.primary_mesh.value)
-            || staged
-                .state
-                .animation_graphs
-                .values()
-                .any(|graph| graph.resource == request.primary_mesh.value)
+            .render_resources
+            .held(request.primary_mesh.value)
         {
             return Err(CsharpEngineServicesError::new(
                 "CSHARP_ANIMATION_CLIP_PACK_ASSOCIATION_CLOSED",
@@ -5910,6 +5918,11 @@ impl RuntimeAppearanceBridge {
                 "animation instance handles exhausted",
             )
         })?;
+        count_user(
+            &mut state.appearance_animation_instances,
+            request.appearance.value,
+            true,
+        );
         state.animation_instances.insert(
             handle,
             AnimationInstance {
@@ -6040,6 +6053,11 @@ impl RuntimeAppearanceBridge {
             push_extra_frame(staged, frame);
         }
         staged.state.animation_instances.remove(&handle.value);
+        count_user(
+            &mut staged.state.appearance_animation_instances,
+            instance.appearance,
+            false,
+        );
         Ok(())
     }
 
@@ -6119,6 +6137,8 @@ impl RuntimeAppearanceBridge {
                     transitions: Vec::new(),
                 },
                 state_order: Vec::new(),
+                transitions: Vec::new(),
+                controllers: 0,
             },
         );
         staged.state.set_held(
@@ -6133,28 +6153,24 @@ impl RuntimeAppearanceBridge {
         &mut self,
         graph: NativeAnimationGraphHandle,
     ) -> Result<(), CsharpEngineServicesError> {
-        let staged = self.staged_mut()?;
-        if staged
-            .state
-            .animation_controllers
-            .values()
-            .any(|controller| controller.graph == graph.value)
-        {
+        let state = &mut *self.staged_mut()?.state;
+        let Some(builder) = state.animation_graphs.get(&graph.value) else {
+            return Ok(());
+        };
+        if builder.controllers > 0 {
             return Err(CsharpEngineServicesError::new(
                 "CSHARP_ANIMATION_GRAPH_IN_USE",
                 "dispose controllers using this graph before disposing it",
             ));
         }
-        if staged.state.animation_graphs.remove(&graph.value).is_none() {
-            return Ok(());
+        let builder = state
+            .animation_graphs
+            .remove(&graph.value)
+            .expect("checked graph");
+        state.release_held(Holder::AnimationGraph, graph.value);
+        for transition in builder.transitions {
+            state.animation_transitions.remove(&transition);
         }
-        staged
-            .state
-            .release_held(Holder::AnimationGraph, graph.value);
-        staged
-            .state
-            .animation_transitions
-            .retain(|_, transition| transition.graph != graph.value);
         Ok(())
     }
 
@@ -6336,6 +6352,13 @@ impl RuntimeAppearanceBridge {
                 index,
             },
         );
+        staged
+            .state
+            .animation_graphs
+            .get_mut(&request.graph.value)
+            .expect("graph found above")
+            .transitions
+            .push(handle);
         Ok(NativeAnimationTransitionHandle { value: handle })
     }
 
@@ -6513,6 +6536,12 @@ impl RuntimeAppearanceBridge {
             .get_mut(&request.instance.value)
             .expect("validated instance remains live")
             .controller = Some(handle);
+        staged
+            .state
+            .animation_graphs
+            .get_mut(&request.graph.value)
+            .expect("validated graph remains live")
+            .controllers += 1;
         staged.state.animation_controllers.insert(
             handle,
             AnimationController {
@@ -6575,7 +6604,11 @@ impl RuntimeAppearanceBridge {
         } else {
             None
         };
-        staged.state.animation_controllers.remove(&handle.value);
+        if let Some(controller) = staged.state.animation_controllers.remove(&handle.value) {
+            if let Some(graph) = staged.state.animation_graphs.get_mut(&controller.graph) {
+                graph.controllers -= 1;
+            }
+        }
         if let Some(frame) = frame {
             push_presentation_frame(staged, frame);
         }
@@ -7529,9 +7562,6 @@ fn native_billboard_diagnostic_code(
         BillboardProjectionDiagnosticCode::ContentHashMismatch => {
             NativePresentationDiagnosticCode::ContentHashMismatch
         }
-        BillboardProjectionDiagnosticCode::DuplicateHandle => {
-            NativePresentationDiagnosticCode::DuplicateHandle
-        }
         BillboardProjectionDiagnosticCode::UnknownHandle => {
             NativePresentationDiagnosticCode::UnknownHandle
         }
@@ -7571,9 +7601,6 @@ fn native_particle_diagnostic_code(
         }
         ParticleProjectionDiagnosticCode::DuplicateSignal => {
             NativePresentationDiagnosticCode::DuplicateSignal
-        }
-        ParticleProjectionDiagnosticCode::DuplicateHandle => {
-            NativePresentationDiagnosticCode::DuplicateHandle
         }
         ParticleProjectionDiagnosticCode::UnknownHandle => {
             NativePresentationDiagnosticCode::UnknownHandle
@@ -9875,7 +9902,34 @@ impl HeldResources {
     }
 }
 
+/// One more (`add`) or one fewer user of `key`.
+fn count_user(users: &mut BTreeMap<u64, u32>, key: u64, add: bool) {
+    if add {
+        *users.entry(key).or_default() += 1;
+    } else if let Some(count) = users.get_mut(&key) {
+        *count -= 1;
+        if *count == 0 {
+            users.remove(&key);
+        }
+    }
+}
+
 impl RuntimeAppearanceData {
+    /// `appearance` now binds exactly `materials`.
+    fn bind_appearance_materials(&mut self, appearance: u64, materials: BTreeSet<u64>) {
+        for material in &materials {
+            count_user(&mut self.material_appearances, *material, true);
+        }
+        let previous = if materials.is_empty() {
+            self.appearance_materials.remove(&appearance)
+        } else {
+            self.appearance_materials.insert(appearance, materials)
+        };
+        for material in previous.into_iter().flatten() {
+            count_user(&mut self.material_appearances, material, false);
+        }
+    }
+
     fn held_resources(
         &mut self,
         holder: Holder,
@@ -11532,6 +11586,18 @@ pub(super) mod tests {
             "taken mesh retains its material independently"
         );
         let appearance = bridge.create_mesh_appearance(part).unwrap();
+        // Shared by two appearances, the mesh stays until the last goes.
+        let second = bridge.create_mesh_appearance(part).unwrap();
+        let mesh_in_use = |bridge: &mut RuntimeAppearanceBridge| {
+            bridge
+                .destroy_mesh_resource(part)
+                .expect_err("an appearance draws the mesh")
+                .code()
+                .to_owned()
+        };
+        assert_eq!(mesh_in_use(&mut bridge), "CSHARP_MESH_IN_USE");
+        bridge.destroy_appearance(second).unwrap();
+        assert_eq!(mesh_in_use(&mut bridge), "CSHARP_MESH_IN_USE");
         let fact = appearance_fact(appearance);
         unsafe { bridge.stage_snapshot(&fact, 1) }.unwrap();
         let call = bridge.take_staged_call();
@@ -11547,6 +11613,9 @@ pub(super) mod tests {
         bridge.destroy_appearance(appearance).unwrap();
         bridge.destroy_mesh_resource(part).unwrap();
         bridge.destroy_material(material).unwrap();
+        let state = &bridge.staged.as_ref().expect("staged state").state;
+        assert!(state.mesh_resource_appearances.is_empty());
+        assert!(!state.generated_meshes.uses_material(material.value));
         let mut readout = NativeMeshPartitionReadout::default();
         assert_eq!(
             unsafe {
@@ -14368,6 +14437,76 @@ fn shade(surface: Surface) -> vec4<f32> {
         (bridge, appearance, controller)
     }
 
+    #[test]
+    fn animation_disposal_follows_the_users_each_handle_has() {
+        let (mut bridge, appearance, controller) = animated_controller_setup();
+        let (graph, instance, resource) = {
+            let state = &bridge.staged.as_ref().expect("staged state").state;
+            let driving = &state.animation_controllers[&controller.value];
+            (
+                NativeAnimationGraphHandle {
+                    value: driving.graph,
+                },
+                NativeAnimationInstanceHandle {
+                    value: driving.instance,
+                },
+                state.animated_appearances[&appearance.value],
+            )
+        };
+        let (transition_id, idle) = (b"settle", b"idle");
+        let slice = |bytes: &[u8]| NativeUtf8Slice {
+            bytes: bytes.as_ptr(),
+            len: bytes.len(),
+        };
+        let transition = bridge
+            .define_animation_transition(&NativeAnimationTransitionDefinitionRequest {
+                graph,
+                transition_id: slice(transition_id),
+                from_state_id: slice(idle),
+                to_state_id: slice(idle),
+                priority: 0,
+                duration_ticks: 1,
+            })
+            .expect("transition");
+        let code = |error: CsharpEngineServicesError| error.code().to_owned();
+
+        // The graph drives a controller; the appearance has an instance; both
+        // hold the animated mesh, so clip packs no longer associate.
+        assert_eq!(
+            code(bridge.destroy_animation_graph(graph).unwrap_err()),
+            "CSHARP_ANIMATION_GRAPH_IN_USE"
+        );
+        assert_eq!(
+            code(bridge.destroy_appearance(appearance).unwrap_err()),
+            "CSHARP_ANIMATION_APPEARANCE_IN_USE"
+        );
+        assert!(bridge
+            .staged
+            .as_ref()
+            .unwrap()
+            .state
+            .render_resources
+            .held(resource));
+
+        bridge.destroy_animation_controller(controller).unwrap();
+        bridge.destroy_animation_graph(graph).unwrap();
+        let state = &bridge.staged.as_ref().unwrap().state;
+        assert!(
+            !state.animation_transitions.contains_key(&transition.value),
+            "the graph's transitions go with it"
+        );
+        assert_eq!(
+            code(bridge.destroy_appearance(appearance).unwrap_err()),
+            "CSHARP_ANIMATION_APPEARANCE_IN_USE",
+            "the instance still uses the appearance"
+        );
+        bridge.destroy_animation_instance(instance).unwrap();
+        bridge.destroy_appearance(appearance).unwrap();
+        let state = &bridge.staged.as_ref().unwrap().state;
+        assert!(state.appearance_animation_instances.is_empty());
+        assert!(!state.render_resources.held(resource));
+    }
+
     fn animation_ops(output: &RuntimeAppearanceCallOutput) -> Vec<&'static str> {
         let RuntimeAppearanceCallOutput::Presentation(frame) = output else {
             return Vec::new();
@@ -14897,8 +15036,11 @@ fn shade(surface: Surface) -> vec4<f32> {
         bridge.commit(initial_call);
         bridge.begin_call();
         let error = bridge
-            .presentation_create_billboard(&descriptor)
-            .expect_err("duplicate billboard");
+            .presentation_create_billboard(&NativePresentationBillboardDescriptor {
+                height_pixels: 0.0,
+                ..descriptor
+            })
+            .expect_err("invalid replacement billboard");
         bridge.record_operation_error(error);
         let facts = bridge.presentation_readout();
         assert_eq!(facts.billboard_diagnostics_len, 1);

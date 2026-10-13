@@ -465,20 +465,23 @@ fn billboard_assets_bounds_and_retained_lifecycle_are_checked() {
     );
     assert_eq!(projector.descriptor(handle), Some(&billboard_descriptor()));
 
-    assert_eq!(
-        projector
-            .project(
-                &assets,
-                PresentationOpMeta::new(2),
-                BillboardProjectionOp::Create {
-                    handle,
-                    descriptor: billboard_descriptor(),
-                },
-            )
-            .unwrap_err()
-            .code,
-        BillboardProjectionDiagnosticCode::DuplicateHandle
-    );
+    // Creating the live handle again replaces its billboard.
+    let replacement = BillboardDescriptor {
+        height_pixels: 32.0,
+        ..billboard_descriptor()
+    };
+    projector
+        .project(
+            &assets,
+            PresentationOpMeta::new(2),
+            BillboardProjectionOp::Create {
+                handle,
+                descriptor: replacement.clone(),
+            },
+        )
+        .unwrap();
+    assert_eq!(projector.descriptor(handle), Some(&replacement));
+    assert_eq!(projector.readout().active_billboards, 1);
     projector
         .project(
             &assets,
@@ -538,6 +541,23 @@ fn particle_curves_repeated_labels_and_reservation_budget() {
     // The refused create changes nothing; the admitted emitter is intact.
     assert_eq!(projector.readout().active_emitters, 1);
     assert_eq!(projector.descriptor(handle), Some(&particle_descriptor()));
+    // Created again, the emitter is replaced and its reservation with it.
+    let replacement = ParticleEmitterDescriptor {
+        rate_per_second: 2.0,
+        ..particle_descriptor()
+    };
+    projector
+        .project(
+            &assets,
+            PresentationOpMeta::new(1),
+            ParticleProjectionOp::Create {
+                handle,
+                descriptor: replacement.clone(),
+            },
+        )
+        .unwrap();
+    assert_eq!(projector.readout().active_emitters, 1);
+    assert_eq!(projector.descriptor(handle), Some(&replacement));
     projector
         .project(
             &assets,

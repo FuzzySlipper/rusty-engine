@@ -34,6 +34,18 @@ struct AudioClip {
     owners: u32,
 }
 
+/// One more (`add`) or one fewer user of `clip`.
+fn count_clip_user(users: &mut BTreeMap<u64, u32>, clip: u64, add: bool) {
+    if add {
+        *users.entry(clip).or_default() += 1;
+    } else if let Some(count) = users.get_mut(&clip) {
+        *count -= 1;
+        if *count == 0 {
+            users.remove(&clip);
+        }
+    }
+}
+
 #[derive(Clone, Default)]
 struct AudioState {
     projector: AudioProjector,
@@ -42,12 +54,35 @@ struct AudioState {
     voices: BTreeMap<u64, AudioHandle>,
     voice_clips: BTreeMap<u64, u64>,
     one_shot_clips: BTreeMap<u64, u64>,
+    /// Retained voices and pending one-shots playing each clip, with how
+    /// many of each.
+    clip_voices: BTreeMap<u64, u32>,
+    clip_one_shots: BTreeMap<u64, u32>,
     /// A realization feedback overflow loses one or more terminal identities.
     /// Pending one-shots remain protected until an owner reset cancels them.
     one_shot_feedback_lost: bool,
     next_clip: u64,
     next_voice: u64,
     next_signal: u64,
+}
+
+impl AudioState {
+    fn release_voice_clip(&mut self, voice: u64) {
+        if let Some(clip) = self.voice_clips.remove(&voice) {
+            count_clip_user(&mut self.clip_voices, clip, false);
+        }
+    }
+
+    fn end_one_shot(&mut self, signal: u64) {
+        if let Some(clip) = self.one_shot_clips.remove(&signal) {
+            count_clip_user(&mut self.clip_one_shots, clip, false);
+        }
+    }
+
+    fn clear_one_shots(&mut self) {
+        self.one_shot_clips.clear();
+        self.clip_one_shots.clear();
+    }
 }
 
 /// Copied audio output realization feedback. Kept separate from the
@@ -161,6 +196,8 @@ impl RuntimeAudioBridge {
                 voices: BTreeMap::new(),
                 voice_clips: BTreeMap::new(),
                 one_shot_clips: BTreeMap::new(),
+                clip_voices: BTreeMap::new(),
+                clip_one_shots: BTreeMap::new(),
                 one_shot_feedback_lost: false,
                 next_clip: 1,
                 next_voice: 1,
@@ -214,7 +251,7 @@ impl RuntimeAudioBridge {
             self.accepted_through_fact_id = None;
             // Historical one-shots are not replayed into a fresh host, so
             // their resources no longer have an active realization owner.
-            self.state.one_shot_clips.clear();
+            self.state.clear_one_shots();
             self.state.one_shot_feedback_lost = false;
         } else if evicted_fact_count > self.renderer_evicted_fact_count {
             self.renderer_evicted_fact_count = evicted_fact_count;
@@ -237,7 +274,7 @@ impl RuntimeAudioBridge {
                     signal_handle: Some(signal_handle),
                     ..
                 } => {
-                    self.state.one_shot_clips.remove(signal_handle);
+                    self.state.end_one_shot(*signal_handle);
                 }
                 _ => {}
             }
@@ -255,7 +292,7 @@ impl RuntimeAudioBridge {
         self.accepted_through_fact_id = None;
         // An exact runtime binding reset also resets the audio feedback owner,
         // cancelling active one-shots before the next feedback owner starts.
-        self.state.one_shot_clips.clear();
+        self.state.clear_one_shots();
         self.state.one_shot_feedback_lost = false;
     }
 
@@ -738,10 +775,10 @@ impl RuntimeAudioBridge {
             signal_id,
             descriptor,
         })?;
-        self.staged_mut()?
-            .state
-            .one_shot_clips
-            .insert(signal_handle.value, request.descriptor.clip.value);
+        let state = &mut self.staged_mut()?.state;
+        let clip = request.descriptor.clip.value;
+        state.one_shot_clips.insert(signal_handle.value, clip);
+        count_clip_user(&mut state.clip_one_shots, clip, true);
         Ok(signal_handle)
     }
 
@@ -763,10 +800,7 @@ impl RuntimeAudioBridge {
         self.stage_op(AudioProjectionOp::Retire {
             signal_handle: render_presentation::AudioSignalHandle::new(signal_handle.value),
         })?;
-        self.staged_mut()?
-            .state
-            .one_shot_clips
-            .remove(&signal_handle.value);
+        self.staged_mut()?.state.end_one_shot(signal_handle.value);
         Ok(())
     }
 
@@ -848,7 +882,7 @@ impl RuntimeAudioBridge {
         ])?;
         let state = &mut self.staged_mut()?.state;
         state.voices.remove(&request.voice.value);
-        state.voice_clips.remove(&request.voice.value);
+        state.release_voice_clip(request.voice.value);
         Ok(Self::retain_voice(state, voice, replacement_clip))
     }
 
@@ -884,6 +918,7 @@ impl RuntimeAudioBridge {
         state.next_voice = voice + 1;
         state.voices.insert(voice, AudioHandle::new(voice));
         state.voice_clips.insert(voice, clip);
+        count_clip_user(&mut state.clip_voices, clip, true);
         NativeAudioVoiceHandle { value: voice }
     }
 
@@ -911,7 +946,7 @@ impl RuntimeAudioBridge {
         self.stage_op(AudioProjectionOp::Destroy { handle })?;
         let state = &mut self.staged_mut()?.state;
         state.voices.remove(&voice.value);
-        state.voice_clips.remove(&voice.value);
+        state.release_voice_clip(voice.value);
         Ok(())
     }
 
@@ -932,23 +967,13 @@ impl RuntimeAudioBridge {
                 .owners -= 1;
             return Ok(());
         }
-        if staged
-            .state
-            .voice_clips
-            .values()
-            .any(|owner| *owner == clip.value)
-        {
+        if staged.state.clip_voices.contains_key(&clip.value) {
             return Err(CsharpEngineServicesError::new(
                 "CSHARP_AUDIO_CLIP_IN_USE",
                 "dispose or replace retained voices before disposing their clip",
             ));
         }
-        if staged
-            .state
-            .one_shot_clips
-            .values()
-            .any(|owner| *owner == clip.value)
-        {
+        if staged.state.clip_one_shots.contains_key(&clip.value) {
             let (code, detail) = if staged.state.one_shot_feedback_lost {
                 (
                     "CSHARP_AUDIO_CLIP_FEEDBACK_LOST",
@@ -1195,9 +1220,6 @@ fn diagnostic_code(code: AudioProjectionDiagnosticCode) -> NativeAudioDiagnostic
         }
         AudioProjectionDiagnosticCode::DuplicateSignal => {
             NativeAudioDiagnosticCode::DuplicateSignal
-        }
-        AudioProjectionDiagnosticCode::DuplicateHandle => {
-            NativeAudioDiagnosticCode::DuplicateHandle
         }
         AudioProjectionDiagnosticCode::UnknownHandle => NativeAudioDiagnosticCode::UnknownHandle,
         AudioProjectionDiagnosticCode::InvalidControl => NativeAudioDiagnosticCode::InvalidControl,
@@ -2070,6 +2092,53 @@ mod tests {
         bridge
             .destroy_clip(clip)
             .expect("no phantom voice keeps the clip in use");
+    }
+
+    #[test]
+    fn a_clip_is_disposable_once_its_last_voice_goes() {
+        let mut bridge = RuntimeAudioBridge::new(BTreeMap::new());
+        bridge.begin_call();
+        let mut other = wav().to_vec();
+        other[44] = 7;
+        let first = bridge
+            .admit_clip("audio/first.wav".to_owned(), wav())
+            .expect("first clip");
+        let second = bridge
+            .admit_clip("audio/second.wav".to_owned(), Arc::from(other))
+            .expect("second clip");
+        let a = bridge
+            .create_voice(descriptor(first, NativeAudioBus::Sfx))
+            .expect("voice a");
+        let b = bridge
+            .create_voice(descriptor(first, NativeAudioBus::Sfx))
+            .expect("voice b");
+        let in_use = |bridge: &mut RuntimeAudioBridge, clip| {
+            bridge
+                .destroy_clip(clip)
+                .expect_err("a voice plays the clip")
+                .code()
+                .to_owned()
+        };
+        assert_eq!(in_use(&mut bridge, first), "CSHARP_AUDIO_CLIP_IN_USE");
+        // Replacing a with the second clip moves its use.
+        let a = bridge
+            .replace_voice(NativeAudioVoiceReplaceRequest {
+                voice: a,
+                descriptor: descriptor(second, NativeAudioBus::Sfx),
+            })
+            .expect("replacement");
+        assert_eq!(in_use(&mut bridge, first), "CSHARP_AUDIO_CLIP_IN_USE");
+        bridge.destroy_voice(b).expect("voice b goes");
+        bridge
+            .destroy_clip(first)
+            .expect("no voice plays the first clip");
+        assert_eq!(in_use(&mut bridge, second), "CSHARP_AUDIO_CLIP_IN_USE");
+        bridge.destroy_voice(a).expect("voice a goes");
+        bridge
+            .destroy_clip(second)
+            .expect("no voice plays the second clip");
+        let state = &bridge.staged_ref().expect("audio call").state;
+        assert!(state.clip_voices.is_empty() && state.clips.is_empty());
     }
 
     #[test]

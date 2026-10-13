@@ -279,7 +279,6 @@ pub enum AnimationProjectionOp {
 #[serde(rename_all = "camelCase")]
 pub enum AnimationProjectionDiagnosticCode {
     InvalidDescriptor,
-    DuplicateHandle,
     DuplicateController,
     UnknownHandle,
     UnknownController,
@@ -591,13 +590,13 @@ impl AnimationProjector {
         op: &AnimationProjectionOp,
     ) -> Result<(), AnimationProjectionDiagnosticCode> {
         match op {
+            // Creating a live handle replaces its controller; another
+            // handle's entity stays its own.
             AnimationProjectionOp::Create { handle, descriptor } => {
-                if self.active.contains_key(handle) {
-                    return Err(AnimationProjectionDiagnosticCode::DuplicateHandle);
-                }
                 if self
                     .entity_handles
-                    .contains_key(&descriptor.controller.entity)
+                    .get(&descriptor.controller.entity)
+                    .is_some_and(|holder| holder != handle)
                 {
                     return Err(AnimationProjectionDiagnosticCode::DuplicateController);
                 }
@@ -609,9 +608,11 @@ impl AnimationProjector {
                         .ok_or(AnimationProjectionDiagnosticCode::HandleExhausted)?;
                 }
                 self.referenced_assets.insert(descriptor.asset.clone());
+                if let Some(replaced) = self.active.insert(*handle, descriptor.clone()) {
+                    self.entity_handles.remove(&replaced.controller.entity);
+                }
                 self.entity_handles
                     .insert(descriptor.controller.entity, *handle);
-                self.active.insert(*handle, descriptor.clone());
             }
             AnimationProjectionOp::Update { handle, controller } => {
                 let current = self
@@ -770,9 +771,6 @@ const fn diagnostic_message(code: AnimationProjectionDiagnosticCode) -> &'static
     match code {
         AnimationProjectionDiagnosticCode::InvalidDescriptor => {
             "animation projection descriptor is invalid"
-        }
-        AnimationProjectionDiagnosticCode::DuplicateHandle => {
-            "animation projection handle is already active"
         }
         AnimationProjectionDiagnosticCode::DuplicateController => {
             "entity already has an animation projection"

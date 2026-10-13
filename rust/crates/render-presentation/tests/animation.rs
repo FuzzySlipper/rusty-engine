@@ -482,6 +482,7 @@ fn animation_projection_validates_handles_targets_revisions_and_batches_atomical
         .unwrap();
     assert_eq!(projector.handle(7), Some(AnimationProjectionHandle::new(1)));
 
+    // Another handle cannot drive the same entity.
     assert_eq!(
         projector
             .project(
@@ -489,20 +490,47 @@ fn animation_projection_validates_handles_targets_revisions_and_batches_atomical
                 &targets,
                 PresentationOpMeta::new(1),
                 AnimationProjectionOp::Create {
-                    handle: AnimationProjectionHandle::new(1),
-                    descriptor: descriptor(
-                        target,
-                        &AnimationControllerState {
-                            entity: 8,
-                            ..initial.clone()
-                        }
-                    ),
+                    handle: AnimationProjectionHandle::new(2),
+                    descriptor: descriptor(target, &initial),
                 },
             )
             .unwrap_err()
             .code,
-        AnimationProjectionDiagnosticCode::DuplicateHandle
+        AnimationProjectionDiagnosticCode::DuplicateController
     );
+    // Creating the live handle again replaces its controller, and the entity
+    // it drives moves with it.
+    let moved = AnimationControllerState {
+        entity: 8,
+        ..initial.clone()
+    };
+    projector
+        .project(
+            &assets,
+            &targets,
+            PresentationOpMeta::new(1),
+            AnimationProjectionOp::Create {
+                handle: AnimationProjectionHandle::new(1),
+                descriptor: descriptor(target, &moved),
+            },
+        )
+        .unwrap();
+    assert_eq!(projector.handle(7), None);
+    assert_eq!(projector.handle(8), Some(AnimationProjectionHandle::new(1)));
+    projector
+        .project(
+            &assets,
+            &targets,
+            PresentationOpMeta::new(1),
+            AnimationProjectionOp::Create {
+                handle: AnimationProjectionHandle::new(1),
+                descriptor: descriptor(target, &initial),
+            },
+        )
+        .unwrap();
+    assert_eq!(projector.handle(7), Some(AnimationProjectionHandle::new(1)));
+    assert_eq!(projector.handle(8), None);
+    assert_eq!(projector.readout().active_controllers, 1);
 
     let changed = controller
         .set_float(7, "speed", 500)

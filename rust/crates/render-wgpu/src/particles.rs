@@ -87,7 +87,6 @@ impl Particle {
 /// Why an op or a spawn did not fully happen. Rendering continues.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ParticleIssue {
-    DuplicateHandle,
     UnknownHandle,
     AnchorMissing,
     /// The emitter's own `max_particles` dropped this many.
@@ -177,10 +176,10 @@ impl Particles {
             }
             ParticleProjectionOp::Create { handle, descriptor } => {
                 let key = EmitterKey::Retained(*handle);
-                if self.emitters.contains_key(&key) {
-                    return Err(ParticleIssue::DuplicateHandle);
-                }
+                // Held before the emitter it replaces lets go, so a shared
+                // slot is not released.
                 hold(&mut self.texture_users, texture);
+                self.remove_emitter(key);
                 self.emitters
                     .insert(key, emitter(descriptor.clone(), texture));
                 self.spawn(key, descriptor.burst_count, entities)
@@ -199,23 +198,31 @@ impl Particles {
                 Ok(())
             }
             ParticleProjectionOp::Destroy { handle } => {
-                let key = EmitterKey::Retained(*handle);
-                let emitter = self
-                    .emitters
-                    .remove(&key)
-                    .ok_or(ParticleIssue::UnknownHandle)?;
-                let (users, released) = (&mut self.texture_users, &mut self.released);
-                let_go(users, released, emitter.texture);
-                self.particles.retain(|particle| {
-                    let keep = particle.emitter != key;
-                    if !keep {
-                        let_go(users, released, particle.texture);
-                    }
-                    keep
-                });
-                Ok(())
+                if self.remove_emitter(EmitterKey::Retained(*handle)) {
+                    Ok(())
+                } else {
+                    Err(ParticleIssue::UnknownHandle)
+                }
             }
         }
+    }
+
+    /// Remove an emitter and its live particles, letting go of their texture
+    /// slots. False when there was no such emitter.
+    fn remove_emitter(&mut self, key: EmitterKey) -> bool {
+        let Some(emitter) = self.emitters.remove(&key) else {
+            return false;
+        };
+        let (users, released) = (&mut self.texture_users, &mut self.released);
+        let_go(users, released, emitter.texture);
+        self.particles.retain(|particle| {
+            let keep = particle.emitter != key;
+            if !keep {
+                let_go(users, released, particle.texture);
+            }
+            keep
+        });
+        true
     }
 
     /// Advance every emitter and particle by `seconds` of Engine update time.
@@ -703,6 +710,69 @@ mod tests {
         let oldest = stepped.last().copied().unwrap();
         assert!((1.7..=2.0 + 1e-3).contains(&oldest), "oldest {oldest}");
         assert!(stepped.first().copied().unwrap() < 0.3);
+    }
+
+    #[test]
+    fn creating_a_live_emitter_replaces_it_and_lets_go_of_its_state_once() {
+        let mut particles = Particles::default();
+        let handle = ParticleEmitterHandle::new(4);
+        let create = |particles: &mut Particles, count, slot| {
+            particles.apply(
+                &ParticleProjectionOp::Create {
+                    handle,
+                    descriptor: burst(count),
+                },
+                Some(slot),
+                NO_ENTITIES,
+            )
+        };
+        create(&mut particles, 6, 1).unwrap();
+        // Another emitter shares slot 1 and keeps it alive.
+        particles
+            .apply(
+                &ParticleProjectionOp::Create {
+                    handle: ParticleEmitterHandle::new(9),
+                    descriptor: burst(2),
+                },
+                Some(1),
+                NO_ENTITIES,
+            )
+            .unwrap();
+        assert_eq!(particles.particles.len(), 8);
+
+        // Replacing with the same slot releases nothing.
+        create(&mut particles, 3, 1).unwrap();
+        assert!(particles.take_released_textures().is_empty());
+        assert_eq!(particles.particles.len(), 5, "the old burst went with it");
+
+        // Replacing with another slot: the old emitter's particles leave,
+        // slot 1 stays held by emitter 9, slot 2 is held by the new one.
+        create(&mut particles, 4, 2).unwrap();
+        assert!(particles.take_released_textures().is_empty());
+        assert_eq!(particles.emitter_count(), 2);
+        assert_eq!(particles.particles.len(), 6);
+        assert!(particles.holds_texture(1) && particles.holds_texture(2));
+
+        // Slot 1's last holder leaves: released once.
+        particles
+            .apply(
+                &ParticleProjectionOp::Destroy {
+                    handle: ParticleEmitterHandle::new(9),
+                },
+                None,
+                NO_ENTITIES,
+            )
+            .unwrap();
+        assert_eq!(particles.take_released_textures(), vec![1]);
+        particles
+            .apply(&ParticleProjectionOp::Destroy { handle }, None, NO_ENTITIES)
+            .unwrap();
+        assert_eq!(particles.take_released_textures(), vec![2]);
+        assert!(particles.particles.is_empty());
+        assert_eq!(
+            particles.apply(&ParticleProjectionOp::Destroy { handle }, None, NO_ENTITIES),
+            Err(ParticleIssue::UnknownHandle)
+        );
     }
 
     #[test]

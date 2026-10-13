@@ -217,7 +217,6 @@ pub enum AudioProjectionDiagnosticCode {
     AssetKindMismatch,
     ContentHashMismatch,
     DuplicateSignal,
-    DuplicateHandle,
     UnknownHandle,
     InvalidControl,
     UnavailableHost,
@@ -444,10 +443,8 @@ impl AudioProjector {
                 self.emitted_signals = self.emitted_signals.saturating_add(1);
             }
             AudioProjectionOp::Retire { .. } => {}
+            // Creating or restoring a live handle replaces its voice.
             AudioProjectionOp::Create { handle, descriptor } => {
-                if self.active.contains_key(handle) {
-                    return Err(AudioProjectionDiagnosticCode::DuplicateHandle);
-                }
                 validate_descriptor(assets, descriptor)?;
                 self.referenced_clips.insert(descriptor.clip.asset.clone());
                 self.active.insert(
@@ -468,9 +465,6 @@ impl AudioProjector {
                 desired_state,
                 cursor_seconds,
             } => {
-                if self.active.contains_key(handle) {
-                    return Err(AudioProjectionDiagnosticCode::DuplicateHandle);
-                }
                 validate_descriptor(assets, descriptor)?;
                 if !cursor_seconds.is_finite() || *cursor_seconds < 0.0 {
                     return Err(AudioProjectionDiagnosticCode::InvalidDescriptor);
@@ -668,7 +662,6 @@ const fn diagnostic_message(code: AudioProjectionDiagnosticCode) -> &'static str
         AudioProjectionDiagnosticCode::DuplicateSignal => {
             "audio one-shot signal id was already projected"
         }
-        AudioProjectionDiagnosticCode::DuplicateHandle => "audio handle is already active",
         AudioProjectionDiagnosticCode::UnknownHandle => "audio handle is not active",
         AudioProjectionDiagnosticCode::InvalidControl => "audio control is invalid",
         AudioProjectionDiagnosticCode::UnavailableHost => "audio host is unavailable",

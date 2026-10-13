@@ -837,12 +837,6 @@ impl<B: Backend> AudioRealizer<B> {
         clips: &impl AudioClipSource,
         entities: &impl AudioEntityPositions,
     ) -> Result<(), OpError> {
-        if self.voices.contains_key(&handle) {
-            return Err((
-                AudioProjectionDiagnosticCode::DuplicateHandle,
-                "audio handle is already realized".to_owned(),
-            ));
-        }
         let duration = self.clip_duration(&descriptor.clip, clips)?;
         let cursor = normalize_cursor(cursor, duration, descriptor.looping);
         let finished = !descriptor.looping && duration.is_some_and(|end| cursor >= end);
@@ -856,16 +850,19 @@ impl<B: Backend> AudioRealizer<B> {
             ),
             AudioVoiceDesiredState::Paused => (RealizedVoiceState::Paused, None),
         };
-        self.voices.insert(
-            handle,
-            Voice {
-                descriptor: descriptor.clone(),
-                sequence,
-                state,
-                cursor,
-                playback,
-            },
-        );
+        let voice = Voice {
+            descriptor: descriptor.clone(),
+            sequence,
+            state,
+            cursor,
+            playback,
+        };
+        // A live handle's voice is replaced: the old one stops.
+        if let Some(mut replaced) = self.voices.insert(handle, voice) {
+            if let Some(playback) = replaced.playback.as_mut() {
+                playback.stop();
+            }
+        }
         Ok(())
     }
 

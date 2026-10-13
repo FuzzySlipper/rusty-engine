@@ -406,7 +406,7 @@ fn structured_icons_require_exact_assets_and_are_accounted_once() {
 }
 
 #[test]
-fn structured_create_update_destroy_duplicate_unknown_and_refused_update_are_atomic() {
+fn structured_create_replace_update_destroy_unknown_and_refused_update_are_atomic() {
     let assets = assets();
     let handle = BillboardHandle::new(7);
     let mut projector = BillboardProjector::default();
@@ -444,20 +444,9 @@ fn structured_create_update_destroy_duplicate_unknown_and_refused_update_are_ato
         .unwrap();
 
     project(&mut projector, handle.raw(), structured_descriptor()).unwrap();
-    assert_eq!(
-        projector
-            .project(
-                &assets,
-                PresentationOpMeta::new(1),
-                BillboardProjectionOp::Create {
-                    handle,
-                    descriptor: structured_descriptor(),
-                },
-            )
-            .unwrap_err()
-            .code,
-        BillboardProjectionDiagnosticCode::DuplicateHandle
-    );
+    // Created again, the live handle is replaced, not refused.
+    project(&mut projector, handle.raw(), structured_descriptor()).unwrap();
+    assert_eq!(projector.readout().active_billboards, 1);
 
     let updated_layout = BillboardLayoutPolicy {
         priority: 11,

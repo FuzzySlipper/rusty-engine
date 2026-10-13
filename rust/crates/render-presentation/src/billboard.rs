@@ -318,7 +318,6 @@ pub enum BillboardProjectionDiagnosticCode {
     AssetMissing,
     AssetKindMismatch,
     ContentHashMismatch,
-    DuplicateHandle,
     UnknownHandle,
     AnchorMissing,
     UnavailableHost,
@@ -422,10 +421,8 @@ impl BillboardProjector {
         op: &BillboardProjectionOp,
     ) -> Result<(), BillboardProjectionDiagnosticCode> {
         match op {
+            // Creating a live handle replaces its billboard.
             BillboardProjectionOp::Create { handle, descriptor } => {
-                if self.active.contains_key(handle) {
-                    return Err(BillboardProjectionDiagnosticCode::DuplicateHandle);
-                }
                 validate_descriptor(assets, descriptor)?;
                 self.record_assets(descriptor);
                 self.active.insert(*handle, descriptor.clone());
@@ -849,7 +846,6 @@ const fn diagnostic_message(code: BillboardProjectionDiagnosticCode) -> &'static
         BillboardProjectionDiagnosticCode::ContentHashMismatch => {
             "billboard resource content hash does not match"
         }
-        BillboardProjectionDiagnosticCode::DuplicateHandle => "billboard handle is already active",
         BillboardProjectionDiagnosticCode::UnknownHandle => "billboard handle is not active",
         BillboardProjectionDiagnosticCode::AnchorMissing => {
             "billboard entity anchor is unavailable"

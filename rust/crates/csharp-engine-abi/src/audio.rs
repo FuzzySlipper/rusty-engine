@@ -80,7 +80,6 @@ pub enum NativeAudioDiagnosticCode {
     AssetKindMismatch = 3,
     ContentHashMismatch = 4,
     DuplicateSignal = 5,
-    DuplicateHandle = 6,
     UnknownHandle = 7,
     UnavailableHost = 8,
     AudioContextBlocked = 9,

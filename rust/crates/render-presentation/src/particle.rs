@@ -317,7 +317,6 @@ pub enum ParticleProjectionDiagnosticCode {
     AssetKindMismatch,
     ContentHashMismatch,
     DuplicateSignal,
-    DuplicateHandle,
     UnknownHandle,
     AnchorMissing,
     BudgetExceeded,
@@ -567,15 +566,18 @@ impl ParticleProjector {
                 self.track_visual(&descriptor.visual);
                 self.emitted_bursts = self.emitted_bursts.saturating_add(1);
             }
+            // Creating a live handle replaces its emitter and reservation.
             ParticleProjectionOp::Create { handle, descriptor } => {
-                if self.active.contains_key(handle) {
-                    return Err(ParticleProjectionDiagnosticCode::DuplicateHandle);
-                }
                 self.validate_descriptor(assets, descriptor)?;
+                let replaced = self
+                    .active
+                    .get(handle)
+                    .map_or(0, |current| current.max_particles);
                 // A zero rate is a paused emitter: it keeps its handle and
                 // reservation and spawns nothing.
                 if self
                     .reserved_particles()
+                    .saturating_sub(replaced)
                     .saturating_add(descriptor.max_particles)
                     > self.limits.max_reserved_particles
                 {
@@ -865,9 +867,6 @@ const fn diagnostic_message(code: ParticleProjectionDiagnosticCode) -> &'static 
         }
         ParticleProjectionDiagnosticCode::DuplicateSignal => {
             "particle burst signal was already projected"
-        }
-        ParticleProjectionDiagnosticCode::DuplicateHandle => {
-            "particle emitter handle is already active"
         }
         ParticleProjectionDiagnosticCode::UnknownHandle => "particle emitter handle is not active",
         ParticleProjectionDiagnosticCode::AnchorMissing => "particle entity anchor is unavailable",

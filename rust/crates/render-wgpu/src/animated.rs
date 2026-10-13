@@ -353,7 +353,7 @@ impl Renderer {
         let now = self.animation_time;
         let target = match op {
             AnimationProjectionOp::Create { handle, descriptor } => {
-                self.tables.controllers.insert(
+                let replaced = self.tables.controllers.insert(
                     handle.raw(),
                     ControllerRow {
                         target: descriptor.target,
@@ -362,6 +362,12 @@ impl Renderer {
                         clips: Vec::new(),
                     },
                 );
+                // A replaced controller's former target poses without it.
+                if let Some(instance) =
+                    replaced.and_then(|row| self.tables.animated.get_mut(&row.target))
+                {
+                    instance.pose_dirty = true;
+                }
                 self.resolve_controllers_of(descriptor.target);
                 descriptor.target
             }

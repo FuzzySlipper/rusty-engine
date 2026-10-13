@@ -329,7 +329,9 @@ A retained emitter (`CreateEmitter`, `UpdateEmitter`) spawns `RatePerSecond`
 particles each second; the rate must be finite and not negative. Rate 0 pauses
 it: it keeps its handle and its `MaxParticles` reservation, spawns nothing, and
 its live particles finish their lifetimes. `Visible = false` also stops it
-spawning. Destroy it to give back its reservation.
+spawning. Destroy it to give back its reservation. Creating an emitter or a
+billboard with the `LogicalId` of a live one replaces it; a replaced emitter's
+particles and reservation go with it.
 The [packaged fixture](../fixtures/csharp-particle-emission/ParticleEmissionChecks.cs)
 exercises caught refusals followed by cube, billboard and colliding debris
 admission in the same callback.

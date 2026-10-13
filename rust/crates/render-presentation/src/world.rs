@@ -28,15 +28,6 @@ enum NodeKind {
 }
 
 impl NodeKind {
-    /// A sprite's descriptor, or what a batch's sprites share.
-    fn sprite(&self) -> Option<&SpriteInstanceDescriptor> {
-        match self {
-            Self::Sprite(sprite) => Some(sprite),
-            Self::SpriteBatch(batch) => Some(&batch.sprite),
-            _ => None,
-        }
-    }
-
     fn transform(&self) -> Option<&Transform> {
         match self {
             Self::Primitive(node) => Some(&node.transform),
@@ -131,6 +122,13 @@ struct RetainedGraphics {
     /// Nodes by `RenderMetadata::source_entity`, kept with `nodes`, so an
     /// entity's node is found without scanning every node.
     entity_nodes: BTreeMap<u64, BTreeSet<RenderHandle>>,
+    /// Each parent's children, kept with `nodes`, so destroying a node
+    /// visits its subtree, not every node.
+    children: BTreeMap<RenderHandle, BTreeSet<RenderHandle>>,
+    /// How many retained nodes, resources, the sky and ghost captures name
+    /// each resource, by `Resource` kind, so a release of a resource still
+    /// named is refused without a scan.
+    users: [BTreeMap<String, u32>; Resource::KINDS],
     textures: BTreeMap<String, Arc<TextureDescriptor>>,
     shaders: BTreeMap<String, Arc<ShaderDescriptor>>,
     materials: BTreeMap<String, Arc<RenderMaterialDescriptor>>,
@@ -185,6 +183,167 @@ impl RetainedGraphics {
             }
         }
     }
+
+    /// Count one more (`add`) or one fewer use of each resource `uses`
+    /// names.
+    fn count(&mut self, add: bool, uses: impl FnOnce(&mut dyn FnMut(Resource, &str))) {
+        let users = &mut self.users;
+        uses(&mut |kind, id| {
+            let users = &mut users[kind as usize];
+            if add {
+                match users.get_mut(id) {
+                    Some(count) => *count += 1,
+                    None => {
+                        users.insert(id.to_owned(), 1);
+                    }
+                }
+            } else if let Some(count) = users.get_mut(id) {
+                *count -= 1;
+                if *count == 0 {
+                    users.remove(id);
+                }
+            }
+        });
+    }
+
+    /// Refuse to release a resource something retained still names.
+    fn release_unused(&self, kind: Resource, id: &str) -> Result<(), PresentationWorldError> {
+        if self.users[kind as usize].contains_key(id) {
+            return Err(PresentationWorldError::ReferencedResource(id.to_owned()));
+        }
+        Ok(())
+    }
+
+    /// Remove `handle` and its subtree, following the children index.
+    fn remove_subtree(&mut self, handle: RenderHandle) {
+        let Some(root) = self.nodes.get(&handle) else {
+            return;
+        };
+        if let Some(parent) = root.parent {
+            if let Some(siblings) = self.children.get_mut(&parent) {
+                siblings.remove(&handle);
+                if siblings.is_empty() {
+                    self.children.remove(&parent);
+                }
+            }
+        }
+        let mut pending = vec![handle];
+        while let Some(handle) = pending.pop() {
+            let Some(node) = self.nodes.remove(&handle) else {
+                continue;
+            };
+            self.unindex_entity(handle, node.kind.source_entity());
+            self.count(false, |use_| node_uses(&node.kind, use_));
+            pending.extend(self.children.remove(&handle).into_iter().flatten());
+        }
+    }
+}
+
+/// A kind of retained resource that others name by id.
+#[derive(Debug, Clone, Copy)]
+enum Resource {
+    Texture,
+    Shader,
+    Material,
+    Atlas,
+    StaticMesh,
+    AnimatedMesh,
+    VoxelObject,
+}
+
+impl Resource {
+    const KINDS: usize = 7;
+}
+
+/// The resources a node names.
+fn node_uses(kind: &NodeKind, use_: &mut dyn FnMut(Resource, &str)) {
+    let (asset, overrides) = match kind {
+        NodeKind::StaticMesh(instance) => (
+            (Resource::StaticMesh, &instance.asset),
+            &instance.material_overrides,
+        ),
+        NodeKind::AnimatedMesh(instance) => (
+            (Resource::AnimatedMesh, &instance.asset),
+            &instance.material_overrides,
+        ),
+        NodeKind::VoxelObject(instance) => (
+            (Resource::VoxelObject, &instance.asset),
+            &instance.material_overrides,
+        ),
+        NodeKind::Scatter(patch) => (
+            (Resource::StaticMesh, &patch.asset),
+            &patch.material_overrides,
+        ),
+        NodeKind::Sprite(SpriteInstanceDescriptor {
+            asset, material, ..
+        })
+        | NodeKind::SpriteBatch(SpriteBatchDescriptor {
+            sprite: SpriteInstanceDescriptor {
+                asset, material, ..
+            },
+            ..
+        }) => {
+            use_(Resource::Atlas, asset);
+            for texture in [&material.normal_texture, &material.depth_texture]
+                .into_iter()
+                .flatten()
+            {
+                use_(Resource::Texture, texture);
+            }
+            return;
+        }
+        NodeKind::Primitive(_) | NodeKind::Light(_) => return,
+    };
+    use_(asset.0, asset.1);
+    slot_uses(overrides, use_);
+}
+
+/// The textures and shader a material names.
+fn material_uses(material: &RenderMaterialDescriptor, use_: &mut dyn FnMut(Resource, &str)) {
+    for texture in material.textures() {
+        use_(Resource::Texture, texture);
+    }
+    if let Some(surface) = &material.voxel_surface {
+        match &surface.mapping {
+            VoxelSurfaceMappingDescriptor::Repeat { texture, .. }
+            | VoxelSurfaceMappingDescriptor::Atlas { texture, .. } => {
+                use_(Resource::Texture, texture);
+            }
+        }
+    }
+    if let Some(shader) = &material.shader {
+        use_(Resource::Shader, &shader.shader);
+    }
+}
+
+/// The materials a mesh asset's slots name.
+fn slot_uses(slots: &[MeshMaterialSlot], use_: &mut dyn FnMut(Resource, &str)) {
+    for slot in slots {
+        use_(Resource::Material, &slot.material);
+    }
+}
+
+fn sky_uses(sky: &Option<SkyBackgroundDescriptor>, use_: &mut dyn FnMut(Resource, &str)) {
+    if let Some(sky) = sky {
+        use_(Resource::Texture, &sky.texture);
+        if let Some(blend) = &sky.blend {
+            use_(Resource::Texture, &blend.texture);
+        }
+    }
+}
+
+/// The resources a ghost plate's capture carries definitions of and still
+/// realizes from.
+fn capture_uses(capture: &RenderFrameDiff, use_: &mut dyn FnMut(Resource, &str)) {
+    for op in &capture.ops {
+        match op {
+            RenderDiff::DefineTexture { texture } => use_(Resource::Texture, &texture.id),
+            RenderDiff::DefineMaterial { material } => use_(Resource::Material, &material.id),
+            RenderDiff::DefineSpriteAtlas { atlas } => use_(Resource::Atlas, &atlas.id),
+            RenderDiff::DefineAnimatedMesh { asset } => use_(Resource::AnimatedMesh, &asset.asset),
+            _ => {}
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -208,7 +367,6 @@ pub enum PresentationWorldError {
     RevisionExhausted,
     InvalidPlayback,
     UnknownNode(RenderHandle),
-    DuplicateNode(RenderHandle),
     WrongNodeKind(RenderHandle),
     InvalidParentJoint { handle: RenderHandle, joint: String },
     UndefinedStaticMesh(String),
@@ -403,7 +561,7 @@ impl PresentationWorld {
                         self.retained
                             .ghost_sources
                             .insert(*handle, descriptor.source);
-                        self.retained.ghost_captures.insert(*handle, capture);
+                        self.retain_capture(*handle, capture);
                     }
                     crate::GhostPlateProjectionOp::Recapture {
                         handle,
@@ -417,10 +575,13 @@ impl PresentationWorld {
                             .ok_or(PresentationWorldError::InvalidPlayback)?;
                         let capture = Arc::new(self.capture_scene(source)?);
                         *captured_scene = Some(capture.clone());
-                        self.retained.ghost_captures.insert(*handle, capture);
+                        self.retain_capture(*handle, capture);
                     }
                     crate::GhostPlateProjectionOp::Destroy { handle } => {
-                        self.retained.ghost_captures.remove(handle);
+                        if let Some(capture) = self.retained.ghost_captures.remove(handle) {
+                            self.retained
+                                .count(false, |use_| capture_uses(&capture, use_));
+                        }
                         self.retained.ghost_sources.remove(handle);
                     }
                     crate::GhostPlateProjectionOp::Update { .. } => {}
@@ -441,6 +602,15 @@ impl PresentationWorld {
         Ok(output)
     }
 
+    /// Keep a ghost plate's capture, in place of any it held before.
+    fn retain_capture(&mut self, handle: crate::GhostPlateHandle, capture: Arc<RenderFrameDiff>) {
+        let retained = &mut *self.retained;
+        retained.count(true, |use_| capture_uses(&capture, use_));
+        if let Some(previous) = retained.ghost_captures.insert(handle, capture) {
+            retained.count(false, |use_| capture_uses(&previous, use_));
+        }
+    }
+
     /// Capture only the retained source hierarchy and scene lights. Resource
     /// definitions are immutable and shared by the stored capture frame.
     fn capture_scene(
@@ -459,17 +629,10 @@ impl PresentationWorld {
             return Err(PresentationWorldError::UnknownNode(source));
         }
         let mut selected = BTreeSet::new();
-        selected.insert(source);
-        loop {
-            let before = selected.len();
-            for (handle, node) in &self.retained.nodes {
-                if node.parent.is_some_and(|parent| selected.contains(&parent)) {
-                    selected.insert(*handle);
-                }
-            }
-            if before == selected.len() {
-                break;
-            }
+        let mut pending = vec![source];
+        while let Some(handle) = pending.pop() {
+            selected.insert(handle);
+            pending.extend(self.retained.children.get(&handle).into_iter().flatten());
         }
         let mut renderable = selected.clone();
         // Ancestors preserve the capture's original world-space transform.
@@ -961,9 +1124,9 @@ impl PresentationWorld {
         parent: Option<RenderHandle>,
         kind: NodeKind,
     ) -> Result<(), PresentationWorldError> {
-        if self.retained.nodes.contains_key(&handle) {
-            return Err(PresentationWorldError::DuplicateNode(handle));
-        }
+        // Creating a live handle replaces its node and subtree, as the
+        // renderer does.
+        self.retained.remove_subtree(handle);
         if let Some(parent) = parent {
             if !self.retained.nodes.contains_key(&parent) {
                 return Err(PresentationWorldError::UnknownNode(parent));
@@ -977,9 +1140,13 @@ impl PresentationWorld {
                     .map_err(|_| PresentationWorldError::InvalidPlayback)?;
             }
         }
-        let entity = kind.source_entity();
-        self.retained.index_entity(handle, entity);
-        self.retained.nodes.insert(
+        let retained = &mut *self.retained;
+        retained.index_entity(handle, kind.source_entity());
+        retained.count(true, |use_| node_uses(&kind, use_));
+        if let Some(parent) = parent {
+            retained.children.entry(parent).or_default().insert(handle);
+        }
+        retained.nodes.insert(
             handle,
             Arc::new(PresentationNode {
                 parent_joint: None,
@@ -1090,25 +1257,7 @@ impl PresentationWorld {
                 if !self.retained.nodes.contains_key(handle) {
                     return Err(PresentationWorldError::UnknownNode(*handle));
                 }
-                let mut removed = BTreeSet::from([*handle]);
-                loop {
-                    let before = removed.len();
-                    for (handle, node) in &self.retained.nodes {
-                        if node.parent.is_some_and(|parent| removed.contains(&parent)) {
-                            removed.insert(*handle);
-                        }
-                    }
-                    if before == removed.len() {
-                        break;
-                    }
-                }
-                for handle in &removed {
-                    let entity = self.retained.nodes[handle].kind.source_entity();
-                    self.retained.unindex_entity(*handle, entity);
-                }
-                self.retained
-                    .nodes
-                    .retain(|handle, _| !removed.contains(handle));
+                self.retained.remove_subtree(*handle);
             }
             RenderDiff::Update {
                 handle,
@@ -1258,61 +1407,41 @@ impl PresentationWorld {
                 }
             }
             RenderDiff::ReleaseMaterial { id } => {
-                if !self.retained.materials.contains_key(id) {
+                let retained = &mut *self.retained;
+                if !retained.materials.contains_key(id) {
                     return Err(PresentationWorldError::UndefinedResource(id.clone()));
                 }
-                let bound = self.retained.static_meshes.values().any(|asset| asset.material_slots.iter().any(|slot| &slot.material == id))
-                    || self.retained.animated_meshes.values().any(|asset| asset.material_slots.iter().any(|slot| &slot.material == id))
-                    || self.retained.voxel_objects.values().any(|asset| asset.material_slots.iter().any(|slot| &slot.material == id))
-                    || self.retained.nodes.values().any(|node| match &node.kind {
-                        NodeKind::StaticMesh(instance) => instance.material_overrides.iter().any(|slot| &slot.material == id),
-                        NodeKind::AnimatedMesh(instance) => instance.material_overrides.iter().any(|slot| &slot.material == id),
-                        NodeKind::VoxelObject(instance) => instance.material_overrides.iter().any(|slot| &slot.material == id),
-                        NodeKind::Scatter(patch) => patch.material_overrides.iter().any(|slot| &slot.material == id),
-                        _ => false,
-                    })
-                    || self.retained.ghost_captures.values().any(|frame| frame.ops.iter().any(|op| matches!(op, RenderDiff::DefineMaterial { material } if &material.id == id)));
-                if bound {
-                    return Err(PresentationWorldError::ReferencedResource(id.clone()));
+                retained.release_unused(Resource::Material, id)?;
+                if let Some(material) = retained.materials.remove(id) {
+                    retained.count(false, |use_| material_uses(&material, use_));
                 }
-                self.retained.materials.remove(id);
             }
             RenderDiff::ReleaseTexture { id } => {
                 if !self.retained.textures.contains_key(id) {
                     return Err(PresentationWorldError::UndefinedResource(id.clone()));
                 }
-                let bound = self.retained.materials.values().any(|material| material.textures().any(|texture| texture == id)
-                    || material.voxel_surface.as_ref().is_some_and(|surface| match &surface.mapping {
-                        VoxelSurfaceMappingDescriptor::Repeat { texture, .. } | VoxelSurfaceMappingDescriptor::Atlas { texture, .. } => texture == id,
-                    }))
-                    || self.retained.atlases.values().any(|atlas| &atlas.texture == id)
-                    || self.retained.sky.as_ref().is_some_and(|sky| &sky.texture == id || sky.blend.as_ref().is_some_and(|blend| &blend.texture == id))
-                    || self.retained.nodes.values().any(|node| node.kind.sprite().is_some_and(|sprite| sprite.material.normal_texture.as_ref() == Some(id) || sprite.material.depth_texture.as_ref() == Some(id)))
-                    || self.retained.ghost_captures.values().any(|frame| frame.ops.iter().any(|op| matches!(op, RenderDiff::DefineTexture { texture } if &texture.id == id)));
-                if bound {
-                    return Err(PresentationWorldError::ReferencedResource(id.clone()));
-                }
+                self.retained.release_unused(Resource::Texture, id)?;
                 self.retained.textures.remove(id);
             }
             RenderDiff::ReleaseSpriteAtlas { id } => {
-                if !self.retained.atlases.contains_key(id) {
+                let retained = &mut *self.retained;
+                if !retained.atlases.contains_key(id) {
                     return Err(PresentationWorldError::UndefinedResource(id.clone()));
                 }
-                if self.retained.nodes.values().any(|node| node.kind.sprite().is_some_and(|sprite| &sprite.asset == id))
-                    || self.retained.ghost_captures.values().any(|frame| frame.ops.iter().any(|op| matches!(op, RenderDiff::DefineSpriteAtlas { atlas } if &atlas.id == id))) {
-                    return Err(PresentationWorldError::ReferencedResource(id.clone()));
+                retained.release_unused(Resource::Atlas, id)?;
+                if let Some(atlas) = retained.atlases.remove(id) {
+                    retained.count(false, |use_| use_(Resource::Texture, &atlas.texture));
                 }
-                self.retained.atlases.remove(id);
             }
             RenderDiff::ReleaseAnimatedMesh { asset } => {
-                if !self.retained.animated_meshes.contains_key(asset) {
+                let retained = &mut *self.retained;
+                if !retained.animated_meshes.contains_key(asset) {
                     return Err(PresentationWorldError::UndefinedResource(asset.clone()));
                 }
-                if self.retained.nodes.values().any(|node| matches!(&node.kind, NodeKind::AnimatedMesh(instance) if &instance.asset == asset))
-                    || self.retained.ghost_captures.values().any(|frame| frame.ops.iter().any(|op| matches!(op, RenderDiff::DefineAnimatedMesh { asset: definition } if &definition.asset == asset))) {
-                    return Err(PresentationWorldError::ReferencedResource(asset.clone()));
+                retained.release_unused(Resource::AnimatedMesh, asset)?;
+                if let Some(asset) = retained.animated_meshes.remove(asset) {
+                    retained.count(false, |use_| slot_uses(&asset.material_slots, use_));
                 }
-                self.retained.animated_meshes.remove(asset);
             }
             RenderDiff::DefineTexture { texture } => {
                 self.retained
@@ -1328,66 +1457,86 @@ impl PresentationWorld {
                 if !self.retained.shaders.contains_key(id) {
                     return Err(PresentationWorldError::UndefinedResource(id.clone()));
                 }
-                if self.retained.materials.values().any(|material| {
-                    material
-                        .shader
-                        .as_ref()
-                        .is_some_and(|shader| &shader.shader == id)
-                }) {
-                    return Err(PresentationWorldError::ReferencedResource(id.clone()));
-                }
+                self.retained.release_unused(Resource::Shader, id)?;
                 self.retained.shaders.remove(id);
             }
             RenderDiff::DefineMaterial { material } => {
-                self.retained
-                    .materials
-                    .insert(material.id.clone(), Arc::new(material.clone()));
+                let retained = &mut *self.retained;
+                retained.count(true, |use_| material_uses(material, use_));
+                let material = Arc::new(material.clone());
+                if let Some(previous) = retained.materials.insert(material.id.clone(), material) {
+                    retained.count(false, |use_| material_uses(&previous, use_));
+                }
             }
             RenderDiff::DefineSpriteAtlas { atlas } => {
-                self.retained
+                let retained = &mut *self.retained;
+                retained.count(true, |use_| use_(Resource::Texture, &atlas.texture));
+                if let Some(previous) = retained
                     .atlases
-                    .insert(atlas.id.clone(), Arc::new(atlas.clone()));
+                    .insert(atlas.id.clone(), Arc::new(atlas.clone()))
+                {
+                    retained.count(false, |use_| use_(Resource::Texture, &previous.texture));
+                }
             }
             RenderDiff::DefineStaticMesh { asset } => {
-                self.retained
+                let retained = &mut *self.retained;
+                retained.count(true, |use_| slot_uses(&asset.material_slots, use_));
+                if let Some(previous) = retained
                     .static_meshes
-                    .insert(asset.asset.clone(), Arc::new(asset.clone()));
+                    .insert(asset.asset.clone(), Arc::new(asset.clone()))
+                {
+                    retained.count(false, |use_| slot_uses(&previous.material_slots, use_));
+                }
             }
             RenderDiff::ReleaseStaticMesh { asset } => {
-                if !self.retained.static_meshes.contains_key(asset) {
+                let retained = &mut *self.retained;
+                if !retained.static_meshes.contains_key(asset) {
                     return Err(PresentationWorldError::UndefinedStaticMesh(asset.clone()));
                 }
-                if self.retained.nodes.values().any(|node| {
-                    matches!(&node.kind, NodeKind::StaticMesh(instance) if &instance.asset == asset)
-                        || matches!(&node.kind, NodeKind::Scatter(patch) if &patch.asset == asset)
-                }) {
-                    return Err(PresentationWorldError::ReferencedResource(asset.clone()));
+                retained.release_unused(Resource::StaticMesh, asset)?;
+                if let Some(asset) = retained.static_meshes.remove(asset) {
+                    retained.count(false, |use_| slot_uses(&asset.material_slots, use_));
                 }
-                self.retained.static_meshes.remove(asset);
             }
             RenderDiff::DefineAnimatedMesh { asset } => {
-                self.retained
+                let retained = &mut *self.retained;
+                retained.count(true, |use_| slot_uses(&asset.material_slots, use_));
+                if let Some(previous) = retained
                     .animated_meshes
-                    .insert(asset.asset.clone(), Arc::new(asset.clone()));
+                    .insert(asset.asset.clone(), Arc::new(asset.clone()))
+                {
+                    retained.count(false, |use_| slot_uses(&previous.material_slots, use_));
+                }
             }
             RenderDiff::DefineVoxelObject { asset } => {
-                self.retained
+                let retained = &mut *self.retained;
+                retained.count(true, |use_| slot_uses(&asset.material_slots, use_));
+                if let Some(previous) = retained
                     .voxel_objects
-                    .insert(asset.asset.clone(), Arc::new(asset.clone()));
+                    .insert(asset.asset.clone(), Arc::new(asset.clone()))
+                {
+                    retained.count(false, |use_| slot_uses(&previous.material_slots, use_));
+                }
             }
             RenderDiff::ReleaseVoxelObject { asset } => {
-                if self.retained.nodes.values().any(|node| matches!(&node.kind, NodeKind::VoxelObject(instance) if &instance.asset == asset)) {
-                    return Err(PresentationWorldError::ReferencedResource(asset.clone()));
+                let retained = &mut *self.retained;
+                retained.release_unused(Resource::VoxelObject, asset)?;
+                if let Some(asset) = retained.voxel_objects.remove(asset) {
+                    retained.count(false, |use_| slot_uses(&asset.material_slots, use_));
                 }
-                self.retained.voxel_objects.remove(asset);
             }
             RenderDiff::SetSkyBackground { background } => {
-                self.retained.sky = background.clone();
-                self.retained.background_color = None;
+                let retained = &mut *self.retained;
+                retained.count(true, |use_| sky_uses(background, use_));
+                let previous = std::mem::replace(&mut retained.sky, background.clone());
+                retained.count(false, |use_| sky_uses(&previous, use_));
+                retained.background_color = None;
             }
             RenderDiff::SetBackgroundColor { color } => {
-                self.retained.sky = None;
-                self.retained.background_color = Some(*color);
+                let retained = &mut *self.retained;
+                let previous = retained.sky.take();
+                retained.count(false, |use_| sky_uses(&previous, use_));
+                retained.background_color = Some(*color);
             }
             RenderDiff::SetFog { fog } => self.retained.fog = *fog,
             RenderDiff::SetToneMapping { tone_mapping } => {
@@ -1850,6 +1999,391 @@ mod tests {
             }])),
             Err(PresentationWorldError::UndefinedStaticMesh(_))
         ));
+    }
+
+    fn texture(id: &str) -> TextureDescriptor {
+        TextureDescriptor {
+            id: id.to_owned(),
+            width: 1,
+            height: 1,
+            filter: TextureFilter::Nearest,
+            wrap: TextureWrap::Clamp,
+            content_hash: None,
+            version: 1,
+            payload: None,
+        }
+    }
+
+    fn material(id: &str, texture: &str) -> RenderMaterialDescriptor {
+        serde_json::from_value(serde_json::json!({
+            "id": id,
+            "color": [1.0, 1.0, 1.0, 1.0],
+            "texture": texture,
+            "roughness": 0.5,
+            "textureTint": [1.0, 1.0, 1.0, 1.0],
+            "emissionColor": [0.0, 0.0, 0.0],
+            "emissionIntensity": 0.0,
+            "uvStrategy": "flat",
+        }))
+        .unwrap()
+    }
+
+    fn mesh_instance(
+        handle: u64,
+        parent: Option<u64>,
+        asset: &str,
+        overrides: &[&str],
+    ) -> RenderDiff {
+        RenderDiff::CreateStaticMeshInstance {
+            handle: RenderHandle::new(handle),
+            parent: parent.map(RenderHandle::new),
+            instance: StaticMeshInstanceDescriptor {
+                asset: asset.to_owned(),
+                transform: Transform::IDENTITY,
+                visible: true,
+                material_overrides: overrides
+                    .iter()
+                    .map(|material| MeshMaterialSlot {
+                        slot: 0,
+                        material: (*material).to_owned(),
+                    })
+                    .collect(),
+                metadata: RenderMetadata::default(),
+                layer: RenderLayer::Scene,
+                shadow_casting: Default::default(),
+            },
+        }
+    }
+
+    fn group(handle: u64, parent: Option<u64>) -> RenderDiff {
+        RenderDiff::Create {
+            handle: RenderHandle::new(handle),
+            parent: parent.map(RenderHandle::new),
+            node: RenderNode::new(Geometry::Group),
+        }
+    }
+
+    fn destroy(handle: u64) -> RenderDiff {
+        RenderDiff::Destroy {
+            handle: RenderHandle::new(handle),
+        }
+    }
+
+    fn release_texture(id: &str) -> RenderDiff {
+        RenderDiff::ReleaseTexture { id: id.to_owned() }
+    }
+
+    fn release_material(id: &str) -> RenderDiff {
+        RenderDiff::ReleaseMaterial { id: id.to_owned() }
+    }
+
+    fn release_mesh(asset: &str) -> RenderDiff {
+        RenderDiff::ReleaseStaticMesh {
+            asset: asset.to_owned(),
+        }
+    }
+
+    /// Applies `op` to a candidate, committing it only when it succeeds.
+    fn try_apply(
+        world: &mut PresentationWorld,
+        op: RenderDiff,
+    ) -> Result<(), PresentationWorldError> {
+        let mut candidate = world.clone();
+        candidate.apply(frame(vec![op]))?;
+        *world = candidate;
+        Ok(())
+    }
+
+    fn assert_indexes_match_nodes(world: &PresentationWorld) {
+        assert_entity_index_matches_nodes(world);
+        let mut children: BTreeMap<RenderHandle, BTreeSet<RenderHandle>> = BTreeMap::new();
+        for (handle, node) in &world.retained.nodes {
+            if let Some(parent) = node.parent {
+                children.entry(parent).or_default().insert(*handle);
+            }
+        }
+        assert_eq!(world.retained.children, children);
+    }
+
+    #[test]
+    fn a_resource_is_released_once_its_last_user_is_gone() {
+        let referenced =
+            |result| matches!(result, Err(PresentationWorldError::ReferencedResource(_)));
+        let mut world = PresentationWorld::default();
+        let mut mesh_two = static_mesh("mesh/two");
+        mesh_two.material_slots[0].material = "material/plain".to_owned();
+        world
+            .apply(frame(vec![
+                RenderDiff::DefineTexture {
+                    texture: texture("texture/a"),
+                },
+                RenderDiff::DefineTexture {
+                    texture: texture("texture/b"),
+                },
+                RenderDiff::DefineMaterial {
+                    material: material("material/plain", "texture/a"),
+                },
+                RenderDiff::DefineMaterial {
+                    material: material("material/override", "texture/b"),
+                },
+                RenderDiff::DefineStaticMesh {
+                    asset: static_mesh("mesh/one"),
+                },
+                RenderDiff::DefineStaticMesh { asset: mesh_two },
+                group(1, None),
+                mesh_instance(2, Some(1), "mesh/one", &[]),
+                mesh_instance(3, None, "mesh/one", &["material/override"]),
+            ]))
+            .unwrap();
+        // Shared: the texture through a material, the material through a
+        // mesh's slots, the mesh through two nodes.
+        for op in [
+            release_texture("texture/a"),
+            release_material("material/plain"),
+            release_mesh("mesh/one"),
+            release_material("material/override"),
+            release_texture("texture/b"),
+        ] {
+            assert!(referenced(try_apply(&mut world, op)));
+        }
+        // Destroying the group takes node 2; node 3 still uses the mesh.
+        try_apply(&mut world, destroy(1)).unwrap();
+        assert!(referenced(try_apply(&mut world, release_mesh("mesh/one"))));
+
+        // Replacing node 3 lets go of its mesh and override material.
+        try_apply(&mut world, mesh_instance(3, None, "mesh/two", &[])).unwrap();
+        try_apply(&mut world, release_mesh("mesh/one")).unwrap();
+        try_apply(&mut world, release_material("material/override")).unwrap();
+        // Redefining a material moves its texture use.
+        try_apply(
+            &mut world,
+            RenderDiff::DefineMaterial {
+                material: material("material/plain", "texture/b"),
+            },
+        )
+        .unwrap();
+        try_apply(&mut world, release_texture("texture/a")).unwrap();
+        assert!(referenced(try_apply(
+            &mut world,
+            release_texture("texture/b")
+        )));
+        assert!(referenced(try_apply(
+            &mut world,
+            release_material("material/plain")
+        )));
+
+        // The survivor still names what it was created with.
+        let snapshot = world.snapshot().frame;
+        assert!(snapshot.ops.iter().any(|op| matches!(op, RenderDiff::CreateStaticMeshInstance { handle, instance, .. } if handle.raw() == 3 && instance.asset == "mesh/two")));
+        assert!(snapshot.ops.iter().any(|op| matches!(op, RenderDiff::DefineMaterial { material } if material.texture.as_deref() == Some("texture/b"))));
+
+        for op in [
+            destroy(3),
+            release_mesh("mesh/two"),
+            release_material("material/plain"),
+            release_texture("texture/b"),
+        ] {
+            try_apply(&mut world, op).unwrap();
+        }
+        // Released once: a second release names nothing.
+        assert!(matches!(
+            try_apply(&mut world, release_texture("texture/b")),
+            Err(PresentationWorldError::UndefinedResource(_))
+        ));
+        assert!(world.retained.users.iter().all(BTreeMap::is_empty));
+        assert_indexes_match_nodes(&world);
+    }
+
+    #[test]
+    fn destroy_takes_the_current_subtree_through_replacement_and_reparenting() {
+        let mut world = PresentationWorld::default();
+        world
+            .apply(frame(vec![
+                group(1, None),
+                group(2, None),
+                RenderDiff::Create {
+                    handle: RenderHandle::new(3),
+                    parent: Some(RenderHandle::new(1)),
+                    node: entity_node(42, 1.0),
+                },
+                group(4, Some(3)),
+                group(5, Some(4)),
+                group(6, Some(2)),
+            ]))
+            .unwrap();
+        assert_indexes_match_nodes(&world);
+
+        // Created again under 2, node 3 is replaced: its old subtree goes
+        // with it, as the renderer's does, and it moves to its new parent.
+        world
+            .apply(frame(vec![RenderDiff::Create {
+                handle: RenderHandle::new(3),
+                parent: Some(RenderHandle::new(2)),
+                node: entity_node(42, 2.0),
+            }]))
+            .unwrap();
+        assert_indexes_match_nodes(&world);
+        let live = |world: &PresentationWorld| {
+            world
+                .retained
+                .nodes
+                .keys()
+                .map(|handle| handle.raw())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(live(&world), [1, 2, 3, 6]);
+        world.apply(frame(vec![group(4, Some(3))])).unwrap();
+
+        // Its old parent's subtree no longer includes it.
+        world.apply(frame(vec![destroy(1)])).unwrap();
+        assert_eq!(live(&world), [2, 3, 4, 6]);
+        assert_eq!(world.entity_world_position(42), Some([2.0, 0.0, 0.0]));
+        assert_indexes_match_nodes(&world);
+
+        world.apply(frame(vec![destroy(2)])).unwrap();
+        assert!(world.retained.nodes.is_empty());
+        assert_indexes_match_nodes(&world);
+        assert!(world.retained.entity_nodes.is_empty());
+    }
+
+    #[test]
+    fn a_ghost_capture_keeps_the_resources_it_realizes_until_it_goes() {
+        use crate::{GhostPlateHandle, GhostPlateProjectionOp, PresentationOp, PresentationOpMeta};
+        let mut world = PresentationWorld::default();
+        world
+            .apply(frame(vec![
+                RenderDiff::DefineTexture {
+                    texture: texture("texture/a"),
+                },
+                RenderDiff::DefineMaterial {
+                    material: material("material/plain", "texture/a"),
+                },
+                RenderDiff::DefineStaticMesh {
+                    asset: static_mesh("mesh/one"),
+                },
+                mesh_instance(7, None, "mesh/one", &[]),
+            ]))
+            .unwrap();
+        let ghost = |op| {
+            PresentationFrameDiff::try_from_ops(vec![PresentationOp::GhostPlate {
+                meta: PresentationOpMeta::new(0),
+                op,
+            }])
+            .unwrap()
+        };
+        let handle = GhostPlateHandle::new(3);
+        let descriptor = crate::GhostPlateDescriptor {
+            captured_scene: None,
+            source: RenderHandle::new(7),
+            placement: crate::GhostPlatePlacement {
+                transform: Transform::IDENTITY,
+                width: 2.0,
+                height: 3.0,
+            },
+            capture: crate::GhostPlateCaptureSettings {
+                resolution: 128,
+                azimuth_degrees: 0.0,
+                elevation_degrees: 12.0,
+                near: 0.1,
+                far: 20.0,
+                field_of_view_degrees: 35.0,
+                lighting: crate::GhostPlateCaptureLighting {
+                    mode: crate::GhostPlateCaptureLightingMode::Isolated,
+                    ambient_color: [1.0; 3],
+                    ambient_intensity: 1.0,
+                    key_direction: [1.0; 3],
+                    key_color: [1.0; 3],
+                    key_intensity: 1.0,
+                    fill_direction: [-1.0, 1.0, 1.0],
+                    fill_color: [1.0; 3],
+                    fill_intensity: 1.0,
+                },
+            },
+            config: crate::GhostPlateConfig {
+                depth_retention: 0.15,
+                anchor_policy: crate::GhostPlateAnchorPolicy::BoundsCenter,
+                anchor_value: 0.5,
+                plate_mapping: crate::GhostPlateMapping::PlateLocked,
+                shell_mode: crate::GhostPlateShellMode::WholeMesh,
+                shell_depth_epsilon: 0.12,
+                sector_count: 8,
+                sector_hysteresis_degrees: 3.0,
+            },
+        };
+        world
+            .apply_presentation(ghost(GhostPlateProjectionOp::Create { handle, descriptor }))
+            .unwrap();
+        // The captured source goes; its mesh is no longer used live.
+        try_apply(&mut world, destroy(7)).unwrap();
+        try_apply(&mut world, release_mesh("mesh/one")).unwrap();
+        for op in [
+            release_material("material/plain"),
+            release_texture("texture/a"),
+        ] {
+            assert!(matches!(
+                try_apply(&mut world, op),
+                Err(PresentationWorldError::ReferencedResource(_))
+            ));
+        }
+        world
+            .apply_presentation(ghost(GhostPlateProjectionOp::Destroy { handle }))
+            .unwrap();
+        try_apply(&mut world, release_material("material/plain")).unwrap();
+        try_apply(&mut world, release_texture("texture/a")).unwrap();
+        assert!(world.retained.users.iter().all(BTreeMap::is_empty));
+    }
+
+    /// Destroying a small subtree and releasing its mesh visits that subtree
+    /// and the mesh's users, not every retained node.
+    #[test]
+    fn destroy_and_release_work_does_not_grow_with_unrelated_nodes() {
+        const ROUNDS: u64 = 1_000;
+        let time_rounds = |unrelated: u64| {
+            let mut world = PresentationWorld::default();
+            let mut ops = vec![
+                RenderDiff::DefineMaterial {
+                    material: material("material/plain", "texture/a"),
+                },
+                RenderDiff::DefineTexture {
+                    texture: texture("texture/a"),
+                },
+            ];
+            ops.extend((0..unrelated).map(|index| RenderDiff::Create {
+                handle: RenderHandle::new(index + 1),
+                parent: None,
+                node: RenderNode::new(Geometry::Cube),
+            }));
+            world.apply(frame(ops)).unwrap();
+            let base = unrelated + 1;
+            let started = std::time::Instant::now();
+            for round in 0..ROUNDS {
+                let root = base + round * 3;
+                world
+                    .apply(frame(vec![
+                        RenderDiff::DefineStaticMesh {
+                            asset: static_mesh("mesh/round"),
+                        },
+                        group(root, None),
+                        mesh_instance(root + 1, Some(root), "mesh/round", &[]),
+                        group(root + 2, Some(root + 1)),
+                    ]))
+                    .unwrap();
+                world
+                    .apply(frame(vec![destroy(root), release_mesh("mesh/round")]))
+                    .unwrap();
+            }
+            assert_eq!(world.retained.nodes.len() as u64, unrelated);
+            started.elapsed()
+        };
+        let small = time_rounds(10);
+        let large = time_rounds(20_000);
+        println!("{ROUNDS} destroy and release rounds: 10 unrelated nodes {small:?}, 20000 unrelated nodes {large:?}");
+        // A scan of every node per destroy and release is several hundred
+        // times slower here; the indexes stay within a small factor.
+        assert!(
+            large < small * 20,
+            "destroy and release grew with unrelated nodes: {small:?} -> {large:?}"
+        );
     }
 
     #[test]
