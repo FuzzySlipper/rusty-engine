@@ -461,6 +461,13 @@ impl Invocation {
     }
 }
 
+/// The platform this host was built for, as runtime packs name it.
+const RUNTIME_TARGET: &str = if cfg!(windows) {
+    "win-x64"
+} else {
+    "linux-x64"
+};
+
 fn print_runtime_identity(machine_readable: bool) {
     let identity = product_host_runtime_identity();
     let fingerprint = identity.fingerprint_hex();
@@ -472,7 +479,7 @@ fn print_runtime_identity(machine_readable: bool) {
                 "schemaVersion": 1,
                 "host": "rusty-product-host",
                 "hostVersion": env!("CARGO_PKG_VERSION"),
-                "target": "linux-x64",
+                "target": RUNTIME_TARGET,
                 "abi": {
                     "protocolVersion": identity.protocol_version,
                     "engineApiBytes": identity.engine_api_bytes,
@@ -484,7 +491,7 @@ fn print_runtime_identity(machine_readable: bool) {
         );
     } else {
         println!(
-            "rusty-product-host {} (linux-x64; ABI v{}; {})",
+            "rusty-product-host {} ({RUNTIME_TARGET}; ABI v{}; {})",
             env!("CARGO_PKG_VERSION"),
             identity.protocol_version,
             fingerprint,
