@@ -553,8 +553,14 @@ fn shade(surface: Surface) -> vec4<f32> {
   direction over the ground, z its strength, w its gust share), and
   `rusty::wind::wind_displace` is the wind feature's own sway. While a
   displacing material draws, the shadow maps redraw as presentation time
-  moves, as they do for a caster stage. The standard stages still cull by
-  the mesh's bounds, so keep a displacement within a metre or so of them.
+  moves, as they do for a caster stage. The view and the shadows cull a part
+  by its mesh's bounds, so a vertex moved beyond them can vanish at the
+  view's edge. Declare how far the stage can move a vertex, in metres, as
+  `MaterialShader.DisplacementBound` (finite, non-negative; 0 by default):
+  the material's parts cull by their bounds grown that far, so storm waves
+  or a creature's leap stay drawn and shadowed. Growing it costs only the
+  extra parts drawn near the view's edge. `UpdateMaterial` with a new bound
+  regrows them.
 - **Displaced normals.** Displacement that tilts the surface leaves the
   mesh's normal behind. A shader may also define
   `fn displace_normal(vertex: Vertex) -> vec3<f32>`, which the world pass's

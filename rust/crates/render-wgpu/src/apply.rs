@@ -1089,6 +1089,9 @@ impl Renderer {
                 MaterialRef::LitFallback => (None, Features::default()),
             };
             let features = features | mesh.map_or(Features::default(), |mesh| mesh.features());
+            let displacement = descriptor
+                .and_then(|descriptor| descriptor.shader.as_ref())
+                .map_or(0.0, |shader| shader.displacement_bound);
             let class = PartClass {
                 blend: row.color[3] < 1.0 || descriptor.is_some_and(blends),
                 shadow: descriptor
@@ -1097,7 +1100,10 @@ impl Renderer {
                 lines: part.wireframe || mesh.is_some_and(|mesh| mesh.topology == Topology::Lines),
                 features,
             };
-            let id = self.tables.parts.insert(part, row, bounds, class);
+            let id = self
+                .tables
+                .parts
+                .insert(part, row, bounds, displacement, class);
             if let Some(local) = locals.get(index) {
                 // A copy follows its run from the first write, so it marks
                 // nothing the indirect light reads.

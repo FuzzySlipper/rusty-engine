@@ -788,6 +788,12 @@ pub struct NativeMaterialShader {
     pub parameter_3: NativeVec4,
     pub texture_a: NativeRenderResourceReference,
     pub texture_b: NativeRenderResourceReference,
+    /// How far, in metres, the shader's `displace` stage may move a vertex
+    /// from where the part's transform puts it: the parts drawn with the
+    /// material cull, in the view and the shadows, by their bounds grown
+    /// this far. Finite and non-negative; 0 (the default) culls by the
+    /// mesh's bounds alone.
+    pub displacement_bound: f32,
 }
 
 /// Projects one admitted authored material through Engine-owned catalog and

@@ -201,6 +201,7 @@ fn wetting_does_not_raise_an_already_smooth_materials_roughness() {
         shader: "roughness".into(),
         parameters: [[0.0; 4]; 4],
         textures: [None, None],
+        displacement_bound: 0.0,
     });
     harness.apply(vec![
         RenderDiff::DefineShader {

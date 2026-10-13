@@ -578,6 +578,12 @@ pub struct MaterialShaderDescriptor {
     /// `product_map_b` in WGSL (white when absent).
     #[serde(default, skip_serializing_if = "no_shader_textures")]
     pub textures: [Option<String>; MATERIAL_SHADER_TEXTURES],
+    /// How far, in metres, the shader's `displace` stage may move a vertex
+    /// from where the part's transform puts it: the parts drawn with this
+    /// material cull by their bounds grown this far. Finite and
+    /// non-negative; 0 culls by the mesh's bounds alone.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub displacement_bound: f32,
 }
 
 /// How many textures of its own a product shader can sample.
@@ -809,6 +815,8 @@ impl RenderMaterialDescriptor {
                     .iter()
                     .flatten()
                     .any(|texture| validate_asset_id(texture, RenderAssetKind::Texture).is_err())
+                || !shader.displacement_bound.is_finite()
+                || shader.displacement_bound < 0.0
             {
                 return Err(MaterialDescriptorError::InvalidShader);
             }

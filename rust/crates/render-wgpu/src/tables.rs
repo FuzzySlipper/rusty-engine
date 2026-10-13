@@ -227,6 +227,17 @@ impl Aabb {
             max: center + half,
         }
     }
+
+    /// This box grown by `margin` on every side (an empty one stays empty).
+    pub fn grown(&self, margin: f32) -> Self {
+        if self.is_empty() {
+            return *self;
+        }
+        Self {
+            min: self.min - Vec3::splat(margin),
+            max: self.max + Vec3::splat(margin),
+        }
+    }
 }
 
 /// Which mesh a part draws. Asset names are resolved to their `names` ids
@@ -455,6 +466,10 @@ pub(crate) struct PartState {
     pub key: u32,
     pub local_bounds: Aabb,
     pub world_bounds: Aabb,
+    /// How far its material's displace stage may move a vertex, in metres
+    /// (`MaterialShaderDescriptor::displacement_bound`): the world bounds
+    /// grow this far.
+    pub displacement: f32,
     /// Negative world determinant: faces wind the other way.
     pub mirrored: bool,
     /// A transform under the node's world (an animated GLB node's pose).
@@ -551,13 +566,21 @@ pub(crate) struct Parts {
 }
 
 impl Parts {
-    pub fn insert(&mut self, part: Part, row: PartRow, bounds: Aabb, class: PartClass) -> PartId {
+    pub fn insert(
+        &mut self,
+        part: Part,
+        row: PartRow,
+        bounds: Aabb,
+        displacement: f32,
+        class: PartClass,
+    ) -> PartId {
         let key = self.acquire_key(&part);
         let state = PartState {
             class,
             key,
             local_bounds: bounds,
             world_bounds: Aabb::EMPTY,
+            displacement,
             mirrored: false,
             local: None,
             shown: false,
@@ -643,7 +666,10 @@ impl Parts {
         if state.mirrored != mirrored || state.shown != shown || state.layer != layer {
             self.regrouped = true;
         }
-        let bounds = state.local_bounds.transformed(world);
+        let bounds = state
+            .local_bounds
+            .transformed(world)
+            .grown(state.displacement);
         // Scattered copies are not the indirect light's scene: they mark no
         // bricks, and their run re-culls as a whole.
         let leader = state.leader;

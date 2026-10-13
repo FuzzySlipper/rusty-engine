@@ -4,7 +4,8 @@
 //! redefinition; a shader that does not compose; its own textures and the
 //! presentation time (#9126); keywords and a caster stage (#9127); a
 //! displace stage that moves the vertices and their shadow (#9541), and a
-//! displaced normal that lights them smoothly (#9905).
+//! displaced normal that lights them smoothly (#9905), and a displacement
+//! bound that grows what culls them (#9906).
 
 mod support;
 
@@ -50,6 +51,7 @@ fn shaded(
         shader: "shader/flat".to_owned(),
         parameters: [first, second, [0.0; 4], [0.0; 4]],
         textures: [None, None],
+        displacement_bound: 0.0,
     });
     descriptor
 }
@@ -326,6 +328,7 @@ fn a_product_shader_samples_its_own_textures_and_animates_with_presentation_time
         shader: "shader/blink".to_owned(),
         parameters: [[0.0; 4]; 4],
         textures: [Some(red.id.clone()), Some(blue.id.clone())],
+        displacement_bound: 0.0,
     });
     harness.apply(vec![
         RenderDiff::DefineTexture { texture: red },
@@ -357,6 +360,7 @@ fn a_product_shader_samples_its_own_textures_and_animates_with_presentation_time
         shader: "shader/blink".to_owned(),
         parameters: [[0.0; 4]; 4],
         textures: [None, Some("texture/blue".to_owned())],
+        displacement_bound: 0.0,
     });
     harness.apply(vec![RenderDiff::DefineMaterial { material: only_b }]);
     assert_eq!(
@@ -407,6 +411,7 @@ fn a_keyword_variant_dissolves_a_material_and_its_caster_stage_cuts_the_shadow_a
             shader: "shader/dissolve".to_owned(),
             parameters: [[0.6, 0.0, 0.0, 0.0], [0.0; 4], [0.0; 4], [0.0; 4]],
             textures: [None, None],
+            displacement_bound: 0.0,
         });
         harness.apply(vec![RenderDiff::DefineShader {
             shader: ShaderDescriptor {
@@ -472,6 +477,7 @@ fn a_caster_stage_reads_presentation_time_and_the_shadow_follows_it() {
         shader: "shader/fading".to_owned(),
         parameters: [[0.0; 4]; 4],
         textures: [None, None],
+        displacement_bound: 0.0,
     });
     harness.apply(vec![shader("shader/fading", FADING_SHADOW)]);
     scene(&mut harness, fading);
@@ -538,6 +544,7 @@ fn a_displace_stage_moves_the_vertices_with_time_and_the_shadow_follows() {
         shader: "shader/rising".to_owned(),
         parameters: [[0.6, 0.0, 0.0, 0.0], [0.0; 4], [0.0; 4], [0.0; 4]],
         textures: [None, None],
+        displacement_bound: 0.0,
     });
     harness.apply(vec![shader("shader/rising", RISING)]);
     scene(&mut harness, rising);
@@ -672,6 +679,7 @@ fn a_displaced_normal_lights_a_rolled_grid_smoothly() {
             shader: "shader/rolling".to_owned(),
             parameters: [[0.0; 4]; 4],
             textures: [None, None],
+            displacement_bound: 0.0,
         });
         harness.apply(vec![
             RenderDiff::DefineShader {
@@ -745,4 +753,140 @@ fn a_displaced_normal_lights_a_rolled_grid_smoothly() {
         difference(&analytic, &derivative),
         difference(&mesh, &derivative)
     );
+}
+
+/// Moves the box by its first parameter: from where its mesh stands, out of
+/// view, to above the floor in view.
+const CARRIED: &str = "#import rusty::types::{Surface, Vertex}
+#import rusty::material::material
+#import rusty::shade::standard_shade
+
+fn displace(vertex: Vertex) -> vec3<f32> {
+    return vertex.world_position + material.parameters[0].xyz;
+}
+
+fn shade(surface: Surface) -> vec4<f32> {
+    return standard_shade(surface);
+}
+";
+
+/// Pixels of the carried box (red, lit or not).
+fn red(rgba: &[u8]) -> usize {
+    rgba.as_chunks::<4>()
+        .0
+        .iter()
+        .filter(|[r, g, b, _]| {
+            *r > 40 && u16::from(*g) * 3 < u16::from(*r) && u16::from(*b) * 3 < u16::from(*r)
+        })
+        .count()
+}
+
+/// Floor pixels in shadow (dark grey; the box's lit faces are red).
+fn floor_shadow(rgba: &[u8]) -> usize {
+    rgba.as_chunks::<4>()
+        .0
+        .iter()
+        .filter(|[r, g, b, _]| *r < 60 && r.abs_diff(*g) < 8 && r.abs_diff(*b) < 8)
+        .count()
+}
+
+#[test]
+fn a_displacement_bound_keeps_a_carried_part_drawn_and_shadowed() {
+    // The box's mesh stands 30 m to the right; its displace stage carries it
+    // back onto the floor, left of the middle of the view.
+    const CARRY: [f32; 4] = [-31.5, 0.0, 0.0, 0.0];
+    let carried = |bound: f32| {
+        let mut descriptor = material("material/carried", [1.0, 0.0, 0.0, 1.0], None);
+        descriptor.shader = Some(MaterialShaderDescriptor {
+            shader: "shader/carried".to_owned(),
+            parameters: [CARRY, [0.0; 4], [0.0; 4], [0.0; 4]],
+            textures: [None, None],
+            displacement_bound: bound,
+        });
+        RenderDiff::DefineMaterial {
+            material: descriptor,
+        }
+    };
+    let mut harness = Harness::new(RendererOptions {
+        default_world_lights: false,
+        shadows: true,
+        ..RendererOptions::default()
+    });
+    harness.apply(vec![
+        shader("shader/carried", CARRIED),
+        RenderDiff::DefineMaterial {
+            material: material("material/plain", [0.8, 0.8, 0.8, 1.0], None),
+        },
+        carried(0.0),
+        static_mesh(
+            "mesh/floor",
+            box_mesh([-6.0, -1.0, -8.0], [6.0, 0.0, 2.0], |_| 0),
+            "material/plain",
+        ),
+        static_mesh(
+            "mesh/box",
+            box_mesh([-0.5, 0.0, -0.5], [0.5, 1.0, 0.5], |_| 0),
+            "material/carried",
+        ),
+        instance(1, None, "mesh/floor", Transform::IDENTITY),
+        instance(
+            2,
+            None,
+            "mesh/box",
+            transform([30.0, 0.0, -3.0], 0.0, [1.0; 3]),
+        ),
+        RenderDiff::CreateLight {
+            handle: RenderHandle::new(3),
+            parent: None,
+            light: LightDescriptor::Directional {
+                color: [1.0; 3],
+                intensity: 2.0,
+                enabled: true,
+                // From the right, behind the camera: the faces in view are
+                // lit, and the shadow falls back and to the left.
+                direction: [-1.0, -1.0, -0.6],
+                range: None,
+                shadow_intent: LightShadowIntent::Requested,
+                shadow: Default::default(),
+            },
+        },
+    ]);
+    let view = camera(VIEW.0, VIEW.1, VIEW.2);
+    for gpu_culling in [false, true] {
+        harness.renderer.set_options(RendererOptions {
+            default_world_lights: false,
+            shadows: true,
+            gpu_culling,
+            ..RendererOptions::default()
+        });
+        harness.apply(vec![carried(0.0)]);
+        let unbounded = harness.render(&view).1;
+        if gpu_culling {
+            if let Some(reason) = harness.renderer.gpu_readout().gpu_culling.refused {
+                eprintln!("GPU culling refused on this device: {reason}");
+                return;
+            }
+        }
+        // Redefining the material regrows its parts' bounds, and back.
+        harness.apply(vec![carried(31.0)]);
+        let bounded = harness.render(&view).1;
+        harness.apply(vec![carried(0.0)]);
+        let again = harness.render(&view).1;
+        assert_eq!(
+            (red(&unbounded), floor_shadow(&unbounded)),
+            (0, 0),
+            "gpu culling {gpu_culling}: culled by its mesh's bounds, unseen and casting nothing"
+        );
+        assert!(
+            red(&bounded) > 300,
+            "gpu culling {gpu_culling}: drawn within its bound: {} pixels",
+            red(&bounded)
+        );
+        assert!(
+            floor_shadow(&bounded) > 80,
+            "gpu culling {gpu_culling}: its shadow on the floor: {} pixels",
+            floor_shadow(&bounded)
+        );
+        assert_eq!(again, unbounded, "gpu culling {gpu_culling}: culled again");
+    }
 }

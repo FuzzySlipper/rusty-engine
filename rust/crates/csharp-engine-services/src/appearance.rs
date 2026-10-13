@@ -10298,6 +10298,7 @@ fn material_shader(
                 row(request.parameter_3),
             ],
             textures,
+            displacement_bound: request.displacement_bound,
         },
         shader,
     )))
@@ -12516,44 +12517,51 @@ fn shade(surface: Surface) -> vec4<f32> {
             z: 0.25,
             w: 1.0,
         };
-        let material = bridge
-            .create_material(NativeMaterialRequest {
-                texture_scale: NativeVec2::default(),
-                texture_offset: NativeVec2::default(),
-                stochastic_tiling: 0.0,
-                color: white,
-                texture: NativeRenderResourceReference::default(),
-                roughness: 0.8,
-                texture_tint: white,
-                emission_color: NativeVec3::default(),
-                emission_intensity: 0.0,
-                double_sided: false,
-                alpha_mode: NativeMaterialAlphaMode::Opaque,
-                alpha_cutoff: 0.5,
-                metalness: 0.0,
-                normal_map: NativeRenderResourceReference::default(),
-                normal_scale: 1.0,
-                triplanar_sharpness: 0.0,
-                shader: csharp_engine_abi::NativeMaterialShader {
-                    shader: NativeRenderResourceReference {
-                        value: shader.handle.value,
-                    },
-                    parameter_0: parameter,
-                    ..Default::default()
+        let request = |displacement_bound: f32| NativeMaterialRequest {
+            texture_scale: NativeVec2::default(),
+            texture_offset: NativeVec2::default(),
+            stochastic_tiling: 0.0,
+            color: white,
+            texture: NativeRenderResourceReference::default(),
+            roughness: 0.8,
+            texture_tint: white,
+            emission_color: NativeVec3::default(),
+            emission_intensity: 0.0,
+            double_sided: false,
+            alpha_mode: NativeMaterialAlphaMode::Opaque,
+            alpha_cutoff: 0.5,
+            metalness: 0.0,
+            normal_map: NativeRenderResourceReference::default(),
+            normal_scale: 1.0,
+            triplanar_sharpness: 0.0,
+            shader: csharp_engine_abi::NativeMaterialShader {
+                shader: NativeRenderResourceReference {
+                    value: shader.handle.value,
                 },
-                emission_map: Default::default(),
-                occlusion_map: Default::default(),
-                orm_map: Default::default(),
-                occlusion_strength: 0.0,
-                unlit: false,
-                flat_shading: false,
-                keep_dry: false,
-                wind_bend: 0.0,
-                wind_flutter: 0.0,
-                water: Default::default(),
-                translucent_shadow: false,
-            })
-            .unwrap();
+                parameter_0: parameter,
+                displacement_bound,
+                ..Default::default()
+            },
+            emission_map: Default::default(),
+            occlusion_map: Default::default(),
+            orm_map: Default::default(),
+            occlusion_strength: 0.0,
+            unlit: false,
+            flat_shading: false,
+            keep_dry: false,
+            wind_bend: 0.0,
+            wind_flutter: 0.0,
+            water: Default::default(),
+            translucent_shadow: false,
+        };
+        // A bound that grows no box is not one.
+        for bound in [-1.0, f32::NAN, f32::INFINITY] {
+            assert_eq!(
+                bridge.create_material(request(bound)).unwrap_err().code(),
+                "CSHARP_MATERIAL"
+            );
+        }
+        let material = bridge.create_material(request(2.5)).unwrap();
         let resources = bridge.staged_ref().unwrap().state.projector.resources();
         let descriptor = resources.materials.last().unwrap();
         let used = descriptor
@@ -12561,6 +12569,7 @@ fn shade(surface: Surface) -> vec4<f32> {
             .as_ref()
             .expect("the material names its shader");
         assert_eq!(used.parameters[0], [1.0, 0.5, 0.25, 1.0]);
+        assert_eq!(used.displacement_bound, 2.5);
         assert_eq!(resources.shaders.len(), 1);
         assert_eq!(resources.shaders[0].id, used.shader);
         assert_eq!(resources.shaders[0].path, "shaders/tint.wgsl");
