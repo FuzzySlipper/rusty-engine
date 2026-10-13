@@ -6,7 +6,7 @@
 // FLAT_SHADING, WIND, WATER; and the mesh's
 // streams: VERTEX_TANGENTS, LAYER_WEIGHTS, VERTEX_OCCLUSION. A product shader (PRODUCT_SHADER)
 // shades the surface in place of `rusty::shade`, and may place its vertices
-// (PRODUCT_DISPLACES).
+// (PRODUCT_DISPLACES) and give their normals (PRODUCT_DISPLACES_NORMAL).
 
 #import rusty::types::{texture_space_position, Vertex}
 #import rusty::view::{frame, parts, instances, mask_coverage, fade_toward_origin, morph_share, morph_normal}
@@ -59,6 +59,9 @@
 #endif
 #ifdef PRODUCT_DISPLACES
 #import rusty::product::displace
+#endif
+#ifdef PRODUCT_DISPLACES_NORMAL
+#import rusty::product::displace_normal
 #endif
 
 // The view's screen-space ambient occlusion (`ambient_occlusion.wgsl`),
@@ -139,7 +142,7 @@ fn vs_world(
     let normal = mesh_normal;
     var world = fade_toward_origin(row, (row.model * vec4<f32>(position, 1.0)).xyz);
 #endif
-    let world_normal = mat3x3<f32>(row.normal_x.xyz, row.normal_y.xyz, row.normal_z.xyz) * normal;
+    var world_normal = mat3x3<f32>(row.normal_x.xyz, row.normal_y.xyz, row.normal_z.xyz) * normal;
 #ifdef WIND
 #ifdef LAYER_WEIGHTS
     world = wind_displace(world, row.model[3].xyz, 1.0);
@@ -151,17 +154,16 @@ fn vs_world(
 #endif
 #endif
 #endif
+#ifdef PRODUCT_SHADER
+    // The vertex as placed so far, which a product's vertex stages move and
+    // turn.
+    let vertex = Vertex(world, world_normal, position, normal, uv, color, row.model[3].xyz, part);
+#endif
 #ifdef PRODUCT_DISPLACES
-    var vertex: Vertex;
-    vertex.world_position = world;
-    vertex.world_normal = world_normal;
-    vertex.position = position;
-    vertex.normal = normal;
-    vertex.uv = uv;
-    vertex.color = color;
-    vertex.origin = row.model[3].xyz;
-    vertex.part = part;
     world = displace(vertex);
+#endif
+#ifdef PRODUCT_DISPLACES_NORMAL
+    world_normal = normalize(displace_normal(vertex));
 #endif
     var out: VsOut;
     out.clip = frame.view_proj * vec4<f32>(world, 1.0);
@@ -180,7 +182,13 @@ fn vs_world(
 #endif
 #ifdef TRIPLANAR
     out.texture_position = texture_space_position(row, position);
+#ifdef PRODUCT_DISPLACES_NORMAL
+    // The product's normal back in texture space (the mesh's, scaled), which
+    // the fragment's normal matrix returns to the world.
+    out.texture_normal = transpose(mat3x3<f32>(row.model[0].xyz, row.model[1].xyz, row.model[2].xyz)) * world_normal;
+#else
     out.texture_normal = normal;
+#endif
 #endif
     return out;
 }

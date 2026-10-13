@@ -3,7 +3,8 @@
 //! in the opaque, blend and shadow passes; their standard-feature variants;
 //! redefinition; a shader that does not compose; its own textures and the
 //! presentation time (#9126); keywords and a caster stage (#9127); a
-//! displace stage that moves the vertices and their shadow (#9541).
+//! displace stage that moves the vertices and their shadow (#9541), and a
+//! displaced normal that lights them smoothly (#9905).
 
 mod support;
 
@@ -574,5 +575,174 @@ fn a_displace_stage_moves_the_vertices_with_time_and_the_shadow_follows() {
     assert_ne!(
         grounded_shadow, lifted_shadow,
         "the shadow follows the lift"
+    );
+}
+
+/// Rolls a grid into waves along x and z, and lights it with a normal by
+/// keyword: `ANALYTIC` the wave's own slope from a displaced normal stage,
+/// `DERIVATIVE` each triangle's plane from screen derivatives, neither the
+/// mesh's undisplaced normal.
+const ROLLING: &str = "#import rusty::types::{Surface, Vertex}
+#import rusty::shade::standard_shade
+
+const HEIGHT: f32 = 0.4;
+const ALONG: vec2<f32> = vec2<f32>(1.5, 0.7);
+
+fn displace(vertex: Vertex) -> vec3<f32> {
+    let p = vertex.world_position;
+    return p + vec3<f32>(0.0, HEIGHT * sin(dot(ALONG, p.xz)), 0.0);
+}
+
+#ifdef ANALYTIC
+fn displace_normal(vertex: Vertex) -> vec3<f32> {
+    let slope = HEIGHT * cos(dot(ALONG, vertex.world_position.xz)) * ALONG;
+    return vec3<f32>(-slope.x, 1.0, -slope.y);
+}
+#endif
+
+fn shade(surface: Surface) -> vec4<f32> {
+    var lit = surface;
+#ifdef DERIVATIVE
+    let plane = cross(dpdx(surface.world_position), dpdy(surface.world_position));
+    lit.normal = normalize(plane * sign(dot(plane, surface.normal)));
+#endif
+    return standard_shade(lit);
+}
+";
+
+/// A flat grid of 1 m cells from `-half` to `half` over x and z, facing up.
+fn grid(half: i32) -> MeshPayloadDescriptor {
+    let (mut positions, mut normals, mut uvs, mut indices) = (vec![], vec![], vec![], vec![]);
+    let side = (2 * half + 1) as u32;
+    for z in -half..=half {
+        for x in -half..=half {
+            positions.extend_from_slice(&[x as f32, 0.0, z as f32]);
+            normals.extend_from_slice(&[0.0, 1.0, 0.0]);
+            uvs.extend_from_slice(&[x as f32, z as f32]);
+        }
+    }
+    for row in 0..side - 1 {
+        for column in 0..side - 1 {
+            let at = row * side + column;
+            indices.extend_from_slice(&[at, at + side, at + 1, at + 1, at + side, at + side + 1]);
+        }
+    }
+    let count = indices.len() as u32;
+    payload(positions, normals, uvs, indices, &[(0, count)])
+}
+
+/// The grey level of each pixel in the middle of the image, which the
+/// rolled grid covers.
+fn grey_rows(rgba: &[u8]) -> Vec<Vec<i32>> {
+    (HEIGHT / 4..HEIGHT * 3 / 4)
+        .map(|y| {
+            (WIDTH / 4..WIDTH * 3 / 4)
+                .map(|x| {
+                    let [r, g, b, _] = pixel(rgba, x, y);
+                    (r as i32 + g as i32 + b as i32) / 3
+                })
+                .collect()
+        })
+        .collect()
+}
+
+/// Steps between neighbouring pixels along a row larger than a smooth
+/// gradient makes: a faceted surface's shading jumps at its triangles' edges.
+fn facet_edges(rows: &[Vec<i32>]) -> usize {
+    rows.iter()
+        .flat_map(|row| row.windows(2))
+        .filter(|pair| (pair[0] - pair[1]).abs() > 6)
+        .count()
+}
+
+fn grey_range(rows: &[Vec<i32>]) -> i32 {
+    let all = || rows.iter().flatten();
+    all().max().unwrap() - all().min().unwrap()
+}
+
+#[test]
+fn a_displaced_normal_lights_a_rolled_grid_smoothly() {
+    let render = |keywords: &[&str]| {
+        let mut harness = Harness::new(RendererOptions {
+            default_world_lights: false,
+            ..RendererOptions::default()
+        });
+        let mut rolled = material("material/rolled", [0.8, 0.8, 0.8, 1.0], None);
+        rolled.shader = Some(MaterialShaderDescriptor {
+            shader: "shader/rolling".to_owned(),
+            parameters: [[0.0; 4]; 4],
+            textures: [None, None],
+        });
+        harness.apply(vec![
+            RenderDiff::DefineShader {
+                shader: ShaderDescriptor {
+                    id: "shader/rolling".to_owned(),
+                    path: "shaders/rolling.wgsl".to_owned(),
+                    source: ROLLING.to_owned(),
+                    keywords: keywords.iter().map(|keyword| keyword.to_string()).collect(),
+                },
+            },
+            RenderDiff::DefineMaterial { material: rolled },
+            static_mesh("mesh/grid", grid(8), "material/rolled"),
+            instance(
+                1,
+                None,
+                "mesh/grid",
+                transform([0.0, 0.0, -5.0], 0.0, [1.0; 3]),
+            ),
+            RenderDiff::CreateLight {
+                handle: RenderHandle::new(2),
+                parent: None,
+                light: LightDescriptor::Directional {
+                    color: [1.0; 3],
+                    intensity: 2.0,
+                    enabled: true,
+                    direction: [0.8, -0.5, -0.3],
+                    range: None,
+                    shadow_intent: LightShadowIntent::Disabled,
+                    shadow: Default::default(),
+                },
+            },
+        ]);
+        let image = harness.render(&camera([0.0, 3.0, 0.0], 0.0, -35.0)).1;
+        grey_rows(&image)
+    };
+    let mesh = render(&[]);
+    let derivative = render(&["DERIVATIVE"]);
+    let analytic = render(&["ANALYTIC"]);
+    let difference = |a: &[Vec<i32>], b: &[Vec<i32>]| {
+        let pixels = a.iter().flatten().zip(b.iter().flatten());
+        pixels.map(|(a, b)| (a - b).abs()).sum::<i32>() / a.iter().flatten().count() as i32
+    };
+    // The derivative normal jumps at every triangle's edge; the displaced
+    // normal varies smoothly across them.
+    assert!(
+        facet_edges(&derivative) > 200,
+        "the derivative normal shows {} facet edges",
+        facet_edges(&derivative)
+    );
+    assert!(
+        facet_edges(&analytic) * 20 < facet_edges(&derivative),
+        "the displaced normal shows {} facet edges against {}",
+        facet_edges(&analytic),
+        facet_edges(&derivative)
+    );
+    // It lights the waves as their slope does; the mesh's normal leaves
+    // the rolled grid evenly lit.
+    assert!(
+        grey_range(&mesh) < 10,
+        "the mesh normal lights the grid evenly: {}",
+        grey_range(&mesh)
+    );
+    assert!(
+        grey_range(&analytic) > 60,
+        "the displaced normal lights the slopes: {}",
+        grey_range(&analytic)
+    );
+    assert!(
+        difference(&analytic, &derivative) * 2 < difference(&mesh, &derivative),
+        "the displaced normal follows the slope: {} from the derivative's, the mesh's {}",
+        difference(&analytic, &derivative),
+        difference(&mesh, &derivative)
     );
 }

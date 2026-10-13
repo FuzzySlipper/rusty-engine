@@ -17,7 +17,9 @@
 //! standard stages computed; may define `fn cast_shadow(caster: Caster)`,
 //! which the shadow pass calls (and which may discard); and may define
 //! `fn displace(vertex: Vertex) -> vec3<f32>`, which the world and shadow
-//! passes' vertex stages call for the vertex's world position. It may
+//! passes' vertex stages call for the vertex's world position, and
+//! `fn displace_normal(vertex: Vertex) -> vec3<f32>`, which the world pass's
+//! vertex stage calls for its world normal. It may
 //! import any module above, and read the standard feature defs
 //! (`#ifdef NORMAL_MAP`) and its own keywords, chosen when it is opened.
 
@@ -220,6 +222,12 @@ impl Features {
         if self.product & PRODUCT_DISPLACES != 0 {
             defs.insert("PRODUCT_DISPLACES".to_string(), ShaderDefValue::Bool(true));
         }
+        if self.product & PRODUCT_DISPLACES_NORMAL != 0 {
+            defs.insert(
+                "PRODUCT_DISPLACES_NORMAL".to_string(),
+                ShaderDefValue::Bool(true),
+            );
+        }
         // The shadow pass has a fragment stage only to discard.
         if self.caster_fragment() {
             defs.insert("CASTER_FRAGMENT".to_string(), ShaderDefValue::Bool(true));
@@ -269,14 +277,18 @@ const PRODUCT_CASTS: u32 = 1 << 31;
 /// Set in a product id whose shader defines `displace`, so `Features::caster`
 /// keeps it and the shadow maps follow its vertices.
 const PRODUCT_DISPLACES: u32 = 1 << 30;
+/// Set in a product id whose shader defines `displace_normal`, which the
+/// world pass's vertex stage calls (the shadow pass needs no normal).
+const PRODUCT_DISPLACES_NORMAL: u32 = 1 << 29;
 /// The product id's flags; the rest is its index + 1.
-const PRODUCT_FLAGS: u32 = PRODUCT_CASTS | PRODUCT_DISPLACES;
+const PRODUCT_FLAGS: u32 = PRODUCT_CASTS | PRODUCT_DISPLACES | PRODUCT_DISPLACES_NORMAL;
 
 /// Shader defs a product keyword may not take.
-const RESERVED_DEFS: [&str; 4] = [
+const RESERVED_DEFS: [&str; 5] = [
     "PRODUCT_SHADER",
     "PRODUCT_CASTS",
     "PRODUCT_DISPLACES",
+    "PRODUCT_DISPLACES_NORMAL",
     "CASTER_FRAGMENT",
 ];
 
@@ -401,6 +413,12 @@ impl ProductShader {
         self.defines("displace")
     }
 
+    /// Whether it defines a displaced normal stage, `fn displace_normal`,
+    /// under its keywords.
+    fn displaces_normal(&self) -> bool {
+        self.defines("displace_normal")
+    }
+
     /// Whether it defines `fn name` under its keywords: naga_oil's own
     /// comment stripping, preprocessor and tokenizer, so any legal spelling
     /// counts. A shader that does not preprocess fails composition instead.
@@ -483,6 +501,11 @@ impl Shaders {
         let flags = if shader.casts() { PRODUCT_CASTS } else { 0 }
             | if shader.displaces() {
                 PRODUCT_DISPLACES
+            } else {
+                0
+            }
+            | if shader.displaces_normal() {
+                PRODUCT_DISPLACES_NORMAL
             } else {
                 0
             };
@@ -930,9 +953,16 @@ fn cast_shadow(caster: Caster) {
 #import rusty::material::material
 #import rusty::shade::standard_shade
 
+fn lift(vertex: Vertex) -> f32 {
+    return sin(frame.time.x * material.parameters[0].x + vertex.uv.x) * vertex.color.a;
+}
+
 fn displace(vertex: Vertex) -> vec3<f32> {
-    let lift = sin(frame.time.x * material.parameters[0].x + vertex.uv.x) * vertex.color.a;
-    return vertex.world_position + vertex.world_normal * lift;
+    return vertex.world_position + vertex.world_normal * lift(vertex);
+}
+
+fn displace_normal(vertex: Vertex) -> vec3<f32> {
+    return vertex.world_normal + vec3<f32>(cos(vertex.uv.x), 0.0, 0.0) * lift(vertex);
 }
 
 fn shade(surface: Surface) -> vec4<f32> {
@@ -942,8 +972,9 @@ fn shade(surface: Surface) -> vec4<f32> {
 
     /// A displace stage keeps its product in the caster pass (the shadow
     /// follows the vertices) without a caster fragment stage, composes in
-    /// the world and shadow passes under every feature set, and moves with
-    /// time.
+    /// the world and shadow passes under every feature set, with its
+    /// displaced normal stage, and moves with time. A displaced normal
+    /// alone leaves the shadow to the standard caster.
     #[test]
     fn a_displace_stage_places_vertices_in_both_passes() {
         let mut shaders = Shaders::new();
@@ -990,7 +1021,22 @@ fn shade(surface: Surface) -> vec4<f32> {
         let both = format!("{WAVING}\nfn cast_shadow(caster: Caster) {{}}\n")
             .replace("{Surface, Vertex}", "{Surface, Vertex, Caster}");
         check_product_shader("shaders/both.wgsl", &both, &[]).unwrap();
-        for reserved in ["PRODUCT_CASTS", "PRODUCT_DISPLACES"] {
+        let turning = WAVING.replace("fn displace(", "fn placed(");
+        check_product_shader("shaders/turning.wgsl", &turning, &[]).unwrap();
+        let turning = Shaders::new().product(ProductShader {
+            path: "shaders/turning.wgsl".to_string(),
+            source: turning,
+            keywords: Vec::new(),
+        });
+        let turning = Features::default().with_product(turning);
+        assert!(turning.defs().contains_key("PRODUCT_DISPLACES_NORMAL"));
+        assert_eq!(turning.caster().product(), 0, "a normal casts nothing");
+        assert!(!turning.moves_with_time());
+        for reserved in [
+            "PRODUCT_CASTS",
+            "PRODUCT_DISPLACES",
+            "PRODUCT_DISPLACES_NORMAL",
+        ] {
             assert!(check_keyword(reserved).is_err(), "{reserved} is reserved");
         }
     }

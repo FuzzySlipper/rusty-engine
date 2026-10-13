@@ -555,6 +555,18 @@ fn shade(surface: Surface) -> vec4<f32> {
   displacing material draws, the shadow maps redraw as presentation time
   moves, as they do for a caster stage. The standard stages still cull by
   the mesh's bounds, so keep a displacement within a metre or so of them.
+- **Displaced normals.** Displacement that tilts the surface leaves the
+  mesh's normal behind. A shader may also define
+  `fn displace_normal(vertex: Vertex) -> vec3<f32>`, which the world pass's
+  vertex stage calls with the same `Vertex` for the world normal (any
+  length; the Engine normalizes it). It is interpolated across triangles
+  like a mesh normal, so the normal map, triplanar planes, the water look's
+  ripples and the lighting all start from it, and `Surface.normal` carries
+  it. Give it the closed-form slope of the same sum `displace` moves by: for
+  a wave `y = a sin(k·xz)` it is `(-a k.x cos(k·xz), 1, -a k.y cos(k·xz))`.
+  A normal rebuilt in `shade` from `dpdx`/`dpdy` of the world position is
+  one per triangle, so it shows the mesh's facets. The shadow pass needs no
+  normal and does not call it; without it, the mesh's normal shades.
 - **Checked when opened.** `OpenResource` checks the keywords and composes
   the shader (and its caster stage) with the standard modules, refusing an
   error with `CSHARP_SHADER`, naming the file, line and column. A product
