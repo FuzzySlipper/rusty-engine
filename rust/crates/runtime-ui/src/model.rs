@@ -1,8 +1,7 @@
 use std::fmt;
 
 use runtime_lifecycle::{
-    validate_runtime_identity, RuntimeControlRevision, RuntimeGeneration, RuntimeIdentityError,
-    RuntimeInstanceId, RuntimeLifecycle,
+    RuntimeControlRevision, RuntimeGeneration, RuntimeInstanceId, RuntimeLifecycle,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -62,7 +61,7 @@ impl From<&RuntimeLifecycle> for RuntimeUiRuntimeBinding {
 /// An owned, validated UI projection transport envelope.
 ///
 /// The fields are private and there are no mutating accessors. Constructing
-/// an envelope validates identities and JSON number portability. Use
+/// an envelope validates JSON number portability. Use
 /// [`Self::encode_json`] to obtain the strict host wire shape.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RuntimeUiProjectionEnvelope {
@@ -83,14 +82,12 @@ impl RuntimeUiProjectionEnvelope {
         contract: impl Into<String>,
         value: Value,
     ) -> Result<Self, RuntimeUiProjectionError> {
-        let stream = validate_identity("stream", stream.into())?;
-        let contract = validate_identity("contract", contract.into())?;
         validate_value(&value)?;
         Ok(Self {
             runtime,
             sequence,
-            stream,
-            contract,
+            stream: stream.into(),
+            contract: contract.into(),
             value,
         })
     }
@@ -104,7 +101,7 @@ impl RuntimeUiProjectionEnvelope {
     ///
     /// This is for Engine-owned staging when a callback runs before a
     /// lifecycle action commits. `RuntimeUiRuntimeBinding` is already typed,
-    /// while the stream, contract, and value were validated by [`Self::new`].
+    /// while the value was validated by [`Self::new`].
     pub fn rebind_runtime(&mut self, runtime: RuntimeUiRuntimeBinding) {
         self.runtime = runtime;
     }
@@ -146,26 +143,13 @@ impl RuntimeUiProjectionEnvelope {
     }
 }
 
-/// Rejections from identity, JSON number and wire validation.
+/// Rejections from JSON number and wire validation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RuntimeUiProjectionError {
-    InvalidIdentity {
-        field: &'static str,
-        value: String,
-        diagnostic: Box<RuntimeIdentityError>,
-    },
-    ValueUnsafeInteger {
-        value: String,
-    },
-    WireUnknownArtifact {
-        received: String,
-    },
-    WireNonCanonicalInteger {
-        field: &'static str,
-    },
-    WireIntegerOutOfRange {
-        field: &'static str,
-    },
+    ValueUnsafeInteger { value: String },
+    WireUnknownArtifact { received: String },
+    WireNonCanonicalInteger { field: &'static str },
+    WireIntegerOutOfRange { field: &'static str },
     WireEncoding,
 }
 
@@ -176,20 +160,6 @@ impl fmt::Display for RuntimeUiProjectionError {
 }
 
 impl std::error::Error for RuntimeUiProjectionError {}
-
-pub(crate) fn validate_identity(
-    field: &'static str,
-    value: String,
-) -> Result<String, RuntimeUiProjectionError> {
-    if let Err(diagnostic) = validate_runtime_identity(&value) {
-        return Err(RuntimeUiProjectionError::InvalidIdentity {
-            field,
-            value: value.clone(),
-            diagnostic: Box::new(diagnostic),
-        });
-    }
-    Ok(value)
-}
 
 pub(crate) fn validate_value(value: &Value) -> Result<(), RuntimeUiProjectionError> {
     let mut pending = vec![value];

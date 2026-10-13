@@ -26,8 +26,8 @@ runtime is paused ([actions while paused](#actions-while-paused)).
   integration. Do not create another central game loop or advance Engine time
   yourself.
 - The runtime delivers a timeline completion only when it names the current
-  running product binding. Correlation, outcome, and provenance values arrive
-  as copied managed data. A product that does not own timeline tickets may
+  running product binding. The correlation the product issued with the ticket,
+  the outcome and the optional provenance detail arrive as copied managed data. A product that does not own timeline tickets may
   leave the default rejecting implementation in place.
 
 ### Actions while paused

@@ -1,6 +1,6 @@
-use crate::publication::{RuntimePublication, RuntimePublicationError};
+use crate::publication::RuntimePublication;
 use crate::timeline::{
-    RuntimeOpaqueData, RuntimeProvenance, RuntimeTimelineBinding, TimelineCompletionEnvelope,
+    RuntimeOpaqueData, RuntimeTimelineBinding, TimelineCompletionEnvelope,
     TimelineCompletionOutcome, TimelineCompletionTicketId,
 };
 pub use runtime_diagnostics::CanonicalU64;
@@ -723,37 +723,29 @@ impl ProductHostOperationResult {
         self.readout.as_ref()
     }
 
+    /// The binding is the readout's runtime: both name the one lifecycle
+    /// state the receipt reports.
     pub fn accepted(
         operation: ProductHostOperationKind,
-        binding: ProductHostRuntimeBinding,
         next_input_sequence: CanonicalU64,
         readout: ProductHostRuntimeReadout,
-    ) -> Result<Self, ProductHostError> {
-        if readout.runtime() != binding {
-            return Err(ProductHostError::new(
-                "PRODUCT_HOST_RESULT_BINDING",
-                "runtime operation receipt binding does not match its readout",
-            ));
-        }
-        Ok(Self {
+    ) -> Self {
+        Self {
             accepted: true,
             code: ACCEPTED_FAULT_CODE.to_owned(),
             disposition: ProductHostFaultDisposition::Accepted,
             operation,
-            binding: Some(binding),
+            binding: Some(readout.runtime()),
             next_input_sequence: Some(next_input_sequence),
             admitted_through: None,
             readout: Some(readout),
             diagnostic: None,
-        })
+        }
     }
 
-    pub fn rejected(
-        operation: ProductHostOperationKind,
-        diagnostic: impl Into<String>,
-    ) -> Result<Self, ProductHostError> {
+    pub fn rejected(operation: ProductHostOperationKind, diagnostic: impl Into<String>) -> Self {
         let diagnostic = diagnostic.into();
-        Ok(Self {
+        Self {
             accepted: false,
             code: "PRODUCT_HOST_OPERATION_REJECTED".to_owned(),
             disposition: ProductHostFaultDisposition::RejectedRecoverable,
@@ -763,15 +755,15 @@ impl ProductHostOperationResult {
             admitted_through: None,
             readout: None,
             diagnostic: Some(diagnostic),
-        })
+        }
     }
 
     pub fn rejected_runtime(
         operation: ProductHostOperationKind,
         error: ProductHostRuntimeError,
-    ) -> Result<Self, ProductHostError> {
+    ) -> Self {
         let (code, disposition, diagnostic) = runtime_fault_fields(error);
-        Ok(Self {
+        Self {
             accepted: false,
             code,
             disposition,
@@ -781,7 +773,7 @@ impl ProductHostOperationResult {
             admitted_through: None,
             readout: None,
             diagnostic: Some(diagnostic),
-        })
+        }
     }
 
     /// Reports a lifecycle admission which already advanced Rust-owned
@@ -790,30 +782,23 @@ impl ProductHostOperationResult {
     /// host resynchronize without replaying the operation.
     pub fn resync_required(
         operation: ProductHostOperationKind,
-        binding: ProductHostRuntimeBinding,
         next_input_sequence: CanonicalU64,
         readout: ProductHostRuntimeReadout,
         admitted_through: Option<CanonicalU64>,
         code: impl Into<String>,
         diagnostic: impl Into<String>,
-    ) -> Result<Self, ProductHostError> {
-        if readout.runtime() != binding {
-            return Err(ProductHostError::new(
-                "PRODUCT_HOST_RESULT_BINDING",
-                "runtime resync receipt binding does not match its readout",
-            ));
-        }
-        Ok(Self {
+    ) -> Self {
+        Self {
             accepted: false,
             code: code.into(),
             disposition: ProductHostFaultDisposition::ResyncRequired,
             operation,
-            binding: Some(binding),
+            binding: Some(readout.runtime()),
             next_input_sequence: Some(next_input_sequence),
             admitted_through,
             readout: Some(readout),
             diagnostic: Some(diagnostic.into()),
-        })
+        }
     }
 }
 
@@ -821,51 +806,41 @@ impl ProductHostOperationResult {
 #[derive(Debug, Clone)]
 pub struct ProductHostInputBatch {
     events: Vec<RuntimeInputEvent>,
-    wire_json: Option<Vec<u8>>,
 }
 
 impl ProductHostInputBatch {
     pub fn new(events: Vec<RuntimeInputEvent>) -> Self {
-        Self {
-            events,
-            wire_json: None,
-        }
+        Self { events }
     }
 
     pub fn events(&self) -> &[RuntimeInputEvent] {
         &self.events
     }
 
-    /// Preserves the one already-admitted host wire encoding when a
-    /// disposable worker must receive the same input batch.  Programmatic
-    /// callers retain the typed in-process route and need not manufacture a
-    /// second wire form.
-    pub fn encoded_json(&self) -> Option<&[u8]> {
-        self.wire_json.as_deref()
+    /// Converts the wire envelopes a host deserialized with its request.
+    /// runtime-input owns event semantics and the event-page count.
+    pub fn from_wire(
+        events: Vec<runtime_input::RuntimeInputWireEvent>,
+    ) -> Result<Self, ProductHostError> {
+        runtime_input::runtime_input_wire_events(events)
+            .map(Self::new)
+            .map_err(input_decode_error)
     }
 
-    /// Strictly decodes the ordered runtime-input wire array used by host
-    /// adapters. This host owns HTTP byte framing; runtime-input owns event
-    /// semantics and the event-page count. Decoder errors are mapped to the
-    /// product host error surface.
+    /// Strictly decodes an ordered runtime-input wire array for in-process
+    /// callers that hold it as JSON.
     pub fn decode_json(bytes: &[u8]) -> Result<Self, ProductHostError> {
-        if bytes.len() > crate::MAX_REQUEST_BODY_BYTES {
-            return Err(ProductHostError::new(
-                "PRODUCT_HOST_BODY_BOUNDS",
-                "input batch exceeds the host JSON body bound",
-            ));
-        }
-        let events = runtime_input::decode_runtime_input_wire_events_json(bytes).map_err(|_| {
-            ProductHostError::new(
-                "PRODUCT_HOST_INPUT_DECODE",
-                "input batch is not a strict runtime-input wire batch",
-            )
-        })?;
-        Ok(Self {
-            events,
-            wire_json: Some(bytes.to_vec()),
-        })
+        runtime_input::decode_runtime_input_wire_events_json(bytes)
+            .map(Self::new)
+            .map_err(input_decode_error)
     }
+}
+
+fn input_decode_error(_: runtime_input::RuntimeInputError) -> ProductHostError {
+    ProductHostError::new(
+        "PRODUCT_HOST_INPUT_DECODE",
+        "input batch is not a strict runtime-input wire batch",
+    )
 }
 
 /// Typed input result supplied by the generated runtime.
@@ -909,24 +884,8 @@ impl ProductHostInputResult {
         self.accepted
     }
 
-    pub fn accepted(
-        count: usize,
-        binding: ProductHostRuntimeBinding,
-        readout: ProductHostRuntimeReadout,
-    ) -> Result<Self, ProductHostError> {
-        if count > runtime_input::MAX_RUNTIME_INPUT_WIRE_EVENTS {
-            return Err(ProductHostError::new(
-                "PRODUCT_HOST_INPUT_RESULT_BOUNDS",
-                "runtime input receipt count exceeds admitted batch bound",
-            ));
-        }
-        if readout.runtime() != binding {
-            return Err(ProductHostError::new(
-                "PRODUCT_HOST_RESULT_BINDING",
-                "runtime input receipt binding does not match its readout",
-            ));
-        }
-        Ok(Self {
+    pub fn accepted(count: usize, readout: ProductHostRuntimeReadout) -> Self {
+        Self {
             accepted: true,
             code: ACCEPTED_FAULT_CODE.to_owned(),
             disposition: ProductHostFaultDisposition::Accepted,
@@ -936,23 +895,17 @@ impl ProductHostInputResult {
             accepted_through: None,
             consumed_through: None,
             next_input_sequence: None,
-            binding: Some(binding),
+            binding: Some(readout.runtime()),
             readout: Some(readout),
             diagnostic: None,
-        })
+        }
     }
 
     /// Acknowledges that the host mailbox accepted the submitted batch. This
     /// deliberately does not claim that RuntimeInputLane or C# has consumed
     /// it; the later scheduled update remains the semantic admission point.
-    pub fn queued(count: usize) -> Result<Self, ProductHostError> {
-        if count > runtime_input::MAX_RUNTIME_INPUT_WIRE_EVENTS {
-            return Err(ProductHostError::new(
-                "PRODUCT_HOST_INPUT_RESULT_BOUNDS",
-                "queued runtime input count exceeds admitted batch bound",
-            ));
-        }
-        Ok(Self {
+    pub fn queued(count: usize) -> Self {
+        Self {
             accepted: true,
             code: "PRODUCT_HOST_INPUT_QUEUED".to_owned(),
             disposition: ProductHostFaultDisposition::Accepted,
@@ -965,7 +918,7 @@ impl ProductHostInputResult {
             binding: None,
             readout: None,
             diagnostic: None,
-        })
+        }
     }
 
     /// Reports a bounded mailbox refusal without pretending that the runtime
@@ -973,14 +926,8 @@ impl ProductHostInputResult {
     /// runtime on the next host observation, so retrying against the old
     /// binding would be incoherent; the transport must request a fresh
     /// baseline instead.
-    pub fn mailbox_full(count: usize) -> Result<Self, ProductHostError> {
-        if count > runtime_input::MAX_RUNTIME_INPUT_WIRE_EVENTS {
-            return Err(ProductHostError::new(
-                "PRODUCT_HOST_INPUT_RESULT_BOUNDS",
-                "mailbox refusal count exceeds admitted batch bound",
-            ));
-        }
-        Ok(Self {
+    pub fn mailbox_full(count: usize) -> Self {
+        Self {
             accepted: false,
             code: "PRODUCT_HOST_INPUT_MAILBOX_FULL".to_owned(),
             disposition: ProductHostFaultDisposition::ResyncRequired,
@@ -993,7 +940,7 @@ impl ProductHostInputResult {
             binding: None,
             readout: None,
             diagnostic: Some("Rust-host input mailbox overflow cleared queued input; obtain a fresh runtime baseline before retrying".to_owned()),
-        })
+        }
     }
 
     /// Reports that the browser submitted a structurally invalid wire batch
@@ -1003,8 +950,8 @@ impl ProductHostInputResult {
     /// runtime output receipt. `count` is diagnostic-only here: the host
     /// already bounded the JSON request, while the admitted-wire-event bound
     /// does not apply to a batch rejected before admission.
-    pub fn wire_decode_resynchronized(count: usize) -> Result<Self, ProductHostError> {
-        Ok(Self {
+    pub fn wire_decode_resynchronized(count: usize) -> Self {
+        Self {
             accepted: false,
             code: "PRODUCT_HOST_INPUT_DECODE".to_owned(),
             disposition: ProductHostFaultDisposition::ResyncRequired,
@@ -1017,11 +964,11 @@ impl ProductHostInputResult {
             binding: None,
             readout: None,
             diagnostic: Some("input batch was not a strict runtime-input wire batch; the runtime input binding was resynchronized".to_owned()),
-        })
+        }
     }
 
-    pub fn rejected(diagnostic: impl Into<String>) -> Result<Self, ProductHostError> {
-        Ok(Self {
+    pub fn rejected(diagnostic: impl Into<String>) -> Self {
+        Self {
             accepted: false,
             code: "PRODUCT_HOST_INPUT_REJECTED".to_owned(),
             disposition: ProductHostFaultDisposition::RejectedRecoverable,
@@ -1034,12 +981,12 @@ impl ProductHostInputResult {
             binding: None,
             readout: None,
             diagnostic: Some(diagnostic.into()),
-        })
+        }
     }
 
-    pub fn rejected_runtime(error: ProductHostRuntimeError) -> Result<Self, ProductHostError> {
+    pub fn rejected_runtime(error: ProductHostRuntimeError) -> Self {
         let (code, disposition, diagnostic) = runtime_fault_fields(error);
-        Ok(Self {
+        Self {
             accepted: false,
             code,
             disposition,
@@ -1052,17 +999,13 @@ impl ProductHostInputResult {
             binding: None,
             readout: None,
             diagnostic: Some(diagnostic),
-        })
+        }
     }
 
     /// Constructs the input receipt for a completed or safely degraded batch.
     /// `accepted` is true only when every submitted event was admitted. A
     /// stale/duplicate drop is recoverable, names the current cursor, and is
     /// never an invitation to replay the original batch.
-    #[allow(
-        clippy::too_many_arguments,
-        reason = "the direct runtime receipt preserves the input admission and cursor facts separately"
-    )]
     pub fn with_progress(
         count: usize,
         accepted_count: usize,
@@ -1070,32 +1013,10 @@ impl ProductHostInputResult {
         accepted_through: Option<CanonicalU64>,
         consumed_through: Option<CanonicalU64>,
         next_input_sequence: CanonicalU64,
-        binding: ProductHostRuntimeBinding,
         readout: ProductHostRuntimeReadout,
-    ) -> Result<Self, ProductHostError> {
-        if count > runtime_input::MAX_RUNTIME_INPUT_WIRE_EVENTS
-            || accepted_count > count
-            || dropped_count > count
-            || accepted_count
-                .checked_add(dropped_count)
-                .is_none_or(|total| total != count)
-            || (accepted_count == 0 && accepted_through.is_some())
-            || (accepted_count > 0 && accepted_through.is_none())
-            || (count == 0 && consumed_through.is_some())
-        {
-            return Err(ProductHostError::new(
-                "PRODUCT_HOST_INPUT_RESULT_BOUNDS",
-                "runtime input progress receipt has incoherent batch boundaries",
-            ));
-        }
-        if readout.runtime() != binding {
-            return Err(ProductHostError::new(
-                "PRODUCT_HOST_RESULT_BINDING",
-                "runtime input receipt binding does not match its readout",
-            ));
-        }
+    ) -> Self {
         let complete = dropped_count == 0;
-        Ok(Self {
+        Self {
             accepted: complete,
             code: if complete {
                 ACCEPTED_FAULT_CODE.to_owned()
@@ -1113,7 +1034,7 @@ impl ProductHostInputResult {
             accepted_through,
             consumed_through,
             next_input_sequence: Some(next_input_sequence),
-            binding: Some(binding),
+            binding: Some(readout.runtime()),
             readout: Some(readout),
             diagnostic: if complete {
                 None
@@ -1122,7 +1043,7 @@ impl ProductHostInputResult {
                     "dropped {dropped_count} stale or duplicate input event(s); synchronize the input cursor and do not replay them"
                 ))
             },
-        })
+        }
     }
 }
 
@@ -1130,33 +1051,22 @@ impl ProductHostInputResult {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProductHostTimelineCompletion {
     envelope: TimelineCompletionEnvelope,
-    wire_json: Option<Vec<u8>>,
 }
 
 impl ProductHostTimelineCompletion {
     /// Strictly decodes the timeline completion wire object accepted by the
     /// host. The private wire DTO remains private; a packaged adapter receives
-    /// only this validated, transport-neutral completion value.
+    /// only this transport-neutral completion value.
     pub fn decode_json(bytes: &[u8]) -> Result<Self, ProductHostError> {
         let value: ProductHostTimelineCompletionWire = decode_strict_json(
             bytes,
             "PRODUCT_HOST_TIMELINE_DECODE",
             "timeline completion JSON is malformed or has unknown fields",
         )?;
-        let mut completion = Self::from_wire(value)?;
-        completion.wire_json = Some(bytes.to_vec());
-        Ok(completion)
+        Ok(Self::from_wire(value))
     }
 
-    pub(crate) fn from_wire(
-        value: ProductHostTimelineCompletionWire,
-    ) -> Result<Self, ProductHostError> {
-        if value.provenance.correlation != value.correlation {
-            return Err(ProductHostError::new(
-                "PRODUCT_HOST_TIMELINE_CORRELATION",
-                "timeline provenance correlation must match completion correlation",
-            ));
-        }
+    pub(crate) fn from_wire(value: ProductHostTimelineCompletionWire) -> Self {
         let outcome_data = match value.outcome {
             ProductHostTimelineOutcomeWire::Success { data } => {
                 TimelineCompletionOutcome::Success(data.map(RuntimeOpaqueData::new))
@@ -1165,38 +1075,20 @@ impl ProductHostTimelineCompletion {
                 TimelineCompletionOutcome::Failure(data.map(RuntimeOpaqueData::new))
             }
         };
-        let provenance = RuntimeProvenance::new(
-            value.provenance.correlation,
-            value.provenance.detail.map(RuntimeOpaqueData::new),
-        )
-        .map_err(|_| {
-            ProductHostError::new(
-                "PRODUCT_HOST_TIMELINE_PROVENANCE",
-                "timeline provenance violates timeline bounds",
-            )
-        })?;
         let binding = RuntimeTimelineBinding::new(
             RuntimeInstanceId::new(value.runtime.instance_id.get()),
             RuntimeGeneration::new(value.runtime.generation.get()),
             RuntimeControlRevision::new(value.runtime.control_revision.get()),
         );
-        let envelope = TimelineCompletionEnvelope::new(
-            TimelineCompletionTicketId::new(value.ticket.get()),
-            binding,
-            value.correlation,
-            outcome_data,
-            provenance,
-        )
-        .map_err(|_| {
-            ProductHostError::new(
-                "PRODUCT_HOST_TIMELINE_COMPLETION",
-                "timeline completion violates timeline bounds",
-            )
-        })?;
-        Ok(Self {
-            envelope,
-            wire_json: None,
-        })
+        Self {
+            envelope: TimelineCompletionEnvelope::new(
+                TimelineCompletionTicketId::new(value.ticket.get()),
+                binding,
+                value.correlation,
+                outcome_data,
+                value.provenance.detail.map(RuntimeOpaqueData::new),
+            ),
+        }
     }
 
     pub fn envelope(&self) -> &TimelineCompletionEnvelope {
@@ -1205,10 +1097,6 @@ impl ProductHostTimelineCompletion {
 
     pub fn into_envelope(self) -> TimelineCompletionEnvelope {
         self.envelope
-    }
-
-    pub fn encoded_json(&self) -> Option<&[u8]> {
-        self.wire_json.as_deref()
     }
 }
 
@@ -1243,7 +1131,6 @@ pub(crate) enum ProductHostTimelineOutcomeWire {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 #[ts(rename = "ProductHostTimelineProvenance")]
 pub(crate) struct ProductHostTimelineProvenanceWire {
-    pub correlation: String,
     #[serde(default)]
     #[ts(optional)]
     pub detail: Option<Value>,
@@ -1277,32 +1164,19 @@ impl ProductHostTimelineCompletionResult {
         self.ticket
     }
 
-    pub fn accepted(
-        ticket: CanonicalU64,
-        binding: ProductHostRuntimeBinding,
-        readout: ProductHostRuntimeReadout,
-    ) -> Result<Self, ProductHostError> {
-        if readout.runtime() != binding {
-            return Err(ProductHostError::new(
-                "PRODUCT_HOST_RESULT_BINDING",
-                "timeline completion receipt binding does not match its readout",
-            ));
-        }
-        Ok(Self {
+    pub fn accepted(ticket: CanonicalU64, readout: ProductHostRuntimeReadout) -> Self {
+        Self {
             accepted: true,
             code: ACCEPTED_FAULT_CODE.to_owned(),
             disposition: ProductHostFaultDisposition::Accepted,
             ticket,
-            binding: Some(binding),
+            binding: Some(readout.runtime()),
             readout: Some(readout),
             diagnostic: None,
-        })
+        }
     }
-    pub fn rejected(
-        ticket: CanonicalU64,
-        diagnostic: impl Into<String>,
-    ) -> Result<Self, ProductHostError> {
-        Ok(Self {
+    pub fn rejected(ticket: CanonicalU64, diagnostic: impl Into<String>) -> Self {
+        Self {
             accepted: false,
             code: "PRODUCT_HOST_TIMELINE_REJECTED".to_owned(),
             disposition: ProductHostFaultDisposition::RejectedRecoverable,
@@ -1310,7 +1184,7 @@ impl ProductHostTimelineCompletionResult {
             binding: None,
             readout: None,
             diagnostic: Some(diagnostic.into()),
-        })
+        }
     }
 
     /// A completion rejected before product callback entry still names the
@@ -1318,34 +1192,24 @@ impl ProductHostTimelineCompletionResult {
     /// treating the result as a stale-output failure.
     pub fn rejected_with_current(
         ticket: CanonicalU64,
-        binding: ProductHostRuntimeBinding,
         readout: ProductHostRuntimeReadout,
         code: impl Into<String>,
         diagnostic: impl Into<String>,
-    ) -> Result<Self, ProductHostError> {
-        if readout.runtime() != binding {
-            return Err(ProductHostError::new(
-                "PRODUCT_HOST_RESULT_BINDING",
-                "timeline rejection binding does not match its readout",
-            ));
-        }
-        Ok(Self {
+    ) -> Self {
+        Self {
             accepted: false,
             code: code.into(),
             disposition: ProductHostFaultDisposition::RejectedRecoverable,
             ticket,
-            binding: Some(binding),
+            binding: Some(readout.runtime()),
             readout: Some(readout),
             diagnostic: Some(diagnostic.into()),
-        })
+        }
     }
 
-    pub fn rejected_runtime(
-        ticket: CanonicalU64,
-        error: ProductHostRuntimeError,
-    ) -> Result<Self, ProductHostError> {
+    pub fn rejected_runtime(ticket: CanonicalU64, error: ProductHostRuntimeError) -> Self {
         let (code, disposition, diagnostic) = runtime_fault_fields(error);
-        Ok(Self {
+        Self {
             accepted: false,
             code,
             disposition,
@@ -1353,7 +1217,7 @@ impl ProductHostTimelineCompletionResult {
             binding: None,
             readout: None,
             diagnostic: Some(diagnostic),
-        })
+        }
     }
 }
 
@@ -1519,31 +1383,6 @@ impl ProductHostRuntimeOutput {
             _ => None,
         }
     }
-
-    /// Checks binding/completion coherence without encoding or imposing delivery budgets.
-    /// Returns a binding only when the whole group is one complete baseline.
-    pub fn validate_output_group(
-        outputs: &[Self],
-    ) -> Result<Option<ProductHostRuntimeBinding>, ProductHostError> {
-        let mut whole_baseline = None;
-        let mut index = 0;
-        while index < outputs.len() {
-            if let Some(binding) = outputs[index].binding_marker() {
-                if let Some(end) = complete_baseline_end(outputs, index, binding)? {
-                    if index == 0 && end + 1 == outputs.len() {
-                        whole_baseline = Some(binding);
-                    }
-                    index = end;
-                }
-            }
-            index += 1;
-        }
-        Ok(whole_baseline)
-    }
-}
-
-fn publication_error(error: RuntimePublicationError) -> ProductHostError {
-    ProductHostError::new("PRODUCT_HOST_RUNTIME_PUBLICATION", error.to_string())
 }
 
 fn host_runtime_binding(binding: RuntimeInputBinding) -> ProductHostRuntimeBinding {
@@ -1569,12 +1408,6 @@ fn decode_strict_json<T>(
 where
     T: for<'de> Deserialize<'de>,
 {
-    if bytes.len() > crate::MAX_REQUEST_BODY_BYTES {
-        return Err(ProductHostError::new(
-            "PRODUCT_HOST_BODY_BOUNDS",
-            "JSON payload exceeds the host body bound",
-        ));
-    }
     let mut decoder = serde_json::Deserializer::from_slice(bytes);
     let value = T::deserialize(&mut decoder).map_err(|_| ProductHostError::new(code, detail))?;
     decoder
@@ -1583,36 +1416,11 @@ where
     Ok(value)
 }
 
-fn complete_baseline_end(
-    outputs: &[ProductHostRuntimeOutput],
-    start: usize,
-    binding: ProductHostRuntimeBinding,
-) -> Result<Option<usize>, ProductHostError> {
-    for (index, output) in outputs.iter().enumerate().skip(start + 1) {
-        if output.binding_marker().is_some() {
-            return Ok(None);
-        }
-        if let Some(completion) = output.complete_baseline_marker() {
-            if completion != binding {
-                return Err(ProductHostError::new(
-                    "PRODUCT_HOST_OUTPUT_BASELINE",
-                    "a baseline completion does not match its binding",
-                ));
-            }
-            return Ok(Some(index));
-        }
-    }
-    Ok(None)
-}
-
 impl<T> ProductHostRuntimeReceipt<T> {
-    pub fn new(result: T, outputs: Vec<RuntimePublication>) -> Result<Self, ProductHostError> {
-        for output in &outputs {
-            output.validate().map_err(publication_error)?;
-        }
-        Ok(Self {
+    pub fn new(result: T, outputs: Vec<RuntimePublication>) -> Self {
+        Self {
             receipt: crate::publication::RuntimeReceipt::new(result, outputs),
-        })
+        }
     }
 
     pub fn result(&self) -> &T {
@@ -1625,22 +1433,19 @@ impl<T> ProductHostRuntimeReceipt<T> {
 
     /// Encode only at the serving edge. Runtime receipts retain typed
     /// Engine facts; the browser shell's share is converted here.
-    pub fn into_wire_parts(self) -> Result<(T, Vec<ProductHostRuntimeOutput>), ProductHostError> {
+    pub fn into_wire_parts(self) -> (T, Vec<ProductHostRuntimeOutput>) {
         let (result, publications) = self.receipt.into_parts();
-        Ok((result, wire_outputs(publications)?))
+        (result, wire_outputs(publications))
     }
 }
 
-/// A receipt's publications as the browser shell's outputs.
-pub(crate) fn wire_outputs(
-    publications: Vec<RuntimePublication>,
-) -> Result<Vec<ProductHostRuntimeOutput>, ProductHostError> {
-    let outputs = publications
+/// A receipt's publications as the browser shell's outputs. Binding and
+/// baseline pairing is checked once, where the host forms SSE batches.
+pub(crate) fn wire_outputs(publications: Vec<RuntimePublication>) -> Vec<ProductHostRuntimeOutput> {
+    publications
         .into_iter()
         .filter_map(ProductHostRuntimeOutput::from_publication)
-        .collect::<Vec<_>>();
-    ProductHostRuntimeOutput::validate_output_group(&outputs)?;
-    Ok(outputs)
+        .collect()
 }
 
 /// Concrete runtime owner implemented by the native product.
@@ -1803,8 +1608,10 @@ pub trait ProductHostRuntime: Send + 'static {
     fn describe_debug(
         &mut self,
     ) -> Result<ProductHostRuntimeReceipt<ProductHostDebugCatalog>, ProductHostRuntimeError> {
-        ProductHostRuntimeReceipt::new(ProductHostDebugCatalog::unavailable(), Vec::new())
-            .map_err(|error| ProductHostRuntimeError::new(error.code(), error.detail()))
+        Ok(ProductHostRuntimeReceipt::new(
+            ProductHostDebugCatalog::unavailable(),
+            Vec::new(),
+        ))
     }
 
     fn advance_realtime(
@@ -1854,13 +1661,10 @@ mod tests {
     #[test]
     fn runtime_faults_carry_their_source_disposition() {
         let result = |error| {
-            serde_json::to_value(
-                ProductHostOperationResult::rejected_runtime(
-                    ProductHostOperationKind::Start,
-                    error,
-                )
-                .unwrap(),
-            )
+            serde_json::to_value(ProductHostOperationResult::rejected_runtime(
+                ProductHostOperationKind::Start,
+                error,
+            ))
             .unwrap()
         };
         let ordinary = result(ProductHostRuntimeError::new_not_applied(
@@ -1887,7 +1691,7 @@ mod tests {
             runtime_input::MAX_RUNTIME_INPUT_WIRE_EVENTS,
             runtime_input::MAX_RUNTIME_INPUT_WIRE_EVENTS + 1,
         ] {
-            let result = ProductHostInputResult::wire_decode_resynchronized(count).unwrap();
+            let result = ProductHostInputResult::wire_decode_resynchronized(count);
             assert!(!result.accepted);
             assert_eq!(result.code, "PRODUCT_HOST_INPUT_DECODE");
             assert_eq!(
@@ -1898,10 +1702,42 @@ mod tests {
             assert_eq!(result.accepted_count, 0);
             assert_eq!(result.dropped_count, count);
         }
+    }
 
-        assert!(
-            ProductHostInputResult::queued(runtime_input::MAX_RUNTIME_INPUT_WIRE_EVENTS + 1)
-                .is_err()
+    #[test]
+    fn timeline_completion_carries_one_product_correlation() {
+        let completion = ProductHostTimelineCompletion::decode_json(
+            br#"{
+                "ticket":"4",
+                "runtime":{"instanceId":"1","generation":"2","controlRevision":"3"},
+                "correlation":"Quest/Step 3",
+                "outcome":{"kind":"failure","data":{"reason":"timeout"}},
+                "provenance":{"detail":{"source":"loader"}}
+            }"#,
+        )
+        .unwrap()
+        .into_envelope();
+        assert_eq!(completion.ticket().value(), 4);
+        assert_eq!(completion.correlation(), "Quest/Step 3");
+        assert!(completion.outcome().is_failure());
+        assert_eq!(
+            completion.provenance().map(RuntimeOpaqueData::value),
+            Some(&serde_json::json!({"source":"loader"}))
+        );
+        // The correlation is carried once; a second copy is an unknown field.
+        assert_eq!(
+            ProductHostTimelineCompletion::decode_json(
+                br#"{
+                    "ticket":"4",
+                    "runtime":{"instanceId":"1","generation":"2","controlRevision":"3"},
+                    "correlation":"quest",
+                    "outcome":{"kind":"success"},
+                    "provenance":{"correlation":"quest"}
+                }"#,
+            )
+            .unwrap_err()
+            .code(),
+            "PRODUCT_HOST_TIMELINE_DECODE"
         );
     }
 
@@ -1925,7 +1761,7 @@ mod tests {
 
     #[test]
     fn only_the_shells_publications_reach_the_wire() {
-        use crate::publication::{RuntimePublication, RuntimePublicationFrontier};
+        use crate::publication::RuntimePublication;
         use render_model::RenderFrameDiff;
         use runtime_input::RuntimeInputBinding;
         use runtime_ui::{RuntimeUiProjectionEnvelope, RuntimeUiRuntimeBinding};
@@ -1935,9 +1771,8 @@ mod tests {
             RuntimeGeneration::new(3),
             RuntimeControlRevision::new(5),
         );
-        let frontier = RuntimePublicationFrontier::new("voxel", 4).unwrap();
         let baseline = ProductHostRuntimeOutput::from_publication(
-            RuntimePublication::complete_baseline_with_frontiers(binding, vec![frontier]),
+            RuntimePublication::complete_baseline(binding),
         )
         .expect("a baseline end reaches the shell");
         assert_eq!(
@@ -2007,42 +1842,5 @@ mod tests {
             ..running(2)
         };
         assert!(rebound.changes_browser_view(&running(1)));
-    }
-
-    #[test]
-    fn output_group_recognizes_baselines_without_a_size_preflight() {
-        let binding = ProductHostRuntimeBinding {
-            instance_id: CanonicalU64::new(7),
-            generation: CanonicalU64::new(3),
-            control_revision: CanonicalU64::new(5),
-        };
-        let large = ProductHostRuntimeOutput::test_value(serde_json::json!({
-            "payload": "x".repeat(16 * 1024 * 1024 + 1),
-        }));
-        assert_eq!(
-            ProductHostRuntimeOutput::validate_output_group(std::slice::from_ref(&large)).unwrap(),
-            None
-        );
-
-        assert_eq!(
-            ProductHostRuntimeOutput::validate_output_group(&[
-                ProductHostRuntimeOutput::binding(binding, CanonicalU64::new(0)),
-                large.clone(),
-                ProductHostRuntimeOutput::complete_baseline(binding),
-            ])
-            .expect("complete retained baseline gets its bounded recovery budget"),
-            Some(binding),
-        );
-
-        assert_eq!(
-            ProductHostRuntimeOutput::validate_output_group(&[
-                ProductHostRuntimeOutput::binding(binding, CanonicalU64::new(0)),
-                large,
-                ProductHostRuntimeOutput::complete_baseline(binding),
-                ProductHostRuntimeOutput::test_value(serde_json::json!({})),
-            ])
-            .expect("a bounded recovery baseline may share publication with following ticks"),
-            None,
-        );
     }
 }

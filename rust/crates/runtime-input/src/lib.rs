@@ -28,8 +28,8 @@ pub use model::{
 };
 pub use wire::{
     decode_runtime_input_wire_event_json, decode_runtime_input_wire_events_json,
-    RuntimeInputWireBinding, RuntimeInputWireClearReason, RuntimeInputWireEdge,
-    RuntimeInputWireEvent, RuntimeInputWireFact, RuntimeInputWireIntentClaim,
+    runtime_input_wire_events, RuntimeInputWireBinding, RuntimeInputWireClearReason,
+    RuntimeInputWireEdge, RuntimeInputWireEvent, RuntimeInputWireFact, RuntimeInputWireIntentClaim,
     RuntimeInputWireIntentValue, RuntimeInputWirePhysical, RuntimeInputWirePointerPosition,
     MAX_RUNTIME_INPUT_WIRE_EVENTS,
 };

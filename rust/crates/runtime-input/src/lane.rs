@@ -682,11 +682,27 @@ impl RuntimeInputLane {
         sequence: u64,
         fact: &RuntimeInputFact,
     ) -> Result<(), RuntimeInputError> {
-        let mappings = self.mappings.mappings().to_vec();
-        for (index, mapping) in mappings.iter().enumerate() {
-            let mut was_active = self.mapping_active[index];
-            let result = physical_trigger_value(mapping.trigger(), fact, self, &mut was_active)?;
-            self.mapping_active[index] = was_active;
+        // The mapping table is read in place: only the per-mapping transition
+        // flags and the pending queue change, so they move out for the scan.
+        let mut mapping_active = std::mem::take(&mut self.mapping_active);
+        let mut pending_intents = std::mem::take(&mut self.pending_intents);
+        let result =
+            self.match_physical_mappings(sequence, fact, &mut mapping_active, &mut pending_intents);
+        self.mapping_active = mapping_active;
+        self.pending_intents = pending_intents;
+        result
+    }
+
+    fn match_physical_mappings(
+        &self,
+        sequence: u64,
+        fact: &RuntimeInputFact,
+        mapping_active: &mut [bool],
+        pending_intents: &mut Vec<PendingIntent>,
+    ) -> Result<(), RuntimeInputError> {
+        for (index, mapping) in self.mappings.mappings().iter().enumerate() {
+            let result =
+                physical_trigger_value(mapping.trigger(), fact, self, &mut mapping_active[index])?;
             let Some((value, phase)) = result else {
                 continue;
             };
@@ -694,7 +710,7 @@ impl RuntimeInputLane {
                 .mappings
                 .intent(mapping.intent())
                 .ok_or(RuntimeInputError::UnknownIntent)?;
-            self.pending_intents.push(PendingIntent {
+            pending_intents.push(PendingIntent {
                 sequence,
                 order: index,
                 descriptor: descriptor.clone(),

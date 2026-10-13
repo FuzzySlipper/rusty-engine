@@ -12,7 +12,7 @@ use runtime_lifecycle::{
 };
 
 fn context() -> InputContext {
-    InputContext::new("gameplay").unwrap()
+    InputContext::new("gameplay")
 }
 
 fn physical(
@@ -82,14 +82,12 @@ fn compiled_mappings() -> CompiledInputMappings {
             DirectInputIntentDescriptor::product_payload(
                 "inventory.drop",
                 "example.inventory.drop.v1",
-            )
-            .unwrap(),
+            ),
         ],
         vec![
-            RuntimeInputMapping::new("w-held", "move.forward", key(InputEdge::Held)).unwrap(),
-            RuntimeInputMapping::new("w-pressed", "move.forward", key(InputEdge::Pressed)).unwrap(),
-            RuntimeInputMapping::new("w-released", "move.forward", key(InputEdge::Released))
-                .unwrap(),
+            RuntimeInputMapping::new("w-held", "move.forward", key(InputEdge::Held)),
+            RuntimeInputMapping::new("w-pressed", "move.forward", key(InputEdge::Pressed)),
+            RuntimeInputMapping::new("w-released", "move.forward", key(InputEdge::Released)),
             RuntimeInputMapping::new(
                 "pointer-look",
                 "look.horizontal",
@@ -97,8 +95,7 @@ fn compiled_mappings() -> CompiledInputMappings {
                     axis: InputAxis::X,
                     context: Some(context()),
                 },
-            )
-            .unwrap(),
+            ),
             RuntimeInputMapping::new(
                 "controller-look",
                 "look.horizontal",
@@ -106,8 +103,7 @@ fn compiled_mappings() -> CompiledInputMappings {
                     axis: ControllerAxis::Axis0,
                     context: Some(context()),
                 },
-            )
-            .unwrap(),
+            ),
         ],
     )
     .unwrap()
@@ -541,7 +537,7 @@ fn restart_and_context_invalidation_cancel_pending_direct_payloads() {
         .ingest(RuntimeInputEvent::Physical(RuntimeInputIngress::new(
             context_binding,
             1,
-            InputContext::new("interface.menu").unwrap(),
+            InputContext::new("interface.menu"),
             RuntimeInputFact::Clear {
                 reason: InputClearReason::InteractionModeLoss,
             },
@@ -653,8 +649,7 @@ fn compiled_mapping_replacement_fences_held_movement_and_rebinds_new_actions() {
                     chord: Vec::new(),
                     context: Some(context()),
                 },
-            )
-            .unwrap(),
+            ),
             RuntimeInputMapping::new(
                 "old-left",
                 "move.left",
@@ -664,8 +659,7 @@ fn compiled_mapping_replacement_fences_held_movement_and_rebinds_new_actions() {
                     chord: Vec::new(),
                     context: Some(context()),
                 },
-            )
-            .unwrap(),
+            ),
             RuntimeInputMapping::new(
                 "old-attack",
                 "attack",
@@ -675,8 +669,7 @@ fn compiled_mapping_replacement_fences_held_movement_and_rebinds_new_actions() {
                     chord: Vec::new(),
                     context: Some(context()),
                 },
-            )
-            .unwrap(),
+            ),
             RuntimeInputMapping::new(
                 "old-interact",
                 "interact",
@@ -686,8 +679,7 @@ fn compiled_mapping_replacement_fences_held_movement_and_rebinds_new_actions() {
                     chord: Vec::new(),
                     context: Some(context()),
                 },
-            )
-            .unwrap(),
+            ),
         ],
     )
     .unwrap();
@@ -703,8 +695,7 @@ fn compiled_mapping_replacement_fences_held_movement_and_rebinds_new_actions() {
                     chord: Vec::new(),
                     context: Some(context()),
                 },
-            )
-            .unwrap(),
+            ),
             RuntimeInputMapping::new(
                 "new-left",
                 "move.left",
@@ -714,8 +705,7 @@ fn compiled_mapping_replacement_fences_held_movement_and_rebinds_new_actions() {
                     chord: Vec::new(),
                     context: Some(context()),
                 },
-            )
-            .unwrap(),
+            ),
             RuntimeInputMapping::new(
                 "new-attack",
                 "attack",
@@ -725,8 +715,7 @@ fn compiled_mapping_replacement_fences_held_movement_and_rebinds_new_actions() {
                     chord: Vec::new(),
                     context: Some(context()),
                 },
-            )
-            .unwrap(),
+            ),
             RuntimeInputMapping::new(
                 "new-interact",
                 "interact",
@@ -736,8 +725,7 @@ fn compiled_mapping_replacement_fences_held_movement_and_rebinds_new_actions() {
                     chord: Vec::new(),
                     context: Some(context()),
                 },
-            )
-            .unwrap(),
+            ),
         ],
     )
     .unwrap();
@@ -837,10 +825,11 @@ fn compiled_mapping_replacement_rejects_changed_declared_intents() {
         vec![
             DirectInputIntentDescriptor::new("different.intent", IntentValueKind::Digital).unwrap(),
         ],
-        vec![
-            RuntimeInputMapping::new("different-key", "different.intent", key(InputEdge::Held))
-                .unwrap(),
-        ],
+        vec![RuntimeInputMapping::new(
+            "different-key",
+            "different.intent",
+            key(InputEdge::Held),
+        )],
     )
     .unwrap();
 
@@ -1020,8 +1009,7 @@ fn controller_button_values_are_bounded_persistent_axes_and_mappable() {
                 button: ControllerButton::Button7,
                 context: Some(context()),
             },
-        )
-        .unwrap()],
+        )],
     )
     .unwrap();
     let mut lane = RuntimeInputLane::new(mappings, binding, context());
@@ -1204,7 +1192,7 @@ fn unlocked_pointer_facts_carry_a_surface_position() {
 }
 
 #[test]
-fn neutral_mapping_construction_validates_identity_and_value_kind() {
+fn neutral_mapping_construction_validates_value_kind() {
     assert_eq!(
         serde_json::to_string(&IntentValueKind::ProductPayload).unwrap(),
         "\"product-payload\""
@@ -1225,11 +1213,50 @@ fn neutral_mapping_construction_validates_identity_and_value_kind() {
                     axis: InputAxis::X,
                     context: Some(context()),
                 },
-            )
-            .unwrap()],
+            )],
         ),
         Err(RuntimeInputError::IntentValueKindMismatch)
     ));
+}
+
+#[test]
+fn product_chosen_names_are_matching_labels() {
+    // Contexts, intents and mapping ids are product data compared for
+    // equality; any spelling the product chooses reaches its mapping.
+    let context = InputContext::new("Gameplay Mode");
+    let mappings = CompiledInputMappings::standard(
+        vec![DirectInputIntentDescriptor::new("Jump_", IntentValueKind::Digital).unwrap()],
+        vec![RuntimeInputMapping::new(
+            "Space Jump",
+            "Jump_",
+            RuntimeInputTrigger::Key {
+                code: KeyboardControl::KeyW,
+                edge: InputEdge::Pressed,
+                chord: Vec::new(),
+                context: Some(context.clone()),
+            },
+        )],
+    )
+    .unwrap();
+    let (mut lifecycle, binding) = lifecycle_and_binding();
+    let mut lane = RuntimeInputLane::new(mappings, binding, context.clone());
+    let wire = serde_json::json!({
+        "runtime": {
+            "instanceId": binding.instance_id().value().to_string(),
+            "generation": binding.generation().value().to_string(),
+            "controlRevision": binding.control_revision().value().to_string(),
+        },
+        "sequence": "0",
+        "context": "Gameplay Mode",
+        "fact": { "kind": "key", "code": "key-w", "edge": "pressed" }
+    });
+    let event =
+        runtime_input::decode_runtime_input_wire_event_json(&serde_json::to_vec(&wire).unwrap())
+            .unwrap();
+    lane.ingest(event).unwrap();
+    let (_, envelopes) = snapshot(&mut lane, &mut lifecycle).unwrap();
+    assert_eq!(envelopes.len(), 1);
+    assert_eq!(envelopes[0].intent(), "Jump_");
 }
 
 #[test]
@@ -1360,7 +1387,6 @@ fn backspace_and_function_keys_deliver_edges_rebind_and_clear() {
                                 context: Some(context()),
                             },
                         )
-                        .unwrap()
                     }),
             )
             .unwrap()
@@ -1460,7 +1486,7 @@ fn backspace_and_function_keys_deliver_edges_rebind_and_clear() {
                 binding,
                 sequence,
                 if reason == InputClearReason::InteractionModeLoss {
-                    InputContext::new("interface.menu").unwrap()
+                    InputContext::new("interface.menu")
                 } else {
                     context()
                 },

@@ -26,7 +26,14 @@ pub fn decode_runtime_input_wire_event_json(
 pub fn decode_runtime_input_wire_events_json(
     bytes: &[u8],
 ) -> Result<Vec<RuntimeInputEvent>, RuntimeInputError> {
-    let events = decode_exact::<Vec<RuntimeInputWireEvent>>(bytes)?;
+    runtime_input_wire_events(decode_exact::<Vec<RuntimeInputWireEvent>>(bytes)?)
+}
+
+/// Converts wire envelopes a host already deserialized as part of its own
+/// request into lane events, in array order.
+pub fn runtime_input_wire_events(
+    events: Vec<RuntimeInputWireEvent>,
+) -> Result<Vec<RuntimeInputEvent>, RuntimeInputError> {
     if events.len() > MAX_RUNTIME_INPUT_WIRE_EVENTS {
         return Err(RuntimeInputError::WireEventLimit);
     }
@@ -79,7 +86,7 @@ impl RuntimeInputWirePhysical {
     fn into_event(self) -> Result<RuntimeInputEvent, RuntimeInputError> {
         let runtime = self.runtime.into_binding()?;
         let sequence = parse_canonical_u64(&self.sequence)?;
-        let context = InputContext::new(self.context)?;
+        let context = InputContext::new(self.context);
         Ok(RuntimeInputEvent::Physical(RuntimeInputIngress::new(
             runtime,
             sequence,
@@ -109,7 +116,7 @@ impl RuntimeInputWireIntentClaim {
             RuntimeDirectIntentClaim::new(
                 self.runtime.into_binding()?,
                 parse_canonical_u64(&self.sequence)?,
-                InputContext::new(self.context)?,
+                InputContext::new(self.context),
                 self.intent,
                 self.value.into_value()?,
             )?,

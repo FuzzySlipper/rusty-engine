@@ -222,7 +222,7 @@ test('same-origin local transport uses fixed typed operation routes and SSE outp
     runtime: RUNTIME,
     correlation: 'request-1',
     outcome: { kind: 'success' },
-    provenance: { correlation: 'request-1' },
+    provenance: {},
   }))?.ticket, '1');
   assert.deepEqual(routes, [
     'POST /__rusty/product/runtime/lifecycle/start',
@@ -297,7 +297,7 @@ test('rejected runtime results remain decoded result facts rather than transport
   assert.equal((await adapter.input([])).disposition, 'rejected-recoverable');
   assert.equal((await adapter.completeTimeline?.({
     ticket: '1', runtime: RUNTIME, correlation: 'request-1', outcome: { kind: 'success' },
-    provenance: { correlation: 'request-1' },
+    provenance: {},
   }))?.disposition, 'rejected-recoverable');
   adapter.dispose();
 });

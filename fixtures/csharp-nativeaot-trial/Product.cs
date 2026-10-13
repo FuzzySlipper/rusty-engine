@@ -554,8 +554,7 @@ public sealed class Product : IEngineProduct
             && completion.OutcomeData is { } outcome
             && outcome.Span.SequenceEqual("{\"accepted\":true}"u8),
             "timeline completion outcome did not reach Product.Game");
-        Require(completion.ProvenanceCorrelation.Span.SequenceEqual("runtime.exercise.timeline"u8)
-            && completion.ProvenanceDetail is { } detail
+        Require(completion.ProvenanceDetail is { } detail
             && detail.Span.SequenceEqual("{\"source\":\"fixture\"}"u8),
             "timeline completion provenance did not reach Product.Game");
         return true;

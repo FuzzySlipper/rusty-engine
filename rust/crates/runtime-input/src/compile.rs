@@ -1,8 +1,8 @@
 use std::collections::BTreeMap;
 
 use crate::{
-    model::is_identity, ControllerAxis, ControllerButton, InputAxis, InputContext, InputEdge,
-    IntentValueKind, KeyboardControl, PointerButton, RuntimeInputError,
+    ControllerAxis, ControllerButton, InputAxis, InputContext, InputEdge, IntentValueKind,
+    KeyboardControl, PointerButton, RuntimeInputError,
 };
 use serde_json::Value;
 
@@ -90,17 +90,12 @@ impl RuntimeInputMapping {
         id: impl Into<String>,
         intent: impl Into<String>,
         trigger: RuntimeInputTrigger,
-    ) -> Result<Self, RuntimeInputError> {
-        let id = id.into();
-        let intent = intent.into();
-        if !is_identity(&id) || !is_identity(&intent) {
-            return Err(RuntimeInputError::InvalidMapping);
-        }
-        Ok(Self {
-            id,
-            intent,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            intent: intent.into(),
             trigger,
-        })
+        }
     }
 
     pub fn id(&self) -> &str {
@@ -131,37 +126,22 @@ impl DirectInputIntentDescriptor {
         id: impl Into<String>,
         value_kind: IntentValueKind,
     ) -> Result<Self, RuntimeInputError> {
-        let id = id.into();
-        if !is_identity(&id) {
-            return Err(RuntimeInputError::InvalidIntent);
-        }
         if value_kind == IntentValueKind::ProductPayload {
             return Err(RuntimeInputError::DirectIntentPayloadUnsupported);
         }
         Ok(Self {
-            id,
+            id: id.into(),
             value_kind,
             payload_contract: None,
         })
     }
 
-    pub fn product_payload(
-        id: impl Into<String>,
-        payload_contract: impl Into<String>,
-    ) -> Result<Self, RuntimeInputError> {
-        let id = id.into();
-        let payload_contract = payload_contract.into();
-        if !is_identity(&id) {
-            return Err(RuntimeInputError::InvalidIntent);
-        }
-        if !is_identity(&payload_contract) {
-            return Err(RuntimeInputError::InvalidProductPayloadContract);
-        }
-        Ok(Self {
-            id,
+    pub fn product_payload(id: impl Into<String>, payload_contract: impl Into<String>) -> Self {
+        Self {
+            id: id.into(),
             value_kind: IntentValueKind::ProductPayload,
-            payload_contract: Some(payload_contract),
-        })
+            payload_contract: Some(payload_contract.into()),
+        }
     }
 
     pub fn id(&self) -> &str {
@@ -197,24 +177,14 @@ impl CompiledInputIntent {
         value_kind: IntentValueKind,
         payload_contract: Option<String>,
         payload: Value,
-    ) -> Result<Self, RuntimeInputError> {
-        let id = id.into();
-        if !is_identity(&id) {
-            return Err(RuntimeInputError::InvalidIntent);
-        }
-        if payload_contract
-            .as_deref()
-            .is_some_and(|contract| !is_identity(contract))
-        {
-            return Err(RuntimeInputError::InvalidProductPayloadContract);
-        }
-        Ok(Self {
+    ) -> Self {
+        Self {
             descriptor_index,
-            id,
+            id: id.into(),
             value_kind,
             payload_contract,
             payload,
-        })
+        }
     }
 
     pub const fn descriptor_index(&self) -> usize {
@@ -250,17 +220,12 @@ impl CompiledInputMapping {
         id: impl Into<String>,
         intent: impl Into<String>,
         trigger: RuntimeInputTrigger,
-    ) -> Result<Self, RuntimeInputError> {
-        let id = id.into();
-        let intent = intent.into();
-        if !is_identity(&id) || !is_identity(&intent) {
-            return Err(RuntimeInputError::InvalidMapping);
-        }
-        Ok(Self {
-            id,
-            intent,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            intent: intent.into(),
             trigger,
-        })
+        }
     }
 
     pub fn id(&self) -> &str {
@@ -309,7 +274,7 @@ impl CompiledInputMappings {
 
     /// Compiles the standard runtime's direct descriptors and physical mapping
     /// configuration. This path has no product composition input and
-    /// performs all mapping identity/value-kind checks before runtime use.
+    /// performs the duplicate and value-kind checks before runtime use.
     pub fn standard(
         descriptors: impl IntoIterator<Item = DirectInputIntentDescriptor>,
         mappings: impl IntoIterator<Item = RuntimeInputMapping>,
@@ -325,12 +290,10 @@ impl CompiledInputMappings {
                     descriptor.payload_contract,
                     Value::Null,
                 )
-            })
-            .collect::<Result<Vec<_>, _>>()?;
+            });
         let mappings = mappings
             .into_iter()
-            .map(|mapping| CompiledInputMapping::new(mapping.id, mapping.intent, mapping.trigger))
-            .collect::<Result<Vec<_>, _>>()?;
+            .map(|mapping| CompiledInputMapping::new(mapping.id, mapping.intent, mapping.trigger));
         Self::from_parts(intents, mappings)
     }
 

@@ -996,19 +996,16 @@ impl Arguments {
                     .expect("fixed exercise mapping intent"),
                 );
             }
-            physical_mappings.push(
-                RuntimeInputMapping::new(
-                    "runtime.exercise.move",
-                    "runtime.exercise.move",
-                    RuntimeInputTrigger::Key {
-                        code: KeyboardControl::KeyW,
-                        edge: InputEdge::Held,
-                        chord: Vec::new(),
-                        context: None,
-                    },
-                )
-                .expect("fixed exercise physical mapping"),
-            );
+            physical_mappings.push(RuntimeInputMapping::new(
+                "runtime.exercise.move",
+                "runtime.exercise.move",
+                RuntimeInputTrigger::Key {
+                    code: KeyboardControl::KeyW,
+                    edge: InputEdge::Held,
+                    chord: Vec::new(),
+                    context: None,
+                },
+            ));
         }
         (direct_intents, physical_mappings)
     }
@@ -1341,8 +1338,7 @@ fn parse_direct_intent(value: &str) -> Result<DirectInputIntentDescriptor, Strin
         .split_once('=')
         .ok_or("--direct-intent requires id=digital, id=axis, or id=payload:contract")?;
     if let Some(contract) = value_kind.strip_prefix("payload:") {
-        return DirectInputIntentDescriptor::product_payload(id, contract)
-            .map_err(|error| error.to_string());
+        return Ok(DirectInputIntentDescriptor::product_payload(id, contract));
     }
     let value_kind = match value_kind {
         "digital" => IntentValueKind::Digital,
@@ -1408,8 +1404,7 @@ fn parse_physical_mapping(value: &str) -> Result<RuntimeInputMapping, String> {
             ));
         }
     };
-    RuntimeInputMapping::new(mapping_id, intent, trigger)
-        .map_err(|error| format!("--physical-mapping declaration is invalid: {error}"))
+    Ok(RuntimeInputMapping::new(mapping_id, intent, trigger))
 }
 
 fn next_mapping_token<'a>(
@@ -1433,10 +1428,7 @@ fn parse_mapping_qualifiers<'a>(
             if context.is_some() {
                 return Err("--physical-mapping may declare context only once".to_owned());
             }
-            context = Some(
-                InputContext::new(value)
-                    .map_err(|error| format!("--physical-mapping context is invalid: {error}"))?,
-            );
+            context = Some(InputContext::new(value));
         } else if let Some(value) = qualifier.strip_prefix("chord=") {
             if !allows_chord {
                 return Err(

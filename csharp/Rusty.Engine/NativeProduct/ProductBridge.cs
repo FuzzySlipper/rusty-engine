@@ -316,7 +316,6 @@ public static unsafe class ProductBridge
             if (completion is null || accepted is null
                 || (completion->correlation.len != 0 && completion->correlation.bytes is null)
                 || (completion->outcome_data.len != 0 && completion->outcome_data.bytes is null)
-                || (completion->provenance_correlation.len != 0 && completion->provenance_correlation.bytes is null)
                 || (completion->provenance_detail.len != 0 && completion->provenance_detail.bytes is null)) return 2;
             *accepted = 0;
             ProductTimelineCompletion value = new(
@@ -325,7 +324,6 @@ public static unsafe class ProductBridge
                 CopyBytes(completion->correlation.bytes, completion->correlation.len),
                 NativeConversions.FromNative(completion->outcome),
                 CopyOptionalBytes(completion->outcome_data.bytes, completion->outcome_data.len),
-                CopyBytes(completion->provenance_correlation.bytes, completion->provenance_correlation.len),
                 CopyOptionalBytes(completion->provenance_detail.bytes, completion->provenance_detail.len));
             *accepted = Get(handle).Product.CompleteTimeline(value) ? (byte)1 : (byte)0;
             return 1;

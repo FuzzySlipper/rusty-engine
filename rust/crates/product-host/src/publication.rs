@@ -6,10 +6,8 @@
 //! output retention, byte limits, and delivery cursors stay with the serving
 //! host that adapts these values.
 
-use std::collections::BTreeSet;
-
 use render_host_contracts::RendererViewComposition;
-use render_model::{RenderFrameDiff, JSON_SAFE_U64_MAX};
+use render_model::RenderFrameDiff;
 use render_presentation::PresentationFrameDiff;
 use runtime_input::RuntimeInputBinding;
 use runtime_ui::RuntimeUiProjectionEnvelope;
@@ -36,42 +34,6 @@ impl<T> RuntimeReceipt<T> {
     }
 }
 
-/// A typed renderer stream frontier captured at a complete baseline boundary.
-///
-/// The renderer stream identity and JSON-safe revision are logical facts used
-/// by downstream retained projection state. The serving host may apply any
-/// additional envelope or aggregate limits when converting this value to its
-/// wire DTO.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RuntimePublicationFrontier {
-    stream: String,
-    revision: u64,
-}
-
-impl RuntimePublicationFrontier {
-    /// The renderer contract currently uses a bounded stream label and a
-    /// JavaScript-safe revision. These checks happen before any host encoding
-    /// so a typed baseline cannot contain an invalid retained frontier.
-    pub fn new(stream: impl Into<String>, revision: u64) -> Result<Self, RuntimePublicationError> {
-        let stream = stream.into();
-        if stream.trim().is_empty() || stream.len() > 256 {
-            return Err(RuntimePublicationError::InvalidFrontierStream);
-        }
-        if revision > JSON_SAFE_U64_MAX {
-            return Err(RuntimePublicationError::InvalidFrontierRevision);
-        }
-        Ok(Self { stream, revision })
-    }
-
-    pub fn stream(&self) -> &str {
-        &self.stream
-    }
-
-    pub const fn revision(&self) -> u64 {
-        self.revision
-    }
-}
-
 /// One logical output from a runtime operation.
 ///
 /// Progress pulses, readouts, and input-result receipts remain operation/host
@@ -86,11 +48,9 @@ pub enum RuntimePublication {
         /// The label of a harness that holds input under this binding. While
         /// one does, an attached page shows the claim and sends no input.
         input_claim: Option<String>,
-        publication_frontiers: Option<Vec<RuntimePublicationFrontier>>,
     },
     CompleteBaseline {
         runtime: RuntimeInputBinding,
-        publication_frontiers: Vec<RuntimePublicationFrontier>,
     },
     Frame(RenderFrameDiff),
     ViewComposition(RendererViewComposition),
@@ -113,42 +73,11 @@ impl RuntimePublication {
             runtime,
             next_input_sequence,
             input_claim,
-            publication_frontiers: None,
-        }
-    }
-
-    pub fn complete_baseline_with_frontiers(
-        runtime: RuntimeInputBinding,
-        publication_frontiers: Vec<RuntimePublicationFrontier>,
-    ) -> Self {
-        Self::CompleteBaseline {
-            runtime,
-            publication_frontiers,
         }
     }
 
     pub fn complete_baseline(runtime: RuntimeInputBinding) -> Self {
-        Self::complete_baseline_with_frontiers(runtime, Vec::new())
-    }
-
-    /// Checks publication metadata, never revalidating owned Engine frames.
-    pub fn validate(&self) -> Result<(), RuntimePublicationError> {
-        match self {
-            Self::Binding {
-                publication_frontiers,
-                ..
-            } => validate_frontiers(publication_frontiers.as_deref().unwrap_or_default()),
-            Self::CompleteBaseline {
-                publication_frontiers,
-                ..
-            } => validate_frontiers(publication_frontiers),
-            // Frame/content invariants belong to their Engine owner. Publications
-            // move those trusted values; host conversion must not readmit them.
-            Self::Frame(_)
-            | Self::Presentation(_)
-            | Self::ViewComposition(_)
-            | Self::UiProjection(_) => Ok(()),
-        }
+        Self::CompleteBaseline { runtime }
     }
 
     /// Returns only newly emitted presentation events for baseline assembly.
@@ -181,49 +110,6 @@ impl RuntimePublication {
     }
 }
 
-fn validate_frontiers(
-    frontiers: &[RuntimePublicationFrontier],
-) -> Result<(), RuntimePublicationError> {
-    let mut streams = BTreeSet::new();
-    for frontier in frontiers {
-        if frontier.stream.trim().is_empty() || frontier.stream.len() > 256 {
-            return Err(RuntimePublicationError::InvalidFrontierStream);
-        }
-        if frontier.revision > JSON_SAFE_U64_MAX {
-            return Err(RuntimePublicationError::InvalidFrontierRevision);
-        }
-        if !streams.insert(frontier.stream.as_str()) {
-            return Err(RuntimePublicationError::DuplicateFrontierStream);
-        }
-    }
-    Ok(())
-}
-
-/// Typed publication validation failures. Host adapters map these to their
-/// own bounded diagnostics without serializing this enum.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RuntimePublicationError {
-    InvalidFrontierStream,
-    InvalidFrontierRevision,
-    DuplicateFrontierStream,
-}
-
-impl std::fmt::Display for RuntimePublicationError {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(match self {
-            Self::InvalidFrontierStream => "runtime publication frontier stream is invalid",
-            Self::InvalidFrontierRevision => {
-                "runtime publication frontier revision is outside the renderer range"
-            }
-            Self::DuplicateFrontierStream => {
-                "runtime publication frontiers contain a duplicate stream"
-            }
-        })
-    }
-}
-
-impl std::error::Error for RuntimePublicationError {}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -233,7 +119,6 @@ mod tests {
         AudioSourceDescriptor, PresentationOp, PresentationOpMeta,
     };
     use runtime_lifecycle::{RuntimeControlRevision, RuntimeGeneration, RuntimeInstanceId};
-    use runtime_ui::RuntimeUiRuntimeBinding;
 
     fn binding() -> RuntimeInputBinding {
         RuntimeInputBinding::new(
@@ -292,39 +177,5 @@ mod tests {
             .transient_presentation()
             .expect("one emitted event");
         assert!(matches!(transient, RuntimePublication::Presentation(_)));
-        assert!(transient.validate().is_ok());
-    }
-
-    #[test]
-    fn frontier_validation_rejects_invalid_or_duplicate_streams() {
-        assert_eq!(
-            RuntimePublicationFrontier::new("", 0),
-            Err(RuntimePublicationError::InvalidFrontierStream)
-        );
-        let first = RuntimePublicationFrontier::new("world", 4).unwrap();
-        let second = RuntimePublicationFrontier::new("world", 5).unwrap();
-        assert_eq!(
-            RuntimePublication::complete_baseline_with_frontiers(binding(), vec![first, second])
-                .validate(),
-            Err(RuntimePublicationError::DuplicateFrontierStream)
-        );
-    }
-
-    #[test]
-    fn ui_projection_stays_typed() {
-        let envelope = RuntimeUiProjectionEnvelope::new(
-            RuntimeUiRuntimeBinding::new(
-                RuntimeInstanceId::new(7),
-                RuntimeGeneration::new(2),
-                RuntimeControlRevision::new(3),
-            ),
-            1,
-            "hud",
-            "fixture",
-            serde_json::json!({"visible": true}),
-        )
-        .expect("fixture envelope");
-        let publication = RuntimePublication::UiProjection(envelope);
-        assert!(publication.validate().is_ok());
     }
 }

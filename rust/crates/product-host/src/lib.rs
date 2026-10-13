@@ -107,9 +107,7 @@ pub use presentation::{
     ProductHostPresentation, ProductHostPresentationLayout, ProductHostPresentationReport,
     ProductHostViewportAnchorReport, PRODUCT_HOST_PRESENTATION_PATH,
 };
-pub use publication::{
-    RuntimePublication, RuntimePublicationError, RuntimePublicationFrontier, RuntimeReceipt,
-};
+pub use publication::{RuntimePublication, RuntimeReceipt};
 pub use scheduler::advance_realtime_with_input_and_publish;
 pub use session::{ProductHostOperationOwner, RuntimeSession};
 pub use timeline::TimelineCompletionOutcome;

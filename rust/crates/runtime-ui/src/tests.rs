@@ -34,19 +34,6 @@ fn envelope_encodes_the_fixture_wire_shape() {
 }
 
 #[test]
-fn identities_are_checked() {
-    assert!(matches!(
-        envelope("not valid", serde_json::json!({})),
-        Err(RuntimeUiProjectionError::InvalidIdentity {
-            field: "stream",
-            ..
-        })
-    ));
-    assert!(envelope("Stealth.Hud", serde_json::json!({})).is_err());
-    assert!(envelope("stealth.hud", serde_json::json!({})).is_ok());
-}
-
-#[test]
 fn large_and_deep_values_are_admitted_without_recursive_validation() {
     let deeply_nested = (0..1_024).fold(serde_json::json!(null), |value, _| {
         serde_json::json!([value])

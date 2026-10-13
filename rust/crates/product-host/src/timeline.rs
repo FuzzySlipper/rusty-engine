@@ -3,16 +3,8 @@
 //! Scheduling and ticket ownership belong to the product. This module does not
 //! retain a queue, invoke work, or own a clock or product state.
 
-use std::fmt;
-
-use runtime_lifecycle::{
-    validate_runtime_identity as validate_neutral_identity, RuntimeControlRevision,
-    RuntimeGeneration, RuntimeInstanceId,
-};
+use runtime_lifecycle::{RuntimeControlRevision, RuntimeGeneration, RuntimeInstanceId};
 use serde_json::Value;
-
-/// Maximum UTF-8 bytes in a completion correlation label.
-pub const MAX_RUNTIME_CORRELATION_BYTES: usize = runtime_lifecycle::MAX_RUNTIME_IDENTITY_BYTES;
 
 /// Identity and lifecycle epoch carried by a completion.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -84,36 +76,6 @@ impl RuntimeOpaqueData {
     }
 }
 
-/// Bounded runtime provenance and correlation data. This is descriptive data
-/// only; it cannot resolve or invoke an operation or host owner.
-#[derive(Debug, Clone, PartialEq)]
-pub struct RuntimeProvenance {
-    correlation: String,
-    detail: Option<RuntimeOpaqueData>,
-}
-
-impl RuntimeProvenance {
-    pub fn new(
-        correlation: impl Into<String>,
-        detail: Option<RuntimeOpaqueData>,
-    ) -> Result<Self, RuntimeTimelineDataError> {
-        let correlation = correlation.into();
-        validate_runtime_identity(&correlation)?;
-        Ok(Self {
-            correlation,
-            detail,
-        })
-    }
-
-    pub fn correlation(&self) -> &str {
-        &self.correlation
-    }
-
-    pub fn detail(&self) -> Option<&RuntimeOpaqueData> {
-        self.detail.as_ref()
-    }
-}
-
 /// Completion outcome data whose meaning belongs to the product.
 #[derive(Debug, Clone, PartialEq)]
 pub enum TimelineCompletionOutcome {
@@ -129,13 +91,15 @@ impl TimelineCompletionOutcome {
 
 /// A typed completion envelope returned by external work. It carries only the
 /// ticket/correlation binding and data outcome; no operation can be supplied.
+/// The product chose the correlation when it issued the ticket and routes the
+/// result by it; the optional provenance detail is descriptive data only.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TimelineCompletionEnvelope {
     ticket: TimelineCompletionTicketId,
     binding: RuntimeTimelineBinding,
     correlation: String,
     outcome: TimelineCompletionOutcome,
-    provenance: RuntimeProvenance,
+    provenance: Option<RuntimeOpaqueData>,
 }
 
 impl TimelineCompletionEnvelope {
@@ -144,17 +108,15 @@ impl TimelineCompletionEnvelope {
         binding: RuntimeTimelineBinding,
         correlation: impl Into<String>,
         outcome: TimelineCompletionOutcome,
-        provenance: RuntimeProvenance,
-    ) -> Result<Self, RuntimeTimelineDataError> {
-        let correlation = correlation.into();
-        validate_runtime_identity(&correlation)?;
-        Ok(Self {
+        provenance: Option<RuntimeOpaqueData>,
+    ) -> Self {
+        Self {
             ticket,
             binding,
-            correlation,
+            correlation: correlation.into(),
             outcome,
             provenance,
-        })
+        }
     }
 
     pub const fn ticket(&self) -> TimelineCompletionTicketId {
@@ -173,34 +135,7 @@ impl TimelineCompletionEnvelope {
         &self.outcome
     }
 
-    pub fn provenance(&self) -> &RuntimeProvenance {
-        &self.provenance
+    pub fn provenance(&self) -> Option<&RuntimeOpaqueData> {
+        self.provenance.as_ref()
     }
-}
-
-/// Errors from constructing bounded caller-supplied timeline data.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum RuntimeTimelineDataError {
-    InvalidIdentity,
-    TextTooLarge { maximum: usize },
-}
-
-impl fmt::Display for RuntimeTimelineDataError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "invalid runtime timeline data: {self:?}")
-    }
-}
-
-impl std::error::Error for RuntimeTimelineDataError {}
-
-pub(crate) fn validate_runtime_identity(value: &str) -> Result<(), RuntimeTimelineDataError> {
-    if value.len() > MAX_RUNTIME_CORRELATION_BYTES {
-        return Err(RuntimeTimelineDataError::TextTooLarge {
-            maximum: MAX_RUNTIME_CORRELATION_BYTES,
-        });
-    }
-    if validate_neutral_identity(value).is_err() {
-        return Err(RuntimeTimelineDataError::InvalidIdentity);
-    }
-    Ok(())
 }

@@ -28,6 +28,7 @@ use netcorehost::{
     pdcstring::PdCString,
 };
 pub use product_container::ProductSource;
+use product_host::RuntimePublication;
 use product_host::{
     runtime_fault_disposition, CanonicalU64, ProductHostControlOperation, ProductHostDebugResult,
     ProductHostFaultDisposition, ProductHostInputBatch, ProductHostInputResult,
@@ -39,7 +40,6 @@ use product_host::{
     ProductHostRuntimeState, ProductHostTimelineCompletion, ProductHostTimelineCompletionResult,
     ProductHostUpdateAttribution,
 };
-use product_host::{RuntimePublication, RuntimePublicationError, RuntimePublicationFrontier};
 use runtime_input::{
     self as runtime_input_model, AxisValue, CompiledInputMappings, DirectInputIntentDescriptor,
     InputAxis, InputClearReason, InputContext, InputEdge, IntentValueKind,
@@ -1298,7 +1298,6 @@ impl CsharpProductRuntime {
                     "data": { "accepted": true },
                 },
                 "provenance": {
-                    "correlation": "runtime.exercise.timeline",
                     "detail": { "source": "fixture" },
                 },
             }))
@@ -2125,7 +2124,6 @@ impl CsharpProductRuntime {
                 .map_err(lifecycle_error)?;
             self.rebind_input(InputClearReason::ControlRevisionChange)?;
         }
-        let binding = self.binding();
         // The browser clears UI when the binding changes, so each stream's
         // latest projection follows the fault binding, as in an in-place rebind.
         outputs.retain(|output| !matches!(output, RuntimePublication::UiProjection(_)));
@@ -2136,7 +2134,7 @@ impl CsharpProductRuntime {
                 .into_iter()
                 .map(RuntimePublication::UiProjection),
         );
-        outputs.push(self.complete_baseline_output(binding)?);
+        outputs.push(self.complete_baseline_output());
         Ok(())
     }
 
@@ -2229,14 +2227,9 @@ impl CsharpProductRuntime {
         let mut all_outputs = self.take_pending_recovery_outputs();
         all_outputs.extend(outputs);
         let readout = self.readout();
-        let result = ProductHostOperationResult::accepted(
-            operation,
-            self.binding(),
-            self.next_input_sequence(),
-            readout,
-        )
-        .map_err(host_runtime_error)?;
-        ProductHostRuntimeReceipt::new(result, all_outputs).map_err(host_runtime_error)
+        let result =
+            ProductHostOperationResult::accepted(operation, self.next_input_sequence(), readout);
+        Ok(ProductHostRuntimeReceipt::new(result, all_outputs))
     }
 
     fn take_pending_recovery_outputs(&mut self) -> Vec<RuntimePublication> {
@@ -2271,7 +2264,6 @@ impl CsharpProductRuntime {
         self.publish_diagnostic_as(&error, ProductHostFaultDisposition::ResyncRequired);
         let result = ProductHostOperationResult::resync_required(
             operation,
-            self.binding(),
             self.next_input_sequence(),
             self.readout(),
             self.lifecycle
@@ -2281,10 +2273,11 @@ impl CsharpProductRuntime {
                 .map(CanonicalU64::new),
             error.code().to_owned(),
             error.diagnostic().to_owned(),
-        )
-        .map_err(host_runtime_error)?;
-        ProductHostRuntimeReceipt::new(result, self.take_pending_recovery_outputs())
-            .map_err(host_runtime_error)
+        );
+        Ok(ProductHostRuntimeReceipt::new(
+            result,
+            self.take_pending_recovery_outputs(),
+        ))
     }
 
     fn readout(&self) -> ProductHostRuntimeReadout {
@@ -2446,7 +2439,6 @@ impl CsharpProductRuntime {
         &self,
         outputs: Vec<RuntimePublication>,
     ) -> Result<Vec<RuntimePublication>, CsharpProductRuntimeError> {
-        let binding = self.binding();
         // Every binding baseline reconstructs committed state. Callback deltas
         // already precede its frontier and cannot be replayed against it.
         let mut snapshot = self.snapshot_outputs()?;
@@ -2458,7 +2450,7 @@ impl CsharpProductRuntime {
         let mut tagged = Vec::with_capacity(snapshot.len() + 2);
         tagged.push(self.binding_output());
         tagged.append(&mut snapshot);
-        tagged.push(self.complete_baseline_output(binding)?);
+        tagged.push(self.complete_baseline_output());
         Ok(tagged)
     }
 
@@ -2481,7 +2473,6 @@ impl CsharpProductRuntime {
         &self,
         outputs: Vec<RuntimePublication>,
     ) -> Result<Vec<RuntimePublication>, CsharpProductRuntimeError> {
-        let binding = self.binding();
         let mut tagged = Vec::with_capacity(outputs.len() + 2);
         tagged.push(self.binding_output());
         tagged.extend(
@@ -2495,25 +2486,12 @@ impl CsharpProductRuntime {
                 .into_iter()
                 .map(RuntimePublication::UiProjection),
         );
-        tagged.push(self.complete_baseline_output(binding)?);
+        tagged.push(self.complete_baseline_output());
         Ok(tagged)
     }
 
-    fn complete_baseline_output(
-        &self,
-        _binding: ProductHostRuntimeBinding,
-    ) -> Result<RuntimePublication, CsharpProductRuntimeError> {
-        let frontiers = self
-            .services
-            .renderer_publication_frontiers()
-            .into_iter()
-            .map(|(stream, revision)| RuntimePublicationFrontier::new(stream, revision))
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(publication_error)?;
-        Ok(RuntimePublication::complete_baseline_with_frontiers(
-            input_binding(&self.lifecycle),
-            frontiers,
-        ))
+    fn complete_baseline_output(&self) -> RuntimePublication {
+        RuntimePublication::complete_baseline(input_binding(&self.lifecycle))
     }
 
     /// Rebind input for a transition that replaces the browser's world (a
@@ -3233,11 +3211,9 @@ impl ProductHostRuntime for CsharpProductRuntime {
             receipt.accepted_through().map(CanonicalU64::new),
             receipt.consumed_through().map(CanonicalU64::new),
             next_input_sequence,
-            self.binding(),
             self.readout(),
-        )
-        .map_err(host_runtime_error)?;
-        ProductHostRuntimeReceipt::new(result, outputs).map_err(host_runtime_error)
+        );
+        Ok(ProductHostRuntimeReceipt::new(result, outputs))
     }
 
     /// Advances the input binding fence after the host dropped input it
@@ -3273,7 +3249,7 @@ impl ProductHostRuntime for CsharpProductRuntime {
             return self.execute_time_debug(command);
         }
         if let Some(result) = self.execute_content_source_debug(command) {
-            return ProductHostRuntimeReceipt::new(result, Vec::new()).map_err(host_runtime_error);
+            return Ok(ProductHostRuntimeReceipt::new(result, Vec::new()));
         }
         if let Some(frames) = self
             .frame_output
@@ -3284,7 +3260,7 @@ impl ProductHostRuntime for CsharpProductRuntime {
                 Ok(answer) => ProductHostDebugResult::new(true, pretty_json(&answer)?),
                 Err(detail) => ProductHostDebugResult::new(false, detail),
             };
-            return ProductHostRuntimeReceipt::new(result, Vec::new()).map_err(host_runtime_error);
+            return Ok(ProductHostRuntimeReceipt::new(result, Vec::new()));
         }
         if let Some(arguments) = command
             .trim()
@@ -3295,7 +3271,7 @@ impl ProductHostRuntime for CsharpProductRuntime {
                 Ok(started) => ProductHostDebugResult::new(true, started),
                 Err(detail) => ProductHostDebugResult::new(false, detail),
             };
-            return ProductHostRuntimeReceipt::new(result, Vec::new()).map_err(host_runtime_error);
+            return Ok(ProductHostRuntimeReceipt::new(result, Vec::new()));
         }
         if let Some(path) = command
             .trim()
@@ -3306,11 +3282,11 @@ impl ProductHostRuntime for CsharpProductRuntime {
                 Ok(report) => ProductHostDebugResult::new(true, pretty_json(&report)?),
                 Err(detail) => ProductHostDebugResult::new(false, detail),
             };
-            return ProductHostRuntimeReceipt::new(result, Vec::new()).map_err(host_runtime_error);
+            return Ok(ProductHostRuntimeReceipt::new(result, Vec::new()));
         }
         if let Some(action) = renderer_debug_command(command) {
             let result = self.execute_renderer_debug(action)?;
-            return ProductHostRuntimeReceipt::new(result, Vec::new()).map_err(host_runtime_error);
+            return Ok(ProductHostRuntimeReceipt::new(result, Vec::new()));
         }
         let (execute, release) = (self.api.execute_debug, self.api.release_debug_result);
 
@@ -3321,9 +3297,7 @@ impl ProductHostRuntime for CsharpProductRuntime {
         let finished = self.finish_product_call(callback_result.as_ref().err().cloned());
         self.settle_gameplay_time();
         match (callback_result, finished.failure) {
-            (Ok(result), None) => {
-                ProductHostRuntimeReceipt::new(result, finished.outputs).map_err(host_runtime_error)
-            }
+            (Ok(result), None) => Ok(ProductHostRuntimeReceipt::new(result, finished.outputs)),
             (_, Some(failure)) => {
                 // The next receipt carries what the command did publish.
                 self.pending_recovery_outputs.extend(finished.outputs);
@@ -3359,7 +3333,7 @@ impl ProductHostRuntime for CsharpProductRuntime {
         } else {
             catalog
         };
-        ProductHostRuntimeReceipt::new(catalog, Vec::new()).map_err(host_runtime_error)
+        Ok(ProductHostRuntimeReceipt::new(catalog, Vec::new()))
     }
 
     fn presentation_interval(&self) -> Option<std::time::Duration> {
@@ -3530,13 +3504,11 @@ impl ProductHostRuntime for CsharpProductRuntime {
         {
             let result = ProductHostTimelineCompletionResult::rejected_with_current(
                 ticket,
-                current,
                 self.readout(),
                 "CSHARP_TIMELINE_BINDING",
                 "timeline completion does not name the current running product binding",
-            )
-            .map_err(host_runtime_error)?;
-            return ProductHostRuntimeReceipt::new(result, Vec::new()).map_err(host_runtime_error);
+            );
+            return Ok(ProductHostRuntimeReceipt::new(result, Vec::new()));
         }
 
         let outcome_data = match envelope.outcome() {
@@ -3554,7 +3526,6 @@ impl ProductHostRuntime for CsharpProductRuntime {
         };
         let provenance_detail = envelope
             .provenance()
-            .detail()
             .map(|value| serde_json::to_vec(value.value()))
             .transpose()
             .map_err(|error| {
@@ -3578,7 +3549,6 @@ impl ProductHostRuntime for CsharpProductRuntime {
                 }
             },
             outcome_data: native_optional_bytes(outcome_data.as_deref()),
-            provenance_correlation: native_utf8(envelope.provenance().correlation()),
             provenance_detail: native_optional_bytes(provenance_detail.as_deref()),
         };
 
@@ -3596,24 +3566,21 @@ impl ProductHostRuntime for CsharpProductRuntime {
             .map_err(|error| self.runtime_error(error))?;
             ProductHostTimelineCompletionResult::rejected_with_current(
                 ticket,
-                self.binding(),
                 self.readout(),
                 failure.code(),
                 failure.detail(),
             )
         } else if matches!(callback_result, Ok(true)) {
-            ProductHostTimelineCompletionResult::accepted(ticket, self.binding(), self.readout())
+            ProductHostTimelineCompletionResult::accepted(ticket, self.readout())
         } else {
             ProductHostTimelineCompletionResult::rejected_with_current(
                 ticket,
-                self.binding(),
                 self.readout(),
                 "CSHARP_TIMELINE_PRODUCT_REJECTED",
                 "the C# product did not accept the timeline completion",
             )
-        }
-        .map_err(host_runtime_error)?;
-        ProductHostRuntimeReceipt::new(result, outputs).map_err(host_runtime_error)
+        };
+        Ok(ProductHostRuntimeReceipt::new(result, outputs))
     }
 }
 
@@ -3839,7 +3806,7 @@ fn native_input_value_kind(value_kind: IntentValueKind) -> NativeInputValueKind 
 }
 
 fn standard_input_context() -> InputContext {
-    InputContext::new(STANDARD_INPUT_CONTEXT).expect("fixed standard input context")
+    InputContext::new(STANDARD_INPUT_CONTEXT)
 }
 
 fn dev_readout(readout: RuntimeLifecycleReadout) -> ProductHostRuntimeReadout {
@@ -4007,14 +3974,9 @@ fn input_error_code(error: &runtime_input::RuntimeInputError) -> &'static str {
     use runtime_input::RuntimeInputError;
 
     match error {
-        RuntimeInputError::InvalidContext => "CSHARP_INPUT_INVALID_CONTEXT",
-        RuntimeInputError::InvalidIntent => "CSHARP_INPUT_INVALID_INTENT",
         RuntimeInputError::InvalidAxisValue => "CSHARP_INPUT_INVALID_AXIS_VALUE",
         RuntimeInputError::InvalidDirectIntentAxisValue => {
             "CSHARP_INPUT_INVALID_DIRECT_INTENT_AXIS_VALUE"
-        }
-        RuntimeInputError::InvalidProductPayloadContract => {
-            "CSHARP_INPUT_INVALID_PRODUCT_PAYLOAD_CONTRACT"
         }
         RuntimeInputError::ProductPayloadUnsafeInteger => {
             "CSHARP_INPUT_PRODUCT_PAYLOAD_UNSAFE_INTEGER"
@@ -4036,7 +3998,6 @@ fn input_error_code(error: &runtime_input::RuntimeInputError) -> &'static str {
         RuntimeInputError::BindingMismatch => "CSHARP_INPUT_BINDING_MISMATCH",
         RuntimeInputError::InvalidRebindClear => "CSHARP_INPUT_INVALID_REBIND_CLEAR",
         RuntimeInputError::DuplicateIntent => "CSHARP_INPUT_DUPLICATE_INTENT",
-        RuntimeInputError::InvalidMapping => "CSHARP_INPUT_INVALID_MAPPING",
         RuntimeInputError::DuplicateMapping => "CSHARP_INPUT_DUPLICATE_MAPPING",
         RuntimeInputError::MappingReplacementIntentMismatch => {
             "CSHARP_INPUT_MAPPING_REPLACEMENT_INTENT_MISMATCH"
@@ -5139,10 +5100,6 @@ fn is_empty_frame(output: &RuntimePublication) -> bool {
     }
 }
 
-fn publication_error(error: RuntimePublicationError) -> CsharpProductRuntimeError {
-    CsharpProductRuntimeError::new("RUNTIME_PUBLICATION", error.to_string())
-}
-
 fn service_outputs(
     output: CsharpEngineCallOutput,
 ) -> Result<Vec<RuntimePublication>, CsharpProductRuntimeError> {
@@ -5269,10 +5226,6 @@ fn complete_voxel_baseline(
             }
         ),
     ))
-}
-
-fn host_runtime_error(error: product_host::ProductHostError) -> ProductHostRuntimeError {
-    ProductHostRuntimeError::new(error.code(), error.detail().to_owned())
 }
 
 #[cfg(test)]
@@ -6243,8 +6196,7 @@ mod tests {
         let descriptor = DirectInputIntentDescriptor::product_payload(
             "fixture.product.payload",
             "fixture.product.payload.v1",
-        )
-        .expect("direct-input descriptor");
+        );
         let runtime = CsharpProductRuntime::load_admitted_with(
             content,
             CsharpProductRuntimeConfig::new(
@@ -6274,8 +6226,7 @@ mod tests {
                 chord: Vec::new(),
                 context: None,
             },
-        )
-        .expect("old remapping fixture mapping");
+        );
         let runtime = CsharpProductRuntime::load_admitted_with(
             content,
             CsharpProductRuntimeConfig::new(
@@ -6307,8 +6258,7 @@ mod tests {
                 chord: Vec::new(),
                 context: None,
             },
-        )
-        .expect("callback old mapping");
+        );
         let runtime = CsharpProductRuntime::load_admitted_with(
             content,
             CsharpProductRuntimeConfig::new(
@@ -7090,7 +7040,6 @@ mod tests {
                 bytes: ptr::null(),
                 len: 0,
             },
-            provenance_correlation: NativeUtf8Slice::default(),
             provenance_detail: NativeByteSlice {
                 bytes: ptr::null(),
                 len: 0,
@@ -7474,8 +7423,7 @@ mod tests {
                     chord: Vec::new(),
                     context: None,
                 },
-            )
-            .expect("new mapping")],
+            )],
         )
         .expect("compile replacement");
         runtime
@@ -8661,8 +8609,7 @@ mod tests {
                         chord: Vec::new(),
                         context: None,
                     },
-                )
-                .expect("held mapping"),
+                ),
             )
         };
         let (forward, forward_w) = held(
@@ -8685,8 +8632,7 @@ mod tests {
                     chord: Vec::new(),
                     context: None,
                 },
-            )
-            .expect("attack mapping"),
+            ),
             RuntimeInputMapping::new(
                 "look-stick",
                 "fixture.look",
@@ -8694,8 +8640,7 @@ mod tests {
                     axis: runtime_input_model::ControllerAxis::Axis2,
                     context: None,
                 },
-            )
-            .expect("look mapping"),
+            ),
             forward_w,
             back_s,
         ];

@@ -68,10 +68,7 @@ impl FixtureRuntime {
     fn baseline_publications() -> Vec<RuntimePublication> {
         vec![
             RuntimePublication::binding(Self::publication_binding(), 0),
-            RuntimePublication::complete_baseline_with_frontiers(
-                Self::publication_binding(),
-                Vec::new(),
-            ),
+            RuntimePublication::complete_baseline(Self::publication_binding()),
         ]
     }
 
@@ -79,16 +76,9 @@ impl FixtureRuntime {
         operation: ProductHostOperationKind,
     ) -> ProductHostRuntimeReceipt<ProductHostOperationResult> {
         ProductHostRuntimeReceipt::new(
-            ProductHostOperationResult::accepted(
-                operation,
-                Self::binding(),
-                CanonicalU64::new(0),
-                Self::readout(),
-            )
-            .unwrap(),
+            ProductHostOperationResult::accepted(operation, CanonicalU64::new(0), Self::readout()),
             Self::baseline_publications(),
         )
-        .unwrap()
     }
 }
 
@@ -119,14 +109,11 @@ impl ReconnectRuntime {
         ProductHostRuntimeReceipt::new(
             ProductHostOperationResult::accepted(
                 operation,
-                FixtureRuntime::binding(),
                 CanonicalU64::new(0),
                 FixtureRuntime::readout(),
-            )
-            .unwrap(),
+            ),
             outputs,
         )
-        .unwrap()
     }
 }
 
@@ -172,15 +159,9 @@ impl ProductHostRuntime for ReconnectRuntime {
         product_host::ProductHostRuntimeError,
     > {
         Ok(ProductHostRuntimeReceipt::new(
-            ProductHostInputResult::accepted(
-                batch.events().len(),
-                FixtureRuntime::binding(),
-                FixtureRuntime::readout(),
-            )
-            .unwrap(),
+            ProductHostInputResult::accepted(batch.events().len(), FixtureRuntime::readout()),
             Vec::new(),
-        )
-        .unwrap())
+        ))
     }
 
     fn advance_realtime(
@@ -203,13 +184,10 @@ impl ProductHostRuntime for ReconnectRuntime {
         Ok(ProductHostRuntimeReceipt::new(
             ProductHostTimelineCompletionResult::accepted(
                 CanonicalU64::new(completion.envelope().ticket().value()),
-                FixtureRuntime::binding(),
                 FixtureRuntime::readout(),
-            )
-            .unwrap(),
+            ),
             Vec::new(),
-        )
-        .unwrap())
+        ))
     }
 }
 
@@ -238,15 +216,9 @@ impl ProductHostRuntime for FixtureRuntime {
         product_host::ProductHostRuntimeError,
     > {
         Ok(ProductHostRuntimeReceipt::new(
-            ProductHostInputResult::accepted(
-                batch.events().len(),
-                Self::binding(),
-                Self::readout(),
-            )
-            .unwrap(),
+            ProductHostInputResult::accepted(batch.events().len(), Self::readout()),
             Vec::new(),
-        )
-        .unwrap())
+        ))
     }
 
     fn recover_input_overflow(
@@ -269,7 +241,7 @@ impl ProductHostRuntime for FixtureRuntime {
             br#"{"available":true,"commands":[{"name":"fixture.echo","description":"Echoes a fixture value.","parameters":[{"name":"value","type":"string"}]}]}"#,
         )
         .unwrap();
-        Ok(ProductHostRuntimeReceipt::new(catalog, Vec::new()).unwrap())
+        Ok(ProductHostRuntimeReceipt::new(catalog, Vec::new()))
     }
 
     fn execute_debug(
@@ -297,7 +269,7 @@ impl ProductHostRuntime for FixtureRuntime {
             }
             _ => ProductHostDebugResult::new(true, format!("executed {command}")),
         };
-        Ok(ProductHostRuntimeReceipt::new(result, Vec::new()).unwrap())
+        Ok(ProductHostRuntimeReceipt::new(result, Vec::new()))
     }
 
     fn advance_realtime(
@@ -320,13 +292,10 @@ impl ProductHostRuntime for FixtureRuntime {
         Ok(ProductHostRuntimeReceipt::new(
             ProductHostTimelineCompletionResult::accepted(
                 CanonicalU64::new(completion.envelope().ticket().value()),
-                Self::binding(),
                 Self::readout(),
-            )
-            .unwrap(),
+            ),
             Vec::new(),
-        )
-        .unwrap())
+        ))
     }
 }
 
@@ -370,15 +339,9 @@ impl ProductHostRuntime for OutputFailureRuntime {
             Vec::new()
         };
         Ok(ProductHostRuntimeReceipt::new(
-            ProductHostInputResult::accepted(
-                batch.events().len(),
-                FixtureRuntime::binding(),
-                FixtureRuntime::readout(),
-            )
-            .unwrap(),
+            ProductHostInputResult::accepted(batch.events().len(), FixtureRuntime::readout()),
             outputs,
-        )
-        .unwrap())
+        ))
     }
 
     fn advance_realtime(
@@ -403,13 +366,10 @@ impl ProductHostRuntime for OutputFailureRuntime {
         Ok(ProductHostRuntimeReceipt::new(
             ProductHostTimelineCompletionResult::accepted(
                 CanonicalU64::new(completion.envelope().ticket().value()),
-                FixtureRuntime::binding(),
                 FixtureRuntime::readout(),
-            )
-            .unwrap(),
+            ),
             Vec::new(),
-        )
-        .unwrap())
+        ))
     }
 }
 
@@ -448,15 +408,9 @@ impl ProductHostRuntime for GatedLifecycleRuntime {
         product_host::ProductHostRuntimeError,
     > {
         Ok(ProductHostRuntimeReceipt::new(
-            ProductHostInputResult::accepted(
-                batch.events().len(),
-                FixtureRuntime::binding(),
-                FixtureRuntime::readout(),
-            )
-            .unwrap(),
+            ProductHostInputResult::accepted(batch.events().len(), FixtureRuntime::readout()),
             Vec::new(),
-        )
-        .unwrap())
+        ))
     }
 
     fn advance_realtime(
@@ -481,13 +435,10 @@ impl ProductHostRuntime for GatedLifecycleRuntime {
         Ok(ProductHostRuntimeReceipt::new(
             ProductHostTimelineCompletionResult::accepted(
                 CanonicalU64::new(completion.envelope().ticket().value()),
-                FixtureRuntime::binding(),
                 FixtureRuntime::readout(),
-            )
-            .unwrap(),
+            ),
             Vec::new(),
-        )
-        .unwrap())
+        ))
     }
 }
 
@@ -998,6 +949,20 @@ fn malformed_pointer_batch_resynchronizes_without_closing_the_host() {
     assert!(malformed.contains("\"code\":\"PRODUCT_HOST_INPUT_DECODE\""));
     assert!(malformed.contains("\"disposition\":\"resync-required\""));
     assert!(malformed.contains("\"droppedCount\":1"));
+    assert_eq!(recovery_calls.load(Ordering::SeqCst), 1);
+
+    // A body that is not an input request at all is an ordinary malformed
+    // request and leaves the runtime input binding alone.
+    let not_a_batch = r#"{"batch":{}}"#;
+    let not_a_batch = request(
+        &origin,
+        &format!(
+            "POST /__rusty/product/runtime/input HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{not_a_batch}",
+            not_a_batch.len(),
+        ),
+    );
+    assert!(not_a_batch.starts_with("HTTP/1.1 400 "), "{not_a_batch}");
+    assert!(not_a_batch.contains("\"code\":\"PRODUCT_HOST_JSON\""));
     assert_eq!(recovery_calls.load(Ordering::SeqCst), 1);
 
     let pointer_body = r#"{"batch":[{"runtime":{"instanceId":"7","generation":"1","controlRevision":"2"},"sequence":"0","context":"gameplay.default","fact":{"kind":"pointer-button","button":"primary","edge":"pressed"}},{"runtime":{"instanceId":"7","generation":"1","controlRevision":"2"},"sequence":"1","context":"gameplay.default","fact":{"kind":"pointer-button","button":"secondary","edge":"pressed"}}]}"#;
@@ -1687,20 +1652,6 @@ fn typed_runtime_rejections_set_known_and_unknown_commit_headers() {
         "a runtime error is reported; it never ends the host"
     );
     host.shutdown().unwrap();
-}
-
-#[test]
-fn input_http_framing_remains_host_owned() {
-    // A valid empty event page can exceed HTTP framing through whitespace alone.
-    // The host-neutral decoder admits it; this particular HTTP host does not.
-    let bytes = format!("[{}]", " ".repeat(product_host::MAX_REQUEST_BODY_BYTES));
-    assert!(
-        runtime_input::decode_runtime_input_wire_events_json(bytes.as_bytes())
-            .unwrap()
-            .is_empty()
-    );
-    let error = ProductHostInputBatch::decode_json(bytes.as_bytes()).unwrap_err();
-    assert_eq!(error.code(), "PRODUCT_HOST_BODY_BOUNDS");
 }
 
 #[test]

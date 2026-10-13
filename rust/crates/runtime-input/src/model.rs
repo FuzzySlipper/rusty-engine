@@ -1,8 +1,7 @@
 use std::{collections::BTreeMap, fmt};
 
 use runtime_lifecycle::{
-    validate_runtime_identity, RuntimeControlRevision, RuntimeGeneration, RuntimeInstanceId,
-    SimulationStep,
+    RuntimeControlRevision, RuntimeGeneration, RuntimeInstanceId, SimulationStep,
 };
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
@@ -220,17 +219,13 @@ pub fn parse_canonical_u64(value: &str) -> Result<u64, RuntimeInputError> {
         .map_err(|_| RuntimeInputError::NonCanonicalWireInteger)
 }
 
-/// Bounded product-defined input context. It is not a browser focus object.
+/// Product-defined input context. It is not a browser focus object.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct InputContext(String);
 
 impl InputContext {
-    pub fn new(value: impl Into<String>) -> Result<Self, RuntimeInputError> {
-        let value = value.into();
-        if !is_identity(&value) {
-            return Err(RuntimeInputError::InvalidContext);
-        }
-        Ok(Self(value))
+    pub fn new(value: impl Into<String>) -> Self {
+        Self(value.into())
     }
 
     pub fn as_str(&self) -> &str {
@@ -398,9 +393,6 @@ impl RuntimeProductPayload {
         data: serde_json::Value,
     ) -> Result<Self, RuntimeInputError> {
         let contract = contract.into();
-        if !is_identity(&contract) {
-            return Err(RuntimeInputError::InvalidProductPayloadContract);
-        }
         let bytes = encode_product_payload_json(&data)?;
         Ok(Self {
             contract,
@@ -451,9 +443,6 @@ impl RuntimeDirectIntentClaim {
         value: RuntimeIntentValue,
     ) -> Result<Self, RuntimeInputError> {
         let intent = intent.into();
-        if !is_identity(&intent) {
-            return Err(RuntimeInputError::InvalidIntent);
-        }
         if let RuntimeIntentValue::Axis { value } = &value {
             if value.value().abs() > MAX_DIRECT_INTENT_AXIS_MAGNITUDE {
                 return Err(RuntimeInputError::InvalidDirectIntentAxisValue);
@@ -699,11 +688,8 @@ impl RuntimeIntentEnvelope {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RuntimeInputError {
-    InvalidContext,
-    InvalidIntent,
     InvalidAxisValue,
     InvalidDirectIntentAxisValue,
-    InvalidProductPayloadContract,
     ProductPayloadUnsafeInteger,
     ProductPayloadContractMismatch,
     InvalidControllerAxisValue,
@@ -716,7 +702,6 @@ pub enum RuntimeInputError {
     BindingMismatch,
     InvalidRebindClear,
     DuplicateIntent,
-    InvalidMapping,
     DuplicateMapping,
     MappingReplacementIntentMismatch,
     DirectIntentPayloadUnsupported,
@@ -842,7 +827,3 @@ impl fmt::Display for RuntimeInputError {
     }
 }
 impl std::error::Error for RuntimeInputError {}
-
-pub(crate) fn is_identity(value: &str) -> bool {
-    validate_runtime_identity(value).is_ok()
-}

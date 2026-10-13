@@ -71,20 +71,18 @@ impl CsharpProductRuntime {
                 format!("time answer could not be encoded: {error}"),
             )
         })?;
-        ProductHostRuntimeReceipt::new(
+        Ok(ProductHostRuntimeReceipt::new(
             ProductHostDebugResult::new(true, message).with_readout(self.readout()),
             outputs,
-        )
-        .map_err(host_runtime_error)
+        ))
     }
 }
 
 fn time_error(
     message: &str,
 ) -> Result<ProductHostRuntimeReceipt<ProductHostDebugResult>, ProductHostRuntimeError> {
-    ProductHostRuntimeReceipt::new(
+    Ok(ProductHostRuntimeReceipt::new(
         ProductHostDebugResult::new(false, message.to_owned()),
         Vec::new(),
-    )
-    .map_err(host_runtime_error)
+    ))
 }

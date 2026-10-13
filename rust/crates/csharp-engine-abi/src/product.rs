@@ -1969,7 +1969,6 @@ pub struct NativeProductTimelineCompletion {
     pub correlation: NativeUtf8Slice,
     pub outcome: NativeProductTimelineOutcome,
     pub outcome_data: NativeByteSlice,
-    pub provenance_correlation: NativeUtf8Slice,
     pub provenance_detail: NativeByteSlice,
 }
 

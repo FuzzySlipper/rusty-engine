@@ -275,7 +275,7 @@ impl<R: ProductHostRuntime> ProductHostOperationOwner<R> {
             }
             let (result, debug_outputs) = runtime.execute_debug(command)?.into_parts();
             outputs.extend(debug_outputs);
-            ProductHostRuntimeReceipt::new(result, outputs).map_err(host_error_to_runtime)
+            Ok(ProductHostRuntimeReceipt::new(result, outputs))
         })
     }
 
@@ -364,12 +364,6 @@ pub(crate) fn runtime_poisoned() -> ProductHostRuntimeError {
 }
 
 fn decode_canonical_u64(bytes: &[u8]) -> Result<CanonicalU64, ProductHostRuntimeError> {
-    if bytes.len() > crate::MAX_REQUEST_BODY_BYTES {
-        return Err(host_error_to_runtime(ProductHostError::new(
-            "PRODUCT_HOST_BODY_BOUNDS",
-            "JSON payload exceeds the host body bound",
-        )));
-    }
     CanonicalU64::decode_json(bytes)
         .map_err(|_| {
             ProductHostError::new(
@@ -399,10 +393,9 @@ mod tests {
             operation: crate::ProductHostOperationKind,
         ) -> ProductHostRuntimeReceipt<ProductHostOperationResult> {
             ProductHostRuntimeReceipt::new(
-                ProductHostOperationResult::rejected(operation, "fixture").unwrap(),
+                ProductHostOperationResult::rejected(operation, "fixture"),
                 publications(),
             )
-            .unwrap()
         }
     }
 
@@ -455,13 +448,10 @@ mod tests {
                     accepted_through,
                     accepted_through,
                     CanonicalU64::new(2),
-                    binding(),
                     readout(),
-                )
-                .unwrap(),
+                ),
                 publications(),
-            )
-            .unwrap())
+            ))
         }
 
         fn advance_realtime(
@@ -483,11 +473,9 @@ mod tests {
                 ProductHostTimelineCompletionResult::rejected(
                     CanonicalU64::new(completion.envelope().ticket().value()),
                     "fixture",
-                )
-                .unwrap(),
+                ),
                 publications(),
-            )
-            .unwrap())
+            ))
         }
     }
 
@@ -539,7 +527,7 @@ mod tests {
             "runtime":{"instanceId":"1","generation":"1","controlRevision":"1"},
             "correlation":"fixture",
             "outcome":{"kind":"success"},
-            "provenance":{"correlation":"fixture"}
+            "provenance":{}
         }"#;
         assert_eq!(
             session

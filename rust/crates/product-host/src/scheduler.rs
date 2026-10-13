@@ -143,10 +143,9 @@ mod tests {
             operation: ProductHostOperationKind,
         ) -> ProductHostRuntimeReceipt<ProductHostOperationResult> {
             ProductHostRuntimeReceipt::new(
-                ProductHostOperationResult::rejected(operation, "fixture").unwrap(),
+                ProductHostOperationResult::rejected(operation, "fixture"),
                 Self::publications(),
             )
-            .unwrap()
         }
     }
 
@@ -176,13 +175,10 @@ mod tests {
                     accepted_through,
                     accepted_through,
                     CanonicalU64::new(2),
-                    Self::binding(),
                     Self::readout(),
-                )
-                .unwrap(),
+                ),
                 Self::publications(),
-            )
-            .unwrap())
+            ))
         }
 
         fn advance_realtime(
@@ -204,11 +200,9 @@ mod tests {
                 ProductHostTimelineCompletionResult::rejected(
                     CanonicalU64::new(completion.envelope().ticket().value()),
                     "fixture",
-                )
-                .unwrap(),
+                ),
                 Self::publications(),
-            )
-            .unwrap())
+            ))
         }
     }
 

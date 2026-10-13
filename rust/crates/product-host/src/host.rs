@@ -12,7 +12,6 @@ use std::{
 
 use serde::Deserialize;
 use serde::Serialize;
-use serde_json::Value;
 use ts_rs::TS;
 
 use crate::{
@@ -1055,20 +1054,7 @@ fn publish_scheduled_input_receipt<R: ProductHostRuntime>(
     state: &HostState<R>,
     receipt: crate::ProductHostRuntimeReceipt<ProductHostInputResult>,
 ) {
-    let (result, mut outputs) = match receipt.into_wire_parts() {
-        Ok(parts) => parts,
-        Err(error) => {
-            publish_host_diagnostic(
-                &state.diagnostics,
-                ProductHostLogSeverity::Warning,
-                ProductHostLogDisposition::ResyncRequired,
-                "PRODUCT_HOST_SCHEDULE_INPUT_OUTPUT_RESYNC",
-                "committed scheduled input receipt could not be encoded; reconnect for a fresh readout instead of replaying",
-                [("cause", error.code().to_owned())],
-            );
-            return;
-        }
-    };
+    let (result, mut outputs) = receipt.into_wire_parts();
     // Input is admitted by the Rust-host scheduler rather than by the HTTP
     // request thread. Carry the complete typed result through the same
     // ordered SSE output family so accepted/consumed cursors and recoverable
@@ -1117,20 +1103,7 @@ fn publish_scheduled_receipt<R: ProductHostRuntime>(
             telemetry.record_progress(progress_ns);
         }
     }
-    let (result, mut outputs) = match receipt.into_wire_parts() {
-        Ok(parts) => parts,
-        Err(error) => {
-            publish_host_diagnostic(
-                &state.diagnostics,
-                ProductHostLogSeverity::Warning,
-                ProductHostLogDisposition::ResyncRequired,
-                "PRODUCT_HOST_SCHEDULE_OUTPUT_RESYNC",
-                "committed scheduled receipt could not be encoded; reconnect for a fresh readout instead of replaying",
-                [("cause", error.code().to_owned())],
-            );
-            return;
-        }
-    };
+    let (result, mut outputs) = receipt.into_wire_parts();
     if let Some(readout) = changed_readout(state, result.readout()) {
         outputs.push(readout);
     }
@@ -1563,12 +1536,7 @@ fn invoke_debug_catalog<R: ProductHostRuntime>(state: &HostState<R>) -> HttpResp
                         return Ok(HttpResponse::error(500, error.code(), error.diagnostic()));
                     }
                 };
-                let (catalog, outputs) = match receipt.into_wire_parts() {
-                    Ok(parts) => parts,
-                    Err(error) => {
-                        return Ok(HttpResponse::error(503, error.code(), error.detail()));
-                    }
-                };
+                let (catalog, outputs) = receipt.into_wire_parts();
                 let output_through = match push_host_outputs(state, outputs) {
                     Ok(output_through) => output_through,
                     Err(error) => {
@@ -1628,15 +1596,7 @@ fn invoke_debug_execute<R: ProductHostRuntime>(state: &HostState<R>, body: &[u8]
                         ));
                     }
                 };
-                let (result, mut outputs) = match receipt.into_wire_parts() {
-                    Ok(parts) => parts,
-                    Err(error) => {
-                        return Ok(debug_text_error(
-                            503,
-                            &format!("{}: {}", error.code(), error.detail()),
-                        ));
-                    }
-                };
+                let (result, mut outputs) = receipt.into_wire_parts();
                 if let Some(readout) = changed_readout(state, result.readout()) {
                     outputs.push(readout);
                 }
@@ -1743,23 +1703,12 @@ fn invoke_claim<R: ProductHostRuntime>(state: &HostState<R>, body: &[u8]) -> Htt
 }
 
 fn invoke_input<R: ProductHostRuntime>(state: &HostState<R>, body: &[u8]) -> HttpResponse {
-    let request: ProductHostInputRequest = match decode_json(body) {
-        Ok(value) => value,
-        Err(response) => return response,
-    };
-    let batch_json = match serde_json::to_vec(&request.batch) {
-        Ok(value) => value,
-        Err(_) => {
-            return HttpResponse::error(
-                400,
-                "PRODUCT_HOST_INPUT_DECODE",
-                "input batch could not be encoded",
-            );
-        }
-    };
-    let batch = match ProductHostInputBatch::decode_json(&batch_json) {
-        Ok(batch) => batch,
-        Err(_) => return recover_rejected_input_batch(state, request.batch.len()),
+    let batch = match serde_json::from_slice::<ProductHostInputRequest>(body) {
+        Ok(request) => match ProductHostInputBatch::from_wire(request.batch) {
+            Ok(batch) => batch,
+            Err(_) => return recover_rejected_input_batch(state, body),
+        },
+        Err(_) => return recover_rejected_input_batch(state, body),
     };
     // Realtime products enqueue at the host edge so a product callback cannot
     // hold up browser input transport. The cached capability covers
@@ -1768,23 +1717,14 @@ fn invoke_input<R: ProductHostRuntime>(state: &HostState<R>, body: &[u8]) -> Htt
     if state.realtime_scheduler_enabled {
         let count = batch.events().len();
         let enqueued_ns = state.diagnostics.now_monotonic_nanoseconds();
-        return match state.input_mailbox.enqueue(batch, enqueued_ns) {
-            true => {
-                state.scheduler_wake.notify();
-                match ProductHostInputResult::queued(count) {
-                    // Admission committed to the mailbox; runtime consumption
-                    // and its output cursor arrive separately through SSE.
-                    Ok(result) => json_response(200, &result).with_queued_input(),
-                    Err(error) => HttpResponse::error(500, error.code(), error.detail()),
-                }
-            }
-            false => {
-                state.scheduler_wake.notify();
-                match ProductHostInputResult::mailbox_full(count) {
-                    Ok(result) => json_response(200, &result).with_resync_required(),
-                    Err(error) => HttpResponse::error(500, error.code(), error.detail()),
-                }
-            }
+        let admitted = state.input_mailbox.enqueue(batch, enqueued_ns);
+        state.scheduler_wake.notify();
+        // Admission committed to the mailbox; runtime consumption and its
+        // output cursor arrive separately through SSE.
+        return if admitted {
+            json_response(200, &ProductHostInputResult::queued(count)).with_queued_input()
+        } else {
+            json_response(200, &ProductHostInputResult::mailbox_full(count)).with_resync_required()
         };
     }
     call_runtime(
@@ -1795,10 +1735,23 @@ fn invoke_input<R: ProductHostRuntime>(state: &HostState<R>, body: &[u8]) -> Htt
     )
 }
 
+/// A request whose events are not a strict runtime-input wire batch
+/// resynchronizes the runtime input binding. Only a body that is not even an
+/// input request is an ordinary malformed request.
 fn recover_rejected_input_batch<R: ProductHostRuntime>(
     state: &HostState<R>,
-    count: usize,
+    body: &[u8],
 ) -> HttpResponse {
+    let count = match serde_json::from_slice::<ProductHostInputRequestShape>(body) {
+        Ok(shape) => shape.batch.len(),
+        Err(_) => {
+            return HttpResponse::error(
+                400,
+                "PRODUCT_HOST_JSON",
+                "request JSON is malformed or has unknown fields",
+            );
+        }
+    };
     state.input_mailbox.clear();
     publish_host_diagnostic(
         &state.diagnostics,
@@ -1814,18 +1767,15 @@ fn recover_rejected_input_batch<R: ProductHostRuntime>(
         |runtime| {
             let recovery = runtime.recover_input_overflow()?;
             let (_operation, outputs) = recovery.into_parts();
-            let result = ProductHostInputResult::wire_decode_resynchronized(count)
-                .map_err(host_error_to_runtime)?;
-            ProductHostRuntimeReceipt::new(result, outputs).map_err(host_error_to_runtime)
+            Ok(ProductHostRuntimeReceipt::new(
+                ProductHostInputResult::wire_decode_resynchronized(count),
+                outputs,
+            ))
         },
         ProductHostInputResult::rejected_runtime,
     );
     state.scheduler_wake.notify();
     response
-}
-
-fn host_error_to_runtime(error: ProductHostError) -> ProductHostRuntimeError {
-    ProductHostRuntimeError::new(error.code(), error.detail())
 }
 
 fn invoke_realtime<R: ProductHostRuntime>(state: &HostState<R>, body: &[u8]) -> HttpResponse {
@@ -2201,7 +2151,7 @@ where
     R: ProductHostRuntime,
     T: Serialize + RouteResultReadout,
     F: FnOnce(&mut R) -> Result<crate::ProductHostRuntimeReceipt<T>, ProductHostRuntimeError>,
-    E: FnOnce(ProductHostRuntimeError) -> Result<T, ProductHostError>,
+    E: FnOnce(ProductHostRuntimeError) -> T,
 {
     let response = state
         .runtime
@@ -2228,30 +2178,13 @@ where
                     ),
                 );
                 let disposition = error.disposition();
-                return Ok((match error_result(error) {
-                    Ok(result) => json_response(200, &result).with_runtime_error(disposition),
-                    Err(host_error) => {
-                        HttpResponse::error(500, host_error.code(), host_error.detail())
-                    }
-                }, runtime.take_update_attribution()));
+                return Ok((
+                    json_response(200, &error_result(error)).with_runtime_error(disposition),
+                    runtime.take_update_attribution(),
+                ));
             }
         };
-        let (result, publications) = receipt.into_parts();
-        let mut outputs = match crate::model::wire_outputs(publications) {
-            Ok(outputs) => outputs,
-            Err(error) => {
-                publish_host_diagnostic(
-                    &state.diagnostics,
-                    ProductHostLogSeverity::Warning,
-                    ProductHostLogDisposition::ResyncRequired,
-                    "PRODUCT_HOST_OUTPUT_COMMIT_RESYNC",
-                    "committed runtime receipt could not be encoded for output publication; reconnect for a fresh readout instead of replaying",
-                    [("cause", error.code().to_owned())],
-                );
-                return Ok((json_response(200, &result)
-                    .with_settled_resync_required(), runtime.take_update_attribution()));
-            }
-        };
+        let (result, mut outputs) = receipt.into_wire_parts();
         if let Some(readout) = changed_readout(state, result.route_readout()) {
             outputs.push(readout);
         }
@@ -2455,12 +2388,7 @@ fn handle_sse<R: ProductHostRuntime>(
             |runtime| {
                 let result = runtime.connect();
                 let receipt = result?;
-                let (result, mut outputs) = match receipt.into_wire_parts() {
-                    Ok(parts) => parts,
-                    Err(error) => {
-                        return Ok(Err(HttpResponse::error(503, error.code(), error.detail())));
-                    }
-                };
+                let (result, mut outputs) = receipt.into_wire_parts();
                 // Readouts are published on change, so a fresh subscriber
                 // starts from the current one.
                 if let Some(readout) = result.readout() {
@@ -3089,7 +3017,7 @@ mod tests {
         (Mutex::new(bus), queue)
     }
 
-    fn batch_json(event: &OutputEvent) -> Value {
+    fn batch_json(event: &OutputEvent) -> serde_json::Value {
         serde_json::from_str(&event.json).unwrap()
     }
 
@@ -3339,13 +3267,11 @@ mod tests {
             Some(CanonicalU64::new(4)),
             Some(CanonicalU64::new(4)),
             CanonicalU64::new(5),
-            binding(),
             crate::ProductHostRuntimeReadout::new(
                 binding(),
                 crate::ProductHostRuntimeState::Running,
             ),
-        )
-        .unwrap();
+        );
         let accepted_wire =
             serde_json::to_value(ProductHostRuntimeOutput::runtime_input_result(accepted)).unwrap();
         assert_eq!(accepted_wire["kind"], "runtime-input-result");
@@ -3361,13 +3287,11 @@ mod tests {
             Some(CanonicalU64::new(6)),
             Some(CanonicalU64::new(7)),
             CanonicalU64::new(8),
-            binding(),
             crate::ProductHostRuntimeReadout::new(
                 binding(),
                 crate::ProductHostRuntimeState::Running,
             ),
-        )
-        .unwrap();
+        );
         let stale_wire =
             serde_json::to_value(ProductHostRuntimeOutput::runtime_input_result(stale)).unwrap();
         assert_eq!(stale_wire["result"]["accepted"], false);
@@ -3375,7 +3299,7 @@ mod tests {
         assert_eq!(stale_wire["result"]["acceptedThrough"], "6");
         assert_eq!(stale_wire["result"]["consumedThrough"], "7");
 
-        let overflow = ProductHostInputResult::mailbox_full(2).unwrap();
+        let overflow = ProductHostInputResult::mailbox_full(2);
         let overflow_wire =
             serde_json::to_value(ProductHostRuntimeOutput::runtime_input_result(overflow)).unwrap();
         assert_eq!(overflow_wire["result"]["accepted"], false);
@@ -3410,17 +3334,14 @@ mod tests {
                 binding(),
                 crate::ProductHostRuntimeState::Paused,
             );
-            crate::ProductHostRuntimeReceipt::new(
+            Ok(crate::ProductHostRuntimeReceipt::new(
                 crate::ProductHostOperationResult::accepted(
                     ProductHostOperationKind::Pause,
-                    binding(),
                     CanonicalU64::new(1),
                     paused,
-                )
-                .unwrap(),
+                ),
                 Vec::new(),
-            )
-            .map_err(|error| crate::ProductHostRuntimeError::new(error.code(), error.detail()))
+            ))
         }
 
         fn input(
@@ -3445,11 +3366,10 @@ mod tests {
             crate::ProductHostRuntimeError,
         > {
             self.0.lock().unwrap().push(command.to_owned());
-            crate::ProductHostRuntimeReceipt::new(
+            Ok(crate::ProductHostRuntimeReceipt::new(
                 crate::ProductHostDebugResult::new(true, String::new()),
                 Vec::new(),
-            )
-            .map_err(|error| crate::ProductHostRuntimeError::new(error.code(), error.detail()))
+            ))
         }
 
         fn advance_realtime(
@@ -4364,8 +4284,15 @@ pub(crate) struct ProductHostControlClaimRequest {
 #[derive(Deserialize, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct ProductHostInputRequest {
-    #[ts(as = "Vec<runtime_input::RuntimeInputWireEvent>")]
-    batch: Vec<Value>,
+    batch: Vec<runtime_input::RuntimeInputWireEvent>,
+}
+
+/// An input request read only for its shape after its events failed strict
+/// decoding, so the resynchronization can report the submitted count.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ProductHostInputRequestShape {
+    batch: Vec<serde::de::IgnoredAny>,
 }
 
 /// `advance-realtime`: the page's monotonic clock, in nanoseconds.
@@ -4387,13 +4314,6 @@ pub(crate) struct ProductHostConnectionBaseline {
 }
 
 fn decode_json<T: for<'de> Deserialize<'de>>(body: &[u8]) -> Result<T, HttpResponse> {
-    if body.len() > MAX_REQUEST_BODY_BYTES {
-        return Err(HttpResponse::error(
-            413,
-            "PRODUCT_HOST_BODY_BOUNDS",
-            "request body exceeds host bound",
-        ));
-    }
     serde_json::from_slice(body).map_err(|_| {
         HttpResponse::error(
             400,

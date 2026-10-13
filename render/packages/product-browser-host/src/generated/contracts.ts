@@ -283,7 +283,7 @@ export type ProductHostTimelineCompletionResult = { accepted: boolean, code: str
 
 export type ProductHostTimelineOutcome = { "kind": "success", data?: JsonValue, } | { "kind": "failure", data?: JsonValue, };
 
-export type ProductHostTimelineProvenance = { correlation: string, detail?: JsonValue, };
+export type ProductHostTimelineProvenance = { detail?: JsonValue, };
 
 /**
  * The runtime binding an envelope belongs to, as canonical decimal text.

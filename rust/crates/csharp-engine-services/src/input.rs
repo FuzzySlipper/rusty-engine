@@ -128,7 +128,7 @@ fn decode_mapping(value: &NativeInputMapping) -> Result<RuntimeInputMapping, ()>
             }
         }
     };
-    RuntimeInputMapping::new(id, intent, trigger).map_err(|_| ())
+    Ok(RuntimeInputMapping::new(id, intent, trigger))
 }
 
 fn text(pointer: *const u8, len: usize) -> Result<String, ()> {
@@ -142,9 +142,7 @@ fn optional_context(pointer: *const u8, len: usize) -> Result<Option<InputContex
     if len == 0 {
         return Ok(None);
     }
-    InputContext::new(text(pointer, len)?)
-        .map(Some)
-        .map_err(|_| ())
+    Ok(Some(InputContext::new(text(pointer, len)?)))
 }
 
 fn edge(value: NativeInputEdge) -> Option<InputEdge> {
