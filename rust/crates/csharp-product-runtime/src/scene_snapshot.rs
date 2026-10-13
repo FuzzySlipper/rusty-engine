@@ -76,6 +76,7 @@ impl From<SceneSnapshotState> for SceneState {
             world_revision: state.world_revision,
             step: state.step,
             held: state.held,
+            lead: None,
         }
     }
 }

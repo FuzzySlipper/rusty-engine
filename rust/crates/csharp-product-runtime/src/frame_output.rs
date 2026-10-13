@@ -43,7 +43,7 @@ use product_host::{
     ProductHostComputeLimits, ProductHostDistanceFieldStatistics, ProductHostDrawingMode,
     ProductHostDrawnFrame, ProductHostFrameStream, ProductHostGpuCullingStatistics,
     ProductHostGpuPass, ProductHostGpuStatistics, ProductHostIndirectLightStatistics,
-    ProductHostLightClusterStatistics, ProductHostRendererInspection,
+    ProductHostLightClusterStatistics, ProductHostPresentedFrame, ProductHostRendererInspection,
     ProductHostRendererSettingValues, ProductHostRendererSettings, ProductHostRendererStatistics,
     ProductHostShadowStatistics, ProductHostStreamMedians, ProductHostStreamStatistics,
     ProductHostTimedStep, ProductHostWindowMedians, ProductHostWindowStatistics,
@@ -108,6 +108,8 @@ struct WindowRecord {
 #[derive(Debug, Clone, Copy)]
 pub struct WindowFrame {
     pub step: u64,
+    /// The presentation time it drew at.
+    pub presentation_seconds: f64,
     pub presented_at: SystemTime,
     /// Waiting for the swapchain image.
     pub acquire: Duration,
@@ -166,7 +168,11 @@ impl WindowTiming {
             },
             shown: frames
                 .iter()
-                .map(|frame| timed_step(frame.presented_at, frame.step))
+                .map(|frame| ProductHostPresentedFrame {
+                    at_unix_ms: unix_ms(frame.presented_at),
+                    step: frame.step,
+                    presentation_seconds: frame.presentation_seconds,
+                })
                 .collect(),
             inputs_received_at_unix_ms: record.inputs.iter().copied().map(unix_ms).collect(),
         }
@@ -766,11 +772,13 @@ impl ResourceSource for EngineResources<'_> {
     }
 }
 
-/// The simulation step a frame shows, and whether time is held.
+/// The simulation step a frame shows, whether time is held, and how
+/// presentation time runs on until the next call while it is not.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Simulation {
     pub held: bool,
     pub step: u64,
+    pub lead: Option<render_wgpu::PresentationLead>,
 }
 
 /// The renderer's changes among a call's publications, in call order.
@@ -796,6 +804,7 @@ pub(crate) fn scene_state(services: &EngineServiceSet, simulation: Simulation) -
             .map_or(0, |(_, revision)| *revision),
         step: simulation.step,
         held: simulation.held,
+        lead: simulation.lead,
     }
 }
 

@@ -28,7 +28,7 @@ pub(crate) fn run_chromium_subprocess() -> Result<(), String> {
     Ok(())
 }
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
 use csharp_product_runtime::{Gpu, Renderer, SceneDriver, WindowFrame, WindowTiming};
@@ -107,6 +107,7 @@ impl Desktop {
         let scene = Arc::new(WindowScene {
             driver,
             timing,
+            drawn_seconds: AtomicU64::new(0),
             cadence: self.cadence,
             stopping,
             closed,
@@ -167,6 +168,8 @@ fn chromium_switches(extra: &[String]) -> Vec<(String, Option<String>)> {
 struct WindowScene {
     driver: Arc<SceneDriver>,
     timing: Arc<WindowTiming>,
+    /// The presentation time the frame being presented drew at, as f64 bits.
+    drawn_seconds: AtomicU64,
     cadence: csharp_product_runtime::PresentationCadence,
     stopping: Arc<AtomicBool>,
     closed: Arc<AtomicBool>,
@@ -175,12 +178,15 @@ struct WindowScene {
 impl DesktopScene for WindowScene {
     fn draw(&self, draw: &mut dyn FnMut(&mut Renderer, f64)) -> u64 {
         let ((), shown) = self.driver.draw(|renderer, now| draw(renderer, now));
+        self.drawn_seconds
+            .store(shown.presentation_seconds.to_bits(), Ordering::Relaxed);
         shown.step
     }
 
     fn presented(&self, frame: PresentedFrame) {
         self.timing.presented(WindowFrame {
             step: frame.step,
+            presentation_seconds: f64::from_bits(self.drawn_seconds.load(Ordering::Relaxed)),
             presented_at: frame.presented_at,
             acquire: frame.acquire,
             lock: frame.lock,

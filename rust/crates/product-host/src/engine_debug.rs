@@ -313,8 +313,9 @@ pub struct ProductHostWindowStatistics {
     pub recent_frames: usize,
     pub frames_per_second: f64,
     pub median_ms: ProductHostWindowMedians,
-    /// When each recent frame was presented, and the step it showed.
-    pub shown: Vec<ProductHostTimedStep>,
+    /// When each recent frame was presented, the step it showed and the
+    /// presentation time it drew at.
+    pub shown: Vec<ProductHostPresentedFrame>,
     /// When recent key and mouse button events reached the window, in Unix
     /// milliseconds.
     pub inputs_received_at_unix_ms: Vec<f64>,
@@ -340,6 +341,18 @@ pub struct ProductHostTimedStep {
     pub at_unix_ms: f64,
     #[ts(type = "number")]
     pub step: u64,
+}
+
+/// A frame the desktop window presented: when, in Unix milliseconds, the
+/// simulation step it showed, and the presentation time it drew at, which
+/// runs on between steps while the world runs.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ProductHostPresentedFrame {
+    pub at_unix_ms: f64,
+    #[ts(type = "number")]
+    pub step: u64,
+    pub presentation_seconds: f64,
 }
 
 /// Median milliseconds per frame for each stage of streaming it.

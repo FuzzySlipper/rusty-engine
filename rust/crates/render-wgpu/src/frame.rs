@@ -1417,7 +1417,7 @@ impl Renderer {
     ) -> ShadowsEncoded {
         let kind = usize::from(backdrop);
         let ours = |layer: &shadows::ShadowLayer| layer.is_backdrop() == backdrop;
-        let retimed = self.shadows.timed[kind] && self.shadows.time[kind] != self.animation_time;
+        let retimed = self.shadows.timed[kind] && self.shadows.time[kind] != self.presentation_time;
         if !retimed
             && self
                 .shadows
@@ -1427,7 +1427,7 @@ impl Renderer {
         {
             return Default::default();
         }
-        self.shadows.time[kind] = self.animation_time;
+        self.shadows.time[kind] = self.presentation_time;
         let batches: Vec<batch::Batch> = self
             .shadows
             .layers
@@ -2105,7 +2105,7 @@ impl Renderer {
         let state = CaptureState {
             eye: eye.to_array(),
             scene: self.scene_generation,
-            time: moving.then_some(self.animation_time),
+            time: moving.then_some(self.presentation_time),
         };
         let faces = self.sky_light.capture_faces(&self.gpu, wanted, state);
         if faces.is_empty() {
@@ -2271,7 +2271,7 @@ impl Renderer {
                     view.viewport,
                     &view.camera,
                     self.options.volumetric_clouds,
-                    self.animation_time,
+                    self.presentation_time,
                 )
             });
             if let Some(frame) = &reduced {
@@ -2298,7 +2298,7 @@ impl Renderer {
                 pass.draw(0..3, 0..1);
                 drop(pass);
                 self.cloud_march
-                    .keep(encoder, frame, &view.camera, self.animation_time);
+                    .keep(encoder, frame, &view.camera, self.presentation_time);
             }
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("render-wgpu clouds"),
@@ -2360,9 +2360,9 @@ impl Renderer {
             self.tables.fog,
             self.tables.color_grading.is_some(),
         ));
-        // The Engine presentation time (`set_animation_time`): it holds while
+        // The presentation time (`set_presentation_time`): it holds while
         // the simulation does, so a held frame draws the same.
-        for value in [self.animation_time as f32, 0.0, 0.0, 0.0] {
+        for value in [self.presentation_time as f32, 0.0, 0.0, 0.0] {
             bytes.extend_from_slice(&value.to_le_bytes());
         }
         for value in grading_uniform(self.tables.color_grading.unwrap_or_default()) {
@@ -2960,7 +2960,7 @@ impl Renderer {
             .filter(|precipitation| precipitation.drops > 0 && world_layer);
         if let Some(precipitation) = raining {
             self.precipitation
-                .write(&self.gpu, &precipitation, self.animation_time);
+                .write(&self.gpu, &precipitation, self.presentation_time);
             let scene_depth = self.effects.scene_depth_bind_group(
                 &self.gpu.device,
                 view.target.samples,
@@ -3006,7 +3006,7 @@ impl Renderer {
                 self.options.volumetric_fog,
                 &self.tables.volumetric_fog,
                 self.tables.fog_volumes.values(),
-                self.animation_time,
+                self.presentation_time,
                 world_layer,
             )
         } else {
@@ -3041,7 +3041,7 @@ impl Renderer {
                 (glow && world_layer, glow_drawn),
                 adapting,
                 shafts.map(|(uv, length, _)| (uv, length)),
-                self.animation_time,
+                self.presentation_time,
                 world_layer,
             );
         }

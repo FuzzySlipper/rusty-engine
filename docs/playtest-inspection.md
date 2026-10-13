@@ -166,9 +166,11 @@ mode and held time are runtime state that every attached page shares
   cameras. The observer never enters player pose, collision or aim. Poses are
   Y-up; positive yaw turns right.
 
-Animation, particles and camera motion run on the Engine's presentation time,
-which advances only with admitted steps. Held time freezes them, and `advance`
-moves them with the steps it admits. Performance metrics still use wall time.
+Animation, particles and camera motion run on the Engine's
+[presentation time](csharp-lifecycle.md#presentation-time), which advances
+only with admitted steps; a running world's frames draw up to a step past it,
+so clouds and wind move every frame. Held time freezes them at the committed
+time exactly, and `advance` moves them with the steps it admits. Performance metrics still use wall time.
 Media and UI playback have their own ownership; these controls concern world
 simulation and presentation.
 

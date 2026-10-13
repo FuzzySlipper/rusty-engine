@@ -233,6 +233,28 @@ admission, the clock, input delivery, world presentation time and their
 lifecycle: pause, inspection and restart compose with the product's choice as
 listed above, and nothing is left to clean up beyond the product's own state.
 
+### Presentation time
+
+The Engine's presentation time is the committed world's elapsed time. Each
+admitted step adds one fixed step, so it holds while the world is held and
+slows with the gameplay rate. Animated poses, particles, video and the facts
+they report follow it exactly.
+
+A running world's frames draw a little past it: the committed time, plus the
+host time realtime admission has owed the world since the last update, at the
+gameplay rate, never a whole step ahead. So what the renderer moves by time
+moves every presented frame, on a display faster than the step rate too:
+clouds, wind sway, precipitation, volumetric fog and a product shader's
+`frame.time`. Paused, held or inspected, frames draw the committed time
+exactly, and a held frame draws the same every time. Rules never read it.
+
+Material values, such as `MaterialShader` parameters and `UpdateMaterial`,
+change only when an update sets them. Motion a product integrates on its own
+clock and hands to a material steps at the update rate. Motion the shader
+computes from `frame.time` moves every frame. `engine.renderer` reports each
+presented window frame's presentation time
+([renderer statistics](performance.md#renderer-statistics)).
+
 ### Particle bursts
 
 `Presentation.EmitParticles` does not need signal registration, an appearance,

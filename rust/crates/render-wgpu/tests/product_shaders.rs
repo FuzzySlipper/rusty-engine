@@ -583,6 +583,23 @@ fn a_displace_stage_moves_the_vertices_with_time_and_the_shadow_follows() {
         grounded_shadow, lifted_shadow,
         "the shadow follows the lift"
     );
+    // Frames draw at the presentation time a running host moves on to
+    // between calls (#9912): the vertices and their shadow follow it while
+    // the committed time stays.
+    harness
+        .renderer
+        .set_animation_time(std::f64::consts::FRAC_PI_2 * 3.0);
+    harness
+        .renderer
+        .set_presentation_time(std::f64::consts::FRAC_PI_2 * 5.0);
+    let ahead = harness.render(&view).1;
+    assert_eq!(top_of_right_box(&ahead), top_of_right_box(&lifted));
+    assert!(
+        shadowed(&ahead).abs_diff(shadowed(&lifted)) * 20 < shadowed(&lifted),
+        "the shadow drawn ahead, {}, is the lifted one, {}",
+        shadowed(&ahead),
+        shadowed(&lifted)
+    );
 }
 
 /// Rolls a grid into waves along x and z, and lights it with a normal by

@@ -44,6 +44,25 @@ pub struct SceneState {
     pub step: u64,
     /// Paused, or inspection time held.
     pub held: bool,
+    /// How presentation time runs on past `elapsed_seconds` until the next
+    /// call, while the world runs; `None` holds it there.
+    pub lead: Option<PresentationLead>,
+}
+
+/// How a running world's presentation time moves between committed calls:
+/// frames draw at the committed time plus what host time has owed the world
+/// since, never a step or more past it, so what moves with presentation time
+/// (clouds, wind sway, product shaders' `frame.time`) moves every frame
+/// rather than once per step.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PresentationLead {
+    /// World seconds realtime admission already owed when the call observed
+    /// host time: below one step.
+    pub owed_seconds: f64,
+    /// World seconds per host second (the gameplay rate).
+    pub rate: f64,
+    /// One fixed step, in seconds.
+    pub step_seconds: f64,
 }
 
 /// What one drawn frame showed.
@@ -51,6 +70,8 @@ pub struct SceneState {
 pub struct SceneFrame {
     pub step: u64,
     pub held: bool,
+    /// The presentation time it drew at (see [`PresentationLead`]).
+    pub presentation_seconds: f64,
     /// Changes with each renderer the driver builds.
     pub renderer_id: u64,
     /// The retained world revision the frame shows.
@@ -111,6 +132,12 @@ struct Scene {
     elapsed_seconds: f64,
     /// Engine presentation time the renderer last advanced to, drawn or not.
     realized_seconds: f64,
+    /// How presentation time runs on past `elapsed_seconds`, and the clock
+    /// reading the last call applied at.
+    lead: Option<(PresentationLead, f64)>,
+    /// The presentation time the last frame drew at: frames between calls
+    /// never draw behind it.
+    drawn_seconds: f64,
     /// Counts captures; a capture's sequence.
     captures: u64,
     animation_facts: Vec<AnimationFact>,
@@ -141,6 +168,8 @@ impl SceneDriver {
                 step: 0,
                 elapsed_seconds: 0.0,
                 realized_seconds: 0.0,
+                lead: None,
+                drawn_seconds: 0.0,
                 captures: 0,
                 animation_facts: Vec::new(),
                 video_facts: Vec::new(),
@@ -203,6 +232,7 @@ impl SceneDriver {
         scene.composition = None;
         scene.composition_revision = 0;
         scene.elapsed_seconds = state.elapsed_seconds;
+        scene.drawn_seconds = state.elapsed_seconds;
         scene.renderer.set_animation_time(state.elapsed_seconds);
         scene.animation_facts.clear();
         scene.video_facts.clear();
@@ -219,6 +249,9 @@ impl SceneDriver {
         if scene.held != held || scene.step != step {
             scene.held = held;
             scene.step = step;
+            if held {
+                scene.lead = None;
+            }
             scene.changed = true;
             drop(scene);
             self.wake.notify_all();
@@ -292,7 +325,8 @@ impl SceneDriver {
     }
 
     /// Draw the committed scene: `draw` renders with the renderer at the
-    /// presentation time it is given, to its own target. Facts the frame
+    /// presentation time the running world has reached (see
+    /// [`PresentationLead`]), to its own target, given the camera clock. Facts the frame
     /// produced are kept for [`Self::take_animation_facts`] and
     /// [`Self::take_video_facts`]. Returns `draw`'s result and what the
     /// frame showed.
@@ -300,12 +334,14 @@ impl SceneDriver {
         let now = self.now();
         let mut scene = self.scene();
         scene.changed = false;
+        scene.present_at(now);
         let result = draw(&mut scene.renderer, now);
         scene.realized_seconds = scene.elapsed_seconds;
         scene.collect_facts();
         let shown = SceneFrame {
             step: scene.step,
             held: scene.held,
+            presentation_seconds: scene.drawn_seconds,
             renderer_id: scene.renderer_id,
             world_revision: scene.world_revision,
             composition: scene.composition.clone(),
@@ -370,6 +406,7 @@ impl SceneDriver {
             .or(scene.renderer.surface_size())
             .unwrap_or(DEFAULT_CAPTURE_SIZE);
         let target = OffscreenTarget::new(&self.gpu, width, height, scene.renderer.samples());
+        scene.present_at(now);
         let video = scene.renderer.render_view_composition(&target, now).video;
         let cameras = scene.renderer.drawn_cameras();
         scene.realized_seconds = scene.elapsed_seconds;
@@ -431,6 +468,23 @@ impl SceneDriver {
 }
 
 impl Scene {
+    /// Sets the presentation time a frame drawn at `now` shows: the
+    /// committed time, plus the running world's lead since the last call.
+    fn present_at(&mut self, now: f64) {
+        let time = match self.lead {
+            Some((lead, applied_at)) => {
+                let owed = lead.owed_seconds + (now - applied_at).max(0.0) * lead.rate;
+                let ahead = owed.clamp(0.0, lead.step_seconds);
+                (self.elapsed_seconds + ahead)
+                    .max(self.drawn_seconds)
+                    .min(self.elapsed_seconds + lead.step_seconds)
+            }
+            None => self.elapsed_seconds,
+        };
+        self.drawn_seconds = time;
+        self.renderer.set_presentation_time(time);
+    }
+
     fn collect_facts(&mut self) {
         let animation = self.renderer.take_animation_facts();
         self.animation_facts.extend(animation);
@@ -473,6 +527,7 @@ impl Scene {
             applied = true;
         }
         self.elapsed_seconds = state.elapsed_seconds;
+        self.lead = state.lead.filter(|_| !state.held).map(|lead| (lead, now));
         self.world_revision = state.world_revision;
         if (self.step, self.held) != (state.step, state.held) {
             (self.step, self.held) = (state.step, state.held);

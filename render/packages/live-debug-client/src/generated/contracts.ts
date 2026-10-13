@@ -245,6 +245,13 @@ overflowedClusters: number, };
 export type ProductHostOperationKind = "connect" | "start" | "pause" | "resume" | "restart" | "shutdown" | "report-fault" | "replace-control" | "release-control" | "claim-control" | "input" | "advance-realtime" | "complete-timeline" | "execute-debug";
 
 /**
+ * A frame the desktop window presented: when, in Unix milliseconds, the
+ * simulation step it showed, and the presentation time it drew at, which
+ * runs on between steps while the world runs.
+ */
+export type ProductHostPresentedFrame = { atUnixMs: number, step: number, presentationSeconds: number, };
+
+/**
  * Where the runtime presents the frames it renders.
  */
 export type ProductHostRenderOutput = "stream" | "window";
@@ -452,9 +459,10 @@ export type ProductHostWindowMedians = { acquire: number, lock: number, draw: nu
  */
 export type ProductHostWindowStatistics = { recentFrames: number, framesPerSecond: number, medianMs: ProductHostWindowMedians, 
 /**
- * When each recent frame was presented, and the step it showed.
+ * When each recent frame was presented, the step it showed and the
+ * presentation time it drew at.
  */
-shown: Array<ProductHostTimedStep>, 
+shown: Array<ProductHostPresentedFrame>, 
 /**
  * When recent key and mouse button events reached the window, in Unix
  * milliseconds.

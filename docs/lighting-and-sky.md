@@ -512,9 +512,12 @@ fn shade(surface: Surface) -> vec4<f32> {
   `rusty::material`) its `TextureA` and `TextureB`: white when unset, sampled
   as they were opened (a ramp or noise read as data is opened with
   `TextureColorSpace.Linear`). `frame.time.x` (`rusty::view`) is the Engine's
-  presentation time in seconds: it advances with the simulation, holds while
-  it is paused, and needs no material update, so scrolling, pulsing and
-  dissolving cost nothing per frame on the C# side. Any standard module may
+  [presentation time](csharp-lifecycle.md#presentation-time) in seconds: it
+  advances with the simulation, every presented frame, holds while it is
+  paused, and needs no material update, so scrolling, pulsing and dissolving
+  cost nothing per frame on the C# side. `material.parameters` change only
+  when an update sets them, so motion integrated in C# steps at the update
+  rate. Any standard module may
   be imported: `rusty::shade::standard_shade` lights and finishes a surface,
   `rusty::lighting` has `standard_radiance` and the light rows (laid out
   in `rusty::types::Light`; a shadowed directional light's row carries its

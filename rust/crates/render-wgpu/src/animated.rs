@@ -328,9 +328,23 @@ pub fn decode_animated_asset(
 impl Renderer {
     /// The Engine presentation timeline in seconds (`PresentationWorld`'s
     /// elapsed time). Animated poses advance on it, not on display time.
+    /// Frames draw at it too, until [`Self::set_presentation_time`] moves
+    /// them on.
     pub fn set_animation_time(&mut self, seconds: f64) {
         if seconds.is_finite() && seconds >= 0.0 {
             self.animation_time = seconds;
+            self.presentation_time = seconds;
+        }
+    }
+
+    /// The presentation time the next frames draw at: their `frame.time`,
+    /// cloud drift, wind sway, precipitation and fog. A host whose world
+    /// runs on between committed steps gives the time it has reached, so
+    /// what moves with time moves every frame; poses, video and their facts
+    /// stay on the committed time ([`Self::set_animation_time`]).
+    pub fn set_presentation_time(&mut self, seconds: f64) {
+        if seconds.is_finite() && seconds >= 0.0 {
+            self.presentation_time = seconds;
         }
     }
 

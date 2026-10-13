@@ -1,7 +1,8 @@
 //! The scene driver against a real headless device: applied changes land
 //! with the step they reach, a drawn frame and a tool capture report what
 //! they showed, an undrawn scene still ends clips on Engine time, and a
-//! joint-reporting instance reports with each applied call. One
+//! joint-reporting instance reports with each applied call, and a running
+//! world's frames draw on past its committed time between calls. One
 //! test, so the binary opens one device (parallel devices can crash the
 //! Vulkan loader).
 
@@ -19,8 +20,8 @@ use render_model::{
 };
 use render_presentation::{video_frame, VideoClipRef, VideoPlaybackHandle, VideoProjectionOp};
 use render_wgpu::{
-    AnimationFact, Gpu, NoResources, OffscreenTarget, RendererOptions, ResourceSource, SceneChange,
-    SceneDriver, SceneState, VideoFact,
+    AnimationFact, Gpu, NoResources, OffscreenTarget, PresentationLead, RendererOptions,
+    ResourceSource, SceneChange, SceneDriver, SceneState, VideoFact,
 };
 
 /// `render-video`'s synthetic fixture: 1.5 s of VP9 at 10 fps.
@@ -41,6 +42,7 @@ fn state(step: u64, held: bool) -> SceneState {
         world_revision: step,
         step,
         held,
+        lead: None,
     }
 }
 
@@ -162,6 +164,73 @@ fn the_driver_reports_what_it_drew_and_ends_clips_undrawn() {
     assert_eq!(readout.player, player);
     assert_eq!(readout.requested.antialiasing, 1);
     drop(scene);
+
+    // A running world's frames draw on past its committed time between
+    // calls, so what moves with presentation time moves every frame: from
+    // what admission already owed, never behind the frame before, never a
+    // step or more ahead. A held world draws its committed time exactly
+    // (#9912).
+    let running = SceneDriver::new(gpu.clone(), RendererOptions::default());
+    const STEP: f64 = 1.0 / 60.0;
+    let lead = PresentationLead {
+        owed_seconds: 0.25 * STEP,
+        rate: 1.0,
+        step_seconds: STEP,
+    };
+    let drawn = |driver: &SceneDriver| {
+        let ((), shown) = driver.draw(|renderer, now| {
+            renderer.render_view_composition(&target, now);
+        });
+        shown.presentation_seconds
+    };
+    let apply = |step: u64, lead: Option<PresentationLead>| {
+        running.apply(
+            [],
+            &NoResources,
+            &|_| None,
+            SceneState {
+                lead,
+                ..state(step, lead.is_none())
+            },
+        );
+    };
+    apply(6, Some(lead));
+    let (committed, next) = (6.0 / 60.0, 6.0 / 60.0 + STEP);
+    let first = drawn(&running);
+    assert!(
+        first >= committed + lead.owed_seconds && first < next,
+        "{first} runs on from {committed} plus what was owed"
+    );
+    std::thread::sleep(Duration::from_millis(4));
+    let later = drawn(&running);
+    assert!(
+        later > first && later <= next,
+        "{later} moves on from {first}"
+    );
+    std::thread::sleep(Duration::from_millis(30));
+    assert_eq!(
+        drawn(&running),
+        next,
+        "never a step past the committed time"
+    );
+    // The next step's call owes nothing yet: frames go on from where they
+    // drew.
+    apply(
+        7,
+        Some(PresentationLead {
+            owed_seconds: 0.0,
+            ..lead
+        }),
+    );
+    assert!(drawn(&running) >= next);
+    apply(7, None);
+    assert_eq!(drawn(&running), 7.0 / 60.0, "held, the committed time");
+    std::thread::sleep(Duration::from_millis(4));
+    assert_eq!(drawn(&running), 7.0 / 60.0, "and it stays");
+    apply(8, Some(lead));
+    running.set_simulation(true, 8);
+    assert_eq!(drawn(&running), 8.0 / 60.0, "paused, the committed time");
+    drop(running);
 
     // Undrawn, a clip still ends on Engine time: waiting advances the scene
     // to the latest call, and the completion reaches the Engine (#8871).

@@ -97,7 +97,9 @@ pub use camera::CameraSampleReadout;
 pub use composition::{DrawnCamera, TargetReadout, TargetStatus, ViewCompositionReadout};
 pub use culling::GpuCullingReadout;
 pub use distance_fields::DistanceFieldReadout;
-pub use driver::{Capture, SceneChange, SceneDriver, SceneFrame, SceneState, SceneView};
+pub use driver::{
+    Capture, PresentationLead, SceneChange, SceneDriver, SceneFrame, SceneState, SceneView,
+};
 pub use frame::FrameStats;
 pub use ghost::GhostPlateReadout;
 pub use gpu::{AdapterSummary, ComputeLimits, Gpu, GpuError};
@@ -444,6 +446,10 @@ pub struct Renderer {
     water: water::WaterDepth,
     /// The Engine presentation timeline animated poses advance on.
     animation_time: f64,
+    /// The presentation time frames draw at (`frame.time`, clouds, wind,
+    /// precipitation): `animation_time`, or up to a step past it while the
+    /// world runs between calls (`Renderer::set_presentation_time`).
+    presentation_time: f64,
     animation_facts: Vec<animated::AnimationFact>,
     /// Realization generation per source entity, as the runtime reads it.
     animation_generations: HashMap<u64, u64>,
@@ -650,6 +656,7 @@ impl Renderer {
             water,
             surface_size: None,
             animation_time: 0.0,
+            presentation_time: 0.0,
             animation_facts: Vec::new(),
             animation_generations: HashMap::new(),
             ghosts: HashMap::new(),

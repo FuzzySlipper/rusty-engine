@@ -780,6 +780,10 @@ pub struct CsharpProductRuntime {
     /// presentations between observations have already shown.
     tween_observed_ns: Option<u64>,
     tween_presented_ns: u64,
+    /// The host time the latest call observed: a realtime advance's, or a
+    /// presentation's between advances. Frames run presentation time on
+    /// from what admission owed the world then.
+    presented_observation_ns: Option<u64>,
     presentation_cadence: PresentationCadence,
     /// Present when audio plays on this process's output device.
     audio_output: Option<audio_output::AudioOutput>,
@@ -1068,6 +1072,7 @@ impl CsharpProductRuntime {
                 frame_output::Simulation {
                     held: true,
                     step: lifecycle.readout().admitted_simulation_steps(),
+                    lead: None,
                 },
             );
         }
@@ -1100,6 +1105,7 @@ impl CsharpProductRuntime {
             host_elapsed_ns: 0,
             tween_host_ns: 0,
             tween_observed_ns: None,
+            presented_observation_ns: None,
             tween_presented_ns: 0,
             presentation_cadence: config.presentation_cadence,
             audio_output,
@@ -2764,10 +2770,28 @@ impl CsharpProductRuntime {
     }
 
     fn frame_simulation(&self) -> frame_output::Simulation {
+        let held = !self.world_time_moves();
         frame_output::Simulation {
-            held: !self.world_time_moves(),
+            held,
             step: self.lifecycle.readout().admitted_simulation_steps(),
+            lead: if held { None } else { self.presentation_lead() },
         }
+    }
+
+    /// How presentation time runs on past the committed world until the
+    /// next call: from the world time admission owed at the latest
+    /// observation, at the gameplay rate, within one step.
+    fn presentation_lead(&self) -> Option<render_wgpu::PresentationLead> {
+        let observed = HostMonotonicTime::from_nanoseconds(self.presented_observation_ns?);
+        let owed_steps = self.lifecycle.owed_steps_at(observed)?;
+        let step_seconds = 1.0 / f64::from(self.lifecycle.configuration().fixed_step_hz());
+        Some(render_wgpu::PresentationLead {
+            owed_seconds: owed_steps * step_seconds,
+            rate: csharp_engine_services::gameplay_rate_value(
+                self.lifecycle.gameplay_time().rate(),
+            ),
+            step_seconds,
+        })
     }
 
     /// Rebuilds the streamed renderer from the committed world. Renderer
@@ -3467,6 +3491,7 @@ impl ProductHostRuntime for CsharpProductRuntime {
         if self.playtest_time != playtest::TimeMode::Realtime || !self.services.tweens_playing() {
             return Ok(None);
         }
+        self.presented_observation_ns = Some(observed);
         let since = observed.saturating_sub(last);
         let shown = since.saturating_sub(self.tween_presented_ns);
         self.tween_presented_ns = since.max(self.tween_presented_ns);
@@ -3539,6 +3564,7 @@ impl ProductHostRuntime for CsharpProductRuntime {
             None => (0, 0),
         };
         self.tween_observed_ns = Some(observed_time_ns.get());
+        self.presented_observation_ns = Some(observed_time_ns.get());
         let outputs = match admission.simulation() {
             // The lifecycle owns admission and its readout counters. Runtime
             // Input snapshots once with the last admitted phase token; the

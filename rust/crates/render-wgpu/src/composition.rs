@@ -423,7 +423,7 @@ impl Renderer {
                 &primary,
                 &parameters,
                 [texture(0), texture(1)],
-                self.animation_time,
+                self.presentation_time,
             );
         } else {
             self.upscale(&scaled, &primary);

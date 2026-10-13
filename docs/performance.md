@@ -58,7 +58,13 @@ with `--live-debug`, run `engine.renderer` in the live-debug panel or
 runtime renderer's adapter and output (`stream` or `window`), retained
 operations skipped by kind, and, for streamed frames, the recent frame rate,
 median render, readback and encode milliseconds, and bytes per frame and per
-second. The desktop window streams nothing, so it reports no frame timing.
+second. For the desktop window, `window` gives the recent presented frame
+rate, the median milliseconds spent acquiring, waiting for the scene, drawing
+and presenting, and `shown`: each recent frame's presentation time (Unix
+milliseconds), the step it showed and the `presentationSeconds` it drew at
+([presentation time](csharp-lifecycle.md#presentation-time)). While the world
+runs, `presentationSeconds` should advance every frame, even across frames
+that show the same step.
 `settings` gives the renderer settings in effect: what the product or its
 manifest requested, what draws, and why each refused setting differs
 ([renderer settings](lighting-and-sky.md#renderer-settings)). Of its two

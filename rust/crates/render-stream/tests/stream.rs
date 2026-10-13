@@ -21,6 +21,7 @@ fn state(step: u64, held: bool) -> SceneState {
         world_revision: 0,
         step,
         held,
+        lead: None,
     }
 }
 
