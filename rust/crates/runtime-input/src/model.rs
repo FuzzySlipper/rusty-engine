@@ -9,7 +9,6 @@ use ts_rs::TS;
 
 use crate::CompiledInputIntent;
 
-pub const MAX_PENDING_INGRESS: usize = 1_024;
 pub const MAX_DIRECT_INTENT_AXIS_MAGNITUDE: f32 = 1.0;
 pub const MAX_CONTROLLER_AXIS_MAGNITUDE: f32 = 1.0;
 pub const MAX_CONTROLLER_BUTTON_VALUE: f32 = 1.0;
@@ -716,7 +715,6 @@ pub enum RuntimeInputError {
     SequenceExhausted,
     BindingMismatch,
     InvalidRebindClear,
-    PendingIngressOverflow,
     DuplicateIntent,
     InvalidMapping,
     DuplicateMapping,

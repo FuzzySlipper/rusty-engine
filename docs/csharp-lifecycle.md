@@ -168,8 +168,9 @@ Composition with the other owners of time:
 
 A gameplay hold is not a pause: the lifecycle keeps running, so ordinary input
 (pointer lock, keys, buttons, sticks, focus and UI capture) is admitted as
-usual and reaches the next update, step or no step. Each update consumes
-input exactly once: pointer and wheel deltas and press/release edges arrive in
+usual and reaches the next update, step or no step, in order and however
+many input batches arrived since the last one. Each update consumes input
+exactly once: pointer and wheel deltas and press/release edges arrive in
 the one update after they happen, and held mappings (a held key, a stick)
 are reported again in every update, so a held stick keeps turning without new
 axis events. A focus loss or control change clears held state as it does

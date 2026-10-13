@@ -7,7 +7,7 @@ use crate::{
     IntentValueKind, KeyboardControl, PhysicalEdge, PointerButton, RuntimeDirectIntentClaim,
     RuntimeInputBatchReceipt, RuntimeInputBinding, RuntimeInputError, RuntimeInputEvent,
     RuntimeInputFact, RuntimeInputIngress, RuntimeInputTrigger, RuntimeIntentEnvelope,
-    RuntimeIntentValue, MAX_PENDING_INGRESS,
+    RuntimeIntentValue,
 };
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -564,10 +564,6 @@ impl RuntimeInputLane {
                 return Err(RuntimeInputError::ProductPayloadContractMismatch);
             }
         }
-        if self.pending_intents.len() >= MAX_PENDING_INGRESS {
-            self.clear_state();
-            return Err(RuntimeInputError::PendingIngressOverflow);
-        }
         self.pending_intents.push(PendingIntent {
             sequence: claim.sequence(),
             order: usize::MAX,
@@ -698,10 +694,6 @@ impl RuntimeInputLane {
                 .mappings
                 .intent(mapping.intent())
                 .ok_or(RuntimeInputError::UnknownIntent)?;
-            if self.pending_intents.len() >= MAX_PENDING_INGRESS {
-                self.clear_state();
-                return Err(RuntimeInputError::PendingIngressOverflow);
-            }
             self.pending_intents.push(PendingIntent {
                 sequence,
                 order: index,

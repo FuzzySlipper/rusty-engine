@@ -1020,30 +1020,6 @@ impl ProductHostInputResult {
         })
     }
 
-    /// The callback-facing queue was fenced before product callback entry.
-    /// The accompanying complete baseline names the committed replacement fence.
-    pub fn pending_resynchronized(
-        count: usize,
-        next_input_sequence: CanonicalU64,
-        binding: ProductHostRuntimeBinding,
-        readout: ProductHostRuntimeReadout,
-    ) -> Result<Self, ProductHostError> {
-        let mut result = Self::with_progress(
-            count,
-            0,
-            count,
-            None,
-            None,
-            next_input_sequence,
-            binding,
-            readout,
-        )?;
-        result.code = "CSHARP_INPUT_PENDING_BOUNDS".to_owned();
-        result.disposition = ProductHostFaultDisposition::ResyncRequired;
-        result.diagnostic = Some("callback input pressure was resynchronized before callback entry; continue from the accompanying baseline".to_owned());
-        Ok(result)
-    }
-
     pub fn rejected(diagnostic: impl Into<String>) -> Result<Self, ProductHostError> {
         Ok(Self {
             accepted: false,

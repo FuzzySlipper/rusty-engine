@@ -923,8 +923,8 @@ fn direct_payload_contract_is_checked_by_the_neutral_input_lane() {
 }
 
 #[test]
-fn direct_claims_fail_closed_for_unknown_kind_axis_range_and_pending_overflow() {
-    let (mut lifecycle, binding) = lifecycle_and_binding();
+fn direct_claims_fail_closed_for_unknown_kind_and_axis_range() {
+    let (_, binding) = lifecycle_and_binding();
 
     let mut unknown = RuntimeInputLane::new(compiled_mappings(), binding, context());
     assert!(matches!(
@@ -978,38 +978,34 @@ fn direct_claims_fail_closed_for_unknown_kind_axis_range_and_pending_overflow() 
         )),
         Err(RuntimeInputError::InvalidControllerAxisValue)
     ));
+}
 
-    let mut overflow = RuntimeInputLane::new(compiled_mappings(), binding, context());
-    for sequence in 0..runtime_input::MAX_PENDING_INGRESS as u64 {
-        overflow
-            .ingest(RuntimeInputEvent::DirectIntent(
-                RuntimeDirectIntentClaim::new(
-                    binding,
-                    sequence,
-                    context(),
-                    "move.forward",
-                    RuntimeIntentValue::Digital { active: true },
-                )
-                .unwrap(),
-            ))
-            .unwrap();
-    }
-    assert!(matches!(
-        overflow.ingest(RuntimeInputEvent::DirectIntent(
+#[test]
+fn claims_beyond_one_wire_batch_all_reach_the_next_snapshot_in_order() {
+    let (mut lifecycle, binding) = lifecycle_and_binding();
+    let mut lane = RuntimeInputLane::new(compiled_mappings(), binding, context());
+    let claims = 2 * runtime_input::MAX_RUNTIME_INPUT_WIRE_EVENTS as u64;
+    for sequence in 0..claims {
+        lane.ingest(RuntimeInputEvent::DirectIntent(
             RuntimeDirectIntentClaim::new(
                 binding,
-                runtime_input::MAX_PENDING_INGRESS as u64,
+                sequence,
                 context(),
                 "move.forward",
-                RuntimeIntentValue::Digital { active: true },
+                RuntimeIntentValue::Digital {
+                    active: sequence % 2 == 0,
+                },
             )
             .unwrap(),
-        )),
-        Err(RuntimeInputError::PendingIngressOverflow)
-    ));
-    let (frame, envelopes) = snapshot(&mut overflow, &mut lifecycle).unwrap();
-    assert!(frame.keyboard().is_empty());
-    assert!(envelopes.is_empty());
+        ))
+        .unwrap();
+    }
+    let (_, envelopes) = snapshot(&mut lane, &mut lifecycle).unwrap();
+    let sequences = envelopes
+        .iter()
+        .map(|envelope| envelope.sequence())
+        .collect::<Vec<_>>();
+    assert_eq!(sequences, (0..claims).collect::<Vec<_>>());
 }
 
 #[test]

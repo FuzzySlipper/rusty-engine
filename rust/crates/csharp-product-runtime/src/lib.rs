@@ -57,16 +57,6 @@ const ABI_OK: i32 = 1;
 const STANDARD_REALTIME_HZ: u32 = 60;
 const STANDARD_MAX_CATCH_UP_STEPS: u32 = 4;
 const STANDARD_REALTIME_EXERCISE_ADMISSION_NS: u64 = 16_666_667;
-/// Native input events are held only until the next admitted product update.
-/// One accepted wire batch plus the Engine-inserted rebind clear. Additional
-/// cadence pressure is resynchronized rather than silently truncating history.
-const MAX_PENDING_NATIVE_INPUTS: usize = runtime_input::MAX_RUNTIME_INPUT_WIRE_EVENTS + 1;
-
-#[derive(Debug, PartialEq, Eq)]
-enum PendingInputAdmission {
-    Appended,
-    Resynchronized,
-}
 // The Engine-owned Product Browser Host uses this same default when its
 // generated bundle does not supply an input-context override. Keeping the
 // standard native runtime on that typed host default lets generated physical
@@ -748,11 +738,11 @@ pub struct CsharpProductRuntime {
     lifecycle: RuntimeLifecycle,
     input_lane: RuntimeInputLane,
     direct_intents: Vec<DirectInputIntentDescriptor>,
+    /// Native input held until the next product update consumes all of it,
+    /// however many batches arrived since the last one.
     pending_inputs: Vec<NativeInputOwned>,
-    /// A recovery baseline produced while input was being admitted. The host
-    /// can call `input` without receiving an operation receipt, so retain at
-    /// most the latest bounded baseline until the next scheduled receipt can
-    /// publish it.
+    /// What a failed debug command published. Its call answers only with the
+    /// error, so the next scheduled receipt carries these.
     pending_recovery_outputs: Vec<RuntimePublication>,
     services: Box<EngineServiceSet>,
     /// The Product and content root whose bundle inventory `reload_content`
@@ -1884,9 +1874,7 @@ impl CsharpProductRuntime {
             .iter()
             .map(|envelope| native_intent_event(envelope, &context))
             .collect::<Vec<_>>();
-        if self.append_pending_inputs(mapped)? == PendingInputAdmission::Resynchronized {
-            return Ok(Vec::new());
-        }
+        self.pending_inputs.extend(mapped);
         let host_elapsed = self.take_host_elapsed(observed_host_time_nanoseconds);
         let tween_time = self.take_tween_time(observed_host_time_nanoseconds);
         let facts = update_facts(
@@ -1979,9 +1967,7 @@ impl CsharpProductRuntime {
             .iter()
             .map(|envelope| native_intent_event(envelope, &context))
             .collect::<Vec<_>>();
-        if self.append_pending_inputs(mapped)? == PendingInputAdmission::Resynchronized {
-            return Ok(Vec::new());
-        }
+        self.pending_inputs.extend(mapped);
         let next_step = self.lifecycle.readout().admitted_simulation_steps();
         let host_elapsed = self.take_host_elapsed(observed_host_time_nanoseconds);
         let tween_time = self.take_tween_time(observed_host_time_nanoseconds);
@@ -2154,82 +2140,6 @@ impl CsharpProductRuntime {
         Ok(())
     }
 
-    /// Advances the input binding fence after a host or callback-facing queue
-    /// overflow. The dropped prefix cannot be replayed safely: RuntimeInputLane
-    /// has already admitted its sequence, while the product callback has not
-    /// observed it. Rebinding clears held/pending state and gives the next
-    /// update an explicit clear event on a fresh control revision.
-    fn recover_pending_input_overflow(
-        &mut self,
-    ) -> Result<ProductHostRuntimeReceipt<ProductHostOperationResult>, ProductHostRuntimeError>
-    {
-        self.lifecycle
-            .change_control(RuntimeControlOperation::Replace)
-            .map_err(|error| self.lifecycle_runtime_error(error))?;
-        // RuntimeInputLane's control-fence contract uses this reason for any
-        // same-generation rebind; the overflow code remains explicit in the
-        // surrounding runtime diagnostic.
-        self.rebind_input_in_place(InputClearReason::ControlRevisionChange)
-            .map_err(|error| self.runtime_error(error))?;
-        observe_product_runtime(&self.api, self.handle, self.lifecycle.readout());
-        // A previous admission failure may already have staged a recovery
-        // baseline. Replace it with this newer fence rather than accumulating
-        // receipts when input pressure persists across host observations.
-        self.pending_recovery_outputs.clear();
-        self.receipt(
-            ProductHostOperationKind::ReplaceControl,
-            self.rebind_in_place(Vec::new())?,
-        )
-    }
-
-    /// Appends callback-facing native input only when the bounded queue can
-    /// retain the complete ordered prefix. A partial append would create a
-    /// sequence hole at the C# boundary, so overflow clears and rebinds the
-    /// entire input lane instead.
-    fn append_pending_inputs(
-        &mut self,
-        inputs: Vec<NativeInputOwned>,
-    ) -> Result<PendingInputAdmission, CsharpProductRuntimeError> {
-        if self
-            .pending_inputs
-            .len()
-            .checked_add(inputs.len())
-            .is_none_or(|length| length > MAX_PENDING_NATIVE_INPUTS)
-        {
-            let error = CsharpProductRuntimeError::new(
-                "CSHARP_INPUT_PENDING_BOUNDS",
-                format!(
-                    "pending native input exceeded the {}-event callback bound; input was resynchronized",
-                    MAX_PENDING_NATIVE_INPUTS
-                ),
-            );
-            let recovery = self.recover_pending_input_overflow().map_err(|recovery| {
-                CsharpProductRuntimeError::new(
-                    "CSHARP_INPUT_RECOVERY",
-                    format!("{}: {}", recovery.code(), recovery.diagnostic()),
-                )
-            })?;
-            let (_, outputs) = recovery.into_parts();
-            // `input` has no operation-output channel of its own. Keep the
-            // latest complete baseline so the following scheduled operation
-            // publishes the new binding instead of leaving the browser stale.
-            self.pending_recovery_outputs = outputs;
-            let _ = self.diagnostics.publish(
-                ProductHostLogEvent::new(
-                    ProductHostLogSeverity::Warning,
-                    ProductHostLogDisposition::ResyncRequired,
-                    "csharp-runtime",
-                    error.code(),
-                    error.detail(),
-                )
-                .with_runtime(self.binding()),
-            );
-            return Ok(PendingInputAdmission::Resynchronized);
-        }
-        self.pending_inputs.extend(inputs);
-        Ok(PendingInputAdmission::Appended)
-    }
-
     fn action<F, T>(
         &mut self,
         action: NativeProductAction,
@@ -2357,9 +2267,7 @@ impl CsharpProductRuntime {
         // The admitted update has crossed the callback boundary or consumed
         // its input snapshot. Do not leave those borrowed native events queued
         // for a later caller to replay after this resync receipt.
-        if self.pending_recovery_outputs.is_empty() {
-            self.pending_inputs.clear();
-        }
+        self.pending_inputs.clear();
         self.publish_diagnostic_as(&error, ProductHostFaultDisposition::ResyncRequired);
         let result = ProductHostOperationResult::resync_required(
             operation,
@@ -3308,24 +3216,7 @@ impl ProductHostRuntime for CsharpProductRuntime {
                 .map(|index| native_event(&batch.events()[*index]))
                 .collect::<Vec<_>>()
         };
-        if self
-            .append_pending_inputs(native)
-            .map_err(|error| self.runtime_error(error))?
-            == PendingInputAdmission::Resynchronized
-        {
-            let result = ProductHostInputResult::pending_resynchronized(
-                receipt.submitted_count(),
-                self.next_input_sequence(),
-                self.binding(),
-                self.readout(),
-            )
-            .map_err(host_runtime_error)?;
-            return ProductHostRuntimeReceipt::new(
-                result,
-                std::mem::take(&mut self.pending_recovery_outputs),
-            )
-            .map_err(host_runtime_error);
-        }
+        self.pending_inputs.extend(native);
         let (outputs, faulted) = self
             .deliver_paused_intents(paused_intents)
             .map_err(|error| self.runtime_error(error))?;
@@ -3349,11 +3240,24 @@ impl ProductHostRuntime for CsharpProductRuntime {
         ProductHostRuntimeReceipt::new(result, outputs).map_err(host_runtime_error)
     }
 
+    /// Advances the input binding fence after the host dropped input it
+    /// could not admit (a full mailbox, a malformed batch). Rebinding clears
+    /// held and pending state and gives the next update an explicit clear
+    /// event on a fresh control revision.
     fn recover_input_overflow(
         &mut self,
     ) -> Result<ProductHostRuntimeReceipt<ProductHostOperationResult>, ProductHostRuntimeError>
     {
-        self.recover_pending_input_overflow()
+        self.lifecycle
+            .change_control(RuntimeControlOperation::Replace)
+            .map_err(|error| self.lifecycle_runtime_error(error))?;
+        self.rebind_input_in_place(InputClearReason::ControlRevisionChange)
+            .map_err(|error| self.runtime_error(error))?;
+        observe_product_runtime(&self.api, self.handle, self.lifecycle.readout());
+        self.receipt(
+            ProductHostOperationKind::ReplaceControl,
+            self.rebind_in_place(Vec::new())?,
+        )
     }
 
     fn execute_debug(
@@ -4137,7 +4041,6 @@ fn input_error_code(error: &runtime_input::RuntimeInputError) -> &'static str {
         RuntimeInputError::SequenceExhausted => "CSHARP_INPUT_SEQUENCE_EXHAUSTED",
         RuntimeInputError::BindingMismatch => "CSHARP_INPUT_BINDING_MISMATCH",
         RuntimeInputError::InvalidRebindClear => "CSHARP_INPUT_INVALID_REBIND_CLEAR",
-        RuntimeInputError::PendingIngressOverflow => "CSHARP_INPUT_PENDING_INGRESS_OVERFLOW",
         RuntimeInputError::DuplicateIntent => "CSHARP_INPUT_DUPLICATE_INTENT",
         RuntimeInputError::InvalidMapping => "CSHARP_INPUT_INVALID_MAPPING",
         RuntimeInputError::DuplicateMapping => "CSHARP_INPUT_DUPLICATE_MAPPING",
@@ -8710,6 +8613,9 @@ mod tests {
     #[derive(Debug, Clone, PartialEq)]
     struct SeenEvent {
         kind: NativeInputEventKind,
+        sequence: u64,
+        keyboard: NativeKeyboardControl,
+        edge: NativeInputEdge,
         intent: Vec<u8>,
         x: f32,
     }
@@ -8732,6 +8638,9 @@ mod tests {
                     .iter()
                     .map(|event| SeenEvent {
                         kind: event.kind,
+                        sequence: event.sequence.value,
+                        keyboard: event.keyboard,
+                        edge: event.edge,
                         intent: unsafe { copy_callback_bytes(event.intent, event.intent_len) },
                         x: event.x,
                     })
@@ -8748,6 +8657,33 @@ mod tests {
             .expect("attack descriptor");
         let look = DirectInputIntentDescriptor::new("fixture.look", IntentValueKind::Axis)
             .expect("look descriptor");
+        let held = |intent: &str, mapping: &str, code| {
+            (
+                DirectInputIntentDescriptor::new(intent, IntentValueKind::Digital)
+                    .expect("held descriptor"),
+                RuntimeInputMapping::new(
+                    mapping,
+                    intent,
+                    RuntimeInputTrigger::Key {
+                        code,
+                        edge: InputEdge::Held,
+                        chord: Vec::new(),
+                        context: None,
+                    },
+                )
+                .expect("held mapping"),
+            )
+        };
+        let (forward, forward_w) = held(
+            "fixture.forward",
+            "forward-w",
+            runtime_input_model::KeyboardControl::KeyW,
+        );
+        let (back, back_s) = held(
+            "fixture.back",
+            "back-s",
+            runtime_input_model::KeyboardControl::KeyS,
+        );
         let mappings = vec![
             RuntimeInputMapping::new(
                 "attack-e",
@@ -8769,13 +8705,15 @@ mod tests {
                 },
             )
             .expect("look mapping"),
+            forward_w,
+            back_s,
         ];
         let mut runtime = CsharpProductRuntime::load_admitted_with(
             content,
             CsharpProductRuntimeConfig::new(
                 RuntimeInstanceId::new(1),
                 RuntimeLifecycleConfig::new(30, 2).expect("realtime fixture config"),
-                vec![attack, look],
+                vec![attack, look, forward, back],
             )
             .with_physical_mappings(mappings),
             || Ok(drop_fixture_api()),
@@ -8990,6 +8928,99 @@ mod tests {
     }
 
     #[test]
+    fn two_full_input_batches_before_one_update_reach_it_in_order_with_held_keys_kept() {
+        let _guard = DROP_FIXTURE_GATE
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let (mut run, root) = gameplay_input_run("input-burst");
+        // Held gameplay time: updates arrive without steps, so input piles up
+        // between them as it does behind a slow update.
+        run.request(FixtureTimeRequest::Rate(0.0));
+        run.observe(1);
+        take_seen();
+
+        // Batch one presses W and S; batch two opens with W's release and
+        // closes with an attack. S stays held across both.
+        let binding = input_binding(&run.runtime.lifecycle);
+        let page = run.runtime.binding();
+        let count = runtime_input::MAX_RUNTIME_INPUT_WIRE_EVENTS as u64;
+        let key = |code, edge| RuntimeInputFact::Key { code, edge };
+        let event = |sequence: u64| {
+            use runtime_input::PhysicalEdge::{Pressed, Released};
+            use runtime_input_model::KeyboardControl::{KeyE, KeyS, KeyW};
+            let fact = match sequence {
+                1 => key(KeyW, Pressed),
+                2 => key(KeyS, Pressed),
+                s if s == count + 1 => key(KeyW, Released),
+                s if s == 2 * count => key(KeyE, Pressed),
+                _ => RuntimeInputFact::PointerDelta {
+                    x: AxisValue::new(1.0).unwrap(),
+                    y: AxisValue::new(0.0).unwrap(),
+                },
+            };
+            physical(binding, sequence, fact)
+        };
+        for batch in [1..=count, count + 1..=2 * count] {
+            let receipt = run
+                .runtime
+                .input(ProductHostInputBatch::new(batch.map(event).collect()))
+                .unwrap();
+            let result = serde_json::to_value(receipt.result()).unwrap();
+            assert_eq!(result["disposition"], "accepted");
+            assert_eq!(result["acceptedCount"], count);
+        }
+        assert_eq!(run.runtime.binding(), page, "no resynchronizing rebind");
+
+        let first = take_seen_after(&mut run);
+        assert_eq!(first.len(), 1);
+        assert!(first[0]
+            .iter()
+            .all(|event| event.kind != NativeInputEventKind::Clear));
+        let physical_sequences = first[0]
+            .iter()
+            .filter(|event| event.intent.is_empty())
+            .map(|event| event.sequence)
+            .collect::<Vec<_>>();
+        assert_eq!(physical_sequences, (1..=2 * count).collect::<Vec<_>>());
+        let w_edges = first[0]
+            .iter()
+            .filter(|event| {
+                event.intent.is_empty() && event.keyboard == NativeKeyboardControl::KeyW
+            })
+            .map(|event| event.edge)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            w_edges,
+            [NativeInputEdge::Pressed, NativeInputEdge::Released]
+        );
+        assert_eq!(mapped(&first, b"fixture.back"), [1.0]);
+        assert_eq!(mapped(&first, b"fixture.attack").len(), 1);
+
+        // The release was not lost: W no longer reports, S still does, and
+        // so it does once realtime resumes and the update admits steps.
+        let second = take_seen_after(&mut run);
+        assert!(mapped(&second, b"fixture.forward").is_empty());
+        assert_eq!(mapped(&second, b"fixture.back"), [1.0]);
+        run.request(FixtureTimeRequest::Rate(1.0));
+        run.observe(1);
+        take_seen();
+        let held_at = run.admitted();
+        let resumed = take_seen_after(&mut run);
+        assert!(run.admitted() > held_at);
+        assert!(mapped(&resumed, b"fixture.forward").is_empty());
+        assert_eq!(mapped(&resumed, b"fixture.back"), [1.0]);
+
+        drop(run);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    /// The input events of the updates one more observed step delivers.
+    fn take_seen_after(run: &mut GameplayTimeRun) -> Vec<Vec<SeenEvent>> {
+        run.observe(1);
+        take_seen()
+    }
+
+    #[test]
     fn gameplay_time_composes_with_pause_inspection_and_restart() {
         let _guard = DROP_FIXTURE_GATE
             .lock()
@@ -9169,50 +9200,6 @@ mod tests {
             .unwrap();
         assert_eq!(queued.get(), 0);
         drop(owner);
-        fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn full_wire_batch_reserves_clear_and_following_pressure_returns_scoped_receipt() {
-        let _guard = DROP_FIXTURE_GATE
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
-        let (mut runtime, root) = drop_fixture_runtime("input-pressure-receipt");
-        runtime
-            .lifecycle(ProductHostLifecycleOperation::Start)
-            .unwrap();
-        let binding = runtime.binding();
-        let batch = |first: usize, count: usize| {
-            let events = (first..first + count).map(|sequence| serde_json::json!({
-                "runtime": binding, "sequence": sequence.to_string(), "context": "gameplay.default",
-                "fact": {"kind": "key", "code": "digit-1", "edge": if sequence % 2 == 1 { "pressed" } else { "released" }},
-            })).collect::<Vec<_>>();
-            ProductHostInputBatch::decode_json(&serde_json::to_vec(&events).unwrap()).unwrap()
-        };
-        let count = runtime_input::MAX_RUNTIME_INPUT_WIRE_EVENTS;
-        assert!(runtime
-            .input(batch(1, count))
-            .unwrap()
-            .result()
-            .is_accepted());
-        assert_eq!(runtime.binding(), binding);
-        assert_eq!(runtime.pending_inputs.len(), count + 1);
-        let receipt = runtime
-            .input(batch(count + 1, 1))
-            .expect("safe pressure receipt");
-        let result = serde_json::to_value(receipt.result()).unwrap();
-        assert_eq!(result["disposition"], "resync-required");
-        assert_eq!(result["code"], "CSHARP_INPUT_PENDING_BOUNDS");
-        assert_eq!(result["nextInputSequence"], "1");
-        assert_eq!(runtime.binding().instance_id, binding.instance_id);
-        assert_ne!(runtime.binding().control_revision, binding.control_revision);
-        let (_, outputs) = receipt.into_parts();
-        assert_eq!(
-            publication_kind(outputs.last().unwrap()),
-            "complete-baseline"
-        );
-        runtime.admit_manual_step().expect("owner remains usable");
-        drop(runtime);
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -9543,59 +9530,42 @@ mod tests {
     }
 
     #[test]
-    fn pending_input_overflow_rebinds_in_place_without_a_world_snapshot() {
+    fn host_input_recovery_rebinds_in_place_without_a_world_snapshot() {
         let _guard = DROP_FIXTURE_GATE
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
-        let (mut runtime, root) = drop_fixture_runtime("pending-input-recovery");
+        let (mut runtime, root) = drop_fixture_runtime("host-input-recovery");
         runtime
             .lifecycle(ProductHostLifecycleOperation::Start)
-            .expect("start pending-input fixture");
+            .expect("start host-input recovery fixture");
         let previous_binding = runtime.binding();
         let pending_binding = input_binding(&runtime.lifecycle);
-        runtime.pending_inputs = (0..MAX_PENDING_NATIVE_INPUTS)
-            .map(|_| clear_input_owned(pending_binding, InputClearReason::FocusLoss))
-            .collect();
+        runtime.pending_inputs.push(clear_input_owned(
+            pending_binding,
+            InputClearReason::FocusLoss,
+        ));
 
-        let admission = runtime
-            .append_pending_inputs(vec![clear_input_owned(
-                pending_binding,
-                InputClearReason::FocusLoss,
-            )])
-            .expect("overflow is a completed scoped recovery");
-        assert_eq!(admission, PendingInputAdmission::Resynchronized);
+        let (_, outputs) = runtime
+            .recover_input_overflow()
+            .expect("host input recovery completes")
+            .into_parts();
         assert_ne!(runtime.binding(), previous_binding);
         assert_eq!(runtime.pending_inputs.len(), 1);
         assert_eq!(
             runtime.pending_inputs[0].clear_reason,
             NativeInputClearReason::ControlRevisionChange
         );
-        let recovery = runtime
-            .pending_recovery_outputs
-            .iter()
-            .map(publication_value)
-            .collect::<Vec<_>>();
+        let recovery = outputs.iter().map(publication_value).collect::<Vec<_>>();
         assert_eq!(recovery.first().unwrap()["kind"], "binding");
         assert_eq!(recovery.last().unwrap()["kind"], "complete-baseline");
         // A same-incarnation input fence rebinds in place: no world snapshot.
         assert!(!recovery.iter().any(|output| output["kind"] == "frame"));
-
-        let (_, outputs) = runtime
+        runtime
             .admit_manual_step()
-            .expect("next operation remains usable after input recovery")
-            .into_parts();
-        let encoded = outputs.iter().map(publication_value).collect::<Vec<_>>();
-        assert!(encoded.iter().any(|output| output["kind"] == "binding"));
-        assert!(
-            encoded
-                .iter()
-                .any(|output| output["kind"] == "complete-baseline"),
-            "the next scheduled receipt must carry the retained recovery baseline"
-        );
-        assert!(runtime.pending_recovery_outputs.is_empty());
+            .expect("next operation remains usable after input recovery");
 
         drop(runtime);
-        fs::remove_dir_all(root).expect("remove pending input recovery fixture content");
+        fs::remove_dir_all(root).expect("remove host input recovery fixture content");
     }
 
     #[test]
