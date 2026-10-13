@@ -29,6 +29,9 @@ pub enum CharacterMotionPublicationError {
     EntityNotActive {
         entity: EntityId,
     },
+    ParentedTransform {
+        entity: EntityId,
+    },
     StaleTransform {
         entity: EntityId,
         expected: u64,
@@ -47,6 +50,7 @@ impl CharacterMotionPublicationError {
         match self {
             Self::UnknownEntity { .. } => "unknown-character-motion-entity",
             Self::EntityNotActive { .. } => "inactive-character-motion-entity",
+            Self::ParentedTransform { .. } => "parented-character-motion-transform",
             Self::StaleTransform { .. } => "stale-character-motion-transform",
             Self::StaleMotion { .. } => "stale-character-motion-component",
             Self::RevisionExhausted => "character-motion-publication-revision-exhausted",
@@ -67,7 +71,10 @@ impl std::error::Error for CharacterMotionPublicationError {}
 /// The values come from the character controller, which solved them from this
 /// entity's transform and motion at the guarded revisions; the revisions are
 /// the only check that the slots are still the ones it read. Removing either
-/// component bumps its revision, so a removed slot is reported as stale.
+/// component bumps its revision, so a removed slot is reported as stale. A
+/// transform parent set with `KeepLocal` bumps neither revision, so the solved
+/// world-space transform would land as a local one; a parented entity is
+/// refused here.
 pub fn replace_character_motion_state(
     state: &mut EntityState,
     replacement: CharacterMotionStateReplacement,
@@ -78,6 +85,9 @@ pub fn replace_character_motion_state(
     };
     if core.lifecycle != EntityLifecycle::Active {
         return Err(CharacterMotionPublicationError::EntityNotActive { entity });
+    }
+    if state.transform_parent(entity).is_some() {
+        return Err(CharacterMotionPublicationError::ParentedTransform { entity });
     }
     let actual_transform = state
         .component_revision::<TransformComponent>(entity)

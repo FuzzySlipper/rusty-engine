@@ -10,7 +10,8 @@ use engine_spatial::{
     VoxelEdit, VoxelEditService,
 };
 use entity_state::{
-    CharacterMotionComponent, CharacterStance, EntityDefinition, EntityState, EntityTransform, Quat,
+    CharacterMotionComponent, CharacterStance, EntityDefinition, EntityState, EntityTransform,
+    Quat, RelationshipCommand, TransformComponent, TransformParentMode,
 };
 
 fn floor_scene() -> VoxelCollisionScene {
@@ -539,6 +540,60 @@ fn environment_change_between_prepare_and_commit_is_fail_atomic() {
     assert_eq!(
         state.character_motion(entity),
         before.character_motion(entity)
+    );
+}
+
+#[test]
+fn transform_parent_set_between_prepare_and_commit_refuses_publication() {
+    let scene = floor_scene();
+    let entity = EntityId::new(1);
+    let parent = EntityId::new(2);
+    let mut state = EntityState::from_definitions([
+        EntityDefinition::new(entity, "character")
+            .with_transform(Vec3::new(0.0, 1.9, 0.0))
+            .with_character_motion(CharacterMotionComponent::at_rest(1.9)),
+        EntityDefinition::new(parent, "parent").with_transform(Vec3::new(100.0, 0.0, 0.0)),
+    ])
+    .unwrap();
+    let config = CharacterControllerConfig::default();
+    let mut service = CharacterControllerService::default();
+    let prepared = service
+        .prepare(
+            &state,
+            &scene,
+            entity,
+            &config,
+            command(1, Vec2::new(1.0, 0.0)),
+        )
+        .unwrap();
+    state
+        .apply_relationship(
+            state.revision(),
+            RelationshipCommand::SetTransformParent {
+                child: entity,
+                parent,
+                mode: TransformParentMode::KeepLocal,
+            },
+        )
+        .unwrap();
+    let before = state.clone();
+    let transform_revision = state.component_revision::<TransformComponent>(entity);
+    let motion_revision = state.component_revision::<CharacterMotionComponent>(entity);
+    let error = service.commit(&mut state, &scene, prepared).unwrap_err();
+    assert_eq!(error.code(), "parented-character-motion-transform");
+    assert_eq!(state.revision(), before.revision());
+    assert_eq!(state.transform(entity), before.transform(entity));
+    assert_eq!(
+        state.character_motion(entity),
+        before.character_motion(entity)
+    );
+    assert_eq!(
+        state.component_revision::<TransformComponent>(entity),
+        transform_revision
+    );
+    assert_eq!(
+        state.component_revision::<CharacterMotionComponent>(entity),
+        motion_revision
     );
 }
 
