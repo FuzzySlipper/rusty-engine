@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use render_model::{RenderAssetError, RenderAssetKind};
+use render_model::RenderAssetKind;
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -215,7 +215,6 @@ pub enum AudioProjectionDiagnosticCode {
     InvalidDescriptor,
     AssetMissing,
     AssetKindMismatch,
-    ContentHashMismatch,
     DuplicateSignal,
     UnknownHandle,
     InvalidControl,
@@ -552,13 +551,7 @@ fn validate_descriptor(
     {
         return Err(AudioProjectionDiagnosticCode::InvalidDescriptor);
     }
-    verify_asset(
-        assets,
-        &descriptor.clip.asset,
-        RenderAssetKind::Audio,
-        Some(&descriptor.clip.content_hash),
-    )
-    .map_err(asset_diagnostic)
+    verify_asset(assets, &descriptor.clip.asset, RenderAssetKind::Audio).map_err(asset_diagnostic)
 }
 
 fn apply_patch(
@@ -594,11 +587,8 @@ fn apply_patch(
 
 fn asset_diagnostic(error: PresentationAssetError) -> AudioProjectionDiagnosticCode {
     match error {
-        PresentationAssetError::Missing(_) => AudioProjectionDiagnosticCode::AssetMissing,
-        PresentationAssetError::Invalid(RenderAssetError::ContentHashMismatch { .. }) => {
-            AudioProjectionDiagnosticCode::ContentHashMismatch
-        }
-        PresentationAssetError::Invalid(_) => AudioProjectionDiagnosticCode::AssetKindMismatch,
+        PresentationAssetError::Missing => AudioProjectionDiagnosticCode::AssetMissing,
+        PresentationAssetError::WrongKind => AudioProjectionDiagnosticCode::AssetKindMismatch,
     }
 }
 
@@ -655,9 +645,6 @@ const fn diagnostic_message(code: AudioProjectionDiagnosticCode) -> &'static str
         AudioProjectionDiagnosticCode::AssetMissing => "audio clip is unavailable",
         AudioProjectionDiagnosticCode::AssetKindMismatch => {
             "audio clip reference has the wrong resource kind"
-        }
-        AudioProjectionDiagnosticCode::ContentHashMismatch => {
-            "audio clip content hash does not match"
         }
         AudioProjectionDiagnosticCode::DuplicateSignal => {
             "audio one-shot signal id was already projected"

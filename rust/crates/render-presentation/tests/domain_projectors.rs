@@ -1,27 +1,18 @@
 use std::collections::BTreeMap;
 
-use render_model::{RenderAssetKind, ResolvedRenderAsset};
+use render_model::RenderAssetKind;
 use render_presentation::*;
 
-fn assets() -> BTreeMap<String, ResolvedRenderAsset> {
+fn assets() -> BTreeMap<String, RenderAssetKind> {
     [
-        asset("audio/pulse", RenderAssetKind::Audio, "aa"),
-        asset("font/ui", RenderAssetKind::Font, "bb"),
-        asset("texture/alert", RenderAssetKind::Texture, "cc"),
-        asset("sprite-sheet/sparks", RenderAssetKind::SpriteAtlas, "dd"),
+        ("audio/pulse", RenderAssetKind::Audio),
+        ("font/ui", RenderAssetKind::Font),
+        ("texture/alert", RenderAssetKind::Texture),
+        ("sprite-sheet/sparks", RenderAssetKind::SpriteAtlas),
     ]
     .into_iter()
-    .map(|asset| (asset.id.clone(), asset))
+    .map(|(id, kind)| (id.to_owned(), kind))
     .collect()
-}
-
-fn asset(id: &str, kind: RenderAssetKind, hash: &str) -> ResolvedRenderAsset {
-    ResolvedRenderAsset {
-        id: id.to_string(),
-        kind,
-        content_hash: Some(hash.to_string()),
-        version: 1,
-    }
 }
 
 fn audio_descriptor() -> AudioSourceDescriptor {
@@ -391,9 +382,9 @@ fn audio_retained_voice_controls_and_fixed_bus_state_are_owner_truth() {
 }
 
 #[test]
-fn audio_rejects_wrong_kind_and_content_identity() {
+fn audio_rejects_wrong_kind() {
     let mut wrong_kind_assets = assets();
-    wrong_kind_assets.get_mut("audio/pulse").unwrap().kind = RenderAssetKind::Font;
+    *wrong_kind_assets.get_mut("audio/pulse").unwrap() = RenderAssetKind::Font;
     let mut projector = AudioProjector::default();
     assert_eq!(
         projector
@@ -408,23 +399,6 @@ fn audio_rejects_wrong_kind_and_content_identity() {
             .unwrap_err()
             .code,
         AudioProjectionDiagnosticCode::AssetKindMismatch
-    );
-
-    let mut changed_assets = assets();
-    changed_assets.get_mut("audio/pulse").unwrap().content_hash = Some("changed".into());
-    assert_eq!(
-        projector
-            .project(
-                &changed_assets,
-                PresentationOpMeta::new(1),
-                AudioProjectionOp::Create {
-                    handle: AudioHandle::new(1),
-                    descriptor: audio_descriptor(),
-                },
-            )
-            .unwrap_err()
-            .code,
-        AudioProjectionDiagnosticCode::ContentHashMismatch
     );
 }
 
@@ -721,7 +695,7 @@ fn cube_particles_validate_local_collision_without_an_asset_reference() {
     let mut projector = ParticleProjector::default();
     projector
         .project(
-            &BTreeMap::<String, ResolvedRenderAsset>::new(),
+            &BTreeMap::<String, RenderAssetKind>::new(),
             PresentationOpMeta::new(0),
             ParticleProjectionOp::Emit {
                 signal_id: "cube:1".into(),
@@ -738,7 +712,7 @@ fn cube_particles_validate_local_collision_without_an_asset_reference() {
     assert_eq!(
         projector
             .project(
-                &BTreeMap::<String, ResolvedRenderAsset>::new(),
+                &BTreeMap::<String, RenderAssetKind>::new(),
                 PresentationOpMeta::new(1),
                 ParticleProjectionOp::Emit {
                     signal_id: "cube:invalid".into(),
@@ -796,7 +770,7 @@ fn every_retained_domain_rejects_unknown_handles() {
 }
 
 #[test]
-fn particle_billboards_accept_admitted_textures_and_verify_their_hash() {
+fn particle_billboards_accept_admitted_textures() {
     for frame_count in [1, 4] {
         let mut descriptor = particle_descriptor();
         descriptor.visual = ParticleVisual::Billboard {
@@ -815,21 +789,6 @@ fn particle_billboards_accept_admitted_textures_and_verify_their_hash() {
                 descriptor.clone(),
             )
             .unwrap();
-        if let ParticleVisual::Billboard { sprite } = &mut descriptor.visual {
-            sprite.content_hash = "wrong".into();
-        }
-        assert_eq!(
-            projector
-                .project_optional_emit(
-                    &assets(),
-                    PresentationOpMeta::new(0),
-                    "wrong".into(),
-                    descriptor
-                )
-                .unwrap_err()
-                .code,
-            ParticleProjectionDiagnosticCode::ContentHashMismatch
-        );
     }
 }
 

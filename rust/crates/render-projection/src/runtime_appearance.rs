@@ -961,20 +961,16 @@ fn validate_joint(
     let Some(Appearance::AnimatedMesh { asset, .. }) = parent_appearance else {
         return refuse(JointAttachmentProblem::ParentNotAnimated);
     };
-    let matches = resources
+    // Rig joint ids are unique (`AnimationRigSignature::validate`).
+    let found = resources
         .animated_meshes
         .get(asset)
         .and_then(|mesh| mesh.rig.as_ref())
-        .map_or(0, |rig| {
-            rig.joints
-                .iter()
-                .filter(|candidate| candidate.id == joint)
-                .count()
-        });
-    match matches {
-        1 => Ok(()),
-        0 => refuse(JointAttachmentProblem::MissingJoint),
-        _ => refuse(JointAttachmentProblem::AmbiguousJoint),
+        .is_some_and(|rig| rig.joints.iter().any(|candidate| candidate.id == joint));
+    if found {
+        Ok(())
+    } else {
+        refuse(JointAttachmentProblem::MissingJoint)
     }
 }
 

@@ -411,7 +411,6 @@ pub enum NativePresentationDiagnosticCode {
     InvalidDescriptor = 1,
     AssetMissing = 2,
     AssetKindMismatch = 3,
-    ContentHashMismatch = 4,
     UnknownHandle = 6,
     DuplicateSignal = 7,
     BudgetExceeded = 8,

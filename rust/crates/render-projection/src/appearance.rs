@@ -1190,7 +1190,6 @@ pub enum JointAttachmentProblem {
     NoParent,
     ParentNotAnimated,
     MissingJoint,
-    AmbiguousJoint,
 }
 
 #[cfg(test)]

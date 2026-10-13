@@ -470,7 +470,15 @@ pub(crate) struct RenderResourceRegistry {
     paths: BTreeMap<RendererPath, u64>,
     /// The renderer paths mapped to each handle, so removing it costs its own.
     handle_paths: BTreeMap<u64, Vec<RendererPath>>,
+    /// Live resources by asset identity (a texture's descriptor id).
     identities: BTreeMap<String, u64>,
+    /// Live resources by body identity. Textures of one image with different
+    /// sampling share a body, so an identity can name several handles.
+    bodies: BTreeMap<String, Vec<u64>>,
+    /// Live animated meshes, and how many clip packs are live, for the
+    /// animation readout.
+    animated: BTreeSet<u64>,
+    clip_packs: usize,
     /// Each explicit resource admission gives the caller one releasable owner.
     open_counts: BTreeMap<u64, u32>,
     /// How many Engine holders (appearances, materials, atlases and the like)
@@ -520,6 +528,28 @@ impl RenderResourceRegistry {
     pub(crate) fn get(&self, handle: u64) -> Option<&CsharpRenderResource> {
         self.entries
             .get(&usize::try_from(handle.saturating_sub(1)).ok()?)
+    }
+
+    /// The live resource with this asset identity.
+    pub(crate) fn by_asset_identity(&self, identity: &str) -> Option<&CsharpRenderResource> {
+        self.get(*self.identities.get(identity)?)
+    }
+
+    /// A live resource whose body has this identity.
+    pub(crate) fn by_identity(&self, identity: &str) -> Option<&CsharpRenderResource> {
+        self.get(*self.bodies.get(identity)?.first()?)
+    }
+
+    /// Live animated meshes.
+    pub(crate) fn animated_meshes(&self) -> impl Iterator<Item = &AnimatedMeshAsset> {
+        self.animated
+            .iter()
+            .filter_map(|handle| self.get(*handle)?.animated_mesh())
+    }
+
+    /// How many animation clip packs are live.
+    pub(crate) fn clip_pack_count(&self) -> usize {
+        self.clip_packs
     }
 
     pub(crate) fn resource(
@@ -588,10 +618,21 @@ impl RenderResourceRegistry {
                         "renderer resource handle overflowed",
                     )
                 })?;
-            let identity = resource.asset_identity().to_owned();
+            self.identities
+                .insert(resource.asset_identity().to_owned(), handle);
+            self.bodies
+                .entry(resource.identity().to_owned())
+                .or_default()
+                .push(handle);
+            match resource.kind() {
+                CsharpRenderResourceKind::AnimatedMesh => {
+                    self.animated.insert(handle);
+                }
+                CsharpRenderResourceKind::AnimationClipPack => self.clip_packs += 1,
+                _ => {}
+            }
             self.entries.insert(self.next, resource);
             self.next += 1;
-            self.identities.insert(identity, handle);
             self.unheld.push(handle);
             handle
         };
@@ -666,6 +707,19 @@ impl RenderResourceRegistry {
             )
         })?;
         self.identities.remove(resource.asset_identity());
+        if let Some(handles) = self.bodies.get_mut(resource.identity()) {
+            handles.retain(|candidate| *candidate != handle);
+            if handles.is_empty() {
+                self.bodies.remove(resource.identity());
+            }
+        }
+        match resource.kind() {
+            CsharpRenderResourceKind::AnimatedMesh => {
+                self.animated.remove(&handle);
+            }
+            CsharpRenderResourceKind::AnimationClipPack => self.clip_packs -= 1,
+            _ => {}
+        }
         for key in self.handle_paths.remove(&handle).unwrap_or_default() {
             // A path a later resource took over stays with it.
             if self.paths.get(&key) == Some(&handle) {
@@ -759,6 +813,17 @@ impl RenderResourceRegistry {
                 )
             })?,
         })
+    }
+}
+
+/// Billboards and particles name textures and fonts by asset identity.
+impl render_presentation::PresentationAssetLookup for RenderResourceRegistry {
+    fn presentation_asset_kind(&self, id: &str) -> Option<render_model::RenderAssetKind> {
+        match self.by_asset_identity(id)?.kind() {
+            CsharpRenderResourceKind::Texture => Some(render_model::RenderAssetKind::Texture),
+            CsharpRenderResourceKind::Font => Some(render_model::RenderAssetKind::Font),
+            _ => None,
+        }
     }
 }
 
@@ -1815,6 +1880,10 @@ pub(crate) mod tests {
                 "pub(crate) fn is_empty",
                 "pub(crate) fn first",
                 "pub(crate) fn get",
+                "pub(crate) fn by_asset_identity",
+                "pub(crate) fn by_identity",
+                "pub(crate) fn animated_meshes",
+                "pub(crate) fn clip_pack_count",
                 "pub(crate) fn resource",
                 "pub(crate) fn animated_mesh_mut",
                 "pub(crate) fn stage",
@@ -1845,6 +1914,75 @@ pub(crate) mod tests {
                 "pub(crate) unsafe extern \"C\" fn take_mesh_partition_part",
                 "pub(crate) unsafe extern \"C\" fn destroy_mesh_partition",
             ]
+        );
+    }
+
+    #[test]
+    fn identity_and_kind_indexes_follow_staging_and_removal() {
+        let mut registry = RenderResourceRegistry::default();
+        let texture = |filter| {
+            CsharpRenderResource::admit_texture(
+                "content/atlas.png".to_owned(),
+                Arc::from(RGBA_PNG),
+                filter,
+                NativeTextureWrap::Clamp,
+                NativeTextureColorSpace::Srgb,
+            )
+            .expect("texture")
+        };
+        let nearest = registry
+            .admit(texture(NativeTextureFilter::Nearest))
+            .unwrap();
+        let linear = registry
+            .admit(texture(NativeTextureFilter::Linear))
+            .unwrap();
+        assert_ne!(nearest, linear, "one image, two samplings");
+        let body = registry.get(nearest).unwrap().identity().to_owned();
+        assert_eq!(registry.get(linear).unwrap().identity(), body);
+        let asset = registry.get(linear).unwrap().asset_identity().to_owned();
+        let animated = || {
+            CsharpRenderResource::admit_animated_mesh(
+                "content/character.glb".to_owned(),
+                CHARACTER_GLB.to_vec(),
+            )
+            .expect("animated mesh")
+        };
+        let mesh = registry.admit(animated()).unwrap();
+        let mut pack = animated();
+        pack.kind = CsharpRenderResourceKind::AnimationClipPack;
+        pack.identity.push_str("-pack");
+        let pack = registry.admit(pack).unwrap();
+        assert_eq!(
+            (
+                registry.animated_meshes().count(),
+                registry.clip_pack_count()
+            ),
+            (1, 1)
+        );
+
+        assert_eq!(
+            registry
+                .by_asset_identity(&asset)
+                .map(|r| r.asset_identity()),
+            Some(asset.as_str())
+        );
+        registry.remove(nearest).unwrap();
+        assert_eq!(
+            registry.by_identity(&body).map(|r| r.asset_identity()),
+            Some(asset.as_str()),
+            "the other sampling still serves the body"
+        );
+        registry.remove(linear).unwrap();
+        assert!(registry.by_identity(&body).is_none());
+        assert!(registry.by_asset_identity(&asset).is_none());
+        registry.remove(mesh).unwrap();
+        registry.remove(pack).unwrap();
+        assert_eq!(
+            (
+                registry.animated_meshes().count(),
+                registry.clip_pack_count()
+            ),
+            (0, 0)
         );
     }
 

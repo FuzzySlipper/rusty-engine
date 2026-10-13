@@ -44,17 +44,18 @@ pub(crate) struct RagdollSource {
 
 const NO_PARENT: u32 = u32::MAX;
 
-/// The admitted rig of an animated asset.
-fn asset_rig<'a>(
-    resources: &'a RenderResourceRegistry,
-    asset: &str,
+/// The admitted rig of the mesh an instance plays.
+fn instance_rig<'a>(
+    state: &'a RuntimeAppearanceData,
+    instance: &AnimationInstance,
 ) -> Option<&'a AnimationRigSignature> {
-    resources
-        .iter()
-        .filter(|resource| resource.kind() == CsharpRenderResourceKind::AnimatedMesh)
-        .filter_map(CsharpRenderResource::animated_mesh)
-        .find(|mesh| mesh.asset == asset)
-        .and_then(|mesh| mesh.rig.as_ref())
+    instance_mesh(
+        &state.animated_appearances,
+        &state.render_resources,
+        instance.appearance,
+    )?
+    .rig
+    .as_ref()
 }
 
 /// Each rig joint's parent index.
@@ -189,7 +190,7 @@ impl RuntimeAppearanceBridge {
                 )
             })?;
         if pose.controls() {
-            let rig = asset_rig(&state.render_resources, &instance.asset)
+            let rig = instance_rig(state, instance)
                 .ok_or_else(|| pose_error("pose controls need a skinned animated mesh"))?;
             let parents = rig_parents(&rig.joints);
             let joints = parents.len() as u32;
@@ -314,8 +315,7 @@ impl RuntimeAppearanceBridge {
                 "animation instance is not live",
             )
         })?;
-        let joints =
-            asset_rig(&state.render_resources, &instance.asset).map_or(0, |rig| rig.joints.len());
+        let joints = instance_rig(state, instance).map_or(0, |rig| rig.joints.len());
         let unreported = || {
             CsharpEngineServicesError::new(
                 "CSHARP_RAGDOLL_POSE",
@@ -353,18 +353,14 @@ impl RuntimeAppearanceBridge {
     }
 
     /// Joint poses the renderer reported since the last call, oldest first.
-    /// Only live instances' objects are kept.
+    /// A report evaluated before its instance was destroyed is dropped;
+    /// destroying an instance drops its object's reports.
     pub(crate) fn ingest_joint_poses(
         &mut self,
         reports: impl IntoIterator<Item = JointPoseReport>,
     ) {
         for report in reports {
-            let live = self
-                .state
-                .animation_instances
-                .values()
-                .any(|instance| instance.object_id == report.object_id);
-            if !live {
+            if !self.state.animation_objects.contains_key(&report.object_id) {
                 continue;
             }
             let rest = report.rest.clone();
@@ -384,13 +380,6 @@ impl RuntimeAppearanceBridge {
                 && earlier.seconds < entry.latest.seconds)
                 .then_some(earlier);
         }
-        let state = &self.state;
-        self.joint_poses.retain(|object, _| {
-            state
-                .animation_instances
-                .values()
-                .any(|instance| instance.object_id == *object)
-        });
     }
 }
 
@@ -704,12 +693,22 @@ mod tests {
             (1.0, 2.0)
         );
 
-        // Destroying the instance clears the controls it left on the target.
+        // Destroying the instance clears the controls it left on the target,
+        // and its object's reports.
         bridge.destroy_animation_instance(instance).unwrap();
         assert_eq!(pose_ops(&bridge), [AnimatedMeshPose::default()]);
+        assert!(bridge.joint_poses.is_empty());
         let call = bridge.take_staged_call();
         bridge.commit(call);
-        bridge.ingest_joint_poses([]);
+        // A report the renderer evaluated before the destruction arrives late.
+        bridge.ingest_joint_poses([JointPoseReport {
+            object_id: 7,
+            generation: 1,
+            seconds: 0.75,
+            world: Transform::IDENTITY,
+            joints: vec![joint(1.0); joints.len()],
+            rest: None,
+        }]);
         assert!(bridge.joint_poses.is_empty());
     }
 }

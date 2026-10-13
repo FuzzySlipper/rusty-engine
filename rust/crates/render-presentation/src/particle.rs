@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use render_model::{RenderAssetError, RenderAssetKind, JSON_SAFE_U64_MAX};
+use render_model::{RenderAssetKind, JSON_SAFE_U64_MAX};
 use serde::{de::Error as _, Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::{
@@ -315,7 +315,6 @@ pub enum ParticleProjectionDiagnosticCode {
     InvalidDescriptor,
     AssetMissing,
     AssetKindMismatch,
-    ContentHashMismatch,
     DuplicateSignal,
     UnknownHandle,
     AnchorMissing,
@@ -648,9 +647,8 @@ impl ParticleProjector {
                 // Packaged C# graphics admits image bytes as Texture. The
                 // descriptor supplies frame layout; keep that resource's real
                 // identity/hash rather than inventing a sprite alias.
-                let kind = if assets
-                    .get_presentation_asset(&sprite.asset)
-                    .is_some_and(|asset| asset.kind == RenderAssetKind::Texture)
+                let kind = if assets.presentation_asset_kind(&sprite.asset)
+                    == Some(RenderAssetKind::Texture)
                 {
                     RenderAssetKind::Texture
                 } else if sprite.frame_count == 1 {
@@ -658,8 +656,7 @@ impl ParticleProjector {
                 } else {
                     RenderAssetKind::SpriteAtlas
                 };
-                verify_asset(assets, &sprite.asset, kind, Some(&sprite.content_hash))
-                    .map_err(asset_diagnostic)
+                verify_asset(assets, &sprite.asset, kind).map_err(asset_diagnostic)
             }
             ParticleVisual::Cube if descriptor.flipbook_frames_per_second == 0.0 => Ok(()),
             ParticleVisual::Cube => Err(ParticleProjectionDiagnosticCode::InvalidDescriptor),
@@ -838,11 +835,8 @@ fn in_range(value: f32, minimum: f32, maximum: f32) -> bool {
 
 fn asset_diagnostic(error: PresentationAssetError) -> ParticleProjectionDiagnosticCode {
     match error {
-        PresentationAssetError::Missing(_) => ParticleProjectionDiagnosticCode::AssetMissing,
-        PresentationAssetError::Invalid(RenderAssetError::ContentHashMismatch { .. }) => {
-            ParticleProjectionDiagnosticCode::ContentHashMismatch
-        }
-        PresentationAssetError::Invalid(_) => ParticleProjectionDiagnosticCode::AssetKindMismatch,
+        PresentationAssetError::Missing => ParticleProjectionDiagnosticCode::AssetMissing,
+        PresentationAssetError::WrongKind => ParticleProjectionDiagnosticCode::AssetKindMismatch,
     }
 }
 
@@ -861,9 +855,6 @@ const fn diagnostic_message(code: ParticleProjectionDiagnosticCode) -> &'static 
         ParticleProjectionDiagnosticCode::AssetMissing => "particle sprite is unavailable",
         ParticleProjectionDiagnosticCode::AssetKindMismatch => {
             "particle sprite kind does not match its frame count"
-        }
-        ParticleProjectionDiagnosticCode::ContentHashMismatch => {
-            "particle sprite content hash does not match"
         }
         ParticleProjectionDiagnosticCode::DuplicateSignal => {
             "particle burst signal was already projected"

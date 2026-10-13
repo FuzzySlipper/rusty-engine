@@ -1263,6 +1263,8 @@ pub(crate) struct RuntimeAppearanceData {
     /// Appearances drawing each mesh resource, with how many.
     mesh_resource_appearances: BTreeMap<u64, u32>,
     lights: BTreeMap<u64, RuntimeLightFact>,
+    /// The live light owning each logical light id.
+    light_owners: BTreeMap<u64, u64>,
     /// Live lights whose parent object is not in the published scene: they
     /// are not projected and show once a snapshot publishes the parent.
     pending_lights: BTreeSet<u64>,
@@ -1296,6 +1298,8 @@ pub(crate) struct RuntimeAppearanceData {
     next_sprite_playback: u64,
     animated_appearances: BTreeMap<u64, u64>,
     animation_instances: BTreeMap<u64, AnimationInstance>,
+    /// The animation instance on each product object.
+    animation_objects: BTreeMap<u64, u64>,
     /// Animation instances on each appearance, with how many.
     appearance_animation_instances: BTreeMap<u64, u32>,
     animation_graphs: BTreeMap<u64, AnimationGraphBuilder>,
@@ -1631,6 +1635,7 @@ impl RuntimeAppearanceBridge {
             mesh_appearances: BTreeMap::new(),
             mesh_resource_appearances: BTreeMap::new(),
             lights: BTreeMap::new(),
+            light_owners: BTreeMap::new(),
             pending_lights: BTreeSet::new(),
             next_light: 1,
             materials: BTreeMap::new(),
@@ -1657,6 +1662,7 @@ impl RuntimeAppearanceBridge {
             next_sprite_playback: 1,
             animated_appearances: BTreeMap::new(),
             animation_instances: BTreeMap::new(),
+            animation_objects: BTreeMap::new(),
             appearance_animation_instances: BTreeMap::new(),
             animation_graphs: BTreeMap::new(),
             animation_transitions: BTreeMap::new(),
@@ -2174,10 +2180,9 @@ impl RuntimeAppearanceBridge {
                 .to_owned();
         let descriptor = self.presentation_particle_descriptor(request)?;
         let result = {
-            let staged = self.staged_mut()?;
-            let assets = presentation_assets(&staged.state.render_resources);
-            staged.state.particle_projector.project_optional_emit(
-                &assets,
+            let state = &mut *self.staged_mut()?.state;
+            state.particle_projector.project_optional_emit(
+                &state.render_resources,
                 PresentationOpMeta::new(0),
                 signal_id,
                 descriptor,
@@ -3147,12 +3152,12 @@ impl RuntimeAppearanceBridge {
     ) -> Result<(), CsharpEngineServicesError> {
         let logical_id = billboard_operation_handle(&op).map_or(0, BillboardHandle::raw);
         let result = {
-            let staged = self.staged_mut()?;
-            let assets = presentation_assets(&staged.state.render_resources);
-            staged
-                .state
-                .billboard_projector
-                .project(&assets, PresentationOpMeta::new(0), op)
+            let state = &mut *self.staged_mut()?.state;
+            state.billboard_projector.project(
+                &state.render_resources,
+                PresentationOpMeta::new(0),
+                op,
+            )
         };
         match result {
             Ok(projected) => {
@@ -3182,12 +3187,12 @@ impl RuntimeAppearanceBridge {
     ) -> Result<(), CsharpEngineServicesError> {
         let logical_id = particle_operation_handle(&op).map_or(0, ParticleEmitterHandle::raw);
         let result = {
-            let staged = self.staged_mut()?;
-            let assets = presentation_assets(&staged.state.render_resources);
-            staged
-                .state
-                .particle_projector
-                .project(&assets, PresentationOpMeta::new(0), op)
+            let state = &mut *self.staged_mut()?.state;
+            state.particle_projector.project(
+                &state.render_resources,
+                PresentationOpMeta::new(0),
+                op,
+            )
         };
         match result {
             Ok(projected) => {
@@ -3412,12 +3417,7 @@ impl RuntimeAppearanceBridge {
     ) -> Result<NativeLightHandle, CsharpEngineServicesError> {
         let fact = runtime_light_fact(request)?;
         let staged = self.staged_mut()?;
-        if staged
-            .state
-            .lights
-            .values()
-            .any(|candidate| candidate.light_id == fact.light_id)
-        {
+        if staged.state.light_owners.contains_key(&fact.light_id) {
             return Err(CsharpEngineServicesError::new(
                 "CSHARP_LIGHT_LOGICAL_ID",
                 "logical light id is already owned by a live light",
@@ -3444,9 +3444,12 @@ impl RuntimeAppearanceBridge {
                 "light handle is not live",
             ));
         }
-        if staged.state.lights.iter().any(|(handle, candidate)| {
-            *handle != request.light.value && candidate.light_id == replacement.light_id
-        }) {
+        if staged
+            .state
+            .light_owners
+            .get(&replacement.light_id)
+            .is_some_and(|owner| *owner != request.light.value)
+        {
             return Err(CsharpEngineServicesError::new(
                 "CSHARP_LIGHT_LOGICAL_ID",
                 "logical light id is already owned by a different live light",
@@ -3466,9 +3469,12 @@ impl RuntimeAppearanceBridge {
     ) -> Result<NativeLightHandle, CsharpEngineServicesError> {
         let replacement = runtime_light_fact(request.replacement)?;
         let staged = self.staged_mut()?;
-        if staged.state.lights.iter().any(|(handle, candidate)| {
-            *handle != request.light.value && candidate.light_id == replacement.light_id
-        }) {
+        if staged
+            .state
+            .light_owners
+            .get(&replacement.light_id)
+            .is_some_and(|owner| *owner != request.light.value)
+        {
             return Err(CsharpEngineServicesError::new(
                 "CSHARP_LIGHT_LOGICAL_ID",
                 "logical light id is already owned by a live light",
@@ -3496,6 +3502,7 @@ impl RuntimeAppearanceBridge {
                 project_light_change(staged, &[], &[id])?;
             }
             staged.state.lights.remove(&light.value);
+            staged.state.light_owners.remove(&id);
             staged.state.pending_lights.remove(&light.value);
         }
         // A successful replacement turns the prior generated owner into a
@@ -5841,28 +5848,18 @@ impl RuntimeAppearanceBridge {
         &mut self,
         request: NativeAnimatedMeshAppearanceRequest,
     ) -> Result<NativeAppearanceHandle, CsharpEngineServicesError> {
-        let asset = self.animated_mesh_asset(request.resource.value)?;
-        {
-            let staged = self.staged_mut()?;
-            if !staged
-                .state
-                .projector
-                .resources_mut()
-                .animated_meshes
-                .iter()
-                .any(|candidate| candidate.asset == asset.asset)
-            {
-                staged
-                    .state
-                    .projector
-                    .resources_mut()
-                    .animated_meshes
-                    .push(Arc::new(asset.clone()));
+        let asset = {
+            let state = &mut *self.staged_mut()?.state;
+            let mesh = animated_mesh_asset(&state.render_resources, request.resource.value)?;
+            let catalog = &mut state.projector.resources_mut().animated_meshes;
+            if !catalog.contains(&mesh.asset) {
+                catalog.push(Arc::new(mesh.clone()));
             }
-        }
+            mesh.asset.clone()
+        };
         let appearance = self.allocate_appearance(Appearance::AnimatedMesh {
             inspection: Default::default(),
-            asset: asset.asset,
+            asset,
             material_overrides: Vec::new(),
             playback: None,
             material_parameters: BTreeMap::new(),
@@ -5881,28 +5878,12 @@ impl RuntimeAppearanceBridge {
         request: NativeAnimatedMeshAppearanceRequest,
     ) -> Result<NativeAppearanceHandle, CsharpEngineServicesError> {
         // Refuse an unusable replacement before the prior appearance is released.
-        self.animated_mesh_asset(request.resource.value)?;
+        animated_mesh_asset(
+            &self.staged_ref()?.state.render_resources,
+            request.resource.value,
+        )?;
         self.destroy_appearance(appearance)?;
         self.create_animated_mesh_appearance(request)
-    }
-
-    fn animated_mesh_asset(
-        &self,
-        resource: u64,
-    ) -> Result<AnimatedMeshAsset, CsharpEngineServicesError> {
-        let resource = self.resource(resource)?;
-        if resource.kind() != CsharpRenderResourceKind::AnimatedMesh {
-            return Err(CsharpEngineServicesError::new(
-                "CSHARP_ANIMATION_RESOURCE_KIND",
-                "animated mesh appearance requires an admitted primary animated GLB resource",
-            ));
-        }
-        resource.animated_mesh().cloned().ok_or_else(|| {
-            CsharpEngineServicesError::new(
-                "CSHARP_ANIMATION_RESOURCE_KIND",
-                "animated mesh appearance requires an admitted animated GLB resource",
-            )
-        })
     }
 
     fn create_animation_instance(
@@ -5923,6 +5904,7 @@ impl RuntimeAppearanceBridge {
             request.appearance.value,
             true,
         );
+        state.animation_objects.insert(request.object_id, handle);
         state.animation_instances.insert(
             handle,
             AnimationInstance {
@@ -5960,9 +5942,11 @@ impl RuntimeAppearanceBridge {
                     "animation instances require a live animated-mesh appearance",
                 )
             })?;
-        if state.animation_instances.iter().any(|(handle, instance)| {
-            Some(*handle) != replacing && instance.object_id == request.object_id
-        }) {
+        if state
+            .animation_objects
+            .get(&request.object_id)
+            .is_some_and(|holder| Some(*holder) != replacing)
+        {
             return Err(CsharpEngineServicesError::new(
                 "CSHARP_ANIMATION_INSTANCE_OBJECT",
                 "a product object may have only one retained animation instance",
@@ -5988,6 +5972,17 @@ impl RuntimeAppearanceBridge {
         &mut self,
         handle: NativeAnimationInstanceHandle,
     ) -> Result<(), CsharpEngineServicesError> {
+        let object = self.release_animation_instance(handle)?;
+        // Reports of the object's joints go with its instance.
+        self.joint_poses.remove(&object);
+        Ok(())
+    }
+
+    /// Removes an instance, returning its object.
+    fn release_animation_instance(
+        &mut self,
+        handle: NativeAnimationInstanceHandle,
+    ) -> Result<u64, CsharpEngineServicesError> {
         let staged = self.staged_mut()?;
         let instance = staged
             .state
@@ -6053,12 +6048,13 @@ impl RuntimeAppearanceBridge {
             push_extra_frame(staged, frame);
         }
         staged.state.animation_instances.remove(&handle.value);
+        staged.state.animation_objects.remove(&instance.object_id);
         count_user(
             &mut staged.state.appearance_animation_instances,
             instance.appearance,
             false,
         );
-        Ok(())
+        Ok(instance.object_id)
     }
 
     fn replace_animation_instance(
@@ -6068,7 +6064,11 @@ impl RuntimeAppearanceBridge {
     ) -> Result<NativeAnimationInstanceHandle, CsharpEngineServicesError> {
         // Refuse an unusable replacement before the prior instance is released.
         self.animation_instance_mesh(request, Some(prior.value))?;
-        self.destroy_animation_instance(prior)?;
+        let object = self.release_animation_instance(prior)?;
+        // A replacement on the same object keeps the object's joint reports.
+        if object != request.object_id {
+            self.joint_poses.remove(&object);
+        }
         self.create_animation_instance(request)
     }
 
@@ -6489,30 +6489,18 @@ impl RuntimeAppearanceBridge {
                 "animation graph and instance must reference the same animated GLB",
             ));
         }
-        let mesh_asset = mesh.asset.clone();
-        let mesh_content_hash = mesh.content_hash.clone();
-        let effective_clips = animation_asset_clips(&staged.state.render_resources, &mesh_asset);
-        let assets = BTreeMap::from([(
-            mesh_asset.clone(),
-            ResolvedRenderAsset {
-                id: mesh_asset.clone(),
-                kind: RenderAssetKind::AnimatedMesh,
-                content_hash: mesh_content_hash.clone(),
-                version: 0,
-            },
-        )]);
         let catalog = validate_animation_catalog(
             AnimationCatalog {
                 schema_version: 1,
                 catalog_id: format!("csharp/{}", graph.definition.graph_id),
                 assets: vec![AnimationClipAsset {
-                    asset_id: mesh_asset,
-                    content_hash: mesh_content_hash.unwrap_or_default(),
-                    clips: effective_clips,
+                    asset_id: mesh.asset.clone(),
+                    content_hash: mesh.content_hash.clone().unwrap_or_default(),
+                    clips: mesh_clip_ids(mesh).map(str::to_owned).collect(),
                 }],
                 graphs: vec![graph.definition.clone()],
             },
-            &assets,
+            &InstanceAsset(&instance.asset),
         )
         .map_err(|error| {
             CsharpEngineServicesError::new("CSHARP_ANIMATION_GRAPH", error.to_string())
@@ -6850,14 +6838,15 @@ impl RuntimeAppearanceBridge {
                 "direct playback cannot be mixed with a controller on one instance",
             ));
         }
-        if matches!(
-            command,
-            AnimatedMeshPlaybackCommand::Play { .. } | AnimatedMeshPlaybackCommand::Sample { .. }
-        ) && !animation_asset_has_clip(
-            &state.render_resources,
-            &instance.asset,
-            command_clip(&command).unwrap_or_default(),
-        ) {
+        let clip_missing = command_clip(&command).is_some_and(|clip| {
+            !instance_mesh(
+                &state.animated_appearances,
+                &state.render_resources,
+                instance.appearance,
+            )
+            .is_some_and(|mesh| mesh_clip_ids(mesh).any(|candidate| candidate == clip))
+        });
+        if clip_missing {
             return Err(CsharpEngineServicesError::new(
                 "CSHARP_ANIMATION_CLIP",
                 "playback references a clip absent from the admitted animated GLB",
@@ -6921,38 +6910,27 @@ impl RuntimeAppearanceBridge {
         controller_handle: u64,
     ) -> Result<(), CsharpEngineServicesError> {
         let staged = self.staged_mut()?;
-        let (instance, assets, sequence) = {
-            let controller = staged
-                .state
-                .animation_controllers
-                .get(&controller_handle)
-                .ok_or_else(|| {
-                    CsharpEngineServicesError::new(
-                        "CSHARP_ANIMATION_CONTROLLER",
-                        "animation controller is not live",
-                    )
-                })?;
-            let instance = staged
-                .state
-                .animation_instances
-                .get(&controller.instance)
-                .cloned()
-                .ok_or_else(|| {
-                    CsharpEngineServicesError::new(
-                        "CSHARP_ANIMATION_INSTANCE",
-                        "animation controller instance is not live",
-                    )
-                })?;
-            let assets = animation_assets(&staged.state.render_resources);
-            let sequence = staged.presentation_frames;
-            (instance, assets, sequence)
-        };
-        let Some(target) = staged.state.projector.object_handle(instance.object_id) else {
-            let controller = staged
-                .state
-                .animation_controllers
-                .get_mut(&controller_handle)
-                .expect("controller was checked above");
+        let sequence = staged.presentation_frames;
+        let data: &mut RuntimeAppearanceData = &mut staged.state;
+        let controller = data
+            .animation_controllers
+            .get_mut(&controller_handle)
+            .ok_or_else(|| {
+                CsharpEngineServicesError::new(
+                    "CSHARP_ANIMATION_CONTROLLER",
+                    "animation controller is not live",
+                )
+            })?;
+        let instance = data
+            .animation_instances
+            .get(&controller.instance)
+            .ok_or_else(|| {
+                CsharpEngineServicesError::new(
+                    "CSHARP_ANIMATION_INSTANCE",
+                    "animation controller instance is not live",
+                )
+            })?;
+        let Some(target) = data.projector.object_handle(instance.object_id) else {
             if controller.projected {
                 return Err(CsharpEngineServicesError::new(
                     "CSHARP_ANIMATION_SNAPSHOT_ORDER",
@@ -6965,11 +6943,6 @@ impl RuntimeAppearanceBridge {
             controller.projector.reset();
             return Ok(());
         };
-        let controller = staged
-            .state
-            .animation_controllers
-            .get_mut(&controller_handle)
-            .expect("controller was checked above");
         let state = controller
             .service
             .state(instance.object_id)
@@ -6982,6 +6955,9 @@ impl RuntimeAppearanceBridge {
         {
             return Ok(());
         }
+        // The instance's appearance holds its animated mesh, so the asset it
+        // names is live.
+        let asset = InstanceAsset(&instance.asset);
         let targets = BTreeSet::from([target]);
         let meta = PresentationOpMeta::new(sequence);
         if let Some(mut descriptor) = controller.detached.take() {
@@ -6991,7 +6967,7 @@ impl RuntimeAppearanceBridge {
             descriptor.target = target;
             let op = controller
                 .projector
-                .create_from_descriptor(&assets, &targets, descriptor, meta)
+                .create_from_descriptor(&asset, &targets, descriptor, meta)
                 .map_err(|diagnostic| {
                     CsharpEngineServicesError::new(
                         "CSHARP_ANIMATION_PROJECTION",
@@ -7009,14 +6985,14 @@ impl RuntimeAppearanceBridge {
         let op = if controller.projected {
             controller
                 .projector
-                .update_for_state(&assets, &targets, &state, meta)
+                .update_for_state(&asset, &targets, &state, meta)
         } else {
             controller.projector.create_for_state(
-                &assets,
+                &asset,
                 &targets,
                 AnimationProjectionTarget {
                     target,
-                    content_hash: instance.content_hash,
+                    content_hash: instance.content_hash.clone(),
                     tick_duration_millis: controller.tick_duration_millis,
                 },
                 &state,
@@ -7115,11 +7091,20 @@ impl RuntimeAppearanceBridge {
             .map_err(|error| {
                 CsharpEngineServicesError::new("CSHARP_ANIMATION_CONTROLLER", error.to_string())
             })?;
-        let clips = animation_asset_clips(&staged.state.render_resources, &instance.asset);
+        let mesh = instance_mesh(
+            &staged.state.animated_appearances,
+            &staged.state.render_resources,
+            instance.appearance,
+        );
         let index = |values: &[String], value: &str| {
             values
                 .iter()
                 .position(|candidate| candidate == value)
+                .and_then(|value| u32::try_from(value).ok())
+                .unwrap_or(u32::MAX)
+        };
+        let clip_index = |clip: &str| {
+            mesh.and_then(|mesh| mesh_clip_ids(mesh).position(|candidate| candidate == clip))
                 .and_then(|value| u32::try_from(value).ok())
                 .unwrap_or(u32::MAX)
         };
@@ -7146,12 +7131,12 @@ impl RuntimeAppearanceBridge {
         };
         Ok(NativeAnimationControllerReadout {
             state_index: index(&graph.state_order, &state.current_state_id),
-            clip_a_index: index(&clips, &state.motion.clip_a),
+            clip_a_index: clip_index(&state.motion.clip_a),
             clip_b_index: state
                 .motion
                 .clip_b
                 .as_deref()
-                .map(|clip| index(&clips, clip))
+                .map(clip_index)
                 .unwrap_or(u32::MAX),
             blend_weight_milli: state.motion.blend_weight_milli,
             speed_milli: state.motion.speed_milli,
@@ -7173,32 +7158,15 @@ impl RuntimeAppearanceBridge {
             )
         })?;
         Ok(NativeAnimationReadout {
-            admitted_meshes: u32::try_from(
-                staged
-                    .state
-                    .render_resources
-                    .iter()
-                    .filter(|resource| resource.kind() == CsharpRenderResourceKind::AnimatedMesh)
-                    .count(),
-            )
-            .unwrap_or(u32::MAX),
-            admitted_clip_packs: u32::try_from(
-                staged
-                    .state
-                    .render_resources
-                    .iter()
-                    .filter(|resource| {
-                        resource.kind() == CsharpRenderResourceKind::AnimationClipPack
-                    })
-                    .count(),
-            )
-            .unwrap_or(u32::MAX),
+            admitted_meshes: u32::try_from(staged.state.render_resources.animated_meshes().count())
+                .unwrap_or(u32::MAX),
+            admitted_clip_packs: u32::try_from(staged.state.render_resources.clip_pack_count())
+                .unwrap_or(u32::MAX),
             retained_clip_pack_associations: u32::try_from(
                 staged
                     .state
                     .render_resources
-                    .iter()
-                    .filter_map(CsharpRenderResource::animated_mesh)
+                    .animated_meshes()
                     .filter(|mesh| mesh.runtime_format == AnimatedMeshRuntimeFormat::Glb)
                     .map(|mesh| mesh.clip_packs.len())
                     .sum::<usize>(),
@@ -7392,53 +7360,14 @@ impl RuntimeAppearanceBridge {
     }
 }
 
-fn animation_assets(resources: &RenderResourceRegistry) -> BTreeMap<String, ResolvedRenderAsset> {
-    resources
-        .iter()
-        .filter(|resource| resource.kind() == CsharpRenderResourceKind::AnimatedMesh)
-        .filter_map(|resource| resource.animated_mesh())
-        .map(|mesh| {
-            (
-                mesh.asset.clone(),
-                ResolvedRenderAsset {
-                    id: mesh.asset.clone(),
-                    kind: RenderAssetKind::AnimatedMesh,
-                    content_hash: mesh.content_hash.clone(),
-                    version: 0,
-                },
-            )
-        })
-        .collect()
-}
+/// The one animated asset an animation projection names, resolved from its
+/// instance.
+struct InstanceAsset<'a>(&'a str);
 
-fn presentation_assets(
-    resources: &RenderResourceRegistry,
-) -> BTreeMap<String, ResolvedRenderAsset> {
-    resources
-        .iter()
-        .filter(|resource| {
-            matches!(
-                resource.kind(),
-                CsharpRenderResourceKind::Texture | CsharpRenderResourceKind::Font
-            )
-        })
-        .map(|resource| {
-            let asset_identity = resource.asset_identity().to_owned();
-            (
-                asset_identity.clone(),
-                ResolvedRenderAsset {
-                    id: asset_identity,
-                    kind: match resource.kind() {
-                        CsharpRenderResourceKind::Texture => RenderAssetKind::Texture,
-                        CsharpRenderResourceKind::Font => RenderAssetKind::Font,
-                        _ => unreachable!("presentation assets only include textures and fonts"),
-                    },
-                    content_hash: Some(resource.content_hash().to_owned()),
-                    version: 0,
-                },
-            )
-        })
-        .collect()
+impl render_presentation::PresentationAssetLookup for InstanceAsset<'_> {
+    fn presentation_asset_kind(&self, id: &str) -> Option<RenderAssetKind> {
+        (id == self.0).then_some(RenderAssetKind::AnimatedMesh)
+    }
 }
 
 fn native_presentation_billboard_anchor(value: NativePresentationAnchor) -> BillboardAnchor {
@@ -7559,9 +7488,6 @@ fn native_billboard_diagnostic_code(
         BillboardProjectionDiagnosticCode::AssetKindMismatch => {
             NativePresentationDiagnosticCode::AssetKindMismatch
         }
-        BillboardProjectionDiagnosticCode::ContentHashMismatch => {
-            NativePresentationDiagnosticCode::ContentHashMismatch
-        }
         BillboardProjectionDiagnosticCode::UnknownHandle => {
             NativePresentationDiagnosticCode::UnknownHandle
         }
@@ -7596,9 +7522,6 @@ fn native_particle_diagnostic_code(
         ParticleProjectionDiagnosticCode::AssetKindMismatch => {
             NativePresentationDiagnosticCode::AssetKindMismatch
         }
-        ParticleProjectionDiagnosticCode::ContentHashMismatch => {
-            NativePresentationDiagnosticCode::ContentHashMismatch
-        }
         ParticleProjectionDiagnosticCode::DuplicateSignal => {
             NativePresentationDiagnosticCode::DuplicateSignal
         }
@@ -7623,30 +7546,43 @@ fn native_particle_diagnostic_code(
     }
 }
 
-fn animation_asset_clips(resources: &RenderResourceRegistry, asset: &str) -> Vec<String> {
-    resources
-        .iter()
-        .filter(|resource| resource.kind() == CsharpRenderResourceKind::AnimatedMesh)
-        .filter_map(CsharpRenderResource::animated_mesh)
-        .find(|mesh| mesh.asset == asset)
-        .map(|mesh| {
-            mesh.clips
-                .iter()
-                .map(|clip| clip.id.clone())
-                .chain(
-                    mesh.clip_packs
-                        .iter()
-                        .flat_map(|pack| pack.clips.iter().map(|clip| clip.id.clone())),
-                )
-                .collect()
-        })
-        .unwrap_or_default()
+/// The primary animated mesh an animated appearance draws.
+fn animated_mesh_asset(
+    resources: &RenderResourceRegistry,
+    resource: u64,
+) -> Result<&AnimatedMeshAsset, CsharpEngineServicesError> {
+    let resource = resources.resource(resource)?;
+    if resource.kind() != CsharpRenderResourceKind::AnimatedMesh {
+        return Err(CsharpEngineServicesError::new(
+            "CSHARP_ANIMATION_RESOURCE_KIND",
+            "animated mesh appearance requires an admitted primary animated GLB resource",
+        ));
+    }
+    resource.animated_mesh().ok_or_else(|| {
+        CsharpEngineServicesError::new(
+            "CSHARP_ANIMATION_RESOURCE_KIND",
+            "animated mesh appearance requires an admitted animated GLB resource",
+        )
+    })
 }
 
-fn animation_asset_has_clip(resources: &RenderResourceRegistry, asset: &str, clip: &str) -> bool {
-    animation_asset_clips(resources, asset)
+/// The animated mesh an instance plays, through the appearance that holds it.
+fn instance_mesh<'a>(
+    animated_appearances: &BTreeMap<u64, u64>,
+    resources: &'a RenderResourceRegistry,
+    appearance: u64,
+) -> Option<&'a AnimatedMeshAsset> {
+    resources
+        .get(*animated_appearances.get(&appearance)?)?
+        .animated_mesh()
+}
+
+/// Every clip an animated mesh plays: its own, then its clip packs'.
+fn mesh_clip_ids(mesh: &AnimatedMeshAsset) -> impl Iterator<Item = &str> {
+    mesh.clips
         .iter()
-        .any(|candidate| candidate == clip)
+        .chain(mesh.clip_packs.iter().flat_map(|pack| &pack.clips))
+        .map(|clip| clip.id.as_str())
 }
 
 fn command_clip(command: &AnimatedMeshPlaybackCommand) -> Option<&str> {
@@ -7768,12 +7704,15 @@ fn set_light(
     }
     let state = &mut staged.state;
     if let Some(previous) = previous {
-        state.lights.remove(&previous);
+        if let Some(shown) = state.lights.remove(&previous) {
+            state.light_owners.remove(&shown.light_id);
+        }
         state.pending_lights.remove(&previous);
     }
     if !ready {
         state.pending_lights.insert(handle);
     }
+    state.light_owners.insert(fact.light_id, handle);
     state.lights.insert(handle, fact);
     Ok(())
 }
@@ -10432,8 +10371,7 @@ fn texture_descriptors_for_material(
         .textures()
         .map(|identity| {
             resources
-                .iter()
-                .find(|resource| resource.asset_identity() == identity)
+                .by_asset_identity(identity)
                 .and_then(CsharpRenderResource::texture)
                 .cloned()
                 .ok_or_else(|| {
@@ -14276,20 +14214,10 @@ fn shade(surface: Surface) -> vec4<f32> {
                 .clone()
                 .expect("primary content hash")
         );
-        let primary_asset = primary_mesh.asset.clone();
         let expected_effective_clip_count =
             primary_mesh.clips.len() + primary_mesh.clip_packs[0].clips.len();
         assert_eq!(
-            animation_asset_clips(
-                &bridge
-                    .staged
-                    .as_ref()
-                    .expect("staged state")
-                    .state
-                    .render_resources,
-                &primary_asset,
-            )
-            .len(),
+            mesh_clip_ids(primary_mesh).count(),
             expected_effective_clip_count,
         );
         let graph_id = b"clip-pack-graph";
@@ -14505,6 +14433,294 @@ fn shade(surface: Surface) -> vec4<f32> {
         let state = &bridge.staged.as_ref().unwrap().state;
         assert!(state.appearance_animation_instances.is_empty());
         assert!(!state.render_resources.held(resource));
+    }
+
+    #[test]
+    fn presentation_material_and_animation_calls_read_only_the_resources_they_name() {
+        let (mut bridge, appearance, controller) = animated_controller_setup();
+        // Many unrelated resources beside the ones the calls name.
+        bridge
+            .content_resources
+            .insert("sky.png".to_owned(), Arc::from(RGBA_PNG));
+        let fonts: Vec<String> = (0..200_u32).map(|n| format!("fonts/{n}.woff2")).collect();
+        for (n, path) in fonts.iter().enumerate() {
+            let mut bytes = b"wOF2".to_vec();
+            bytes.extend_from_slice(&(n as u32).to_le_bytes());
+            bridge
+                .content_resources
+                .insert(path.clone(), Arc::from(bytes));
+        }
+        let open = |bridge: &mut RuntimeAppearanceBridge, path: &str| {
+            let mut request = resource_request("");
+            request.path = NativeUtf8Slice {
+                bytes: path.as_ptr(),
+                len: path.len(),
+            };
+            bridge.open_resource(&request).expect("admitted").handle
+        };
+        let font_handles: Vec<_> = fonts.iter().map(|path| open(&mut bridge, path)).collect();
+        let sky = open(&mut bridge, "sky.png");
+        let slice = |value: &'static [u8]| NativeUtf8Slice {
+            bytes: value.as_ptr(),
+            len: value.len(),
+        };
+        let reads = || RESOURCE_INVENTORY_READS.with(std::cell::Cell::get);
+        RESOURCE_INVENTORY_READS.with(|count| count.set(0));
+
+        // A billboard naming a texture and a font, then updated.
+        let white = NativeColor {
+            r: 1.0,
+            g: 1.0,
+            b: 1.0,
+            a: 1.0,
+        };
+        let mut billboard = NativePresentationBillboardDescriptor {
+            logical_id: 9,
+            anchor: NativePresentationAnchor {
+                kind: NativePresentationAnchorKind::World,
+                position: NativeVec3::default(),
+                entity: 0,
+                offset: NativeVec3::default(),
+            },
+            content_kind: NativeBillboardContentKind::Icon,
+            localization_key: slice(b"marker"),
+            fallback_text: slice(b"Marker"),
+            value: slice(b""),
+            unit_key: slice(b""),
+            fallback_unit: slice(b""),
+            texture: NativeRenderResourceReference { value: sky.value },
+            font_kind: NativePresentationFontKind::Asset,
+            font_asset: NativeRenderResourceReference {
+                value: font_handles[150].value,
+            },
+            font_family: slice(b"ui"),
+            height_pixels: 16.0,
+            color: white,
+            background: NativeColor::default(),
+            max_distance: 100.0,
+            layer: NativePresentationBillboardLayer::AlwaysOnTop,
+            visible: true,
+        };
+        let owner = bridge
+            .presentation_create_billboard(&billboard)
+            .expect("icon billboard");
+        billboard.height_pixels = 24.0;
+        bridge
+            .presentation_update_billboard(owner, &billboard)
+            .expect("billboard update");
+
+        // An emitter and an emission drawing the texture as a sprite.
+        let size_curve = [
+            NativePresentationParticleScalarKey {
+                age: 0.0,
+                value: 1.0,
+            },
+            NativePresentationParticleScalarKey {
+                age: 1.0,
+                value: 0.0,
+            },
+        ];
+        let color_curve = [
+            NativePresentationParticleColorKey {
+                age: 0.0,
+                color: white,
+            },
+            NativePresentationParticleColorKey {
+                age: 1.0,
+                color: white,
+            },
+        ];
+        let particles = NativePresentationParticleDescriptor {
+            logical_id: 31,
+            signal_id: slice(b"sparks"),
+            anchor: billboard.anchor,
+            visual: NativePresentationParticleVisual::Billboard,
+            size_mode: Default::default(),
+            blend: Default::default(),
+            softness_metres: 0.0,
+            backdrop: false,
+            sprite: NativeRenderResourceReference { value: sky.value },
+            sprite_frame_count: 1,
+            rate_per_second: 1.0,
+            burst_count: 2,
+            lifetime_min_seconds: 0.1,
+            lifetime_max_seconds: 1.0,
+            velocity_min: NativeVec3::default(),
+            velocity_max: NativeVec3::default(),
+            acceleration: NativeVec3::default(),
+            size_curve: size_curve.as_ptr(),
+            size_curve_len: size_curve.len(),
+            color_curve: color_curve.as_ptr(),
+            color_curve_len: color_curve.len(),
+            flipbook_frames_per_second: 0.0,
+            seed: 7,
+            max_particles: 8,
+            visible: true,
+            has_collision: false,
+            collision: inert_particle_collision(),
+            collision_volumes: std::ptr::null(),
+            collision_volumes_len: 0,
+        };
+        bridge
+            .presentation_create_emitter(&particles)
+            .expect("sprite emitter");
+        bridge
+            .presentation_emit_particles(slice(b"burst"), &particles)
+            .expect("sprite emission");
+
+        // A textured material, updated and replaced.
+        let material_request = |roughness: f32| NativeMaterialRequest {
+            texture_scale: NativeVec2::default(),
+            texture_offset: NativeVec2::default(),
+            stochastic_tiling: 0.0,
+            shader: Default::default(),
+            triplanar_sharpness: 0.0,
+            color: white,
+            texture: NativeRenderResourceReference { value: sky.value },
+            roughness,
+            texture_tint: white,
+            emission_color: NativeVec3::default(),
+            emission_intensity: 0.0,
+            double_sided: false,
+            alpha_mode: NativeMaterialAlphaMode::Opaque,
+            alpha_cutoff: 0.5,
+            metalness: 0.0,
+            normal_map: Default::default(),
+            normal_scale: 1.0,
+            emission_map: Default::default(),
+            occlusion_map: Default::default(),
+            orm_map: Default::default(),
+            occlusion_strength: 0.0,
+            unlit: false,
+            flat_shading: false,
+            keep_dry: false,
+            wind_bend: 0.0,
+            wind_flutter: 0.0,
+            water: Default::default(),
+            translucent_shadow: false,
+        };
+        let material = bridge.create_material(material_request(0.5)).unwrap();
+        bridge
+            .update_material(NativeMaterialUpdateRequest {
+                material,
+                replacement: material_request(0.6),
+            })
+            .unwrap();
+        bridge
+            .replace_material(NativeMaterialUpdateRequest {
+                material,
+                replacement: material_request(0.7),
+            })
+            .unwrap();
+
+        // The controller projects once, then stays unchanged across snapshots.
+        let fact = appearance_fact(appearance);
+        for _ in 0..3 {
+            unsafe { bridge.stage_snapshot(&fact, 1) }.expect("snapshot");
+        }
+        let creates = bridge
+            .staged
+            .as_ref()
+            .unwrap()
+            .outputs
+            .iter()
+            .flat_map(animation_ops)
+            .count();
+        assert_eq!(creates, 1, "an unchanged controller projects nothing more");
+        bridge.read_animation_controller(controller).unwrap();
+        bridge.read_animation().unwrap();
+
+        // Direct playback names one of the instance mesh's clips.
+        let direct = bridge
+            .create_animation_instance(NativeAnimationInstanceRequest {
+                appearance,
+                object_id: 8,
+            })
+            .unwrap();
+        let play = |clip: &'static [u8]| NativeAnimationPlaybackRequest {
+            instance: direct,
+            kind: NativeAnimationPlaybackKind::Play,
+            clip: slice(clip),
+            loop_mode: NativeAnimationLoopMode::Repeat,
+            speed: 1.0,
+            weight: 1.0,
+            restart: false,
+            fade_seconds: 0.0,
+            has_fade: false,
+            normalized_time: 0.0,
+        };
+        bridge.set_animation_playback(&play(b"idle")).unwrap();
+        assert_eq!(
+            bridge
+                .set_animation_playback(&play(b"no-such-clip"))
+                .unwrap_err()
+                .code(),
+            "CSHARP_ANIMATION_CLIP"
+        );
+
+        // Renderer byte requests resolve by identity.
+        let resources = &bridge.staged_ref().unwrap().state.render_resources;
+        let texture = resources.get(sky.value).unwrap();
+        assert_eq!(
+            resources
+                .by_identity(texture.identity())
+                .map(CsharpRenderResource::identity),
+            Some(texture.identity())
+        );
+        assert_eq!(reads(), 0, "no call read the whole resource inventory");
+    }
+
+    #[test]
+    fn a_released_logical_light_id_is_free_for_another_light() {
+        let mut bridge =
+            RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), BTreeMap::new());
+        bridge.begin_call();
+        let code = |error: CsharpEngineServicesError| error.code().to_owned();
+        let first = bridge.create_light(point_light_request(5, None)).unwrap();
+        assert_eq!(
+            code(
+                bridge
+                    .create_light(point_light_request(5, None))
+                    .unwrap_err()
+            ),
+            "CSHARP_LIGHT_LOGICAL_ID"
+        );
+        // Replacing under a new id frees the old one.
+        let replaced = bridge
+            .replace_light(NativeLightUpdateRequest {
+                light: first,
+                replacement: point_light_request(6, None),
+            })
+            .unwrap();
+        let other = bridge.create_light(point_light_request(5, None)).unwrap();
+        // An update keeps its own id and may move to a free one.
+        bridge
+            .update_light(NativeLightUpdateRequest {
+                light: replaced,
+                replacement: point_light_request(6, None),
+            })
+            .unwrap();
+        assert_eq!(
+            code(
+                bridge
+                    .update_light(NativeLightUpdateRequest {
+                        light: replaced,
+                        replacement: point_light_request(5, None),
+                    })
+                    .unwrap_err()
+            ),
+            "CSHARP_LIGHT_LOGICAL_ID"
+        );
+        bridge
+            .update_light(NativeLightUpdateRequest {
+                light: replaced,
+                replacement: point_light_request(7, None),
+            })
+            .unwrap();
+        bridge.create_light(point_light_request(6, None)).unwrap();
+        // Destroying frees its id.
+        bridge.destroy_light(other).unwrap();
+        bridge.create_light(point_light_request(5, None)).unwrap();
     }
 
     fn animation_ops(output: &RuntimeAppearanceCallOutput) -> Vec<&'static str> {

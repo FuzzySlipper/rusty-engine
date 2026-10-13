@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use render_model::{RenderAssetError, RenderAssetKind};
+use render_model::RenderAssetKind;
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -317,7 +317,6 @@ pub enum BillboardProjectionDiagnosticCode {
     InvalidDescriptor,
     AssetMissing,
     AssetKindMismatch,
-    ContentHashMismatch,
     UnknownHandle,
     AnchorMissing,
     UnavailableHost,
@@ -633,13 +632,7 @@ fn validate_texture_ref(
 ) -> Result<(), BillboardProjectionDiagnosticCode> {
     validate_key(&texture.asset)?;
     validate_text(&texture.content_hash)?;
-    verify_asset(
-        assets,
-        &texture.asset,
-        RenderAssetKind::Texture,
-        Some(&texture.content_hash),
-    )
-    .map_err(asset_diagnostic)
+    verify_asset(assets, &texture.asset, RenderAssetKind::Texture).map_err(asset_diagnostic)
 }
 
 fn validate_style(style: &BillboardStyle) -> bool {
@@ -691,14 +684,9 @@ pub(crate) fn validate_font(
 ) -> Result<(), BillboardProjectionDiagnosticCode> {
     match font {
         BillboardFontRef::System { family } => validate_text(family),
-        BillboardFontRef::Asset {
-            asset,
-            content_hash,
-            family,
-        } => {
+        BillboardFontRef::Asset { asset, family, .. } => {
             validate_text(family)?;
-            verify_asset(assets, asset, RenderAssetKind::Font, Some(content_hash))
-                .map_err(asset_diagnostic)
+            verify_asset(assets, asset, RenderAssetKind::Font).map_err(asset_diagnostic)
         }
     }
 }
@@ -820,11 +808,8 @@ fn validate_arguments(
 
 fn asset_diagnostic(error: PresentationAssetError) -> BillboardProjectionDiagnosticCode {
     match error {
-        PresentationAssetError::Missing(_) => BillboardProjectionDiagnosticCode::AssetMissing,
-        PresentationAssetError::Invalid(RenderAssetError::ContentHashMismatch { .. }) => {
-            BillboardProjectionDiagnosticCode::ContentHashMismatch
-        }
-        PresentationAssetError::Invalid(_) => BillboardProjectionDiagnosticCode::AssetKindMismatch,
+        PresentationAssetError::Missing => BillboardProjectionDiagnosticCode::AssetMissing,
+        PresentationAssetError::WrongKind => BillboardProjectionDiagnosticCode::AssetKindMismatch,
     }
 }
 
@@ -842,9 +827,6 @@ const fn diagnostic_message(code: BillboardProjectionDiagnosticCode) -> &'static
         BillboardProjectionDiagnosticCode::AssetMissing => "billboard resource is unavailable",
         BillboardProjectionDiagnosticCode::AssetKindMismatch => {
             "billboard resource has the wrong kind"
-        }
-        BillboardProjectionDiagnosticCode::ContentHashMismatch => {
-            "billboard resource content hash does not match"
         }
         BillboardProjectionDiagnosticCode::UnknownHandle => "billboard handle is not active",
         BillboardProjectionDiagnosticCode::AnchorMissing => {

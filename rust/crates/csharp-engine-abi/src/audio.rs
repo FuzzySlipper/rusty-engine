@@ -78,7 +78,6 @@ pub enum NativeAudioDiagnosticCode {
     InvalidDescriptor = 1,
     AssetMissing = 2,
     AssetKindMismatch = 3,
-    ContentHashMismatch = 4,
     DuplicateSignal = 5,
     UnknownHandle = 7,
     UnavailableHost = 8,

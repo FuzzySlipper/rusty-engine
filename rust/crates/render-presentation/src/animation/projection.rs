@@ -1,8 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use render_model::{
-    AnimatedMeshClipPose, AnimatedMeshPlaybackCommand, RenderAssetError, RenderAssetKind,
-    RenderHandle,
+    AnimatedMeshClipPose, AnimatedMeshPlaybackCommand, RenderAssetKind, RenderHandle,
 };
 use serde::{Deserialize, Serialize};
 
@@ -285,7 +284,6 @@ pub enum AnimationProjectionDiagnosticCode {
     UnknownTarget,
     AssetMissing,
     AssetKindMismatch,
-    ContentHashMismatch,
     ClipMissing,
     InvalidBlendWeight,
     InvalidTransition,
@@ -667,13 +665,8 @@ fn validate_descriptor(
     if !targets.contains_render_target(descriptor.target) {
         return Err(AnimationProjectionDiagnosticCode::UnknownTarget);
     }
-    verify_asset(
-        assets,
-        &descriptor.asset,
-        RenderAssetKind::AnimatedMesh,
-        Some(&descriptor.content_hash),
-    )
-    .map_err(asset_diagnostic)?;
+    verify_asset(assets, &descriptor.asset, RenderAssetKind::AnimatedMesh)
+        .map_err(asset_diagnostic)?;
     validate_motion(&descriptor.controller.motion)?;
     if descriptor.controller.clip_phases.len() > 4
         || descriptor.controller.clip_phases.iter().any(|phase| {
@@ -744,11 +737,8 @@ fn validate_fact(
 
 fn asset_diagnostic(error: PresentationAssetError) -> AnimationProjectionDiagnosticCode {
     match error {
-        PresentationAssetError::Missing(_) => AnimationProjectionDiagnosticCode::AssetMissing,
-        PresentationAssetError::Invalid(RenderAssetError::ContentHashMismatch { .. }) => {
-            AnimationProjectionDiagnosticCode::ContentHashMismatch
-        }
-        PresentationAssetError::Invalid(_) => AnimationProjectionDiagnosticCode::AssetKindMismatch,
+        PresentationAssetError::Missing => AnimationProjectionDiagnosticCode::AssetMissing,
+        PresentationAssetError::WrongKind => AnimationProjectionDiagnosticCode::AssetKindMismatch,
     }
 }
 
@@ -787,9 +777,6 @@ const fn diagnostic_message(code: AnimationProjectionDiagnosticCode) -> &'static
         AnimationProjectionDiagnosticCode::AssetMissing => "animated mesh is unavailable",
         AnimationProjectionDiagnosticCode::AssetKindMismatch => {
             "animation asset has the wrong resource kind"
-        }
-        AnimationProjectionDiagnosticCode::ContentHashMismatch => {
-            "animated mesh content hash does not match"
         }
         AnimationProjectionDiagnosticCode::ClipMissing => {
             "animation motion references an invalid clip"

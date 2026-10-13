@@ -1,31 +1,18 @@
 use std::collections::BTreeMap;
 
-use render_model::{RenderAssetKind, ResolvedRenderAsset};
+use render_model::RenderAssetKind;
 use render_presentation::*;
 
-fn asset(id: &str, kind: RenderAssetKind, hash: &str) -> ResolvedRenderAsset {
-    ResolvedRenderAsset {
-        id: id.into(),
-        kind,
-        content_hash: Some(hash.into()),
-        version: 1,
-    }
-}
-
-fn assets() -> BTreeMap<String, ResolvedRenderAsset> {
+fn assets() -> BTreeMap<String, RenderAssetKind> {
     [
-        asset("font/ui", RenderAssetKind::Font, "font-hash"),
-        asset(
-            "texture/indicator",
-            RenderAssetKind::Texture,
-            "indicator-hash",
-        ),
-        asset("texture/ready", RenderAssetKind::Texture, "ready-hash"),
-        asset("texture/locked", RenderAssetKind::Texture, "locked-hash"),
-        asset("audio/pulse", RenderAssetKind::Audio, "audio-hash"),
+        ("font/ui", RenderAssetKind::Font),
+        ("texture/indicator", RenderAssetKind::Texture),
+        ("texture/ready", RenderAssetKind::Texture),
+        ("texture/locked", RenderAssetKind::Texture),
+        ("audio/pulse", RenderAssetKind::Audio),
     ]
     .into_iter()
-    .map(|asset| (asset.id.clone(), asset))
+    .map(|(id, kind)| (id.to_owned(), kind))
     .collect()
 }
 
@@ -381,27 +368,6 @@ fn structured_icons_require_exact_assets_and_are_accounted_once() {
             .unwrap_err()
             .code,
         BillboardProjectionDiagnosticCode::AssetMissing
-    );
-
-    let mut wrong_hash_assets = assets();
-    wrong_hash_assets
-        .get_mut("texture/indicator")
-        .unwrap()
-        .content_hash = Some("changed".into());
-    let mut wrong_hash_projector = BillboardProjector::default();
-    let wrong_hash_error = wrong_hash_projector
-        .project(
-            &wrong_hash_assets,
-            PresentationOpMeta::new(0),
-            BillboardProjectionOp::Create {
-                handle: BillboardHandle::new(3),
-                descriptor,
-            },
-        )
-        .unwrap_err();
-    assert_eq!(
-        wrong_hash_error.code,
-        BillboardProjectionDiagnosticCode::ContentHashMismatch
     );
 }
 

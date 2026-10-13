@@ -1,16 +1,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use render_model::{RenderAssetKind, RenderHandle, ResolvedRenderAsset};
+use render_model::{RenderAssetKind, RenderHandle};
 use render_presentation::*;
 
-fn assets() -> BTreeMap<String, ResolvedRenderAsset> {
-    let asset = ResolvedRenderAsset {
-        id: "animated-mesh/hero".into(),
-        kind: RenderAssetKind::AnimatedMesh,
-        content_hash: Some("ff".into()),
-        version: 3,
-    };
-    BTreeMap::from([(asset.id.clone(), asset)])
+fn assets() -> BTreeMap<String, RenderAssetKind> {
+    BTreeMap::from([("animated-mesh/hero".into(), RenderAssetKind::AnimatedMesh)])
 }
 
 fn catalog() -> AnimationCatalog {
@@ -143,17 +137,6 @@ fn catalog_rejects_invalid_graphs_speeds_and_asset_identity_drift() {
         .diagnostics
         .iter()
         .any(|item| item.code == AnimationCatalogDiagnosticCode::AmbiguousTransition));
-
-    let mut changed_assets = assets();
-    changed_assets
-        .get_mut("animated-mesh/hero")
-        .unwrap()
-        .content_hash = Some("changed".into());
-    let error = validate_animation_catalog(catalog(), &changed_assets).unwrap_err();
-    assert!(error
-        .diagnostics
-        .iter()
-        .any(|item| item.code == AnimationCatalogDiagnosticCode::ContentHashMismatch));
 
     let mut invalid_graph = catalog();
     invalid_graph.graphs[0].states[0].motion = AnimationMotionDefinition::Clip {

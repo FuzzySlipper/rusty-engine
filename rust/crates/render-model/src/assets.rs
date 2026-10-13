@@ -38,92 +38,6 @@ impl RenderAssetKind {
     }
 }
 
-/// Immutable resource information supplied to projection or a renderer host.
-/// This is deliberately not a catalog: it cannot enumerate, mutate, resolve a
-/// project, or decide gameplay authority.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ResolvedRenderAsset {
-    pub id: String,
-    pub kind: RenderAssetKind,
-    pub content_hash: Option<String>,
-    pub version: u32,
-}
-
-impl ResolvedRenderAsset {
-    pub fn validate(&self) -> Result<(), RenderAssetError> {
-        validate_asset_id(&self.id, self.kind)?;
-        if self
-            .content_hash
-            .as_ref()
-            .is_some_and(|hash| hash.trim().is_empty())
-        {
-            return Err(RenderAssetError::EmptyContentHash);
-        }
-        Ok(())
-    }
-
-    pub fn verify_requirement(
-        &self,
-        requirement: &RenderAssetRequirement,
-    ) -> Result<(), RenderAssetError> {
-        self.validate()?;
-        requirement.validate()?;
-        if self.id != requirement.id {
-            return Err(RenderAssetError::IdMismatch {
-                expected: requirement.id.clone(),
-                actual: self.id.clone(),
-            });
-        }
-        if self.kind != requirement.kind {
-            return Err(RenderAssetError::WrongKind {
-                id: self.id.clone(),
-                expected: requirement.kind,
-            });
-        }
-        if requirement
-            .content_hash
-            .as_ref()
-            .is_some_and(|expected| self.content_hash.as_ref() != Some(expected))
-        {
-            return Err(RenderAssetError::ContentHashMismatch {
-                expected: requirement.content_hash.clone().unwrap_or_default(),
-                actual: self.content_hash.clone(),
-            });
-        }
-        if self.version < requirement.minimum_version {
-            return Err(RenderAssetError::VersionTooOld {
-                minimum: requirement.minimum_version,
-                actual: self.version,
-            });
-        }
-        Ok(())
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct RenderAssetRequirement {
-    pub id: String,
-    pub kind: RenderAssetKind,
-    pub content_hash: Option<String>,
-    pub minimum_version: u32,
-}
-
-impl RenderAssetRequirement {
-    pub fn validate(&self) -> Result<(), RenderAssetError> {
-        validate_asset_id(&self.id, self.kind)?;
-        if self
-            .content_hash
-            .as_ref()
-            .is_some_and(|hash| hash.trim().is_empty())
-        {
-            return Err(RenderAssetError::EmptyContentHash);
-        }
-        Ok(())
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RenderAssetError {
     InvalidSkyBlendAmount,
@@ -131,19 +45,6 @@ pub enum RenderAssetError {
     WrongKind {
         id: String,
         expected: RenderAssetKind,
-    },
-    EmptyContentHash,
-    IdMismatch {
-        expected: String,
-        actual: String,
-    },
-    ContentHashMismatch {
-        expected: String,
-        actual: Option<String>,
-    },
-    VersionTooOld {
-        minimum: u32,
-        actual: u32,
     },
 }
 
@@ -1662,32 +1563,14 @@ mod tests {
         "sha256:a58d5395a03945e56638dba7ae6158b2fdaf013610a798c059a6d88231a052ae";
 
     #[test]
-    fn narrow_asset_view_checks_kind_without_becoming_a_catalog() {
-        let asset = ResolvedRenderAsset {
-            id: "mesh/crate".to_string(),
-            kind: RenderAssetKind::StaticMesh,
-            content_hash: Some("abc123".to_string()),
-            version: 4,
-        };
-        assert_eq!(asset.validate(), Ok(()));
+    fn asset_ids_carry_their_kind_prefix() {
+        assert_eq!(
+            validate_asset_id("mesh/crate", RenderAssetKind::StaticMesh),
+            Ok(())
+        );
         assert!(matches!(
-            ResolvedRenderAsset {
-                kind: RenderAssetKind::Texture,
-                ..asset.clone()
-            }
-            .validate(),
+            validate_asset_id("mesh/crate", RenderAssetKind::Texture),
             Err(RenderAssetError::WrongKind { .. })
-        ));
-
-        let requirement = RenderAssetRequirement {
-            id: "mesh/crate".to_string(),
-            kind: RenderAssetKind::StaticMesh,
-            content_hash: Some("different".to_string()),
-            minimum_version: 3,
-        };
-        assert!(matches!(
-            asset.verify_requirement(&requirement),
-            Err(RenderAssetError::ContentHashMismatch { .. })
         ));
     }
 

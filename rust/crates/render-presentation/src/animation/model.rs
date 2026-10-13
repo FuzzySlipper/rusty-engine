@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
-use render_model::{RenderAssetError, RenderAssetKind};
+use render_model::RenderAssetKind;
 use serde::{Deserialize, Serialize};
 
 use crate::{verify_asset, PresentationAssetError, PresentationAssetLookup};
@@ -259,12 +259,7 @@ pub fn validate_animation_catalog(
                 "animated mesh content hash must be non-empty",
             );
         }
-        match verify_asset(
-            assets,
-            &asset.asset_id,
-            RenderAssetKind::AnimatedMesh,
-            Some(&asset.content_hash),
-        ) {
+        match verify_asset(assets, &asset.asset_id, RenderAssetKind::AnimatedMesh) {
             Ok(()) => {}
             Err(error) => {
                 let (code, message) = asset_diagnostic(error);
@@ -644,17 +639,11 @@ fn asset_diagnostic(
     error: PresentationAssetError,
 ) -> (AnimationCatalogDiagnosticCode, &'static str) {
     match error {
-        PresentationAssetError::Missing(_) => (
+        PresentationAssetError::Missing => (
             AnimationCatalogDiagnosticCode::MissingAsset,
             "animated mesh is unavailable",
         ),
-        PresentationAssetError::Invalid(
-            RenderAssetError::ContentHashMismatch { .. } | RenderAssetError::EmptyContentHash,
-        ) => (
-            AnimationCatalogDiagnosticCode::ContentHashMismatch,
-            "animated mesh content hash does not match",
-        ),
-        PresentationAssetError::Invalid(_) => (
+        PresentationAssetError::WrongKind => (
             AnimationCatalogDiagnosticCode::AssetKindMismatch,
             "animation asset has the wrong resource kind",
         ),

@@ -1026,16 +1026,27 @@ impl EngineServiceSet {
     /// Encoded bytes of an admitted audio clip, shared without copying.
     pub fn audio_clip_bytes(&self, content_hash: &str) -> Option<Arc<[u8]>> {
         self.audio
-            .render_resources()
-            .find(|resource| resource.content_hash() == content_hash)
+            .clip_by_content_hash(content_hash)
             .map(CsharpRenderResource::shared_bytes)
     }
 
     /// A retained renderer resource by identity, borrowed for an in-process
     /// renderer that reads the bytes while it holds the services.
     pub fn borrowed_renderer_resource(&self, identity: &str) -> Option<&CsharpRenderResource> {
-        self.renderer_resources()
-            .find(|resource| resource.identity() == identity)
+        let resources = &self.appearance.state.render_resources;
+        resources
+            .by_identity(identity)
+            .or_else(|| {
+                resources
+                    .recently_released()
+                    .find(|resource| resource.identity() == identity)
+            })
+            .or_else(|| self.audio.clip_by_identity(identity))
+            .or_else(|| {
+                self.video
+                    .render_resources()
+                    .find(|resource| resource.identity() == identity)
+            })
     }
 
     /// Every resource a renderer of the committed scene may ask for.

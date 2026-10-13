@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use render_model::{RenderAssetKind, ResolvedRenderAsset, JSON_SAFE_U64_MAX};
+use render_model::{RenderAssetKind, JSON_SAFE_U64_MAX};
 use serde::{Deserialize, Serialize};
 
 use crate::billboard::{
@@ -608,15 +608,10 @@ fn wire_color_is_valid(color: [f32; 4]) -> bool {
 fn synthetic_billboard_assets(
     font: Option<&BillboardFontRef>,
     content: Option<&BillboardContent>,
-) -> BTreeMap<String, ResolvedRenderAsset> {
+) -> BTreeMap<String, RenderAssetKind> {
     let mut assets = BTreeMap::new();
-    if let Some(BillboardFontRef::Asset {
-        asset,
-        content_hash,
-        ..
-    }) = font
-    {
-        insert_synthetic_asset(&mut assets, asset, RenderAssetKind::Font, content_hash);
+    if let Some(BillboardFontRef::Asset { asset, .. }) = font {
+        assets.insert(asset.clone(), RenderAssetKind::Font);
     }
     if let Some(content) = content {
         match content {
@@ -640,32 +635,10 @@ fn synthetic_billboard_assets(
 }
 
 fn insert_synthetic_texture(
-    assets: &mut BTreeMap<String, ResolvedRenderAsset>,
+    assets: &mut BTreeMap<String, RenderAssetKind>,
     texture: &BillboardTextureRef,
 ) {
-    insert_synthetic_asset(
-        assets,
-        &texture.asset,
-        RenderAssetKind::Texture,
-        &texture.content_hash,
-    );
-}
-
-fn insert_synthetic_asset(
-    assets: &mut BTreeMap<String, ResolvedRenderAsset>,
-    id: &str,
-    kind: RenderAssetKind,
-    content_hash: &str,
-) {
-    assets.insert(
-        id.to_string(),
-        ResolvedRenderAsset {
-            id: id.to_string(),
-            kind,
-            content_hash: Some(content_hash.to_string()),
-            version: 1,
-        },
-    );
+    assets.insert(texture.asset.clone(), RenderAssetKind::Texture);
 }
 
 fn validate_billboard_anchor(

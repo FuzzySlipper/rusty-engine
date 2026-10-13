@@ -6,7 +6,7 @@ use std::{
 };
 
 use csharp_engine_abi::*;
-use render_model::{RenderAssetKind, ResolvedRenderAsset, JSON_SAFE_U64_MAX};
+use render_model::{RenderAssetKind, JSON_SAFE_U64_MAX};
 use render_presentation::{
     AudioBus, AudioBusControl, AudioEmitter, AudioHandle, AudioProjectionDiagnosticCode,
     AudioProjectionOp, AudioProjector, AudioRolloff, AudioSourceDescriptor, AudioVoiceControl,
@@ -34,6 +34,14 @@ struct AudioClip {
     owners: u32,
 }
 
+/// The hex SHA-256 digest an admitted clip's content hash names.
+fn clip_digest(content_hash: &str) -> String {
+    content_hash
+        .strip_prefix("sha256:")
+        .expect("audio clip hashes use SHA-256")
+        .to_owned()
+}
+
 /// One more (`add`) or one fewer user of `clip`.
 fn count_clip_user(users: &mut BTreeMap<u64, u32>, clip: u64, add: bool) {
     if add {
@@ -50,7 +58,11 @@ fn count_clip_user(users: &mut BTreeMap<u64, u32>, clip: u64, add: bool) {
 struct AudioState {
     projector: AudioProjector,
     clips: BTreeMap<u64, AudioClip>,
-    assets: BTreeMap<String, ResolvedRenderAsset>,
+    /// Each clip by the hex SHA-256 digest of its body, which names both its
+    /// content hash (`sha256:<digest>`) and its resource identity
+    /// (`audio-resource/<digest>`).
+    digests: BTreeMap<String, u64>,
+    assets: BTreeMap<String, RenderAssetKind>,
     voices: BTreeMap<u64, AudioHandle>,
     voice_clips: BTreeMap<u64, u64>,
     one_shot_clips: BTreeMap<u64, u64>,
@@ -192,6 +204,7 @@ impl RuntimeAudioBridge {
             state: AudioState {
                 projector: AudioProjector::default(),
                 clips: BTreeMap::new(),
+                digests: BTreeMap::new(),
                 assets: BTreeMap::new(),
                 voices: BTreeMap::new(),
                 voice_clips: BTreeMap::new(),
@@ -342,6 +355,21 @@ impl RuntimeAudioBridge {
 
     pub(crate) fn render_resources(&self) -> impl Iterator<Item = &CsharpRenderResource> {
         self.state.clips.values().map(|clip| &clip.resource)
+    }
+
+    /// The admitted clip with this content hash.
+    pub(crate) fn clip_by_content_hash(&self, content_hash: &str) -> Option<&CsharpRenderResource> {
+        self.clip_by_digest(content_hash.strip_prefix("sha256:")?)
+    }
+
+    /// The admitted clip with this resource identity.
+    pub(crate) fn clip_by_identity(&self, identity: &str) -> Option<&CsharpRenderResource> {
+        self.clip_by_digest(identity.strip_prefix("audio-resource/")?)
+    }
+
+    fn clip_by_digest(&self, digest: &str) -> Option<&CsharpRenderResource> {
+        let handle = self.state.digests.get(digest)?;
+        Some(&self.state.clips.get(handle)?.resource)
     }
 
     /// Reconstructs the retained audio intent on a fresh realization. This
@@ -500,21 +528,25 @@ impl RuntimeAudioBridge {
         resource_identity: &str,
     ) -> Result<Option<NativeAudioClipHandle>, CsharpEngineServicesError> {
         let staged = self.staged_mut()?;
-        let Some((handle, clip)) = staged
-            .state
-            .clips
-            .iter_mut()
-            .find(|(_, clip)| clip.resource.identity() == resource_identity)
+        let Some(handle) = resource_identity
+            .strip_prefix("audio-resource/")
+            .and_then(|digest| staged.state.digests.get(digest))
+            .copied()
         else {
             return Ok(None);
         };
+        let clip = staged
+            .state
+            .clips
+            .get_mut(&handle)
+            .expect("an indexed clip is live");
         clip.owners = clip.owners.checked_add(1).ok_or_else(|| {
             CsharpEngineServicesError::new(
                 "CSHARP_AUDIO_CLIP_OWNERS",
                 "audio clip owner count exhausted",
             )
         })?;
-        Ok(Some(NativeAudioClipHandle { value: *handle }))
+        Ok(Some(NativeAudioClipHandle { value: handle }))
     }
 
     fn admit_clip(
@@ -543,15 +575,14 @@ impl RuntimeAudioBridge {
                 "audio clip handles exhausted",
             )
         })?;
-        staged.state.assets.insert(
-            asset.clone(),
-            ResolvedRenderAsset {
-                id: asset.clone(),
-                kind: RenderAssetKind::Audio,
-                content_hash: Some(content_hash.clone()),
-                version: 0,
-            },
-        );
+        staged
+            .state
+            .assets
+            .insert(asset.clone(), RenderAssetKind::Audio);
+        staged
+            .state
+            .digests
+            .insert(clip_digest(&content_hash), handle);
         staged.state.clips.insert(
             handle,
             AudioClip {
@@ -630,15 +661,14 @@ impl RuntimeAudioBridge {
                     "audio clip handles exhausted",
                 )
             })?;
-            staged.state.assets.insert(
-                asset.clone(),
-                ResolvedRenderAsset {
-                    id: asset.clone(),
-                    kind: RenderAssetKind::Audio,
-                    content_hash: Some(content_hash.clone()),
-                    version: 0,
-                },
-            );
+            staged
+                .state
+                .assets
+                .insert(asset.clone(), RenderAssetKind::Audio);
+            staged
+                .state
+                .digests
+                .insert(clip_digest(&content_hash), handle);
             staged.state.clips.insert(
                 handle,
                 AudioClip {
@@ -993,6 +1023,10 @@ impl RuntimeAudioBridge {
             .remove(&clip.value)
             .expect("checked clip");
         staged.state.assets.remove(&clip.asset);
+        staged
+            .state
+            .digests
+            .remove(&clip_digest(&clip.content_hash));
         Ok(())
     }
 
@@ -1214,9 +1248,6 @@ fn diagnostic_code(code: AudioProjectionDiagnosticCode) -> NativeAudioDiagnostic
         AudioProjectionDiagnosticCode::AssetMissing => NativeAudioDiagnosticCode::AssetMissing,
         AudioProjectionDiagnosticCode::AssetKindMismatch => {
             NativeAudioDiagnosticCode::AssetKindMismatch
-        }
-        AudioProjectionDiagnosticCode::ContentHashMismatch => {
-            NativeAudioDiagnosticCode::ContentHashMismatch
         }
         AudioProjectionDiagnosticCode::DuplicateSignal => {
             NativeAudioDiagnosticCode::DuplicateSignal
@@ -1696,6 +1727,62 @@ mod tests {
         bytes[36..40].copy_from_slice(b"data");
         bytes[40..44].copy_from_slice(&4_u32.to_le_bytes());
         Arc::from(bytes)
+    }
+
+    #[test]
+    fn clips_are_found_by_content_hash_and_identity_until_disposed() {
+        let mut bridge = RuntimeAudioBridge::new(BTreeMap::new());
+        bridge.begin_call();
+        let handles: Vec<_> = (0..64_u8)
+            .map(|n| {
+                let mut bytes = wav().to_vec();
+                bytes[44] = n;
+                bridge
+                    .admit_clip(format!("audio/{n}.wav"), Arc::from(bytes))
+                    .unwrap()
+            })
+            .collect();
+        bridge.end_call();
+        let resource = bridge.state.clips[&handles[7].value].resource.clone();
+        let found = |bridge: &RuntimeAudioBridge| {
+            (
+                bridge
+                    .clip_by_content_hash(resource.content_hash())
+                    .map(|clip| clip.identity().to_owned()),
+                bridge
+                    .clip_by_identity(resource.identity())
+                    .map(|clip| clip.content_hash().to_owned()),
+            )
+        };
+        assert_eq!(
+            found(&bridge),
+            (
+                Some(resource.identity().to_owned()),
+                Some(resource.content_hash().to_owned())
+            )
+        );
+        // A second opener shares the clip, so one disposal keeps it.
+        bridge.begin_call();
+        let mut bytes = wav().to_vec();
+        bytes[44] = 7;
+        let shared = bridge
+            .admit_clip("audio/again.wav".to_owned(), Arc::from(bytes))
+            .unwrap();
+        assert_eq!(shared, handles[7]);
+        bridge.destroy_clip(shared).unwrap();
+        bridge.end_call();
+        assert_eq!(found(&bridge).0.as_deref(), Some(resource.identity()));
+        bridge.begin_call();
+        bridge.destroy_clip(handles[7]).unwrap();
+        bridge.end_call();
+        assert_eq!(found(&bridge), (None, None));
+        assert!(bridge
+            .clip_by_content_hash(
+                bridge.state.clips[&handles[8].value]
+                    .resource
+                    .content_hash()
+            )
+            .is_some());
     }
 
     #[test]

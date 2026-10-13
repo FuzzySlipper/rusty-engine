@@ -1193,11 +1193,7 @@ impl PresentationWorld {
                             .get(&instance.asset)
                             .and_then(|asset| asset.rig.as_ref())
                             .is_some_and(|rig| {
-                                rig.joints
-                                    .iter()
-                                    .filter(|candidate| candidate.id == *joint)
-                                    .count()
-                                    == 1
+                                rig.joints.iter().any(|candidate| candidate.id == *joint)
                             }),
                         _ => false,
                     };

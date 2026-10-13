@@ -3630,9 +3630,6 @@ fn native_audio_diagnostic_code(
         render_presentation::AudioProjectionDiagnosticCode::AssetKindMismatch => {
             NativeAudioDiagnosticCode::AssetKindMismatch
         }
-        render_presentation::AudioProjectionDiagnosticCode::ContentHashMismatch => {
-            NativeAudioDiagnosticCode::ContentHashMismatch
-        }
         render_presentation::AudioProjectionDiagnosticCode::DuplicateSignal => {
             NativeAudioDiagnosticCode::DuplicateSignal
         }
