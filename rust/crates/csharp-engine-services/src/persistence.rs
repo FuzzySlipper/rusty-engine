@@ -8,7 +8,7 @@
 use std::{
     collections::BTreeMap,
     ffi::c_void,
-    fs::{self, File, OpenOptions},
+    fs::{self, OpenOptions},
     io::Write,
     path::{Component, Path, PathBuf},
 };
@@ -166,17 +166,7 @@ impl RuntimePersistenceBridge {
         } else if current.is_none() {
             NativePersistenceDeleteOutcome::Missing
         } else {
-            // Flush the directory entry removal before reporting durable success.
-            // A failed flush is an operation failure, not a deletion receipt.
-            let removed = path
-                .parent()
-                .ok_or_else(|| std::io::Error::other("the key has no parent directory"))
-                .and_then(File::open)
-                .and_then(|directory| {
-                    fs::remove_file(&path)?;
-                    directory.sync_all()
-                });
-            removed.map_err(|error| {
+            remove_durably(&path).map_err(|error| {
                 io_error(format!("deleting persistence key `{key}` failed: {error}"))
             })?;
             NativePersistenceDeleteOutcome::Deleted
@@ -280,6 +270,27 @@ unsafe extern "C" fn save(
         refusable(context, request, result, receipt, |bridge, request| {
             bridge.save(request)
         })
+    }
+}
+
+/// Removes a key's file and, on Unix, flushes the directory entry's removal
+/// before success is reported; a failed flush is an operation failure, not a
+/// deletion receipt. Windows opens no directory as a file (std's `File::open`
+/// on one is access-denied), and NTFS journals the entry itself, so there the
+/// removal is the whole operation.
+fn remove_durably(path: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        let directory = path
+            .parent()
+            .ok_or_else(|| std::io::Error::other("the key has no parent directory"))
+            .and_then(fs::File::open)?;
+        fs::remove_file(path)?;
+        directory.sync_all()
+    }
+    #[cfg(not(unix))]
+    {
+        fs::remove_file(path)
     }
 }
 
@@ -936,7 +947,6 @@ mod tests {
     #[test]
     fn retired_malformed_and_unreadable_storage_are_refused_with_codes_and_left_untouched() {
         use crate::operation_diagnostics::{empty_receipt, receipt_codes};
-        use std::os::unix::fs::PermissionsExt;
         fn utf8(value: &str) -> NativeUtf8Slice {
             NativeUtf8Slice {
                 bytes: value.as_ptr(),
@@ -1045,17 +1055,22 @@ mod tests {
             ABI_OK
         );
         let before = fs::read(scope.join("committed")).unwrap();
-        fs::set_permissions(&scope, fs::Permissions::from_mode(0o500)).unwrap();
-        // A privileged user writes through permissions; there is no failure to observe.
-        let writable = fs::write(scope.join("probe"), b"").is_ok();
-        if !writable {
-            assert_eq!(
-                unsafe { save(context, &committed, &mut saved, &mut refusal) },
-                0
-            );
-            assert_eq!(receipt_codes(&refusal), ["CSHARP_PERSISTENCE_IO"]);
+        // An unwritable scope (Unix permissions) refuses the save.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&scope, fs::Permissions::from_mode(0o500)).unwrap();
+            // A privileged user writes through permissions; there is no failure to observe.
+            let writable = fs::write(scope.join("probe"), b"").is_ok();
+            if !writable {
+                assert_eq!(
+                    unsafe { save(context, &committed, &mut saved, &mut refusal) },
+                    0
+                );
+                assert_eq!(receipt_codes(&refusal), ["CSHARP_PERSISTENCE_IO"]);
+            }
+            fs::set_permissions(&scope, fs::Permissions::from_mode(0o700)).unwrap();
         }
-        fs::set_permissions(&scope, fs::Permissions::from_mode(0o700)).unwrap();
         assert_eq!(fs::read(scope.join("committed")).unwrap(), before);
         let mut blob = NativePersistenceBlobHandle::default();
         let load_request = NativePersistenceLoadRequest {
