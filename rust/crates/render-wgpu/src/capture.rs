@@ -21,7 +21,7 @@ use crate::camera::{self, CameraPose};
 use crate::compose::Conversion;
 use crate::frame::{PassStart, PixelRect, ViewLayer, ViewPass};
 use crate::tables::Environment;
-use crate::target::{TargetView, DEPTH_FORMAT};
+use crate::target::{fit_to_device, TargetView, DEPTH_FORMAT};
 use crate::{encode_png, ApplyIssue, OffscreenTarget, Renderer, ResourceSource};
 
 /// Linear capture format: exposure and tone mapping run after the capture.
@@ -173,6 +173,14 @@ impl Renderer {
         if *width == 0 || *height == 0 || capture_width > limit || capture_height > limit {
             return Err(format!(
                 "capture: {width}x{height} with {samples} samples ({factor}x{factor} supersampling) exceeds the device texture limit {limit}"
+            ));
+        }
+        // The image is its stated size: a target the device would make
+        // smaller to read back is refused, not encoded as that size.
+        if fit_to_device(&self.gpu, *width, *height) != (*width, *height) {
+            return Err(format!(
+                "capture: {width}x{height} exceeds the device readback buffer limit {}",
+                self.gpu.device.limits().max_buffer_size
             ));
         }
         let (mut isolated, issues) = self.isolated(&job.frame, resources);

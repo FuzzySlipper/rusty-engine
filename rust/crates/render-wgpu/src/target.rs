@@ -92,7 +92,7 @@ fn padded_row(width: u32) -> u32 {
     (width * 4).div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT) * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT
 }
 
-fn fit_to_device(gpu: &Gpu, width: u32, height: u32) -> (u32, u32) {
+pub(crate) fn fit_to_device(gpu: &Gpu, width: u32, height: u32) -> (u32, u32) {
     let limits = gpu.device.limits();
     fit_to_limits(
         width,
@@ -116,6 +116,15 @@ fn fit_to_limits(width: u32, height: u32, max_side: u32, max_buffer: u64) -> (u3
     // Row padding is outside the tight estimate; the height gives it room.
     let rows = u32::try_from(max_buffer / u64::from(padded_row(width))).unwrap_or(u32::MAX);
     (width, fitted(height).min(rows.max(1)))
+}
+
+fn fitted_pixel_ratio(ratio: f32, requested_width: u32, fitted_width: u32) -> f32 {
+    let requested_width = requested_width.max(1);
+    if fitted_width == requested_width {
+        ratio
+    } else {
+        (f64::from(ratio) * f64::from(fitted_width) / f64::from(requested_width)) as f32
+    }
 }
 
 /// An offscreen colour and depth target of one size, with a readback buffer.
@@ -169,6 +178,15 @@ impl OffscreenTarget {
 
     pub fn size(&self) -> (u32, u32) {
         (self.width, self.height)
+    }
+
+    /// Target pixels per CSS pixel for a view of `requested_width` pixels
+    /// at `ratio` (`Renderer::set_pixel_ratio`) drawn into this target:
+    /// `ratio` itself, unless the target was made smaller, when it shrinks
+    /// with it. Authored CSS sizes then keep their share of the frame, and
+    /// their size when the viewer shows it at the size it asked for.
+    pub fn fitted_pixel_ratio(&self, requested_width: u32, ratio: f32) -> f32 {
+        fitted_pixel_ratio(ratio, requested_width, self.width)
     }
 
     /// Reallocate for a new size or sample count. The next render fills the
@@ -353,5 +371,24 @@ mod tests {
         );
         let fitted = fit_to_limits(16384, 16384, 16384, buffer);
         assert_eq!(fit_to_limits(fitted.0, fitted.1, 16384, buffer), fitted);
+    }
+
+    #[test]
+    fn a_fitted_target_draws_authored_css_sizes_at_the_viewers_size() {
+        // A 5K display at device pixel ratio 2 on an 8192-side device.
+        let (side, buffer) = (8192, 256 << 20);
+        let (css_width, ratio) = (5120.0_f32, 2.0_f32);
+        let (width, _) = fit_to_limits(10240, 5760, side, buffer);
+        assert_eq!(width, 8192);
+        let fitted = fitted_pixel_ratio(ratio, 10240, width);
+        assert_eq!(fitted, 1.6);
+        // A 20 CSS pixel sprite covers 32 target pixels, which the viewer
+        // stretches from 8192 to its 5120 CSS pixels: 20 again.
+        let sprite = 20.0 * fitted;
+        assert_eq!(sprite * css_width / width as f32, 20.0);
+        // A size that fits keeps the viewer's exact ratio.
+        for ratio in [1.0, 1.25, 1.5, 2.0, 2.625] {
+            assert_eq!(fitted_pixel_ratio(ratio, 3000, 3000), ratio);
+        }
     }
 }

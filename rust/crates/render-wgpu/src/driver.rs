@@ -401,8 +401,9 @@ impl SceneDriver {
     }
 
     /// Draws the committed scene once into a target of its own and reads it
-    /// back, at `size`, else the window's surface size, else 1280x720. A
-    /// capture changes no output's frame size and draws into no output; its
+    /// back, at `size`, else the window's surface size, else 1280x720, at
+    /// the pixel ratio the last output drew with. A capture changes no
+    /// output's frame size or pixel ratio and draws into no output; its
     /// facts are reported like a drawn frame's.
     pub fn capture(&self, size: Option<(u32, u32)>) -> Capture {
         let now = self.now();
@@ -411,9 +412,13 @@ impl SceneDriver {
             .or(scene.renderer.surface_size())
             .unwrap_or(DEFAULT_CAPTURE_SIZE);
         let target = OffscreenTarget::new(&self.gpu, width, height, scene.renderer.samples());
+        let ratio = scene.renderer.pixel_ratio();
+        let fitted_ratio = target.fitted_pixel_ratio(width, ratio);
         let (width, height) = target.size();
         scene.present_at(now);
+        scene.renderer.set_pixel_ratio(fitted_ratio);
         let video = scene.renderer.render_view_composition(&target, now).video;
+        scene.renderer.set_pixel_ratio(ratio);
         let cameras = scene.renderer.drawn_cameras();
         scene.realized_seconds = scene.elapsed_seconds;
         scene.collect_facts();

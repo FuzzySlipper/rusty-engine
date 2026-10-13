@@ -35,7 +35,7 @@ projection are Engine inputs. Exposure, no tone mapping/ACES, and
 multisample count are explicit capture choices; the scene's
 `CameraView.SetToneMapping`, `SetAutoExposure` and `SetColorGrading` do not apply to captures,
 while the scene's fog, atmosphere, bloom, sun shafts and sky light do; a sample count above 1 supersamples. Dimensions
-beyond the device's texture limit fail with a diagnostic. A zero
+beyond the device's texture or readback buffer limit fail with a diagnostic. A zero
 `PoseObjectId` keeps the frozen pose; a nonzero object
 selects an exact normalized clip time in `[0,1]`, including the final pose,
 without advancing the live animation or wall clock.

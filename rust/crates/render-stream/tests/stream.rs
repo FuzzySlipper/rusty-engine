@@ -220,5 +220,24 @@ fn frames_follow_viewers_and_simulation_time() {
             .is_none(),
         "a capture publishes no frame"
     );
+
+    // A viewer wider than the device can draw, at device pixel ratio 2: the
+    // frame is made smaller at the same aspect, and the renderer draws at the
+    // fitted frame's ratio, so authored CSS sizes keep their size when the
+    // viewer stretches the frame to the size it asked for.
+    let side = gpu.max_texture_dimension();
+    frames.set_viewer_pixel_ratio(2.0);
+    let _ = frames.next_after(latest, Some((side * 5 / 4, 80)), Duration::from_millis(50));
+    let wide = streamer.draw_now(wait).expect("a requested frame");
+    assert_eq!(wide.width, side);
+    let drawn_ratio = || scene.draw(|renderer, _| renderer.pixel_ratio()).0;
+    assert_eq!(drawn_ratio(), 1.6);
+    // A capture at the stream's size draws that frame; one larger than the
+    // device draws at its own fitted ratio and leaves the stream's.
+    let default = streamer.capture(None);
+    assert_eq!((default.width, default.height), (wide.width, wide.height));
+    let oversized = streamer.capture(Some((side * 2, 64)));
+    assert_eq!(oversized.width, side);
+    assert_eq!(drawn_ratio(), 1.6);
     drop(streamer);
 }

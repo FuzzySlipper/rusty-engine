@@ -489,6 +489,33 @@ fn capture_image_writes_a_straight_alpha_png_of_the_frozen_subtree() {
         &NoResources,
     );
     assert!(refused.unwrap_err().contains("unknown animated mesh"));
+    // An image is its stated size: one the device cannot draw or read back
+    // whole is refused, never encoded from a smaller target.
+    let side = harness.gpu.max_texture_dimension();
+    let sized = |width: u32, height: u32| {
+        let mut operation = image(1, None);
+        if let RenderOutputOperation::Image {
+            width: w,
+            height: h,
+            ..
+        } = &mut operation
+        {
+            (*w, *h) = (width, height);
+        }
+        harness
+            .renderer
+            .capture_image(&capture_job(&harness.world, operation), &NoResources)
+    };
+    assert!(sized(side + 1, 1)
+        .unwrap_err()
+        .contains("exceeds the device texture limit"));
+    // wgpu's default 256 MiB readback buffer holds a square image up to
+    // 8192 pixels a side; a device drawing larger textures meets it first.
+    if side > 8192 {
+        assert!(sized(side, side)
+            .unwrap_err()
+            .contains("exceeds the device readback buffer limit"));
+    }
     let glb = harness.renderer.capture_image(
         &capture_job(
             &harness.world,

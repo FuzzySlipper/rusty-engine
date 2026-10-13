@@ -323,7 +323,7 @@ fn render_loop(driver: &SceneDriver, shared: &Shared, frames: &ProductHostFrameS
             None => target.insert(OffscreenTarget::new(driver.gpu(), size.0, size.1, samples)),
         };
         let started = Instant::now();
-        let pixel_ratio = frames.wanted_pixel_ratio();
+        let pixel_ratio = target.fitted_pixel_ratio(size.0, frames.wanted_pixel_ratio());
         let (video, shown) = driver.draw(|renderer, now| {
             renderer.set_pixel_ratio(pixel_ratio);
             renderer.render_view_composition(target, now).video
@@ -369,7 +369,8 @@ fn render_loop(driver: &SceneDriver, shared: &Shared, frames: &ProductHostFrameS
             video,
         };
         let mut state = shared.state();
-        state.output_size = Some(size);
+        // A capture without a size draws this frame's size at its ratio.
+        state.output_size = Some((width, height));
         if state.stats.len() == STATS_WINDOW {
             state.stats.pop_front();
         }
