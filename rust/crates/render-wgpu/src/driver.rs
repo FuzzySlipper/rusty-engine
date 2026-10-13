@@ -411,6 +411,7 @@ impl SceneDriver {
             .or(scene.renderer.surface_size())
             .unwrap_or(DEFAULT_CAPTURE_SIZE);
         let target = OffscreenTarget::new(&self.gpu, width, height, scene.renderer.samples());
+        let (width, height) = target.size();
         scene.present_at(now);
         let video = scene.renderer.render_view_composition(&target, now).video;
         let cameras = scene.renderer.drawn_cameras();

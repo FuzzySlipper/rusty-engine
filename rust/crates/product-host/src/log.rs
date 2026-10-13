@@ -19,7 +19,6 @@ use runtime_diagnostics::{
 
 use crate::ProductHostError;
 
-const MAX_LINE_BYTES: usize = 4 * 1024;
 const DEFAULT_ROTATE_BYTES: u64 = 6 * 1024 * 1024;
 const MAX_RETENTION_FILES: u8 = 4;
 
@@ -97,9 +96,7 @@ pub struct ProductHostLog {
 
 impl ProductHostLog {
     pub fn new(config: ProductHostLogConfig) -> Result<Self, ProductHostError> {
-        if config.rotate_bytes < MAX_LINE_BYTES as u64
-            || !(1..=MAX_RETENTION_FILES).contains(&config.retention_files)
-        {
+        if !(1..=MAX_RETENTION_FILES).contains(&config.retention_files) {
             return Err(ProductHostError::new(
                 "PRODUCT_HOST_LOG_CONFIG",
                 "diagnostic log configuration is outside fixed bounds",
@@ -301,9 +298,6 @@ fn write_event(
     };
     let mut encoded = serde_json::to_vec(event).map_err(|_| "event encoding failed".to_owned())?;
     encoded.push(b'\n');
-    if encoded.len() > MAX_LINE_BYTES {
-        return Err("encoded event exceeded fixed line bound".to_owned());
-    }
     if bytes.saturating_add(encoded.len() as u64) > *rotate_bytes {
         rotate(path, *retention_files)?;
         *file = OpenOptions::new()
@@ -365,16 +359,13 @@ mod tests {
                 .without_file(),
         )
         .unwrap();
-        log.publish(
-            ProductHostLogEvent::new(
-                ProductHostLogSeverity::Info,
-                ProductHostLogDisposition::Accepted,
-                "product",
-                "DISPOSED",
-                "disposed",
-            )
-            .unwrap(),
-        )
+        log.publish(ProductHostLogEvent::new(
+            ProductHostLogSeverity::Info,
+            ProductHostLogDisposition::Accepted,
+            "product",
+            "DISPOSED",
+            "disposed",
+        ))
         .unwrap();
         log.flush();
         assert_eq!(log.snapshot().events.len(), 1);
@@ -398,21 +389,56 @@ mod tests {
         .unwrap();
         for index in 0..6 {
             log.handle()
-                .publish(
-                    ProductHostLogEvent::new(
-                        ProductHostLogSeverity::Warning,
-                        ProductHostLogDisposition::RejectedRecoverable,
-                        "host",
-                        format!("CODE_{index}"),
-                        "x".repeat(1_000),
-                    )
-                    .unwrap(),
-                )
+                .publish(ProductHostLogEvent::new(
+                    ProductHostLogSeverity::Warning,
+                    ProductHostLogDisposition::RejectedRecoverable,
+                    "host",
+                    format!("CODE_{index}"),
+                    "x".repeat(1_000),
+                ))
                 .unwrap();
         }
         assert_eq!(log.snapshot().events.len(), 2);
         assert!(path.exists());
         assert!(rotated_path(&path, 1).exists());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_long_stack_trace_is_written_and_the_writer_keeps_going() {
+        let root =
+            std::env::temp_dir().join(format!("rusty-engine-log-long-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let path = root.join("events.ndjson");
+        let log = ProductHostLog::new(ProductHostLogConfig::default().with_path(&path)).unwrap();
+        let stack = "System.InvalidOperationException: broken\n".to_owned()
+            + &"   at Product.Deep.Frame() in Game.cs:line 42\n".repeat(200);
+        assert!(stack.len() > 8 * 1024);
+        for (code, message) in [("CSHARP_FAULT", stack.as_str()), ("AFTER", "next event")] {
+            log.publish(ProductHostLogEvent::new(
+                ProductHostLogSeverity::Error,
+                ProductHostLogDisposition::Degraded,
+                "csharp-runtime",
+                code,
+                message,
+            ))
+            .unwrap();
+        }
+        log.flush();
+        assert_eq!(
+            log.snapshot().writer_state,
+            ProductHostLogWriterState::Ready
+        );
+        assert_eq!(log.snapshot().dropped_count, 0);
+        let written = fs::read_to_string(&path).unwrap();
+        let lines: Vec<serde_json::Value> = written
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0]["code"], "CSHARP_FAULT");
+        assert_eq!(lines[0]["message"], stack.as_str());
+        assert_eq!(lines[1]["code"], "AFTER");
         let _ = fs::remove_dir_all(root);
     }
 }

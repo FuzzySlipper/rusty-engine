@@ -162,8 +162,8 @@ fn runtime_fault_fields(
     )
 }
 
-/// Fixed browser-host observation batch. This is deliberately a small health
-/// report, not a browser console or generic diagnostic transport.
+/// The browser host's typed observation report: a health report, not a
+/// browser console or generic diagnostic transport.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ProductHostBrowserDiagnosticsReport {
@@ -242,88 +242,11 @@ pub enum ProductHostBrowserPageDiagnosticKind {
     UnhandledRejection,
 }
 
-impl ProductHostBrowserDiagnosticsReport {
-    pub const MAX_PAGE_EVENTS: usize = 8;
-
-    pub fn validate(&self) -> Result<(), ProductHostError> {
-        if self.page_events.len() > Self::MAX_PAGE_EVENTS {
-            return Err(ProductHostError::new(
-                "PRODUCT_HOST_BROWSER_DIAGNOSTICS_BOUNDS",
-                "browser diagnostics page event count exceeds its fixed bound",
-            ));
-        }
-        if let Some(diagnostic) = &self.first_terminal {
-            validate_browser_diagnostic(&diagnostic.code, &diagnostic.message)?;
-        }
-        if let Some(diagnostic) = &self.recoverable_event {
-            validate_browser_diagnostic(&diagnostic.code, &diagnostic.message)?;
-            if !matches!(
-                diagnostic.code.as_str(),
-                "CSHARP_LIFECYCLE_CLOCK_REGRESSION" | "BROWSER_LOCAL_REQUEST_UNAVAILABLE"
-            ) {
-                return Err(ProductHostError::new(
-                    "PRODUCT_HOST_BROWSER_DIAGNOSTICS_BOUNDS",
-                    "browser recoverable diagnostic code is not admitted",
-                ));
-            }
-        }
-        for diagnostic in &self.page_events {
-            validate_browser_diagnostic(&diagnostic.code, &diagnostic.message)?;
-        }
-        if let Some(attachment) = &self.attachment {
-            validate_browser_attachment_id(&attachment.id)?;
-            if let Some(replaces) = &attachment.replaces {
-                validate_browser_attachment_id(replaces)?;
-            }
-        }
-        Ok(())
-    }
-}
-
-pub(crate) fn browser_attachment_id_is_admitted(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= 128
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
-}
-
-fn validate_browser_attachment_id(value: &str) -> Result<(), ProductHostError> {
-    if browser_attachment_id_is_admitted(value) {
-        Ok(())
-    } else {
-        Err(ProductHostError::new(
-            "PRODUCT_HOST_BROWSER_DIAGNOSTICS_BOUNDS",
-            "browser attachment identity is outside fixed bounds",
-        ))
-    }
-}
-
-fn validate_browser_diagnostic(code: &str, message: &str) -> Result<(), ProductHostError> {
-    if code.is_empty()
-        || code.len() > 128
-        || !code
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-' | b':'))
-        || message.is_empty()
-        || message.len() > 1_024
-        || message
-            .chars()
-            .any(|character| character.is_control() && character != '\t')
-    {
-        return Err(ProductHostError::new(
-            "PRODUCT_HOST_BROWSER_DIAGNOSTICS_BOUNDS",
-            "browser diagnostic code or message is outside fixed bounds",
-        ));
-    }
-    Ok(())
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ProductHostBrowserDiagnosticsResult {
     pub accepted: bool,
-    pub reported: u8,
+    pub reported: u32,
 }
 
 /// Bounded host-owned product-lane telemetry returned alongside the existing
@@ -1927,7 +1850,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn browser_attachment_report_uses_bounded_typed_baseline_facts() {
+    fn browser_attachment_report_uses_typed_baseline_facts() {
         let report: ProductHostBrowserDiagnosticsReport = serde_json::from_str(
             r#"{
                 "hostState":"ready",
@@ -1947,19 +1870,9 @@ mod tests {
         )
         .unwrap();
 
-        report.validate().unwrap();
         let encoded = serde_json::to_value(&report).unwrap();
         assert_eq!(encoded["attachment"]["id"], "attachment-2");
         assert_eq!(encoded["attachment"]["baseline"]["nextInputSequence"], "14");
-
-        let invalid_id: ProductHostBrowserDiagnosticsReport = serde_json::from_str(
-            r#"{"hostState":"ready","runtimeProgress":"9","transportState":"open","outputState":"open","pageEvents":[],"attachment":{"id":"invalid id","replaces":null,"baseline":null}}"#,
-        )
-        .unwrap();
-        assert_eq!(
-            invalid_id.validate().unwrap_err().code(),
-            "PRODUCT_HOST_BROWSER_DIAGNOSTICS_BOUNDS"
-        );
     }
 
     #[test]

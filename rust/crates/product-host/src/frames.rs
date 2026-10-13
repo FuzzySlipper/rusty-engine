@@ -71,8 +71,6 @@ pub(crate) mod header {
 pub(crate) const FLAG_HELD: u8 = 1;
 /// A frame showing a playing video: the page shows it above its UI.
 pub(crate) const FLAG_VIDEO: u8 = 2;
-/// Largest size a viewer may ask for, per side.
-const MAX_FRAME_SIDE: u32 = 4096;
 /// Size rendered before any viewer states one.
 const DEFAULT_FRAME_SIZE: (u32, u32) = (1280, 720);
 /// A viewer is still watching this long after its last request ended.
@@ -297,8 +295,8 @@ pub(crate) fn capture_request(path: &str) -> Result<ProductHostCaptureRequest, &
                 let side = value
                     .parse::<u32>()
                     .ok()
-                    .filter(|value| (1..=MAX_FRAME_SIDE).contains(value))
-                    .ok_or("frame size must be 1..=4096 pixels per side")?;
+                    .filter(|value| *value >= 1)
+                    .ok_or("frame size must be at least 1 pixel per side")?;
                 let slot = if name == "width" {
                     &mut width
                 } else {
@@ -358,8 +356,8 @@ pub(crate) fn frame_request(path: &str) -> Result<FrameRequest, &'static str> {
     let side = |value: u64| {
         u32::try_from(value)
             .ok()
-            .filter(|value| (1..=MAX_FRAME_SIDE).contains(value))
-            .ok_or("frame size must be 1..=4096 pixels per side")
+            .filter(|value| *value >= 1)
+            .ok_or("frame size must be at least 1 pixel per side")
     };
     let size = match (width, height) {
         (Some(width), Some(height)) => Some((side(width)?, side(height)?)),
@@ -403,7 +401,11 @@ mod tests {
         assert!(parse("?format=jpeg").is_err());
         assert!(parse("?width=640").is_err());
         assert!(parse("?width=0&height=1").is_err());
-        assert!(parse("?width=5000&height=1").is_err());
+        // The host admits any size; the renderer fits it to its adapter.
+        assert_eq!(
+            parse("?width=5120&height=2880").map(|request| request.size),
+            Ok(Some((5120, 2880)))
+        );
         assert!(parse("?format=png&format=png").is_err());
         assert!(parse("?after=3").is_err());
     }
@@ -526,12 +528,23 @@ mod tests {
                 pixel_ratio: Some(2.0),
             })
         );
+        // A 5K display at device pixel ratio 2: the host admits any size;
+        // the renderer fits it to what its adapter can draw.
+        assert_eq!(
+            frame_request(
+                "/__rusty/product/runtime/frames?after=4&width=10240&height=5760&cssWidth=5120"
+            ),
+            Ok(FrameRequest {
+                after: 4,
+                size: Some((10240, 5760)),
+                pixel_ratio: Some(2.0),
+            })
+        );
         for bad in [
             "/__rusty/product/runtime/frames?cssWidth=1280",
             "/__rusty/product/runtime/frames?width=1280&height=720&cssWidth=0",
             "/__rusty/product/runtime/frames?width=1280",
             "/__rusty/product/runtime/frames?width=0&height=720",
-            "/__rusty/product/runtime/frames?width=5000&height=720",
             "/__rusty/product/runtime/frames?after=1&after=2",
             "/__rusty/product/runtime/frames?after=-1",
             "/__rusty/product/runtime/frames?depth=1",

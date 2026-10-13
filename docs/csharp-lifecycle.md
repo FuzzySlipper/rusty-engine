@@ -596,7 +596,8 @@ change, so Update notices a resize by comparing it. `Reported` is false until a
 page reports. The UI sets the UI scale with `context.ui.setScale(scale)` (0.25
 to 4) and reads it with `context.ui.scale()`; the document root's font size and
 its `--rusty-ui-scale` property follow it, so rem-sized UI scales while layout
-units keep their meaning. Streamed frames render at device pixels.
+units keep their meaning. Streamed frames render at device pixels, made
+smaller at the same aspect only when the GPU cannot draw or read back that size.
 `Watching` on the same readout says whether anyone watches the product now. It
 is false only in stream output while no page pulls frames. It turns false
 within 1.25 seconds of the last page leaving (a watching page starts a frame

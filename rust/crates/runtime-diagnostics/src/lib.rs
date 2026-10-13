@@ -15,12 +15,6 @@ use serde::{Deserialize, Serialize, Serializer};
 use ts_rs::TS;
 
 const DEFAULT_RING_CAPACITY: usize = 256;
-const MAX_RING_CAPACITY: usize = 1_024;
-const MAX_SOURCE_BYTES: usize = 64;
-const MAX_CODE_BYTES: usize = 128;
-const MAX_CORRELATION_BYTES: usize = 128;
-const MAX_FIELDS: usize = 8;
-const MAX_FIELD_KEY_BYTES: usize = 64;
 const MAX_BATCH_EVENTS: usize = 64;
 const MAX_RECOVERABLE_CODES: usize = 64;
 
@@ -32,15 +26,10 @@ pub struct RuntimeDiagnosticsError {
 
 impl RuntimeDiagnosticsError {
     fn new(code: &'static str, detail: impl Into<String>) -> Self {
-        let mut detail = detail.into();
-        if detail.len() > 512 {
-            let mut end = 512;
-            while !detail.is_char_boundary(end) {
-                end -= 1;
-            }
-            detail.truncate(end);
+        Self {
+            code,
+            detail: detail.into(),
         }
-        Self { code, detail }
     }
 
     pub const fn code(&self) -> &'static str {
@@ -189,19 +178,19 @@ impl RuntimeDiagnosticEvent {
         source: impl Into<String>,
         code: impl Into<String>,
         message: impl Into<String>,
-    ) -> Result<Self, RuntimeDiagnosticsError> {
-        Ok(Self {
+    ) -> Self {
+        Self {
             sequence: 0,
             monotonic_nanoseconds: 0,
             severity,
             disposition,
-            source: bounded_identity(source.into(), MAX_SOURCE_BYTES, "source")?,
-            code: bounded_identity(code.into(), MAX_CODE_BYTES, "code")?,
+            source: source.into(),
+            code: code.into(),
             message: message.into(),
             runtime: None,
             correlation: None,
             fields: Vec::new(),
-        })
+        }
     }
 
     pub fn with_runtime(mut self, runtime: impl Into<RuntimeDiagnosticRuntimeBinding>) -> Self {
@@ -209,41 +198,20 @@ impl RuntimeDiagnosticEvent {
         self
     }
 
-    pub fn with_correlation(
-        mut self,
-        correlation: impl Into<String>,
-    ) -> Result<Self, RuntimeDiagnosticsError> {
-        self.correlation = Some(bounded_identity(
-            correlation.into(),
-            MAX_CORRELATION_BYTES,
-            "correlation",
-        )?);
-        Ok(self)
+    pub fn with_correlation(mut self, correlation: impl Into<String>) -> Self {
+        self.correlation = Some(correlation.into());
+        self
     }
 
-    pub fn with_field(
-        mut self,
-        key: impl Into<String>,
-        value: impl Into<String>,
-    ) -> Result<Self, RuntimeDiagnosticsError> {
-        if self.fields.len() == MAX_FIELDS {
-            return Err(RuntimeDiagnosticsError::new(
-                "RUNTIME_DIAGNOSTICS_FIELDS",
-                "diagnostic event has too many fields",
-            ));
+    /// Adds a field; a key given again keeps its place and takes the later
+    /// value.
+    pub fn with_field(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+        let (key, value) = (key.into(), value.into());
+        match self.fields.iter_mut().find(|field| field.key == key) {
+            Some(field) => field.value = value,
+            None => self.fields.push(RuntimeDiagnosticField { key, value }),
         }
-        let key = bounded_identity(key.into(), MAX_FIELD_KEY_BYTES, "field key")?;
-        if self.fields.iter().any(|field| field.key == key) {
-            return Err(RuntimeDiagnosticsError::new(
-                "RUNTIME_DIAGNOSTICS_FIELDS",
-                "diagnostic event fields must have unique keys",
-            ));
-        }
-        self.fields.push(RuntimeDiagnosticField {
-            key,
-            value: value.into(),
-        });
-        Ok(self)
+        self
     }
 
     pub fn code(&self) -> &str {
@@ -359,10 +327,10 @@ impl RuntimeDiagnosticsSink {
         config: RuntimeDiagnosticsConfig,
         writer: Option<Arc<dyn RuntimeDiagnosticsWriter>>,
     ) -> Result<Self, RuntimeDiagnosticsError> {
-        if config.ring_capacity == 0 || config.ring_capacity > MAX_RING_CAPACITY {
+        if config.ring_capacity == 0 {
             return Err(RuntimeDiagnosticsError::new(
                 "RUNTIME_DIAGNOSTICS_CONFIG",
-                "diagnostic ring capacity is outside fixed bounds",
+                "diagnostic ring capacity must be at least one",
             ));
         }
         Ok(Self(Arc::new(Mutex::new(RuntimeDiagnosticsInner {
@@ -515,25 +483,6 @@ fn serialize_u64_as_string<S: Serializer>(value: &u64, serializer: S) -> Result<
     serializer.serialize_str(&value.to_string())
 }
 
-fn bounded_identity(
-    value: String,
-    maximum: usize,
-    field: &str,
-) -> Result<String, RuntimeDiagnosticsError> {
-    if value.is_empty()
-        || value.len() > maximum
-        || !value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-' | b':'))
-    {
-        return Err(RuntimeDiagnosticsError::new(
-            "RUNTIME_DIAGNOSTICS_EVENT",
-            format!("diagnostic {field} is invalid"),
-        ));
-    }
-    Ok(value)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -542,22 +491,40 @@ mod tests {
         let mut event = RuntimeDiagnosticEvent::new(
             RuntimeDiagnosticSeverity::Info,
             RuntimeDiagnosticDisposition::Accepted,
-            "s".repeat(MAX_SOURCE_BYTES),
+            "s".repeat(64),
             format!("DENSE_{index:03}"),
             "m".repeat(1_024),
         )
-        .unwrap()
-        .with_correlation("r".repeat(MAX_CORRELATION_BYTES))
-        .unwrap();
-        for field_index in 0..MAX_FIELDS {
-            event = event
-                .with_field(
-                    format!("{field_index}{}", "k".repeat(MAX_FIELD_KEY_BYTES - 1)),
-                    "v".repeat(256),
-                )
-                .unwrap();
+        .with_correlation("r".repeat(128));
+        for field_index in 0..8 {
+            event = event.with_field(format!("{field_index}{}", "k".repeat(63)), "v".repeat(256));
         }
         event
+    }
+
+    #[test]
+    fn an_event_keeps_its_whole_text_and_every_field() {
+        let stack = "System.InvalidOperationException: broken\n".to_owned()
+            + &"   at Product.Deep.Frame() in Game.cs:line 42\n".repeat(200);
+        let mut event = RuntimeDiagnosticEvent::new(
+            RuntimeDiagnosticSeverity::Error,
+            RuntimeDiagnosticDisposition::Terminal,
+            "csharp product",
+            "Product exception/unhandled",
+            stack.clone(),
+        )
+        .with_correlation("call 7: update");
+        for index in 0..20 {
+            event = event.with_field(format!("field {index}"), index.to_string());
+        }
+        event = event.with_field("field 3", "later");
+        assert_eq!(event.message(), stack);
+        assert_eq!(event.source(), "csharp product");
+        assert_eq!(event.code(), "Product exception/unhandled");
+        assert_eq!(event.correlation(), Some("call 7: update"));
+        assert_eq!(event.fields().len(), 20);
+        assert_eq!(event.fields()[3].key(), "field 3");
+        assert_eq!(event.fields()[3].value(), "later");
     }
 
     #[test]
@@ -573,7 +540,6 @@ mod tests {
                 code,
                 "retryable",
             )
-            .unwrap()
         };
         sink.publish(event("SAME")).unwrap();
         sink.publish(event("SAME")).unwrap();

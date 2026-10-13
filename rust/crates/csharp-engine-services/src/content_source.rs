@@ -230,15 +230,13 @@ impl RuntimeContentSourceBridge {
     ) -> Result<[u8; 32], CsharpEngineServicesError> {
         let sha256 = self.source.edit(path, expected, edits)?;
         if let Some(sink) = &self.diagnostics {
-            if let Ok(event) = RuntimeDiagnosticEvent::new(
+            let _ = sink.publish(RuntimeDiagnosticEvent::new(
                 RuntimeDiagnosticSeverity::Info,
                 RuntimeDiagnosticDisposition::Accepted,
                 "content-source",
                 "CONTENT_SOURCE_WRITTEN",
                 format!("wrote the source and staged copy of `{path}`"),
-            ) {
-                let _ = sink.publish(event);
-            }
+            ));
         }
         Ok(sha256)
     }

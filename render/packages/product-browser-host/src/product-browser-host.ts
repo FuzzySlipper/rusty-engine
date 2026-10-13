@@ -210,7 +210,6 @@ interface ProductBrowserOperationQueue {
 }
 
 const MAXIMUM_PENDING_OUTPUTS = 64;
-const MAXIMUM_HEALTH_DIAGNOSTIC_BYTES = 512;
 
 /** This is the sole browser cadence observation that can be safely dropped. */
 export function isDroppedClockRegression(result: ProductHostOperationResult): boolean {
@@ -370,14 +369,14 @@ export async function mountProductBrowserHostWithApplication(
     syncProductBrowserHealthDatasets(roots, {
       state,
       progress: String(runtimeProgress),
-      failure: (failure ?? recoveryFailure) === null ? null : boundedDiagnostic((failure ?? recoveryFailure)!.message),
+      failure: (failure ?? recoveryFailure)?.message ?? null,
     });
     if (!reportToTransport && pageEvents.length === 0) return;
     const terminal = failure === null
       ? undefined
       : Object.freeze({
         code: `BROWSER_HOST_${failure.code.toUpperCase()}`,
-        message: boundedDiagnostic(failure.message),
+        message: failure.message,
       });
     const includeTerminal = terminal !== undefined && !terminalDiagnosticsReported;
     const hostState = state === 'starting' ? 'loading' : state;
@@ -391,7 +390,7 @@ export async function mountProductBrowserHostWithApplication(
       : recoveryFailure !== null && !recoveryDiagnosticReported
         ? Object.freeze({
             code: 'BROWSER_LOCAL_REQUEST_UNAVAILABLE' as const,
-            message: boundedDiagnostic(recoveryFailure.message),
+            message: recoveryFailure.message,
           })
         : undefined;
     const shouldReport = reportToTransport && transport.reportBrowserDiagnostics !== undefined
@@ -650,7 +649,7 @@ export async function mountProductBrowserHostWithApplication(
       code: string,
       message: string,
     ): void => {
-      publishHealth(true, [Object.freeze({ kind, code, message: boundedDiagnostic(message) })]);
+      publishHealth(true, [Object.freeze({ kind, code, message })]);
     };
     const onError = (event: ErrorEvent): void => {
       reportPageEvent('error', 'BROWSER_PAGE_ERROR', event.message || 'page error');
@@ -1152,19 +1151,6 @@ function sameRuntimeBinding(
     && left.controlRevision === right.controlRevision;
 }
 
-function boundedDiagnostic(value: string): string {
-  let diagnostic = '';
-  let bytes = 0;
-  const encoder = new TextEncoder();
-  for (const character of value) {
-    const characterBytes = encoder.encode(character).byteLength;
-    if (bytes + characterBytes > MAXIMUM_HEALTH_DIAGNOSTIC_BYTES) break;
-    diagnostic += character;
-    bytes += characterBytes;
-  }
-  return diagnostic;
-}
-
 function normalizeTerminalFailure(value: ProductBrowserRuntimeTerminalFailure): ProductBrowserRuntimeTerminalFailure {
   if (value === null || typeof value !== 'object') {
     return { kind: 'runtime-failure', diagnostic: 'runtime terminal failure was malformed' };
@@ -1174,9 +1160,6 @@ function normalizeTerminalFailure(value: ProductBrowserRuntimeTerminalFailure): 
   }
   if (typeof value.diagnostic !== 'string' || value.diagnostic.length === 0) {
     return { kind: 'runtime-failure', diagnostic: 'runtime terminal failure diagnostic was invalid' };
-  }
-  if (new TextEncoder().encode(value.diagnostic).byteLength > MAXIMUM_HEALTH_DIAGNOSTIC_BYTES) {
-    return { kind: 'runtime-failure', diagnostic: 'runtime terminal failure diagnostic exceeded host bounds' };
   }
   return value;
 }

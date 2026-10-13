@@ -560,16 +560,13 @@ pub(crate) fn publish_host_diagnostic(
     message: &str,
 ) {
     eprintln!("RUSTY_HOST {code}: {message}");
-    let event = product_host::ProductHostLogEvent::new(
+    let _ = diagnostics.publish(product_host::ProductHostLogEvent::new(
         product_host::ProductHostLogSeverity::Error,
         product_host::ProductHostLogDisposition::Degraded,
         source,
         code,
         message,
-    );
-    if let Ok(event) = event {
-        let _ = diagnostics.publish(event);
-    }
+    ));
 }
 
 /// The standard host is owned by its foreground process supervisor. In

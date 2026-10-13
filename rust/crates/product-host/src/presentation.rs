@@ -18,9 +18,6 @@ use serde::Deserialize;
 use ts_rs::TS;
 
 pub const PRODUCT_HOST_PRESENTATION_PATH: &str = "/__rusty/product/runtime/presentation";
-/// More anchors than any layout needs; a report beyond it is refused.
-pub const MAX_VIEWPORT_ANCHORS: usize = 64;
-pub const MAX_VIEWPORT_ANCHOR_NAME_BYTES: usize = 64;
 
 /// What the page reports about its presentation.
 #[derive(Debug, Clone, PartialEq, Deserialize, TS)]
@@ -69,14 +66,8 @@ impl ProductHostPresentationReport {
         if !positive(self.device_pixel_ratio) || !positive(self.ui_scale) {
             return Err("device pixel ratio and UI scale must be finite and positive");
         }
-        if self.anchors.len() > MAX_VIEWPORT_ANCHORS {
-            return Err("too many viewport anchors");
-        }
         let mut anchors = BTreeMap::new();
         for anchor in self.anchors {
-            if anchor.name.is_empty() || anchor.name.len() > MAX_VIEWPORT_ANCHOR_NAME_BYTES {
-                return Err("a viewport anchor name must be 1 to 64 bytes");
-            }
             if ![anchor.x, anchor.y, anchor.width, anchor.height]
                 .iter()
                 .all(|value| value.is_finite())
@@ -242,7 +233,6 @@ mod tests {
         assert_eq!(heard.lock().unwrap().len(), 1);
 
         assert!(report(0.0, Vec::new()).layout().is_err());
-        assert!(report(800.0, vec![anchor("", 0.0, 0.5)]).layout().is_err());
         assert!(report(800.0, vec![anchor("nan", f64::NAN, 0.5)])
             .layout()
             .is_err());

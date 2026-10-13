@@ -87,6 +87,37 @@ pub(crate) fn extent(width: u32, height: u32) -> wgpu::Extent3d {
     }
 }
 
+/// Bytes in one readback row: copies align rows to 256 bytes.
+fn padded_row(width: u32) -> u32 {
+    (width * 4).div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT) * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT
+}
+
+fn fit_to_device(gpu: &Gpu, width: u32, height: u32) -> (u32, u32) {
+    let limits = gpu.device.limits();
+    fit_to_limits(
+        width,
+        height,
+        limits.max_texture_dimension_2d,
+        limits.max_buffer_size,
+    )
+}
+
+/// The largest size of this aspect within the device's limits: each side
+/// within its texture limit and the padded readback within its buffer limit.
+/// A size that fits is unchanged.
+fn fit_to_limits(width: u32, height: u32, max_side: u32, max_buffer: u64) -> (u32, u32) {
+    let (width, height) = (width.max(1), height.max(1));
+    let tight_bytes = 4.0 * f64::from(width) * f64::from(height);
+    let scale = (f64::from(max_side) / f64::from(width.max(height)))
+        .min((max_buffer as f64 / tight_bytes).sqrt())
+        .min(1.0);
+    let fitted = |side: u32| ((f64::from(side) * scale) as u32).clamp(1, max_side);
+    let width = fitted(width);
+    // Row padding is outside the tight estimate; the height gives it room.
+    let rows = u32::try_from(max_buffer / u64::from(padded_row(width))).unwrap_or(u32::MAX);
+    (width, fitted(height).min(rows.max(1)))
+}
+
 /// An offscreen colour and depth target of one size, with a readback buffer.
 /// It is a primary destination: the world draws with the depth's samples
 /// and finishes into the single-sample colour that readback copies.
@@ -103,9 +134,10 @@ pub struct OffscreenTarget {
 
 impl OffscreenTarget {
     /// A target of this size with `samples` per pixel
-    /// (`Renderer::samples`).
+    /// (`Renderer::samples`), made smaller, keeping its aspect, when the
+    /// device cannot draw or read back that size ([`Self::size`] says).
     pub fn new(gpu: &Gpu, width: u32, height: u32, samples: u32) -> Self {
-        let (width, height) = (width.max(1), height.max(1));
+        let (width, height) = fit_to_device(gpu, width, height);
         let color = gpu.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("render-wgpu offscreen colour"),
             size: extent(width, height),
@@ -116,8 +148,7 @@ impl OffscreenTarget {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
             view_formats: &[],
         });
-        let padded_row = (width * 4).div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT)
-            * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+        let padded_row = padded_row(width);
         let readback = gpu.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("render-wgpu readback"),
             size: u64::from(padded_row) * u64::from(height),
@@ -143,7 +174,8 @@ impl OffscreenTarget {
     /// Reallocate for a new size or sample count. The next render fills the
     /// new target.
     pub fn resize(&mut self, gpu: &Gpu, width: u32, height: u32, samples: u32) {
-        if (width.max(1), height.max(1), samples) != (self.width, self.height, self.samples) {
+        let (width, height) = fit_to_device(gpu, width, height);
+        if (width, height, samples) != (self.width, self.height, self.samples) {
             *self = Self::new(gpu, width, height, samples);
         }
     }
@@ -298,5 +330,28 @@ impl ScaledPrimary {
             width: self.width,
             height: self.height,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_size_beyond_the_device_keeps_its_aspect_within_both_limits() {
+        // wgpu's default limits: 8192 per side, a 256 MiB buffer.
+        let (side, buffer) = (8192, 256 << 20);
+        assert_eq!(fit_to_limits(5120, 2880, side, buffer), (5120, 2880));
+        assert_eq!(fit_to_limits(10240, 5760, side, buffer), (8192, 4608));
+        assert_eq!(fit_to_limits(0, 0, side, buffer), (1, 1));
+        // A 16384 texture limit leaves the readback buffer as the bound.
+        let (width, height) = fit_to_limits(16384, 16384, 16384, buffer);
+        assert!(u64::from(padded_row(width)) * u64::from(height) <= buffer);
+        assert!(
+            width.abs_diff(height) <= 1 && width > 8000,
+            "{width}x{height}"
+        );
+        let fitted = fit_to_limits(16384, 16384, 16384, buffer);
+        assert_eq!(fit_to_limits(fitted.0, fitted.1, 16384, buffer), fitted);
     }
 }

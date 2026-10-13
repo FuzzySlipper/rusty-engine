@@ -1255,16 +1255,9 @@ fn publish_host_diagnostic<const N: usize>(
     message: &str,
     fields: [(&str, String); N],
 ) {
-    let Ok(mut event) =
-        ProductHostLogEvent::new(severity, disposition, "product-host", code, message)
-    else {
-        return;
-    };
+    let mut event = ProductHostLogEvent::new(severity, disposition, "product-host", code, message);
     for (key, value) in fields {
-        let Ok(next) = event.with_field(key, value) else {
-            return;
-        };
-        event = next;
+        event = event.with_field(key, value);
     }
     let _ = diagnostics.publish(event);
 }
@@ -1351,7 +1344,6 @@ fn handle_connection<R: ProductHostRuntime>(mut stream: TcpStream, state: Arc<Ho
     let attachment_id = request
         .headers
         .get("x-rusty-browser-attachment")
-        .filter(|value| crate::model::browser_attachment_id_is_admitted(value))
         .cloned()
         .unwrap_or_else(|| "none".to_owned());
     let response = dispatch_request(&state, request);
@@ -1968,10 +1960,7 @@ fn invoke_browser_diagnostics<R: ProductHostRuntime>(
         Ok(value) => value,
         Err(response) => return response,
     };
-    if let Err(error) = report.validate() {
-        return HttpResponse::error(400, error.code(), error.detail());
-    }
-    let mut reported = 0_u8;
+    let mut reported = 0_u32;
     let status_disposition = if matches!(
         report.host_state,
         ProductHostBrowserHostState::Degraded | ProductHostBrowserHostState::Failed
@@ -1988,16 +1977,13 @@ fn invoke_browser_diagnostics<R: ProductHostRuntime>(
     } else {
         ProductHostLogSeverity::Info
     };
-    let mut status = match ProductHostLogEvent::new(
+    let mut status = ProductHostLogEvent::new(
         status_severity,
         status_disposition,
         "browser-host",
         "BROWSER_HOST_STATUS",
         "Product Browser Host transition snapshot",
-    ) {
-        Ok(event) => event,
-        Err(error) => return HttpResponse::error(500, error.code(), error.detail()),
-    };
+    );
     let established_baseline = matches!(report.host_state, ProductHostBrowserHostState::Ready)
         && matches!(
             report.transport_state,
@@ -2059,65 +2045,52 @@ fn invoke_browser_diagnostics<R: ProductHostRuntime>(
         ("baseline-established", established_baseline.to_string()),
         ("baseline-facts", baseline_facts),
     ] {
-        status = match status.with_field(key, value) {
-            Ok(event) => event,
-            Err(error) => return HttpResponse::error(500, error.code(), error.detail()),
-        };
+        status = status.with_field(key, value);
     }
     if let Err(error) = state.diagnostics.publish(status) {
         return HttpResponse::error(503, error.code(), error.detail());
     }
-    reported = reported.saturating_add(1);
+    reported += 1;
 
     if let Some(terminal) = report.first_terminal {
-        let event = match ProductHostLogEvent::new(
+        let event = ProductHostLogEvent::new(
             ProductHostLogSeverity::Error,
             ProductHostLogDisposition::Terminal,
             "browser-host",
             terminal.code,
             terminal.message,
-        ) {
-            Ok(event) => event,
-            Err(error) => return HttpResponse::error(500, error.code(), error.detail()),
-        };
+        );
         if let Err(error) = state.diagnostics.publish(event) {
             return HttpResponse::error(503, error.code(), error.detail());
         }
-        reported = reported.saturating_add(1);
+        reported += 1;
     }
     if let Some(recoverable) = report.recoverable_event {
-        let event = match ProductHostLogEvent::new(
+        let event = ProductHostLogEvent::new(
             ProductHostLogSeverity::Warning,
             ProductHostLogDisposition::RejectedRecoverable,
             "browser-host",
             recoverable.code,
             recoverable.message,
-        ) {
-            Ok(event) => event,
-            Err(error) => return HttpResponse::error(500, error.code(), error.detail()),
-        };
+        );
         if let Err(error) = state.diagnostics.publish(event) {
             return HttpResponse::error(503, error.code(), error.detail());
         }
-        reported = reported.saturating_add(1);
+        reported += 1;
     }
     for page_event in report.page_events {
-        let event = match ProductHostLogEvent::new(
+        let event = ProductHostLogEvent::new(
             ProductHostLogSeverity::Warning,
             ProductHostLogDisposition::Degraded,
             "browser-page",
             page_event.code,
             page_event.message,
         )
-        .and_then(|event| event.with_field("kind", browser_page_diagnostic_kind(page_event.kind)))
-        {
-            Ok(event) => event,
-            Err(error) => return HttpResponse::error(500, error.code(), error.detail()),
-        };
+        .with_field("kind", browser_page_diagnostic_kind(page_event.kind));
         if let Err(error) = state.diagnostics.publish(event) {
             return HttpResponse::error(503, error.code(), error.detail());
         }
-        reported = reported.saturating_add(1);
+        reported += 1;
     }
     json_response(
         200,
@@ -2252,8 +2225,7 @@ where
                         "runtime",
                         error.code(),
                         message,
-                    )
-                    .expect("runtime diagnostics are bounded"),
+                    ),
                 );
                 let disposition = error.disposition();
                 return Ok((match error_result(error) {

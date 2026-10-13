@@ -72,8 +72,8 @@ export type ProductHostBrowserBootstrap = { product: ProductHostBootstrapProduct
 export type ProductHostBrowserConnectionState = "open" | "closed";
 
 /**
- * Fixed browser-host observation batch. This is deliberately a small health
- * report, not a browser console or generic diagnostic transport.
+ * The browser host's typed observation report: a health report, not a
+ * browser console or generic diagnostic transport.
  */
 export type ProductHostBrowserDiagnosticsReport = { hostState: ProductHostBrowserHostState, runtimeProgress: CanonicalU64, transportState: ProductHostBrowserConnectionState, outputState: ProductHostBrowserConnectionState, firstTerminal?: ProductHostBrowserTerminalDiagnostic, recoverableEvent?: ProductHostBrowserTerminalDiagnostic, pageEvents: Array<ProductHostBrowserPageDiagnostic>, attachment?: ProductHostBrowserAttachment, };
 

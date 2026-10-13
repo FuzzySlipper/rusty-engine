@@ -32,8 +32,6 @@ use crate::{
     content::RuntimeContentBridge,
 };
 
-const MAX_DIAGNOSTICS: usize = 128;
-
 pub(crate) struct RuntimeAuthoredContentBridge {
     catalogs: BTreeMap<u64, AdmittedAssetCatalog>,
     next_catalog: u64,
@@ -2795,12 +2793,10 @@ fn receipt(
     let facts: Vec<(String, String, String)> = match error {
         AuthoredError::Validation(values) => values
             .into_iter()
-            .take(MAX_DIAGNOSTICS)
             .map(|value| (value.code, value.message, value.path))
             .collect(),
         AuthoredError::PrefabValidation(values) => values
             .into_iter()
-            .take(MAX_DIAGNOSTICS)
             .map(|value| (value.code.as_str().to_owned(), value.message, value.path))
             .collect(),
         AuthoredError::Simple {

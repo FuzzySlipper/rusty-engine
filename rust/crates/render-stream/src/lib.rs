@@ -383,7 +383,8 @@ fn render_loop(driver: &SceneDriver, shared: &Shared, frames: &ProductHostFrameS
 
 fn encode_jpeg(rgba: &[u8], width: u32, height: u32) -> Vec<u8> {
     let mut jpeg = Vec::with_capacity(rgba.len() / 16);
-    // OffscreenTarget sides fit u16: the frame route bounds them to 4096.
+    // OffscreenTarget sides fit u16: they are within the device's texture
+    // limit, which no adapter sets above JPEG's 65535.
     jpeg_encoder::Encoder::new(&mut jpeg, JPEG_QUALITY)
         .encode(
             rgba,

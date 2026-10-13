@@ -2122,7 +2122,6 @@ impl CsharpProductRuntime {
                         failure.detail()
                     ),
                 )
-                .expect("a runtime error code is a bounded identity")
                 .with_runtime(self.binding()),
             );
         }
@@ -2223,7 +2222,6 @@ impl CsharpProductRuntime {
                     error.code(),
                     error.detail(),
                 )
-                .expect("bounded input recovery diagnostic")
                 .with_runtime(self.binding()),
             );
             return Ok(PendingInputAdmission::Resynchronized);
@@ -2432,7 +2430,6 @@ impl CsharpProductRuntime {
                 error.code(),
                 message,
             )
-            .expect("runtime diagnostics are bounded")
             .with_runtime(self.binding()),
         );
     }
@@ -2818,7 +2815,6 @@ impl CsharpProductRuntime {
                         error.code(),
                         error.detail(),
                     )
-                    .expect("bounded frame baseline diagnostic")
                     .with_runtime(self.binding()),
                 );
             }
@@ -3292,7 +3288,6 @@ impl ProductHostRuntime for CsharpProductRuntime {
                         receipt.dropped_count()
                     ),
                 )
-                .expect("stale input diagnostic is bounded")
                 .with_runtime(self.binding()),
             );
         }

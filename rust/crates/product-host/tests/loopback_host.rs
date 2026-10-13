@@ -1133,21 +1133,71 @@ fn browser_diagnostics_establishes_a_typed_attachment_baseline() {
     );
     assert!(read.contains("runtime=7/3/12;next-input=14"), "{read}");
 
-    let invalid_body = r#"{"hostState":"ready","runtimeProgress":"9","transportState":"open","outputState":"open","pageEvents":[],"attachment":{"id":"attachment has a space","replaces":null,"baseline":null}}"#;
-    let invalid = request(
+    host.shutdown().unwrap();
+}
+
+#[test]
+fn browser_diagnostics_keeps_a_large_report_whole() {
+    let host = start_debug();
+    let origin = host.origin();
+    let stack = "TypeError: broken\n".to_owned() + &"    at frame (ui.js:1:2)\n".repeat(200);
+    let page_events: Vec<_> = (0..12)
+        .map(|index| {
+            serde_json::json!({
+                "kind": "error",
+                "code": format!("BROWSER_PAGE_ERROR {index}"),
+                "message": if index == 0 { stack.clone() } else { format!("page error {index}") },
+            })
+        })
+        .collect();
+    let report_body = serde_json::json!({
+        "hostState": "degraded",
+        "runtimeProgress": "9",
+        "transportState": "open",
+        "outputState": "open",
+        "recoverableEvent": { "code": "BROWSER_NEW_RECOVERABLE", "message": "a later shell code" },
+        "pageEvents": page_events,
+        "attachment": { "id": "attachment has a space" },
+    })
+    .to_string();
+    let reported = request(
         &origin,
         &format!(
-            "POST /__rusty/product/runtime/browser-diagnostics HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{invalid_body}",
-            invalid_body.len(),
+            "POST /__rusty/product/runtime/browser-diagnostics HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\nContent-Type: application/json\r\nX-Rusty-Browser-Attachment: attachment has a space\r\nContent-Length: {}\r\n\r\n{report_body}",
+            report_body.len(),
         ),
     );
-    assert!(
-        invalid.starts_with("HTTP/1.1 400 Bad Request\r\n"),
-        "{invalid}"
+    assert!(reported.starts_with("HTTP/1.1 200 OK\r\n"), "{reported}");
+    // The status, the recoverable event and every page event.
+    assert!(reported.contains("\"reported\":14"), "{reported}");
+    let read = request(
+        &origin,
+        "POST /__rusty/product/runtime/diagnostics/read HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}",
+    );
+    let body: serde_json::Value =
+        serde_json::from_str(read.split_once("\r\n\r\n").unwrap().1).unwrap();
+    let events = body["events"].as_array().unwrap();
+    let message = |code: &str| {
+        events
+            .iter()
+            .find(|event| event["code"] == code)
+            .map(|event| event["message"].as_str().unwrap().to_owned())
+    };
+    assert_eq!(
+        message("BROWSER_PAGE_ERROR 0").as_deref(),
+        Some(stack.as_str())
+    );
+    assert_eq!(
+        message("BROWSER_PAGE_ERROR 11").as_deref(),
+        Some("page error 11")
+    );
+    assert_eq!(
+        message("BROWSER_NEW_RECOVERABLE").as_deref(),
+        Some("a later shell code")
     );
     assert!(
-        invalid.contains("PRODUCT_HOST_BROWSER_DIAGNOSTICS_BOUNDS"),
-        "{invalid}"
+        read.contains("\"attachment-id\",\"value\":\"attachment has a space\""),
+        "{read}"
     );
     host.shutdown().unwrap();
 }

@@ -61,8 +61,6 @@ use crate::composition::{
     CsharpEngineServicesError, ABI_OK,
 };
 
-const MAX_TRIGGER_OPERATION_DIAGNOSTICS: usize = 64;
-const MAX_TRIGGER_DIAGNOSTIC_TEXT_BYTES: usize = 512;
 const COLLISION_NAVIGATION_EPSILON: f64 = 0.001;
 const COLLISION_NAVIGATION_CLEARANCE_EPSILON: f64 = 0.02;
 
@@ -3320,10 +3318,9 @@ impl RuntimeSpatialBridge {
             SpatialTriggerOperationError::Trigger(error) => error
                 .diagnostics
                 .iter()
-                .take(MAX_TRIGGER_OPERATION_DIAGNOSTICS)
                 .map(|diagnostic| SpatialTriggerDiagnosticValue {
                     code: diagnostic.code.code().to_owned(),
-                    message: bounded_trigger_diagnostic_text(&diagnostic.message),
+                    message: diagnostic.message.clone(),
                     source: diagnostic
                         .entity
                         .map(|entity| format!("entity:{}", entity.raw()))
@@ -3332,7 +3329,7 @@ impl RuntimeSpatialBridge {
                 .collect(),
             SpatialTriggerOperationError::Service(error) => vec![SpatialTriggerDiagnosticValue {
                 code: error.code().to_owned(),
-                message: bounded_trigger_diagnostic_text(error.detail()),
+                message: error.detail().to_owned(),
                 source: String::new(),
             }],
         };
@@ -3347,12 +3344,12 @@ impl RuntimeSpatialBridge {
         let value = match error {
             SpatialCharacterValidationError::Service(error) => SpatialTriggerDiagnosticValue {
                 code: error.code().to_owned(),
-                message: bounded_trigger_diagnostic_text(error.detail()),
+                message: error.detail().to_owned(),
                 source: String::new(),
             },
             SpatialCharacterValidationError::Controller(error) => SpatialTriggerDiagnosticValue {
                 code: error.code().to_owned(),
-                message: bounded_trigger_diagnostic_text(&error.to_string()),
+                message: error.to_string(),
                 source: match error {
                     CharacterControllerError::InvalidConfig(error) => error.field.to_owned(),
                     CharacterControllerError::InvalidCommand => "command".to_owned(),
@@ -4520,7 +4517,7 @@ unsafe extern "C" fn replace_spatial_content_artifact(
         Err(error) => {
             let diagnostic = SpatialTriggerDiagnosticValue {
                 code: error.code().to_owned(),
-                message: bounded_trigger_diagnostic_text(error.detail()),
+                message: error.detail().to_owned(),
                 source: String::new(),
             };
             bridge.retain_spatial_operation_diagnostic(&[diagnostic], receipt);
@@ -5641,14 +5638,6 @@ fn spatial_content_asset_id(digest: NativeContentSha256) -> u64 {
 
 fn spatial_error(code: &'static str, detail: impl Into<String>) -> CsharpEngineServicesError {
     CsharpEngineServicesError::new(code, detail)
-}
-
-fn bounded_trigger_diagnostic_text(value: &str) -> String {
-    let mut end = value.len().min(MAX_TRIGGER_DIAGNOSTIC_TEXT_BYTES);
-    while end > 0 && !value.is_char_boundary(end) {
-        end -= 1;
-    }
-    value[..end].to_owned()
 }
 
 fn finite_vec3(value: Vec3) -> bool {

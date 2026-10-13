@@ -30,15 +30,13 @@ pub(crate) fn publish_recoverable_once(
     if !reported_codes.insert(code) {
         return;
     }
-    let Ok(event) = RuntimeDiagnosticEvent::new(
+    let event = RuntimeDiagnosticEvent::new(
         RuntimeDiagnosticSeverity::Warning,
         RuntimeDiagnosticDisposition::RejectedRecoverable,
         source,
         code,
         message,
-    ) else {
-        return;
-    };
+    );
     // Recoverable product feedback must not become a callback fault merely
     // because diagnostics persistence has become unavailable.
     let _ = sink.publish(event);
@@ -95,8 +93,7 @@ impl RuntimeDiagnosticsBridge {
             }
             NativeDiagnosticsDisposition::Terminal => RuntimeDiagnosticDisposition::Terminal,
         };
-        let event = RuntimeDiagnosticEvent::new(severity, disposition, source, code, message)
-            .map_err(|_| ())?;
+        let event = RuntimeDiagnosticEvent::new(severity, disposition, source, code, message);
         let correlation = unsafe {
             crate::composition::borrowed_utf8(
                 request.correlation.bytes,
@@ -108,7 +105,7 @@ impl RuntimeDiagnosticsBridge {
         let event = if correlation.is_empty() {
             event
         } else {
-            event.with_correlation(correlation).map_err(|_| ())?
+            event.with_correlation(correlation)
         };
         self.sink.publish(event).map_err(|_| ())
     }
@@ -198,14 +195,17 @@ mod tests {
     }
 
     #[test]
-    fn publish_copies_bounded_csharp_diagnostic_into_the_engine_sink() {
+    fn publish_copies_the_whole_csharp_diagnostic_into_the_engine_sink() {
         let sink = RuntimeDiagnosticsSink::new(Default::default()).unwrap();
         let mut bridge = RuntimeDiagnosticsBridge::new(sink.clone());
         let api = api(&mut bridge);
         let source = b"product";
         let code = b"PRODUCT_NOTICE";
-        let message = b"bounded diagnostic";
-        let correlation = b"update-7";
+        // A managed stack trace: many kilobytes over many lines.
+        let stack = "System.InvalidOperationException: broken\n".to_owned()
+            + &"   at Product.Deep.Frame() in Game.cs:line 42\n".repeat(200);
+        let message = stack.as_bytes();
+        let correlation = b"update 7";
         let request = NativeDiagnosticsPublishRequest {
             severity: NativeDiagnosticsSeverity::Warning,
             disposition: NativeDiagnosticsDisposition::Degraded,
@@ -230,6 +230,8 @@ mod tests {
         let snapshot = sink.snapshot();
         assert_eq!(snapshot.warning_count, 1);
         assert_eq!(snapshot.events[0].code(), "PRODUCT_NOTICE");
+        assert_eq!(snapshot.events[0].message(), stack);
+        assert_eq!(snapshot.events[0].correlation(), Some("update 7"));
 
         let invalid = NativeDiagnosticsPublishRequest {
             message: csharp_engine_abi::NativeUtf8Slice {
