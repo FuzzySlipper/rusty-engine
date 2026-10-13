@@ -1,9 +1,7 @@
 use core_ids::EntityId;
 
 use crate::{
-    validate_character_motion, CharacterMotionComponent, CharacterMotionValidationError,
-    ComponentRevision, EntityLifecycle, EntityState, KinematicComponent, RigidBodyComponent,
-    TransformComponent,
+    CharacterMotionComponent, ComponentRevision, EntityLifecycle, EntityState, TransformComponent,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -31,34 +29,6 @@ pub enum CharacterMotionPublicationError {
     EntityNotActive {
         entity: EntityId,
     },
-    MissingTransform {
-        entity: EntityId,
-    },
-    MissingCharacterMotion {
-        entity: EntityId,
-    },
-    KinematicConflict {
-        entity: EntityId,
-    },
-    RigidBodyConflict {
-        entity: EntityId,
-    },
-    ParentedTransform {
-        entity: EntityId,
-    },
-    NonUnitScale {
-        entity: EntityId,
-    },
-    InvalidTransform {
-        entity: EntityId,
-    },
-    InvalidMotion {
-        entity: EntityId,
-        reason: CharacterMotionValidationError,
-    },
-    RevisionScopeMismatch {
-        entity: EntityId,
-    },
     StaleTransform {
         entity: EntityId,
         expected: u64,
@@ -77,15 +47,6 @@ impl CharacterMotionPublicationError {
         match self {
             Self::UnknownEntity { .. } => "unknown-character-motion-entity",
             Self::EntityNotActive { .. } => "inactive-character-motion-entity",
-            Self::MissingTransform { .. } => "missing-character-motion-transform",
-            Self::MissingCharacterMotion { .. } => "missing-character-motion-component",
-            Self::KinematicConflict { .. } => "legacy-kinematic-character-motion-conflict",
-            Self::RigidBodyConflict { .. } => "rigid-body-character-motion-conflict",
-            Self::ParentedTransform { .. } => "parented-character-motion-transform",
-            Self::NonUnitScale { .. } => "scaled-character-motion-transform",
-            Self::InvalidTransform { .. } => "invalid-character-motion-transform",
-            Self::InvalidMotion { .. } => "invalid-character-motion-publication-state",
-            Self::RevisionScopeMismatch { .. } => "character-motion-revision-scope-mismatch",
             Self::StaleTransform { .. } => "stale-character-motion-transform",
             Self::StaleMotion { .. } => "stale-character-motion-component",
             Self::RevisionExhausted => "character-motion-publication-revision-exhausted",
@@ -102,6 +63,11 @@ impl std::fmt::Display for CharacterMotionPublicationError {
 impl std::error::Error for CharacterMotionPublicationError {}
 
 /// Atomically replace one character's transform and continuation facts.
+///
+/// The values come from the character controller, which solved them from this
+/// entity's transform and motion at the guarded revisions; the revisions are
+/// the only check that the slots are still the ones it read. Removing either
+/// component bumps its revision, so a removed slot is reported as stale.
 pub fn replace_character_motion_state(
     state: &mut EntityState,
     replacement: CharacterMotionStateReplacement,
@@ -112,49 +78,6 @@ pub fn replace_character_motion_state(
     };
     if core.lifecycle != EntityLifecycle::Active {
         return Err(CharacterMotionPublicationError::EntityNotActive { entity });
-    }
-    if state.transform(entity).is_none() {
-        return Err(CharacterMotionPublicationError::MissingTransform { entity });
-    }
-    if state.character_motion(entity).is_none() {
-        return Err(CharacterMotionPublicationError::MissingCharacterMotion { entity });
-    }
-    if state
-        .has_component::<KinematicComponent>(entity)
-        .expect("built-in registration")
-    {
-        return Err(CharacterMotionPublicationError::KinematicConflict { entity });
-    }
-    if state
-        .has_component::<RigidBodyComponent>(entity)
-        .expect("built-in registration")
-    {
-        return Err(CharacterMotionPublicationError::RigidBodyConflict { entity });
-    }
-    if state.transform_parent(entity).is_some() {
-        return Err(CharacterMotionPublicationError::ParentedTransform { entity });
-    }
-    if replacement.transform.scale != core_math::Vec3::ONE {
-        return Err(CharacterMotionPublicationError::NonUnitScale { entity });
-    }
-    if !crate::definition::transform_is_valid(replacement.transform.transform()) {
-        return Err(CharacterMotionPublicationError::InvalidTransform { entity });
-    }
-    validate_character_motion(&replacement.motion)
-        .map_err(|reason| CharacterMotionPublicationError::InvalidMotion { entity, reason })?;
-
-    let transform_type = state
-        .component_type_id::<TransformComponent>()
-        .expect("built-in transform registration");
-    let motion_type = state
-        .component_type_id::<CharacterMotionComponent>()
-        .expect("built-in character-motion registration");
-    if replacement.expected_transform_revision.entity() != entity
-        || replacement.expected_transform_revision.component() != transform_type
-        || replacement.expected_motion_revision.entity() != entity
-        || replacement.expected_motion_revision.component() != motion_type
-    {
-        return Err(CharacterMotionPublicationError::RevisionScopeMismatch { entity });
     }
     let actual_transform = state
         .component_revision::<TransformComponent>(entity)

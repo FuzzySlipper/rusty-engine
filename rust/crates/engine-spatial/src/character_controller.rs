@@ -786,6 +786,10 @@ impl CharacterStepWorld for EntityState {
 pub struct CharacterControllerService {
     generation: u64,
     last_readout: Option<CharacterControllerReadout>,
+    /// The configuration this service last validated. A step validates its
+    /// configuration only when it differs from this one, so an unchanged
+    /// configuration is checked once rather than on every command.
+    admitted_config: Option<CharacterControllerConfig>,
 }
 
 /// Why a directed support-to-support surface edge is or is not traversable.
@@ -1510,12 +1514,13 @@ impl CharacterControllerService {
         command: CharacterControllerCommand,
         colliders: CharacterStepColliders<'_>,
     ) -> Result<CharacterControllerReceipt, CharacterControllerError> {
+        self.admit_config(config)?;
         let solution = self.solve(world, scene, subject, config, command, colliders)?;
         self.finish(solution, 0, 0)
     }
 
     pub fn prepare(
-        &self,
+        &mut self,
         entities: &EntityState,
         scene: &VoxelCollisionScene,
         entity: EntityId,
@@ -1526,7 +1531,7 @@ impl CharacterControllerService {
     }
 
     fn prepare_with_obstacles(
-        &self,
+        &mut self,
         entities: &EntityState,
         scene: &VoxelCollisionScene,
         entity: EntityId,
@@ -1545,7 +1550,7 @@ impl CharacterControllerService {
     }
 
     fn prepare_with_obstacles_and_mesh_instances(
-        &self,
+        &mut self,
         entities: &EntityState,
         scene: &VoxelCollisionScene,
         entity: EntityId,
@@ -1553,6 +1558,7 @@ impl CharacterControllerService {
         command: CharacterControllerCommand,
         colliders: CharacterStepColliders<'_>,
     ) -> Result<PreparedCharacterControllerStep, CharacterControllerError> {
+        self.admit_config(config)?;
         let core = entities
             .core(entity)
             .ok_or(CharacterControllerError::UnknownEntity { entity })?;
@@ -1586,8 +1592,23 @@ impl CharacterControllerService {
         })
     }
 
+    /// Validate `config` unless it is the configuration this service already
+    /// admitted.
+    fn admit_config(
+        &mut self,
+        config: &CharacterControllerConfig,
+    ) -> Result<(), CharacterControllerError> {
+        if self.admitted_config.as_ref() != Some(config) {
+            config
+                .validate()
+                .map_err(CharacterControllerError::InvalidConfig)?;
+            self.admitted_config = Some(config.clone());
+        }
+        Ok(())
+    }
+
     /// Solves one command, as sub-steps when it is longer than the solver
-    /// integrates at once.
+    /// integrates at once. The caller has admitted `config`.
     fn solve(
         &self,
         entities: &dyn CharacterStepWorld,
@@ -1597,7 +1618,9 @@ impl CharacterControllerService {
         command: CharacterControllerCommand,
         colliders: CharacterStepColliders<'_>,
     ) -> Result<CharacterStepSolution, CharacterControllerError> {
-        command.validate_against(config)?;
+        validate_command(command, config)?;
+        // Every sub-step reads the same world and mesh admissions.
+        validate_mesh_instances(entities, scene, subject.entity, colliders.mesh_instances)?;
         if command.sequence <= subject.motion.last_command_sequence {
             return Err(CharacterControllerError::DuplicateOrOldCommand {
                 previous: subject.motion.last_command_sequence,
@@ -1672,7 +1695,6 @@ impl CharacterControllerService {
             return Err(CharacterControllerError::NonUnitScale { entity });
         }
         let motion_before = subject.motion;
-        validate_mesh_instances(entities, scene, entity, mesh_instances)?;
         let obstacles = character_obstacles_with_mesh_instances(
             entities,
             entity,
@@ -3645,6 +3667,48 @@ mod tests {
         assert_eq!(config.shape, CharacterShapeConfig::default());
         assert_eq!(config.solver, CharacterSolverConfig::default());
         assert_eq!(config.validate(), Ok(()));
+    }
+
+    #[test]
+    fn steps_validate_only_a_config_the_service_has_not_admitted() {
+        let mut voxels = Vec::new();
+        for x in -4..=4 {
+            for z in -4..=4 {
+                voxels.push([x, 0, z]);
+            }
+        }
+        let scene = VoxelCollisionScene::from_solid_voxels(1.0, 8, voxels).unwrap();
+        let entity = EntityId::new(1);
+        let mut state = EntityState::from_definitions([entity_state::EntityDefinition::new(
+            entity,
+            "character",
+        )
+        .with_transform(Vec3::new(0.0, 1.9, 0.0))
+        .with_character_motion(CharacterMotionComponent::at_rest(1.9))])
+        .unwrap();
+        let idle = |sequence| CharacterControllerCommand::idle(1.0 / 60.0, sequence);
+        let mut service = CharacterControllerService::default();
+        let config = CharacterControllerConfig::default();
+        for sequence in 1..=3 {
+            service
+                .step(&mut state, &scene, entity, &config, idle(sequence))
+                .unwrap();
+            assert_eq!(service.admitted_config.as_ref(), Some(&config));
+        }
+        let mut invalid = config.clone();
+        invalid.vertical.terminal_fall_speed = -1.0;
+        assert!(matches!(
+            service.step(&mut state, &scene, entity, &invalid, idle(4)),
+            Err(CharacterControllerError::InvalidConfig(error))
+                if error.field == "vertical.terminalFallSpeed"
+        ));
+        assert_eq!(service.admitted_config.as_ref(), Some(&config));
+        let mut faster = config.clone();
+        faster.ground.forward_speed = 7.0;
+        service
+            .step(&mut state, &scene, entity, &faster, idle(4))
+            .unwrap();
+        assert_eq!(service.admitted_config.as_ref(), Some(&faster));
     }
 
     #[test]

@@ -5,27 +5,24 @@ namespace Rusty.Engine.Entities;
 /// <summary>
 /// SDK-owned descriptors for generated Engine values that may participate in a managed entity
 /// world. These are value facts only; they do not make this world a mirror of Rust entity-state.
+/// They carry no validator: the Engine services that produce and consume these values own
+/// their meaning.
 /// </summary>
 public static class EngineComponentTypes
 {
-    private const float QuaternionNormalizationTolerance = 0.001f;
-
     // Values below 1024 are reserved for Engine-maintained descriptors.
     public static ComponentType<Transform> Transform { get; } = ComponentType<Transform>.CreateEngine(
-        EngineComponentKeys.Create(1),
-        validator: ValidateTransform);
+        EngineComponentKeys.Create(1));
 
     public static ComponentType<CharacterMotion> CharacterMotion { get; } = ComponentType<CharacterMotion>.CreateEngine(
-        EngineComponentKeys.Create(2),
-        validator: ValidateCharacterMotion);
+        EngineComponentKeys.Create(2));
 
     /// <summary>
     /// A local-space collider shape projected with the canonical <see cref="Transform"/> into
     /// the generated Spatial trigger batch. Entity identity remains owned by <see cref="EntityStore"/>.
     /// </summary>
     public static ComponentType<SpatialCollider> SpatialCollider { get; } = ComponentType<SpatialCollider>.CreateEngine(
-        EngineComponentKeys.Create(3),
-        validator: ValidateSpatialCollider);
+        EngineComponentKeys.Create(3));
 
     /// <summary>
     /// Caller-owned velocity and bounds projected into the call-local generated
@@ -33,8 +30,7 @@ public static class EngineComponentTypes
     /// <c>KinematicBody</c> value used by direct Physics integration.
     /// </summary>
     public static ComponentType<Kinematic> Kinematic { get; } = ComponentType<Kinematic>.CreateEngine(
-        EngineComponentKeys.Create(4),
-        validator: ValidateKinematic);
+        EngineComponentKeys.Create(4));
 
     /// <summary>
     /// The minimal copied motion facts returned by the retained Dynamics
@@ -43,70 +39,4 @@ public static class EngineComponentTypes
     /// </summary>
     public static ComponentType<DynamicsMotion> DynamicsMotion { get; } = ComponentType<DynamicsMotion>.CreateEngine(
         EngineComponentKeys.Create(5));
-
-    private static void ValidateTransform(in Transform value)
-    {
-        if (!IsFinite(value.Translation) || !IsFinite(value.Scale)
-            || value.Scale.X <= 0 || value.Scale.Y <= 0 || value.Scale.Z <= 0
-            || !IsFinite(value.Rotation)
-            || MathF.Abs(value.Rotation.LengthSquared() - 1f) > QuaternionNormalizationTolerance)
-        {
-            throw new ArgumentException("Transform must have finite translation, positive scale, and normalized rotation.");
-        }
-    }
-
-    private static void ValidateCharacterMotion(in CharacterMotion value)
-    {
-        if (!float.IsFinite(value.TetherLength) || value.TetherLength < 0
-            || (value.TetherAttached && value.TetherLength <= 0)
-            || !IsFinite(value.TetherAnchorPoint)
-            || !IsFinite(value.TetherLocalAnchor)
-            || !IsFinite(value.ControlledVelocity)
-            || !IsFinite(value.ExternalVelocity)
-            || !IsTimer(value.JumpBufferRemaining) || !IsTimer(value.CoyoteRemaining)
-            || !IsTimer(value.LandingLockoutRemaining)
-            || !IsFinite(value.SupportLocalAnchor)
-            || !IsFinite(value.SupportPreviousTranslation)
-            || !IsNormalized(value.SupportPreviousRotation)
-            || !IsFinite(value.SupportPointVelocity)
-            || !IsFinite(value.FallOriginY)
-            || !IsFinite(value.PeakY))
-        {
-            throw new ArgumentException("Character motion does not satisfy its intrinsic Engine value bounds.");
-        }
-    }
-
-    private static void ValidateSpatialCollider(in SpatialCollider value)
-    {
-        if (!IsFinite(value.Min) || !IsFinite(value.Max)
-            || value.Min.X > value.Max.X
-            || value.Min.Y > value.Max.Y
-            || value.Min.Z > value.Max.Z)
-        {
-            throw new ArgumentException("Spatial collider bounds must be finite and ordered.");
-        }
-    }
-
-    private static void ValidateKinematic(in Kinematic value)
-    {
-        if (!IsFinite(value.HalfExtents)
-            || value.HalfExtents.X <= 0 || value.HalfExtents.Y <= 0 || value.HalfExtents.Z <= 0
-            || !IsFinite(value.Velocity))
-        {
-            throw new ArgumentException("Kinematic must have finite positive half extents and finite velocity.");
-        }
-    }
-
-    private static bool IsFinite(System.Numerics.Vector3 value)
-        => float.IsFinite(value.X) && float.IsFinite(value.Y) && float.IsFinite(value.Z);
-
-    private static bool IsFinite(System.Numerics.Quaternion value)
-        => float.IsFinite(value.X) && float.IsFinite(value.Y) && float.IsFinite(value.Z) && float.IsFinite(value.W);
-
-    private static bool IsFinite(float value) => float.IsFinite(value);
-
-    private static bool IsTimer(float value) => float.IsFinite(value) && value >= 0;
-
-    private static bool IsNormalized(System.Numerics.Quaternion value)
-        => IsFinite(value) && MathF.Abs(value.LengthSquared() - 1f) <= QuaternionNormalizationTolerance;
 }

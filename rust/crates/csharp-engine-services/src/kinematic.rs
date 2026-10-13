@@ -158,12 +158,6 @@ fn build_motion_result(
 ) -> Result<NativeKinematicMotionResult, i32> {
     let mut rows = rows.iter().collect::<Vec<_>>();
     rows.sort_by_key(|row| row.entity_id);
-    if rows
-        .windows(2)
-        .any(|pair| pair[0].entity_id == pair[1].entity_id)
-    {
-        return Err(NativeKinematicErrorStatus::InvalidMotionRows as i32);
-    }
     let included = |row: &NativeKinematicMotionEntityRow| {
         !request.selection_present || selected.contains(&EntityId::new(row.entity_id))
     };
@@ -316,9 +310,6 @@ unsafe extern "C" fn run_motion(
         Ok(ids) => ids,
         _ => return 0,
     };
-    if !request.selection_present && !selected_ids.is_empty() {
-        return 0;
-    }
     let selected = selected_ids.iter().copied().map(EntityId::new).collect();
     // SAFETY: this exact context is supplied by `api` for the product lifetime.
     let bridge = unsafe { &mut *context.cast::<RuntimeSpatialBridge>() };

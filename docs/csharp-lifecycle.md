@@ -1266,9 +1266,10 @@ current support transform and obstacle list on later steps so Engine-owned
 support/carry continuation can apply; the session never retains product
 entities or collider records. Every identity is the product's, the first an
 `EntityStore` allocates (1) included: the proposal names no character entity,
-and its receipt's `Entity` is 0. Collision uses translation-offset AABBs with
-unit scale; obstacle rotation participates in platform carry but does not
-rotate the collider volume.
+and its receipt's `Entity` is 0. Collision uses the obstacle's bounds offset by
+its translation, so give bounds that already carry any scale; the transform's
+scale is not used, and its rotation participates in platform carry but does
+not rotate the collider volume.
 
 For a moving retained static-mesh instance, use the call-local
 `CharacterStepRequest.MeshInstances` collection. Each
@@ -1276,9 +1277,9 @@ For a moving retained static-mesh instance, use the call-local
 instance ID, supplies the product entity ID that should receive support facts,
 and carries the current linear and angular velocity. The Engine uses the
 retained triangle mesh for collision and support, then applies translation and
-rotation carry from the retained instance transform. Do not also submit the
-same model as a `CharacterObstacle`: the mesh instance is one collision and
-support authority. Update its retained pose through `ApplyCollisionResidency`
+rotation carry from the retained instance transform. The mesh instance is
+the one collision and support authority for its entity: a `CharacterObstacle`
+with the same entity ID is ignored for collision and support pose. Update its retained pose through `ApplyCollisionResidency`
 before the step and resubmit its `CharacterMeshInstance` each step. The
 separate `CharacterSupport` value may be absent for mesh support; the Engine
 reads its pose from residency. Product persistence keeps the instance/entity

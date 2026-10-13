@@ -143,7 +143,7 @@ pub struct NativeKinematicMotionCandidate {
 
 /// Borrowed bounded input for one call-local KinematicMotionSystem phase.
 /// `selection_present` selects `run_selected`; when false the system runs all
-/// projected bodies and selected_entity_ids must be empty.
+/// projected bodies and ignores selected_entity_ids.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeKinematicMotionRequest {

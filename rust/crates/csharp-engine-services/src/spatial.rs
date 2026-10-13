@@ -1705,12 +1705,6 @@ impl RuntimeSpatialBridge {
                 "maximum navigation step exceeded u8",
             )
         })?;
-        if request.agent_height_voxels == 0 {
-            return Err(CsharpEngineServicesError::new(
-                "CSHARP_NAVIGATION_CONFIG",
-                "agent height must be non-zero",
-            ));
-        }
         let scene = VoxelCollisionScene::from_solid_voxels(
             request.config.cell_size,
             request.config.chunk_size,
@@ -2596,14 +2590,17 @@ impl RuntimeSpatialBridge {
             transform: TransformComponent::from_transform(EntityTransform::at(position)),
             motion,
         };
-        let (mesh_poses, mesh_instances) =
-            character_mesh_instances(&session.scene, mesh_values, obstacle_values)?;
+        let (mesh_poses, mesh_instances) = character_mesh_instances(&session.scene, mesh_values)?;
         let mesh_entities = mesh_values
             .iter()
             .map(|value| (value.instance, value.entity))
             .collect::<BTreeMap<_, _>>();
-        let (mut poses, obstacles) = character_obstacles(obstacle_values)?;
-        poses.extend(mesh_poses);
+        // A mesh admission's retained pose comes first, so it is the pose the
+        // controller reads for an entity also listed as a box obstacle, whose
+        // box the controller drops in favour of the mesh.
+        let (obstacle_poses, obstacles) = character_obstacles(obstacle_values);
+        let mut poses = mesh_poses;
+        poses.extend(obstacle_poses);
         apply_character_support(&mut poses, &mesh_instances, request.motion, request.support)?;
         let world = CharacterCallWorld { poses };
         let receipt = session
@@ -2975,7 +2972,7 @@ impl RuntimeSpatialBridge {
         }?;
         let scene = self.session_mut(request.session)?.scene.clone();
         let ignored = ignored_set(ignored)?;
-        let records = filtered_entities(entities, request.filter, &ignored)?;
+        let records = filtered_entities(entities, request.filter, &ignored);
         let (min, max) = (
             [f64::from(min.x), f64::from(min.y), f64::from(min.z)],
             [f64::from(max.x), f64::from(max.y), f64::from(max.z)],
@@ -3063,7 +3060,7 @@ impl RuntimeSpatialBridge {
         }?;
         let scene = self.session_mut(request.session)?.scene.clone();
         let ignored = ignored_set(ignored)?;
-        let records = filtered_entities(entities, request.filter, &ignored)?;
+        let records = filtered_entities(entities, request.filter, &ignored);
         let obstacles = records
             .iter()
             .copied()
@@ -3486,53 +3483,29 @@ fn static_mesh_transform(value: NativeTransform) -> StaticMeshTransform {
     }
 }
 
-fn retained_mesh_entity_transform(
-    value: StaticMeshTransform,
-    instance: u64,
-) -> Result<EntityTransform, CsharpEngineServicesError> {
-    let cast = |value: f64, field: &'static str| {
-        let result = value as f32;
-        if value.is_finite() && result.is_finite() {
-            Ok(result)
-        } else {
-            Err(CsharpEngineServicesError::new(
-                "CSHARP_CHARACTER_MESH_INSTANCE",
-                format!("retained mesh instance {instance} had a non-finite {field}"),
-            ))
-        }
-    };
-    let translation = Vec3::new(
-        cast(value.translation[0], "translation.x")?,
-        cast(value.translation[1], "translation.y")?,
-        cast(value.translation[2], "translation.z")?,
-    );
-    let rotation = Quat::new(
-        cast(value.rotation[0], "rotation.x")?,
-        cast(value.rotation[1], "rotation.y")?,
-        cast(value.rotation[2], "rotation.z")?,
-        cast(value.rotation[3], "rotation.w")?,
-    );
-    let length_squared = rotation.norm_squared();
-    if !length_squared.is_finite() || length_squared <= f32::EPSILON {
-        return Err(CsharpEngineServicesError::new(
-            "CSHARP_CHARACTER_MESH_INSTANCE",
-            format!("retained mesh instance {instance} had an invalid rotation"),
-        ));
-    }
-    let inverse_length = length_squared.sqrt().recip();
-    Ok(EntityTransform {
-        translation,
+/// The carry-anchor pose of a retained mesh instance. Collision admission
+/// already refused non-finite values and a zero rotation, so the stored pose
+/// only needs its rotation normalized.
+fn retained_mesh_entity_transform(value: StaticMeshTransform) -> EntityTransform {
+    let [x, y, z, w] = value.rotation;
+    let inverse_length = (x * x + y * y + z * z + w * w).sqrt().recip();
+    EntityTransform {
+        translation: Vec3::new(
+            value.translation[0] as f32,
+            value.translation[1] as f32,
+            value.translation[2] as f32,
+        ),
         rotation: Quat::new(
-            rotation.x * inverse_length,
-            rotation.y * inverse_length,
-            rotation.z * inverse_length,
-            rotation.w * inverse_length,
+            (x * inverse_length) as f32,
+            (y * inverse_length) as f32,
+            (z * inverse_length) as f32,
+            (w * inverse_length) as f32,
         ),
         // The synthetic support entity is a rigid pose used only for carry
         // anchors. Retained mesh scale remains owned by the collision
         // projection and participates in its topology identity.
         scale: Vec3::ONE,
-    })
+    }
 }
 
 fn character_motion(
@@ -3667,49 +3640,12 @@ fn apply_character_support(
 fn character_mesh_instances(
     scene: &VoxelCollisionScene,
     values: &[NativeCharacterMeshInstance],
-    obstacles: &[NativeCharacterObstacle],
 ) -> Result<(EntityPoses, Vec<SpatialCharacterMeshInstance>), CsharpEngineServicesError> {
-    let obstacle_entities = obstacles
-        .iter()
-        .map(|value| value.entity)
-        .collect::<BTreeSet<_>>();
-    let mut instances = BTreeSet::new();
-    let mut entities = BTreeSet::new();
     let mut poses = Vec::with_capacity(values.len());
     let mut admitted = Vec::with_capacity(values.len());
     for value in values {
-        if value.instance == 0 || value.entity == 0 {
-            return Err(CsharpEngineServicesError::new(
-                "CSHARP_CHARACTER_MESH_INSTANCE",
-                "C# mesh admission used an invalid instance or entity identity",
-            ));
-        }
-        if !instances.insert(value.instance) {
-            return Err(CsharpEngineServicesError::new(
-                "CSHARP_CHARACTER_MESH_INSTANCE",
-                "C# mesh admission repeated a retained instance identity",
-            ));
-        }
-        if !entities.insert(value.entity) {
-            return Err(CsharpEngineServicesError::new(
-                "CSHARP_CHARACTER_MESH_INSTANCE",
-                "C# mesh admission repeated an entity identity",
-            ));
-        }
-        if obstacle_entities.contains(&value.entity) {
-            return Err(CsharpEngineServicesError::new(
-                "CSHARP_CHARACTER_MESH_INSTANCE",
-                "C# mesh admission duplicated a call-local obstacle entity",
-            ));
-        }
         let linear_velocity = native_vec3_value(value.linear_velocity);
         let angular_velocity = native_vec3_value(value.angular_velocity);
-        if !finite_vec3(linear_velocity) || !finite_vec3(angular_velocity) {
-            return Err(CsharpEngineServicesError::new(
-                "CSHARP_CHARACTER_MESH_INSTANCE",
-                "C# mesh admission used non-finite motion",
-            ));
-        }
         let Some((_, _, retained_transform)) =
             scene.static_mesh_instance(StaticMeshInstanceId(value.instance))
         else {
@@ -3718,8 +3654,10 @@ fn character_mesh_instances(
                 "C# mesh admission named a static instance absent from retained Spatial collision",
             ));
         };
-        let transform = retained_mesh_entity_transform(retained_transform, value.instance)?;
-        poses.push((EntityId::new(value.entity), transform));
+        poses.push((
+            EntityId::new(value.entity),
+            retained_mesh_entity_transform(retained_transform),
+        ));
         admitted.push(SpatialCharacterMeshInstance {
             instance: StaticMeshInstanceId(value.instance),
             entity: EntityId::new(value.entity),
@@ -3739,20 +3677,20 @@ fn character_mesh_instances(
 }
 
 /// Poses for every product obstacle plus the collision-enabled boxes, in
-/// entity order. Box values are validated where collision consumes them.
+/// entity order. A box is the obstacle's bounds placed at its translation:
+/// the bounds already carry any scale, so the pose is the rigid translation
+/// and rotation the controller carries a supported character with. Box values
+/// are validated where collision consumes them.
 fn character_obstacles(
     values: &[NativeCharacterObstacle],
-) -> Result<(EntityPoses, Vec<CharacterObstacle>), CsharpEngineServicesError> {
+) -> (EntityPoses, Vec<CharacterObstacle>) {
     let mut poses = Vec::with_capacity(values.len());
     let mut obstacles = Vec::with_capacity(values.len());
     for value in values {
-        let transform = native_entity_transform(value.transform);
-        if transform.scale != Vec3::ONE {
-            return Err(CsharpEngineServicesError::new(
-                "CSHARP_CHARACTER_OBSTACLE",
-                "C# obstacle transforms require unit scale",
-            ));
-        }
+        let transform = EntityTransform {
+            scale: Vec3::ONE,
+            ..native_entity_transform(value.transform)
+        };
         poses.push((EntityId::new(value.entity), transform));
         if !value.collision_enabled {
             continue;
@@ -3788,7 +3726,7 @@ fn character_obstacles(
         });
     }
     obstacles.sort_by_key(|obstacle| obstacle.id);
-    Ok((poses, obstacles))
+    (poses, obstacles)
 }
 
 fn character_config(
@@ -5842,24 +5780,14 @@ fn filtered_entities(
     values: &[NativeSpatialEntityCollider],
     filter: NativeSpatialQueryFilter,
     ignored: &[EntityId],
-) -> Result<Vec<NativeSpatialEntityCollider>, CsharpEngineServicesError> {
-    for value in values {
-        validate_entity_collider(*value)?;
-    }
-    Ok(values
+) -> Vec<NativeSpatialEntityCollider> {
+    values
         .iter()
         .copied()
         .filter(|value| {
             filter_matches(*value, filter) && !ignored.contains(&EntityId::new(value.entity))
         })
-        .collect())
-}
-
-fn validate_entity_collider(
-    value: NativeSpatialEntityCollider,
-) -> Result<(), CsharpEngineServicesError> {
-    validate_aabb(native_vec3_value(value.min), native_vec3_value(value.max))?;
-    Ok(())
+        .collect()
 }
 
 fn trigger_colliders(
@@ -5944,10 +5872,7 @@ fn cast_ray_parts(
         return Err(spatial_error("CSHARP_SPATIAL_RAY", "ray was invalid"));
     }
     let ignored = ignored_set(ignored_values)?;
-    let entities = filtered_entities(entity_values, filter, &ignored)?;
-    for value in override_values {
-        validate_entity_collider(*value)?;
-    }
+    let entities = filtered_entities(entity_values, filter, &ignored);
     let colliders = entities.iter().filter(|value| value.enabled).map(|value| {
         let bounds = override_values
             .iter()
@@ -8076,7 +8001,7 @@ mod tests {
     }
 
     #[test]
-    fn character_step_rejects_malformed_and_invalid_obstacles_with_diagnostics() {
+    fn character_step_rejects_a_malformed_obstacle_span_and_admits_scaled_bounds() {
         let mut bridge = RuntimeSpatialBridge::new();
         let session = bridge
             .create(NativeSpatialSessionConfig {
@@ -8131,10 +8056,16 @@ mod tests {
             "C# character obstacles had length without a pointer"
         );
 
-        let invalid = [NativeCharacterObstacle {
+        // Bounds already carry the obstacle's scale: the box is admitted as
+        // given, and a supported character is not carried by the scale.
+        let scaled = [NativeCharacterObstacle {
             entity: 2,
             transform: NativeTransform {
-                translation: NativeVec3::default(),
+                translation: NativeVec3 {
+                    x: 0.0,
+                    y: 0.85,
+                    z: 0.0,
+                },
                 rotation: NativeQuat {
                     x: 0.0,
                     y: 0.0,
@@ -8142,8 +8073,8 @@ mod tests {
                     w: 1.0,
                 },
                 scale: NativeVec3 {
-                    x: 2.0,
-                    y: 1.0,
+                    x: 1.0,
+                    y: 2.0,
                     z: 1.0,
                 },
             },
@@ -8161,18 +8092,37 @@ mod tests {
             linear_velocity: NativeVec3::default(),
             angular_velocity: NativeVec3::default(),
         }];
-        let obstacle_error = bridge
-            .propose_character(request(invalid.as_ptr(), invalid.len()))
-            .expect_err("non-unit obstacle scale is rejected");
-        assert_eq!(obstacle_error.code(), "CSHARP_CHARACTER_OBSTACLE");
-        assert_eq!(
-            obstacle_error.detail(),
-            "C# obstacle transforms require unit scale"
-        );
+        let first = bridge
+            .propose_character(request(scaled.as_ptr(), scaled.len()))
+            .expect("a scaled obstacle is admitted");
+        assert!(first.ground.present);
+        assert_eq!(first.motion.support_entity, 2);
+        assert!((first.transform.translation.y - 2.0).abs() < 0.05);
+        let base = request(scaled.as_ptr(), scaled.len());
+        let second = bridge
+            .propose_character(NativeCharacterStepRequest {
+                position: first.transform.translation,
+                motion: first.motion,
+                support: NativeCharacterSupport {
+                    present: true,
+                    lifecycle: NativeCharacterSupportLifecycle::Active,
+                    entity: 2,
+                    transform: scaled[0].transform,
+                },
+                command: NativeCharacterControllerCommand {
+                    sequence: 2,
+                    ..base.command
+                },
+                ..base
+            })
+            .expect("the character stays on the scaled obstacle");
+        assert!(second.platform.present && !second.platform.departed);
+        assert_eq!(second.platform.carried_displacement.y, 0.0);
+        assert!((second.transform.translation.y - first.transform.translation.y).abs() < 1.0e-4);
     }
 
     #[test]
-    fn character_mesh_admission_rejects_invalid_identity_without_advancing_generation() {
+    fn character_mesh_admission_rejects_an_unknown_instance_without_advancing_generation() {
         let mut bridge = RuntimeSpatialBridge::new();
         let session = bridge
             .create(NativeSpatialSessionConfig {
@@ -8293,66 +8243,6 @@ mod tests {
         let error = invalid(&unknown, &[]).expect_err("unknown mesh instance is rejected");
         assert_eq!(error.code(), "CSHARP_CHARACTER_MESH_INSTANCE");
 
-        let duplicate_instance = [
-            NativeCharacterMeshInstance {
-                instance: 9,
-                entity: 2,
-                linear_velocity: NativeVec3::default(),
-                angular_velocity: NativeVec3::default(),
-            },
-            NativeCharacterMeshInstance {
-                instance: 9,
-                entity: 3,
-                linear_velocity: NativeVec3::default(),
-                angular_velocity: NativeVec3::default(),
-            },
-        ];
-        let error = invalid(&duplicate_instance, &[])
-            .expect_err("duplicate mesh instance identity is rejected");
-        assert_eq!(error.code(), "CSHARP_CHARACTER_MESH_INSTANCE");
-
-        let duplicate_entity = [
-            NativeCharacterMeshInstance {
-                instance: 9,
-                entity: 2,
-                linear_velocity: NativeVec3::default(),
-                angular_velocity: NativeVec3::default(),
-            },
-            NativeCharacterMeshInstance {
-                instance: 10,
-                entity: 2,
-                linear_velocity: NativeVec3::default(),
-                angular_velocity: NativeVec3::default(),
-            },
-        ];
-        let error = invalid(&duplicate_entity, &[])
-            .expect_err("duplicate mesh entity identity is rejected");
-        assert_eq!(error.code(), "CSHARP_CHARACTER_MESH_INSTANCE");
-
-        let conflicting_obstacle = [NativeCharacterObstacle {
-            entity: 2,
-            bounds_min: NativeVec3 {
-                x: -1.0,
-                y: -0.25,
-                z: -1.0,
-            },
-            bounds_max: NativeVec3 {
-                x: 1.0,
-                y: 0.25,
-                z: 1.0,
-            },
-            collision_enabled: true,
-            ..Default::default()
-        }];
-        let admitted_mesh = [NativeCharacterMeshInstance {
-            instance: 9,
-            entity: 2,
-            linear_velocity: NativeVec3::default(),
-            angular_velocity: NativeVec3::default(),
-        }];
-        let error = invalid(&admitted_mesh, &conflicting_obstacle)
-            .expect_err("mesh and box obstacle cannot share an entity identity");
-        assert_eq!(error.code(), "CSHARP_CHARACTER_MESH_INSTANCE");
         assert_eq!(
             bridge
                 .sessions
@@ -8363,7 +8253,144 @@ mod tests {
                 .unwrap()
                 .generation,
             1,
-            "invalid mesh admission must not advance controller generation"
+            "an unknown mesh instance must not advance controller generation"
+        );
+    }
+
+    #[test]
+    fn character_step_carries_with_a_moving_retained_mesh_over_a_same_entity_box() {
+        let mut bridge = RuntimeSpatialBridge::new();
+        let session = bridge
+            .create(NativeSpatialSessionConfig {
+                collision_voxel_size: 1.0,
+                collision_chunk_size: 8,
+                voxel_surface_mode: NativeVoxelSurfaceMode::GreedyCubes,
+            })
+            .expect("character session creates");
+        let place = |bridge: &mut RuntimeSpatialBridge, x: f64| {
+            let asset = StaticMeshColliderAsset::new(
+                StaticMeshAssetId(7),
+                vec![
+                    [-2.0, 0.0, -2.0],
+                    [2.0, 0.0, -2.0],
+                    [2.0, 0.0, 2.0],
+                    [-2.0, 0.0, 2.0],
+                ],
+                vec![[0, 2, 1], [0, 3, 2]],
+            )
+            .expect("mesh geometry is valid");
+            let mut candidate = bridge
+                .sessions
+                .get(&session.value)
+                .unwrap()
+                .scene
+                .as_ref()
+                .clone();
+            candidate
+                .replace_static_mesh_colliders(
+                    [asset],
+                    [StaticMeshColliderInstance {
+                        id: StaticMeshInstanceId(9),
+                        asset: StaticMeshAssetId(7),
+                        transform: StaticMeshTransform {
+                            translation: [x, 0.0, 0.0],
+                            ..StaticMeshTransform::IDENTITY
+                        },
+                    }],
+                )
+                .expect("mesh residency admits");
+            let next = Arc::new(candidate);
+            bridge.sessions.get_mut(&session.value).unwrap().scene = Arc::clone(&next);
+            bridge.publish_scene(session, next);
+        };
+        place(&mut bridge, 0.0);
+        let meshes = [NativeCharacterMeshInstance {
+            instance: 9,
+            entity: 2,
+            linear_velocity: NativeVec3::default(),
+            angular_velocity: NativeVec3::default(),
+        }];
+        // The same entity listed as a box far away: the mesh is its collision
+        // and support pose.
+        let boxes = [NativeCharacterObstacle {
+            entity: 2,
+            transform: NativeTransform {
+                translation: NativeVec3 {
+                    x: 6.0,
+                    y: 0.0,
+                    z: 0.0,
+                },
+                ..NativeTransform::default()
+            },
+            bounds_min: NativeVec3 {
+                x: -0.5,
+                y: -0.5,
+                z: -0.5,
+            },
+            bounds_max: NativeVec3 {
+                x: 0.5,
+                y: 0.5,
+                z: 0.5,
+            },
+            collision_enabled: true,
+            ..Default::default()
+        }];
+        let config = bridge.default_character_controller_config();
+        let request = |position: NativeVec3, motion: NativeCharacterMotion, sequence: u64| {
+            NativeCharacterStepRequest {
+                tether: NativeCharacterTetherRequest::default(),
+                session,
+                position,
+                motion,
+                support: NativeCharacterSupport::default(),
+                obstacles: boxes.as_ptr(),
+                obstacles_len: boxes.len(),
+                mesh_instances: meshes.as_ptr(),
+                mesh_instances_len: meshes.len(),
+                config,
+                command: NativeCharacterControllerCommand {
+                    movement: Default::default(),
+                    planar_intent: NativeVec2::default(),
+                    heading_yaw_radians: 0.0,
+                    jump_pressed: false,
+                    jump_held: false,
+                    crouch_requested: false,
+                    external_velocity: NativeVec3::default(),
+                    external_impulse: NativeVec3::default(),
+                    step_seconds: 1.0 / 60.0,
+                    sequence,
+                },
+            }
+        };
+        let landed = bridge
+            .propose_character(request(
+                NativeVec3 {
+                    x: 0.0,
+                    y: 0.92,
+                    z: 0.0,
+                },
+                NativeCharacterMotion {
+                    stance: NativeCharacterStance::Standing,
+                    fall_origin_y: 0.92,
+                    peak_y: 0.92,
+                    ..Default::default()
+                },
+                1,
+            ))
+            .expect("the character lands on the retained mesh");
+        assert!(landed.ground.present);
+        assert!(landed.motion.support_entity_present);
+        assert_eq!(landed.motion.support_entity, 2);
+
+        place(&mut bridge, 0.2);
+        let carried = bridge
+            .propose_character(request(landed.transform.translation, landed.motion, 2))
+            .expect("the character rides the moved mesh");
+        assert!(carried.platform.present && !carried.platform.departed);
+        assert_eq!(carried.platform.entity, 2);
+        assert!((carried.platform.carried_displacement.x - 0.2).abs() < 1.0e-4);
+        assert!(
+            (carried.transform.translation.x - landed.transform.translation.x - 0.2).abs() < 1.0e-3
         );
     }
 

@@ -42,7 +42,7 @@ impl RuntimeSpatialBridge {
         }
         let entities =
             unsafe { borrowed_slice(request.entities, request.entities_len, "map colliders") }?;
-        let records = filtered_entities(entities, NativeSpatialQueryFilter::default(), &[])?;
+        let records = filtered_entities(entities, NativeSpatialQueryFilter::default(), &[]);
         let identity = self.collision_source.cursor_identity(request.session)?;
         let session = self
             .sessions

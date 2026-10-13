@@ -96,15 +96,13 @@ public sealed class ComponentType<T> : ComponentType where T : notnull
         return new(key, validator);
     }
 
-    internal static ComponentType<T> CreateEngine(
-        ComponentTypeKey key,
-        ComponentValidator<T>? validator = null)
+    internal static ComponentType<T> CreateEngine(ComponentTypeKey key)
     {
         if (!key.IsEngine)
         {
             throw new ArgumentOutOfRangeException(nameof(key));
         }
-        return new(key, validator);
+        return new(key, null);
     }
 
     internal void Validate(in T value) => Validator?.Invoke(in value);
