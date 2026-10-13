@@ -36,10 +36,11 @@ mod headless_browser;
 mod product_bundle;
 #[cfg(unix)]
 mod supervisor;
+mod supervisor_command;
 
 /// Forwarded to a serving runtime after `rusty dev` restaged only UI or
 /// bundle content: the runtime re-reads them without restarting the product.
-/// A supervised runtime reads it on stdin on every platform.
+/// The Unix supervisor forwards it to its runtime on stdin.
 pub(crate) const RELOAD_ASSETS_COMMAND: &str = "reload-assets";
 /// Forwarded with a JSON array of content-root-relative paths after `rusty
 /// dev` restaged live loose content: the runtime re-admits those files and
@@ -185,7 +186,7 @@ fn main() -> Result<std::process::ExitCode, String> {
         .with_bind_host(args.bind_host())
         // The probe's HTTP lane steps held time through the debug route.
         .with_live_debug(args.live_debug() || args.performance_probe.is_some())
-        .with_diagnostics(diagnostics)
+        .with_diagnostics(diagnostics.clone())
         .with_ui_files(runtime.ui_files());
     config = config.with_presentation(runtime.presentation());
     config = config.with_video_options(runtime.video_options());
@@ -311,12 +312,15 @@ fn main() -> Result<std::process::ExitCode, String> {
             || "Rusty Engine".to_owned(),
             |product| product.title.clone(),
         );
-        // Only a runtime serving under the supervisor receives asset reloads.
-        let reload_assets = args
-            .serve_listener_fd
-            .and(args.product.take())
-            .map(|product| asset_reloader(host.asset_reload(), product));
         let supervised = args.supervised || args.serve_listener_fd.is_some();
+        // Under `rusty dev`: a runtime the Unix supervisor serves through, or
+        // on Windows the supervised host itself.
+        let reload_assets = args
+            .product
+            .take()
+            .filter(|_| supervised)
+            .map(|product| asset_reloader(host.asset_reload(), product, diagnostics.clone()));
+        let framed_commands = args.serve_listener_fd.is_none();
         #[cfg(feature = "desktop")]
         if let (Some(desktop), Some((driver, timing))) = (desktop, window_scene) {
             // The window owns the main thread. The usual stop conditions
@@ -331,6 +335,7 @@ fn main() -> Result<std::process::ExitCode, String> {
             };
             let reason = std::thread::scope(|scope| {
                 let waiter = Arc::clone(&termination);
+                let waiter_diagnostics = diagnostics.clone();
                 let host = &host;
                 let window = &ended;
                 let waiting = scope.spawn(move || {
@@ -340,6 +345,8 @@ fn main() -> Result<std::process::ExitCode, String> {
                         Arc::clone(&waiter),
                         Some(window),
                         reload_assets,
+                        framed_commands,
+                        waiter_diagnostics,
                     );
                     waiter.store(true, Ordering::Relaxed);
                     reason
@@ -362,7 +369,15 @@ fn main() -> Result<std::process::ExitCode, String> {
             drop(host);
             return Ok(stop_exit_code(supervised, reason));
         }
-        wait_for_process_termination(supervised, &host, termination, None, reload_assets);
+        wait_for_process_termination(
+            supervised,
+            &host,
+            termination,
+            None,
+            reload_assets,
+            framed_commands,
+            diagnostics,
+        );
     }
     Ok(std::process::ExitCode::SUCCESS)
 }
@@ -477,53 +492,131 @@ fn print_runtime_identity(machine_readable: bool) {
     }
 }
 
-/// Handles one reload line the supervisor forwards.
-type ReloadLine = Box<dyn Fn(&str) + Send>;
+/// A reload `rusty dev` asks of the running product after a restage.
+enum Reload {
+    /// Restaged UI and bundle content.
+    Assets,
+    /// Restaged live loose content files, content-root-relative.
+    Content(Vec<String>),
+}
 
-/// Handles one reload line from the supervisor. `reload-assets` re-reads the
-/// staged UI into a fresh browser bundle and reloads the runtime's bundle
-/// inventory, keeping the old bundle and inventory on failure.
-/// `reload-content` re-admits the named loose files, keeping the old ones on
-/// failure.
-fn asset_reloader(reload: ProductHostAssetReload, product: ProductBundle) -> ReloadLine {
-    Box::new(move |line| {
-        if let Some(paths) = line
-            .strip_prefix(RELOAD_CONTENT_COMMAND)
-            .and_then(|rest| rest.strip_prefix(' '))
-        {
-            let result = serde_json::from_str::<Vec<String>>(paths)
-                .map_err(|error| error.to_string())
-                .and_then(|paths| {
+impl Reload {
+    /// The line the Unix supervisor forwards to its runtime.
+    fn from_line(line: &str) -> Option<Result<Self, String>> {
+        if line == RELOAD_ASSETS_COMMAND {
+            return Some(Ok(Self::Assets));
+        }
+        let paths = line
+            .strip_prefix(RELOAD_CONTENT_COMMAND)?
+            .strip_prefix(' ')?;
+        Some(
+            serde_json::from_str(paths)
+                .map(Self::Content)
+                .map_err(|error| format!("PRODUCT_HOST_CONTENT_RELOAD: {error}")),
+        )
+    }
+}
+
+type Reloader = Box<dyn Fn(Reload) + Send>;
+
+/// `Reload::Assets` re-reads the staged UI into a fresh browser bundle and
+/// reloads the runtime's bundle inventory, keeping the old bundle and
+/// inventory on failure. `Reload::Content` re-admits the named loose files,
+/// keeping the old ones on failure. A failure is printed and published to the
+/// host's diagnostics.
+fn asset_reloader(
+    reload: ProductHostAssetReload,
+    product: ProductBundle,
+    diagnostics: ProductHostLog,
+) -> Reloader {
+    Box::new(move |request| match request {
+        Reload::Content(paths) => match reload.reload_content_files(&paths) {
+            Ok(()) => {
+                for path in paths {
+                    print_line(&format!("RUSTY_HOST content-reloaded {path}"));
+                }
+            }
+            Err(error) => publish_host_diagnostic(
+                &diagnostics,
+                "content-reload",
+                "PRODUCT_HOST_CONTENT_RELOAD",
+                &format!("{}: {}", error.code(), error.diagnostic()),
+            ),
+        },
+        Reload::Assets => {
+            let result = runtime_browser_root()
+                .and_then(|root| load_bundle(&root, &product))
+                .and_then(|bundle| {
                     reload
-                        .reload_content_files(&paths)
-                        .map(|()| paths)
+                        .reload(bundle)
                         .map_err(|error| format!("{}: {}", error.code(), error.diagnostic()))
                 });
             match result {
-                Ok(paths) => {
-                    for path in paths {
-                        print_line(&format!("RUSTY_HOST content-reloaded {path}"));
-                    }
-                }
-                Err(error) => eprintln!("RUSTY_HOST PRODUCT_HOST_CONTENT_RELOAD: {error}"),
+                Ok(()) => print_line("RUSTY_HOST assets-reloaded"),
+                Err(error) => publish_host_diagnostic(
+                    &diagnostics,
+                    "asset-reload",
+                    "PRODUCT_HOST_ASSET_RELOAD",
+                    &error,
+                ),
             }
-            return;
-        }
-        if line != RELOAD_ASSETS_COMMAND {
-            return;
-        }
-        let result = runtime_browser_root()
-            .and_then(|root| load_bundle(&root, &product))
-            .and_then(|bundle| {
-                reload
-                    .reload(bundle)
-                    .map_err(|error| format!("{}: {}", error.code(), error.diagnostic()))
-            });
-        match result {
-            Ok(()) => print_line("RUSTY_HOST assets-reloaded"),
-            Err(error) => eprintln!("RUSTY_HOST PRODUCT_HOST_ASSET_RELOAD: {error}"),
         }
     })
+}
+
+/// Prints a host failure for `rusty dev` and publishes it where
+/// `diagnostics/read` and the diagnostics log show it.
+pub(crate) fn publish_host_diagnostic(
+    diagnostics: &ProductHostLog,
+    source: &str,
+    code: &str,
+    message: &str,
+) {
+    eprintln!("RUSTY_HOST {code}: {message}");
+    let event = product_host::ProductHostLogEvent::new(
+        product_host::ProductHostLogSeverity::Error,
+        product_host::ProductHostLogDisposition::Degraded,
+        source,
+        code,
+        message,
+    );
+    if let Ok(event) = event {
+        let _ = diagnostics.publish(event);
+    }
+}
+
+/// Applies `rusty dev`'s commands to a host that runs its product in process
+/// until stdin closes. Such a host cannot replace its runtime, so a
+/// replacement is reported rather than dropped.
+fn apply_framed_commands(
+    commands: impl IntoIterator<Item = Result<supervisor_command::SupervisorCommand, String>>,
+    reload: impl Fn(Reload),
+    diagnostics: &ProductHostLog,
+) {
+    for command in commands {
+        match command {
+            Ok(supervisor_command::SupervisorCommand::ReloadAssets) => reload(Reload::Assets),
+            Ok(supervisor_command::SupervisorCommand::ReloadContent { paths }) => {
+                reload(Reload::Content(paths));
+            }
+            Ok(supervisor_command::SupervisorCommand::ReplaceRuntime { .. }) => {
+                publish_host_diagnostic(
+                    diagnostics,
+                    "supervisor",
+                    "PRODUCT_HOST_SUPERVISOR_REPLACE",
+                    "this host runs its product in process and cannot replace it; stop and \
+                     start rusty dev to run the restaged product",
+                );
+            }
+            Err(error) if error == supervisor_command::SUPERVISOR_EOF => {}
+            Err(error) => publish_host_diagnostic(
+                diagnostics,
+                "supervisor",
+                "PRODUCT_HOST_SUPERVISOR_CONTROL",
+                &error,
+            ),
+        }
+    }
 }
 
 /// The standard host is owned by its foreground process supervisor. In
@@ -538,7 +631,9 @@ fn wait_for_process_termination(
     host: &RunningProductHost,
     termination: Arc<AtomicBool>,
     window: Option<&WindowEnd>,
-    reload_assets: Option<ReloadLine>,
+    reload_assets: Option<Reloader>,
+    framed_commands: bool,
+    diagnostics: ProductHostLog,
 ) -> &'static str {
     let window_ended = || {
         let window = window?;
@@ -559,14 +654,35 @@ fn wait_for_process_termination(
         // Keep stdin as the supervisor's clean-stop mechanism, but read it on
         // a helper so a terminal runtime recovery can wake this foreground
         // owner without waiting for the supervisor to close the pipe. The
-        // supervisor also forwards asset reloads here, one line each.
+        // Unix supervisor forwards reloads here, one line each; on Windows
+        // `rusty dev`'s own framed commands arrive here.
         let supervisor_stdin_closed = Arc::new(AtomicBool::new(false));
         let reader_closed = Arc::clone(&supervisor_stdin_closed);
+        let reload = move |request| {
+            if let Some(reload) = &reload_assets {
+                reload(request);
+            }
+        };
         std::thread::spawn(move || {
-            for line in std::io::stdin().lock().lines() {
-                let Ok(line) = line else { break };
-                if let Some(reload) = &reload_assets {
-                    reload(&line);
+            if framed_commands {
+                apply_framed_commands(
+                    supervisor_command::read_supervisor_commands(),
+                    reload,
+                    &diagnostics,
+                );
+            } else {
+                for line in std::io::stdin().lock().lines() {
+                    let Ok(line) = line else { break };
+                    match Reload::from_line(&line) {
+                        Some(Ok(request)) => reload(request),
+                        Some(Err(error)) => publish_host_diagnostic(
+                            &diagnostics,
+                            "content-reload",
+                            "PRODUCT_HOST_CONTENT_RELOAD",
+                            &error,
+                        ),
+                        None => {}
+                    }
                 }
             }
             reader_closed.store(true, Ordering::Release);
@@ -1650,6 +1766,57 @@ fn content_type(path: &str) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn supervisor_reload_lines_parse_to_reloads() {
+        assert!(matches!(
+            Reload::from_line("reload-assets"),
+            Some(Ok(Reload::Assets))
+        ));
+        let Some(Ok(Reload::Content(paths))) =
+            Reload::from_line(r#"reload-content ["tuning/a.json"]"#)
+        else {
+            panic!("expected a content reload");
+        };
+        assert_eq!(paths, ["tuning/a.json"]);
+        assert!(matches!(
+            Reload::from_line("reload-content tuning/a.json"),
+            Some(Err(_))
+        ));
+        assert!(Reload::from_line("serve").is_none());
+    }
+
+    #[test]
+    fn an_in_process_host_applies_reloads_and_reports_a_replacement() {
+        // #9898: on Windows `rusty dev`'s framed commands reach the host
+        // itself, which read them as lines and dropped every one.
+        use supervisor_command::SupervisorCommand;
+        let diagnostics = ProductHostLog::new(Default::default()).unwrap();
+        let reloads = std::cell::RefCell::new(Vec::new());
+        apply_framed_commands(
+            [
+                Ok(SupervisorCommand::ReloadContent {
+                    paths: vec!["tuning/a.json".to_owned()],
+                }),
+                Ok(SupervisorCommand::ReloadAssets),
+                Ok(SupervisorCommand::ReplaceRuntime {
+                    product_directory: PathBuf::from("/staged"),
+                }),
+                Err(supervisor_command::SUPERVISOR_EOF.to_owned()),
+            ],
+            |reload| {
+                reloads.borrow_mut().push(match reload {
+                    Reload::Assets => "assets".to_owned(),
+                    Reload::Content(paths) => paths.join(","),
+                });
+            },
+            &diagnostics,
+        );
+        assert_eq!(*reloads.borrow(), ["tuning/a.json", "assets"]);
+        let events = diagnostics.read_after(None).events;
+        let codes: Vec<_> = events.iter().map(|event| event.code()).collect();
+        assert_eq!(codes, ["PRODUCT_HOST_SUPERVISOR_REPLACE"]);
+    }
 
     fn parse_test_args(arguments: &[&str]) -> Result<Arguments, String> {
         let mut values = vec![
