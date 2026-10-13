@@ -18,10 +18,13 @@ use render_presentation::MAX_AUDIO_DIAGNOSTICS;
 
 use crate::{
     composition::{borrowed_utf8, ABI_OK},
-    content::{RetainedContent, RuntimeContentBridge},
+    content::{ContentIdentity, RetainedContent, RuntimeContentBridge},
     render_resources::CsharpRenderResource,
     CsharpEngineServicesError,
 };
+
+/// A clip's content-relative path, body and content identity.
+type ClipSource = (String, Arc<[u8]>, ContentIdentity);
 
 #[derive(Clone)]
 struct AudioClip {
@@ -466,20 +469,20 @@ impl RuntimeAudioBridge {
     fn clip_source_from_retained(
         &self,
         content: RetainedContent,
-    ) -> Result<(String, Arc<[u8]>), CsharpEngineServicesError> {
+    ) -> Result<ClipSource, CsharpEngineServicesError> {
         if content.path.is_empty() {
             return Err(CsharpEngineServicesError::new(
                 "CSHARP_AUDIO_RESOURCE_PATH",
                 "audio content reference has no canonical path",
             ));
         }
-        Ok((content.path, content.bytes))
+        Ok((content.path, content.bytes, content.identity))
     }
 
     fn clip_source_from_path(
         &self,
         relative_path: &str,
-    ) -> Result<(String, Arc<[u8]>), CsharpEngineServicesError> {
+    ) -> Result<ClipSource, CsharpEngineServicesError> {
         let retained = self
             .content
             .and_then(|content| unsafe { content.as_ref() })
@@ -490,7 +493,7 @@ impl RuntimeAudioBridge {
                 self.content_resources
                     .get(relative_path)
                     .cloned()
-                    .map(|bytes| (relative_path.to_owned(), bytes))
+                    .map(|bytes| (relative_path.to_owned(), bytes, ContentIdentity::default()))
             });
         retained.ok_or_else(|| {
             CsharpEngineServicesError::new(
@@ -503,7 +506,7 @@ impl RuntimeAudioBridge {
     fn clip_source_from_reference(
         &self,
         reference: NativeContentReferenceHandle,
-    ) -> Result<(String, Arc<[u8]>), CsharpEngineServicesError> {
+    ) -> Result<ClipSource, CsharpEngineServicesError> {
         let content = self
             .content
             .and_then(|content| unsafe { content.as_ref() })
@@ -549,13 +552,18 @@ impl RuntimeAudioBridge {
         Ok(Some(NativeAudioClipHandle { value: handle }))
     }
 
+    /// Admits a clip under its content identity, or acquires the live clip
+    /// with that identity; the body is neither hashed again nor copied.
     fn admit_clip(
         &mut self,
-        relative_path: String,
-        bytes: Arc<[u8]>,
+        (relative_path, bytes, identity): ClipSource,
     ) -> Result<NativeAudioClipHandle, CsharpEngineServicesError> {
-        let browser_path = format!("content/{relative_path}");
-        let resource = CsharpRenderResource::admit_audio(browser_path, bytes.to_vec())?;
+        let content_hash = identity.content_hash(&bytes);
+        let resource = CsharpRenderResource::admit_audio(
+            format!("content/{relative_path}"),
+            bytes,
+            content_hash,
+        )?;
         if let Some(handle) = self.acquire_existing_clip(resource.identity())? {
             return Ok(handle);
         }
@@ -602,16 +610,16 @@ impl RuntimeAudioBridge {
     ) -> Result<NativeAudioClipHandle, CsharpEngineServicesError> {
         let requested_path =
             unsafe { borrowed_utf8(request.path.bytes, request.path.len, "audio resource path")? };
-        let (relative_path, bytes) = self.clip_source_from_path(requested_path)?;
-        self.admit_clip(relative_path, bytes)
+        let source = self.clip_source_from_path(requested_path)?;
+        self.admit_clip(source)
     }
 
     fn open_clip_from_content(
         &mut self,
         request: NativeAudioClipFromContentRequest,
     ) -> Result<NativeAudioClipHandle, CsharpEngineServicesError> {
-        let (relative_path, bytes) = self.clip_source_from_reference(request.content)?;
-        self.admit_clip(relative_path, bytes)
+        let source = self.clip_source_from_reference(request.content)?;
+        self.admit_clip(source)
     }
 
     fn preload_optional(
@@ -621,7 +629,7 @@ impl RuntimeAudioBridge {
         let requested_path =
             unsafe { borrowed_utf8(request.path.bytes, request.path.len, "audio resource path")? }
                 .to_owned();
-        let (relative_path, bytes) = match self.clip_source_from_path(&requested_path) {
+        let source = match self.clip_source_from_path(&requested_path) {
             Ok(source) => source,
             Err(error) if error.code() == "CSHARP_AUDIO_RESOURCE_UNKNOWN" => {
                 let receipt = Self::optional_preload_receipt(
@@ -636,55 +644,8 @@ impl RuntimeAudioBridge {
             }
             Err(error) => return Err(error),
         };
-        let browser_path = format!("content/{relative_path}");
-        let resource = CsharpRenderResource::admit_audio(browser_path, bytes.to_vec())?;
-        if let Some(handle) = self.acquire_existing_clip(resource.identity())? {
-            return Self::optional_preload_receipt(
-                NativeAudioOptionalPreloadOutcome::Admitted,
-                handle,
-            );
-        }
-        let duration_seconds = wav_duration_seconds(resource.bytes());
-        let content_hash = resource.content_hash().to_owned();
-        let asset = format!(
-            "audio/{}",
-            content_hash
-                .strip_prefix("sha256:")
-                .expect("audio resource identity has a SHA-256 hash")
-        );
-        let handle = {
-            let staged = self.staged_mut()?;
-            let handle = staged.state.next_clip;
-            staged.state.next_clip = handle.checked_add(1).ok_or_else(|| {
-                CsharpEngineServicesError::new(
-                    "CSHARP_AUDIO_CLIP_HANDLE",
-                    "audio clip handles exhausted",
-                )
-            })?;
-            staged
-                .state
-                .assets
-                .insert(asset.clone(), RenderAssetKind::Audio);
-            staged
-                .state
-                .digests
-                .insert(clip_digest(&content_hash), handle);
-            staged.state.clips.insert(
-                handle,
-                AudioClip {
-                    asset,
-                    content_hash,
-                    duration_seconds,
-                    resource,
-                    owners: 1,
-                },
-            );
-            handle
-        };
-        Self::optional_preload_receipt(
-            NativeAudioOptionalPreloadOutcome::Admitted,
-            NativeAudioClipHandle { value: handle },
-        )
+        let handle = self.admit_clip(source)?;
+        Self::optional_preload_receipt(NativeAudioOptionalPreloadOutcome::Admitted, handle)
     }
 
     fn descriptor(
@@ -1738,7 +1699,11 @@ mod tests {
                 let mut bytes = wav().to_vec();
                 bytes[44] = n;
                 bridge
-                    .admit_clip(format!("audio/{n}.wav"), Arc::from(bytes))
+                    .admit_clip((
+                        format!("audio/{n}.wav"),
+                        Arc::from(bytes),
+                        ContentIdentity::default(),
+                    ))
                     .unwrap()
             })
             .collect();
@@ -1766,7 +1731,11 @@ mod tests {
         let mut bytes = wav().to_vec();
         bytes[44] = 7;
         let shared = bridge
-            .admit_clip("audio/again.wav".to_owned(), Arc::from(bytes))
+            .admit_clip((
+                "audio/again.wav".to_owned(),
+                Arc::from(bytes),
+                ContentIdentity::default(),
+            ))
             .unwrap();
         assert_eq!(shared, handles[7]);
         bridge.destroy_clip(shared).unwrap();
@@ -1813,9 +1782,14 @@ mod tests {
         bridge.begin_call();
         for (extension, bytes) in samples {
             let path = format!("audio/tone.{extension}");
-            let first = bridge.admit_clip(path.clone(), Arc::from(*bytes)).unwrap();
+            let first = bridge
+                .admit_clip((path.clone(), Arc::from(*bytes), Default::default()))
+                .unwrap();
             assert_eq!(
-                bridge.admit_clip(path, Arc::from(*bytes)).unwrap().value,
+                bridge
+                    .admit_clip((path, Arc::from(*bytes), Default::default()))
+                    .unwrap()
+                    .value,
                 first.value
             );
         }
@@ -1834,23 +1808,32 @@ mod tests {
             let mut bytes = samples[3].1.to_vec();
             bytes.extend_from_slice(&n.to_le_bytes());
             bridge
-                .admit_clip(format!("audio/{n}.mp3"), Arc::from(bytes))
+                .admit_clip((
+                    format!("audio/{n}.mp3"),
+                    Arc::from(bytes),
+                    Default::default(),
+                ))
                 .unwrap();
         }
         for (index, (extension, source)) in samples.iter().take(4).enumerate() {
             let mut bytes = source.to_vec();
             bytes.resize(9 * 1024 * 1024, index as u8);
             bridge
-                .admit_clip(format!("audio/large.{extension}"), Arc::from(bytes))
+                .admit_clip((
+                    format!("audio/large.{extension}"),
+                    Arc::from(bytes),
+                    Default::default(),
+                ))
                 .unwrap();
         }
         assert_eq!(bridge.staged_ref().unwrap().state.clips.len(), 74);
         assert_eq!(
             bridge
-                .admit_clip(
+                .admit_clip((
                     "audio/unknown.aac".into(),
-                    Arc::from(b"not audio".as_slice())
-                )
+                    Arc::from(b"not audio".as_slice()),
+                    Default::default(),
+                ))
                 .unwrap_err()
                 .code(),
             "CSHARP_AUDIO_RESOURCE_CONTAINER"
@@ -2188,10 +2171,14 @@ mod tests {
         let mut other = wav().to_vec();
         other[44] = 7;
         let first = bridge
-            .admit_clip("audio/first.wav".to_owned(), wav())
+            .admit_clip(("audio/first.wav".to_owned(), wav(), Default::default()))
             .expect("first clip");
         let second = bridge
-            .admit_clip("audio/second.wav".to_owned(), Arc::from(other))
+            .admit_clip((
+                "audio/second.wav".to_owned(),
+                Arc::from(other),
+                Default::default(),
+            ))
             .expect("second clip");
         let a = bridge
             .create_voice(descriptor(first, NativeAudioBus::Sfx))
@@ -2474,6 +2461,35 @@ mod tests {
     }
 
     #[test]
+    fn reopening_a_clip_reuses_its_content_identity_under_any_filename() {
+        const PATH: &str = "audio/ß #1 звук.wav";
+        let content = RuntimeContentBridge::new(BTreeMap::from([(PATH.to_owned(), wav())]));
+        let mut bridge = RuntimeAudioBridge::new(BTreeMap::new());
+        bridge.bind_content(&content);
+        bridge.begin_call();
+        let request = NativeAudioClipRequest {
+            path: NativeUtf8Slice {
+                bytes: PATH.as_ptr(),
+                len: PATH.len(),
+            },
+        };
+        let hashes = crate::content::tests::body_hashes();
+        let first = bridge.open_clip(&request).unwrap();
+        let second = bridge.open_clip(&request).unwrap();
+        let preloaded = bridge.preload_optional(&request).unwrap();
+        assert_eq!(crate::content::tests::body_hashes(), hashes + 1);
+        assert_eq!([second, preloaded.clip], [first; 2]);
+        let state = &bridge.staged_ref().unwrap().state;
+        let clip = &state.clips[&first.value];
+        assert_eq!(clip.owners, 3);
+        assert_eq!(clip.resource.path(), format!("content/{PATH}"));
+        assert!(Arc::ptr_eq(
+            &clip.resource.shared_bytes(),
+            &content.retained_path(PATH).unwrap().bytes
+        ));
+    }
+
+    #[test]
     fn admits_content_references_after_selection_and_releases_shared_clips() {
         let mut resources = BTreeMap::new();
         resources.insert("audio/bundle.wav".to_owned(), wav());
@@ -2743,10 +2759,14 @@ mod tests {
         second[44] = 7;
         bridge.begin_call();
         let first = bridge
-            .admit_clip("audio/revision.wav".to_owned(), first)
+            .admit_clip(("audio/revision.wav".to_owned(), first, Default::default()))
             .expect("first content version");
         let second = bridge
-            .admit_clip("audio/revision.wav".to_owned(), Arc::from(second))
+            .admit_clip((
+                "audio/revision.wav".to_owned(),
+                Arc::from(second),
+                Default::default(),
+            ))
             .expect("second content version");
         assert_ne!(
             first, second,

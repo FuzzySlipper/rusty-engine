@@ -3317,15 +3317,9 @@ impl RuntimeAppearanceBridge {
         color_space: NativeTextureColorSpace,
         shader_keywords: &[String],
     ) -> Result<NativeRenderResourceInfo, CsharpEngineServicesError> {
-        let content_admitted = self.content.is_some();
-        let resource = self.imports.file(
-            content,
-            filter,
-            wrap,
-            color_space,
-            shader_keywords,
-            content_admitted,
-        )?;
+        let resource = self
+            .imports
+            .file(content, filter, wrap, color_space, shader_keywords)?;
         let resources = &mut self.staged_mut()?.state.render_resources;
         let handle = resources.admit(resource)?;
         resources.info(handle)
@@ -3543,7 +3537,7 @@ impl RuntimeAppearanceBridge {
         staged.state.next_material = next_material;
         let resources = staged.state.projector.resources_mut();
         for texture in textures {
-            retain_texture_descriptor(&mut resources.textures, texture)?;
+            retain_texture_descriptor(&mut resources.textures, texture);
         }
         if let Some((_, shader)) = shader {
             retain_shader_descriptor(&mut resources.shaders, shader);
@@ -3690,7 +3684,7 @@ impl RuntimeAppearanceBridge {
             .chain(normal_texture)
             .chain(shader_textures)
         {
-            retain_texture_descriptor(&mut resources.textures, texture)?;
+            retain_texture_descriptor(&mut resources.textures, texture);
         }
         if let Some((_, shader)) = shader {
             retain_shader_descriptor(&mut resources.shaders, shader);
@@ -3826,7 +3820,7 @@ impl RuntimeAppearanceBridge {
         let shader = material_shader(&staged.state.render_resources, request.replacement.shader)?;
         let resources = staged.state.projector.resources_mut();
         for texture in textures {
-            retain_texture_descriptor(&mut resources.textures, texture)?;
+            retain_texture_descriptor(&mut resources.textures, texture);
         }
         if let Some((_, shader)) = shader {
             retain_shader_descriptor(&mut resources.shaders, shader);
@@ -4823,7 +4817,7 @@ impl RuntimeAppearanceBridge {
             retain_texture_descriptor(
                 &mut self.staged_mut()?.state.projector.resources_mut().textures,
                 texture,
-            )?;
+            );
         }
         Ok(())
     }
@@ -10356,21 +10350,15 @@ fn texture_descriptors_for_material(
         .collect()
 }
 
+/// A texture id names its content identity and sampling, so a retained
+/// descriptor with the same id already carries the same facts.
 fn retain_texture_descriptor(
     textures: &mut render_projection::ResourceList<TextureDescriptor>,
     texture: TextureDescriptor,
-) -> Result<(), CsharpEngineServicesError> {
-    if let Some(retained) = textures.get(&texture.id) {
-        if retained != &texture {
-            return Err(CsharpEngineServicesError::new(
-                "CSHARP_MATERIAL_TEXTURE",
-                "retained texture identity resolved to different immutable facts",
-            ));
-        }
-        return Ok(());
+) {
+    if !textures.contains(&texture.id) {
+        textures.push(texture);
     }
-    textures.push(texture);
-    Ok(())
 }
 
 pub(crate) unsafe extern "C" fn open_render_resource_from_content(
@@ -12699,6 +12687,173 @@ fn shade(surface: Surface) -> vec4<f32> {
         );
         bridge.destroy_material(material).unwrap();
         bridge.destroy_resource(noise.handle).unwrap();
+    }
+
+    #[test]
+    fn reopened_content_resources_realize_without_rehashing_or_rereading() {
+        const TEXTURE: &str = "textures/ß #1 ткань.png";
+        const MESH: &str = "meshes/треугольник.rstatmsh";
+        let mesh = std::fs::read(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../../fixtures/csharp-static-mesh/triangle.rstatmsh"),
+        )
+        .unwrap();
+        let content = crate::content::RuntimeContentBridge::new(BTreeMap::from([
+            (TEXTURE.to_owned(), Arc::from(RGBA_PNG)),
+            (MESH.to_owned(), Arc::from(mesh)),
+        ]));
+        let content = Box::new(content);
+        let mut bridge =
+            RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), BTreeMap::new());
+        bridge.bind_content(&content);
+        bridge.begin_call();
+        let hashes = crate::content::tests::body_hashes();
+        let pngs = crate::render_resources::tests::png_admissions();
+        let first = bridge.open_resource(&resource_request(TEXTURE)).unwrap();
+        let again = bridge.open_resource(&resource_request(TEXTURE)).unwrap();
+        let mut repeat = resource_request(TEXTURE);
+        repeat.wrap = NativeTextureWrap::Repeat;
+        let repeat = bridge.open_resource(&repeat).unwrap();
+        assert_eq!(first.handle, again.handle);
+        assert_ne!(first.handle, repeat.handle);
+        assert_eq!(crate::content::tests::body_hashes(), hashes + 1);
+        assert_eq!(crate::render_resources::tests::png_admissions(), pngs + 1);
+        assert_eq!(
+            [first.byte_length, repeat.byte_length],
+            [RGBA_PNG.len() as u32; 2]
+        );
+        // A reloaded body is new content with its own identity, read afresh.
+        const TILES: &[u8] =
+            include_bytes!("../../../../fixtures/csharp-voxel-atlases/content/tiles.png");
+        let mut content = content;
+        content.reload(BTreeMap::from([(TEXTURE.to_owned(), Arc::from(TILES))]));
+        let reloaded = bridge.open_resource(&resource_request(TEXTURE)).unwrap();
+        assert_ne!(reloaded.handle, first.handle);
+        assert_eq!(crate::content::tests::body_hashes(), hashes + 2);
+        assert_eq!(crate::render_resources::tests::png_admissions(), pngs + 2);
+        let reloaded = bridge
+            .resource(reloaded.handle.value)
+            .unwrap()
+            .texture()
+            .unwrap();
+        assert_eq!((reloaded.width, reloaded.height), (4, 2));
+        let frame = NativeSpriteAtlasFrame {
+            frame_id: 0,
+            uv_min: NativeVec2::default(),
+            uv_max: NativeVec2 { x: 0.5, y: 1.0 },
+            has_size: false,
+            size: NativeVec2::default(),
+        };
+        unsafe {
+            bridge.create_sprite_atlas(&NativeSpriteAtlasCreateRequest {
+                texture: first.handle,
+                frames: &frame,
+                frames_len: 1,
+            })
+        }
+        .unwrap();
+        let material = |texture: NativeRenderResourceHandle| NativeMaterialRequest {
+            texture_scale: NativeVec2::default(),
+            texture_offset: NativeVec2::default(),
+            stochastic_tiling: 0.0,
+            shader: Default::default(),
+            triplanar_sharpness: 0.0,
+            color: NativeColor {
+                r: 1.0,
+                g: 1.0,
+                b: 1.0,
+                a: 1.0,
+            },
+            texture: NativeRenderResourceReference {
+                value: texture.value,
+            },
+            roughness: 1.0,
+            metalness: 0.0,
+            normal_map: NativeRenderResourceReference::default(),
+            normal_scale: 1.0,
+            texture_tint: NativeColor {
+                r: 1.0,
+                g: 1.0,
+                b: 1.0,
+                a: 1.0,
+            },
+            emission_color: NativeVec3::default(),
+            emission_intensity: 0.0,
+            double_sided: false,
+            alpha_mode: NativeMaterialAlphaMode::Opaque,
+            alpha_cutoff: 0.5,
+            emission_map: Default::default(),
+            occlusion_map: Default::default(),
+            orm_map: Default::default(),
+            occlusion_strength: 0.0,
+            unlit: false,
+            flat_shading: false,
+            keep_dry: false,
+            wind_bend: 0.0,
+            wind_flutter: 0.0,
+            water: Default::default(),
+            translucent_shadow: false,
+        };
+        for texture in [first.handle, first.handle, repeat.handle] {
+            bridge.create_material(material(texture)).unwrap();
+        }
+        let texture_ids = {
+            let state = &bridge.staged.as_ref().unwrap().state;
+            [first.handle, repeat.handle].map(|handle| {
+                state
+                    .render_resources
+                    .get(handle.value)
+                    .unwrap()
+                    .asset_identity()
+                    .to_owned()
+            })
+        };
+        let resources = bridge.staged.as_ref().unwrap().state.projector.resources();
+        for id in &texture_ids {
+            let texture = resources.textures.get(id).expect("material texture");
+            assert_eq!((texture.width, texture.height), (2, 1));
+        }
+        // A binary static mesh is admitted from its descriptor, named by the
+        // file's content identity (hashed once), and draws from the same body.
+        let mesh_request = NativeStaticMeshContentAppearanceRequest {
+            path: NativeUtf8Slice {
+                bytes: MESH.as_ptr(),
+                len: MESH.len(),
+            },
+            color: NativeColor {
+                r: 1.0,
+                g: 1.0,
+                b: 1.0,
+                a: 1.0,
+            },
+        };
+        let hashes = crate::content::tests::body_hashes();
+        for _ in 0..2 {
+            bridge
+                .create_static_mesh_from_content(&mesh_request)
+                .unwrap();
+        }
+        assert_eq!(crate::content::tests::body_hashes(), hashes + 1);
+        let state = &bridge.staged.as_ref().unwrap().state;
+        let meshes = state
+            .render_resources
+            .iter()
+            .filter(|resource| resource.kind() == CsharpRenderResourceKind::Mesh)
+            .collect::<Vec<_>>();
+        assert_eq!(meshes.len(), 1);
+        let asset = state
+            .projector
+            .resources()
+            .static_meshes
+            .iter()
+            .last()
+            .unwrap();
+        let streams = render_model::decode_mesh_resource_payload(&asset.payload, meshes[0].bytes())
+            .expect("the renderer reads the admitted streams");
+        let MeshPayloadSource::Inline { indices, .. } = streams.source else {
+            unreachable!("decoded streams are inline");
+        };
+        assert_eq!(indices, [0, 1, 2]);
     }
 
     #[test]

@@ -930,22 +930,37 @@ impl TextureDescriptor {
         wrap: TextureWrap,
         version: u32,
     ) -> Result<Self, TextureError> {
-        let byte_length = u32::try_from(encoded_bytes.len()).map_err(|_| {
-            TextureError::EncodedByteQuotaExceeded {
-                byte_length: u32::MAX,
-            }
-        })?;
-        if byte_length == 0 {
-            return Err(TextureError::EncodedByteQuotaExceeded { byte_length });
-        }
-        let [width, height] = png_rgba8_dimensions(encoded_bytes)?;
-        validate_png_rgba8(encoded_bytes, width, height)?;
-        let content_hash = format!("sha256:{:x}", Sha256::digest(encoded_bytes));
+        let dimensions = admit_png_rgba8(encoded_bytes)?;
+        Ok(Self::png_rgba8_resource(
+            id,
+            format!("sha256:{:x}", Sha256::digest(encoded_bytes)),
+            encoded_bytes.len() as u32,
+            dimensions,
+            filter,
+            wrap,
+            version,
+        ))
+    }
+
+    /// A resource-backed RGBA8 PNG texture from the facts its admission
+    /// established ([`admit_png_rgba8`]): the body's SHA-256 identity
+    /// (`sha256:<hex>`), byte length and dimensions.
+    pub fn png_rgba8_resource(
+        id: String,
+        content_hash: String,
+        byte_length: u32,
+        [width, height]: [u32; 2],
+        filter: TextureFilter,
+        wrap: TextureWrap,
+        version: u32,
+    ) -> Self {
         let resource = format!(
             "texture-resource/{}",
-            content_hash.strip_prefix("sha256:").expect("owned SHA-256")
+            content_hash
+                .strip_prefix("sha256:")
+                .unwrap_or(&content_hash)
         );
-        let descriptor = Self {
+        Self {
             id,
             width,
             height,
@@ -960,9 +975,7 @@ impl TextureDescriptor {
                 byte_length,
                 source: TexturePayloadSource::Resource { resource },
             }),
-        };
-        descriptor.validate()?;
-        Ok(descriptor)
+        }
     }
 
     pub fn validate(&self) -> Result<(), TextureError> {
@@ -990,29 +1003,6 @@ impl TextureDescriptor {
     }
 }
 
-fn png_rgba8_dimensions(bytes: &[u8]) -> Result<[u32; 2], TextureError> {
-    const SIGNATURE: &[u8; 8] = b"\x89PNG\r\n\x1a\n";
-    if bytes.get(..8) != Some(SIGNATURE)
-        || bytes.get(12..16) != Some(b"IHDR")
-        || bytes.get(8..12) != Some(&13_u32.to_be_bytes())
-    {
-        return Err(TextureError::InvalidPng);
-    }
-    let width = u32::from_be_bytes(
-        bytes
-            .get(16..20)
-            .and_then(|value| value.try_into().ok())
-            .ok_or(TextureError::InvalidPng)?,
-    );
-    let height = u32::from_be_bytes(
-        bytes
-            .get(20..24)
-            .and_then(|value| value.try_into().ok())
-            .ok_or(TextureError::InvalidPng)?,
-    );
-    Ok([width, height])
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TextureError {
     Asset(RenderAssetError),
@@ -1023,9 +1013,7 @@ pub enum TextureError {
     InvalidContentHash,
     InvalidResourceIdentity,
     InlineByteLengthMismatch,
-    InlineContentHashMismatch,
     InvalidPng,
-    PngDimensionMismatch,
     UnsupportedPng,
 }
 
@@ -1056,11 +1044,6 @@ fn validate_texture_payload(
             if encoded_bytes.len() != payload.byte_length as usize {
                 return Err(TextureError::InlineByteLengthMismatch);
             }
-            let actual = format!("sha256:{:x}", Sha256::digest(encoded_bytes));
-            if actual != payload.content_hash {
-                return Err(TextureError::InlineContentHashMismatch);
-            }
-            validate_png_rgba8(encoded_bytes, texture.width, texture.height)?;
         }
         TexturePayloadSource::Resource { resource } => {
             if resource != &format!("texture-resource/{digest}") {
@@ -1071,12 +1054,22 @@ fn validate_texture_payload(
     Ok(())
 }
 
-fn validate_png_rgba8(bytes: &[u8], width: u32, height: u32) -> Result<(), TextureError> {
+/// Checks exact encoded RGBA8 PNG bytes when they are first imported and
+/// returns their dimensions: the signature, every chunk's CRC, an 8-bit RGBA
+/// non-interlaced `IHDR` first, `IDAT`, and a final `IEND`. Facts derived from
+/// the admitted body (its identity and dimensions) are not checked again.
+pub fn admit_png_rgba8(bytes: &[u8]) -> Result<[u32; 2], TextureError> {
+    if bytes.is_empty() || u32::try_from(bytes.len()).is_err() {
+        return Err(TextureError::EncodedByteQuotaExceeded {
+            byte_length: u32::try_from(bytes.len()).unwrap_or(u32::MAX),
+        });
+    }
     const SIGNATURE: &[u8; 8] = b"\x89PNG\r\n\x1a\n";
     if bytes.get(..8) != Some(SIGNATURE) {
         return Err(TextureError::InvalidPng);
     }
     let mut offset = 8_usize;
+    let mut dimensions = [0, 0];
     let mut saw_ihdr = false;
     let mut saw_idat = false;
     let mut saw_iend = false;
@@ -1108,10 +1101,12 @@ fn validate_png_rgba8(bytes: &[u8], width: u32, height: u32) -> Result<(), Textu
         match kind {
             b"IHDR" if !saw_ihdr && offset == 8 && length == 13 => {
                 let data = &bytes[data_start..data_end];
-                let actual_width = u32::from_be_bytes(data[0..4].try_into().expect("IHDR width"));
-                let actual_height = u32::from_be_bytes(data[4..8].try_into().expect("IHDR height"));
-                if [actual_width, actual_height] != [width, height] {
-                    return Err(TextureError::PngDimensionMismatch);
+                dimensions = [
+                    u32::from_be_bytes(data[0..4].try_into().expect("IHDR width")),
+                    u32::from_be_bytes(data[4..8].try_into().expect("IHDR height")),
+                ];
+                if dimensions.contains(&0) {
+                    return Err(TextureError::InvalidPng);
                 }
                 if data[8..13] != [8, 6, 0, 0, 0] {
                     return Err(TextureError::UnsupportedPng);
@@ -1131,7 +1126,7 @@ fn validate_png_rgba8(bytes: &[u8], width: u32, height: u32) -> Result<(), Textu
         offset = chunk_end;
     }
     if saw_ihdr && saw_idat && saw_iend {
-        Ok(())
+        Ok(dimensions)
     } else {
         Err(TextureError::InvalidPng)
     }
@@ -1661,7 +1656,7 @@ mod tests {
     }
 
     #[test]
-    fn texture_payload_admits_exact_rgba8_png_and_rejects_hash_or_png_drift() {
+    fn inline_texture_payload_validates_its_facts_without_rereading_the_png() {
         let texture = TextureDescriptor {
             id: "texture/checker".to_string(),
             width: 2,
@@ -1686,16 +1681,16 @@ mod tests {
         hash_drift.payload.as_mut().unwrap().content_hash = format!("sha256:{}", "0".repeat(64));
         assert_eq!(hash_drift.validate(), Err(TextureError::InvalidContentHash));
 
-        let mut png_drift = texture;
+        let mut length_drift = texture;
         if let TexturePayloadSource::Inline { encoded_bytes } =
-            &mut png_drift.payload.as_mut().unwrap().source
+            &mut length_drift.payload.as_mut().unwrap().source
         {
-            encoded_bytes[32] ^= 1;
-            let drift_hash = format!("sha256:{:x}", Sha256::digest(encoded_bytes));
-            png_drift.content_hash = Some(drift_hash.clone());
-            png_drift.payload.as_mut().unwrap().content_hash = drift_hash;
+            encoded_bytes.push(0);
         }
-        assert_eq!(png_drift.validate(), Err(TextureError::InvalidPng));
+        assert_eq!(
+            length_drift.validate(),
+            Err(TextureError::InlineByteLengthMismatch)
+        );
     }
 
     #[test]
@@ -1729,6 +1724,10 @@ mod tests {
             ),
             Err(TextureError::InvalidPng),
         );
+        let mut damaged = CHECKER_PNG.to_vec();
+        damaged[45] ^= 1;
+        assert_eq!(admit_png_rgba8(&damaged), Err(TextureError::InvalidPng));
+        assert_eq!(admit_png_rgba8(CHECKER_PNG), Ok([2, 1]));
     }
 
     #[test]

@@ -20,12 +20,11 @@ use csharp_engine_abi::{
     NativeTextureFilter, NativeTextureWrap, NativeVec3,
 };
 use render_model::{
-    decode_mesh_resource_payload, mesh_resource_content_hash, pack_mesh_resources,
-    partition_mesh_spatially, validate_mesh_resource_header, AnimatedMeshAsset, MeshAttribute,
-    MeshAttributeKind, MeshAttributeName, MeshBoundsDescriptor, MeshBufferLayout,
-    MeshCollisionPolicy, MeshGroupDescriptor, MeshIndexWidth, MeshMaterialSlot,
+    pack_mesh_resources, partition_mesh_spatially, validate_mesh_resource_header,
+    AnimatedMeshAsset, MeshAttribute, MeshAttributeKind, MeshAttributeName, MeshBoundsDescriptor,
+    MeshBufferLayout, MeshCollisionPolicy, MeshGroupDescriptor, MeshIndexWidth, MeshMaterialSlot,
     MeshPayloadDescriptor, MeshPayloadSource, MeshProvenance, PackedMeshResource, StaticMeshAsset,
-    TextureDescriptor, TextureFilter, TexturePayloadSource, TextureWrap, MAX_MESH_RESOURCE_BYTES,
+    TextureDescriptor, TextureFilter, TextureWrap, MAX_MESH_RESOURCE_BYTES,
 };
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -60,17 +59,31 @@ pub enum CsharpRenderResourceKind {
 }
 
 impl CsharpRenderResource {
+    /// A PNG texture from its content identity and the dimensions its first
+    /// admission read.
     fn admit_texture(
         path: String,
         bytes: Arc<[u8]>,
+        content_hash: String,
+        dimensions: [u32; 2],
         filter: NativeTextureFilter,
         wrap: NativeTextureWrap,
         color_space: NativeTextureColorSpace,
-    ) -> Result<Self, CsharpEngineServicesError> {
-        let path = renderer_path(path, ".png")?;
-        let mut descriptor = TextureDescriptor::admit_png_rgba8_resource(
-            "texture/csharp-product".to_owned(),
-            &bytes,
+    ) -> Self {
+        let digest = &content_hash["sha256:".len()..];
+        let mut identity = format!("texture/csharp-product-{digest}");
+        if filter != NativeTextureFilter::Nearest || wrap != NativeTextureWrap::Clamp {
+            identity.push_str(&format!("-f{}-w{}", filter as u32, wrap as u32));
+        }
+        if color_space == NativeTextureColorSpace::Linear {
+            identity.push_str("-linear");
+        }
+        let resource_identity = format!("texture-resource/{digest}");
+        let mut descriptor = TextureDescriptor::png_rgba8_resource(
+            identity,
+            content_hash.clone(),
+            bytes.len() as u32,
+            dimensions,
             match filter {
                 NativeTextureFilter::Nearest => TextureFilter::Nearest,
                 NativeTextureFilter::Linear => TextureFilter::Linear,
@@ -80,49 +93,13 @@ impl CsharpRenderResource {
                 NativeTextureWrap::Repeat => TextureWrap::Repeat,
             },
             1,
-        )
-        .map_err(|error| {
-            CsharpEngineServicesError::new(
-                "CSHARP_RENDER_RESOURCE_TEXTURE",
-                format!("renderer resource is not an admitted PNG: {error:?}"),
-            )
-        })?;
-        let content_hash = descriptor
-            .content_hash
-            .clone()
-            .expect("resource-backed texture has a content hash");
-        let mut identity = format!(
-            "texture/csharp-product-{}",
-            content_hash
-                .strip_prefix("sha256:")
-                .expect("Engine texture hash uses SHA-256")
         );
-        if filter != NativeTextureFilter::Nearest || wrap != NativeTextureWrap::Clamp {
-            identity.push_str(&format!("-f{}-w{}", filter as u32, wrap as u32));
-        }
         if color_space == NativeTextureColorSpace::Linear {
-            identity.push_str("-linear");
             if let Some(payload) = descriptor.payload.as_mut() {
                 payload.color_space = render_model::TextureColorSpace::Linear;
             }
         }
-        descriptor.id = identity.clone();
-        descriptor.validate().map_err(|error| {
-            CsharpEngineServicesError::new(
-                "CSHARP_RENDER_RESOURCE_TEXTURE",
-                format!("renderer texture identity is invalid: {error:?}"),
-            )
-        })?;
-        let resource_identity = match descriptor.payload.as_ref().map(|payload| &payload.source) {
-            Some(TexturePayloadSource::Resource { resource }) => resource.clone(),
-            _ => {
-                return Err(CsharpEngineServicesError::new(
-                    "CSHARP_RENDER_RESOURCE_TEXTURE",
-                    "renderer texture payload did not retain its content resource identity",
-                ));
-            }
-        };
-        Ok(Self {
+        Self {
             kind: CsharpRenderResourceKind::Texture,
             identity: resource_identity,
             content_hash,
@@ -130,7 +107,7 @@ impl CsharpRenderResource {
             bytes,
             texture: Some(descriptor),
             animated_mesh: None,
-        })
+        }
     }
 
     fn admit_mesh(
@@ -138,7 +115,6 @@ impl CsharpRenderResource {
         bytes: Arc<[u8]>,
         content_hash: String,
     ) -> Result<Self, CsharpEngineServicesError> {
-        let path = renderer_path(path, ".rmesh")?;
         validate_mesh_resource_header(&bytes).map_err(|error| {
             CsharpEngineServicesError::new("CSHARP_RENDER_RESOURCE_MESH", format!("{error:?}"))
         })?;
@@ -165,29 +141,23 @@ impl CsharpRenderResource {
         }
     }
 
-    fn admit_font(path: String, bytes: Vec<u8>) -> Result<Self, CsharpEngineServicesError> {
-        use sha2::{Digest, Sha256};
-
-        let path = renderer_path(path, ".woff2")?;
-        if bytes.len() < 4 || bytes.get(..4) != Some(b"wOF2") {
+    fn admit_font(
+        path: String,
+        bytes: Arc<[u8]>,
+        content_hash: String,
+    ) -> Result<Self, CsharpEngineServicesError> {
+        if bytes.get(..4) != Some(b"wOF2") {
             return Err(CsharpEngineServicesError::new(
                 "CSHARP_RENDER_RESOURCE_FONT",
                 "font resource is not an admitted WOFF2 body",
             ));
         }
-        let content_hash = format!("sha256:{:x}", Sha256::digest(&bytes));
-        let identity = format!(
-            "font/{}",
-            content_hash
-                .strip_prefix("sha256:")
-                .expect("SHA-256 prefix")
-        );
         Ok(Self {
             kind: CsharpRenderResourceKind::Font,
-            identity,
+            identity: format!("font/{}", &content_hash["sha256:".len()..]),
             content_hash,
             path,
-            bytes: Arc::from(bytes),
+            bytes,
             texture: None,
             animated_mesh: None,
         })
@@ -200,11 +170,9 @@ impl CsharpRenderResource {
         path: String,
         relative_path: &str,
         bytes: Arc<[u8]>,
+        content_hash: String,
         keywords: &[String],
     ) -> Result<Self, CsharpEngineServicesError> {
-        use sha2::{Digest, Sha256};
-
-        let path = renderer_path(path, ".wgsl")?;
         let source = std::str::from_utf8(&bytes).map_err(|_| {
             CsharpEngineServicesError::new(
                 "CSHARP_SHADER",
@@ -213,13 +181,10 @@ impl CsharpRenderResource {
         })?;
         render_shaders::check_product_shader(relative_path, source, keywords)
             .map_err(|error| CsharpEngineServicesError::new("CSHARP_SHADER", error))?;
-        let content_hash = format!("sha256:{:x}", Sha256::digest(&bytes));
         // Each keyword set is its own variant, so its own resource.
         let identity = format!(
             "shader/{}{}",
-            content_hash
-                .strip_prefix("sha256:")
-                .expect("SHA-256 prefix"),
+            &content_hash["sha256:".len()..],
             keywords
                 .iter()
                 .map(|keyword| format!("+{keyword}"))
@@ -245,7 +210,6 @@ impl CsharpRenderResource {
     ) -> Result<Self, CsharpEngineServicesError> {
         use sha2::{Digest, Sha256};
 
-        let path = renderer_path(path, ".stars.json")?;
         let stars = render_model::parse_star_catalogue(bytes).map_err(|error| {
             CsharpEngineServicesError::new(
                 "CSHARP_STAR_CATALOGUE",
@@ -273,30 +237,22 @@ impl CsharpRenderResource {
 
     pub(crate) fn admit_audio(
         path: String,
-        bytes: Vec<u8>,
+        bytes: Arc<[u8]>,
+        content_hash: String,
     ) -> Result<Self, CsharpEngineServicesError> {
-        use sha2::{Digest, Sha256};
-
         let container = render_model::AudioContainer::identify(&bytes).ok_or_else(|| {
             CsharpEngineServicesError::new(
                 "CSHARP_AUDIO_RESOURCE_CONTAINER",
                 render_model::AUDIO_CONTAINER_POLICY,
             )
         })?;
-        let path = renderer_path(path, container.extension())?;
-        let content_hash = format!("sha256:{:x}", Sha256::digest(&bytes));
-        let identity = format!(
-            "audio-resource/{}",
-            content_hash
-                .strip_prefix("sha256:")
-                .expect("SHA-256 prefix")
-        );
+        require_extension(&path, container.extension())?;
         Ok(Self {
             kind: CsharpRenderResourceKind::Audio,
-            identity,
+            identity: format!("audio-resource/{}", &content_hash["sha256:".len()..]),
             content_hash,
             path,
-            bytes: Arc::from(bytes),
+            bytes,
             texture: None,
             animated_mesh: None,
         })
@@ -304,10 +260,10 @@ impl CsharpRenderResource {
 
     pub(crate) fn admit_video(
         path: String,
-        bytes: Vec<u8>,
+        bytes: Arc<[u8]>,
+        content_hash: String,
     ) -> Result<Self, CsharpEngineServicesError> {
-        use sha2::{Digest, Sha256};
-        let path = renderer_path(path, ".webm")?;
+        require_extension(&path, ".webm")?;
         if bytes.get(..4) != Some(&[0x1a, 0x45, 0xdf, 0xa3])
             || !bytes[..bytes.len().min(1024)]
                 .windows(4)
@@ -318,19 +274,12 @@ impl CsharpRenderResource {
                 "video resource must be an admitted WebM EBML body",
             ));
         }
-        let content_hash = format!("sha256:{:x}", Sha256::digest(&bytes));
-        let identity = format!(
-            "video-resource/{}",
-            content_hash
-                .strip_prefix("sha256:")
-                .expect("SHA-256 prefix")
-        );
         Ok(Self {
             kind: CsharpRenderResourceKind::Video,
-            identity,
+            identity: format!("video-resource/{}", &content_hash["sha256:".len()..]),
             content_hash,
             path,
-            bytes: Arc::from(bytes),
+            bytes,
             texture: None,
             animated_mesh: None,
         })
@@ -340,7 +289,7 @@ impl CsharpRenderResource {
         path: String,
         bytes: Vec<u8>,
     ) -> Result<Self, CsharpEngineServicesError> {
-        let path = renderer_path(path, ".glb")?;
+        require_extension(&path, ".glb")?;
         let relative_path = path
             .strip_prefix("content/")
             .expect("renderer path retains content prefix");
@@ -857,14 +806,15 @@ struct ImportedAnimatedContent {
 #[derive(Default)]
 pub(crate) struct RenderResourceImports {
     static_content: BTreeMap<String, ImportedStaticContent>,
-    mesh: BTreeMap<String, CsharpRenderResource>,
+    /// The dimensions of each PNG body admitted so far, by content identity,
+    /// so reopening one reads neither its chunks nor its hash again.
+    png_dimensions: BTreeMap<String, [u32; 2]>,
     animated: BTreeMap<String, ImportedAnimatedContent>,
 }
 
 impl RenderResourceImports {
-    /// Decodes a PNG texture, packed mesh or WOFF2 font by its extension.
-    /// `content_admitted` says the Content service admitted the source and
-    /// already knows its digest.
+    /// Admits a PNG texture, packed mesh, WOFF2 font, WGSL shader or star
+    /// catalogue by its extension, under the content's identity.
     pub(crate) fn file(
         &mut self,
         content: RetainedContent,
@@ -872,66 +822,59 @@ impl RenderResourceImports {
         wrap: NativeTextureWrap,
         color_space: NativeTextureColorSpace,
         shader_keywords: &[String],
-        content_admitted: bool,
     ) -> Result<CsharpRenderResource, CsharpEngineServicesError> {
         let relative_path = content.path;
-        let requested_path = relative_path.clone();
         let bytes = content.bytes;
         let browser_path = format!("content/{relative_path}");
+        let content_hash = || content.identity.content_hash(&bytes);
         match () {
             _ if relative_path.ends_with(".png") => {
-                CsharpRenderResource::admit_texture(
-                    browser_path.clone(),
+                let content_hash = content_hash();
+                let dimensions = match self.png_dimensions.get(&content_hash) {
+                    Some(dimensions) => *dimensions,
+                    None => {
+                        #[cfg(test)]
+                        tests::PNG_ADMISSIONS.with(|count| count.set(count.get() + 1));
+                        let dimensions = render_model::admit_png_rgba8(&bytes).map_err(|error| {
+                            CsharpEngineServicesError::new(
+                                "CSHARP_RENDER_RESOURCE_TEXTURE",
+                                format!("renderer resource is not an admitted PNG: {error:?}"),
+                            )
+                        })?;
+                        self.png_dimensions.insert(content_hash.clone(), dimensions);
+                        dimensions
+                    }
+                };
+                Ok(CsharpRenderResource::admit_texture(
+                    browser_path,
                     bytes,
+                    content_hash,
+                    dimensions,
                     filter,
                     wrap,
                     color_space,
-                )
+                ))
             }
             _ if relative_path.ends_with(".rmesh") => {
-                let resource = match self.mesh.get(&relative_path) {
-                    Some(resource) if Arc::ptr_eq(&resource.bytes, &bytes) => resource.clone(),
-                    _ => {
-                        let hash = if content_admitted {
-                            let digest = content.identity.of(&bytes);
-                            format!(
-                                "sha256:{:016x}{:016x}{:016x}{:016x}",
-                                digest.word0, digest.word1, digest.word2, digest.word3
-                            )
-                        } else {
-                            // Standalone source construction has no Content admission.
-                            mesh_resource_content_hash(&bytes)
-                        };
-                        let resource =
-                            CsharpRenderResource::admit_mesh(browser_path.clone(), bytes, hash)?;
-                        self.mesh.insert(relative_path.clone(), resource.clone());
-                        resource
-                    }
-                };
-                Ok(resource)
+                CsharpRenderResource::admit_mesh(browser_path, Arc::clone(&bytes), content_hash())
             }
             _ if relative_path.ends_with(".woff2") => {
-                CsharpRenderResource::admit_font(browser_path.clone(), bytes.to_vec())
+                CsharpRenderResource::admit_font(browser_path, Arc::clone(&bytes), content_hash())
             }
             _ if relative_path.ends_with(".stars.json") => {
-                CsharpRenderResource::admit_star_catalogue(
-                    browser_path.clone(),
-                    &relative_path,
-                    &bytes,
-                )
+                CsharpRenderResource::admit_star_catalogue(browser_path, &relative_path, &bytes)
             }
-            _ if relative_path.ends_with(".wgsl") => {
-                CsharpRenderResource::admit_shader(
-                    browser_path.clone(),
-                    &relative_path,
-                    bytes,
-                    shader_keywords,
-                )
-            }
+            _ if relative_path.ends_with(".wgsl") => CsharpRenderResource::admit_shader(
+                browser_path,
+                &relative_path,
+                Arc::clone(&bytes),
+                content_hash(),
+                shader_keywords,
+            ),
             _ => Err(CsharpEngineServicesError::new(
                 "CSHARP_RENDER_RESOURCE_KIND",
                 format!(
-                    "renderer resource `{requested_path}` must be an RGBA PNG, packed .rmesh, WOFF2, WGSL or .stars.json file"
+                    "renderer resource `{relative_path}` must be an RGBA PNG, packed .rmesh, WOFF2, WGSL or .stars.json file"
                 ),
             )),
         }
@@ -958,7 +901,7 @@ impl RenderResourceImports {
         {
             let bytes = content.bytes.as_ref();
             let (asset, payload, packed_resource) = if bytes.starts_with(STATIC_MESH_MAGIC) {
-                decode_static_mesh(bytes)?
+                decode_static_mesh(bytes, content.identity.content_hash(bytes))?
             } else {
                 let asset = serde_json::from_slice::<StaticMeshAsset>(bytes).map_err(|error| {
                     CsharpEngineServicesError::new(
@@ -1649,14 +1592,15 @@ unsafe fn generated_mesh_payload(
     Ok((payload, slots, bindings))
 }
 
-fn renderer_path(path: String, extension: &str) -> Result<String, CsharpEngineServicesError> {
-    if !path.starts_with("content/") || !path.ends_with(extension) {
+/// A recorded-audio, video or animated resource's path names its media type.
+fn require_extension(path: &str, extension: &str) -> Result<(), CsharpEngineServicesError> {
+    if !path.ends_with(extension) {
         return Err(CsharpEngineServicesError::new(
             "CSHARP_RENDER_RESOURCE_PATH",
-            "renderer resource must use its fixed content path and media extension",
+            format!("renderer resource `{path}` must use the {extension} extension"),
         ));
     }
-    normalize_bundle_path(&path)
+    Ok(())
 }
 
 struct PackedAnimatedSource {
@@ -1723,26 +1667,6 @@ fn pack_animated_glb_closure(
     })
 }
 
-fn normalize_bundle_path(value: &str) -> Result<String, CsharpEngineServicesError> {
-    if value.is_empty()
-        || value.len() > 512
-        || value.starts_with('/')
-        || value.contains('\\')
-        || value
-            .split('/')
-            .any(|part| part.is_empty() || matches!(part, "." | ".."))
-        || !value.bytes().all(|byte| {
-            byte.is_ascii_alphanumeric() || matches!(byte, b' ' | b'.' | b'-' | b'_' | b'/')
-        })
-    {
-        return Err(CsharpEngineServicesError::new(
-            "CSHARP_RENDER_RESOURCE_PATH",
-            "renderer resource path must be a bounded normalized relative ASCII path",
-        ));
-    }
-    Ok(value.to_owned())
-}
-
 /// The binary static mesh: the JSON form's descriptor, with its payload read
 /// from the Engine's packed mesh resource that follows it, so the streams need
 /// no parse and no repacking. Little-endian:
@@ -1754,14 +1678,20 @@ fn normalize_bundle_path(value: &str) -> Result<String, CsharpEngineServicesErro
 /// | descriptor | UTF-8 JSON static mesh document whose `payload.source` is a `resource` source naming the bytes below |
 /// | packed mesh resource | `payload.source.byteLength` bytes, to the end of the file (`RMSHLE01`–`03`) |
 ///
-/// The resource is checked as the renderer reads it
-/// ([`decode_mesh_resource_payload`]): its identity is its content hash, and
-/// every stream must match the descriptor, as an inline payload must.
+/// The resource is named by the file's content identity, which the Engine
+/// computed: the descriptor's `resource` and `contentHash` are replaced, so a
+/// stale value written by a tool cannot name another mesh's resource.
+/// Admission checks the descriptor and the resource header against the bytes,
+/// not the streams, which the renderer reads when it draws.
 const STATIC_MESH_MAGIC: &[u8; 8] = b"RSTATMSH";
 
 type DecodedStaticMesh = (StaticMeshAsset, MeshPayloadDescriptor, PackedMeshResource);
 
-fn decode_static_mesh(bytes: &[u8]) -> Result<DecodedStaticMesh, CsharpEngineServicesError> {
+/// `file_hash` is the content identity of the whole file (`sha256:<hex>`).
+fn decode_static_mesh(
+    bytes: &[u8],
+    file_hash: String,
+) -> Result<DecodedStaticMesh, CsharpEngineServicesError> {
     let malformed =
         |detail: String| CsharpEngineServicesError::new("CSHARP_STATIC_MESH_CONTENT_JSON", detail);
     let header = STATIC_MESH_MAGIC.len() + 4;
@@ -1772,25 +1702,40 @@ fn decode_static_mesh(bytes: &[u8]) -> Result<DecodedStaticMesh, CsharpEngineSer
     let descriptor = bytes
         .get(header..header.saturating_add(length))
         .ok_or_else(|| malformed("binary static mesh descriptor is truncated".to_owned()))?;
-    let asset = serde_json::from_slice::<StaticMeshAsset>(descriptor)
+    let mut asset = serde_json::from_slice::<StaticMeshAsset>(descriptor)
         .map_err(|error| malformed(error.to_string()))?;
     let resource = &bytes[header + length..];
-    decode_mesh_resource_payload(&asset.payload, resource).map_err(|error| {
-        CsharpEngineServicesError::new("CSHARP_STATIC_MESH_PACK", format!("{error:?}"))
-    })?;
+    let pack_error =
+        |detail: String| CsharpEngineServicesError::new("CSHARP_STATIC_MESH_PACK", detail);
+    validate_mesh_resource_header(resource).map_err(|error| pack_error(format!("{error:?}")))?;
     let MeshPayloadSource::Resource {
         resource: identity,
         content_hash,
+        byte_length,
         ..
-    } = &asset.payload.source
+    } = &mut asset.payload.source
     else {
-        unreachable!("a decoded payload names its resource");
+        return Err(pack_error(
+            "binary static mesh payload must name its packed resource".to_owned(),
+        ));
     };
+    if *byte_length as usize != resource.len() {
+        return Err(pack_error(format!(
+            "binary static mesh descriptor names {byte_length} resource bytes, not {}",
+            resource.len()
+        )));
+    }
+    *identity = format!("mesh-resource/{}", &file_hash["sha256:".len()..]);
+    *content_hash = file_hash;
     let packed = PackedMeshResource {
         resource: identity.clone(),
         content_hash: content_hash.clone(),
         bytes: resource.to_vec(),
     };
+    asset
+        .payload
+        .validate()
+        .map_err(|error| pack_error(format!("{error:?}")))?;
     let payload = asset.payload.clone();
     Ok((asset, payload, packed))
 }
@@ -1804,6 +1749,15 @@ pub(crate) mod tests {
     const CHARACTER_GLB: &[u8] = include_bytes!(
         "../../../../fixtures/render/assets/kenney-retro-character/character-medium.glb"
     );
+
+    thread_local! {
+        pub(super) static PNG_ADMISSIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    }
+
+    /// PNG bodies whose chunks were read on this thread so far.
+    pub(crate) fn png_admissions() -> usize {
+        PNG_ADMISSIONS.with(std::cell::Cell::get)
+    }
 
     pub(crate) fn external_image_glb(source: &[u8], uri: &str) -> Vec<u8> {
         assert_eq!(&source[..4], b"glTF");
@@ -1924,11 +1878,12 @@ pub(crate) mod tests {
             CsharpRenderResource::admit_texture(
                 "content/atlas.png".to_owned(),
                 Arc::from(RGBA_PNG),
+                crate::content::ContentIdentity::default().content_hash(RGBA_PNG),
+                render_model::admit_png_rgba8(RGBA_PNG).expect("png"),
                 filter,
                 NativeTextureWrap::Clamp,
                 NativeTextureColorSpace::Srgb,
             )
-            .expect("texture")
         };
         let nearest = registry
             .admit(texture(NativeTextureFilter::Nearest))
@@ -1992,12 +1947,9 @@ pub(crate) mod tests {
         // renderer reads it after the call, so it stays until the call after next.
         let mut registry = RenderResourceRegistry::default();
         registry.begin_call();
-        let texture = CsharpRenderResource::admit_texture(
-            "content/atlas.png".to_owned(),
-            Arc::from(RGBA_PNG),
-            NativeTextureFilter::Nearest,
-            NativeTextureWrap::Clamp,
-            NativeTextureColorSpace::Srgb,
+        let texture = open_file(
+            &mut RenderResourceImports::default(),
+            content("atlas.png", Arc::from(RGBA_PNG)),
         )
         .expect("texture");
         let handle = registry.admit(texture).expect("admitted texture");
@@ -2016,6 +1968,68 @@ pub(crate) mod tests {
         );
         registry.begin_call();
         assert_eq!(registry.recently_released().count(), 0, "gone after that");
+    }
+
+    #[test]
+    fn reopening_content_reuses_its_identity_and_png_facts_under_any_filename() {
+        let packed = pack_mesh_resources(
+            std::slice::from_ref(
+                &serde_json::from_slice::<StaticMeshAsset>(&static_mesh_fixture(
+                    "triangle.static-mesh.json",
+                ))
+                .unwrap()
+                .payload,
+            ),
+            MAX_MESH_RESOURCE_BYTES,
+        )
+        .unwrap();
+        let mut font = b"wOF2".to_vec();
+        font.resize(64, 0);
+        let mut imports = RenderResourceImports::default();
+        for (path, bytes) in [
+            ("textures/ß #1 ткань.png", RGBA_PNG.to_vec()),
+            (
+                "meshes/треугольник.rmesh",
+                packed.resources[0].bytes.clone(),
+            ),
+            ("fonts/日本語.woff2", font),
+        ] {
+            let retained = content(path, Arc::from(bytes));
+            let (hashes, pngs) = (crate::content::tests::body_hashes(), png_admissions());
+            let first = open_file(&mut imports, retained.clone()).expect(path);
+            let second = open_file(&mut imports, retained).unwrap();
+            assert_eq!(first, second);
+            assert_eq!(first.path(), format!("content/{path}"));
+            assert_eq!(
+                crate::content::tests::body_hashes(),
+                hashes + 1,
+                "{path} is hashed once, by its content identity"
+            );
+            assert_eq!(
+                png_admissions(),
+                pngs + usize::from(path.ends_with(".png")),
+                "{path}'s PNG chunks are read once"
+            );
+            if path.ends_with(".rmesh") {
+                assert_eq!(first.identity(), packed.resources[0].resource);
+            }
+        }
+        // Other content with the same body reuses the facts of its identity.
+        let alias = content("textures/alias.png", Arc::from(RGBA_PNG));
+        let pngs = png_admissions();
+        let texture = open_file(&mut imports, alias).unwrap();
+        assert_eq!(png_admissions(), pngs);
+        let texture = texture.texture().unwrap();
+        assert_eq!((texture.width, texture.height), (2, 1));
+        // A changed body is a new identity, admitted afresh.
+        let mut damaged = RGBA_PNG.to_vec();
+        damaged[20] ^= 1;
+        assert_eq!(
+            open_file(&mut imports, content("damaged.png", Arc::from(damaged)))
+                .unwrap_err()
+                .code(),
+            "CSHARP_RENDER_RESOURCE_TEXTURE"
+        );
     }
 
     #[test]
@@ -2045,14 +2059,27 @@ pub(crate) mod tests {
         assert_eq!(unchanged.bytes, CHARACTER_GLB);
     }
 
-    fn static_mesh_content(path: &str, bytes: Vec<u8>) -> RetainedContent {
+    fn content(path: &str, bytes: Arc<[u8]>) -> RetainedContent {
         RetainedContent {
             path: path.to_owned(),
             identity: Default::default(),
-            bytes: Arc::from(bytes),
+            bytes,
             transient: false,
             files: crate::content::ContentFiles::snapshot(BTreeMap::new()),
         }
+    }
+
+    fn open_file(
+        imports: &mut RenderResourceImports,
+        content: RetainedContent,
+    ) -> Result<CsharpRenderResource, CsharpEngineServicesError> {
+        imports.file(
+            content,
+            NativeTextureFilter::Nearest,
+            NativeTextureWrap::Clamp,
+            NativeTextureColorSpace::Srgb,
+            &[],
+        )
     }
 
     fn static_mesh_fixture(name: &str) -> Vec<u8> {
@@ -2075,7 +2102,7 @@ pub(crate) mod tests {
         String,
     > {
         RenderResourceImports::default()
-            .static_mesh(static_mesh_content("mesh", bytes))
+            .static_mesh(content("mesh", Arc::from(bytes)))
             .map_err(|error| error.code().to_owned())
     }
 
@@ -2084,16 +2111,22 @@ pub(crate) mod tests {
         let (json_payload, json_slots, json_resource) =
             import_static_mesh(static_mesh_fixture("triangle.static-mesh.json")).unwrap();
         // Written from the documented layouts by an independent script.
-        let (payload, slots, resource) =
-            import_static_mesh(static_mesh_fixture("triangle.rstatmsh")).unwrap();
-        assert_eq!((payload, slots), (json_payload, json_slots));
-        assert_eq!(resource.identity(), json_resource.identity());
+        let binary = static_mesh_fixture("triangle.rstatmsh");
+        let (mut payload, slots, resource) = import_static_mesh(binary.clone()).unwrap();
         assert_eq!(resource.bytes(), json_resource.bytes());
-        assert_eq!(resource.path(), json_resource.path());
+        // The binary form's resource is named by the file's own identity.
+        let file_hash = render_model::mesh_resource_content_hash(&binary);
+        assert_eq!(
+            resource.identity(),
+            format!("mesh-resource/{}", &file_hash["sha256:".len()..])
+        );
+        assert_eq!(resource.content_hash(), file_hash);
+        payload.source = json_payload.source.clone();
+        assert_eq!((payload, slots), (json_payload, json_slots));
     }
 
     #[test]
-    fn a_damaged_binary_static_mesh_is_refused_with_the_json_forms_codes() {
+    fn a_binary_static_mesh_is_admitted_from_its_descriptor_and_resource_header() {
         let binary = static_mesh_fixture("triangle.rstatmsh");
         let refused = |bytes: Vec<u8>| import_static_mesh(bytes).unwrap_err();
         assert_eq!(
@@ -2103,14 +2136,72 @@ pub(crate) mod tests {
         let mut long = binary.clone();
         long[8..12].copy_from_slice(&u32::MAX.to_le_bytes());
         assert_eq!(refused(long), "CSHARP_STATIC_MESH_CONTENT_JSON");
-        // A changed stream byte no longer matches the resource's identity.
-        let mut changed = binary.clone();
-        *changed.last_mut().unwrap() ^= 1;
-        assert_eq!(refused(changed), "CSHARP_STATIC_MESH_PACK");
         assert_eq!(
             refused(binary[..binary.len() - 4].to_vec()),
             "CSHARP_STATIC_MESH_PACK"
         );
+        // The streams are not decoded on admission: a changed stream is
+        // admitted, under the changed file's identity.
+        let (_, _, original) = import_static_mesh(binary.clone()).unwrap();
+        let mut changed = binary;
+        *changed.last_mut().unwrap() ^= 1;
+        let (_, _, admitted) = import_static_mesh(changed.clone()).unwrap();
+        assert_ne!(admitted.identity(), original.identity());
+        assert_eq!(
+            admitted.bytes(),
+            &changed[changed.len() - admitted.bytes().len()..]
+        );
+    }
+
+    #[test]
+    fn binary_static_meshes_are_named_by_their_content_not_their_descriptor_hash() {
+        // A tool that left the descriptor's hash stale: same descriptor,
+        // different streams.
+        let first = static_mesh_fixture("triangle.rstatmsh");
+        let mut second = first.clone();
+        let indices = second.len() - 12;
+        for (slot, index) in [0_u32, 2, 1].into_iter().enumerate() {
+            second[indices + slot * 4..indices + slot * 4 + 4]
+                .copy_from_slice(&index.to_le_bytes());
+        }
+        let mut imports = RenderResourceImports::default();
+        let mut registry = RenderResourceRegistry::default();
+        let mut handles = Vec::new();
+        for (path, bytes, expected) in [
+            ("first.rstatmsh", first, [0, 1, 2]),
+            ("second.rstatmsh", second, [0, 2, 1]),
+        ] {
+            let (payload, _, resource) = imports
+                .static_mesh(content(path, Arc::from(bytes)))
+                .unwrap();
+            let decoded =
+                render_model::decode_mesh_resource_payload(&payload, resource.bytes()).unwrap();
+            let MeshPayloadSource::Inline { indices, .. } = decoded.source else {
+                unreachable!("decoded streams are inline");
+            };
+            assert_eq!(indices, expected);
+            let MeshPayloadSource::Resource {
+                resource: named, ..
+            } = &payload.source
+            else {
+                unreachable!("an admitted binary mesh names its resource");
+            };
+            assert_eq!(named, resource.identity());
+            let path = resource.path().to_owned();
+            handles.push(registry.stage(resource, [path]).unwrap());
+        }
+        assert_ne!(handles[0], handles[1], "each file is its own resource");
+        for (handle, expected) in handles.iter().zip([[0_u32, 1, 2], [0, 2, 1]]) {
+            let resource = registry.get(*handle).unwrap();
+            let tail = &resource.bytes()[resource.bytes().len() - 12..];
+            let drawn = tail
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|chunk| u32::from_le_bytes(*chunk))
+                .collect::<Vec<_>>();
+            assert_eq!(drawn, expected);
+        }
     }
 
     /// A town-sized static mesh (rusty-dagger's Charing ships 6.9 MB of JSON),

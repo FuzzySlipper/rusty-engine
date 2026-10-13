@@ -698,7 +698,9 @@ sample the base level. GLB textures follow their sampler's `minFilter`.
 Sampling applies only to PNG resources. The same PNG can be selected with different samplers: pixel content
 is shared, while each sampler has its own retained texture identity. Keep
 sprite/atlas resources clamped unless their authored usage calls for something
-else.
+else. A resource is identified by its content's SHA-256, so reopening the same
+content hashes and reads nothing again; any path the content holds opens,
+whatever characters it uses.
 
 ### Ghost plates
 

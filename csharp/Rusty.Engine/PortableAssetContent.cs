@@ -61,17 +61,14 @@ public sealed class PortableAssetContent : IDisposable
     }
 
     /// <summary>Convert a single-texture descriptor into existing atlas frame values.</summary>
-    /// <remarks>Texture extent is the decoded image size. Separate-image descriptors
-    /// retain their distinct texture IDs and must be realized using those resources.</remarks>
+    /// <remarks>Texture extent is the decoded image size; the Engine refuses a frame
+    /// outside it when the atlas is created. Separate-image descriptors retain their
+    /// distinct texture IDs and must be realized using those resources.</remarks>
     public SpriteAtlasFrame[] AtlasFrames(string textureId, Vector2 textureExtent)
     {
-        if (!float.IsFinite(textureExtent.X) || !float.IsFinite(textureExtent.Y) || textureExtent.X <= 0 || textureExtent.Y <= 0)
-            throw new ArgumentOutOfRangeException(nameof(textureExtent));
         return Facts.Frames.ToArray().Select((frame, index) =>
         {
             if (frame.TextureId != textureId) throw new ArgumentException("This descriptor uses multiple textures; select its individual frame resources.", nameof(textureId));
-            if (frame.Origin.X + frame.Extent.X > textureExtent.X || frame.Origin.Y + frame.Extent.Y > textureExtent.Y)
-                throw new ArgumentException($"Frame '{frame.Id}' exceeds texture '{textureId}'.", nameof(textureExtent));
             return new SpriteAtlasFrame(checked((uint)index), frame.Origin / textureExtent, (frame.Origin + frame.Extent) / textureExtent, true, frame.Extent);
         }).ToArray();
     }

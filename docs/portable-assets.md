@@ -78,8 +78,9 @@ var playback = hero.CreatePlayback(engine.Graphics, appearance, atlas,
 ```
 
 `CreateAtlas` uses Engine-decoded texture dimensions and the `Graphics` atlas API.
-Its lower-level `AtlasFrames` helper accepts explicit dimensions;
-it checks rectangle containment against the supplied decoded image extent.
+Its lower-level `AtlasFrames` helper accepts explicit dimensions; the Engine
+refuses a frame outside the texture when the atlas is created
+(`CSHARP_SPRITE_ATLAS_FRAME`).
 Separate-image facts retain distinct texture identities for ordinary sprite
 resource composition. `CreatePlayback` uses the Engine's sprite playback owner
 and clock. Dispose playback, appearance, atlas and texture through their normal

@@ -32,6 +32,15 @@ impl ContentIdentity {
     pub(crate) fn of(&self, bytes: &[u8]) -> NativeContentSha256 {
         *self.0.get_or_init(|| sha256(bytes))
     }
+
+    /// The identity as `sha256:<hex>`, the form renderer resources name.
+    pub(crate) fn content_hash(&self, bytes: &[u8]) -> String {
+        let digest = self.of(bytes);
+        format!(
+            "sha256:{:016x}{:016x}{:016x}{:016x}",
+            digest.word0, digest.word1, digest.word2, digest.word3
+        )
+    }
 }
 
 /// The immutable files a source's relative dependencies resolve in: a
@@ -491,14 +500,15 @@ fn sha256_words(digest: &[u8]) -> NativeContentSha256 {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     thread_local! {
         pub(super) static BODY_HASHES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     }
 
-    fn body_hashes() -> usize {
+    /// Content bodies hashed on this thread so far.
+    pub(crate) fn body_hashes() -> usize {
         BODY_HASHES.with(std::cell::Cell::get)
     }
 

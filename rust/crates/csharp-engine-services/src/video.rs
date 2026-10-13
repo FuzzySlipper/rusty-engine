@@ -9,7 +9,7 @@ use render_presentation::{video_frame, VideoClipRef, VideoPlaybackHandle, VideoP
 
 use crate::{
     composition::{borrowed_utf8, ABI_OK},
-    content::RuntimeContentBridge,
+    content::{ContentIdentity, RuntimeContentBridge},
     render_resources::CsharpRenderResource,
     CsharpEngineServicesError,
 };
@@ -169,9 +169,11 @@ impl RuntimeVideoBridge {
         &mut self,
         path: &str,
         bytes: Arc<[u8]>,
+        identity: &ContentIdentity,
     ) -> Result<NativeVideoPlaybackHandle, CsharpEngineServicesError> {
+        let content_hash = identity.content_hash(&bytes);
         let resource =
-            CsharpRenderResource::admit_video(format!("content/{path}"), bytes.to_vec())?;
+            CsharpRenderResource::admit_video(format!("content/{path}"), bytes, content_hash)?;
         let staged = self.staged()?;
         let handle = staged.state.next_handle;
         staged.state.next_handle = handle.checked_add(1).ok_or_else(|| {
@@ -200,13 +202,20 @@ impl RuntimeVideoBridge {
     ) -> Result<NativeVideoPlaybackHandle, CsharpEngineServicesError> {
         let path =
             unsafe { borrowed_utf8(request.path.bytes, request.path.len, "video resource path")? };
+        if let Some(content) = self
+            .content
+            .and_then(|pointer| unsafe { pointer.as_ref() })
+            .and_then(|content| content.retained_path(path))
+        {
+            return self.play_selected(path, content.bytes, &content.identity);
+        }
         let bytes = self.content_resources.get(path).cloned().ok_or_else(|| {
             CsharpEngineServicesError::new(
                 "CSHARP_VIDEO_RESOURCE_UNKNOWN",
                 format!("product content has no video resource `{path}`"),
             )
         })?;
-        self.play_selected(path, bytes)
+        self.play_selected(path, bytes, &ContentIdentity::default())
     }
     fn play_from_content(
         &mut self,
@@ -222,7 +231,7 @@ impl RuntimeVideoBridge {
                     "video content reference is not retained",
                 )
             })?;
-        self.play_selected(&retained.path, retained.bytes)
+        self.play_selected(&retained.path, retained.bytes, &retained.identity)
     }
     fn stop(
         &mut self,

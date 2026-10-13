@@ -598,17 +598,21 @@ eight bytes. Little-endian:
 | --- | --- |
 | Magic | `RSTATMSH` (8 bytes) |
 | Descriptor length | u32 |
-| Descriptor | the static mesh JSON document, its `payload.source` a `resource` source: `resource` `mesh-resource/<hex>`, `contentHash` `sha256:<hex>` of the resource bytes, `byteLength`, `encoding` and each stream's byte offset |
+| Descriptor | the static mesh JSON document, its `payload.source` a `resource` source: `resource` and `contentHash` strings (required, values ignored), `byteLength`, `encoding` and each stream's byte offset |
 | Packed mesh resource | `byteLength` bytes, to the end of the file |
 
 The packed mesh resource is the Engine's `.rmesh` body: an 8-byte magic
 (`RMSHLE01` for positions and normals, `RMSHLE02` with UVs, `RMSHLE03` with
 colors; encoding `packedStreamsLeV1`/`V2`/`V3`), its total byte length and its
 payload count (1) as u32, then f32 positions, normals, UVs and colors and u32
-indices. Validation, refusal codes and the admitted renderer resource are those
-of the JSON form; a changed stream fails its `contentHash`
-(`CSHARP_STATIC_MESH_PACK`). A town-sized mesh of 100,000 vertices is 3.8 MB
-instead of 6.0 MB of JSON, and imports in about 3.5 ms instead of 41 ms.
+indices. The admitted mesh and its bytes are the JSON form's. Admission reads the
+descriptor and the resource header against the bytes (`CSHARP_STATIC_MESH_PACK`
+when they disagree), not the streams. The Engine names the resource by the
+file's own content identity, so the descriptor's `resource` and `contentHash`
+must be present but their values are ignored: a stale hash from a tool cannot
+make two different files share a resource. A town-sized mesh of 100,000
+vertices is 3.8 MB instead of 6.0 MB of JSON, and imports in about 3.5 ms
+instead of 41 ms.
 [`triangle.rstatmsh`](../fixtures/csharp-static-mesh/triangle.rstatmsh) is
 `triangle.static-mesh.json` in this form.
 
