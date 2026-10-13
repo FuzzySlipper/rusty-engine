@@ -4,6 +4,8 @@
 //! connection while no runtime serves, and, on Windows, the private copy a
 //! runtime loads its assemblies from.
 
+use std::path::{Path, PathBuf};
+
 #[cfg(unix)]
 pub(crate) use unix::*;
 #[cfg(windows)]
@@ -89,7 +91,6 @@ mod windows {
             io::{AsRawSocket, FromRawSocket},
             process::CommandExt,
         },
-        path::{Path, PathBuf},
         process::{Child, Command},
     };
 
@@ -169,48 +170,75 @@ mod windows {
 
     /// Removes the private copy an exited runtime loaded from.
     pub(crate) fn runtime_ended(pid: u32) {
-        let _ = std::fs::remove_dir_all(private_copy_root().join(pid.to_string()));
+        let _ = std::fs::remove_dir_all(super::private_copy_root().join(pid.to_string()));
     }
+}
 
-    fn private_copy_root() -> PathBuf {
-        std::env::temp_dir().join("rusty-product-runtime")
-    }
+#[cfg_attr(not(windows), allow(dead_code))]
+fn private_copy_root() -> PathBuf {
+    std::env::temp_dir().join("rusty-product-runtime")
+}
 
-    /// Windows keeps a loaded assembly's file from being replaced, so a
-    /// supervised runtime loads its CoreCLR artifacts from a private copy and
-    /// `rusty dev` can restage the Product while it runs. Returns the copied
-    /// directory, which replaces `directory` in the artifact paths.
-    pub(crate) fn private_loader_copy(directory: &Path) -> Result<PathBuf, String> {
-        let root = private_copy_root();
-        // Copies left by runtimes that ended with their supervisor; a running
-        // one's loaded files refuse removal.
-        if let Ok(entries) = std::fs::read_dir(&root) {
-            for entry in entries.flatten() {
-                let _ = std::fs::remove_dir_all(entry.path());
-            }
+/// Windows keeps a loaded assembly's file from being replaced, so a
+/// supervised runtime there loads its CoreCLR artifacts from a private copy
+/// and `rusty dev` can restage the Product while it runs. Returns the copied
+/// directory, which replaces `directory` in the artifact paths. Only this
+/// runtime's supervisor removes it, once the runtime has ended.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(crate) fn private_loader_copy(directory: &Path) -> Result<PathBuf, String> {
+    copy_for_runtime(directory, &private_copy_root(), std::process::id())
+}
+
+#[cfg_attr(not(windows), allow(dead_code))]
+fn copy_for_runtime(directory: &Path, root: &Path, runtime: u32) -> Result<PathBuf, String> {
+    let copy = root.join(runtime.to_string());
+    copy_directory(directory, &copy).map_err(|error| {
+        format!(
+            "PRODUCT_HOST_RUNTIME_COPY: could not copy `{}` to `{}`: {error}",
+            directory.display(),
+            copy.display()
+        )
+    })?;
+    Ok(copy)
+}
+
+#[cfg_attr(not(windows), allow(dead_code))]
+fn copy_directory(from: &Path, to: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(to)?;
+    for entry in std::fs::read_dir(from)? {
+        let entry = entry?;
+        let target = to.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            copy_directory(&entry.path(), &target)?;
+        } else {
+            std::fs::copy(entry.path(), target)?;
         }
-        let copy = root.join(std::process::id().to_string());
-        copy_directory(directory, &copy).map_err(|error| {
-            format!(
-                "PRODUCT_HOST_RUNTIME_COPY: could not copy `{}` to `{}`: {error}",
-                directory.display(),
-                copy.display()
-            )
-        })?;
-        Ok(copy)
     }
+    Ok(())
+}
 
-    fn copy_directory(from: &Path, to: &Path) -> std::io::Result<()> {
-        std::fs::create_dir_all(to)?;
-        for entry in std::fs::read_dir(from)? {
-            let entry = entry?;
-            let target = to.join(entry.file_name());
-            if entry.file_type()?.is_dir() {
-                copy_directory(&entry.path(), &target)?;
-            } else {
-                std::fs::copy(entry.path(), target)?;
-            }
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_runtime_copy_leaves_other_runtimes_copies_alone() {
+        // #9900 review: each start removed every other runtime's copy,
+        // including one copied but not yet loaded, so it failed to start.
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("coreclr");
+        std::fs::create_dir_all(source.join("runtimes")).unwrap();
+        std::fs::write(source.join("Product.dll"), b"product").unwrap();
+        std::fs::write(source.join("runtimes/native.dll"), b"native").unwrap();
+        let root = temp.path().join("copies");
+        let first = copy_for_runtime(&source, &root, 1).unwrap();
+        let second = copy_for_runtime(&source, &root, 2).unwrap();
+        for copy in [&first, &second] {
+            assert_eq!(std::fs::read(copy.join("Product.dll")).unwrap(), b"product");
+            assert_eq!(
+                std::fs::read(copy.join("runtimes/native.dll")).unwrap(),
+                b"native"
+            );
         }
-        Ok(())
     }
 }
