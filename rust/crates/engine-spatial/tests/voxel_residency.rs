@@ -427,3 +427,146 @@ fn mixed_retained_operations_are_reported_but_all_retained_is_no_change() {
     assert_eq!(scene.source_revision(), revision);
     assert_eq!(scene.resident_chunk_count(), 2);
 }
+
+#[test]
+fn a_populated_scene_changes_only_named_chunks_assets_and_instances() {
+    use engine_spatial::{
+        SpatialCollisionHit, StaticMeshAssetId, StaticMeshColliderAsset,
+        StaticMeshColliderInstance, StaticMeshCollisionError, StaticMeshInstanceId,
+        StaticMeshTransform,
+    };
+    const CHUNK: u32 = 2;
+    const INSTANCES: u64 = 64;
+    // Eight resident chunks of voxels, and 64 floor tiles of four assets at
+    // y = 10, two metres apart along x.
+    let mut scene = empty_scene(CHUNK, SurfaceMode::GreedyCubes);
+    let chunks: Vec<_> = (0..8).map(|x| identity(x, 0, 0)).collect();
+    let solid = payload(CHUNK, &[([0, 0, 0], 1)]);
+    let admit: Vec<_> = chunks
+        .iter()
+        .map(|&chunk| VoxelChunkResidencyOperation::Admit {
+            chunk,
+            payload: solid.clone(),
+        })
+        .collect();
+    apply(&mut scene, &admit).unwrap();
+    let tile = |id: u64, height: f64| {
+        StaticMeshColliderAsset::new(
+            StaticMeshAssetId(id),
+            vec![
+                [0.0, height, 0.0],
+                [1.0, height, 0.0],
+                [0.0, height, 1.0],
+                [1.0, height, 1.0],
+            ],
+            vec![[0, 2, 1], [1, 2, 3]],
+        )
+        .unwrap()
+    };
+    let instance = |id: u64, y: f64| StaticMeshColliderInstance {
+        id: StaticMeshInstanceId(id),
+        asset: StaticMeshAssetId(id % 4),
+        transform: StaticMeshTransform {
+            translation: [id as f64 * 2.0, y, 20.0],
+            ..StaticMeshTransform::IDENTITY
+        },
+    };
+    let floor_at = |scene: &VoxelCollisionScene, id: u64| match scene.raycast_world(
+        [id as f64 * 2.0 + 0.5, 50.0, 20.5],
+        [0.0, -1.0, 0.0],
+        100.0,
+    ) {
+        Some(SpatialCollisionHit::StaticMesh(hit)) if hit.instance.0 == id => Some(hit.point.y),
+        _ => None,
+    };
+    scene
+        .replace_static_mesh_colliders(
+            (0..4).map(|id| tile(id, 0.0)),
+            (0..INSTANCES).map(|id| instance(id, 10.0)),
+        )
+        .unwrap();
+
+    // One changed instance (repeated: the last wins), one released, and the
+    // unchanged assets admitted again.
+    let receipt = scene
+        .apply_static_mesh_residency(
+            (0..4).map(|id| tile(id, 0.0)),
+            [instance(5, 3.0), instance(5, 12.0)],
+            [],
+            [StaticMeshInstanceId(7)],
+        )
+        .unwrap();
+    assert_eq!((receipt.asset_count, receipt.instance_count), (4, 63));
+    assert_eq!(floor_at(&scene, 5), Some(12.0));
+    assert_eq!(floor_at(&scene, 6), Some(10.0));
+    assert_eq!(floor_at(&scene, 7), None);
+
+    // An asset still in use cannot be released; nothing changes.
+    let revision = scene.static_mesh_collision_revision();
+    assert_eq!(
+        scene
+            .apply_static_mesh_residency([], [], [StaticMeshAssetId(2)], [])
+            .unwrap_err(),
+        StaticMeshCollisionError::MissingAsset {
+            id: StaticMeshAssetId(2)
+        }
+    );
+    assert_eq!(
+        scene
+            .apply_static_mesh_residency([], [instance(70, 10.0)], [StaticMeshAssetId(9)], [])
+            .map(|_| ()),
+        Ok(()),
+        "releasing an absent asset is harmless"
+    );
+    assert_eq!(scene.static_mesh_collision_revision(), revision + 1);
+    assert_eq!(floor_at(&scene, 6), Some(10.0));
+
+    // One asset's new geometry moves its instances alone.
+    scene
+        .apply_static_mesh_residency([tile(2, 1.0)], [], [], [])
+        .unwrap();
+    assert_eq!(floor_at(&scene, 6), Some(11.0));
+    assert_eq!(floor_at(&scene, 5), Some(12.0));
+    assert_eq!(floor_at(&scene, 4), Some(10.0));
+
+    // The maintained identity is a fresh build's of the same set.
+    let mut fresh = empty_scene(CHUNK, SurfaceMode::GreedyCubes);
+    let fresh_receipt = fresh
+        .replace_static_mesh_colliders(
+            [tile(0, 0.0), tile(1, 0.0), tile(2, 1.0), tile(3, 0.0)],
+            (0..INSTANCES)
+                .chain([70])
+                .filter(|id| *id != 7)
+                .map(|id| instance(id, if id == 5 { 12.0 } else { 10.0 })),
+        )
+        .unwrap();
+    let none = std::collections::BTreeSet::new();
+    assert_eq!(
+        scene.static_mesh_collision_topology_hash_excluding_pose(&none),
+        fresh_receipt.projection_hash
+    );
+
+    // Chunks: unchanged replacements are retained, one changed chunk is
+    // replaced, one is released, and queries follow.
+    let changed = payload(CHUNK, &[([0, 0, 0], 1), ([1, 1, 1], 2)]);
+    let mut operations: Vec<_> = chunks
+        .iter()
+        .map(|&chunk| VoxelChunkResidencyOperation::Replace {
+            chunk,
+            payload: solid.clone(),
+        })
+        .collect();
+    operations[3] = VoxelChunkResidencyOperation::Replace {
+        chunk: chunks[3],
+        payload: changed,
+    };
+    operations[6] = VoxelChunkResidencyOperation::Evict { chunk: chunks[6] };
+    let receipt = apply(&mut scene, &operations).unwrap();
+    assert_eq!(receipt.replaced, [chunks[3]]);
+    assert_eq!(receipt.evicted, [chunks[6]]);
+    assert_eq!(receipt.retained.len(), 6);
+    assert!(scene.contains_point([7.5, 1.5, 1.5]));
+    assert!(!scene.contains_point([12.5, 0.5, 0.5]));
+    assert!(scene.contains_point([14.5, 0.5, 0.5]));
+    assert_eq!(floor_at(&scene, 6), Some(11.0));
+}

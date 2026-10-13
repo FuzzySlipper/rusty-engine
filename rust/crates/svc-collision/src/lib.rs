@@ -10,11 +10,9 @@
 //!
 //! # Design soul
 //!
-//! - **Derived, not authoritative.** Each chunk collider records the
-//!   `content_hash` of the chunk it was built from; [`CollisionProjection::is_chunk_stale`]
-//!   detects drift so rebuilds stay coordinated with the chunk dirty queue. Immutable
-//!   triangle assets and caller-owned instances enter through one exact-revision,
-//!   fail-atomic replacement boundary.
+//! - **Derived, not authoritative.** The owner of the voxel authority drives
+//!   rebuilds from its own dirty chunks. Immutable triangle assets and
+//!   caller-owned instances enter by id.
 //! - **Typed boundary.** ASHA coordinate types (`WorldPos`, `VoxelGridSpec`) cross
 //!   the public API; `parry3d` `Pose`/`Vector`/`Compound` (glam-backed) stay
 //!   internal so coordinate-space distinctions are not erased.
@@ -230,8 +228,6 @@ impl CollisionHit {
 /// collidable part has no collider entry.
 #[derive(Clone)]
 struct ChunkCollider {
-    /// `content_hash` of the `VoxelChunk` this was built from — the staleness key.
-    source_hash: u64,
     /// World-positioned solid cuboids.
     cubes: Option<Arc<Compound>>,
     /// The canonical voxels of each Compound child, in the same order as
@@ -587,34 +583,6 @@ pub fn character_capsule_overlap_obstacles_with_stats(
         );
     }
     Ok((best, stats))
-}
-
-/// Stable identity for a collision projection and the voxel authority it was
-/// derived from. Receipts expose these values so separately invoked operations
-/// can prove they queried the same projection substrate.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct CollisionProjectionIdentity {
-    pub source_hash: u64,
-    pub projection_hash: u64,
-}
-
-impl CollisionProjectionIdentity {
-    pub fn source_hash_hex(self) -> String {
-        format!("{:016x}", self.source_hash)
-    }
-
-    pub fn projection_hash_label(self) -> String {
-        format!("fnv1a64:{:016x}", self.projection_hash)
-    }
-}
-
-fn fnv1a64(bytes: &[u8]) -> u64 {
-    let mut hash = 0xcbf29ce484222325u64;
-    for byte in bytes {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(0x100000001b3);
-    }
-    hash
 }
 
 impl CollisionProjection {
@@ -1020,65 +988,11 @@ impl CollisionProjection {
         self.chunks.keys().copied()
     }
 
-    /// Compute the versioned identity of this projection from canonical voxel
-    /// chunk hashes and deterministic collider coordinates.
-    pub fn identity(&self, world: &VoxelWorld) -> CollisionProjectionIdentity {
-        let mut source_key = String::new();
-        for (coord, chunk) in world.resident_chunks() {
-            source_key.push_str(&format!(
-                "{},{},{}={:016x};",
-                coord.x,
-                coord.y,
-                coord.z,
-                chunk.content_hash().0
-            ));
-        }
-        let source_hash = fnv1a64(source_key.as_bytes());
-        let chunks = self
-            .collider_chunks()
-            .map(|coord| format!("{},{},{}", coord.x, coord.y, coord.z))
-            .collect::<Vec<_>>()
-            .join(";");
-        let grid_origin = self.grid.origin_world();
-        let mut projection_key = if self.world_offset == WorldVec::ZERO
-            && grid_origin == WorldPos::ORIGIN
-        {
-            format!(
-                "{source_hash:016x}|v{}|n{}|{chunks}",
-                self.version(),
-                self.collider_count()
-            )
-        } else {
-            format!(
-                "{source_hash:016x}|v{}|n{}|o{:016x},{:016x},{:016x}|g{:016x},{:016x},{:016x}|{chunks}",
-                self.version(),
-                self.collider_count(),
-                self.world_offset.x.to_bits(),
-                self.world_offset.y.to_bits(),
-                self.world_offset.z.to_bits(),
-                grid_origin.x.to_bits(),
-                grid_origin.y.to_bits(),
-                grid_origin.z.to_bits(),
-            )
-        };
-        if self.static_meshes.revision() != 0 {
-            projection_key.push_str(&format!(
-                "|s{}:{:016x}",
-                self.static_meshes.revision(),
-                self.static_meshes.identity_hash()
-            ));
-        }
-        CollisionProjectionIdentity {
-            source_hash,
-            projection_hash: fnv1a64(projection_key.as_bytes()),
-        }
-    }
-
     /// Build/replace the collider for one chunk from its current voxels, as
     /// merged boxes. Drops the entry if the chunk has become all-empty.
     fn set_chunk(&mut self, coord: ChunkCoord, chunk: &VoxelChunk) {
         let prepared = self.prepare_chunk(coord, chunk);
-        self.install_chunk_parts(coord, chunk.content_hash().0, prepared);
+        self.install_chunk_parts(coord, prepared);
     }
 
     /// The parts [`Self::set_chunk`] would install for a chunk of cube
@@ -1147,13 +1061,12 @@ impl CollisionProjection {
     pub fn set_chunk_parts(
         &mut self,
         coord: ChunkCoord,
-        source_hash: u64,
         cube_voxels: &[VoxelCoord],
         surface_key: u64,
         surface: impl FnOnce() -> Option<ChunkSurfaceCollider>,
     ) {
         let prepared = self.prepare_chunk_parts(coord, cube_voxels, surface_key, surface);
-        self.install_chunk_parts(coord, source_hash, prepared);
+        self.install_chunk_parts(coord, prepared);
     }
 
     /// The parts [`Self::set_chunk_parts`] would install, built without
@@ -1229,12 +1142,7 @@ impl CollisionProjection {
 
     /// Install one chunk's parts from [`Self::prepare_chunk_parts`] or
     /// [`Self::prepare_chunk`]. Does not bump the version.
-    pub fn install_chunk_parts(
-        &mut self,
-        coord: ChunkCoord,
-        source_hash: u64,
-        prepared: PreparedChunkParts,
-    ) {
+    pub fn install_chunk_parts(&mut self, coord: ChunkCoord, prepared: PreparedChunkParts) {
         let PreparedChunkParts {
             boxes,
             cubes,
@@ -1274,7 +1182,6 @@ impl CollisionProjection {
         self.chunks.insert(
             coord,
             ChunkCollider {
-                source_hash,
                 cubes,
                 boxes,
                 surface,
@@ -1343,22 +1250,6 @@ impl CollisionProjection {
     /// Mark a batch of [`Self::set_chunk_parts`] changes with one version bump.
     pub fn touch(&mut self) {
         self.version += 1;
-    }
-
-    /// Whether the projection for `chunk` no longer matches `world`'s current data
-    /// (content changed, a chunk gained its first solids, or a collider's chunk is
-    /// gone). The basis for coordinated, version-checked rebuilds.
-    pub fn is_chunk_stale(&self, world: &VoxelWorld, chunk: ChunkCoord) -> bool {
-        match (self.chunks.get(&chunk), world.get(chunk)) {
-            (Some(c), Some(data)) => c.source_hash != data.content_hash().0,
-            // No collider but the chunk now has solids → stale (needs a build).
-            (None, Some(data)) => data
-                .iter()
-                .any(|(_, value)| collision_class(value) == CollisionClass::Solid),
-            // Have a collider but the chunk is gone/unloaded → stale (needs a drop).
-            (Some(_), None) => true,
-            (None, None) => false,
-        }
     }
 
     /// Occupancy query: is `p` inside a solid voxel's collider? The first query over
@@ -2090,7 +1981,7 @@ mod tests {
             triangles: vec![[0, 1, 2]],
             owners: vec![VoxelBox::single(VoxelCoord::new(1, 2, 1))],
         };
-        projection.set_chunk_parts(coord, 1, &cubes, 7, || Some(surface.clone()));
+        projection.set_chunk_parts(coord, &cubes, 7, || Some(surface.clone()));
         projection.touch();
         assert_eq!(projection.chunks[&coord].boxes.len(), 1);
         let side = projection
@@ -2126,7 +2017,7 @@ mod tests {
             .unwrap()
             .shape
             .clone();
-        projection.set_chunk_parts(coord, 2, &cubes, 7, || panic!("the surface is unchanged"));
+        projection.set_chunk_parts(coord, &cubes, 7, || panic!("the surface is unchanged"));
         assert!(Arc::ptr_eq(
             &kept,
             &projection.chunks[&coord].surface.as_ref().unwrap().shape
@@ -2375,55 +2266,40 @@ mod tests {
     }
 
     #[test]
-    fn projection_detects_staleness_and_rebuilds() {
+    fn rebuilding_a_chunk_follows_its_edits_and_unload() {
         let mut world = world_with(ChunkCoord::new(0, 0, 0), &[LocalVoxelCoord::new(0, 0, 0)]);
         let mut proj = CollisionProjection::build(&world);
         let chunk = ChunkCoord::new(0, 0, 0);
-        assert!(!proj.is_chunk_stale(&world, chunk));
-
-        // Edit the chunk → projection is now stale until rebuilt.
         world
             .get_mut(chunk)
             .unwrap()
             .set(LocalVoxelCoord::new(1, 1, 1), VoxelValue::solid_raw(1))
             .unwrap();
-        assert!(proj.is_chunk_stale(&world, chunk));
         let before = proj.version();
         proj.reconcile(&world, &[chunk]);
-        assert!(!proj.is_chunk_stale(&world, chunk));
         assert!(proj.version() > before);
         assert!(proj.contains_point(WorldPos::new(1.5, 1.5, 1.5)));
+
+        world.unload(chunk).unwrap();
+        proj.rebuild_chunk(&world, chunk);
+        assert!(!proj.has_collider(chunk));
     }
 
     #[test]
-    fn first_solid_in_untracked_chunk_reads_as_stale() {
-        // Chunk resident but all-empty → no collider; after gaining a solid it is stale.
+    fn first_solid_in_an_empty_chunk_builds_its_collider() {
         let mut world = VoxelWorld::new(spec());
         let chunk = ChunkCoord::new(2, 0, 0);
         world.insert(chunk, VoxelChunk::from_spec(&spec()));
         world.drain_dirty();
         let mut proj = CollisionProjection::build(&world);
         assert!(!proj.has_collider(chunk));
-        assert!(!proj.is_chunk_stale(&world, chunk));
         world
             .get_mut(chunk)
             .unwrap()
             .set(LocalVoxelCoord::new(0, 0, 0), VoxelValue::solid_raw(1))
             .unwrap();
-        assert!(proj.is_chunk_stale(&world, chunk));
         proj.rebuild_chunk(&world, chunk);
         assert!(proj.has_collider(chunk));
-    }
-
-    #[test]
-    fn unloading_a_chunk_makes_its_collider_stale_then_dropped() {
-        let mut world = world_with(ChunkCoord::new(0, 0, 0), &[LocalVoxelCoord::new(0, 0, 0)]);
-        let mut proj = CollisionProjection::build(&world);
-        let chunk = ChunkCoord::new(0, 0, 0);
-        world.unload(chunk).unwrap();
-        assert!(proj.is_chunk_stale(&world, chunk));
-        proj.rebuild_chunk(&world, chunk);
-        assert!(!proj.has_collider(chunk));
     }
 
     // ── ray / shape queries (#2258) ────────────────────────────────────────────

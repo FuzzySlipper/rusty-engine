@@ -1,4 +1,7 @@
-use std::{collections::BTreeMap, sync::Arc};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+};
 
 use core_space::{WorldPos, WorldVec};
 use parry3d_f64::math::{Pose, Vector};
@@ -89,8 +92,6 @@ pub struct StaticMeshHit {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StaticMeshCollisionError {
     RevisionExhausted,
-    DuplicateAsset { id: StaticMeshAssetId },
-    DuplicateInstance { id: StaticMeshInstanceId },
     MissingAsset { id: StaticMeshAssetId },
     EmptyGeometry,
     NonFiniteVertex,
@@ -105,8 +106,8 @@ struct PreparedInstance {
     geometry_hash: u64,
     transform: StaticMeshTransform,
     shape: SharedShape,
-    /// Cached at atomic projection replacement so character queries never
-    /// rebuild geometry bounds. `None` is an intentional fail-open sentinel.
+    /// Cached at admission so character queries never rebuild geometry
+    /// bounds. `None` is an intentional fail-open sentinel.
     bounds: Option<WorldAabb>,
     /// Topology contributions computed once at admission: with and without
     /// the translation/rotation that an admitted moving instance may change.
@@ -114,16 +115,52 @@ struct PreparedInstance {
     moving_topology: u64,
 }
 
+impl PreparedInstance {
+    fn bake(
+        id: StaticMeshInstanceId,
+        asset: &StaticMeshColliderAsset,
+        transform: StaticMeshTransform,
+    ) -> Result<Self, StaticMeshCollisionError> {
+        validate_transform(transform)?;
+        let vertices = asset
+            .positions
+            .iter()
+            .copied()
+            .map(|position| transform_position(position, transform))
+            .map(|position| Vector::new(position[0], position[1], position[2]))
+            .collect();
+        let shape = SharedShape::trimesh(vertices, asset.triangles.clone())
+            .map_err(|_| StaticMeshCollisionError::InvalidTriangleMesh)?;
+        let bounds = shape_world_aabb(shape.as_ref());
+        Ok(Self {
+            asset: asset.id,
+            geometry_hash: asset.geometry_hash,
+            transform,
+            shape,
+            bounds,
+            posed_topology: instance_topology(id, asset, transform, true),
+            moving_topology: instance_topology(id, asset, transform, false),
+        })
+    }
+}
+
+#[derive(Clone)]
+struct ResidentAsset {
+    asset: Arc<StaticMeshColliderAsset>,
+    /// The instances baked from this asset.
+    users: BTreeSet<StaticMeshInstanceId>,
+}
+
 /// Query-optimized projection of immutable static-mesh assets and caller-owned
-/// instances. The complete asset/instance set is revision-replaced atomically;
-/// callers retain authored identity, transforms, persistence, and mutation policy.
+/// instances, changed by id; callers retain authored identity, transforms,
+/// persistence, and mutation policy.
 #[derive(Clone, Default)]
 pub struct StaticMeshCollisionProjection {
-    assets: BTreeMap<StaticMeshAssetId, Arc<StaticMeshColliderAsset>>,
+    assets: BTreeMap<StaticMeshAssetId, ResidentAsset>,
     instances: BTreeMap<StaticMeshInstanceId, PreparedInstance>,
     revision: u64,
     /// Order-independent sum of every asset and posed instance contribution,
-    /// maintained by replacement so per-step identity reads stay O(moving).
+    /// maintained by each change so identity reads stay O(moving).
     topology: u64,
 }
 
@@ -168,7 +205,7 @@ impl StaticMeshCollisionProjection {
     /// static collision changes still invalidate controller continuity.
     pub(crate) fn topology_hash_excluding_pose(
         &self,
-        moving_instances: &std::collections::BTreeSet<StaticMeshInstanceId>,
+        moving_instances: &BTreeSet<StaticMeshInstanceId>,
     ) -> u64 {
         moving_instances
             .iter()
@@ -189,33 +226,30 @@ impl StaticMeshCollisionProjection {
         self.revision
     }
 
+    /// Every instance moved by `delta`; their triangles are rebaked.
     pub(crate) fn translated(&self, delta: WorldVec) -> Result<Self, StaticMeshCollisionError> {
         if ![delta.x, delta.y, delta.z].into_iter().all(f64::is_finite) {
             return Err(StaticMeshCollisionError::InvalidTransform);
         }
-        let assets = self
-            .assets
-            .values()
-            .map(|asset| (**asset).clone())
-            .collect::<Vec<_>>();
-        let instances = self
-            .instances
-            .iter()
-            .map(|(id, instance)| {
-                let mut transform = instance.transform;
-                transform.translation[0] += delta.x;
-                transform.translation[1] += delta.y;
-                transform.translation[2] += delta.z;
-                StaticMeshColliderInstance {
-                    id: *id,
-                    asset: instance.asset,
-                    transform,
-                }
-            })
-            .collect::<Vec<_>>();
-        let mut candidate = Self::default();
-        candidate.replace_all(assets, instances)?;
-        candidate.revision = self.revision;
+        let mut candidate = Self {
+            assets: self.assets.clone(),
+            instances: BTreeMap::new(),
+            revision: self.revision,
+            topology: self.topology,
+        };
+        for (id, instance) in &self.instances {
+            let mut transform = instance.transform;
+            transform.translation[0] += delta.x;
+            transform.translation[1] += delta.y;
+            transform.translation[2] += delta.z;
+            let moved =
+                PreparedInstance::bake(*id, &self.assets[&instance.asset].asset, transform)?;
+            candidate.topology = candidate
+                .topology
+                .wrapping_sub(instance.posed_topology)
+                .wrapping_add(moved.posed_topology);
+            candidate.instances.insert(*id, moved);
+        }
         Ok(candidate)
     }
 
@@ -227,51 +261,38 @@ impl StaticMeshCollisionProjection {
         self.instances.len()
     }
 
-    pub(crate) fn identity_hash(&self) -> u64 {
-        let mut hash = 0xcbf29ce484222325u64;
-        write_hash(&mut hash, &(self.assets.len() as u64).to_le_bytes());
-        write_hash(&mut hash, &(self.instances.len() as u64).to_le_bytes());
-        for (id, asset) in &self.assets {
-            write_hash(&mut hash, &id.0.to_le_bytes());
-            write_hash(&mut hash, &asset.geometry_hash.to_le_bytes());
-        }
-        for (id, instance) in &self.instances {
-            write_hash(&mut hash, &id.0.to_le_bytes());
-            write_hash(&mut hash, &instance.asset.0.to_le_bytes());
-            write_hash(&mut hash, &instance.geometry_hash.to_le_bytes());
-            for value in instance
-                .transform
-                .translation
-                .iter()
-                .chain(&instance.transform.rotation)
-                .chain(&instance.transform.scale)
-            {
-                write_hash(&mut hash, &value.to_bits().to_le_bytes());
-            }
-        }
-        hash
-    }
-
+    /// Replace the complete asset and instance set: everything not listed
+    /// is removed, and listed entries are applied as by
+    /// [`Self::apply_residency`].
     pub fn replace_all(
         &mut self,
         assets: impl IntoIterator<Item = StaticMeshColliderAsset>,
         instances: impl IntoIterator<Item = StaticMeshColliderInstance>,
     ) -> Result<StaticMeshCollisionReceipt, StaticMeshCollisionError> {
-        // Assets were validated and hashed when constructed.
-        let mut next_assets = BTreeMap::new();
-        for asset in assets {
-            let id = asset.id;
-            if next_assets.insert(id, Arc::new(asset)).is_some() {
-                return Err(StaticMeshCollisionError::DuplicateAsset { id });
-            }
-        }
-
-        self.commit_projection(next_assets, instances)
+        let assets: Vec<_> = assets.into_iter().collect();
+        let instances: Vec<_> = instances.into_iter().collect();
+        let listed_assets: BTreeSet<_> = assets.iter().map(|asset| asset.id).collect();
+        let listed_instances: BTreeSet<_> = instances.iter().map(|instance| instance.id).collect();
+        let removed_assets: Vec<_> = self
+            .assets
+            .keys()
+            .filter(|id| !listed_assets.contains(id))
+            .copied()
+            .collect();
+        let removed_instances: Vec<_> = self
+            .instances
+            .keys()
+            .filter(|id| !listed_instances.contains(id))
+            .copied()
+            .collect();
+        self.apply_residency(assets, instances, removed_assets, removed_instances)
     }
 
-    /// Applies a bounded residency delta without rebuilding unchanged triangle meshes.
-    /// Removals precede upserts. Removing an absent identity is idempotent.
-    /// Assets still referenced by retained instances cannot be removed.
+    /// Applies a residency delta by id, touching only the named assets and
+    /// instances and the instances baked from a replaced asset. Removals
+    /// precede upserts; a later entry for an id replaces an earlier one.
+    /// Removing an absent identity is idempotent. Assets still used by a
+    /// retained instance cannot be removed. A refusal changes nothing.
     pub fn apply_residency(
         &mut self,
         assets: impl IntoIterator<Item = StaticMeshColliderAsset>,
@@ -279,116 +300,126 @@ impl StaticMeshCollisionProjection {
         removed_assets: impl IntoIterator<Item = StaticMeshAssetId>,
         removed_instances: impl IntoIterator<Item = StaticMeshInstanceId>,
     ) -> Result<StaticMeshCollisionReceipt, StaticMeshCollisionError> {
-        let mut admitted = Self::default();
-        admitted.replace_all(assets, [])?;
-        let mut next_assets = self.assets.clone();
-        for id in removed_assets {
-            next_assets.remove(&id);
-        }
-        next_assets.extend(admitted.assets);
-        let mut next_instances = self
-            .instances
-            .iter()
-            .map(|(id, instance)| {
-                (
-                    *id,
-                    StaticMeshColliderInstance {
-                        id: *id,
-                        asset: instance.asset,
-                        transform: instance.transform,
-                    },
-                )
-            })
-            .collect::<BTreeMap<_, _>>();
-        for id in removed_instances {
-            next_instances.remove(&id);
-        }
-        let mut upserts = BTreeMap::new();
-        for instance in instances {
-            let id = instance.id;
-            if upserts.insert(id, instance).is_some() {
-                return Err(StaticMeshCollisionError::DuplicateInstance { id });
-            }
-        }
-        next_instances.extend(upserts);
-        self.commit_projection(next_assets, next_instances.into_values())
-    }
-
-    fn commit_projection(
-        &mut self,
-        next_assets: BTreeMap<StaticMeshAssetId, Arc<StaticMeshColliderAsset>>,
-        instances: impl IntoIterator<Item = StaticMeshColliderInstance>,
-    ) -> Result<StaticMeshCollisionReceipt, StaticMeshCollisionError> {
         let revision_after = self
             .revision
             .checked_add(1)
             .ok_or(StaticMeshCollisionError::RevisionExhausted)?;
-        let mut next_instances = BTreeMap::new();
-        for instance in instances {
-            if next_instances.contains_key(&instance.id) {
-                return Err(StaticMeshCollisionError::DuplicateInstance { id: instance.id });
-            }
-            let Some(asset) = next_assets.get(&instance.asset) else {
-                return Err(StaticMeshCollisionError::MissingAsset { id: instance.asset });
-            };
-            validate_transform(instance.transform)?;
-            if let Some(previous) = self.instances.get(&instance.id).filter(|previous| {
-                previous.asset == instance.asset
+        // Assets were validated and hashed when constructed.
+        let mut admitted: BTreeMap<_, _> = assets
+            .into_iter()
+            .map(|asset| (asset.id, Arc::new(asset)))
+            .collect();
+        let removed_assets: BTreeSet<_> = removed_assets
+            .into_iter()
+            .filter(|id| self.assets.contains_key(id) && !admitted.contains_key(id))
+            .collect();
+        // Re-admitting an asset's geometry keeps it and its instances.
+        admitted.retain(|id, asset| {
+            self.assets
+                .get(id)
+                .is_none_or(|resident| resident.asset.geometry_hash != asset.geometry_hash)
+        });
+        let upserts: BTreeMap<_, _> = instances
+            .into_iter()
+            .map(|instance| (instance.id, instance))
+            .collect();
+        let removed_instances: BTreeSet<_> = removed_instances
+            .into_iter()
+            .filter(|id| self.instances.contains_key(id) && !upserts.contains_key(id))
+            .collect();
+        let asset_after = |id: StaticMeshAssetId| {
+            admitted.get(&id).or_else(|| {
+                (!removed_assets.contains(&id))
+                    .then(|| self.assets.get(&id).map(|resident| &resident.asset))
+                    .flatten()
+            })
+        };
+
+        // Build everything that can fail before changing anything.
+        let mut baked = Vec::new();
+        for (id, instance) in &upserts {
+            let asset = asset_after(instance.asset)
+                .ok_or(StaticMeshCollisionError::MissingAsset { id: instance.asset })?;
+            let unchanged = self.instances.get(id).is_some_and(|previous| {
+                previous.asset == asset.id
                     && previous.geometry_hash == asset.geometry_hash
                     && previous.transform == instance.transform
-            }) {
-                next_instances.insert(instance.id, previous.clone());
-                continue;
+            });
+            if !unchanged {
+                baked.push((*id, PreparedInstance::bake(*id, asset, instance.transform)?));
             }
-            let vertices = asset
-                .positions
+        }
+        for (asset_id, asset) in &admitted {
+            let Some(resident) = self.assets.get(asset_id) else {
+                continue;
+            };
+            for id in &resident.users {
+                if !removed_instances.contains(id) && !upserts.contains_key(id) {
+                    let transform = self.instances[id].transform;
+                    baked.push((*id, PreparedInstance::bake(*id, asset, transform)?));
+                }
+            }
+        }
+        for asset_id in &removed_assets {
+            let retained = self.assets[asset_id]
+                .users
                 .iter()
-                .copied()
-                .map(|position| transform_position(position, instance.transform))
-                .map(|position| Vector::new(position[0], position[1], position[2]))
-                .collect();
-            let shape = SharedShape::trimesh(vertices, asset.triangles.clone())
-                .map_err(|_| StaticMeshCollisionError::InvalidTriangleMesh)?;
-            let bounds = shape_world_aabb(shape.as_ref());
-            let id = instance.id;
-            next_instances.insert(
-                id,
-                PreparedInstance {
-                    asset: asset.id,
-                    geometry_hash: asset.geometry_hash,
-                    transform: instance.transform,
-                    shape,
-                    bounds,
-                    posed_topology: instance_topology(id, asset, instance.transform, true),
-                    moving_topology: instance_topology(id, asset, instance.transform, false),
-                },
-            );
+                .any(|id| !removed_instances.contains(id) && !upserts.contains_key(id));
+            if retained {
+                return Err(StaticMeshCollisionError::MissingAsset { id: *asset_id });
+            }
         }
 
-        let topology = next_assets
-            .values()
-            .map(|asset| asset_topology(asset))
-            .chain(
-                next_instances
-                    .values()
-                    .map(|instance| instance.posed_topology),
-            )
-            .fold(0u64, u64::wrapping_add);
-        let mut candidate = Self {
-            assets: next_assets,
-            instances: next_instances,
-            revision: revision_after,
-            topology,
-        };
-        let receipt = StaticMeshCollisionReceipt {
-            revision_before: self.revision,
+        let revision_before = self.revision;
+        for id in removed_instances
+            .iter()
+            .chain(baked.iter().map(|(id, _)| id))
+        {
+            self.detach(*id);
+        }
+        for id in removed_assets {
+            let resident = self.assets.remove(&id).expect("removed asset is resident");
+            self.topology = self.topology.wrapping_sub(asset_topology(&resident.asset));
+        }
+        for (id, asset) in admitted {
+            self.topology = self.topology.wrapping_add(asset_topology(&asset));
+            let users = match self.assets.remove(&id) {
+                Some(previous) => {
+                    self.topology = self.topology.wrapping_sub(asset_topology(&previous.asset));
+                    previous.users
+                }
+                None => BTreeSet::new(),
+            };
+            self.assets.insert(id, ResidentAsset { asset, users });
+        }
+        for (id, instance) in baked {
+            self.topology = self.topology.wrapping_add(instance.posed_topology);
+            self.assets
+                .get_mut(&instance.asset)
+                .expect("an instance's asset is resident")
+                .users
+                .insert(id);
+            self.instances.insert(id, instance);
+        }
+        self.revision = revision_after;
+        Ok(StaticMeshCollisionReceipt {
+            revision_before,
             revision_after,
-            asset_count: candidate.assets.len(),
-            instance_count: candidate.instances.len(),
-            projection_hash: candidate.identity_hash(),
+            asset_count: self.assets.len(),
+            instance_count: self.instances.len(),
+            projection_hash: self.topology,
+        })
+    }
+
+    /// Take one instance out of the projection and its asset's users.
+    fn detach(&mut self, id: StaticMeshInstanceId) {
+        let Some(instance) = self.instances.remove(&id) else {
+            return;
         };
-        std::mem::swap(self, &mut candidate);
-        Ok(receipt)
+        self.topology = self.topology.wrapping_sub(instance.posed_topology);
+        if let Some(asset) = self.assets.get_mut(&instance.asset) {
+            asset.users.remove(&id);
+        }
     }
 
     pub fn raycast(&self, ray: Ray, max_distance: f64) -> Option<StaticMeshHit> {
@@ -672,7 +703,7 @@ mod tests {
         projection
             .apply_residency([first], [first_instance], [], [])
             .unwrap();
-        let retained_asset = Arc::clone(&projection.assets[&StaticMeshAssetId(7)]);
+        let retained_asset = Arc::clone(&projection.assets[&StaticMeshAssetId(7)].asset);
         let retained_shape = projection.instances[&StaticMeshInstanceId(11)]
             .shape
             .clone();
@@ -687,7 +718,7 @@ mod tests {
             .unwrap();
         assert!(Arc::ptr_eq(
             &retained_asset,
-            &projection.assets[&StaticMeshAssetId(7)]
+            &projection.assets[&StaticMeshAssetId(7)].asset
         ));
         assert!(std::ptr::eq(
             retained_shape.as_ref(),
@@ -695,13 +726,14 @@ mod tests {
                 .shape
                 .as_ref()
         ));
-        let identity = projection.identity_hash();
+        let none = BTreeSet::new();
+        let identity = projection.topology_hash_excluding_pose(&none);
         assert!(matches!(
             projection.apply_residency([], [], [StaticMeshAssetId(7)], []),
             Err(StaticMeshCollisionError::MissingAsset { .. })
         ));
         assert_eq!(projection.revision(), 2);
-        assert_eq!(projection.identity_hash(), identity);
+        assert_eq!(projection.topology_hash_excluding_pose(&none), identity);
         projection
             .apply_residency([], [], [StaticMeshAssetId(7)], [StaticMeshInstanceId(11)])
             .unwrap();
@@ -783,7 +815,8 @@ mod tests {
             .unwrap();
         let moving = std::collections::BTreeSet::from([StaticMeshInstanceId(11)]);
         let before = projection.topology_hash_excluding_pose(&moving);
-        let full_before = projection.identity_hash();
+        let none = BTreeSet::new();
+        let full_before = projection.topology_hash_excluding_pose(&none);
         projection
             .apply_residency(
                 [],
@@ -800,7 +833,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(projection.topology_hash_excluding_pose(&moving), before);
-        assert_ne!(projection.identity_hash(), full_before);
+        assert_ne!(projection.topology_hash_excluding_pose(&none), full_before);
 
         projection
             .apply_residency(
@@ -898,6 +931,77 @@ mod tests {
             WorldPos::new(2.5, 5.0, 0.25),
             WorldVec::new(1.0, 0.0, 0.0),
         ));
+    }
+
+    #[test]
+    fn repeated_ids_replace_and_a_replaced_asset_rebakes_only_its_instances() {
+        let instance = |id, asset, x| StaticMeshColliderInstance {
+            id: StaticMeshInstanceId(id),
+            asset: StaticMeshAssetId(asset),
+            transform: StaticMeshTransform {
+                translation: [x, 0.0, 0.0],
+                ..StaticMeshTransform::IDENTITY
+            },
+        };
+        let mut other = ramp();
+        other.id = StaticMeshAssetId(8);
+        let mut projection = StaticMeshCollisionProjection::default();
+        // The later asset and instance of a repeated id win.
+        let receipt = projection
+            .replace_all(
+                [ramp(), ramp(), other.clone()],
+                [
+                    instance(11, 7, 0.0),
+                    instance(11, 7, 10.0),
+                    instance(12, 8, 20.0),
+                ],
+            )
+            .unwrap();
+        assert_eq!((receipt.asset_count, receipt.instance_count), (2, 2));
+        assert_eq!(
+            projection.instances[&StaticMeshInstanceId(11)]
+                .transform
+                .translation[0],
+            10.0
+        );
+        let untouched = projection.instances[&StaticMeshInstanceId(12)]
+            .shape
+            .clone();
+
+        // New geometry under asset 7 rebakes instance 11 and nothing else.
+        let taller = StaticMeshColliderAsset::new(
+            StaticMeshAssetId(7),
+            vec![[0.0, 5.0, -1.0], [2.0, 5.0, -1.0], [0.0, 5.0, 1.0]],
+            vec![[0, 2, 1]],
+        )
+        .unwrap();
+        let receipt = projection
+            .apply_residency([taller.clone()], [], [], [])
+            .unwrap();
+        assert!(std::ptr::eq(
+            untouched.as_ref(),
+            projection.instances[&StaticMeshInstanceId(12)]
+                .shape
+                .as_ref()
+        ));
+        let hit = projection
+            .raycast(
+                Ray::new(WorldPos::new(10.5, 9.0, 0.0), WorldVec::new(0.0, -1.0, 0.0)),
+                10.0,
+            )
+            .unwrap();
+        assert_eq!(hit.instance, StaticMeshInstanceId(11));
+        assert!((hit.point.y - 5.0).abs() < 1.0e-9);
+
+        // The maintained identity is the one a fresh build of the same set has.
+        let mut fresh = StaticMeshCollisionProjection::default();
+        let rebuilt = fresh
+            .replace_all(
+                [taller, other],
+                [instance(11, 7, 10.0), instance(12, 8, 20.0)],
+            )
+            .unwrap();
+        assert_eq!(receipt.projection_hash, rebuilt.projection_hash);
     }
 
     #[test]

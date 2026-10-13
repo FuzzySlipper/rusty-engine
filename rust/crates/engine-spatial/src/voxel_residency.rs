@@ -316,8 +316,7 @@ impl VoxelChunkResidencyService {
             let current = scene.voxel_world.get(coordinate);
             match contents {
                 Some(chunk) => {
-                    if current.is_some_and(|current| current.content_hash() == chunk.content_hash())
-                    {
+                    if current.is_some_and(|current| current.same_content(&chunk)) {
                         retained.push(identity);
                         continue;
                     }

@@ -4183,16 +4183,8 @@ mod tests {
             NativeNavigationPathOutcome::StartNotWalkable
         );
 
-        // Conflicts and malformed artifacts refuse and change nothing.
+        // Malformed artifacts refuse and change nothing.
         let revision = across.navigation_revision;
-        assert_eq!(
-            residency(&[place(1, west, 6)], &[]).unwrap_err(),
-            "CSHARP_SPATIAL_CONTENT_IDENTITY"
-        );
-        assert_eq!(
-            residency(&[place(500, west, 6)], &[]).unwrap_err(),
-            "CSHARP_SPATIAL_CONTENT_IDENTITY"
-        );
         assert_eq!(
             residency(&[place(3, west, 6), place(4, broken, 9)], &[]).unwrap_err(),
             "CSHARP_SPATIAL_CONTENT_SCHEMA"
@@ -4211,14 +4203,35 @@ mod tests {
             residency(&[malformed_translation], &[]).unwrap_err(),
             "CSHARP_SPATIAL_CONTENT_TRANSFORM"
         );
-        assert_ne!(
-            collision_residency(&[1]),
-            ABI_OK,
-            "a placed artifact's collision is its own"
-        );
         let unchanged = step([0.5, 0.0, 0.5], [4.5, 0.0, 0.5]);
         assert_eq!(unchanged.navigation_revision, revision);
         assert!(!has_instance(&services, 3) && has_instance(&services, 1));
+
+        // A resident identity placed again is replaced, and the last of
+        // a repeated identity wins.
+        let receipt = residency(&[place(1, west, 6), place(1, east, 6)], &[]).unwrap();
+        assert_eq!(
+            (receipt.instance_count, receipt.navigation_cell_count),
+            (2, 4)
+        );
+        assert!(!floor_below(&services, [1.5, 0.5]) && floor_below(&services, [6.5, 0.5]));
+        residency(&[translated(1, west, 0, translated_west)], &[]).unwrap();
+        assert!(floor_below(&services, [1.5, 0.5]));
+
+        // Collision residency may remove a placed artifact's instance; the
+        // placement leaves the composition with it.
+        assert_eq!(collision_residency(&[1]), ABI_OK);
+        assert!(!has_instance(&services, 1) && !floor_below(&services, [1.5, 0.5]));
+        let receipt = residency(&[], &[]).unwrap();
+        assert_eq!(
+            (receipt.instance_count, receipt.navigation_cell_count),
+            (1, 2)
+        );
+        let receipt = residency(&[translated(1, west, 0, translated_west)], &[]).unwrap();
+        assert_eq!(
+            (receipt.instance_count, receipt.navigation_cell_count),
+            (2, 5)
+        );
 
         // Unload one closure; the other and the terrain stay.
         let receipt = residency(&[], &[1]).unwrap();

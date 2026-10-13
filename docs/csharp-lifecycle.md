@@ -1205,14 +1205,14 @@ SpatialContentArtifactResidencyReceipt resident = engine.Spatial.ApplyContentArt
         7, 8, 1));
 ```
 
-- **Composition.** Removals apply first, so one request can also replace an
-  identity. Each placed artifact's collision joins the session's static
-  collision as the static-mesh instance under its `Id`. Planar navigation
-  becomes one projection over the base artifact's cells
+- **Composition.** Removals apply first. An `Id` placed again, whether
+  already resident or repeated in one request, is replaced; the last one
+  wins. Each placed artifact's collision joins the session's static collision
+  as the static-mesh instance under its `Id`, replacing any instance of that
+  `Id`. Planar navigation becomes one projection over the base artifact's cells
   (`ReplaceContentArtifact`) and every placed artifact's. Paths cross between
   neighbouring closures as within one. A cell two artifacts both declare is
   walkable, at the higher support.
-- **Grid.** All of them must share one cell size and level quantum
 - **Grid.** All of them must share one cell size and level quantum
   (`CSHARP_SPATIAL_CONTENT_NAVIGATION_GRID`). The integer topology is the base
   artifact's, or, with no base, the local frame when the first artifact was
@@ -1226,11 +1226,12 @@ SpatialContentArtifactResidencyReceipt resident = engine.Spatial.ApplyContentArt
   `ReplaceCollision`, `ReplaceNavigation`, `ReplaceVoxelNavigation`,
   `ReplaceCollisionNavigation` and `ClearNavigation` end it. Artifact
   collision then stays as ordinary static collision.
-- **Refusals.** An `Id` that is already resident, placed or the session's own
-  static collision, is refused with `CSHARP_SPATIAL_CONTENT_IDENTITY`.
-  `ApplyCollisionResidency` refuses to change a placed artifact's collision
-  (`CSHARP_COLLISION_CONTENT_OWNED`). Any refusal, including a malformed
-  artifact, changes nothing.
+- **Collision residency.** `ApplyCollisionResidency` that removes or
+  replaces a placed artifact's instance takes that artifact out of the
+  composition; its navigation cells leave at the next
+  `ApplyContentArtifactResidency`.
+- **Refusals.** A malformed artifact or a non-finite translation is refused
+  and changes nothing.
 - **Lifetime.** Placed artifacts with the same content share one collider
   asset, released with the last of them. The content references are read
   during the call and can be disposed afterwards.

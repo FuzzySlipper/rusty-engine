@@ -593,6 +593,7 @@ impl VoxelCollisionScene {
         {
             return Err(CollisionSceneError::Mesh(MeshError::InvalidTerrainLayers));
         }
+        // Every voxel was validated when it entered `voxel_world`.
         let mut solid_voxel_count = 0usize;
         let mut authority_hash = 0u64;
         for (coordinate, chunk) in voxel_world.resident_chunks() {
@@ -600,8 +601,6 @@ impl VoxelCollisionScene {
                 let Some(voxel) = material_voxel_at(grid, coordinate, local, value) else {
                     continue;
                 };
-                validate_material_voxel(voxel)
-                    .map_err(CollisionSceneError::InvalidMaterialVoxel)?;
                 solid_voxel_count += 1;
                 authority_hash = authority_hash.wrapping_add(voxel_hash(voxel));
             }
@@ -1236,16 +1235,14 @@ impl VoxelCollisionScene {
         &self,
         coordinate: ChunkCoord,
         mesh: Option<&VoxelMeshChunk>,
-    ) -> Option<(u64, PreparedChunkParts)> {
-        let chunk = self.voxel_world.get(coordinate)?;
+    ) -> Option<PreparedChunkParts> {
         if self.mesh_options.all_greedy() {
             let collided =
                 collision_chunk(&self.voxel_world, &self.noncollidable_materials, coordinate)?;
-            return Some((
-                collided.content_hash().0,
-                self.projection.prepare_chunk(coordinate, &collided),
-            ));
+            return Some(self.projection.prepare_chunk(coordinate, &collided));
         }
+        // A chunk that is not resident has no collider.
+        self.voxel_world.get(coordinate)?;
         let participation = surface_collision::noncollidable_key(&self.noncollidable_materials);
         let cubes = surface_collision::collider_cubes(
             &self.voxel_world,
@@ -1270,15 +1267,12 @@ impl VoxelCollisionScene {
                 })
             },
         );
-        Some((chunk.content_hash().0, parts))
+        Some(parts)
     }
 
     /// The colliders of `coordinates`, built in parallel from their current
     /// voxels and meshes.
-    fn prepare_colliders(
-        &self,
-        coordinates: &[ChunkCoord],
-    ) -> Vec<Option<(u64, PreparedChunkParts)>> {
+    fn prepare_colliders(&self, coordinates: &[ChunkCoord]) -> Vec<Option<PreparedChunkParts>> {
         surface_collision::in_parallel(coordinates, |coordinate| {
             self.prepare_collider(
                 coordinate,
@@ -1291,14 +1285,11 @@ impl VoxelCollisionScene {
     /// not bump the projection version.
     fn install_prepared(
         &mut self,
-        colliders: impl IntoIterator<Item = (ChunkCoord, Option<(u64, PreparedChunkParts)>)>,
+        colliders: impl IntoIterator<Item = (ChunkCoord, Option<PreparedChunkParts>)>,
     ) {
         for (coordinate, prepared) in colliders {
             match prepared {
-                Some((source_hash, parts)) => {
-                    self.projection
-                        .install_chunk_parts(coordinate, source_hash, parts)
-                }
+                Some(parts) => self.projection.install_chunk_parts(coordinate, parts),
                 None => self.projection.remove_chunk(coordinate),
             }
         }
@@ -1591,7 +1582,7 @@ impl VoxelCollisionScene {
 /// that change (`None` removes one), and the summed meshing time.
 pub(crate) struct ChunkRebuild {
     meshes: BTreeMap<ChunkCoord, Option<Arc<VoxelMeshChunk>>>,
-    colliders: Vec<(ChunkCoord, Option<(u64, PreparedChunkParts)>)>,
+    colliders: Vec<(ChunkCoord, Option<PreparedChunkParts>)>,
     microseconds: u64,
 }
 

@@ -46,10 +46,10 @@ use svc_pathfinding::{
     find_path_with_traversal_and_edge_admission, find_path_with_traversal_policy,
     find_volumetric_path, find_weighted_path_with_edge_admission, find_weighted_path_with_policy,
     find_weighted_volumetric_path, planar_nav_offsets, propose_direct_nav_movement,
-    volumetric_navigation_source_hash, DirectNavMovementRequest, NavComponents, NavEdgeAdmission,
-    NavError, NavPathOutcome, NavPathQuery, NavProjection, NavProjectionConfig, NavTraversalCell,
-    NavTraversalOverlay, PlanarNavNeighborPolicy, VolumetricAgentVolume, VolumetricNavConfig,
-    VolumetricNavError, VolumetricNavOutcome, VolumetricNavQuery, VolumetricNavTraversalCell,
+    DirectNavMovementRequest, NavComponents, NavEdgeAdmission, NavError, NavPathOutcome,
+    NavPathQuery, NavProjection, NavProjectionConfig, NavTraversalCell, NavTraversalOverlay,
+    PlanarNavNeighborPolicy, VolumetricAgentVolume, VolumetricNavConfig, VolumetricNavError,
+    VolumetricNavOutcome, VolumetricNavQuery, VolumetricNavTraversalCell,
     VolumetricNavTraversalOverlay, VolumetricNeighborSet, VolumetricTraversalRule,
     VolumetricVerticalPolicy, WeightedNavPathError, WeightedNavPathOutcome,
     WeightedVolumetricNavPathError,
@@ -159,21 +159,6 @@ struct SpatialContentComposition {
     active: bool,
     base: Option<(SpatialContentIdentity, Arc<ContentNavigationCells>)>,
     placed: BTreeMap<u64, PlacedContentArtifact>,
-}
-
-impl SpatialContentComposition {
-    /// Whether `id` names a static-mesh instance or asset this composition
-    /// owns.
-    fn owns_collision(&self, id: u64) -> bool {
-        self.placed.contains_key(&id)
-            || self
-                .placed
-                .values()
-                .any(|placed| placed.asset == Some(StaticMeshAssetId(id)))
-            || self.base.as_ref().is_some_and(|(identity, _)| {
-                spatial_content_asset_id(identity.content_sha256) == id
-            })
-    }
 }
 
 /// Engine-owned collision/navigation mechanisms. Player and game state never
@@ -440,6 +425,15 @@ impl NavigationState {
             // cannot describe free 3D space for volumetric navigation.
             NavigationSource::HostWalkableCells | NavigationSource::CollisionDerived => None,
             NavigationSource::VoxelDerived(scene) => Some(scene.voxel_world()),
+        }
+    }
+
+    /// The identity of the voxels volumetric navigation reads: the scene's
+    /// maintained solid-voxel hash.
+    fn volumetric_source_hash(&self) -> Option<u64> {
+        match &self.source {
+            NavigationSource::VoxelDerived(scene) => Some(scene.authority_hash()),
+            NavigationSource::HostWalkableCells | NavigationSource::CollisionDerived => None,
         }
     }
 
@@ -1103,22 +1097,11 @@ impl RuntimeSpatialBridge {
             .collect::<Vec<_>>();
         let (scene, receipt) = {
             let session = self.session_mut(request.session)?;
-            if removed.is_some() {
-                // Placed artifacts' collision changes only with their navigation.
-                let owned = removed
-                    .into_iter()
-                    .flat_map(|(assets, instances)| assets.iter().chain(instances))
-                    .copied()
-                    .chain(admitted.iter().map(|asset| asset.id.0))
-                    .chain(instances.iter().map(|instance| instance.id.0))
-                    .find(|id| session.content.owns_collision(*id));
-                if let Some(id) = owned {
-                    return Err(CsharpEngineServicesError::new(
-                        "CSHARP_COLLISION_CONTENT_OWNED",
-                        format!("collision identity {id} belongs to an admitted spatial content artifact; change it through its content residency"),
-                    ));
-                }
-            }
+            let changed: Vec<u64> = removed
+                .iter()
+                .flat_map(|(_, removed_instances)| removed_instances.iter().copied())
+                .chain(instances.iter().map(|instance| instance.id.0))
+                .collect();
             let mut candidate = (*session.scene).clone();
             let receipt = if let Some((removed_assets, removed_instances)) = removed {
                 candidate.apply_static_mesh_residency(
@@ -1137,6 +1120,12 @@ impl RuntimeSpatialBridge {
             session.scene = Arc::clone(&candidate);
             if removed.is_none() {
                 session.content = SpatialContentComposition::default();
+            } else {
+                // An instance the product removed or replaced here is no
+                // longer a placed artifact's collision.
+                for id in changed {
+                    session.content.placed.remove(&id);
+                }
             }
             (candidate, receipt)
         };
@@ -1437,25 +1426,16 @@ impl RuntimeSpatialBridge {
                 .filter(|(id, _)| !removed.contains(id))
                 .map(|(id, placed)| (*id, placed))
                 .collect();
+            // An arriving id replaces whatever collision instance it named.
             let removed_instances: Vec<StaticMeshInstanceId> = removed
                 .iter()
                 .filter(|id| session.content.placed.contains_key(id))
+                .chain(arrivals.iter().map(|(placement, ..)| &placement.id))
                 .map(|id| StaticMeshInstanceId(*id))
                 .collect();
             let mut arriving = BTreeMap::new();
             for (placement, asset, navigation, translation) in &arrivals {
                 let id = placement.id;
-                let product_owned = session
-                    .scene
-                    .static_mesh_instance(StaticMeshInstanceId(id))
-                    .is_some()
-                    && !session.content.placed.contains_key(&id);
-                if placed.contains_key(&id) || arriving.contains_key(&id) || product_owned {
-                    return Err(CsharpEngineServicesError::new(
-                        "CSHARP_SPATIAL_CONTENT_IDENTITY",
-                        format!("spatial content identity {id} is already resident"),
-                    ));
-                }
                 arriving.insert(
                     id,
                     PlacedContentArtifact {
@@ -1497,7 +1477,7 @@ impl RuntimeSpatialBridge {
             let mut new_assets = BTreeMap::new();
             for (_, asset, _, _) in &arrivals {
                 if let Some(asset) = asset {
-                    if !resident.contains(&asset.id) {
+                    if in_use.contains(&asset.id) && !resident.contains(&asset.id) {
                         new_assets.insert(asset.id, asset.clone());
                     }
                 }
@@ -2067,8 +2047,7 @@ impl RuntimeSpatialBridge {
                     "navigation projection is unavailable",
                 )
             })?
-            .voxel_world()
-            .map(volumetric_navigation_source_hash)
+            .volumetric_source_hash()
             .ok_or_else(|| {
                 CsharpEngineServicesError::new(
                     "CSHARP_NAVIGATION_VOLUMETRIC_TRAVERSAL",
@@ -2105,8 +2084,7 @@ impl RuntimeSpatialBridge {
                     "navigation projection is unavailable",
                 )
             })?
-            .voxel_world()
-            .map(volumetric_navigation_source_hash)
+            .volumetric_source_hash()
             .ok_or_else(|| {
                 CsharpEngineServicesError::new(
                     "CSHARP_NAVIGATION_VOLUMETRIC_TRAVERSAL",
@@ -2363,7 +2341,10 @@ impl RuntimeSpatialBridge {
         let kind = navigation.kind();
         let revision = navigation.revision;
         let overlay_hash = navigation.volumetric_traversal.overlay_hash();
-        let Some(world) = navigation.voxel_world() else {
+        let (Some(world), Some(source_hash)) = (
+            navigation.voxel_world(),
+            navigation.volumetric_source_hash(),
+        ) else {
             return Ok(NativeNavigationVolumetricWeightedPathResult {
                 outcome: NativeNavigationPathOutcome::ProjectionUnavailable,
                 kind,
@@ -2372,7 +2353,6 @@ impl RuntimeSpatialBridge {
                 ..Default::default()
             });
         };
-        let source_hash = volumetric_navigation_source_hash(world);
         let result = find_weighted_volumetric_path(
             world,
             &navigation.volumetric_traversal,

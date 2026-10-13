@@ -538,6 +538,15 @@ impl VoxelChunk {
         out
     }
 
+    /// Whether `other` holds the same voxels: what [`Self::content_hash`]
+    /// covers, compared directly. Grid, version and dirty state are ignored.
+    pub fn same_content(&self, other: &Self) -> bool {
+        self.dims == other.dims
+            && self.cells == other.cells
+            && self.densities == other.densities
+            && self.normals == other.normals
+    }
+
     /// Deterministic FNV-1a content hash over chunk dims + voxel values.
     pub fn content_hash(&self) -> ChunkHash {
         const OFFSET: u64 = 0xcbf2_9ce4_8422_2325;

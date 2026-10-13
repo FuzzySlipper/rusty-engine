@@ -974,11 +974,6 @@ pub struct VolumetricNavReadout {
 }
 
 /// Deterministic weighted path facts over resident voxel space.
-///
-/// `source_hash` identifies the resident voxel source used for occupancy
-/// admission. It is intentionally distinct from the planar surface projection
-/// hash because a volumetric route may occupy cells that are not walkable
-/// surface cells at all.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WeightedVolumetricNavPathReadout {
     pub outcome: WeightedNavPathOutcome,
@@ -986,7 +981,6 @@ pub struct WeightedVolumetricNavPathReadout {
     pub total_cost: u64,
     pub path: Vec<VoxelCoord>,
     pub path_hash: u64,
-    pub source_hash: u64,
     pub overlay_hash: u64,
 }
 
@@ -1853,7 +1847,6 @@ pub fn find_weighted_volumetric_path(
         return Err(WeightedVolumetricNavPathError::GoalBlocked { goal: query.goal });
     }
 
-    let source_hash = volumetric_navigation_source_hash(world);
     if query.start == query.goal {
         let path = vec![query.start];
         return Ok(weighted_volumetric_readout(
@@ -1861,7 +1854,6 @@ pub fn find_weighted_volumetric_path(
             1,
             0,
             path,
-            source_hash,
             overlay.overlay_hash(),
         ));
     }
@@ -1886,7 +1878,6 @@ pub fn find_weighted_volumetric_path(
                 visited,
                 0,
                 Vec::new(),
-                source_hash,
                 overlay.overlay_hash(),
             ));
         }
@@ -1898,7 +1889,6 @@ pub fn find_weighted_volumetric_path(
                 visited,
                 cost,
                 path,
-                source_hash,
                 overlay.overlay_hash(),
             ));
         }
@@ -1927,7 +1917,6 @@ pub fn find_weighted_volumetric_path(
         visited,
         0,
         Vec::new(),
-        source_hash,
         overlay.overlay_hash(),
     ))
 }
@@ -2072,7 +2061,6 @@ fn weighted_volumetric_readout(
     visited: usize,
     total_cost: u64,
     path: Vec<VoxelCoord>,
-    source_hash: u64,
     overlay_hash: u64,
 ) -> WeightedVolumetricNavPathReadout {
     WeightedVolumetricNavPathReadout {
@@ -2081,7 +2069,6 @@ fn weighted_volumetric_readout(
         total_cost,
         path_hash: hash_path(&path),
         path,
-        source_hash,
         overlay_hash,
     }
 }
@@ -2185,34 +2172,6 @@ fn hash_volumetric_traversal_cells(
         feed_coord(&mut h, cell.coord);
         feed_byte(&mut h, u8::from(cell.allowed));
         feed_u64(&mut h, cell.cost);
-    }
-    h
-}
-
-/// Stable identity for the resident voxel source used by volumetric queries.
-///
-/// This intentionally does not use the planar `NavProjection` hash. It covers
-/// the grid identity/shape/origin plus resident chunk coordinates and content,
-/// so callers can distinguish a volumetric occupancy source even when its
-/// surface projection is unchanged.
-pub fn volumetric_navigation_source_hash(world: &VoxelWorld) -> u64 {
-    let grid = world.grid();
-    let mut h = fnv_offset();
-    feed_u64(&mut h, u64::from(grid.id().raw()));
-    feed_u64(&mut h, grid.voxel_size().to_bits());
-    for dimension in grid.chunk_dims().to_array() {
-        feed_u64(&mut h, u64::from(dimension));
-    }
-    for value in grid.origin_world().to_array() {
-        feed_u64(&mut h, value.to_bits());
-    }
-    let residents = world.resident_chunks().collect::<Vec<_>>();
-    feed_u64(&mut h, residents.len() as u64);
-    for (coordinate, chunk) in residents {
-        for value in coordinate.to_array() {
-            feed_i64(&mut h, value);
-        }
-        feed_u64(&mut h, chunk.content_hash().0);
     }
     h
 }
@@ -3342,10 +3301,6 @@ mod tests {
         assert_eq!(readout.path, path);
         assert_eq!(readout.total_cost, 7);
         assert_eq!(readout.overlay_hash, forward.overlay_hash());
-        assert_eq!(
-            readout.source_hash,
-            volumetric_navigation_source_hash(&world)
-        );
     }
 
     #[test]

@@ -106,11 +106,12 @@ with a zero reference uses its raw vertex/triangle arrays.
 
 For streaming authored collision cells, use `Spatial.ApplyCollisionResidency`
 with stable asset and instance IDs. Its arrays are upserts; `RemovedAssets` and
-`RemovedInstances` remove selected IDs before upserts are applied. Missing
-removals are harmless. A whole delta commits atomically, and removing an asset
-still referenced by a retained instance fails without changing the scene.
-Unchanged geometry and prepared colliders are shared; admission does not copy
-or rebuild every resident cell. Use current local-frame instance transforms;
+`RemovedInstances` remove selected IDs before upserts are applied; an ID
+repeated in one delta takes its last entry. Missing removals are harmless. A
+whole delta commits atomically, and removing an asset still referenced by a
+retained instance fails without changing the scene. A delta touches only the
+IDs it names and the instances of an asset whose geometry it replaces;
+unchanged geometry and prepared colliders are shared. Use current local-frame instance transforms;
 `WorldOrigin` rebases these same retained colliders. The product owns cell
 selection, unload/reload policy and its authored identity map. This path uses
 ordinary static-mesh collision/query ownership, without a dense voxel volume
