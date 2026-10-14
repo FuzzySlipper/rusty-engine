@@ -1,16 +1,11 @@
 use std::collections::BTreeSet;
 
 use core_assets::{AssetId, AssetKind};
+use core_space::MAX_VOXEL_COORDINATE_ABS;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::codec::{MAX_MATERIAL_MAPPINGS, MAX_REPRESENTED_VOXELS, MAX_STRING_BYTES};
-
-/// Largest lattice span representable by the durable +/-1,000,000-cell
-/// coordinate contract. Conversion work and retained output have independent,
-/// substantially tighter measured limits; this is not a product-tuning cap.
-pub const MAX_CONVERSION_RESOLUTION_AXIS: u32 = 2_000_001;
-pub const MAX_CONVERSION_CELLS: u64 = 8_000_012_000_006_000_001;
+use crate::codec::MAX_REPRESENTED_VOXELS;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -167,22 +162,11 @@ fn validate_settings(
     settings: &VoxelConversionSettings,
     diagnostics: &mut Vec<VoxelConversionInputDiagnostic>,
 ) {
-    let cells = settings
-        .resolution
-        .into_iter()
-        .try_fold(1u64, |total, axis| total.checked_mul(u64::from(axis)));
-    if settings
-        .resolution
-        .iter()
-        .any(|axis| !(1..=MAX_CONVERSION_RESOLUTION_AXIS).contains(axis))
-        || cells.is_none_or(|cells| cells > MAX_CONVERSION_CELLS)
-    {
+    if settings.resolution.contains(&0) {
         diagnostics.push(input_diagnostic(
-            "conversion.resourceLimit",
+            "conversion.invalidSettings",
             "settings.resolution",
-            format!(
-                "each resolution axis must be 1..={MAX_CONVERSION_RESOLUTION_AXIS} and the grid may contain at most {MAX_CONVERSION_CELLS} cells"
-            ),
+            "each resolution axis must be nonzero",
         ));
     }
     if !settings.cell_size.is_finite() || settings.cell_size <= 0.0 {
@@ -192,32 +176,27 @@ fn validate_settings(
             "cellSize must be finite and greater than zero",
         ));
     }
-    if !(1..=64).contains(&settings.chunk_size) {
-        diagnostics.push(input_diagnostic(
-            "conversion.invalidSettings",
-            "settings.chunkSize",
-            "chunkSize must be in 1..=64",
-        ));
-    }
     if settings
         .origin
         .iter()
-        .any(|coordinate| coordinate.unsigned_abs() > 1_000_000)
+        .any(|coordinate| coordinate.unsigned_abs() > MAX_VOXEL_COORDINATE_ABS as u64)
     {
         diagnostics.push(input_diagnostic(
             "conversion.resourceLimit",
             "settings.origin",
-            "origin coordinates must stay within +/-1,000,000 cells",
+            format!("origin coordinates must stay within +/-{MAX_VOXEL_COORDINATE_ABS} cells"),
         ));
     }
     for (axis, (origin, resolution)) in settings.origin.iter().zip(settings.resolution).enumerate()
     {
         let mapped_max = origin.checked_add(i64::from(resolution.saturating_sub(1)));
-        if mapped_max.is_none_or(|coordinate| coordinate.unsigned_abs() > 1_000_000) {
+        if mapped_max
+            .is_none_or(|coordinate| coordinate.unsigned_abs() > MAX_VOXEL_COORDINATE_ABS as u64)
+        {
             diagnostics.push(input_diagnostic(
                 "conversion.resourceLimit",
                 format!("settings.origin[{axis}]"),
-                "origin plus resolution exceeds +/-1,000,000 cells",
+                format!("origin plus resolution exceeds +/-{MAX_VOXEL_COORDINATE_ABS} cells"),
             ));
         }
     }
@@ -230,31 +209,27 @@ fn validate_settings(
             format!("maxOutputVoxels must be in 1..={MAX_REPRESENTED_VOXELS}"),
         ));
     }
-    if settings.material_map.is_empty() || settings.material_map.len() > MAX_MATERIAL_MAPPINGS {
+    if settings.material_map.is_empty() {
         diagnostics.push(input_diagnostic(
             "conversion.invalidMaterialMap",
             "settings.materialMap",
-            format!("materialMap must contain 1..={MAX_MATERIAL_MAPPINGS} entries"),
+            "materialMap must not be empty",
         ));
     }
-    if settings.material_palette.is_empty()
-        || settings.material_palette.len() > MAX_MATERIAL_MAPPINGS
-    {
+    if settings.material_palette.is_empty() {
         diagnostics.push(input_diagnostic(
             "conversion.invalidMaterialPalette",
             "settings.materialPalette",
-            format!("materialPalette must contain 1..={MAX_MATERIAL_MAPPINGS} entries"),
+            "materialPalette must not be empty",
         ));
     }
     let mut palette_slots = BTreeSet::new();
     for (index, binding) in settings.material_palette.iter().enumerate() {
-        if !(1..=4_095).contains(&binding.material_slot)
-            || !palette_slots.insert(binding.material_slot)
-        {
+        if binding.material_slot == 0 || !palette_slots.insert(binding.material_slot) {
             diagnostics.push(input_diagnostic(
                 "conversion.invalidMaterialPalette",
                 format!("settings.materialPalette[{index}].materialSlot"),
-                "material slots must be unique and in 1..=4095",
+                "material slots must be unique and nonzero",
             ));
         }
         match AssetId::parse(&binding.material_asset_id) {
@@ -287,11 +262,11 @@ fn validate_settings(
                 "source material slots must be unique",
             ));
         }
-        if !(1..=4_095).contains(&mapping.voxel_material_slot) {
+        if mapping.voxel_material_slot == 0 {
             diagnostics.push(input_diagnostic(
                 "conversion.invalidMaterialMap",
                 format!("settings.materialMap[{index}].voxelMaterialSlot"),
-                "voxel material slots must be in 1..=4095",
+                "voxel material slots must be nonzero",
             ));
         } else if !palette_slots.contains(&mapping.voxel_material_slot) {
             diagnostics.push(input_diagnostic(
@@ -316,11 +291,11 @@ fn validate_string(
     diagnostics: &mut Vec<VoxelConversionInputDiagnostic>,
 ) {
     let path = path.into();
-    if value.trim().is_empty() || value.len() > MAX_STRING_BYTES {
+    if value.trim().is_empty() {
         diagnostics.push(input_diagnostic(
             "conversion.invalidString",
             path,
-            format!("value must contain 1..={MAX_STRING_BYTES} UTF-8 bytes"),
+            "value must not be empty",
         ));
     }
 }

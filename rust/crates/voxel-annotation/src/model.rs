@@ -2,29 +2,6 @@ use serde::{Deserialize, Serialize};
 
 pub const VOXEL_ANNOTATION_SCHEMA_VERSION: u32 = 1;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct VoxelAnnotationLimits {
-    pub max_regions: usize,
-    pub max_runs_per_region: usize,
-    pub max_total_assigned_cells: u64,
-    pub max_tags_per_region: usize,
-    pub max_provenance_refs: usize,
-    pub max_string_bytes: usize,
-}
-
-impl Default for VoxelAnnotationLimits {
-    fn default() -> Self {
-        Self {
-            max_regions: 4_096,
-            max_runs_per_region: 16_384,
-            max_total_assigned_cells: 8_388_608,
-            max_tags_per_region: 32,
-            max_provenance_refs: 4_096,
-            max_string_bytes: 4_096,
-        }
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum VoxelAnnotationKind {
@@ -62,7 +39,7 @@ pub enum VoxelAnnotationDiagnosticCode {
     InvalidSparseRun,
     DuplicateCell,
     RegionOutOfBounds,
-    QuotaExceeded,
+    InvalidText,
     InvalidProvenance,
     ContentHashMismatch,
 }

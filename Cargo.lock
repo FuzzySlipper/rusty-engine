@@ -7599,6 +7599,7 @@ name = "voxel-asset"
 version = "0.1.0"
 dependencies = [
  "core-assets",
+ "core-space",
  "serde",
  "serde_json",
  "serde_path_to_error",
@@ -7610,6 +7611,7 @@ name = "voxel-convert"
 version = "0.1.0"
 dependencies = [
  "core-assets",
+ "core-space",
  "gltf",
  "serde",
  "serde_json",

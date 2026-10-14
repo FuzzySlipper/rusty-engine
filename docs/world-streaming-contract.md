@@ -45,7 +45,7 @@ A solid cell stores a material slot and fifteen state bits: two low bits encode
 quarter turns about +Y; thirteen upper bits encode a product-defined variant or
 stage (0–8191). Use `VoxelCellState.Encode(quarterTurns, variant)` in C#.
 A quarter turn maps authored +X to world -Z. State zero preserves ordinary
-unrotated cells. Material IDs retain their own 1–4095 range; never pack state
+unrotated cells. Material IDs keep their own 1–65535 range; never pack state
 into material IDs. Empty cells have state zero.
 
 `VoxelEdit.State` and `VoxelReadout.State` provide write and read access. `VoxelResidencyTransaction.States` is either empty (all default)

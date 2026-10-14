@@ -362,7 +362,7 @@ pub struct NativeVoxelAnnotationTag {
 }
 
 /// Atomically replace one region's tags at an expected owner hash. `tags` is
-/// a synchronous, bounded borrowed array with no retained product pointers.
+/// a synchronous borrowed array with no retained product pointers.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeSetVoxelAnnotationTagsRequest {

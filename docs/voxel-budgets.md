@@ -30,9 +30,14 @@ A failed edit changes nothing:
 
 | Boundary | Limit | Owner |
 | --- | ---: | --- |
-| Voxel coordinate | ±1,000,000 per axis | `engine-spatial/src/voxel_edit.rs` |
-| Solid material slot | 1–4,095 | same |
+| Voxel coordinate | ±(2²⁴ − 1) per axis | `core-space` `MAX_VOXEL_COORDINATE_ABS` |
+| Solid material slot | 1–65,535 (0 is empty) | `engine-spatial/src/voxel_edit.rs` |
 | Chunk edge | 1–64 cells | `engine-spatial/src/lib.rs` |
+
+The coordinate bound is where voxel surface tile coordinates, carried in `f32`,
+stop being exact: the far corner of the outermost voxel is 2²⁴. Scenes, edits,
+residency, voxel assets and voxel object frames all refuse a coordinate past it
+when it enters, so meshing never meets one.
 
 Edit, residency, scene-building and primitive calls have no count caps.
 

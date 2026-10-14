@@ -377,8 +377,10 @@ fn select_frame(
                 .iter()
                 .copied()
                 .sum::<u64>();
-            let cycle = clip.duration_micros + reverse_duration;
-            let offset = elapsed_micros % cycle;
+            // A clip may last most of u64 microseconds, so its forward and
+            // reverse passes together may not fit.
+            let cycle = u128::from(clip.duration_micros) + u128::from(reverse_duration);
+            let offset = (u128::from(elapsed_micros) % cycle) as u64;
             if offset < clip.duration_micros {
                 return (locate_forward(clip, offset), false);
             }

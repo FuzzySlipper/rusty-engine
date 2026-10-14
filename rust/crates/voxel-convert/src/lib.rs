@@ -72,5 +72,4 @@ pub use source::{
     MeshSourceRef, MeshSourceTextureCoordinates,
 };
 pub use store::{convert_and_install, decode_conversion_request};
-pub use voxel_asset::{MAX_CONVERSION_CELLS, MAX_CONVERSION_RESOLUTION_AXIS};
 pub use voxelize::MAX_GEOMETRIC_VOXELIZATION_WORK;

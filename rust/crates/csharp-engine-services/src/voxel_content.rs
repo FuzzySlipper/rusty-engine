@@ -2430,8 +2430,7 @@ mod tests {
     use std::collections::BTreeMap;
     use voxel_annotation::{
         encode_annotation_layer, finalize_annotation_draft, VoxelAnnotationLayerDraft,
-        VoxelAnnotationLimits, VoxelAnnotationRegion, VoxelAnnotationSelection,
-        VoxelAnnotationSparseRun,
+        VoxelAnnotationRegion, VoxelAnnotationSelection, VoxelAnnotationSparseRun,
     };
     use voxel_asset::{
         encode_voxel_asset, encode_voxel_object, with_computed_content_hash,
@@ -3667,10 +3666,7 @@ mod tests {
             0,
             "bounds outside the target are refused by the owner"
         );
-        let many_tags: Vec<String> = (0..=VoxelAnnotationLimits::default().max_tags_per_region)
-            .map(|index| format!("tag-{index}"))
-            .collect();
-        let many_tags: Vec<_> = many_tags
+        let empty_tag: Vec<_> = ["kept", " "]
             .iter()
             .map(|tag| NativeVoxelAnnotationTag {
                 value: NativeUtf8Slice {
@@ -3690,15 +3686,15 @@ mod tests {
                             bytes: region_a.as_ptr(),
                             len: region_a.len(),
                         },
-                        tags: many_tags.as_ptr(),
-                        tags_len: many_tags.len(),
+                        tags: empty_tag.as_ptr(),
+                        tags_len: empty_tag.len(),
                     },
                     &mut refused,
                     std::ptr::null_mut(),
                 )
             },
             0,
-            "the owner enforces the tag quota"
+            "the owner refuses an empty tag"
         );
         let retained = bridge
             .annotation(annotation_handle)
@@ -4062,7 +4058,6 @@ mod tests {
                 provenance: vec![],
             },
             asset,
-            Default::default(),
         )
         .expect("valid annotation")
     }

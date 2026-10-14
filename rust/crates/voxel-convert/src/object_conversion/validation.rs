@@ -1,9 +1,9 @@
 use std::collections::BTreeSet;
 
 use core_assets::{AssetId, AssetKind};
+use core_space::MAX_VOXEL_COORDINATE_ABS;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
-use voxel_asset::{MAX_STRING_BYTES, MAX_VOXEL_OBJECT_CLIPS};
 
 use super::{
     VoxelObjectClipConversionRequest, VoxelObjectConversionPlanRequest,
@@ -74,12 +74,14 @@ pub(super) fn validate_request(
         .settings
         .pivot
         .iter()
-        .any(|value| !value.is_finite() || value.abs() > 1_000_000.0)
+        .any(|value| !value.is_finite() || value.abs() > MAX_VOXEL_COORDINATE_ABS as f64)
     {
         return Err(ConversionError::one(
             "conversion.invalidObjectGrid",
             "settings.pivot",
-            "pivot components must be finite and stay within +/-1,000,000 cells",
+            format!(
+                "pivot components must be finite and stay within +/-{MAX_VOXEL_COORDINATE_ABS} cells"
+            ),
         ));
     }
     validate_bounded_string(&request.source_path, "sourcePath")?;
@@ -93,11 +95,6 @@ pub(super) fn validate_request(
 pub(super) fn canonical_clip_requests(
     request: &VoxelObjectConversionPlanRequest,
 ) -> Result<Vec<VoxelObjectClipConversionRequest>, ConversionError> {
-    if request.clips.len() > MAX_VOXEL_OBJECT_CLIPS {
-        return Err(aggregate_limit(
-            "selected clip count exceeds the durable object limit",
-        ));
-    }
     let mut output_ids = BTreeSet::new();
     for clip in &request.clips {
         validate_bounded_string(&clip.source_clip_name, "clips.sourceClipName")?;
@@ -166,7 +163,6 @@ pub(super) fn aggregate_limit(message: &str) -> ConversionError {
 
 fn validate_clip_id(value: &str) -> Result<(), ConversionError> {
     let valid = !value.is_empty()
-        && value.len() <= MAX_STRING_BYTES
         && value.split('/').all(|segment| {
             !segment.is_empty()
                 && !segment.starts_with('-')
@@ -187,11 +183,11 @@ fn validate_clip_id(value: &str) -> Result<(), ConversionError> {
 }
 
 fn validate_bounded_string(value: &str, path: &'static str) -> Result<(), ConversionError> {
-    if value.trim().is_empty() || value.len() > MAX_STRING_BYTES {
+    if value.trim().is_empty() {
         return Err(ConversionError::one(
             "conversion.invalidString",
             path,
-            format!("value must contain 1..={MAX_STRING_BYTES} UTF-8 bytes"),
+            "value must not be empty",
         ));
     }
     Ok(())

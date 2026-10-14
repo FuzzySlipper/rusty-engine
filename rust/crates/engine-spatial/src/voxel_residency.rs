@@ -12,7 +12,7 @@ use svc_volume::VoxelChunk;
 
 use crate::{
     CollisionSceneError, SurfaceMode, VoxelCollisionScene, VoxelProjectionRevisions,
-    VoxelSourceRevision, MAX_VOXEL_COORDINATE_ABS, MAX_VOXEL_MATERIAL_SLOT,
+    VoxelSourceRevision, MAX_VOXEL_COORDINATE_ABS,
 };
 
 /// Stable signed identity of one canonical world chunk.
@@ -73,8 +73,7 @@ impl VoxelChunkContentHash {
 
 /// Complete dense local authority in X-fastest, then Y, then Z order.
 ///
-/// Slot zero is empty. Positive slots name semantic-neutral material entries and
-/// are validated against [`MAX_VOXEL_MATERIAL_SLOT`] before candidate creation.
+/// Slot zero is empty. Every other slot names a semantic-neutral material entry.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct VoxelChunkPayload {
@@ -177,13 +176,6 @@ pub enum VoxelChunkResidencyRejection {
         chunk: VoxelChunkIdentity,
         expected: usize,
         actual: usize,
-    },
-    InvalidMaterialSlot {
-        operation_index: usize,
-        chunk: VoxelChunkIdentity,
-        slot_index: usize,
-        material_slot: u16,
-        maximum: u16,
     },
     /// Every operation already matched the resident set.
     NoChanges {
@@ -459,28 +451,18 @@ fn validate_payload(
         .copied()
         .enumerate()
         .map(|(slot_index, material_slot)| {
-            if material_slot > MAX_VOXEL_MATERIAL_SLOT {
-                Err(VoxelChunkResidencyApplyError::Rejected(
-                    VoxelChunkResidencyRejection::InvalidMaterialSlot {
-                        operation_index,
-                        chunk: identity,
-                        slot_index,
-                        material_slot,
-                        maximum: MAX_VOXEL_MATERIAL_SLOT,
-                    },
-                ))
-            } else if material_slot == 0 {
-                Ok(VoxelValue::EMPTY)
+            if material_slot == 0 {
+                VoxelValue::EMPTY
             } else {
-                Ok(VoxelValue::solid_raw(material_slot).with_state(
+                VoxelValue::solid_raw(material_slot).with_state(
                     core_voxel::VoxelState::from_raw(
                         payload.states.get(slot_index).copied().unwrap_or(0),
                     )
                     .expect("validated state"),
-                ))
+                )
             }
         })
-        .collect::<Result<_, _>>()?;
+        .collect();
     if !payload.densities.is_empty()
         && (payload.densities.len() != expected_slot_count
             || payload.densities.iter().any(|density| !density.is_finite()))

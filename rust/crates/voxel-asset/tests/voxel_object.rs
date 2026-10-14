@@ -1,3 +1,4 @@
+use core_space::MAX_VOXEL_COORDINATE_ABS;
 use voxel_asset::{
     decode_voxel_object, encode_voxel_object, validate_voxel_object,
     with_computed_voxel_object_hashes, VoxelAssetBounds, VoxelAssetMaterialBinding,
@@ -5,8 +6,7 @@ use voxel_asset::{
     VoxelObjectAsset, VoxelObjectClip, VoxelObjectCollisionPrimitive, VoxelObjectFrameAnchor,
     VoxelObjectFrameCollision, VoxelObjectGrid, VoxelObjectHitRegion, VoxelObjectProvenance,
     VoxelObjectProvenanceKind, VoxelObjectSourceClipProvenance, VoxelRepresentation,
-    VoxelRepresentationKind, VoxelSparseRun, MAX_STRING_BYTES, MAX_VOXEL_OBJECT_ANCHORS_PER_FRAME,
-    MAX_VOXEL_OBJECT_HIT_REGIONS_PER_FRAME, MAX_VOXEL_OBJECT_TOTAL_VOXELS,
+    VoxelRepresentationKind, VoxelSparseRun, MAX_REPRESENTED_VOXELS, MAX_VOXEL_OBJECT_TOTAL_VOXELS,
     VOXEL_OBJECT_SCHEMA_VERSION,
 };
 
@@ -177,16 +177,17 @@ fn frame_facts_are_bounded_canonical_and_content_hash_bound() {
         edited
     );
 
-    let mut exact = object();
-    exact.clips[1].frames[0].anchors = (0..MAX_VOXEL_OBJECT_ANCHORS_PER_FRAME)
+    // A frame carries as many anchors and hit regions as it is authored with.
+    let mut many = object();
+    many.clips[1].frames[0].anchors = (0..100)
         .map(|index| VoxelObjectFrameAnchor {
             id: format!("anchor-{index}"),
             position: [index as f64, 0.0, 0.0],
         })
         .collect();
-    exact.clips[1].frames[0].collision = Some(VoxelObjectFrameCollision {
+    many.clips[1].frames[0].collision = Some(VoxelObjectFrameCollision {
         body: None,
-        hit_regions: (0..MAX_VOXEL_OBJECT_HIT_REGIONS_PER_FRAME)
+        hit_regions: (0..100)
             .map(|index| VoxelObjectHitRegion {
                 id: format!("region-{index}"),
                 primitive: VoxelObjectCollisionPrimitive::Box {
@@ -196,33 +197,10 @@ fn frame_facts_are_bounded_canonical_and_content_hash_bound() {
             })
             .collect(),
     });
-    with_computed_voxel_object_hashes(exact.clone()).expect("exact limits are admitted");
-    exact.clips[1].frames[0]
-        .anchors
-        .push(VoxelObjectFrameAnchor {
-            id: "one-over".to_owned(),
-            position: [0.0, 0.0, 0.0],
-        });
-    exact.clips[1].frames[0]
-        .collision
-        .as_mut()
-        .unwrap()
-        .hit_regions
-        .push(VoxelObjectHitRegion {
-            id: "one-over".to_owned(),
-            primitive: VoxelObjectCollisionPrimitive::Box {
-                center: [0.0, 0.0, 0.0],
-                half_extents: [1.0, 1.0, 1.0],
-            },
-        });
-    let error = with_computed_voxel_object_hashes(exact).unwrap_err();
+    let many = with_computed_voxel_object_hashes(many).unwrap();
     assert_eq!(
-        error
-            .diagnostics()
-            .iter()
-            .filter(|item| item.code == "voxelObject.resourceLimit")
-            .count(),
-        2
+        decode_voxel_object(&encode_voxel_object(&many).unwrap()).unwrap(),
+        many
     );
 }
 
@@ -361,7 +339,45 @@ fn clip_timing_identity_and_aggregate_limits_fail_closed() {
                 .contains(&MAX_VOXEL_OBJECT_TOTAL_VOXELS.to_string())
     }));
 
+    // One frame representing more than a frame may is refused from its runs,
+    // before anything expands them.
+    let mut oversized_frame = object();
+    oversized_frame.default_frame = frame([0, 0, 0], MAX_REPRESENTED_VOXELS as u32 + 1, 1);
+    let error = with_computed_voxel_object_hashes(oversized_frame).unwrap_err();
+    assert!(error.diagnostics().iter().any(|item| {
+        item.code == "voxelFrame.resourceLimit"
+            && item.path == "defaultFrame.representation.sparseRuns"
+    }));
+
     assert_eq!(encode_voxel_object(&baseline).unwrap(), baseline_bytes);
+}
+
+#[test]
+fn frames_reach_the_voxel_coordinate_bound_with_any_nonzero_slot() {
+    let far_frame = |start_x: i64| frame([start_x, -MAX_VOXEL_COORDINATE_ABS, 0], 2, u16::MAX);
+    let mut far = object();
+    far.clips.clear();
+    far.default_clip = None;
+    far.provenance.source_clips.clear();
+    far.material_palette[1].material_slot = u16::MAX;
+    far.material_map[1].voxel_material_slot = u16::MAX;
+    far.default_frame = far_frame(MAX_VOXEL_COORDINATE_ABS - 1);
+    far.bounds = far.default_frame.bounds;
+    let mut past = far.clone();
+
+    let far = with_computed_voxel_object_hashes(far).unwrap();
+    assert_eq!(
+        decode_voxel_object(&encode_voxel_object(&far).unwrap()).unwrap(),
+        far
+    );
+
+    past.default_frame = far_frame(MAX_VOXEL_COORDINATE_ABS);
+    past.bounds = past.default_frame.bounds;
+    let error = with_computed_voxel_object_hashes(past).unwrap_err();
+    assert!(error
+        .diagnostics()
+        .iter()
+        .any(|item| item.code == "voxelFrame.resourceLimit"));
 }
 
 #[test]
@@ -402,57 +418,6 @@ fn strict_object_decode_and_frame_selection_reject_drift() {
 
     assert!(object.resolve_clip_frame("missing", 0).is_err());
     assert!(object.resolve_clip_frame("walk", 99).is_err());
-}
-
-#[test]
-fn object_and_material_identities_enforce_the_string_byte_limit() {
-    let mut at_limit = object();
-    at_limit.asset_id = identity_with_byte_len("voxel-object/", MAX_STRING_BYTES);
-    at_limit.material_palette[0].material_asset_id =
-        identity_with_byte_len("material/", MAX_STRING_BYTES);
-    let at_limit = with_computed_voxel_object_hashes(at_limit).unwrap();
-    let encoded = encode_voxel_object(&at_limit).unwrap();
-    let decoded = decode_voxel_object(&encoded).unwrap();
-    assert_eq!(decoded.asset_id.len(), MAX_STRING_BYTES);
-    assert!(decoded
-        .material_palette
-        .iter()
-        .any(|binding| binding.material_asset_id.len() == MAX_STRING_BYTES));
-
-    let mut over_limit = object();
-    over_limit.asset_id = identity_with_byte_len("voxel-object/", MAX_STRING_BYTES + 1);
-    over_limit.material_palette[0].material_asset_id =
-        identity_with_byte_len("material/", MAX_STRING_BYTES + 1);
-    let construction_error = with_computed_voxel_object_hashes(over_limit).unwrap_err();
-    assert_identity_limit_diagnostics(&construction_error);
-
-    let mut value: serde_json::Value = serde_json::from_str(&encoded).unwrap();
-    value["assetId"] = serde_json::json!(identity_with_byte_len(
-        "voxel-object/",
-        MAX_STRING_BYTES + 1
-    ));
-    value["materialPalette"][0]["materialAssetId"] =
-        serde_json::json!(identity_with_byte_len("material/", MAX_STRING_BYTES + 1));
-    let decode_error = decode_voxel_object(&serde_json::to_string(&value).unwrap()).unwrap_err();
-    assert_identity_limit_diagnostics(&decode_error);
-}
-
-fn assert_identity_limit_diagnostics(error: &voxel_asset::VoxelObjectError) {
-    assert!(error.diagnostics().iter().any(|item| {
-        item.code == "voxelObject.invalidAssetId"
-            && item.path == "assetId"
-            && item.message.contains(&MAX_STRING_BYTES.to_string())
-    }));
-    assert!(error.diagnostics().iter().any(|item| {
-        item.code == "voxelObject.invalidMaterialReference"
-            && item.path == "materialPalette[0].materialAssetId"
-            && item.message.contains(&MAX_STRING_BYTES.to_string())
-    }));
-}
-
-fn identity_with_byte_len(prefix: &str, byte_len: usize) -> String {
-    assert!(prefix.len() < byte_len);
-    format!("{prefix}{}", "a".repeat(byte_len - prefix.len()))
 }
 
 fn object() -> VoxelObjectAsset {

@@ -12,10 +12,8 @@ use core_space::{ChunkCoord, VoxelCoord};
 use core_voxel::{VoxelMaterialId, VoxelState, VoxelValue};
 use serde::{Deserialize, Serialize};
 use svc_volume::VoxelChunk;
-/// Keeps chunk addressing and projection work in a reviewable world-space span.
-pub const MAX_VOXEL_COORDINATE_ABS: i64 = 1_000_000;
-/// Slot zero is empty and the bounded positive range is authored material data.
-pub const MAX_VOXEL_MATERIAL_SLOT: u16 = 4_095;
+
+pub use core_space::MAX_VOXEL_COORDINATE_ABS;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VoxelAuthorityValidationError {
@@ -27,9 +25,9 @@ pub enum VoxelAuthorityValidationError {
     InvalidState {
         state: u16,
     },
+    /// Slot zero is empty, so a solid voxel cannot name it.
     InvalidMaterialSlot {
         material_slot: u16,
-        maximum: u16,
     },
 }
 
@@ -41,8 +39,9 @@ impl std::fmt::Display for VoxelAuthorityValidationError {
 
 impl std::error::Error for VoxelAuthorityValidationError {}
 
-/// Apply the same practical world bound to authored, imported, restored, and
-/// live-edited voxel authority.
+/// Apply the same coordinate bound to authored, imported, restored, and
+/// live-edited voxel authority, so meshing never meets a coordinate its `f32`
+/// tile coordinates cannot hold.
 pub fn validate_voxel_address(address: [i64; 3]) -> Result<(), VoxelAuthorityValidationError> {
     for (axis, coordinate) in address.into_iter().enumerate() {
         if coordinate.unsigned_abs() > MAX_VOXEL_COORDINATE_ABS as u64 {
@@ -59,11 +58,8 @@ pub fn validate_voxel_address(address: [i64; 3]) -> Result<(), VoxelAuthorityVal
 pub fn validate_voxel_material_slot(
     material_slot: u16,
 ) -> Result<(), VoxelAuthorityValidationError> {
-    if !(1..=MAX_VOXEL_MATERIAL_SLOT).contains(&material_slot) {
-        return Err(VoxelAuthorityValidationError::InvalidMaterialSlot {
-            material_slot,
-            maximum: MAX_VOXEL_MATERIAL_SLOT,
-        });
+    if material_slot == 0 {
+        return Err(VoxelAuthorityValidationError::InvalidMaterialSlot { material_slot });
     }
     Ok(())
 }
@@ -147,7 +143,6 @@ pub enum VoxelEditRejection {
     InvalidMaterialSlot {
         edit_index: usize,
         material_slot: u16,
-        maximum: u16,
     },
     /// Every edit already matched the scene.
     NoChanges,
@@ -367,13 +362,10 @@ fn validate_edit(
         });
     }
     if let VoxelEdit::Set { material_slot, .. } | VoxelEdit::SetState { material_slot, .. } = edit {
-        if let Err(VoxelAuthorityValidationError::InvalidMaterialSlot { maximum, .. }) =
-            validate_voxel_material_slot(material_slot)
-        {
+        if validate_voxel_material_slot(material_slot).is_err() {
             return Err(VoxelEditRejection::InvalidMaterialSlot {
                 edit_index,
                 material_slot,
-                maximum,
             });
         }
     }

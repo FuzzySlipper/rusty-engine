@@ -47,7 +47,7 @@ pub use direction::{Axis, Direction6, Face};
 pub use grid::{ChunkDims, GridId, SpatialCellCoord, SpatialGridSpec, VoxelGridSpec};
 pub use origin::{GlobalPosition, GlobalPositionError, WorldOrigin};
 pub use region::{ChunkRegion, VoxelRegion};
-pub use voxel::{ChunkCoord, LocalVoxelCoord, VoxelCoord};
+pub use voxel::{ChunkCoord, LocalVoxelCoord, VoxelCoord, MAX_VOXEL_COORDINATE_ABS};
 pub use world::{WorldPos, WorldScalar, WorldVec};
 
 /// Floor division of `a` by a strictly positive `b` (`b > 0`).

@@ -1,12 +1,13 @@
+use core_space::MAX_VOXEL_COORDINATE_ABS;
 use voxel_asset::{
     conversion_settings_sha256, decode_voxel_asset, encode_voxel_asset, replace_voxel_palette,
-    validate_conversion_request, validate_voxel_asset, with_computed_content_hash, VoxelAsset,
-    VoxelAssetBounds, VoxelAssetGrid, VoxelAssetMaterialBinding, VoxelAssetMaterialMapping,
-    VoxelAssetProvenance, VoxelAssetProvenanceKind, VoxelConversionFitPolicy, VoxelConversionMode,
+    resolve_voxel_asset, validate_conversion_request, validate_voxel_asset,
+    with_computed_content_hash, VoxelAsset, VoxelAssetBounds, VoxelAssetGrid,
+    VoxelAssetMaterialBinding, VoxelAssetMaterialMapping, VoxelAssetProvenance,
+    VoxelAssetProvenanceKind, VoxelConversionFitPolicy, VoxelConversionMode,
     VoxelConversionOriginPolicy, VoxelConversionRequest, VoxelConversionSettings,
     VoxelCoordinateSystem, VoxelPaletteUpdateError, VoxelPaletteUpdateRequest, VoxelRepresentation,
-    VoxelRepresentationKind, VoxelSparseRun, MAX_CONVERSION_RESOLUTION_AXIS,
-    VOXEL_ASSET_SCHEMA_VERSION,
+    VoxelRepresentationKind, VoxelSparseRun, VOXEL_ASSET_SCHEMA_VERSION,
 };
 
 #[test]
@@ -221,6 +222,60 @@ fn schema_provenance_and_sparse_resource_limits_are_structured() {
 }
 
 #[test]
+fn assets_reach_the_coordinate_bound_with_wide_palettes_and_long_names() {
+    let mut source = valid_asset();
+    source.grid.origin = [
+        MAX_VOXEL_COORDINATE_ABS - 2,
+        -MAX_VOXEL_COORDINATE_ABS,
+        MAX_VOXEL_COORDINATE_ABS,
+    ];
+    source.material_palette = (1..5_000)
+        .chain([u16::MAX])
+        .map(|material_slot| VoxelAssetMaterialBinding {
+            material_slot,
+            material_asset_id: format!("material/slot-{material_slot}"),
+            display_name: Some(format!("Slot {material_slot}")),
+        })
+        .collect();
+    source.material_palette[0].display_name = Some("n".repeat(10 * 1024));
+    source.material_map = (0..5_000)
+        .map(|source_material_slot| VoxelAssetMaterialMapping {
+            source_material_slot,
+            source_material_name: None,
+            voxel_material_slot: if source_material_slot == 0 {
+                u16::MAX
+            } else {
+                source_material_slot as u16
+            },
+        })
+        .collect();
+    for run in &mut source.representation.sparse_runs {
+        run.material_slot = u16::MAX;
+    }
+    let mut past = source.clone();
+
+    let asset = with_computed_content_hash(source).unwrap();
+    let encoded = encode_voxel_asset(&asset).unwrap();
+    let decoded = decode_voxel_asset(&encoded).unwrap();
+    assert_eq!(decoded, asset);
+    assert_eq!(encode_voxel_asset(&decoded).unwrap(), encoded);
+    let cells = resolve_voxel_asset(&decoded);
+    assert_eq!(cells.len(), 3);
+    assert!(cells.iter().all(|cell| cell.material_slot == u16::MAX));
+    assert_eq!(
+        cells.iter().map(|cell| cell.coordinate[0]).max(),
+        Some(MAX_VOXEL_COORDINATE_ABS)
+    );
+
+    past.grid.origin[0] += 1;
+    let error = with_computed_content_hash(past).unwrap_err();
+    assert!(error.diagnostics().iter().any(|diagnostic| {
+        diagnostic.code == "voxelAsset.resourceLimit"
+            && diagnostic.path.starts_with("representation.sparseRuns")
+    }));
+}
+
+#[test]
 fn conversion_input_fixes_identity_settings_and_hard_limits_before_parsing() {
     let request = valid_request();
     validate_conversion_request(&request, 64 * 1024 * 1024 + 1).unwrap();
@@ -240,19 +295,20 @@ fn conversion_input_fixes_identity_settings_and_hard_limits_before_parsing() {
     high_density.settings.origin = [0, 0, 0];
     validate_conversion_request(&high_density, 3_352).unwrap();
 
+    // The grid may span the whole coordinate range and no further.
+    let span = 2 * MAX_VOXEL_COORDINATE_ABS as u32 + 1;
     let mut representational_limit = request.clone();
-    representational_limit.settings.resolution = [MAX_CONVERSION_RESOLUTION_AXIS, 1, 1];
-    representational_limit.settings.origin = [-1_000_000, 0, 0];
+    representational_limit.settings.resolution = [span, 1, 1];
+    representational_limit.settings.origin = [-MAX_VOXEL_COORDINATE_ABS, 0, 0];
     validate_conversion_request(&representational_limit, 3_352).unwrap();
 
-    let mut excessive_resolution = request.clone();
-    excessive_resolution.settings.resolution = [MAX_CONVERSION_RESOLUTION_AXIS + 1, 1, 1];
-    excessive_resolution.settings.origin = [-1_000_000, 0, 0];
+    let mut excessive_resolution = representational_limit;
+    excessive_resolution.settings.resolution = [span + 1, 1, 1];
     let error = validate_conversion_request(&excessive_resolution, 3_352).unwrap_err();
     assert!(error
         .diagnostics()
         .iter()
-        .any(|diagnostic| diagnostic.path == "settings.resolution"));
+        .any(|diagnostic| diagnostic.path == "settings.origin[0]"));
 
     let mut duplicate_mapping = request;
     duplicate_mapping

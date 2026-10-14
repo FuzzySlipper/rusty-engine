@@ -1,6 +1,7 @@
 use std::collections::BTreeSet;
 
 use core_assets::{AssetId, AssetKind};
+use core_space::MAX_VOXEL_COORDINATE_ABS;
 use sha2::{Digest, Sha256};
 
 use crate::{
@@ -10,16 +11,10 @@ use crate::{
     VoxelObjectProvenanceKind, VOXEL_OBJECT_SCHEMA_VERSION,
 };
 
-pub const MAX_VOXEL_OBJECT_ARTIFACT_BYTES: usize = 64 * 1024 * 1024;
-pub const MAX_VOXEL_OBJECT_CLIPS: usize = 256;
-pub const MAX_VOXEL_OBJECT_FRAMES_PER_CLIP: usize = 4_096;
-pub const MAX_VOXEL_OBJECT_TOTAL_FRAMES: usize = 8_192;
+/// Most voxels all of one object's frames may represent together. Admission
+/// expands every frame's runs into cells before runtime limits apply.
 pub const MAX_VOXEL_OBJECT_TOTAL_VOXELS: usize = 16_777_216;
-pub const MAX_VOXEL_OBJECT_FRAMES_PER_SECOND: f64 = 240.0;
-pub const MAX_VOXEL_OBJECT_FRAME_DURATION_SECONDS: f64 = 60.0;
-pub const MAX_VOXEL_OBJECT_ANCHORS_PER_FRAME: usize = 64;
-pub const MAX_VOXEL_OBJECT_HIT_REGIONS_PER_FRAME: usize = 32;
-const MAX_VOXEL_OBJECT_LOCAL_COORDINATE_ABS: f64 = 1_000_000.0;
+const MAX_LOCAL_COORDINATE_ABS: f64 = MAX_VOXEL_COORDINATE_ABS as f64;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VoxelObjectDiagnostic {
@@ -62,16 +57,6 @@ impl std::fmt::Display for VoxelObjectError {
 impl std::error::Error for VoxelObjectError {}
 
 pub fn decode_voxel_object(input: &str) -> Result<VoxelObjectAsset, VoxelObjectError> {
-    if input.len() > MAX_VOXEL_OBJECT_ARTIFACT_BYTES {
-        return Err(VoxelObjectError::one(
-            "voxelObject.resourceLimit",
-            "$",
-            format!(
-                "artifact has {} bytes; limit is {MAX_VOXEL_OBJECT_ARTIFACT_BYTES}",
-                input.len()
-            ),
-        ));
-    }
     let mut deserializer = serde_json::Deserializer::from_str(input);
     let object: VoxelObjectAsset =
         serde_path_to_error::deserialize(&mut deserializer).map_err(|error| {
@@ -158,23 +143,13 @@ fn verify_stated_identities(
     }
 }
 
+/// Serialize an object as it is. Every object the Engine holds came from
+/// [`decode_voxel_object`] or [`with_computed_voxel_object_hashes`], which
+/// already checked and canonicalized it and computed its identities.
 pub fn encode_voxel_object(object: &VoxelObjectAsset) -> Result<String, VoxelObjectError> {
-    validate_voxel_object(object)?;
-    let mut canonical = object.clone();
-    canonicalize(&mut canonical);
-    let mut encoded = serde_json::to_string_pretty(&canonical)
+    let mut encoded = serde_json::to_string_pretty(object)
         .map_err(|error| VoxelObjectError::one("voxelObject.encode", "$", error.to_string()))?;
     encoded.push('\n');
-    if encoded.len() > MAX_VOXEL_OBJECT_ARTIFACT_BYTES {
-        return Err(VoxelObjectError::one(
-            "voxelObject.resourceLimit",
-            "$",
-            format!(
-                "encoded artifact has {} bytes; limit is {MAX_VOXEL_OBJECT_ARTIFACT_BYTES}",
-                encoded.len()
-            ),
-        ));
-    }
     Ok(encoded)
 }
 
@@ -262,15 +237,7 @@ fn semantic_diagnostics(object: &VoxelObjectAsset) -> Vec<VoxelObjectDiagnostic>
     );
     validate_provenance(&object.provenance, &mut diagnostics);
 
-    if object.clips.len() > MAX_VOXEL_OBJECT_CLIPS {
-        diagnostics.push(diagnostic(
-            "voxelObject.resourceLimit",
-            "clips",
-            format!("clip count must be 0..={MAX_VOXEL_OBJECT_CLIPS}"),
-        ));
-    }
     let mut clip_ids = BTreeSet::new();
-    let mut total_frames = 0usize;
     let mut total_voxels = represented_voxel_count(&object.default_frame);
     let mut union_bounds = object.default_frame.bounds;
     for (clip_index, clip) in object.clips.iter().enumerate() {
@@ -285,38 +252,30 @@ fn semantic_diagnostics(object: &VoxelObjectAsset) -> Vec<VoxelObjectDiagnostic>
         if let Some(name) = &clip.name {
             validate_string(name, format!("{clip_path}.name"), &mut diagnostics);
         }
-        if !clip.frames_per_second.is_finite()
-            || !(f64::EPSILON..=MAX_VOXEL_OBJECT_FRAMES_PER_SECOND)
-                .contains(&clip.frames_per_second)
-        {
+        if !valid_positive(clip.frames_per_second) {
             diagnostics.push(diagnostic(
                 "voxelObject.invalidFrameRate",
                 format!("{clip_path}.framesPerSecond"),
-                format!(
-                    "framesPerSecond must be finite and in (0,{MAX_VOXEL_OBJECT_FRAMES_PER_SECOND}]"
-                ),
+                "framesPerSecond must be finite and greater than zero",
             ));
         }
-        if clip.frames.is_empty() || clip.frames.len() > MAX_VOXEL_OBJECT_FRAMES_PER_CLIP {
+        if clip.frames.is_empty() {
             diagnostics.push(diagnostic(
-                "voxelObject.resourceLimit",
+                "voxelObject.invalidClip",
                 format!("{clip_path}.frames"),
-                format!("each clip must contain 1..={MAX_VOXEL_OBJECT_FRAMES_PER_CLIP} frames"),
+                "each clip must contain at least one frame",
             ));
         }
-        total_frames = total_frames.saturating_add(clip.frames.len());
         for (frame_index, animation_frame) in clip.frames.iter().enumerate() {
             let path = format!("{clip_path}.frames[{frame_index}]");
-            if animation_frame.duration_seconds.is_some_and(|duration| {
-                !duration.is_finite()
-                    || !(f64::EPSILON..=MAX_VOXEL_OBJECT_FRAME_DURATION_SECONDS).contains(&duration)
-            }) {
+            if animation_frame
+                .duration_seconds
+                .is_some_and(|duration| !valid_positive(duration))
+            {
                 diagnostics.push(diagnostic(
                     "voxelObject.invalidFrameDuration",
                     format!("{path}.durationSeconds"),
-                    format!(
-                        "durationSeconds must be finite and in (0,{MAX_VOXEL_OBJECT_FRAME_DURATION_SECONDS}]"
-                    ),
+                    "durationSeconds must be finite and greater than zero",
                 ));
             }
             validate_frame_metadata(animation_frame, &path, &mut diagnostics);
@@ -330,15 +289,6 @@ fn semantic_diagnostics(object: &VoxelObjectAsset) -> Vec<VoxelObjectDiagnostic>
                 total_voxels.saturating_add(represented_voxel_count(&animation_frame.frame));
             union_bounds = union(union_bounds, animation_frame.frame.bounds);
         }
-    }
-    if total_frames > MAX_VOXEL_OBJECT_TOTAL_FRAMES {
-        diagnostics.push(diagnostic(
-            "voxelObject.resourceLimit",
-            "clips",
-            format!(
-                "object contains {total_frames} animation frames; limit is {MAX_VOXEL_OBJECT_TOTAL_FRAMES}"
-            ),
-        ));
     }
     if total_voxels > MAX_VOXEL_OBJECT_TOTAL_VOXELS {
         diagnostics.push(diagnostic(
@@ -406,23 +356,18 @@ fn validate_grid(object: &VoxelObjectAsset, diagnostics: &mut Vec<VoxelObjectDia
             "cellSize must be finite and greater than zero",
         ));
     }
-    if !(1..=64).contains(&object.grid.chunk_size) {
-        diagnostics.push(diagnostic(
-            "voxelObject.invalidGrid",
-            "grid.chunkSize",
-            "chunkSize must be in 1..=64",
-        ));
-    }
     if object
         .grid
         .pivot
         .iter()
-        .any(|value| !value.is_finite() || value.abs() > 1_000_000.0)
+        .any(|value| !value.is_finite() || value.abs() > MAX_LOCAL_COORDINATE_ABS)
     {
         diagnostics.push(diagnostic(
             "voxelObject.invalidGrid",
             "grid.pivot",
-            "pivot components must be finite and stay within +/-1,000,000 cells",
+            format!(
+                "pivot components must be finite and stay within +/-{MAX_VOXEL_COORDINATE_ABS} cells"
+            ),
         ));
     }
 }
@@ -432,13 +377,6 @@ fn validate_frame_metadata(
     path: &str,
     diagnostics: &mut Vec<VoxelObjectDiagnostic>,
 ) {
-    if frame.anchors.len() > MAX_VOXEL_OBJECT_ANCHORS_PER_FRAME {
-        diagnostics.push(diagnostic(
-            "voxelObject.resourceLimit",
-            format!("{path}.anchors"),
-            format!("anchor count must be 0..={MAX_VOXEL_OBJECT_ANCHORS_PER_FRAME}"),
-        ));
-    }
     let mut anchor_ids = BTreeSet::new();
     for (index, anchor) in frame.anchors.iter().enumerate() {
         let anchor_path = format!("{path}.anchors[{index}]");
@@ -475,13 +413,6 @@ fn validate_frame_collision(
     if let Some(body) = &collision.body {
         validate_collision_primitive(body, &format!("{path}.collision.body"), diagnostics);
     }
-    if collision.hit_regions.len() > MAX_VOXEL_OBJECT_HIT_REGIONS_PER_FRAME {
-        diagnostics.push(diagnostic(
-            "voxelObject.resourceLimit",
-            format!("{path}.collision.hitRegions"),
-            format!("hit region count must be 0..={MAX_VOXEL_OBJECT_HIT_REGIONS_PER_FRAME}"),
-        ));
-    }
     let mut region_ids = BTreeSet::new();
     for (index, region) in collision.hit_regions.iter().enumerate() {
         let region_path = format!("{path}.collision.hitRegions[{index}]");
@@ -507,15 +438,16 @@ fn validate_collision_primitive(
             half_extents,
         } => {
             validate_local_point(*center, format!("{path}.center"), diagnostics);
-            if half_extents.iter().any(|value| {
-                !value.is_finite()
-                    || *value <= 0.0
-                    || *value > MAX_VOXEL_OBJECT_LOCAL_COORDINATE_ABS
-            }) {
+            if half_extents
+                .iter()
+                .any(|value| !valid_positive_extent(*value))
+            {
                 diagnostics.push(diagnostic(
                     "voxelObject.invalidCollisionPrimitive",
                     format!("{path}.halfExtents"),
-                    "box half extents must be finite and in (0,1000000]",
+                    format!(
+                        "box half extents must be finite and in (0,{MAX_VOXEL_COORDINATE_ABS}]"
+                    ),
                 ));
             }
         }
@@ -529,14 +461,16 @@ fn validate_collision_primitive(
                 diagnostics.push(diagnostic(
                     "voxelObject.invalidCollisionPrimitive",
                     format!("{path}.radius"),
-                    "capsule radius must be finite and in (0,1000000]",
+                    format!("capsule radius must be finite and in (0,{MAX_VOXEL_COORDINATE_ABS}]"),
                 ));
             }
             if !valid_positive_extent(*half_height) {
                 diagnostics.push(diagnostic(
                     "voxelObject.invalidCollisionPrimitive",
                     format!("{path}.halfHeight"),
-                    "capsule halfHeight must be finite and in (0,1000000]",
+                    format!(
+                        "capsule halfHeight must be finite and in (0,{MAX_VOXEL_COORDINATE_ABS}]"
+                    ),
                 ));
             }
         }
@@ -550,18 +484,24 @@ fn validate_local_point(
 ) {
     if point
         .iter()
-        .any(|value| !value.is_finite() || value.abs() > MAX_VOXEL_OBJECT_LOCAL_COORDINATE_ABS)
+        .any(|value| !value.is_finite() || value.abs() > MAX_LOCAL_COORDINATE_ABS)
     {
         diagnostics.push(diagnostic(
             "voxelObject.invalidLocalPoint",
             path,
-            "local point components must be finite and stay within +/-1000000 cells",
+            format!(
+                "local point components must be finite and stay within +/-{MAX_VOXEL_COORDINATE_ABS} cells"
+            ),
         ));
     }
 }
 
+fn valid_positive(value: f64) -> bool {
+    value.is_finite() && value > 0.0
+}
+
 fn valid_positive_extent(value: f64) -> bool {
-    value.is_finite() && value > 0.0 && value <= MAX_VOXEL_OBJECT_LOCAL_COORDINATE_ABS
+    valid_positive(value) && value <= MAX_LOCAL_COORDINATE_ABS
 }
 
 fn validate_materials(
@@ -569,25 +509,20 @@ fn validate_materials(
     mappings: &[VoxelAssetMaterialMapping],
     diagnostics: &mut Vec<VoxelObjectDiagnostic>,
 ) -> BTreeSet<u16> {
-    if palette.is_empty() || palette.len() > crate::MAX_MATERIAL_MAPPINGS {
+    if palette.is_empty() {
         diagnostics.push(diagnostic(
-            "voxelObject.resourceLimit",
+            "voxelObject.invalidMaterialBinding",
             "materialPalette",
-            format!(
-                "materialPalette must contain 1..={} entries",
-                crate::MAX_MATERIAL_MAPPINGS
-            ),
+            "materialPalette must not be empty",
         ));
     }
     let mut palette_slots = BTreeSet::new();
     for (index, binding) in palette.iter().enumerate() {
-        if !(1..=4_095).contains(&binding.material_slot)
-            || !palette_slots.insert(binding.material_slot)
-        {
+        if binding.material_slot == 0 || !palette_slots.insert(binding.material_slot) {
             diagnostics.push(diagnostic(
                 "voxelObject.duplicateMaterialBinding",
                 format!("materialPalette[{index}].materialSlot"),
-                "material slots must be unique and in 1..=4095",
+                "material slots must be unique and nonzero",
             ));
         }
         validate_asset_identity(
@@ -605,14 +540,11 @@ fn validate_materials(
             );
         }
     }
-    if mappings.is_empty() || mappings.len() > crate::MAX_MATERIAL_MAPPINGS {
+    if mappings.is_empty() {
         diagnostics.push(diagnostic(
-            "voxelObject.resourceLimit",
+            "voxelObject.invalidMaterialMapping",
             "materialMap",
-            format!(
-                "materialMap must contain 1..={} entries",
-                crate::MAX_MATERIAL_MAPPINGS
-            ),
+            "materialMap must not be empty",
         ));
     }
     let mut source_slots = BTreeSet::new();
@@ -676,13 +608,6 @@ fn validate_provenance(
             "sourceByteCount must be nonzero",
         ));
     }
-    if provenance.source_clips.len() > MAX_VOXEL_OBJECT_CLIPS {
-        diagnostics.push(diagnostic(
-            "voxelObject.resourceLimit",
-            "provenance.sourceClips",
-            format!("source clip count must be 0..={MAX_VOXEL_OBJECT_CLIPS}"),
-        ));
-    }
     let mut output_ids = BTreeSet::new();
     for (index, clip) in provenance.source_clips.iter().enumerate() {
         let path = format!("provenance.sourceClips[{index}]");
@@ -706,13 +631,11 @@ fn validate_provenance(
                 "source clip range must be ordered",
             ));
         }
-        if clip.sample_rate_hz == 0
-            || f64::from(clip.sample_rate_hz) > MAX_VOXEL_OBJECT_FRAMES_PER_SECOND
-        {
+        if clip.sample_rate_hz == 0 {
             diagnostics.push(diagnostic(
                 "voxelObject.invalidProvenance",
                 format!("{path}.sampleRateHz"),
-                format!("sampleRateHz must be in 1..={MAX_VOXEL_OBJECT_FRAMES_PER_SECOND}"),
+                "sampleRateHz must be nonzero",
             ));
         }
     }
@@ -820,7 +743,6 @@ fn union(left: VoxelAssetBounds, right: VoxelAssetBounds) -> VoxelAssetBounds {
 
 fn valid_clip_id(value: &str) -> bool {
     !value.is_empty()
-        && value.len() <= crate::MAX_STRING_BYTES
         && value.split('/').all(|segment| {
             !segment.is_empty()
                 && !segment.starts_with('-')
@@ -834,7 +756,6 @@ fn valid_clip_id(value: &str) -> bool {
 
 fn valid_frame_fact_id(value: &str) -> bool {
     !value.is_empty()
-        && value.len() <= crate::MAX_STRING_BYTES
         && !value.starts_with(['-', '_', '/'])
         && !value.ends_with(['-', '_', '/'])
         && !value.contains("//")
@@ -851,18 +772,6 @@ fn validate_asset_identity(
     diagnostics: &mut Vec<VoxelObjectDiagnostic>,
 ) {
     let path = path.into();
-    if value.len() > crate::MAX_STRING_BYTES {
-        diagnostics.push(diagnostic(
-            code,
-            path,
-            format!(
-                "identity has {} UTF-8 bytes; limit is {}",
-                value.len(),
-                crate::MAX_STRING_BYTES
-            ),
-        ));
-        return;
-    }
     match AssetId::parse(value) {
         Ok(id) if id.kind() == expected_kind => {}
         Ok(id) => diagnostics.push(diagnostic(
@@ -879,14 +788,11 @@ fn validate_string(
     path: impl Into<String>,
     diagnostics: &mut Vec<VoxelObjectDiagnostic>,
 ) {
-    if value.trim().is_empty() || value.len() > crate::MAX_STRING_BYTES {
+    if value.trim().is_empty() {
         diagnostics.push(diagnostic(
             "voxelObject.invalidString",
             path,
-            format!(
-                "value must contain 1..={} UTF-8 bytes",
-                crate::MAX_STRING_BYTES
-            ),
+            "value must not be empty",
         ));
     }
 }

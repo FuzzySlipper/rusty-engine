@@ -6,16 +6,13 @@ use voxel_asset::VoxelAsset;
 
 use crate::{
     VoxelAnnotationContentHashes, VoxelAnnotationDiagnostic, VoxelAnnotationDiagnosticCode,
-    VoxelAnnotationLayer, VoxelAnnotationLayerDraft, VoxelAnnotationLimits, VoxelAnnotationRegion,
+    VoxelAnnotationLayer, VoxelAnnotationLayerDraft, VoxelAnnotationRegion,
     VoxelAnnotationSparseRun, VOXEL_ANNOTATION_SCHEMA_VERSION,
 };
-
-pub const MAX_ANNOTATION_BYTES: usize = 32 * 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VoxelAnnotationError {
     Decode { path: String, message: String },
-    ResourceLimit { limit: usize, actual: usize },
     Invalid(Vec<VoxelAnnotationDiagnostic>),
 }
 
@@ -34,9 +31,6 @@ impl std::fmt::Display for VoxelAnnotationError {
             Self::Decode { path, message } => {
                 write!(formatter, "decode error at {path}: {message}")
             }
-            Self::ResourceLimit { limit, actual } => {
-                write!(formatter, "annotation has {actual} bytes; limit is {limit}")
-            }
             Self::Invalid(diagnostics) => write!(
                 formatter,
                 "annotation failed validation with {} diagnostic(s)",
@@ -48,18 +42,9 @@ impl std::fmt::Display for VoxelAnnotationError {
 
 impl std::error::Error for VoxelAnnotationError {}
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct VoxelAnnotationExport {
-    pub layer: VoxelAnnotationLayer,
-    pub canonical_json: String,
-    pub canonical_layer_hash: String,
-    pub membership_data_hash: String,
-}
-
 pub fn finalize_annotation_draft(
     draft: VoxelAnnotationLayerDraft,
     target: &VoxelAsset,
-    limits: VoxelAnnotationLimits,
 ) -> Result<VoxelAnnotationLayer, VoxelAnnotationError> {
     let mut layer = VoxelAnnotationLayer {
         schema_version: VOXEL_ANNOTATION_SCHEMA_VERSION,
@@ -74,20 +59,19 @@ pub fn finalize_annotation_draft(
             membership_data: String::new(),
         },
     };
-    normalize_and_rehash(&mut layer, Some(target), limits)?;
+    normalize_and_rehash(&mut layer, Some(target))?;
     Ok(layer)
 }
 
-/// Checks a layer's meaning: schema, identities, bounds, regions, parents and
-/// quotas, plus the supplied target when one is given. It does not recompute
+/// Checks a layer's meaning: schema, identities, bounds, regions and parents,
+/// plus the supplied target when one is given. It does not recompute
 /// `content_hashes`; finalize, decode and edits compute them whenever the
 /// layer's contents change.
 pub fn validate_annotation_layer(
     layer: &VoxelAnnotationLayer,
     target: Option<&VoxelAsset>,
-    limits: VoxelAnnotationLimits,
 ) -> Result<(), VoxelAnnotationError> {
-    let diagnostics = semantic_diagnostics(layer, target, limits);
+    let diagnostics = semantic_diagnostics(layer, target);
     if diagnostics.is_empty() {
         Ok(())
     } else {
@@ -95,24 +79,17 @@ pub fn validate_annotation_layer(
     }
 }
 
+/// Serializes a layer as it is. Every layer comes from finalize, decode or an
+/// edit, which all end in normalizing, checking and hashing its contents.
 pub fn encode_annotation_layer(
     layer: &VoxelAnnotationLayer,
 ) -> Result<String, VoxelAnnotationError> {
-    validate_annotation_layer(layer, None, VoxelAnnotationLimits::default())?;
-    let mut canonical = layer.clone();
-    normalize_layer(&mut canonical);
     let mut encoded =
-        serde_json::to_string_pretty(&canonical).map_err(|error| VoxelAnnotationError::Decode {
+        serde_json::to_string_pretty(layer).map_err(|error| VoxelAnnotationError::Decode {
             path: "$".to_string(),
             message: error.to_string(),
         })?;
     encoded.push('\n');
-    if encoded.len() > MAX_ANNOTATION_BYTES {
-        return Err(VoxelAnnotationError::ResourceLimit {
-            limit: MAX_ANNOTATION_BYTES,
-            actual: encoded.len(),
-        });
-    }
     Ok(encoded)
 }
 
@@ -125,12 +102,6 @@ pub fn decode_annotation_layer(
     input: &str,
     target: Option<&VoxelAsset>,
 ) -> Result<VoxelAnnotationLayer, VoxelAnnotationError> {
-    if input.len() > MAX_ANNOTATION_BYTES {
-        return Err(VoxelAnnotationError::ResourceLimit {
-            limit: MAX_ANNOTATION_BYTES,
-            actual: input.len(),
-        });
-    }
     let mut deserializer = serde_json::Deserializer::from_str(input);
     let mut layer: VoxelAnnotationLayer = serde_path_to_error::deserialize(&mut deserializer)
         .map_err(|error| VoxelAnnotationError::Decode {
@@ -144,7 +115,7 @@ pub fn decode_annotation_layer(
             message: error.to_string(),
         })?;
     let recorded = layer.content_hashes.clone();
-    normalize_and_rehash(&mut layer, target, VoxelAnnotationLimits::default())?;
+    normalize_and_rehash(&mut layer, target)?;
     if layer.content_hashes != recorded {
         return Err(VoxelAnnotationError::Invalid(vec![diagnostic(
             VoxelAnnotationDiagnosticCode::ContentHashMismatch,
@@ -155,35 +126,14 @@ pub fn decode_annotation_layer(
     Ok(layer)
 }
 
-pub fn export_annotation_layer(
-    layer: &VoxelAnnotationLayer,
-    expected_layer_hash: &str,
-) -> Result<VoxelAnnotationExport, VoxelAnnotationError> {
-    if expected_layer_hash != layer.content_hashes.canonical_layer {
-        return Err(VoxelAnnotationError::Invalid(vec![diagnostic(
-            VoxelAnnotationDiagnosticCode::ContentHashMismatch,
-            "expectedLayerHash",
-            "export expected a different annotation layer hash",
-        )]));
-    }
-    let canonical_json = encode_annotation_layer(layer)?;
-    Ok(VoxelAnnotationExport {
-        layer: layer.clone(),
-        canonical_json,
-        canonical_layer_hash: layer.content_hashes.canonical_layer.clone(),
-        membership_data_hash: layer.content_hashes.membership_data.clone(),
-    })
-}
-
 /// Canonicalizes changed contents, checks their meaning and computes the
 /// layer's identities once. Every path that changes contents ends here.
 pub(crate) fn normalize_and_rehash(
     layer: &mut VoxelAnnotationLayer,
     target: Option<&VoxelAsset>,
-    limits: VoxelAnnotationLimits,
 ) -> Result<(), VoxelAnnotationError> {
     normalize_layer(layer);
-    validate_annotation_layer(layer, target, limits)?;
+    validate_annotation_layer(layer, target)?;
     set_hashes(layer);
     Ok(())
 }
@@ -191,7 +141,6 @@ pub(crate) fn normalize_and_rehash(
 fn semantic_diagnostics(
     layer: &VoxelAnnotationLayer,
     target: Option<&VoxelAsset>,
-    limits: VoxelAnnotationLimits,
 ) -> Vec<VoxelAnnotationDiagnostic> {
     let mut diagnostics = Vec::new();
     if layer.schema_version != VOXEL_ANNOTATION_SCHEMA_VERSION {
@@ -204,11 +153,7 @@ fn semantic_diagnostics(
             ),
         ));
     }
-    if !valid_scoped_id(
-        &layer.layer_id,
-        "voxel-annotation/",
-        limits.max_string_bytes,
-    ) {
+    if !valid_scoped_id(&layer.layer_id, "voxel-annotation/") {
         diagnostics.push(diagnostic(
             VoxelAnnotationDiagnosticCode::InvalidLayerId,
             "layerId",
@@ -267,31 +212,21 @@ fn semantic_diagnostics(
             ));
         }
     }
-    validate_provenance(layer, limits, &mut diagnostics);
-    validate_regions(layer, limits, &mut diagnostics);
+    validate_provenance(layer, &mut diagnostics);
+    validate_regions(layer, &mut diagnostics);
     diagnostics
 }
 
 fn validate_provenance(
     layer: &VoxelAnnotationLayer,
-    limits: VoxelAnnotationLimits,
     diagnostics: &mut Vec<VoxelAnnotationDiagnostic>,
 ) {
-    if layer.provenance.len() > limits.max_provenance_refs {
-        diagnostics.push(diagnostic(
-            VoxelAnnotationDiagnosticCode::QuotaExceeded,
-            "provenance",
-            "provenance reference quota exceeded",
-        ));
-    }
     for (index, provenance) in layer.provenance.iter().enumerate() {
-        if !valid_string(&provenance.uri, limits.max_string_bytes)
-            || !valid_sha256(&provenance.content_hash)
-        {
+        if !valid_string(&provenance.uri) || !valid_sha256(&provenance.content_hash) {
             diagnostics.push(diagnostic(
                 VoxelAnnotationDiagnosticCode::InvalidProvenance,
                 format!("provenance[{index}]"),
-                "provenance requires a bounded URI and lowercase SHA-256 hash",
+                "provenance requires a URI and lowercase SHA-256 hash",
             ));
         }
     }
@@ -299,21 +234,12 @@ fn validate_provenance(
 
 fn validate_regions(
     layer: &VoxelAnnotationLayer,
-    limits: VoxelAnnotationLimits,
     diagnostics: &mut Vec<VoxelAnnotationDiagnostic>,
 ) {
-    if layer.regions.len() > limits.max_regions {
-        diagnostics.push(diagnostic(
-            VoxelAnnotationDiagnosticCode::QuotaExceeded,
-            "regions",
-            "region quota exceeded",
-        ));
-    }
     let mut ids = BTreeSet::new();
     let mut parents = BTreeMap::new();
-    let mut assigned = 0u64;
     for (index, region) in layer.regions.iter().enumerate() {
-        if !valid_scoped_id(&region.region_id, "region/", limits.max_string_bytes) {
+        if !valid_scoped_id(&region.region_id, "region/") {
             diagnostics.push(diagnostic(
                 VoxelAnnotationDiagnosticCode::InvalidRegionId,
                 format!("regions[{index}].regionId"),
@@ -330,17 +256,7 @@ fn validate_regions(
             region.region_id.as_str(),
             region.parent_region_id.as_deref(),
         );
-        validate_region(layer, region, index, limits, &mut assigned, diagnostics);
-    }
-    if assigned > limits.max_total_assigned_cells {
-        diagnostics.push(diagnostic(
-            VoxelAnnotationDiagnosticCode::QuotaExceeded,
-            "regions.selection",
-            format!(
-                "assigned cell count {assigned} exceeds {}",
-                limits.max_total_assigned_cells
-            ),
-        ));
+        validate_region(layer, region, index, diagnostics);
     }
     validate_parent_tree(&parents, diagnostics);
 }
@@ -349,27 +265,20 @@ fn validate_region(
     layer: &VoxelAnnotationLayer,
     region: &VoxelAnnotationRegion,
     index: usize,
-    limits: VoxelAnnotationLimits,
-    assigned: &mut u64,
     diagnostics: &mut Vec<VoxelAnnotationDiagnostic>,
 ) {
-    if !valid_string(&region.label, limits.max_string_bytes) {
+    if !valid_string(&region.label) {
         diagnostics.push(diagnostic(
-            VoxelAnnotationDiagnosticCode::QuotaExceeded,
+            VoxelAnnotationDiagnosticCode::InvalidText,
             format!("regions[{index}].label"),
-            "label is empty or exceeds the string quota",
+            "label must not be empty or contain NUL",
         ));
     }
-    if region.tags.len() > limits.max_tags_per_region
-        || region
-            .tags
-            .iter()
-            .any(|tag| !valid_string(tag, limits.max_string_bytes))
-    {
+    if !region.tags.iter().all(|tag| valid_string(tag)) {
         diagnostics.push(diagnostic(
-            VoxelAnnotationDiagnosticCode::QuotaExceeded,
+            VoxelAnnotationDiagnosticCode::InvalidText,
             format!("regions[{index}].tags"),
-            "tag count or string quota exceeded",
+            "tags must not be empty or contain NUL",
         ));
     }
     if !region.bounds.is_valid() {
@@ -386,16 +295,15 @@ fn validate_region(
         ));
     }
     let runs = &region.selection.sparse_runs;
-    if runs.is_empty() || runs.len() > limits.max_runs_per_region {
+    if runs.is_empty() {
         diagnostics.push(diagnostic(
-            VoxelAnnotationDiagnosticCode::QuotaExceeded,
+            VoxelAnnotationDiagnosticCode::InvalidSparseRun,
             format!("regions[{index}].selection.sparseRuns"),
-            "selection must contain a bounded, non-empty run set",
+            "selection must not be empty",
         ));
     }
     let mut rows = BTreeMap::<(i64, i64), Vec<(i64, i64, usize)>>::new();
     for (run_index, run) in runs.iter().copied().enumerate() {
-        *assigned = assigned.saturating_add(u64::from(run.length));
         let Some(bounds) = run.bounds() else {
             diagnostics.push(diagnostic(
                 VoxelAnnotationDiagnosticCode::InvalidSparseRun,
@@ -528,29 +436,28 @@ fn valid_sha256(value: &str) -> bool {
     })
 }
 
-fn valid_string(value: &str, max_bytes: usize) -> bool {
-    !value.trim().is_empty() && value.len() <= max_bytes && !value.contains('\0')
+fn valid_string(value: &str) -> bool {
+    !value.trim().is_empty() && !value.contains('\0')
 }
 
-fn valid_scoped_id(value: &str, prefix: &str, max_bytes: usize) -> bool {
-    value.len() <= max_bytes
-        && value.strip_prefix(prefix).is_some_and(|tail| {
-            !tail.is_empty()
-                && tail.split('/').all(|segment| {
-                    !segment.is_empty()
-                        && segment.bytes().all(|byte| {
-                            byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-'
-                        })
-                        && segment
-                            .as_bytes()
-                            .first()
-                            .is_some_and(u8::is_ascii_alphanumeric)
-                        && segment
-                            .as_bytes()
-                            .last()
-                            .is_some_and(u8::is_ascii_alphanumeric)
-                })
-        })
+fn valid_scoped_id(value: &str, prefix: &str) -> bool {
+    value.strip_prefix(prefix).is_some_and(|tail| {
+        !tail.is_empty()
+            && tail.split('/').all(|segment| {
+                !segment.is_empty()
+                    && segment.bytes().all(|byte| {
+                        byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-'
+                    })
+                    && segment
+                        .as_bytes()
+                        .first()
+                        .is_some_and(u8::is_ascii_alphanumeric)
+                    && segment
+                        .as_bytes()
+                        .last()
+                        .is_some_and(u8::is_ascii_alphanumeric)
+            })
+    })
 }
 
 fn diagnostic(

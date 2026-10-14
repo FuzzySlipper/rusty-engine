@@ -5,7 +5,7 @@ use engine_spatial::{
     SpatialCollisionHit, StaticMeshAssetId, StaticMeshColliderAsset, StaticMeshColliderInstance,
     StaticMeshInstanceId, StaticMeshTransform, SurfaceMeshLimits, SurfaceMeshOptions, SurfaceMode,
     VoxelAuthorityValidationError, VoxelCollisionScene, VoxelEdit, VoxelEditApplyError,
-    VoxelEditRejection, VoxelEditService, MAX_VOXEL_COORDINATE_ABS, MAX_VOXEL_MATERIAL_SLOT,
+    VoxelEditRejection, VoxelEditService, MAX_VOXEL_COORDINATE_ABS,
 };
 use entity_state::{EntityDefinition, EntityState};
 
@@ -92,24 +92,22 @@ fn every_material_authority_constructor_enforces_edit_vocabulary_bounds() {
         )
     ));
 
-    for material_slot in [0, MAX_VOXEL_MATERIAL_SLOT + 1] {
-        let slot = VoxelCollisionScene::from_material_voxels(
-            1.0,
-            4,
-            [MaterialVoxel {
-                state: 0,
-                address: [0, 0, 0],
-                material_slot,
-            }],
+    let slot = VoxelCollisionScene::from_material_voxels(
+        1.0,
+        4,
+        [MaterialVoxel {
+            state: 0,
+            address: [0, 0, 0],
+            material_slot: 0,
+        }],
+    )
+    .unwrap_err();
+    assert!(matches!(
+        slot,
+        CollisionSceneError::InvalidMaterialVoxel(
+            VoxelAuthorityValidationError::InvalidMaterialSlot { material_slot: 0 }
         )
-        .unwrap_err();
-        assert!(matches!(
-            slot,
-            CollisionSceneError::InvalidMaterialVoxel(
-                VoxelAuthorityValidationError::InvalidMaterialSlot { .. }
-            )
-        ));
-    }
+    ));
 }
 
 #[test]

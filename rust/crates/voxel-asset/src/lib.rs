@@ -22,18 +22,15 @@ pub use asset::{
 };
 pub use codec::{
     decode_voxel_asset, encode_voxel_asset, validate_voxel_asset, with_computed_content_hash,
-    VoxelAssetDiagnostic, VoxelAssetError, MAX_ARTIFACT_BYTES, MAX_MATERIAL_MAPPINGS,
-    MAX_REPRESENTED_VOXELS, MAX_STRING_BYTES,
+    VoxelAssetDiagnostic, VoxelAssetError, MAX_REPRESENTED_VOXELS,
 };
 pub use conversion::{
     conversion_settings_sha256, validate_conversion_request, VoxelConversionFitPolicy,
     VoxelConversionInputDiagnostic, VoxelConversionInputError, VoxelConversionMode,
     VoxelConversionOriginPolicy, VoxelConversionRequest, VoxelConversionSettings,
-    MAX_CONVERSION_CELLS, MAX_CONVERSION_RESOLUTION_AXIS,
 };
 pub use frame::{
     represented_voxel_count, resolve_voxel_asset, resolve_voxel_frame, VoxelFrame, VoxelFrameCell,
-    MAX_VOXEL_FRAME_COORDINATE_ABS,
 };
 pub use object::{
     VoxelObjectAnimationFrame, VoxelObjectAsset, VoxelObjectClip, VoxelObjectCollisionPrimitive,
@@ -44,10 +41,7 @@ pub use object::{
 pub use object_codec::{
     decode_voxel_object, encode_voxel_object, validate_voxel_object,
     with_computed_voxel_object_hashes, VoxelObjectDiagnostic, VoxelObjectError,
-    MAX_VOXEL_OBJECT_ANCHORS_PER_FRAME, MAX_VOXEL_OBJECT_ARTIFACT_BYTES, MAX_VOXEL_OBJECT_CLIPS,
-    MAX_VOXEL_OBJECT_FRAMES_PER_CLIP, MAX_VOXEL_OBJECT_FRAMES_PER_SECOND,
-    MAX_VOXEL_OBJECT_FRAME_DURATION_SECONDS, MAX_VOXEL_OBJECT_HIT_REGIONS_PER_FRAME,
-    MAX_VOXEL_OBJECT_TOTAL_FRAMES, MAX_VOXEL_OBJECT_TOTAL_VOXELS,
+    MAX_VOXEL_OBJECT_TOTAL_VOXELS,
 };
 pub use palette::{
     replace_voxel_palette, VoxelPaletteUpdateError, VoxelPaletteUpdateReceipt,

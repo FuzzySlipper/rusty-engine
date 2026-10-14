@@ -14,7 +14,6 @@ use voxel_convert::{
     MeshSourceImportRequest, TextureChannelLayout, TextureColorSpace, TextureMaterialBinding,
     TextureMaterialMode, TextureSampleAsset, TextureSamplingPolicy, TextureSourceRef,
     TextureUvAttributeRef, TextureWrapPolicy, VoxelModelInfoRequest, VoxelModelWindowRequest,
-    MAX_CONVERSION_RESOLUTION_AXIS,
 };
 
 const SOURCE: &[u8] = include_bytes!(concat!(
@@ -333,7 +332,8 @@ fn solid_topology_limits_and_rejected_install_leave_no_partial_output() {
     );
 
     let mut oversized = plan_request(&imported);
-    oversized.settings.conversion.resolution[0] = MAX_CONVERSION_RESOLUTION_AXIS + 1;
+    // Wider than the whole voxel coordinate range.
+    oversized.settings.conversion.resolution[0] = u32::MAX;
     let error = plan_conversion(&oversized, &imported).unwrap_err();
     assert_eq!(error.diagnostics()[0].code, "conversion.resourceLimit");
 

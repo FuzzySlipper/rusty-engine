@@ -111,7 +111,7 @@ pub use voxel_edit::{
     validate_material_voxel, validate_voxel_address, validate_voxel_material_slot,
     VoxelAuthorityValidationError, VoxelEdit, VoxelEditApplyError, VoxelEditFact, VoxelEditReceipt,
     VoxelEditRejection, VoxelEditService, VoxelProjectionRevisions, VoxelSourceRevision,
-    MAX_VOXEL_COORDINATE_ABS, MAX_VOXEL_MATERIAL_SLOT,
+    MAX_VOXEL_COORDINATE_ABS,
 };
 pub use voxel_picking::{
     InstanceVoxelPickAnchor, VoxelPickAnchor, VoxelPickError, VoxelPickHint, VoxelPickService,

@@ -10,6 +10,10 @@ use core_space::{Axis, Direction6};
 /// by the `f32` vertex stream selected for voxel surface mapping.
 pub const MAX_EXACT_TILE_COORDINATE: i64 = 1_i64 << 24;
 
+// Every voxel entry point bounds coordinates by this, so the far corner of the
+// outermost voxel, one cell past its coordinate, stays exact.
+const _: () = assert!(core_space::MAX_VOXEL_COORDINATE_ABS < MAX_EXACT_TILE_COORDINATE);
+
 /// Smallest supported authored tile period, in voxel-cell units.
 pub const MIN_TILE_SCALE_CELLS: f64 = 1.0 / 256.0;
 
@@ -100,8 +104,9 @@ pub const fn voxel_surface_texture_basis(direction: Direction6) -> VoxelSurfaceT
 /// mesher origin for `engine-spatial`, and `[0, 0, 0]` for voxel objects. The
 /// result therefore remains continuous across independently rebuilt chunks
 /// while moving with an object's local transform. It is exact while the
-/// absolute coordinate stays within [`MAX_EXACT_TILE_COORDINATE`], which the
-/// voxel coordinate bounds at every voxel entry point keep it inside.
+/// absolute coordinate stays within [`MAX_EXACT_TILE_COORDINATE`], which
+/// [`core_space::MAX_VOXEL_COORDINATE_ABS`] at every voxel entry point keeps it
+/// inside.
 pub fn project_voxel_surface_tile_point(
     direction: Direction6,
     grid_point: [i64; 3],

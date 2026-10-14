@@ -6,6 +6,13 @@
 
 use crate::direction::Direction6;
 
+/// Largest voxel coordinate magnitude any voxel authority may name: scenes,
+/// edits, residency, voxel assets and voxel object frames. Voxel meshes carry
+/// voxel-corner tile coordinates in `f32`, which holds every integer exactly
+/// through 2^24, and the far corner of the outermost voxel lies one cell past
+/// its coordinate.
+pub const MAX_VOXEL_COORDINATE_ABS: i64 = (1 << 24) - 1;
+
 /// An integer voxel cell coordinate within *some* voxel grid.
 ///
 /// Which grid it belongs to is contextual (held by the caller / the owning

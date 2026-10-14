@@ -2,7 +2,7 @@ use engine_spatial::{
     MaterialVoxel, SurfaceMeshOptions, SurfaceMode, VoxelChunkIdentity, VoxelChunkPayload,
     VoxelChunkResidencyApplyError, VoxelChunkResidencyOperation, VoxelChunkResidencyRejection,
     VoxelChunkResidencyService, VoxelCollisionScene, VoxelEdit, VoxelEditService,
-    VoxelSourceRevision,
+    VoxelSourceRevision, MAX_VOXEL_COORDINATE_ABS,
 };
 
 fn identity(x: i64, y: i64, z: i64) -> VoxelChunkIdentity {
@@ -152,45 +152,63 @@ fn empty_chunks_are_resident_without_mesh_payloads() {
 
 #[test]
 fn negative_chunk_coordinates_and_world_bounds_are_exact() {
+    // Two-voxel chunks: the outermost chunks whose every voxel is inside the
+    // coordinate bound are admitted, the next ones out are refused.
+    let half = (MAX_VOXEL_COORDINATE_ABS + 1) / 2;
     let mut scene = empty_scene(2, SurfaceMode::GreedyCubes);
-    let lowest_valid = identity(-500_000, -1, -2);
+    let lowest_valid = identity(-(half - 1), -1, -2);
+    let highest_valid = identity(half - 1, 0, 0);
     apply(
         &mut scene,
-        &[VoxelChunkResidencyOperation::Admit {
-            chunk: lowest_valid,
-            payload: payload(2, &[([1, 0, 1], 1)]),
-        }],
+        &[
+            VoxelChunkResidencyOperation::Admit {
+                chunk: lowest_valid,
+                payload: payload(2, &[([1, 0, 1], 1)]),
+            },
+            VoxelChunkResidencyOperation::Admit {
+                chunk: highest_valid,
+                payload: payload(2, &[([1, 0, 0], 1)]),
+            },
+        ],
     )
     .unwrap();
     assert!(VoxelChunkResidencyService::resident_chunk(&scene, lowest_valid).is_some());
+    assert!(VoxelChunkResidencyService::resident_chunk(&scene, highest_valid).is_some());
 
     let revision = scene.source_revision();
-    let error = apply(
-        &mut scene,
-        &[VoxelChunkResidencyOperation::Admit {
-            chunk: identity(500_000, 0, 0),
-            payload: payload(2, &[]),
-        }],
-    )
-    .unwrap_err();
-    assert!(matches!(
-        error,
-        VoxelChunkResidencyApplyError::Rejected(
+    for (chunk, voxel_min) in [
+        (identity(half, 0, 0), 2 * half),
+        (identity(-half, 0, 0), -2 * half),
+    ] {
+        let error = apply(
+            &mut scene,
+            &[VoxelChunkResidencyOperation::Admit {
+                chunk,
+                payload: payload(2, &[]),
+            }],
+        )
+        .unwrap_err();
+        let VoxelChunkResidencyApplyError::Rejected(rejection) = error else {
+            panic!("expected a rejection, got {error:?}");
+        };
+        assert_eq!(
+            rejection,
             VoxelChunkResidencyRejection::ChunkCoordinateOutOfBounds {
                 operation_index: 0,
+                chunk,
                 axis: 0,
-                voxel_min: 1_000_000,
-                voxel_max_inclusive: 1_000_001,
-                ..
+                voxel_min,
+                voxel_max_inclusive: voxel_min + 1,
+                limit: MAX_VOXEL_COORDINATE_ABS,
             }
-        )
-    ));
+        );
+    }
     assert_eq!(scene.source_revision(), revision);
-    assert_eq!(scene.resident_chunk_count(), 1);
+    assert_eq!(scene.resident_chunk_count(), 2);
 }
 
 #[test]
-fn dimensions_material_and_payload_bounds_are_atomic() {
+fn dimensions_and_payload_bounds_are_atomic() {
     let mut dimensions_scene = empty_scene(2, SurfaceMode::GreedyCubes);
     let operations = [
         VoxelChunkResidencyOperation::Admit {
@@ -212,29 +230,6 @@ fn dimensions_material_and_payload_bounds_are_atomic() {
         ))
     ));
     assert_eq!(dimensions_scene.resident_chunk_count(), 0);
-
-    let mut material_scene = empty_scene(2, SurfaceMode::GreedyCubes);
-    let operations = [
-        VoxelChunkResidencyOperation::Admit {
-            chunk: identity(0, 0, 0),
-            payload: payload(2, &[([0, 0, 0], 1)]),
-        },
-        VoxelChunkResidencyOperation::Admit {
-            chunk: identity(1, 0, 0),
-            payload: payload(2, &[([1, 1, 1], 4_096)]),
-        },
-    ];
-    assert!(matches!(
-        apply(&mut material_scene, &operations),
-        Err(VoxelChunkResidencyApplyError::Rejected(
-            VoxelChunkResidencyRejection::InvalidMaterialSlot {
-                operation_index: 1,
-                slot_index: 7,
-                ..
-            }
-        ))
-    ));
-    assert_eq!(material_scene.resident_chunk_count(), 0);
 
     let mut aggregate_scene = empty_scene(64, SurfaceMode::GreedyCubes);
     let empty = payload(64, &[]);

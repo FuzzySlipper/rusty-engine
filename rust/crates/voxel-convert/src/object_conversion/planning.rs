@@ -6,7 +6,6 @@ use voxel_asset::{
     VoxelConversionRequest, VoxelFrame, VoxelObjectAnimationFrame, VoxelObjectAsset,
     VoxelObjectClip, VoxelObjectGrid, VoxelObjectProvenance, VoxelObjectProvenanceKind,
     VoxelObjectSourceClipProvenance, VoxelRepresentation, VoxelRepresentationKind,
-    MAX_VOXEL_OBJECT_FRAME_DURATION_SECONDS, MAX_VOXEL_OBJECT_TOTAL_FRAMES,
     MAX_VOXEL_OBJECT_TOTAL_VOXELS, VOXEL_OBJECT_SCHEMA_VERSION,
 };
 
@@ -82,7 +81,6 @@ pub fn plan_animated_voxel_object_conversion(
     let bind_estimate = preflight_animation_bind_pose(&source.model, &bind_request)?;
     let mut retained_snapshot_bytes = bind_estimate.materialized_snapshot_bytes;
     let mut deformation_work = bind_estimate.deformation_work;
-    let mut total_sampled_frames = 1usize;
     let mut planned_clips = Vec::with_capacity(clips.len());
     for clip_request in &clips {
         let source_clip = source
@@ -129,14 +127,6 @@ pub fn plan_animated_voxel_object_conversion(
         if deformation_work > MAX_VOXEL_OBJECT_CONVERSION_DEFORMATION_WORK {
             return Err(aggregate_limit(&format!(
                 "aggregate animation deformation work {deformation_work} exceeds {MAX_VOXEL_OBJECT_CONVERSION_DEFORMATION_WORK}"
-            )));
-        }
-        total_sampled_frames = total_sampled_frames
-            .checked_add(estimate.snapshot_count)
-            .ok_or_else(|| aggregate_limit("sample frame count overflowed"))?;
-        if total_sampled_frames > MAX_VOXEL_OBJECT_TOTAL_FRAMES {
-            return Err(aggregate_limit(&format!(
-                "selected clips contain {total_sampled_frames} samples; limit is {MAX_VOXEL_OBJECT_TOTAL_FRAMES}"
             )));
         }
         planned_clips.push((clip_request.clone(), sampling_request));
@@ -567,7 +557,6 @@ fn sample_durations(sampling: &AnimationSampleRangeReceipt) -> Result<Vec<u64>, 
 }
 
 fn deduplicate_consecutive_frames(frames: Vec<StoredFrame>) -> Vec<StoredFrame> {
-    let limit_microseconds = (MAX_VOXEL_OBJECT_FRAME_DURATION_SECONDS * 1_000_000.0) as u64;
     let mut stored: Vec<StoredFrame> = Vec::with_capacity(frames.len());
     for frame in frames {
         let merge = stored.last().is_some_and(|prior| {
@@ -575,7 +564,7 @@ fn deduplicate_consecutive_frames(frames: Vec<StoredFrame>) -> Vec<StoredFrame> 
                 && prior
                     .duration_microseconds
                     .checked_add(frame.duration_microseconds)
-                    .is_some_and(|duration| duration <= limit_microseconds)
+                    .is_some()
         });
         if merge {
             let prior = stored.last_mut().expect("checked prior frame");

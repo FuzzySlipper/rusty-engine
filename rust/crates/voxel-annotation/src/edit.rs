@@ -4,11 +4,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     codec::normalize_and_rehash, VoxelAnnotationBounds, VoxelAnnotationError, VoxelAnnotationKind,
-    VoxelAnnotationLayer, VoxelAnnotationLimits, VoxelAnnotationRegion, VoxelAnnotationSelection,
+    VoxelAnnotationLayer, VoxelAnnotationRegion, VoxelAnnotationSelection,
     VoxelAnnotationSparseRun,
 };
-
-pub const MAX_ANNOTATION_COMMANDS_PER_TRANSACTION: usize = 256;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(
@@ -80,7 +78,6 @@ pub struct VoxelAnnotationEditReceipt {
 pub enum VoxelAnnotationEditError {
     StaleLayerHash { expected: String, actual: String },
     EmptyTransaction,
-    TooManyCommands { limit: usize, actual: usize },
     UnknownRegion(String),
     InvalidRemovalRun(VoxelAnnotationSparseRun),
     InvalidCandidate(VoxelAnnotationError),
@@ -117,19 +114,13 @@ impl VoxelAnnotationEditService {
         if command_count == 0 {
             return Err(VoxelAnnotationEditError::EmptyTransaction);
         }
-        if command_count > MAX_ANNOTATION_COMMANDS_PER_TRANSACTION {
-            return Err(VoxelAnnotationEditError::TooManyCommands {
-                limit: MAX_ANNOTATION_COMMANDS_PER_TRANSACTION,
-                actual: command_count,
-            });
-        }
 
         let mut candidate = layer.clone();
         let mut affected = BTreeSet::new();
         for command in transaction.commands {
             apply_command(&mut candidate, command, &mut affected)?;
         }
-        normalize_and_rehash(&mut candidate, None, VoxelAnnotationLimits::default())
+        normalize_and_rehash(&mut candidate, None)
             .map_err(VoxelAnnotationEditError::InvalidCandidate)?;
         if candidate.content_hashes.canonical_layer == layer.content_hashes.canonical_layer {
             return Err(VoxelAnnotationEditError::NoChanges);

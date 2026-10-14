@@ -90,10 +90,10 @@ pub(crate) fn collider_cubes(
     };
     let size = grid.chunk_dims().to_array().map(|value| value as usize);
     let origin = grid.chunk_origin_voxel(coordinate);
-    // Materials of the chunk and a one-voxel halo; `u16::MAX` is empty.
-    const EMPTY: u16 = u16::MAX;
+    // Materials of the chunk and a one-voxel halo; `None` is empty. Every u16
+    // is a material slot, so none can stand for empty.
     let halo = size.map(|value| value + 2);
-    let mut materials = vec![EMPTY; halo[0] * halo[1] * halo[2]];
+    let mut materials: Vec<Option<u16>> = vec![None; halo[0] * halo[1] * halo[2]];
     let index = |x: usize, y: usize, z: usize| (z * halo[1] + y) * halo[0] + x;
     for dz in -1..=1_i64 {
         for dy in -1..=1_i64 {
@@ -123,7 +123,7 @@ pub(crate) fn collider_cubes(
                                     at(dx, lx, size[0]),
                                     at(dy, ly, size[1]),
                                     at(dz, lz, size[2]),
-                                )] = material.raw();
+                                )] = Some(material.raw());
                             }
                         }
                     }
@@ -155,11 +155,15 @@ pub(crate) fn collider_cubes(
         for dz in 0..3 {
             for dy in 0..3 {
                 for dx in 0..3 {
-                    let neighbour = materials[index(x + dx - 1, y + dy - 1, z + dz - 1)];
+                    let Some(neighbour) = materials[index(x + dx - 1, y + dy - 1, z + dz - 1)]
+                    else {
+                        interior = false;
+                        continue;
+                    };
                     // The surface also meets a different non-occluding material.
                     let see_through =
                         neighbour != slot && options.non_occluding.contains(&neighbour);
-                    if neighbour == EMPTY || see_through {
+                    if see_through {
                         interior = false;
                     } else if noncollidable.contains(&neighbour)
                         && [dx, dy, dz].iter().filter(|offset| **offset != 1).count() == 1

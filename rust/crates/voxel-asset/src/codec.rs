@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use core_assets::{AssetId, AssetKind};
+use core_space::MAX_VOXEL_COORDINATE_ABS;
 use sha2::{Digest, Sha256};
 
 use crate::{
@@ -8,10 +9,10 @@ use crate::{
     VoxelRepresentationKind, VOXEL_ASSET_SCHEMA_VERSION,
 };
 
-pub const MAX_ARTIFACT_BYTES: usize = 16 * 1024 * 1024;
+/// Most voxels one asset or frame may represent. Resolving expands every run
+/// into a cell, so this keeps a short file from asking for an allocation no
+/// later limit sees in time.
 pub const MAX_REPRESENTED_VOXELS: usize = 1_000_000;
-pub const MAX_MATERIAL_MAPPINGS: usize = 4_095;
-pub const MAX_STRING_BYTES: usize = 4_096;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VoxelAssetDiagnostic {
@@ -54,16 +55,6 @@ impl std::fmt::Display for VoxelAssetError {
 impl std::error::Error for VoxelAssetError {}
 
 pub fn decode_voxel_asset(input: &str) -> Result<VoxelAsset, VoxelAssetError> {
-    if input.len() > MAX_ARTIFACT_BYTES {
-        return Err(VoxelAssetError::one(
-            "voxelAsset.resourceLimit",
-            "$",
-            format!(
-                "artifact has {} bytes; limit is {MAX_ARTIFACT_BYTES}",
-                input.len()
-            ),
-        ));
-    }
     let mut deserializer = serde_json::Deserializer::from_str(input);
     let asset: VoxelAsset =
         serde_path_to_error::deserialize(&mut deserializer).map_err(|error| {
@@ -91,23 +82,13 @@ pub fn decode_voxel_asset(input: &str) -> Result<VoxelAsset, VoxelAssetError> {
     verify_stated_identities(canonical)
 }
 
+/// Serialize an asset as it is. Every asset the Engine holds came from
+/// [`decode_voxel_asset`] or [`with_computed_content_hash`], which already
+/// checked and canonicalized it and computed its identities.
 pub fn encode_voxel_asset(asset: &VoxelAsset) -> Result<String, VoxelAssetError> {
-    validate_voxel_asset(asset)?;
-    let mut canonical = asset.clone();
-    canonicalize(&mut canonical);
-    let mut encoded = serde_json::to_string_pretty(&canonical)
+    let mut encoded = serde_json::to_string_pretty(asset)
         .map_err(|error| VoxelAssetError::one("voxelAsset.encode", "$", error.to_string()))?;
     encoded.push('\n');
-    if encoded.len() > MAX_ARTIFACT_BYTES {
-        return Err(VoxelAssetError::one(
-            "voxelAsset.resourceLimit",
-            "$",
-            format!(
-                "encoded artifact has {} bytes; limit is {MAX_ARTIFACT_BYTES}",
-                encoded.len()
-            ),
-        ));
-    }
     Ok(encoded)
 }
 
@@ -252,20 +233,20 @@ fn validate_material_palette(
     bindings: &[VoxelAssetMaterialBinding],
     diagnostics: &mut Vec<VoxelAssetDiagnostic>,
 ) -> BTreeSet<u16> {
-    if bindings.is_empty() || bindings.len() > MAX_MATERIAL_MAPPINGS {
+    if bindings.is_empty() {
         diagnostics.push(diagnostic(
-            "voxelAsset.resourceLimit",
+            "voxelAsset.invalidMaterialBinding",
             "materialPalette",
-            format!("materialPalette must contain 1..={MAX_MATERIAL_MAPPINGS} entries"),
+            "materialPalette must not be empty",
         ));
     }
     let mut slots = BTreeSet::new();
     for (index, binding) in bindings.iter().enumerate() {
-        if !(1..=4_095).contains(&binding.material_slot) || !slots.insert(binding.material_slot) {
+        if binding.material_slot == 0 || !slots.insert(binding.material_slot) {
             diagnostics.push(diagnostic(
                 "voxelAsset.duplicateMaterialBinding",
                 format!("materialPalette[{index}].materialSlot"),
-                "material slots must be unique and in 1..=4095",
+                "material slots must be unique and nonzero",
             ));
         }
         match AssetId::parse(&binding.material_asset_id) {
@@ -300,23 +281,16 @@ fn validate_grid(asset: &VoxelAsset, diagnostics: &mut Vec<VoxelAssetDiagnostic>
             "cellSize must be finite and greater than zero",
         ));
     }
-    if !(1..=64).contains(&asset.grid.chunk_size) {
-        diagnostics.push(diagnostic(
-            "voxelAsset.invalidGrid",
-            "grid.chunkSize",
-            "chunkSize must be in 1..=64",
-        ));
-    }
     if asset
         .grid
         .origin
         .iter()
-        .any(|coordinate| coordinate.unsigned_abs() > 1_000_000)
+        .any(|coordinate| coordinate.unsigned_abs() > MAX_VOXEL_COORDINATE_ABS as u64)
     {
         diagnostics.push(diagnostic(
             "voxelAsset.resourceLimit",
             "grid.origin",
-            "origin coordinates must stay within +/-1,000,000 cells",
+            format!("origin coordinates must stay within +/-{MAX_VOXEL_COORDINATE_ABS} cells"),
         ));
     }
     if asset
@@ -338,11 +312,11 @@ fn validate_material_map(
     mappings: &[VoxelAssetMaterialMapping],
     diagnostics: &mut Vec<VoxelAssetDiagnostic>,
 ) -> BTreeSet<u16> {
-    if mappings.is_empty() || mappings.len() > MAX_MATERIAL_MAPPINGS {
+    if mappings.is_empty() {
         diagnostics.push(diagnostic(
-            "voxelAsset.resourceLimit",
+            "voxelAsset.invalidMaterialMapping",
             "materialMap",
-            format!("materialMap must contain 1..={MAX_MATERIAL_MAPPINGS} entries"),
+            "materialMap must not be empty",
         ));
     }
     let mut source_slots = BTreeSet::new();
@@ -355,11 +329,11 @@ fn validate_material_map(
                 "source material slots must be unique",
             ));
         }
-        if !(1..=4_095).contains(&mapping.voxel_material_slot) {
+        if mapping.voxel_material_slot == 0 {
             diagnostics.push(diagnostic(
                 "voxelAsset.invalidMaterialMapping",
                 format!("materialMap[{index}].voxelMaterialSlot"),
-                "voxel material slots must be in 1..=4095",
+                "voxel material slots must be nonzero",
             ));
         } else {
             output_slots.insert(mapping.voxel_material_slot);
@@ -483,11 +457,13 @@ fn validate_sparse_runs(
             };
             for local in endpoints {
                 match asset.grid.origin[axis].checked_add(local) {
-                    Some(address) if address.unsigned_abs() <= 1_000_000 => {}
+                    Some(address) if address.unsigned_abs() <= MAX_VOXEL_COORDINATE_ABS as u64 => {}
                     _ => diagnostics.push(diagnostic(
                         "voxelAsset.resourceLimit",
                         format!("representation.sparseRuns[{index}].start[{axis}]"),
-                        "mapped engine address exceeds +/-1,000,000 cells",
+                        format!(
+                            "mapped engine address exceeds +/-{MAX_VOXEL_COORDINATE_ABS} cells"
+                        ),
                     )),
                 }
             }
@@ -570,11 +546,11 @@ fn validate_string(
     diagnostics: &mut Vec<VoxelAssetDiagnostic>,
 ) {
     let path = path.into();
-    if value.trim().is_empty() || value.len() > MAX_STRING_BYTES {
+    if value.trim().is_empty() {
         diagnostics.push(diagnostic(
             "voxelAsset.invalidString",
             path,
-            format!("value must contain 1..={MAX_STRING_BYTES} UTF-8 bytes"),
+            "value must not be empty",
         ));
     }
 }

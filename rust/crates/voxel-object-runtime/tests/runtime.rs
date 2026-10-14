@@ -310,6 +310,91 @@ fn once_repeat_ping_pong_speed_and_invalid_clips_are_deterministic() {
 }
 
 #[test]
+fn objects_without_schema_quotas_round_trip_and_admit() {
+    let mut source = object_source();
+    source.material_palette = (1..5_000)
+        .chain([u16::MAX])
+        .map(|material_slot| VoxelAssetMaterialBinding {
+            material_slot,
+            material_asset_id: format!("material/slot-{material_slot}"),
+            display_name: None,
+        })
+        .collect();
+    source.material_palette[0].display_name = Some("n".repeat(10 * 1024));
+    source.clips[0].frames[0].duration_seconds = Some(90.0);
+    source.clips.extend((0..298).map(|index| VoxelObjectClip {
+        id: format!("extra-{index}"),
+        name: None,
+        frames_per_second: 1_000.0,
+        frames: vec![VoxelObjectAnimationFrame {
+            duration_seconds: None,
+            anchors: Vec::new(),
+            collision: None,
+            frame: frame([0, 0, 0], 1, u16::MAX),
+        }],
+    }));
+    let object = with_computed_voxel_object_hashes(source).unwrap();
+    let encoded = encode_voxel_object(&object).unwrap();
+    let decoded = voxel_asset::decode_voxel_object(&encoded).unwrap();
+    assert_eq!(decoded, object);
+    assert_eq!(encode_voxel_object(&decoded).unwrap(), encoded);
+
+    let admitted = admit_voxel_object_json(&encoded, VoxelObjectRuntimeLimits::default()).unwrap();
+    assert_eq!(admitted.clips().len(), 300);
+    assert_eq!(
+        admitted.clip("walk").unwrap().frame_durations_micros[0],
+        90_000_000
+    );
+    assert_eq!(
+        admitted.clip("extra-0").unwrap().frame_durations_micros,
+        [1_000]
+    );
+}
+
+#[test]
+fn ping_pong_plays_a_clip_whose_round_trip_exceeds_u64_microseconds() {
+    let mut source = object_source();
+    let walk = source
+        .clips
+        .iter_mut()
+        .find(|clip| clip.id == "walk")
+        .unwrap();
+    walk.frames[1].duration_seconds = Some(9.3e12);
+    walk.frames.push(VoxelObjectAnimationFrame {
+        duration_seconds: Some(0.1),
+        anchors: Vec::new(),
+        collision: None,
+        frame: frame([0, 0, 1], 1, 1),
+    });
+    source.bounds.max[2] = 1;
+    let admitted = admit_voxel_object(
+        with_computed_voxel_object_hashes(source).unwrap(),
+        VoxelObjectRuntimeLimits::default(),
+    )
+    .unwrap();
+
+    let mut player = VoxelObjectPlayer::new();
+    player
+        .play(
+            &admitted,
+            "walk",
+            VoxelObjectLoopMode::PingPong,
+            VoxelObjectPlaybackRate::NORMAL,
+            0,
+        )
+        .unwrap();
+    // Forward through the long middle frame and the last one, then back
+    // into the middle frame.
+    assert_eq!(
+        player
+            .sample_at(&admitted, u64::MAX - 1)
+            .unwrap()
+            .clip_frame,
+        Some(1)
+    );
+}
+
+#[test]
 fn presentation_frames_never_change_explicit_collision_selection() {
     let admitted = admit_voxel_object(object(), VoxelObjectRuntimeLimits::default()).unwrap();
     let policy = VoxelObjectCollisionPolicy::StableClipFrame {

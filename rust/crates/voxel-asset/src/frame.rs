@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
+use core_space::MAX_VOXEL_COORDINATE_ABS;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -7,8 +8,6 @@ use crate::{
     VoxelAsset, VoxelAssetBounds, VoxelRepresentation, VoxelRepresentationKind, VoxelSparseRun,
     MAX_REPRESENTED_VOXELS,
 };
-
-pub const MAX_VOXEL_FRAME_COORDINATE_ABS: u64 = 1_000_000;
 
 /// One complete local-space arrangement of material voxels.
 ///
@@ -170,7 +169,7 @@ pub(crate) fn semantic_diagnostics(
             ));
             continue;
         };
-        if !(1..=4_095).contains(&run.material_slot) || !materials.contains(&run.material_slot) {
+        if !materials.contains(&run.material_slot) {
             diagnostics.push(diagnostic(
                 "voxelFrame.unknownMaterial",
                 format!("representation.sparseRuns[{index}].materialSlot"),
@@ -193,14 +192,12 @@ pub(crate) fn semantic_diagnostics(
             .start
             .iter()
             .chain(std::iter::once(&end_x))
-            .any(|coordinate| coordinate.unsigned_abs() > MAX_VOXEL_FRAME_COORDINATE_ABS)
+            .any(|coordinate| coordinate.unsigned_abs() > MAX_VOXEL_COORDINATE_ABS as u64)
         {
             diagnostics.push(diagnostic(
                 "voxelFrame.resourceLimit",
                 format!("representation.sparseRuns[{index}]"),
-                format!(
-                    "local frame coordinates must stay within +/-{MAX_VOXEL_FRAME_COORDINATE_ABS}"
-                ),
+                format!("local frame coordinates must stay within +/-{MAX_VOXEL_COORDINATE_ABS}"),
             ));
         }
     }

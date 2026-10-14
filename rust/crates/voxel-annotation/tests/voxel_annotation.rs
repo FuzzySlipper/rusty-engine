@@ -1,12 +1,11 @@
 use voxel_annotation::{
-    decode_annotation_layer, encode_annotation_layer, export_annotation_layer,
-    finalize_annotation_draft, query_annotation_layer, VoxelAnnotationBounds,
-    VoxelAnnotationDiagnosticCode, VoxelAnnotationEditCommand, VoxelAnnotationEditError,
-    VoxelAnnotationEditService, VoxelAnnotationEditTransaction, VoxelAnnotationKind,
-    VoxelAnnotationLayerDraft, VoxelAnnotationLimits, VoxelAnnotationProvenanceKind,
-    VoxelAnnotationProvenanceRef, VoxelAnnotationQuery, VoxelAnnotationQueryError,
-    VoxelAnnotationQueryMode, VoxelAnnotationRegion, VoxelAnnotationSelection,
-    VoxelAnnotationSparseRun,
+    decode_annotation_layer, encode_annotation_layer, finalize_annotation_draft,
+    query_annotation_layer, VoxelAnnotationBounds, VoxelAnnotationDiagnosticCode,
+    VoxelAnnotationEditCommand, VoxelAnnotationEditError, VoxelAnnotationEditService,
+    VoxelAnnotationEditTransaction, VoxelAnnotationKind, VoxelAnnotationLayerDraft,
+    VoxelAnnotationProvenanceKind, VoxelAnnotationProvenanceRef, VoxelAnnotationQuery,
+    VoxelAnnotationQueryError, VoxelAnnotationQueryMode, VoxelAnnotationRegion,
+    VoxelAnnotationSelection, VoxelAnnotationSparseRun,
 };
 use voxel_asset::{
     with_computed_content_hash, VoxelAsset, VoxelAssetBounds, VoxelAssetGrid,
@@ -18,9 +17,7 @@ use voxel_asset::{
 #[test]
 fn draft_finalization_is_canonical_queryable_and_strict() {
     let target = target_asset();
-    let layer =
-        finalize_annotation_draft(draft(&target), &target, VoxelAnnotationLimits::default())
-            .unwrap();
+    let layer = finalize_annotation_draft(draft(&target), &target).unwrap();
     assert_eq!(layer.regions[0].selection.sparse_runs.len(), 1);
     assert_eq!(layer.regions[0].selection.sparse_runs[0].length, 3);
     assert!(layer.content_hashes.canonical_layer.starts_with("sha256:"));
@@ -64,9 +61,7 @@ fn draft_finalization_is_canonical_queryable_and_strict() {
 #[test]
 fn decode_takes_identity_from_contents_and_checks_the_target() {
     let target = target_asset();
-    let layer =
-        finalize_annotation_draft(draft(&target), &target, VoxelAnnotationLimits::default())
-            .unwrap();
+    let layer = finalize_annotation_draft(draft(&target), &target).unwrap();
     let encoded = encode_annotation_layer(&layer).unwrap();
 
     let mut edited: serde_json::Value = serde_json::from_str(&encoded).unwrap();
@@ -90,7 +85,7 @@ fn decode_takes_identity_from_contents_and_checks_the_target() {
 }
 
 #[test]
-fn validation_classifies_cycles_overlap_target_drift_and_quotas() {
+fn validation_classifies_cycles_overlap_target_drift_and_empty_text() {
     let target = target_asset();
     let mut invalid = draft(&target);
     invalid.target_voxel_data_hash =
@@ -98,7 +93,7 @@ fn validation_classifies_cycles_overlap_target_drift_and_quotas() {
     invalid.regions[0].parent_region_id = Some("region/cover".to_string());
     invalid.regions.push(VoxelAnnotationRegion {
         region_id: "region/cover".to_string(),
-        label: "Cover".to_string(),
+        label: " ".to_string(),
         kind: VoxelAnnotationKind::Cover,
         tags: vec![],
         parent_region_id: Some("region/spawn".to_string()),
@@ -107,15 +102,7 @@ fn validation_classifies_cycles_overlap_target_drift_and_quotas() {
             sparse_runs: vec![run(2, 0, 0, 3), run(3, 0, 0, 4)],
         },
     });
-    let error = finalize_annotation_draft(
-        invalid,
-        &target,
-        VoxelAnnotationLimits {
-            max_regions: 1,
-            ..VoxelAnnotationLimits::default()
-        },
-    )
-    .unwrap_err();
+    let error = finalize_annotation_draft(invalid, &target).unwrap_err();
     let codes: std::collections::BTreeSet<_> = error
         .diagnostics()
         .iter()
@@ -124,15 +111,13 @@ fn validation_classifies_cycles_overlap_target_drift_and_quotas() {
     assert!(codes.contains(&VoxelAnnotationDiagnosticCode::TargetHashMismatch));
     assert!(codes.contains(&VoxelAnnotationDiagnosticCode::ParentCycle));
     assert!(codes.contains(&VoxelAnnotationDiagnosticCode::DuplicateCell));
-    assert!(codes.contains(&VoxelAnnotationDiagnosticCode::QuotaExceeded));
+    assert!(codes.contains(&VoxelAnnotationDiagnosticCode::InvalidText));
 }
 
 #[test]
 fn edit_batches_are_hash_guarded_atomic_and_cover_region_operations() {
     let target = target_asset();
-    let mut layer =
-        finalize_annotation_draft(draft(&target), &target, VoxelAnnotationLimits::default())
-            .unwrap();
+    let mut layer = finalize_annotation_draft(draft(&target), &target).unwrap();
     let before = layer.clone();
     let stale = VoxelAnnotationEditService::apply(
         &mut layer,
@@ -229,18 +214,6 @@ fn edit_batches_are_hash_guarded_atomic_and_cover_region_operations() {
         Err(VoxelAnnotationEditError::InvalidCandidate(_))
     ));
     assert_eq!(layer, accepted);
-}
-
-#[test]
-fn export_is_compare_and_swap_guarded() {
-    let target = target_asset();
-    let layer =
-        finalize_annotation_draft(draft(&target), &target, VoxelAnnotationLimits::default())
-            .unwrap();
-    assert!(export_annotation_layer(&layer, "sha256:stale").is_err());
-    let exported = export_annotation_layer(&layer, &layer.content_hashes.canonical_layer).unwrap();
-    assert_eq!(exported.layer, layer);
-    assert!(exported.canonical_json.ends_with('\n'));
 }
 
 fn draft(target: &VoxelAsset) -> VoxelAnnotationLayerDraft {

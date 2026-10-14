@@ -12,21 +12,19 @@ mod model;
 mod query;
 
 pub use codec::{
-    decode_annotation_layer, encode_annotation_layer, export_annotation_layer,
-    finalize_annotation_draft, validate_annotation_layer, VoxelAnnotationError,
-    VoxelAnnotationExport, MAX_ANNOTATION_BYTES,
+    decode_annotation_layer, encode_annotation_layer, finalize_annotation_draft,
+    validate_annotation_layer, VoxelAnnotationError,
 };
 pub use edit::{
     VoxelAnnotationEditCommand, VoxelAnnotationEditError, VoxelAnnotationEditReceipt,
     VoxelAnnotationEditService, VoxelAnnotationEditTransaction,
-    MAX_ANNOTATION_COMMANDS_PER_TRANSACTION,
 };
 pub use model::{
     VoxelAnnotationBounds, VoxelAnnotationContentHashes, VoxelAnnotationDiagnostic,
     VoxelAnnotationDiagnosticCode, VoxelAnnotationKind, VoxelAnnotationLayer,
-    VoxelAnnotationLayerDraft, VoxelAnnotationLimits, VoxelAnnotationProvenanceKind,
-    VoxelAnnotationProvenanceRef, VoxelAnnotationRegion, VoxelAnnotationSelection,
-    VoxelAnnotationSparseRun, VOXEL_ANNOTATION_SCHEMA_VERSION,
+    VoxelAnnotationLayerDraft, VoxelAnnotationProvenanceKind, VoxelAnnotationProvenanceRef,
+    VoxelAnnotationRegion, VoxelAnnotationSelection, VoxelAnnotationSparseRun,
+    VOXEL_ANNOTATION_SCHEMA_VERSION,
 };
 pub use query::{
     query_annotation_layer, VoxelAnnotationQuery, VoxelAnnotationQueryError,
