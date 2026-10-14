@@ -351,13 +351,10 @@ impl RuntimeAppearanceProjector {
         let resources = &self.resources;
         let objects = &self.objects;
 
-        reject_duplicates(facts.iter().map(|fact| fact.object_id), removals)
-            .map_err(|id| AppearanceProjectionError::DuplicateObject { id })?;
-        reject_duplicates(light_facts.iter().map(|fact| fact.light_id), light_removals)
-            .map_err(|id| AppearanceProjectionError::DuplicateLight { id })?;
-
         // Collect the objects that change: removals, facts that differ from
         // the retained values, and users of appearances changed in the catalog.
+        // An object named more than once takes its last fact, and a fact
+        // wins over a removal.
         let mut changes: BTreeMap<u64, Change<NextObject<'_>>> = BTreeMap::new();
         for id in removals {
             if objects.contains_key(id) {
@@ -391,6 +388,7 @@ impl RuntimeAppearanceProjector {
                 .get(&id)
                 .is_some_and(|previous| unchanged(previous, &next, &self.dirty_appearances))
             {
+                changes.remove(&id);
                 continue;
             }
             changes.insert(id, Change::Put(next));
@@ -438,6 +436,8 @@ impl RuntimeAppearanceProjector {
             }
             if self.lights.get(&id) != Some(fact) {
                 light_changes.insert(id, Change::Put(fact));
+            } else {
+                light_changes.remove(&id);
             }
         }
 
@@ -891,16 +891,6 @@ fn unchanged(
         && previous.joint.as_deref() == next.joint
         && (!dirty_appearances.contains(next.appearance_id)
             || previous.appearance == *next.appearance)
-}
-
-/// Returns the first identity named twice across the facts and removals.
-fn reject_duplicates(facts: impl Iterator<Item = u64>, removals: &[u64]) -> Result<(), u64> {
-    let mut ids: Vec<u64> = facts.chain(removals.iter().copied()).collect();
-    ids.sort_unstable();
-    match ids.windows(2).find(|pair| pair[0] == pair[1]) {
-        Some(pair) => Err(pair[0]),
-        None => Ok(()),
-    }
 }
 
 fn depth(id: u64, parent: impl Fn(u64) -> Option<u64>) -> usize {
@@ -1518,17 +1508,43 @@ mod tests {
             projector.apply(&[child(1, 2), child(2, 1)], &[]),
             Err(AppearanceProjectionError::ParentCycle { .. })
         ));
-        assert_eq!(
-            projector.apply(&[fact(1), moved(1, 2.0)], &[]),
-            Err(AppearanceProjectionError::DuplicateObject { id: 1 })
-        );
-        assert_eq!(
-            projector.apply(&[fact(1)], &[1]),
-            Err(AppearanceProjectionError::DuplicateObject { id: 1 })
-        );
         assert_eq!(projector.object_handle(1), Some(handle));
         assert!(projector
             .apply(&[fact(1), fact(2)], &[])
+            .unwrap()
+            .is_empty());
+    }
+
+    /// An object named twice takes its last fact, even one equal to the
+    /// retained object, and a fact keeps an object its removal names.
+    #[test]
+    fn an_object_named_twice_takes_its_last_fact() {
+        let mut projector = projector();
+        projector.apply(&[fact(1)], &[]).unwrap();
+        let handle = projector.object_handle(1).unwrap();
+        assert!(projector
+            .apply(&[moved(1, 2.0), fact(1)], &[])
+            .unwrap()
+            .is_empty());
+        let moved_last = projector.apply(&[fact(1), moved(1, 2.0)], &[]).unwrap();
+        assert!(matches!(
+            moved_last.ops.as_slice(),
+            [RenderDiff::Update { handle: updated, transform: Some(transform), .. }]
+                if *updated == handle && transform.translation == [2.0, 0.0, 0.0]
+        ));
+        assert!(projector.apply(&[moved(1, 2.0)], &[1]).unwrap().is_empty());
+        assert_eq!(projector.object_handle(1), Some(handle));
+
+        let light = ambient_light(7, None);
+        projector
+            .apply_lights(std::slice::from_ref(&light), &[])
+            .unwrap();
+        let mut brighter = light.clone();
+        if let LightDescriptor::Ambient { intensity, .. } = &mut brighter.light {
+            *intensity = 0.9;
+        }
+        assert!(projector
+            .apply_lights(&[brighter, light.clone()], &[7])
             .unwrap()
             .is_empty());
     }

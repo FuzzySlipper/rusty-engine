@@ -340,7 +340,7 @@ impl RuntimeAuthoredContentBridge {
         entries: &[NativeAuthoredCatalogEntryInput],
         dependencies: &[NativeAuthoredCatalogDependencyInput],
     ) -> Result<NativeAuthoredCatalogHandle, AuthoredError> {
-        let values = Self::base_entries(entries, dependencies, false)?;
+        let (values, _) = Self::base_entries(entries, dependencies, false)?;
         self.retain(
             AdmittedAssetCatalog::admit(AssetCatalog::from_entries(values))
                 .map_err(admission_error)?,
@@ -350,7 +350,7 @@ impl RuntimeAuthoredContentBridge {
         entries: &[NativeAuthoredCatalogEntryInput],
         dependencies: &[NativeAuthoredCatalogDependencyInput],
         allow_material: bool,
-    ) -> Result<Vec<CatalogEntry>, AuthoredError> {
+    ) -> Result<(Vec<CatalogEntry>, BTreeMap<AssetId, usize>), AuthoredError> {
         let mut values = Vec::with_capacity(entries.len());
         for row in entries {
             let id = parse_id(row.id, "entry id").map_err(AuthoredError::simple)?;
@@ -374,6 +374,7 @@ impl RuntimeAuthoredContentBridge {
             }
             values.push(entry);
         }
+        let index = first_positions(values.iter().map(|entry| entry.id.clone()));
         for row in dependencies {
             let entry_id =
                 parse_id(row.entry_id, "dependency entry id").map_err(AuthoredError::simple)?;
@@ -385,14 +386,14 @@ impl RuntimeAuthoredContentBridge {
                 row.reference_hash,
             )
             .map_err(AuthoredError::simple)?;
-            let Some(entry) = values.iter_mut().find(|entry| entry.id == entry_id) else {
+            let Some(&position) = index.get(&entry_id) else {
                 return Err(AuthoredError::simple(
                     "dependency entry is absent from request",
                 ));
             };
-            entry.dependencies.push(dependency);
+            values[position].dependencies.push(dependency);
         }
-        Ok(values)
+        Ok((values, index))
     }
     fn admit_payload_rows(
         &mut self,
@@ -444,13 +445,10 @@ impl RuntimeAuthoredContentBridge {
             )
         }
         .map_err(|error| AuthoredError::simple(error.to_string()))?;
-        let mut values = Self::base_entries(entries, dependencies, true)?;
-        let mut seen = std::collections::BTreeSet::new();
+        // A payload row for an entry that already has one replaces it.
+        let (mut values, index) = Self::base_entries(entries, dependencies, true)?;
         for row in materials {
             let id = parse_id(row.entry_id, "material entry id").map_err(AuthoredError::simple)?;
-            if !seen.insert(("material", id.as_str().to_owned())) {
-                return Err(AuthoredError::simple("duplicate material payload row"));
-            }
             let texture = parse_optional_reference(
                 row.has_texture,
                 row.texture_id,
@@ -459,7 +457,7 @@ impl RuntimeAuthoredContentBridge {
                 row.texture_has_hash,
                 row.texture_hash,
             )?;
-            let entry = find_entry_mut(&mut values, &id)?;
+            let entry = find_entry_mut(&mut values, &index, &id)?;
             entry.material = Some(MaterialDefinition {
                 authority: MaterialAuthority {
                     solid: row.solid,
@@ -479,13 +477,9 @@ impl RuntimeAuthoredContentBridge {
                 },
             });
         }
-        seen.clear();
         for row in textures {
             let id = parse_id(row.entry_id, "texture entry id").map_err(AuthoredError::simple)?;
-            if !seen.insert(("texture", id.as_str().to_owned())) {
-                return Err(AuthoredError::simple("duplicate texture payload row"));
-            }
-            let entry = find_entry_mut(&mut values, &id)?;
+            let entry = find_entry_mut(&mut values, &index, &id)?;
             entry.texture = Some(TextureDefinition {
                 width: row.width,
                 height: row.height,
@@ -493,12 +487,8 @@ impl RuntimeAuthoredContentBridge {
                 wrap: texture_wrap(row.wrap)?,
             });
         }
-        seen.clear();
         for row in atlases {
             let id = parse_id(row.entry_id, "atlas entry id").map_err(AuthoredError::simple)?;
-            if !seen.insert(("atlas", id.as_str().to_owned())) {
-                return Err(AuthoredError::simple("duplicate voxel atlas payload row"));
-            }
             let texture = parse_reference_parts(
                 row.texture_id,
                 row.texture_version_kind,
@@ -507,22 +497,18 @@ impl RuntimeAuthoredContentBridge {
                 row.texture_hash,
             )
             .map_err(AuthoredError::simple)?;
-            let entry = find_entry_mut(&mut values, &id)?;
+            let entry = find_entry_mut(&mut values, &index, &id)?;
             entry.voxel_atlas = Some(VoxelAtlasDefinition {
                 schema_version: row.schema_version,
                 texture,
                 regions: Vec::new(),
             });
         }
-        seen.clear();
         for row in regions {
             let atlas_id = parse_id(row.atlas_entry_id, "atlas region owner id")
                 .map_err(AuthoredError::simple)?;
             let region_id = parse_text(row.id, "atlas region id").map_err(AuthoredError::simple)?;
-            if !seen.insert(("region", format!("{}:{region_id}", atlas_id.as_str()))) {
-                return Err(AuthoredError::simple("duplicate atlas region payload row"));
-            }
-            let entry = find_entry_mut(&mut values, &atlas_id)?;
+            let entry = find_entry_mut(&mut values, &index, &atlas_id)?;
             let atlas = entry
                 .voxel_atlas
                 .as_mut()
@@ -540,13 +526,9 @@ impl RuntimeAuthoredContentBridge {
                 inset: atlas_inset(row.inset)?,
             });
         }
-        seen.clear();
         for row in surfaces {
             let id = parse_id(row.material_entry_id, "voxel surface material id")
                 .map_err(AuthoredError::simple)?;
-            if !seen.insert(("surface", id.as_str().to_owned())) {
-                return Err(AuthoredError::simple("duplicate voxel surface payload row"));
-            }
             let mapping = match row.mapping_kind {
                 NativeAuthoredVoxelSurfaceMappingKind::Repeat => VoxelSurfaceMapping::Repeat {
                     texture: parse_reference_parts(
@@ -575,7 +557,7 @@ impl RuntimeAuthoredContentBridge {
                     tile_origin_cells: [row.tile_origin_x, row.tile_origin_y],
                 },
             };
-            let entry = find_entry_mut(&mut values, &id)?;
+            let entry = find_entry_mut(&mut values, &index, &id)?;
             let material = entry.material.as_mut().ok_or_else(|| {
                 AuthoredError::simple("voxel surface owner has no material payload")
             })?;
@@ -660,21 +642,27 @@ impl RuntimeAuthoredContentBridge {
                 .collect::<Result<Vec<_>, _>>()
                 .map_err(AuthoredError::simple)?,
         };
+        let index = first_positions(
+            registry
+                .definitions
+                .iter()
+                .map(|definition| definition.id.raw()),
+        );
         for row in parts {
-            let definition = find_prefab_definition_mut(&mut registry, row.prefab_id)?;
+            let definition = find_prefab_definition_mut(&mut registry, &index, row.prefab_id)?;
             definition
                 .parts
                 .push(prefab_part(row).map_err(AuthoredError::simple)?);
         }
         for row in roles {
-            let definition = find_prefab_definition_mut(&mut registry, row.prefab_id)?;
+            let definition = find_prefab_definition_mut(&mut registry, &index, row.prefab_id)?;
             definition.part_roles.push(PrefabPartRoleBinding {
                 role: parse_text(row.role, "prefab role").map_err(AuthoredError::simple)?,
                 part: PrefabPartId::new(row.part_id),
             });
         }
         for row in removed_roles {
-            let definition = find_prefab_definition_mut(&mut registry, row.prefab_id)?;
+            let definition = find_prefab_definition_mut(&mut registry, &index, row.prefab_id)?;
             let variant = definition.variant.as_mut().ok_or_else(|| {
                 AuthoredError::simple("removed role belongs to a non-variant prefab")
             })?;
@@ -683,7 +671,7 @@ impl RuntimeAuthoredContentBridge {
                 .push(parse_text(row.role, "removed prefab role").map_err(AuthoredError::simple)?);
         }
         for row in overrides {
-            let definition = find_prefab_definition_mut(&mut registry, row.prefab_id)?;
+            let definition = find_prefab_definition_mut(&mut registry, &index, row.prefab_id)?;
             let variant = definition
                 .variant
                 .as_mut()
@@ -726,7 +714,7 @@ impl RuntimeAuthoredContentBridge {
         &mut self,
         handle: NativeAuthoredPrefabRegistryHandle,
     ) -> Option<NativeAuthoredPrefabRegistryReadoutResult> {
-        let registry = self.prefab_registries.get(&handle.value)?.clone();
+        let registry = self.prefab_registries.get(&handle.value)?;
         let mut text = Text { values: vec![] };
         let mut definitions = vec![];
         let mut parts = vec![];
@@ -1073,8 +1061,10 @@ impl RuntimeAuthoredContentBridge {
         &mut self,
         handle: NativeAuthoredCatalogHandle,
     ) -> Option<NativeAuthoredCatalogReadoutResult> {
-        let catalog = self.catalogs.get(&handle.value)?.clone();
-        self.catalog_result(catalog.catalog(), catalog.canonical_hash())
+        let catalog = self.catalogs.get(&handle.value)?;
+        let (backing, result) = catalog_result(catalog.catalog(), catalog.canonical_hash())?;
+        self.borrowed.hold(backing);
+        Some(result)
     }
     fn resolve(
         &mut self,
@@ -1287,59 +1277,57 @@ impl RuntimeAuthoredContentBridge {
         self.borrowed.hold(backing);
         Ok(out)
     }
-    fn catalog_result(
-        &mut self,
-        catalog: &AssetCatalog,
-        canonical_hash: &str,
-    ) -> Option<NativeAuthoredCatalogReadoutResult> {
-        let mut text = Text { values: vec![] };
-        let mut dependencies = vec![];
-        let entries = catalog
-            .iter()
-            .map(|entry| {
-                for dependency in &entry.dependencies {
-                    dependencies.push(dependency_row(&mut text, entry, dependency));
-                }
-                entry_row(&mut text, entry)
-            })
-            .collect::<Vec<_>>();
-        let hash = canonical_hash.to_owned();
-        let payloads = payload_rows(&mut text, catalog.iter());
-        let backing = CatalogBacking {
-            _text: text,
-            entries,
-            dependencies,
-            materials: payloads.materials,
-            textures: payloads.textures,
-            voxel_atlases: payloads.voxel_atlases,
-            atlas_regions: payloads.atlas_regions,
-            voxel_surfaces: payloads.voxel_surfaces,
-            hash,
-        };
-        let out = NativeAuthoredCatalogReadoutResult {
-            canonical_hash: NativeUtf8Slice {
-                bytes: backing.hash.as_ptr(),
-                len: backing.hash.len(),
-            },
-            entry_count: u32::try_from(backing.entries.len()).ok()?,
-            entries: backing.entries.as_ptr(),
-            entries_len: backing.entries.len(),
-            dependencies: backing.dependencies.as_ptr(),
-            dependencies_len: backing.dependencies.len(),
-            materials: backing.materials.as_ptr(),
-            materials_len: backing.materials.len(),
-            textures: backing.textures.as_ptr(),
-            textures_len: backing.textures.len(),
-            voxel_atlases: backing.voxel_atlases.as_ptr(),
-            voxel_atlases_len: backing.voxel_atlases.len(),
-            atlas_regions: backing.atlas_regions.as_ptr(),
-            atlas_regions_len: backing.atlas_regions.len(),
-            voxel_surfaces: backing.voxel_surfaces.as_ptr(),
-            voxel_surfaces_len: backing.voxel_surfaces.len(),
-        };
-        self.borrowed.hold(backing);
-        Some(out)
-    }
+}
+fn catalog_result(
+    catalog: &AssetCatalog,
+    canonical_hash: &str,
+) -> Option<(CatalogBacking, NativeAuthoredCatalogReadoutResult)> {
+    let mut text = Text { values: vec![] };
+    let mut dependencies = vec![];
+    let entries = catalog
+        .iter()
+        .map(|entry| {
+            for dependency in &entry.dependencies {
+                dependencies.push(dependency_row(&mut text, entry, dependency));
+            }
+            entry_row(&mut text, entry)
+        })
+        .collect::<Vec<_>>();
+    let hash = canonical_hash.to_owned();
+    let payloads = payload_rows(&mut text, catalog.iter());
+    let backing = CatalogBacking {
+        _text: text,
+        entries,
+        dependencies,
+        materials: payloads.materials,
+        textures: payloads.textures,
+        voxel_atlases: payloads.voxel_atlases,
+        atlas_regions: payloads.atlas_regions,
+        voxel_surfaces: payloads.voxel_surfaces,
+        hash,
+    };
+    let out = NativeAuthoredCatalogReadoutResult {
+        canonical_hash: NativeUtf8Slice {
+            bytes: backing.hash.as_ptr(),
+            len: backing.hash.len(),
+        },
+        entry_count: u32::try_from(backing.entries.len()).ok()?,
+        entries: backing.entries.as_ptr(),
+        entries_len: backing.entries.len(),
+        dependencies: backing.dependencies.as_ptr(),
+        dependencies_len: backing.dependencies.len(),
+        materials: backing.materials.as_ptr(),
+        materials_len: backing.materials.len(),
+        textures: backing.textures.as_ptr(),
+        textures_len: backing.textures.len(),
+        voxel_atlases: backing.voxel_atlases.as_ptr(),
+        voxel_atlases_len: backing.voxel_atlases.len(),
+        atlas_regions: backing.atlas_regions.as_ptr(),
+        atlas_regions_len: backing.atlas_regions.len(),
+        voxel_surfaces: backing.voxel_surfaces.as_ptr(),
+        voxel_surfaces_len: backing.voxel_surfaces.len(),
+    };
+    Some((backing, out))
 }
 fn payload_rows<'a>(
     text: &mut Text,
@@ -1821,13 +1809,22 @@ fn parse_id(value: NativeUtf8Slice, field: &'static str) -> Result<AssetId, Stri
 fn parse_hash(value: NativeUtf8Slice, field: &'static str) -> Result<AssetHash, String> {
     AssetHash::parse(&parse_text(value, field)?).map_err(|error| error.to_string())
 }
+/// Each key's first position.
+fn first_positions<K: Ord>(keys: impl IntoIterator<Item = K>) -> BTreeMap<K, usize> {
+    let mut index = BTreeMap::new();
+    for (position, key) in keys.into_iter().enumerate() {
+        index.entry(key).or_insert(position);
+    }
+    index
+}
 fn find_entry_mut<'a>(
     values: &'a mut [CatalogEntry],
+    index: &BTreeMap<AssetId, usize>,
     id: &AssetId,
 ) -> Result<&'a mut CatalogEntry, AuthoredError> {
-    values
-        .iter_mut()
-        .find(|entry| entry.id == *id)
+    index
+        .get(id)
+        .map(|&position| &mut values[position])
         .ok_or_else(|| AuthoredError::simple("payload owner is absent from catalog entries"))
 }
 fn parse_optional_reference(
@@ -1963,14 +1960,14 @@ fn prefab_definition(
         },
     })
 }
-fn find_prefab_definition_mut(
-    registry: &mut PrefabRegistry,
+fn find_prefab_definition_mut<'a>(
+    registry: &'a mut PrefabRegistry,
+    index: &BTreeMap<u64, usize>,
     id: u64,
-) -> Result<&mut PrefabDefinition, AuthoredError> {
-    registry
-        .definitions
-        .iter_mut()
-        .find(|definition| definition.id.raw() == id)
+) -> Result<&'a mut PrefabDefinition, AuthoredError> {
+    index
+        .get(&id)
+        .map(|&position| &mut registry.definitions[position])
         .ok_or_else(|| AuthoredError::simple("prefab row refers to an absent definition"))
 }
 fn prefab_part(row: &NativeAuthoredPrefabPartInput) -> Result<PrefabPart, String> {
@@ -2245,78 +2242,60 @@ fn scene_document_from_rows(
             .collect::<Result<_, _>>()?,
         nodes: nodes.iter().map(scene_node_row).collect::<Result<_, _>>()?,
     };
+    let index = first_positions(nodes.iter().map(|row| row.id));
     for row in tags {
-        scene_node_mut(&mut document, row.node_id)?
+        scene_node_mut(&mut document, &index, row.node_id)?
             .metadata
             .tags
             .push(parse_text(row.tag, "scene node tag").map_err(AuthoredError::simple)?);
     }
     for row in instances {
-        let node = scene_node_mut(&mut document, row.node_id)?;
-        set_scene_node_kind(
-            node,
-            NativeAuthoredSceneNodeKind::EntityInstance,
-            SceneNodeKind::EntityInstance(SceneEntityInstance {
-                instance_id: parse_text(row.instance_id, "scene instance id")
-                    .map_err(AuthoredError::simple)?,
-                reference: match row.reference_kind {
-                    NativeAuthoredSceneEntityReferenceKind::EntityDefinition => {
-                        SceneEntityReference::EntityDefinition {
-                            stable_id: parse_text(
-                                row.entity_definition_id,
-                                "scene entity-definition reference",
-                            )
-                            .map_err(AuthoredError::simple)?,
-                        }
+        let node = scene_node_mut(&mut document, &index, row.node_id)?;
+        node.kind = SceneNodeKind::EntityInstance(SceneEntityInstance {
+            instance_id: parse_text(row.instance_id, "scene instance id")
+                .map_err(AuthoredError::simple)?,
+            reference: match row.reference_kind {
+                NativeAuthoredSceneEntityReferenceKind::EntityDefinition => {
+                    SceneEntityReference::EntityDefinition {
+                        stable_id: parse_text(
+                            row.entity_definition_id,
+                            "scene entity-definition reference",
+                        )
+                        .map_err(AuthoredError::simple)?,
                     }
-                    NativeAuthoredSceneEntityReferenceKind::Prefab => {
-                        SceneEntityReference::Prefab {
-                            prefab_id: PrefabId::new(row.prefab_id),
-                            variant_id: row
-                                .has_variant
-                                .then(|| parse_text(row.variant_id, "scene prefab variant id"))
-                                .transpose()
-                                .map_err(AuthoredError::simple)?,
-                            instantiation_seed: row.instantiation_seed,
-                        }
-                    }
+                }
+                NativeAuthoredSceneEntityReferenceKind::Prefab => SceneEntityReference::Prefab {
+                    prefab_id: PrefabId::new(row.prefab_id),
+                    variant_id: row
+                        .has_variant
+                        .then(|| parse_text(row.variant_id, "scene prefab variant id"))
+                        .transpose()
+                        .map_err(AuthoredError::simple)?,
+                    instantiation_seed: row.instantiation_seed,
                 },
-                spawn_marker_id: row
-                    .has_spawn_marker
-                    .then(|| parse_text(row.spawn_marker_id, "scene spawn marker id"))
-                    .transpose()
-                    .map_err(AuthoredError::simple)?,
-            }),
-        )?;
+            },
+            spawn_marker_id: row
+                .has_spawn_marker
+                .then(|| parse_text(row.spawn_marker_id, "scene spawn marker id"))
+                .transpose()
+                .map_err(AuthoredError::simple)?,
+        });
     }
     for row in lights {
-        let node = scene_node_mut(&mut document, row.node_id)?;
-        set_scene_node_kind(
-            node,
-            NativeAuthoredSceneNodeKind::Light,
-            SceneNodeKind::Light(scene_light(row)),
-        )?;
+        let node = scene_node_mut(&mut document, &index, row.node_id)?;
+        node.kind = SceneNodeKind::Light(scene_light(row));
     }
     for row in bootstraps {
-        let node = scene_node_mut(&mut document, row.node_id)?;
-        set_scene_node_kind(
-            node,
-            NativeAuthoredSceneNodeKind::Bootstrap,
-            SceneNodeKind::Bootstrap(SceneBootstrapBindings::default()),
-        )?;
+        let node = scene_node_mut(&mut document, &index, row.node_id)?;
+        node.kind = SceneNodeKind::Bootstrap(SceneBootstrapBindings::default());
     }
     for row in generators {
-        let node = scene_node_mut(&mut document, row.bootstrap_node_id)?;
+        let node = scene_node_mut(&mut document, &index, row.bootstrap_node_id)?;
         let SceneNodeKind::Bootstrap(bindings) = &mut node.kind else {
             return Err(AuthoredError::simple(
                 "scene generator owner is not a bootstrap node",
             ));
         };
-        if bindings.generator.is_some() {
-            return Err(AuthoredError::simple(
-                "scene bootstrap has duplicate generator rows",
-            ));
-        }
         bindings.generator = Some(SceneGeneratorBinding {
             provider_id: parse_text(row.provider_id, "scene generator provider id")
                 .map_err(AuthoredError::simple)?,
@@ -2326,7 +2305,7 @@ fn scene_document_from_rows(
         });
     }
     for row in catalog_bindings {
-        let node = scene_node_mut(&mut document, row.bootstrap_node_id)?;
+        let node = scene_node_mut(&mut document, &index, row.bootstrap_node_id)?;
         let SceneNodeKind::Bootstrap(bindings) = &mut node.kind else {
             return Err(AuthoredError::simple(
                 "scene catalog binding owner is not a bootstrap node",
@@ -2341,11 +2320,13 @@ fn scene_document_from_rows(
                 .map_err(AuthoredError::simple)?,
         });
     }
-    for row in nodes {
-        let node = scene_node_mut(&mut document, row.id)?;
+    // Each node's declared kind needs its typed detail row: a light,
+    // instance or bootstrap row fills a node its node row left empty, and
+    // a later typed row for a node replaces the earlier one.
+    for (row, node) in nodes.iter().zip(&document.nodes) {
         if !scene_node_kind_matches(row.kind, &node.kind) {
             return Err(AuthoredError::simple(
-                "scene node kind requires exactly one matching typed detail row",
+                "scene node kind requires a matching typed detail row",
             ));
         }
     }
@@ -2414,33 +2395,15 @@ fn scene_node_row(row: &NativeAuthoredSceneNodeInput) -> Result<SceneNodeRecord,
         },
     })
 }
-fn scene_node_mut(
-    document: &mut FlatSceneDocument,
+fn scene_node_mut<'a>(
+    document: &'a mut FlatSceneDocument,
+    index: &BTreeMap<u64, usize>,
     node_id: u64,
-) -> Result<&mut SceneNodeRecord, AuthoredError> {
-    document
-        .nodes
-        .iter_mut()
-        .find(|node| node.id.raw() == node_id)
+) -> Result<&'a mut SceneNodeRecord, AuthoredError> {
+    index
+        .get(&node_id)
+        .map(|&position| &mut document.nodes[position])
         .ok_or_else(|| AuthoredError::simple("scene detail row refers to an absent node"))
-}
-fn set_scene_node_kind(
-    node: &mut SceneNodeRecord,
-    expected: NativeAuthoredSceneNodeKind,
-    kind: SceneNodeKind,
-) -> Result<(), AuthoredError> {
-    if !matches!(node.kind, SceneNodeKind::EmptyGroup) {
-        return Err(AuthoredError::simple(
-            "scene node has duplicate typed detail rows",
-        ));
-    }
-    node.kind = kind;
-    if !scene_node_kind_matches(expected, &node.kind) {
-        return Err(AuthoredError::simple(
-            "scene typed detail row does not match node kind",
-        ));
-    }
-    Ok(())
 }
 fn scene_node_kind_matches(expected: NativeAuthoredSceneNodeKind, kind: &SceneNodeKind) -> bool {
     matches!(
@@ -4093,7 +4056,7 @@ mod tests {
         ];
         let (texture_id, texture_version_kind, texture_version, texture_has_hash, texture_hash) =
             reference(b"texture/stone", b"ccdd");
-        let materials = [NativeAuthoredMaterialInput {
+        let stone = NativeAuthoredMaterialInput {
             entry_id: slice(b"material/stone"),
             solid: true,
             collidable: true,
@@ -4111,7 +4074,15 @@ mod tests {
             emission_color: color(0.0, 0.0, 0.0, 1.0),
             emissive: 0.0,
             uv_strategy: NativeAuthoredUvStrategy::Atlas,
-        }];
+        };
+        // A repeated payload row replaces the earlier one for its entry.
+        let materials = [
+            NativeAuthoredMaterialInput {
+                color: color(0.1, 0.1, 0.1, 1.0),
+                ..stone
+            },
+            stone,
+        ];
         let textures = [NativeAuthoredTextureInput {
             entry_id: slice(b"texture/stone"),
             width: 16,
@@ -4224,6 +4195,7 @@ mod tests {
             ),
             (3, 1, 1, 1, 1, 1)
         );
+        assert_eq!(unsafe { (*readout.materials).color.r }, 0.5);
         let material_request = NativeAuthoredMaterialResolveRequest {
             catalog,
             material_id: slice(b"material/stone"),
@@ -4823,6 +4795,61 @@ mod tests {
             &bindings,
         )
         .unwrap();
+        // A repeated typed row replaces the earlier one for its node, as a
+        // repeated generator row does for its bootstrap; a typed row that
+        // does not match its node's declared kind is still refused.
+        let brighter = NativeAuthoredSceneLightInput {
+            intensity: 0.75,
+            ..lights[0]
+        };
+        let reseeded = NativeAuthoredSceneGeneratorInput {
+            seed: 10,
+            ..generators[0]
+        };
+        let repeated = scene_document_from_rows(
+            request,
+            &dependencies,
+            &nodes,
+            &[],
+            &instances,
+            &[lights[0], brighter],
+            &bootstraps,
+            &[generators[0], reseeded],
+            &bindings,
+        )
+        .unwrap();
+        let node = |id| {
+            repeated
+                .nodes
+                .iter()
+                .find(|node| node.id.raw() == id)
+                .unwrap()
+        };
+        assert!(matches!(
+            node(3).kind,
+            SceneNodeKind::Light(SceneLight::Ambient { intensity, .. }) if intensity == 0.75
+        ));
+        assert!(matches!(
+            &node(4).kind,
+            SceneNodeKind::Bootstrap(bindings)
+                if bindings.generator.as_ref().is_some_and(|generator| generator.seed == 10)
+        ));
+        let on_mesh = NativeAuthoredSceneLightInput {
+            node_id: 5,
+            ..lights[0]
+        };
+        assert!(scene_document_from_rows(
+            request,
+            &dependencies,
+            &nodes,
+            &[],
+            &instances,
+            &[lights[0], on_mesh],
+            &bootstraps,
+            &generators,
+            &bindings,
+        )
+        .is_err());
         let mut resources = BTreeMap::new();
         resources.insert(
             "scene.json".to_owned(),

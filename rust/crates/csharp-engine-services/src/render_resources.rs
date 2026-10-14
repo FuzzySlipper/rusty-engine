@@ -1119,26 +1119,26 @@ impl GeneratedMeshes {
     ) -> Result<BoundGeneratedMesh, CsharpEngineServicesError> {
         let invalid =
             |message: &str| CsharpEngineServicesError::new("CSHARP_MESH_ADMISSION", message);
-        let mut bound_slots = BTreeSet::new();
-        let mut material_slots = Vec::new();
-        let mut material_handles = BTreeSet::new();
+        // A repeated slot takes its last binding; each slot the groups use
+        // must have one, and a slot they do not use is not resolved.
+        let mut by_slot = BTreeMap::new();
         for binding in bindings {
             let slot = u16::try_from(binding.material_slot)
                 .map_err(|_| invalid("mesh material slot exceeds u16"))?;
-            if !slots.contains(&slot) || !bound_slots.insert(slot) {
-                return Err(invalid(
-                    "mesh bindings must name each used slot exactly once",
-                ));
-            }
-            let material = material_id(binding.material.value)
+            by_slot.insert(slot, binding.material.value);
+        }
+        let mut material_slots = Vec::with_capacity(slots.len());
+        let mut material_handles = BTreeSet::new();
+        for slot in slots {
+            let handle = *by_slot.get(&slot).ok_or_else(|| {
+                invalid(&format!(
+                    "mesh bindings do not bind group material slot {slot}"
+                ))
+            })?;
+            let material = material_id(handle)
                 .ok_or_else(|| invalid("mesh binding requires a live material"))?;
             material_slots.push(MeshMaterialSlot { slot, material });
-            material_handles.insert(binding.material.value);
-        }
-        if slots != bound_slots {
-            return Err(invalid(
-                "mesh bindings must cover every group material slot",
-            ));
+            material_handles.insert(handle);
         }
         let handle = self.next_resource;
         let next = handle

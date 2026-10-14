@@ -1,5 +1,3 @@
-use std::collections::BTreeSet;
-
 use crate::RenderLayer;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -1177,11 +1175,7 @@ impl SpriteAtlasDescriptor {
         if self.frames.is_empty() {
             return Err(SpriteAtlasError::NoFrames);
         }
-        let mut seen = BTreeSet::new();
         for rect in &self.frames {
-            if !seen.insert(rect.frame) {
-                return Err(SpriteAtlasError::DuplicateFrame { frame: rect.frame });
-            }
             if !rect
                 .uv_min
                 .iter()
@@ -1203,8 +1197,9 @@ impl SpriteAtlasDescriptor {
         Ok(())
     }
 
+    /// A frame listed twice is its last rectangle.
     pub fn frame_rect(&self, frame: u32) -> Option<&SpriteFrameRect> {
-        self.frames.iter().find(|rect| rect.frame == frame)
+        self.frames.iter().rfind(|rect| rect.frame == frame)
     }
 }
 
@@ -1213,7 +1208,6 @@ pub enum SpriteAtlasError {
     Asset(RenderAssetError),
     InvalidTextureReference,
     NoFrames,
-    DuplicateFrame { frame: u32 },
     UvOutOfRange { frame: u32 },
     DegenerateRect { frame: u32 },
     InvalidFrameSize { frame: u32 },
@@ -1570,29 +1564,20 @@ mod tests {
     }
 
     #[test]
-    fn atlas_validation_rejects_duplicate_frames() {
+    fn a_repeated_atlas_frame_is_its_last_rectangle() {
+        let rect = |u: f32| SpriteFrameRect {
+            frame: 0,
+            uv_min: [u, 0.0],
+            uv_max: [u + 0.5, 1.0],
+            size: None,
+        };
         let atlas = SpriteAtlasDescriptor {
             id: "sprite-sheet/sparks".to_string(),
             texture: "texture/sparks".to_string(),
-            frames: vec![
-                SpriteFrameRect {
-                    frame: 0,
-                    uv_min: [0.0, 0.0],
-                    uv_max: [0.5, 1.0],
-                    size: None,
-                },
-                SpriteFrameRect {
-                    frame: 0,
-                    uv_min: [0.5, 0.0],
-                    uv_max: [1.0, 1.0],
-                    size: None,
-                },
-            ],
+            frames: vec![rect(0.0), rect(0.5)],
         };
-        assert_eq!(
-            atlas.validate(),
-            Err(SpriteAtlasError::DuplicateFrame { frame: 0 })
-        );
+        assert_eq!(atlas.validate(), Ok(()));
+        assert_eq!(atlas.frame_rect(0), Some(&rect(0.5)));
     }
 
     #[test]

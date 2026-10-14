@@ -971,9 +971,6 @@ pub enum AppearanceProjectionError {
         owner: String,
         material: String,
     },
-    DuplicateObject {
-        id: u64,
-    },
     UnsafeObjectId {
         id: u64,
     },
@@ -1008,9 +1005,6 @@ pub enum AppearanceProjectionError {
     MissingSpriteAtlas {
         id: u64,
         asset: String,
-    },
-    DuplicateLight {
-        id: u64,
     },
     UnsafeLightId {
         id: u64,

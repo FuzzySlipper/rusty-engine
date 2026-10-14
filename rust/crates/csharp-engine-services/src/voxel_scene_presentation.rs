@@ -21,8 +21,9 @@ use render_model::{
     RenderDiff, RenderFrameDiff, RenderMaterialDescriptor, TextureDescriptor, Transform,
 };
 use render_projection::{
-    voxel_material_id, VoxelLevelOfDetail, VoxelMaterialSlotMapping, VoxelProjectionInstance,
-    VoxelRenderProjector, VoxelScatter, VoxelScatterExclusion, VoxelScatterField,
+    voxel_material_id, VoxelLevelOfDetail, VoxelMaterialSlotMapping, VoxelProjectionError,
+    VoxelProjectionInstance, VoxelRenderProjector, VoxelScatter, VoxelScatterExclusion,
+    VoxelScatterField,
 };
 
 use crate::{
@@ -211,9 +212,7 @@ impl RuntimeVoxelScenePresentationBridge {
         &mut self,
         request: NativeProjectVoxelSceneDirectionalRequest,
     ) -> Result<NativeVoxelScenePresentationHandle, CsharpEngineServicesError> {
-        let scene = self.spatial.scene(request.session)?;
         let resolved = self.materials_for_scene(
-            &scene,
             request.materials,
             request.materials_len,
             request.face_materials,
@@ -643,20 +642,17 @@ impl RuntimeVoxelScenePresentationBridge {
         &mut self,
         request: NativeUpdateVoxelScenePresentationDirectionalRequest,
     ) -> Result<NativeVoxelScenePresentationReadout, CsharpEngineServicesError> {
-        let session = self
-            .staged
-            .as_ref()
-            .and_then(|call| call.state.presentations.get(&request.presentation.value))
-            .map(|presentation| presentation.session)
-            .ok_or_else(|| {
-                CsharpEngineServicesError::new(
-                    "CSHARP_VOXEL_SCENE_PRESENTATION_HANDLE",
-                    "voxel scene presentation handle is not retained",
-                )
-            })?;
-        let scene = self.spatial.scene(session)?;
+        if !self.staged.as_ref().is_some_and(|call| {
+            call.state
+                .presentations
+                .contains_key(&request.presentation.value)
+        }) {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_VOXEL_SCENE_PRESENTATION_HANDLE",
+                "voxel scene presentation handle is not retained",
+            ));
+        }
         let resolved = self.materials_for_scene(
-            &scene,
             request.materials,
             request.materials_len,
             request.face_materials,
@@ -887,9 +883,11 @@ impl RuntimeVoxelScenePresentationBridge {
         })
     }
 
+    /// The product's bindings, one per source slot (a repeated slot takes
+    /// its last binding). Whether they cover the slots the scene uses is
+    /// resolved when its chunks are projected.
     fn materials_for_scene(
         &mut self,
-        scene: &VoxelCollisionScene,
         pointer: *const NativeVoxelSceneMaterialBinding,
         len: usize,
         face_pointer: *const NativeVoxelSceneFaceMaterialBinding,
@@ -901,10 +899,6 @@ impl RuntimeVoxelScenePresentationBridge {
         let face_bindings = unsafe {
             borrowed_slice(face_pointer, face_len, "voxel scene face material bindings")?
         };
-        let expected = scene
-            .mesh_chunks()
-            .flat_map(|chunk| chunk.groups.iter().map(|group| group.material_slot))
-            .collect::<BTreeSet<_>>();
         let slots = bindings
             .iter()
             .map(|binding| {
@@ -916,22 +910,6 @@ impl RuntimeVoxelScenePresentationBridge {
                     ))
             })
             .collect::<Result<BTreeMap<_, _>, _>>()?;
-        if slots.len() != bindings.len() {
-            return Err(CsharpEngineServicesError::new(
-                "CSHARP_VOXEL_SCENE_PRESENTATION_MATERIALS",
-                "voxel scene material bindings contain duplicate source slots",
-            ));
-        }
-        let missing = expected
-            .difference(&slots.keys().copied().collect())
-            .copied()
-            .collect::<Vec<_>>();
-        if !missing.is_empty() {
-            return Err(CsharpEngineServicesError::new(
-                "CSHARP_VOXEL_SCENE_PRESENTATION_MATERIALS",
-                format!("voxel scene material bindings are missing used source slots {missing:?}"),
-            ));
-        }
         // Reconstructed groups carry the face of their box projection, so
         // face overrides select materials on smooth surfaces as on cubes.
         let mut overrides = BTreeMap::new();
@@ -943,36 +921,24 @@ impl RuntimeVoxelScenePresentationBridge {
                 )
             })?;
             let direction = native_direction(binding.face)?;
+            // The slot's other faces and its reconstructed surfaces draw
+            // with the base binding.
             if !slots.contains_key(&slot) {
                 return Err(CsharpEngineServicesError::new(
                     "CSHARP_VOXEL_SCENE_PRESENTATION_DIRECTIONAL",
                     "face material override requires a base binding for its source slot",
                 ));
             }
-            if overrides
-                .insert(
-                    (
-                        slot,
-                        u16::try_from(binding.variant)
-                            .ok()
-                            .filter(|v| *v <= 8191)
-                            .ok_or_else(|| {
-                                CsharpEngineServicesError::new(
-                                    "CSHARP_VOXEL_STATE",
-                                    "variant must fit thirteen bits",
-                                )
-                            })?,
-                        direction,
-                    ),
-                    binding.material,
-                )
-                .is_some()
-            {
-                return Err(CsharpEngineServicesError::new(
-                    "CSHARP_VOXEL_SCENE_PRESENTATION_DIRECTIONAL",
-                    "face material overrides contained a duplicate source slot and direction",
-                ));
-            }
+            let variant = u16::try_from(binding.variant)
+                .ok()
+                .filter(|v| *v <= 8191)
+                .ok_or_else(|| {
+                    CsharpEngineServicesError::new(
+                        "CSHARP_VOXEL_STATE",
+                        "variant must fit thirteen bits",
+                    )
+                })?;
+            overrides.insert((slot, variant, direction), binding.material);
         }
         let appearance = self.appearance_mut()?;
         let mut resolved_by_handle = BTreeMap::new();
@@ -1181,8 +1147,17 @@ fn project_all_presentations(
     let result = state
         .projector
         .project_mapped_directional(&instances, &materials, &material_slots)
-        .map_err(|error| {
-            CsharpEngineServicesError::new("CSHARP_VOXEL_SCENE_PRESENTATION", format!("{error:?}"))
+        .map_err(|error| match error {
+            VoxelProjectionError::MissingMaterial { instance, slot } => {
+                CsharpEngineServicesError::new(
+                    "CSHARP_VOXEL_SCENE_PRESENTATION_MATERIALS",
+                    format!("{instance} has no material binding for used source slot {slot}"),
+                )
+            }
+            error => CsharpEngineServicesError::new(
+                "CSHARP_VOXEL_SCENE_PRESENTATION",
+                format!("{error:?}"),
+            ),
         })?;
     let mut frame = result.frame;
     let defined = frame.ops.iter().filter_map(|operation| match operation {
@@ -2480,7 +2455,7 @@ mod tests {
             };
             assert_eq!(
                 std::str::from_utf8(message).unwrap(),
-                "voxel scene material bindings are missing used source slots [1]"
+                "csharp-voxel-scene-presentation-1 has no material binding for used source slot 1"
             );
         }
         assert_eq!(rejected.value, 0);
@@ -2891,9 +2866,14 @@ mod tests {
                     if material.id == voxel_material_id(u16::try_from(new_base.renderer_slot).unwrap())
             )));
 
-        // A duplicate face override is rejected before the retained mapping or
-        // renderer payload can be replaced.
-        let duplicate = [overrides[0], overrides[0]];
+        // A repeated face override takes its last material.
+        let duplicate = [
+            NativeVoxelSceneFaceMaterialBinding {
+                material: zero,
+                ..overrides[0]
+            },
+            overrides[0],
+        ];
         let mut readout = NativeVoxelScenePresentationReadout::default();
         assert_eq!(
             unsafe {
@@ -2910,7 +2890,7 @@ mod tests {
                     &mut std::mem::zeroed::<NativeOperationErrorReceipt>(),
                 )
             },
-            0
+            ABI_OK
         );
         let none = [NativeVoxelSceneFaceMaterialBinding {
             variant: 0,

@@ -117,6 +117,40 @@ fn shared_instances_materialize_one_resource() {
     assert!(unchanged.frame.ops.is_empty());
 }
 
+/// An instance id named twice takes its last entry. A material that left
+/// use is defined again when an instance uses it again.
+#[test]
+fn a_repeated_instance_takes_its_last_entry() {
+    let object = admitted();
+    let mut projector = VoxelObjectRenderProjector::new();
+    let mut moved = instance(&object, 1);
+    moved.transform.translation = [2.0, 0.0, 0.0];
+    let created = projector
+        .project(&[instance(&object, 0), moved], &materials())
+        .unwrap();
+    let created_instances: Vec<_> = created
+        .frame
+        .ops
+        .iter()
+        .filter_map(|operation| match operation {
+            RenderDiff::CreateVoxelObjectInstance { instance, .. } => Some(instance),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(created_instances.len(), 1);
+    assert_eq!(created_instances[0].frame, 1);
+    assert_eq!(created_instances[0].transform.translation, [2.0, 0.0, 0.0]);
+
+    projector.project(&[], &materials()).unwrap();
+    let again = projector
+        .project(&[instance(&object, 0)], &materials())
+        .unwrap();
+    assert!(matches!(
+        again.frame.ops[0],
+        RenderDiff::DefineMaterial { .. }
+    ));
+}
+
 #[test]
 fn packed_projection_moves_mesh_streams_out_of_the_control_frame() {
     let object = admitted();

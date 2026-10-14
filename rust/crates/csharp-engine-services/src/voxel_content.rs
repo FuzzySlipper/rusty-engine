@@ -5,11 +5,7 @@
 //! feeds a retained asset into the canonical scene; presentation and material
 //! resource realization remain separate Engine-owned services.
 
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    ffi::c_void,
-    sync::Arc,
-};
+use std::{collections::BTreeMap, ffi::c_void, sync::Arc};
 
 use crate::operation_diagnostics::{clear_receipt, refuse};
 use csharp_engine_abi::*;
@@ -846,28 +842,8 @@ impl RuntimeVoxelContentBridge {
         // SAFETY: generated C# pins this bounded typed array for the direct
         // callback. Every descriptor below is copied before return.
         let bindings = unsafe { borrowed_slice(pointer, len, "voxel-object material bindings")? };
-        let expected = object
-            .source()
-            .material_palette
-            .iter()
-            .map(|binding| binding.material_slot)
-            .collect::<BTreeSet<_>>();
-        let actual = bindings
-            .iter()
-            .map(|binding| u16::try_from(binding.material_slot))
-            .collect::<Result<BTreeSet<_>, _>>()
-            .map_err(|_| {
-                CsharpEngineServicesError::new(
-                    "CSHARP_VOXEL_PRESENTATION_MATERIALS",
-                    "voxel presentation material slot exceeded the admitted object slot range",
-                )
-            })?;
-        if actual.len() != bindings.len() || actual != expected {
-            return Err(CsharpEngineServicesError::new(
-                "CSHARP_VOXEL_PRESENTATION_MATERIALS",
-                "voxel presentation requires exactly one live material binding for every object palette slot",
-            ));
-        }
+        // One binding per slot; a repeated slot takes its last binding and a
+        // slot the palette does not use is not resolved.
         let by_slot = bindings
             .iter()
             .map(|binding| {
@@ -887,7 +863,15 @@ impl RuntimeVoxelContentBridge {
             .material_palette
             .iter()
             .map(|palette| {
-                let material = by_slot[&palette.material_slot];
+                let material = *by_slot.get(&palette.material_slot).ok_or_else(|| {
+                    CsharpEngineServicesError::new(
+                        "CSHARP_VOXEL_PRESENTATION_MATERIALS",
+                        format!(
+                            "voxel presentation has no material binding for palette slot {}",
+                            palette.material_slot
+                        ),
+                    )
+                })?;
                 let mut descriptor = appearance.voxel_material_descriptor(material)?;
                 descriptor.id = palette.material_asset_id.clone();
                 Ok((descriptor.id.clone(), descriptor))
@@ -3849,6 +3833,153 @@ mod tests {
             },
             NativeMagicaVoxelAdmissionStatus::InvalidRequest as i32
         );
+    }
+
+    /// Each palette slot takes the last binding naming it; a binding for a
+    /// slot the palette does not use is not resolved, and a palette slot
+    /// without a binding is refused.
+    #[test]
+    fn object_presentation_resolves_each_palette_slot_from_its_last_binding() {
+        let mut bridge = RuntimeVoxelContentBridge::new();
+        let mut appearance =
+            RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), BTreeMap::new());
+        let api = super::api(&mut bridge, &mut appearance);
+        let body = encode_voxel_object(&object())
+            .expect("canonical object")
+            .into_bytes();
+        let mut object_handle = NativeVoxelObjectHandle::default();
+        assert_eq!(
+            unsafe {
+                (api.admit_object)(
+                    api.context,
+                    &NativeAdmitVoxelObjectRequest {
+                        bytes: NativeByteSlice {
+                            bytes: body.as_ptr(),
+                            len: body.len(),
+                        },
+                    },
+                    &mut object_handle,
+                    std::ptr::null_mut(),
+                )
+            },
+            ABI_OK
+        );
+        appearance.begin_call();
+        let material = |appearance: &mut RuntimeAppearanceBridge, red: f32| {
+            let white = NativeColor {
+                r: 1.0,
+                g: 1.0,
+                b: 1.0,
+                a: 1.0,
+            };
+            let mut handle = NativeMaterialHandle::default();
+            let request = NativeMaterialRequest {
+                texture_scale: NativeVec2::default(),
+                texture_offset: NativeVec2::default(),
+                stochastic_tiling: 0.0,
+                shader: Default::default(),
+                triplanar_sharpness: 0.0,
+                color: NativeColor { r: red, ..white },
+                texture: NativeRenderResourceReference::default(),
+                roughness: 1.0,
+                metalness: 0.0,
+                normal_map: NativeRenderResourceReference::default(),
+                normal_scale: 1.0,
+                texture_tint: white,
+                emission_color: NativeVec3::default(),
+                emission_intensity: 0.0,
+                double_sided: false,
+                alpha_mode: NativeMaterialAlphaMode::Opaque,
+                alpha_cutoff: 0.5,
+                emission_map: Default::default(),
+                occlusion_map: Default::default(),
+                orm_map: Default::default(),
+                occlusion_strength: 0.0,
+                unlit: false,
+                flat_shading: false,
+                keep_dry: false,
+                wind_bend: 0.0,
+                wind_flutter: 0.0,
+                water: Default::default(),
+                translucent_shadow: false,
+            };
+            assert_eq!(
+                unsafe {
+                    crate::appearance::create_material(
+                        (appearance as *mut RuntimeAppearanceBridge).cast(),
+                        request,
+                        &mut handle,
+                        std::ptr::null_mut(),
+                    )
+                },
+                ABI_OK
+            );
+            handle
+        };
+        let first = material(&mut appearance, 0.25);
+        let last = material(&mut appearance, 0.75);
+        let bindings = [(1, first), (9, first), (1, last)].map(|(material_slot, material)| {
+            NativeVoxelObjectMaterialBinding {
+                material_slot,
+                material,
+            }
+        });
+        let transform = NativeTransform {
+            translation: NativeVec3::default(),
+            rotation: NativeQuat {
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+                w: 1.0,
+            },
+            scale: NativeVec3 {
+                x: 1.0,
+                y: 1.0,
+                z: 1.0,
+            },
+        };
+        bridge.begin_call();
+        let presentation = bridge
+            .project_object(NativeProjectVoxelObjectRequest {
+                object: object_handle,
+                runtime_frame: 0,
+                transform,
+                visible: true,
+                materials: bindings.as_ptr(),
+                materials_len: bindings.len(),
+            })
+            .expect("presentation");
+        let defined: Vec<_> = bridge
+            .staged_presentation
+            .as_ref()
+            .unwrap()
+            .frames
+            .iter()
+            .flat_map(|frame| &frame.ops)
+            .filter_map(|operation| match operation {
+                render_model::RenderDiff::DefineMaterial { material } => Some(material),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(defined.len(), 1);
+        assert_eq!(defined[0].id, "material/bridge-test");
+        assert_eq!(defined[0].color[0], 0.75);
+
+        let unbound = [NativeVoxelObjectMaterialBinding {
+            material_slot: 9,
+            material: last,
+        }];
+        let refused = bridge
+            .update_object_presentation(NativeUpdateVoxelObjectPresentationRequest {
+                presentation,
+                runtime_frame: 0,
+                transform,
+                visible: true,
+                materials: unbound.as_ptr(),
+                materials_len: unbound.len(),
+            })
+            .unwrap_err();
+        assert_eq!(refused.code(), "CSHARP_VOXEL_PRESENTATION_MATERIALS");
     }
 
     fn asset() -> VoxelAsset {

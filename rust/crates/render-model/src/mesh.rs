@@ -1724,12 +1724,10 @@ fn validate_playback_timeline_time(now_seconds: f64) -> Result<(), AnimatedMeshP
     Ok(())
 }
 
+/// Each slot names a material. A slot listed twice draws with its last
+/// entry.
 pub(crate) fn validate_slots(slots: &[MeshMaterialSlot]) -> Result<(), MeshMaterialSlotError> {
-    let mut seen = BTreeSet::new();
     for slot in slots {
-        if !seen.insert(slot.slot) {
-            return Err(MeshMaterialSlotError::Duplicate { slot: slot.slot });
-        }
         slot.validate()
             .map_err(|source| MeshMaterialSlotError::InvalidMaterial {
                 slot: slot.slot,
@@ -1741,7 +1739,6 @@ pub(crate) fn validate_slots(slots: &[MeshMaterialSlot]) -> Result<(), MeshMater
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MeshMaterialSlotError {
-    Duplicate { slot: u16 },
     InvalidMaterial { slot: u16, source: RenderAssetError },
 }
 

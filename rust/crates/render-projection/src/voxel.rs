@@ -59,7 +59,8 @@ pub struct VoxelMaterialSlotMapping {
 }
 
 impl VoxelMaterialSlotMapping {
-    fn renderer_slot(&self, slot: u16, state: u16, direction: Option<Direction6>) -> u16 {
+    /// The renderer slot this mapping names for a group, if any.
+    fn mapped_slot(&self, slot: u16, state: u16, direction: Option<Direction6>) -> Option<u16> {
         direction
             .and_then(|direction| {
                 self.directional
@@ -68,7 +69,12 @@ impl VoxelMaterialSlotMapping {
                     .copied()
             })
             .or_else(|| self.base.get(&slot).copied())
-            .unwrap_or(slot)
+    }
+
+    /// The renderer slot a group draws with: its mapped slot, or its own
+    /// slot for an instance projected without a mapping.
+    fn renderer_slot(&self, slot: u16, state: u16, direction: Option<Direction6>) -> u16 {
+        self.mapped_slot(slot, state, direction).unwrap_or(slot)
     }
 }
 
@@ -300,7 +306,9 @@ impl VoxelRenderProjector {
     /// Projects voxel instances whose source material slots are translated to
     /// retained renderer slots before mesh payloads are published. The map is
     /// internal renderer realization: callers still own source scene slots,
-    /// while `materials` is keyed by the effective renderer slot.
+    /// while `materials` is keyed by the effective renderer slot. A mapped
+    /// instance must map every slot its drawn chunks use; an instance without
+    /// a mapping draws each slot as its own renderer slot.
     pub fn project_mapped(
         &mut self,
         instances: &[VoxelProjectionInstance<'_>],
@@ -332,14 +340,19 @@ impl VoxelRenderProjector {
         material_slots: &BTreeMap<String, VoxelMaterialSlotMapping>,
     ) -> Result<VoxelProjectionResult, VoxelProjectionError> {
         let empty_mapping = VoxelMaterialSlotMapping::default();
-        let materials_changed = *materials != self.last_materials;
+        // Only a material that went can leave a chunk that did not change
+        // without one; a changed or added material is defined below.
+        let material_removed = self
+            .last_materials
+            .keys()
+            .any(|slot| !materials.contains_key(slot));
 
         // Plan and check every instance before any retained state changes.
         let mut plans = Vec::with_capacity(instances.len());
         for instance in instances_by_id(instances) {
-            let slots = material_slots
-                .get(&instance.instance_id)
-                .unwrap_or(&empty_mapping);
+            let mapping = material_slots.get(&instance.instance_id);
+            let mapped = mapping.is_some();
+            let slots = mapping.unwrap_or(&empty_mapping);
             let scene = instance.scene;
             let previous = self.continued(instance);
             let replace_all = previous.is_some_and(|previous| previous.material_slots != *slots);
@@ -355,17 +368,18 @@ impl VoxelRenderProjector {
                 }
                 _ => ChunkVisit::All,
             };
-            // A material change can invalidate chunks that did not change.
-            match (&visit, materials_changed) {
-                (ChunkVisit::All, _) | (_, true) => {
-                    check_chunks(instance, slots, materials, scene.mesh_chunks())?
+            let check = ChunkCheck {
+                instance,
+                slots,
+                mapped,
+                materials,
+            };
+            // A removed material can invalidate chunks that did not change.
+            match (&visit, material_removed) {
+                (ChunkVisit::All, _) | (_, true) => check.chunks(scene.mesh_chunks())?,
+                (ChunkVisit::Dirty(coords), false) => {
+                    check.chunks(coords.iter().filter_map(|coord| scene.mesh_chunk(*coord)))?
                 }
-                (ChunkVisit::Dirty(coords), false) => check_chunks(
-                    instance,
-                    slots,
-                    materials,
-                    coords.iter().filter_map(|coord| scene.mesh_chunk(*coord)),
-                )?,
                 (ChunkVisit::None, false) => {}
             }
             let coarse = plan_coarse(
@@ -374,10 +388,11 @@ impl VoxelRenderProjector {
                 self.levels.get(&instance.instance_id),
                 &visit,
             )?;
-            check_chunks(instance, slots, materials, coarse.built.values())?;
-            if materials_changed {
+            check.chunks(coarse.built.values())?;
+            // Retained coarse meshes are rewritten with a new mapping too.
+            if material_removed || replace_all {
                 if let Some(previous) = previous {
-                    check_chunks(instance, slots, materials, previous.coarse.values())?;
+                    check.chunks(previous.coarse.values())?;
                 }
             }
             plans.push(InstancePlan {
@@ -390,15 +405,17 @@ impl VoxelRenderProjector {
         }
 
         let mut operations = Vec::new();
-        if materials_changed {
-            for (slot, material) in materials {
-                if self.last_materials.get(slot) != Some(material) {
-                    operations.push(RenderDiff::DefineMaterial {
-                        material: material.clone(),
-                    });
-                }
+        if material_removed {
+            self.last_materials
+                .retain(|slot, _| materials.contains_key(slot));
+        }
+        for (slot, material) in materials {
+            if self.last_materials.get(slot) != Some(material) {
+                operations.push(RenderDiff::DefineMaterial {
+                    material: material.clone(),
+                });
+                self.last_materials.insert(*slot, material.clone());
             }
-            self.last_materials = materials.clone();
         }
 
         // Retire instances that left or were rebound to another asset.
@@ -752,25 +769,42 @@ fn voxel_publication_stream<'a>(instances: impl Iterator<Item = &'a String>) -> 
     }
 }
 
-/// Every group of these chunks must resolve to a defined material.
-fn check_chunks<'a>(
-    instance: &VoxelProjectionInstance<'_>,
-    slots: &VoxelMaterialSlotMapping,
-    materials: &BTreeMap<u16, RenderMaterialDescriptor>,
-    chunks: impl Iterator<Item = &'a VoxelMeshChunk>,
-) -> Result<(), VoxelProjectionError> {
-    for chunk in chunks {
-        for group in &chunk.groups {
-            let slot = slots.renderer_slot(group.material_slot, group.state, group.direction);
-            if !materials.contains_key(&slot) {
-                return Err(VoxelProjectionError::MissingMaterial {
-                    instance: instance.instance_id.clone(),
-                    slot,
-                });
+/// Checks that every group of an instance's chunks resolves to a defined
+/// material: through the instance's mapping when it has one.
+struct ChunkCheck<'a> {
+    instance: &'a VoxelProjectionInstance<'a>,
+    slots: &'a VoxelMaterialSlotMapping,
+    /// The caller mapped the instance's slots, so a slot the mapping does
+    /// not name has no material rather than drawing as its own number.
+    mapped: bool,
+    materials: &'a BTreeMap<u16, RenderMaterialDescriptor>,
+}
+
+impl ChunkCheck<'_> {
+    /// `slot` in the error is the renderer slot, or the source slot a
+    /// mapping does not name.
+    fn chunks<'c>(
+        &self,
+        chunks: impl Iterator<Item = &'c VoxelMeshChunk>,
+    ) -> Result<(), VoxelProjectionError> {
+        for chunk in chunks {
+            for group in &chunk.groups {
+                let slot = if self.mapped {
+                    self.slots
+                        .mapped_slot(group.material_slot, group.state, group.direction)
+                } else {
+                    Some(group.material_slot)
+                };
+                if !slot.is_some_and(|slot| self.materials.contains_key(&slot)) {
+                    return Err(VoxelProjectionError::MissingMaterial {
+                        instance: self.instance.instance_id.clone(),
+                        slot: slot.unwrap_or(group.material_slot),
+                    });
+                }
             }
         }
+        Ok(())
     }
-    Ok(())
 }
 
 /// The chunks `level` draws coarse, given those drawn coarse now.
@@ -1765,6 +1799,114 @@ mod tests {
         assert_eq!(projector.root_handle("room"), None);
     }
 
+    /// A mapped instance's slot that its mapping does not name has no
+    /// material, even when a renderer slot of the same number holds another
+    /// instance's material; the slot is resolved when a chunk uses it,
+    /// including a chunk edited after the mapping was set.
+    #[test]
+    fn a_mapped_slot_without_a_mapping_is_missing_not_drawn_with_another_material() {
+        let voxel = |address, material_slot| MaterialVoxel {
+            state: 0,
+            address,
+            material_slot,
+        };
+        let mut scene =
+            VoxelCollisionScene::from_material_voxels(1.0, 16, [voxel([0, 0, 0], 1)]).unwrap();
+        let other =
+            VoxelCollisionScene::from_material_voxels(1.0, 16, [voxel([0, 0, 0], 2)]).unwrap();
+        let materials = BTreeMap::from([(2, material(2)), (4, material(4))]);
+        let slots = BTreeMap::from([
+            ("room".to_string(), BTreeMap::from([(1, 4)])),
+            ("other".to_string(), BTreeMap::from([(2, 2)])),
+        ]);
+        fn instance<'a>(id: &str, scene: &'a VoxelCollisionScene) -> VoxelProjectionInstance<'a> {
+            VoxelProjectionInstance {
+                instance_id: id.to_string(),
+                asset_id: format!("voxel-object/{id}"),
+                transform: Transform::IDENTITY,
+                scene,
+            }
+        }
+        let mut projector = VoxelRenderProjector::new();
+        projector
+            .project_mapped(
+                &[instance("room", &scene), instance("other", &other)],
+                &materials,
+                &slots,
+            )
+            .unwrap();
+        // The room's edit uses slot 2, which only the other instance maps.
+        VoxelEditService::apply(
+            &mut scene,
+            &[VoxelEdit::Set {
+                address: [1, 0, 0],
+                material_slot: 2,
+            }],
+        )
+        .unwrap();
+        assert_eq!(
+            projector
+                .project_mapped(
+                    &[instance("room", &scene), instance("other", &other)],
+                    &materials,
+                    &slots,
+                )
+                .unwrap_err(),
+            VoxelProjectionError::MissingMaterial {
+                instance: "room".to_string(),
+                slot: 2,
+            }
+        );
+    }
+
+    /// Changing one material defines that material alone: no chunk payload
+    /// is rewritten. Removing a material a retained chunk still uses is
+    /// refused although the chunk did not change.
+    #[test]
+    fn a_changed_material_defines_only_itself_and_a_removed_one_is_still_resolved() {
+        let scene = VoxelCollisionScene::from_material_voxels(
+            1.0,
+            4,
+            (0..8).map(|x| MaterialVoxel {
+                state: 0,
+                address: [x * 4, 0, 0],
+                material_slot: 1 + (x % 2) as u16,
+            }),
+        )
+        .unwrap();
+        let instances = [VoxelProjectionInstance {
+            instance_id: "room".to_string(),
+            asset_id: "voxel-object/room".to_string(),
+            transform: Transform::IDENTITY,
+            scene: &scene,
+        }];
+        let mut materials = BTreeMap::from([(1, material(1)), (2, material(2))]);
+        let mut projector = VoxelRenderProjector::new();
+        projector.project(&instances, &materials).unwrap();
+        materials.get_mut(&2).unwrap().color = [1.0, 0.0, 0.0, 1.0];
+        let changed = projector.project(&instances, &materials).unwrap();
+        assert_eq!(
+            changed.frame.ops,
+            vec![RenderDiff::DefineMaterial {
+                material: materials[&2].clone(),
+            }]
+        );
+        materials.remove(&2);
+        assert!(matches!(
+            projector.project(&instances, &materials),
+            Err(VoxelProjectionError::MissingMaterial { slot: 2, .. })
+        ));
+        // The refusal left the retained materials as they were.
+        materials.insert(2, material(2));
+        let restored = projector.project(&instances, &materials).unwrap();
+        assert_eq!(
+            restored.frame.ops,
+            vec![RenderDiff::DefineMaterial {
+                material: material(2),
+            }]
+        );
+    }
+
     #[test]
     fn textured_reconstructed_surface_projects_with_box_projected_uvs() {
         let scene = VoxelCollisionScene::from_material_voxels_with_mesh_options(
@@ -2219,8 +2361,9 @@ mod tests {
             })
             .collect();
         let materials: BTreeMap<_, _> = (1..=3).map(|slot| (slot, material(slot))).collect();
+        // A mapping names every slot the scenes use.
         let remapped = VoxelMaterialSlotMapping {
-            base: BTreeMap::from([(2, 3)]),
+            base: BTreeMap::from([(1, 1), (2, 3), (3, 3)]),
             directional: BTreeMap::new(),
         };
         let mut mapped = false;
@@ -2303,14 +2446,11 @@ mod tests {
                     scene: &value.scene,
                 })
                 .collect();
-            let slots = BTreeMap::from([(
-                "cubes".to_string(),
-                if mapped {
-                    remapped.clone()
-                } else {
-                    VoxelMaterialSlotMapping::default()
-                },
-            )]);
+            let slots = if mapped {
+                BTreeMap::from([("cubes".to_string(), remapped.clone())])
+            } else {
+                BTreeMap::new()
+            };
             let update = projector
                 .project_mapped_directional(&instances, &materials, &slots)
                 .unwrap();

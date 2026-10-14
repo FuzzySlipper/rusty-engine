@@ -769,7 +769,7 @@ Immediately after creating a Spatial session, call
 `Voxel.ConfigureMaterialCollision(new(session, declarations))` with
 `VoxelMaterialCollision(slot, collidable)` values from the product's material
 definitions. Unlisted slots collide, which is the default occupied-cell
-behavior. Duplicate slots return a named operation diagnostic. Configuring again
+behavior, and a slot listed twice takes its last declaration. Configuring again
 later replaces the declarations and updates collision for the whole scene.
 
 A false declaration keeps the canonical voxel, material, and visual mesh while
@@ -842,13 +842,18 @@ layer
 An atlas reference must keep the catalog's pinned version/hash. Structural
 class does not select a scene atlas or replace canonical voxel state.
 
-Base bindings must cover every currently meshed source slot, with no duplicate
-slots. The retained palette may also contain slots not currently meshed, so
-adding/removing voxels or streaming chunks does not require trimming the palette.
-Face overrides require a corresponding base binding, even when that slot is
-currently absent. `RefreshScene` uses the retained palette; use `UpdateScene`
-or `UpdateSceneDirectional` when adding a new material binding. `MaterialCount`
-counts the retained base palette, including currently unused slots.
+Base bindings must cover every source slot the scene's chunks use; a slot
+bound twice takes its last binding, as does a repeated face override. Coverage
+is resolved as chunks are projected, so creating or updating the presentation,
+and any later `RefreshScene` after an edit that meshes an unbound slot, returns
+a `CSHARP_VOXEL_SCENE_PRESENTATION_MATERIALS` diagnostic naming the slot and
+leaves the presentation as it was. The retained palette may also contain slots
+not currently meshed, so adding/removing voxels or streaming chunks does not
+require trimming the palette. Face overrides require a corresponding base
+binding, even when that slot is currently absent. `RefreshScene` uses the
+retained palette; use `UpdateScene` or `UpdateSceneDirectional` when adding a
+new material binding. `MaterialCount` counts the retained base palette,
+including currently unused slots.
 
 Source slots are unsigned 16-bit identities (0–65,535); base and face bindings
 share 65,536 renderer slots across retained voxel presentations. Out-of-range

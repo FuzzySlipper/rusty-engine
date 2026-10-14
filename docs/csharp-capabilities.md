@@ -167,7 +167,7 @@ presentation; no voxel-specific shader or downstream renderer is involved.
 
 This is an object path, not a general scene importer. Source format, size,
 voxel, frame, mesh, and material limits still apply, and every palette slot
-must be bound. If a product needs a presentation or resource mechanism that
+must be bound (a slot bound twice takes its last binding). If a product needs a presentation or resource mechanism that
 the generated services cannot express, file the narrow Engine request and
 stop at that boundary rather than inventing C#, TypeScript, or browser
 rendering to fill it.

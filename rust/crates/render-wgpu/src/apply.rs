@@ -913,7 +913,7 @@ impl Renderer {
                             let material_id = instance
                                 .material_overrides
                                 .iter()
-                                .find(|binding| binding.slot == *slot)
+                                .rfind(|binding| binding.slot == *slot)
                                 .map(|binding| &binding.material)
                                 .or_else(|| object.slots.get(slot));
                             let (material_ref, color, emission) = match material_id.and_then(|id| {
@@ -1002,7 +1002,7 @@ impl Renderer {
                         let material_id = patch
                             .material_overrides
                             .iter()
-                            .find(|binding| binding.slot == *slot)
+                            .rfind(|binding| binding.slot == *slot)
                             .map(|binding| &binding.material)
                             .or_else(|| mesh.slots.get(slot));
                         let (material_ref, color, emission) = match material_id.and_then(|id| {

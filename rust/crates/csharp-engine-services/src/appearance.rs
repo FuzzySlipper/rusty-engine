@@ -4035,9 +4035,8 @@ impl RuntimeAppearanceBridge {
                     "appearance handle is not live",
                 )
             })?;
-        let mut slots = BTreeSet::new();
-        let mut material_overrides = Vec::with_capacity(bindings.len());
-        let mut material_handles = BTreeSet::new();
+        // A repeated slot takes its last binding.
+        let mut by_slot = BTreeMap::new();
         for binding in bindings {
             let slot = u16::try_from(binding.material_slot).map_err(|_| {
                 CsharpEngineServicesError::new(
@@ -4045,16 +4044,15 @@ impl RuntimeAppearanceBridge {
                     "mesh material slot exceeded u16",
                 )
             })?;
-            if !slots.insert(slot) {
-                return Err(CsharpEngineServicesError::new(
-                    "CSHARP_STATIC_MESH_SLOT",
-                    "mesh material bindings must not repeat a slot",
-                ));
-            }
+            by_slot.insert(slot, binding.material);
+        }
+        let mut material_overrides = Vec::with_capacity(by_slot.len());
+        let mut material_handles = BTreeSet::new();
+        for (slot, handle) in by_slot {
             let material = staged
                 .state
                 .materials
-                .get(&binding.material.value)
+                .get(&handle.value)
                 .cloned()
                 .ok_or_else(|| {
                     CsharpEngineServicesError::new(
@@ -4063,7 +4061,7 @@ impl RuntimeAppearanceBridge {
                     )
                 })?;
             material_overrides.push(MeshMaterialSlot { slot, material });
-            material_handles.insert(binding.material.value);
+            material_handles.insert(handle.value);
         }
         match staged.state.projector.appearance_mut(&identity) {
             Some(Appearance::StaticMesh {
@@ -4118,12 +4116,7 @@ impl RuntimeAppearanceBridge {
                 )
             })?;
             let value = mesh_material_parameters(factor, "CSHARP_STATIC_MESH_FACTORS")?;
-            if parameters.insert(slot, value).is_some() {
-                return Err(CsharpEngineServicesError::new(
-                    "CSHARP_STATIC_MESH_SLOT",
-                    "static mesh material factors must not repeat a slot",
-                ));
-            }
+            parameters.insert(slot, value);
         }
         match staged.state.projector.appearance_mut(&identity) {
             Some(Appearance::StaticMesh {
@@ -4185,9 +4178,8 @@ impl RuntimeAppearanceBridge {
         let staged = self.staged_mut()?;
         let (identity, embedded_slots) =
             animated_appearance_slots(staged, request.appearance, "material bindings")?;
-        let mut slots = BTreeSet::new();
-        let mut material_overrides = Vec::with_capacity(bindings.len());
-        let mut material_handles = BTreeSet::new();
+        // A repeated slot takes its last binding.
+        let mut by_slot = BTreeMap::new();
         for binding in bindings {
             let slot = u16::try_from(binding.material_slot).map_err(|_| {
                 CsharpEngineServicesError::new(
@@ -4195,22 +4187,21 @@ impl RuntimeAppearanceBridge {
                     "animated mesh material slot exceeded u16",
                 )
             })?;
-            if !slots.insert(slot) {
-                return Err(CsharpEngineServicesError::new(
-                    "CSHARP_ANIMATED_MESH_SLOT",
-                    "animated mesh material bindings must not repeat a slot",
-                ));
-            }
             if !embedded_slots.contains(&slot) {
                 return Err(CsharpEngineServicesError::new(
                     "CSHARP_ANIMATED_MESH_SLOT",
                     "animated mesh material binding names an unbound embedded slot",
                 ));
             }
+            by_slot.insert(slot, binding.material);
+        }
+        let mut material_overrides = Vec::with_capacity(by_slot.len());
+        let mut material_handles = BTreeSet::new();
+        for (slot, handle) in by_slot {
             let material = staged
                 .state
                 .materials
-                .get(&binding.material.value)
+                .get(&handle.value)
                 .cloned()
                 .ok_or_else(|| {
                     CsharpEngineServicesError::new(
@@ -4219,7 +4210,7 @@ impl RuntimeAppearanceBridge {
                     )
                 })?;
             material_overrides.push(MeshMaterialSlot { slot, material });
-            material_handles.insert(binding.material.value);
+            material_handles.insert(handle.value);
         }
         match staged.state.projector.appearance_mut(&identity) {
             Some(Appearance::AnimatedMesh {
@@ -4267,12 +4258,7 @@ impl RuntimeAppearanceBridge {
                     )
                 })?;
             let value = mesh_material_parameters(factor, "CSHARP_ANIMATED_MESH_FACTORS")?;
-            if parameters.insert(slot, value).is_some() {
-                return Err(CsharpEngineServicesError::new(
-                    "CSHARP_ANIMATED_MESH_SLOT",
-                    "animated mesh material factors must not repeat a slot",
-                ));
-            }
+            parameters.insert(slot, value);
         }
         match staged.state.projector.appearance_mut(&identity) {
             Some(Appearance::AnimatedMesh {
@@ -10598,20 +10584,12 @@ pub(crate) unsafe extern "C" fn publish_appearance_changes(
                     "joint attachments",
                 )
             }?;
+            // A child attached twice takes its last joint; the projection
+            // resolves each joint in its parent's rig.
             let mut attachments = BTreeMap::new();
             for row in rows {
                 let joint = unsafe { borrowed_utf8(row.joint.bytes, row.joint.len, "joint name") }?;
-                if joint.trim().is_empty()
-                    || attachments.insert(row.child_object_id, joint).is_some()
-                {
-                    return Err(CsharpEngineServicesError::new(
-                        "CSHARP_JOINT_ATTACHMENT",
-                        format!(
-                            "empty joint or duplicate attachment for child {}",
-                            row.child_object_id
-                        ),
-                    ));
-                }
+                attachments.insert(row.child_object_id, joint);
             }
             bridge.stage_changes(facts, Some(removals), &attachments)
         })();
@@ -11088,38 +11066,37 @@ pub(super) mod tests {
             b: 1.0,
             a: 1.0,
         };
-        let material = bridge
-            .create_material(NativeMaterialRequest {
-                texture_scale: NativeVec2::default(),
-                texture_offset: NativeVec2::default(),
-                stochastic_tiling: 0.0,
-                shader: Default::default(),
-                triplanar_sharpness: 0.0,
-                color: white,
-                texture: NativeRenderResourceReference::default(),
-                roughness: 0.7,
-                texture_tint: white,
-                emission_color: NativeVec3::default(),
-                emission_intensity: 0.0,
-                double_sided: false,
-                alpha_mode: NativeMaterialAlphaMode::Opaque,
-                alpha_cutoff: 0.5,
-                metalness: 0.0,
-                normal_map: NativeRenderResourceReference::default(),
-                normal_scale: 1.0,
-                unlit: false,
-                emission_map: NativeRenderResourceReference::default(),
-                occlusion_map: NativeRenderResourceReference::default(),
-                orm_map: Default::default(),
-                occlusion_strength: 0.0,
-                flat_shading: false,
-                keep_dry: false,
-                wind_bend: 0.0,
-                wind_flutter: 0.0,
-                water: Default::default(),
-                translucent_shadow: false,
-            })
-            .unwrap();
+        let material_request = NativeMaterialRequest {
+            texture_scale: NativeVec2::default(),
+            texture_offset: NativeVec2::default(),
+            stochastic_tiling: 0.0,
+            shader: Default::default(),
+            triplanar_sharpness: 0.0,
+            color: white,
+            texture: NativeRenderResourceReference::default(),
+            roughness: 0.7,
+            texture_tint: white,
+            emission_color: NativeVec3::default(),
+            emission_intensity: 0.0,
+            double_sided: false,
+            alpha_mode: NativeMaterialAlphaMode::Opaque,
+            alpha_cutoff: 0.5,
+            metalness: 0.0,
+            normal_map: NativeRenderResourceReference::default(),
+            normal_scale: 1.0,
+            unlit: false,
+            emission_map: NativeRenderResourceReference::default(),
+            occlusion_map: NativeRenderResourceReference::default(),
+            orm_map: Default::default(),
+            occlusion_strength: 0.0,
+            flat_shading: false,
+            keep_dry: false,
+            wind_bend: 0.0,
+            wind_flutter: 0.0,
+            water: Default::default(),
+            translucent_shadow: false,
+        };
+        let material = bridge.create_material(material_request).unwrap();
         let bindings = [NativeMeshMaterialBinding {
             material_slot: 0,
             material,
@@ -11148,6 +11125,46 @@ pub(super) mod tests {
         let tinted = bridge.create_mesh_appearance(resource).unwrap();
         let plain = bridge.create_mesh_appearance(resource).unwrap();
 
+        // A repeated slot takes its last binding, and only that material is
+        // held by the appearance.
+        let first = bridge.create_material(material_request).unwrap();
+        let last = bridge.create_material(material_request).unwrap();
+        let repeated = [first, last].map(|material| NativeMeshMaterialBinding {
+            material_slot: 0,
+            material,
+        });
+        unsafe {
+            bridge.update_static_mesh_materials(&NativeStaticMeshMaterialUpdateRequest {
+                appearance: plain,
+                bindings: repeated.as_ptr(),
+                bindings_len: repeated.len(),
+            })
+        }
+        .expect("a repeated slot takes its last binding");
+        let state = &bridge.staged_ref().unwrap().state;
+        let last_id = state.materials[&last.value].clone();
+        assert!(matches!(
+            state.projector.appearance(&state.appearances[&plain.value]),
+            Some(Appearance::StaticMesh { material_overrides, .. })
+                if *material_overrides == [MeshMaterialSlot { slot: 0, material: last_id }]
+        ));
+        bridge
+            .destroy_material(first)
+            .expect("the replaced binding is not held");
+        assert_eq!(
+            bridge.destroy_material(last).unwrap_err().code(),
+            "CSHARP_MATERIAL_IN_USE"
+        );
+        unsafe {
+            bridge.update_static_mesh_materials(&NativeStaticMeshMaterialUpdateRequest {
+                appearance: plain,
+                bindings: std::ptr::null(),
+                bindings_len: 0,
+            })
+        }
+        .expect("clear the bindings");
+        bridge.destroy_material(last).expect("released");
+
         let tint = |slot, r: f32| NativeMeshMaterialFactors {
             material_slot: slot,
             override_base_color: false,
@@ -11172,10 +11189,10 @@ pub(super) mod tests {
                 factors_len: factors.len(),
             })
         };
-        update(&mut bridge, tinted, &[tint(0, 1.0)]).expect("slot 0 factors");
+        // A repeated slot takes its last factors.
+        update(&mut bridge, tinted, &[tint(0, 0.25), tint(0, 1.0)]).expect("slot 0 factors");
         for (factors, code) in [
             (vec![tint(0, 1.5)], "CSHARP_STATIC_MESH_FACTORS"),
-            (vec![tint(0, 0.5), tint(0, 0.5)], "CSHARP_STATIC_MESH_SLOT"),
             (vec![tint(70_000, 0.5)], "CSHARP_STATIC_MESH_SLOT"),
         ] {
             assert_eq!(
@@ -14264,7 +14281,8 @@ fn shade(surface: Surface) -> vec4<f32> {
                 },
             )
         };
-        update(&mut bridge, &[factor(0, 0.75)]).expect("slot 0 factors");
+        // A repeated slot takes its last factors.
+        update(&mut bridge, &[factor(0, 0.5), factor(0, 0.75)]).expect("slot 0 factors");
         let identity = bridge.staged_ref().unwrap().state.appearances[&appearance.value].clone();
         let parameters = match bridge
             .staged_ref()
@@ -14287,10 +14305,6 @@ fn shade(surface: Surface) -> vec4<f32> {
         for (factors, code) in [
             (vec![factor(1, 0.5)], "CSHARP_ANIMATED_MESH_SLOT"),
             (vec![factor(0, 1.5)], "CSHARP_ANIMATED_MESH_FACTORS"),
-            (
-                vec![factor(0, 0.5), factor(0, 0.5)],
-                "CSHARP_ANIMATED_MESH_SLOT",
-            ),
         ] {
             assert_eq!(
                 update(&mut bridge, &factors).expect_err("refused").code(),

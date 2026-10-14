@@ -947,7 +947,7 @@ unsafe extern "C" fn configure_material_collision(
                 "voxel material collision declarations",
             )
         }?;
-        let mut declared = std::collections::BTreeSet::new();
+        // A repeated slot takes its last declaration.
         let mut excluded = std::collections::BTreeSet::new();
         for material in materials {
             let slot = u16::try_from(material.material_slot).ok().ok_or_else(|| {
@@ -956,13 +956,9 @@ unsafe extern "C" fn configure_material_collision(
                     "material slot must be in 0..=65535",
                 )
             })?;
-            if !declared.insert(slot) {
-                return Err(voxel_error(
-                    "CSHARP_VOXEL_MATERIAL_COLLISION",
-                    "duplicate material slot",
-                ));
-            }
-            if !material.collidable {
+            if material.collidable {
+                excluded.remove(&slot);
+            } else {
                 excluded.insert(slot);
             }
         }
@@ -1001,14 +997,20 @@ unsafe extern "C" fn configure_material_occlusion(
                 "voxel material occlusion declarations",
             )
         }?;
+        // A repeated slot takes its last declaration.
         let mut non_occluding = std::collections::BTreeSet::new();
-        for material in materials.iter().filter(|material| !material.occludes) {
-            non_occluding.insert(u16::try_from(material.material_slot).map_err(|_| {
+        for material in materials {
+            let slot = u16::try_from(material.material_slot).map_err(|_| {
                 voxel_error(
                     "CSHARP_VOXEL_MATERIAL_OCCLUSION",
                     "material slot must be in 0..=65535",
                 )
-            })?);
+            })?;
+            if material.occludes {
+                non_occluding.remove(&slot);
+            } else {
+                non_occluding.insert(slot);
+            }
         }
         let options = SurfaceMeshOptions {
             non_occluding,
@@ -1476,11 +1478,12 @@ mod tests {
                 .voxel,
             [0, 0, 0]
         );
-        // Collision can be reconfigured after edits: slot 11 now collides.
-        let collidable = [NativeVoxelMaterialCollision {
+        // Collision can be reconfigured after edits: slot 11 now collides,
+        // its last declaration in the call.
+        let collidable = [false, true].map(|collidable| NativeVoxelMaterialCollision {
             material_slot: 11,
-            collidable: true,
-        }];
+            collidable,
+        });
         let request = NativeVoxelMaterialCollisionRequest {
             session,
             materials: collidable.as_ptr(),
