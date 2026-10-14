@@ -1110,7 +1110,9 @@ fn native_sampled_volume_blocks_carry_sample_materials_and_regenerate_only_dirty
             },
             ABI_OK
         );
-        (generation.vertices, generation.triangles)
+        let geometry = crate::render_resources::copy_inline_mesh_geometry(&appearance, mesh)
+            .expect("the generated mesh is staged");
+        (generation.vertices, generation.triangles, geometry)
     };
     let flat = materials[0];
     let smooth = NativeSampledVolumeMaterial {
@@ -1125,6 +1127,35 @@ fn native_sampled_volume_blocks_carry_sample_materials_and_regenerate_only_dirty
     assert_eq!(generated(&[smooth, flat]), generated(&[flat]));
     assert_eq!(generated(&[flat, smooth]), generated(&[smooth]));
 
+    // A finite crease angle or roughness outside its range generates what
+    // its clamped value does, through extraction and final assembly alike.
+    let sharp = |crease_angle_degrees, roughness| NativeSampledVolumeMaterial {
+        character: NativeSurfaceCharacter {
+            placement: NativeVertexPlacement::Sharp,
+            crease_angle_degrees,
+            roughness,
+        },
+        ..flat
+    };
+    assert_ne!(
+        generated(&[sharp(0.0, 0.0)]),
+        generated(&[sharp(180.0, 0.0)])
+    );
+    assert_ne!(generated(&[sharp(0.0, 0.0)]), generated(&[sharp(0.0, 0.5)]));
+    assert_eq!(
+        generated(&[sharp(190.0, 0.0)]),
+        generated(&[sharp(180.0, 0.0)])
+    );
+    assert_eq!(
+        generated(&[sharp(-5.0, 0.0)]),
+        generated(&[sharp(0.0, 0.0)])
+    );
+    assert_eq!(generated(&[sharp(0.0, 0.9)]), generated(&[sharp(0.0, 0.5)]));
+    assert_eq!(
+        generated(&[sharp(0.0, -0.2)]),
+        generated(&[sharp(0.0, 0.0)])
+    );
+
     // A surface index without a material in the request is refused.
     let missing = NativeSampledVolumeGenerateRequest {
         materials: std::ptr::null(),
@@ -1135,6 +1166,20 @@ fn native_sampled_volume_blocks_carry_sample_materials_and_regenerate_only_dirty
         unsafe { (api.generate_sampled_volume)(api.context, &missing, &mut mesh, &mut receipt) },
         0
     );
+    // A non-finite crease angle or roughness is refused.
+    for material in [sharp(f32::NAN, 0.0), sharp(0.0, f32::INFINITY)] {
+        let request = NativeSampledVolumeGenerateRequest {
+            materials: &material,
+            materials_len: 1,
+            ..whole
+        };
+        assert_eq!(
+            unsafe {
+                (api.generate_sampled_volume)(api.context, &request, &mut mesh, &mut receipt)
+            },
+            0
+        );
+    }
     let retained = implicit.take_call().expect("the call stays usable");
     implicit.commit_call(retained);
     appearance.end_call();

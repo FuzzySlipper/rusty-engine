@@ -439,7 +439,7 @@ impl RuntimeImplicitBridge {
                 "sampled volume material regions",
             )
         }?;
-        let sampled = unsafe {
+        let mut sampled = unsafe {
             borrowed_slice(
                 request.materials,
                 request.materials_len,
@@ -460,6 +460,14 @@ impl RuntimeImplicitBridge {
             ));
         }
         let characters = SurfaceMaterials::new(characters).map_err(|e| error(e.to_string()))?;
+        // Assembly shades each slot with the crease angle extraction
+        // normalized, so the two agree on a clamped value.
+        for entry in &mut sampled {
+            if let Some(surface) = characters.get(entry.index as u16) {
+                entry.character.crease_angle_degrees = surface.character.crease_angle_degrees;
+                entry.character.roughness = surface.character.roughness;
+            }
+        }
         let (field, region_nodes) = {
             let retained = self.retained(request.field)?;
             let region_nodes = regions
