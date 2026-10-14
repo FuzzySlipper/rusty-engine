@@ -112,7 +112,17 @@ impl RuntimeDynamicsBridge {
             ));
         }
         let start = endpoint_point(world, anchor);
+        // An end beyond the links' total length lays the chain out straight
+        // toward it. A new link must start within its length: Rapier would
+        // snap each bead to it in one step.
         let end = native_vec3_value(end);
+        let span = end - start;
+        let reach = config.link_length * config.bead_count as f32;
+        let end = if span.length() > reach {
+            start + span * (reach / span.length())
+        } else {
+            end
+        };
         let mut chain = DynamicsChain {
             links: Vec::new(),
             bodies: Vec::new(),

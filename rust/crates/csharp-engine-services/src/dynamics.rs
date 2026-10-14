@@ -1893,14 +1893,9 @@ mod tests {
         invalid = request;
         invalid.config.properties.mass = -1.0;
         assert!(bridge.create_body_chain(invalid).is_err());
-        // Beyond the links' reach the first link's tether refuses; a NaN end
-        // gives its first bead a NaN position, which body admission refuses.
+        // A NaN end gives the first bead a NaN position, which body
+        // admission refuses.
         invalid = request;
-        invalid.end.x = 5.0;
-        assert_eq!(
-            bridge.create_body_chain(invalid).unwrap_err().code(),
-            "dynamics-tether-out-of-reach"
-        );
         invalid.end.x = f32::NAN;
         assert_eq!(
             bridge.create_body_chain(invalid).unwrap_err().code(),
@@ -1956,6 +1951,75 @@ mod tests {
         assert_eq!(receipt.removed_bodies, 4);
         assert!(!bridge.remove_chain(query).unwrap().released);
         assert_eq!(bridge.active_world(world.value).unwrap().bodies.len(), 0);
+    }
+
+    #[test]
+    fn overstretched_chain_lays_out_within_reach_and_settles_finite() {
+        let spatial = crate::spatial::RuntimeSpatialBridge::new();
+        let mut bridge = RuntimeDynamicsBridge::new(spatial.collision_source());
+        let world = bridge
+            .create_world(NativeDynamicsWorldConfig {
+                gravity: NativeVec3 {
+                    x: 0.0,
+                    y: -9.81,
+                    z: 0.0,
+                },
+            })
+            .unwrap();
+        // Four 0.5 m links toward an end 5 m away.
+        bridge
+            .create_fixed_chain(NativeDynamicsFixedChainRequest {
+                world,
+                anchor: NativeVec3::default(),
+                end: NativeVec3 {
+                    x: 5.0,
+                    y: 0.0,
+                    z: 0.0,
+                },
+                config: chain_config(8, 4),
+            })
+            .unwrap();
+        let points = |bridge: &RuntimeDynamicsBridge| {
+            (0..5)
+                .map(|index| {
+                    let point = bridge
+                        .read_chain_point(NativeDynamicsChainPointRequest {
+                            world,
+                            id: 8,
+                            index,
+                        })
+                        .unwrap();
+                    assert!(point.present);
+                    native_vec3_value(point.position)
+                })
+                .collect::<Vec<_>>()
+        };
+        let links_within = |points: &[Vec3], tolerance: f32| {
+            points.windows(2).all(|pair| {
+                let length = (pair[1] - pair[0]).length();
+                length.is_finite() && length <= 0.5 + tolerance
+            })
+        };
+        let laid_out = points(&bridge);
+        assert!(links_within(&laid_out, 1e-4), "{laid_out:?}");
+        assert!((laid_out[4].x - 2.0).abs() < 1e-4, "{laid_out:?}");
+
+        let step = NativeDynamicsStepRequest {
+            world,
+            step_seconds: ONE_SIXTIETH_SECOND,
+            steps: 1,
+            actions: std::ptr::null(),
+            actions_len: 0,
+        };
+        // It swings down under the anchor with every link within its length.
+        let mut lowest = f32::INFINITY;
+        for _ in 0..240 {
+            bridge.step(&step).unwrap();
+            let swung = points(&bridge);
+            assert!(links_within(&swung, 0.01), "{swung:?}");
+            lowest = lowest.min(swung[4].y);
+        }
+        assert!(lowest < -1.5, "{lowest}");
     }
 
     #[test]
@@ -2660,6 +2724,11 @@ mod tests {
             angular_velocity: NativeVec3::default(),
             sleeping: false,
         };
+        bridge
+            .reset(reset(rotation(0.0, 0.0, 0.0, 1.001), NativeVec3::default()))
+            .unwrap();
+        let read = bridge.read(NativeDynamicsReadRequest { body }).unwrap();
+        assert!((norm(read.transform.rotation) - 1.0).abs() < 1e-6);
         let half_turn = rotation(0.0, 2.0, 0.0, 0.0);
         bridge
             .reset(reset(half_turn, NativeVec3::default()))
@@ -2693,6 +2762,17 @@ mod tests {
             (after.transform.translation.x, after.transform.rotation.y),
             (turned.transform.translation.x, turned.transform.rotation.y)
         );
+
+        let replaced = bridge
+            .replace_body(NativeDynamicsReplaceBodyRequest {
+                body,
+                replacement: config,
+            })
+            .unwrap();
+        let read = bridge
+            .read(NativeDynamicsReadRequest { body: replaced })
+            .unwrap();
+        assert!((norm(read.transform.rotation) - 1.0).abs() < 1e-6);
 
         // Bodies have no scale.
         config.transform.scale.x = 2.0;

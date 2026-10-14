@@ -349,8 +349,9 @@ preserves body velocity. A removed body invalidates its attached tethers.
 
 `CreateFixedChain` and `CreateBodyChain` own one anchored end and a series of
 sphere beads; the final bead is free. Supply ordinary body properties and an
-initial end position. Engine spaces the initial beads along that segment and
-creates all bodies and links; a refused chain leaves none behind.
+initial end position. Engine spaces the initial beads along that segment, or
+lays the chain out straight toward an end beyond its total length, and creates
+all bodies and links; a refused chain leaves none behind.
 `ReadChainPoint` returns the anchor at index zero followed by bead centers in
 order. `SetChainLength` distributes total length and reel rate evenly across
 links. `RemoveChain` removes all its bodies and links; destroying a body anchor
