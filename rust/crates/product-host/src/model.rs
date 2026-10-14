@@ -883,6 +883,10 @@ impl ProductHostInputResult {
         self.accepted
     }
 
+    pub const fn disposition(&self) -> ProductHostFaultDisposition {
+        self.disposition
+    }
+
     pub fn accepted(count: usize, readout: ProductHostRuntimeReadout) -> Self {
         Self {
             accepted: true,
@@ -963,6 +967,32 @@ impl ProductHostInputResult {
             binding: None,
             readout: None,
             diagnostic: Some("input batch was not a strict runtime-input wire batch; the runtime input binding was resynchronized".to_owned()),
+        }
+    }
+
+    /// Reports that the runtime input lane refused a decoded batch (an
+    /// undeclared direct intent, say) and the runtime replaced its input
+    /// control fence. Nothing from the batch reached the product; the
+    /// replacement binding and its sequence-zero clear arrive through the
+    /// accompanying runtime output receipt.
+    pub fn lane_resynchronized(
+        code: impl Into<String>,
+        count: usize,
+        diagnostic: impl Into<String>,
+    ) -> Self {
+        Self {
+            accepted: false,
+            code: code.into(),
+            disposition: ProductHostFaultDisposition::ResyncRequired,
+            count,
+            accepted_count: 0,
+            dropped_count: count,
+            accepted_through: None,
+            consumed_through: None,
+            next_input_sequence: None,
+            binding: None,
+            readout: None,
+            diagnostic: Some(diagnostic.into()),
         }
     }
 

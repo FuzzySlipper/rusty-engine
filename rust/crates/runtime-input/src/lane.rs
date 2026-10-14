@@ -48,24 +48,6 @@ struct PendingIntent {
     provenance: IntentProvenance,
 }
 
-#[derive(Debug, Clone)]
-struct InputLaneCheckpoint {
-    binding: RuntimeInputBinding,
-    context: InputContext,
-    last_sequence: Option<u64>,
-    last_snapshot_step: Option<u64>,
-    keyboard: Vec<(KeyboardControl, ButtonState)>,
-    pointer_buttons: Vec<(PointerButton, ButtonState)>,
-    controller_buttons: Vec<(ControllerButton, ButtonState)>,
-    pointer: (AxisValue, AxisValue),
-    wheel: (AxisValue, AxisValue),
-    controller_axes: Vec<(ControllerAxis, AxisValue)>,
-    controller_button_values: Vec<(ControllerButton, AxisValue)>,
-    mapping_active: Vec<bool>,
-    pending_intents: Vec<PendingIntent>,
-    disposed: bool,
-}
-
 type OrderedEnvelope = (RuntimeIntentEnvelope, (u8, usize));
 
 /// One explicit input owner per runtime instance. It captures normalized facts,
@@ -151,17 +133,17 @@ impl RuntimeInputLane {
         Ok(())
     }
 
-    /// Ingests an ordered batch as one lane transaction. A same-binding,
-    /// same-context event whose sequence is already behind the lane cursor is
-    /// a safe stale/duplicate observation and is dropped without changing
-    /// held or pending state. Any other error restores the complete
-    /// pre-batch checkpoint, so callers never forward a successfully ingested
-    /// prefix while reporting a failed batch.
+    /// Ingests an ordered batch. A same-binding, same-context event whose
+    /// sequence is already behind the lane cursor is a safe stale/duplicate
+    /// observation and is dropped without changing held or pending state.
+    /// Any other error clears the lane's held and pending state at the
+    /// failing event, and its cursor stops there: the caller must not forward
+    /// any of the batch and must [`Self::rebind`] the lane to a new control
+    /// revision before admitting more input.
     pub fn ingest_batch(
         &mut self,
         events: &[RuntimeInputEvent],
     ) -> Result<RuntimeInputBatchReceipt, RuntimeInputError> {
-        let checkpoint = self.checkpoint();
         let mut accepted_count = 0;
         let mut dropped_count = 0;
         let mut accepted_through: Option<u64> = None;
@@ -176,10 +158,7 @@ impl RuntimeInputLane {
                 );
                 continue;
             }
-            if let Err(error) = self.ingest(event.clone()) {
-                self.restore(checkpoint);
-                return Err(error);
-            }
+            self.ingest(event.clone())?;
             accepted_count += 1;
             accepted_indices.push(index);
             accepted_through = Some(event.sequence());
@@ -310,9 +289,6 @@ impl RuntimeInputLane {
         if self.disposed {
             return Err(RuntimeInputError::Disposed);
         }
-        if token.phase() != RuntimePhase::InputSnapshot {
-            return Err(RuntimeInputError::WrongSnapshotPhase);
-        }
         if lifecycle
             .validate_phase_token(token, RuntimePhase::InputSnapshot)
             .is_err()
@@ -320,21 +296,16 @@ impl RuntimeInputLane {
             self.clear_state();
             return Err(RuntimeInputError::LifecycleValidation);
         }
+        // Every control change rebinds the lane in the same owner call, and
+        // the token comes from that owner's current lifecycle.
         let simulation = token.simulation();
-        if simulation.instance_id() != self.binding.instance_id()
-            || simulation.generation() != self.binding.generation()
-            || simulation.control_revision() != self.binding.control_revision()
-        {
-            self.clear_state();
-            return Err(RuntimeInputError::BindingMismatch);
-        }
+        debug_assert!(
+            simulation.instance_id() == self.binding.instance_id()
+                && simulation.generation() == self.binding.generation()
+                && simulation.control_revision() == self.binding.control_revision(),
+            "an input snapshot token names the lane's binding"
+        );
         let simulation_step = simulation.step();
-        if self
-            .last_snapshot_step
-            .is_some_and(|previous| simulation_step.value() <= previous)
-        {
-            return Err(RuntimeInputError::SnapshotOutOfOrder);
-        }
         let snapshot = self.take_snapshot(simulation_step)?;
         self.last_snapshot_step = Some(simulation_step.value());
         Ok(snapshot)
@@ -406,55 +377,20 @@ impl RuntimeInputLane {
 
     fn is_safe_stale_duplicate(&self, event: &RuntimeInputEvent) -> bool {
         let event_binding = event.runtime();
-        // A prior control revision from this exact running incarnation can
-        // arrive after the host has already published a newer rebind. It is a
+        // An older generation or control revision of this instance can arrive
+        // from a page that has not yet seen the host's newer rebind. It is a
         // safe stale observation, not a foreign-control failure: admitting it
         // must never clear the new lane before fresh edges arrive.
         if event_binding.instance_id() == self.binding.instance_id()
-            && event_binding.generation() == self.binding.generation()
-            && event_binding.control_revision() < self.binding.control_revision()
+            && (event_binding.generation() < self.binding.generation()
+                || (event_binding.generation() == self.binding.generation()
+                    && event_binding.control_revision() < self.binding.control_revision()))
         {
             return true;
         }
         event_binding == self.binding
             && event.context() == &self.context
             && event.sequence() < expected_sequence(self.last_sequence)
-    }
-
-    fn checkpoint(&self) -> InputLaneCheckpoint {
-        InputLaneCheckpoint {
-            binding: self.binding,
-            context: self.context.clone(),
-            last_sequence: self.last_sequence,
-            last_snapshot_step: self.last_snapshot_step,
-            keyboard: self.keyboard.clone(),
-            pointer_buttons: self.pointer_buttons.clone(),
-            controller_buttons: self.controller_buttons.clone(),
-            pointer: self.pointer,
-            wheel: self.wheel,
-            controller_axes: self.controller_axes.clone(),
-            controller_button_values: self.controller_button_values.clone(),
-            mapping_active: self.mapping_active.clone(),
-            pending_intents: self.pending_intents.clone(),
-            disposed: self.disposed,
-        }
-    }
-
-    fn restore(&mut self, checkpoint: InputLaneCheckpoint) {
-        self.binding = checkpoint.binding;
-        self.context = checkpoint.context;
-        self.last_sequence = checkpoint.last_sequence;
-        self.last_snapshot_step = checkpoint.last_snapshot_step;
-        self.keyboard = checkpoint.keyboard;
-        self.pointer_buttons = checkpoint.pointer_buttons;
-        self.controller_buttons = checkpoint.controller_buttons;
-        self.pointer = checkpoint.pointer;
-        self.wheel = checkpoint.wheel;
-        self.controller_axes = checkpoint.controller_axes;
-        self.controller_button_values = checkpoint.controller_button_values;
-        self.mapping_active = checkpoint.mapping_active;
-        self.pending_intents = checkpoint.pending_intents;
-        self.disposed = checkpoint.disposed;
     }
 
     fn rebind_event(&mut self, event: RuntimeInputEvent) -> Result<(), RuntimeInputError> {

@@ -707,13 +707,11 @@ pub enum RuntimeInputError {
     UnknownIntent,
     IntentValueKindMismatch,
     Disposed,
-    WrongSnapshotPhase,
     LifecycleValidation,
-    SnapshotOutOfOrder,
 }
 
-/// Receipt for an ordered input batch. The lane either applies every
-/// non-stale event or restores its checkpoint when a hard error is found.
+/// Receipt for an ordered input batch whose every non-stale event the lane
+/// applied. A batch with a hard error has no receipt: the caller rebinds.
 /// `accepted_indices` identifies the entries that callers may forward to a
 /// product callback without replaying a safely dropped stale observation.
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -110,20 +110,21 @@ fn compiled_mappings() -> CompiledInputMappings {
 }
 
 #[test]
-fn input_batch_rolls_back_a_valid_prefix_and_preserves_pending_held_state() {
+fn a_refused_batch_releases_held_input_and_a_rebind_admits_fresh_input() {
     let (mut lifecycle, binding) = lifecycle_and_binding();
     let mut lane = RuntimeInputLane::new(compiled_mappings(), binding, context());
-    let initial = physical(
+    lane.ingest(physical(
         binding,
         0,
         RuntimeInputFact::Key {
             code: KeyboardControl::KeyW,
             edge: PhysicalEdge::Pressed,
         },
-    );
-    lane.ingest(initial.clone()).unwrap();
+    ))
+    .unwrap();
 
-    let invalid_batch = [
+    // An undeclared direct intent between a pointer delta and the W release.
+    let refused = [
         physical(
             binding,
             1,
@@ -132,58 +133,102 @@ fn input_batch_rolls_back_a_valid_prefix_and_preserves_pending_held_state() {
                 y: axis(-0.25),
             },
         ),
+        RuntimeInputEvent::DirectIntent(
+            RuntimeDirectIntentClaim::new(
+                binding,
+                2,
+                context(),
+                "no.such.intent",
+                RuntimeIntentValue::Digital { active: true },
+            )
+            .unwrap(),
+        ),
         physical(
             binding,
-            2,
-            RuntimeInputFact::ControllerAxis {
-                axis: ControllerAxis::Axis0,
-                value: axis(1.01),
+            3,
+            RuntimeInputFact::Key {
+                code: KeyboardControl::KeyW,
+                edge: PhysicalEdge::Released,
             },
         ),
     ];
     assert!(matches!(
-        lane.ingest_batch(&invalid_batch),
-        Err(RuntimeInputError::InvalidControllerAxisValue)
+        lane.ingest_batch(&refused),
+        Err(RuntimeInputError::UnknownIntent)
     ));
-    assert_eq!(lane.last_sequence(), Some(0));
-
-    let correct = physical(
-        binding,
-        1,
-        RuntimeInputFact::PointerDelta {
-            x: axis(0.25),
-            y: axis(0.0),
-        },
+    let (_, envelopes) = snapshot(&mut lane, &mut lifecycle).unwrap();
+    assert!(
+        !envelopes
+            .iter()
+            .any(|envelope| envelope.descriptor().id() == "move.forward"),
+        "W is not held after a refused batch: {envelopes:?}"
     );
-    let receipt = lane.ingest_batch(std::slice::from_ref(&correct)).unwrap();
-    assert_eq!(receipt.submitted_count(), 1);
-    assert_eq!(receipt.accepted_count(), 1);
-    assert_eq!(receipt.dropped_count(), 0);
-    assert_eq!(receipt.accepted_through(), Some(1));
-    assert_eq!(receipt.consumed_through(), Some(1));
-    assert_eq!(receipt.next_sequence(), Some(2));
-    assert_eq!(receipt.accepted_indices(), &[0]);
 
-    // A lane that never saw the failed prefix must produce the same frame and
-    // envelopes. This covers both the held key and the pending press/axis
-    // mappings that are not directly exposed as mutable implementation state.
-    let (mut expected_lifecycle, expected_binding) = lifecycle_and_binding();
-    let mut expected = RuntimeInputLane::new(compiled_mappings(), expected_binding, context());
-    expected.ingest(initial).unwrap();
-    expected
-        .ingest(physical(
-            expected_binding,
+    let receipt = lifecycle
+        .change_control(RuntimeControlOperation::Replace)
+        .unwrap();
+    let fresh = RuntimeInputBinding::new(
+        receipt.instance_id(),
+        receipt.generation(),
+        receipt.control_revision(),
+    );
+    lane.rebind(fresh, context(), InputClearReason::ControlRevisionChange)
+        .unwrap();
+    let receipt = lane
+        .ingest_batch(&[physical(
+            fresh,
             1,
             RuntimeInputFact::PointerDelta {
                 x: axis(0.25),
                 y: axis(0.0),
             },
-        ))
+        )])
         .unwrap();
-    assert_eq!(
-        snapshot(&mut lane, &mut lifecycle).unwrap(),
-        snapshot(&mut expected, &mut expected_lifecycle).unwrap()
+    assert_eq!(receipt.accepted_count(), 1);
+    assert_eq!(receipt.next_sequence(), Some(2));
+}
+
+#[test]
+fn input_from_an_older_generation_is_stale_and_keeps_held_input() {
+    let (mut lifecycle, old_binding) = lifecycle_and_binding();
+    let mut lane = RuntimeInputLane::new(compiled_mappings(), old_binding, context());
+    let receipt = lifecycle.restart().unwrap();
+    let fresh = RuntimeInputBinding::new(
+        receipt.instance_id(),
+        receipt.generation(),
+        receipt.control_revision(),
     );
+    lane.rebind(fresh, context(), InputClearReason::Restart)
+        .unwrap();
+    lane.ingest(physical(
+        fresh,
+        1,
+        RuntimeInputFact::Key {
+            code: KeyboardControl::KeyW,
+            edge: PhysicalEdge::Pressed,
+        },
+    ))
+    .unwrap();
+
+    let receipt = lane
+        .ingest_batch(&[physical(
+            old_binding,
+            2,
+            RuntimeInputFact::Key {
+                code: KeyboardControl::KeyW,
+                edge: PhysicalEdge::Released,
+            },
+        )])
+        .unwrap();
+    assert_eq!(receipt.accepted_count(), 0);
+    assert_eq!(receipt.dropped_count(), 1);
+    assert_eq!(receipt.next_sequence(), Some(2));
+    assert_eq!(lane.binding(), fresh);
+    let (_, envelopes) = snapshot(&mut lane, &mut lifecycle).unwrap();
+    assert!(envelopes
+        .iter()
+        .any(|envelope| envelope.descriptor().id() == "move.forward"
+            && envelope.phase() == IntentPhase::Held));
 }
 
 #[test]
@@ -550,24 +595,13 @@ fn restart_and_context_invalidation_cancel_pending_direct_payloads() {
 }
 
 #[test]
-fn lifecycle_tokens_fence_wrong_phase_foreign_and_stale_bindings() {
+fn lifecycle_tokens_fence_wrong_phase_and_stale_snapshots() {
     let (mut lifecycle, binding) = lifecycle_and_binding();
     let mut lane = RuntimeInputLane::new(compiled_mappings(), binding, context());
     let admission = lifecycle.admit_manual_step().unwrap().step_at(0).unwrap();
     assert!(matches!(
         lane.snapshot_for_step(&lifecycle, admission.phases().schedule()),
-        Err(RuntimeInputError::WrongSnapshotPhase)
-    ));
-
-    let mut foreign = RuntimeLifecycle::new(
-        RuntimeInstanceId::new(42),
-        RuntimeLifecycleConfig::new(60, 4).unwrap(),
-    );
-    foreign.start().unwrap();
-    let foreign_token = input_token(&mut foreign);
-    assert!(matches!(
-        lane.snapshot_for_step(&foreign, foreign_token),
-        Err(RuntimeInputError::BindingMismatch)
+        Err(RuntimeInputError::LifecycleValidation)
     ));
 
     lifecycle.pause().unwrap();

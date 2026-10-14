@@ -1481,7 +1481,7 @@ impl CsharpProductRuntime {
                 before_binding,
                 1,
             )]))
-            .is_ok()
+            .is_ok_and(|receipt| receipt.result().is_accepted())
         {
             return Err(CsharpProductRuntimeError::new(
                 "CSHARP_EXERCISE_RESTART",
@@ -1600,32 +1600,26 @@ impl CsharpProductRuntime {
                 "configured payload direct intent has no payload contract",
             )
         })?;
+        // A refused claim fences input, so each later claim uses the fresh
+        // binding and its first sequence.
         let unmapped =
             payload_intent(current_binding, next_sequence, "runtime.unmapped", contract)?;
-        if self
-            .input(ProductHostInputBatch::new(vec![unmapped]))
-            .is_ok()
-        {
-            return Err(CsharpProductRuntimeError::new(
-                "CSHARP_EXERCISE_UNMAPPED_DIRECT_INTENT",
-                "unmapped payload direct intent was admitted",
-            ));
-        }
+        let (current_binding, next_sequence) = self.exercise_refused_input(
+            unmapped,
+            "CSHARP_EXERCISE_UNMAPPED_DIRECT_INTENT",
+            "unmapped payload direct intent was admitted",
+        )?;
         let mismatched = payload_intent(
             current_binding,
             next_sequence,
             descriptor.id(),
             "runtime.wrong.contract",
         )?;
-        if self
-            .input(ProductHostInputBatch::new(vec![mismatched]))
-            .is_ok()
-        {
-            return Err(CsharpProductRuntimeError::new(
-                "CSHARP_EXERCISE_MISMATCHED_DIRECT_INTENT",
-                "payload direct intent with a mismatched contract was admitted",
-            ));
-        }
+        let (current_binding, next_sequence) = self.exercise_refused_input(
+            mismatched,
+            "CSHARP_EXERCISE_MISMATCHED_DIRECT_INTENT",
+            "payload direct intent with a mismatched contract was admitted",
+        )?;
         let admitted = direct_intent(current_binding, next_sequence, &descriptor)?;
         self.input(ProductHostInputBatch::new(vec![admitted]))
             .map_err(exercise_runtime_error)?;
@@ -1656,6 +1650,28 @@ impl CsharpProductRuntime {
         self.input(ProductHostInputBatch::new(vec![admitted]))
             .map_err(exercise_runtime_error)?;
         Ok(())
+    }
+
+    /// Submits input the lane must refuse and returns the fresh binding and
+    /// first sequence that the refusal's control fence published.
+    fn exercise_refused_input(
+        &mut self,
+        event: RuntimeInputEvent,
+        code: &'static str,
+        detail: &'static str,
+    ) -> Result<(RuntimeInputBinding, u64), CsharpProductRuntimeError> {
+        let refused = self
+            .input(ProductHostInputBatch::new(vec![event]))
+            .map_err(exercise_runtime_error)?;
+        if refused.result().is_accepted()
+            || refused.result().disposition() != ProductHostFaultDisposition::ResyncRequired
+        {
+            return Err(CsharpProductRuntimeError::new(code, detail));
+        }
+        Ok((
+            input_binding(&self.lifecycle),
+            self.next_input_sequence().get(),
+        ))
     }
 
     fn exercise_realtime_admission(&mut self) -> Result<(), CsharpProductRuntimeError> {
@@ -2776,6 +2792,46 @@ impl CsharpProductRuntime {
         Ok(())
     }
 
+    /// Replaces the control revision and rebinds input in place: held and
+    /// pending input is cleared, the product's next update starts with one
+    /// clear, and the page adopts the published binding.
+    fn fence_input(&mut self) -> Result<Vec<RuntimePublication>, ProductHostRuntimeError> {
+        self.lifecycle
+            .change_control(RuntimeControlOperation::Replace)
+            .map_err(|error| self.lifecycle_runtime_error(error))?;
+        self.rebind_input_in_place(InputClearReason::ControlRevisionChange)
+            .map_err(|error| self.runtime_error(error))?;
+        observe_product_runtime(&self.api, self.handle, self.lifecycle.readout());
+        self.rebind_in_place(Vec::new())
+    }
+
+    fn fence_refused_input(
+        &mut self,
+        count: usize,
+        error: &runtime_input::RuntimeInputError,
+    ) -> Result<ProductHostRuntimeReceipt<ProductHostInputResult>, ProductHostRuntimeError> {
+        let code = input_error_code(error);
+        let diagnostic = format!(
+            "input batch was refused ({error}); the runtime input binding was resynchronized"
+        );
+        let _ = self.diagnostics.publish(
+            ProductHostLogEvent::new(
+                ProductHostLogSeverity::Warning,
+                ProductHostLogDisposition::ResyncRequired,
+                "csharp-runtime",
+                code,
+                diagnostic.clone(),
+            )
+            .with_runtime(self.binding()),
+        );
+        let mut outputs = self.take_pending_recovery_outputs();
+        outputs.extend(self.fence_input()?);
+        Ok(ProductHostRuntimeReceipt::new(
+            ProductHostInputResult::lane_resynchronized(code, count, diagnostic),
+            outputs,
+        ))
+    }
+
     /// Settles a C#-staged mapping set only after the product callback and all
     /// other staged Engine output have committed. The existing control fence
     /// makes any browser batch carrying the old binding stale and gives the
@@ -3132,13 +3188,15 @@ impl ProductHostRuntime for CsharpProductRuntime {
                 "input is admitted only while the standard runtime is running or paused",
             ));
         }
-        // RuntimeInputLane owns the checkpoint. This keeps a valid prefix from
-        // reaching the product when a later event is malformed or from a
-        // foreign binding, and gives the host a precise safe-drop cursor.
-        let receipt = self
-            .input_lane
-            .ingest_batch(batch.events())
-            .map_err(input_runtime_error)?;
+        // A batch the lane refuses (a product's undeclared intent, a gap, a
+        // foreign binding) leaves its cursor at the failing event, and its
+        // releases never reach the product. Nothing from it is forwarded: the
+        // control fence clears held input on both sides and gives the page a
+        // fresh binding, and its in-flight batches drop as stale.
+        let receipt = match self.input_lane.ingest_batch(batch.events()) {
+            Ok(receipt) => receipt,
+            Err(error) => return self.fence_refused_input(batch.events().len(), &error),
+        };
         // A safe drop is a batch a fence made stale or a replay behind the
         // cursor: expected, and answered in the receipt, so it is recorded as
         // information. (The sink raises any rejected-recoverable event to a
@@ -3205,16 +3263,8 @@ impl ProductHostRuntime for CsharpProductRuntime {
         &mut self,
     ) -> Result<ProductHostRuntimeReceipt<ProductHostOperationResult>, ProductHostRuntimeError>
     {
-        self.lifecycle
-            .change_control(RuntimeControlOperation::Replace)
-            .map_err(|error| self.lifecycle_runtime_error(error))?;
-        self.rebind_input_in_place(InputClearReason::ControlRevisionChange)
-            .map_err(|error| self.runtime_error(error))?;
-        observe_product_runtime(&self.api, self.handle, self.lifecycle.readout());
-        self.receipt(
-            ProductHostOperationKind::ReplaceControl,
-            self.rebind_in_place(Vec::new())?,
-        )
+        let outputs = self.fence_input()?;
+        self.receipt(ProductHostOperationKind::ReplaceControl, outputs)
     }
 
     fn execute_debug(
@@ -3906,10 +3956,6 @@ fn prepare_persistence_root(
     Ok(Some(root.to_path_buf()))
 }
 
-fn input_runtime_error(error: runtime_input::RuntimeInputError) -> ProductHostRuntimeError {
-    ProductHostRuntimeError::new_not_applied(input_error_code(&error), error.to_string())
-}
-
 fn lifecycle_error(error: runtime_lifecycle::RuntimeLifecycleError) -> CsharpProductRuntimeError {
     CsharpProductRuntimeError::new(lifecycle_error_code(&error), error.to_string())
 }
@@ -3978,9 +4024,7 @@ fn input_error_code(error: &runtime_input::RuntimeInputError) -> &'static str {
         RuntimeInputError::UnknownIntent => "CSHARP_INPUT_UNKNOWN_INTENT",
         RuntimeInputError::IntentValueKindMismatch => "CSHARP_INPUT_INTENT_VALUE_KIND_MISMATCH",
         RuntimeInputError::Disposed => "CSHARP_INPUT_DISPOSED",
-        RuntimeInputError::WrongSnapshotPhase => "CSHARP_INPUT_WRONG_SNAPSHOT_PHASE",
         RuntimeInputError::LifecycleValidation => "CSHARP_INPUT_LIFECYCLE_VALIDATION",
-        RuntimeInputError::SnapshotOutOfOrder => "CSHARP_INPUT_SNAPSHOT_OUT_OF_ORDER",
     }
 }
 
@@ -9474,6 +9518,188 @@ mod tests {
     }
 
     #[test]
+    fn a_refused_input_batch_fences_input_and_releases_held_keys() {
+        let _guard = DROP_FIXTURE_GATE
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let (mut runtime, root) = drop_fixture_runtime("refused-input-fence");
+        runtime
+            .lifecycle(ProductHostLifecycleOperation::Start)
+            .expect("start refused-input fixture");
+        let old_binding = input_binding(&runtime.lifecycle);
+        let physical = |binding, sequence, fact| {
+            RuntimeInputEvent::Physical(RuntimeInputIngress::new(
+                binding,
+                sequence,
+                standard_input_context(),
+                fact,
+            ))
+        };
+        let key_w = |edge| RuntimeInputFact::Key {
+            code: runtime_input_model::KeyboardControl::KeyW,
+            edge,
+        };
+        let pointer_delta = || RuntimeInputFact::PointerDelta {
+            x: AxisValue::new(0.5).unwrap(),
+            y: AxisValue::new(0.0).unwrap(),
+        };
+        runtime
+            .input(ProductHostInputBatch::new(vec![physical(
+                old_binding,
+                1,
+                key_w(runtime_input::PhysicalEdge::Pressed),
+            )]))
+            .expect("admit W press");
+
+        // A product's undeclared direct intent between a pointer delta and
+        // the W release.
+        let warnings = runtime.diagnostics.snapshot().warning_count;
+        let previous_binding = runtime.binding();
+        let refused = runtime
+            .input(ProductHostInputBatch::new(vec![
+                physical(old_binding, 2, pointer_delta()),
+                RuntimeInputEvent::DirectIntent(
+                    RuntimeDirectIntentClaim::new(
+                        old_binding,
+                        3,
+                        standard_input_context(),
+                        "no.such.intent",
+                        RuntimeIntentValue::Digital { active: true },
+                    )
+                    .unwrap(),
+                ),
+                physical(old_binding, 4, key_w(runtime_input::PhysicalEdge::Released)),
+            ]))
+            .expect("a refused batch is answered with a fence");
+        assert_eq!(runtime.diagnostics.snapshot().warning_count, warnings + 1);
+        let (result, outputs) = refused.into_parts();
+        assert!(!result.is_accepted());
+        let encoded = serde_json::to_value(&result).expect("refused receipt serializes");
+        assert_eq!(encoded["code"], "CSHARP_INPUT_UNKNOWN_INTENT");
+        assert_eq!(encoded["disposition"], "resync-required");
+        assert_eq!(encoded["count"], 3);
+        assert_eq!(
+            outputs
+                .iter()
+                .filter(|output| matches!(output, RuntimePublication::Binding { .. }))
+                .count(),
+            1
+        );
+        assert_ne!(runtime.binding(), previous_binding);
+
+        // The page's in-flight batch at the old binding drops as stale.
+        let stale = runtime
+            .input(ProductHostInputBatch::new(vec![physical(
+                old_binding,
+                5,
+                pointer_delta(),
+            )]))
+            .expect("old-binding input is a safe stale drop");
+        let encoded = serde_json::to_value(stale.result()).expect("stale receipt serializes");
+        assert_eq!(encoded["acceptedCount"], 0);
+        assert_eq!(encoded["nextInputSequence"], "1");
+
+        let fresh_binding = input_binding(&runtime.lifecycle);
+        let fresh = runtime
+            .input(ProductHostInputBatch::new(vec![physical(
+                fresh_binding,
+                1,
+                pointer_delta(),
+            )]))
+            .expect("admit input at the fresh binding");
+        assert!(fresh.result().is_accepted());
+
+        // The product sees one clear and the fresh event: no W press
+        // survives without a clear after it, and nothing from the refused
+        // batch arrives.
+        let kinds = runtime
+            .pending_inputs
+            .iter()
+            .map(|event| (event.kind, event.clear_reason))
+            .collect::<Vec<_>>();
+        assert_eq!(kinds.len(), 2, "{kinds:?}");
+        assert_eq!(kinds[0].0, NativeInputEventKind::Clear);
+        assert_eq!(kinds[0].1, NativeInputClearReason::ControlRevisionChange);
+        assert_eq!(kinds[1].0, NativeInputEventKind::PointerDelta);
+
+        drop(runtime);
+        fs::remove_dir_all(root).expect("remove refused-input fixture content");
+    }
+
+    #[test]
+    fn input_from_before_a_restart_drops_as_stale_without_a_fence() {
+        let _guard = DROP_FIXTURE_GATE
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let (mut runtime, root) = drop_fixture_runtime("pre-restart-input");
+        runtime
+            .lifecycle(ProductHostLifecycleOperation::Start)
+            .expect("start pre-restart fixture");
+        let old_binding = input_binding(&runtime.lifecycle);
+        runtime
+            .lifecycle(ProductHostLifecycleOperation::Restart)
+            .expect("restart pre-restart fixture");
+        let fresh_binding = input_binding(&runtime.lifecycle);
+        let key_w = |binding, sequence, edge| {
+            RuntimeInputEvent::Physical(RuntimeInputIngress::new(
+                binding,
+                sequence,
+                standard_input_context(),
+                RuntimeInputFact::Key {
+                    code: runtime_input_model::KeyboardControl::KeyW,
+                    edge,
+                },
+            ))
+        };
+        runtime
+            .input(ProductHostInputBatch::new(vec![key_w(
+                fresh_binding,
+                1,
+                runtime_input::PhysicalEdge::Pressed,
+            )]))
+            .expect("admit W press in the new generation");
+        let pending_before = runtime.pending_inputs.len();
+        let warnings = runtime.diagnostics.snapshot().warning_count;
+        let binding_before = runtime.binding();
+
+        // A page that has not seen the restart releases W at the old generation.
+        let stale = runtime
+            .input(ProductHostInputBatch::new(vec![key_w(
+                old_binding,
+                2,
+                runtime_input::PhysicalEdge::Released,
+            )]))
+            .expect("pre-restart input is a safe stale drop");
+        let (result, outputs) = stale.into_parts();
+        let encoded = serde_json::to_value(&result).expect("stale receipt serializes");
+        assert_eq!(encoded["code"], "CSHARP_INPUT_STALE_DROPPED");
+        assert_eq!(encoded["acceptedCount"], 0);
+        assert_eq!(encoded["droppedCount"], 1);
+        assert_eq!(encoded["nextInputSequence"], "2");
+        assert!(outputs.is_empty(), "no fence is published");
+        assert_eq!(runtime.binding(), binding_before);
+        assert_eq!(runtime.diagnostics.snapshot().warning_count, warnings);
+        assert_eq!(runtime.pending_inputs.len(), pending_before);
+        let last = runtime.pending_inputs.last().expect("W press is pending");
+        assert_eq!(last.kind, NativeInputEventKind::Key);
+        assert_eq!(last.edge, NativeInputEdge::Pressed);
+
+        // The lane still holds W: its release at the fresh binding is the
+        // next sequence and reaches the product.
+        runtime
+            .input(ProductHostInputBatch::new(vec![key_w(
+                fresh_binding,
+                2,
+                runtime_input::PhysicalEdge::Released,
+            )]))
+            .expect("admit W release in the new generation");
+        assert_eq!(runtime.pending_inputs.len(), pending_before + 1);
+
+        drop(runtime);
+        fs::remove_dir_all(root).expect("remove pre-restart fixture content");
+    }
+
+    #[test]
     fn lifecycle_readout_projects_owner_fault_and_restart_reset() {
         let mut lifecycle = RuntimeLifecycle::new(
             RuntimeInstanceId::new(1),
@@ -9553,7 +9779,7 @@ mod tests {
             "CSHARP_LIFECYCLE_GAMEPLAY_ADVANCE_WITHOUT_RATE"
         );
         assert_eq!(
-            input_runtime_error(runtime_input::RuntimeInputError::BindingMismatch).code(),
+            input_error_code(&runtime_input::RuntimeInputError::BindingMismatch),
             "CSHARP_INPUT_BINDING_MISMATCH"
         );
     }
