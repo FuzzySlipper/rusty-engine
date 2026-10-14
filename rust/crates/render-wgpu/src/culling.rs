@@ -146,11 +146,11 @@ impl CandidateList {
     pub fn new(
         list: DrawList,
         visible_base: u32,
-        index_range: impl Fn(&Batch) -> Option<(u32, u32)>,
+        index_range: impl Fn(&Batch) -> (u32, u32),
     ) -> Self {
         let mut template = Vec::with_capacity(list.batches.len() * ARGS_BYTES as usize);
         for batch in &list.batches {
-            let (first_index, index_count) = index_range(batch).unwrap_or((0, 0));
+            let (first_index, index_count) = index_range(batch);
             template.extend_from_slice(
                 wgpu::util::DrawIndexedIndirectArgs {
                     index_count,

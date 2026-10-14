@@ -4,9 +4,11 @@
 //! caster feature set and culling, and the ambient occlusion pre-pass's
 //! depth-only pipelines per caster feature set and world pass (the caster
 //! shaders with the world pass's culling). Pipelines are made when a material
-//! is defined and before a pass is encoded, never while drawing.
+//! is defined and when a part brings a new feature set and pass
+//! (`Variants`); a target set, the casters and the pre-pass make every known
+//! one when they first draw. Never while drawing.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
 use crate::batch::Pass;
 use crate::shaders::{Entry, Features, Shaders};
@@ -114,6 +116,20 @@ pub(crate) struct Layouts {
     /// Product shaders that did not compose since last taken; their
     /// materials draw with the standard shade stage.
     pub shader_errors: Vec<String>,
+    pub variants: Variants,
+}
+
+/// The (features, pass) pairs parts draw with, noted as parts are derived.
+/// Each world pipeline set, the caster pipelines and the pre-pass pipelines
+/// make every known pair when they first draw, and each later pair as a
+/// part brings it, so a frame never searches its lists for pipelines.
+#[derive(Default)]
+pub(crate) struct Variants {
+    known: BTreeSet<(Features, Pass)>,
+    /// Shadow casters have drawn.
+    casters: bool,
+    /// The ambient occlusion pre-pass has drawn.
+    prepass: bool,
 }
 
 /// One target format's pipelines: the sky, the sun and moon added over the
@@ -134,6 +150,8 @@ pub(crate) struct Pipelines {
     /// (`fs_clouds_composite`).
     pub clouds_composite: wgpu::RenderPipeline,
     world: HashMap<(Features, Pass), wgpu::RenderPipeline>,
+    /// The world draws into this target: it holds every known variant.
+    pub draws_world: bool,
 }
 
 impl Pipelines {
@@ -615,6 +633,7 @@ impl Layouts {
             prepass: PrepassPipelines::default(),
             ambient_occlusion,
             shader_errors: Vec::new(),
+            variants: Variants::default(),
         }
     }
 
@@ -785,7 +804,74 @@ impl Layouts {
                 }),
             ),
             world: HashMap::new(),
+            draws_world: false,
         }
+    }
+
+    /// A part draws `features` in `pass`: make its pipelines on each world
+    /// set, and its caster and pre-pass pipelines once those draw. Returns
+    /// how many were made.
+    pub fn note_variant(
+        &mut self,
+        device: &wgpu::Device,
+        sets: &mut [Pipelines],
+        features: Features,
+        pass: Pass,
+    ) -> u32 {
+        if !self.variants.known.insert((features, pass)) {
+            return 0;
+        }
+        let mut made = 0;
+        for set in sets.iter_mut().filter(|set| set.draws_world) {
+            made += u32::from(self.prepare(device, set, features, pass));
+        }
+        if self.variants.casters {
+            made += u32::from(self.prepare_caster(device, features, pass));
+        }
+        if self.variants.prepass && pass < Pass::Lines {
+            made += u32::from(self.prepare_prepass(device, features, pass));
+        }
+        made
+    }
+
+    /// The world draws into `set` from now on: make every known variant on
+    /// it. Returns how many pipelines were made.
+    pub fn draw_world_on(&mut self, device: &wgpu::Device, set: &mut Pipelines) -> u32 {
+        if std::mem::replace(&mut set.draws_world, true) {
+            return 0;
+        }
+        let known: Vec<(Features, Pass)> = self.variants.known.iter().copied().collect();
+        known
+            .into_iter()
+            .map(|(features, pass)| u32::from(self.prepare(device, set, features, pass)))
+            .sum()
+    }
+
+    /// Shadow casters draw from now on: make every known variant's caster
+    /// pipeline. Returns how many were made.
+    pub fn start_casters(&mut self, device: &wgpu::Device) -> u32 {
+        if std::mem::replace(&mut self.variants.casters, true) {
+            return 0;
+        }
+        let known: Vec<(Features, Pass)> = self.variants.known.iter().copied().collect();
+        known
+            .into_iter()
+            .map(|(features, pass)| u32::from(self.prepare_caster(device, features, pass)))
+            .sum()
+    }
+
+    /// The occlusion pre-pass draws from now on: make every known opaque
+    /// variant's pre-pass pipeline. Returns how many were made.
+    pub fn start_prepass(&mut self, device: &wgpu::Device) -> u32 {
+        if std::mem::replace(&mut self.variants.prepass, true) {
+            return 0;
+        }
+        let known: Vec<(Features, Pass)> = self.variants.known.iter().copied().collect();
+        known
+            .into_iter()
+            .filter(|(_, pass)| *pass < Pass::Lines)
+            .map(|(features, pass)| u32::from(self.prepare_prepass(device, features, pass)))
+            .sum()
     }
 
     /// Make the world pipeline drawing `features` in `pass` on `pipelines`'

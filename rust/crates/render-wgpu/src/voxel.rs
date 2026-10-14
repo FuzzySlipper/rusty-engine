@@ -142,18 +142,14 @@ impl Renderer {
         );
         // Instances created before (or kept across) a redefinition bind the
         // new meshes.
-        for handle in self.voxel_object_instances(&asset.asset) {
-            self.rebuild_parts(handle);
-        }
+        self.rebuild_users(&[id]);
         Ok(())
     }
 
     pub(crate) fn release_voxel_object(&mut self, asset: &str) {
         if let Some(id) = self.tables.names.get(asset) {
             self.tables.voxel_objects.remove(id);
-        }
-        for handle in self.voxel_object_instances(asset) {
-            self.rebuild_parts(handle);
+            self.rebuild_users(&[id]);
         }
     }
 
@@ -176,20 +172,6 @@ impl Renderer {
         }
         self.rebuild_parts(handle);
         Ok(())
-    }
-
-    fn voxel_object_instances(&self, asset: &str) -> Vec<RenderHandle> {
-        let mut handles: Vec<RenderHandle> = self
-            .tables
-            .nodes
-            .iter()
-            .filter(|(_, node)| {
-                matches!(&node.kind, NodeKind::VoxelObject(instance) if instance.asset == asset)
-            })
-            .map(|(handle, _)| *handle)
-            .collect();
-        handles.sort();
-        handles
     }
 }
 

@@ -117,6 +117,17 @@ impl Harness {
         let stats = self.renderer.render_offscreen(camera, &self.target);
         (stats, self.target.read_rgba(&self.gpu))
     }
+
+    /// What a new renderer with the same options, given the retained world
+    /// whole, draws on the same target: what the changes applied one by one
+    /// must draw too.
+    pub fn render_fresh(&self, camera: &RendererCompositionCamera) -> (FrameStats, Vec<u8>) {
+        let mut renderer = Renderer::new(&self.gpu, self.renderer.options());
+        let issues = renderer.apply(&self.world.snapshot().frame, &self.resources);
+        assert!(issues.is_empty(), "the snapshot applies: {issues:?}");
+        let stats = renderer.render_offscreen(camera, &self.target);
+        (stats, self.target.read_rgba(&self.gpu))
+    }
 }
 
 pub fn camera(

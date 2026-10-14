@@ -956,11 +956,12 @@ fn materials_share_a_pipeline_per_feature_set_made_when_the_material_is_defined(
     let view = camera([0.0, 1.5, 4.0], 0.0, -15.0);
 
     // Red and green compile no features and share one pipeline; blue's alpha
-    // mask is a second. The target is new, so both are made for this frame.
+    // mask is a second. The target is new, so both are made for this frame,
+    // each for mirrored parts too.
     let (first, _) = harness.render(&view);
     assert_eq!(
         (first.draws, first.pipeline_binds, first.pipelines_created),
-        (3, 2, 2)
+        (3, 2, 4)
     );
 
     // Another masked material reuses blue's pipeline; a voxel surface is a
@@ -2319,6 +2320,25 @@ fn a_session_of_six_terrain_layers_draws_each_chunk_as_the_layers_it_weighs() {
         differing, 0,
         "layered again, the chunks draw their palettes"
     );
+
+    // Released with their narrowed variants, the layered materials leave
+    // their chunks to the fallback, as a new renderer draws them.
+    harness.apply(
+        [1, 2]
+            .map(|slot| RenderDiff::ReleaseMaterial {
+                id: render_projection::voxel_material_id(slot),
+            })
+            .into(),
+    );
+    let released = harness.render(&view).1;
+    let fresh = harness.render_fresh(&view).1;
+    let differing = fresh
+        .chunks(4)
+        .zip(released.chunks(4))
+        .filter(|(a, b)| (0..3).any(|c| a[c].abs_diff(b[c]) > 2))
+        .count();
+    assert_eq!(differing, 0, "released, as a new renderer draws them");
+    assert_ne!(released, layered_again);
 }
 
 /// The six ground materials of [`six_grounds`], west to east in their

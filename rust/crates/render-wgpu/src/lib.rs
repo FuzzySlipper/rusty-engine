@@ -473,6 +473,9 @@ pub struct Renderer {
     /// The world's HDR targets and the finish pass.
     finish: finish::Finish,
     distance_fields: distance_fields::DistanceFields,
+    /// The world boxes of the resident distance fields, at the scene
+    /// generation they were gathered at (`frame.rs` `gather_field_entries`).
+    field_entries: Option<(u64, Vec<distance_fields::FieldEntry>)>,
     light_clusters: light_clusters::LightClusters,
     culling: culling::GpuCulling,
     composition: composition::ViewComposition,
@@ -669,6 +672,7 @@ impl Renderer {
             ambient_occlusion,
             finish,
             distance_fields,
+            field_entries: None,
             light_clusters,
             culling,
             composition: Default::default(),
@@ -745,6 +749,7 @@ impl Renderer {
         self.options = options;
         self.tables.lights_dirty = true;
         if was != now {
+            self.field_entries = None;
             for mesh in self.tables.payload_meshes.values_mut() {
                 let Some(field) = &mut mesh.distance_field else {
                     continue;

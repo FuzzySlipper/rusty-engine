@@ -7,6 +7,7 @@
 //! | `static_meshes` | static mesh asset id | vertex/index buffers, groups, default slots, local bounds | `DefineStaticMesh` / `ReleaseStaticMesh` |
 //! | `payload_meshes` | node handle | vertex/index buffers of a primitive's replaced payload or line | `ReplaceMeshPayload`, `Create` (line) |
 //! | `nodes` | `RenderHandle` | parent, children, local and world transform, visibility, layer, kind, owned parts | `Create*`, `Update`, `Destroy`, `SetParentJoint`, `UpdateLight`, `SetMaterialInstanceParameters` |
+//! | `users` | asset or material name id (`names`) | the nodes whose parts name it, defined or not | derived from nodes |
 //! | `parts` | `PartId` (dense) | one drawable (node, mesh group, material), its GPU `PartRow`, and its draw state (class, batch key, bounds, visibility, layer) | derived from nodes |
 //! | `atlases` | atlas name id (`names`) | retained descriptor and its texture's name id | `DefineSpriteAtlas` / `ReleaseSpriteAtlas` |
 //! | `names` | asset or texture id | dense name id, assigned at apply | any op naming an atlas or sprite texture |
@@ -39,9 +40,10 @@
 //! Draw lists (`batch.rs`) read the dense part state only: parts sharing a
 //! batch key draw as one instanced run.
 //!
-//! Dirty marks are the only change tracking: a transform or visibility change
-//! marks its node; `prepare` recomputes that subtree's world rows and uploads
-//! only those `PartRow`s. Nothing is re-derived for unchanged nodes.
+//! A transform or visibility change marks its node; `prepare` recomputes that
+//! subtree's world rows and uploads only those `PartRow`s. Defining,
+//! redefining or releasing an asset or material re-derives the nodes naming
+//! it (`users`). Nothing is re-derived for unchanged nodes.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
@@ -424,6 +426,9 @@ pub(crate) struct NodeRow {
     pub shadow_casting: ShadowCasting,
     pub kind: NodeKind,
     pub parts: Vec<PartId>,
+    /// The `names` ids of the assets and materials its parts were derived
+    /// from, defined or not: its entries in `Tables::users`.
+    pub names: Vec<u32>,
     /// The focus its children's morphing meshes morph about, in its own
     /// space (`RenderDiff::SetMorphFocus`).
     pub morph_focus: Option<[f64; 2]>,
@@ -432,7 +437,6 @@ pub(crate) struct NodeRow {
 pub(crate) type PartId = u32;
 
 pub(crate) struct Part {
-    pub node: RenderHandle,
     pub mesh: MeshRef,
     /// Triangle index range; a wireframe part draws its edges instead.
     pub first_index: u32,
@@ -811,6 +815,13 @@ pub(crate) struct Tables {
     pub animated: HashMap<RenderHandle, AnimatedInstance>,
     /// Animation controllers by projection handle.
     pub controllers: HashMap<u64, ControllerRow>,
+    /// The controllers driving each animated instance, by target; the first
+    /// poses it.
+    pub controlled: HashMap<RenderHandle, BTreeSet<u64>>,
+    /// The nodes whose parts name each asset or material (`names` id),
+    /// whether it is defined or not: defining, redefining or releasing it
+    /// re-derives these nodes and no others.
+    pub users: HashMap<u32, BTreeSet<RenderHandle>>,
     pub environment: Environment,
     pub fog: Option<FogDescriptor>,
     pub tone_mapping: ToneMappingDescriptor,
@@ -849,6 +860,9 @@ pub(crate) struct Tables {
     /// Light nodes; the light rows are rebuilt when any of them changes.
     pub lights: HashSet<RenderHandle>,
     pub lights_dirty: bool,
+    /// The lights created, changed, moved or destroyed since `prepare`: the
+    /// indirect light rebakes where each was and is (`probes`).
+    pub changed_lights: HashSet<RenderHandle>,
     pub environment_dirty: bool,
 }
 
@@ -872,6 +886,8 @@ impl Tables {
             animated_assets: Slots::default(),
             animated: HashMap::new(),
             controllers: HashMap::new(),
+            controlled: HashMap::new(),
+            users: HashMap::new(),
             environment: Environment::Default,
             fog: None,
             tone_mapping: ToneMappingDescriptor::NONE,
@@ -896,6 +912,7 @@ impl Tables {
             dirty_nodes: HashSet::new(),
             lights: HashSet::new(),
             lights_dirty: true,
+            changed_lights: HashSet::new(),
             environment_dirty: true,
         }
     }

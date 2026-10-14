@@ -115,15 +115,22 @@ impl Renderer {
                 self.tables.shaders.remove(id);
             }
             RenderDiff::ReleaseMaterial { id } => {
-                if let Some(id) = self.tables.names.get(id) {
-                    self.tables.materials.remove(id);
-                }
-                self.release_layer_variants(id);
+                // Its narrowed variants go with it; what drew any of them
+                // draws the lit fallback.
+                let mut released = self.release_layer_variants(id);
+                released.extend(
+                    self.tables
+                        .names
+                        .get(id)
+                        .filter(|id| self.tables.materials.remove(*id).is_some()),
+                );
+                self.rebuild_users(&released);
             }
             RenderDiff::DefineStaticMesh { asset } => self.define_static_mesh(asset, resources)?,
             RenderDiff::ReleaseStaticMesh { asset } => {
                 if let Some(id) = self.tables.names.get(asset) {
                     self.tables.static_meshes.remove(id);
+                    self.rebuild_users(&[id]);
                 }
             }
             RenderDiff::DefineSpriteAtlas { atlas } => {
@@ -406,12 +413,14 @@ impl Renderer {
                 );
                 self.tables.lights.insert(*handle);
                 self.tables.lights_dirty = true;
+                self.tables.changed_lights.insert(*handle);
             }
             RenderDiff::UpdateLight { handle, light } => {
                 let node = self.node_mut(*handle)?;
                 node.kind = NodeKind::Light(light.clone());
                 self.tables.sprites.remove(handle);
                 self.tables.lights_dirty = true;
+                self.tables.changed_lights.insert(*handle);
             }
             RenderDiff::Update {
                 handle,
@@ -706,6 +715,7 @@ impl Renderer {
                 shadow_casting,
                 kind,
                 parts: Vec::new(),
+                names: Vec::new(),
                 morph_focus: None,
             },
         );
@@ -724,18 +734,20 @@ impl Renderer {
         {
             parent.children.retain(|child| *child != handle);
         }
-        let mut stack = vec![node];
+        let mut stack = vec![(handle, node)];
         let mut removed = vec![handle];
-        while let Some(node) = stack.pop() {
+        while let Some((handle, node)) = stack.pop() {
             for part in node.parts {
                 self.tables.parts.remove(part);
             }
+            unlink_users(&mut self.tables.users, handle, &node.names);
             if matches!(node.kind, NodeKind::Light(_)) {
                 self.tables.lights_dirty = true;
+                self.tables.changed_lights.insert(handle);
             }
             for child in node.children {
                 if let Some(child_node) = self.tables.nodes.remove(&child) {
-                    stack.push(child_node);
+                    stack.push((child, child_node));
                     removed.push(child);
                 }
             }
@@ -754,15 +766,19 @@ impl Renderer {
         }
     }
 
-    /// Re-derive a node's drawable parts from its kind and bindings.
+    /// Re-derive a node's drawable parts from its kind and bindings. Each
+    /// part draws a defined mesh and a defined material (or a fallback);
+    /// the assets and materials the node names, defined or not, become its
+    /// entries in `Tables::users`, so their changes re-derive it.
     pub(crate) fn rebuild_parts(&mut self, handle: RenderHandle) {
         let animated = self
             .tables
             .nodes
             .get(&handle)
             .is_some_and(|node| matches!(node.kind, NodeKind::AnimatedMesh(_)));
+        let mut used: Vec<u32> = Vec::new();
         let animated_parts = if animated {
-            self.animated_parts(handle)
+            self.animated_parts(handle, &mut used)
         } else {
             Vec::new()
         };
@@ -772,6 +788,8 @@ impl Renderer {
         for part in std::mem::take(&mut node.parts) {
             self.tables.parts.remove(part);
         }
+        let names = &mut self.tables.names;
+        let materials = &self.tables.materials;
         let mut parts: Vec<(Part, PartRow)> = Vec::new();
         // A scattered node's copies: each part's transform under the node,
         // and the runs (part index ranges) its mesh groups make.
@@ -788,7 +806,6 @@ impl Renderer {
                 let unlit = |mesh, first_index, index_count, wireframe| {
                     (
                         Part {
-                            node: handle,
                             mesh,
                             first_index,
                             index_count,
@@ -806,20 +823,9 @@ impl Renderer {
                             // material narrowed to it.
                             let variant = (!mesh.layer_palette.is_empty())
                                 .then(|| layer_variant_id(&slot_material, &mesh.layer_palette))
-                                .and_then(|variant| {
-                                    crate::tables::named(
-                                        &self.tables.names,
-                                        &self.tables.materials,
-                                        &variant,
-                                    )
-                                });
-                            let (material_ref, color, emission) = match variant.or_else(|| {
-                                crate::tables::named(
-                                    &self.tables.names,
-                                    &self.tables.materials,
-                                    &slot_material,
-                                )
-                            }) {
+                                .and_then(|variant| wanted(names, materials, &mut used, &variant));
+                            let slot_row = wanted(names, materials, &mut used, &slot_material);
+                            let (material_ref, color, emission) = match variant.or(slot_row) {
                                 Some((id, row)) => (
                                     MaterialRef::Retained(id),
                                     mul(row.descriptor.color, row.descriptor.texture_tint),
@@ -832,7 +838,6 @@ impl Renderer {
                             };
                             parts.push((
                                 Part {
-                                    node: handle,
                                     mesh: MeshRef::Payload(handle),
                                     first_index: *start,
                                     index_count: *count,
@@ -873,13 +878,13 @@ impl Renderer {
                 parameters,
             } => {
                 if let Some((mesh_id, mesh)) =
-                    crate::tables::named(&self.tables.names, &self.tables.static_meshes, asset)
+                    wanted(names, &self.tables.static_meshes, &mut used, asset)
                 {
                     for (slot, start, count) in &mesh.groups {
                         let material_id = overrides.get(slot).or_else(|| mesh.slots.get(slot));
-                        let (material_ref, color, emission) = match material_id.and_then(|id| {
-                            crate::tables::named(&self.tables.names, &self.tables.materials, id)
-                        }) {
+                        let (material_ref, color, emission) = match material_id
+                            .and_then(|id| wanted(names, materials, &mut used, id))
+                        {
                             Some((id, row)) => {
                                 let (color, emission) =
                                     instance_colors(&row.descriptor, parameters.get(slot));
@@ -889,7 +894,6 @@ impl Renderer {
                         };
                         parts.push((
                             Part {
-                                node: handle,
                                 mesh: MeshRef::Static(mesh_id),
                                 first_index: *start,
                                 index_count: *count,
@@ -902,9 +906,10 @@ impl Renderer {
                 }
             }
             NodeKind::VoxelObject(instance) => {
-                if let Some((object_id, object)) = crate::tables::named(
-                    &self.tables.names,
+                if let Some((object_id, object)) = wanted(
+                    names,
                     &self.tables.voxel_objects,
+                    &mut used,
                     &instance.asset,
                 ) {
                     let index = object.frame_mesh(instance.frame);
@@ -916,9 +921,9 @@ impl Renderer {
                                 .rfind(|binding| binding.slot == *slot)
                                 .map(|binding| &binding.material)
                                 .or_else(|| object.slots.get(slot));
-                            let (material_ref, color, emission) = match material_id.and_then(|id| {
-                                crate::tables::named(&self.tables.names, &self.tables.materials, id)
-                            }) {
+                            let (material_ref, color, emission) = match material_id
+                                .and_then(|id| wanted(names, materials, &mut used, id))
+                            {
                                 Some((id, row)) => (
                                     MaterialRef::Retained(id),
                                     mul(row.descriptor.color, row.descriptor.texture_tint),
@@ -931,7 +936,6 @@ impl Renderer {
                             };
                             parts.push((
                                 Part {
-                                    node: handle,
                                     mesh: MeshRef::Voxel(object_id, index),
                                     first_index: *start,
                                     index_count: *count,
@@ -944,7 +948,8 @@ impl Renderer {
                     }
                 }
             }
-            NodeKind::AnimatedMesh(_) => {
+            NodeKind::AnimatedMesh(descriptor) => {
+                used.push(names.id(&descriptor.asset));
                 // Inspection draws the instance as a wireframe.
                 let wireframe = self
                     .tables
@@ -958,7 +963,7 @@ impl Renderer {
                     .map(|instance| &instance.parameters);
                 for (mesh, index_count, material, slot) in animated_parts {
                     let (color, emission) = match &material {
-                        MaterialRef::Retained(id) => match self.tables.materials.get(*id) {
+                        MaterialRef::Retained(id) => match materials.get(*id) {
                             Some(row) => instance_colors(
                                 &row.descriptor,
                                 slot.zip(parameters)
@@ -970,7 +975,6 @@ impl Renderer {
                     };
                     parts.push((
                         Part {
-                            node: handle,
                             mesh,
                             first_index: 0,
                             index_count,
@@ -982,11 +986,9 @@ impl Renderer {
                 }
             }
             NodeKind::Scatter(patch) => {
-                if let Some((mesh_id, mesh)) = crate::tables::named(
-                    &self.tables.names,
-                    &self.tables.static_meshes,
-                    &patch.asset,
-                ) {
+                if let Some((mesh_id, mesh)) =
+                    wanted(names, &self.tables.static_meshes, &mut used, &patch.asset)
+                {
                     let copies: Vec<glam::Mat4> = patch
                         .instances
                         .iter()
@@ -1005,9 +1007,9 @@ impl Renderer {
                             .rfind(|binding| binding.slot == *slot)
                             .map(|binding| &binding.material)
                             .or_else(|| mesh.slots.get(slot));
-                        let (material_ref, color, emission) = match material_id.and_then(|id| {
-                            crate::tables::named(&self.tables.names, &self.tables.materials, id)
-                        }) {
+                        let (material_ref, color, emission) = match material_id
+                            .and_then(|id| wanted(names, materials, &mut used, id))
+                        {
                             Some((id, row)) => {
                                 let (color, emission) = instance_colors(&row.descriptor, None);
                                 (MaterialRef::Retained(id), color, emission)
@@ -1029,7 +1031,6 @@ impl Renderer {
                             row.fade = [patch.fade.start, patch.fade.end, 0.0, 0.0];
                             parts.push((
                                 Part {
-                                    node: handle,
                                     mesh: MeshRef::Static(mesh_id),
                                     first_index: *start,
                                     index_count: *count,
@@ -1054,8 +1055,10 @@ impl Renderer {
             if let MeshRef::Builtin(kind) = part.mesh {
                 part.index_count = self.builtins[&kind].groups[0].2;
             }
-            let mesh = self.mesh(&part.mesh);
-            if let Some(space) = mesh.and_then(|mesh| mesh.texture_space) {
+            let mesh = self
+                .mesh(&part.mesh)
+                .expect("each kind above binds only meshes that are defined");
+            if let Some(space) = mesh.texture_space {
                 row.texture_space = [
                     space.origin[0],
                     space.origin[1],
@@ -1063,26 +1066,27 @@ impl Renderer {
                     1.0 / space.cell_size,
                 ];
             }
-            if let Some(morph) = mesh.and_then(|mesh| mesh.morph.as_ref()) {
+            if let Some(morph) = mesh.morph.as_ref() {
                 row.fade = self.morph_fade(handle, morph);
             }
-            let bounds = mesh.map_or(Aabb::EMPTY, |mesh| mesh.bounds);
-            if let (true, Some(mesh)) = (part.wireframe, mesh) {
+            let bounds = mesh.bounds;
+            if part.wireframe {
                 mesh.edges
                     .get_or_init(|| edge_buffer(&self.gpu.device, &mesh.cpu.indices));
             }
-            let (descriptor, features) = match &part.material {
-                MaterialRef::Retained(id) => {
-                    let row = self.tables.materials.get(*id);
-                    (
-                        row.map(|row| &row.descriptor),
-                        row.map_or(Features::default(), |row| row.features),
-                    )
-                }
+            let (descriptor, features) = match part.material {
+                MaterialRef::Retained(id) => match self.tables.materials.get(id) {
+                    Some(row) => (Some(&row.descriptor), row.features),
+                    // Named but not defined: the lit fallback until it is.
+                    None => {
+                        part.material = MaterialRef::LitFallback;
+                        (None, Features::default())
+                    }
+                },
                 MaterialRef::Unlit => (None, Features::UNLIT),
                 MaterialRef::LitFallback => (None, Features::default()),
             };
-            let features = features | mesh.map_or(Features::default(), |mesh| mesh.features());
+            let features = features | mesh.features();
             let displacement = descriptor
                 .and_then(|descriptor| descriptor.shader.as_ref())
                 .map_or(0.0, |shader| shader.displacement_bound);
@@ -1091,9 +1095,10 @@ impl Renderer {
                 shadow: descriptor
                     .is_none_or(|descriptor| !blends(descriptor) || descriptor.translucent_shadow),
                 double_sided: descriptor.is_some_and(|descriptor| descriptor.double_sided),
-                lines: part.wireframe || mesh.is_some_and(|mesh| mesh.topology == Topology::Lines),
+                lines: part.wireframe || mesh.topology == Topology::Lines,
                 features,
             };
+            self.prepare_part(class);
             let id = self
                 .tables
                 .parts
@@ -1114,13 +1119,43 @@ impl Renderer {
         for run in runs {
             self.tables.parts.make_run(ids[run].to_vec());
         }
+        used.sort_unstable();
+        used.dedup();
         if let Some(node) = self.tables.nodes.get_mut(&handle) {
             node.parts = ids;
+            let previous = std::mem::replace(&mut node.names, used);
+            unlink_users(&mut self.tables.users, handle, &previous);
+            for id in &node.names {
+                self.tables.users.entry(*id).or_default().insert(handle);
+            }
         }
         if animated {
             // Rigid GLB nodes draw at their pose under the instance.
             self.write_animated_parts(handle);
         }
+    }
+
+    /// Re-derive the nodes naming any of `ids` (`Tables::users`): an asset
+    /// or material they name was defined, redefined or released.
+    pub(crate) fn rebuild_users(&mut self, ids: &[u32]) {
+        let handles: BTreeSet<RenderHandle> = ids
+            .iter()
+            .filter_map(|id| self.tables.users.get(id))
+            .flatten()
+            .copied()
+            .collect();
+        for handle in handles {
+            self.rebuild_parts(handle);
+        }
+    }
+
+    /// The nodes naming `id`, in handle order.
+    pub(crate) fn users_of(&self, id: u32) -> Vec<RenderHandle> {
+        self.tables
+            .users
+            .get(&id)
+            .map(|nodes| nodes.iter().copied().collect())
+            .unwrap_or_default()
     }
 
     /// The uploaded mesh a part draws, if it is (still) defined.
@@ -1219,21 +1254,16 @@ impl Renderer {
 
     fn define_material(&mut self, descriptor: RenderMaterialDescriptor) -> Result<(), String> {
         // A terrain layer material's narrowed variants follow it: those the
-        // chunks drawing it need are made anew, the rest released.
+        // chunks drawing it need are made anew, the rest released. The
+        // chunks name the material as well as their variant, so defining it
+        // rebinds them to it, and each variant defined then to the variant.
         self.release_layer_variants(&descriptor.id);
-        let paletted = self.paletted_meshes_drawing(&descriptor.id);
+        let palettes = self.palettes_drawing(&descriptor.id);
         self.define_material_alone(descriptor.clone())?;
         if descriptor.terrain_layers.is_some() {
-            let palettes: BTreeSet<&Vec<u8>> =
-                paletted.iter().map(|(_, palette)| palette).collect();
             for palette in palettes {
-                self.define_layer_variant(&descriptor, palette)?;
+                self.define_layer_variant(&descriptor, &palette)?;
             }
-        }
-        // Those chunks switch between the material and its variants when it
-        // gains or loses layers, which neither definition alone rebinds.
-        for (handle, _) in paletted {
-            self.rebuild_parts(handle);
         }
         Ok(())
     }
@@ -1360,31 +1390,37 @@ impl Renderer {
             })
     }
 
-    fn release_layer_variants(&mut self, id: &str) {
+    /// Release `id`'s narrowed variants, returning their ids. The chunks
+    /// drawing them name `id` too; the caller re-derives them.
+    fn release_layer_variants(&mut self, id: &str) -> Vec<u32> {
+        let mut released = Vec::new();
         for palette in self.tables.layer_variants.remove(id).into_iter().flatten() {
             if let Some(variant) = self.tables.names.get(&layer_variant_id(id, &palette)) {
-                self.tables.materials.remove(variant);
+                if self.tables.materials.remove(variant).is_some() {
+                    released.push(variant);
+                }
             }
         }
+        released
     }
 
-    /// The payload meshes with a terrain layer palette drawing `id` as a slot
-    /// material, and their palettes.
-    fn paletted_meshes_drawing(&self, id: &str) -> Vec<(RenderHandle, Vec<u8>)> {
-        let Some(slot) = id
-            .strip_prefix(PAYLOAD_SLOT_MATERIAL_PREFIX)
-            .and_then(|slot| slot.parse::<u16>().ok())
-        else {
-            return Vec::new();
+    /// The terrain layer palettes of the payload meshes drawing `id` as a
+    /// slot material.
+    fn palettes_drawing(&self, id: &str) -> BTreeSet<Vec<u8>> {
+        if !id.starts_with(PAYLOAD_SLOT_MATERIAL_PREFIX) {
+            return BTreeSet::new();
+        }
+        let Some(id) = self.tables.names.get(id) else {
+            return BTreeSet::new();
         };
         self.tables
-            .payload_meshes
-            .iter()
-            .filter(|(_, mesh)| {
-                !mesh.layer_palette.is_empty()
-                    && mesh.groups.iter().any(|(drawn, _, _)| *drawn == slot)
-            })
-            .map(|(handle, mesh)| (*handle, mesh.layer_palette.clone()))
+            .users
+            .get(&id)
+            .into_iter()
+            .flatten()
+            .filter_map(|handle| self.tables.payload_meshes.get(handle))
+            .filter(|mesh| !mesh.layer_palette.is_empty())
+            .map(|mesh| mesh.layer_palette.clone())
             .collect()
     }
 
@@ -1429,27 +1465,28 @@ impl Renderer {
             },
         );
         // Parts bound to this material carry its colour and emission in their
-        // rows; re-derive the nodes that draw it.
-        let dependents: Vec<RenderHandle> = self
-            .tables
-            .parts
-            .meta
-            .iter()
-            .flatten()
-            .filter(|part| {
-                part.material == MaterialRef::Retained(id)
-                    || matches!(part.material, MaterialRef::LitFallback)
-            })
-            .map(|part| part.node)
-            .collect();
-        for handle in dedup(dependents) {
-            self.rebuild_parts(handle);
-        }
+        // rows, and parts waiting for it draw the fallback: re-derive the
+        // nodes that name it.
+        self.rebuild_users(&[id]);
         error.map_or(Ok(()), Err)
     }
 
-    /// Make a material's pipelines on every target so far and for the shadow
-    /// casters, so its first draw does not compile them.
+    /// Make the pipelines a part of `class` draws with, mirrored or not, on
+    /// every set that needs them (`Layouts::note_variant`).
+    fn prepare_part(&mut self, class: PartClass) {
+        for mirrored in [false, true] {
+            self.layouts.note_variant(
+                &self.gpu.device,
+                &mut self.pipelines,
+                class.features,
+                Pass::of(class, mirrored),
+            );
+        }
+    }
+
+    /// Make a material's pipelines on every target the world draws into so
+    /// far and for the shadow casters, so its first draw does not compile
+    /// them.
     pub(crate) fn prepare_material(&mut self, features: Features, blend: bool, double_sided: bool) {
         let passes: &[Pass] = match (blend, double_sided) {
             (false, false) => &[Pass::Opaque, Pass::OpaqueMirrored],
@@ -1462,7 +1499,7 @@ impl Renderer {
         // error is known when its material is defined.
         self.layouts.world_shader(device, features);
         for &pass in passes {
-            for pipelines in &mut self.pipelines {
+            for pipelines in self.pipelines.iter_mut().filter(|set| set.draws_world) {
                 self.layouts.prepare(device, pipelines, features, pass);
             }
             if self.options.shadows {
@@ -1576,24 +1613,11 @@ impl Renderer {
         mesh.texture_space = asset.payload.texture_space;
         self.attach_morph(&mut mesh, &asset.payload, &asset.asset);
         let id = self.tables.names.id(&asset.asset);
-        let redefined = self.tables.static_meshes.insert(id, mesh).is_some();
-        // A redefinition redraws every user; a first definition the scatter
-        // patches that arrived before it (they come from another service's
+        self.tables.static_meshes.insert(id, mesh);
+        // Its instances and scatter patches draw it, including those that
+        // arrived before it (scatter patches come from another service's
         // frames than the mesh's appearance).
-        let instances: Vec<RenderHandle> = self
-            .tables
-            .nodes
-            .iter()
-            .filter(|(_, node)| match &node.kind {
-                NodeKind::StaticMesh { asset: used, .. } => redefined && *used == asset.asset,
-                NodeKind::Scatter(patch) => patch.asset == asset.asset,
-                _ => false,
-            })
-            .map(|(handle, _)| *handle)
-            .collect();
-        for handle in instances {
-            self.rebuild_parts(handle);
-        }
+        self.rebuild_users(&[id]);
         Ok(())
     }
 
@@ -2621,10 +2645,33 @@ pub fn slot_color(slot: u16) -> [f32; 4] {
     [linear[0], linear[1], linear[2], 1.0]
 }
 
-fn dedup(mut handles: Vec<RenderHandle>) -> Vec<RenderHandle> {
-    handles.sort();
-    handles.dedup();
-    handles
+/// The row named `name`, with its id; the id is noted in `used` whether the
+/// row is defined or not, so its definition finds the node asking for it.
+fn wanted<'a, T>(
+    names: &mut crate::tables::Names,
+    rows: &'a crate::tables::Slots<T>,
+    used: &mut Vec<u32>,
+    name: &str,
+) -> Option<(u32, &'a T)> {
+    let id = names.id(name);
+    used.push(id);
+    Some((id, rows.get(id)?))
+}
+
+/// Remove `handle` from the users of each of `names`.
+pub(crate) fn unlink_users(
+    users: &mut std::collections::HashMap<u32, BTreeSet<RenderHandle>>,
+    handle: RenderHandle,
+    names: &[u32],
+) {
+    for id in names {
+        if let Some(nodes) = users.get_mut(id) {
+            nodes.remove(&handle);
+            if nodes.is_empty() {
+                users.remove(id);
+            }
+        }
+    }
 }
 
 fn op_name(op: &RenderDiff) -> &'static str {

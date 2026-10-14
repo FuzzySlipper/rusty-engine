@@ -470,6 +470,9 @@ pub(crate) struct ShadowLayer {
     pub cached: Option<CachedStatic>,
     /// The view, tile or a caster changed since the layer was rendered.
     pub stale: bool,
+    /// A caster's stage reads time (a product caster stage, wind): the
+    /// layer redraws as presentation time moves. Set with its lists.
+    pub timed: bool,
 }
 
 /// The static casters' depth a layer's tile in the static cache holds, by
@@ -533,6 +536,7 @@ impl ShadowLayer {
             dynamic_parts: Vec::new(),
             cached: None,
             stale: true,
+            timed: false,
         }
     }
 

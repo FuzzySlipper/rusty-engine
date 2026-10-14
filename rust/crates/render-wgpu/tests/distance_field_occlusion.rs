@@ -391,3 +391,53 @@ fn the_atlas_grows_past_its_first_bricks() {
     }
     assert!(pixels.iter().any(|value| *value != 0));
 }
+
+#[test]
+fn field_boxes_follow_a_moved_room_and_the_path_turned_off_and_on_again() {
+    let mut harness = Harness::new(options(AmbientOcclusionPath::DistanceField));
+    let materials = materials();
+    let scene = voxel_room();
+    let mut projector = VoxelRenderProjector::new();
+    harness.apply(project(&mut projector, &scene, &materials));
+    let before = harness.render(&view()).1;
+    if let Some(reason) = harness.renderer.gpu_readout().distance_fields.refused {
+        eprintln!("distance fields refused on this adapter: {reason}");
+        return;
+    }
+    let as_fresh = |harness: &mut Harness, step: &str| {
+        let drawn = harness.render(&view()).1;
+        let fresh = harness.render_fresh(&view()).1;
+        let differing = differences(&fresh, &drawn)
+            .iter()
+            .filter(|delta| delta.abs() > 2)
+            .count();
+        assert_eq!(differing, 0, "{step}: as a new renderer draws it");
+        drawn
+    };
+
+    // The room moves: its fields' boxes move with it.
+    let moved = projector
+        .project(
+            &[VoxelProjectionInstance {
+                instance_id: "room".to_owned(),
+                asset_id: "room".to_owned(),
+                transform: transform([1.5, 0.0, -1.0], 0.0, [1.0; 3]),
+                scene: &scene,
+            }],
+            &materials,
+        )
+        .expect("project the moved room")
+        .frame
+        .ops;
+    harness.apply(moved);
+    let moved = as_fresh(&mut harness, "moved");
+    assert_ne!(moved, before);
+
+    // Off and on again, the fields take their bricks anew, in another order.
+    render_with(&mut harness, AmbientOcclusionPath::Off);
+    harness
+        .renderer
+        .set_options(options(AmbientOcclusionPath::DistanceField));
+    let again = as_fresh(&mut harness, "off and on again");
+    assert_eq!(again, moved);
+}

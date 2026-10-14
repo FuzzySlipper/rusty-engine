@@ -30,7 +30,9 @@ use crate::light_clusters::{ClusterUniform, CLUSTER_CAPACITY};
 use crate::pipelines::{Layouts, Pipelines};
 use crate::shaders::Features;
 use crate::shadows::{self, ShadowMaps};
-use crate::tables::{Builtin, Environment, MaterialRef, NodeKind, PartId, PART_ROW_FLOATS};
+use crate::tables::{
+    Builtin, Environment, GpuMesh, MaterialRef, NodeKind, Part, PartId, PART_ROW_FLOATS,
+};
 use crate::target::{ColorTarget, TargetView};
 use crate::water;
 use crate::{
@@ -114,8 +116,9 @@ pub struct FrameStats {
     /// Pipelines bound for part draws across view passes and shadow layers:
     /// one per run of draws sharing a pass and material features.
     pub pipeline_binds: u32,
-    /// World and caster pipelines compiled while rendering; 0 when every
-    /// material's pipelines were made at its definition.
+    /// World, caster and pre-pass pipelines compiled while rendering: the
+    /// feature sets in use, made for a target the world first draws into
+    /// and when shadows or ambient occlusion first draw; 0 otherwise.
     pub pipelines_created: u32,
     /// CPU microseconds spent building draw lists this frame: view lists
     /// (frustum tests and grouping) and shadow caster lists; 0 when every
@@ -383,6 +386,7 @@ impl Renderer {
         self.batch_time = std::time::Duration::ZERO;
         let mut layers_changed = false;
         let lights_changed = self.tables.lights_dirty;
+        let changed_lights = std::mem::take(&mut self.tables.changed_lights);
         if self.tables.lights_dirty {
             layers_changed = self.upload_lights();
             self.tables.lights_dirty = false;
@@ -436,9 +440,7 @@ impl Renderer {
             }
             self.probes.moves_seen();
             if lights_changed {
-                let mut rows = Vec::new();
-                self.world_light_rows(&mut rows);
-                marked |= self.probes.mark_lights(&rows);
+                marked |= self.mark_light_changes(&changed_lights);
             }
             if marked {
                 self.probes.touch(now);
@@ -553,6 +555,11 @@ impl Renderer {
                 {
                     layer.stale = true;
                 }
+                // A caster whose stage reads time redraws as time moves.
+                layer.timed = list.batches.iter().chain(&dynamic.batches).any(|draw| {
+                    let caster = parts.state[draw.part as usize].class.features.caster();
+                    caster.product() != 0 || caster.moves_with_time()
+                });
                 if list != layer.casters || dynamic != layer.dynamic {
                     layer.casters = list;
                     layer.dynamic = dynamic;
@@ -708,6 +715,7 @@ impl Renderer {
             node.world_layer = layer;
             if matches!(node.kind, NodeKind::Light(_)) {
                 self.tables.lights_dirty = true;
+                self.tables.changed_lights.insert(handle);
             }
             let casts = node.shadow_casting.is_cast();
             let parts = node.parts.clone();
@@ -837,10 +845,41 @@ impl Renderer {
     /// The world's light rows, as `upload_lights` builds them, for the probe
     /// bake.
     pub(crate) fn world_light_rows(&self, rows: &mut Vec<f32>) {
-        if self.options.default_world_lights {
-            neutral_rig(rows, NEUTRAL_KEY_POSITION);
-        }
+        rows.extend(self.world_rig_rows());
         self.retained_light_rows(rows, ViewLayer::World, None);
+    }
+
+    /// The neutral rig's rows when the world has it.
+    pub(crate) fn world_rig_rows(&self) -> Vec<f32> {
+        let mut rows = Vec::new();
+        if self.options.default_world_lights {
+            neutral_rig(&mut rows, NEUTRAL_KEY_POSITION);
+        }
+        rows
+    }
+
+    /// A retained light's world row, if it lights the world now: shown and
+    /// outside the viewmodel and backdrop layers.
+    pub(crate) fn world_light_row(&self, handle: RenderHandle) -> Option<[f32; LIGHT_ROW_FLOATS]> {
+        let node = self.tables.nodes.get(&handle)?;
+        let NodeKind::Light(light) = &node.kind else {
+            return None;
+        };
+        if !node.world_visible || ViewLayer::of(node.world_layer) != ViewLayer::World {
+            return None;
+        }
+        light_row(light, &node.world)
+    }
+
+    /// Mark the indirect light's bricks within reach of each changed light,
+    /// where it was and where it is, and of the neutral rig if it changed.
+    fn mark_light_changes(&mut self, changed: &HashSet<RenderHandle>) -> bool {
+        let mut marked = self.probes.mark_rig(self.world_rig_rows());
+        for &handle in changed {
+            let row = self.world_light_row(handle);
+            marked |= self.probes.mark_light(handle, row);
+        }
+        marked
     }
 
     /// Choose which shadow candidates cast (`shadows::choose`, from the
@@ -929,9 +968,19 @@ impl Renderer {
             })
     }
 
-    /// The resident distance fields of the shown scene-layer payload meshes,
-    /// in world space, for a world view's cone trace.
-    fn field_entries(&self) -> Vec<FieldEntry> {
+    /// Bring `field_entries` to the scene generation: the resident distance
+    /// fields of the shown scene-layer payload meshes, in world space, for
+    /// the world views' cone traces. The meshes, their fields and their
+    /// nodes' placements change only with the generation; the occlusion
+    /// path taking or giving up the bricks clears the list.
+    fn gather_field_entries(&mut self) {
+        if self
+            .field_entries
+            .as_ref()
+            .is_some_and(|(generation, _)| *generation == self.scene_generation)
+        {
+            return;
+        }
         let mut entries = Vec::new();
         for (handle, mesh) in &self.tables.payload_meshes {
             let Some(slot) = mesh.distance_field.as_ref().and_then(|field| field.slot) else {
@@ -951,7 +1000,7 @@ impl Renderer {
             let (min, max) = world_box(&node.world, field);
             entries.push(FieldEntry { min, max, slot });
         }
-        entries
+        self.field_entries = Some((self.scene_generation, entries));
     }
 
     /// Retained light rows in `layer`. With `candidates`, a light whose
@@ -1263,13 +1312,14 @@ impl Renderer {
                     self.batch_time += started.elapsed();
                     uploaded += self.upload_instances(base, &list.ids);
                     let candidates = CandidateList::new(list, visible_base, |batch| {
-                        let part = self.tables.parts.meta[batch.part as usize].as_ref()?;
-                        self.mesh(&part.mesh)?;
-                        Some(if part.wireframe {
+                        let part = self.tables.parts.meta[batch.part as usize]
+                            .as_ref()
+                            .expect("a listed part is live");
+                        if part.wireframe {
                             (part.first_index * 2, part.index_count * 2)
                         } else {
                             (part.first_index, part.index_count)
-                        })
+                        }
                     });
                     self.culling
                         .upload_candidates(&self.gpu, layer, &candidates);
@@ -1324,29 +1374,14 @@ impl Renderer {
         let mut index = 0;
         while index < batches.len() {
             let draw = &batches[index];
-            let Some(part) = self.tables.parts.meta[draw.part as usize].as_ref() else {
-                index += 1;
-                continue;
-            };
-            let Some(mesh) = self.mesh(&part.mesh) else {
-                index += 1;
-                continue;
-            };
-            let (material, features) = self.part_material(&part.material);
-            let features = features | mesh.features();
+            let (part, mesh, material, features) = self.drawn_part(draw.part);
             if current != Some((draw.pass, features)) {
                 pass.set_pipeline(pipeline(draw.pass, features));
                 current = Some((draw.pass, features));
                 encoded.pipeline_binds += 1;
             }
             let indices = if part.wireframe {
-                match mesh.edges.get() {
-                    Some(edges) => edges,
-                    None => {
-                        index += 1;
-                        continue;
-                    }
-                }
+                mesh.edges.get().expect("a wireframe part's edges")
             } else {
                 &mesh.indices
             };
@@ -1362,20 +1397,15 @@ impl Renderer {
             if self.culling.multi_draw() {
                 while index + run < batches.len() {
                     let next = &batches[index + run];
-                    let same = self.tables.parts.meta[next.part as usize]
+                    let next_part = self.tables.parts.meta[next.part as usize]
                         .as_ref()
-                        .is_some_and(|next_part| {
-                            next.pass == draw.pass
-                                && next_part.wireframe == part.wireframe
-                                && next_part.mesh == part.mesh
-                                && self.mesh(&next_part.mesh).is_some_and(|next_mesh| {
-                                    std::ptr::eq(next_mesh, mesh)
-                                        && features
-                                            == (self.part_material(&next_part.material).1
-                                                | next_mesh.features())
-                                })
-                                && std::ptr::eq(self.part_material(&next_part.material).0, material)
-                        });
+                        .expect("a listed part is live");
+                    // One mesh and one material: one mesh, one bind group and
+                    // one feature set.
+                    let same = next.pass == draw.pass
+                        && next_part.wireframe == part.wireframe
+                        && next_part.mesh == part.mesh
+                        && next_part.material == part.material;
                     if !same {
                         break;
                     }
@@ -1428,33 +1458,15 @@ impl Renderer {
             return Default::default();
         }
         self.shadows.time[kind] = self.presentation_time;
-        let batches: Vec<batch::Batch> = self
+        self.shadows.timed[kind] = self
             .shadows
             .layers
             .iter()
-            .filter(|layer| ours(layer))
-            .flat_map(|layer| {
-                layer
-                    .casters
-                    .batches
-                    .iter()
-                    .chain(&layer.dynamic.batches)
-                    .copied()
-            })
-            .collect();
-        let variants = self.batch_variants(&batches);
-        self.shadows.timed[kind] = variants.iter().any(|(features, _)| {
-            let caster = features.caster();
-            caster.product() != 0 || caster.moves_with_time()
-        });
-        let mut drawn = ShadowsEncoded::default();
-        for (features, pass) in variants {
-            drawn.pipelines_created += u32::from(self.layouts.prepare_caster(
-                &self.gpu.device,
-                features,
-                pass,
-            ));
-        }
+            .any(|layer| ours(layer) && layer.timed);
+        let mut drawn = ShadowsEncoded {
+            pipelines_created: self.layouts.start_casters(&self.gpu.device),
+            ..ShadowsEncoded::default()
+        };
         // A layer with dynamic casters keeps its static casters' depth in the
         // static cache, unless time moves every caster (`retimed`).
         let cached_path = |layer: &shadows::ShadowLayer| !retimed && layer.dynamic.instances() > 0;
@@ -1597,37 +1609,30 @@ impl Renderer {
         drawn
     }
 
-    /// The bind group and features a part's material draws with; a released
-    /// material draws as the lit fallback.
-    fn part_material(&self, material: &MaterialRef) -> (&wgpu::BindGroup, Features) {
-        let fallback = (&self.lit_fallback_material, Features::default());
-        match material {
-            MaterialRef::Retained(id) => self
-                .tables
-                .materials
-                .get(*id)
-                .map_or(fallback, |row| (&row.bind_group, row.features)),
-            MaterialRef::Unlit => (&self.unlit_material, Features::UNLIT),
-            MaterialRef::LitFallback => fallback,
-        }
-    }
-
-    /// The (features, pass) pairs a draw list's batches draw with.
-    fn batch_variants(&self, batches: &[batch::Batch]) -> Vec<(Features, batch::Pass)> {
-        let mut variants: Vec<(Features, batch::Pass)> = batches
-            .iter()
-            .filter_map(|draw| {
-                let part = self.tables.parts.meta[draw.part as usize].as_ref()?;
-                let mesh = self.mesh(&part.mesh)?;
-                Some((
-                    self.part_material(&part.material).1 | mesh.features(),
-                    draw.pass,
-                ))
-            })
-            .collect();
-        variants.sort_unstable();
-        variants.dedup();
-        variants
+    /// A listed part, its mesh, its material's bind group and the features
+    /// it draws with. A listed part is live, and its mesh and material are
+    /// defined: their release re-derives the part (`Tables::users`).
+    fn drawn_part(&self, part: PartId) -> (&Part, &GpuMesh, &wgpu::BindGroup, Features) {
+        let meta = self.tables.parts.meta[part as usize]
+            .as_ref()
+            .expect("a listed part is live");
+        let mesh = self
+            .mesh(&meta.mesh)
+            .expect("a part's mesh is defined while it draws");
+        let material = match &meta.material {
+            MaterialRef::Retained(id) => {
+                &self
+                    .tables
+                    .materials
+                    .get(*id)
+                    .expect("a part's material is defined while it draws")
+                    .bind_group
+            }
+            MaterialRef::Unlit => &self.unlit_material,
+            MaterialRef::LitFallback => &self.lit_fallback_material,
+        };
+        let features = self.tables.parts.state[part as usize].class.features;
+        (meta, mesh, material, features)
     }
 
     /// Encode a draw list's batches with the pipeline each pass and material
@@ -1653,14 +1658,7 @@ impl Renderer {
         let mut current: Option<(batch::Pass, Features)> = None;
         let mut encoded = Encoded::default();
         for draw in batches {
-            let Some(part) = self.tables.parts.meta[draw.part as usize].as_ref() else {
-                continue;
-            };
-            let Some(mesh) = self.mesh(&part.mesh) else {
-                continue;
-            };
-            let (material, features) = self.part_material(&part.material);
-            let features = features | mesh.features();
+            let (part, mesh, material, features) = self.drawn_part(draw.part);
             if current != Some((draw.pass, features)) {
                 pass.set_pipeline(pipeline(draw.pass, features));
                 current = Some((draw.pass, features));
@@ -1670,9 +1668,7 @@ impl Renderer {
             // A wireframe part draws its triangles' edges: two edge indices
             // per triangle index.
             let (indices, range) = if part.wireframe {
-                let Some(edges) = mesh.edges.get() else {
-                    continue;
-                };
+                let edges = mesh.edges.get().expect("a wireframe part's edges");
                 let (first, count) = (part.first_index * 2, part.index_count * 2);
                 (edges, first..first + count)
             } else {
@@ -2535,20 +2531,10 @@ impl Renderer {
         };
         let format_index = pipeline_set(&mut self.pipelines, &self.layouts, hdr_format);
         let sky_index = pipeline_set(&mut self.pipelines, &self.layouts, target);
-        let cache = self.views[slot].as_ref().expect("view list is current");
-        let mut variants = self.batch_variants(&cache.list.batches);
-        if let Some(candidates) = &cache.candidates {
-            variants.extend(self.batch_variants(&candidates.list.batches));
-        }
-        let mut pipelines_created = 0;
-        for (features, pass) in variants {
-            pipelines_created += u32::from(self.layouts.prepare(
-                &self.gpu.device,
-                &mut self.pipelines[format_index],
-                features,
-                pass,
-            ));
-        }
+        // A target the world first draws into makes every known variant.
+        let mut pipelines_created = self
+            .layouts
+            .draw_world_on(&self.gpu.device, &mut self.pipelines[format_index]);
         // A world view's occlusion: its depth pre-pass draws the opaque
         // batches with the pre-pass pipelines, which compile like the
         // caster pipelines.
@@ -2570,6 +2556,7 @@ impl Renderer {
             .candidates
             .is_some();
         let prepass_batches: Vec<batch::Batch> = if occlusion.is_some() {
+            pipelines_created += self.layouts.start_prepass(&self.gpu.device);
             let cache = self.views[slot].as_ref().expect("view list is current");
             cache
                 .candidates
@@ -2583,13 +2570,6 @@ impl Renderer {
         } else {
             Vec::new()
         };
-        for (features, pass) in self.batch_variants(&prepass_batches) {
-            pipelines_created += u32::from(self.layouts.prepare_prepass(
-                &self.gpu.device,
-                features,
-                pass,
-            ));
-        }
         let whole = view.start == PassStart::Target;
         if world_layer {
             // Ghost plates snap per view; a view is known by its viewport.
@@ -2656,12 +2636,13 @@ impl Renderer {
                     }
                 });
             if occlusion.path() == AmbientOcclusionPath::DistanceField {
-                let entries = self.field_entries();
+                self.gather_field_entries();
+                let (_, entries) = self.field_entries.as_ref().expect("gathered above");
                 self.distance_fields.begin_view(
                     &self.gpu,
                     &view.camera,
                     occlusion.region(),
-                    &entries,
+                    entries,
                 );
             }
             self.ambient_occlusion.encode(

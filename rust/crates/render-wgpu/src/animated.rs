@@ -18,7 +18,7 @@
 //! controller state with per-clip phases each update; a controlled instance
 //! samples `frozen_pose` of that state, each clip advanced by its speed over
 //! the Engine time since the update. A controller replaces direct playback on
-//! its target until destroyed.
+//! its target until destroyed (the first by handle, if several target it).
 //!
 //! **Blending**: each property takes its first
 //! contributing clip, later clips mix in by `w / (Σw + w)` (slerp for
@@ -215,7 +215,6 @@ struct Fade {
 }
 
 pub(crate) struct AnimatedInstance {
-    asset: String,
     /// The asset's slot in `animated_assets` (its `names` id).
     slot: u32,
     object_id: Option<u64>,
@@ -363,11 +362,17 @@ impl Renderer {
                     },
                 );
                 // A replaced controller's former target poses without it.
-                if let Some(instance) =
-                    replaced.and_then(|row| self.tables.animated.get_mut(&row.target))
-                {
-                    instance.pose_dirty = true;
+                if let Some(replaced) = replaced {
+                    self.unlink_controller(handle.raw(), replaced.target);
+                    if let Some(instance) = self.tables.animated.get_mut(&replaced.target) {
+                        instance.pose_dirty = true;
+                    }
                 }
+                self.tables
+                    .controlled
+                    .entry(descriptor.target)
+                    .or_default()
+                    .insert(handle.raw());
                 self.resolve_controllers_of(descriptor.target);
                 descriptor.target
             }
@@ -389,6 +394,7 @@ impl Renderer {
                     .controllers
                     .remove(&handle.raw())
                     .ok_or_else(|| format!("unknown animation controller {}", handle.raw()))?;
+                self.unlink_controller(handle.raw(), row.target);
                 row.target
             }
         };
@@ -396,6 +402,15 @@ impl Renderer {
             instance.pose_dirty = true;
         }
         Ok(())
+    }
+
+    fn unlink_controller(&mut self, controller: u64, target: RenderHandle) {
+        if let Some(controllers) = self.tables.controlled.get_mut(&target) {
+            controllers.remove(&controller);
+            if controllers.is_empty() {
+                self.tables.controlled.remove(&target);
+            }
+        }
     }
 
     /// Resolve the clip tables of every controller driving `target` against
@@ -406,13 +421,10 @@ impl Renderer {
             .animated
             .get(&target)
             .and_then(|instance| self.tables.animated_assets.get(instance.slot));
-        for row in self
-            .tables
-            .controllers
-            .values_mut()
-            .filter(|row| row.target == target)
-        {
-            row.resolve(asset);
+        for controller in self.tables.controlled.get(&target).into_iter().flatten() {
+            if let Some(row) = self.tables.controllers.get_mut(controller) {
+                row.resolve(asset);
+            }
         }
     }
 
@@ -655,14 +667,7 @@ impl Renderer {
             },
         );
         // Live instances (a redefinition keeps them) re-pose on the new asset.
-        let instances: Vec<RenderHandle> = self
-            .tables
-            .animated
-            .iter()
-            .filter(|(_, instance)| instance.asset == asset.asset)
-            .map(|(handle, _)| *handle)
-            .collect();
-        for handle in instances {
+        for handle in self.instances_of(slot) {
             self.reset_animated_instance(handle);
         }
         Ok(())
@@ -670,29 +675,39 @@ impl Renderer {
 
     pub(crate) fn release_animated_mesh(&mut self, asset: &str) {
         self.release_animated_mesh_resources(asset);
-        let instances: Vec<RenderHandle> = self
-            .tables
-            .animated
-            .iter()
-            .filter(|(_, instance)| instance.asset == asset)
-            .map(|(handle, _)| *handle)
-            .collect();
-        for handle in instances {
-            self.reset_animated_instance(handle);
+        if let Some(slot) = self.tables.names.get(asset) {
+            for handle in self.instances_of(slot) {
+                self.reset_animated_instance(handle);
+            }
         }
+    }
+
+    /// The instances of the animated asset in `slot`.
+    fn instances_of(&self, slot: u32) -> Vec<RenderHandle> {
+        self.users_of(slot)
+            .into_iter()
+            .filter(|handle| {
+                self.tables
+                    .animated
+                    .get(handle)
+                    .is_some_and(|instance| instance.slot == slot)
+            })
+            .collect()
     }
 
     fn release_animated_mesh_resources(&mut self, asset: &str) {
         let slot = self.tables.names.get(asset);
         if let Some(row) = slot.and_then(|slot| self.tables.animated_assets.remove(slot)) {
-            for id in row.materials {
-                if let Some(id) = self.tables.names.get(&id) {
-                    self.tables.materials.remove(id);
-                }
-            }
+            let released: Vec<u32> = row
+                .materials
+                .iter()
+                .filter_map(|id| self.tables.names.get(id))
+                .filter(|id| self.tables.materials.remove(*id).is_some())
+                .collect();
             for id in row.textures.into_iter().chain(row.linear_textures) {
                 self.tables.textures.remove(&id);
             }
+            self.rebuild_users(&released);
         }
     }
 
@@ -718,7 +733,6 @@ impl Renderer {
         self.tables.animated.insert(
             handle,
             AnimatedInstance {
-                asset: descriptor.asset.clone(),
                 slot,
                 object_id,
                 generation,
@@ -946,11 +960,7 @@ impl Renderer {
                 if !selected(instance) {
                     return false;
                 }
-                let controlled = self
-                    .tables
-                    .controllers
-                    .values()
-                    .any(|controller| controller.target == **handle);
+                let controlled = self.tables.controlled.contains_key(*handle);
                 let moved = instance.controls.reads_world()
                     && self
                         .tables
@@ -1109,11 +1119,13 @@ impl Renderer {
                 actions.push((clip, time, weight * (1.0 - progress)));
             }
         }
+        // The first of the controllers driving it, if any.
         let controller = self
             .tables
-            .controllers
-            .values()
-            .find(|controller| controller.target == handle);
+            .controlled
+            .get(&handle)
+            .and_then(|controllers| controllers.first())
+            .and_then(|controller| self.tables.controllers.get(controller));
         let (current, finished) = match controller {
             // A controller replaces direct playback on its target.
             Some(controller) => (
@@ -1459,10 +1471,14 @@ impl Renderer {
 
     /// The parts of an animated instance's node, in draw order: each GLB node
     /// with a mesh, each primitive, with its material binding.
-    /// Each drawn primitive's mesh, index count, material and material slot.
+    /// Each drawn primitive's mesh, index count, material and material slot;
+    /// the materials it names, defined or not, are noted in `used`. A
+    /// primitive whose mesh is not uploaded (skinned joints without
+    /// weights) draws nothing.
     pub(crate) fn animated_parts(
         &mut self,
         handle: RenderHandle,
+        used: &mut Vec<u32>,
     ) -> Vec<(crate::tables::MeshRef, u32, MaterialRef, Option<u16>)> {
         let Some(instance) = self.tables.animated.get(&handle) else {
             return Vec::new();
@@ -1500,6 +1516,17 @@ impl Renderer {
                         primitive_index as u32,
                     )
                 };
+                let uploaded = match &mesh_ref {
+                    crate::tables::MeshRef::AnimatedSkinned(_, node, primitive) => {
+                        instance.skinned.contains_key(&(*node, *primitive))
+                    }
+                    _ => asset
+                        .rigid
+                        .contains_key(&(mesh as u32, primitive_index as u32)),
+                };
+                if !uploaded {
+                    continue;
+                }
                 let slot = primitive.material.and_then(|glb_material| {
                     asset
                         .slots
@@ -1513,8 +1540,10 @@ impl Renderer {
                         let id = overridden
                             .cloned()
                             .unwrap_or_else(|| asset.materials[glb_material].clone());
+                        used.push(self.tables.names.id(&id));
                         if matte {
                             let matte_id = self.tables.names.id(&format!("{id}#matte"));
+                            used.push(matte_id);
                             mattes.push(id);
                             MaterialRef::Retained(matte_id)
                         } else {

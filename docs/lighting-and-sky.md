@@ -450,8 +450,12 @@ material compiles only the features its contents use:
 | Wind | `MaterialRequest.WindBend` or `WindFlutter` is nonzero (or a static mesh asset's material has `wind`): the part sways in [the scene's wind](#wind) in the world and shadow passes alike. `WindBend` is how far each metre of a vertex's height above the part's origin leans with the wind at unit strength, in metres, so a trunk or stalk bends from its root; `WindFlutter` is how far a vertex circles at unit strength, in metres, times its colour's alpha, so leaves and grass tips flutter while their roots (alpha 0) hold; a mesh without vertex colours flutters whole. Masked leaves resolve anti-aliased under multisampling: a masked material covers its pixel's samples by its alpha sharpened about the cutoff, and masked sprites do the same |
 
 Materials with the same features share pipelines and batch together. A new
-feature set compiles once, when its first material is defined: about 8 ms on
-an RX 9070 XT, then about 0.4 ms for each further pass it draws in. Doom's E1M1
+feature set compiles once, when its first material is defined, or for a
+mesh's own streams (terrain layer weights, vertex occlusion) when the first
+part drawing it is created: about 8 ms on an RX 9070 XT, then about 0.4 ms
+for each further pass it draws in. A target the world first draws into, and
+the first shadow or ambient occlusion pass, make every feature set already in
+use. Doom's E1M1
 uses two. The shader is composed from importable WGSL modules in
 `render-shaders/src/shaders/` (`types`, `view`, `material`, `surface`,
 `lighting`, `tonemap`, `finish`, `shade`).

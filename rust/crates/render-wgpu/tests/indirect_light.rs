@@ -419,3 +419,83 @@ fn the_upload_bytes_are_the_last_frames_and_zero_when_nothing_uploaded() {
     let idle = harness.renderer.indirect_light_readout();
     assert_eq!(idle.upload_bytes, 0, "{idle:?}");
 }
+
+/// A torch with a 6 m range, by itself or under `parent`.
+fn torch_at(handle: u64, parent: Option<u64>, position: [f32; 3]) -> RenderDiff {
+    RenderDiff::CreateLight {
+        handle: RenderHandle::new(handle),
+        parent: parent.map(RenderHandle::new),
+        light: LightDescriptor::Point {
+            color: [1.0, 0.7, 0.4],
+            intensity: 20.0,
+            enabled: true,
+            position,
+            range: Some(6.0),
+            decay: 2.0,
+            shadow_intent: LightShadowIntent::Disabled,
+            shadow: Default::default(),
+        },
+    }
+}
+
+#[test]
+fn a_torch_its_parent_moves_or_hides_rebakes_where_it_was_and_where_it_is() {
+    let mut harness = own_lights();
+    ground_with_bricks(&mut harness);
+    harness.apply(vec![
+        group(40, None, transform([0.0; 3], 0.0, [1.0; 3])),
+        torch_at(3, Some(40), [-20.0, 2.0, -20.0]),
+        torch_at(4, None, [20.0, 2.0, -20.0]),
+    ]);
+    harness.render(&over_the_ground());
+    bake(&mut harness);
+    // The parent carries the torch from one corner to the opposite one:
+    // 3 × 2 × 3 bricks around each, sharing the middle 2 × 2 × 2. The other
+    // torch is not a change.
+    harness.apply(vec![RenderDiff::Update {
+        handle: RenderHandle::new(40),
+        transform: Some(transform([40.0, 0.0, 40.0], 0.0, [1.0; 3])),
+        material: None,
+        visible: None,
+        metadata: None,
+    }]);
+    harness.render(&over_the_ground());
+    let moved = bake(&mut harness);
+    assert_eq!(moved.last_batch_bricks, 28, "{moved:?}");
+    // Hidden with its parent, it no longer lights its bricks.
+    harness.apply(vec![RenderDiff::Update {
+        handle: RenderHandle::new(40),
+        transform: None,
+        material: None,
+        visible: Some(false),
+        metadata: None,
+    }]);
+    harness.render(&over_the_ground());
+    let hidden = bake(&mut harness);
+    assert_eq!(hidden.last_batch_bricks, 18, "{hidden:?}");
+}
+
+#[test]
+fn an_option_change_marks_only_the_rig_lights_it_changes() {
+    let mut harness = own_lights();
+    ground_with_bricks(&mut harness);
+    harness.apply(vec![torch_at(3, None, [-20.0, 2.0, -20.0])]);
+    harness.render(&over_the_ground());
+    bake(&mut harness);
+    // Another setting rebuilds the light rows, but no light changed.
+    harness.renderer.set_options(RendererOptions {
+        clustered_lighting: !harness.renderer.options().clustered_lighting,
+        ..harness.renderer.options()
+    });
+    harness.render(&over_the_ground());
+    let unchanged = harness.renderer.indirect_light_readout();
+    assert!(!unchanged.pending, "{unchanged:?}");
+    // The neutral rig's ambient rows reach every brick.
+    harness.renderer.set_options(RendererOptions {
+        default_world_lights: true,
+        ..harness.renderer.options()
+    });
+    harness.render(&over_the_ground());
+    let rigged = bake(&mut harness);
+    assert_eq!(rigged.last_batch_bricks, 32, "{rigged:?}");
+}

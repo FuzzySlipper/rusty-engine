@@ -928,3 +928,89 @@ fn pose_controls_reach_a_world_target_and_report_the_drawn_joints() {
     assert_eq!(cleared, before);
     assert!(joint_poses(&mut harness).is_empty(), "reporting stopped");
 }
+
+#[test]
+fn a_controller_created_again_for_another_target_drives_only_that_one() {
+    use render_presentation::{
+        AnimationControllerClipPhase, AnimationControllerProjectionState,
+        AnimationProjectionDescriptor, AnimationProjectionHandle, AnimationProjectionOp,
+        PresentationFrameDiff, PresentationOp, PresentationOpMeta, ResolvedAnimationMotion,
+    };
+    const NO_ENTITIES: &dyn Fn(u64) -> Option<[f32; 3]> = &|_| None;
+    const SECOND: u64 = 3;
+    let handle = AnimationProjectionHandle::new(1);
+    let create = |target: u64| PresentationFrameDiff {
+        ops: vec![PresentationOp::Animation {
+            meta: PresentationOpMeta::new(0),
+            op: AnimationProjectionOp::Create {
+                handle,
+                descriptor: AnimationProjectionDescriptor {
+                    target: RenderHandle::new(target),
+                    asset: "graph/character".to_owned(),
+                    content_hash: "sha256:controller-fixture".to_owned(),
+                    tick_duration_millis: 16,
+                    controller: AnimationControllerProjectionState {
+                        entity: BODY,
+                        graph_id: "graph/character".to_owned(),
+                        graph_version: 1,
+                        state_id: "run".to_owned(),
+                        revision: 1,
+                        controller_tick: 1,
+                        phase_seconds: 0.0,
+                        clip_phases: vec![AnimationControllerClipPhase {
+                            clip: "run".to_owned(),
+                            time_seconds: 0.1,
+                        }],
+                        motion: ResolvedAnimationMotion {
+                            clip_a: "run".to_owned(),
+                            clip_b: None,
+                            blend_weight_milli: 0,
+                            speed_milli: 1000,
+                        },
+                        transition: None,
+                        transition_fact: None,
+                    },
+                },
+            },
+        }],
+        ..PresentationFrameDiff::default()
+    };
+    // Two characters side by side, each sampling its own clip.
+    let scene = |harness: &mut Harness| {
+        character_scene(harness);
+        let body = admit(harness, "csharp-joint-attachments/content/body.glb");
+        harness.apply(vec![animated(
+            SECOND,
+            None,
+            &body,
+            transform([-2.0, 0.0, 0.0], 0.0, [1.0; 3]),
+            Some(sample("run", 0.5)),
+        )]);
+    };
+    let view = character_view();
+    let mut harness = Harness::new(RendererOptions::default());
+    scene(&mut harness);
+    let (_, sampled) = harness.render(&view);
+    let issues =
+        harness
+            .renderer
+            .apply_presentation(&create(BODY), &harness.resources, NO_ENTITIES);
+    assert!(issues.is_empty(), "{issues:?}");
+    let (_, first) = harness.render(&view);
+    assert_ne!(first, sampled, "the controller drives the first character");
+
+    // The same controller created for the second character: the first
+    // returns to its own playback.
+    harness
+        .renderer
+        .apply_presentation(&create(SECOND), &harness.resources, NO_ENTITIES);
+    let (_, moved) = harness.render(&view);
+    let mut expected = Harness::new(RendererOptions::default());
+    scene(&mut expected);
+    expected
+        .renderer
+        .apply_presentation(&create(SECOND), &expected.resources, NO_ENTITIES);
+    let (_, only_second) = expected.render(&view);
+    assert_ne!(moved, first);
+    assert_eq!(moved, only_second, "only the second character is driven");
+}

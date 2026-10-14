@@ -40,7 +40,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use glam::{IVec3, Mat4, Vec3};
-use render_model::{IndirectAmbient, IndirectLightDescriptor, RenderLayer};
+use render_model::{IndirectAmbient, IndirectLightDescriptor, RenderHandle, RenderLayer};
 
 use crate::tables::{Aabb, MaterialRef, PartId, Topology};
 use crate::{Gpu, Renderer};
@@ -516,24 +516,6 @@ impl Volume {
     }
 }
 
-/// The light rows whose count differs between `old` and `new`: a row added,
-/// removed or changed, counted with its duplicates, since two lights alike in
-/// every value are still two lights.
-fn changed_rows(old: &[f32], new: &[f32]) -> Vec<[f32; LIGHT_ROW]> {
-    let mut counts: HashMap<[u32; LIGHT_ROW], i32> = HashMap::new();
-    for row in old.as_chunks::<LIGHT_ROW>().0 {
-        *counts.entry(row.map(f32::to_bits)).or_default() -= 1;
-    }
-    for row in new.as_chunks::<LIGHT_ROW>().0 {
-        *counts.entry(row.map(f32::to_bits)).or_default() += 1;
-    }
-    counts
-        .into_iter()
-        .filter(|(_, count)| *count != 0)
-        .map(|(row, _)| row.map(f32::from_bits))
-        .collect()
-}
-
 /// When the next bake starts.
 #[derive(Default)]
 struct Schedule {
@@ -655,8 +637,11 @@ pub(crate) struct ProbeVolume {
     job: Option<Receiver<BrickResult>>,
     /// Bricks the running batch has baked so far.
     batch_bricks: u32,
-    /// The world light rows the last marking compared against.
-    last_rows: Vec<f32>,
+    /// Each retained world light's row as the last marking or batch read
+    /// it, and the neutral rig's rows: a change marks the bricks the old
+    /// and the new row reach.
+    pub light_rows: HashMap<RenderHandle, [f32; LIGHT_ROW]>,
+    pub rig_rows: Vec<f32>,
     /// Parts whose move the last batch already read, with the bounds it
     /// read, so the frame that drains them does not mark their bricks again
     /// unless they moved since.
@@ -689,7 +674,8 @@ impl ProbeVolume {
             baked_generation: 0,
             job: None,
             batch_bricks: 0,
-            last_rows: Vec::new(),
+            light_rows: HashMap::new(),
+            rig_rows: Vec::new(),
             covered_moved: HashMap::new(),
             readout: IndirectLightReadout::default(),
             frame_upload: 0,
@@ -805,19 +791,42 @@ impl ProbeVolume {
             .is_some_and(|volume| volume.mark_bounds(min, max))
     }
 
-    /// The world's light rows now: the bricks within reach of every row that
-    /// changed since the last marking rebake.
-    pub fn mark_lights(&mut self, rows: &[f32]) -> bool {
+    /// A light changed and lights the world with `row` now (`None`: not at
+    /// all): the bricks within reach of its old and new row rebake.
+    pub fn mark_light(&mut self, handle: RenderHandle, row: Option<[f32; LIGHT_ROW]>) -> bool {
         let Some(volume) = self.volume.as_mut() else {
             return false;
         };
-        let mut marked = false;
-        for row in changed_rows(&self.last_rows, rows) {
-            volume.mark_light(&row);
-            marked = true;
+        let old = match row {
+            Some(row) => self.light_rows.insert(handle, row),
+            None => self.light_rows.remove(&handle),
+        };
+        if old == row {
+            return false;
         }
-        self.last_rows = rows.to_vec();
-        marked
+        for row in old.iter().chain(&row) {
+            volume.mark_light(row);
+        }
+        true
+    }
+
+    /// The neutral rig's rows now: if they changed, the bricks within reach
+    /// of the old and new rows rebake.
+    pub fn mark_rig(&mut self, rows: Vec<f32>) -> bool {
+        if rows == self.rig_rows {
+            return false;
+        }
+        let Some(volume) = self.volume.as_mut() else {
+            return false;
+        };
+        for row in self.rig_rows.as_chunks::<LIGHT_ROW>().0 {
+            volume.mark_light(row);
+        }
+        for row in rows.as_chunks::<LIGHT_ROW>().0 {
+            volume.mark_light(row);
+        }
+        self.rig_rows = rows;
+        true
     }
 
     /// Materials, textures or the sky changed: everything rebakes.
@@ -985,7 +994,8 @@ impl ProbeVolume {
         self.job = None;
         let had = self.volume.take().is_some();
         let rebind = self.ensure_texture(gpu, [1, 1, 1]);
-        self.last_rows.clear();
+        self.light_rows.clear();
+        self.rig_rows.clear();
         self.readout = IndirectLightReadout {
             bakes: self.readout.bakes,
             brick_ms_max: self.readout.brick_ms_max,
@@ -1095,7 +1105,13 @@ impl Renderer {
             }
         }
         // What this batch reads is not a change for the next frame.
-        self.probes.last_rows = rows.clone();
+        self.probes.light_rows = self
+            .tables
+            .lights
+            .iter()
+            .filter_map(|handle| Some((*handle, self.world_light_row(*handle)?)))
+            .collect();
+        self.probes.rig_rows = self.world_rig_rows();
         self.probes.covered_moved = self
             .tables
             .parts
@@ -1307,25 +1323,6 @@ mod tests {
         // An ambient row marks every brick.
         volume.mark_light(&[0.0; LIGHT_ROW]);
         assert_eq!(volume.take_work().expect("marked").bake.len(), 32);
-    }
-
-    #[test]
-    fn light_rows_are_compared_with_their_duplicates() {
-        let mut torch = [0.0_f32; LIGHT_ROW];
-        torch[3] = 3.0;
-        torch[7] = 6.0;
-        let mut ambient = [0.0_f32; LIGHT_ROW];
-        ambient[0] = 0.5;
-        let two_torches: Vec<f32> = [torch, torch, ambient].concat();
-        let one_torch: Vec<f32> = [torch, ambient].concat();
-        // Removing one of two identical torches is a change where it stood.
-        assert_eq!(changed_rows(&two_torches, &one_torch), vec![torch]);
-        assert_eq!(changed_rows(&one_torch, &two_torches), vec![torch]);
-        assert!(changed_rows(&one_torch, &one_torch).is_empty());
-        let mut moved = torch;
-        moved[4] = 10.0;
-        let changed = changed_rows(&one_torch, &[moved, ambient].concat());
-        assert_eq!(changed.len(), 2, "the old and the new place: {changed:?}");
     }
 
     #[test]
