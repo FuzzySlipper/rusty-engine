@@ -122,6 +122,74 @@ dispatchMutation.Advance(UpdateAt(16, 1));
 dispatchMutation.Advance(UpdateAt(17, 1));
 Require(string.Join(',', dispatchOrder) == "first,next", "dispatch-time scheduling or cancellation was not revision safe");
 
+const ulong SiblingDelaySteps = 4;
+var rescheduledSibling = new SimulationScheduler();
+rescheduledSibling.Advance(UpdateAt(100, 1));
+var rescheduledOrder = new List<string>();
+ScheduledWorkHandle siblingB = default;
+rescheduledSibling.ResumeNextStep(_ =>
+{
+    rescheduledOrder.Add("A");
+    Require(rescheduledSibling.RescheduleAfter(siblingB, SiblingDelaySteps), "a callback did not reschedule its sibling");
+});
+siblingB = rescheduledSibling.ResumeNextStep(context => rescheduledOrder.Add($"B@{context.SimulationStep}"));
+rescheduledSibling.Advance(UpdateAt(101, 6));
+Require(string.Join(',', rescheduledOrder) == "A,B@106", "a sibling rescheduled during dispatch ran at its old step");
+Require(rescheduledSibling.Readout == new SchedulerReadout(0, 2, 0), "the rescheduled sibling readout was not accurate");
+
+var replacedSibling = new SimulationScheduler();
+replacedSibling.Advance(UpdateAt(100, 1));
+var replacedOrder = new List<string>();
+ScheduledWorkHandle replacedB = default;
+replacedSibling.ResumeNextStep(_ =>
+{
+    replacedOrder.Add("A");
+    Require(
+        replacedSibling.ReplaceAfter(replacedB, SiblingDelaySteps, 0, context => replacedOrder.Add($"B@{context.SimulationStep}")),
+        "a callback did not replace its sibling");
+});
+replacedB = replacedSibling.ResumeNextStep(_ => replacedOrder.Add("old-B"));
+replacedSibling.Advance(UpdateAt(101, 6));
+Require(string.Join(',', replacedOrder) == "A,B@106", "a sibling replaced during dispatch ran at its old step");
+Require(replacedSibling.Readout == new SchedulerReadout(0, 2, 0), "the replaced sibling readout was not accurate");
+
+var dueOrder = new SimulationScheduler();
+var dueOrderRuns = new List<string>();
+ScheduledWorkHandle movedBack = default;
+dueOrder.ScheduleAt(101, context =>
+{
+    dueOrderRuns.Add($"current@{context.SimulationStep}");
+    Require(dueOrder.RescheduleAt(movedBack, 50), "a callback did not move its sibling to a past step");
+    dueOrder.ScheduleAt(context.SimulationStep, next => dueOrderRuns.Add($"added@{next.SimulationStep}"));
+});
+movedBack = dueOrder.ScheduleAt(101, context => dueOrderRuns.Add($"moved@{context.SimulationStep}"));
+dueOrder.ScheduleAt(50, context => dueOrderRuns.Add($"overdue@{context.SimulationStep}"));
+dueOrder.Advance(UpdateAt(101, 2));
+Require(
+    string.Join(',', dueOrderRuns) == "overdue@101,current@101,moved@102,added@102",
+    "due work did not run by due step then scheduling order, with dispatch-time moves at the next step");
+
+var throwingSibling = new SimulationScheduler();
+var throwingSiblingRuns = new List<string>();
+throwingSibling.ScheduleAt(101, _ =>
+    throwingSibling.ScheduleAt(50, next => throwingSiblingRuns.Add($"added@{next.SimulationStep}")));
+ScheduledWorkHandle thrower = throwingSibling.ScheduleAt(101, _ => throw new InvalidOperationException("expected sibling failure"));
+var siblingFailurePropagated = false;
+try
+{
+    throwingSibling.Advance(UpdateAt(101, 1));
+}
+catch (InvalidOperationException exception) when (exception.Message == "expected sibling failure")
+{
+    siblingFailurePropagated = true;
+}
+
+Require(siblingFailurePropagated, "a sibling failure did not propagate");
+Require(throwingSibling.Cancel(thrower), "the failed callback did not remain pending");
+throwingSibling.Advance(UpdateAt(102, 1));
+Require(throwingSiblingRuns.SequenceEqual(["added@102"]), "work deferred before a callback failure did not run at the next step");
+Require(throwingSibling.Readout == new SchedulerReadout(0, 2, 1), "the failed dispatch readout was not accurate");
+
 var throwingContinuation = new SimulationScheduler();
 throwingContinuation.Advance(UpdateAt(20, 1));
 throwingContinuation.WaitUntil(

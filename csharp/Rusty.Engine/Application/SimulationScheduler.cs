@@ -15,6 +15,10 @@ namespace Rusty.Engine.Application;
 /// remain confined to an Engine-invoked callback that permits the operation.
 /// A new Engine lifecycle generation cancels all pending work so a
 /// product restart cannot execute callbacks retained from the prior run.
+/// Each step runs the work due at or before it in due-step order, then in
+/// scheduling order, so overdue work from an absolute past step runs first.
+/// Work that a callback adds, reschedules or replaces to the step being
+/// dispatched, or an earlier one, runs at the next admitted step.
 /// </remarks>
 public sealed class SimulationScheduler
 {
@@ -22,8 +26,10 @@ public sealed class SimulationScheduler
     private const ulong NextAdmittedStepOffset = 1;
 
     private readonly Dictionary<ulong, ScheduledWork> _pending = [];
+    private readonly SortedSet<ScheduledWork> _byDueStep = new(DueOrder.Instance);
+    private readonly List<ScheduledWork> _deferred = [];
     private ulong _nextHandle = NextAdmittedStepOffset;
-    private ulong _nextInsertionOrder = NextAdmittedStepOffset;
+    private ulong _lastChange;
     private ulong _currentStep;
     private ulong _generation;
     private uint _completedCount;
@@ -131,11 +137,12 @@ public sealed class SimulationScheduler
     /// <summary>Cancels pending work. Completed or unknown handles return false.</summary>
     public bool Cancel(ScheduledWorkHandle handle)
     {
-        if (!_pending.Remove(handle.Id))
+        if (!_pending.Remove(handle.Id, out ScheduledWork? work))
         {
             return false;
         }
 
+        _byDueStep.Remove(work);
         Increment(ref _cancelledCount);
         return true;
     }
@@ -198,7 +205,9 @@ public sealed class SimulationScheduler
     {
         ValidateCallback(callback);
         ulong id = _nextHandle++;
-        _pending.Add(id, new ScheduledWork(id, dueStep, repeatEverySteps, callback, _nextInsertionOrder++));
+        var work = new ScheduledWork(id, dueStep, repeatEverySteps, callback, ++_lastChange);
+        _pending.Add(id, work);
+        _byDueStep.Add(work);
         return new ScheduledWorkHandle(id);
     }
 
@@ -224,7 +233,10 @@ public sealed class SimulationScheduler
             return false;
         }
 
+        _byDueStep.Remove(work);
         work.DueStep = dueStep;
+        work.Change = ++_lastChange;
+        _byDueStep.Add(work);
         if (repeatEverySteps.HasValue)
         {
             work.RepeatEverySteps = repeatEverySteps.Value;
@@ -235,7 +247,6 @@ public sealed class SimulationScheduler
             work.Callback = callback;
         }
 
-        work.Revision++;
         return true;
     }
 
@@ -257,39 +268,62 @@ public sealed class SimulationScheduler
         _hasCurrentStep = false;
         uint cancelled = (uint)_pending.Count;
         _pending.Clear();
+        _byDueStep.Clear();
         SaturatingAdd(ref _cancelledCount, cancelled);
     }
 
     private void DispatchStep(ulong simulationStep, ProductUpdateFacts facts)
     {
-        ScheduledWork[] due = _pending.Values
-            .Where(work => work.DueStep <= simulationStep)
-            .OrderBy(work => work.InsertionOrder)
-            .ToArray();
-
-        foreach (ScheduledWork work in due)
+        ulong admittedChange = _lastChange;
+        try
         {
-            if (!_pending.ContainsKey(work.Id))
+            while (_byDueStep.Count > 0)
             {
-                continue;
+                ScheduledWork work = _byDueStep.Min!;
+                if (work.DueStep > simulationStep)
+                {
+                    break;
+                }
+
+                if (work.Change > admittedChange)
+                {
+                    _byDueStep.Remove(work);
+                    _deferred.Add(work);
+                    continue;
+                }
+
+                ulong change = work.Change;
+                work.Callback(new ScheduledWorkContext(facts, simulationStep));
+                if (work.Change != change || !_pending.ContainsKey(work.Id))
+                {
+                    continue;
+                }
+
+                if (work.RepeatEverySteps == NoRepeat)
+                {
+                    _pending.Remove(work.Id);
+                    _byDueStep.Remove(work);
+                    Increment(ref _completedCount);
+                    continue;
+                }
+
+                ulong nextDueStep = checked(simulationStep + work.RepeatEverySteps);
+                _byDueStep.Remove(work);
+                work.DueStep = nextDueStep;
+                _byDueStep.Add(work);
+            }
+        }
+        finally
+        {
+            foreach (ScheduledWork work in _deferred)
+            {
+                if (_pending.ContainsKey(work.Id))
+                {
+                    _byDueStep.Add(work);
+                }
             }
 
-            ulong revision = work.Revision;
-            work.Callback(new ScheduledWorkContext(facts, simulationStep));
-            if (!_pending.TryGetValue(work.Id, out ScheduledWork? current) || current.Revision != revision)
-            {
-                continue;
-            }
-
-            if (current.RepeatEverySteps == NoRepeat)
-            {
-                _pending.Remove(current.Id);
-                Increment(ref _completedCount);
-                continue;
-            }
-
-            current.DueStep = checked(simulationStep + current.RepeatEverySteps);
-            current.Revision++;
+            _deferred.Clear();
         }
     }
 
@@ -318,21 +352,36 @@ public sealed class SimulationScheduler
 
     private sealed class ScheduledWork
     {
-        public ScheduledWork(ulong id, ulong dueStep, ulong repeatEverySteps, ScheduledWorkCallback callback, ulong insertionOrder)
+        public ScheduledWork(ulong id, ulong dueStep, ulong repeatEverySteps, ScheduledWorkCallback callback, ulong change)
         {
             Id = id;
             DueStep = dueStep;
             RepeatEverySteps = repeatEverySteps;
             Callback = callback;
-            InsertionOrder = insertionOrder;
+            Change = change;
         }
 
+        /// <summary>Handle identity, issued in scheduling order.</summary>
         public ulong Id { get; }
+
+        /// <summary>Ordering key; changed only while the work is out of the due-step set.</summary>
         public ulong DueStep { get; set; }
         public ulong RepeatEverySteps { get; set; }
         public ScheduledWorkCallback Callback { get; set; }
-        public ulong InsertionOrder { get; }
-        public ulong Revision { get; set; }
+
+        /// <summary>The scheduler-wide sequence of the last add, reschedule or replacement.</summary>
+        public ulong Change { get; set; }
+    }
+
+    private sealed class DueOrder : IComparer<ScheduledWork>
+    {
+        public static readonly DueOrder Instance = new();
+
+        public int Compare(ScheduledWork? left, ScheduledWork? right)
+        {
+            int byStep = left!.DueStep.CompareTo(right!.DueStep);
+            return byStep != 0 ? byStep : left.Id.CompareTo(right.Id);
+        }
     }
 
     private sealed class ConditionContinuation

@@ -9,7 +9,7 @@ required product framework pieces:
 
 | Namespace | Role |
 | --- | --- |
-| [`Rusty.Engine.Application`](../csharp/Rusty.Engine/Application) | An optional Engine-context update pipeline and deterministic scheduler helper. Its `SimulationScheduler` can resume on the next admitted step, wait fixed admitted steps, or wait for a caller-owned completion condition without creating a second clock. |
+| [`Rusty.Engine.Application`](../csharp/Rusty.Engine/Application) | An optional Engine-context update pipeline and deterministic scheduler helper. Its `SimulationScheduler` can resume on the next admitted step, wait fixed admitted steps, or wait for a caller-owned completion condition without creating a second clock. Each step runs due work by due step, then scheduling order; work a callback adds or moves to the current or an earlier step runs at the next admitted step. |
 | [`Rusty.Engine.Entities`](../csharp/Rusty.Engine/Entities) | Ordinary class/value component storage, `EntityBatch` grouped writes, and managed adapters around Engine mechanisms. |
 | [`Rusty.Engine.Persistence`](../csharp/Rusty.Engine/Persistence) | Explicit product-state codecs and stores for the current shape. There are no product schema versions or migrations: changing the shape breaks old saves, by product choice. |
 
