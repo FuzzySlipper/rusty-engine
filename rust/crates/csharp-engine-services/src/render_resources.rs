@@ -397,8 +397,24 @@ impl CsharpRenderResource {
     }
 }
 
-/// A renderer path with the sampling it was opened with.
-type RendererPath = (String, NativeTextureFilter, NativeTextureWrap);
+/// A live resource body: its bytes and the live handles sharing them.
+#[derive(Clone)]
+struct ResourceBody {
+    bytes: Arc<[u8]>,
+    handles: Vec<u64>,
+}
+
+/// The live resource bodies as an offline output job settled, by body
+/// identity. Jobs share the registry's map; a resource change while a job
+/// still holds it copies the map once.
+#[derive(Clone, Default)]
+pub struct RenderOutputResources(Arc<BTreeMap<String, ResourceBody>>);
+
+impl RenderOutputResources {
+    pub fn bytes(&self, identity: &str) -> Option<&[u8]> {
+        self.0.get(identity).map(|body| &*body.bytes)
+    }
+}
 
 /// Admitted renderer resources by handle. Monotonic slots keep stale handles
 /// invalid while released payloads leave memory.
@@ -412,14 +428,11 @@ pub(crate) struct RenderResourceRegistry {
     /// for one more call instead of forcing a renderer rebaseline.
     released_this_call: Vec<CsharpRenderResource>,
     released_last_call: Vec<CsharpRenderResource>,
-    paths: BTreeMap<RendererPath, u64>,
-    /// The renderer paths mapped to each handle, so removing it costs its own.
-    handle_paths: BTreeMap<u64, Vec<RendererPath>>,
     /// Live resources by asset identity (a texture's descriptor id).
     identities: BTreeMap<String, u64>,
     /// Live resources by body identity. Textures of one image with different
     /// sampling share a body, so an identity can name several handles.
-    bodies: BTreeMap<String, Vec<u64>>,
+    bodies: RenderOutputResources,
     /// Live animated meshes, and how many clip packs are live, for the
     /// animation readout.
     animated: BTreeSet<u64>,
@@ -449,6 +462,11 @@ impl RenderResourceRegistry {
             .chain(&self.released_last_call)
     }
 
+    /// The live bodies, shared with an offline output job.
+    pub(crate) fn output_resources(&self) -> RenderOutputResources {
+        self.bodies.clone()
+    }
+
     pub(crate) fn iter(&self) -> impl Iterator<Item = &CsharpRenderResource> {
         #[cfg(test)]
         crate::appearance::RESOURCE_INVENTORY_READS.with(|count| count.set(count.get() + 1));
@@ -462,7 +480,7 @@ impl RenderResourceRegistry {
     /// No live resource, and no renderer path naming one.
     #[cfg(test)]
     pub(crate) fn is_empty(&self) -> bool {
-        self.entries.is_empty() && self.paths.is_empty()
+        self.entries.is_empty()
     }
 
     #[cfg(test)]
@@ -482,7 +500,7 @@ impl RenderResourceRegistry {
 
     /// A live resource whose body has this identity.
     pub(crate) fn by_identity(&self, identity: &str) -> Option<&CsharpRenderResource> {
-        self.get(*self.bodies.get(identity)?.first()?)
+        self.get(*self.bodies.0.get(identity)?.handles.first()?)
     }
 
     /// Live animated meshes.
@@ -529,60 +547,40 @@ impl RenderResourceRegistry {
     }
 
     /// Stages a resource under the handle of an identical live asset, or a
-    /// fresh one, and maps each renderer path to it.
+    /// fresh one.
     pub(crate) fn stage(
         &mut self,
         resource: CsharpRenderResource,
-        paths: impl IntoIterator<Item = String>,
     ) -> Result<u64, CsharpEngineServicesError> {
-        let (filter, wrap) = resource.texture().map_or(
-            (NativeTextureFilter::Nearest, NativeTextureWrap::Clamp),
-            |texture| {
-                (
-                    match texture.filter {
-                        TextureFilter::Nearest => NativeTextureFilter::Nearest,
-                        TextureFilter::Linear => NativeTextureFilter::Linear,
-                    },
-                    match texture.wrap {
-                        TextureWrap::Clamp => NativeTextureWrap::Clamp,
-                        TextureWrap::Repeat => NativeTextureWrap::Repeat,
-                    },
-                )
-            },
-        );
-        let handle = if let Some(handle) = self.identities.get(resource.asset_identity()).copied() {
-            handle
-        } else {
-            let handle = u64::try_from(self.next).map_err(|_| {
-                CsharpEngineServicesError::new(
-                    "CSHARP_RENDER_RESOURCE_HANDLE",
-                    "renderer resource handle overflowed",
-                )
-            })? + 1;
-            self.identities
-                .insert(resource.asset_identity().to_owned(), handle);
-            self.bodies
-                .entry(resource.identity().to_owned())
-                .or_default()
-                .push(handle);
-            match resource.kind() {
-                CsharpRenderResourceKind::AnimatedMesh => {
-                    self.animated.insert(handle);
-                }
-                CsharpRenderResourceKind::AnimationClipPack => self.clip_packs += 1,
-                _ => {}
-            }
-            self.entries.insert(self.next, resource);
-            self.next += 1;
-            self.unheld.push(handle);
-            handle
-        };
-        for path in paths {
-            let key = (path, filter, wrap);
-            if self.paths.insert(key.clone(), handle) != Some(handle) {
-                self.handle_paths.entry(handle).or_default().push(key);
-            }
+        if let Some(handle) = self.identities.get(resource.asset_identity()).copied() {
+            return Ok(handle);
         }
+        let handle = u64::try_from(self.next).map_err(|_| {
+            CsharpEngineServicesError::new(
+                "CSHARP_RENDER_RESOURCE_HANDLE",
+                "renderer resource handle overflowed",
+            )
+        })? + 1;
+        self.identities
+            .insert(resource.asset_identity().to_owned(), handle);
+        Arc::make_mut(&mut self.bodies.0)
+            .entry(resource.identity().to_owned())
+            .or_insert_with(|| ResourceBody {
+                bytes: resource.shared_bytes(),
+                handles: Vec::new(),
+            })
+            .handles
+            .push(handle);
+        match resource.kind() {
+            CsharpRenderResourceKind::AnimatedMesh => {
+                self.animated.insert(handle);
+            }
+            CsharpRenderResourceKind::AnimationClipPack => self.clip_packs += 1,
+            _ => {}
+        }
+        self.entries.insert(self.next, resource);
+        self.next += 1;
+        self.unheld.push(handle);
         Ok(handle)
     }
 
@@ -591,7 +589,7 @@ impl RenderResourceRegistry {
         &mut self,
         resource: CsharpRenderResource,
     ) -> Result<u64, CsharpEngineServicesError> {
-        let handle = self.stage(resource, [])?;
+        let handle = self.stage(resource)?;
         self.acquire_owner(handle)?;
         Ok(handle)
     }
@@ -648,10 +646,11 @@ impl RenderResourceRegistry {
             )
         })?;
         self.identities.remove(resource.asset_identity());
-        if let Some(handles) = self.bodies.get_mut(resource.identity()) {
-            handles.retain(|candidate| *candidate != handle);
-            if handles.is_empty() {
-                self.bodies.remove(resource.identity());
+        let bodies = Arc::make_mut(&mut self.bodies.0);
+        if let Some(body) = bodies.get_mut(resource.identity()) {
+            body.handles.retain(|candidate| *candidate != handle);
+            if body.handles.is_empty() {
+                bodies.remove(resource.identity());
             }
         }
         match resource.kind() {
@@ -660,12 +659,6 @@ impl RenderResourceRegistry {
             }
             CsharpRenderResourceKind::AnimationClipPack => self.clip_packs -= 1,
             _ => {}
-        }
-        for key in self.handle_paths.remove(&handle).unwrap_or_default() {
-            // A path a later resource took over stays with it.
-            if self.paths.get(&key) == Some(&handle) {
-                self.paths.remove(&key);
-            }
         }
         self.open_counts.remove(&handle);
         self.released_this_call.push(resource.clone());
@@ -1838,9 +1831,12 @@ pub(crate) mod tests {
                 "pub(crate) fn animated_mesh",
                 "pub(crate) fn shader",
                 "pub(crate) fn test_mesh",
+                "pub struct RenderOutputResources",
+                "pub fn bytes",
                 "pub(crate) struct RenderResourceRegistry",
                 "pub(crate) fn begin_call",
                 "pub(crate) fn recently_released",
+                "pub(crate) fn output_resources",
                 "pub(crate) fn iter",
                 "pub(crate) fn len",
                 "pub(crate) fn is_empty",
@@ -1885,7 +1881,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn identity_and_kind_indexes_follow_staging_and_removal() {
+    fn identity_kind_and_body_indexes_follow_staging_and_removal() {
         let mut registry = RenderResourceRegistry::default();
         let texture = |filter| {
             CsharpRenderResource::admit_texture(
@@ -1940,6 +1936,9 @@ pub(crate) mod tests {
                 .map(|r| r.asset_identity()),
             Some(asset.as_str())
         );
+        // Output jobs share the live bodies until a change copies them.
+        let job = registry.output_resources();
+        assert!(Arc::ptr_eq(&job.0, &registry.output_resources().0));
         registry.remove(nearest).unwrap();
         assert_eq!(
             registry.by_identity(&body).map(|r| r.asset_identity()),
@@ -1948,6 +1947,12 @@ pub(crate) mod tests {
         );
         registry.remove(linear).unwrap();
         assert!(registry.by_identity(&body).is_none());
+        assert!(registry.output_resources().bytes(&body).is_none());
+        assert_eq!(
+            job.bytes(&body),
+            Some(RGBA_PNG),
+            "a job keeps what it settled with"
+        );
         assert!(registry.by_asset_identity(&asset).is_none());
         registry.remove(mesh).unwrap();
         registry.remove(pack).unwrap();
@@ -2224,8 +2229,7 @@ pub(crate) mod tests {
                 unreachable!("an admitted binary mesh names its resource");
             };
             assert_eq!(named, resource.identity());
-            let path = resource.path().to_owned();
-            handles.push(registry.stage(resource, [path]).unwrap());
+            handles.push(registry.stage(resource).unwrap());
         }
         assert_ne!(handles[0], handles[1], "each file is its own resource");
         for (handle, expected) in handles.iter().zip([[0_u32, 1, 2], [0, 2, 1]]) {

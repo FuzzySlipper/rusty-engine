@@ -1003,10 +1003,6 @@ pub enum AppearanceProjectionError {
         id: u64,
         parent: u64,
     },
-    InvalidLight {
-        id: u64,
-        source: render_model::LightDescriptorError,
-    },
     Handle(HandleAllocationError),
 }
 

@@ -332,14 +332,13 @@ fn sky_uses(sky: &Option<SkyBackgroundDescriptor>, use_: &mut dyn FnMut(Resource
     }
 }
 
-/// The resources a ghost plate's capture carries definitions of and still
-/// realizes from.
+/// The resources a ghost plate's capture still reads bytes of whenever the
+/// plate is built again. Its other definitions (materials, atlases) are
+/// carried whole in the capture, so their release does not reach it.
 fn capture_uses(capture: &RenderFrameDiff, use_: &mut dyn FnMut(Resource, &str)) {
     for op in &capture.ops {
         match op {
             RenderDiff::DefineTexture { texture } => use_(Resource::Texture, &texture.id),
-            RenderDiff::DefineMaterial { material } => use_(Resource::Material, &material.id),
-            RenderDiff::DefineSpriteAtlas { atlas } => use_(Resource::Atlas, &atlas.id),
             RenderDiff::DefineAnimatedMesh { asset } => use_(Resource::AnimatedMesh, &asset.asset),
             _ => {}
         }
@@ -2241,7 +2240,7 @@ mod tests {
     }
 
     #[test]
-    fn a_ghost_capture_keeps_the_resources_it_realizes_until_it_goes() {
+    fn a_ghost_capture_keeps_the_texture_bytes_it_rebuilds_from_until_it_goes() {
         use crate::{GhostPlateHandle, GhostPlateProjectionOp, PresentationOp, PresentationOpMeta};
         let mut world = PresentationWorld::default();
         world
@@ -2306,22 +2305,19 @@ mod tests {
         world
             .apply_presentation(ghost(GhostPlateProjectionOp::Create { handle, descriptor }))
             .unwrap();
-        // The captured source goes; its mesh is no longer used live.
+        // The captured source goes; its mesh and material are no longer used
+        // live, and the capture carries their definitions whole.
         try_apply(&mut world, destroy(7)).unwrap();
         try_apply(&mut world, release_mesh("mesh/one")).unwrap();
-        for op in [
-            release_material("material/plain"),
-            release_texture("texture/a"),
-        ] {
-            assert!(matches!(
-                try_apply(&mut world, op),
-                Err(PresentationWorldError::ReferencedResource(_))
-            ));
-        }
+        try_apply(&mut world, release_material("material/plain")).unwrap();
+        // Building the plate again reads the texture's bytes.
+        assert!(matches!(
+            try_apply(&mut world, release_texture("texture/a")),
+            Err(PresentationWorldError::ReferencedResource(_))
+        ));
         world
             .apply_presentation(ghost(GhostPlateProjectionOp::Destroy { handle }))
             .unwrap();
-        try_apply(&mut world, release_material("material/plain")).unwrap();
         try_apply(&mut world, release_texture("texture/a")).unwrap();
         assert!(world.retained.users.iter().all(BTreeMap::is_empty));
     }

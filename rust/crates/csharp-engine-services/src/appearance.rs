@@ -110,6 +110,18 @@ pub enum AnimationRealizationFact {
 }
 
 impl RuntimeAppearanceData {
+    fn unindex_light_parent(&mut self, handle: u64, fact: &RuntimeLightFact) {
+        let Some(parent) = fact.parent_object_id else {
+            return;
+        };
+        if let Some(lights) = self.parented_lights.get_mut(&parent) {
+            lights.remove(&handle);
+            if lights.is_empty() {
+                self.parented_lights.remove(&parent);
+            }
+        }
+    }
+
     /// The catalog material id of a live material handle.
     pub(crate) fn material_id(&self, material: u64) -> Option<&str> {
         self.materials.get(&material).map(String::as_str)
@@ -647,6 +659,26 @@ fn atlas_sprite_failures_and_legacy_replacement_leave_or_release_the_lease() {
             .code(),
         "CSHARP_SPRITE_ATLAS_APPEARANCE"
     );
+    let mut inverted = legacy_sprite_request(texture);
+    inverted.uv_min = NativeVec2 { x: 1.0, y: 1.0 };
+    inverted.uv_max = NativeVec2::default();
+    assert_eq!(
+        bridge
+            .replace_sprite(NativeSpriteAppearanceReplaceRequest {
+                appearance: sprite,
+                replacement: inverted,
+            })
+            .expect_err("an inverted frame is refused")
+            .code(),
+        "CSHARP_SPRITE_FRAME"
+    );
+    assert_eq!(
+        bridge
+            .read_sprite(sprite)
+            .expect("a refused legacy replacement leaves the sprite")
+            .frame_id,
+        4
+    );
     let replacement = bridge
         .replace_sprite(NativeSpriteAppearanceReplaceRequest {
             appearance: sprite,
@@ -902,15 +934,6 @@ fn sprite_playback_advances_repeated_frames_once_and_controls_lifetime() {
     unsafe { bridge.stage_snapshot(std::ptr::null(), 0) }.expect("remove retained sprite");
     let removal_call = bridge.take_staged_call();
     bridge.commit(removal_call);
-    bridge.begin_update_call(realtime_sprite_update(3, 0.25));
-    assert_eq!(
-        bridge
-            .advance_sprite_playback(NativeSpritePlaybackAdvanceRequest { playback })
-            .expect_err("stale admitted update")
-            .code(),
-        "CSHARP_SPRITE_PLAYBACK_STALE_UPDATE"
-    );
-    bridge.end_call();
     bridge.begin_call();
     assert_eq!(
         bridge
@@ -926,6 +949,104 @@ fn sprite_playback_advances_repeated_frames_once_and_controls_lifetime() {
         .destroy_appearance(appearance)
         .expect("dispose sprite");
     bridge.destroy_sprite_atlas(atlas).expect("dispose atlas");
+}
+
+#[cfg(test)]
+#[test]
+fn sprite_playback_advances_again_after_a_product_pause_and_resume() {
+    let mut content_resources = BTreeMap::new();
+    content_resources.insert("atlas.png".to_owned(), Arc::from(tests::RGBA_PNG));
+    let mut bridge =
+        RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), content_resources);
+    let atlas_frames = [7, 9].map(|frame_id| NativeSpriteAtlasFrame {
+        frame_id,
+        uv_min: NativeVec2::default(),
+        uv_max: NativeVec2 { x: 1.0, y: 1.0 },
+        has_size: false,
+        size: NativeVec2::default(),
+    });
+    bridge.begin_call();
+    let texture = bridge
+        .open_resource(&tests::resource_request("atlas.png"))
+        .expect("atlas texture")
+        .handle;
+    let atlas = unsafe {
+        bridge
+            .create_sprite_atlas(&NativeSpriteAtlasCreateRequest {
+                texture,
+                frames: atlas_frames.as_ptr(),
+                frames_len: atlas_frames.len(),
+            })
+            .expect("atlas")
+    };
+    let appearance = bridge
+        .create_sprite_from_atlas(atlas_sprite_request(atlas, 7))
+        .expect("sprite");
+    let frames = [7, 9, 7].map(|frame_id| NativeSpritePlaybackFrame {
+        frame_id,
+        duration_seconds: 0.25,
+    });
+    // Markers may share an id; each crossing reports it.
+    let markers = [1, 2].map(|frame_index| NativeSpritePlaybackMarker {
+        marker_id: 5,
+        frame_index,
+    });
+    let playback = unsafe {
+        bridge
+            .create_sprite_playback(&NativeSpritePlaybackCreateRequest {
+                appearance,
+                atlas,
+                frames: frames.as_ptr(),
+                frames_len: frames.len(),
+                markers: markers.as_ptr(),
+                markers_len: markers.len(),
+                loop_mode: NativeSpritePlaybackLoopMode::Loop,
+                playback_rate: 1.0,
+            })
+            .expect("markers sharing an id are accepted")
+    };
+    bridge
+        .control_sprite_playback(NativeSpritePlaybackControlRequest {
+            playback,
+            control: NativeSpritePlaybackControl::Start,
+        })
+        .expect("start");
+    bridge.end_call();
+
+    let advance = |bridge: &mut RuntimeAppearanceBridge, facts| {
+        bridge.begin_update_call(facts);
+        let result = bridge
+            .advance_sprite_playback(NativeSpritePlaybackAdvanceRequest { playback })
+            .expect("advance");
+        let crossings: Vec<u64> = if result.crossings_len == 0 {
+            Vec::new()
+        } else {
+            unsafe { std::slice::from_raw_parts(result.crossings, result.crossings_len) }
+                .iter()
+                .map(|crossing| crossing.marker_id)
+                .collect()
+        };
+        bridge.end_call();
+        (result.advanced, result.readout.frame_index, crossings)
+    };
+    assert_eq!(
+        advance(&mut bridge, realtime_sprite_update(1, 0.25)),
+        (true, 1, vec![5])
+    );
+    // The product pauses: its updates admit no steps and change nothing.
+    let paused = NativeProductUpdateFacts {
+        lifecycle_state: NativeProductLifecycleState::Paused,
+        control_revision: 2,
+        admitted_step_count: 0,
+        ..realtime_sprite_update(1, 0.25)
+    };
+    assert_eq!(advance(&mut bridge, paused), (false, 1, vec![]));
+    // Resumed, the next admitted step advances from where it stopped.
+    let resumed = NativeProductUpdateFacts {
+        control_revision: 3,
+        ..realtime_sprite_update(2, 0.25)
+    };
+    assert_eq!(advance(&mut bridge, resumed), (true, 2, vec![5]));
 }
 
 #[cfg(test)]
@@ -1266,6 +1387,8 @@ pub(crate) struct RuntimeAppearanceData {
     /// Live lights whose parent object is not in the published scene: they
     /// are not projected and show once a snapshot publishes the parent.
     pending_lights: BTreeSet<u64>,
+    /// Live lights by parent object.
+    parented_lights: BTreeMap<u64, BTreeSet<u64>>,
     next_light: u64,
     materials: BTreeMap<u64, String>,
     appearance_materials: BTreeMap<u64, BTreeSet<u64>>,
@@ -1323,6 +1446,27 @@ struct RuntimeGhostPlatePresentation {
     placement: GhostPlatePlacement,
     capture: GhostPlateCaptureSettings,
     config: GhostPlateConfig,
+}
+
+/// A material create that every refusal has passed, ready to install.
+struct BuiltMaterial {
+    descriptor: RenderMaterialDescriptor,
+    textures: Vec<TextureDescriptor>,
+    shader: Option<render_model::ShaderDescriptor>,
+    held: BTreeSet<u64>,
+}
+
+/// A sprite appearance create that every refusal has passed, ready to
+/// install under the next appearance handle.
+struct BuiltSprite {
+    appearance: Appearance,
+    /// Texture definitions it draws, in catalog order.
+    textures: Vec<TextureDescriptor>,
+    /// A legacy sprite's own one-frame atlas.
+    own_atlas: Option<SpriteAtlasDescriptor>,
+    /// The retained atlas an atlas-backed sprite draws from.
+    retained_atlas: Option<u64>,
+    held: BTreeSet<u64>,
 }
 
 #[derive(Clone)]
@@ -1635,6 +1779,7 @@ impl RuntimeAppearanceBridge {
             lights: BTreeMap::new(),
             light_owners: BTreeMap::new(),
             pending_lights: BTreeSet::new(),
+            parented_lights: BTreeMap::new(),
             next_light: 1,
             materials: BTreeMap::new(),
             appearance_materials: BTreeMap::new(),
@@ -3471,7 +3616,9 @@ impl RuntimeAppearanceBridge {
             if !staged.state.pending_lights.contains(&light.value) {
                 project_light_change(staged, &[], &[id])?;
             }
-            staged.state.lights.remove(&light.value);
+            if let Some(fact) = staged.state.lights.remove(&light.value) {
+                staged.state.unindex_light_parent(light.value, &fact);
+            }
             staged.state.light_owners.remove(&id);
             staged.state.pending_lights.remove(&light.value);
         }
@@ -3500,28 +3647,27 @@ impl RuntimeAppearanceBridge {
         &mut self,
         request: NativeMaterialRequest,
     ) -> Result<NativeMaterialHandle, CsharpEngineServicesError> {
-        let staged = self.staged_mut()?;
-        let handle = staged.state.next_material;
-        let next_material = handle + 1;
-        let id = runtime_material_id(handle);
-        let descriptor = material_descriptor(id.clone(), request, &staged.state.render_resources)?;
-        let textures =
-            texture_descriptors_for_material(&descriptor, &staged.state.render_resources)?;
-        let shader = material_shader(&staged.state.render_resources, request.shader)?;
-        staged.state.next_material = next_material;
-        let resources = staged.state.projector.resources_mut();
-        for texture in textures {
-            retain_texture_descriptor(&mut resources.textures, texture);
-        }
-        if let Some((_, shader)) = shader {
-            retain_shader_descriptor(&mut resources.shaders, shader);
-        }
-        resources.materials.push(descriptor);
-        staged.state.materials.insert(handle, id);
-        staged.state.set_held(
-            Holder::Material,
-            handle,
-            resource_set([
+        let built = self.build_material(request)?;
+        Ok(self.install_material(built))
+    }
+
+    /// Everything a material create can refuse, resolved under the handle
+    /// [`Self::install_material`] will give it.
+    fn build_material(
+        &self,
+        request: NativeMaterialRequest,
+    ) -> Result<BuiltMaterial, CsharpEngineServicesError> {
+        let state = &self.staged_ref()?.state;
+        let resources = &state.render_resources;
+        let descriptor =
+            material_descriptor(runtime_material_id(state.next_material), request, resources)?;
+        let textures = texture_descriptors_for_material(&descriptor, resources)?;
+        let shader = material_shader(resources, request.shader)?.map(|(_, shader)| shader);
+        Ok(BuiltMaterial {
+            descriptor,
+            textures,
+            shader,
+            held: resource_set([
                 request.texture.value,
                 request.normal_map.value,
                 request.shader.shader.value,
@@ -3530,8 +3676,28 @@ impl RuntimeAppearanceBridge {
                 request.water.foam_texture.value,
                 request.water.ripple_texture.value,
             ]),
-        );
-        Ok(NativeMaterialHandle { value: handle })
+        })
+    }
+
+    fn install_material(&mut self, built: BuiltMaterial) -> NativeMaterialHandle {
+        let staged = self
+            .staged
+            .as_mut()
+            .expect("a built material installs in its call");
+        let handle = staged.state.next_material;
+        staged.state.next_material = handle + 1;
+        let id = built.descriptor.id.clone();
+        let resources = staged.state.projector.resources_mut();
+        for texture in built.textures {
+            retain_texture_descriptor(&mut resources.textures, texture);
+        }
+        if let Some(shader) = built.shader {
+            retain_shader_descriptor(&mut resources.shaders, shader);
+        }
+        resources.materials.push(built.descriptor);
+        staged.state.materials.insert(handle, id);
+        staged.state.set_held(Holder::Material, handle, built.held);
+        NativeMaterialHandle { value: handle }
     }
 
     fn create_authored_material(
@@ -3817,17 +3983,11 @@ impl RuntimeAppearanceBridge {
         &mut self,
         request: NativeMaterialUpdateRequest,
     ) -> Result<NativeMaterialHandle, CsharpEngineServicesError> {
-        // Refuse an invalid replacement before the prior material is released,
-        // validating it under the identity create_material will assign.
-        let state = &self.staged_ref()?.state;
-        let descriptor = material_descriptor(
-            runtime_material_id(state.next_material),
-            request.replacement,
-            &state.render_resources,
-        )?;
-        texture_descriptors_for_material(&descriptor, &state.render_resources)?;
+        // A call keeps what it did, so the replacement is refused before the
+        // prior material is released.
+        let built = self.build_material(request.replacement)?;
         self.destroy_material(request.material)?;
-        self.create_material(request.replacement)
+        Ok(self.install_material(built))
     }
 
     fn destroy_material(
@@ -4528,12 +4688,8 @@ impl RuntimeAppearanceBridge {
         asset.validate().map_err(|error| {
             CsharpEngineServicesError::new("CSHARP_STATIC_MESH_LAYOUT", format!("{error:?}"))
         })?;
-        let browser_path = resource.path().to_owned();
         let staged = self.staged_mut()?;
-        let resource = staged
-            .state
-            .render_resources
-            .stage(resource, [browser_path])?;
+        let resource = staged.state.render_resources.stage(resource)?;
         let resources = staged.state.projector.resources_mut();
         resources.materials.extend(materials);
         resources.static_meshes.push(Arc::new(asset));
@@ -4676,22 +4832,15 @@ impl RuntimeAppearanceBridge {
     fn sprite_atlas(
         &self,
         atlas: NativeSpriteAtlasHandle,
-    ) -> Result<RuntimeSpriteAtlas, CsharpEngineServicesError> {
+    ) -> Result<&RuntimeSpriteAtlas, CsharpEngineServicesError> {
         let state = self
             .staged
             .as_ref()
             .map(|call| &call.state)
             .unwrap_or(&self.state);
-        state
-            .sprite_atlases
-            .get(&atlas.value)
-            .cloned()
-            .ok_or_else(|| {
-                CsharpEngineServicesError::new(
-                    "CSHARP_SPRITE_ATLAS_HANDLE",
-                    "sprite atlas is not live",
-                )
-            })
+        state.sprite_atlases.get(&atlas.value).ok_or_else(|| {
+            CsharpEngineServicesError::new("CSHARP_SPRITE_ATLAS_HANDLE", "sprite atlas is not live")
+        })
     }
 
     fn sprite_material_descriptor(
@@ -4753,38 +4902,86 @@ impl RuntimeAppearanceBridge {
         Ok(descriptor)
     }
 
-    fn retain_sprite_material_textures(
-        &mut self,
+    /// The texture definitions a sprite material draws. Resource admission
+    /// alone does not publish a texture definition.
+    fn sprite_material_textures(
+        &self,
         material: NativeSpriteMaterialDescriptor,
-    ) -> Result<(), CsharpEngineServicesError> {
-        for handle in [material.normal_texture, material.depth_texture] {
-            if handle.value == 0 {
-                continue;
-            }
-            // Descriptor validation has already established the resource kind.
-            // Resource admission alone does not publish a texture definition.
-            let texture = self
-                .resource(handle.value)?
-                .texture()
-                .cloned()
-                .ok_or_else(|| {
-                    CsharpEngineServicesError::new(
-                        "CSHARP_SPRITE_MATERIAL_TEXTURE",
-                        "sprite material texture is unavailable",
-                    )
-                })?;
-            retain_texture_descriptor(
-                &mut self.staged_mut()?.state.projector.resources_mut().textures,
-                texture,
-            );
+    ) -> Result<Vec<TextureDescriptor>, CsharpEngineServicesError> {
+        [material.normal_texture, material.depth_texture]
+            .into_iter()
+            .filter(|handle| handle.value != 0)
+            .map(|handle| {
+                // Descriptor validation has already established the resource kind.
+                self.resource(handle.value)?
+                    .texture()
+                    .cloned()
+                    .ok_or_else(|| {
+                        CsharpEngineServicesError::new(
+                            "CSHARP_SPRITE_MATERIAL_TEXTURE",
+                            "sprite material texture is unavailable",
+                        )
+                    })
+            })
+            .collect()
+    }
+
+    /// Installs a built sprite under the next appearance handle.
+    fn install_sprite(&mut self, built: BuiltSprite) -> NativeAppearanceHandle {
+        let staged = self
+            .staged
+            .as_mut()
+            .expect("a built sprite installs in its call");
+        let state = &mut *staged.state;
+        let resources = state.projector.resources_mut();
+        for texture in built.textures {
+            retain_texture_descriptor(&mut resources.textures, texture);
         }
-        Ok(())
+        if let Some(atlas) = built.own_atlas {
+            resources.sprite_atlases.push(atlas);
+        }
+        let handle = state.next_appearance;
+        state.next_appearance = handle + 1;
+        let identity = format!("appearance/native-{handle}");
+        state
+            .projector
+            .insert_appearance(identity.clone(), built.appearance);
+        state.appearances.insert(handle, identity);
+        state.set_held(Holder::Appearance, handle, built.held);
+        if let Some(atlas) = built.retained_atlas {
+            state
+                .sprite_atlas_appearances
+                .entry(atlas)
+                .or_default()
+                .insert(handle);
+            state.sprite_appearance_atlases.insert(handle, atlas);
+        }
+        NativeAppearanceHandle { value: handle }
+    }
+
+    /// An appearance drawing from a retained atlas, which it holds with its
+    /// material's textures.
+    fn build_atlas_appearance(
+        &self,
+        atlas: NativeSpriteAtlasHandle,
+        material: NativeSpriteMaterialDescriptor,
+        appearance: Appearance,
+    ) -> Result<BuiltSprite, CsharpEngineServicesError> {
+        // Installing needs the call.
+        self.staged_ref()?;
+        Ok(BuiltSprite {
+            appearance,
+            textures: self.sprite_material_textures(material)?,
+            own_atlas: None,
+            retained_atlas: Some(atlas.value),
+            held: resource_set([material.normal_texture.value, material.depth_texture.value]),
+        })
     }
 
     fn sprite_from_atlas(
         &self,
         request: NativeSpriteFromAtlasRequest,
-    ) -> Result<(RuntimeSpriteAtlas, SpriteInstanceDescriptor), CsharpEngineServicesError> {
+    ) -> Result<SpriteInstanceDescriptor, CsharpEngineServicesError> {
         let atlas = self.sprite_atlas(request.atlas)?;
         if !atlas.frames.contains_key(&request.frame_id) {
             return Err(CsharpEngineServicesError::new(
@@ -4807,47 +5004,27 @@ impl RuntimeAppearanceBridge {
         sprite.validate().map_err(|error| {
             CsharpEngineServicesError::new("CSHARP_SPRITE_ATLAS_FRAME", format!("{error:?}"))
         })?;
-        Ok((atlas.clone(), sprite))
+        Ok(sprite)
     }
 
-    fn create_sprite_from_atlas(
-        &mut self,
+    fn build_sprite_from_atlas(
+        &self,
         request: NativeSpriteFromAtlasRequest,
-    ) -> Result<NativeAppearanceHandle, CsharpEngineServicesError> {
-        let (_, sprite) = self.sprite_from_atlas(request)?;
-        self.admit_atlas_appearance(
+    ) -> Result<BuiltSprite, CsharpEngineServicesError> {
+        let sprite = self.sprite_from_atlas(request)?;
+        self.build_atlas_appearance(
             request.atlas,
             request.material,
             Appearance::Sprite { sprite },
         )
     }
 
-    /// An appearance drawing from a retained atlas, which it holds with its
-    /// material's textures.
-    fn admit_atlas_appearance(
+    fn create_sprite_from_atlas(
         &mut self,
-        atlas: NativeSpriteAtlasHandle,
-        material: NativeSpriteMaterialDescriptor,
-        appearance: Appearance,
+        request: NativeSpriteFromAtlasRequest,
     ) -> Result<NativeAppearanceHandle, CsharpEngineServicesError> {
-        self.retain_sprite_material_textures(material)?;
-        let appearance = self.allocate_appearance(appearance)?;
-        self.set_appearance_resources(
-            appearance.value,
-            [material.normal_texture.value, material.depth_texture.value],
-        )?;
-        let staged = self.staged_mut()?;
-        staged
-            .state
-            .sprite_atlas_appearances
-            .entry(atlas.value)
-            .or_default()
-            .insert(appearance.value);
-        staged
-            .state
-            .sprite_appearance_atlases
-            .insert(appearance.value, atlas.value);
-        Ok(appearance)
+        let built = self.build_sprite_from_atlas(request)?;
+        Ok(self.install_sprite(built))
     }
 
     unsafe fn create_sprite_batch(
@@ -4889,7 +5066,7 @@ impl RuntimeAppearanceBridge {
             .keys()
             .next()
             .expect("an atlas has at least one frame");
-        let (_, sprite) = self.sprite_from_atlas(NativeSpriteFromAtlasRequest {
+        let sprite = self.sprite_from_atlas(NativeSpriteFromAtlasRequest {
             atlas: request.atlas,
             frame_id: shared_frame,
             pivot: request.pivot,
@@ -4905,23 +5082,24 @@ impl RuntimeAppearanceBridge {
         batch.validate().map_err(|error| {
             CsharpEngineServicesError::new("CSHARP_SPRITE_BATCH", format!("{error:?}"))
         })?;
-        self.admit_atlas_appearance(
+        let built = self.build_atlas_appearance(
             request.atlas,
             request.material,
             Appearance::SpriteBatch { batch },
-        )
+        )?;
+        Ok(self.install_sprite(built))
     }
 
     fn replace_sprite_from_atlas(
         &mut self,
         request: NativeSpriteFromAtlasReplaceRequest,
     ) -> Result<NativeAppearanceHandle, CsharpEngineServicesError> {
-        // Resolve the new retained atlas and frame before releasing the prior
-        // owner, so stale/wrong-kind/frame failures cannot disturb it.
-        self.sprite_from_atlas(request.replacement)?;
+        // A call keeps what it did, so the replacement is refused before the
+        // prior appearance is released.
+        let built = self.build_sprite_from_atlas(request.replacement)?;
         self.ensure_live_appearance(request.appearance)?;
         self.destroy_appearance(request.appearance)?;
-        self.create_sprite_from_atlas(request.replacement)
+        Ok(self.install_sprite(built))
     }
 
     fn set_sprite_frame(
@@ -5148,14 +5326,7 @@ impl RuntimeAppearanceBridge {
                 ));
             }
         }
-        let mut marker_ids = BTreeSet::new();
         for marker in markers {
-            if marker.marker_id == 0 || !marker_ids.insert(marker.marker_id) {
-                return Err(CsharpEngineServicesError::new(
-                    "CSHARP_SPRITE_PLAYBACK_MARKER",
-                    "sprite playback marker IDs must be nonzero and unique",
-                ));
-            }
             if marker.frame_index as usize >= frames.len() {
                 return Err(CsharpEngineServicesError::new(
                     "CSHARP_SPRITE_PLAYBACK_MARKER",
@@ -5336,7 +5507,14 @@ impl RuntimeAppearanceBridge {
             )
         })?;
         let mut playback = self.sprite_playback(request.playback)?;
-        let identity = validate_sprite_playback_update(facts, playback.last_update)?;
+        // The facts are the Engine's own: their identity only grows, and
+        // their realtime step is positive.
+        let identity = SpritePlaybackUpdateIdentity {
+            generation: facts.generation,
+            control_revision: facts.control_revision,
+            simulation_step: facts.simulation_step,
+            admitted_step_count: facts.admitted_step_count,
+        };
         let duplicate = playback.last_update == Some(identity);
         let mut crossings = Vec::new();
         let mut advanced = false;
@@ -5347,12 +5525,6 @@ impl RuntimeAppearanceBridge {
                 let mut remaining = facts.fixed_delta_seconds
                     * f64::from(facts.admitted_step_count)
                     * playback.playback_rate;
-                if !remaining.is_finite() || remaining < 0.0 {
-                    return Err(CsharpEngineServicesError::new(
-                        "CSHARP_SPRITE_PLAYBACK_TIME",
-                        "admitted sprite playback time is not finite and non-negative",
-                    ));
-                }
                 advanced = remaining > 0.0;
                 let mut transitions = 0usize;
                 while remaining > 0.0 && playback.state == NativeSpritePlaybackState::Playing {
@@ -5482,63 +5654,31 @@ impl RuntimeAppearanceBridge {
         }
     }
 
-    fn validate_legacy_sprite_request(
-        &self,
-        request: NativeSpriteAppearanceRequest,
-    ) -> Result<(), CsharpEngineServicesError> {
-        let resource = self.resource(request.texture.value)?.clone();
-        if resource.kind() != CsharpRenderResourceKind::Texture {
-            return Err(CsharpEngineServicesError::new(
-                "CSHARP_SPRITE_RESOURCE",
-                "sprite appearance requires a texture resource",
-            ));
-        }
-        let texture = sprite_texture_descriptor(&resource, "texture/legacy-validation".to_owned())?;
-        let atlas = SpriteAtlasDescriptor {
-            id: "sprite/legacy-validation".to_owned(),
-            texture: texture.id,
-            frames: vec![SpriteFrameRect {
-                frame: 0,
-                uv_min: native_vec2(request.uv_min),
-                uv_max: native_vec2(request.uv_max),
-                size: None,
-            }],
-        };
-        atlas.validate().map_err(|error| {
-            CsharpEngineServicesError::new("CSHARP_SPRITE_FRAME", format!("{error:?}"))
-        })?;
-        let sprite = sprite_instance_descriptor(
-            atlas.id,
-            0,
-            request.pivot,
-            request.size,
-            request.billboard,
-            request.size_mode,
-            request.render_order,
-            request.depth,
-            request.tint,
-            self.sprite_material_descriptor(request.material)?,
-        );
-        sprite.validate().map_err(|error| {
-            CsharpEngineServicesError::new("CSHARP_SPRITE_FRAME", format!("{error:?}"))
-        })
-    }
-
     fn create_sprite(
         &mut self,
         request: NativeSpriteAppearanceRequest,
     ) -> Result<NativeAppearanceHandle, CsharpEngineServicesError> {
-        let resource = self.resource(request.texture.value)?.clone();
+        let built = self.build_sprite(request)?;
+        Ok(self.install_sprite(built))
+    }
+
+    /// A legacy sprite: its texture as a one-frame atlas of its own, named
+    /// after the appearance handle it will be installed under.
+    fn build_sprite(
+        &self,
+        request: NativeSpriteAppearanceRequest,
+    ) -> Result<BuiltSprite, CsharpEngineServicesError> {
+        let resource = self.resource(request.texture.value)?;
         if resource.kind() != CsharpRenderResourceKind::Texture {
             return Err(CsharpEngineServicesError::new(
                 "CSHARP_SPRITE_RESOURCE",
                 "sprite appearance requires a texture resource",
             ));
         }
-        let handle = self.staged_mut()?.state.next_appearance;
+        let handle = self.staged_ref()?.state.next_appearance;
         let texture_id = format!("texture/native-{handle}");
         let atlas_id = format!("sprite/native-{handle}");
-        let texture = sprite_texture_descriptor(&resource, texture_id.clone())?;
+        let texture = sprite_texture_descriptor(resource, texture_id.clone())?;
         let atlas = SpriteAtlasDescriptor {
             id: atlas_id.clone(),
             texture: texture_id,
@@ -5568,32 +5708,31 @@ impl RuntimeAppearanceBridge {
         atlas.validate().map_err(|error| {
             CsharpEngineServicesError::new("CSHARP_SPRITE_FRAME", format!("{error:?}"))
         })?;
-        self.retain_sprite_material_textures(request.material)?;
-        {
-            let resources = self.staged_mut()?.state.projector.resources_mut();
-            resources.textures.push(texture);
-            resources.sprite_atlases.push(atlas);
-        }
-        let appearance = self.allocate_appearance(Appearance::Sprite { sprite })?;
-        self.set_appearance_resources(
-            appearance.value,
-            [
+        let mut textures = self.sprite_material_textures(request.material)?;
+        textures.push(texture);
+        Ok(BuiltSprite {
+            appearance: Appearance::Sprite { sprite },
+            textures,
+            own_atlas: Some(atlas),
+            retained_atlas: None,
+            held: resource_set([
                 request.texture.value,
                 request.material.normal_texture.value,
                 request.material.depth_texture.value,
-            ],
-        )?;
-        Ok(appearance)
+            ]),
+        })
     }
 
     fn replace_sprite(
         &mut self,
         request: NativeSpriteAppearanceReplaceRequest,
     ) -> Result<NativeAppearanceHandle, CsharpEngineServicesError> {
-        self.validate_legacy_sprite_request(request.replacement)?;
+        // A call keeps what it did, so the replacement is refused before the
+        // prior appearance is released.
+        let built = self.build_sprite(request.replacement)?;
         self.ensure_live_appearance(request.appearance)?;
         self.destroy_appearance(request.appearance)?;
-        self.create_sprite(request.replacement)
+        Ok(self.install_sprite(built))
     }
 
     fn open_animated_mesh(
@@ -6751,14 +6890,13 @@ impl RuntimeAppearanceBridge {
             .state
             .animation_instances
             .get(&instance_handle)
-            .cloned()
             .ok_or_else(|| {
                 CsharpEngineServicesError::new(
                     "CSHARP_ANIMATION_INSTANCE",
                     "animation instance is not live",
                 )
             })?;
-        let Some(playback) = instance.direct_playback else {
+        let Some(playback) = instance.direct_playback.clone() else {
             return Ok(());
         };
         let Some(handle) = staged.state.projector.object_handle(instance.object_id) else {
@@ -6892,23 +7030,25 @@ impl RuntimeAppearanceBridge {
 
     fn flush_all_animations(&mut self) -> Result<(), CsharpEngineServicesError> {
         let (direct, controllers) = {
-            let staged = self.staged.as_ref().ok_or_else(|| {
+            let staged = self.staged.as_mut().ok_or_else(|| {
                 CsharpEngineServicesError::new(
                     "CSHARP_ANIMATION_CALL",
                     "animation service was called outside a product call",
                 )
             })?;
+            let state = &mut *staged.state;
+            // Direct playback goes out again only to a new renderer object:
+            // one created since the last flush. A command waiting for its
+            // object is sent once that object is created.
+            let created = state.projector.take_created_objects();
             (
-                staged
-                    .state
-                    .animation_instances
+                created
                     .iter()
-                    .filter_map(|(handle, instance)| {
-                        instance.direct_playback.is_some().then_some(*handle)
-                    })
+                    .filter_map(|object| state.animation_objects.get(object))
+                    .copied()
+                    .filter(|handle| state.animation_instances[handle].direct_playback.is_some())
                     .collect::<Vec<_>>(),
-                staged
-                    .state
+                state
                     .animation_controllers
                     .keys()
                     .copied()
@@ -7128,8 +7268,9 @@ impl RuntimeAppearanceBridge {
                 joint: attachments.get(&fact.object_id).copied(),
             });
         }
+        let fact_ids: BTreeSet<u64> = owned.iter().map(|fact| fact.object_id).collect();
         for child in attachments.keys() {
-            if !owned.iter().any(|fact| fact.object_id == *child) {
+            if !fact_ids.contains(child) {
                 return Err(CsharpEngineServicesError::new(
                     "CSHARP_JOINT_ATTACHMENT",
                     format!("attachment child object {child} is not among the changed objects"),
@@ -7179,31 +7320,39 @@ impl RuntimeAppearanceBridge {
             }
         }
 
-        // Parented lights follow their parent in and out of the scene.
-        let present = |object: u64| {
-            owned.iter().any(|fact| fact.object_id == object)
-                || removals.is_some_and(|removals| {
-                    !removals.contains(&object) && state.projector.object_handle(object).is_some()
-                })
+        // Parented lights follow their parent in and out of the scene. A light
+        // waits exactly while its parent is out of the published scene, so
+        // only parents this change publishes or removes change their lights.
+        let lights_of = |parent: &u64| {
+            state
+                .parented_lights
+                .get(parent)
+                .into_iter()
+                .flatten()
+                .copied()
         };
         let mut light_puts = Vec::new();
+        let mut shown = Vec::new();
+        for handle in fact_ids.iter().flat_map(lights_of) {
+            if state.pending_lights.contains(&handle) {
+                light_puts.push(state.lights[&handle].clone());
+                shown.push(handle);
+            }
+        }
+        let removed: BTreeSet<u64> = match removals {
+            Some(removals) => removals.iter().copied().collect(),
+            None => state.parented_lights.keys().copied().collect(),
+        };
         let mut light_removals = Vec::new();
-        let mut waiting = BTreeSet::new();
-        for (handle, light) in &state.lights {
-            let Some(parent) = light.parent_object_id else {
-                continue;
-            };
-            let pending = state.pending_lights.contains(handle);
-            match (pending, present(parent)) {
-                (true, true) => light_puts.push(light.clone()),
-                (true, false) => {
-                    waiting.insert(*handle);
-                }
-                (false, false) => {
-                    light_removals.push(light.light_id);
-                    waiting.insert(*handle);
-                }
-                (false, true) => {}
+        let mut hidden = Vec::new();
+        for handle in removed
+            .iter()
+            .filter(|parent| !fact_ids.contains(parent))
+            .flat_map(lights_of)
+        {
+            if !state.pending_lights.contains(&handle) {
+                light_removals.push(state.lights[&handle].light_id);
+                hidden.push(handle);
             }
         }
         let projected =
@@ -7219,7 +7368,11 @@ impl RuntimeAppearanceBridge {
             }
             error => CsharpEngineServicesError::new("CSHARP_VISUAL_SNAPSHOT", format!("{error:?}")),
         })?;
-        staged.state.pending_lights = waiting;
+        let pending = &mut staged.state.pending_lights;
+        for handle in shown {
+            pending.remove(&handle);
+        }
+        pending.extend(hidden);
         detach_retargeted_controllers(staged)?;
         append_projection_frame(staged, frame)?;
         self.flush_all_animations()?;
@@ -7606,11 +7759,19 @@ fn set_light(
     if let Some(previous) = previous {
         if let Some(shown) = state.lights.remove(&previous) {
             state.light_owners.remove(&shown.light_id);
+            state.unindex_light_parent(previous, &shown);
         }
         state.pending_lights.remove(&previous);
     }
     if !ready {
         state.pending_lights.insert(handle);
+    }
+    if let Some(parent) = fact.parent_object_id {
+        state
+            .parented_lights
+            .entry(parent)
+            .or_default()
+            .insert(handle);
     }
     state.light_owners.insert(fact.light_id, handle);
     state.lights.insert(handle, fact);
@@ -7904,39 +8065,6 @@ fn sprite_playback_readout(playback: &RuntimeSpritePlayback) -> NativeSpritePlay
         revision: playback.revision,
         completed: playback.state == NativeSpritePlaybackState::Completed,
     }
-}
-
-fn validate_sprite_playback_update(
-    facts: NativeProductUpdateFacts,
-    last: Option<SpritePlaybackUpdateIdentity>,
-) -> Result<SpritePlaybackUpdateIdentity, CsharpEngineServicesError> {
-    if facts.lifecycle_state != NativeProductLifecycleState::Running {
-        return Err(CsharpEngineServicesError::new(
-            "CSHARP_SPRITE_PLAYBACK_UPDATE",
-            "sprite playback can advance only during a running product update",
-        ));
-    }
-    if facts.admitted_step_count > 0
-        && (!facts.fixed_delta_seconds.is_finite() || facts.fixed_delta_seconds <= 0.0)
-    {
-        return Err(CsharpEngineServicesError::new(
-            "CSHARP_SPRITE_PLAYBACK_UPDATE",
-            "sprite playback requires positive finite Rust-admitted realtime steps",
-        ));
-    }
-    let identity = SpritePlaybackUpdateIdentity {
-        generation: facts.generation,
-        control_revision: facts.control_revision,
-        simulation_step: facts.simulation_step,
-        admitted_step_count: facts.admitted_step_count,
-    };
-    if last.is_some_and(|previous| identity < previous) {
-        return Err(CsharpEngineServicesError::new(
-            "CSHARP_SPRITE_PLAYBACK_STALE_UPDATE",
-            "sprite playback update facts precede the last admitted update",
-        ));
-    }
-    Ok(identity)
 }
 
 fn append_sprite_playback_markers(
@@ -10803,7 +10931,7 @@ pub(super) mod tests {
         bridge
             .state
             .render_resources
-            .stage(CsharpRenderResource::test_mesh(bytes), [])
+            .stage(CsharpRenderResource::test_mesh(bytes))
             .unwrap();
 
         bridge.begin_call();
@@ -10822,10 +10950,11 @@ pub(super) mod tests {
         bridge
             .state
             .render_resources
-            .stage(
-                CsharpRenderResource::test_mesh(Arc::from(vec![0x5a; 8 * 1024 * 1024])),
-                [],
-            )
+            .stage(CsharpRenderResource::test_mesh(Arc::from(vec![
+                0x5a;
+                8 * 1024
+                    * 1024
+            ])))
             .unwrap();
         for _ in 0..100 {
             bridge.begin_call();
@@ -12119,6 +12248,63 @@ pub(super) mod tests {
         let staged = bridge.take_staged_call();
         assert_eq!(staged.state.projector.retained_lights(), 0);
         assert!(staged.state.lights.is_empty() && staged.state.pending_lights.is_empty());
+    }
+
+    #[test]
+    fn parented_lights_follow_the_parent_they_name_now() {
+        let mut bridge =
+            RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), BTreeMap::new());
+        bridge.begin_call();
+        let appearance = bridge.create_primitive(primitive_request()).unwrap();
+        let fact = |object_id| NativeAppearanceFact {
+            object_id,
+            ..appearance_fact(appearance)
+        };
+        let none = BTreeMap::new();
+        let shown = |bridge: &RuntimeAppearanceBridge| {
+            let state = &bridge.staged_ref().unwrap().state;
+            (
+                state.projector.retained_lights(),
+                state.pending_lights.iter().copied().collect::<Vec<_>>(),
+            )
+        };
+        bridge
+            .stage_changes(&[fact(7), fact(8)], Some(&[]), &none)
+            .unwrap();
+        let light = bridge
+            .create_light(point_light_request(91, Some(7)))
+            .unwrap();
+        let disposed = bridge
+            .create_light(point_light_request(92, Some(7)))
+            .unwrap();
+        bridge
+            .update_light(NativeLightUpdateRequest {
+                light,
+                replacement: point_light_request(91, Some(8)),
+            })
+            .unwrap();
+        bridge.destroy_light(disposed).unwrap();
+        assert_eq!(shown(&bridge), (1, vec![]));
+        // Its old parent goes, and with it no live light.
+        bridge.stage_changes(&[], Some(&[7]), &none).unwrap();
+        assert_eq!(shown(&bridge), (1, vec![]));
+        bridge.stage_changes(&[], Some(&[8]), &none).unwrap();
+        assert_eq!(shown(&bridge), (0, vec![light.value]));
+
+        // Replaced under a new handle and parent, it waits for that parent.
+        let replaced = bridge
+            .replace_light(NativeLightUpdateRequest {
+                light,
+                replacement: point_light_request(91, Some(9)),
+            })
+            .unwrap();
+        bridge.stage_changes(&[fact(8)], Some(&[]), &none).unwrap();
+        assert_eq!(shown(&bridge), (0, vec![replaced.value]));
+        bridge.stage_changes(&[fact(9)], Some(&[]), &none).unwrap();
+        assert_eq!(shown(&bridge), (1, vec![]));
+        // A whole snapshot without the parent takes it out again.
+        bridge.stage_changes(&[fact(8)], None, &none).unwrap();
+        assert_eq!(shown(&bridge), (0, vec![replaced.value]));
     }
 
     #[test]
@@ -13959,6 +14145,92 @@ fn shade(surface: Surface) -> vec4<f32> {
             frames_before,
             "do not send Stop to a renderer target already removed by the snapshot"
         );
+    }
+
+    /// Direct playback goes out again to every new renderer object of its
+    /// instance, including one recreated because an ancestor was, and to
+    /// nothing else.
+    #[test]
+    fn direct_playback_follows_a_recreated_descendant_only() {
+        const CHARACTER_GLB: &[u8] = include_bytes!(
+            "../../../../fixtures/render/assets/kenney-retro-character/character-medium.glb"
+        );
+        let mut content_resources = BTreeMap::new();
+        content_resources.insert("character.glb".to_owned(), Arc::from(CHARACTER_GLB));
+        let mut bridge =
+            RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), content_resources);
+        let resource_path = b"character.glb";
+        bridge.begin_call();
+        let resource = bridge
+            .open_animated_mesh(&NativeAnimatedMeshResourceRequest {
+                path: NativeUtf8Slice {
+                    bytes: resource_path.as_ptr(),
+                    len: resource_path.len(),
+                },
+            })
+            .expect("admitted animated GLB");
+        let animated = bridge
+            .create_animated_mesh_appearance(NativeAnimatedMeshAppearanceRequest { resource })
+            .expect("animated appearance");
+        let primitive = bridge.create_primitive(primitive_request()).unwrap();
+        let instance = bridge
+            .create_animation_instance(NativeAnimationInstanceRequest {
+                appearance: animated,
+                object_id: 7,
+            })
+            .expect("retained animation instance");
+        bridge
+            .set_animation_playback(&NativeAnimationPlaybackRequest {
+                instance,
+                kind: NativeAnimationPlaybackKind::Stop,
+                clip: NativeUtf8Slice {
+                    bytes: std::ptr::null(),
+                    len: 0,
+                },
+                loop_mode: NativeAnimationLoopMode::Once,
+                speed: 0.0,
+                weight: 0.0,
+                restart: false,
+                fade_seconds: 0.0,
+                has_fade: false,
+                normalized_time: 0.0,
+            })
+            .expect("a command waiting for its object");
+        let parent = NativeAppearanceFact {
+            object_id: 3,
+            ..appearance_fact(primitive)
+        };
+        let child = NativeAppearanceFact {
+            has_parent_object: true,
+            parent_object_id: 3,
+            ..appearance_fact(animated)
+        };
+        let unrelated = NativeAppearanceFact {
+            object_id: 9,
+            ..appearance_fact(primitive)
+        };
+        let none = BTreeMap::new();
+        let sent = |bridge: &mut RuntimeAppearanceBridge, facts: &[NativeAppearanceFact]| {
+            bridge.stage_changes(facts, Some(&[]), &none).unwrap();
+            let call = bridge.take_staged_call();
+            let count = call
+                .render_ops()
+                .iter()
+                .filter(|op| matches!(op, RenderDiff::SetAnimatedMeshPlayback { .. }))
+                .count();
+            bridge.commit(call);
+            bridge.begin_call();
+            count
+        };
+        assert_eq!(sent(&mut bridge, &[parent, child]), 1);
+        assert_eq!(sent(&mut bridge, &[unrelated]), 0);
+        // The parent stops casting shadows: it and its child are recreated.
+        let recast = NativeAppearanceFact {
+            shadow_casting: NativeShadowCasting::None,
+            ..parent
+        };
+        assert_eq!(sent(&mut bridge, &[recast]), 1);
+        assert_eq!(sent(&mut bridge, &[recast]), 0);
     }
 
     #[test]

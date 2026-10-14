@@ -49,7 +49,8 @@ pub struct RuntimeAppearanceFact<'a> {
 }
 
 /// The complete current fact for one runtime light. Light identities are a
-/// separate key space from object identities.
+/// separate key space from object identities. The caller admits `light`
+/// valid; the projector does not check it again.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RuntimeLightFact {
     pub light_id: u64,
@@ -137,6 +138,8 @@ pub struct RuntimeAppearanceProjector {
     resources_dirty: bool,
     /// Appearance identities changed in the catalog since the last projection.
     dirty_appearances: BTreeSet<String>,
+    /// Objects given a new renderer handle since the caller last took them.
+    created: BTreeSet<u64>,
 }
 
 impl RuntimeAppearanceProjector {
@@ -153,6 +156,7 @@ impl RuntimeAppearanceProjector {
             resources: ResourceSnapshot::default(),
             resources_dirty: true,
             dirty_appearances: BTreeSet::new(),
+            created: BTreeSet::new(),
         }
     }
 
@@ -266,6 +270,12 @@ impl RuntimeAppearanceProjector {
         removals: &[u64],
     ) -> Result<RenderFrameDiff, AppearanceProjectionError> {
         self.change(&[], &[], facts, removals)
+    }
+
+    /// The objects created or recreated, each with a new renderer handle,
+    /// since the last call.
+    pub fn take_created_objects(&mut self) -> BTreeSet<u64> {
+        std::mem::take(&mut self.created)
     }
 
     pub fn object_handle(&self, object_id: u64) -> Option<RenderHandle> {
@@ -553,9 +563,6 @@ impl RuntimeAppearanceProjector {
                     return Err(AppearanceProjectionError::MissingLightParent { id, parent });
                 }
             }
-            fact.light
-                .validate()
-                .map_err(|source| AppearanceProjectionError::InvalidLight { id, source })?;
         }
 
         // A structural change, or a redefined mesh, needs a new renderer
@@ -760,6 +767,7 @@ impl RuntimeAppearanceProjector {
             self.commit_light(id, change);
         }
 
+        self.created.extend(&created);
         let mut created = created;
         created.sort_by_key(|id| (depth(*id, |id| self.objects.get(&id)?.parent), *id));
         for id in created {

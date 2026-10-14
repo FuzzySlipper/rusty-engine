@@ -8,10 +8,9 @@
 //! first image job; a GLB export needs none.
 
 use std::borrow::Cow;
-use std::collections::HashMap;
 use std::sync::mpsc::{self, Sender};
 
-use csharp_engine_services::{CsharpRenderResource, RenderOutputWork};
+use csharp_engine_services::{RenderOutputResources, RenderOutputWork};
 use render_export::export_glb;
 use render_host_contracts::RenderOutputOperation;
 use render_wgpu::{Gpu, Renderer, RendererOptions, ResourceSource};
@@ -28,7 +27,7 @@ impl OutputExecutor {
             .spawn(move || {
                 let mut renderer: Option<Result<Renderer, String>> = None;
                 for work in receiver {
-                    let resources = JobResources::new(&work.resources);
+                    let resources = JobResources(&work.resources);
                     let result = match work.job.operation {
                         RenderOutputOperation::Glb { .. } => export_glb(&work.job, &resources),
                         RenderOutputOperation::Image { .. } => renderer
@@ -57,23 +56,10 @@ impl OutputExecutor {
 }
 
 /// The resources a job's frozen frame reads, by identity.
-struct JobResources<'a>(HashMap<&'a str, &'a CsharpRenderResource>);
-
-impl<'a> JobResources<'a> {
-    fn new(resources: &'a [CsharpRenderResource]) -> Self {
-        Self(
-            resources
-                .iter()
-                .map(|resource| (resource.identity(), resource))
-                .collect(),
-        )
-    }
-}
+struct JobResources<'a>(&'a RenderOutputResources);
 
 impl ResourceSource for JobResources<'_> {
     fn bytes(&self, identity: &str) -> Option<Cow<'_, [u8]>> {
-        self.0
-            .get(identity)
-            .map(|resource| Cow::Borrowed(resource.bytes()))
+        self.0.bytes(identity).map(Cow::Borrowed)
     }
 }

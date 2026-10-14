@@ -383,6 +383,9 @@ impl Default for ParticleProjectionLimits {
 pub struct ParticleProjector {
     limits: ParticleProjectionLimits,
     active: BTreeMap<ParticleEmitterHandle, ParticleEmitterDescriptor>,
+    /// Sum of `max_particles` over `active`. Every insert keeps it within
+    /// `max_reserved_particles`, so it never overflows.
+    reserved_particles: u32,
     referenced_sprites: BTreeSet<String>,
     emitted_bursts: u64,
     diagnostics: Vec<ParticleProjectionDiagnostic>,
@@ -399,6 +402,7 @@ impl ParticleProjector {
         Self {
             limits,
             active: BTreeMap::new(),
+            reserved_particles: 0,
             referenced_sprites: BTreeSet::new(),
             emitted_bursts: 0,
             diagnostics: Vec::new(),
@@ -438,7 +442,7 @@ impl ParticleProjector {
     ) -> Result<(ParticleEmissionAdmission, Option<PresentationOp>), ParticleProjectionDiagnostic>
     {
         let requested_particles = descriptor.burst_count;
-        let reserved_particles = self.reserved_particles();
+        let reserved_particles = self.reserved_particles;
         let available_particles = self
             .limits
             .max_reserved_particles
@@ -506,7 +510,7 @@ impl ParticleProjector {
     pub fn readout(&self) -> ParticleProjectionReadout {
         ParticleProjectionReadout {
             active_emitters: self.active.len() as u32,
-            reserved_particles: self.reserved_particles(),
+            reserved_particles: self.reserved_particles,
             referenced_sprites: self.referenced_sprites.len() as u32,
             emitted_bursts: self.emitted_bursts,
             diagnostics: self.diagnostics.clone(),
@@ -574,16 +578,13 @@ impl ParticleProjector {
                     .map_or(0, |current| current.max_particles);
                 // A zero rate is a paused emitter: it keeps its handle and
                 // reservation and spawns nothing.
-                if self
-                    .reserved_particles()
-                    .saturating_sub(replaced)
-                    .saturating_add(descriptor.max_particles)
-                    > self.limits.max_reserved_particles
-                {
-                    return Err(ParticleProjectionDiagnosticCode::BudgetExceeded);
-                }
+                let reserved = (self.reserved_particles - replaced)
+                    .checked_add(descriptor.max_particles)
+                    .filter(|reserved| *reserved <= self.limits.max_reserved_particles)
+                    .ok_or(ParticleProjectionDiagnosticCode::BudgetExceeded)?;
                 self.track_visual(&descriptor.visual);
                 self.active.insert(*handle, descriptor.clone());
+                self.reserved_particles = reserved;
             }
             ParticleProjectionOp::Update { handle, patch } => {
                 let current = self
@@ -596,21 +597,20 @@ impl ParticleProjector {
                 }
                 let updated = apply_patch(current.clone(), patch);
                 self.validate_descriptor(assets, &updated)?;
-                if self
-                    .reserved_particles()
-                    .saturating_sub(current.max_particles)
-                    .saturating_add(updated.max_particles)
-                    > self.limits.max_reserved_particles
-                {
-                    return Err(ParticleProjectionDiagnosticCode::BudgetExceeded);
-                }
+                let reserved = (self.reserved_particles - current.max_particles)
+                    .checked_add(updated.max_particles)
+                    .filter(|reserved| *reserved <= self.limits.max_reserved_particles)
+                    .ok_or(ParticleProjectionDiagnosticCode::BudgetExceeded)?;
                 self.track_visual(&updated.visual);
                 self.active.insert(*handle, updated);
+                self.reserved_particles = reserved;
             }
             ParticleProjectionOp::Destroy { handle } => {
-                if self.active.remove(handle).is_none() {
-                    return Err(ParticleProjectionDiagnosticCode::UnknownHandle);
-                }
+                let removed = self
+                    .active
+                    .remove(handle)
+                    .ok_or(ParticleProjectionDiagnosticCode::UnknownHandle)?;
+                self.reserved_particles -= removed.max_particles;
             }
         }
         Ok(())
@@ -666,12 +666,6 @@ impl ParticleProjector {
         if let ParticleVisual::Billboard { sprite } = visual {
             self.referenced_sprites.insert(sprite.asset.clone());
         }
-    }
-
-    fn reserved_particles(&self) -> u32 {
-        self.active.values().fold(0_u32, |total, descriptor| {
-            total.saturating_add(descriptor.max_particles)
-        })
     }
 }
 

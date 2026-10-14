@@ -218,3 +218,143 @@ fn placement_updates_reuse_captures_and_sector_changes_recapture() {
     );
     assert!(harness.renderer.ghost_plate_readouts().is_empty());
 }
+
+/// A capture carries its materials and atlases whole: once its source is
+/// gone, the main world may release them, and the plate still builds again
+/// for a new sector count and for a fresh attachment.
+#[test]
+fn a_plate_rebuilds_after_its_material_and_atlas_are_released() {
+    let mut harness = Harness::new(RendererOptions::default());
+    source_scene(&mut harness);
+    let sheet: Vec<u8> = (0..16)
+        .flat_map(|index| {
+            if index % 2 == 0 {
+                [230, 200, 40, 255]
+            } else {
+                [40, 200, 90, 255]
+            }
+        })
+        .collect();
+    let atlas_texture =
+        harness
+            .resources
+            .texture("texture/ghost-sheet", 4, 4, &sheet, TextureWrap::Clamp);
+    harness.apply(vec![
+        RenderDiff::DefineTexture {
+            texture: atlas_texture,
+        },
+        RenderDiff::DefineSpriteAtlas {
+            atlas: SpriteAtlasDescriptor {
+                id: "sprite/ghost".to_owned(),
+                texture: "texture/ghost-sheet".to_owned(),
+                frames: vec![SpriteFrameRect {
+                    frame: 0,
+                    uv_min: [0.0, 0.0],
+                    uv_max: [1.0, 1.0],
+                    size: None,
+                }],
+            },
+        },
+        RenderDiff::CreateSprite {
+            handle: RenderHandle::new(53),
+            parent: Some(RenderHandle::new(SOURCE)),
+            sprite: SpriteInstanceDescriptor {
+                asset: "sprite/ghost".to_owned(),
+                frame: 0,
+                pivot: [0.5, 0.0],
+                size: [0.5, 0.5],
+                size_mode: SpriteSizeMode::World,
+                billboard: BillboardMode::None,
+                tint: [1.0; 4],
+                render_order: 0,
+                depth: SpriteDepthPolicy::Default,
+                layer: RenderLayer::Scene,
+                viewport_placement: None,
+                shading: SpriteShading::Unlit,
+                material: SpriteMaterialDescriptor::default(),
+                visible: true,
+                transform: transform([0.0, 1.6, 0.0], 0.0, [1.0; 3]),
+                attachment: SpriteAttachment::default(),
+                metadata: RenderMetadata::default(),
+            },
+        },
+    ]);
+    ghost(
+        &mut harness,
+        GhostPlateProjectionOp::Create {
+            handle: PLATE,
+            descriptor: descriptor(8),
+        },
+    );
+    let (captured, _) = harness.render(&orbit(0.0));
+    let parts = harness.renderer.ghost_plate_readouts()[0].parts;
+    assert!(parts >= 2, "the plate captures both boxes: {parts}");
+
+    // The source goes, then the resources only it drew from.
+    harness.apply(vec![RenderDiff::Destroy {
+        handle: RenderHandle::new(SOURCE),
+    }]);
+    harness.apply(vec![
+        RenderDiff::ReleaseStaticMesh {
+            asset: "mesh/tall".to_owned(),
+        },
+        RenderDiff::ReleaseMaterial {
+            id: "material/red".to_owned(),
+        },
+        RenderDiff::ReleaseSpriteAtlas {
+            id: "sprite/ghost".to_owned(),
+        },
+    ]);
+    // The texture's bytes are read again on every rebuild, so it stays.
+    assert!(harness
+        .world
+        .clone()
+        .apply(RenderFrameDiff {
+            publication: None,
+            ops: vec![RenderDiff::ReleaseTexture {
+                id: "texture/ghost-sheet".to_owned(),
+            }],
+        })
+        .is_err());
+
+    let mut fewer = descriptor(4);
+    ghost(
+        &mut harness,
+        GhostPlateProjectionOp::Update {
+            handle: PLATE,
+            patch: GhostPlatePatch {
+                placement: None,
+                config: Some(fewer.config.clone()),
+            },
+        },
+    );
+    let (rebuilt, _) = harness.render(&orbit(0.0));
+    let readout = &harness.renderer.ghost_plate_readouts()[0];
+    assert_eq!((readout.sector_count, readout.parts), (4, parts));
+    assert_eq!(rebuilt.draws, captured.draws);
+
+    // A fresh attachment: the retained world, then its plate's baseline.
+    fewer.captured_scene = None;
+    let baseline = harness
+        .world
+        .with_retained_captures(vec![PresentationFrameDiff::from_ops(vec![
+            PresentationOp::GhostPlate {
+                meta: PresentationOpMeta::new(0),
+                op: GhostPlateProjectionOp::Create {
+                    handle: PLATE,
+                    descriptor: fewer,
+                },
+            },
+        ])]);
+    let mut fresh = render_wgpu::Renderer::new(&harness.gpu, harness.renderer.options());
+    let issues = fresh.apply(&harness.world.snapshot().frame, &harness.resources);
+    assert!(issues.is_empty(), "{issues:?}");
+    for frame in &baseline {
+        let issues = fresh.apply_presentation(frame, &harness.resources, NO_ENTITIES);
+        assert!(issues.is_empty(), "{issues:?}");
+    }
+    let readout = &fresh.ghost_plate_readouts()[0];
+    assert_eq!((readout.sector_count, readout.parts), (4, parts));
+    let attached = fresh.render_offscreen(&orbit(0.0), &harness.target);
+    assert_eq!(attached.draws, captured.draws);
+}

@@ -399,9 +399,7 @@ impl RuntimeCameraViewBridge {
                 viewport_anchor: None,
             },
         );
-        // No view names the new camera yet; the call still publishes the
-        // composition, as every camera change does.
-        staged.composition_changed = true;
+        // No view names the new camera yet, so the composition is unchanged.
         Ok(NativeCameraHandle { value: handle })
     }
 
@@ -512,8 +510,8 @@ impl RuntimeCameraViewBridge {
             .validate()
             .map_err(target_descriptor_error)?;
         staged.state.next_target = next_target;
+        // Nor does any view name the new target.
         staged.state.targets.insert(handle, target);
-        staged.composition_changed = true;
         Ok(NativeCameraTargetHandle { value: handle })
     }
 
@@ -3014,6 +3012,19 @@ mod tests {
         assert_eq!(published.cameras.len(), 3);
         assert_eq!(published.views.len(), 3);
         bridge.commit(call);
+    }
+
+    #[test]
+    fn creating_a_camera_or_target_no_view_names_publishes_no_composition() {
+        let mut bridge = RuntimeCameraViewBridge::new();
+        bridge.begin_call();
+        bridge.create(camera_descriptor(FULL)).expect("camera");
+        bridge.create_target(target_descriptor()).expect("target");
+        let mut call = bridge.take_staged_call().expect("create call");
+        assert_eq!(call.take_composition(), None);
+        bridge.commit(call);
+        let composition = bridge.snapshot_composition();
+        assert!(composition.cameras.is_empty() && composition.targets.is_empty());
     }
 
     #[test]

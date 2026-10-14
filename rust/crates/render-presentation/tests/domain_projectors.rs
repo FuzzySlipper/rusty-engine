@@ -996,3 +996,88 @@ fn look_values_without_a_resource_behind_them_are_accepted() {
         ParticleProjectionDiagnosticCode::InvalidDescriptor
     );
 }
+
+#[test]
+fn particle_reservation_total_follows_create_replace_update_and_destroy() {
+    let assets = assets();
+    let mut projector = ParticleProjector::new(ParticleProjectionLimits {
+        max_reserved_particles: 100,
+    });
+    let fresh_sum = |projector: &ParticleProjector| -> u32 {
+        projector
+            .active_emitters()
+            .map(|(_, descriptor)| descriptor.max_particles)
+            .sum()
+    };
+    let with_max = |max_particles| ParticleEmitterDescriptor {
+        max_particles,
+        ..particle_descriptor()
+    };
+    let mut sequence = 0;
+    let mut apply = |projector: &mut ParticleProjector, op| {
+        sequence += 1;
+        let result = projector.project(&assets, PresentationOpMeta::new(sequence), op);
+        assert_eq!(projector.readout().reserved_particles, fresh_sum(projector));
+        result.map(|_| ()).map_err(|diagnostic| diagnostic.code)
+    };
+    let first = ParticleEmitterHandle::new(1);
+    let second = ParticleEmitterHandle::new(2);
+    let create = |handle, max| ParticleProjectionOp::Create {
+        handle,
+        descriptor: with_max(max),
+    };
+    let update = |handle, max| ParticleProjectionOp::Update {
+        handle,
+        patch: ParticleEmitterPatch {
+            max_particles: Some(max),
+            ..Default::default()
+        },
+    };
+
+    apply(&mut projector, create(first, 40)).unwrap();
+    apply(&mut projector, create(second, 50)).unwrap();
+    assert_eq!(projector.readout().reserved_particles, 90);
+    // Replacing a live handle gives its old reservation back first.
+    apply(&mut projector, create(first, 50)).unwrap();
+    assert_eq!(projector.readout().reserved_particles, 100);
+    assert_eq!(
+        apply(&mut projector, create(first, 51)),
+        Err(ParticleProjectionDiagnosticCode::BudgetExceeded)
+    );
+    assert_eq!(
+        apply(&mut projector, update(second, 51)),
+        Err(ParticleProjectionDiagnosticCode::BudgetExceeded)
+    );
+    assert_eq!(
+        apply(
+            &mut projector,
+            create(ParticleEmitterHandle::new(3), u32::MAX)
+        ),
+        Err(ParticleProjectionDiagnosticCode::BudgetExceeded)
+    );
+    assert_eq!(projector.readout().reserved_particles, 100);
+    apply(&mut projector, update(second, 20)).unwrap();
+    assert_eq!(projector.readout().reserved_particles, 70);
+    apply(
+        &mut projector,
+        ParticleProjectionOp::Destroy { handle: first },
+    )
+    .unwrap();
+    assert_eq!(projector.readout().reserved_particles, 20);
+    assert_eq!(
+        apply(
+            &mut projector,
+            ParticleProjectionOp::Destroy { handle: first }
+        ),
+        Err(ParticleProjectionDiagnosticCode::UnknownHandle)
+    );
+    apply(
+        &mut projector,
+        ParticleProjectionOp::Destroy { handle: second },
+    )
+    .unwrap();
+    assert_eq!(projector.readout().reserved_particles, 0);
+    apply(&mut projector, create(first, 100)).unwrap();
+    projector.reset();
+    assert_eq!(projector.readout().reserved_particles, 0);
+}

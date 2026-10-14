@@ -6,7 +6,7 @@ use crate::operation_diagnostics::{clear_receipt, refuse};
 use crate::{
     camera_view::RuntimeCameraViewCall,
     composition::{borrowed_utf8, ABI_OK},
-    render_resources::CsharpRenderResource,
+    render_resources::RenderOutputResources,
     CsharpEngineServicesError,
 };
 use csharp_engine_abi::*;
@@ -52,7 +52,7 @@ type Results = Arc<Mutex<Vec<(u64, Result<Vec<u8>, String>)>>>;
 /// releases them first.
 pub struct RenderOutputWork {
     pub job: RenderOutputJob,
-    pub resources: Vec<CsharpRenderResource>,
+    pub resources: RenderOutputResources,
     results: Option<Results>,
 }
 
@@ -344,7 +344,7 @@ impl RuntimeRenderOutputBridge {
             match settled {
                 Ok(job) => work.push(RenderOutputWork {
                     job,
-                    resources: appearance.render_resources.iter().cloned().collect(),
+                    resources: appearance.render_resources.output_resources(),
                     results: Some(Arc::clone(&self.results)),
                 }),
                 Err(cause) => {
@@ -504,7 +504,7 @@ mod tests {
                     include_animations: false,
                 },
             },
-            resources: Vec::new(),
+            resources: RenderOutputResources::default(),
             results: Some(Arc::clone(&bridge.results)),
         }
     }
