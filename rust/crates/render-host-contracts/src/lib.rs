@@ -193,59 +193,146 @@ pub struct RendererViewComposition {
     pub presentations: Vec<RendererCompositionPresentation>,
 }
 
-impl RendererViewComposition {
+// Whoever admits a fact checks it with these where it enters: the C# camera
+// service checks a product's camera, target or view once, not the whole
+// composition after each change.
+
+impl RendererCameraPose {
     pub fn validate(&self) -> Result<(), RendererHostContractError> {
-        for camera in &self.cameras {
-            validate_identifier(&camera.id)?;
-            validate_pose(camera.pose)?;
-            if let Some(basis) = camera.basis {
-                validate_basis(basis)?;
-            }
-            validate_projection(camera.projection)?;
-            if let Some(motion) = &camera.motion {
-                validate_camera_motion(motion)?;
-            }
+        if self.position.into_iter().all(f64::is_finite)
+            && self.pitch_degrees.is_finite()
+            && self.yaw_degrees.is_finite()
+        {
+            Ok(())
+        } else {
+            Err(RendererHostContractError::InvalidNumber)
         }
-        let mut target_pixels = 0_u64;
-        for target in &self.targets {
-            validate_identifier(&target.id)?;
-            validate_json_safe(target.revision)?;
-            if target.width == 0
-                || target.height == 0
-                || target.width > MAX_RENDERER_TARGET_DIMENSION
-                || target.height > MAX_RENDERER_TARGET_DIMENSION
-            {
-                return Err(RendererHostContractError::InvalidDimension);
-            }
-            target_pixels = target_pixels
-                .checked_add(u64::from(target.width) * u64::from(target.height))
-                .ok_or(RendererHostContractError::LimitExceeded)?;
+    }
+}
+
+impl RendererCameraBasis {
+    pub fn validate(&self) -> Result<(), RendererHostContractError> {
+        let values = self.forward.into_iter().chain(self.right).chain(self.up);
+        if values.clone().all(f64::is_finite)
+            && self
+                .forward
+                .into_iter()
+                .map(|value| value * value)
+                .sum::<f64>()
+                > f64::EPSILON
+            && self.up.into_iter().map(|value| value * value).sum::<f64>() > f64::EPSILON
+        {
+            Ok(())
+        } else {
+            Err(RendererHostContractError::InvalidNumber)
         }
-        if target_pixels > MAX_RENDERER_TARGET_PIXELS {
-            return Err(RendererHostContractError::LimitExceeded);
+    }
+}
+
+impl RendererCameraProjection {
+    pub fn validate(&self) -> Result<(), RendererHostContractError> {
+        let (measure, near, far) = match *self {
+            RendererCameraProjection::Perspective {
+                fov_y_degrees,
+                near,
+                far,
+            } => (fov_y_degrees, near, far),
+            RendererCameraProjection::Orthographic {
+                vertical_size,
+                near,
+                far,
+            } => (vertical_size, near, far),
+        };
+        if measure.is_finite()
+            && measure > 0.0
+            && near.is_finite()
+            && near > 0.0
+            && far.is_finite()
+            && far > near
+        {
+            Ok(())
+        } else {
+            Err(RendererHostContractError::InvalidNumber)
         }
-        for view in &self.views {
-            validate_identifier(&view.id)?;
-            validate_identifier(&view.camera_id)?;
-            validate_viewport(view.viewport)?;
-            validate_json_safe(view.order)?;
-            if let RendererViewTarget::Offscreen {
-                target_id,
-                target_revision,
-            } = &view.target
-            {
-                validate_identifier(target_id)?;
-                validate_json_safe(*target_revision)?;
-            }
+    }
+}
+
+impl RendererViewport {
+    pub fn validate(&self) -> Result<(), RendererHostContractError> {
+        if [self.x, self.y, self.width, self.height]
+            .into_iter()
+            .all(f64::is_finite)
+            && self.x >= 0.0
+            && self.y >= 0.0
+            && self.width > 0.0
+            && self.height > 0.0
+            && self.x + self.width <= 1.0
+            && self.y + self.height <= 1.0
+        {
+            Ok(())
+        } else {
+            Err(RendererHostContractError::InvalidNumber)
         }
-        for presentation in &self.presentations {
-            validate_identifier(&presentation.id)?;
-            validate_identifier(&presentation.source_target_id)?;
-            validate_json_safe(presentation.source_target_revision)?;
-            validate_json_safe(presentation.order)?;
-            validate_viewport(presentation.destination.viewport)?;
+    }
+}
+
+impl RendererCompositionTarget {
+    pub fn validate(&self) -> Result<(), RendererHostContractError> {
+        validate_identifier(&self.id)?;
+        validate_json_safe(self.revision)?;
+        if self.width == 0
+            || self.height == 0
+            || self.width > MAX_RENDERER_TARGET_DIMENSION
+            || self.height > MAX_RENDERER_TARGET_DIMENSION
+        {
+            return Err(RendererHostContractError::InvalidDimension);
         }
         Ok(())
+    }
+}
+
+/// The offscreen targets one composition names fit the renderer's pixel
+/// budget together.
+pub fn validate_target_pixels<'a>(
+    targets: impl IntoIterator<Item = &'a RendererCompositionTarget>,
+) -> Result<(), RendererHostContractError> {
+    let mut pixels = 0_u64;
+    for target in targets {
+        pixels = pixels
+            .checked_add(u64::from(target.width) * u64::from(target.height))
+            .ok_or(RendererHostContractError::LimitExceeded)?;
+    }
+    if pixels > MAX_RENDERER_TARGET_PIXELS {
+        return Err(RendererHostContractError::LimitExceeded);
+    }
+    Ok(())
+}
+
+impl RendererCompositionView {
+    pub fn validate(&self) -> Result<(), RendererHostContractError> {
+        validate_identifier(&self.id)?;
+        validate_identifier(&self.camera_id)?;
+        self.viewport.validate()?;
+        validate_json_safe(self.order)?;
+        if let RendererViewTarget::Offscreen {
+            target_id,
+            target_revision,
+        } = &self.target
+        {
+            validate_identifier(target_id)?;
+            validate_json_safe(*target_revision)?;
+        }
+        Ok(())
+    }
+}
+
+impl RendererCompositionPresentation {
+    pub fn validate(&self) -> Result<(), RendererHostContractError> {
+        validate_identifier(&self.id)?;
+        validate_identifier(&self.source_target_id)?;
+        validate_json_safe(self.source_target_revision)?;
+        validate_json_safe(self.order)?;
+        self.destination.viewport.validate()
     }
 }
 
@@ -263,92 +350,6 @@ fn validate_identifier(value: &str) -> Result<(), RendererHostContractError> {
         Err(RendererHostContractError::InvalidIdentifier)
     } else {
         Ok(())
-    }
-}
-
-fn validate_pose(pose: RendererCameraPose) -> Result<(), RendererHostContractError> {
-    if pose.position.into_iter().all(f64::is_finite)
-        && pose.pitch_degrees.is_finite()
-        && pose.yaw_degrees.is_finite()
-    {
-        Ok(())
-    } else {
-        Err(RendererHostContractError::InvalidNumber)
-    }
-}
-
-fn validate_basis(basis: RendererCameraBasis) -> Result<(), RendererHostContractError> {
-    let values = basis.forward.into_iter().chain(basis.right).chain(basis.up);
-    if values.clone().all(f64::is_finite)
-        && basis
-            .forward
-            .into_iter()
-            .map(|value| value * value)
-            .sum::<f64>()
-            > f64::EPSILON
-        && basis.up.into_iter().map(|value| value * value).sum::<f64>() > f64::EPSILON
-    {
-        Ok(())
-    } else {
-        Err(RendererHostContractError::InvalidNumber)
-    }
-}
-
-fn validate_projection(
-    projection: RendererCameraProjection,
-) -> Result<(), RendererHostContractError> {
-    let (measure, near, far) = match projection {
-        RendererCameraProjection::Perspective {
-            fov_y_degrees,
-            near,
-            far,
-        } => (fov_y_degrees, near, far),
-        RendererCameraProjection::Orthographic {
-            vertical_size,
-            near,
-            far,
-        } => (vertical_size, near, far),
-    };
-    if measure.is_finite()
-        && measure > 0.0
-        && near.is_finite()
-        && near > 0.0
-        && far.is_finite()
-        && far > near
-    {
-        Ok(())
-    } else {
-        Err(RendererHostContractError::InvalidNumber)
-    }
-}
-
-fn validate_camera_motion(motion: &RendererCameraMotion) -> Result<(), RendererHostContractError> {
-    validate_identifier(&motion.sample_id)?;
-    if motion.sample_time_seconds.is_finite()
-        && motion.sample_time_seconds >= 0.0
-        && motion.delay_seconds.is_finite()
-        && motion.delay_seconds > 0.0
-    {
-        Ok(())
-    } else {
-        Err(RendererHostContractError::InvalidNumber)
-    }
-}
-
-fn validate_viewport(viewport: RendererViewport) -> Result<(), RendererHostContractError> {
-    if [viewport.x, viewport.y, viewport.width, viewport.height]
-        .into_iter()
-        .all(f64::is_finite)
-        && viewport.x >= 0.0
-        && viewport.y >= 0.0
-        && viewport.width > 0.0
-        && viewport.height > 0.0
-        && viewport.x + viewport.width <= 1.0
-        && viewport.y + viewport.height <= 1.0
-    {
-        Ok(())
-    } else {
-        Err(RendererHostContractError::InvalidNumber)
     }
 }
 

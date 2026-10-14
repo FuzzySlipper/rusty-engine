@@ -3,8 +3,9 @@ use std::{collections::BTreeMap, ffi::c_void};
 use csharp_engine_abi::*;
 use render_host_contracts::{
     RendererCameraBasis, RendererCameraInterpolation, RendererCameraMotion, RendererCameraPose,
-    RendererCameraProjection, RendererCompositionCamera, RendererCompositionView,
-    RendererViewComposition, RendererViewTarget, RendererViewport,
+    RendererCameraProjection, RendererCompositionCamera, RendererCompositionPresentation,
+    RendererCompositionTarget, RendererCompositionView, RendererViewComposition,
+    RendererViewTarget, RendererViewport,
 };
 use render_model::{
     AtmosphereDescriptor, AutoExposureDescriptor, BloomDescriptor, CloudsDescriptor,
@@ -33,7 +34,7 @@ pub(crate) enum CameraBackground {
     Color([f32; 4]),
 }
 
-#[derive(Clone, Default)]
+#[derive(Default)]
 struct CameraState {
     cameras: BTreeMap<u64, CameraEntry>,
     targets: BTreeMap<u64, CameraTargetState>,
@@ -48,9 +49,25 @@ struct CameraState {
     stars: Option<NativeStarsRequest>,
     next_camera: u64,
     next_target: u64,
+    /// The renderer composition `views` and `presentations` describe.
+    composition: RetainedComposition,
 }
 
-#[derive(Clone)]
+/// A renderer composition kept current by each camera change: a camera's
+/// or target's value change patches its own entries, and a change to which
+/// cameras and targets the views name builds it again. Every view and
+/// presentation names a live camera and target: `set_composition` admits
+/// only live ones, and removal drops or remaps the views that named them.
+#[derive(Default)]
+struct RetainedComposition {
+    /// The cameras and targets the views and presentations name, by handle.
+    cameras: BTreeMap<u64, RendererCompositionCamera>,
+    targets: BTreeMap<u64, RendererCompositionTarget>,
+    /// In the order of `CameraState::views` and `::presentations`.
+    views: Vec<RendererCompositionView>,
+    presentations: Vec<RendererCompositionPresentation>,
+}
+
 struct CameraEntry {
     descriptor: NativeCameraDescriptor,
     motion: Option<RendererCameraMotion>,
@@ -69,7 +86,8 @@ struct CameraTargetState {
 
 pub(crate) struct RuntimeCameraViewCall {
     state: CameraState,
-    pub(crate) composition: Option<RendererViewComposition>,
+    /// Whether a camera change this call publishes the composition.
+    composition_changed: bool,
     pub(crate) background: Option<CameraBackground>,
     /// Fog selected during the call (`Some(None)` turns it off). The
     /// presentation world retains the selection.
@@ -107,6 +125,11 @@ pub(crate) struct RuntimeCameraViewCall {
 }
 
 impl RuntimeCameraViewCall {
+    /// The composition the call leaves, when a camera change published it.
+    pub(crate) fn take_composition(&mut self) -> Option<RendererViewComposition> {
+        std::mem::take(&mut self.composition_changed).then(|| self.state.composition.renderer())
+    }
+
     /// Where a live camera stands, as the call leaves it.
     pub(crate) fn camera_position(&self, camera: u64) -> Option<[f64; 3]> {
         let position = self.state.cameras.get(&camera)?.descriptor.pose.position;
@@ -179,6 +202,7 @@ impl RuntimeCameraViewBridge {
                 stars: None,
                 next_camera: 1,
                 next_target: 1,
+                composition: RetainedComposition::default(),
             },
             // Until the runtime reports otherwise, assume someone watches.
             surface: NativeCameraSurfaceReadout {
@@ -277,7 +301,7 @@ impl RuntimeCameraViewBridge {
         // The call owns the state until it finishes; nothing is copied.
         self.staged = Some(RuntimeCameraViewCall {
             state: std::mem::take(&mut self.state),
-            composition: None,
+            composition_changed: false,
             background: None,
             fog: None,
             tone_mapping: None,
@@ -338,41 +362,11 @@ impl RuntimeCameraViewBridge {
             }
     }
 
-    /// Rebuilds the current retained camera composition without entering a
-    /// product callback or changing camera handles. Sky is retained by the
-    /// presentation world alongside graphics resources.
-    pub(crate) fn snapshot_composition(
-        &self,
-    ) -> Result<RendererViewComposition, CsharpEngineServicesError> {
-        let mut snapshot = RuntimeCameraViewCall {
-            state: self.state.clone(),
-            composition: None,
-            background: None,
-            fog: None,
-            tone_mapping: None,
-            bloom: None,
-            auto_exposure: None,
-            color_grading: None,
-            atmosphere: None,
-            sun_shafts: None,
-            moon: None,
-            stars: None,
-            wind: None,
-            clouds: None,
-            wetness: None,
-            backdrops: Vec::new(),
-            volumetric_fog: None,
-            cloud_regions: Vec::new(),
-            fog_volumes: Vec::new(),
-            precipitation: None,
-            image_effect: None,
-            indirect_light: None,
-            sky_light: None,
-        };
-        stage_composition(&mut snapshot)?;
-        Ok(snapshot
-            .composition
-            .expect("camera composition staging always produces a composition"))
+    /// The committed camera composition, without entering a product
+    /// callback. Sky is retained by the presentation world alongside
+    /// graphics resources.
+    pub(crate) fn snapshot_composition(&self) -> RendererViewComposition {
+        self.state.composition.renderer()
     }
 
     fn staged_mut(&mut self) -> Result<&mut RuntimeCameraViewCall, CsharpEngineServicesError> {
@@ -384,11 +378,15 @@ impl RuntimeCameraViewBridge {
         })
     }
 
+    // Each change below checks everything that can refuse it before it
+    // changes anything, so a refused change leaves the call's cameras,
+    // targets and composition as they were.
+
     fn create(
         &mut self,
         descriptor: NativeCameraDescriptor,
     ) -> Result<NativeCameraHandle, CsharpEngineServicesError> {
-        validate_descriptor(descriptor)?;
+        validate_descriptor(&descriptor)?;
         let staged = self.staged_mut()?;
         let handle = staged.state.next_camera;
         staged.state.next_camera = handle.checked_add(1).ok_or_else(|| {
@@ -403,7 +401,9 @@ impl RuntimeCameraViewBridge {
                 viewport_anchor: None,
             },
         );
-        stage_composition(staged)?;
+        // No view names the new camera yet; the call still publishes the
+        // composition, as every camera change does.
+        staged.composition_changed = true;
         Ok(NativeCameraHandle { value: handle })
     }
 
@@ -411,7 +411,7 @@ impl RuntimeCameraViewBridge {
         &mut self,
         request: NativeCameraUpdateRequest,
     ) -> Result<(), CsharpEngineServicesError> {
-        validate_descriptor(request.descriptor)?;
+        validate_descriptor(&request.descriptor)?;
         let staged = self.staged_mut()?;
         let camera = staged
             .state
@@ -424,19 +424,16 @@ impl RuntimeCameraViewBridge {
         // The established immediate update path explicitly drops retained
         // sampling state, so it cannot accidentally keep smoothing a new pose.
         camera.motion = None;
-        if staged.state.active_camera == Some(request.camera.value) {
-            if let Some(view) = staged.state.views.first_mut() {
-                view.viewport = request.descriptor.viewport;
-            }
-        }
-        stage_composition(staged)
+        staged.state.patch_camera(request.camera.value);
+        staged.composition_changed = true;
+        Ok(())
     }
 
     fn update_sample(
         &mut self,
         request: NativeCameraSampleRequest,
     ) -> Result<(), CsharpEngineServicesError> {
-        validate_descriptor(request.descriptor)?;
+        validate_descriptor(&request.descriptor)?;
         let motion = sample_motion(request)?;
         let staged = self.staged_mut()?;
         let camera = staged
@@ -460,31 +457,30 @@ impl RuntimeCameraViewBridge {
             camera.motion = None;
         }
         camera.descriptor = request.descriptor;
-        if staged.state.active_camera == Some(request.camera.value) {
-            if let Some(view) = staged.state.views.first_mut() {
-                view.viewport = request.descriptor.viewport;
-            }
-        }
-        stage_composition(staged)
+        staged.state.patch_camera(request.camera.value);
+        staged.composition_changed = true;
+        Ok(())
     }
 
     fn replace(
         &mut self,
         request: NativeCameraReplaceRequest,
     ) -> Result<NativeCameraHandle, CsharpEngineServicesError> {
-        validate_descriptor(request.replacement)?;
+        validate_descriptor(&request.replacement)?;
         let staged = self.staged_mut()?;
-        if staged.state.cameras.remove(&request.camera.value).is_none() {
+        let state = &mut staged.state;
+        if !state.cameras.contains_key(&request.camera.value) {
             return Err(CsharpEngineServicesError::new(
                 "CSHARP_CAMERA_HANDLE",
                 "camera handle is not live",
             ));
         }
-        let replacement = staged.state.next_camera;
-        staged.state.next_camera = replacement.checked_add(1).ok_or_else(|| {
+        let replacement = state.next_camera;
+        state.next_camera = replacement.checked_add(1).ok_or_else(|| {
             CsharpEngineServicesError::new("CSHARP_CAMERA_HANDLE", "camera handle overflow")
         })?;
-        staged.state.cameras.insert(
+        state.cameras.remove(&request.camera.value);
+        state.cameras.insert(
             replacement,
             CameraEntry {
                 descriptor: request.replacement,
@@ -493,18 +489,19 @@ impl RuntimeCameraViewBridge {
                 viewport_anchor: None,
             },
         );
-        for view in &mut staged.state.views {
+        for view in &mut state.views {
             if view.camera == request.camera {
                 view.camera = NativeCameraHandle { value: replacement };
             }
         }
-        if staged.state.active_camera == Some(request.camera.value) {
-            staged.state.active_camera = Some(replacement);
-            if let Some(view) = staged.state.views.first_mut() {
+        if state.active_camera == Some(request.camera.value) {
+            state.active_camera = Some(replacement);
+            if let Some(view) = state.views.first_mut() {
                 view.viewport = request.replacement.viewport;
             }
         }
-        stage_composition(staged)?;
+        state.rebuild_composition();
+        staged.composition_changed = true;
         Ok(NativeCameraHandle { value: replacement })
     }
 
@@ -512,20 +509,22 @@ impl RuntimeCameraViewBridge {
         &mut self,
         descriptor: NativeCameraTargetDescriptor,
     ) -> Result<NativeCameraTargetHandle, CsharpEngineServicesError> {
-        validate_target_descriptor(descriptor)?;
         let staged = self.staged_mut()?;
         let handle = staged.state.next_target;
-        staged.state.next_target = handle.checked_add(1).ok_or_else(|| {
+        let next_target = handle.checked_add(1).ok_or_else(|| {
             CsharpEngineServicesError::new("CSHARP_CAMERA_TARGET_HANDLE", "target handle overflow")
         })?;
-        staged.state.targets.insert(
-            handle,
-            CameraTargetState {
-                descriptor,
-                revision: 1,
-            },
-        );
-        stage_composition(staged)?;
+        let target = CameraTargetState {
+            descriptor,
+            revision: 1,
+        };
+        // No view names the new target yet, so it takes none of the budget.
+        composition_target(handle, target)
+            .validate()
+            .map_err(target_descriptor_error)?;
+        staged.state.next_target = next_target;
+        staged.state.targets.insert(handle, target);
+        staged.composition_changed = true;
         Ok(NativeCameraTargetHandle { value: handle })
     }
 
@@ -533,84 +532,76 @@ impl RuntimeCameraViewBridge {
         &mut self,
         request: NativeCameraTargetUpdateRequest,
     ) -> Result<(), CsharpEngineServicesError> {
-        validate_target_descriptor(request.descriptor)?;
-        self.with_state_restored_on_refusal(|staged| {
-            let target = staged
-                .state
-                .targets
-                .get_mut(&request.target.value)
-                .ok_or_else(|| {
-                    CsharpEngineServicesError::new(
-                        "CSHARP_CAMERA_TARGET_HANDLE",
-                        "target handle is not live",
-                    )
-                })?;
-            target.descriptor = request.descriptor;
-            target.revision = target.revision.checked_add(1).ok_or_else(|| {
+        let staged = self.staged_mut()?;
+        let state = &mut staged.state;
+        let handle = request.target.value;
+        let current = state.targets.get(&handle).ok_or_else(|| {
+            CsharpEngineServicesError::new(
+                "CSHARP_CAMERA_TARGET_HANDLE",
+                "target handle is not live",
+            )
+        })?;
+        let target = CameraTargetState {
+            descriptor: request.descriptor,
+            revision: current.revision.checked_add(1).ok_or_else(|| {
                 CsharpEngineServicesError::new(
                     "CSHARP_CAMERA_TARGET_REVISION",
                     "target revision overflow",
                 )
-            })?;
-            stage_composition(staged)
-        })
+            })?,
+        };
+        let rendered = composition_target(handle, target);
+        rendered.validate().map_err(target_descriptor_error)?;
+        state.composition.check_target_budget(handle, &rendered)?;
+        state.targets.insert(handle, target);
+        state.patch_target(handle, rendered);
+        staged.composition_changed = true;
+        Ok(())
     }
 
     fn replace_target(
         &mut self,
         request: NativeCameraTargetReplaceRequest,
     ) -> Result<NativeCameraTargetHandle, CsharpEngineServicesError> {
-        validate_target_descriptor(request.replacement)?;
-        self.with_state_restored_on_refusal(|staged| {
-            if staged.state.targets.remove(&request.target.value).is_none() {
-                return Err(CsharpEngineServicesError::new(
-                    "CSHARP_CAMERA_TARGET_HANDLE",
-                    "target handle is not live",
-                ));
-            }
-            let handle = staged.state.next_target;
-            staged.state.next_target = handle.checked_add(1).ok_or_else(|| {
-                CsharpEngineServicesError::new(
-                    "CSHARP_CAMERA_TARGET_HANDLE",
-                    "target handle overflow",
-                )
-            })?;
-            staged.state.targets.insert(
-                handle,
-                CameraTargetState {
-                    descriptor: request.replacement,
-                    revision: 1,
-                },
-            );
-            let replacement = NativeCameraTargetHandle { value: handle };
-            for view in &mut staged.state.views {
-                if view.target.value == request.target.value {
-                    view.target = NativeCameraTargetReference { value: handle };
-                }
-            }
-            for presentation in &mut staged.state.presentations {
-                if presentation.source_target == request.target {
-                    presentation.source_target = replacement;
-                }
-            }
-            stage_composition(staged)?;
-            Ok(replacement)
-        })
-    }
-
-    /// Target edits change retained state before the composition budget is
-    /// checked. Restore that state when composition refuses the edit.
-    fn with_state_restored_on_refusal<T>(
-        &mut self,
-        change: impl FnOnce(&mut RuntimeCameraViewCall) -> Result<T, CsharpEngineServicesError>,
-    ) -> Result<T, CsharpEngineServicesError> {
         let staged = self.staged_mut()?;
-        let previous = staged.state.clone();
-        let result = change(staged);
-        if result.is_err() {
-            staged.state = previous;
+        let state = &mut staged.state;
+        if !state.targets.contains_key(&request.target.value) {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_CAMERA_TARGET_HANDLE",
+                "target handle is not live",
+            ));
         }
-        result
+        let handle = state.next_target;
+        let next_target = handle.checked_add(1).ok_or_else(|| {
+            CsharpEngineServicesError::new("CSHARP_CAMERA_TARGET_HANDLE", "target handle overflow")
+        })?;
+        let target = CameraTargetState {
+            descriptor: request.replacement,
+            revision: 1,
+        };
+        let rendered = composition_target(handle, target);
+        rendered.validate().map_err(target_descriptor_error)?;
+        // The replacement takes the old target's place in every view.
+        state
+            .composition
+            .check_target_budget(request.target.value, &rendered)?;
+        state.next_target = next_target;
+        state.targets.remove(&request.target.value);
+        state.targets.insert(handle, target);
+        let replacement = NativeCameraTargetHandle { value: handle };
+        for view in &mut state.views {
+            if view.target.value == request.target.value {
+                view.target = NativeCameraTargetReference { value: handle };
+            }
+        }
+        for presentation in &mut state.presentations {
+            if presentation.source_target == request.target {
+                presentation.source_target = replacement;
+            }
+        }
+        state.rebuild_composition();
+        staged.composition_changed = true;
+        Ok(replacement)
     }
 
     fn destroy_target(
@@ -624,16 +615,15 @@ impl RuntimeCameraViewBridge {
             ));
         }
         let staged = self.staged_mut()?;
-        staged.state.targets.remove(&target.value);
-        staged
-            .state
-            .views
-            .retain(|view| view.target.value != target.value);
-        staged
-            .state
+        let state = &mut staged.state;
+        state.targets.remove(&target.value);
+        state.views.retain(|view| view.target.value != target.value);
+        state
             .presentations
             .retain(|presentation| presentation.source_target != target);
-        stage_composition(staged)
+        state.rebuild_composition();
+        staged.composition_changed = true;
+        Ok(())
     }
 
     unsafe fn set_composition(
@@ -647,84 +637,104 @@ impl RuntimeCameraViewBridge {
             "camera composition presentations",
         )?;
         let staged = self.staged_mut()?;
-        let mut candidate = RuntimeCameraViewCall {
-            state: staged.state.clone(),
-            composition: None,
-            background: None,
-            fog: None,
-            tone_mapping: None,
-            bloom: None,
-            auto_exposure: None,
-            color_grading: None,
-            atmosphere: None,
-            sun_shafts: None,
-            moon: None,
-            stars: None,
-            wind: None,
-            clouds: None,
-            wetness: None,
-            backdrops: Vec::new(),
-            volumetric_fog: None,
-            cloud_regions: Vec::new(),
-            fog_volumes: Vec::new(),
-            precipitation: None,
-            image_effect: None,
-            indirect_light: None,
-            sky_light: None,
+        let state = &mut staged.state;
+        let target_refused = |detail: &str| {
+            CsharpEngineServicesError::new("CSHARP_CAMERA_COMPOSITION_TARGET", detail)
         };
-        candidate.state.views = views.to_vec();
-        candidate.state.presentations = presentations.to_vec();
-        candidate.state.active_camera = None;
-        stage_composition(&mut candidate)?;
-        staged.state = candidate.state;
-        staged.composition = candidate.composition;
+        for view in views {
+            if !state.cameras.contains_key(&view.camera.value) {
+                return Err(CsharpEngineServicesError::new(
+                    "CSHARP_CAMERA_COMPOSITION_CAMERA",
+                    "composition view names a camera that is not live",
+                ));
+            }
+            if view.target.value != 0 && !state.targets.contains_key(&view.target.value) {
+                return Err(target_refused(
+                    "composition view names a target that is not live",
+                ));
+            }
+        }
+        for presentation in presentations {
+            if !state
+                .targets
+                .contains_key(&presentation.source_target.value)
+            {
+                return Err(target_refused(
+                    "composition presentation names a target that is not live",
+                ));
+            }
+        }
+        // The cameras and targets were checked when they entered; the
+        // product's viewports and orders, and the targets' budget
+        // together, are checked here.
+        let composition =
+            RetainedComposition::build(&state.cameras, &state.targets, views, presentations);
+        composition
+            .views
+            .iter()
+            .try_for_each(RendererCompositionView::validate)
+            .and_then(|()| {
+                composition
+                    .presentations
+                    .iter()
+                    .try_for_each(RendererCompositionPresentation::validate)
+            })
+            .and_then(|()| {
+                render_host_contracts::validate_target_pixels(composition.targets.values())
+            })
+            .map_err(composition_error)?;
+        state.views = views.to_vec();
+        state.presentations = presentations.to_vec();
+        state.active_camera = None;
+        state.composition = composition;
+        staged.composition_changed = true;
         Ok(())
     }
 
     fn destroy(&mut self, camera: NativeCameraHandle) -> Result<(), CsharpEngineServicesError> {
         let staged = self.staged_mut()?;
+        let state = &mut staged.state;
         // Replacement turns the prior owner into a tombstone. Its generated
         // IDisposable must remain safe to release in normal owner-first or
         // replacement-first teardown order.
-        staged.state.cameras.remove(&camera.value);
-        staged.state.views.retain(|view| view.camera != camera);
-        if staged.state.active_camera == Some(camera.value) {
-            staged.state.active_camera = None;
+        state.cameras.remove(&camera.value);
+        state.views.retain(|view| view.camera != camera);
+        if state.active_camera == Some(camera.value) {
+            state.active_camera = None;
         }
-        stage_composition(staged)
+        state.rebuild_composition();
+        staged.composition_changed = true;
+        Ok(())
     }
 
     fn set_active(&mut self, camera: NativeCameraHandle) -> Result<(), CsharpEngineServicesError> {
         let staged = self.staged_mut()?;
-        if !staged.state.cameras.contains_key(&camera.value) {
-            return Err(CsharpEngineServicesError::new(
-                "CSHARP_CAMERA_HANDLE",
-                "camera handle is not live",
-            ));
-        }
-        staged.state.views = vec![NativeCameraCompositionView {
+        let state = &mut staged.state;
+        let entry = state.cameras.get(&camera.value).ok_or_else(|| {
+            CsharpEngineServicesError::new("CSHARP_CAMERA_HANDLE", "camera handle is not live")
+        })?;
+        state.views = vec![NativeCameraCompositionView {
             camera,
             target: NativeCameraTargetReference::default(),
-            viewport: staged
-                .state
-                .cameras
-                .get(&camera.value)
-                .expect("live camera was checked")
-                .descriptor
-                .viewport,
+            viewport: entry.descriptor.viewport,
             order: 0,
         }];
-        staged.state.presentations.clear();
-        staged.state.active_camera = Some(camera.value);
-        stage_composition(staged)
+        state.presentations.clear();
+        state.active_camera = Some(camera.value);
+        state.rebuild_composition();
+        staged.composition_changed = true;
+        Ok(())
     }
 
     fn clear_active(&mut self) -> Result<(), CsharpEngineServicesError> {
         let staged = self.staged_mut()?;
-        staged.state.views.clear();
-        staged.state.presentations.clear();
-        staged.state.active_camera = None;
-        stage_composition(staged)
+        let state = &mut staged.state;
+        state.views.clear();
+        state.presentations.clear();
+        state.active_camera = None;
+        state.composition = RetainedComposition::default();
+        staged.composition_changed = true;
+        Ok(())
     }
 
     fn set_sky(
@@ -840,7 +850,9 @@ impl RuntimeCameraViewBridge {
             CsharpEngineServicesError::new("CSHARP_CAMERA_HANDLE", "camera handle is not live")
         })?;
         entry.viewport_anchor = (!anchor.is_empty()).then(|| anchor.to_owned());
-        stage_composition(staged)
+        staged.state.rebuild_composition();
+        staged.composition_changed = true;
+        Ok(())
     }
 
     fn set_tone_mapping(
@@ -1367,109 +1379,170 @@ impl RuntimeCameraViewBridge {
     }
 }
 
-fn stage_composition(staged: &mut RuntimeCameraViewCall) -> Result<(), CsharpEngineServicesError> {
-    let mut cameras = BTreeMap::new();
-    let mut targets = BTreeMap::new();
-    let mut views = Vec::with_capacity(staged.state.views.len());
-    for (index, view) in staged.state.views.iter().enumerate() {
-        let descriptor = staged
-            .state
-            .cameras
-            .get(&view.camera.value)
-            .cloned()
-            .ok_or_else(|| {
-                CsharpEngineServicesError::new(
-                    "CSHARP_CAMERA_COMPOSITION_CAMERA",
-                    "composition view names a camera that is not live",
-                )
-            })?;
-        let camera_id = format!("csharp-camera-{}", view.camera.value);
-        let viewport_anchor = (view.target.value == 0)
-            .then(|| descriptor.viewport_anchor.clone())
-            .flatten();
-        cameras
-            .entry(view.camera.value)
-            .or_insert(composition_camera(camera_id.clone(), descriptor)?);
-        let target = if view.target.value == 0 {
-            RendererViewTarget::Primary
-        } else {
-            let target_state = staged
-                .state
-                .targets
-                .get(&view.target.value)
-                .ok_or_else(|| {
-                    CsharpEngineServicesError::new(
-                        "CSHARP_CAMERA_COMPOSITION_TARGET",
-                        "composition view names a target that is not live",
-                    )
-                })?;
-            let target_id = format!("csharp-target-{}", view.target.value);
-            targets
-                .entry(view.target.value)
-                .or_insert_with(|| composition_target(target_id.clone(), *target_state));
-            RendererViewTarget::Offscreen {
-                target_id,
-                target_revision: target_state.revision,
+impl CameraState {
+    /// Builds the composition again after a change to which cameras and
+    /// targets the views and presentations name.
+    fn rebuild_composition(&mut self) {
+        self.composition = RetainedComposition::build(
+            &self.cameras,
+            &self.targets,
+            &self.views,
+            &self.presentations,
+        );
+    }
+
+    /// Brings the composition up to a live camera's changed descriptor or
+    /// motion: its own renderer camera, and the active camera's view.
+    fn patch_camera(&mut self, handle: u64) {
+        let entry = &self.cameras[&handle];
+        if let Some(camera) = self.composition.cameras.get_mut(&handle) {
+            *camera = composition_camera(std::mem::take(&mut camera.id), entry);
+        }
+        if self.active_camera == Some(handle) {
+            if let (Some(view), Some(rendered)) =
+                (self.views.first_mut(), self.composition.views.first_mut())
+            {
+                view.viewport = entry.descriptor.viewport;
+                rendered.viewport = viewport(entry.descriptor.viewport);
             }
+        }
+    }
+
+    /// Brings the composition up to a live target's changed descriptor:
+    /// the target and the revision every view and presentation of it names.
+    fn patch_target(&mut self, handle: u64, rendered: RendererCompositionTarget) {
+        let Some(target) = self.composition.targets.get_mut(&handle) else {
+            return;
         };
-        views.push(RendererCompositionView {
-            id: format!("csharp-view-{index}"),
-            camera_id,
-            target,
-            viewport: viewport(view.viewport),
-            order: view.order,
-            viewport_anchor,
-        });
+        let revision = rendered.revision;
+        *target = rendered;
+        for (view, rendered) in self.views.iter().zip(&mut self.composition.views) {
+            if view.target.value != handle {
+                continue;
+            }
+            if let RendererViewTarget::Offscreen {
+                target_revision, ..
+            } = &mut rendered.target
+            {
+                *target_revision = revision;
+            }
+        }
+        for (presentation, rendered) in self
+            .presentations
+            .iter()
+            .zip(&mut self.composition.presentations)
+        {
+            if presentation.source_target.value == handle {
+                rendered.source_target_revision = revision;
+            }
+        }
     }
-    let mut presentations = Vec::with_capacity(staged.state.presentations.len());
-    for (index, presentation) in staged.state.presentations.iter().enumerate() {
-        let target_state = staged
-            .state
-            .targets
-            .get(&presentation.source_target.value)
-            .ok_or_else(|| {
-                CsharpEngineServicesError::new(
-                    "CSHARP_CAMERA_COMPOSITION_TARGET",
-                    "composition presentation names a target that is not live",
-                )
-            })?;
-        let target_id = format!("csharp-target-{}", presentation.source_target.value);
-        targets
-            .entry(presentation.source_target.value)
-            .or_insert_with(|| composition_target(target_id.clone(), *target_state));
-        presentations.push(render_host_contracts::RendererCompositionPresentation {
-            id: format!("csharp-presentation-{index}"),
-            source_target_id: target_id,
-            source_target_revision: target_state.revision,
-            destination: render_host_contracts::RendererPrimaryDestination {
-                kind: render_host_contracts::RendererPrimaryDestinationKind::Primary,
-                viewport: viewport(presentation.destination),
-            },
-            order: presentation.order,
-        });
+}
+
+impl RetainedComposition {
+    /// Every view and presentation must name a live camera and target.
+    fn build(
+        cameras: &BTreeMap<u64, CameraEntry>,
+        targets: &BTreeMap<u64, CameraTargetState>,
+        views: &[NativeCameraCompositionView],
+        presentations: &[NativeCameraCompositionPresentation],
+    ) -> Self {
+        let mut composition = Self::default();
+        for (index, view) in views.iter().enumerate() {
+            let camera = &cameras[&view.camera.value];
+            let camera_id = composition
+                .cameras
+                .entry(view.camera.value)
+                .or_insert_with(|| {
+                    composition_camera(format!("csharp-camera-{}", view.camera.value), camera)
+                })
+                .id
+                .clone();
+            let target = if view.target.value == 0 {
+                RendererViewTarget::Primary
+            } else {
+                let target = composition.target(targets, view.target.value);
+                RendererViewTarget::Offscreen {
+                    target_id: target.id.clone(),
+                    target_revision: target.revision,
+                }
+            };
+            composition.views.push(RendererCompositionView {
+                id: format!("csharp-view-{index}"),
+                camera_id,
+                target,
+                viewport: viewport(view.viewport),
+                order: view.order,
+                viewport_anchor: (view.target.value == 0)
+                    .then(|| camera.viewport_anchor.clone())
+                    .flatten(),
+            });
+        }
+        for (index, presentation) in presentations.iter().enumerate() {
+            let target = composition.target(targets, presentation.source_target.value);
+            let (source_target_id, source_target_revision) = (target.id.clone(), target.revision);
+            composition.presentations.push(
+                render_host_contracts::RendererCompositionPresentation {
+                    id: format!("csharp-presentation-{index}"),
+                    source_target_id,
+                    source_target_revision,
+                    destination: render_host_contracts::RendererPrimaryDestination {
+                        kind: render_host_contracts::RendererPrimaryDestinationKind::Primary,
+                        viewport: viewport(presentation.destination),
+                    },
+                    order: presentation.order,
+                },
+            );
+        }
+        composition
     }
-    let composition = RendererViewComposition {
-        cameras: cameras.into_values().collect(),
-        targets: targets.into_values().collect(),
-        views,
-        presentations,
-    };
-    composition.validate().map_err(|error| {
-        CsharpEngineServicesError::new(
-            "CSHARP_CAMERA_COMPOSITION",
-            format!("camera composition is invalid: {error:?}"),
-        )
-    })?;
-    staged.composition = Some(composition);
-    Ok(())
+
+    fn target(
+        &mut self,
+        targets: &BTreeMap<u64, CameraTargetState>,
+        handle: u64,
+    ) -> &RendererCompositionTarget {
+        self.targets
+            .entry(handle)
+            .or_insert_with(|| composition_target(handle, targets[&handle]))
+    }
+
+    /// Refuses `rendered` in place of target `handle` when the targets the
+    /// composition names would no longer fit the pixel budget together.
+    fn check_target_budget(
+        &self,
+        handle: u64,
+        rendered: &RendererCompositionTarget,
+    ) -> Result<(), CsharpEngineServicesError> {
+        if !self.targets.contains_key(&handle) {
+            return Ok(());
+        }
+        render_host_contracts::validate_target_pixels(self.targets.iter().map(|(named, target)| {
+            if *named == handle {
+                rendered
+            } else {
+                target
+            }
+        }))
+        .map_err(composition_error)
+    }
+
+    fn renderer(&self) -> RendererViewComposition {
+        RendererViewComposition {
+            cameras: self.cameras.values().cloned().collect(),
+            targets: self.targets.values().cloned().collect(),
+            views: self.views.clone(),
+            presentations: self.presentations.clone(),
+        }
+    }
 }
 
 fn composition_target(
-    id: String,
+    handle: u64,
     state: CameraTargetState,
 ) -> render_host_contracts::RendererCompositionTarget {
     render_host_contracts::RendererCompositionTarget {
-        id,
+        id: format!("csharp-target-{handle}"),
         revision: state.revision,
         width: state.descriptor.width,
         height: state.descriptor.height,
@@ -1493,11 +1566,14 @@ fn composition_target(
     }
 }
 
-fn composition_camera(
-    id: String,
-    camera: CameraEntry,
-) -> Result<RendererCompositionCamera, CsharpEngineServicesError> {
-    let descriptor = camera.descriptor;
+/// A product camera's renderer facts.
+fn camera_facts(
+    descriptor: &NativeCameraDescriptor,
+) -> (
+    RendererCameraPose,
+    Option<RendererCameraBasis>,
+    RendererCameraProjection,
+) {
     let projection = match descriptor.projection.kind {
         NativeCameraProjectionKind::Perspective => RendererCameraProjection::Perspective {
             fov_y_degrees: descriptor.projection.fov_y_degrees,
@@ -1510,32 +1586,32 @@ fn composition_camera(
             far: descriptor.projection.far,
         },
     };
-    let viewmodel_fov = descriptor.viewmodel_fov_y_degrees;
-    if !(viewmodel_fov.is_finite() && (0.0..180.0).contains(&viewmodel_fov)) {
-        return Err(CsharpEngineServicesError::new(
-            "CSHARP_CAMERA_DESCRIPTOR",
-            "the viewmodel field of view must be 0 (the camera's own) or between 0 and 180 degrees",
-        ));
-    }
-    Ok(RendererCompositionCamera {
+    let pose = RendererCameraPose {
+        position: native_vec3(descriptor.pose.position),
+        pitch_degrees: descriptor.pose.pitch_degrees,
+        yaw_degrees: descriptor.pose.yaw_degrees,
+    };
+    let basis = match descriptor.basis_mode {
+        NativeCameraBasisMode::Derived => None,
+        NativeCameraBasisMode::Explicit => Some(RendererCameraBasis {
+            forward: native_vec3(descriptor.basis.forward),
+            right: native_vec3(descriptor.basis.right),
+            up: native_vec3(descriptor.basis.up),
+        }),
+    };
+    (pose, basis, projection)
+}
+
+fn composition_camera(id: String, camera: &CameraEntry) -> RendererCompositionCamera {
+    let (pose, basis, projection) = camera_facts(&camera.descriptor);
+    RendererCompositionCamera {
         id,
-        pose: RendererCameraPose {
-            position: native_vec3(descriptor.pose.position),
-            pitch_degrees: descriptor.pose.pitch_degrees,
-            yaw_degrees: descriptor.pose.yaw_degrees,
-        },
-        basis: match descriptor.basis_mode {
-            NativeCameraBasisMode::Derived => None,
-            NativeCameraBasisMode::Explicit => Some(RendererCameraBasis {
-                forward: native_vec3(descriptor.basis.forward),
-                right: native_vec3(descriptor.basis.right),
-                up: native_vec3(descriptor.basis.up),
-            }),
-        },
+        pose,
+        basis,
         projection,
-        motion: camera.motion,
-        viewmodel_fov_y_degrees: viewmodel_fov,
-    })
+        motion: camera.motion.clone(),
+        viewmodel_fov_y_degrees: camera.descriptor.viewmodel_fov_y_degrees,
+    }
 }
 
 fn native_vec3(value: NativeVec3) -> [f64; 3] {
@@ -1581,59 +1657,47 @@ fn sample_motion(
     }))
 }
 
+/// Checks a product camera where it enters, by the renderer's rules for the
+/// composition camera and the active view it may become.
 fn validate_descriptor(
-    descriptor: NativeCameraDescriptor,
+    descriptor: &NativeCameraDescriptor,
 ) -> Result<(), CsharpEngineServicesError> {
-    let composition = RendererViewComposition {
-        cameras: vec![composition_camera(
-            "validate".to_owned(),
-            CameraEntry {
-                descriptor,
-                motion: None,
-                next_sample_id: 1,
-                viewport_anchor: None,
-            },
-        )?],
-        targets: Vec::new(),
-        views: vec![RendererCompositionView {
-            id: "validate-view".to_owned(),
-            camera_id: "validate".to_owned(),
-            target: RendererViewTarget::Primary,
-            viewport: viewport(descriptor.viewport),
-            order: 0,
-            viewport_anchor: None,
-        }],
-        presentations: Vec::new(),
-    };
-    composition.validate().map_err(|error| {
-        CsharpEngineServicesError::new(
+    let viewmodel_fov = descriptor.viewmodel_fov_y_degrees;
+    if !(viewmodel_fov.is_finite() && (0.0..180.0).contains(&viewmodel_fov)) {
+        return Err(CsharpEngineServicesError::new(
             "CSHARP_CAMERA_DESCRIPTOR",
-            format!("camera descriptor is invalid: {error:?}"),
-        )
-    })
+            "the viewmodel field of view must be 0 (the camera's own) or between 0 and 180 degrees",
+        ));
+    }
+    let (pose, basis, projection) = camera_facts(descriptor);
+    pose.validate()
+        .and_then(|()| basis.map_or(Ok(()), |basis| basis.validate()))
+        .and_then(|()| projection.validate())
+        .and_then(|()| viewport(descriptor.viewport).validate())
+        .map_err(|error| {
+            CsharpEngineServicesError::new(
+                "CSHARP_CAMERA_DESCRIPTOR",
+                format!("camera descriptor is invalid: {error:?}"),
+            )
+        })
 }
 
-fn validate_target_descriptor(
-    descriptor: NativeCameraTargetDescriptor,
-) -> Result<(), CsharpEngineServicesError> {
-    let composition = RendererViewComposition {
-        cameras: Vec::new(),
-        targets: vec![composition_target(
-            "validate-target".to_owned(),
-            CameraTargetState {
-                descriptor,
-                revision: 1,
-            },
-        )],
-        views: Vec::new(),
-        presentations: Vec::new(),
-    };
-    composition.validate().map_err(|error| {
-        CsharpEngineServicesError::new(
-            "CSHARP_CAMERA_TARGET_DESCRIPTOR",
-            format!("camera target descriptor is invalid: {error:?}"),
-        )
-    })
+fn target_descriptor_error(
+    error: render_host_contracts::RendererHostContractError,
+) -> CsharpEngineServicesError {
+    CsharpEngineServicesError::new(
+        "CSHARP_CAMERA_TARGET_DESCRIPTOR",
+        format!("camera target descriptor is invalid: {error:?}"),
+    )
+}
+
+fn composition_error(
+    error: render_host_contracts::RendererHostContractError,
+) -> CsharpEngineServicesError {
+    CsharpEngineServicesError::new(
+        "CSHARP_CAMERA_COMPOSITION",
+        format!("camera composition is invalid: {error:?}"),
+    )
 }
 
 /// The call's background, fog, tone mapping, bloom, auto exposure, colour
@@ -2689,10 +2753,10 @@ impl RuntimeCameraViewCall {
         &self,
         id: u64,
     ) -> Result<RendererCompositionCamera, CsharpEngineServicesError> {
-        let camera = self.state.cameras.get(&id).cloned().ok_or_else(|| {
+        let camera = self.state.cameras.get(&id).ok_or_else(|| {
             CsharpEngineServicesError::new("CSHARP_RENDER_OUTPUT_CAMERA", "unknown capture camera")
         })?;
-        let mut camera = composition_camera(format!("capture-{id}"), camera)?;
+        let mut camera = composition_camera(format!("capture-{id}"), camera);
         camera.motion = None;
         Ok(camera)
     }
@@ -2795,6 +2859,374 @@ mod tests {
         }
     }
 
+    const FULL: NativeCameraViewport = NativeCameraViewport {
+        x: 0.0,
+        y: 0.0,
+        width: 1.0,
+        height: 1.0,
+    };
+
+    /// Four cameras: one on the primary surface, two drawing into targets
+    /// shown as insets, and a fourth inset on the primary surface.
+    fn split_scene(
+        bridge: &mut RuntimeCameraViewBridge,
+        first_target: NativeCameraTargetDescriptor,
+    ) -> (Vec<NativeCameraHandle>, Vec<NativeCameraTargetHandle>) {
+        bridge.begin_call();
+        let cameras: Vec<_> = (0..4)
+            .map(|_| bridge.create(camera_descriptor(FULL)).expect("camera"))
+            .collect();
+        let targets: Vec<_> = [first_target, target_descriptor(), target_descriptor()]
+            .into_iter()
+            .map(|descriptor| bridge.create_target(descriptor).expect("target"))
+            .collect();
+        let inset = NativeCameraViewport {
+            x: 0.75,
+            y: 0.75,
+            width: 0.25,
+            height: 0.25,
+        };
+        let view = |camera: NativeCameraHandle, target: u64, viewport, order| {
+            NativeCameraCompositionView {
+                camera,
+                target: NativeCameraTargetReference { value: target },
+                viewport,
+                order,
+            }
+        };
+        let views = [
+            view(cameras[0], 0, FULL, 0),
+            view(cameras[1], targets[0].value, FULL, 1),
+            view(cameras[2], targets[1].value, FULL, 2),
+            view(cameras[2], targets[2].value, FULL, 3),
+            view(cameras[3], 0, inset, 4),
+        ];
+        let presentations =
+            targets
+                .iter()
+                .enumerate()
+                .map(|(index, target)| NativeCameraCompositionPresentation {
+                    source_target: *target,
+                    destination: inset,
+                    order: 10 + index as u64,
+                });
+        let presentations: Vec<_> = presentations.collect();
+        unsafe {
+            bridge
+                .set_composition(&NativeCameraCompositionRequest {
+                    views: views.as_ptr(),
+                    views_len: views.len(),
+                    presentations: presentations.as_ptr(),
+                    presentations_len: presentations.len(),
+                })
+                .expect("split composition");
+        }
+        let call = bridge.take_staged_call().expect("scene call");
+        bridge.commit(call);
+        (cameras, targets)
+    }
+
+    /// The composition built from nothing but the retained cameras, targets,
+    /// views and presentations.
+    fn rebuilt(state: &CameraState) -> RendererViewComposition {
+        RetainedComposition::build(
+            &state.cameras,
+            &state.targets,
+            &state.views,
+            &state.presentations,
+        )
+        .renderer()
+    }
+
+    fn staged_state(bridge: &RuntimeCameraViewBridge) -> &CameraState {
+        &bridge.staged.as_ref().expect("inside a call").state
+    }
+
+    /// Where the composition's identifiers live: a patch keeps them, a
+    /// rebuild makes new ones.
+    fn identifier_addresses(composition: &RetainedComposition) -> Vec<*const u8> {
+        let cameras = composition
+            .cameras
+            .values()
+            .map(|camera| camera.id.as_ptr());
+        let targets = composition
+            .targets
+            .values()
+            .map(|target| target.id.as_ptr());
+        let views = composition.views.iter().map(|view| view.id.as_ptr());
+        cameras.chain(targets).chain(views).collect()
+    }
+
+    #[test]
+    fn samples_patch_their_own_camera_and_a_target_change_its_own_target() {
+        let mut bridge = RuntimeCameraViewBridge::new();
+        let (cameras, targets) = split_scene(&mut bridge, target_descriptor());
+        let addresses = identifier_addresses(&bridge.state.composition);
+        let untouched = |composition: &RendererViewComposition| {
+            (
+                composition.cameras[1..].to_vec(),
+                composition.targets.clone(),
+            )
+        };
+        let unchanged = untouched(&bridge.snapshot_composition());
+
+        for frame in 0..8 {
+            bridge.begin_call();
+            for camera in [cameras[0], cameras[0]] {
+                let mut descriptor = camera_descriptor(FULL);
+                descriptor.pose.position.x = frame as f32;
+                bridge
+                    .update_sample(NativeCameraSampleRequest {
+                        sample_time_seconds: f64::from(frame) / 60.0,
+                        ..sample_request(
+                            camera,
+                            descriptor,
+                            NativeCameraInterpolation::Position,
+                            false,
+                        )
+                    })
+                    .expect("sample");
+            }
+            let mut call = bridge.take_staged_call().expect("sample call");
+            let published = call.take_composition().expect("a sample publishes");
+            assert_eq!(published, rebuilt(&call.state));
+            assert_eq!(published.cameras[0].pose.position[0], f64::from(frame));
+            assert_eq!(untouched(&published), unchanged);
+            bridge.commit(call);
+            assert_eq!(
+                identifier_addresses(&bridge.state.composition),
+                addresses,
+                "a sample rebuilds nothing"
+            );
+        }
+
+        bridge.begin_call();
+        let mut resized = target_descriptor();
+        resized.width = 640;
+        bridge
+            .update_target(NativeCameraTargetUpdateRequest {
+                target: targets[1],
+                descriptor: resized,
+            })
+            .expect("target update");
+        let mut call = bridge.take_staged_call().expect("target call");
+        let published = call.take_composition().expect("a target change publishes");
+        assert_eq!(published, rebuilt(&call.state));
+        assert_eq!(published.targets[1].width, 640);
+        assert_eq!(published.targets[1].revision, 2);
+        assert_eq!(published.presentations[1].source_target_revision, 2);
+        assert_eq!(published.targets[0], unchanged.1[0]);
+        bridge.commit(call);
+        // Only the changed target is made again.
+        let mut kept = addresses.clone();
+        kept[cameras.len() + 1] = bridge.state.composition.targets[&targets[1].value]
+            .id
+            .as_ptr();
+        assert_eq!(
+            identifier_addresses(&bridge.state.composition),
+            kept,
+            "a target change rebuilds nothing else"
+        );
+
+        bridge.begin_call();
+        bridge.destroy(cameras[2]).expect("composition change");
+        let mut call = bridge.take_staged_call().expect("destroy call");
+        let published = call.take_composition().expect("a removal publishes");
+        assert_eq!(published, rebuilt(&call.state));
+        assert_eq!(published.cameras.len(), 3);
+        assert_eq!(published.views.len(), 3);
+        bridge.commit(call);
+    }
+
+    #[test]
+    fn a_refused_change_leaves_the_cameras_and_the_published_composition_as_they_were() {
+        let mut bridge = RuntimeCameraViewBridge::new();
+        let largest = NativeCameraTargetDescriptor {
+            width: render_host_contracts::MAX_RENDERER_TARGET_DIMENSION,
+            height: render_host_contracts::MAX_RENDERER_TARGET_DIMENSION,
+            ..target_descriptor()
+        };
+        // One target at the largest size leaves room for the small ones
+        // but not for a second at the largest size.
+        let (cameras, targets) = split_scene(&mut bridge, largest);
+
+        bridge.begin_call();
+        bridge
+            .update_sample(sample_request(
+                cameras[0],
+                camera_descriptor(FULL),
+                NativeCameraInterpolation::Position,
+                false,
+            ))
+            .expect("accepted sample");
+        let facts = |bridge: &RuntimeCameraViewBridge| {
+            let state = staged_state(bridge);
+            format!(
+                "{:?}",
+                (
+                    state
+                        .cameras
+                        .iter()
+                        .map(|(handle, camera)| (
+                            handle,
+                            camera.descriptor,
+                            &camera.motion,
+                            camera.next_sample_id,
+                            &camera.viewport_anchor
+                        ))
+                        .collect::<Vec<_>>(),
+                    state
+                        .targets
+                        .iter()
+                        .map(|(handle, target)| (handle, target.descriptor, target.revision))
+                        .collect::<Vec<_>>(),
+                    &state.views,
+                    &state.presentations,
+                    state.active_camera,
+                    state.next_camera,
+                    state.next_target,
+                )
+            )
+        };
+        let before = (facts(&bridge), staged_state(&bridge).composition.renderer());
+        let unchanged = |bridge: &RuntimeCameraViewBridge, refused: &str| {
+            assert_eq!(
+                (facts(bridge), staged_state(bridge).composition.renderer()),
+                before,
+                "{refused}"
+            );
+        };
+
+        let mut invalid = camera_descriptor(FULL);
+        invalid.pose.position.x = f32::NAN;
+        let refusals: [(&str, &str, Result<(), CsharpEngineServicesError>); 3] = [
+            (
+                "a non-finite pose",
+                "CSHARP_CAMERA_DESCRIPTOR",
+                bridge.update(NativeCameraUpdateRequest {
+                    camera: cameras[0],
+                    descriptor: invalid,
+                }),
+            ),
+            (
+                "a viewport off the surface",
+                "CSHARP_CAMERA_DESCRIPTOR",
+                bridge.update_sample(sample_request(
+                    cameras[1],
+                    camera_descriptor(NativeCameraViewport { x: 0.5, ..FULL }),
+                    NativeCameraInterpolation::Pose,
+                    false,
+                )),
+            ),
+            (
+                "a second target at the largest size",
+                "CSHARP_CAMERA_COMPOSITION",
+                bridge.update_target(NativeCameraTargetUpdateRequest {
+                    target: targets[1],
+                    descriptor: largest,
+                }),
+            ),
+        ];
+        for (refused, code, result) in refusals {
+            assert_eq!(result.expect_err(refused).code(), code, "{refused}");
+            unchanged(&bridge, refused);
+        }
+        let replaced = bridge.replace_target(NativeCameraTargetReplaceRequest {
+            target: targets[2],
+            replacement: largest,
+        });
+        assert_eq!(
+            replaced.expect_err("replacement over budget").code(),
+            "CSHARP_CAMERA_COMPOSITION"
+        );
+        unchanged(&bridge, "a replacement target over the budget");
+        assert_eq!(
+            bridge
+                .create_target(NativeCameraTargetDescriptor {
+                    width: 0,
+                    ..target_descriptor()
+                })
+                .expect_err("empty target")
+                .code(),
+            "CSHARP_CAMERA_TARGET_DESCRIPTOR"
+        );
+        unchanged(&bridge, "an empty target");
+        for (refused, view) in [
+            (
+                "a view off the surface",
+                NativeCameraCompositionView {
+                    camera: cameras[0],
+                    target: NativeCameraTargetReference::default(),
+                    viewport: NativeCameraViewport { width: 0.0, ..FULL },
+                    order: 0,
+                },
+            ),
+            (
+                "a view of a dead target",
+                NativeCameraCompositionView {
+                    camera: cameras[0],
+                    target: NativeCameraTargetReference { value: 99 },
+                    viewport: FULL,
+                    order: 0,
+                },
+            ),
+        ] {
+            let views = [view];
+            unsafe {
+                bridge
+                    .set_composition(&NativeCameraCompositionRequest {
+                        views: views.as_ptr(),
+                        views_len: views.len(),
+                        presentations: std::ptr::null(),
+                        presentations_len: 0,
+                    })
+                    .expect_err(refused);
+            }
+            unchanged(&bridge, refused);
+        }
+        bridge
+            .set_active(NativeCameraHandle { value: 99 })
+            .expect_err("a dead camera");
+        unchanged(&bridge, "a dead active camera");
+
+        // A replacement whose handle cannot be issued keeps the camera it
+        // would have replaced.
+        let issued = staged_state(&bridge).next_camera;
+        bridge.staged.as_mut().unwrap().state.next_camera = u64::MAX;
+        assert_eq!(
+            bridge
+                .replace(NativeCameraReplaceRequest {
+                    camera: cameras[0],
+                    replacement: camera_descriptor(FULL),
+                })
+                .expect_err("handle overflow")
+                .code(),
+            "CSHARP_CAMERA_HANDLE"
+        );
+        bridge.staged.as_mut().unwrap().state.next_camera = issued;
+        unchanged(&bridge, "a replacement without a handle");
+
+        let mut call = bridge.take_staged_call().expect("refusals keep the call");
+        assert_eq!(
+            call.take_composition(),
+            Some(before.1.clone()),
+            "the call publishes what its accepted sample left"
+        );
+        bridge.commit(call);
+        assert_eq!(bridge.snapshot_composition(), before.1);
+
+        bridge.begin_call();
+        bridge
+            .update(NativeCameraUpdateRequest {
+                camera: cameras[0],
+                descriptor: invalid,
+            })
+            .expect_err("refused");
+        let mut call = bridge.take_staged_call().expect("refusal keeps the call");
+        assert_eq!(call.take_composition(), None, "a refusal publishes nothing");
+        bridge.commit(call);
+    }
+
     #[test]
     fn refused_target_update_keeps_prior_descriptor_and_composition() {
         let mut bridge = RuntimeCameraViewBridge::new();
@@ -2846,16 +3278,21 @@ mod tests {
                 descriptor: largest,
             })
             .expect_err("a second large target exceeds the pixel budget");
-        let staged = bridge
+        let mut staged = bridge
             .take_staged_call()
             .expect("refusal does not fail the call");
         let retained = &staged.state.targets[&targets[1].value];
         assert_eq!(retained.descriptor.width, target_descriptor().width);
         assert_eq!(retained.revision, 1);
-        let composition = staged.composition.clone().expect("accepted update output");
+        let composition = staged.take_composition().expect("accepted update output");
         assert_eq!(composition.targets.len(), 3);
+        assert_eq!(
+            composition.targets[1].width,
+            target_descriptor().width,
+            "the refused target keeps its size"
+        );
         bridge.commit(staged);
-        assert!(bridge.snapshot_composition().is_ok());
+        assert_eq!(bridge.snapshot_composition(), composition);
     }
 
     #[test]
@@ -2888,8 +3325,8 @@ mod tests {
                 false,
             ))
             .expect("position sample");
-        let first = bridge.take_staged_call().expect("first sample");
-        let first_motion = first.composition.as_ref().unwrap().cameras[0]
+        let mut first = bridge.take_staged_call().expect("first sample");
+        let first_motion = first.take_composition().unwrap().cameras[0]
             .motion
             .as_ref()
             .expect("position metadata")
@@ -2902,7 +3339,7 @@ mod tests {
         assert!(!first_motion.cut);
         bridge.commit(first);
 
-        let snapshot = bridge.snapshot_composition().expect("retained snapshot");
+        let snapshot = bridge.snapshot_composition();
         assert_eq!(snapshot.cameras[0].motion.as_ref(), Some(&first_motion));
 
         bridge.begin_call();
@@ -2919,10 +3356,10 @@ mod tests {
                 true,
             ))
             .expect("pose sample");
-        let second = bridge.take_staged_call().expect("second sample");
-        let second_motion = second.composition.as_ref().unwrap().cameras[0]
+        let mut second = bridge.take_staged_call().expect("second sample");
+        let second_motion = second.take_composition().unwrap().cameras[0]
             .motion
-            .as_ref()
+            .clone()
             .expect("pose metadata");
         assert_eq!(second_motion.sample_id, "2");
         assert_eq!(
@@ -2944,8 +3381,8 @@ mod tests {
                 }),
             })
             .expect("immediate update");
-        let immediate = bridge.take_staged_call().expect("immediate composition");
-        assert!(immediate.composition.as_ref().unwrap().cameras[0]
+        let mut immediate = bridge.take_staged_call().expect("immediate composition");
+        assert!(immediate.take_composition().unwrap().cameras[0]
             .motion
             .is_none());
     }
@@ -3022,14 +3459,12 @@ mod tests {
         let camera = bridge.create(camera_descriptor(quarter)).expect("camera");
         bridge.set_active(camera).expect("active");
         let anchors = |bridge: &RuntimeCameraViewBridge| {
-            let composition = bridge
+            bridge
                 .staged
                 .as_ref()
                 .unwrap()
+                .state
                 .composition
-                .as_ref()
-                .unwrap();
-            composition
                 .views
                 .iter()
                 .map(|view| (view.viewport_anchor.clone(), view.viewport.width))
@@ -3143,6 +3578,11 @@ mod tests {
         assert_eq!(
             bridge.staged.as_ref().unwrap().state.views[0].viewport.x,
             0.25
+        );
+        assert_eq!(
+            staged_state(&bridge).composition.renderer(),
+            rebuilt(staged_state(&bridge)),
+            "the active view follows its camera's viewport"
         );
         let explicit = [NativeCameraCompositionView {
             camera,
@@ -3288,8 +3728,8 @@ mod tests {
                 })
                 .expect("split and inset composition");
         }
-        let staged = bridge.take_staged_call().expect("staged composition");
-        let composition = staged.composition.clone().expect("composition output");
+        let mut staged = bridge.take_staged_call().expect("staged composition");
+        let composition = staged.take_composition().expect("composition output");
         assert_eq!(composition.cameras.len(), 2);
         assert_eq!(composition.targets.len(), 1);
         assert_eq!(composition.views.len(), 2);
@@ -3300,10 +3740,7 @@ mod tests {
             .contains("csharp-target-1"));
         bridge.commit(staged);
 
-        assert_eq!(
-            bridge.snapshot_composition().expect("fresh baseline"),
-            composition
-        );
+        assert_eq!(bridge.snapshot_composition(), composition);
 
         bridge.begin_call();
         let mut updated = target_descriptor();
@@ -3314,8 +3751,17 @@ mod tests {
                 descriptor: updated,
             })
             .expect("target update");
-        let update = bridge.take_staged_call().expect("updated composition");
-        assert_eq!(update.composition.as_ref().unwrap().targets[0].revision, 2);
+        let mut update = bridge.take_staged_call().expect("updated composition");
+        let composition = update.take_composition().unwrap();
+        assert_eq!(composition.targets[0].revision, 2);
+        assert_eq!(
+            composition.views[1].target,
+            RendererViewTarget::Offscreen {
+                target_id: "csharp-target-1".to_owned(),
+                target_revision: 2,
+            }
+        );
+        assert_eq!(composition.presentations[0].source_target_revision, 2);
         bridge.commit(update);
 
         bridge.begin_call();
@@ -3336,8 +3782,8 @@ mod tests {
                 replacement: target_descriptor(),
             })
             .expect("target replacement");
-        let replacement = bridge.take_staged_call().expect("replacement composition");
-        let composition = replacement.composition.as_ref().unwrap();
+        let mut replacement = bridge.take_staged_call().expect("replacement composition");
+        let composition = replacement.take_composition().unwrap();
         assert!(composition
             .views
             .iter()
@@ -3352,8 +3798,8 @@ mod tests {
         bridge
             .destroy_target(replacement_target)
             .expect("target destroys dependent composition facts");
-        let removal = bridge.take_staged_call().expect("target removal");
-        let composition = removal.composition.as_ref().unwrap();
+        let mut removal = bridge.take_staged_call().expect("target removal");
+        let composition = removal.take_composition().unwrap();
         assert_eq!(composition.targets.len(), 0);
         assert_eq!(composition.presentations.len(), 0);
         assert_eq!(composition.views.len(), 1);
@@ -3370,42 +3816,45 @@ mod viewmodel_field_of_view {
 
     fn entry(viewmodel_fov_y_degrees: f64) -> CameraEntry {
         CameraEntry {
-            descriptor: NativeCameraDescriptor {
-                pose: NativeCameraPose::default(),
-                basis_mode: NativeCameraBasisMode::Derived,
-                basis: NativeCameraBasis::default(),
-                projection: NativeCameraProjection {
-                    kind: NativeCameraProjectionKind::Perspective,
-                    fov_y_degrees: 70.0,
-                    vertical_size: 1.0,
-                    near: 0.1,
-                    far: 500.0,
-                },
-                viewport: NativeCameraViewport {
-                    x: 0.0,
-                    y: 0.0,
-                    width: 1.0,
-                    height: 1.0,
-                },
-                viewmodel_fov_y_degrees,
-            },
+            descriptor: descriptor(viewmodel_fov_y_degrees),
             motion: None,
             next_sample_id: 1,
             viewport_anchor: None,
         }
     }
 
+    fn descriptor(viewmodel_fov_y_degrees: f64) -> NativeCameraDescriptor {
+        NativeCameraDescriptor {
+            pose: NativeCameraPose::default(),
+            basis_mode: NativeCameraBasisMode::Derived,
+            basis: NativeCameraBasis::default(),
+            projection: NativeCameraProjection {
+                kind: NativeCameraProjectionKind::Perspective,
+                fov_y_degrees: 70.0,
+                vertical_size: 1.0,
+                near: 0.1,
+                far: 500.0,
+            },
+            viewport: NativeCameraViewport {
+                x: 0.0,
+                y: 0.0,
+                width: 1.0,
+                height: 1.0,
+            },
+            viewmodel_fov_y_degrees,
+        }
+    }
+
     #[test]
     fn the_viewmodel_field_of_view_reaches_the_composition_camera_within_its_range() {
-        let camera = composition_camera("eye".to_owned(), entry(0.0)).unwrap();
-        assert_eq!(
-            camera.viewmodel_fov_y_degrees, 0.0,
-            "0 keeps the camera's own"
-        );
-        let camera = composition_camera("eye".to_owned(), entry(35.0)).unwrap();
+        validate_descriptor(&descriptor(0.0)).expect("0 keeps the camera's own");
+        let camera = composition_camera("eye".to_owned(), &entry(0.0));
+        assert_eq!(camera.viewmodel_fov_y_degrees, 0.0);
+        validate_descriptor(&descriptor(35.0)).expect("within range");
+        let camera = composition_camera("eye".to_owned(), &entry(35.0));
         assert_eq!(camera.viewmodel_fov_y_degrees, 35.0);
         for refused in [180.0, -1.0, f64::NAN] {
-            let error = composition_camera("eye".to_owned(), entry(refused)).unwrap_err();
+            let error = validate_descriptor(&descriptor(refused)).unwrap_err();
             assert_eq!(error.code(), "CSHARP_CAMERA_DESCRIPTOR", "{refused}");
         }
     }

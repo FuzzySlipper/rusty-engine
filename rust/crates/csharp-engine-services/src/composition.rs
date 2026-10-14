@@ -1005,9 +1005,7 @@ impl EngineServiceSet {
 
     /// The committed camera/view composition, for a realization that needs
     /// the current listener without waiting for the next camera change.
-    pub fn view_composition(
-        &self,
-    ) -> Result<render_host_contracts::RendererViewComposition, CsharpEngineServicesError> {
+    pub fn view_composition(&self) -> render_host_contracts::RendererViewComposition {
         self.camera_view.snapshot_composition()
     }
 
@@ -1082,7 +1080,7 @@ impl EngineServiceSet {
             render_output: Vec::new(),
             appearance: vec![CsharpAppearanceCallOutput::Frame(snapshot.frame)],
             frames: Vec::new(),
-            view_composition: Some(self.camera_view.snapshot_composition()?),
+            view_composition: Some(self.camera_view.snapshot_composition()),
             ui: self.ui.snapshot_projections(binding),
             presentation,
         })
@@ -1124,7 +1122,7 @@ impl EngineServiceSet {
             render_output: Vec::new(),
             appearance,
             frames,
-            view_composition: call.camera_view.composition.take(),
+            view_composition: call.camera_view.take_composition(),
             ui: std::mem::take(&mut call.ui),
             presentation: call
                 .audio

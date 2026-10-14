@@ -211,7 +211,7 @@ impl AudioOutput {
     ) -> Result<(), CsharpProductRuntimeError> {
         let baseline = services.audio_snapshot_frame()?;
         self.world_seconds = services.presentation_elapsed_seconds();
-        self.follow_camera(&services.view_composition()?);
+        self.follow_camera(&services.view_composition());
         self.realizer.reset();
         // A fresh realization plays an active clip from its start, as the
         // renderer shows it.

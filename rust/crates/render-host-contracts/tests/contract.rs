@@ -1,7 +1,6 @@
 use render_host_contracts::{
     RendererCameraInterpolation, RendererCameraMotion, RendererCameraPose,
-    RendererCameraProjection, RendererCompositionCamera, RendererCompositionView,
-    RendererViewComposition, RendererViewTarget, RendererViewport,
+    RendererCameraProjection, RendererCompositionCamera,
 };
 
 #[test]
@@ -26,7 +25,7 @@ fn camera_motion_contract_carries_renderer_sampling_facts() {
             near: 0.1,
             far: 1_000.0,
         },
-        motion: Some(motion.clone()),
+        motion: Some(motion),
         viewmodel_fov_y_degrees: 0.0,
     };
     assert_eq!(
@@ -39,27 +38,4 @@ fn camera_motion_contract_carries_renderer_sampling_facts() {
             "cut": true,
         })
     );
-    let composition = RendererViewComposition {
-        cameras: vec![camera],
-        targets: Vec::new(),
-        views: vec![RendererCompositionView {
-            id: "view".to_owned(),
-            camera_id: "camera".to_owned(),
-            target: RendererViewTarget::Primary,
-            viewport: RendererViewport {
-                x: 0.0,
-                y: 0.0,
-                width: 1.0,
-                height: 1.0,
-            },
-            order: 0,
-            viewport_anchor: None,
-        }],
-        presentations: Vec::new(),
-    };
-    assert!(composition.validate().is_ok());
-
-    let mut invalid = composition;
-    invalid.cameras[0].motion.as_mut().unwrap().delay_seconds = 0.0;
-    assert!(invalid.validate().is_err());
 }
