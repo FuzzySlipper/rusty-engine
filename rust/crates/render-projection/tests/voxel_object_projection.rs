@@ -151,6 +151,52 @@ fn a_repeated_instance_takes_its_last_entry() {
     ));
 }
 
+/// An overwritten entry contributes no resource or material: the repeated
+/// batch resolves exactly what its last entry alone would, even when the
+/// earlier entry names another object or another version of the same one.
+#[test]
+fn a_repeated_instance_resolves_only_its_last_object() {
+    let first = admitted();
+    let other = admitted_variant("voxel-object/other", "material/other", "test");
+    let revised = admitted_variant("voxel-object/runner", "material/other", "test-v2");
+    assert_ne!(first.content_hash(), revised.content_hash());
+    let mut all_materials = materials();
+    let other_material = material("material/other", [0.1, 0.2, 0.8, 1.0]);
+    all_materials.insert(other_material.id.clone(), other_material);
+
+    for survivor in [&other, &revised] {
+        let repeated = VoxelObjectRenderProjector::new()
+            .project(
+                &[instance(&first, 0), instance(survivor, 0)],
+                &all_materials,
+            )
+            .unwrap();
+        let alone = VoxelObjectRenderProjector::new()
+            .project(&[instance(survivor, 0)], &all_materials)
+            .unwrap();
+        assert_eq!(repeated.frame, alone.frame);
+        assert_eq!(repeated.readout, alone.readout);
+        assert_eq!(
+            repeated.readout.materialized_resources,
+            vec![survivor.asset_id().to_string()]
+        );
+        assert_eq!(
+            repeated.readout.resource_hashes[survivor.asset_id()],
+            survivor.content_hash()
+        );
+        let defined_materials = repeated
+            .frame
+            .ops
+            .iter()
+            .filter_map(|operation| match operation {
+                RenderDiff::DefineMaterial { material } => Some(material.id.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(defined_materials, vec!["material/other"]);
+    }
+}
+
 #[test]
 fn packed_projection_moves_mesh_streams_out_of_the_control_frame() {
     let object = admitted();
@@ -308,10 +354,14 @@ fn voxel_object_material_override_defines_the_selected_material() {
     let override_material = material("material/override", [0.1, 0.4, 0.9, 1.0]);
     available_materials.insert(override_material.id.clone(), override_material);
     let mut projection_instance = instance(&object, 0);
-    projection_instance.material_overrides = vec![MeshMaterialSlot {
-        slot: 1,
-        material: "material/override".to_string(),
-    }];
+    // A repeated slot takes its last override; the replaced one is neither
+    // resolved nor published.
+    projection_instance.material_overrides = ["material/replaced", "material/override"]
+        .map(|material| MeshMaterialSlot {
+            slot: 1,
+            material: material.to_string(),
+        })
+        .to_vec();
 
     let projected = projector
         .project(&[projection_instance], &available_materials)
@@ -338,7 +388,13 @@ fn voxel_object_material_override_defines_the_selected_material() {
             _ => None,
         })
         .unwrap();
-    assert_eq!(created.material_overrides[0].material, "material/override");
+    assert_eq!(
+        created.material_overrides,
+        vec![MeshMaterialSlot {
+            slot: 1,
+            material: "material/override".to_string(),
+        }]
+    );
 }
 
 #[test]
@@ -493,6 +549,19 @@ fn admitted_with_surface(surface_mode: SurfaceMode) -> voxel_object_runtime::Adm
         },
     )
     .unwrap()
+}
+
+fn admitted_variant(
+    asset_id: &str,
+    material_id: &str,
+    converter: &str,
+) -> voxel_object_runtime::AdmittedVoxelObject {
+    let mut asset = object();
+    asset.asset_id = asset_id.to_string();
+    asset.material_palette[0].material_asset_id = material_id.to_string();
+    asset.provenance.converter = converter.to_string();
+    let asset = with_computed_voxel_object_hashes(asset).unwrap();
+    admit_voxel_object(asset, VoxelObjectRuntimeLimits::default()).unwrap()
 }
 
 fn object() -> VoxelObjectAsset {

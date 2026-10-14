@@ -355,7 +355,9 @@ impl RuntimeAppearanceProjector {
         // the retained values, and users of appearances changed in the catalog.
         // An object named more than once takes its last fact, and a fact
         // wins over a removal.
+        // An appearance is resolved for an object's last fact only.
         let mut changes: BTreeMap<u64, Change<NextObject<'_>>> = BTreeMap::new();
+        let mut unknown: BTreeMap<u64, &str> = BTreeMap::new();
         for id in removals {
             if objects.contains_key(id) {
                 changes.insert(*id, Change::Remove);
@@ -366,14 +368,11 @@ impl RuntimeAppearanceProjector {
             if id > JSON_SAFE_U64_MAX {
                 return Err(AppearanceProjectionError::UnsafeObjectId { id });
             }
-            let appearance = self
-                .catalog
-                .appearances
-                .get(fact.appearance)
-                .ok_or_else(|| AppearanceProjectionError::UnknownAppearance {
-                    id,
-                    appearance: fact.appearance.to_owned(),
-                })?;
+            let Some(appearance) = self.catalog.appearances.get(fact.appearance) else {
+                unknown.insert(id, fact.appearance);
+                continue;
+            };
+            unknown.remove(&id);
             let next = NextObject {
                 parent: fact.parent_object_id,
                 appearance_id: fact.appearance,
@@ -392,6 +391,12 @@ impl RuntimeAppearanceProjector {
                 continue;
             }
             changes.insert(id, Change::Put(next));
+        }
+        if let Some((&id, &appearance)) = unknown.first_key_value() {
+            return Err(AppearanceProjectionError::UnknownAppearance {
+                id,
+                appearance: appearance.to_owned(),
+            });
         }
         for identity in &self.dirty_appearances {
             for id in self.users.get(identity).into_iter().flatten() {
@@ -1531,6 +1536,19 @@ mod tests {
             moved_last.ops.as_slice(),
             [RenderDiff::Update { handle: updated, transform: Some(transform), .. }]
                 if *updated == handle && transform.translation == [2.0, 0.0, 0.0]
+        ));
+        // Only the last fact's appearance is resolved.
+        let unknown = || RuntimeAppearanceFact {
+            appearance: "appearance/absent",
+            ..fact(1)
+        };
+        assert!(projector
+            .apply(&[unknown(), moved(1, 2.0)], &[])
+            .unwrap()
+            .is_empty());
+        assert!(matches!(
+            projector.apply(&[moved(1, 2.0), unknown()], &[]),
+            Err(AppearanceProjectionError::UnknownAppearance { id: 1, .. })
         ));
         assert!(projector.apply(&[moved(1, 2.0)], &[1]).unwrap().is_empty());
         assert_eq!(projector.object_handle(1), Some(handle));

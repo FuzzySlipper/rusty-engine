@@ -504,6 +504,8 @@ impl RuntimeAuthoredContentBridge {
                 regions: Vec::new(),
             });
         }
+        // A region row for a region its atlas already has replaces it.
+        let mut region_positions = BTreeMap::new();
         for row in regions {
             let atlas_id = parse_id(row.atlas_entry_id, "atlas region owner id")
                 .map_err(AuthoredError::simple)?;
@@ -513,8 +515,8 @@ impl RuntimeAuthoredContentBridge {
                 .voxel_atlas
                 .as_mut()
                 .ok_or_else(|| AuthoredError::simple("atlas region owner has no atlas payload"))?;
-            atlas.regions.push(AtlasRegionDefinition {
-                id: region_id,
+            let region = AtlasRegionDefinition {
+                id: region_id.clone(),
                 content_min: [row.content_min_x, row.content_min_y],
                 content_extent: [row.content_extent_x, row.content_extent_y],
                 padding: AtlasPadding {
@@ -524,7 +526,16 @@ impl RuntimeAuthoredContentBridge {
                     top: row.padding_top,
                 },
                 inset: atlas_inset(row.inset)?,
-            });
+            };
+            match region_positions.entry((atlas_id, region_id)) {
+                std::collections::btree_map::Entry::Occupied(position) => {
+                    atlas.regions[*position.get()] = region;
+                }
+                std::collections::btree_map::Entry::Vacant(position) => {
+                    position.insert(atlas.regions.len());
+                    atlas.regions.push(region);
+                }
+            }
         }
         for row in surfaces {
             let id = parse_id(row.material_entry_id, "voxel surface material id")
@@ -4096,7 +4107,7 @@ mod tests {
             texture_has_hash,
             texture_hash,
         }];
-        let regions = [NativeAuthoredAtlasRegionInput {
+        let region = NativeAuthoredAtlasRegionInput {
             atlas_entry_id: slice(b"sprite-sheet/stone"),
             id: slice(b"stone"),
             content_min_x: 2,
@@ -4108,7 +4119,19 @@ mod tests {
             padding_bottom: 1,
             padding_top: 1,
             inset: NativeAuthoredAtlasInset::HalfTexel,
-        }];
+        };
+        // A repeated region row replaces the earlier rectangle, which would
+        // otherwise overlap it.
+        let regions = [
+            NativeAuthoredAtlasRegionInput {
+                content_min_x: 4,
+                content_min_y: 4,
+                content_extent_x: 6,
+                content_extent_y: 6,
+                ..region
+            },
+            region,
+        ];
         let (atlas_id, atlas_version_kind, atlas_version, atlas_has_hash, atlas_hash) =
             reference(b"sprite-sheet/stone", b"eeff");
         let surfaces = [NativeAuthoredVoxelSurfaceInput {
@@ -4193,6 +4216,16 @@ mod tests {
             (3, 1, 1, 1, 1, 1)
         );
         assert_eq!(unsafe { (*readout.materials).color.r }, 0.5);
+        let region = unsafe { *readout.atlas_regions };
+        assert_eq!(
+            (
+                region.content_min_x,
+                region.content_min_y,
+                region.content_extent_x,
+                region.content_extent_y
+            ),
+            (2, 2, 8, 8)
+        );
         let material_request = NativeAuthoredMaterialResolveRequest {
             catalog,
             material_id: slice(b"material/stone"),

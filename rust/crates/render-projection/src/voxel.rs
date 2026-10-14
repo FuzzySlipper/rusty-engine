@@ -98,6 +98,9 @@ struct InstanceSnapshot {
     mesh_state: u64,
     source_revision: u64,
     material_slots: VoxelMaterialSlotMapping,
+    /// Whether the caller mapped the instance's slots: an empty mapping
+    /// leaves every slot unbound, where no mapping draws each as its own.
+    mapped: bool,
     chunks: BTreeMap<[i64; 3], ChunkSnapshot>,
     /// The coarse meshes of chunks drawn coarse.
     coarse: BTreeMap<[i64; 3], VoxelMeshChunk>,
@@ -141,6 +144,7 @@ enum ChunkVisit<'a> {
 struct InstancePlan<'a> {
     instance: &'a VoxelProjectionInstance<'a>,
     slots: &'a VoxelMaterialSlotMapping,
+    mapped: bool,
     /// The slot mapping changed, so every payload is rewritten.
     replace_all: bool,
     visit: ChunkVisit<'a>,
@@ -355,7 +359,9 @@ impl VoxelRenderProjector {
             let slots = mapping.unwrap_or(&empty_mapping);
             let scene = instance.scene;
             let previous = self.continued(instance);
-            let replace_all = previous.is_some_and(|previous| previous.material_slots != *slots);
+            let replace_all = previous.is_some_and(|previous| {
+                previous.mapped != mapped || previous.material_slots != *slots
+            });
             let visit = match previous {
                 Some(previous) if !replace_all && previous.mesh_state == scene.mesh_state() => {
                     ChunkVisit::None
@@ -398,6 +404,7 @@ impl VoxelRenderProjector {
             plans.push(InstancePlan {
                 instance,
                 slots,
+                mapped,
                 replace_all,
                 visit,
                 coarse,
@@ -491,6 +498,7 @@ impl VoxelRenderProjector {
                     }
                     if plan.replace_all {
                         snapshot.material_slots = plan.slots.clone();
+                        snapshot.mapped = plan.mapped;
                     }
                     (snapshot, handle)
                 }
@@ -511,6 +519,7 @@ impl VoxelRenderProjector {
                         mesh_state: scene.mesh_state(),
                         source_revision: scene.source_revision().raw(),
                         material_slots: plan.slots.clone(),
+                        mapped: plan.mapped,
                         chunks: BTreeMap::new(),
                         coarse: BTreeMap::new(),
                         pending_coarse: BTreeMap::new(),
@@ -1857,6 +1866,49 @@ mod tests {
                 slot: 2,
             }
         );
+    }
+
+    /// An instance that gains an explicit mapping on an unchanged scene is
+    /// checked against it: an empty mapping leaves its slot unbound, and the
+    /// refusal leaves the retained projection as it was.
+    #[test]
+    fn an_unchanged_instance_given_an_empty_mapping_is_checked() {
+        let scene = VoxelCollisionScene::from_material_voxels(
+            1.0,
+            16,
+            [MaterialVoxel {
+                state: 0,
+                address: [0, 0, 0],
+                material_slot: 1,
+            }],
+        )
+        .unwrap();
+        let instances = [VoxelProjectionInstance {
+            instance_id: "room".to_string(),
+            asset_id: "voxel-object/room".to_string(),
+            transform: Transform::IDENTITY,
+            scene: &scene,
+        }];
+        let materials = BTreeMap::from([(1, material(1))]);
+        let mut projector = VoxelRenderProjector::new();
+        projector.project(&instances, &materials).unwrap();
+        let root = projector.root_handle("room");
+        assert_eq!(
+            projector
+                .project_mapped(
+                    &instances,
+                    &materials,
+                    &BTreeMap::from([("room".to_string(), BTreeMap::new())]),
+                )
+                .unwrap_err(),
+            VoxelProjectionError::MissingMaterial {
+                instance: "room".to_string(),
+                slot: 1,
+            }
+        );
+        assert_eq!(projector.root_handle("room"), root);
+        let unchanged = projector.project(&instances, &materials).unwrap();
+        assert!(unchanged.frame.ops.is_empty());
     }
 
     /// Changing one material defines that material alone: no chunk payload

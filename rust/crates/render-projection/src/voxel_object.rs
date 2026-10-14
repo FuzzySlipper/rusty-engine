@@ -267,14 +267,19 @@ struct ValidatedProjection<'a, 'm> {
     materials: BTreeMap<&'m str, &'m RenderMaterialDescriptor>,
 }
 
-/// Snapshots the instances (a repeated instance id takes its last entry)
-/// and resolves the resources and materials they use.
+/// Snapshots the instances and resolves the resources and materials they
+/// use. A repeated instance id takes its last entry before anything is
+/// resolved, so an overwritten entry adds no resource or material demand.
 fn validate_and_snapshot<'a, 'm>(
     instances: &[VoxelObjectProjectionInstance<'a>],
     materials: &'m BTreeMap<String, RenderMaterialDescriptor>,
 ) -> Result<ValidatedProjection<'a, 'm>, VoxelObjectProjectionError> {
-    let mut modes_by_asset = BTreeMap::<&str, BTreeSet<SurfaceMode>>::new();
+    let mut surviving = BTreeMap::<&str, &VoxelObjectProjectionInstance<'a>>::new();
     for instance in instances {
+        surviving.insert(&instance.instance_id, instance);
+    }
+    let mut modes_by_asset = BTreeMap::<&str, BTreeSet<SurfaceMode>>::new();
+    for instance in surviving.values() {
         modes_by_asset
             .entry(instance.object.asset_id())
             .or_default()
@@ -283,7 +288,7 @@ fn validate_and_snapshot<'a, 'm>(
     let mut snapshots = BTreeMap::new();
     let mut resources = BTreeMap::<String, RequestedResource<'a>>::new();
     let mut used_materials = BTreeMap::new();
-    for instance in instances {
+    for instance in surviving.into_values() {
         if instance.instance_id.trim().is_empty() {
             return Err(VoxelObjectProjectionError::EmptyInstanceId);
         }
@@ -322,18 +327,20 @@ fn validate_and_snapshot<'a, 'm>(
         for binding in &instance.object.source().material_palette {
             collect_material(&binding.material_asset_id, materials, &mut used_materials)?;
         }
-        if let Some(slot) = instance
+        // A repeated override slot takes its last material, and only that
+        // one is resolved and published.
+        let overrides = instance
             .material_overrides
             .iter()
-            .map(|binding| binding.slot)
-            .find(|slot| !bound_slots.contains(slot))
-        {
-            return Err(VoxelObjectProjectionError::UnboundMaterialOverride {
-                instance: instance.instance_id.clone(),
-                slot,
-            });
-        }
-        for binding in &instance.material_overrides {
+            .map(|binding| (binding.slot, binding))
+            .collect::<BTreeMap<_, _>>();
+        for (slot, binding) in &overrides {
+            if !bound_slots.contains(slot) {
+                return Err(VoxelObjectProjectionError::UnboundMaterialOverride {
+                    instance: instance.instance_id.clone(),
+                    slot: *slot,
+                });
+            }
             collect_material(&binding.material, materials, &mut used_materials)?;
         }
         snapshots.insert(
@@ -344,7 +351,7 @@ fn validate_and_snapshot<'a, 'm>(
                 frame: instance.frame,
                 transform: instance.transform,
                 visible: instance.visible,
-                material_overrides: instance.material_overrides.clone(),
+                material_overrides: overrides.into_values().cloned().collect(),
                 metadata: instance.metadata.clone(),
                 surface_mode: instance.object.surface_mode(),
             },
