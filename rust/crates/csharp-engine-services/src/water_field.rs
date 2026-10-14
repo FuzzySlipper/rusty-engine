@@ -152,9 +152,14 @@ impl Field {
         Ok(z * self.width + x)
     }
 
+    /// The field as its latest snapshot stands. Pending time is admitted time
+    /// neither in the snapshot nor dropped, so it includes a batch the worker
+    /// is running or has published since the call began.
     fn readout(&self, placement: [f64; 3]) -> NativeWaterFieldReadout {
         let latest = &self.latest;
         let pending = self.shared.pending.lock().expect("water field pending");
+        let age = (self.admitted - latest.time).max(0.0);
+        let dropped = latest.dropped_seconds + pending.dropped;
         NativeWaterFieldReadout {
             origin: NativeVec3 {
                 x: placement[0] as f32,
@@ -169,9 +174,9 @@ impl Field {
             snapshots: latest.sequence,
             time: latest.time,
             admitted_time: self.admitted,
-            age: (self.admitted - latest.time).max(0.0),
-            dropped_seconds: latest.dropped_seconds + pending.dropped,
-            pending_seconds: pending.seconds(),
+            age,
+            dropped_seconds: dropped,
+            pending_seconds: (age - dropped).max(0.0),
             coalesced_changes: pending.coalesced,
             volume: latest.volume,
             boundary_inflow: latest.totals.inflow,

@@ -123,7 +123,7 @@ the field's frame) and velocity. `Read` returns the diagnostics:
 | `Incarnation`, `SnapshotIncarnation` | The field's bed edits, and those the snapshot carries. |
 | `Time`, `AdmittedTime`, `Age` | The snapshot's simulated time, the admitted time handed to the field, the gap. |
 | `DroppedSeconds` | Admitted time dropped past the backlog. |
-| `PendingSeconds`, `CoalescedChanges` | Admitted time waiting for the worker, and changes applied later than their boundary because too many intervals waited. |
+| `PendingSeconds`, `CoalescedChanges` | Admitted time waiting for the worker, queued or being run (neither in the snapshot nor dropped, so `Age` is `DroppedSeconds` plus `PendingSeconds`), and changes applied later than their boundary because too many intervals waited. |
 | `Volume`, `BoundaryInflow`, `BoundaryOutflow`, `SourceVolume`, `SinkVolume` | Water in the field, and in total through its edges, sources and sinks. |
 | `WetCells`, `DrawnCells` | Cells holding water, and those the drawn surface shows. |
 | `Steps`, `StepMicroseconds`, `Load` | The worker's last advance: steps, wall time, worker seconds per simulated second. |

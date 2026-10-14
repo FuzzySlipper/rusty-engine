@@ -394,25 +394,63 @@ fn work_beyond_the_backlog_drops_admitted_time_and_reports_it() {
             ABI_OK
         );
     });
-    let before = valley.read().snapshots;
+    let before = valley.read();
     // One update admits 3 s at once: far more work than the backlog allows.
     valley.step += 90;
     valley
         .services
         .begin_update_call(binding(), update(valley.step, 90));
     valley.services.finish_call().unwrap();
+    // Until the worker has run what was kept, the policy change's snapshot
+    // or a batch in flight may be the latest; wait for nothing to be pending.
     let started = Instant::now();
     let readout = loop {
         let readout = valley.read();
-        if readout.snapshots > before {
+        if readout.pending_seconds < 1.0e-6 {
             break readout;
         }
-        assert!(started.elapsed() < WORKER_PATIENCE);
+        assert!(
+            started.elapsed() < WORKER_PATIENCE,
+            "the worker fell behind: {readout:?}"
+        );
         std::thread::sleep(Duration::from_millis(2));
     };
     assert!(readout.dropped_seconds > 2.9, "{readout:?}");
+    assert!(readout.time - before.time < 0.01, "{readout:?}");
     assert!((readout.time + readout.dropped_seconds - readout.admitted_time).abs() < 1.0e-6);
-    assert!((readout.age - readout.dropped_seconds).abs() < 1.0e-6);
+}
+
+/// Time the worker has taken from the queue is pending until its snapshot is
+/// read: every admitted second is in the snapshot, dropped or pending.
+#[test]
+fn time_the_worker_has_taken_is_still_pending() {
+    let mut valley = Valley::new();
+    valley.run(1.0);
+    let bridge = |water: &NativeWaterFieldApi| unsafe {
+        &mut *water.context.cast::<RuntimeWaterFieldBridge>()
+    };
+    // Without a worker, take the next admission as the worker takes a batch.
+    valley.call(|water, _| bridge(water).worker = None);
+    valley.step += u64::from(STEPS_PER_CALL);
+    valley
+        .services
+        .begin_update_call(binding(), update(valley.step, STEPS_PER_CALL));
+    valley.services.finish_call().unwrap();
+    let taken = valley.call(|water, field| {
+        let shared = &bridge(water).field(field).unwrap().shared;
+        std::mem::take(&mut shared.pending.lock().unwrap().segments)
+    });
+    assert_eq!(taken.len(), 1);
+    let readout = valley.read();
+    assert!(
+        (readout.pending_seconds - taken[0].seconds).abs() < 1.0e-6,
+        "{readout:?}"
+    );
+    assert!(
+        (readout.time + readout.dropped_seconds + readout.pending_seconds - readout.admitted_time)
+            .abs()
+            < 1.0e-6
+    );
 }
 
 #[test]
