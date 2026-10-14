@@ -95,8 +95,7 @@ fn import_command(
             .sidecar_update
             .as_ref()
             .filter(|_| metadata_path.is_file())
-            .map(encode_sidecar)
-            .transpose()?;
+            .map(encode_sidecar);
         let receipt = match encoded_sidecar.as_deref() {
             Some(encoded) => publish_directory_with_sidecar_atomically(
                 &plan,
@@ -241,7 +240,7 @@ fn init_sidecar(
             &uniqueness_salt,
         )
     };
-    write_file_atomically(&path, encode_sidecar(&metadata)?.as_bytes())?;
+    write_file_atomically(&path, encode_sidecar(&metadata).as_bytes())?;
     println!(
         "initialized {} guid={}",
         path.display(),

@@ -491,7 +491,7 @@ fn validate_surface(
         });
     }
     if let VoxelAlphaMode::Mask { cutoff } = surface.alpha_mode {
-        if !cutoff.is_finite() || !(0.0..=1.0).contains(&cutoff) {
+        if !(0.0..=1.0).contains(&cutoff) {
             errors.push(CatalogValidationError::InvalidAlphaCutoff {
                 id: entry.id.clone(),
             });

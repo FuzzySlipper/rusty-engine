@@ -11,11 +11,14 @@ use crate::import::{
     identity_matrix, import_animated_glb_scene, matrix_from_gltf, validate_affine_matrix,
     validate_imported_name,
 };
-use crate::{source_sha256, ConversionError, ImportedModelScene};
+use crate::{ConversionError, ImportedModelScene};
 
 mod clip;
 
-pub(super) fn import_animated_glb(source: &[u8]) -> Result<ImportedAnimatedModel, ConversionError> {
+pub(super) fn import_animated_glb(
+    source: &[u8],
+    source_sha256: String,
+) -> Result<ImportedAnimatedModel, ConversionError> {
     let (parsed, scene) = import_animated_glb_scene(source)?;
     let blob = parsed
         .blob
@@ -29,7 +32,7 @@ pub(super) fn import_animated_glb(source: &[u8]) -> Result<ImportedAnimatedModel
     let clips = clip::import_clips(&parsed.document, blob, &nodes)?;
 
     Ok(ImportedAnimatedModel {
-        source_sha256: source_sha256(source),
+        source_sha256,
         scene,
         nodes,
         skins,

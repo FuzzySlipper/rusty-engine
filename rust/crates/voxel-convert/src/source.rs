@@ -4,15 +4,11 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::{
-    flatten_static_scene, import_animated_glb, import_static_glb_scene, sample_animation_bind_pose,
+    flatten_static_scene, import_static_glb_scene, sample_animation_bind_pose,
     texture_coordinate_source_hash, AnimationAnchorPolicy, AnimationBindPoseRequest,
     ConversionError, ImportedAnimatedModel, ImportedModelScene, ImportedPrimitiveGroup,
     ImportedStaticMesh, ImportedStaticTextureCoordinates,
 };
-
-pub const MAX_MESH_SOURCE_ASSET_ID_BYTES: usize = 1_024;
-pub const MAX_MESH_SOURCE_PATH_BYTES: usize = 8_192;
-pub const MAX_MESH_PRIMITIVE_BYTES: usize = 1_024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -148,7 +144,23 @@ pub fn import_mesh_source(
     request: &MeshSourceImportRequest,
 ) -> Result<ImportedMeshSource, ConversionError> {
     validate_import_request(request, AssetKind::StaticMesh)?;
-    let source_hash = source_sha256(&request.source_bytes);
+    import_static_mesh_source(request, source_sha256(&request.source_bytes))
+}
+
+/// [`import_mesh_source`] for a caller that already hashed
+/// `request.source_bytes`: `source_hash` is their [`source_sha256`].
+pub fn import_mesh_source_with_hash(
+    request: &MeshSourceImportRequest,
+    source_hash: String,
+) -> Result<ImportedMeshSource, ConversionError> {
+    validate_import_request(request, AssetKind::StaticMesh)?;
+    import_static_mesh_source(request, source_hash)
+}
+
+fn import_static_mesh_source(
+    request: &MeshSourceImportRequest,
+    source_hash: String,
+) -> Result<ImportedMeshSource, ConversionError> {
     validate_expected_source_hash(request, &source_hash)?;
     let scene = match request.format {
         MeshSourceFormat::Glb => import_static_glb_scene(&request.source_bytes)?,
@@ -180,23 +192,27 @@ pub fn import_mesh_source(
 pub fn import_animated_mesh_source(
     request: &MeshSourceImportRequest,
 ) -> Result<ImportedAnimatedMeshSource, ConversionError> {
-    import_animated_mesh_source_with(request, false)
+    validate_import_request(request, AssetKind::AnimatedMesh)?;
+    import_animated_mesh_source_with(request, source_sha256(&request.source_bytes), false)
 }
 
 /// Imports the exact animated source for runtime visual-resource metadata.
 /// Degenerate faces are omitted only from the derived bind-pose mesh; ordinary
-/// voxel conversion and animation sampling remain strict.
+/// voxel conversion and animation sampling remain strict. `source_hash` is the
+/// caller's [`source_sha256`] of `request.source_bytes`.
 pub fn import_animated_mesh_source_for_visual_metadata(
     request: &MeshSourceImportRequest,
+    source_hash: String,
 ) -> Result<ImportedAnimatedMeshSource, ConversionError> {
-    import_animated_mesh_source_with(request, true)
+    validate_import_request(request, AssetKind::AnimatedMesh)?;
+    import_animated_mesh_source_with(request, source_hash, true)
 }
 
 fn import_animated_mesh_source_with(
     request: &MeshSourceImportRequest,
+    source_hash: String,
     visual_metadata: bool,
 ) -> Result<ImportedAnimatedMeshSource, ConversionError> {
-    validate_import_request(request, AssetKind::AnimatedMesh)?;
     if request.mesh_primitive.is_some() {
         return Err(ConversionError::one(
             "conversion.unsupportedSource",
@@ -204,10 +220,12 @@ fn import_animated_mesh_source_with(
             "animated object conversion requires the complete selected scene",
         ));
     }
-    let source_hash = source_sha256(&request.source_bytes);
     validate_expected_source_hash(request, &source_hash)?;
     let model = match request.format {
-        MeshSourceFormat::Glb => import_animated_glb(&request.source_bytes)?,
+        MeshSourceFormat::Glb => crate::animation::import_animated_glb_with_hash(
+            &request.source_bytes,
+            source_hash.clone(),
+        )?,
     };
     let bind_request = AnimationBindPoseRequest {
         expected_source_sha256: source_hash.clone(),
@@ -400,34 +418,12 @@ fn validate_import_request(
             "assetVersion must be positive",
         ));
     }
-    validate_string(
-        &request.source_asset_id,
-        "sourceAssetId",
-        MAX_MESH_SOURCE_ASSET_ID_BYTES,
-    )?;
-    validate_string(
-        &request.source_path,
-        "sourcePath",
-        MAX_MESH_SOURCE_PATH_BYTES,
-    )?;
-    if let Some(mesh_primitive) = &request.mesh_primitive {
-        validate_string(mesh_primitive, "meshPrimitive", MAX_MESH_PRIMITIVE_BYTES)?;
-    }
     if request.source_bytes.is_empty() {
         return Err(ConversionError::one(
             "conversion.invalidSource",
             "sourceBytes",
             "source body is empty",
         ));
-    }
-    if let Some(expected) = &request.expected_source_sha256 {
-        if !valid_sha256(expected) {
-            return Err(ConversionError::one(
-                "conversion.invalidSourceIdentity",
-                "expectedSourceSha256",
-                "expectedSourceSha256 must be a lowercase sha256 identity",
-            ));
-        }
     }
     Ok(())
 }
@@ -451,17 +447,6 @@ fn validate_expected_source_hash(
                     .as_deref()
                     .expect("checked expected source hash")
             ),
-        ));
-    }
-    Ok(())
-}
-
-fn validate_string(value: &str, path: &'static str, limit: usize) -> Result<(), ConversionError> {
-    if value.trim().is_empty() || value.len() > limit {
-        return Err(ConversionError::one(
-            "conversion.invalidString",
-            path,
-            format!("value must contain 1..={limit} UTF-8 bytes"),
         ));
     }
     Ok(())
@@ -654,14 +639,6 @@ fn bounds_for_positions(positions: &[[f64; 3]]) -> Option<MeshSourceBounds> {
         }
     }
     Some(MeshSourceBounds { min, max })
-}
-
-fn valid_sha256(value: &str) -> bool {
-    value.len() == 71
-        && value.starts_with("sha256:")
-        && value[7..]
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
 #[cfg(test)]

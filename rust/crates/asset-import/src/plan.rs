@@ -114,11 +114,10 @@ pub fn plan_import(
         sidecar.map(|metadata| metadata.guid.clone()),
         &files,
     );
-    let manifest_json = encode_import_manifest(&manifest)
-        .expect("newly built import manifest is valid and serializable");
     files.push(GeneratedArtifact {
         relative_path: format!("{name}.import.json"),
-        bytes: manifest_json.into_bytes(),
+        bytes: encode_import_manifest(&manifest).into_bytes(),
+        sha256: None,
     });
     files.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
     let reimport = prior
@@ -225,19 +224,24 @@ pub fn plan_animated_glb_import(
             has_errors: true,
         };
     };
-    let manifest = build_manifest(
+    let source_hash = assets
+        .receipt
+        .source_hash
+        .strip_prefix("sha256:")
+        .expect("animated import records a sha256 source hash")
+        .to_owned();
+    let manifest = build_manifest_with_source_hash(
         source_uri.value(),
-        source_bytes,
+        source_hash,
         SUPPORTED_ANIMATED_GLB_VERSION,
         &assets.animated_mesh.asset,
         sidecar.map(|metadata| metadata.guid.clone()),
         &files,
     );
-    let manifest_json = encode_import_manifest(&manifest)
-        .expect("newly built animated import manifest is valid and serializable");
     files.push(GeneratedArtifact {
         relative_path: format!("{name}.import.json"),
-        bytes: manifest_json.into_bytes(),
+        bytes: encode_import_manifest(&manifest).into_bytes(),
+        sha256: None,
     });
     files.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
     let reimport = prior
@@ -376,11 +380,10 @@ pub fn plan_animated_gltf_import(
         sidecar.map(|metadata| metadata.guid.clone()),
         &files,
     );
-    let manifest_json = encode_import_manifest(&manifest)
-        .expect("newly built glTF import manifest is valid and serializable");
     files.push(GeneratedArtifact {
         relative_path: format!("{name}.import.json"),
-        bytes: manifest_json.into_bytes(),
+        bytes: encode_import_manifest(&manifest).into_bytes(),
+        sha256: None,
     });
     files.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
     let reimport = prior

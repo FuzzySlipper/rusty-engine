@@ -4,9 +4,6 @@ use core_ids::EntityId;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub const MAX_COMPONENT_TYPE_ID_BYTES: usize = 128;
-pub const MAX_COMPONENT_CODEC_ID_BYTES: usize = 128;
-pub const MAX_REGISTERED_COMPONENT_TYPES: usize = 256;
 pub const MAX_COMPONENT_INSPECTION_ENTITIES: usize = 64;
 
 pub const TRANSFORM_COMPONENT_TYPE_ID: &str = "rusty.entity.transform";
@@ -30,11 +27,9 @@ pub struct ComponentTypeId(String);
 impl ComponentTypeId {
     pub fn parse(value: impl Into<String>) -> Result<Self, ComponentIdentityError> {
         let value = value.into();
-        validate_identity(&value, MAX_COMPONENT_TYPE_ID_BYTES).map_err(|reason| {
-            ComponentIdentityError {
-                value: value.clone(),
-                reason,
-            }
+        validate_identity(&value).map_err(|reason| ComponentIdentityError {
+            value: value.clone(),
+            reason,
         })?;
         Ok(Self(value))
     }
@@ -116,11 +111,9 @@ impl<T: EntityComponent> ComponentCodec<T> {
         encode: fn(&T) -> Value,
         decode: fn(Value) -> Result<T, String>,
     ) -> Result<Self, ComponentCodecError> {
-        validate_identity(identity, MAX_COMPONENT_CODEC_ID_BYTES).map_err(|reason| {
-            ComponentCodecError::InvalidIdentity {
-                value: identity.to_string(),
-                reason,
-            }
+        validate_identity(identity).map_err(|reason| ComponentCodecError::InvalidIdentity {
+            value: identity.to_string(),
+            reason,
         })?;
         if version == 0 {
             return Err(ComponentCodecError::InvalidVersion { version });
@@ -261,9 +254,6 @@ pub enum ComponentRegistrationError {
     IncompatibleCodec {
         component: ComponentTypeId,
     },
-    TypeLimitExceeded {
-        limit: usize,
-    },
 }
 
 impl fmt::Display for ComponentRegistrationError {
@@ -401,12 +391,9 @@ impl fmt::Display for RegisteredComponentSnapshotError {
 
 impl std::error::Error for RegisteredComponentSnapshotError {}
 
-fn validate_identity(value: &str, max_bytes: usize) -> Result<(), &'static str> {
+fn validate_identity(value: &str) -> Result<(), &'static str> {
     if value.is_empty() {
         return Err("identity is empty");
-    }
-    if value.len() > max_bytes {
-        return Err("identity exceeds its UTF-8 byte limit");
     }
     let mut characters = value.bytes();
     if !characters

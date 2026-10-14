@@ -314,6 +314,9 @@ pub(crate) fn api(bridge: &mut RuntimeContentBridge) -> NativeContentApi {
 
 /// Admission owns the only copy across the ABI. Normal decoders validate their
 /// format when a resource is opened; no GLB/schema policy lives in Content.
+/// The product's paths only key the source's dependency files: a dependency
+/// is found by the exact path its source resolves, and a repeated path keeps
+/// its last bytes.
 pub(crate) unsafe extern "C" fn admit_reference(
     context: *mut c_void,
     request: *const NativeContentAdmissionRequest,
@@ -327,9 +330,6 @@ pub(crate) unsafe extern "C" fn admit_reference(
                      bytes: NativeByteSlice|
      -> Option<(String, Arc<[u8]>)> {
         let path = unsafe { borrowed_utf8(path.bytes, path.len, "content path") }.ok()?;
-        if !bundles::relative(path) {
-            return None;
-        }
         let bytes =
             unsafe { crate::composition::borrowed_slice(bytes.bytes, bytes.len, "content bytes") }
                 .ok()?;
@@ -352,9 +352,7 @@ pub(crate) unsafe extern "C" fn admit_reference(
         let Some((path, bytes)) = read_file(dependency.path, dependency.bytes) else {
             return 0;
         };
-        if files.insert(path, bytes).is_some() {
-            return 0;
-        }
+        files.insert(path, bytes);
     }
     let content = AdmittedContent {
         path,
@@ -596,6 +594,53 @@ pub(crate) mod tests {
         assert_eq!(unsafe { destroy_reference(context, handle) }, ABI_OK);
         assert!(weak.upgrade().is_none());
         assert!(bridge.retained_content(handle).is_none());
+    }
+
+    #[test]
+    fn live_admission_keys_dependencies_by_the_products_exact_paths() {
+        let mut bridge = RuntimeContentBridge::new(BTreeMap::new());
+        let context = (&mut bridge as *mut RuntimeContentBridge).cast();
+        let text = |s: &str| NativeUtf8Slice {
+            bytes: s.as_ptr(),
+            len: s.len(),
+        };
+        let bytes = |b: &[u8]| NativeByteSlice {
+            bytes: b.as_ptr(),
+            len: b.len(),
+        };
+        let files = [
+            NativeContentSourceFile {
+                path: text("../shared/texture.png"),
+                bytes: bytes(&[1]),
+            },
+            NativeContentSourceFile {
+                path: text("../shared/texture.png"),
+                bytes: bytes(&[2]),
+            },
+        ];
+        let request = NativeContentAdmissionRequest {
+            path: text("/models/scene.glb"),
+            bytes: bytes(&[9]),
+            dependencies: files.as_ptr(),
+            dependencies_len: files.len(),
+        };
+        let mut handle = NativeContentReferenceHandle::default();
+        assert_eq!(
+            unsafe { admit_reference(context, &request, &mut handle) },
+            ABI_OK
+        );
+        let retained = bridge.retained_content(handle).unwrap();
+        assert_eq!(retained.path, "/models/scene.glb");
+        assert_eq!(
+            &*retained
+                .files
+                .get("../shared/texture.png")
+                .unwrap()
+                .unwrap(),
+            &[2],
+            "a repeated path keeps its last bytes"
+        );
+        assert!(retained.files.get("shared/texture.png").unwrap().is_none());
     }
 
     #[test]

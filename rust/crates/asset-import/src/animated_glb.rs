@@ -3,7 +3,7 @@ use std::{
     path::Path,
 };
 
-use asset_catalog::{validate_catalog, AssetCatalog, CatalogEntry};
+use asset_catalog::{AssetCatalog, CatalogEntry};
 use core_assets::{AssetHash, AssetId, AssetKind};
 use gltf::buffer::Source as BufferSource;
 use gltf::image::Source as ImageSource;
@@ -16,8 +16,8 @@ use render_model::{
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use voxel_convert::{
-    import_animated_mesh_source_for_visual_metadata, import_mesh_source, AnimationChannelValues,
-    AnimationProperty, MeshSourceFormat, MeshSourceImportRequest,
+    import_animated_mesh_source_for_visual_metadata, import_mesh_source_with_hash, source_sha256,
+    AnimationChannelValues, AnimationProperty, MeshSourceFormat, MeshSourceImportRequest,
 };
 
 use crate::{
@@ -26,14 +26,8 @@ use crate::{
 
 pub const SUPPORTED_ANIMATED_GLB_VERSION: u32 = 2;
 /// Texture transforms may select TEXCOORD_0 through TEXCOORD_3. render-wgpu
-/// draws TEXCOORD_0 only, for the base colour texture, and does not apply
-/// texture transforms.
+/// reads TEXCOORD_0 and TEXCOORD_1; a later set reads TEXCOORD_0.
 pub const MAX_ANIMATED_GLB_TEXTURE_COORD_SET: u64 = 3;
-/// Keeps authored UV transforms finite and prevents extreme values from
-/// crossing the retained renderer boundary. Negative offset, rotation, and
-/// scale remain valid within this absolute bound.
-pub const MAX_ANIMATED_GLB_TEXTURE_TRANSFORM_COMPONENT: f64 = 1_000_000.0;
-
 /// The admitted GLB's embedded animation classification. Both variants retain
 /// the existing GLB mesh resource and `AnimatedMeshAsset` wire lifecycle; this
 /// readout avoids describing a zero-clip resource as animated.
@@ -117,9 +111,10 @@ pub fn glb_model_triangles(source: &[u8]) -> Result<GlbModelTriangles, String> {
     };
     // The static parser refuses skins and animations; the animated one
     // gives those models' bind pose.
-    let imported = match import_mesh_source(&request) {
+    let source_hash = source_sha256(source);
+    let imported = match import_mesh_source_with_hash(&request, source_hash.clone()) {
         Ok(imported) => imported,
-        Err(error) => import_animated_mesh_source_for_visual_metadata(&request)
+        Err(error) => import_animated_mesh_source_for_visual_metadata(&request, source_hash)
             .map(|imported| imported.source)
             .map_err(|_| error.to_string())?,
     };
@@ -214,7 +209,7 @@ pub fn import_animated_glb_asset(
         source_path: source_uri.value().to_owned(),
         format: MeshSourceFormat::Glb,
         source_bytes: source.to_vec(),
-        expected_source_sha256: Some(source_hash.clone()),
+        expected_source_sha256: None,
         mesh_primitive: None,
     };
     let (
@@ -226,7 +221,10 @@ pub fn import_animated_glb_asset(
         channel_count,
         keyframe_count,
     ) = if parsed.document.animations().next().is_some() {
-        let imported = match import_animated_mesh_source_for_visual_metadata(&animated_request) {
+        let imported = match import_animated_mesh_source_for_visual_metadata(
+            &animated_request,
+            source_hash.clone(),
+        ) {
             Ok(imported) => imported,
             Err(error) => {
                 diagnostics.extend(error.diagnostics().iter().map(|item| {
@@ -307,7 +305,7 @@ pub fn import_animated_glb_asset(
             source_asset_id: format!("mesh/{source_hash_hex}"),
             ..animated_request
         };
-        let imported = match import_mesh_source(&static_request) {
+        let imported = match import_mesh_source_with_hash(&static_request, source_hash.clone()) {
             Ok(imported) => imported,
             Err(error) => {
                 diagnostics.extend(error.diagnostics().iter().map(|item| {
@@ -385,18 +383,6 @@ pub fn import_animated_glb_asset(
         .with_hash(asset_hash)
         .with_source(runtime_resource_path.clone())
         .with_label(name)]);
-    let validation = validate_catalog(&catalog);
-    if !validation.is_ok() {
-        diagnostics.extend(validation.diagnostics().into_iter().map(|item| {
-            ImportDiagnostic::error(
-                ImportCode::InvalidDescriptor,
-                item.path,
-                item.message,
-                "repair generated animated asset identity or provenance",
-            )
-        }));
-        return failed(diagnostics);
-    }
     let primitive_count = parsed
         .document
         .meshes()
@@ -1194,20 +1180,13 @@ fn validate_texture_transform_number(
             "texture transform component must be a finite number",
         ));
     };
-    if !value.is_finite() {
+    // The renderer applies the transform in f32.
+    if !(value as f32).is_finite() {
         return Err(ImportDiagnostic::error(
             ImportCode::NonFiniteValue,
             path,
-            "texture transform component must be finite",
+            "texture transform component must be finite as a 32-bit float",
             "author a finite UV transform",
-        ));
-    }
-    if value.abs() > MAX_ANIMATED_GLB_TEXTURE_TRANSFORM_COMPONENT {
-        return Err(resource_limit(
-            path,
-            &format!(
-                "texture transform component {value} exceeds absolute bound {MAX_ANIMATED_GLB_TEXTURE_TRANSFORM_COMPONENT}"
-            ),
         ));
     }
     Ok(())

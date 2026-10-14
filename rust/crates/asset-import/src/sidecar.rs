@@ -61,20 +61,6 @@ impl SourceUri {
             | Self::ContentAddressed(value) => value,
         }
     }
-
-    fn is_valid(&self) -> bool {
-        match self {
-            Self::RelativePath(path) => crate::artifact::is_safe_relative_path(path),
-            Self::AbsolutePath(path) => path.starts_with('/') && !path.contains('\0'),
-            Self::FileUrl(url) => url.starts_with("file://") && url.len() > "file://".len(),
-            Self::ContentAddressed(hash) => {
-                hash.len() == 64
-                    && hash
-                        .bytes()
-                        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-            }
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -321,8 +307,7 @@ struct StoredImportSettings {
     material_namespace: Option<String>,
 }
 
-pub fn encode_sidecar(sidecar: &SidecarMetadata) -> Result<String, SidecarCodecError> {
-    validate_sidecar(sidecar)?;
+pub fn encode_sidecar(sidecar: &SidecarMetadata) -> String {
     let mut labels = sidecar.labels.clone();
     labels.sort();
     labels.dedup();
@@ -346,10 +331,9 @@ pub fn encode_sidecar(sidecar: &SidecarMetadata) -> Result<String, SidecarCodecE
         },
         generated_artifacts,
     };
-    let mut encoded = serde_json::to_string_pretty(&stored)
-        .map_err(|error| SidecarCodecError::new("$", error.to_string()))?;
+    let mut encoded = serde_json::to_string_pretty(&stored).expect("sidecar serializes");
     encoded.push('\n');
-    Ok(encoded)
+    encoded
 }
 
 pub fn decode_sidecar(input: &str) -> Result<SidecarMetadata, SidecarCodecError> {
@@ -393,6 +377,9 @@ pub fn decode_sidecar(input: &str) -> Result<SidecarMetadata, SidecarCodecError>
     Ok(sidecar)
 }
 
+/// The sidecar's checks where its file enters: the schema it was written
+/// with, and the import settings that drive the importer. The rest is
+/// provenance the CLI records and compares.
 fn validate_sidecar(sidecar: &SidecarMetadata) -> Result<(), SidecarCodecError> {
     if sidecar.schema_version != SIDECAR_SCHEMA_VERSION {
         return Err(SidecarCodecError::new(
@@ -400,64 +387,11 @@ fn validate_sidecar(sidecar: &SidecarMetadata) -> Result<(), SidecarCodecError> 
             format!("unsupported sidecar schema {}", sidecar.schema_version),
         ));
     }
-    if !sidecar.source_uri.is_valid() {
-        return Err(SidecarCodecError::new("sourceUri", "invalid source URI"));
-    }
-    if sidecar.source_hash.len() != 64
-        || !sidecar
-            .source_hash
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-    {
-        return Err(SidecarCodecError::new(
-            "sourceHash",
-            "source hash must be SHA-256",
-        ));
-    }
-    if sidecar.importer_version == 0
-        || core_assets::AssetKind::from_prefix(&sidecar.declared_kind).is_none()
-    {
-        return Err(SidecarCodecError::new(
-            "$",
-            "importer version and a known declared asset kind are required",
-        ));
-    }
     if !sidecar.import_settings.is_valid() {
         return Err(SidecarCodecError::new(
             "importSettings",
             "invalid typed import settings",
         ));
-    }
-    let mut labels = BTreeSet::new();
-    for (index, label) in sidecar.labels.iter().enumerate() {
-        if !is_scoped_key(label) || !labels.insert(label.as_str()) {
-            return Err(SidecarCodecError::new(
-                format!("labels[{index}]"),
-                "label is invalid or duplicated",
-            ));
-        }
-    }
-    let mut paths = BTreeSet::new();
-    for (index, artifact) in sidecar.generated_artifacts.iter().enumerate() {
-        if !crate::artifact::is_safe_relative_path(&artifact.relative_path)
-            || !paths.insert(artifact.relative_path.as_str())
-        {
-            return Err(SidecarCodecError::new(
-                format!("generatedArtifacts[{index}].relativePath"),
-                "artifact path is invalid or duplicated",
-            ));
-        }
-        if artifact.content_hash.len() != 64
-            || !artifact
-                .content_hash
-                .bytes()
-                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-        {
-            return Err(SidecarCodecError::new(
-                format!("generatedArtifacts[{index}].contentHash"),
-                "artifact hash must be SHA-256",
-            ));
-        }
     }
     Ok(())
 }

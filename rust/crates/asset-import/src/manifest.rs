@@ -44,54 +44,6 @@ impl ImportManifest {
         });
         manifest
     }
-
-    fn validate(&self) -> Result<(), ImportManifestCodecError> {
-        if self.schema_version != IMPORT_MANIFEST_SCHEMA_VERSION {
-            return Err(ImportManifestCodecError::new(
-                "schemaVersion",
-                format!("unsupported import manifest schema {}", self.schema_version),
-            ));
-        }
-        if self.importer_version == 0 || self.source_schema_version == 0 {
-            return Err(ImportManifestCodecError::new(
-                "$",
-                "version fields must be non-zero",
-            ));
-        }
-        if self.source_uri.trim().is_empty() {
-            return Err(ImportManifestCodecError::new(
-                "sourceUri",
-                "source URI must not be empty",
-            ));
-        }
-        core_assets::AssetId::parse(&self.mesh_asset_id)
-            .map_err(|error| ImportManifestCodecError::new("meshAssetId", error.to_string()))?;
-        validate_hash("sourceHash", &self.source_hash)?;
-        let mut paths = BTreeSet::new();
-        for (index, artifact) in self.artifacts.iter().enumerate() {
-            if !crate::artifact::is_safe_relative_path(&artifact.relative_path) {
-                return Err(ImportManifestCodecError::new(
-                    format!("artifacts[{index}].relativePath"),
-                    "artifact path is not safe and relative",
-                ));
-            }
-            if !paths.insert(artifact.relative_path.as_str()) {
-                return Err(ImportManifestCodecError::new(
-                    format!("artifacts[{index}].relativePath"),
-                    "duplicate artifact path",
-                ));
-            }
-            validate_hash(
-                &format!("artifacts[{index}].contentHash"),
-                &artifact.content_hash,
-            )?;
-        }
-        Ok(())
-    }
-}
-
-pub fn validate_import_manifest(manifest: &ImportManifest) -> Result<(), ImportManifestCodecError> {
-    manifest.validate()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -160,7 +112,10 @@ pub fn build_manifest_with_source_hash(
         .iter()
         .map(|artifact| ArtifactFingerprint {
             relative_path: artifact.relative_path.clone(),
-            content_hash: fingerprint_hex(&artifact.bytes),
+            content_hash: artifact
+                .sha256
+                .clone()
+                .unwrap_or_else(|| fingerprint_hex(&artifact.bytes)),
             byte_len: artifact.bytes.len() as u64,
         })
         .collect();
@@ -177,10 +132,7 @@ pub fn build_manifest_with_source_hash(
     }
 }
 
-pub fn encode_import_manifest(
-    manifest: &ImportManifest,
-) -> Result<String, ImportManifestCodecError> {
-    validate_import_manifest(manifest)?;
+pub fn encode_import_manifest(manifest: &ImportManifest) -> String {
     let canonical = manifest.canonical();
     let stored = StoredImportManifest {
         schema_version: canonical.schema_version,
@@ -192,12 +144,14 @@ pub fn encode_import_manifest(
         guid: canonical.guid.map(|guid| guid.as_str().to_owned()),
         artifacts: canonical.artifacts,
     };
-    let mut encoded = serde_json::to_string_pretty(&stored)
-        .map_err(|error| ImportManifestCodecError::new("$", error.to_string()))?;
+    let mut encoded = serde_json::to_string_pretty(&stored).expect("import manifest serializes");
     encoded.push('\n');
-    Ok(encoded)
+    encoded
 }
 
+/// Reads a previous import's manifest. Beyond its typed GUID only the schema
+/// version is checked: the manifest is the Engine's own record, read back to
+/// classify a reimport, and nothing touches storage by its paths.
 pub fn decode_import_manifest(input: &str) -> Result<ImportManifest, ImportManifestCodecError> {
     let mut deserializer = serde_json::Deserializer::from_str(input);
     let stored: StoredImportManifest = serde_path_to_error::deserialize(&mut deserializer)
@@ -211,6 +165,15 @@ pub fn decode_import_manifest(input: &str) -> Result<ImportManifest, ImportManif
     deserializer
         .end()
         .map_err(|error| ImportManifestCodecError::new("$", error.to_string()))?;
+    if stored.schema_version != IMPORT_MANIFEST_SCHEMA_VERSION {
+        return Err(ImportManifestCodecError::new(
+            "schemaVersion",
+            format!(
+                "unsupported import manifest schema {}",
+                stored.schema_version
+            ),
+        ));
+    }
     let guid = stored
         .guid
         .map(|guid| {
@@ -228,7 +191,6 @@ pub fn decode_import_manifest(input: &str) -> Result<ImportManifest, ImportManif
         guid,
         artifacts: stored.artifacts,
     };
-    validate_import_manifest(&manifest)?;
     Ok(manifest.canonical())
 }
 
@@ -327,19 +289,4 @@ pub fn detect_source_drift(
             "review the reimport plan before updating the asset lock",
         )
     })
-}
-
-fn validate_hash(path: &str, hash: &str) -> Result<(), ImportManifestCodecError> {
-    if hash.len() == 64
-        && hash
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-    {
-        Ok(())
-    } else {
-        Err(ImportManifestCodecError::new(
-            path,
-            "hash must be a lowercase SHA-256 digest",
-        ))
-    }
 }

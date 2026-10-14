@@ -19,8 +19,7 @@ pub use registration::{
     ComponentValueSnapshot, EntityComponent, RegisteredComponentSnapshot,
     RegisteredComponentSnapshotError, ASSET_BINDING_COMPONENT_TYPE_ID, BOUNDS_COMPONENT_TYPE_ID,
     COLLISION_COMPONENT_TYPE_ID, CONTROLLER_COMPONENT_TYPE_ID, KINEMATIC_COMPONENT_TYPE_ID,
-    MAX_COMPONENT_CODEC_ID_BYTES, MAX_COMPONENT_INSPECTION_ENTITIES, MAX_COMPONENT_TYPE_ID_BYTES,
-    MAX_REGISTERED_COMPONENT_TYPES, RENDERABLE_COMPONENT_TYPE_ID, TRANSFORM_COMPONENT_TYPE_ID,
+    MAX_COMPONENT_INSPECTION_ENTITIES, RENDERABLE_COMPONENT_TYPE_ID, TRANSFORM_COMPONENT_TYPE_ID,
 };
 
 trait ErasedComponentTable: Send + Sync {
@@ -371,11 +370,6 @@ fn admits_registration<T: EntityComponent>(
             rust_type: requested_rust_type,
             registered_component: existing_id.clone(),
             requested_component: requested_id.clone(),
-        });
-    }
-    if tables.len() >= MAX_REGISTERED_COMPONENT_TYPES {
-        return Err(ComponentRegistrationError::TypeLimitExceeded {
-            limit: MAX_REGISTERED_COMPONENT_TYPES,
         });
     }
     Ok(true)

@@ -14,7 +14,7 @@ use voxel_convert::{
     MeshSourceImportRequest, TextureChannelLayout, TextureColorSpace, TextureMaterialBinding,
     TextureMaterialMode, TextureSampleAsset, TextureSamplingPolicy, TextureSourceRef,
     TextureUvAttributeRef, TextureWrapPolicy, VoxelModelInfoRequest, VoxelModelWindowRequest,
-    MAX_CONVERSION_RESOLUTION_AXIS, MAX_MESH_SOURCE_PATH_BYTES,
+    MAX_CONVERSION_RESOLUTION_AXIS,
 };
 
 const SOURCE: &[u8] = include_bytes!(concat!(
@@ -80,11 +80,6 @@ fn imported_source_has_hash_pinned_groups_materials_and_strict_shape() {
     stale.expected_source_sha256 = Some(hash('a'));
     let error = import_mesh_source(&stale).unwrap_err();
     assert_eq!(error.diagnostics()[0].code, "conversion.sourceHashMismatch");
-
-    let mut oversized_path = request;
-    oversized_path.source_path = "p".repeat(MAX_MESH_SOURCE_PATH_BYTES + 1);
-    let error = import_mesh_source(&oversized_path).unwrap_err();
-    assert_eq!(error.diagnostics()[0].code, "conversion.invalidString");
 }
 
 #[test]

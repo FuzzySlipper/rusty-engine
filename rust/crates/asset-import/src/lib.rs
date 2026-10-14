@@ -33,8 +33,8 @@ pub use gltf_package::{
 pub use importer::{import, import_with_context, ImportContext, ImportOutcome, ImportedAssets};
 pub use manifest::{
     build_manifest, build_manifest_with_source_hash, decode_import_manifest, detect_source_drift,
-    encode_import_manifest, plan_reimport, validate_import_manifest, ArtifactFingerprint,
-    ImportManifest, ImportManifestCodecError, ReimportPlan,
+    encode_import_manifest, plan_reimport, ArtifactFingerprint, ImportManifest,
+    ImportManifestCodecError, ReimportPlan,
 };
 pub use plan::{
     plan_animated_glb_import, plan_animated_gltf_import, plan_import, ImportMode, ImportPlan,

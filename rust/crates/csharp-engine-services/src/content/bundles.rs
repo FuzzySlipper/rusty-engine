@@ -70,8 +70,6 @@ struct FileDefinition {
     sha256: String,
 }
 
-pub(super) use product_container::is_relative_path as relative;
-
 impl ProductContentBundles {
     /// Read only the bundle inventory; no bundle payload is read here. A loose
     /// Product carries the SDK-generated `.rusty-bundles.json` in its content

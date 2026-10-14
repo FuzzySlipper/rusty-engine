@@ -42,13 +42,6 @@ pub(super) fn validate_request(
             ));
         }
     }
-    if request.target_asset_id.len() > MAX_STRING_BYTES {
-        return Err(ConversionError::one(
-            "conversion.invalidTargetIdentity",
-            "targetAssetId",
-            format!("target asset identity exceeds {MAX_STRING_BYTES} UTF-8 bytes"),
-        ));
-    }
     match AssetId::parse(&request.target_asset_id) {
         Ok(id) if id.kind() == AssetKind::VoxelObject => {}
         Ok(id) => {

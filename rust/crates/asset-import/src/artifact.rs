@@ -6,6 +6,9 @@ use crate::{ImportedAnimatedGlb, ImportedAssets};
 pub struct GeneratedArtifact {
     pub relative_path: String,
     pub bytes: Vec<u8>,
+    /// The bytes' SHA-256 (lowercase hex) when the import already computed
+    /// it: a runtime GLB is the hashed source. The manifest hashes the rest.
+    pub sha256: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -32,10 +35,12 @@ pub fn render_artifacts(
         GeneratedArtifact {
             relative_path: format!("{name}.catalog.json"),
             bytes: catalog.into_bytes(),
+            sha256: None,
         },
         GeneratedArtifact {
             relative_path: format!("{name}.static-mesh.json"),
             bytes: mesh.into_bytes(),
+            sha256: None,
         },
     ];
     artifacts.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
@@ -55,27 +60,24 @@ pub fn render_animated_glb_artifacts(
         GeneratedArtifact {
             relative_path: format!("{name}.animated-mesh.json"),
             bytes: mesh.into_bytes(),
+            sha256: None,
         },
         GeneratedArtifact {
             relative_path: assets.runtime_resource_path.clone(),
             bytes: assets.runtime_resource_bytes.clone(),
+            sha256: assets
+                .animated_mesh
+                .content_hash
+                .as_deref()
+                .and_then(|hash| hash.strip_prefix("sha256:"))
+                .map(str::to_owned),
         },
         GeneratedArtifact {
             relative_path: format!("{name}.catalog.json"),
             bytes: catalog.into_bytes(),
+            sha256: None,
         },
     ];
     artifacts.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
     Ok(artifacts)
-}
-
-pub(crate) fn is_safe_relative_path(path: &str) -> bool {
-    !path.is_empty()
-        && path.trim() == path
-        && !path.starts_with('/')
-        && !path.contains('\\')
-        && !path.contains('\0')
-        && path
-            .split('/')
-            .all(|segment| !segment.is_empty() && segment != "." && segment != "..")
 }

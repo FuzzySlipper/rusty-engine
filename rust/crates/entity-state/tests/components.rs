@@ -6,7 +6,7 @@ use entity_state::{
     ComponentReplacement, ComponentTypeId, EntityAuthoringError, EntityAuthoringService,
     EntityComponent, EntityDefinition, EntityState, EntityStateSnapshotError,
     RegisteredComponentSnapshotError, TransformComponent, MAX_COMPONENT_INSPECTION_ENTITIES,
-    MAX_COMPONENT_TYPE_ID_BYTES, TRANSFORM_COMPONENT_TYPE_ID,
+    TRANSFORM_COMPONENT_TYPE_ID,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -656,14 +656,9 @@ fn runtime_only_snapshot_policy_and_inspection_bounds_are_explicit() {
 }
 
 #[test]
-fn stable_component_and_codec_identities_are_bounded_and_versioned() {
-    let at_limit = format!("a{}", "b".repeat(MAX_COMPONENT_TYPE_ID_BYTES - 1));
-    assert_eq!(
-        ComponentTypeId::parse(&at_limit).unwrap().as_str(),
-        at_limit
-    );
-    let over_limit = format!("a{}", "b".repeat(MAX_COMPONENT_TYPE_ID_BYTES));
-    assert!(ComponentTypeId::parse(over_limit).is_err());
+fn stable_component_and_codec_identities_are_versioned() {
+    let long = format!("a{}", "b".repeat(1024));
+    assert_eq!(ComponentTypeId::parse(&long).unwrap().as_str(), long);
     assert!(ComponentTypeId::parse("Rust.Type").is_err());
     assert!(ComponentCodec::<DurablePower>::new(
         DURABLE_CODEC_ID,

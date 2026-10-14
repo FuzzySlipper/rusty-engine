@@ -386,7 +386,7 @@ fn animated_glb_invalid_content_still_rejects_after_filename_admission() {
 }
 
 #[test]
-fn animated_glb_admits_bounded_texture_transform_and_retains_exact_bytes() {
+fn animated_glb_admits_large_texture_transform_and_retains_exact_bytes() {
     let source = rewrite_glb_json(ANIMATED_GLB, |root| {
         root["extensionsUsed"]
             .as_array_mut()
@@ -396,7 +396,7 @@ fn animated_glb_admits_bounded_texture_transform_and_retains_exact_bytes() {
             ));
         root["materials"][0]["pbrMetallicRoughness"]["baseColorTexture"]["extensions"] = serde_json::json!({
             "KHR_texture_transform": {
-                "offset": [-0.25, 0.5],
+                "offset": [-0.25, 2_000_000.0],
                 "rotation": 0.75,
                 "scale": [2.0, -3.0],
                 "texCoord": 0
@@ -406,7 +406,9 @@ fn animated_glb_admits_bounded_texture_transform_and_retains_exact_bytes() {
     let uri = SourceUri::RelativePath("content/actors/transformed-character.glb".to_owned());
     let imported = import_animated_glb_asset(&uri, &source, &ImportContext::default());
     assert!(!imported.has_errors(), "{:?}", imported.diagnostics);
-    let assets = imported.assets.expect("bounded transform is admitted");
+    let assets = imported
+        .assets
+        .expect("an f32-finite transform is admitted");
     assert_eq!(assets.runtime_resource_bytes, source);
     assert_eq!(
         assets.receipt.source_hash,
@@ -566,8 +568,8 @@ fn animated_glb_rejects_malformed_or_unrealizable_texture_transforms_atomically(
             ImportCode::InvalidContainer,
         ),
         (
-            serde_json::json!({"scale": [1_000_001.0, 1.0]}),
-            ImportCode::ResourceLimit,
+            serde_json::json!({"scale": [1.0e39, 1.0]}),
+            ImportCode::InvalidContainer,
         ),
         (
             serde_json::json!({"texCoord": 4}),
@@ -607,6 +609,36 @@ fn animated_glb_rejects_malformed_or_unrealizable_texture_transforms_atomically(
             plan.diagnostics
         );
     }
+
+    // glTF types the base colour transform as f32 and refuses a larger
+    // number itself; the normal texture's extension stays untyped JSON, so
+    // the import refuses what the renderer's f32 cannot hold.
+    let source = rewrite_glb_json(ANIMATED_GLB, |root| {
+        root["extensionsUsed"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::Value::String(
+                "KHR_texture_transform".to_owned(),
+            ));
+        root["materials"][0]["normalTexture"] = serde_json::json!({
+            "index": 0,
+            "extensions": {"KHR_texture_transform": {"scale": [1.0e39, 1.0]}}
+        });
+    });
+    let imported = import_animated_glb_asset(
+        &SourceUri::RelativePath("content/actors/invalid-transform.glb".to_owned()),
+        &source,
+        &ImportContext::default(),
+    );
+    assert!(imported.assets.is_none());
+    assert!(
+        imported
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == ImportCode::NonFiniteValue),
+        "{:?}",
+        imported.diagnostics
+    );
 }
 
 #[test]
@@ -1246,8 +1278,12 @@ fn sidecar_guid_provenance_reconcile_and_override_are_typed() {
         ImportSettings::default(),
         "fixture-salt",
     );
-    let encoded = encode_sidecar(&metadata).unwrap();
+    let encoded = encode_sidecar(&metadata);
     assert_eq!(decode_sidecar(&encoded).unwrap(), metadata);
+    // Whatever source path the CLI was given reads back as written.
+    let mut dotted = metadata.clone();
+    dotted.source_uri = SourceUri::RelativePath("./models/../fixture.mesh.json".to_owned());
+    assert_eq!(decode_sidecar(&encode_sidecar(&dotted)).unwrap(), dotted);
     assert!(
         decode_sidecar(&encoded.replace("\"schemaVersion\": 1", "\"schemaVersion\": 2")).is_err()
     );
@@ -1346,12 +1382,12 @@ fn comparing_a_plan_with_its_prior_afterwards_matches_planning_against_it() {
 }
 
 #[test]
-fn directory_publication_is_whole_and_failed_verification_preserves_prior() {
+fn published_import_resolves_its_material_and_texture_from_the_written_files() {
     let root = temp_directory("publication");
     let output = root.join("imported");
     fs::create_dir(&output).unwrap();
     fs::write(output.join("prior.txt"), b"prior").unwrap();
-    let mut plan = plan_import(
+    let plan = plan_import(
         &uri(),
         VALID,
         &ImportContext::default(),
@@ -1362,19 +1398,97 @@ fn directory_publication_is_whole_and_failed_verification_preserves_prior() {
     let receipt = publish_directory_atomically(&plan, &output).unwrap();
     assert!(receipt.replaced_previous);
     assert!(!output.join("prior.txt").exists());
-    assert!(receipt
-        .written_files
-        .iter()
-        .all(|path| output.join(path).is_file()));
+    assert_eq!(receipt.written_files.len(), plan.files.len());
 
-    fs::write(output.join("sentinel.txt"), b"keep-me").unwrap();
-    plan.files
-        .iter_mut()
-        .find(|file| file.relative_path.ends_with(".static-mesh.json"))
+    // The manifest names every published artifact by the hash of the bytes
+    // now on disk.
+    let manifest = decode_import_manifest(
+        &fs::read_to_string(output.join("fixture-triangle.import.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(manifest, *plan.manifest.as_ref().unwrap());
+    for artifact in &manifest.artifacts {
+        let bytes = fs::read(output.join(&artifact.relative_path)).unwrap();
+        assert_eq!(artifact.byte_len, bytes.len() as u64);
+        assert_eq!(
+            artifact.content_hash,
+            format!("{:x}", sha2::Sha256::digest(&bytes))
+        );
+    }
+
+    // The published catalog resolves the mesh through its material to the
+    // texture it depends on.
+    let catalog =
+        decode_catalog(&fs::read_to_string(output.join("fixture-triangle.catalog.json")).unwrap())
+            .unwrap();
+    assert!(validate_catalog(&catalog).is_ok());
+    let mesh = catalog
+        .entries
+        .iter()
+        .find(|entry| entry.id.as_str() == "mesh/fixture-triangle")
+        .unwrap();
+    let material = catalog
+        .entries
+        .iter()
+        .find(|entry| entry.id == *mesh.dependencies[0].id())
+        .unwrap();
+    assert_eq!(material.id.as_str(), "material/steel");
+    let texture = material
+        .material
+        .as_ref()
         .unwrap()
-        .bytes = b"corrupt candidate".to_vec();
-    assert!(publish_directory_atomically(&plan, &output).is_err());
-    assert_eq!(fs::read(output.join("sentinel.txt")).unwrap(), b"keep-me");
+        .style
+        .texture
+        .as_ref()
+        .unwrap();
+    assert_eq!(texture.id().as_str(), "texture/steel-plate");
+    assert!(catalog
+        .entries
+        .iter()
+        .any(|entry| entry.id == *texture.id()));
+    let static_mesh: render_model::StaticMeshAsset = serde_json::from_slice(
+        &fs::read(output.join("fixture-triangle.static-mesh.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(static_mesh.material_slots[0].material, "material/steel");
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn failed_staging_write_preserves_the_previous_publication() {
+    let root = temp_directory("failed-write");
+    let output = root.join("imported");
+    let mut plan = plan_import(
+        &uri(),
+        VALID,
+        &ImportContext::default(),
+        ImportMode::Write,
+        None,
+        None,
+    );
+    publish_directory_atomically(&plan, &output).unwrap();
+    let published = fs::read(output.join("fixture-triangle.static-mesh.json")).unwrap();
+
+    // A file cannot also be a directory, so staging this plan fails part-way.
+    plan.files.push(GeneratedArtifact {
+        relative_path: "fixture-triangle.catalog.json/nested.json".to_owned(),
+        bytes: b"{}".to_vec(),
+        sha256: None,
+    });
+    assert!(matches!(
+        publish_directory_atomically(&plan, &output),
+        Err(PublicationError::Io(_))
+    ));
+    assert_eq!(
+        fs::read(output.join("fixture-triangle.static-mesh.json")).unwrap(),
+        published
+    );
+    let leftovers: Vec<_> = fs::read_dir(&root)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect();
+    assert_eq!(leftovers, ["imported"], "the staging directory is removed");
 
     fs::remove_dir_all(root).unwrap();
 }

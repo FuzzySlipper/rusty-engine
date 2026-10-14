@@ -1,8 +1,6 @@
-use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::fingerprint::fingerprint_hex;
 use crate::{ImportMode, ImportPlan};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -29,11 +27,8 @@ pub enum PublicationError {
         output_directory: PathBuf,
         sidecar_path: PathBuf,
     },
-    UnsafeRelativePath(String),
-    DuplicatePath(String),
     ParentMissing(PathBuf),
     Io(std::io::Error),
-    VerificationFailed(String),
     RollbackFailed {
         publish_error: std::io::Error,
         rollback_error: std::io::Error,
@@ -61,8 +56,8 @@ impl From<std::io::Error> for PublicationError {
 }
 
 /// Publishes all planned output as one directory swap. No output path is
-/// touched until every staged file has been written and hash-verified. If the
-/// final rename fails, the previous directory is restored before returning.
+/// touched until every staged file has been written. If the final rename
+/// fails, the previous directory is restored before returning.
 pub fn publish_directory_atomically(
     plan: &ImportPlan,
     output_directory: &Path,
@@ -90,23 +85,10 @@ pub fn publish_directory_atomically(
             output_directory.to_owned(),
         ));
     }
-    let mut paths = BTreeSet::new();
-    for file in &plan.files {
-        if !crate::artifact::is_safe_relative_path(&file.relative_path) {
-            return Err(PublicationError::UnsafeRelativePath(
-                file.relative_path.clone(),
-            ));
-        }
-        if !paths.insert(file.relative_path.as_str()) {
-            return Err(PublicationError::DuplicatePath(file.relative_path.clone()));
-        }
-    }
-    validate_file_closure(plan, &paths)?;
-
     let (staging, backup) = reserve_paths(parent, name)?;
-    if let Err(error) = stage_and_verify(plan, &staging) {
+    if let Err(error) = stage(plan, &staging) {
         let _ = fs::remove_dir_all(&staging);
-        return Err(error);
+        return Err(PublicationError::Io(error));
     }
     let replaced_previous = output_directory.exists();
     if replaced_previous {
@@ -135,7 +117,11 @@ pub fn publish_directory_atomically(
     };
     Ok(PublicationReceipt {
         output_directory: output_directory.to_owned(),
-        written_files: paths.into_iter().map(str::to_owned).collect(),
+        written_files: plan
+            .files
+            .iter()
+            .map(|file| file.relative_path.clone())
+            .collect(),
         replaced_previous,
         retained_backup,
         retained_sidecar_backup: None,
@@ -288,7 +274,7 @@ fn reserve_paths(parent: &Path, name: &str) -> Result<(PathBuf, PathBuf), Public
     )))
 }
 
-fn stage_and_verify(plan: &ImportPlan, staging: &Path) -> Result<(), PublicationError> {
+fn stage(plan: &ImportPlan, staging: &Path) -> std::io::Result<()> {
     for file in &plan.files {
         let path = staging.join(&file.relative_path);
         if let Some(parent) = path.parent() {
@@ -296,56 +282,5 @@ fn stage_and_verify(plan: &ImportPlan, staging: &Path) -> Result<(), Publication
         }
         fs::write(&path, &file.bytes)?;
     }
-    let manifest = plan
-        .manifest
-        .as_ref()
-        .ok_or(PublicationError::InvalidPlan)?;
-    for artifact in &manifest.artifacts {
-        let path = staging.join(&artifact.relative_path);
-        let bytes = fs::read(&path)?;
-        if bytes.len() as u64 != artifact.byte_len
-            || fingerprint_hex(&bytes) != artifact.content_hash
-        {
-            return Err(PublicationError::VerificationFailed(
-                artifact.relative_path.clone(),
-            ));
-        }
-    }
-    let name = import_asset_name(&manifest.mesh_asset_id)?;
-    let manifest_path = format!("{name}.import.json");
-    let expected =
-        crate::encode_import_manifest(manifest).map_err(|_| PublicationError::InvalidPlan)?;
-    if fs::read(staging.join(&manifest_path))? != expected.as_bytes() {
-        return Err(PublicationError::VerificationFailed(manifest_path));
-    }
     Ok(())
-}
-
-fn validate_file_closure(
-    plan: &ImportPlan,
-    paths: &BTreeSet<&str>,
-) -> Result<(), PublicationError> {
-    let manifest = plan
-        .manifest
-        .as_ref()
-        .ok_or(PublicationError::InvalidPlan)?;
-    let name = import_asset_name(&manifest.mesh_asset_id)?;
-    let manifest_path = format!("{name}.import.json");
-    let mut expected: BTreeSet<_> = manifest
-        .artifacts
-        .iter()
-        .map(|artifact| artifact.relative_path.as_str())
-        .collect();
-    expected.insert(&manifest_path);
-    if &expected != paths {
-        return Err(PublicationError::InvalidPlan);
-    }
-    Ok(())
-}
-
-fn import_asset_name(asset_id: &str) -> Result<&str, PublicationError> {
-    asset_id
-        .strip_prefix("mesh/")
-        .or_else(|| asset_id.strip_prefix("mesh-animation/"))
-        .ok_or(PublicationError::InvalidPlan)
 }

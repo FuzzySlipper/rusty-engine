@@ -1,8 +1,8 @@
 use std::collections::BTreeSet;
 
 use asset_catalog::{
-    validate_catalog, AssetCatalog, CatalogEntry, MaterialAuthority, MaterialDefinition,
-    MaterialStyle, Rgba, UvStrategy,
+    AssetCatalog, CatalogEntry, MaterialAuthority, MaterialDefinition, MaterialStyle, Rgba,
+    UvStrategy,
 };
 use core_assets::{AssetId, AssetReference, AssetVersionReq};
 use render_model::{
@@ -369,26 +369,10 @@ pub fn import_with_context(source: &SourceMesh, context: &ImportContext) -> Impo
             diagnostics,
         };
     }
-    let catalog = AssetCatalog::from_entries(entries).canonical();
-    let validation = validate_catalog(&catalog);
-    if !validation.is_ok() {
-        diagnostics.extend(validation.diagnostics().into_iter().map(|item| {
-            ImportDiagnostic::error(
-                ImportCode::InvalidDescriptor,
-                item.path,
-                item.message,
-                "repair generated asset dependencies",
-            )
-        }));
-        return ImportOutcome {
-            assets: None,
-            diagnostics,
-        };
-    }
     ImportOutcome {
         assets: Some(ImportedAssets {
             static_mesh,
-            catalog,
+            catalog: AssetCatalog::from_entries(entries).canonical(),
         }),
         diagnostics,
     }

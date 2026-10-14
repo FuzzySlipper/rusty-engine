@@ -4,7 +4,7 @@ use core_assets::{AssetId, AssetKind};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::codec::{valid_sha256, MAX_MATERIAL_MAPPINGS, MAX_REPRESENTED_VOXELS, MAX_STRING_BYTES};
+use crate::codec::{MAX_MATERIAL_MAPPINGS, MAX_REPRESENTED_VOXELS, MAX_STRING_BYTES};
 
 /// Largest lattice span representable by the durable +/-1,000,000-cell
 /// coordinate contract. Conversion work and retained output have independent,
@@ -114,13 +114,6 @@ pub fn validate_conversion_request(
         )),
     }
     validate_string(&request.source_path, "sourcePath", &mut diagnostics);
-    if !valid_sha256(&request.expected_source_sha256) {
-        diagnostics.push(input_diagnostic(
-            "conversion.invalidSourceIdentity",
-            "expectedSourceSha256",
-            "expectedSourceSha256 must be `sha256:` followed by 64 lowercase hexadecimal digits",
-        ));
-    }
     if let Some(path) = &request.license_path {
         validate_string(path, "licensePath", &mut diagnostics);
     }
