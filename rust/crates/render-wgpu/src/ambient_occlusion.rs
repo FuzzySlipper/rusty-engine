@@ -420,7 +420,7 @@ impl AmbientOcclusionPass {
         fields: &DistanceFields,
     ) -> Option<ViewOcclusion> {
         let path = match options.path {
-            _ if options.strength <= 0.0 || options.strength.is_nan() => AmbientOcclusionPath::Off,
+            _ if options.strength <= 0.0 => AmbientOcclusionPath::Off,
             AmbientOcclusionPath::Compute if self.compute.is_err() => AmbientOcclusionPath::Raster,
             AmbientOcclusionPath::DistanceField if !fields.available() => {
                 AmbientOcclusionPath::Raster

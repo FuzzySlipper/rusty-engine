@@ -231,12 +231,19 @@ fn parse(arguments: impl IntoIterator<Item = String>) -> Result<Option<Arguments
                 });
             }
             "--ambient-occlusion-strength" | "--ambient-occlusion-radius" => {
+                // A radius divides: it needs more than 0.
+                let strength = argument == "--ambient-occlusion-strength";
                 let value = arguments
                     .next()
                     .and_then(|value| value.parse::<f32>().ok())
-                    .filter(|value| value.is_finite() && *value >= 0.0)
-                    .ok_or_else(|| format!("{argument} needs a number of at least 0\n{USAGE}"))?;
-                if argument == "--ambient-occlusion-strength" {
+                    .filter(|value| {
+                        value.is_finite() && (*value > 0.0 || strength && *value == 0.0)
+                    })
+                    .ok_or_else(|| {
+                        let least = if strength { "of at least 0" } else { "above 0" };
+                        format!("{argument} needs a number {least}\n{USAGE}")
+                    })?;
+                if strength {
                     ambient_occlusion_strength = Some(value);
                 } else {
                     ambient_occlusion_radius = Some(value);
@@ -659,6 +666,26 @@ mod tests {
                 "{refused}: {error}"
             );
         }
+    }
+
+    #[test]
+    fn an_occlusion_radius_is_above_0_and_a_strength_at_least_0() {
+        let arguments = parsed(&[
+            "--ambient-occlusion-strength",
+            "0",
+            "--ambient-occlusion-radius",
+            "0.5",
+        ])
+        .unwrap()
+        .unwrap();
+        assert_eq!(arguments.ambient_occlusion_strength, Some(0.0));
+        assert_eq!(arguments.ambient_occlusion_radius, Some(0.5));
+        for refused in ["0", "-1", "nan", "inf"] {
+            let error = parsed(&["--ambient-occlusion-radius", refused]).unwrap_err();
+            assert!(error.starts_with("--ambient-occlusion-radius needs a number above 0"));
+        }
+        let error = parsed(&["--ambient-occlusion-strength", "-1"]).unwrap_err();
+        assert!(error.starts_with("--ambient-occlusion-strength needs a number of at least 0"));
     }
 
     #[test]

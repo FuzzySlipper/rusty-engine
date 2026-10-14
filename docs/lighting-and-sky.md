@@ -332,7 +332,8 @@ them, and a choice the player forgets returns to the game's value. `Read()`
 reports `Requested` with the player's choices in it. The choices are kept for
 the install in `engine-video-options.json` under the persistence root, read
 at startup; a game run without a persistence root keeps them for the session
-only, and a damaged file is reported and ignored.
+only, and a damaged file, or one holding a choice that is not a valid
+renderer setting, is reported and ignored.
 
 | Option | Group | Values |
 | --- | --- | --- |

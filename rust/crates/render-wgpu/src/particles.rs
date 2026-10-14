@@ -228,7 +228,7 @@ impl Particles {
     /// Advance every emitter and particle by `seconds` of Engine update time.
     pub fn advance(&mut self, seconds: f32, entities: EntityPositions<'_>) -> Vec<ParticleIssue> {
         let mut issues = Vec::new();
-        if seconds <= 0.0 || !seconds.is_finite() {
+        if seconds <= 0.0 {
             return issues;
         }
         let mut spawns = Vec::new();

@@ -377,7 +377,7 @@ impl Renderer {
         draw: impl FnOnce(&mut Self, TargetView<'_>) -> FrameStats,
     ) -> FrameStats {
         let scale = self.options.render_scale;
-        let scaled_down = scale.is_finite() && scale < 1.0;
+        let scaled_down = scale < 1.0;
         // An image effect reads the whole picture, so the view draws into a
         // picture of its own first, as a render scale's does.
         let effect = self.image_effect.active();

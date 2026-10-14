@@ -421,8 +421,15 @@ impl SceneSnapshot {
                 .get(name)
                 .map_err(|error| format!("{}: {error}", path.display()))
         };
-        let metadata = serde_json::from_slice(&json(METADATA)?)
+        let metadata: SceneSnapshotMetadata = serde_json::from_slice(&json(METADATA)?)
             .map_err(|error| format!("{METADATA}: {error}"))?;
+        // The renderer takes its options and the player's choices unchecked.
+        let options = render_wgpu::RendererOptions::from(metadata.options).settings();
+        if !metadata.player_settings.apply(options).valid() {
+            return Err(format!(
+                "{METADATA}: the renderer options or the player's choices are not valid renderer settings"
+            ));
+        }
         let changes = serde_json::from_slice(&json(CHANGES)?)
             .map_err(|error| format!("{CHANGES}: {error}"))?;
         Ok(Self {
@@ -576,5 +583,17 @@ mod tests {
         let bytes = snapshot.bytes(resource).expect("the packed mesh is stored");
         let decoded = render_model::decode_mesh_resource_payload(&asset.payload, &bytes).unwrap();
         assert_eq!(decoded, inline_mesh());
+
+        // Invalid settings are refused where the snapshot is read, not drawn
+        // with.
+        let mut scaled = metadata.clone();
+        scaled.player_settings.render_scale = Some(0.25);
+        let mut faint = metadata.clone();
+        faint.options.ambient_occlusion.strength = -1.0;
+        for metadata in [scaled, faint] {
+            write_scene_snapshot(&path, &metadata, &[], []).unwrap();
+            let error = SceneSnapshot::open(&path).err().expect("refused");
+            assert!(error.contains("not valid renderer settings"), "{error}");
+        }
     }
 }

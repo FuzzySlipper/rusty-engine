@@ -12,8 +12,8 @@ use std::{
 
 use product_host::ProductHostVideoOptionsRequest;
 use render_model::{
-    renderer_setting_value, RendererSettingsOverrides, RENDERER_SETTING_OPTIONS,
-    RENDERER_SETTING_PRESETS,
+    renderer_setting_value, RendererSettingsDescriptor, RendererSettingsOverrides,
+    RENDERER_SETTING_OPTIONS, RENDERER_SETTING_PRESETS,
 };
 use render_wgpu::{RendererSettingsReadout, SceneDriver, SettingRefusal};
 use serde_json::{json, Value};
@@ -34,8 +34,10 @@ pub(crate) struct VideoOptions {
 
 impl VideoOptions {
     /// The choices stored under `persistence_root`, or none; a store that
-    /// cannot be read is reported and ignored, so a damaged file never stops
-    /// a game from starting.
+    /// cannot be read, or holds a choice that is not a valid renderer
+    /// setting, is reported and ignored, so a damaged file never stops a game from
+    /// starting. The renderer takes the choices as they come from here and
+    /// from `answer`, without checking them again.
     pub(crate) fn open(persistence_root: Option<&Path>, streamed: bool) -> Self {
         let file = persistence_root.map(|root| root.join(VIDEO_OPTIONS_FILE));
         let choices = file
@@ -210,9 +212,17 @@ fn read_store(path: &Path) -> Result<Option<RendererSettingsOverrides>, String> 
             path.display()
         ));
     }
-    serde_json::from_value(value["choices"].clone())
-        .map(Some)
-        .map_err(|error| format!("{}: {error}", path.display()))
+    let choices: RendererSettingsOverrides = serde_json::from_value(value["choices"].clone())
+        .map_err(|error| format!("{}: {error}", path.display()))?;
+    // Each choice replaces its whole setting, so over any valid request the
+    // choices are valid exactly when they are over the default one.
+    if !choices.apply(RendererSettingsDescriptor::DEFAULT).valid() {
+        return Err(format!(
+            "{}: a choice is not a valid renderer setting",
+            path.display()
+        ));
+    }
+    Ok(Some(choices))
 }
 
 /// Written beside and renamed over, so a crash never leaves half a store.
@@ -296,6 +306,22 @@ mod tests {
         assert!(read_store(&path).is_err());
         assert!(VideoOptions::open(Some(&root), false).choices().is_empty());
         assert_eq!(read_store(&root.join("absent.json")).unwrap(), None);
+        // A number past f32 reads as infinity: the store is refused whole.
+        for choices in [
+            "{\"renderScale\":1e39}",
+            "{\"renderScale\":0.25,\"vsync\":false}",
+            "{\"ambientOcclusionStrength\":-1e39}",
+            "{\"ambientOcclusionRadius\":0}",
+            "{\"antialiasing\":3}",
+        ] {
+            fs::write(&path, format!("{{\"version\":1,\"choices\":{choices}}}")).unwrap();
+            let error = read_store(&path).unwrap_err();
+            assert!(
+                error.contains("not a valid renderer setting"),
+                "{choices}: {error}"
+            );
+            assert!(VideoOptions::open(Some(&root), false).choices().is_empty());
+        }
         let _ = fs::remove_dir_all(&root);
     }
 

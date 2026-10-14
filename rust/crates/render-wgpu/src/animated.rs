@@ -330,10 +330,9 @@ impl Renderer {
     /// Frames draw at it too, until [`Self::set_presentation_time`] moves
     /// them on.
     pub fn set_animation_time(&mut self, seconds: f64) {
-        if seconds.is_finite() && seconds >= 0.0 {
-            self.animation_time = seconds;
-            self.presentation_time = seconds;
-        }
+        debug_assert!(seconds.is_finite() && seconds >= 0.0, "{seconds}");
+        self.animation_time = seconds;
+        self.presentation_time = seconds;
     }
 
     /// The presentation time the next frames draw at: their `frame.time`,
@@ -342,9 +341,8 @@ impl Renderer {
     /// what moves with time moves every frame; poses, video and their facts
     /// stay on the committed time ([`Self::set_animation_time`]).
     pub fn set_presentation_time(&mut self, seconds: f64) {
-        if seconds.is_finite() && seconds >= 0.0 {
-            self.presentation_time = seconds;
-        }
+        debug_assert!(seconds.is_finite() && seconds >= 0.0, "{seconds}");
+        self.presentation_time = seconds;
     }
 
     /// Apply one animation controller op (`PresentationOp::Animation`).
@@ -1353,9 +1351,8 @@ impl Renderer {
         ) else {
             return;
         };
-        if node.parts.len() != instance.part_nodes.len() {
-            return;
-        }
+        // `rebuild_parts` sets both from one `animated_parts` call.
+        debug_assert_eq!(node.parts.len(), instance.part_nodes.len());
         let asset = self.tables.animated_assets.get(instance.slot);
         for (part, glb_node) in node.parts.iter().zip(&instance.part_nodes) {
             let skinned = asset.is_some_and(|asset| asset.model.nodes[*glb_node].skin.is_some());
@@ -1484,6 +1481,11 @@ impl Renderer {
             return Vec::new();
         };
         let Some(asset) = self.tables.animated_assets.get(instance.slot) else {
+            // No parts, so no part nodes: a redefinition re-derives the parts
+            // between retiring the old asset and admitting the new one.
+            if let Some(instance) = self.tables.animated.get_mut(&handle) {
+                instance.part_nodes.clear();
+            }
             return Vec::new();
         };
         let overrides: BTreeMap<u16, String> = match self.tables.nodes.get(&handle).map(|n| &n.kind)

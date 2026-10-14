@@ -1014,3 +1014,17 @@ fn a_controller_created_again_for_another_target_drives_only_that_one() {
     assert_ne!(moved, first);
     assert_eq!(moved, only_second, "only the second character is driven");
 }
+
+#[test]
+fn a_redefined_asset_keeps_its_instances_drawing() {
+    let mut harness = Harness::new(RendererOptions::default());
+    character_scene(&mut harness);
+    let (shown, before) = harness.render(&character_view());
+    // A redefinition retires the old asset's materials before the new one
+    // lands, which re-derives the instance's parts while it has no asset.
+    let body = admit(&mut harness, "csharp-joint-attachments/content/body.glb");
+    harness.apply(vec![RenderDiff::DefineAnimatedMesh { asset: body }]);
+    let (again, after) = harness.render(&character_view());
+    assert_eq!(again.draws, shown.draws);
+    assert_eq!(before, after);
+}
