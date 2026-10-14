@@ -19,7 +19,7 @@ pub mod portable;
 mod validation;
 mod voxel;
 
-pub use admission::{AdmittedAssetCatalog, AssetCatalogStore, CatalogAdmissionError};
+pub use admission::{AdmittedAssetCatalog, CatalogAdmissionError};
 pub use catalog::{AssetCatalog, CatalogEntry, CatalogResolveError};
 pub use change::{
     classify_material_change, material_change_impact, revalidate_asset, ChangeImpactReport,

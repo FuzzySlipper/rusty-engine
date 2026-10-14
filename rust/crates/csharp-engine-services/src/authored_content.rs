@@ -1793,9 +1793,6 @@ fn admission_error(error: CatalogAdmissionError) -> AuthoredError {
             message: error.message,
             source: error.path,
         },
-        CatalogAdmissionError::RevisionExhausted => {
-            AuthoredError::simple("catalog revision exhausted")
-        }
     }
 }
 fn parse_text(value: NativeUtf8Slice, field: &'static str) -> Result<String, String> {

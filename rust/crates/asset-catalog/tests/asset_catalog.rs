@@ -1,11 +1,11 @@
 use asset_catalog::{
     classify_material_change, decode_catalog, decode_lock, encode_catalog, encode_lock,
     fallback_for, generate_lock, material_change_impact, revalidate_asset, validate_catalog,
-    validate_lock, AdmittedAssetCatalog, AssetCatalog, AssetCatalogStore, AssetContext, AtlasInset,
-    AtlasPadding, AtlasRegionDefinition, CatalogEntry, CatalogValidationError, ChangeKind,
-    DependencyGraph, FallbackOutcome, FallbackVisual, LockIssue, MaterialAuthority,
-    MaterialDefinition, MaterialStyle, ReloadSuggestion, ResolvedVoxelSurfaceMapping, Rgba,
-    StructuralClass, TextureDefinition, TextureFilter, TextureWrap, UvStrategy, VoxelAlphaMode,
+    validate_lock, AdmittedAssetCatalog, AssetCatalog, AssetContext, AtlasInset, AtlasPadding,
+    AtlasRegionDefinition, CatalogEntry, CatalogValidationError, ChangeKind, DependencyGraph,
+    FallbackOutcome, FallbackVisual, LockIssue, MaterialAuthority, MaterialDefinition,
+    MaterialStyle, ReloadSuggestion, ResolvedVoxelSurfaceMapping, Rgba, StructuralClass,
+    TextureDefinition, TextureFilter, TextureWrap, UvStrategy, VoxelAlphaMode,
     VoxelAtlasDefinition, VoxelMaterialError, VoxelMaterialTable, VoxelSurfaceBinding,
     VoxelSurfaceMapping,
 };
@@ -481,7 +481,7 @@ fn atlas_padding_tile_and_region_quota_boundaries_are_typed() {
 }
 
 #[test]
-fn strict_reopen_and_catalog_replacement_are_atomic() {
+fn strict_reopen_keeps_the_admitted_identity() {
     let source = surface_catalog();
     let entries = source.entries.as_ptr();
     let admitted = AdmittedAssetCatalog::admit(source).unwrap();
@@ -490,9 +490,6 @@ fn strict_reopen_and_catalog_replacement_are_atomic() {
     assert_eq!(reopened, admitted);
     assert!(admitted.canonical_hash().starts_with("sha256:"));
     assert_eq!(reopened.canonical_hash(), admitted.canonical_hash());
-    let mut store = AssetCatalogStore::new(admitted);
-    let before_json = store.current().canonical_json().to_string();
-    let before_revision = store.revision();
 
     let mut invalid = surface_catalog();
     invalid
@@ -502,19 +499,7 @@ fn strict_reopen_and_catalog_replacement_are_atomic() {
         .unwrap()
         .dependencies
         .clear();
-    assert!(store.replace(invalid).is_err());
-    assert_eq!(store.revision(), before_revision);
-    assert_eq!(store.current().canonical_json(), before_json);
-
-    let mut valid = surface_catalog();
-    valid
-        .entries
-        .iter_mut()
-        .find(|entry| entry.id.as_str() == "material/atlas-stone")
-        .unwrap()
-        .label = Some("updated".to_string());
-    assert_eq!(store.replace(valid).unwrap(), before_revision + 1);
-    assert!(store.current().canonical_json().contains("updated"));
+    assert!(AdmittedAssetCatalog::admit(invalid).is_err());
 }
 
 #[test]

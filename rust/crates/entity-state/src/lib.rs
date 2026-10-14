@@ -32,7 +32,7 @@ pub use activation::{
 };
 pub use authoring::{
     ComponentReplacement, EntityAuthoringError, EntityAuthoringFact, EntityAuthoringReceipt,
-    EntityAuthoringService, MAX_COMPONENT_REPLACEMENTS,
+    EntityAuthoringService,
 };
 pub use character_motion::{
     validate_character_motion, CharacterMotionValidationError, CHARACTER_MOTION_CODEC_ID,

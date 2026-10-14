@@ -55,11 +55,6 @@ pub enum ComponentActivationError {
         entity: EntityId,
         component: ActivatableComponentKind,
     },
-    AlreadyInState {
-        entity: EntityId,
-        component: ActivatableComponentKind,
-        state: ComponentActivationState,
-    },
 }
 
 impl std::fmt::Display for ComponentActivationError {
@@ -148,14 +143,17 @@ pub fn set_component_activation(
         ComponentActivation::Inactive => ComponentActivationState::Inactive,
         ComponentActivation::Active => ComponentActivationState::Active,
     };
+    let revision_before = state.revision;
     if before == after {
-        return Err(ComponentActivationError::AlreadyInState {
+        return Ok(ComponentActivationReceipt {
+            revision_before,
+            revision_after: revision_before,
             entity,
             component,
-            state: before,
+            before,
+            after,
         });
     }
-    let revision_before = state.revision;
     match component {
         ActivatableComponentKind::Collision => {
             let mut collision = *state.collision(entity).expect("presence checked");

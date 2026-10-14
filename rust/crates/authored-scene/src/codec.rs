@@ -200,11 +200,9 @@ enum StoredAssetVersionRequirement {
     },
 }
 
+/// Writes the document's canonical stored form. The document is the caller's
+/// valid scene; [`decode_scene`] is where stored text is validated.
 pub fn encode_scene(document: &FlatSceneDocument) -> Result<String, SceneCodecError> {
-    let report = validate_scene(document);
-    if !report.is_valid() {
-        return Err(validation_error(report));
-    }
     let stored = StoredSceneDocument::from(&document.canonical());
     let mut encoded = serde_json::to_string_pretty(&stored)
         .map_err(|error| SceneCodecError::new("$", error.to_string()))?;

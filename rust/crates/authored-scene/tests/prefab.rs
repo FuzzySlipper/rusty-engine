@@ -101,6 +101,23 @@ fn prefab_variant_codec_validation_and_resolution_preserve_typed_behavior() {
         .unwrap();
     assert_eq!(visual.material.as_deref(), Some("material/steel"));
     assert!(!visual.active);
+
+    let woken = resolve_prefab(
+        &decoded,
+        PrefabId::new(2),
+        &[PrefabOverride {
+            target_role: "visual".to_owned(),
+            value: PrefabOverrideValue::Activation { active: true },
+        }],
+    )
+    .unwrap();
+    let visual = woken
+        .parts
+        .iter()
+        .find(|part| part.roles.contains(&"visual".to_owned()))
+        .unwrap();
+    assert_eq!(visual.material.as_deref(), Some("material/steel"));
+    assert!(visual.active);
 }
 
 #[test]

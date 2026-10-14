@@ -1,17 +1,16 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use core_assets::AssetKind;
+use core_assets::{AssetKind, AssetReference};
 use core_ids::SceneNodeId;
 use core_math::Vec3;
 
 use crate::{
-    FlatSceneDocument, SceneLightInvalid, SceneNodeKind, SceneTransform,
+    FlatSceneDocument, SceneLightInvalid, SceneNodeKind, SceneNodeRecord, SceneTransform,
     CURRENT_SCENE_SCHEMA_VERSION,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TransformInvalid {
-    RequiresSchema5,
     NonFiniteTranslation,
     NonFiniteRotation,
     NonUnitRotation,
@@ -22,7 +21,6 @@ pub enum TransformInvalid {
 impl TransformInvalid {
     pub const fn code(self) -> &'static str {
         match self {
-            Self::RequiresSchema5 => "requires-schema-5",
             Self::NonFiniteTranslation => "non-finite-translation",
             Self::NonFiniteRotation => "non-finite-rotation",
             Self::NonUnitRotation => "non-unit-rotation",
@@ -37,10 +35,6 @@ pub enum SceneValidationError {
     UnsupportedSchemaVersion {
         found: u32,
         supported: u32,
-    },
-    AuthoringVersionAheadOfSchema {
-        authored: u32,
-        schema: u32,
     },
     DuplicateNodeId {
         id: SceneNodeId,
@@ -68,13 +62,6 @@ pub enum SceneValidationError {
     },
     BlankTag {
         node: SceneNodeId,
-    },
-    DuplicateTag {
-        node: SceneNodeId,
-        tag: String,
-    },
-    DuplicateAssetDependency {
-        asset: String,
     },
     MissingAssetDependency {
         node: SceneNodeId,
@@ -130,7 +117,6 @@ impl SceneValidationError {
     pub const fn code(&self) -> &'static str {
         match self {
             Self::UnsupportedSchemaVersion { .. } => "unsupported-schema-version",
-            Self::AuthoringVersionAheadOfSchema { .. } => "authoring-version-ahead-of-schema",
             Self::DuplicateNodeId { .. } => "duplicate-node-id",
             Self::UnknownParent { .. } => "unknown-parent",
             Self::Cycle { .. } => "cycle",
@@ -139,8 +125,6 @@ impl SceneValidationError {
             Self::RenderableTransformWithoutAsset { .. } => "renderable-transform-without-asset",
             Self::BlankLabel { .. } => "blank-label",
             Self::BlankTag { .. } => "blank-tag",
-            Self::DuplicateTag { .. } => "duplicate-tag",
-            Self::DuplicateAssetDependency { .. } => "duplicate-asset-dependency",
             Self::MissingAssetDependency { .. } => "missing-asset-dependency",
             Self::AssetKindMismatch { .. } => "asset-kind-mismatch",
             Self::InvalidVoxelVolumeTransform { .. } => "invalid-voxel-volume-transform",
@@ -161,10 +145,6 @@ impl SceneValidationError {
             Self::UnsupportedSchemaVersion { found, supported } => (
                 "schemaVersion".to_string(),
                 format!("scene schema {found} is unsupported; latest supported is {supported}"),
-            ),
-            Self::AuthoringVersionAheadOfSchema { authored, schema } => (
-                "metadata.authoringFormatVersion".to_string(),
-                format!("authoring format {authored} is ahead of scene schema {schema}"),
             ),
             Self::DuplicateNodeId { id } => (
                 format!("nodes[{}].id", id.raw()),
@@ -203,14 +183,6 @@ impl SceneValidationError {
             Self::BlankTag { node } => (
                 format!("nodes[{}].metadata.tags", node.raw()),
                 "tag must not be blank".to_string(),
-            ),
-            Self::DuplicateTag { node, tag } => (
-                format!("nodes[{}].metadata.tags", node.raw()),
-                format!("tag `{tag}` occurs more than once"),
-            ),
-            Self::DuplicateAssetDependency { asset } => (
-                "dependencies".to_string(),
-                format!("asset dependency `{asset}` occurs more than once"),
             ),
             Self::MissingAssetDependency { node, asset } => (
                 format!("nodes[{}].asset", node.raw()),
@@ -310,27 +282,12 @@ pub fn validate_scene(document: &FlatSceneDocument) -> SceneValidationReport {
             supported: CURRENT_SCENE_SCHEMA_VERSION,
         });
     }
-    if document.metadata.authoring_format_version > document.schema_version {
-        errors.push(SceneValidationError::AuthoringVersionAheadOfSchema {
-            authored: document.metadata.authoring_format_version,
-            schema: document.schema_version,
-        });
-    }
 
     let mut known = BTreeSet::new();
     let mut duplicate_ids = BTreeSet::new();
     for node in &document.nodes {
         if !known.insert(node.id) && duplicate_ids.insert(node.id) {
             errors.push(SceneValidationError::DuplicateNodeId { id: node.id });
-        }
-    }
-
-    let mut dependency_ids = BTreeSet::new();
-    for dependency in &document.dependencies {
-        if !dependency_ids.insert(dependency.id().as_str()) {
-            errors.push(SceneValidationError::DuplicateAssetDependency {
-                asset: dependency.id().as_str().to_string(),
-            });
         }
     }
 
@@ -357,103 +314,21 @@ pub fn validate_scene(document: &FlatSceneDocument) -> SceneValidationReport {
                 });
             }
         }
-        if let Err(reason) = validate_transform(node.transform) {
-            errors.push(SceneValidationError::InvalidTransform {
-                node: node.id,
-                reason,
-            });
-        }
-        if let Err(reason) = validate_transform(node.renderable_transform) {
-            errors.push(SceneValidationError::InvalidRenderableTransform {
-                node: node.id,
-                reason,
-            });
-        } else if node.renderable_transform != SceneTransform::IDENTITY {
-            if document.schema_version < 5 || document.metadata.authoring_format_version < 5 {
-                errors.push(SceneValidationError::InvalidRenderableTransform {
-                    node: node.id,
-                    reason: TransformInvalid::RequiresSchema5,
-                });
-            } else if node.kind.asset().is_none() {
-                errors
-                    .push(SceneValidationError::RenderableTransformWithoutAsset { node: node.id });
-            }
-        }
-        if node
-            .metadata
-            .label
-            .as_deref()
-            .is_some_and(|label| label.trim().is_empty())
-        {
-            errors.push(SceneValidationError::BlankLabel { node: node.id });
-        }
-        let mut tags = BTreeSet::new();
-        for tag in &node.metadata.tags {
-            if tag.trim().is_empty() {
-                errors.push(SceneValidationError::BlankTag { node: node.id });
-            } else if !tags.insert(tag) {
-                errors.push(SceneValidationError::DuplicateTag {
-                    node: node.id,
-                    tag: tag.clone(),
-                });
-            }
-        }
-        if let (Some(expected), Some(asset)) = (node.kind.expected_asset_kind(), node.kind.asset())
-        {
-            if asset.kind() != expected {
-                errors.push(SceneValidationError::AssetKindMismatch {
-                    node: node.id,
-                    expected,
-                    actual: asset.kind(),
-                });
-            }
+        validate_node_fields(node, &mut errors);
+        if let Some(asset) = node.kind.asset() {
             if !document
                 .dependencies
                 .iter()
                 .any(|dependency| dependency == asset)
             {
-                errors.push(SceneValidationError::MissingAssetDependency {
-                    node: node.id,
-                    asset: format!(
-                        "{} {:?} {}",
-                        asset.id().as_str(),
-                        asset.version(),
-                        asset.hash().map_or("unhashed", |hash| hash.as_str())
-                    ),
-                });
+                errors.push(missing_dependency(node.id, asset));
             }
         }
         match &node.kind {
-            SceneNodeKind::Light(light) => {
-                let result = if document.schema_version < 2
-                    || document.metadata.authoring_format_version < 2
-                {
-                    Err(SceneLightInvalid::RequiresSchema2)
-                } else if node.transform.scale != Vec3::ONE {
-                    Err(SceneLightInvalid::NonUnitScale)
-                } else {
-                    light.validate()
-                };
-                if let Err(reason) = result {
-                    errors.push(SceneValidationError::InvalidLight {
-                        node: node.id,
-                        reason,
-                    });
-                }
-            }
             SceneNodeKind::Marker(marker) => {
-                if document.schema_version < 4 || document.metadata.authoring_format_version < 4 {
-                    errors.push(SceneValidationError::InvalidMarker {
-                        node: node.id,
-                        reason: "requires-schema-4",
-                    });
-                }
-                if !valid_stable_id(&marker.marker_id) {
-                    errors.push(SceneValidationError::InvalidMarker {
-                        node: node.id,
-                        reason: "invalid-marker-id",
-                    });
-                } else if !seen_markers.insert(marker.marker_id.as_str()) {
+                if valid_stable_id(&marker.marker_id)
+                    && !seen_markers.insert(marker.marker_id.as_str())
+                {
                     errors.push(SceneValidationError::DuplicateMarkerId {
                         node: node.id,
                         marker_id: marker.marker_id.clone(),
@@ -461,27 +336,35 @@ pub fn validate_scene(document: &FlatSceneDocument) -> SceneValidationReport {
                 }
             }
             SceneNodeKind::EntityInstance(instance) => {
-                validate_instance(
-                    document,
-                    node.id,
-                    instance,
-                    &marker_ids,
-                    &mut seen_instances,
-                    &mut errors,
-                );
+                if valid_stable_id(&instance.instance_id)
+                    && !seen_instances.insert(instance.instance_id.as_str())
+                {
+                    errors.push(SceneValidationError::DuplicateEntityInstanceId {
+                        node: node.id,
+                        instance_id: instance.instance_id.clone(),
+                    });
+                }
+                if let Some(marker_id) = instance.spawn_marker_id.as_deref() {
+                    if valid_stable_id(marker_id) && !marker_ids.contains(marker_id) {
+                        errors.push(SceneValidationError::UnknownSpawnMarker {
+                            node: node.id,
+                            marker_id: marker_id.to_string(),
+                        });
+                    }
+                }
             }
-            SceneNodeKind::Bootstrap(bindings) => {
+            SceneNodeKind::Bootstrap(_) => {
                 if bootstrap_seen {
                     errors.push(SceneValidationError::DuplicateBootstrapNode { node: node.id });
                 }
                 bootstrap_seen = true;
-                validate_bootstrap(document, node, bindings, &mut errors);
             }
             SceneNodeKind::EmptyGroup
             | SceneNodeKind::StaticMesh(_)
             | SceneNodeKind::AnimatedMesh(_)
             | SceneNodeKind::Sprite(_)
-            | SceneNodeKind::VoxelVolume(_) => {}
+            | SceneNodeKind::VoxelVolume(_)
+            | SceneNodeKind::Light(_) => {}
         }
     }
 
@@ -497,50 +380,132 @@ pub fn validate_scene(document: &FlatSceneDocument) -> SceneValidationReport {
     }) {
         let world = composed_world_transforms(document);
         for node in &document.nodes {
-            if !matches!(node.kind, SceneNodeKind::VoxelVolume(_)) {
-                continue;
-            }
-            let transform = world[&node.id];
-            if transform.rotation != crate::Quat::IDENTITY {
-                errors.push(SceneValidationError::InvalidVoxelVolumeTransform {
-                    node: node.id,
-                    reason: "non-identity-rotation",
-                });
-            }
-            if transform.scale != Vec3::ONE {
-                errors.push(SceneValidationError::InvalidVoxelVolumeTransform {
-                    node: node.id,
-                    reason: "non-unit-scale",
-                });
+            if matches!(node.kind, SceneNodeKind::VoxelVolume(_)) {
+                voxel_world_errors(node.id, world[&node.id], &mut errors);
             }
         }
     }
     SceneValidationReport { errors }
 }
 
-fn validate_instance<'a>(
-    document: &FlatSceneDocument,
-    node: SceneNodeId,
-    instance: &'a crate::SceneEntityInstance,
-    marker_ids: &BTreeSet<&str>,
-    seen_instances: &mut BTreeSet<&'a str>,
-    errors: &mut Vec<SceneValidationError>,
-) {
-    if document.schema_version < 3 || document.metadata.authoring_format_version < 3 {
-        errors.push(SceneValidationError::InvalidEntityInstance {
-            node,
-            reason: "requires-schema-3",
+/// Checks what one node holds by itself: its transforms, label, tags, asset
+/// kind, light, the stable ids its kind carries and the bootstrap shape.
+/// Relationships to other nodes (parents, unique and referenced ids, declared
+/// dependencies, composed voxel transforms) are checked by the caller.
+pub(crate) fn validate_node_fields(node: &SceneNodeRecord, errors: &mut Vec<SceneValidationError>) {
+    if let Err(reason) = validate_transform(node.transform) {
+        errors.push(SceneValidationError::InvalidTransform {
+            node: node.id,
+            reason,
         });
     }
+    if let Err(reason) = validate_transform(node.renderable_transform) {
+        errors.push(SceneValidationError::InvalidRenderableTransform {
+            node: node.id,
+            reason,
+        });
+    } else if node.renderable_transform != SceneTransform::IDENTITY && node.kind.asset().is_none() {
+        errors.push(SceneValidationError::RenderableTransformWithoutAsset { node: node.id });
+    }
+    if node
+        .metadata
+        .label
+        .as_deref()
+        .is_some_and(|label| label.trim().is_empty())
+    {
+        errors.push(SceneValidationError::BlankLabel { node: node.id });
+    }
+    if node.metadata.tags.iter().any(|tag| tag.trim().is_empty()) {
+        errors.push(SceneValidationError::BlankTag { node: node.id });
+    }
+    if let (Some(expected), Some(asset)) = (node.kind.expected_asset_kind(), node.kind.asset()) {
+        if asset.kind() != expected {
+            errors.push(SceneValidationError::AssetKindMismatch {
+                node: node.id,
+                expected,
+                actual: asset.kind(),
+            });
+        }
+    }
+    match &node.kind {
+        SceneNodeKind::Light(light) => {
+            let result = if node.transform.scale != Vec3::ONE {
+                Err(SceneLightInvalid::NonUnitScale)
+            } else {
+                light.validate()
+            };
+            if let Err(reason) = result {
+                errors.push(SceneValidationError::InvalidLight {
+                    node: node.id,
+                    reason,
+                });
+            }
+        }
+        SceneNodeKind::Marker(marker) => {
+            if !valid_stable_id(&marker.marker_id) {
+                errors.push(SceneValidationError::InvalidMarker {
+                    node: node.id,
+                    reason: "invalid-marker-id",
+                });
+            }
+        }
+        SceneNodeKind::EntityInstance(instance) => {
+            validate_instance_fields(node.id, instance, errors);
+        }
+        SceneNodeKind::Bootstrap(bindings) => validate_bootstrap(node, bindings, errors),
+        SceneNodeKind::EmptyGroup
+        | SceneNodeKind::StaticMesh(_)
+        | SceneNodeKind::AnimatedMesh(_)
+        | SceneNodeKind::Sprite(_)
+        | SceneNodeKind::VoxelVolume(_) => {}
+    }
+}
+
+pub(crate) fn missing_dependency(
+    node: SceneNodeId,
+    asset: &AssetReference,
+) -> SceneValidationError {
+    SceneValidationError::MissingAssetDependency {
+        node,
+        asset: format!(
+            "{} {:?} {}",
+            asset.id().as_str(),
+            asset.version(),
+            asset.hash().map_or("unhashed", |hash| hash.as_str())
+        ),
+    }
+}
+
+/// A voxel volume is placed on the voxel grid, so its composed world
+/// transform keeps the identity rotation and unit scale.
+pub(crate) fn voxel_world_errors(
+    node: SceneNodeId,
+    world: SceneTransform,
+    errors: &mut Vec<SceneValidationError>,
+) {
+    if world.rotation != crate::Quat::IDENTITY {
+        errors.push(SceneValidationError::InvalidVoxelVolumeTransform {
+            node,
+            reason: "non-identity-rotation",
+        });
+    }
+    if world.scale != Vec3::ONE {
+        errors.push(SceneValidationError::InvalidVoxelVolumeTransform {
+            node,
+            reason: "non-unit-scale",
+        });
+    }
+}
+
+fn validate_instance_fields(
+    node: SceneNodeId,
+    instance: &crate::SceneEntityInstance,
+    errors: &mut Vec<SceneValidationError>,
+) {
     if !valid_stable_id(&instance.instance_id) {
         errors.push(SceneValidationError::InvalidEntityInstance {
             node,
             reason: "invalid-instance-id",
-        });
-    } else if !seen_instances.insert(&instance.instance_id) {
-        errors.push(SceneValidationError::DuplicateEntityInstanceId {
-            node,
-            instance_id: instance.instance_id.clone(),
         });
     }
     match &instance.reference {
@@ -557,12 +522,6 @@ fn validate_instance<'a>(
             variant_id,
             ..
         } => {
-            if document.schema_version < 4 || document.metadata.authoring_format_version < 4 {
-                errors.push(SceneValidationError::InvalidEntityInstance {
-                    node,
-                    reason: "prefab-seed-requires-schema-4",
-                });
-            }
             if prefab_id.raw() == 0 {
                 errors.push(SceneValidationError::InvalidEntityInstance {
                     node,
@@ -581,33 +540,23 @@ fn validate_instance<'a>(
         }
         crate::SceneEntityReference::EntityDefinition { .. } => {}
     }
-    if let Some(marker_id) = instance.spawn_marker_id.as_deref() {
-        if !valid_stable_id(marker_id) {
-            errors.push(SceneValidationError::InvalidEntityInstance {
-                node,
-                reason: "invalid-spawn-marker-id",
-            });
-        } else if !marker_ids.contains(marker_id) {
-            errors.push(SceneValidationError::UnknownSpawnMarker {
-                node,
-                marker_id: marker_id.to_string(),
-            });
-        }
+    if instance
+        .spawn_marker_id
+        .as_deref()
+        .is_some_and(|marker_id| !valid_stable_id(marker_id))
+    {
+        errors.push(SceneValidationError::InvalidEntityInstance {
+            node,
+            reason: "invalid-spawn-marker-id",
+        });
     }
 }
 
 fn validate_bootstrap(
-    document: &FlatSceneDocument,
-    node: &crate::SceneNodeRecord,
+    node: &SceneNodeRecord,
     bindings: &crate::SceneBootstrapBindings,
     errors: &mut Vec<SceneValidationError>,
 ) {
-    if document.schema_version < 3 || document.metadata.authoring_format_version < 3 {
-        errors.push(SceneValidationError::InvalidBootstrap {
-            node: node.id,
-            reason: "requires-schema-3",
-        });
-    }
     if node.parent.is_some() {
         errors.push(SceneValidationError::InvalidBootstrap {
             node: node.id,
@@ -647,7 +596,7 @@ fn validate_bootstrap(
     }
 }
 
-fn validate_transform(transform: SceneTransform) -> Result<(), TransformInvalid> {
+pub(crate) fn validate_transform(transform: SceneTransform) -> Result<(), TransformInvalid> {
     if !vector_finite(transform.translation) {
         return Err(TransformInvalid::NonFiniteTranslation);
     }
@@ -755,7 +704,7 @@ fn detect_cycles(
     }
 }
 
-fn valid_stable_id(value: &str) -> bool {
+pub(crate) fn valid_stable_id(value: &str) -> bool {
     !value.is_empty()
         && value.trim() == value
         && value.bytes().all(|byte| {

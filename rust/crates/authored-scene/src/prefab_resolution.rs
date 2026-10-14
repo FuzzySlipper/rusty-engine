@@ -4,8 +4,8 @@ use core_assets::{AssetId, AssetKind};
 use core_ids::{PrefabId, PrefabPartId};
 
 use crate::{
-    PrefabOverride, PrefabOverrideValue, PrefabPartSource, PrefabRegistryValidationContext,
-    PrefabTransform, ValidatedPrefabRegistry,
+    PrefabDefinition, PrefabOverride, PrefabOverrideValue, PrefabPartSource,
+    PrefabRegistryValidationContext, PrefabTransform, ValidatedPrefabRegistry,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -57,19 +57,11 @@ pub fn resolve_prefab(
     prefab: PrefabId,
     instance_overrides: &[PrefabOverride],
 ) -> Result<ResolvedPrefab, PrefabResolutionError> {
-    let requested = registry
-        .as_registry()
-        .definitions
-        .iter()
-        .find(|definition| definition.id == prefab)
-        .ok_or(PrefabResolutionError::MissingPrefab(prefab))?;
+    let requested =
+        definition(registry, prefab).ok_or(PrefabResolutionError::MissingPrefab(prefab))?;
     let (base, variant_id, removed_roles, variant_overrides) = match &requested.variant {
         Some(variant) => (
-            registry
-                .as_registry()
-                .definitions
-                .iter()
-                .find(|definition| definition.id == variant.base)
+            definition(registry, variant.base)
                 .ok_or(PrefabResolutionError::MissingBase(variant.base))?,
             Some(variant.variant_id.clone()),
             variant.removed_roles.as_slice(),
@@ -123,7 +115,16 @@ pub fn resolve_prefab(
             });
         }
     }
-    for item in variant_overrides.iter().chain(instance_overrides) {
+    // Registry admission validated the variant's overrides against its base.
+    for item in variant_overrides {
+        if let Some(part) = roles
+            .get(item.target_role.as_str())
+            .and_then(|part_id| parts.get_mut(part_id))
+        {
+            write_override(part, &item.value);
+        }
+    }
+    for item in instance_overrides {
         let part_id = roles
             .get(item.target_role.as_str())
             .copied()
@@ -139,6 +140,33 @@ pub fn resolve_prefab(
         variant_id,
         parts: parts.into_values().collect(),
     })
+}
+
+/// Admitted registries keep their definitions in identity order.
+fn definition(registry: &ValidatedPrefabRegistry, id: PrefabId) -> Option<&PrefabDefinition> {
+    let definitions = &registry.as_registry().definitions;
+    definitions
+        .binary_search_by_key(&id.raw(), |definition| definition.id.raw())
+        .ok()
+        .map(|index| &definitions[index])
+}
+
+fn write_override(part: &mut ResolvedPrefabPart, value: &PrefabOverrideValue) {
+    match value {
+        PrefabOverrideValue::Transform { transform } => part.transform = *transform,
+        PrefabOverrideValue::EntityDefinition { stable_id } => {
+            if let PrefabPartSource::EntityDefinition { stable_id: value } = &mut part.source {
+                value.clone_from(stable_id);
+            }
+        }
+        PrefabOverrideValue::Asset { asset } => match &mut part.source {
+            PrefabPartSource::Scene { asset: value }
+            | PrefabPartSource::VoxelObject { asset: value } => value.clone_from(asset),
+            PrefabPartSource::EntityDefinition { .. } => {}
+        },
+        PrefabOverrideValue::Material { asset } => part.material = Some(asset.clone()),
+        PrefabOverrideValue::Activation { active } => part.active = *active,
+    }
 }
 
 fn apply_override(

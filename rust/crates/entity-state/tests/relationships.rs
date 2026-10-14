@@ -55,37 +55,23 @@ fn relationship_preview_is_read_only_and_apply_is_revision_guarded() {
 }
 
 #[test]
-fn clearing_absent_relations_is_classified_and_does_not_mutate() {
+fn clearing_absent_relations_is_an_unchanged_receipt() {
     let mut state = fixture();
     let before = encode_snapshot(&state).unwrap();
-    for (command, kind) in [
-        (
-            RelationshipCommand::ClearTransformParent {
-                child: EntityId::new(2),
-                keep_world: true,
-            },
-            RelationshipKind::TransformParent,
-        ),
-        (
-            RelationshipCommand::ClearContainment {
-                child: EntityId::new(2),
-            },
-            RelationshipKind::Containment,
-        ),
-        (
-            RelationshipCommand::ClearSourceAncestry {
-                entity: EntityId::new(2),
-            },
-            RelationshipKind::SourceAncestry,
-        ),
+    for command in [
+        RelationshipCommand::ClearTransformParent {
+            child: EntityId::new(2),
+            keep_world: true,
+        },
+        RelationshipCommand::ClearContainment {
+            child: EntityId::new(2),
+        },
+        RelationshipCommand::ClearSourceAncestry {
+            entity: EntityId::new(2),
+        },
     ] {
-        assert_eq!(
-            state.apply_relationship(0, command),
-            Err(RelationshipError::NoSuchRelation {
-                entity: EntityId::new(2),
-                kind,
-            })
-        );
+        let receipt = state.apply_relationship(0, command).unwrap();
+        assert_eq!((receipt.revision_before, receipt.revision_after), (0, 0));
         assert_eq!(encode_snapshot(&state).unwrap(), before);
     }
 }
@@ -270,4 +256,69 @@ fn source_ancestry_survives_origin_destruction_as_provenance() {
         state.relationships(EntityId::new(2)).unwrap().derived_from,
         Some(EntityId::new(1))
     );
+}
+
+#[test]
+fn destroying_a_former_parent_leaves_moved_and_cleared_children_alone() {
+    let mut state = EntityState::from_definitions([
+        EntityDefinition::new(EntityId::new(1), "old").with_transform(Vec3::new(10.0, 0.0, 0.0)),
+        EntityDefinition::new(EntityId::new(2), "new").with_transform(Vec3::new(0.0, 5.0, 0.0)),
+        EntityDefinition::new(EntityId::new(3), "moved")
+            .with_transform(Vec3::new(1.0, 0.0, 0.0))
+            .with_transform_parent(EntityId::new(1)),
+        EntityDefinition::new(EntityId::new(4), "cleared")
+            .with_transform(Vec3::new(2.0, 0.0, 0.0))
+            .with_transform_parent(EntityId::new(1)),
+        EntityDefinition::new(EntityId::new(5), "kept")
+            .with_transform(Vec3::new(3.0, 0.0, 0.0))
+            .with_transform_parent(EntityId::new(1)),
+    ])
+    .expect("fixture");
+    state
+        .apply_relationship(
+            0,
+            RelationshipCommand::SetTransformParent {
+                child: EntityId::new(3),
+                parent: EntityId::new(2),
+                mode: TransformParentMode::KeepLocal,
+            },
+        )
+        .unwrap();
+    state
+        .apply_relationship(
+            1,
+            RelationshipCommand::ClearTransformParent {
+                child: EntityId::new(4),
+                keep_world: false,
+            },
+        )
+        .unwrap();
+    let revision = |state: &EntityState, entity: u64| {
+        state
+            .component_revision::<entity_state::TransformComponent>(EntityId::new(entity))
+            .unwrap()
+    };
+    let (moved, cleared) = (revision(&state, 3), revision(&state, 4));
+    let kept_world = state.world_transform(EntityId::new(5)).unwrap();
+
+    EntityAuthoringService
+        .destroy(&mut state, 2, EntityId::new(1))
+        .expect("old parent destroyed");
+    assert_eq!(
+        state.transform_parent(EntityId::new(3)),
+        Some(EntityId::new(2))
+    );
+    assert_eq!(revision(&state, 3), moved);
+    assert_eq!(state.transform_parent(EntityId::new(4)), None);
+    assert_eq!(revision(&state, 4), cleared);
+    assert_eq!(state.transform_parent(EntityId::new(5)), None);
+    assert_eq!(state.world_transform(EntityId::new(5)), Some(kept_world));
+
+    EntityAuthoringService
+        .destroy(&mut state, 3, EntityId::new(3))
+        .expect("moved child destroyed");
+    EntityAuthoringService
+        .destroy(&mut state, 4, EntityId::new(2))
+        .expect("new parent destroyed");
+    assert!(state.transform(EntityId::new(3)).is_none());
 }

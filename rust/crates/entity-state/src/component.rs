@@ -311,50 +311,20 @@ impl ComponentRegistry {
         Self::default()
     }
 
+    /// Registers a component type. Registering a stable id again for the same
+    /// Rust type, persistence and codec keeps the existing registration.
     pub fn register<T: EntityComponent>(
         &mut self,
         registration: ComponentRegistration<T>,
     ) -> Result<(), ComponentRegistrationError> {
-        let requested_id = registration.type_id.clone();
-        let requested_rust_type = std::any::type_name::<T>();
-        let requested_type_id = TypeId::of::<T>();
-
-        if let Some(existing) = self.prototypes.get(&requested_id) {
-            if existing.rust_type_id() != requested_type_id {
-                return Err(ComponentRegistrationError::StableIdConflict {
-                    component: requested_id,
-                    registered_rust_type: existing.rust_type_name(),
-                    requested_rust_type,
-                });
-            }
-            if existing.persistence() != registration.persistence()
-                || existing.codec_signature() != registration.codec_signature()
-            {
-                return Err(ComponentRegistrationError::IncompatibleCodec {
-                    component: requested_id,
-                });
-            }
-            return Err(ComponentRegistrationError::DuplicateStableId {
-                component: requested_id,
-            });
+        if admits_registration(&self.prototypes, &self.rust_types, &registration)? {
+            self.rust_types
+                .insert(TypeId::of::<T>(), registration.type_id.clone());
+            self.prototypes.insert(
+                registration.type_id.clone(),
+                Box::new(ComponentTable::new(registration)),
+            );
         }
-        if let Some(existing_id) = self.rust_types.get(&requested_type_id) {
-            return Err(ComponentRegistrationError::RustTypeConflict {
-                rust_type: requested_rust_type,
-                registered_component: existing_id.clone(),
-                requested_component: requested_id,
-            });
-        }
-        if self.prototypes.len() >= MAX_REGISTERED_COMPONENT_TYPES {
-            return Err(ComponentRegistrationError::TypeLimitExceeded {
-                limit: MAX_REGISTERED_COMPONENT_TYPES,
-            });
-        }
-
-        self.rust_types
-            .insert(requested_type_id, requested_id.clone());
-        self.prototypes
-            .insert(requested_id, Box::new(ComponentTable::new(registration)));
         Ok(())
     }
 
@@ -368,6 +338,47 @@ impl ComponentRegistry {
             rust_types: self.rust_types.clone(),
         }
     }
+}
+
+/// Whether `registration` adds a component type next to `tables`; `false`
+/// when the same registration is already present.
+fn admits_registration<T: EntityComponent>(
+    tables: &BTreeMap<ComponentTypeId, Box<dyn ErasedComponentTable>>,
+    rust_types: &HashMap<TypeId, ComponentTypeId>,
+    registration: &ComponentRegistration<T>,
+) -> Result<bool, ComponentRegistrationError> {
+    let requested_id = &registration.type_id;
+    let requested_rust_type = std::any::type_name::<T>();
+    if let Some(existing) = tables.get(requested_id) {
+        if existing.rust_type_id() != TypeId::of::<T>() {
+            return Err(ComponentRegistrationError::StableIdConflict {
+                component: requested_id.clone(),
+                registered_rust_type: existing.rust_type_name(),
+                requested_rust_type,
+            });
+        }
+        if existing.persistence() != registration.persistence()
+            || existing.codec_signature() != registration.codec_signature()
+        {
+            return Err(ComponentRegistrationError::IncompatibleCodec {
+                component: requested_id.clone(),
+            });
+        }
+        return Ok(false);
+    }
+    if let Some(existing_id) = rust_types.get(&TypeId::of::<T>()) {
+        return Err(ComponentRegistrationError::RustTypeConflict {
+            rust_type: requested_rust_type,
+            registered_component: existing_id.clone(),
+            requested_component: requested_id.clone(),
+        });
+    }
+    if tables.len() >= MAX_REGISTERED_COMPONENT_TYPES {
+        return Err(ComponentRegistrationError::TypeLimitExceeded {
+            limit: MAX_REGISTERED_COMPONENT_TYPES,
+        });
+    }
+    Ok(true)
 }
 
 #[derive(Clone)]
@@ -404,6 +415,9 @@ impl ComponentStore {
         &mut self,
         registration: ComponentRegistration<T>,
     ) -> Result<(), ComponentRegistrationError> {
+        if !admits_registration(&self.tables, &self.rust_types, &registration)? {
+            return Ok(());
+        }
         let mut registry = self.registry();
         registry.register(registration)?;
         *self = self.with_registry(registry);

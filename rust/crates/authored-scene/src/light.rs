@@ -48,7 +48,6 @@ pub enum SceneLightInvalid {
     InvalidSpotAngle,
     InvalidPenumbra,
     NonUnitScale,
-    RequiresSchema2,
 }
 
 impl SceneLightInvalid {
@@ -61,7 +60,6 @@ impl SceneLightInvalid {
             Self::InvalidSpotAngle => "invalid-spot-angle",
             Self::InvalidPenumbra => "invalid-penumbra",
             Self::NonUnitScale => "non-unit-scale",
-            Self::RequiresSchema2 => "requires-schema-2",
         }
     }
 }

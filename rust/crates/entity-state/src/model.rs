@@ -176,6 +176,7 @@ pub struct EntityState {
     pub(crate) components: ComponentStore,
     pub(crate) inactive_controllers: BTreeSet<EntityId>,
     pub(crate) transform_parents: BTreeMap<EntityId, EntityId>,
+    pub(crate) transform_children: BTreeMap<EntityId, BTreeSet<EntityId>>,
     pub(crate) containment: BTreeMap<EntityId, EntityId>,
     pub(crate) containment_children: BTreeMap<EntityId, BTreeSet<EntityId>>,
     pub(crate) derived_from: BTreeMap<EntityId, EntityId>,
@@ -195,6 +196,7 @@ impl EntityState {
             components: ComponentStore::from_registry(&registry),
             inactive_controllers: BTreeSet::new(),
             transform_parents: BTreeMap::new(),
+            transform_children: BTreeMap::new(),
             containment: BTreeMap::new(),
             containment_children: BTreeMap::new(),
             derived_from: BTreeMap::new(),
@@ -649,13 +651,33 @@ impl EntityState {
         }
     }
 
+    pub(crate) fn link_transform_parent(&mut self, child: EntityId, parent: EntityId) {
+        if let Some(previous) = self.transform_parents.insert(child, parent) {
+            remove_indexed_child(&mut self.transform_children, previous, child);
+        }
+        self.transform_children
+            .entry(parent)
+            .or_default()
+            .insert(child);
+    }
+
+    pub(crate) fn unlink_transform_parent(&mut self, child: EntityId) {
+        if let Some(parent) = self.transform_parents.remove(&child) {
+            remove_indexed_child(&mut self.transform_children, parent, child);
+        }
+    }
+
     pub(crate) fn remove_components_and_relations(&mut self, entity: EntityId) {
         self.components.remove_entity(entity);
         self.inactive_controllers.remove(&entity);
-        self.transform_parents.remove(&entity);
-        self.transform_parents.retain(|_, parent| *parent != entity);
+        self.unlink_transform_parent(entity);
+        if let Some(children) = self.transform_children.remove(&entity) {
+            for child in children {
+                self.transform_parents.remove(&child);
+            }
+        }
         if let Some(container) = self.containment.remove(&entity) {
-            remove_containment_child(&mut self.containment_children, container, entity);
+            remove_indexed_child(&mut self.containment_children, container, entity);
         }
         if let Some(children) = self.containment_children.remove(&entity) {
             for child in children {
@@ -666,16 +688,17 @@ impl EntityState {
     }
 }
 
-fn remove_containment_child(
+/// Removes `child` from `parent`'s entry of a reverse relationship index.
+pub(crate) fn remove_indexed_child(
     index: &mut BTreeMap<EntityId, BTreeSet<EntityId>>,
-    container: EntityId,
+    parent: EntityId,
     child: EntityId,
 ) {
-    let remove_container = index.get_mut(&container).is_some_and(|children| {
+    let remove_parent = index.get_mut(&parent).is_some_and(|children| {
         children.remove(&child);
         children.is_empty()
     });
-    if remove_container {
-        index.remove(&container);
+    if remove_parent {
+        index.remove(&parent);
     }
 }

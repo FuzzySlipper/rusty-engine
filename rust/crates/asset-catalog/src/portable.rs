@@ -192,13 +192,11 @@ impl PortableAssets {
     }
 
     pub fn asset(&self, id: &str) -> Result<&PortableAsset, PortableAssetError> {
-        let mut matches = self.assets.iter().filter(|a| a.id == id);
-        let asset = matches
-            .next()
+        let asset = self
+            .assets
+            .iter()
+            .find(|a| a.id == id)
             .ok_or_else(|| error(format!("missing asset '{id}'")))?;
-        if id.is_empty() || matches.next().is_some() {
-            return Err(error(format!("ambiguous or empty asset ID '{id}'")));
-        }
         if let PortableDefinition::Draft { diagnostic, .. } = &asset.definition {
             return Err(error(format!("asset '{id}' is incomplete: {diagnostic}")));
         }
@@ -254,15 +252,10 @@ impl PortableAssets {
                     dependencies.push((target, "model"));
                     dependencies.push((child, "model"));
                 }
-                PortableDefinition::Texture { path } => {
-                    portable_relative_path(path)?;
-                }
+                PortableDefinition::Texture { .. } => {}
                 PortableDefinition::Model {
-                    path,
-                    materials,
-                    clips,
+                    materials, clips, ..
                 } => {
-                    portable_relative_path(path)?;
                     if clips
                         .iter()
                         .any(|(id, name)| id.is_empty() || name.is_empty())
@@ -321,22 +314,6 @@ impl PortableAssets {
         )?;
         Ok(result)
     }
-}
-
-/// Paths are relative to the descriptor's directory, contained in its admitted
-/// content context. This is a logical reference check, not filesystem access.
-pub fn portable_relative_path(path: &str) -> Result<(), PortableAssetError> {
-    if path.is_empty()
-        || path.contains(['\\', ':', '\0'])
-        || path
-            .split('/')
-            .any(|p| p.is_empty() || p == "." || p == "..")
-    {
-        return Err(error(format!(
-            "invalid descriptor-relative path '{path}'; use contained forward-slash relative paths"
-        )));
-    }
-    Ok(())
 }
 
 impl PortableSpriteFrame {
@@ -501,11 +478,9 @@ mod tests {
         assert_eq!(animations["walk"].frames, ["b", "a", "b"]);
         assert_eq!(animations["walk"].durations().unwrap(), [0.1, 0.2, 0.3]);
         assert!(!directions.as_ref().unwrap().actions["walk"].contains_key("right"));
-        assert!(document
-            .resolve("unfinished")
-            .unwrap_err()
-            .to_string()
-            .contains("path"));
+        // A texture's path is a key into its admitted content; the loader
+        // reports a path that names no file.
+        assert_eq!(document.resolve("unfinished").unwrap().len(), 1);
     }
     #[test]
     fn incomplete_unselected_entries_are_preserved_but_rejected_when_required() {
@@ -540,7 +515,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_version_reference_role_and_path_errors_at_resolution() {
+    fn rejects_version_and_reference_errors_at_resolution() {
         assert!(PortableAssets::decode(br#"{"schemaVersion":42}"#)
             .unwrap_err()
             .to_string()
@@ -552,14 +527,6 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("missing asset 'missing'"));
-        for path in ["../escape", "/absolute", "C:/file", "a\\b", "a//b", "a/./b"] {
-            assert!(portable_relative_path(path).is_err(), "{path}");
-        }
-        let invalid = SPRITE.replace("images/walk.png", "../walk.png");
-        assert!(PortableAssets::decode(invalid.as_bytes())
-            .unwrap()
-            .resolve("hero")
-            .is_err());
     }
     #[test]
     fn model_relationships_do_not_duplicate_gltf_tracks() {

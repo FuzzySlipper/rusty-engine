@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use authored_scene::{
     composed_world_transforms, encode_scene, validate_scene, FlatSceneDocument, NodeMetadata,
-    SceneMarker, SceneNodeKind, SceneNodeRecord, SceneTransform, CURRENT_SCENE_SCHEMA_VERSION,
+    SceneMarker, SceneNodeKind, SceneNodeRecord, SceneTransform,
 };
 use core_assets::{AssetId, AssetKind, AssetReference, AssetVersionReq};
 use core_ids::SceneNodeId;
@@ -97,9 +97,6 @@ pub enum EnvironmentMaterializationError {
         actual: u64,
     },
     SceneRevisionOverflow,
-    InvalidSceneBefore {
-        diagnostics: Vec<String>,
-    },
     InvalidSceneAfter {
         diagnostics: Vec<String>,
     },
@@ -126,7 +123,6 @@ impl EnvironmentMaterializationError {
         match self {
             Self::StaleSceneRevision { .. } => "stale-scene-revision",
             Self::SceneRevisionOverflow => "scene-revision-overflow",
-            Self::InvalidSceneBefore { .. } => "invalid-scene-before-materialization",
             Self::InvalidSceneAfter { .. } => "invalid-scene-after-materialization",
             Self::ConflictingAssetDependency { .. } => "conflicting-asset-dependency",
             Self::InvalidTarget { .. } => "invalid-environment-target",
@@ -147,8 +143,9 @@ impl std::fmt::Display for EnvironmentMaterializationError {
 
 impl std::error::Error for EnvironmentMaterializationError {}
 
-/// Build immutable asset and scene candidates. The input document is never
-/// mutated, so every rejection is fail-atomic by construction.
+/// Build immutable asset and scene candidates from the caller's valid scene.
+/// The input document is never mutated, so every rejection is fail-atomic by
+/// construction; the candidate scene is validated once before it is encoded.
 pub fn materialize_environment(
     current_scene: &FlatSceneDocument,
     request: &EnvironmentMaterializationRequest,
@@ -157,16 +154,6 @@ pub fn materialize_environment(
         return Err(EnvironmentMaterializationError::StaleSceneRevision {
             expected: request.expected_scene_revision,
             actual: current_scene.revision,
-        });
-    }
-    let before = validate_scene(current_scene);
-    if !before.is_valid() {
-        return Err(EnvironmentMaterializationError::InvalidSceneBefore {
-            diagnostics: before
-                .errors
-                .iter()
-                .map(|error| format!("{}: {error:?}", error.code()))
-                .collect(),
         });
     }
     validate_target(current_scene, request)?;
@@ -457,8 +444,6 @@ fn build_scene(
             .push(marker_node(request.target.voxel_node_id, target, marker));
     }
     reconcile_dependencies(&mut scene)?;
-    scene.schema_version = CURRENT_SCENE_SCHEMA_VERSION;
-    scene.metadata.authoring_format_version = CURRENT_SCENE_SCHEMA_VERSION;
     scene.revision = scene
         .revision
         .checked_add(1)

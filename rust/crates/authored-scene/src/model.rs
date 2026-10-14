@@ -189,6 +189,22 @@ pub struct SceneNodeRecord {
     pub metadata: NodeMetadata,
 }
 
+impl SceneNodeRecord {
+    /// Sorts and deduplicates the node's tags and orders its catalog bindings.
+    pub fn canonicalize(&mut self) {
+        self.metadata.tags.sort();
+        self.metadata.tags.dedup();
+        if let SceneNodeKind::Bootstrap(bindings) = &mut self.kind {
+            bindings.catalogs.sort_by(|left, right| {
+                left.binding_id
+                    .cmp(&right.binding_id)
+                    .then_with(|| left.catalog_id.cmp(&right.catalog_id))
+                    .then_with(|| left.source_path.cmp(&right.source_path))
+            });
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct FlatSceneDocument {
     pub id: SceneId,
@@ -227,17 +243,9 @@ impl FlatSceneDocument {
                         .cmp(&right.hash().map(|hash| hash.as_str()))
                 })
         });
+        self.dependencies.dedup();
         for node in &mut self.nodes {
-            node.metadata.tags.sort();
-            node.metadata.tags.dedup();
-            if let SceneNodeKind::Bootstrap(bindings) = &mut node.kind {
-                bindings.catalogs.sort_by(|left, right| {
-                    left.binding_id
-                        .cmp(&right.binding_id)
-                        .then_with(|| left.catalog_id.cmp(&right.catalog_id))
-                        .then_with(|| left.source_path.cmp(&right.source_path))
-                });
-            }
+            node.canonicalize();
         }
     }
 

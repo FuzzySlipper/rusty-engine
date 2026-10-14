@@ -2,7 +2,9 @@ use std::collections::BTreeSet;
 
 use core_ids::EntityId;
 
-use crate::model::{EntityDefinition, EntityLifecycle, EntityState, TransformComponent};
+use crate::model::{
+    remove_indexed_child, EntityDefinition, EntityLifecycle, EntityState, TransformComponent,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TransformParentMode {
@@ -114,10 +116,6 @@ pub enum RelationshipError {
         target: EntityId,
     },
     ProjectionOnly {
-        kind: RelationshipKind,
-    },
-    NoSuchRelation {
-        entity: EntityId,
         kind: RelationshipKind,
     },
 }
@@ -244,11 +242,9 @@ pub(crate) fn apply_definition_relationships(
 }
 
 pub(crate) fn reroot_transform_children(state: &mut EntityState, parent: EntityId) {
-    let children: Vec<_> = state
-        .transform_parents
-        .iter()
-        .filter_map(|(child, current_parent)| (*current_parent == parent).then_some(*child))
-        .collect();
+    let Some(children) = state.transform_children.remove(&parent) else {
+        return;
+    };
     for child in children {
         let world = state.world_transform(child);
         state.transform_parents.remove(&child);
@@ -279,40 +275,23 @@ fn validate_command(
         RelationshipCommand::ClearTransformParent { child, .. } => {
             ensure_alive(state, child)?;
             ensure_transform(state, child)?;
-            ensure_relation_present(
-                state.transform_parents.contains_key(&child),
-                child,
-                RelationshipKind::TransformParent,
-            )?;
         }
         RelationshipCommand::SetContainment { child, container } => {
             ensure_pair(state, child, container)?;
-            let links = state
-                .containment
-                .iter()
-                .map(|(entity, container)| (*entity, *container))
-                .collect();
-            ensure_acyclic(&links, RelationshipKind::Containment, child, container)?;
-        }
-        RelationshipCommand::ClearContainment { child } => {
-            ensure_alive(state, child)?;
-            ensure_relation_present(
-                state.containment.contains_key(&child),
-                child,
+            ensure_acyclic(
+                &state.containment,
                 RelationshipKind::Containment,
+                child,
+                container,
             )?;
+        }
+        RelationshipCommand::ClearContainment { child }
+        | RelationshipCommand::ClearSourceAncestry { entity: child } => {
+            ensure_alive(state, child)?;
         }
         RelationshipCommand::SetSourceAncestry { entity, source } => {
             ensure_alive(state, entity)?;
             ensure_known(state, source)?;
-        }
-        RelationshipCommand::ClearSourceAncestry { entity } => {
-            ensure_alive(state, entity)?;
-            ensure_relation_present(
-                state.derived_from.contains_key(&entity),
-                entity,
-                RelationshipKind::SourceAncestry,
-            )?;
         }
         RelationshipCommand::SetRenderGroup { .. } => {
             return Err(RelationshipError::ProjectionOnly {
@@ -333,7 +312,7 @@ fn mutate(state: &mut EntityState, command: RelationshipCommand) {
             let world = (mode == TransformParentMode::KeepWorld)
                 .then(|| state.world_transform(child))
                 .flatten();
-            state.transform_parents.insert(child, parent);
+            state.link_transform_parent(child, parent);
             if let (Some(world), Some(parent_world)) = (world, state.world_transform(parent)) {
                 state.components.insert_unchecked(
                     child,
@@ -343,7 +322,7 @@ fn mutate(state: &mut EntityState, command: RelationshipCommand) {
         }
         RelationshipCommand::ClearTransformParent { child, keep_world } => {
             let world = keep_world.then(|| state.world_transform(child)).flatten();
-            state.transform_parents.remove(&child);
+            state.unlink_transform_parent(child);
             if let Some(world) = world {
                 state
                     .components
@@ -352,7 +331,7 @@ fn mutate(state: &mut EntityState, command: RelationshipCommand) {
         }
         RelationshipCommand::SetContainment { child, container } => {
             if let Some(previous) = state.containment.insert(child, container) {
-                remove_containment_child(state, previous, child);
+                remove_indexed_child(&mut state.containment_children, previous, child);
             }
             state
                 .containment_children
@@ -362,7 +341,7 @@ fn mutate(state: &mut EntityState, command: RelationshipCommand) {
         }
         RelationshipCommand::ClearContainment { child } => {
             if let Some(container) = state.containment.remove(&child) {
-                remove_containment_child(state, container, child);
+                remove_indexed_child(&mut state.containment_children, container, child);
             }
         }
         RelationshipCommand::SetSourceAncestry { entity, source } => {
@@ -372,19 +351,6 @@ fn mutate(state: &mut EntityState, command: RelationshipCommand) {
             state.derived_from.remove(&entity);
         }
         RelationshipCommand::SetRenderGroup { .. } => unreachable!("validated before mutation"),
-    }
-}
-
-fn remove_containment_child(state: &mut EntityState, container: EntityId, child: EntityId) {
-    let remove_container = state
-        .containment_children
-        .get_mut(&container)
-        .is_some_and(|children| {
-            children.remove(&child);
-            children.is_empty()
-        });
-    if remove_container {
-        state.containment_children.remove(&container);
     }
 }
 
@@ -446,16 +412,6 @@ fn ensure_transform(state: &EntityState, entity: EntityId) -> Result<(), Relatio
     } else {
         Err(RelationshipError::MissingTransform { entity })
     }
-}
-
-fn ensure_relation_present(
-    present: bool,
-    entity: EntityId,
-    kind: RelationshipKind,
-) -> Result<(), RelationshipError> {
-    present
-        .then_some(())
-        .ok_or(RelationshipError::NoSuchRelation { entity, kind })
 }
 
 fn ensure_acyclic(

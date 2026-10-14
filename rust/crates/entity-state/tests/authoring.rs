@@ -2,9 +2,9 @@ use core_ids::{EntityId, ProcessId, TagId};
 use core_math::Vec3;
 use entity_state::{
     encode_snapshot, ActivatableComponentKind, CollisionComponent, ComponentActivation,
-    ComponentActivationState, ControllerComponent, EntityAuthoringError, EntityAuthoringService,
-    EntityDefinition, EntityLifecycle, EntityState, KinematicComponent, TransformComponent,
-    KINEMATIC_COMPONENT_TYPE_ID,
+    ComponentActivationState, ControllerComponent, EntityAuthoringError, EntityAuthoringReceipt,
+    EntityAuthoringService, EntityDefinition, EntityLifecycle, EntityState, KinematicComponent,
+    TransformComponent, KINEMATIC_COMPONENT_TYPE_ID,
 };
 
 #[test]
@@ -83,7 +83,7 @@ fn lifecycle_labels_and_tombstones_have_one_clear_owner() {
 }
 
 #[test]
-fn repeated_lifecycle_and_activation_transitions_are_rejected_without_mutation() {
+fn repeated_lifecycle_label_component_and_activation_requests_are_unchanged_receipts() {
     let service = EntityAuthoringService;
     let id = EntityId::new(11);
     let mut state = EntityState::from_definitions([EntityDefinition::new(id, "actor")
@@ -93,32 +93,81 @@ fn repeated_lifecycle_and_activation_transitions_are_rejected_without_mutation()
     .expect("fixture");
 
     let before = encode_snapshot(&state).unwrap();
+    let transform_revision = state.component_revision::<TransformComponent>(id).unwrap();
+    let transform = *state.transform(id).unwrap();
+    let unchanged = |receipt: EntityAuthoringReceipt| {
+        assert_eq!((receipt.revision_before, receipt.revision_after), (0, 0));
+        assert!(receipt.facts.is_empty());
+    };
+    unchanged(service.enable(&mut state, 0, id).unwrap());
+    unchanged(
+        service
+            .remove_label(&mut state, 0, id, TagId::new(4))
+            .unwrap(),
+    );
+    unchanged(
+        service
+            .attach_component(&mut state, transform_revision.clone(), id, transform)
+            .unwrap(),
+    );
     assert!(matches!(
-        service.enable(&mut state, 0, id),
-        Err(EntityAuthoringError::InvalidLifecycleTransition {
-            from: EntityLifecycle::Active,
-            to: EntityLifecycle::Active,
-            ..
-        })
+        service.attach_component(
+            &mut state,
+            transform_revision.clone(),
+            id,
+            TransformComponent::from_transform(entity_state::EntityTransform::at(Vec3::ONE)),
+        ),
+        Err(EntityAuthoringError::ComponentAlreadyPresent { .. })
     ));
-    assert_eq!(encode_snapshot(&state).unwrap(), before);
-
-    assert!(matches!(
-        service.set_component_activation(
+    let activation = service
+        .set_component_activation(
             &mut state,
             0,
             id,
             ActivatableComponentKind::Controller,
             ComponentActivation::Active,
+        )
+        .unwrap();
+    assert_eq!(
+        (
+            activation.revision_after,
+            activation.before,
+            activation.after
         ),
-        Err(EntityAuthoringError::Activation(
-            entity_state::ComponentActivationError::AlreadyInState {
-                state: ComponentActivationState::Active,
-                ..
-            }
-        ))
-    ));
+        (
+            0,
+            ComponentActivationState::Active,
+            ComponentActivationState::Active
+        )
+    );
     assert_eq!(encode_snapshot(&state).unwrap(), before);
+    assert_eq!(
+        state.component_revision::<TransformComponent>(id).unwrap(),
+        transform_revision
+    );
+
+    service
+        .add_label(&mut state, 0, id, TagId::new(4))
+        .expect("label added");
+    unchanged_after(
+        service.add_label(&mut state, 1, id, TagId::new(4)).unwrap(),
+        1,
+    );
+    service.disable(&mut state, 1, id).expect("disabled");
+    unchanged_after(service.disable(&mut state, 2, id).unwrap(), 2);
+    service.destroy(&mut state, 2, id).expect("destroyed");
+    assert!(matches!(
+        service.disable(&mut state, 3, id),
+        Err(EntityAuthoringError::InvalidLifecycleTransition { .. })
+    ));
+}
+
+fn unchanged_after(receipt: EntityAuthoringReceipt, revision: u64) {
+    assert_eq!(
+        (receipt.revision_before, receipt.revision_after),
+        (revision, revision)
+    );
+    assert!(receipt.facts.is_empty());
 }
 
 #[test]

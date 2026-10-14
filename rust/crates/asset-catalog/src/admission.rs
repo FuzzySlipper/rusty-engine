@@ -46,42 +46,7 @@ impl AdmittedAssetCatalog {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct AssetCatalogStore {
-    current: AdmittedAssetCatalog,
-    revision: u64,
-}
-
-impl AssetCatalogStore {
-    pub fn new(current: AdmittedAssetCatalog) -> Self {
-        Self {
-            current,
-            revision: 1,
-        }
-    }
-
-    pub fn current(&self) -> &AdmittedAssetCatalog {
-        &self.current
-    }
-
-    pub const fn revision(&self) -> u64 {
-        self.revision
-    }
-
-    pub fn replace(&mut self, candidate: AssetCatalog) -> Result<u64, CatalogAdmissionError> {
-        let candidate = AdmittedAssetCatalog::admit(candidate)?;
-        let next_revision = self
-            .revision
-            .checked_add(1)
-            .ok_or(CatalogAdmissionError::RevisionExhausted)?;
-        self.current = candidate;
-        self.revision = next_revision;
-        Ok(next_revision)
-    }
-}
-
-#[derive(Debug, Clone, PartialEq)]
 pub enum CatalogAdmissionError {
     Codec(AssetCatalogCodecError),
     Validation(CatalogValidationReport),
-    RevisionExhausted,
 }

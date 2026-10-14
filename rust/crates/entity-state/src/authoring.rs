@@ -16,8 +16,6 @@ use crate::model::{
 };
 use crate::relationship::{reroot_transform_children, RelationshipError};
 
-pub const MAX_COMPONENT_REPLACEMENTS: usize = 32;
-
 #[derive(Debug, Clone)]
 pub struct ComponentReplacement<T: EntityComponent> {
     pub expected_revision: ComponentRevision,
@@ -102,14 +100,6 @@ pub enum EntityAuthoringError {
         from: EntityLifecycle,
         to: EntityLifecycle,
     },
-    DuplicateLabel {
-        entity: EntityId,
-        label: TagId,
-    },
-    MissingLabel {
-        entity: EntityId,
-        label: TagId,
-    },
     UnregisteredComponent {
         rust_type: &'static str,
     },
@@ -134,10 +124,6 @@ pub enum EntityAuthoringError {
     DuplicateComponentReplacement {
         entity: EntityId,
         component: ComponentTypeId,
-    },
-    ComponentReplacementLimitExceeded {
-        actual: usize,
-        maximum: usize,
     },
 }
 
@@ -250,7 +236,7 @@ impl EntityAuthoringService {
             .expect("entity presence checked")
             .labels;
         match labels.binary_search(&label) {
-            Ok(_) => Err(EntityAuthoringError::DuplicateLabel { entity, label }),
+            Ok(_) => Ok(unchanged(state)),
             Err(index) => {
                 labels.insert(index, label);
                 bump_with_fact(state, EntityAuthoringFact::LabelAdded { entity, label })
@@ -272,14 +258,17 @@ impl EntityAuthoringService {
             .get_mut(&entity)
             .expect("entity presence checked")
             .labels;
-        let index = labels
-            .binary_search(&label)
-            .map_err(|_| EntityAuthoringError::MissingLabel { entity, label })?;
+        let Ok(index) = labels.binary_search(&label) else {
+            return Ok(unchanged(state));
+        };
         labels.remove(index);
         bump_with_fact(state, EntityAuthoringFact::LabelRemoved { entity, label })
     }
 
-    pub fn attach_component<T: EntityComponent>(
+    /// Attaches `component`. Attaching the value the slot already holds is
+    /// unchanged; a different present value is replaced only through
+    /// [`Self::replace_component`].
+    pub fn attach_component<T: EntityComponent + PartialEq>(
         self,
         state: &mut EntityState,
         expected_revision: ComponentRevision,
@@ -288,15 +277,19 @@ impl EntityAuthoringService {
     ) -> Result<EntityAuthoringReceipt, EntityAuthoringError> {
         ensure_alive(state, entity)?;
         let type_id = ensure_component_revision::<T>(state, entity, &expected_revision)?;
-        if state
+        match state
             .components
-            .has::<T>(entity)
+            .get::<T>(entity)
             .expect("registration checked")
         {
-            return Err(EntityAuthoringError::ComponentAlreadyPresent {
-                entity,
-                component: type_id,
-            });
+            Some(present) if present == &component => return Ok(unchanged(state)),
+            Some(_) => {
+                return Err(EntityAuthoringError::ComponentAlreadyPresent {
+                    entity,
+                    component: type_id,
+                })
+            }
+            None => {}
         }
         validate_component(state, entity, &component, &type_id)?;
         state.components.insert_unchecked(entity, component);
@@ -328,11 +321,7 @@ impl EntityAuthoringService {
             })?;
         validate_component(state, entity, &component, &type_id)?;
         if before == &component {
-            return Ok(EntityAuthoringReceipt {
-                revision_before: state.revision,
-                revision_after: state.revision,
-                facts: Vec::new(),
-            });
+            return Ok(unchanged(state));
         }
         state.components.insert_unchecked(entity, component);
         bump_with_fact(
@@ -344,7 +333,7 @@ impl EntityAuthoringService {
         )
     }
 
-    /// Atomically replaces a bounded set of slots for one registered component type.
+    /// Atomically replaces a set of slots for one registered component type.
     ///
     /// Every exact slot guard and candidate value is validated before any slot changes. This is a
     /// narrow homogeneous primitive for owners such as transfers between two instances of the same
@@ -354,12 +343,6 @@ impl EntityAuthoringService {
         state: &mut EntityState,
         mut replacements: Vec<ComponentReplacement<T>>,
     ) -> Result<EntityAuthoringReceipt, EntityAuthoringError> {
-        if replacements.len() > MAX_COMPONENT_REPLACEMENTS {
-            return Err(EntityAuthoringError::ComponentReplacementLimitExceeded {
-                actual: replacements.len(),
-                maximum: MAX_COMPONENT_REPLACEMENTS,
-            });
-        }
         replacements.sort_by_key(|replacement| replacement.entity);
         let type_id = registered_type_id::<T>(state)?;
         let mut seen = BTreeSet::new();
@@ -416,7 +399,7 @@ impl EntityAuthoringService {
 
     /// Replaces root transforms while changing only the simulation's local coordinate frame.
     ///
-    /// Unlike ordinary transform mutation, this bounded primitive admits active static colliders:
+    /// Unlike ordinary transform mutation, this primitive admits active static colliders:
     /// their global placement is unchanged when the spatial authority and every root transform are
     /// published together by the owning frame-rebase service. Parented transforms are excluded
     /// because they inherit the root frame change. Exact slot guards and all candidate values are
@@ -426,12 +409,6 @@ impl EntityAuthoringService {
         state: &mut EntityState,
         mut replacements: Vec<ComponentReplacement<TransformComponent>>,
     ) -> Result<EntityAuthoringReceipt, EntityAuthoringError> {
-        if replacements.len() > MAX_COMPONENT_REPLACEMENTS {
-            return Err(EntityAuthoringError::ComponentReplacementLimitExceeded {
-                actual: replacements.len(),
-                maximum: MAX_COMPONENT_REPLACEMENTS,
-            });
-        }
         replacements.sort_by_key(|replacement| replacement.entity);
         let type_id = registered_type_id::<TransformComponent>(state)?;
         let mut seen = BTreeSet::new();
@@ -521,7 +498,7 @@ impl EntityAuthoringService {
         validate_detach::<T>(state, entity, &type_id)?;
         if TypeId::of::<T>() == TypeId::of::<TransformComponent>() {
             reroot_transform_children(state, entity);
-            state.transform_parents.remove(&entity);
+            state.unlink_transform_parent(entity);
         }
         state.components.remove_unchecked::<T>(entity);
         if TypeId::of::<T>() == TypeId::of::<ControllerComponent>() {
@@ -574,11 +551,7 @@ impl EntityAuthoringService {
             });
         }
         if before == lifecycle {
-            return Err(EntityAuthoringError::InvalidLifecycleTransition {
-                entity,
-                from: before,
-                to: lifecycle,
-            });
+            return Ok(unchanged(state));
         }
         core.lifecycle = lifecycle;
         bump_with_fact(
@@ -788,6 +761,14 @@ fn commit(
         revision_after: state.revision,
         facts,
     })
+}
+
+fn unchanged(state: &EntityState) -> EntityAuthoringReceipt {
+    EntityAuthoringReceipt {
+        revision_before: state.revision,
+        revision_after: state.revision,
+        facts: Vec::new(),
+    }
 }
 
 fn bump_with_fact(

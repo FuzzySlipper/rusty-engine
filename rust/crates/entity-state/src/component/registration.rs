@@ -248,9 +248,6 @@ impl<T: EntityComponent> ComponentRegistration<T> {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ComponentRegistrationError {
-    DuplicateStableId {
-        component: ComponentTypeId,
-    },
     StableIdConflict {
         component: ComponentTypeId,
         registered_rust_type: &'static str,

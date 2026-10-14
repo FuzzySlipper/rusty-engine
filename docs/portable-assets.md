@@ -19,8 +19,9 @@ loading validates only the selected asset and its dependencies. Structurally
 incomplete entries (including a missing `kind` or required field) are retained
 as drafts and do not block unrelated selections; selecting or referencing one
 reports its local ID and the missing field. IDs are local,
-case-sensitive stable strings, independent of file names. Referenced IDs must
-resolve uniquely. No hash or production-history fields are required.
+case-sensitive stable strings, independent of file names; a reference resolves
+to the first asset with its ID. No hash or production-history fields are
+required.
 
 Each asset has `id` and one `kind`:
 
@@ -32,10 +33,10 @@ Each asset has `id` and one `kind`:
   These are relationships; materials are still created through `Graphics`.
 - `sprite`: `frames`, named `animations`, optional `directions`, as below.
 
-Paths use forward slashes relative to the descriptor's directory. Absolute,
-empty, dot-segment, backslash and colon paths reject at load. Every referenced
-file must exist in that descriptor's admitted context; opening other bundles
-cannot change resolution. Resource decoders remain responsible for their own
+Paths use forward slashes relative to the descriptor's directory and are
+looked up as written in that descriptor's admitted context; a path that names
+no file there refuses at load as a missing file. Opening other bundles cannot
+change resolution. Resource decoders remain responsible for their own
 formats and glTF's embedded dependencies.
 
 ## Sprites

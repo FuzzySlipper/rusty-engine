@@ -6,8 +6,8 @@ use authored_scene::{
     SceneBootstrapBindings, SceneCatalogBinding, SceneEditCommand, SceneEditError,
     SceneEditService, SceneEntityInstance, SceneEntityReference, SceneGeneratorBinding, SceneLight,
     SceneLightInvalid, SceneLightShadowIntent, SceneMarker, SceneMetadata, SceneNode,
-    SceneNodeKind, SceneNodeRecord, SceneReferenceError, SceneResolutionContext, SceneTransform,
-    SceneTree, SceneValidationError, TransformInvalid,
+    SceneNodeKind, SceneNodeRecord, SceneObjectSnapshot, SceneReferenceError,
+    SceneResolutionContext, SceneTransform, SceneTree, SceneValidationError, TransformInvalid,
 };
 use core_assets::{AssetHash, AssetId, AssetReference, AssetVersionReq};
 use core_ids::{EntityId, PrefabId, SceneId, SceneNodeId};
@@ -114,16 +114,7 @@ fn renderable_transform_is_canonical_and_legacy_scenes_default_to_identity() {
 }
 
 #[test]
-fn renderable_transform_requires_current_schema_and_an_asset_owner() {
-    let mut old_schema = simple_document();
-    old_schema.nodes[1].renderable_transform = translated(0.0, -1.0, 0.0);
-    assert!(validate_scene(&old_schema).errors.contains(
-        &SceneValidationError::InvalidRenderableTransform {
-            node: SceneNodeId::new(2),
-            reason: TransformInvalid::RequiresSchema5,
-        }
-    ));
-
+fn renderable_transform_requires_an_asset_owner() {
     let mut non_asset = FlatSceneDocument::new(SceneId::new(5));
     non_asset.nodes.push(SceneNodeRecord {
         renderable_transform: translated(0.0, -1.0, 0.0),
@@ -299,8 +290,7 @@ fn renderable_transform_edit_is_revision_guarded_and_asset_scoped() {
         )
         .unwrap();
     assert_eq!((receipt.revision_before, receipt.revision_after), (0, 1));
-    assert_eq!(document.schema_version, 5);
-    assert_eq!(document.metadata.authoring_format_version, 5);
+    assert_eq!(document.schema_version, 4);
     assert_eq!(document.nodes[1].renderable_transform, offset);
 
     let stale_source = document.clone();
@@ -451,7 +441,11 @@ fn selection_does_not_canonicalize_or_mutate_the_authored_document() {
         .unwrap();
     assert_eq!(document, before);
     assert_eq!(receipt.revision_after, 0);
-    assert_eq!(receipt.snapshot.objects[0].id, SceneNodeId::new(1));
+    assert_eq!(receipt.selected, Some(SceneNodeId::new(2)));
+    assert_eq!(
+        SceneObjectSnapshot::from_document(&document).objects[0].id,
+        SceneNodeId::new(1)
+    );
 }
 
 #[test]
@@ -555,6 +549,282 @@ fn node_asset_pins_must_match_the_declared_dependency_exactly() {
         .iter()
         .any(|error| matches!(error, SceneValidationError::MissingAssetDependency { .. })));
     assert_eq!(document, before);
+}
+
+#[test]
+fn repeated_tags_and_dependencies_are_canonicalized_not_refused() {
+    let mut document = simple_document();
+    document.nodes[1].metadata.tags = vec!["b".into(), "a".into(), "b".into()];
+    document.dependencies.push(mesh_reference());
+    assert!(validate_scene(&document).is_valid());
+    let decoded = decode_scene(&encode_scene(&document).unwrap()).unwrap();
+    assert_eq!(decoded.nodes[1].metadata.tags, ["a", "b"]);
+    assert_eq!(decoded.dependencies, [mesh_reference()]);
+
+    SceneEditService
+        .apply(
+            &mut document,
+            0,
+            SceneEditCommand::Create {
+                record: SceneNodeRecord {
+                    metadata: NodeMetadata {
+                        label: None,
+                        tags: vec!["x".into(), "x".into()],
+                    },
+                    ..record(3, None, SceneNodeKind::EmptyGroup)
+                },
+            },
+        )
+        .unwrap();
+    assert_eq!(document.nodes[2].metadata.tags, ["x"]);
+}
+
+#[test]
+fn older_schema_documents_hold_every_node_kind() {
+    let mut document = complete_document();
+    document.schema_version = 1;
+    document.metadata.authoring_format_version = 1;
+    document.nodes[1].renderable_transform = translated(0.0, -1.5, 0.0);
+    assert!(validate_scene(&document).is_valid());
+    let decoded = decode_scene(&encode_scene(&document).unwrap()).unwrap();
+    assert_eq!(decoded.schema_version, 1);
+    assert_eq!(decoded, document.canonical());
+}
+
+#[test]
+fn edits_refuse_what_they_would_break_elsewhere_and_leave_the_document_unchanged() {
+    let turned = SceneTransform {
+        rotation: Quat::new(0.0, 0.5_f32.sin(), 0.0, 0.5_f32.cos()),
+        ..SceneTransform::IDENTITY
+    };
+    let mut document = complete_document();
+    document.dependencies.push(voxel_reference());
+    document.nodes.extend([
+        record(8, Some(1), SceneNodeKind::EmptyGroup),
+        record(9, Some(8), SceneNodeKind::VoxelVolume(voxel_reference())),
+        SceneNodeRecord {
+            transform: turned,
+            ..record(10, None, SceneNodeKind::EmptyGroup)
+        },
+    ]);
+    assert!(validate_scene(&document).is_valid());
+    let refused = |document: &mut FlatSceneDocument, command, code: &str| {
+        let before = document.clone();
+        let Err(SceneEditError::InvalidAfter { errors }) =
+            SceneEditService.apply(document, 0, command)
+        else {
+            panic!("expected {code} refusal");
+        };
+        assert_has_error(&errors, code);
+        assert_eq!(*document, before);
+    };
+    // Removing or renaming the marker an instance spawns at.
+    refused(
+        &mut document,
+        SceneEditCommand::Delete {
+            id: SceneNodeId::new(3),
+        },
+        "unknown-spawn-marker",
+    );
+    refused(
+        &mut document,
+        SceneEditCommand::SetKind {
+            id: SceneNodeId::new(3),
+            kind: SceneNodeKind::Marker(SceneMarker {
+                marker_id: "spawn.other".into(),
+            }),
+        },
+        "unknown-spawn-marker",
+    );
+    // Identities other nodes already hold.
+    refused(
+        &mut document,
+        SceneEditCommand::Create {
+            record: record(
+                11,
+                None,
+                SceneNodeKind::Marker(SceneMarker {
+                    marker_id: "spawn.player".into(),
+                }),
+            ),
+        },
+        "duplicate-marker-id",
+    );
+    refused(
+        &mut document,
+        SceneEditCommand::SetKind {
+            id: SceneNodeId::new(8),
+            kind: SceneNodeKind::EntityInstance(SceneEntityInstance {
+                instance_id: "enemy.one".into(),
+                reference: SceneEntityReference::EntityDefinition {
+                    stable_id: "player.definition".into(),
+                },
+                spawn_marker_id: None,
+            }),
+        },
+        "duplicate-entity-instance-id",
+    );
+    refused(
+        &mut document,
+        SceneEditCommand::Create {
+            record: record(
+                11,
+                None,
+                SceneNodeKind::Bootstrap(SceneBootstrapBindings::default()),
+            ),
+        },
+        "duplicate-bootstrap-node",
+    );
+    refused(
+        &mut document,
+        SceneEditCommand::Create {
+            record: record(
+                11,
+                None,
+                SceneNodeKind::EntityInstance(SceneEntityInstance {
+                    instance_id: "late.one".into(),
+                    reference: SceneEntityReference::EntityDefinition {
+                        stable_id: "player.definition".into(),
+                    },
+                    spawn_marker_id: Some("spawn.absent".into()),
+                }),
+            ),
+        },
+        "unknown-spawn-marker",
+    );
+    // Hierarchy: a parent cycle, and a bootstrap moved off the root.
+    refused(
+        &mut document,
+        SceneEditCommand::Reparent {
+            id: SceneNodeId::new(1),
+            parent: Some(SceneNodeId::new(9)),
+            child_order: 0,
+        },
+        "cycle",
+    );
+    refused(
+        &mut document,
+        SceneEditCommand::Reparent {
+            id: SceneNodeId::new(6),
+            parent: Some(SceneNodeId::new(1)),
+            child_order: 0,
+        },
+        "invalid-bootstrap",
+    );
+    // A voxel volume's composed placement, changed from above it.
+    refused(
+        &mut document,
+        SceneEditCommand::SetTransform {
+            id: SceneNodeId::new(1),
+            transform: turned,
+        },
+        "invalid-voxel-volume-transform",
+    );
+    refused(
+        &mut document,
+        SceneEditCommand::Reparent {
+            id: SceneNodeId::new(8),
+            parent: Some(SceneNodeId::new(10)),
+            child_order: 0,
+        },
+        "invalid-voxel-volume-transform",
+    );
+    // Node fields: a light's scale and a second pin of one asset.
+    refused(
+        &mut document,
+        SceneEditCommand::SetTransform {
+            id: SceneNodeId::new(5),
+            transform: SceneTransform {
+                scale: Vec3::new(2.0, 2.0, 2.0),
+                ..SceneTransform::IDENTITY
+            },
+        },
+        "invalid-light",
+    );
+    refused(
+        &mut document,
+        SceneEditCommand::Create {
+            record: record(
+                11,
+                None,
+                SceneNodeKind::StaticMesh(AssetReference::new(
+                    AssetId::parse("mesh/room").unwrap(),
+                    AssetVersionReq::Exact(3),
+                    None,
+                )),
+            ),
+        },
+        "missing-asset-dependency",
+    );
+    assert!(validate_scene(&document).is_valid());
+}
+
+#[test]
+fn edits_keep_a_larger_scene_valid_and_touch_one_node() {
+    let mut document = FlatSceneDocument::new(SceneId::new(11));
+    document.dependencies.push(mesh_reference());
+    for id in 1..=2_000_u64 {
+        let parent = (id > 1).then(|| (id - 1) / 4 + 1);
+        let kind = if id % 3 == 0 {
+            SceneNodeKind::StaticMesh(mesh_reference())
+        } else {
+            SceneNodeKind::EmptyGroup
+        };
+        document.nodes.push(record(id, parent, kind));
+    }
+    assert!(validate_scene(&document).is_valid());
+    let untouched = document.nodes[..1_499].to_vec();
+
+    let commands = [
+        SceneEditCommand::Rename {
+            id: SceneNodeId::new(1_500),
+            label: Some("Lamp".into()),
+        },
+        SceneEditCommand::SetTransform {
+            id: SceneNodeId::new(1_500),
+            transform: translated(1.0, 2.0, 3.0),
+        },
+        SceneEditCommand::Reparent {
+            id: SceneNodeId::new(1_500),
+            parent: Some(SceneNodeId::new(2)),
+            child_order: 9,
+        },
+        SceneEditCommand::SetKind {
+            id: SceneNodeId::new(1_501),
+            kind: SceneNodeKind::Marker(SceneMarker {
+                marker_id: "spawn.large".into(),
+            }),
+        },
+        SceneEditCommand::Create {
+            record: record(
+                2_001,
+                Some(SceneNodeId::new(1_500).raw()),
+                SceneNodeKind::EmptyGroup,
+            ),
+        },
+        SceneEditCommand::Delete {
+            id: SceneNodeId::new(1_502),
+        },
+    ];
+    for (revision, command) in commands.into_iter().enumerate() {
+        let receipt = SceneEditService
+            .apply(&mut document, revision as u64, command)
+            .unwrap();
+        assert_eq!(receipt.revision_after, revision as u64 + 1);
+        assert!(validate_scene(&document).is_valid());
+    }
+    assert_eq!(document.nodes[..1_499], untouched[..]);
+    assert_eq!(document.dependencies, [mesh_reference()]);
+    let node = &document.nodes[1_499];
+    assert_eq!(
+        (node.id.raw(), node.parent, node.metadata.label.as_deref()),
+        (1_500, Some(SceneNodeId::new(2)), Some("Lamp"))
+    );
+    assert_eq!(document.nodes.last().unwrap().id.raw(), 2_001);
+    assert!(!document
+        .nodes
+        .iter()
+        .any(|node| node.id.raw() == 1_502 || node.parent == Some(SceneNodeId::new(1_502))));
 }
 
 fn simple_document() -> FlatSceneDocument {

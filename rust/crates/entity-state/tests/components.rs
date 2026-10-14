@@ -434,10 +434,7 @@ fn registration_conflicts_fail_before_existing_state_changes() {
         .unwrap();
     let before_inspection = state.component_inspection();
 
-    assert!(matches!(
-        state.register_component(runtime_registration()),
-        Err(ComponentRegistrationError::DuplicateStableId { .. })
-    ));
+    state.register_component(runtime_registration()).unwrap();
     assert!(matches!(
         state.register_component(ComponentRegistration::<OtherPower>::runtime_only(
             component_id(RUNTIME_TYPE_ID)
@@ -696,4 +693,46 @@ fn generic_replacement_cannot_bypass_static_transform_invariant() {
     ));
     assert_eq!(state.revision(), 0);
     assert_eq!(state.transform(entity).unwrap().translation, Vec3::ZERO);
+}
+
+#[test]
+fn replacement_batches_larger_than_thirty_two_publish_once() {
+    let entities: Vec<_> = (100..140).map(EntityId::new).collect();
+    let mut state = EntityState::from_definitions(entities.iter().map(|&entity| {
+        EntityDefinition::new(entity, "root").with_transform(Vec3::new(1.0, 0.0, 0.0))
+    }))
+    .unwrap();
+    let shifted = |state: &EntityState| {
+        entities
+            .iter()
+            .map(|&entity| ComponentReplacement {
+                expected_revision: state
+                    .component_revision::<TransformComponent>(entity)
+                    .unwrap(),
+                entity,
+                component: TransformComponent::from_transform(entity_state::EntityTransform::at(
+                    Vec3::new(-99.0, 0.0, 0.0),
+                )),
+            })
+            .collect::<Vec<_>>()
+    };
+    let replacements = shifted(&state);
+    let receipt = EntityAuthoringService
+        .replace_root_transforms_for_local_frame(&mut state, replacements)
+        .unwrap();
+    assert_eq!((receipt.revision_before, receipt.revision_after), (0, 1));
+    assert_eq!(receipt.facts.len(), entities.len());
+
+    let mut moved = shifted(&state);
+    for replacement in &mut moved {
+        replacement.component =
+            TransformComponent::from_transform(entity_state::EntityTransform::at(Vec3::ONE));
+    }
+    let receipt = EntityAuthoringService
+        .replace_components(&mut state, moved)
+        .unwrap();
+    assert_eq!(receipt.facts.len(), entities.len());
+    assert!(entities
+        .iter()
+        .all(|&entity| state.transform(entity).unwrap().translation == Vec3::ONE));
 }

@@ -1,5 +1,3 @@
-use std::collections::BTreeSet;
-
 use core_assets::AssetReference;
 use core_ids::{EntityId, TagId};
 use core_math::Vec3;
@@ -145,7 +143,6 @@ impl EntityDefinition {
 pub enum EntityDefinitionError {
     DuplicateEntity { entity: EntityId },
     EmptyName { entity: EntityId },
-    DuplicateLabel { entity: EntityId, label: TagId },
     InvalidSource { entity: EntityId },
     InvalidTransform { entity: EntityId },
     InvalidBounds { entity: EntityId },
@@ -175,15 +172,6 @@ pub(crate) fn validate_definition(
         return Err(EntityDefinitionError::EmptyName {
             entity: definition.id,
         });
-    }
-    let mut labels = BTreeSet::new();
-    for &label in &definition.labels {
-        if !labels.insert(label) {
-            return Err(EntityDefinitionError::DuplicateLabel {
-                entity: definition.id,
-                label,
-            });
-        }
     }
     if let EntitySource::PrefabInstance {
         role: Some(role), ..
