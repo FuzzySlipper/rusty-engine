@@ -4,8 +4,8 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::{
-    validate_voxel_asset, VoxelAsset, VoxelAssetBounds, VoxelRepresentation,
-    VoxelRepresentationKind, VoxelSparseRun, MAX_REPRESENTED_VOXELS,
+    VoxelAsset, VoxelAssetBounds, VoxelRepresentation, VoxelRepresentationKind, VoxelSparseRun,
+    MAX_REPRESENTED_VOXELS,
 };
 
 pub const MAX_VOXEL_FRAME_COORDINATE_ABS: u64 = 1_000_000;
@@ -31,42 +31,11 @@ pub struct VoxelFrameCell {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct VoxelFrameDiagnostic {
-    pub code: &'static str,
-    pub path: String,
-    pub message: String,
+pub(crate) struct VoxelFrameDiagnostic {
+    pub(crate) code: &'static str,
+    pub(crate) path: String,
+    pub(crate) message: String,
 }
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct VoxelFrameError {
-    diagnostics: Vec<VoxelFrameDiagnostic>,
-}
-
-impl VoxelFrameError {
-    pub fn diagnostics(&self) -> &[VoxelFrameDiagnostic] {
-        &self.diagnostics
-    }
-
-    pub(crate) fn from_diagnostics(diagnostics: Vec<VoxelFrameDiagnostic>) -> Self {
-        Self { diagnostics }
-    }
-}
-
-impl std::fmt::Display for VoxelFrameError {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let first = self
-            .diagnostics
-            .first()
-            .expect("voxel frame error always has a diagnostic");
-        write!(
-            formatter,
-            "{} at {}: {}",
-            first.code, first.path, first.message
-        )
-    }
-}
-
-impl std::error::Error for VoxelFrameError {}
 
 impl From<&VoxelAsset> for VoxelFrame {
     fn from(asset: &VoxelAsset) -> Self {
@@ -78,94 +47,29 @@ impl From<&VoxelAsset> for VoxelFrame {
     }
 }
 
-pub fn validate_voxel_frame(
-    frame: &VoxelFrame,
-    material_slots: impl IntoIterator<Item = u16>,
-) -> Result<(), VoxelFrameError> {
-    let materials = material_slots.into_iter().collect::<BTreeSet<_>>();
-    let mut diagnostics = semantic_diagnostics(frame, &materials);
-    if !crate::codec::valid_sha256(&frame.voxel_data_hash) {
-        diagnostics.push(diagnostic(
-            "voxelFrame.voxelDataHashMismatch",
-            "voxelDataHash",
-            "voxelDataHash must be `sha256:` followed by 64 lowercase hexadecimal digits",
-        ));
-    } else if frame.voxel_data_hash != computed_voxel_data_hash(frame) {
-        diagnostics.push(diagnostic(
-            "voxelFrame.voxelDataHashMismatch",
-            "voxelDataHash",
-            "voxelDataHash does not match canonical sparse occupancy",
-        ));
-    }
-    if diagnostics.is_empty() {
-        Ok(())
-    } else {
-        Err(VoxelFrameError::from_diagnostics(diagnostics))
-    }
-}
-
-pub fn canonicalize_voxel_frame(
-    frame: &VoxelFrame,
-    material_slots: impl IntoIterator<Item = u16>,
-) -> Result<VoxelFrame, VoxelFrameError> {
-    validate_voxel_frame(frame, material_slots)?;
-    let mut canonical = frame.clone();
-    canonicalize_frame(&mut canonical);
-    Ok(canonical)
-}
-
-pub fn with_computed_voxel_frame_hash(
-    mut frame: VoxelFrame,
-    material_slots: impl IntoIterator<Item = u16>,
-) -> Result<VoxelFrame, VoxelFrameError> {
-    let materials = material_slots.into_iter().collect::<BTreeSet<_>>();
-    frame.voxel_data_hash.clear();
-    let diagnostics = semantic_diagnostics(&frame, &materials);
-    if !diagnostics.is_empty() {
-        return Err(VoxelFrameError::from_diagnostics(diagnostics));
-    }
-    canonicalize_frame(&mut frame);
-    frame.voxel_data_hash = computed_voxel_data_hash(&frame);
-    validate_voxel_frame(&frame, materials)?;
-    Ok(frame)
-}
-
-pub fn resolve_voxel_frame(
-    frame: &VoxelFrame,
-    material_slots: impl IntoIterator<Item = u16>,
-) -> Result<Vec<VoxelFrameCell>, VoxelFrameError> {
-    validate_voxel_frame(frame, material_slots)?;
-    Ok(expand_sparse_runs(&frame.representation.sparse_runs))
+/// Expand a frame's sparse runs to local cells.
+///
+/// The frame must belong to an object that came from `decode_voxel_object`
+/// or `with_computed_voxel_object_hashes`; those checked its runs, so this
+/// only expands them.
+pub fn resolve_voxel_frame(frame: &VoxelFrame) -> Vec<VoxelFrameCell> {
+    expand_sparse_runs(&frame.representation.sparse_runs)
 }
 
 /// Resolve an existing volume asset to its canonical engine-cell addresses.
 ///
 /// This is the ordinary provider admission seam for stored volume occupancy;
 /// callers remain responsible for deciding whether those cells feed collision,
-/// navigation, rendering, or another named consumer.
-pub fn resolve_voxel_asset(
-    asset: &VoxelAsset,
-) -> Result<Vec<VoxelFrameCell>, crate::VoxelAssetError> {
-    validate_voxel_asset(asset)?;
-    let mut cells = Vec::new();
-    for run in &asset.representation.sparse_runs {
-        for offset in 0..run.length {
-            let local_x = run.start[0]
-                .checked_add(i64::from(offset))
-                .expect("validated sparse run cannot overflow");
-            let local = [local_x, run.start[1], run.start[2]];
-            let coordinate = std::array::from_fn(|axis| {
-                asset.grid.origin[axis]
-                    .checked_add(local[axis])
-                    .expect("validated mapped coordinate cannot overflow")
-            });
-            cells.push(VoxelFrameCell {
-                coordinate,
-                material_slot: run.material_slot,
-            });
-        }
+/// navigation, rendering, or another named consumer. The asset must come from
+/// `decode_voxel_asset` or `with_computed_content_hash`, which checked that
+/// every mapped run stays inside the engine address range.
+pub fn resolve_voxel_asset(asset: &VoxelAsset) -> Vec<VoxelFrameCell> {
+    let origin = asset.grid.origin;
+    let mut cells = expand_sparse_runs(&asset.representation.sparse_runs);
+    for cell in &mut cells {
+        cell.coordinate = std::array::from_fn(|axis| origin[axis] + cell.coordinate[axis]);
     }
-    Ok(cells)
+    cells
 }
 
 pub fn represented_voxel_count(frame: &VoxelFrame) -> usize {
@@ -210,21 +114,20 @@ pub(crate) fn canonicalize_sparse_runs(runs: &mut Vec<VoxelSparseRun>) {
     *runs = merged;
 }
 
-pub(crate) fn computed_voxel_data_hash(frame: &VoxelFrame) -> String {
-    let mut runs = frame.representation.sparse_runs.clone();
-    canonicalize_sparse_runs(&mut runs);
-    let mut bytes = Vec::with_capacity(runs.len().saturating_mul(30));
+/// SHA-256 of sparse runs that are already in canonical order.
+pub(crate) fn canonical_runs_hash(runs: &[VoxelSparseRun]) -> String {
+    let mut hasher = Sha256::new();
     for run in runs {
         for coordinate in run.start {
-            bytes.extend_from_slice(&coordinate.to_le_bytes());
+            hasher.update(coordinate.to_le_bytes());
         }
-        bytes.extend_from_slice(&run.length.to_le_bytes());
-        bytes.extend_from_slice(&run.material_slot.to_le_bytes());
+        hasher.update(run.length.to_le_bytes());
+        hasher.update(run.material_slot.to_le_bytes());
     }
-    format!("sha256:{:x}", Sha256::digest(bytes))
+    format!("sha256:{:x}", hasher.finalize())
 }
 
-fn semantic_diagnostics(
+pub(crate) fn semantic_diagnostics(
     frame: &VoxelFrame,
     materials: &BTreeSet<u16>,
 ) -> Vec<VoxelFrameDiagnostic> {

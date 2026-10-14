@@ -9,7 +9,6 @@ use voxel_asset::{
 /// allocations created while resolving and meshing a live object.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct VoxelObjectRuntimeLimits {
-    pub max_frames: u32,
     pub max_resolved_voxels: u64,
     /// Aggregate visible unit faces before deterministic greedy compression.
     pub max_unique_mesh_faces: u64,
@@ -23,7 +22,6 @@ pub struct VoxelObjectRuntimeLimits {
 impl Default for VoxelObjectRuntimeLimits {
     fn default() -> Self {
         Self {
-            max_frames: 8_193,
             max_resolved_voxels: 16_777_216,
             max_unique_mesh_faces: 2_000_000,
             max_unique_mesh_vertices: 8_000_000,

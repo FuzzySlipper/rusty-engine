@@ -54,7 +54,6 @@ fn palette_replacement_is_fail_atomic_and_preserves_voxel_identity() {
         &mut asset,
         VoxelPaletteUpdateRequest {
             expected_content_hash: original.content_hash.clone(),
-            expected_voxel_data_hash: original.voxel_data_hash.clone(),
             replacement: vec![VoxelAssetMaterialBinding {
                 material_slot: 3,
                 material_asset_id: "material/polished-concrete".to_string(),
@@ -65,13 +64,17 @@ fn palette_replacement_is_fail_atomic_and_preserves_voxel_identity() {
     .unwrap();
     assert_ne!(receipt.content_hash_before, receipt.content_hash_after);
     assert_eq!(asset.voxel_data_hash, original.voxel_data_hash);
+    // The edited asset carries exactly the identities a fresh computation
+    // of the same content produces, so an encode, decode or annotation CAS
+    // after the edit never sees a stale content identity.
+    assert_eq!(receipt.content_hash_after, asset.content_hash);
+    assert_eq!(with_computed_content_hash(asset.clone()).unwrap(), asset);
 
     let accepted = asset.clone();
     let stale = replace_voxel_palette(
         &mut asset,
         VoxelPaletteUpdateRequest {
             expected_content_hash: original.content_hash,
-            expected_voxel_data_hash: original.voxel_data_hash,
             replacement: vec![],
         },
     );
@@ -85,7 +88,6 @@ fn palette_replacement_is_fail_atomic_and_preserves_voxel_identity() {
         &mut asset,
         VoxelPaletteUpdateRequest {
             expected_content_hash: accepted.content_hash.clone(),
-            expected_voxel_data_hash: accepted.voxel_data_hash.clone(),
             replacement: vec![VoxelAssetMaterialBinding {
                 material_slot: 3,
                 material_asset_id: "static-mesh/not-a-material".to_string(),
@@ -98,7 +100,7 @@ fn palette_replacement_is_fail_atomic_and_preserves_voxel_identity() {
 }
 
 #[test]
-fn strict_decode_and_hash_reject_unknown_or_changed_content() {
+fn strict_decode_rejects_unknown_fields_and_invalid_content() {
     let asset = with_computed_content_hash(valid_asset()).unwrap();
     let encoded = encode_voxel_asset(&asset).unwrap();
     let mut value: serde_json::Value = serde_json::from_str(&encoded).unwrap();
@@ -114,10 +116,78 @@ fn strict_decode_and_hash_reject_unknown_or_changed_content() {
         .diagnostics()
         .iter()
         .any(|diagnostic| diagnostic.code == "voxelAsset.unknownMaterial"));
+
+    changed.content_hash = "sha256:stale".to_owned();
+    let error = validate_voxel_asset(&changed).unwrap_err();
     assert!(error
         .diagnostics()
         .iter()
         .any(|diagnostic| diagnostic.code == "voxelAsset.contentHashMismatch"));
+}
+
+#[test]
+fn decode_refuses_a_file_edited_without_new_identities() {
+    let asset = with_computed_content_hash(valid_asset()).unwrap();
+    let encoded = encode_voxel_asset(&asset).unwrap();
+
+    // A palette edit written back without recomputing identities.
+    let mut value: serde_json::Value = serde_json::from_str(&encoded).unwrap();
+    value["materialPalette"][0]["materialAssetId"] = "material/brick".into();
+    let error = decode_voxel_asset(&serde_json::to_string(&value).unwrap()).unwrap_err();
+    let codes = error
+        .diagnostics()
+        .iter()
+        .map(|diagnostic| diagnostic.code)
+        .collect::<Vec<_>>();
+    assert_eq!(codes, ["voxelAsset.contentHashMismatch"]);
+
+    // An occupancy edit changes both identities.
+    let mut value: serde_json::Value = serde_json::from_str(&encoded).unwrap();
+    value["representation"]["sparseRuns"][0]["start"][1] = 1.into();
+    value["bounds"]["min"][1] = 1.into();
+    value["bounds"]["max"][1] = 1.into();
+    let error = decode_voxel_asset(&serde_json::to_string(&value).unwrap()).unwrap_err();
+    let codes = error
+        .diagnostics()
+        .iter()
+        .map(|diagnostic| diagnostic.code)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        codes,
+        [
+            "voxelAsset.voxelDataHashMismatch",
+            "voxelAsset.contentHashMismatch"
+        ]
+    );
+
+    // The unedited file decodes with the identities it states.
+    assert_eq!(decode_voxel_asset(&encoded).unwrap(), asset);
+}
+
+#[test]
+fn identities_change_with_content_and_survive_encode_and_decode() {
+    let asset = with_computed_content_hash(valid_asset()).unwrap();
+    let decoded = decode_voxel_asset(&encode_voxel_asset(&asset).unwrap()).unwrap();
+    assert_eq!(decoded.content_hash, asset.content_hash);
+    assert_eq!(decoded.voxel_data_hash, asset.voxel_data_hash);
+
+    let mut moved = asset.clone();
+    moved.grid.origin[1] += 1;
+    let moved = with_computed_content_hash(moved).unwrap();
+    assert_ne!(moved.content_hash, asset.content_hash);
+    assert_eq!(moved.voxel_data_hash, asset.voxel_data_hash);
+
+    let mut repainted = asset.clone();
+    repainted.material_palette.push(VoxelAssetMaterialBinding {
+        material_slot: 4,
+        material_asset_id: "material/brick".to_string(),
+        display_name: None,
+    });
+    repainted.material_map[0].voxel_material_slot = 4;
+    repainted.representation.sparse_runs[0].material_slot = 4;
+    let repainted = with_computed_content_hash(repainted).unwrap();
+    assert_ne!(repainted.content_hash, asset.content_hash);
+    assert_ne!(repainted.voxel_data_hash, asset.voxel_data_hash);
 }
 
 #[test]

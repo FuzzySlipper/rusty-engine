@@ -1384,7 +1384,7 @@ fn admit_magica_bytes(
         source_byte_count: admission.source_byte_count,
     };
     let object =
-        match voxel_object_runtime::admit_voxel_object(&admission.object, Default::default()) {
+        match voxel_object_runtime::admit_voxel_object(admission.object, Default::default()) {
             Ok(value) => value,
             Err(_) => return Err(NativeMagicaVoxelAdmissionStatus::CanonicalObject as i32),
         };
@@ -3764,8 +3764,7 @@ mod tests {
         assert_eq!(palette.palette_len, 2);
         assert_ne!(palette.source_hash, NativeVoxelContentHash::default());
 
-        let plain =
-            voxel_object_runtime::admit_voxel_object(&object(), Default::default()).unwrap();
+        let plain = voxel_object_runtime::admit_voxel_object(object(), Default::default()).unwrap();
         let plain = bridge
             .insert_object_with_magica_palette(plain, None)
             .unwrap();

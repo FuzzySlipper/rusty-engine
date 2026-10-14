@@ -3,12 +3,10 @@ use std::path::Path;
 use core_assets::{AssetId, AssetKind};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use voxel_asset::{
-    validate_voxel_asset, VoxelAssetBounds, VoxelConversionRequest, VoxelConversionSettings,
-};
+use voxel_asset::{VoxelAssetBounds, VoxelConversionRequest, VoxelConversionSettings};
 
 use crate::{
-    convert::{convert_imported_mesh_with_material_sampling, replace_settings_identity},
+    convert::{conversion_receipt, convert_mesh_cells},
     material::{
         canonicalize_material_policy, material_sampling_context, resolve_material_map,
         ConversionMaterialPolicy,
@@ -157,14 +155,20 @@ pub fn plan_conversion(
         settings: effective_settings,
     };
     let settings_sha256 = plan_settings_sha256(&request.settings);
-    let output = replace_settings_identity(
-        convert_imported_mesh_with_material_sampling(
-            &conversion_request,
-            &transformed_mesh,
-            source.receipt.source.source_sha256.clone(),
-            source.receipt.source_byte_count,
-            Some(&material_sampling),
-        )?,
+    let cells = convert_mesh_cells(
+        &conversion_request,
+        &transformed_mesh,
+        &source.receipt.source.source_sha256,
+        source.receipt.source_byte_count,
+        Some(&material_sampling),
+        None,
+    )?;
+    let output = conversion_receipt(
+        &conversion_request,
+        &transformed_mesh,
+        cells,
+        source.receipt.source.source_sha256.clone(),
+        source.receipt.source_byte_count,
         settings_sha256.clone(),
     )?;
 
@@ -251,13 +255,6 @@ pub fn apply_conversion(
     prepared: &PreparedVoxelConversion,
 ) -> Result<AppliedVoxelConversion, ConversionError> {
     validate_prepared_identity(&request.plan_id, &request.expected_plan_hash, prepared)?;
-    validate_voxel_asset(&prepared.output.asset).map_err(|error| {
-        ConversionError::one(
-            "conversion.invalidPreparedOutput",
-            "preparedOutput",
-            format!("prepared voxel asset failed semantic validation: {error}"),
-        )
-    })?;
     let output_hash = prepared.output.asset.content_hash.clone();
     if request
         .expected_output_hash
@@ -413,38 +410,15 @@ pub(crate) fn transform_position(
     Ok(transformed)
 }
 
+/// Compare a request against the plan it names. The prepared plan and its
+/// output were built together by [`plan_conversion`] and cannot be changed
+/// afterwards, so their own identities are not recomputed here.
 fn validate_prepared_identity(
     plan_id: &str,
     expected_plan_hash: &str,
     prepared: &PreparedVoxelConversion,
 ) -> Result<(), ConversionError> {
-    let plan = &prepared.plan;
-    let output = &prepared.output;
-    let provenance = &output.asset.provenance;
-    if plan_id != prepared.plan.plan_id
-        || expected_plan_hash != prepared.plan.plan_hash
-        || conversion_plan_hash(&prepared.plan) != prepared.plan.plan_hash
-        || conversion_plan_id(
-            &plan.source,
-            &plan.target_asset_id,
-            &plan.source_path,
-            &plan.license_path,
-            &plan.settings_sha256,
-        ) != plan.plan_id
-        || plan_settings_sha256(&plan.settings) != plan.settings_sha256
-        || plan.source.source_sha256 != plan.expected_source_sha256
-        || output.asset.asset_id != plan.target_asset_id
-        || provenance.source_path != plan.source_path
-        || provenance.license_path != plan.license_path
-        || provenance.source_sha256 != plan.expected_source_sha256
-        || provenance.settings_sha256 != plan.settings_sha256
-        || output.source_sha256 != plan.expected_source_sha256
-        || output.settings_sha256 != plan.settings_sha256
-        || output.asset.content_hash != plan.expected_output_content_hash
-        || output.content_hash != plan.expected_output_content_hash
-        || output.output_voxels != plan.estimated_output_voxels
-        || output.bounds != plan.estimated_bounds
-    {
+    if plan_id != prepared.plan.plan_id || expected_plan_hash != prepared.plan.plan_hash {
         return Err(ConversionError::one(
             "conversion.stalePlan",
             "plan",

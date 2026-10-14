@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 pub const VOXEL_ASSET_SCHEMA_VERSION: u32 = 1;
 
-/// One complete, self-validating voxel-volume artifact.
+/// One complete voxel-volume artifact carrying its own identities.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct VoxelAsset {

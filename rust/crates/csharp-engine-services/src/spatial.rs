@@ -933,9 +933,7 @@ impl RuntimeSpatialBridge {
             Arc::clone(&session.scene)
         };
 
-        let cells = resolve_voxel_asset(asset).map_err(|error| {
-            CsharpEngineServicesError::new("CSHARP_VOXEL_ASSET_SPATIAL_RESOLVE", error.to_string())
-        })?;
+        let cells = resolve_voxel_asset(asset);
         let mut candidate = VoxelCollisionScene::from_material_voxels_with_mesh_options(
             asset.grid.cell_size,
             asset.grid.chunk_size,

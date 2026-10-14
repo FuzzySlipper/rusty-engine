@@ -278,6 +278,13 @@ fn animated_clips_use_one_grid_stable_palette_and_durable_source_schedules() {
     );
     assert!(!receipt.asset.provenance.source_clips[0].included_clip_end);
     assert_eq!(receipt.artifact_bytes, receipt.canonical_json.len());
+    // Frame readouts report the identities computed with the object.
+    let run = receipt.asset.clip("locomotion/run").unwrap();
+    assert_eq!(receipt.clips[0].frames.len(), run.frames.len());
+    for (readout, frame) in receipt.clips[0].frames.iter().zip(&run.frames) {
+        assert_eq!(readout.voxel_data_hash, frame.frame.voxel_data_hash);
+        assert!(readout.voxel_data_hash.starts_with("sha256:"));
+    }
     eprintln!(
         "animated voxel object: {} bytes, {} sampled frames, {} stored frames, {:?}",
         receipt.artifact_bytes, receipt.sampled_frames, receipt.stored_frames, elapsed
@@ -291,7 +298,7 @@ fn animated_clips_use_one_grid_stable_palette_and_durable_source_schedules() {
         .collect::<std::collections::BTreeSet<_>>();
     for clip in &receipt.asset.clips {
         for frame in &clip.frames {
-            let cells = resolve_voxel_frame(&frame.frame, palette_slots.iter().copied()).unwrap();
+            let cells = resolve_voxel_frame(&frame.frame);
             assert!(cells
                 .iter()
                 .all(|cell| palette_slots.contains(&cell.material_slot)));
@@ -514,12 +521,7 @@ fn static_import_request() -> MeshSourceImportRequest {
 fn frame_coordinates(
     object: &voxel_asset::VoxelObjectAsset,
 ) -> std::collections::BTreeSet<[i64; 3]> {
-    let material_slots = object
-        .material_palette
-        .iter()
-        .map(|binding| binding.material_slot);
-    resolve_voxel_frame(&object.default_frame, material_slots)
-        .unwrap()
+    resolve_voxel_frame(&object.default_frame)
         .into_iter()
         .map(|cell| cell.coordinate)
         .collect()

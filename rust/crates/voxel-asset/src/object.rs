@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     resolve_voxel_frame, VoxelAssetBounds, VoxelAssetMaterialBinding, VoxelAssetMaterialMapping,
-    VoxelCoordinateSystem, VoxelFrame, VoxelFrameCell, VoxelFrameError,
+    VoxelCoordinateSystem, VoxelFrame, VoxelFrameCell,
 };
 
 pub const VOXEL_OBJECT_SCHEMA_VERSION: u32 = 1;
@@ -219,7 +219,6 @@ pub enum VoxelObjectFrameSelectionError {
         index: usize,
         frame_count: usize,
     },
-    InvalidFrame(VoxelFrameError),
 }
 
 impl std::fmt::Display for VoxelObjectFrameSelectionError {
@@ -234,7 +233,6 @@ impl std::fmt::Display for VoxelObjectFrameSelectionError {
                 formatter,
                 "voxel-object clip `{clip}` frame {index} is outside 0..{frame_count}"
             ),
-            Self::InvalidFrame(error) => error.fmt(formatter),
         }
     }
 }
@@ -265,11 +263,8 @@ impl VoxelObjectAsset {
         })
     }
 
-    pub fn resolve_default_frame(
-        &self,
-    ) -> Result<Vec<VoxelFrameCell>, VoxelObjectFrameSelectionError> {
-        resolve_voxel_frame(&self.default_frame, self.material_slots())
-            .map_err(VoxelObjectFrameSelectionError::InvalidFrame)
+    pub fn resolve_default_frame(&self) -> Vec<VoxelFrameCell> {
+        resolve_voxel_frame(&self.default_frame)
     }
 
     pub fn resolve_clip_frame(
@@ -277,14 +272,8 @@ impl VoxelObjectAsset {
         clip_id: &str,
         frame_index: usize,
     ) -> Result<Vec<VoxelFrameCell>, VoxelObjectFrameSelectionError> {
-        let frame = self.clip_frame(clip_id, frame_index)?;
-        resolve_voxel_frame(&frame.frame, self.material_slots())
-            .map_err(VoxelObjectFrameSelectionError::InvalidFrame)
-    }
-
-    fn material_slots(&self) -> impl Iterator<Item = u16> + '_ {
-        self.material_palette
-            .iter()
-            .map(|binding| binding.material_slot)
+        Ok(resolve_voxel_frame(
+            &self.clip_frame(clip_id, frame_index)?.frame,
+        ))
     }
 }

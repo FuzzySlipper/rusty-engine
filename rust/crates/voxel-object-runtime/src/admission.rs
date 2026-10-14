@@ -5,9 +5,8 @@ use svc_mesh::{
     SurfaceMeshOptions,
 };
 use voxel_asset::{
-    canonicalize_voxel_object, decode_voxel_object, VoxelFrameCell, VoxelObjectAsset,
-    VoxelObjectError, VoxelObjectFrameAnchor, VoxelObjectFrameCollision,
-    VoxelObjectFrameSelectionError,
+    decode_voxel_object, resolve_voxel_frame, VoxelFrameCell, VoxelObjectAsset, VoxelObjectError,
+    VoxelObjectFrameAnchor, VoxelObjectFrameCollision,
 };
 
 use crate::{
@@ -18,9 +17,7 @@ use crate::{
 #[derive(Debug)]
 pub enum VoxelObjectAdmissionError {
     Asset(VoxelObjectError),
-    Frame(VoxelObjectFrameSelectionError),
     Mesh(MeshError),
-    FrameLimit { count: u64, limit: u32 },
     ResolvedVoxelLimit { count: u64, limit: u64 },
     MeshFaceLimit { count: u64, limit: u64 },
     MeshVertexLimit { count: u64, limit: u64 },
@@ -34,14 +31,7 @@ impl std::fmt::Display for VoxelObjectAdmissionError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Asset(error) => error.fmt(formatter),
-            Self::Frame(error) => error.fmt(formatter),
             Self::Mesh(error) => error.fmt(formatter),
-            Self::FrameLimit { count, limit } => {
-                write!(
-                    formatter,
-                    "voxel object resolves {count} frames; limit is {limit}"
-                )
-            }
             Self::ResolvedVoxelLimit { count, limit } => write!(
                 formatter,
                 "voxel object resolves {count} aggregate cells; runtime limit is {limit}"
@@ -83,11 +73,14 @@ pub fn admit_voxel_object_json(
     limits: VoxelObjectRuntimeLimits,
 ) -> Result<AdmittedVoxelObject, VoxelObjectAdmissionError> {
     let object = decode_voxel_object(input).map_err(VoxelObjectAdmissionError::Asset)?;
-    admit_voxel_object(&object, limits)
+    admit_voxel_object(object, limits)
 }
 
+/// Admit an object returned by `decode_voxel_object` or
+/// `with_computed_voxel_object_hashes`. Both checked and canonicalized it, so
+/// admission only applies the runtime work limits.
 pub fn admit_voxel_object(
-    object: &VoxelObjectAsset,
+    object: VoxelObjectAsset,
     limits: VoxelObjectRuntimeLimits,
 ) -> Result<AdmittedVoxelObject, VoxelObjectAdmissionError> {
     admit_voxel_object_with_options(
@@ -100,28 +93,11 @@ pub fn admit_voxel_object(
 }
 
 pub fn admit_voxel_object_with_options(
-    object: &VoxelObjectAsset,
+    object: VoxelObjectAsset,
     options: VoxelObjectAdmissionOptions,
 ) -> Result<AdmittedVoxelObject, VoxelObjectAdmissionError> {
-    let object = canonicalize_voxel_object(object).map_err(VoxelObjectAdmissionError::Asset)?;
-    let frame_count = object
-        .clips
-        .iter()
-        .try_fold(1_u64, |count, clip| {
-            count.checked_add(clip.frames.len() as u64)
-        })
-        .unwrap_or(u64::MAX);
-    if frame_count > u64::from(options.limits.max_frames) {
-        return Err(VoxelObjectAdmissionError::FrameLimit {
-            count: frame_count,
-            limit: options.limits.max_frames,
-        });
-    }
-
     let mut builder = AdmissionBuilder::new(&object, options);
-    let default_cells = object
-        .resolve_default_frame()
-        .map_err(VoxelObjectAdmissionError::Frame)?;
+    let default_cells = object.resolve_default_frame();
     builder.push_frame(
         VoxelObjectFrameSource::Default,
         object.default_frame.voxel_data_hash.clone(),
@@ -137,9 +113,7 @@ pub fn admit_voxel_object_with_options(
         let default_duration = seconds_to_micros(1.0 / clip.frames_per_second);
         let mut duration_micros = 0_u64;
         for (frame_index, animation_frame) in clip.frames.iter().enumerate() {
-            let cells = object
-                .resolve_clip_frame(&clip.id, frame_index)
-                .map_err(VoxelObjectAdmissionError::Frame)?;
+            let cells = resolve_voxel_frame(&animation_frame.frame);
             let runtime_index = builder.push_frame(
                 VoxelObjectFrameSource::Clip {
                     clip: clip.id.clone(),

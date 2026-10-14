@@ -1,5 +1,5 @@
 use voxel_asset::{
-    decode_voxel_object, encode_voxel_object, resolve_voxel_frame, validate_voxel_object,
+    decode_voxel_object, encode_voxel_object, validate_voxel_object,
     with_computed_voxel_object_hashes, VoxelAssetBounds, VoxelAssetMaterialBinding,
     VoxelAssetMaterialMapping, VoxelCoordinateSystem, VoxelFrame, VoxelObjectAnimationFrame,
     VoxelObjectAsset, VoxelObjectClip, VoxelObjectCollisionPrimitive, VoxelObjectFrameAnchor,
@@ -29,7 +29,6 @@ fn static_and_animated_objects_are_canonical_and_frame_resolvable() {
     assert_eq!(
         decoded
             .resolve_default_frame()
-            .unwrap()
             .iter()
             .map(|cell| cell.coordinate)
             .collect::<Vec<_>>(),
@@ -156,8 +155,10 @@ fn frame_facts_are_bounded_canonical_and_content_hash_bound() {
         canonical
     );
 
-    let mut tampered = canonical.clone();
-    tampered
+    // An in-place frame-fact edit changes the object identity once the
+    // identities are recomputed, and leaves voxel occupancy identities alone.
+    let mut edited = canonical.clone();
+    edited
         .clips
         .iter_mut()
         .find(|clip| clip.id == "idle")
@@ -165,11 +166,16 @@ fn frame_facts_are_bounded_canonical_and_content_hash_bound() {
         .frames[0]
         .anchors[0]
         .position[1] += 1.0;
-    assert!(validate_voxel_object(&tampered)
-        .unwrap_err()
-        .diagnostics()
-        .iter()
-        .any(|item| item.code == "voxelObject.contentHashMismatch"));
+    let edited = with_computed_voxel_object_hashes(edited).unwrap();
+    assert_ne!(edited.content_hash, canonical.content_hash);
+    assert_eq!(
+        edited.clips[0].frames[0].frame.voxel_data_hash,
+        canonical.clips[0].frames[0].frame.voxel_data_hash
+    );
+    assert_eq!(
+        decode_voxel_object(&encode_voxel_object(&edited).unwrap()).unwrap(),
+        edited
+    );
 
     let mut exact = object();
     exact.clips[1].frames[0].anchors = (0..MAX_VOXEL_OBJECT_ANCHORS_PER_FRAME)
@@ -359,7 +365,7 @@ fn clip_timing_identity_and_aggregate_limits_fail_closed() {
 }
 
 #[test]
-fn strict_object_decode_and_standalone_frame_validation_reject_drift() {
+fn strict_object_decode_and_frame_selection_reject_drift() {
     let object = with_computed_voxel_object_hashes(object()).unwrap();
     let encoded = encode_voxel_object(&object).unwrap();
     let mut value: serde_json::Value = serde_json::from_str(&encoded).unwrap();
@@ -372,9 +378,28 @@ fn strict_object_decode_and_standalone_frame_validation_reject_drift() {
         "voxelObject.decode"
     );
 
-    let mut changed = object.default_frame.clone();
-    changed.representation.sparse_runs[0].material_slot = 2;
-    assert!(resolve_voxel_frame(&changed, [1, 2]).is_err());
+    // A frame edited and written back without recomputing identities.
+    let mut value: serde_json::Value = serde_json::from_str(&encoded).unwrap();
+    value["clips"][1]["frames"][0]["frame"]["representation"]["sparseRuns"][0]["materialSlot"] =
+        2.into();
+    let error = decode_voxel_object(&serde_json::to_string(&value).unwrap()).unwrap_err();
+    let diagnostics = error
+        .diagnostics()
+        .iter()
+        .map(|item| (item.code, item.path.as_str()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        diagnostics,
+        [
+            ("voxelObject.contentHashMismatch", "contentHash"),
+            (
+                "voxelFrame.voxelDataHashMismatch",
+                "clips[1].frames[0].frame.voxelDataHash"
+            ),
+        ]
+    );
+    assert_eq!(decode_voxel_object(&encoded).unwrap(), object);
+
     assert!(object.resolve_clip_frame("missing", 0).is_err());
     assert!(object.resolve_clip_frame("walk", 99).is_err());
 }

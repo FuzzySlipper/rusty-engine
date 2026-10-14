@@ -104,7 +104,6 @@ pub struct GeneratedTunnelProvenance {
     pub preset: &'static str,
     pub seed: u64,
     pub settings_sha256: String,
-    pub voxel_data_sha256: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -259,7 +258,6 @@ pub fn generate_tunnel(
         preset: config.preset.label(),
         seed: config.seed,
         settings_sha256: sha256(&settings),
-        voxel_data_sha256: hash_voxels(&voxels),
     };
     Ok(GeneratedTunnel {
         config,
@@ -291,42 +289,6 @@ pub(crate) fn settings_bytes(config: TunnelGeneratorConfig) -> Vec<u8> {
 
 pub(crate) fn sha256(bytes: &[u8]) -> String {
     format!("sha256:{:x}", Sha256::digest(bytes))
-}
-
-fn hash_voxels(voxels: &[GeneratedVoxel]) -> String {
-    let mut cells = voxels.to_vec();
-    cells.sort_by_key(|voxel| {
-        (
-            voxel.address[2],
-            voxel.address[1],
-            voxel.address[0],
-            voxel.material_slot,
-        )
-    });
-    let mut runs: Vec<([i64; 3], u32, u16)> = Vec::new();
-    for voxel in cells {
-        if let Some((start, length, material_slot)) = runs.last_mut() {
-            if start[1] == voxel.address[1]
-                && start[2] == voxel.address[2]
-                && *material_slot == voxel.material_slot
-                && start[0] + i64::from(*length) == voxel.address[0]
-            {
-                *length += 1;
-                continue;
-            }
-        }
-        runs.push((voxel.address, 1, voxel.material_slot));
-    }
-    runs.sort_by_key(|(start, length, material_slot)| (*start, *material_slot, *length));
-    let mut hasher = Sha256::new();
-    for (start, length, material_slot) in runs {
-        for coordinate in start {
-            hasher.update(coordinate.to_le_bytes());
-        }
-        hasher.update(length.to_le_bytes());
-        hasher.update(material_slot.to_le_bytes());
-    }
-    format!("sha256:{:x}", hasher.finalize())
 }
 
 fn validate_config(config: TunnelGeneratorConfig) -> Result<(), TunnelGenerationError> {

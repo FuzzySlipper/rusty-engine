@@ -5,9 +5,9 @@ use sha2::{Digest, Sha256};
 
 use crate::{
     frame::{canonicalize_frame, represented_voxel_count},
-    validate_voxel_frame, VoxelAssetBounds, VoxelAssetMaterialBinding, VoxelAssetMaterialMapping,
-    VoxelObjectAsset, VoxelObjectCollisionPrimitive, VoxelObjectFrameCollision,
-    VoxelObjectProvenance, VoxelObjectProvenanceKind, VOXEL_OBJECT_SCHEMA_VERSION,
+    VoxelAssetBounds, VoxelAssetMaterialBinding, VoxelAssetMaterialMapping, VoxelObjectAsset,
+    VoxelObjectCollisionPrimitive, VoxelObjectFrameCollision, VoxelObjectProvenance,
+    VoxelObjectProvenanceKind, VOXEL_OBJECT_SCHEMA_VERSION,
 };
 
 pub const MAX_VOXEL_OBJECT_ARTIFACT_BYTES: usize = 64 * 1024 * 1024;
@@ -96,7 +96,66 @@ pub fn decode_voxel_object(input: &str) -> Result<VoxelObjectAsset, VoxelObjectE
     validate_voxel_object(&object)?;
     let mut canonical = object;
     canonicalize(&mut canonical);
-    Ok(canonical)
+    verify_stated_identities(canonical)
+}
+
+/// Compute a decoded object's frame and content identities once and refuse a
+/// file whose stated identities do not match its content.
+///
+/// Content files can be edited by hand or written back by tooling and
+/// reloaded, and every later consumer keys caches and expected-hash guards on
+/// the stored identities, so they are checked here where the file enters.
+fn verify_stated_identities(
+    mut object: VoxelObjectAsset,
+) -> Result<VoxelObjectAsset, VoxelObjectError> {
+    let stated_content_hash = std::mem::take(&mut object.content_hash);
+    let stated_default_hash = std::mem::take(&mut object.default_frame.voxel_data_hash);
+    let stated_clip_hashes = object
+        .clips
+        .iter_mut()
+        .map(|clip| {
+            clip.frames
+                .iter_mut()
+                .map(|frame| std::mem::take(&mut frame.frame.voxel_data_hash))
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    let bytes = serde_json::to_vec(&object).expect("voxel object serializes");
+    object.content_hash = format!("sha256:{:x}", Sha256::digest(bytes));
+    populate_frame_hashes(&mut object);
+
+    let mut diagnostics = Vec::new();
+    if stated_content_hash != object.content_hash {
+        diagnostics.push(diagnostic(
+            "voxelObject.contentHashMismatch",
+            "contentHash",
+            "contentHash does not match the canonical semantic object",
+        ));
+    }
+    let mut frame_mismatch = |path: String| {
+        diagnostics.push(diagnostic(
+            "voxelFrame.voxelDataHashMismatch",
+            path,
+            "voxelDataHash does not match canonical sparse occupancy",
+        ));
+    };
+    if stated_default_hash != object.default_frame.voxel_data_hash {
+        frame_mismatch("defaultFrame.voxelDataHash".to_owned());
+    }
+    for (clip_index, (clip, stated)) in object.clips.iter().zip(&stated_clip_hashes).enumerate() {
+        for (frame_index, (frame, stated)) in clip.frames.iter().zip(stated).enumerate() {
+            if *stated != frame.frame.voxel_data_hash {
+                frame_mismatch(format!(
+                    "clips[{clip_index}].frames[{frame_index}].frame.voxelDataHash"
+                ));
+            }
+        }
+    }
+    if diagnostics.is_empty() {
+        Ok(object)
+    } else {
+        Err(VoxelObjectError { diagnostics })
+    }
 }
 
 pub fn encode_voxel_object(object: &VoxelObjectAsset) -> Result<String, VoxelObjectError> {
@@ -119,15 +178,11 @@ pub fn encode_voxel_object(object: &VoxelObjectAsset) -> Result<String, VoxelObj
     Ok(encoded)
 }
 
-pub fn canonicalize_voxel_object(
-    object: &VoxelObjectAsset,
-) -> Result<VoxelObjectAsset, VoxelObjectError> {
-    validate_voxel_object(object)?;
-    let mut canonical = object.clone();
-    canonicalize(&mut canonical);
-    Ok(canonical)
-}
-
+/// Canonicalize the object and compute its frame and content identities.
+///
+/// This is where a voxel object's identities change. Decode verifies a file's
+/// stated identities once; encode, runtime admission and queries reuse the
+/// stored identities rather than recomputing them.
 pub fn with_computed_voxel_object_hashes(
     mut object: VoxelObjectAsset,
 ) -> Result<VoxelObjectAsset, VoxelObjectError> {
@@ -137,26 +192,25 @@ pub fn with_computed_voxel_object_hashes(
         return Err(VoxelObjectError { diagnostics });
     }
     canonicalize(&mut object);
+    let bytes = serde_json::to_vec(&object).expect("voxel object serializes");
+    object.content_hash = format!("sha256:{:x}", Sha256::digest(bytes));
     populate_frame_hashes(&mut object);
-    object.content_hash = computed_content_hash(&object);
-    validate_voxel_object(&object)?;
     Ok(object)
 }
 
+/// Check an object's structure and the shape of its stored identities.
+///
+/// The identities themselves are not recomputed: decode verifies them once
+/// where a file enters, and [`with_computed_voxel_object_hashes`] computes
+/// them when content changes.
 pub fn validate_voxel_object(object: &VoxelObjectAsset) -> Result<(), VoxelObjectError> {
     let mut diagnostics = semantic_diagnostics(object);
-    validate_frame_hash(
-        &object.default_frame,
-        "defaultFrame",
-        &object.material_palette,
-        &mut diagnostics,
-    );
+    validate_frame_hash_shape(&object.default_frame, "defaultFrame", &mut diagnostics);
     for (clip_index, clip) in object.clips.iter().enumerate() {
         for (frame_index, frame) in clip.frames.iter().enumerate() {
-            validate_frame_hash(
+            validate_frame_hash_shape(
                 &frame.frame,
                 &format!("clips[{clip_index}].frames[{frame_index}].frame"),
-                &object.material_palette,
                 &mut diagnostics,
             );
         }
@@ -166,12 +220,6 @@ pub fn validate_voxel_object(object: &VoxelObjectAsset) -> Result<(), VoxelObjec
             "voxelObject.contentHashMismatch",
             "contentHash",
             "contentHash must be `sha256:` followed by 64 lowercase hexadecimal digits",
-        ));
-    } else if object.content_hash != computed_content_hash(object) {
-        diagnostics.push(diagnostic(
-            "voxelObject.contentHashMismatch",
-            "contentHash",
-            "contentHash does not match the canonical semantic object",
         ));
     }
     if diagnostics.is_empty() {
@@ -676,31 +724,24 @@ fn append_frame_semantics(
     material_slots: &BTreeSet<u16>,
     diagnostics: &mut Vec<VoxelObjectDiagnostic>,
 ) {
-    let mut without_hash = frame.clone();
-    without_hash.voxel_data_hash = crate::frame::computed_voxel_data_hash(&without_hash);
-    if let Err(error) = validate_voxel_frame(&without_hash, material_slots.iter().copied()) {
-        diagnostics.extend(
-            error.diagnostics().iter().map(|item| {
-                diagnostic(item.code, prefixed(path, &item.path), item.message.clone())
-            }),
-        );
-    }
+    diagnostics.extend(
+        crate::frame::semantic_diagnostics(frame, material_slots)
+            .into_iter()
+            .map(|item| diagnostic(item.code, prefixed(path, &item.path), item.message)),
+    );
 }
 
-fn validate_frame_hash(
+fn validate_frame_hash_shape(
     frame: &crate::VoxelFrame,
     path: &str,
-    palette: &[VoxelAssetMaterialBinding],
     diagnostics: &mut Vec<VoxelObjectDiagnostic>,
 ) {
-    if let Err(error) =
-        validate_voxel_frame(frame, palette.iter().map(|binding| binding.material_slot))
-    {
-        diagnostics.extend(
-            error.diagnostics().iter().map(|item| {
-                diagnostic(item.code, prefixed(path, &item.path), item.message.clone())
-            }),
-        );
+    if !crate::codec::valid_sha256(&frame.voxel_data_hash) {
+        diagnostics.push(diagnostic(
+            "voxelFrame.voxelDataHashMismatch",
+            prefixed(path, "voxelDataHash"),
+            "voxelDataHash must be `sha256:` followed by 64 lowercase hexadecimal digits",
+        ));
     }
 }
 
@@ -759,21 +800,15 @@ fn clear_hashes(object: &mut VoxelObjectAsset) {
 }
 
 fn populate_frame_hashes(object: &mut VoxelObjectAsset) {
-    object.default_frame.voxel_data_hash =
-        crate::frame::computed_voxel_data_hash(&object.default_frame);
+    let hash = |frame: &crate::VoxelFrame| {
+        crate::frame::canonical_runs_hash(&frame.representation.sparse_runs)
+    };
+    object.default_frame.voxel_data_hash = hash(&object.default_frame);
     for clip in &mut object.clips {
         for frame in &mut clip.frames {
-            frame.frame.voxel_data_hash = crate::frame::computed_voxel_data_hash(&frame.frame);
+            frame.frame.voxel_data_hash = hash(&frame.frame);
         }
     }
-}
-
-fn computed_content_hash(object: &VoxelObjectAsset) -> String {
-    let mut canonical = object.clone();
-    clear_hashes(&mut canonical);
-    canonicalize(&mut canonical);
-    let bytes = serde_json::to_vec(&canonical).expect("voxel object serializes");
-    format!("sha256:{:x}", Sha256::digest(bytes))
 }
 
 fn union(left: VoxelAssetBounds, right: VoxelAssetBounds) -> VoxelAssetBounds {

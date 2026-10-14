@@ -88,7 +88,7 @@ pub fn decode_voxel_asset(input: &str) -> Result<VoxelAsset, VoxelAssetError> {
     validate_voxel_asset(&asset)?;
     let mut canonical = asset;
     canonicalize(&mut canonical);
-    Ok(canonical)
+    verify_stated_identities(canonical)
 }
 
 pub fn encode_voxel_asset(asset: &VoxelAsset) -> Result<String, VoxelAssetError> {
@@ -111,14 +111,11 @@ pub fn encode_voxel_asset(asset: &VoxelAsset) -> Result<String, VoxelAssetError>
     Ok(encoded)
 }
 
-pub fn canonicalize_voxel_asset(asset: &VoxelAsset) -> Result<VoxelAsset, VoxelAssetError> {
-    validate_voxel_asset(asset)?;
-    let mut canonical = asset.clone();
-    canonicalize(&mut canonical);
-    Ok(canonical)
-}
-
-/// Populate the semantic content hash after validating every other field.
+/// Canonicalize the asset and compute its voxel-data and content identities.
+///
+/// This is where a voxel asset's identities change. Decode verifies a file's
+/// stated identities once; encode, resolve and queries reuse the stored
+/// identities rather than recomputing them.
 pub fn with_computed_content_hash(mut asset: VoxelAsset) -> Result<VoxelAsset, VoxelAssetError> {
     asset.voxel_data_hash.clear();
     asset.content_hash.clear();
@@ -127,12 +124,67 @@ pub fn with_computed_content_hash(mut asset: VoxelAsset) -> Result<VoxelAsset, V
         return Err(VoxelAssetError { diagnostics });
     }
     canonicalize(&mut asset);
-    asset.voxel_data_hash = computed_voxel_data_hash(&asset);
-    asset.content_hash = computed_content_hash(&asset);
-    validate_voxel_asset(&asset)?;
+    asset.content_hash = canonical_content_hash(&asset);
+    asset.voxel_data_hash = crate::frame::canonical_runs_hash(&asset.representation.sparse_runs);
     Ok(asset)
 }
 
+/// Compute a decoded asset's identities once and refuse a file whose stated
+/// identities do not match its content.
+///
+/// Content files can be edited by hand or written back by tooling and
+/// reloaded, and every later consumer keys caches and expected-hash guards on
+/// the stored identities, so they are checked here where the file enters.
+fn verify_stated_identities(mut asset: VoxelAsset) -> Result<VoxelAsset, VoxelAssetError> {
+    let stated_voxel_data_hash = std::mem::take(&mut asset.voxel_data_hash);
+    let stated_content_hash = std::mem::take(&mut asset.content_hash);
+    let content_hash = canonical_content_hash(&asset);
+    let voxel_data_hash = crate::frame::canonical_runs_hash(&asset.representation.sparse_runs);
+    let mut diagnostics = Vec::new();
+    if stated_voxel_data_hash != voxel_data_hash {
+        diagnostics.push(diagnostic(
+            "voxelAsset.voxelDataHashMismatch",
+            "voxelDataHash",
+            "voxelDataHash does not match canonical sparse occupancy",
+        ));
+    }
+    if stated_content_hash != content_hash {
+        diagnostics.push(diagnostic(
+            "voxelAsset.contentHashMismatch",
+            "contentHash",
+            "contentHash does not match the canonical semantic asset",
+        ));
+    }
+    if !diagnostics.is_empty() {
+        return Err(VoxelAssetError { diagnostics });
+    }
+    asset.voxel_data_hash = voxel_data_hash;
+    asset.content_hash = content_hash;
+    Ok(asset)
+}
+
+/// Recompute only the content identity of an asset whose voxel occupancy is
+/// unchanged, keeping its stored voxel-data identity.
+pub(crate) fn with_recomputed_content_hash(
+    mut asset: VoxelAsset,
+) -> Result<VoxelAsset, VoxelAssetError> {
+    let voxel_data_hash = std::mem::take(&mut asset.voxel_data_hash);
+    asset.content_hash.clear();
+    let diagnostics = semantic_diagnostics(&asset);
+    if !diagnostics.is_empty() {
+        return Err(VoxelAssetError { diagnostics });
+    }
+    canonicalize(&mut asset);
+    asset.content_hash = canonical_content_hash(&asset);
+    asset.voxel_data_hash = voxel_data_hash;
+    Ok(asset)
+}
+
+/// Check an asset's structure and the shape of its stored identities.
+///
+/// The identities themselves are not recomputed: decode verifies them once
+/// where a file enters, and [`with_computed_content_hash`] computes them when
+/// content changes.
 pub fn validate_voxel_asset(asset: &VoxelAsset) -> Result<(), VoxelAssetError> {
     let mut diagnostics = semantic_diagnostics(asset);
     if !valid_sha256(&asset.voxel_data_hash) {
@@ -141,24 +193,12 @@ pub fn validate_voxel_asset(asset: &VoxelAsset) -> Result<(), VoxelAssetError> {
             "voxelDataHash",
             "voxelDataHash must be `sha256:` followed by 64 lowercase hexadecimal digits",
         ));
-    } else if asset.voxel_data_hash != computed_voxel_data_hash(asset) {
-        diagnostics.push(diagnostic(
-            "voxelAsset.voxelDataHashMismatch",
-            "voxelDataHash",
-            "voxelDataHash does not match canonical sparse occupancy",
-        ));
     }
     if !valid_sha256(&asset.content_hash) {
         diagnostics.push(diagnostic(
             "voxelAsset.contentHashMismatch",
             "contentHash",
             "contentHash must be `sha256:` followed by 64 lowercase hexadecimal digits",
-        ));
-    } else if asset.content_hash != computed_content_hash(asset) {
-        diagnostics.push(diagnostic(
-            "voxelAsset.contentHashMismatch",
-            "contentHash",
-            "contentHash does not match the canonical semantic asset",
         ));
     }
     if diagnostics.is_empty() {
@@ -490,17 +530,10 @@ fn validate_sparse_runs(
     }
 }
 
-fn computed_content_hash(asset: &VoxelAsset) -> String {
-    let mut canonical = asset.clone();
-    canonical.voxel_data_hash.clear();
-    canonical.content_hash.clear();
-    canonicalize(&mut canonical);
-    let bytes = serde_json::to_vec(&canonical).expect("voxel asset serializes");
+/// SHA-256 of the canonical asset serialized with both identities empty.
+fn canonical_content_hash(asset: &VoxelAsset) -> String {
+    let bytes = serde_json::to_vec(asset).expect("voxel asset serializes");
     format!("sha256:{:x}", Sha256::digest(bytes))
-}
-
-fn computed_voxel_data_hash(asset: &VoxelAsset) -> String {
-    crate::frame::computed_voxel_data_hash(&crate::VoxelFrame::from(asset))
 }
 
 fn canonicalize(asset: &mut VoxelAsset) {

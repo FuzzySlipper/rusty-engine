@@ -6,7 +6,7 @@ use sha2::{Digest, Sha256};
 use voxel_asset::{MAX_STRING_BYTES, MAX_VOXEL_OBJECT_CLIPS};
 
 use super::{
-    VoxelObjectClipConversionRequest, VoxelObjectConversionPlan, VoxelObjectConversionPlanRequest,
+    VoxelObjectClipConversionRequest, VoxelObjectConversionPlanRequest,
     VoxelObjectConversionSettings,
 };
 use crate::voxelize::VoxelizationSourceBounds;
@@ -164,17 +164,6 @@ pub(super) fn object_plan_id(
         &request.target_asset_id,
         &request.license_path,
         settings_sha256,
-    ))
-}
-
-pub(super) fn object_plan_id_from_plan(plan: &VoxelObjectConversionPlan) -> String {
-    sha256_json(&(
-        "voxel-object-conversion-plan",
-        &plan.source,
-        &plan.source_path,
-        &plan.target_asset_id,
-        &plan.license_path,
-        &plan.settings_sha256,
     ))
 }
 

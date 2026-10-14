@@ -1,11 +1,10 @@
-use crate::{with_computed_content_hash, VoxelAsset, VoxelAssetError, VoxelAssetMaterialBinding};
+use crate::{VoxelAsset, VoxelAssetError, VoxelAssetMaterialBinding};
 
 /// Compare-and-swap request for changing material meaning without changing
 /// voxel occupancy.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VoxelPaletteUpdateRequest {
     pub expected_content_hash: String,
-    pub expected_voxel_data_hash: String,
     pub replacement: Vec<VoxelAssetMaterialBinding>,
 }
 
@@ -21,9 +20,7 @@ pub struct VoxelPaletteUpdateReceipt {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VoxelPaletteUpdateError {
     StaleContentHash { expected: String, actual: String },
-    StaleVoxelDataHash { expected: String, actual: String },
     Invalid(VoxelAssetError),
-    VoxelDataChanged { before: String, after: String },
 }
 
 impl std::fmt::Display for VoxelPaletteUpdateError {
@@ -35,7 +32,8 @@ impl std::fmt::Display for VoxelPaletteUpdateError {
 impl std::error::Error for VoxelPaletteUpdateError {}
 
 /// Validate the complete candidate before replacing the caller's asset. Any
-/// rejection leaves `asset` untouched.
+/// rejection leaves `asset` untouched. Only the palette changes, so the voxel
+/// data identity is kept and only the content identity is recomputed.
 pub fn replace_voxel_palette(
     asset: &mut VoxelAsset,
     request: VoxelPaletteUpdateRequest,
@@ -46,29 +44,13 @@ pub fn replace_voxel_palette(
             actual: asset.content_hash.clone(),
         });
     }
-    if request.expected_voxel_data_hash != asset.voxel_data_hash {
-        return Err(VoxelPaletteUpdateError::StaleVoxelDataHash {
-            expected: request.expected_voxel_data_hash,
-            actual: asset.voxel_data_hash.clone(),
-        });
-    }
-
-    let before_content = asset.content_hash.clone();
-    let before_voxels = asset.voxel_data_hash.clone();
     let material_count_before = asset.material_palette.len();
     let mut candidate = asset.clone();
     candidate.material_palette = request.replacement;
-    candidate.voxel_data_hash.clear();
-    candidate.content_hash.clear();
-    candidate = with_computed_content_hash(candidate).map_err(VoxelPaletteUpdateError::Invalid)?;
-    if candidate.voxel_data_hash != before_voxels {
-        return Err(VoxelPaletteUpdateError::VoxelDataChanged {
-            before: before_voxels,
-            after: candidate.voxel_data_hash,
-        });
-    }
+    let candidate = crate::codec::with_recomputed_content_hash(candidate)
+        .map_err(VoxelPaletteUpdateError::Invalid)?;
     let receipt = VoxelPaletteUpdateReceipt {
-        content_hash_before: before_content,
+        content_hash_before: std::mem::take(&mut asset.content_hash),
         content_hash_after: candidate.content_hash.clone(),
         voxel_data_hash: candidate.voxel_data_hash.clone(),
         material_count_before,

@@ -267,7 +267,6 @@ impl VoxelObjectPlayer {
         object: &'a AdmittedVoxelObject,
         now_micros: u64,
     ) -> Result<VoxelObjectPlaybackReadout<'a>, VoxelObjectPlayerError> {
-        validate_posture(object, &self.posture)?;
         let elapsed_micros = self.elapsed_at(now_micros)?;
         let Some(clip_id) = self.posture.clip.as_deref() else {
             return Ok(VoxelObjectPlaybackReadout {

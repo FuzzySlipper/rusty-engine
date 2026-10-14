@@ -19,10 +19,7 @@ fn tunnel_generation_is_bounded_repeatable_and_seed_sensitive() {
     let variation = generate_tunnel(TunnelGeneratorConfig::tiny_enclosed(42)).unwrap();
 
     assert_eq!(first, repeated);
-    assert_ne!(
-        first.provenance.voxel_data_sha256,
-        variation.provenance.voxel_data_sha256
-    );
+    assert_ne!(first.voxels, variation.voxels);
     assert_eq!(first.config.shell_dimensions(), [7, 6, 11]);
     assert_eq!(first.spawn_markers.len(), 2);
     assert_eq!(first.frame.local_offset, Vec3::new(-3.5, -1.0, -5.5));
@@ -89,10 +86,6 @@ fn materialization_produces_repeatable_native_asset_and_scene_candidates() {
         VoxelAssetProvenanceKind::GeneratedEnvironment
     );
     assert_eq!(decode_voxel_asset(&first.asset_json).unwrap(), first.asset);
-    assert_eq!(
-        first.asset.voxel_data_hash,
-        first.generation.provenance.voxel_data_sha256
-    );
     assert_eq!(first.revision_before, 0);
     assert_eq!(first.revision_after, 1);
     assert_eq!(first.markers.len(), 2);

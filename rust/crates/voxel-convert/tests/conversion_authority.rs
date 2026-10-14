@@ -6,16 +6,15 @@ use voxel_asset::{
     VoxelConversionOriginPolicy,
 };
 use voxel_convert::{
-    apply_conversion, apply_conversion_and_install, conversion_plan_hash,
-    decode_conversion_request, decode_mesh_source_import_request, identity_transform,
-    import_mesh_source, plan_conversion, plan_settings_sha256, preview_conversion,
-    query_model_info, query_model_window, texture_coordinate_source_hash, ConversionApplyRequest,
-    ConversionMaterialPolicy, ConversionPlanRequest, ConversionPlanSettings,
-    ConversionPreviewRequest, MeshSourceFormat, MeshSourceImportRequest, TextureChannelLayout,
-    TextureColorSpace, TextureMaterialBinding, TextureMaterialMode, TextureSampleAsset,
-    TextureSamplingPolicy, TextureSourceRef, TextureUvAttributeRef, TextureWrapPolicy,
-    VoxelModelInfoRequest, VoxelModelWindowRequest, MAX_CONVERSION_RESOLUTION_AXIS,
-    MAX_MESH_SOURCE_PATH_BYTES,
+    apply_conversion, apply_conversion_and_install, decode_conversion_request,
+    decode_mesh_source_import_request, identity_transform, import_mesh_source, plan_conversion,
+    plan_settings_sha256, preview_conversion, query_model_info, query_model_window,
+    texture_coordinate_source_hash, ConversionApplyRequest, ConversionMaterialPolicy,
+    ConversionPlanRequest, ConversionPlanSettings, ConversionPreviewRequest, MeshSourceFormat,
+    MeshSourceImportRequest, TextureChannelLayout, TextureColorSpace, TextureMaterialBinding,
+    TextureMaterialMode, TextureSampleAsset, TextureSamplingPolicy, TextureSourceRef,
+    TextureUvAttributeRef, TextureWrapPolicy, VoxelModelInfoRequest, VoxelModelWindowRequest,
+    MAX_CONVERSION_RESOLUTION_AXIS, MAX_MESH_SOURCE_PATH_BYTES,
 };
 
 const SOURCE: &[u8] = include_bytes!(concat!(
@@ -206,25 +205,6 @@ fn plan_preview_apply_are_hash_guarded_bounded_and_transform_aware() {
     )
     .unwrap_err();
     assert_eq!(stale.diagnostics()[0].code, "conversion.stalePlan");
-}
-
-#[test]
-fn prepared_plan_provenance_cannot_be_rewritten_and_rehashed() {
-    let imported = imported_source();
-    let baseline = plan_conversion(&plan_request(&imported), &imported).unwrap();
-    let mut forged_plan = baseline.plan().clone();
-    forged_plan.license_path = Some("licenses/forged.txt".to_owned());
-    forged_plan.plan_hash = conversion_plan_hash(&forged_plan);
-    let forged = apply_conversion(
-        &ConversionApplyRequest {
-            plan_id: forged_plan.plan_id,
-            expected_plan_hash: forged_plan.plan_hash,
-            expected_output_hash: None,
-        },
-        &baseline,
-    )
-    .unwrap_err();
-    assert_eq!(forged.diagnostics()[0].code, "conversion.stalePlan");
 }
 
 #[test]

@@ -2,8 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 use voxel_asset::{
-    represented_voxel_count, resolve_voxel_frame, validate_voxel_object, VoxelAssetBounds,
-    VoxelFrame, VoxelObjectAsset,
+    represented_voxel_count, resolve_voxel_frame, VoxelAssetBounds, VoxelFrame, VoxelObjectAsset,
 };
 
 use crate::{ConversionError, VoxelModelMaterialCount, VoxelObjectFrameSelection};
@@ -154,7 +153,7 @@ pub fn query_voxel_object_frame(
 ) -> Result<VoxelObjectFrameReadout, ConversionError> {
     validate_snapshot(object, &request.expected_content_hash)?;
     let (frame, duration_microseconds) = select_frame(object, &request.frame)?;
-    let cells = resolve_cells(object, frame)?;
+    let cells = resolve_voxel_frame(frame);
     let material_counts = if request.include_material_counts {
         let mut counts = BTreeMap::<u16, usize>::new();
         for cell in &cells {
@@ -213,7 +212,7 @@ pub fn query_voxel_object_window(
             "materialFilter must contain unique non-zero material slots",
         ));
     }
-    let occupied = resolve_cells(object, frame)?
+    let occupied = resolve_voxel_frame(frame)
         .into_iter()
         .map(|cell| (cell.coordinate, cell.material_slot))
         .collect::<BTreeMap<_, _>>();
@@ -270,13 +269,6 @@ pub fn query_voxel_object_window(
 }
 
 fn validate_snapshot(object: &VoxelObjectAsset, expected: &str) -> Result<(), ConversionError> {
-    validate_voxel_object(object).map_err(|error| {
-        let first = error
-            .diagnostics()
-            .first()
-            .expect("voxel object error contains diagnostics");
-        ConversionError::one(first.code, first.path.clone(), first.message.clone())
-    })?;
     if expected != object.content_hash {
         return Err(ConversionError::one(
             "conversion.staleAuthoritySnapshot",
@@ -313,26 +305,6 @@ fn select_frame<'a>(
             ))
         }
     }
-}
-
-fn resolve_cells(
-    object: &VoxelObjectAsset,
-    frame: &VoxelFrame,
-) -> Result<Vec<voxel_asset::VoxelFrameCell>, ConversionError> {
-    resolve_voxel_frame(
-        frame,
-        object
-            .material_palette
-            .iter()
-            .map(|binding| binding.material_slot),
-    )
-    .map_err(|error| {
-        let first = error
-            .diagnostics()
-            .first()
-            .expect("voxel frame error contains diagnostics");
-        ConversionError::one(first.code, first.path.clone(), first.message.clone())
-    })
 }
 
 fn frame_duration_microseconds(duration: Option<f64>, frames_per_second: f64) -> u64 {

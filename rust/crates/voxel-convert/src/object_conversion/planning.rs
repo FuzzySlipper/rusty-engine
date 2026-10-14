@@ -2,10 +2,10 @@ use std::path::Path;
 
 use core_assets::AssetKind;
 use voxel_asset::{
-    encode_voxel_object, resolve_voxel_frame, validate_voxel_object,
-    with_computed_voxel_object_hashes, VoxelAssetBounds, VoxelConversionRequest, VoxelFrame,
-    VoxelObjectAnimationFrame, VoxelObjectAsset, VoxelObjectClip, VoxelObjectGrid,
-    VoxelObjectProvenance, VoxelObjectProvenanceKind, VoxelObjectSourceClipProvenance,
+    encode_voxel_object, resolve_voxel_frame, with_computed_voxel_object_hashes, VoxelAssetBounds,
+    VoxelConversionRequest, VoxelFrame, VoxelObjectAnimationFrame, VoxelObjectAsset,
+    VoxelObjectClip, VoxelObjectGrid, VoxelObjectProvenance, VoxelObjectProvenanceKind,
+    VoxelObjectSourceClipProvenance, VoxelRepresentation, VoxelRepresentationKind,
     MAX_VOXEL_OBJECT_FRAME_DURATION_SECONDS, MAX_VOXEL_OBJECT_TOTAL_FRAMES,
     MAX_VOXEL_OBJECT_TOTAL_VOXELS, VOXEL_OBJECT_SCHEMA_VERSION,
 };
@@ -14,7 +14,7 @@ use super::model::*;
 use super::validation::*;
 use crate::{
     animation::{preflight_animation_bind_pose, preflight_animation_clip_range},
-    convert::{convert_imported_mesh_with_material_sampling_in_bounds, replace_settings_identity},
+    convert::convert_mesh_cells,
     material::{material_sampling_context, resolve_material_map},
     planning::{transform_mesh, transform_mesh_owned, transform_position},
     sample_animation_bind_pose, sample_animation_clip_range,
@@ -206,22 +206,32 @@ fn build_candidate(
         settings: effective_settings.clone(),
     };
     let convert_frame = |mesh: &ImportedStaticMesh| -> Result<ConvertedFrame, ConversionError> {
-        let receipt = replace_settings_identity(
-            convert_imported_mesh_with_material_sampling_in_bounds(
-                &conversion_request,
-                mesh,
-                source.receipt.source.source_sha256.clone(),
-                source.receipt.source_byte_count,
-                Some(&material_sampling),
-                fixed_bounds,
-            )?,
-            settings_sha256.clone(),
+        // Frame identities are computed once, with the object's, by
+        // `with_computed_voxel_object_hashes` below.
+        let cells = convert_mesh_cells(
+            &conversion_request,
+            mesh,
+            &source.receipt.source.source_sha256,
+            source.receipt.source_byte_count,
+            Some(&material_sampling),
+            Some(fixed_bounds),
         )?;
         Ok(ConvertedFrame {
-            frame: VoxelFrame::from(&receipt.asset),
-            voxelization_work: receipt.voxelization_work,
-            voxel_count: receipt.output_voxels,
-            sparse_run_count: receipt.sparse_runs,
+            voxelization_work: cells.voxelization_work,
+            voxel_count: cells
+                .sparse_runs
+                .iter()
+                .map(|run| run.length as usize)
+                .sum(),
+            sparse_run_count: cells.sparse_runs.len(),
+            frame: VoxelFrame {
+                bounds: cells.bounds,
+                representation: VoxelRepresentation {
+                    kind: VoxelRepresentationKind::SparseRuns,
+                    sparse_runs: cells.sparse_runs,
+                },
+                voxel_data_hash: String::new(),
+            },
         })
     };
 
@@ -356,6 +366,14 @@ fn build_candidate(
         content_hash: String::new(),
     })
     .map_err(object_error)?;
+    for readout in &mut clip_readouts {
+        let clip = asset
+            .clip(&readout.output_clip_id)
+            .expect("every converted clip is in the object");
+        for (frame_readout, frame) in readout.frames.iter_mut().zip(&clip.frames) {
+            frame_readout.voxel_data_hash = frame.frame.voxel_data_hash.clone();
+        }
+    }
     let canonical_json = encode_voxel_object(&asset).map_err(object_error)?;
     let artifact_bytes = canonical_json.len();
     let content_hash = asset.content_hash.clone();
@@ -402,8 +420,7 @@ fn prepare_plan(
             duration_microseconds: clip.duration_microseconds,
         })
         .collect::<Vec<_>>();
-    let settings_sha256 =
-        object_settings_sha256(&request.settings, &request.clips, &request.default_clip);
+    let settings_sha256 = output.settings_sha256.clone();
     let plan_id = object_plan_id(request, &settings_sha256);
     let mut plan = VoxelObjectConversionPlan {
         plan_id,
@@ -451,16 +468,7 @@ pub fn preview_voxel_object_conversion(
     }
     let (frame, duration_microseconds, source_timestamps_microseconds) =
         selected_frame(prepared, &request.frame)?;
-    let mut cells = resolve_voxel_frame(
-        frame,
-        prepared
-            .output
-            .asset
-            .material_palette
-            .iter()
-            .map(|binding| binding.material_slot),
-    )
-    .map_err(frame_error)?;
+    let mut cells = resolve_voxel_frame(frame);
     cells.sort_by_key(|cell| (cell.coordinate[2], cell.coordinate[1], cell.coordinate[0]));
     let selected_frame = VoxelObjectSelectedFramePreview {
         selection: request.frame.clone(),
@@ -499,7 +507,6 @@ pub fn apply_voxel_object_conversion(
     prepared: &PreparedVoxelObjectConversion,
 ) -> Result<AppliedVoxelObjectConversion, ConversionError> {
     validate_prepared(&request.plan_id, &request.expected_plan_hash, prepared)?;
-    validate_voxel_object(&prepared.output.asset).map_err(object_error)?;
     if request
         .expected_output_hash
         .as_ref()
@@ -564,7 +571,7 @@ fn deduplicate_consecutive_frames(frames: Vec<StoredFrame>) -> Vec<StoredFrame> 
     let mut stored: Vec<StoredFrame> = Vec::with_capacity(frames.len());
     for frame in frames {
         let merge = stored.last().is_some_and(|prior| {
-            prior.frame.voxel_data_hash == frame.frame.voxel_data_hash
+            prior.frame.representation == frame.frame.representation
                 && prior
                     .duration_microseconds
                     .checked_add(frame.duration_microseconds)
@@ -620,35 +627,15 @@ fn selected_frame<'a>(
     }
 }
 
+/// Compare a request against the plan it names. The prepared plan and its
+/// output were built together and cannot be changed afterwards, so their own
+/// identities are not recomputed here.
 fn validate_prepared(
     plan_id: &str,
     expected_plan_hash: &str,
     prepared: &PreparedVoxelObjectConversion,
 ) -> Result<(), ConversionError> {
-    let plan = &prepared.plan;
-    let output = &prepared.output;
-    if plan_id != plan.plan_id
-        || expected_plan_hash != plan.plan_hash
-        || voxel_object_conversion_plan_hash(plan) != plan.plan_hash
-        || object_plan_id_from_plan(plan) != plan.plan_id
-        || object_settings_sha256(&plan.settings, &plan.clips, &plan.default_clip)
-            != plan.settings_sha256
-        || plan.source.source_sha256 != plan.expected_source_sha256
-        || output.asset.asset_id != plan.target_asset_id
-        || output.asset.provenance.source_path != plan.source_path
-        || output.asset.provenance.source_sha256 != plan.expected_source_sha256
-        || output.asset.provenance.settings_sha256 != plan.settings_sha256
-        || output.asset.provenance.license_path != plan.license_path
-        || output.source_sha256 != plan.expected_source_sha256
-        || output.settings_sha256 != plan.settings_sha256
-        || output.content_hash != plan.expected_output_content_hash
-        || output.asset.content_hash != plan.expected_output_content_hash
-        || output.sampled_frames != plan.estimated_sampled_frames
-        || output.stored_frames != plan.estimated_stored_frames
-        || output.aggregate_voxels != plan.estimated_aggregate_voxels
-        || output.artifact_bytes != plan.estimated_artifact_bytes
-        || output.bounds != plan.estimated_bounds
-    {
+    if plan_id != prepared.plan.plan_id || expected_plan_hash != prepared.plan.plan_hash {
         return Err(ConversionError::one(
             "conversion.stalePlan",
             "plan",
@@ -671,14 +658,6 @@ fn unknown_frame(clip_id: &str, frame_index: u32) -> ConversionError {
         "frame",
         format!("clip {clip_id:?} has no stored frame {frame_index}"),
     )
-}
-
-fn frame_error(error: voxel_asset::VoxelFrameError) -> ConversionError {
-    let first = error
-        .diagnostics()
-        .first()
-        .expect("voxel frame errors contain diagnostics");
-    ConversionError::one(first.code, first.path.clone(), first.message.clone())
 }
 
 fn object_error(error: voxel_asset::VoxelObjectError) -> ConversionError {

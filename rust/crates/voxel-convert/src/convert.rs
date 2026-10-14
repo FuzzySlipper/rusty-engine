@@ -43,67 +43,40 @@ pub fn convert_glb(
 ) -> Result<ConversionReceipt, ConversionError> {
     let source_sha256 = sha256(source);
     let mesh = crate::import_static_glb(source)?;
-    convert_imported_mesh(request, &mesh, source_sha256, source.len() as u64)
-}
-
-pub(crate) fn convert_imported_mesh(
-    request: &VoxelConversionRequest,
-    mesh: &ImportedStaticMesh,
-    source_sha256: String,
-    source_byte_count: u64,
-) -> Result<ConversionReceipt, ConversionError> {
-    convert_imported_mesh_with_material_sampling(
+    let source_byte_count = source.len() as u64;
+    let cells = convert_mesh_cells(
         request,
-        mesh,
-        source_sha256,
+        &mesh,
+        &source_sha256,
         source_byte_count,
         None,
-    )
-}
-
-pub(crate) fn convert_imported_mesh_with_material_sampling(
-    request: &VoxelConversionRequest,
-    mesh: &ImportedStaticMesh,
-    source_sha256: String,
-    source_byte_count: u64,
-    material_sampling: Option<&MaterialSamplingContext<'_>>,
-) -> Result<ConversionReceipt, ConversionError> {
-    convert_imported_mesh_with_material_sampling_and_bounds(
-        request,
-        mesh,
-        source_sha256,
-        source_byte_count,
-        material_sampling,
         None,
-    )
-}
-
-pub(crate) fn convert_imported_mesh_with_material_sampling_in_bounds(
-    request: &VoxelConversionRequest,
-    mesh: &ImportedStaticMesh,
-    source_sha256: String,
-    source_byte_count: u64,
-    material_sampling: Option<&MaterialSamplingContext<'_>>,
-    source_bounds: VoxelizationSourceBounds,
-) -> Result<ConversionReceipt, ConversionError> {
-    convert_imported_mesh_with_material_sampling_and_bounds(
+    )?;
+    conversion_receipt(
         request,
-        mesh,
+        &mesh,
+        cells,
         source_sha256,
         source_byte_count,
-        material_sampling,
-        Some(source_bounds),
+        conversion_settings_sha256(&request.settings),
     )
 }
 
-fn convert_imported_mesh_with_material_sampling_and_bounds(
+/// Voxelized occupancy of one source mesh, before it becomes an asset.
+pub(crate) struct ConvertedCells {
+    pub(crate) bounds: VoxelAssetBounds,
+    pub(crate) sparse_runs: Vec<VoxelSparseRun>,
+    pub(crate) voxelization_work: u64,
+}
+
+pub(crate) fn convert_mesh_cells(
     request: &VoxelConversionRequest,
     mesh: &ImportedStaticMesh,
-    source_sha256: String,
+    source_sha256: &str,
     source_byte_count: u64,
     material_sampling: Option<&MaterialSamplingContext<'_>>,
     source_bounds: Option<VoxelizationSourceBounds>,
-) -> Result<ConversionReceipt, ConversionError> {
+) -> Result<ConvertedCells, ConversionError> {
     validate_conversion_request(request, source_byte_count)?;
     if source_sha256 != request.expected_source_sha256 {
         return Err(ConversionError::one(
@@ -119,9 +92,28 @@ fn convert_imported_mesh_with_material_sampling_and_bounds(
     validate_material_map(request, mesh)?;
     let (cells, voxelization_work) =
         convert_cells(request, mesh, material_sampling, source_bounds)?;
-    let bounds = bounds_for_cells(&cells).expect("conversion rejects empty output");
-    let sparse_runs = sparse_runs(&cells);
-    let settings_sha256 = conversion_settings_sha256(&request.settings);
+    Ok(ConvertedCells {
+        bounds: bounds_for_cells(&cells).expect("conversion rejects empty output"),
+        sparse_runs: sparse_runs(&cells),
+        voxelization_work,
+    })
+}
+
+/// Build the converted asset, computing its identities once under the given
+/// settings identity, and its canonical encoding.
+pub(crate) fn conversion_receipt(
+    request: &VoxelConversionRequest,
+    mesh: &ImportedStaticMesh,
+    cells: ConvertedCells,
+    source_sha256: String,
+    source_byte_count: u64,
+    settings_sha256: String,
+) -> Result<ConversionReceipt, ConversionError> {
+    let ConvertedCells {
+        bounds,
+        sparse_runs,
+        voxelization_work,
+    } = cells;
     let asset = with_computed_content_hash(VoxelAsset {
         schema_version: VOXEL_ASSET_SCHEMA_VERSION,
         asset_id: request.asset_id.clone(),
@@ -173,18 +165,6 @@ fn convert_imported_mesh_with_material_sampling_and_bounds(
         settings_sha256,
         content_hash,
     })
-}
-
-pub(crate) fn replace_settings_identity(
-    mut receipt: ConversionReceipt,
-    settings_sha256: String,
-) -> Result<ConversionReceipt, ConversionError> {
-    receipt.asset.provenance.settings_sha256 = settings_sha256.clone();
-    receipt.asset = with_computed_content_hash(receipt.asset).map_err(asset_error)?;
-    receipt.canonical_json = encode_voxel_asset(&receipt.asset).map_err(asset_error)?;
-    receipt.settings_sha256 = settings_sha256;
-    receipt.content_hash = receipt.asset.content_hash.clone();
-    Ok(receipt)
 }
 
 fn validate_material_map(

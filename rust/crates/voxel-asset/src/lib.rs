@@ -21,9 +21,9 @@ pub use asset::{
     VOXEL_ASSET_SCHEMA_VERSION,
 };
 pub use codec::{
-    canonicalize_voxel_asset, decode_voxel_asset, encode_voxel_asset, validate_voxel_asset,
-    with_computed_content_hash, VoxelAssetDiagnostic, VoxelAssetError, MAX_ARTIFACT_BYTES,
-    MAX_MATERIAL_MAPPINGS, MAX_REPRESENTED_VOXELS, MAX_STRING_BYTES,
+    decode_voxel_asset, encode_voxel_asset, validate_voxel_asset, with_computed_content_hash,
+    VoxelAssetDiagnostic, VoxelAssetError, MAX_ARTIFACT_BYTES, MAX_MATERIAL_MAPPINGS,
+    MAX_REPRESENTED_VOXELS, MAX_STRING_BYTES,
 };
 pub use conversion::{
     conversion_settings_sha256, validate_conversion_request, VoxelConversionFitPolicy,
@@ -32,9 +32,8 @@ pub use conversion::{
     MAX_CONVERSION_CELLS, MAX_CONVERSION_RESOLUTION_AXIS,
 };
 pub use frame::{
-    canonicalize_voxel_frame, represented_voxel_count, resolve_voxel_asset, resolve_voxel_frame,
-    validate_voxel_frame, with_computed_voxel_frame_hash, VoxelFrame, VoxelFrameCell,
-    VoxelFrameDiagnostic, VoxelFrameError, MAX_VOXEL_FRAME_COORDINATE_ABS,
+    represented_voxel_count, resolve_voxel_asset, resolve_voxel_frame, VoxelFrame, VoxelFrameCell,
+    MAX_VOXEL_FRAME_COORDINATE_ABS,
 };
 pub use object::{
     VoxelObjectAnimationFrame, VoxelObjectAsset, VoxelObjectClip, VoxelObjectCollisionPrimitive,
@@ -43,7 +42,7 @@ pub use object::{
     VoxelObjectSourceClipProvenance, VOXEL_OBJECT_SCHEMA_VERSION,
 };
 pub use object_codec::{
-    canonicalize_voxel_object, decode_voxel_object, encode_voxel_object, validate_voxel_object,
+    decode_voxel_object, encode_voxel_object, validate_voxel_object,
     with_computed_voxel_object_hashes, VoxelObjectDiagnostic, VoxelObjectError,
     MAX_VOXEL_OBJECT_ANCHORS_PER_FRAME, MAX_VOXEL_OBJECT_ARTIFACT_BYTES, MAX_VOXEL_OBJECT_CLIPS,
     MAX_VOXEL_OBJECT_FRAMES_PER_CLIP, MAX_VOXEL_OBJECT_FRAMES_PER_SECOND,

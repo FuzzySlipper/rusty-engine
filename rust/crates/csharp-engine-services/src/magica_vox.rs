@@ -9,10 +9,10 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use sha2::{Digest, Sha256};
 use voxel_asset::{
-    with_computed_voxel_frame_hash, with_computed_voxel_object_hashes, VoxelAssetBounds,
-    VoxelAssetMaterialBinding, VoxelAssetMaterialMapping, VoxelCoordinateSystem, VoxelFrame,
-    VoxelObjectAsset, VoxelObjectGrid, VoxelObjectProvenance, VoxelObjectProvenanceKind,
-    VoxelRepresentation, VoxelRepresentationKind, VoxelSparseRun, VOXEL_OBJECT_SCHEMA_VERSION,
+    with_computed_voxel_object_hashes, VoxelAssetBounds, VoxelAssetMaterialBinding,
+    VoxelAssetMaterialMapping, VoxelCoordinateSystem, VoxelFrame, VoxelObjectAsset,
+    VoxelObjectGrid, VoxelObjectProvenance, VoxelObjectProvenanceKind, VoxelRepresentation,
+    VoxelRepresentationKind, VoxelSparseRun, VOXEL_OBJECT_SCHEMA_VERSION,
 };
 
 use csharp_engine_abi::{NativeMagicaVoxelOrientation, NativeMagicaVoxelPivotPolicy};
@@ -248,18 +248,14 @@ pub(crate) fn admit_magica_vox(
             voxel_material_slot: row.material_slot,
         })
         .collect::<Vec<_>>();
-    let frame = with_computed_voxel_frame_hash(
-        VoxelFrame {
-            bounds,
-            representation: VoxelRepresentation {
-                kind: VoxelRepresentationKind::SparseRuns,
-                sparse_runs,
-            },
-            voxel_data_hash: String::new(),
+    let frame = VoxelFrame {
+        bounds,
+        representation: VoxelRepresentation {
+            kind: VoxelRepresentationKind::SparseRuns,
+            sparse_runs,
         },
-        material_palette.iter().map(|binding| binding.material_slot),
-    )
-    .map_err(|error| MagicaVoxelError::Canonical(error.to_string()))?;
+        voxel_data_hash: String::new(),
+    };
     let source_hash = format!("sha256:{:x}", Sha256::digest(bytes));
     let settings_hash = settings_hash(options);
     // Scene `_r`/`_t` facts are structurally validated above but intentionally

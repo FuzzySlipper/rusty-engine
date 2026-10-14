@@ -119,9 +119,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 });
                 continue;
             }
+            let candidate = object.clone();
             let started = Instant::now();
             let admitted = admit_voxel_object_with_options(
-                &object,
+                candidate,
                 VoxelObjectAdmissionOptions {
                     surface_mode: mode,
                     ..VoxelObjectAdmissionOptions::default()

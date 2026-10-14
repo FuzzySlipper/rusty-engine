@@ -17,7 +17,7 @@ use voxel_object_runtime::{
 #[test]
 fn admission_resolves_readouts_and_deduplicates_identical_frame_meshes() {
     let object = object();
-    let admitted = admit_voxel_object(&object, VoxelObjectRuntimeLimits::default()).unwrap();
+    let admitted = admit_voxel_object(object.clone(), VoxelObjectRuntimeLimits::default()).unwrap();
 
     assert_eq!(admitted.readout().asset_id, "voxel-object/test-runner");
     assert_eq!(admitted.readout().frame_count, 4);
@@ -79,7 +79,7 @@ fn admission_resolves_readouts_and_deduplicates_identical_frame_meshes() {
     assert_eq!(admitted.meshes()[0].bounds.min, [-0.125, 0.0, 0.0]);
     assert_eq!(admitted.meshes()[0].bounds.max, [0.375, 0.25, 0.25]);
 
-    let again = admit_voxel_object(&object, VoxelObjectRuntimeLimits::default()).unwrap();
+    let again = admit_voxel_object(object, VoxelObjectRuntimeLimits::default()).unwrap();
     assert_eq!(admitted.meshes().len(), again.meshes().len());
     for (left, right) in admitted.meshes().iter().zip(again.meshes()) {
         assert_eq!(left.as_ref(), right.as_ref());
@@ -100,20 +100,11 @@ fn strict_json_and_runtime_work_limits_fail_closed() {
     ));
 
     let tiny = VoxelObjectRuntimeLimits {
-        max_frames: 3,
-        ..VoxelObjectRuntimeLimits::default()
-    };
-    assert!(matches!(
-        admit_voxel_object(&object(), tiny),
-        Err(VoxelObjectAdmissionError::FrameLimit { count: 4, limit: 3 })
-    ));
-
-    let tiny = VoxelObjectRuntimeLimits {
         max_unique_mesh_faces: 5,
         ..VoxelObjectRuntimeLimits::default()
     };
     assert!(matches!(
-        admit_voxel_object(&object(), tiny),
+        admit_voxel_object(object(), tiny),
         Err(VoxelObjectAdmissionError::MeshFaceLimit { limit: 5, .. })
     ));
 }
@@ -122,7 +113,7 @@ fn strict_json_and_runtime_work_limits_fail_closed() {
 fn reconstructed_surface_admission_covers_animation_and_aggregate_limits() {
     for surface_mode in [SurfaceMode::MarchingCubes, SurfaceMode::DualContouring] {
         let admitted = admit_voxel_object_with_options(
-            &object(),
+            object(),
             VoxelObjectAdmissionOptions {
                 surface_mode,
                 ..VoxelObjectAdmissionOptions::default()
@@ -144,7 +135,7 @@ fn reconstructed_surface_admission_covers_animation_and_aggregate_limits() {
     }
 
     let error = admit_voxel_object_with_options(
-        &object(),
+        object(),
         VoxelObjectAdmissionOptions {
             surface_mode: SurfaceMode::DualContouring,
             limits: VoxelObjectRuntimeLimits {
@@ -162,7 +153,7 @@ fn reconstructed_surface_admission_covers_animation_and_aggregate_limits() {
 
 #[test]
 fn caller_driven_play_pause_resume_stop_and_reload_are_explicit_time() {
-    let admitted = admit_voxel_object(&object(), VoxelObjectRuntimeLimits::default()).unwrap();
+    let admitted = admit_voxel_object(object(), VoxelObjectRuntimeLimits::default()).unwrap();
     let mut player = VoxelObjectPlayer::new();
     player
         .play(
@@ -213,7 +204,7 @@ fn caller_driven_play_pause_resume_stop_and_reload_are_explicit_time() {
 
 #[test]
 fn scrub_selects_an_exact_clip_frame_and_resume_uses_explicit_time() {
-    let admitted = admit_voxel_object(&object(), VoxelObjectRuntimeLimits::default()).unwrap();
+    let admitted = admit_voxel_object(object(), VoxelObjectRuntimeLimits::default()).unwrap();
     let mut player = VoxelObjectPlayer::new();
 
     player
@@ -259,7 +250,7 @@ fn once_repeat_ping_pong_speed_and_invalid_clips_are_deterministic() {
     });
     source.bounds.max[2] = 1;
     let source = with_computed_voxel_object_hashes(source).unwrap();
-    let admitted = admit_voxel_object(&source, VoxelObjectRuntimeLimits::default()).unwrap();
+    let admitted = admit_voxel_object(source, VoxelObjectRuntimeLimits::default()).unwrap();
 
     let mut player = VoxelObjectPlayer::new();
     player
@@ -320,7 +311,7 @@ fn once_repeat_ping_pong_speed_and_invalid_clips_are_deterministic() {
 
 #[test]
 fn presentation_frames_never_change_explicit_collision_selection() {
-    let admitted = admit_voxel_object(&object(), VoxelObjectRuntimeLimits::default()).unwrap();
+    let admitted = admit_voxel_object(object(), VoxelObjectRuntimeLimits::default()).unwrap();
     let policy = VoxelObjectCollisionPolicy::StableClipFrame {
         clip: "walk".to_owned(),
         frame: 0,

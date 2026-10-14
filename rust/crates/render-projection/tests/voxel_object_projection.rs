@@ -447,12 +447,12 @@ fn material(id: &str, color: [f32; 4]) -> RenderMaterialDescriptor {
 }
 
 fn admitted() -> voxel_object_runtime::AdmittedVoxelObject {
-    admit_voxel_object(&object(), VoxelObjectRuntimeLimits::default()).unwrap()
+    admit_voxel_object(object(), VoxelObjectRuntimeLimits::default()).unwrap()
 }
 
 fn admitted_with_surface(surface_mode: SurfaceMode) -> voxel_object_runtime::AdmittedVoxelObject {
     admit_voxel_object_with_options(
-        &object(),
+        object(),
         VoxelObjectAdmissionOptions {
             surface_mode,
             ..VoxelObjectAdmissionOptions::default()
