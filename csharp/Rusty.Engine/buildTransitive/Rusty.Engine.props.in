@@ -29,7 +29,6 @@
     <RustyEngineProductPort Condition="'$(RustyEngineProductPort)' == ''">0</RustyEngineProductPort>
     <RustyEngineProductLiveDebug Condition="'$(RustyEngineProductLiveDebug)' == ''">false</RustyEngineProductLiveDebug>
     <RustyEngineProductUiEntry Condition="'$(RustyEngineProductUiEntry)' == ''">main.js</RustyEngineProductUiEntry>
-    <RustyEngineProductUiAssets Condition="'$(RustyEngineProductUiAssets)' == ''">assets</RustyEngineProductUiAssets>
     <!-- Optional paired declaration for the Engine-owned browser UI projection
          port. Product code names its projection; the shell never guesses it. -->
     <RustyEngineProductUiProjectionStream Condition="'$(RustyEngineProductUiProjectionStream)' == ''"></RustyEngineProductUiProjectionStream>

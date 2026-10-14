@@ -123,7 +123,6 @@ cat > "$consumer_dir/Consumer.csproj" <<EOF
     <RustyEngineProductId>fixture.sdk-package</RustyEngineProductId>
     <RustyEngineProductTitle>SDK package fixture</RustyEngineProductTitle>
     <RustyEngineProductUiEntry>main.js</RustyEngineProductUiEntry>
-    <RustyEngineProductUiAssets>assets</RustyEngineProductUiAssets>
     <RustyEngineProductFixedStepHz>60</RustyEngineProductFixedStepHz>
     <RustyEngineProductFixedStepMaxCatchUpSteps>4</RustyEngineProductFixedStepMaxCatchUpSteps>
     <RustyEngineProductDefaultWorldLights>disabled</RustyEngineProductDefaultWorldLights>

@@ -9,7 +9,7 @@ use memmap2::Mmap;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::{is_relative_path, Error};
+use crate::Error;
 
 const MAGIC: [u8; 8] = *b"RUSTYPAK";
 const HEADER_LEN: u64 = 32;
@@ -111,11 +111,6 @@ impl Container {
                 actual,
             });
         }
-        if actual > file_len {
-            return Err(corrupt(format!(
-                "{actual} bytes, but the header records {file_len}"
-            )));
-        }
         let inventory_end = inventory_offset
             .checked_add(inventory_len)
             .filter(|&end| inventory_offset >= HEADER_LEN && end <= file_len)
@@ -198,38 +193,16 @@ fn read_prefix(file: &mut File, buffer: &mut [u8]) -> std::io::Result<usize> {
     Ok(read)
 }
 
-/// Paths are relative, unique and sorted; each entry is aligned, in range and
-/// after the previous one; each bundle member names a declared bundle and lies
-/// under its root.
+/// The writer's inventory is taken as written except where reading relies on
+/// it: paths strictly increase, so `entry` can binary-search them, and each
+/// entry's bytes lie after the previous entry's and before the inventory, so
+/// `read` can slice the map.
 fn check(inventory: &Inventory, data_end: u64) -> Result<(), String> {
-    for (index, bundle) in inventory.bundles.iter().enumerate() {
-        if !is_relative_path(&bundle.id)
-            || bundle.id.contains('/')
-            || !is_relative_path(&bundle.root)
-            || inventory.bundles[..index].iter().any(|b| b.id == bundle.id)
-        {
-            return Err(format!("invalid bundle `{}`", bundle.id));
-        }
-    }
     let mut previous: Option<&Entry> = None;
     for entry in &inventory.entries {
         let path = &entry.path;
-        if !is_relative_path(path) {
-            return Err(format!("invalid entry path `{path}`"));
-        }
         if previous.is_some_and(|p| p.path >= *path) {
             return Err(format!("entry `{path}` is duplicated or out of order"));
-        }
-        if entry.sha256.len() != 64
-            || !entry
-                .sha256
-                .bytes()
-                .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
-        {
-            return Err(format!("entry `{path}` has an invalid SHA-256"));
-        }
-        if entry.offset % ALIGNMENT != 0 {
-            return Err(format!("entry `{path}` is not {ALIGNMENT}-byte aligned"));
         }
         let start = previous.map_or(HEADER_LEN, |p| p.offset + p.stored_length());
         let end = entry.offset.checked_add(entry.stored_length());
@@ -237,12 +210,6 @@ fn check(inventory: &Inventory, data_end: u64) -> Result<(), String> {
             return Err(format!(
                 "entry `{path}` overlaps another or lies outside the file"
             ));
-        }
-        if let Some(id) = &entry.bundle {
-            let bundle = inventory.bundles.iter().find(|b| &b.id == id);
-            if !bundle.is_some_and(|b| path.starts_with(&format!("{}/", b.root))) {
-                return Err(format!("entry `{path}` is not under bundle `{id}`"));
-            }
         }
         previous = Some(entry);
     }
@@ -267,10 +234,11 @@ pub struct WriteReport {
     pub entries: usize,
 }
 
-/// Writes a container, hashing each body while copying it. With `compress`,
-/// a body that zstd shrinks by at least `MIN_COMPRESSION_SAVING` is stored
-/// compressed; the rest stay raw. The file appears at `out` by rename once
-/// complete.
+/// Writes a container, hashing each body while copying it. Each entry names
+/// a distinct relative `/`-separated path, as the packers enumerate them.
+/// With `compress`, a body that zstd shrinks by at least
+/// `MIN_COMPRESSION_SAVING` is stored compressed; the rest stay raw. The file
+/// appears at `out` by rename once complete.
 pub fn write(
     out: &Path,
     mut entries: Vec<NewEntry<'_>>,
@@ -278,11 +246,6 @@ pub fn write(
     compress: bool,
 ) -> Result<WriteReport, Error> {
     entries.sort_by(|a, b| a.path.cmp(&b.path));
-    for (index, entry) in entries.iter().enumerate() {
-        if !is_relative_path(&entry.path) || index > 0 && entries[index - 1].path == entry.path {
-            return Err(Error::InvalidPath(entry.path.clone()));
-        }
-    }
     let name = out
         .file_name()
         .and_then(|name| name.to_str())
@@ -529,6 +492,30 @@ mod tests {
     }
 
     #[test]
+    fn writer_facts_reading_does_not_use_are_taken_as_written() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = fixture(directory.path());
+        let mut bytes = fs::read(&path).unwrap();
+        let offset = inventory_offset(&bytes);
+        let mut inventory: serde_json::Value = serde_json::from_slice(&bytes[offset..]).unwrap();
+        inventory["entries"][1]["sha256"] = "opaque".into();
+        inventory["entries"][1]["bundle"] = "other".into();
+        inventory["bundles"][0]["id"] = "a/b".into();
+        bytes.truncate(offset);
+        bytes.extend(serde_json::to_vec(&inventory).unwrap());
+        let (len, total) = ((bytes.len() - offset) as u64, bytes.len() as u64);
+        set_header(&mut bytes, 1, len);
+        set_header(&mut bytes, 2, total);
+        bytes.push(0);
+        fs::write(&path, bytes).unwrap();
+        let container = Container::open(&path).unwrap();
+        assert_eq!(
+            container.get("content/rules/a.json").unwrap().as_ref(),
+            b"{\"id\":1}"
+        );
+    }
+
+    #[test]
     fn damage_fails_at_open_with_a_named_error() {
         assert!(matches!(
             damaged(|bytes| bytes[0] = b'X'),
@@ -541,10 +528,6 @@ mod tests {
         assert!(matches!(
             damaged(|bytes| bytes.truncate(bytes.len() - 1)),
             Error::Truncated { .. }
-        ));
-        assert!(matches!(
-            damaged(|bytes| bytes.push(0)),
-            Error::Corrupt { .. }
         ));
         let corrupt = |error: Error, detail: &str| match error {
             Error::Corrupt { detail: found, .. } => {
@@ -572,16 +555,8 @@ mod tests {
             "overlaps",
         );
         corrupt(
-            with_inventory(|inventory| inventory["entries"][0]["offset"] = 96.into()),
-            "aligned",
-        );
-        corrupt(
             with_inventory(|inventory| inventory["entries"][2]["path"] = "content/body.bin".into()),
             "duplicated",
-        );
-        corrupt(
-            with_inventory(|inventory| inventory["entries"][1]["bundle"] = "other".into()),
-            "not under bundle",
         );
     }
 }

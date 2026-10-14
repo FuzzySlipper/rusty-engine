@@ -24,7 +24,7 @@ public sealed class ProductContent
         Files = files.ToArray();
         byPath = new(StringComparer.Ordinal);
         foreach (ProductContentFile file in Files.Span)
-            byPath.Add(file.RelativePath, file);
+            byPath[file.RelativePath] = file;
         orderedFiles = byPath.OrderBy(pair => pair.Key, StringComparer.Ordinal).ToArray();
     }
 

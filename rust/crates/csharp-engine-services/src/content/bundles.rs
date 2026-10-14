@@ -1133,7 +1133,9 @@ mod tests {
         let truncated = directory.path().join("truncated.rpak");
         fs::write(&truncated, &packed[..packed.len() - 10]).unwrap();
         let corrupt = directory.path().join("corrupt.rpak");
-        fs::write(&corrupt, [packed.as_slice(), b"x"].concat()).unwrap();
+        let mut inventory_outside = packed.clone();
+        inventory_outside[8..16].copy_from_slice(&(u64::MAX - 1).to_le_bytes());
+        fs::write(&corrupt, inventory_outside).unwrap();
         let text_file = directory.path().join("notes.txt");
         fs::write(&text_file, b"not a container").unwrap();
         for (path, code) in [

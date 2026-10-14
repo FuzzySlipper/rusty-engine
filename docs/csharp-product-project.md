@@ -806,9 +806,12 @@ Staging runs `ValidateRustyEngineProduct`, the project's ordinary `Build`, and
 
 The Product directory has `product.json`, the project's build output under
 `coreclr/` (the product assembly keeps its own name), and Product-owned `ui/`
-and `content/`. Each stage copies the build output into a fresh `coreclr/`
-directory, because a running worker keeps the previous files mapped until the
-supervisor replaces it. Engine JavaScript and host binaries stay in
+and `content/`. The manifest's `coreclr` and `nativeAot` paths are relative to
+the Product directory (the container's directory for a packed release) and are
+loaded by path, so a symlinked artifact loads as its target, and a missing or
+unloadable one fails at load naming the path. Each stage copies the build
+output into a fresh `coreclr/` directory, because a running worker keeps the
+previous files mapped until the supervisor replaces it. Engine JavaScript and host binaries stay in
 the runtime pack. Product UI is DOM UI and accessibility only; the Engine
 renderer owns non-UI presentation.
 
@@ -861,9 +864,10 @@ offset, and an inventory of path, length, SHA-256 and bundle membership; the
 host maps it read-only and reads the manifest, UI, content and bundles from it
 as it reads a loose directory. The inventory's SHA-256 is each file's identity;
 there is no second checksum or version field (a pair reads its own output). A
-missing magic, a truncated file or an inconsistent inventory stops the host at
-start with `PRODUCT_CONTAINER_NOT_A_CONTAINER`, `PRODUCT_CONTAINER_TRUNCATED`
-or `PRODUCT_CONTAINER_CORRUPT`. `rusty dev` keeps the loose directory, so a UI
+missing magic, a truncated file, or an inventory whose paths are out of order
+or whose byte ranges overlap or leave the file stops the host at start with
+`PRODUCT_CONTAINER_NOT_A_CONTAINER`, `PRODUCT_CONTAINER_TRUNCATED` or
+`PRODUCT_CONTAINER_CORRUPT`. `rusty dev` keeps the loose directory, so a UI
 or bundle restage still reloads in place.
 
 Files are stored raw, so the host borrows them from the mapped file. `--pack

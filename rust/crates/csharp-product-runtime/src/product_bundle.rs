@@ -6,9 +6,8 @@
 //! browser host's product UI bytes immutable for the lifetime of the launch.
 
 use std::{
-    fs,
     net::Ipv4Addr,
-    path::{Component, Path, PathBuf},
+    path::{Path, PathBuf},
 };
 
 use csharp_product_runtime::ProductSource;
@@ -22,7 +21,7 @@ use product_host::{
     PRODUCT_HOST_BOOTSTRAP_PATH,
 };
 use render_model::{AmbientOcclusionMode, AmbientOcclusionSettings, RendererSettingsDescriptor};
-use runtime_input::{CompiledInputMappings, DirectInputIntentDescriptor, RuntimeInputMapping};
+use runtime_input::{DirectInputIntentDescriptor, RuntimeInputMapping};
 use runtime_lifecycle::{validate_runtime_identity, RuntimeLifecycleConfig};
 use serde::Deserialize;
 
@@ -87,25 +86,19 @@ impl ProductBundle {
         validate_runtime_identity(&manifest.product.id).map_err(|_| {
             field_error("product.id", "must be a bounded lowercase runtime identity")
         })?;
-        if manifest.product.title.trim().is_empty() || manifest.product.title.len() > 160 {
-            return Err(field_error(
-                "product.title",
-                "must contain 1 to 160 characters",
-            ));
-        }
 
         let native_module = manifest
             .native_aot
-            .map(|native| resolve_regular_file(root, &native.module, "nativeAot.module"))
+            .map(|native| native_artifact(root, &native.module, "nativeAot.module"))
             .transpose()?;
         let (coreclr_assembly, coreclr_runtimeconfig) = match manifest.coreclr {
             Some(coreclr) => (
-                Some(resolve_regular_file(
+                Some(native_artifact(
                     root,
                     &coreclr.assembly,
                     "coreclr.assembly",
                 )?),
-                Some(resolve_regular_file(
+                Some(native_artifact(
                     root,
                     &coreclr.runtimeconfig,
                     "coreclr.runtimeconfig",
@@ -122,10 +115,6 @@ impl ProductBundle {
 
         let ui_root = product_directory(source, "", &manifest.ui.root, "ui.root")?;
         let ui_entry = product_file(source, &ui_root, &manifest.ui.entry, "ui.entry")?;
-        // Validate the declared assets path even though the complete UI root is
-        // staged.  Modules can import adjacent assets without a second UI file
-        // vocabulary, while this retains an explicit assets declaration.
-        product_directory(source, &ui_root, &manifest.ui.assets, "ui.assets")?;
         let content_root = product_directory(source, "", &manifest.content.root, "content.root")?;
         for subtree in &manifest.content.ui {
             product_directory(source, &content_root, subtree, "content.ui")?;
@@ -348,8 +337,6 @@ fn input(
             .map_err(|error| field_error("input.mappings", error))
         })
         .collect::<Result<Vec<_>, _>>()?;
-    CompiledInputMappings::standard(direct_intents.clone(), physical_mappings.clone())
-        .map_err(|error| field_error("input", error.to_string()))?;
     Ok((
         direct_intents,
         physical_mappings,
@@ -357,40 +344,17 @@ fn input(
     ))
 }
 
-fn relative_path(value: &str, field: &str) -> Result<PathBuf, String> {
-    let path = Path::new(value);
-    if value.is_empty()
-        || path.is_absolute()
-        || path
-            .components()
-            .any(|component| !matches!(component, Component::Normal(_)))
-    {
+/// A native artifact under `root`, loaded by path: hostfxr and the dynamic
+/// loader report a missing or unloadable file, and a symlink loads as its
+/// target.
+fn native_artifact(root: &Path, value: &str, field: &str) -> Result<PathBuf, String> {
+    if !is_relative_path(value) {
         return Err(field_error(
             field,
             "must be a non-empty relative non-escaping path",
         ));
     }
-    Ok(path.to_owned())
-}
-
-/// A native artifact: a regular file on disk under `root`, loaded by path.
-fn resolve_regular_file(root: &Path, value: &str, field: &str) -> Result<PathBuf, String> {
-    let path = root.join(relative_path(value, field)?);
-    let metadata = fs::symlink_metadata(&path).map_err(|error| {
-        field_error(
-            field,
-            format!("could not read `{}`: {error}", path.display()),
-        )
-    })?;
-    if metadata.file_type().is_symlink() || !metadata.is_file() {
-        return Err(field_error(field, "must be a regular file, not a symlink"));
-    }
-    let canonical =
-        fs::canonicalize(path).map_err(|error| field_error(field, error.to_string()))?;
-    if !canonical.starts_with(root) {
-        return Err(field_error(field, "resolved outside Product root"));
-    }
-    Ok(canonical)
+    Ok(root.join(value))
 }
 
 /// `parent/value` in the staged Product, when it names a directory.
@@ -528,7 +492,6 @@ struct ManifestCoreClr {
 struct ManifestUi {
     root: String,
     entry: String,
-    assets: String,
 }
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -945,7 +908,7 @@ mod tests {
           "product":{{"id":"fixture.product","title":"Fixture"}},
           "nativeAot":{{"module":"{native_path}"}},
           "coreclr":{{"assembly":"coreclr/product.dll","runtimeconfig":"coreclr/product.runtimeconfig.json"}},
-          "ui":{{"root":"ui","entry":"main.js","assets":"assets"}},
+          "ui":{{"root":"ui","entry":"main.js"}},
           "content":{{"root":"content"}},
           "uiProjection":{{"expectedStream":"fixture.terrain","expectedContract":"fixture.terrain.v1"}},
           "lifecycle":{{"fixedStep":{{"hz":60,"maxCatchUpSteps":2}}}},
@@ -965,14 +928,14 @@ mod tests {
                 .selected_artifacts(ProductLoader::NativeAot)
                 .unwrap()
                 .0,
-            root.join("native/product.so").canonicalize().unwrap()
+            root.canonicalize().unwrap().join("native/product.so")
         );
         assert_eq!(
             product
                 .selected_artifacts(ProductLoader::CoreClr)
                 .unwrap()
                 .0,
-            root.join("coreclr/product.dll").canonicalize().unwrap()
+            root.canonicalize().unwrap().join("coreclr/product.dll")
         );
         let entries = product.browser_entries().expect("Product UI stages");
         assert!(entries
@@ -1113,7 +1076,7 @@ mod tests {
         assert!(packed.source.container().is_some());
         assert_eq!(
             packed.selected_artifacts(ProductLoader::CoreClr).unwrap().0,
-            release.join("coreclr/product.dll").canonicalize().unwrap()
+            release.canonicalize().unwrap().join("coreclr/product.dll")
         );
         let entries = |product: &ProductBundle| {
             product
@@ -1127,6 +1090,29 @@ mod tests {
         assert_eq!(packed.content_root, "content");
         fs::remove_dir_all(root).unwrap();
         fs::remove_dir_all(release).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_native_artifact_admits_at_its_staged_path() {
+        let root = fixture_root("symlinked-artifact");
+        let built = root.with_extension("built");
+        fs::create_dir_all(&built).unwrap();
+        fs::write(built.join("product.so"), b"built").unwrap();
+        std::os::unix::fs::symlink(built.join("product.so"), root.join("native/linked.so"))
+            .unwrap();
+        write_manifest(&root, "native/linked.so");
+        let product = read(&root).expect("a symlinked module admits");
+        let (module, _) = product
+            .selected_artifacts(ProductLoader::NativeAot)
+            .unwrap();
+        assert_eq!(
+            module,
+            root.canonicalize().unwrap().join("native/linked.so")
+        );
+        assert_eq!(fs::read(module).unwrap(), b"built");
+        fs::remove_dir_all(root).unwrap();
+        fs::remove_dir_all(built).unwrap();
     }
 
     #[test]

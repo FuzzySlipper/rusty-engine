@@ -865,6 +865,13 @@ impl CsharpProductRuntime {
         config: CsharpProductRuntimeConfig,
         load_api: impl FnOnce() -> Result<LoadedProductApi, CsharpProductRuntimeError>,
     ) -> Result<Self, CsharpProductRuntimeError> {
+        // Compiled before any output starts, so a mapping error ends the
+        // launch before the GPU or audio device opens.
+        let mut input_mappings = CompiledInputMappings::standard(
+            config.direct_intents.clone(),
+            config.physical_mappings.clone(),
+        )
+        .map_err(input_error)?;
         let persistence_root = prepare_persistence_root(config.persistence_root.as_deref())?;
         let frame_output = config
             .render_output
@@ -904,11 +911,6 @@ impl CsharpProductRuntime {
                     format!("could not start the render output worker: {error}"),
                 )
             })?;
-        let mut input_mappings = CompiledInputMappings::standard(
-            config.direct_intents.clone(),
-            config.physical_mappings.clone(),
-        )
-        .map_err(input_error)?;
         let lifecycle = RuntimeLifecycle::new(config.runtime_instance_id, config.lifecycle);
         let initial_binding = input_binding(&lifecycle);
         let input_context = standard_input_context().as_str().as_bytes().to_vec();
@@ -3901,12 +3903,6 @@ fn prepare_persistence_root(
             ),
         )
     })?;
-    if !root.is_dir() {
-        return Err(CsharpProductRuntimeError::new(
-            "CSHARP_PERSISTENCE_ROOT",
-            format!("persistence root {} is not a directory", root.display()),
-        ));
-    }
     Ok(Some(root.to_path_buf()))
 }
 
@@ -4003,15 +3999,9 @@ fn call_create(
     let mut native_error = NativeProductCallError::default();
     // SAFETY: fixed ABI pointers are valid for the duration of this call.
     let status = unsafe { (api.create)(args, handle, &mut native_error) };
+    // A successful create's diagnostic, if any, is released unread.
     let diagnostic_result = if status == ABI_OK {
-        if !native_product_call_error_is_empty(native_error) {
-            Ok(Some(CsharpProductRuntimeError::new(
-                "CSHARP_PRODUCT_CALL",
-                "C# product create succeeded with a non-empty callback diagnostic",
-            )))
-        } else {
-            Ok(None)
-        }
+        Ok(None)
     } else {
         copy_product_call_error(native_error)
     };
@@ -4204,16 +4194,7 @@ fn call_describe_debug(
 fn copy_debug_result(
     native: NativeProductDebugResult,
 ) -> Result<ProductHostDebugResult, CsharpProductRuntimeError> {
-    let succeeded = match native.succeeded {
-        0 => false,
-        1 => true,
-        value => {
-            return Err(CsharpProductRuntimeError::new(
-                "CSHARP_DEBUG_RESULT_STATUS",
-                format!("generated debug callback returned invalid success flag {value}"),
-            ));
-        }
-    };
+    let succeeded = native.succeeded != 0;
     if native.message.len != 0 && native.message.bytes.is_null() {
         return Err(CsharpProductRuntimeError::new(
             "CSHARP_DEBUG_RESULT_POINTER",
@@ -4249,14 +4230,7 @@ fn call_complete_timeline(
     if let Err(fallback) = checked_status(status, "complete_timeline") {
         return Err(read_product_call_error(api, handle).unwrap_or(fallback));
     }
-    match accepted {
-        0 => Ok(false),
-        1 => Ok(true),
-        value => Err(CsharpProductRuntimeError::new(
-            "CSHARP_TIMELINE_ACCEPTED",
-            format!("C# product returned invalid timeline acceptance value {value}"),
-        )),
-    }
+    Ok(accepted != 0)
 }
 
 fn call_paused_intents(
@@ -6115,6 +6089,39 @@ mod tests {
         )
         .expect("audio disposal fixture runtime");
         (runtime, root)
+    }
+
+    #[test]
+    fn declared_mappings_are_refused_before_the_product_loads() {
+        let root = content_fixture_root("mapping-refusal");
+        fs::create_dir_all(&root).expect("mapping fixture content root");
+        let content = CsharpProductContent::admit(&root).expect("mapping fixture content");
+        let config = CsharpProductRuntimeConfig::new(
+            RuntimeInstanceId::new(1),
+            CsharpProductRuntime::standard_realtime_config(),
+            vec![
+                DirectInputIntentDescriptor::new("move.forward", IntentValueKind::Digital)
+                    .expect("mapping fixture descriptor"),
+            ],
+        )
+        .with_physical_mappings(vec![RuntimeInputMapping::new(
+            "move",
+            "move.missing",
+            RuntimeInputTrigger::Key {
+                code: runtime_input_model::KeyboardControl::KeyW,
+                edge: InputEdge::Held,
+                chord: Vec::new(),
+                context: None,
+            },
+        )]);
+        let error = CsharpProductRuntime::load_admitted_with(content, config, || {
+            panic!("the product must not load with refused mappings")
+        })
+        .err()
+        .expect("an unknown intent refuses");
+        assert_eq!(error.code(), "CSHARP_INPUT_ADMISSION");
+        assert!(error.to_string().contains("UnknownIntent"), "{error}");
+        fs::remove_dir_all(root).expect("remove mapping fixture");
     }
 
     fn realtime_drop_fixture_runtime(label: &str) -> (CsharpProductRuntime, PathBuf) {

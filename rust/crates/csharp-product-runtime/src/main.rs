@@ -20,9 +20,9 @@ use product_host::{
     ProductHostConfig, ProductHostLog, ProductHostLogConfig, RunningProductHost,
 };
 use runtime_input::{
-    CompiledInputMappings, ControllerAxis, ControllerButton, DirectInputIntentDescriptor,
-    InputAxis, InputContext, InputEdge, IntentValueKind, KeyboardControl, PointerButton,
-    RuntimeInputMapping, RuntimeInputTrigger,
+    ControllerAxis, ControllerButton, DirectInputIntentDescriptor, InputAxis, InputContext,
+    InputEdge, IntentValueKind, KeyboardControl, PointerButton, RuntimeInputMapping,
+    RuntimeInputTrigger,
 };
 use runtime_lifecycle::RuntimeInstanceId;
 
@@ -1304,11 +1304,6 @@ impl Arguments {
                 }
                 _ => {}
             }
-            CompiledInputMappings::standard(
-                arguments.direct_intents.clone(),
-                arguments.physical_mappings.clone(),
-            )
-            .map_err(|error| format!("--physical-mapping configuration is invalid: {error}"))?;
         }
         Ok(arguments)
     }
@@ -1676,6 +1671,7 @@ fn content_type(path: &str) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use runtime_input::CompiledInputMappings;
 
     #[test]
     fn supervisor_reload_lines_parse_to_reloads() {
@@ -1909,7 +1905,7 @@ mod tests {
     }
 
     #[test]
-    fn parser_rejects_malformed_unknown_duplicate_and_mismatched_mappings() {
+    fn parser_rejects_malformed_mappings() {
         for declaration in [
             "move=move.forward:key:key-w",
             "move=move.forward:gesture:key-w:held",
@@ -1924,32 +1920,6 @@ mod tests {
             ]);
             assert!(error.contains("--physical-mapping"));
         }
-
-        let unknown = parse_test_error(&[
-            "--direct-intent",
-            "move.forward=digital",
-            "--physical-mapping",
-            "move=move.missing:key:key-w:held",
-        ]);
-        assert!(unknown.contains("UnknownIntent"));
-
-        let duplicate = parse_test_error(&[
-            "--direct-intent",
-            "move.forward=digital",
-            "--physical-mapping",
-            "move=move.forward:key:key-w:held",
-            "--physical-mapping",
-            "move=move.forward:key:key-a:held",
-        ]);
-        assert!(duplicate.contains("DuplicateMapping"));
-
-        let mismatch = parse_test_error(&[
-            "--direct-intent",
-            "move.forward=digital",
-            "--physical-mapping",
-            "move=move.forward:pointer-axis:x",
-        ]);
-        assert!(mismatch.contains("IntentValueKindMismatch"));
     }
 
     #[test]

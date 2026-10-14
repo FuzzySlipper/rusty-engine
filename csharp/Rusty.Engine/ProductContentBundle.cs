@@ -25,7 +25,7 @@ public sealed class ProductContentBundle : IDisposable
         entries = service.ReadBundleFiles(handle);
         Identity = service.ReadBundleIdentity(handle);
         files = new(StringComparer.Ordinal);
-        foreach (var file in entries.Span) files.Add(file.Path, file);
+        foreach (var file in entries.Span) files[file.Path] = file;
     }
 
     /// <summary>
