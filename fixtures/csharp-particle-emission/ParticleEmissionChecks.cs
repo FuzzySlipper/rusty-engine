@@ -28,8 +28,8 @@ internal static class ParticleEmissionChecks
         };
         Require(engine.Presentation.EmitParticles(valid).Outcome == PresentationParticleEmissionOutcome.Admitted,
             "valid cube burst was not admitted after refusal");
-        ExpectRefusal(engine, valid with { Anchor = default });
-        ExpectRefusal(engine, valid with { Visual = (PresentationParticleVisual)999 });
+        Require(engine.Presentation.EmitParticles(valid with { SignalId = "fixture.particle.default-anchor", Anchor = default }).Outcome == PresentationParticleEmissionOutcome.Admitted,
+            "a default anchor was not admitted as the world origin");
         ExpectRefusal(engine, valid with { HasCollision = true });
         Require(engine.Presentation.EmitParticles(valid with { SignalId = "fixture.particle.wide-seed", Seed = ulong.MaxValue }).Outcome == PresentationParticleEmissionOutcome.Admitted,
             "a seed using all 64 bits was not admitted");

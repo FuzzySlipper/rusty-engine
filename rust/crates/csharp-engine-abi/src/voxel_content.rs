@@ -67,33 +67,33 @@ pub struct NativeVoxelAnnotationBounds {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum NativeVoxelAnnotationKind {
     #[default]
-    Selection = 1,
-    Room = 2,
-    Portal = 3,
-    SpawnArea = 4,
-    Cover = 5,
-    Hazard = 6,
-    NavigationHint = 7,
-    Custom = 8,
+    Selection = 0,
+    Room = 1,
+    Portal = 2,
+    SpawnArea = 3,
+    Cover = 4,
+    Hazard = 5,
+    NavigationHint = 6,
+    Custom = 7,
 }
 
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum NativeVoxelAnnotationQueryMode {
     #[default]
-    Cell = 1,
-    Bounds = 2,
-    Region = 3,
-    LayerSummary = 4,
+    Cell = 0,
+    Bounds = 1,
+    Region = 2,
+    LayerSummary = 3,
 }
 
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum NativeVoxelObjectLoopMode {
     #[default]
-    Once = 1,
-    Repeat = 2,
-    PingPong = 3,
+    Once = 0,
+    Repeat = 1,
+    PingPong = 2,
 }
 
 #[repr(u32)]
@@ -112,7 +112,7 @@ pub enum NativeVoxelObjectPlaybackStatus {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum NativeMagicaVoxelOrientation {
     #[default]
-    XRightYUpNegativeZForward = 1,
+    XRightYUpNegativeZForward = 0,
 }
 
 /// Product-selected local pivot policy for a MagicaVoxel source. Explicit
@@ -121,9 +121,9 @@ pub enum NativeMagicaVoxelOrientation {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum NativeMagicaVoxelPivotPolicy {
     #[default]
-    Explicit = 1,
-    BoundsCenter = 2,
-    BaseCenter = 3,
+    Explicit = 0,
+    BoundsCenter = 1,
+    BaseCenter = 2,
 }
 
 /// Stable rejection statuses for the bounded MagicaVoxel source-admission

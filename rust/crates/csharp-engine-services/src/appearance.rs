@@ -57,8 +57,6 @@ pub struct GhostPlateRealizationFact {
     pub source_matches: bool,
     pub current_sector: u32,
     pub local_angular_offset_degrees: Option<f32>,
-    pub fallback_active: bool,
-    pub fallback_reason: NativeGhostPlateFallbackReason,
     pub limitation_mask: NativeGhostPlateLimitationMask,
     pub preparation_cpu_milliseconds: Option<f64>,
     pub capture_cpu_submission_milliseconds: Option<f64>,
@@ -2513,10 +2511,6 @@ impl RuntimeAppearanceBridge {
             local_angular_offset_degrees: observed
                 .and_then(|fact| fact.local_angular_offset_degrees)
                 .unwrap_or_default(),
-            fallback_active: observed.is_some_and(|fact| fact.fallback_active),
-            fallback_reason: observed.map_or(NativeGhostPlateFallbackReason::None, |fact| {
-                fact.fallback_reason
-            }),
             limitation_mask: observed.map_or(NativeGhostPlateLimitationMask::None, |fact| {
                 fact.limitation_mask
             }),
@@ -12018,8 +12012,6 @@ pub(super) mod tests {
                 source_matches: true,
                 current_sector: 2,
                 local_angular_offset_degrees: Some(12.0),
-                fallback_active: false,
-                fallback_reason: NativeGhostPlateFallbackReason::None,
                 limitation_mask: NativeGhostPlateLimitationMask::SingleCaptureViewProfile,
                 preparation_cpu_milliseconds: Some(1.0),
                 capture_cpu_submission_milliseconds: Some(2.0),
@@ -15829,6 +15821,72 @@ fn shade(surface: Surface) -> vec4<f32> {
             panic!("retained content remains structured");
         };
         assert_eq!(indicator.meters[0].segments, 2);
+    }
+
+    #[test]
+    fn particle_descriptor_enums_left_at_default_take_their_zero_meaning() {
+        let mut bridge =
+            RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), BTreeMap::new());
+        let color = NativeColor {
+            r: 1.0,
+            g: 1.0,
+            b: 1.0,
+            a: 1.0,
+        };
+        let size_curve = [
+            NativePresentationParticleScalarKey {
+                age: 0.0,
+                value: 1.0,
+            },
+            NativePresentationParticleScalarKey {
+                age: 1.0,
+                value: 0.0,
+            },
+        ];
+        let color_curve = [
+            NativePresentationParticleColorKey { age: 0.0, color },
+            NativePresentationParticleColorKey { age: 1.0, color },
+        ];
+        // SAFETY: a C# descriptor left at `default` is all zeros, and every
+        // field of this one, its enums included, declares zero.
+        let mut descriptor: NativePresentationParticleDescriptor = unsafe { std::mem::zeroed() };
+        assert_eq!(descriptor.anchor.kind, NativePresentationAnchorKind::World);
+        assert_eq!(
+            descriptor.visual,
+            NativePresentationParticleVisual::Billboard
+        );
+        assert_eq!(
+            descriptor.collision.limit_behavior,
+            NativePresentationParticleCollisionLimitBehavior::Sleep
+        );
+        descriptor.logical_id = 41;
+        // A billboard also needs a sprite; the anchor stays at its default.
+        descriptor.visual = NativePresentationParticleVisual::Cube;
+        descriptor.burst_count = 2;
+        descriptor.max_particles = 8;
+        descriptor.lifetime_min_seconds = 0.1;
+        descriptor.lifetime_max_seconds = 1.0;
+        descriptor.size_curve = size_curve.as_ptr();
+        descriptor.size_curve_len = size_curve.len();
+        descriptor.color_curve = color_curve.as_ptr();
+        descriptor.color_curve_len = color_curve.len();
+        descriptor.visible = true;
+
+        bridge.begin_call();
+        bridge
+            .presentation_create_emitter(&descriptor)
+            .expect("default-anchored emitter create");
+        let create = bridge.take_staged_call();
+        bridge.commit(create);
+        let retained = bridge
+            .state
+            .particle_projector
+            .descriptor(ParticleEmitterHandle::new(41))
+            .expect("retained emitter");
+        assert!(matches!(
+            retained.anchor,
+            ParticleAnchor::World { position } if position == [0.0; 3]
+        ));
     }
 
     #[test]

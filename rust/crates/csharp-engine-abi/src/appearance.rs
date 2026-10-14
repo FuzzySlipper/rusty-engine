@@ -183,14 +183,14 @@ pub enum NativeRenderResourceKind {
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NativePrimitiveGeometry {
-    Cube = 1,
-    Sphere = 2,
-    Quad = 3,
-    Point = 4,
+    Cube = 0,
+    Sphere = 1,
+    Quad = 2,
+    Point = 3,
     /// Transform-only retained node; no geometry is drawn. Children form a subtree.
-    Group = 5,
+    Group = 4,
     /// Retained line from local (0, 0, 0) to (0, 1, 0); place through its appearance transform.
-    Line = 6,
+    Line = 5,
 }
 
 #[repr(u32)]

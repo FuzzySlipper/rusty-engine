@@ -41,7 +41,6 @@ pub enum NativeVideoRealizationFactKind {
 pub enum NativeVideoFailureCode {
     None = 0,
     DecodeFailed = 1,
-    PlaybackBlocked = 2,
     HostFailure = 3,
 }
 

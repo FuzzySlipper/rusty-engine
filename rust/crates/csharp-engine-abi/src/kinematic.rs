@@ -183,7 +183,6 @@ pub enum NativeKinematicErrorStatus {
     InvalidShape = 104,
     NonFiniteInput = 105,
     InvalidMotionDelta = 106,
-    InvalidMotionRows = 107,
     MotionBatchRejected = 108,
 }
 

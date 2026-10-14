@@ -30,8 +30,8 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant, SystemTime};
 
 use csharp_engine_abi::{
-    NativeGhostPlateFallbackReason, NativeGhostPlateLimitationMask, NativeRendererSettingRefusal,
-    NativeRendererSettingsReadout, NativeVideoFailureCode,
+    NativeGhostPlateLimitationMask, NativeRendererSettingRefusal, NativeRendererSettingsReadout,
+    NativeVideoFailureCode,
 };
 use csharp_engine_services::{
     renderer_settings_request, AnimationRealizationFact, EngineServiceSet,
@@ -1002,10 +1002,9 @@ fn primary_camera_pose(composition: &RendererViewComposition) -> Option<Renderer
 /// profile follows the plate's capture bank: a single capture view with one
 /// sector, otherwise a directional capture bank. The plate is built from
 /// its own descriptor's captured source, so the source always matches. A plate
-/// whose capture failed is not realized and has no fact; no realized plate
-/// draws a stand-in, so there is no fallback. The whole CPU build (the plate's
-/// isolated renderer and every sector's capture) is its capture submission
-/// time. Its meshes and materials are the frozen source's parts and
+/// whose capture failed is not realized and has no fact. The whole CPU build
+/// (the plate's isolated renderer and every sector's capture) is its capture
+/// submission time. Its meshes and materials are the frozen source's parts and
 /// materials; it borrows no textures.
 fn ghost_plate_fact(plate: &render_wgpu::GhostPlateReadout) -> GhostPlateRealizationFact {
     GhostPlateRealizationFact {
@@ -1013,8 +1012,6 @@ fn ghost_plate_fact(plate: &render_wgpu::GhostPlateReadout) -> GhostPlateRealiza
         source_matches: true,
         current_sector: plate.current_sector,
         local_angular_offset_degrees: Some(plate.local_azimuth_degrees),
-        fallback_active: false,
-        fallback_reason: NativeGhostPlateFallbackReason::None,
         limitation_mask: if plate.sector_count == 1 {
             NativeGhostPlateLimitationMask::SingleCaptureViewProfile
         } else {
@@ -1098,8 +1095,6 @@ mod tests {
         assert!(fact.source_matches);
         assert_eq!(fact.current_sector, 3, "the sector the last view drew");
         assert_eq!(fact.local_angular_offset_degrees, Some(271.5));
-        assert!(!fact.fallback_active);
-        assert_eq!(fact.fallback_reason, NativeGhostPlateFallbackReason::None);
         assert_eq!(
             fact.limitation_mask,
             NativeGhostPlateLimitationMask::DirectionalCaptureBankProfile

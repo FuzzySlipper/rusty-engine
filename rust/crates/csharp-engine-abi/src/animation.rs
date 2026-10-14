@@ -36,43 +36,43 @@ pub struct NativeAnimationControllerHandle {
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NativeAnimationLoopMode {
-    Once = 1,
-    Repeat = 2,
-    PingPong = 3,
+    Once = 0,
+    Repeat = 1,
+    PingPong = 2,
 }
 
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NativeAnimationPlaybackKind {
-    Play = 1,
-    Stop = 2,
-    Sample = 3,
-    Pause = 4,
-    Resume = 5,
+    Play = 0,
+    Stop = 1,
+    Sample = 2,
+    Pause = 3,
+    Resume = 4,
 }
 
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NativeAnimationParameterKind {
-    Float = 1,
-    Bool = 2,
-    Trigger = 3,
+    Float = 0,
+    Bool = 1,
+    Trigger = 2,
 }
 
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NativeAnimationMotionKind {
-    Clip = 1,
-    LinearBlend = 2,
+    Clip = 0,
+    LinearBlend = 1,
 }
 
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NativeAnimationConditionKind {
-    FloatGreaterThan = 1,
-    FloatLessThanOrEqual = 2,
-    BoolEquals = 3,
-    TriggerSet = 4,
+    FloatGreaterThan = 0,
+    FloatLessThanOrEqual = 1,
+    BoolEquals = 2,
+    TriggerSet = 3,
 }
 
 #[repr(u32)]
@@ -280,9 +280,9 @@ pub struct NativeAnimationPlaybackRequest {
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NativePoseSpace {
-    Local = 1,
-    Model = 2,
-    World = 3,
+    Local = 0,
+    Model = 1,
+    World = 2,
 }
 
 /// One joint's rotation and/or translation over the evaluated pose, mixed in

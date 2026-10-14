@@ -227,7 +227,11 @@ pub(crate) fn renderer_settings_descriptor(
             strength: request.ambient_occlusion_strength,
             radius: request.ambient_occlusion_radius,
         },
-        antialiasing: request.antialiasing as u32,
+        antialiasing: match request.antialiasing {
+            NativeAntialiasing::Off => 1,
+            NativeAntialiasing::Msaa2 => 2,
+            NativeAntialiasing::Msaa4 => 4,
+        },
         render_scale: request.render_scale,
         vsync: request.vsync,
         clustered_lighting: request.clustered_lighting,
@@ -357,6 +361,27 @@ mod tests {
         // SAFETY: the slice borrows the bridge's catalogue, alive here.
         String::from_utf8(unsafe { std::slice::from_raw_parts(slice.bytes, slice.len) }.to_vec())
             .unwrap()
+    }
+
+    #[test]
+    fn antialiasing_keeps_its_sample_count_and_a_default_request_draws_without_msaa() {
+        // SAFETY: a C# request left at `default` is all zeros, and every
+        // field of this one, its enums included, declares zero.
+        let mut request: NativeRendererSettingsRequest = unsafe { std::mem::zeroed() };
+        assert_eq!(request.antialiasing, NativeAntialiasing::Off);
+        for (antialiasing, samples) in [
+            (NativeAntialiasing::Off, 1),
+            (NativeAntialiasing::Msaa2, 2),
+            (NativeAntialiasing::Msaa4, 4),
+        ] {
+            request.antialiasing = antialiasing;
+            let descriptor = renderer_settings_descriptor(&request);
+            assert_eq!(descriptor.antialiasing, samples);
+            assert_eq!(
+                renderer_settings_request(&descriptor).antialiasing,
+                antialiasing
+            );
+        }
     }
 
     #[test]

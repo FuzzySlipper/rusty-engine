@@ -4,6 +4,10 @@
 //! from these family modules. The table names Engine service families; it
 //! intentionally has no generic invocation, target strings, capability
 //! catalogue, or JSON command protocol.
+//!
+//! Every enum that C# sends to the Engine has a member at 0, its default
+//! meaning: a C# field left at `default` holds 0, and a Rust enum without that
+//! discriminant would read it as undefined behaviour.
 
 mod animation;
 mod appearance;

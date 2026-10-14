@@ -5,20 +5,20 @@ use crate::NativeUtf8Slice;
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NativeDiagnosticsSeverity {
-    Debug = 1,
-    Info = 2,
-    Warning = 3,
-    Error = 4,
+    Debug = 0,
+    Info = 1,
+    Warning = 2,
+    Error = 3,
 }
 
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NativeDiagnosticsDisposition {
-    Accepted = 1,
-    RejectedRecoverable = 2,
-    Degraded = 3,
-    ResyncRequired = 4,
-    Terminal = 5,
+    Accepted = 0,
+    RejectedRecoverable = 1,
+    Degraded = 2,
+    ResyncRequired = 3,
+    Terminal = 4,
 }
 
 /// One borrowed, typed product diagnostic. Strings are copied and validated by

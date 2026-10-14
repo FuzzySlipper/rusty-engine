@@ -29,121 +29,121 @@ pub struct NativeAuthoredScenePlanHandle {
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NativeAssetKind {
-    Material = 1,
-    StaticMesh = 2,
-    AnimatedMesh = 3,
-    Sprite = 4,
-    SpriteSheet = 5,
-    Texture = 6,
-    AudioClip = 7,
-    Font = 8,
-    VoxelVolume = 9,
-    VoxelObject = 10,
-    Script = 11,
-    Scene = 12,
+    Material = 0,
+    StaticMesh = 1,
+    AnimatedMesh = 2,
+    Sprite = 3,
+    SpriteSheet = 4,
+    Texture = 5,
+    AudioClip = 6,
+    Font = 7,
+    VoxelVolume = 8,
+    VoxelObject = 9,
+    Script = 10,
+    Scene = 11,
 }
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NativeAssetVersionRequirementKind {
-    Any = 1,
-    Exact = 2,
-    AtLeast = 3,
+    Any = 0,
+    Exact = 1,
+    AtLeast = 2,
 }
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NativeAuthoredPrefabPartSourceKind {
-    Scene = 1,
-    EntityDefinition = 2,
-    VoxelObject = 3,
+    Scene = 0,
+    EntityDefinition = 1,
+    VoxelObject = 2,
 }
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NativeAuthoredPrefabOverrideKind {
-    Transform = 1,
-    EntityDefinition = 2,
-    Asset = 3,
-    Material = 4,
-    Activation = 5,
+    Transform = 0,
+    EntityDefinition = 1,
+    Asset = 2,
+    Material = 3,
+    Activation = 4,
 }
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NativeAuthoredSceneNodeKind {
-    EmptyGroup = 1,
-    StaticMesh = 2,
-    AnimatedMesh = 3,
-    Sprite = 4,
-    VoxelVolume = 5,
-    Light = 6,
-    Marker = 7,
-    EntityInstance = 8,
-    Bootstrap = 9,
+    EmptyGroup = 0,
+    StaticMesh = 1,
+    AnimatedMesh = 2,
+    Sprite = 3,
+    VoxelVolume = 4,
+    Light = 5,
+    Marker = 6,
+    EntityInstance = 7,
+    Bootstrap = 8,
 }
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NativeAuthoredSceneEntityReferenceKind {
-    EntityDefinition = 1,
-    Prefab = 2,
+    EntityDefinition = 0,
+    Prefab = 1,
 }
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NativeAuthoredSceneLightKind {
-    Ambient = 1,
-    Directional = 2,
-    Point = 3,
-    Spot = 4,
+    Ambient = 0,
+    Directional = 1,
+    Point = 2,
+    Spot = 3,
 }
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NativeAuthoredStructuralClass {
-    Decorative = 1,
-    Solid = 2,
-    Structural = 3,
+    Decorative = 0,
+    Solid = 1,
+    Structural = 2,
 }
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NativeAuthoredUvStrategy {
-    Flat = 1,
-    Planar = 2,
-    Atlas = 3,
-}
-#[repr(C)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum NativeAuthoredTextureFilter {
-    Nearest = 1,
-    Linear = 2,
-}
-#[repr(C)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum NativeAuthoredTextureWrap {
-    Clamp = 1,
-    Repeat = 2,
-}
-#[repr(C)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum NativeAuthoredAtlasInset {
-    HalfTexel = 1,
-}
-#[repr(C)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum NativeAuthoredVoxelAlphaModeKind {
-    Opaque = 1,
-    Mask = 2,
-    Blend = 3,
-}
-#[repr(C)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum NativeAuthoredVoxelSurfaceMappingKind {
-    Repeat = 1,
+    Flat = 0,
+    Planar = 1,
     Atlas = 2,
 }
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativeAuthoredTextureFilter {
+    Nearest = 0,
+    Linear = 1,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativeAuthoredTextureWrap {
+    Clamp = 0,
+    Repeat = 1,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativeAuthoredAtlasInset {
+    HalfTexel = 0,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativeAuthoredVoxelAlphaModeKind {
+    Opaque = 0,
+    Mask = 1,
+    Blend = 2,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativeAuthoredVoxelSurfaceMappingKind {
+    Repeat = 0,
+    Atlas = 1,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NativeAuthoredFallbackContext {
-    DebugOverlay = 1,
-    CosmeticSurface = 2,
-    CollisionCritical = 3,
-    BackgroundDecoration = 4,
+    DebugOverlay = 0,
+    CosmeticSurface = 1,
+    CollisionCritical = 2,
+    BackgroundDecoration = 3,
 }
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

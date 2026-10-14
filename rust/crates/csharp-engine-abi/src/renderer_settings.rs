@@ -20,7 +20,7 @@ pub enum NativeAmbientOcclusionMode {
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NativeAntialiasing {
-    Off = 1,
+    Off = 0,
     Msaa2 = 2,
     Msaa4 = 4,
 }

@@ -190,13 +190,13 @@ internal sealed class BindingModel
         {
             string receipt = Bare(parameters[^1]);
             if (IsBorrowedResult(receipt, structs)) ValidateBorrowedResult(family, method, signature, receipt, structs, enums);
-            else ValidateFixedType(family, method, signature, receipt, structs, enums, new HashSet<string>(StringComparer.Ordinal), "out receipt");
+            else ValidateFixedType(family, method, signature, receipt, structs, enums, new HashSet<string>(StringComparer.Ordinal), "out receipt", sent: false);
         }
         if (inputs == 0 && hasReceipt) return;
         if (inputs == 2 && IsExactBorrowedPointer(parameters[0]) && Bare(parameters[1]) == "size_t")
         {
             if (Bare(parameters[0]) == "NativeInputMapping") return;
-            ValidateFixedType(family, method, signature, Bare(parameters[0]), structs, enums, new HashSet<string>(StringComparer.Ordinal), "pointer/count span element");
+            ValidateFixedType(family, method, signature, Bare(parameters[0]), structs, enums, new HashSet<string>(StringComparer.Ordinal), "pointer/count span element", sent: true);
             return;
         }
         if (inputs > 1 && IsExactBorrowedPointer(parameters[inputs - 1]))
@@ -205,7 +205,7 @@ internal sealed class BindingModel
             {
                 string leading = parameters[index];
                 if (leading.Contains('*', StringComparison.Ordinal)) Fail(family, method, signature, $"unsupported leading pointer input {leading}");
-                ValidateFixedType(family, method, signature, Bare(leading), structs, enums, new HashSet<string>(StringComparer.Ordinal), "leading direct input");
+                ValidateFixedType(family, method, signature, Bare(leading), structs, enums, new HashSet<string>(StringComparer.Ordinal), "leading direct input", sent: true);
             }
             string borrowed = parameters[inputs - 1];
             string borrowedBare = Bare(borrowed);
@@ -223,7 +223,7 @@ internal sealed class BindingModel
             return;
         }
         if (input.Contains('*', StringComparison.Ordinal)) Fail(family, method, signature, $"unsupported pointer input {input}");
-        ValidateFixedType(family, method, signature, bare, structs, enums, new HashSet<string>(StringComparer.Ordinal), "direct input");
+        ValidateFixedType(family, method, signature, bare, structs, enums, new HashSet<string>(StringComparer.Ordinal), "direct input", sent: true);
     }
 
     private static void ValidateOperationErrorReceipt(string family, string method, string signature, IReadOnlyDictionary<string, Struct> structs, IReadOnlyDictionary<string, Enum> enums)
@@ -237,9 +237,14 @@ internal sealed class BindingModel
         }
     }
 
-    private static void ValidateFixedType(string family, string method, string signature, string type, IReadOnlyDictionary<string, Struct> structs, IReadOnlyDictionary<string, Enum> enums, HashSet<string> seen, string role)
+    private static void ValidateFixedType(string family, string method, string signature, string type, IReadOnlyDictionary<string, Struct> structs, IReadOnlyDictionary<string, Enum> enums, HashSet<string> seen, string role, bool sent)
     {
-        if (IsScalar(type) || enums.ContainsKey(type)) return;
+        if (IsScalar(type)) return;
+        if (enums.TryGetValue(type, out Enum? enumValue))
+        {
+            if (sent) ValidateSentEnum(family, method, signature, enumValue, role);
+            return;
+        }
         if (!structs.TryGetValue(type, out Struct? value) || value is null) { Fail(family, method, signature, $"{role} {type} is not a supported scalar or emitted native struct"); return; }
         if (type.EndsWith("Api", StringComparison.Ordinal) || type is "NativeProductApi" or "NativeProductCreateArgs" or "NativeProductUpdateArgs") Fail(family, method, signature, $"{role} {type} is an API/product table rather than a fixed value");
         if (type is "NativeUtf8Slice" or "NativeByteSlice" or "NativeWritableByteSlice" or "NativeStructuredValue") Fail(family, method, signature, $"{role} {type} is only supported as a specially marshalled request field");
@@ -249,12 +254,12 @@ internal sealed class BindingModel
             if (field.Type.Contains('*', StringComparison.Ordinal)) Fail(family, method, signature, $"{role} {type}.{field.Name} ({field.Type}) is borrowed and cannot be emitted by-value");
             if (field.Array is FixedArray array)
             {
-                ValidateFixedType(family, method, signature, Bare(array.ElementType), structs, enums, seen, $"{role} fixed-array element {type}.{field.Name}");
+                ValidateFixedType(family, method, signature, Bare(array.ElementType), structs, enums, seen, $"{role} fixed-array element {type}.{field.Name}", sent);
                 continue;
             }
             string nested = Bare(field.Type);
             if (nested is "NativeUtf8Slice" or "NativeByteSlice" or "NativeWritableByteSlice" or "NativeStructuredValue") Fail(family, method, signature, $"{role} {type}.{field.Name} ({field.Type}) requires request-only marshalling");
-            ValidateFixedType(family, method, signature, nested, structs, enums, seen, $"{role} field {type}.{field.Name}");
+            ValidateFixedType(family, method, signature, nested, structs, enums, seen, $"{role} field {type}.{field.Name}", sent);
         }
     }
 
@@ -346,7 +351,7 @@ internal sealed class BindingModel
             if (field.Type.Contains('*', StringComparison.Ordinal)) { Fail(family, method, signature, $"result element {value.Name}.{field.Name} has unsupported pointer {field.Type}"); continue; }
             if (field.Array is FixedArray array)
             {
-                ValidateFixedType(family, method, signature, Bare(array.ElementType), structs, enums, seen, $"result element fixed-array element {value.Name}.{field.Name}");
+                ValidateFixedType(family, method, signature, Bare(array.ElementType), structs, enums, seen, $"result element fixed-array element {value.Name}.{field.Name}", sent: false);
                 continue;
             }
             if (structs.TryGetValue(nested, out Struct? nestedValue) && nestedValue is not null)
@@ -355,7 +360,7 @@ internal sealed class BindingModel
             }
             else
             {
-                ValidateFixedType(family, method, signature, nested, structs, enums, seen, $"result element {value.Name}.{field.Name}");
+                ValidateFixedType(family, method, signature, nested, structs, enums, seen, $"result element {value.Name}.{field.Name}", sent: false);
             }
         }
     }
@@ -379,7 +384,7 @@ internal sealed class BindingModel
             string nested = Bare(field.Type);
             if (nested is "NativeUtf8Slice" or "NativeByteSlice" or "NativeWritableByteSlice") continue;
             if (nested == "NativeStructuredValue") continue;
-            ValidateFixedType(family, method, signature, nested, structs, enums, seen, $"borrowed request field {request.Name}.{field.Name}");
+            ValidateFixedType(family, method, signature, nested, structs, enums, seen, $"borrowed request field {request.Name}.{field.Name}", sent: true);
         }
     }
 
@@ -390,7 +395,12 @@ internal sealed class BindingModel
     /// outside the ABI grammar.
     private static void ValidateBorrowedSpanElement(string family, string method, string signature, string type, IReadOnlyDictionary<string, Struct> structs, IReadOnlyDictionary<string, Enum> enums)
     {
-        if (IsScalar(type) || enums.ContainsKey(type)) return;
+        if (IsScalar(type)) return;
+        if (enums.TryGetValue(type, out Enum? element))
+        {
+            ValidateSentEnum(family, method, signature, element, "borrowed span element");
+            return;
+        }
         if (!structs.TryGetValue(type, out Struct? value) || value is null)
         {
             Fail(family, method, signature, $"borrowed span element {type} is not a supported scalar or emitted native struct");
@@ -415,13 +425,19 @@ internal sealed class BindingModel
                 Fail(family, method, signature, $"borrowed span element {type}.{field.Name} ({field.Type}) is not a supported immediate field");
                 continue;
             }
-            ValidateFixedType(family, method, signature, nested, structs, enums, new HashSet<string>(StringComparer.Ordinal), $"borrowed span element {type}.{field.Name}");
+            ValidateFixedType(family, method, signature, nested, structs, enums, new HashSet<string>(StringComparer.Ordinal), $"borrowed span element {type}.{field.Name}", sent: true);
         }
     }
 
     private static bool IsExactOutPointer(string type) => !type.StartsWith("const ", StringComparison.Ordinal) && PointerLevel(type) == 1 && Bare(type) != "void";
     private static bool IsExactBorrowedPointer(string type) => type.StartsWith("const ", StringComparison.Ordinal) && PointerLevel(type) == 1 && Bare(type) != "void";
     private static int PointerLevel(string type) => type.Count(character => character == '*');
+    // A C# field left at default sends 0, which the Rust enum must declare.
+    private static void ValidateSentEnum(string family, string method, string signature, Enum value, string role)
+    {
+        if (!value.Members.Any(member => member.Value == 0)) Fail(family, method, signature, $"{role} {value.Name} has no member at 0, the value a C# default sends");
+    }
+
     private static void Fail(string family, string method, string signature, string detail) => throw new InvalidOperationException($"unsupported {family}.{method} signature {signature}: {detail}.");
 
     private static unsafe List<CXCursor> Children(CXCursor cursor)
@@ -965,24 +981,6 @@ internal static class Emit
         for (int index = 0; index < leading.Length; index++) output.AppendLine($"        {RawType(leading[index])} raw{index} = NativeConversions.ToNative(arg{index});");
         int requestIndex = leading.Length;
         string requestArgument = $"arg{requestIndex}";
-        if (requestName == "NativePresentationParticleDescriptor")
-        {
-            // Rust enum fields must contain declared discriminants, including
-            // nested fields whose semantic use is optional.
-            void RequireEnum(string type, string expression)
-            {
-                string allowed = string.Join(" or ", model.Enums[type].Members.Select(member => $"{SafeType(type)}.{SafeEnumMember(type, member.Name)}"));
-                output.AppendLine($"        if ({expression} is not ({allowed})) throw new EngineCallException(\"Presentation\", \"{Pascal(operation)}\", 0, new EngineDiagnostic[] {{ new(\"CSHARP_PRESENTATION_PARTICLE\", \"{expression} must name a declared {SafeType(type)} value\", string.Empty) }});");
-            }
-            RequireEnum("NativePresentationAnchorKind", $"{requestArgument}.Anchor.Kind");
-            RequireEnum("NativePresentationParticleVisual", $"{requestArgument}.Visual");
-            output.AppendLine($"        if (!{requestArgument}.HasCollision) {requestArgument} = {requestArgument} with {{ Collision = new() {{ LimitBehavior = PresentationParticleCollisionLimitBehavior.Sleep }}, CollisionVolumes = default }};");
-            RequireEnum("NativePresentationParticleCollisionLimitBehavior", $"{requestArgument}.Collision.LimitBehavior");
-            output.AppendLine($"        foreach (var volume in {requestArgument}.CollisionVolumes.Span)");
-            output.AppendLine("        {");
-            RequireEnum("NativePresentationParticleCollisionVolumeKind", "volume.Kind");
-            output.AppendLine("        }");
-        }
         List<string> closers = [];
         Field[] specialSpanFields = request.Fields.Where(field => field.Type.Contains('*', StringComparison.Ordinal) && BorrowedSpanElementHasImmediateFields(model, BindingModel.Bare(field.Type))).ToArray();
         List<string> temporaryPinArrays = specialSpanFields.SelectMany(field => BorrowedSpanElementPinNames(model, field)).ToList();

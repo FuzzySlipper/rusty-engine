@@ -30,18 +30,18 @@ pub struct NativeAudioSignalHandle {
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NativeAudioBus {
-    Sfx = 1,
-    Ambient = 2,
-    Ui = 3,
-    Music = 4,
+    Sfx = 0,
+    Ambient = 1,
+    Ui = 2,
+    Music = 3,
 }
 
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NativeAudioEmitterKind {
-    Global2d = 1,
-    World3d = 2,
-    EntityAttached = 3,
+    Global2d = 0,
+    World3d = 1,
+    EntityAttached = 2,
 }
 
 /// How a spatial source's level falls between the reference distance
@@ -51,17 +51,17 @@ pub enum NativeAudioEmitterKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NativeAudioRolloff {
     /// Amplitude falls linearly to zero.
-    Linear = 1,
+    Linear = 0,
     /// Level falls linearly in decibels, to -60 dB (silence).
-    LinearDecibels = 2,
+    LinearDecibels = 1,
 }
 
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NativeAudioVoiceControl {
-    Pause = 1,
-    Resume = 2,
-    Retrigger = 3,
+    Pause = 0,
+    Resume = 1,
+    Retrigger = 2,
 }
 
 #[repr(u32)]

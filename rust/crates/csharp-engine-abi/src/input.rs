@@ -224,13 +224,13 @@ pub enum NativeControllerAxis {
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NativeInputTriggerKind {
-    Key = 1,
-    PointerButton = 2,
-    PointerAxis = 3,
-    Wheel = 4,
-    ControllerButton = 5,
-    ControllerAxis = 6,
-    ControllerButtonValue = 7,
+    Key = 0,
+    PointerButton = 1,
+    PointerAxis = 2,
+    Wheel = 3,
+    ControllerButton = 4,
+    ControllerAxis = 5,
+    ControllerButtonValue = 6,
 }
 
 /// Runtime/control identity carried with every admitted product input fact.

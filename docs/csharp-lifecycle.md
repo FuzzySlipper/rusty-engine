@@ -282,14 +282,14 @@ engine.Presentation.EmitParticles(new PresentationParticleDescriptor
 });
 ```
 
-The zero-initialized descriptor is incomplete: enum zero is not World or
-Billboard, lifetime and capacity are zero, and curves are empty. Set the enums
-explicitly. Each curve needs at least two keys with finite ages strictly
+The zero-initialized descriptor anchors in the world at the origin and draws
+billboards, but it is incomplete: lifetime and capacity are zero, and curves
+are empty. Each curve needs at least two keys with finite ages strictly
 increasing from 0 to 1; sizes must be finite and nonnegative, color channels
 in 0–1. Colour keys are linear and blend in linear light
 ([colours](#colours)). Lifetimes must be positive and ordered, velocity bounds ordered and
-finite, and acceleration finite. A burst needs `0 < BurstCount <= MaxParticles`
-and `Seed <= 9007199254740991` (53 bits).
+finite, and acceleration finite. A burst needs `0 < BurstCount <= MaxParticles`;
+any 64-bit `Seed` is accepted.
 
 `SizeCurve` values are edge lengths. A cube particle's is in metres. A
 billboard's follows `SizeMode`: `Screen` (the zero default) keeps a fixed size

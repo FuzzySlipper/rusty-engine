@@ -669,10 +669,10 @@ pub struct NativeDynamicsStepWithReactionsRequest {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NativeDynamicsJointKind {
     /// About the frames' X axis only, between `min_angle` and `max_angle`.
-    Hinge = 1,
+    Hinge = 0,
     /// The second frame's X axis within `swing_angle` of the first's,
     /// twisting about it between `min_angle` and `max_angle`.
-    Cone = 2,
+    Cone = 1,
 }
 
 /// A joint's limits and damping. `damping` (N·m·s per radian) resists
@@ -727,10 +727,10 @@ pub struct NativeDynamicsRagdollHandle {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NativeDynamicsRagdollShape {
     /// A capsule of `radius` from the joint to the bone's end.
-    Capsule = 1,
+    Capsule = 0,
     /// A box as long as the bone, `radius` half wide (joint X) and
     /// `half_depth` half deep (joint Z).
-    Box = 2,
+    Box = 1,
 }
 
 /// One simulated bone: the rig joint (`Animation.ReadJoints` index) its body

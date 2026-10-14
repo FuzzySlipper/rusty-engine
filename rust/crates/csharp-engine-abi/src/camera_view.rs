@@ -34,8 +34,8 @@ pub enum NativeCameraBasisMode {
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NativeCameraProjectionKind {
-    Perspective = 1,
-    Orthographic = 2,
+    Perspective = 0,
+    Orthographic = 1,
 }
 
 #[repr(u32)]

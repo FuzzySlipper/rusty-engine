@@ -21,8 +21,8 @@ pub struct NativePresentationEmitterHandle {
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NativePresentationAnchorKind {
-    World = 1,
-    EntityAttached = 2,
+    World = 0,
+    EntityAttached = 1,
 }
 
 #[repr(C)]
@@ -37,18 +37,18 @@ pub struct NativePresentationAnchor {
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NativeBillboardContentKind {
-    Text = 1,
-    Value = 2,
-    Icon = 3,
+    Text = 0,
+    Value = 1,
+    Icon = 2,
 }
 
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NativePresentationBillboardMeterFillDirection {
-    LeftToRight = 1,
-    RightToLeft = 2,
-    BottomToTop = 3,
-    TopToBottom = 4,
+    LeftToRight = 0,
+    RightToLeft = 1,
+    BottomToTop = 2,
+    TopToBottom = 3,
 }
 
 #[repr(C)]
@@ -98,16 +98,16 @@ pub struct NativePresentationBillboardStyle {
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NativePresentationBillboardAlignment {
-    Start = 1,
-    Center = 2,
-    End = 3,
+    Start = 0,
+    Center = 1,
+    End = 2,
 }
 
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NativePresentationBillboardLayoutSizing {
-    ConstantPixels = 1,
-    DistanceScaled = 2,
+    ConstantPixels = 0,
+    DistanceScaled = 1,
 }
 
 #[repr(C)]
@@ -122,15 +122,15 @@ pub struct NativePresentationBillboardSafeArea {
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NativePresentationBillboardEdgeBehavior {
-    Clamp = 1,
-    Cull = 2,
+    Clamp = 0,
+    Cull = 1,
 }
 
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NativePresentationBillboardOverlapBehavior {
-    Stack = 1,
-    Suppress = 2,
+    Stack = 0,
+    Suppress = 1,
 }
 
 #[repr(C)]
@@ -149,16 +149,16 @@ pub struct NativePresentationBillboardLayout {
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NativePresentationBillboardLayer {
-    AlwaysOnTop = 1,
-    DepthTested = 2,
-    Occluded = 3,
+    AlwaysOnTop = 0,
+    DepthTested = 1,
+    Occluded = 2,
 }
 
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NativePresentationFontKind {
-    System = 1,
-    Asset = 2,
+    System = 0,
+    Asset = 1,
 }
 
 /// A complete replacement descriptor for one ordinary world indicator. Asset
@@ -228,8 +228,8 @@ pub struct NativePresentationStructuredBillboardDescriptor {
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NativePresentationParticleVisual {
-    Billboard = 1,
-    Cube = 2,
+    Billboard = 0,
+    Cube = 1,
 }
 
 /// What a billboard particle's size curve measures: a fixed screen size
@@ -272,15 +272,15 @@ pub struct NativePresentationParticleColorKey {
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NativePresentationParticleCollisionLimitBehavior {
-    Sleep = 1,
-    Kill = 2,
+    Sleep = 0,
+    Kill = 1,
 }
 
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NativePresentationParticleCollisionVolumeKind {
-    Plane = 1,
-    Aabb = 2,
+    Plane = 0,
+    Aabb = 1,
 }
 
 /// A closed spawn-relative presentation collision volume. Plane values use
@@ -440,8 +440,8 @@ pub struct NativeGhostPlatePresentationHandle {
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NativeGhostPlateCaptureLightingMode {
-    Scene = 1,
-    Isolated = 2,
+    Scene = 0,
+    Isolated = 1,
 }
 
 #[repr(C)]
@@ -476,23 +476,23 @@ pub struct NativeGhostPlateCaptureSettings {
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NativeGhostPlateAnchorPolicy {
-    BoundsCenter = 1,
-    BoundsNormalized = 2,
+    BoundsCenter = 0,
+    BoundsNormalized = 1,
 }
 
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NativeGhostPlateMapping {
-    PlateLocked = 1,
-    ProjectiveSurface = 2,
+    PlateLocked = 0,
+    ProjectiveSurface = 1,
 }
 
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NativeGhostPlateShellMode {
-    WholeMesh = 1,
-    StrictSource = 2,
-    RepairedSource = 3,
+    WholeMesh = 0,
+    StrictSource = 1,
+    RepairedSource = 2,
 }
 
 /// Product-owned placement facts for one retained ghost plate.
@@ -549,15 +549,6 @@ pub struct NativeRecaptureGhostPlatePresentationRequest {
     pub capture: NativeGhostPlateCaptureSettings,
 }
 
-#[repr(u32)]
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum NativeGhostPlateFallbackReason {
-    #[default]
-    None = 0,
-    PreparedSourceUnsupported = 1,
-    RealizationFailed = 2,
-}
-
 /// Compact closed summary of the retained ghost realization limits. The two
 /// profiles are the only backend states currently emitted: a single capture
 /// or a hard-snapped directional capture bank. Individual bit values remain
@@ -591,8 +582,6 @@ pub struct NativeGhostPlatePresentationReadout {
     pub current_sector: u32,
     pub has_local_angular_offset: bool,
     pub local_angular_offset_degrees: f32,
-    pub fallback_active: bool,
-    pub fallback_reason: NativeGhostPlateFallbackReason,
     pub limitation_mask: NativeGhostPlateLimitationMask,
     pub has_preparation_cpu_milliseconds: bool,
     pub preparation_cpu_milliseconds: f64,
