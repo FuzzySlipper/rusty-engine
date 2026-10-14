@@ -549,7 +549,6 @@ pub enum CharacterControllerError {
     InvalidConfig(CharacterConfigError),
     InvalidCommand,
     DisplacementEnvelopeExceeded { requested: f32, maximum: f32 },
-    DuplicateOrOldCommand { previous: u64, requested: u64 },
     UnknownEntity { entity: EntityId },
     InactiveEntity { entity: EntityId },
     MissingTransform { entity: EntityId },
@@ -579,7 +578,6 @@ impl CharacterControllerError {
             Self::DisplacementEnvelopeExceeded { .. } => {
                 "character-controller-displacement-envelope-exceeded"
             }
-            Self::DuplicateOrOldCommand { .. } => "stale-character-controller-command",
             Self::UnknownEntity { .. } => "unknown-character-controller-entity",
             Self::InactiveEntity { .. } => "inactive-character-controller-entity",
             Self::MissingTransform { .. } => "missing-character-controller-transform",
@@ -620,20 +618,35 @@ impl From<CharacterMotionPublicationError> for CharacterControllerError {
     }
 }
 
+/// What a prepared step read of the world besides its own character. The
+/// caller holds the world between `prepare` and `commit` and may change it;
+/// the controlled character's revisions do not see another entity move or a
+/// collision edit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct CharacterEnvironmentIdentity {
-    source_revision: u64,
-    authority_hash: u64,
-    projection_version: u64,
-    static_mesh_revision: u64,
-    static_mesh_topology_hash: u64,
+struct PreparedEnvironment {
+    collision_world_hash: u64,
     obstacle_hash: u64,
-    mesh_instance_hash: u64,
-    mesh_motion_hash: u64,
+}
+
+impl PreparedEnvironment {
+    fn read(entities: &EntityState, scene: &VoxelCollisionScene, entity: EntityId) -> Self {
+        Self {
+            collision_world_hash: collision_world_hash(scene, &[]),
+            obstacle_hash: hash_obstacles(&character_obstacles(entities, entity)),
+        }
+    }
 }
 
 #[derive(Clone)]
 pub struct PreparedCharacterControllerStep {
+    step: EntityCharacterStep,
+    environment: PreparedEnvironment,
+}
+
+/// A step solved for a character an [`EntityState`] holds, with the revisions
+/// its publication expects.
+#[derive(Clone)]
+struct EntityCharacterStep {
     transform_revision: ComponentRevision,
     motion_revision: ComponentRevision,
     solution: CharacterStepSolution,
@@ -661,7 +674,6 @@ struct CharacterStepSolution {
     collision_query_stats: CharacterCollisionQueryStats,
     recovery_passes: u8,
     recovery_distance: f32,
-    environment: CharacterEnvironmentIdentity,
 }
 
 impl CharacterStepSolution {
@@ -742,7 +754,6 @@ impl CharacterStepSolution {
             collision_query_stats: stats(self.collision_query_stats, next.collision_query_stats),
             recovery_passes: self.recovery_passes.saturating_add(next.recovery_passes),
             recovery_distance: self.recovery_distance + next.recovery_distance,
-            environment: next.environment,
         }
     }
 }
@@ -1453,8 +1464,14 @@ impl CharacterControllerService {
         config: &CharacterControllerConfig,
         command: CharacterControllerCommand,
     ) -> Result<CharacterControllerReceipt, CharacterControllerError> {
-        let prepared = self.prepare(entities, scene, entity, config, command)?;
-        self.commit(entities, scene, prepared)
+        self.step_with_obstacles_and_mesh_instances(
+            entities,
+            scene,
+            entity,
+            config,
+            command,
+            CharacterStepColliders::empty(),
+        )
     }
 
     /// Solves one character step against the call-local active EntityState plus
@@ -1493,18 +1510,20 @@ impl CharacterControllerService {
         command: CharacterControllerCommand,
         colliders: CharacterStepColliders<'_>,
     ) -> Result<CharacterControllerReceipt, CharacterControllerError> {
-        // The exclusive borrow spans prepare and publish, so the environment
-        // the step solved against cannot change in between.
-        let prepared = self.prepare_with_obstacles_and_mesh_instances(
-            entities, scene, entity, config, command, colliders,
-        )?;
-        self.publish(entities, prepared)
+        // The exclusive borrow spans solving and publishing, so the
+        // environment the step solved against cannot change in between.
+        let step = self.solve_entity(entities, scene, entity, config, command, colliders)?;
+        self.publish(entities, step)
     }
 
     /// Solve one step for a character whose transform and motion the caller
     /// owns, reading other entities through `world`. Nothing is retained or
     /// published; the receipt carries the accepted transform and motion. Its
     /// entity revisions are zero because no entity store is involved.
+    ///
+    /// The caller resolves each mesh instance from the scene, poses its entity
+    /// in `world` with unit scale, and names the controlled character
+    /// nowhere among the colliders.
     pub fn step_subject(
         &mut self,
         world: &dyn CharacterStepWorld,
@@ -1515,10 +1534,13 @@ impl CharacterControllerService {
         colliders: CharacterStepColliders<'_>,
     ) -> Result<CharacterControllerReceipt, CharacterControllerError> {
         self.admit_config(config)?;
+        validate_mesh_motion(colliders.mesh_instances)?;
         let solution = self.solve(world, scene, subject, config, command, colliders)?;
         self.finish(solution, 0, 0)
     }
 
+    /// Solve one step without publishing it. [`Self::commit`] publishes it if
+    /// neither the character nor the world it read has changed since.
     pub fn prepare(
         &mut self,
         entities: &EntityState,
@@ -1527,29 +1549,21 @@ impl CharacterControllerService {
         config: &CharacterControllerConfig,
         command: CharacterControllerCommand,
     ) -> Result<PreparedCharacterControllerStep, CharacterControllerError> {
-        self.prepare_with_obstacles(entities, scene, entity, config, command, &[])
-    }
-
-    fn prepare_with_obstacles(
-        &mut self,
-        entities: &EntityState,
-        scene: &VoxelCollisionScene,
-        entity: EntityId,
-        config: &CharacterControllerConfig,
-        command: CharacterControllerCommand,
-        obstacle_overrides: &[CharacterObstacle],
-    ) -> Result<PreparedCharacterControllerStep, CharacterControllerError> {
-        self.prepare_with_obstacles_and_mesh_instances(
+        let step = self.solve_entity(
             entities,
             scene,
             entity,
             config,
             command,
-            CharacterStepColliders::new(obstacle_overrides, &[]),
-        )
+            CharacterStepColliders::empty(),
+        )?;
+        Ok(PreparedCharacterControllerStep {
+            step,
+            environment: PreparedEnvironment::read(entities, scene, entity),
+        })
     }
 
-    fn prepare_with_obstacles_and_mesh_instances(
+    fn solve_entity(
         &mut self,
         entities: &EntityState,
         scene: &VoxelCollisionScene,
@@ -1557,7 +1571,7 @@ impl CharacterControllerService {
         config: &CharacterControllerConfig,
         command: CharacterControllerCommand,
         colliders: CharacterStepColliders<'_>,
-    ) -> Result<PreparedCharacterControllerStep, CharacterControllerError> {
+    ) -> Result<EntityCharacterStep, CharacterControllerError> {
         self.admit_config(config)?;
         let core = entities
             .core(entity)
@@ -1580,12 +1594,13 @@ impl CharacterControllerService {
         let motion_revision = entities
             .component_revision::<CharacterMotionComponent>(entity)
             .expect("built-in character-motion registration");
+        validate_mesh_instances(entities, scene, entity, colliders.mesh_instances)?;
         let subject = CharacterStepSubject {
             entity,
             transform,
             motion,
         };
-        Ok(PreparedCharacterControllerStep {
+        Ok(EntityCharacterStep {
             transform_revision,
             motion_revision,
             solution: self.solve(entities, scene, subject, config, command, colliders)?,
@@ -1608,7 +1623,9 @@ impl CharacterControllerService {
     }
 
     /// Solves one command, as sub-steps when it is longer than the solver
-    /// integrates at once. The caller has admitted `config`.
+    /// integrates at once. The caller has admitted `config` and the mesh
+    /// instances. Every sub-step reads the same world, so its obstacles and
+    /// collision identity are derived once here.
     fn solve(
         &self,
         entities: &dyn CharacterStepWorld,
@@ -1619,14 +1636,21 @@ impl CharacterControllerService {
         colliders: CharacterStepColliders<'_>,
     ) -> Result<CharacterStepSolution, CharacterControllerError> {
         validate_command(command, config)?;
-        // Every sub-step reads the same world and mesh admissions.
-        validate_mesh_instances(entities, scene, subject.entity, colliders.mesh_instances)?;
-        if command.sequence <= subject.motion.last_command_sequence {
-            return Err(CharacterControllerError::DuplicateOrOldCommand {
-                previous: subject.motion.last_command_sequence,
-                requested: command.sequence,
+        if subject.transform.scale != Vec3::ONE {
+            return Err(CharacterControllerError::NonUnitScale {
+                entity: subject.entity,
             });
         }
+        let environment = StepEnvironment {
+            obstacles: &character_obstacles_with_mesh_instances(
+                entities,
+                subject.entity,
+                colliders.obstacles,
+                colliders.mesh_instances,
+            ),
+            mesh_instances: colliders.mesh_instances,
+            world_hash: collision_world_hash(scene, colliders.mesh_instances),
+        };
         let (count, seconds) = solver_steps(command.step_seconds);
         let first = CharacterControllerCommand {
             step_seconds: seconds,
@@ -1639,7 +1663,7 @@ impl CharacterControllerService {
             config,
             first,
             Some(command.step_seconds),
-            colliders,
+            &environment,
         )?;
         // A jump press and an impulse happen once per command, so only the
         // first sub-step takes them.
@@ -1666,7 +1690,8 @@ impl CharacterControllerService {
                 transform: solution.transform_after,
                 motion: solution.motion_after,
             };
-            let next = self.solve_step(entities, scene, subject, config, rest, None, colliders)?;
+            let next =
+                self.solve_step(entities, scene, subject, config, rest, None, &environment)?;
             last_tether = next.tether;
             solution = solution.then(next, config);
         }
@@ -1685,24 +1710,14 @@ impl CharacterControllerService {
         config: &CharacterControllerConfig,
         command: CharacterControllerCommand,
         carry_seconds: Option<f32>,
-        colliders: CharacterStepColliders<'_>,
+        environment: &StepEnvironment<'_>,
     ) -> Result<CharacterStepSolution, CharacterControllerError> {
-        let obstacle_overrides = colliders.obstacles;
-        let mesh_instances = colliders.mesh_instances;
+        let obstacles = environment.obstacles;
+        let mesh_instances = environment.mesh_instances;
+        let world_hash = environment.world_hash;
         let entity = subject.entity;
         let transform_before = subject.transform;
-        if transform_before.scale != Vec3::ONE {
-            return Err(CharacterControllerError::NonUnitScale { entity });
-        }
         let motion_before = subject.motion;
-        let obstacles = character_obstacles_with_mesh_instances(
-            entities,
-            entity,
-            obstacle_overrides,
-            mesh_instances,
-        );
-        let environment = character_environment(scene, &obstacles, mesh_instances);
-        let world_hash = hash_environment(environment);
         let dt = command.step_seconds;
         let mut motion = motion_before;
         if motion.collision_world_hash != 0 && motion.collision_world_hash != world_hash {
@@ -1741,7 +1756,7 @@ impl CharacterControllerService {
             );
             let candidate = capsule_at(candidate_center, new_height, config.shape.radius);
             if requested_stance == CharacterStance::Standing
-                && overlap_world(&scene.projection, &obstacles, candidate, &mut query_stats)?
+                && overlap_world(&scene.projection, obstacles, candidate, &mut query_stats)?
                     .is_some()
             {
                 stance_blocked = true;
@@ -1760,7 +1775,7 @@ impl CharacterControllerService {
         for _ in 0..config.solver.maximum_recovery_passes {
             let Some(overlap) = overlap_world(
                 &scene.projection,
-                &obstacles,
+                obstacles,
                 capsule(center),
                 &mut query_stats,
             )?
@@ -1783,7 +1798,7 @@ impl CharacterControllerService {
         }
         if let Some(overlap) = overlap_world(
             &scene.projection,
-            &obstacles,
+            obstacles,
             capsule(center),
             &mut query_stats,
         )? {
@@ -1911,7 +1926,7 @@ impl CharacterControllerService {
         }
         let solve = move_and_slide(MoveSolveInput {
             projection: &scene.projection,
-            obstacles: &obstacles,
+            obstacles,
             center,
             capsule: &capsule,
             requested,
@@ -1973,7 +1988,7 @@ impl CharacterControllerService {
             cast_count = cast_count.saturating_add(1);
             let broad_hit = cast_world(
                 &scene.projection,
-                &obstacles,
+                obstacles,
                 capsule(center),
                 WorldVec::new(0.0, -f64::from(config.surface.floor_snap_distance), 0.0),
                 f64::from(config.shape.contact_skin),
@@ -2011,7 +2026,7 @@ impl CharacterControllerService {
                         cast_count = cast_count.saturating_add(1);
                         if let Some(support) = cast_world(
                             &scene.projection,
-                            &obstacles,
+                            obstacles,
                             bounded_support_probe(capsule(center), config),
                             WorldVec::new(0.0, -f64::from(config.surface.floor_snap_distance), 0.0),
                             0.0,
@@ -2058,7 +2073,7 @@ impl CharacterControllerService {
             cast_count += 1;
             let fraction = cast_world(
                 &scene.projection,
-                &obstacles,
+                obstacles,
                 capsule(center),
                 vec3_world(correction),
                 f64::from(config.shape.contact_skin),
@@ -2092,7 +2107,7 @@ impl CharacterControllerService {
         }
         update_platform_support(
             entities,
-            &obstacles,
+            obstacles,
             mesh_instances,
             &mut motion,
             &ground,
@@ -2159,65 +2174,43 @@ impl CharacterControllerService {
             collision_query_stats: query_stats,
             recovery_passes,
             recovery_distance,
-            environment,
         })
     }
 
+    /// Publish a prepared step. It is refused when, since `prepare`, the
+    /// character's transform or motion changed or it gained a transform
+    /// parent, or the world the step read changed: another entity's collider,
+    /// the voxel projection or the static-mesh collision.
     pub fn commit(
         &mut self,
         entities: &mut EntityState,
         scene: &VoxelCollisionScene,
         prepared: PreparedCharacterControllerStep,
     ) -> Result<CharacterControllerReceipt, CharacterControllerError> {
-        self.commit_with_obstacles_and_mesh_instances(
-            entities,
-            scene,
-            prepared,
-            CharacterStepColliders::empty(),
-        )
-    }
-
-    fn commit_with_obstacles_and_mesh_instances(
-        &mut self,
-        entities: &mut EntityState,
-        scene: &VoxelCollisionScene,
-        prepared: PreparedCharacterControllerStep,
-        colliders: CharacterStepColliders<'_>,
-    ) -> Result<CharacterControllerReceipt, CharacterControllerError> {
-        let obstacle_overrides = colliders.obstacles;
-        let mesh_instances = colliders.mesh_instances;
-        let entity = prepared.solution.entity;
-        validate_mesh_instances(entities, scene, entity, mesh_instances)?;
-        let obstacles = character_obstacles_with_mesh_instances(
-            entities,
-            entity,
-            obstacle_overrides,
-            mesh_instances,
-        );
-        if character_environment(scene, &obstacles, mesh_instances) != prepared.solution.environment
-        {
+        let entity = prepared.step.solution.entity;
+        if PreparedEnvironment::read(entities, scene, entity) != prepared.environment {
             return Err(CharacterControllerError::StaleEnvironment);
         }
-        self.publish(entities, prepared)
+        self.publish(entities, prepared.step)
     }
 
     fn publish(
         &mut self,
         entities: &mut EntityState,
-        prepared: PreparedCharacterControllerStep,
+        step: EntityCharacterStep,
     ) -> Result<CharacterControllerReceipt, CharacterControllerError> {
         let publication = replace_character_motion_state(
             entities,
             CharacterMotionStateReplacement {
-                entity: prepared.solution.entity,
-                expected_transform_revision: prepared.transform_revision,
-                expected_motion_revision: prepared.motion_revision,
-                transform: prepared.solution.transform_after,
-                motion: prepared.solution.motion_after,
+                entity: step.solution.entity,
+                expected_transform_revision: step.transform_revision,
+                expected_motion_revision: step.motion_revision,
+                transform: step.solution.transform_after,
+                motion: step.solution.motion_after,
             },
         )?;
         self.finish(
-            prepared.solution,
+            step.solution,
             publication.revision_before,
             publication.revision_after,
         )
@@ -2271,6 +2264,13 @@ impl CharacterControllerService {
             recovery_distance: prepared.recovery_distance,
         })
     }
+}
+
+/// The world one command's sub-steps all read.
+struct StepEnvironment<'a> {
+    obstacles: &'a [CharacterObstacle],
+    mesh_instances: &'a [CharacterMeshInstance],
+    world_hash: u64,
 }
 
 struct MoveSolveInput<'a, F> {
@@ -2897,37 +2897,24 @@ fn solver_steps(step_seconds: f32) -> (u32, f32) {
     (count, step_seconds / count as f32)
 }
 
-fn character_environment(
+/// Identity of the collision world a support was acquired in. A support
+/// does not carry across a change to it. Admitted moving mesh instances count
+/// by identity, not by pose or motion, so moving a platform keeps its riders.
+fn collision_world_hash(
     scene: &VoxelCollisionScene,
-    obstacles: &[CharacterObstacle],
     mesh_instances: &[CharacterMeshInstance],
-) -> CharacterEnvironmentIdentity {
+) -> u64 {
     let moving_instances = mesh_instances
         .iter()
         .map(|mesh| mesh.instance)
         .collect::<BTreeSet<_>>();
-    let (mesh_instance_hash, mesh_motion_hash) = hash_mesh_instances(mesh_instances);
-    CharacterEnvironmentIdentity {
-        source_revision: scene.source_revision().raw(),
-        authority_hash: scene.authority_hash(),
-        projection_version: scene.projection_version(),
-        static_mesh_revision: scene.static_mesh_collision_revision(),
-        static_mesh_topology_hash: scene
-            .static_mesh_collision_topology_hash_excluding_pose(&moving_instances),
-        obstacle_hash: hash_obstacles(obstacles),
-        mesh_instance_hash,
-        mesh_motion_hash,
-    }
-}
-
-fn hash_environment(value: CharacterEnvironmentIdentity) -> u64 {
     let mut hash = 0xcbf29ce484222325u64;
     for value in [
-        value.source_revision,
-        value.authority_hash,
-        value.projection_version,
-        value.static_mesh_topology_hash,
-        value.mesh_instance_hash,
+        scene.source_revision().raw(),
+        scene.authority_hash(),
+        scene.projection_version(),
+        scene.static_mesh_collision_topology_hash_excluding_pose(&moving_instances),
+        hash_mesh_instances(mesh_instances),
     ] {
         for byte in value.to_le_bytes() {
             hash ^= u64::from(byte);
@@ -2937,41 +2924,28 @@ fn hash_environment(value: CharacterEnvironmentIdentity) -> u64 {
     hash
 }
 
-fn hash_mesh_instances(values: &[CharacterMeshInstance]) -> (u64, u64) {
-    let mut sorted = values.to_vec();
-    sorted.sort_unstable_by_key(|mesh| (mesh.instance.0, mesh.entity.raw()));
+fn hash_mesh_instances(values: &[CharacterMeshInstance]) -> u64 {
+    let mut sorted = values
+        .iter()
+        .map(|mesh| (mesh.instance.0, mesh.entity.raw()))
+        .collect::<Vec<_>>();
+    sorted.sort_unstable();
     let mut identity = 0xcbf29ce484222325u64;
-    let mut motion = 0xcbf29ce484222325u64;
     for byte in (sorted.len() as u64).to_le_bytes() {
         identity ^= u64::from(byte);
         identity = identity.wrapping_mul(0x100000001b3);
-        motion ^= u64::from(byte);
-        motion = motion.wrapping_mul(0x100000001b3);
     }
-    for mesh in sorted {
-        for byte in mesh.instance.0.to_le_bytes() {
+    for (instance, entity) in sorted {
+        for byte in instance
+            .to_le_bytes()
+            .into_iter()
+            .chain(entity.to_le_bytes())
+        {
             identity ^= u64::from(byte);
             identity = identity.wrapping_mul(0x100000001b3);
         }
-        for byte in mesh.entity.raw().to_le_bytes() {
-            identity ^= u64::from(byte);
-            identity = identity.wrapping_mul(0x100000001b3);
-        }
-        for value in [
-            mesh.linear_velocity.x.to_bits(),
-            mesh.linear_velocity.y.to_bits(),
-            mesh.linear_velocity.z.to_bits(),
-            mesh.angular_velocity.x.to_bits(),
-            mesh.angular_velocity.y.to_bits(),
-            mesh.angular_velocity.z.to_bits(),
-        ] {
-            for byte in value.to_le_bytes() {
-                motion ^= u64::from(byte);
-                motion = motion.wrapping_mul(0x100000001b3);
-            }
-        }
     }
-    (identity, motion)
+    identity
 }
 
 fn character_obstacles(entities: &EntityState, controlled: EntityId) -> Vec<CharacterObstacle> {
@@ -3009,6 +2983,15 @@ fn character_obstacles_with_overrides(
     overrides: &[CharacterObstacle],
 ) -> Vec<CharacterObstacle> {
     let mut obstacles = entities.obstacles(controlled);
+    if obstacles.is_empty() {
+        // Nothing to merge with: the caller's list is the whole set.
+        obstacles.extend(
+            overrides
+                .iter()
+                .filter(|obstacle| obstacle.id != controlled.raw()),
+        );
+        return obstacles;
+    }
     for override_value in overrides {
         if override_value.id == controlled.raw() {
             continue;
@@ -3042,8 +3025,11 @@ fn character_obstacles_with_mesh_instances(
     obstacles
 }
 
+/// Admit mesh instances named by a caller that holds an [`EntityState`]: each
+/// is a retained scene instance whose entity is posed at unit scale, named
+/// once, and is not the controlled character.
 fn validate_mesh_instances(
-    entities: &dyn CharacterStepWorld,
+    entities: &EntityState,
     scene: &VoxelCollisionScene,
     controlled: EntityId,
     mesh_instances: &[CharacterMeshInstance],
@@ -3071,6 +3057,26 @@ fn validate_mesh_instances(
                 instance: mesh.instance,
             });
         }
+        let transform = entities.world_transform(mesh.entity).ok_or(
+            CharacterControllerError::UnknownEntity {
+                entity: mesh.entity,
+            },
+        )?;
+        if transform.scale != Vec3::ONE {
+            return Err(CharacterControllerError::NonUnitScale {
+                entity: mesh.entity,
+            });
+        }
+    }
+    validate_mesh_motion(mesh_instances)
+}
+
+/// Mesh velocities feed the support velocity the character keeps, so a
+/// non-finite one would persist in its motion.
+fn validate_mesh_motion(
+    mesh_instances: &[CharacterMeshInstance],
+) -> Result<(), CharacterControllerError> {
+    for mesh in mesh_instances {
         if ![
             mesh.linear_velocity.x,
             mesh.linear_velocity.y,
@@ -3084,16 +3090,6 @@ fn validate_mesh_instances(
         {
             return Err(CharacterControllerError::InvalidMeshMotion {
                 instance: mesh.instance,
-            });
-        }
-        let transform = entities.world_transform(mesh.entity).ok_or(
-            CharacterControllerError::UnknownEntity {
-                entity: mesh.entity,
-            },
-        )?;
-        if transform.scale != Vec3::ONE {
-            return Err(CharacterControllerError::NonUnitScale {
-                entity: mesh.entity,
             });
         }
     }

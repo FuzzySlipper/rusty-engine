@@ -2625,7 +2625,7 @@ impl RuntimeSpatialBridge {
         let position = native_vec3_value(request.position);
         let motion = character_motion(request.motion)?;
         let subject = CharacterStepSubject {
-            entity: call_local_character(obstacle_values, mesh_values, request.motion),
+            entity: CALL_LOCAL_CHARACTER,
             transform: TransformComponent::from_transform(EntityTransform::at(position)),
             motion,
         };
@@ -2640,7 +2640,7 @@ impl RuntimeSpatialBridge {
         let (obstacle_poses, obstacles) = character_obstacles(obstacle_values);
         let mut poses = mesh_poses;
         poses.extend(obstacle_poses);
-        apply_character_support(&mut poses, &mesh_instances, request.motion, request.support)?;
+        apply_character_support(&mut poses, request.motion, request.support);
         let world = CharacterCallWorld { poses };
         let receipt = session
             .controller
@@ -2759,7 +2759,8 @@ impl RuntimeSpatialBridge {
             contacts_len: contacts.len(),
             present: readout.is_some(),
             generation: readout.map_or(0, |value| value.generation),
-            entity: readout.map_or(0, |value| value.entity.raw()),
+            // As in the receipt, the proposal's own identity is not reported.
+            entity: 0,
             command_sequence: readout.map_or(0, |value| value.command_sequence),
             grounded: readout.is_some_and(|value| value.grounded),
             block_count: receipt.map_or(0, |value| value.blocks.len() as u32),
@@ -3512,32 +3513,12 @@ fn character_motion(
     })
 }
 
-/// The proposed character's identity for one call: the smallest one no
-/// obstacle, mesh or support of the call uses, so every product identity,
-/// the first one an EntityStore allocates included, stays the product's.
-/// The controller only uses it to leave the character out of its own
-/// obstacles; it reaches no receipt or collision identity.
-fn call_local_character(
-    obstacles: &[NativeCharacterObstacle],
-    meshes: &[NativeCharacterMeshInstance],
-    motion: NativeCharacterMotion,
-) -> EntityId {
-    let used = obstacles
-        .iter()
-        .map(|obstacle| obstacle.entity)
-        .chain(meshes.iter().map(|mesh| mesh.entity))
-        .chain(
-            motion
-                .support_entity_present
-                .then_some(motion.support_entity),
-        )
-        .collect::<BTreeSet<_>>();
-    EntityId::new(
-        (1..)
-            .find(|candidate| !used.contains(candidate))
-            .expect("a call names finitely many entities"),
-    )
-}
+/// The proposed character's identity in every call. Products allocate entity
+/// identities from 1 upward and never reach this one, so every identity a
+/// call names stays the product's. The controller only uses it to leave the
+/// character out of its own obstacles; it reaches no receipt or collision
+/// identity.
+const CALL_LOCAL_CHARACTER: EntityId = EntityId::new(u64::MAX);
 
 /// Entity poses one character proposal supplies. Box obstacles reach the
 /// controller as [`CharacterStepColliders`], so only poses are looked up here.
@@ -3564,30 +3545,21 @@ impl CharacterStepWorld for CharacterCallWorld {
     }
 }
 
-/// Add the continuation support pose, or remove it when the product reports
-/// the support destroyed. A retained mesh admission is the support pose
-/// authority: the product may pass an empty support value on continuation,
-/// and using its transform would reintroduce the stale duplicate pose that
-/// mesh admission removes.
+/// Add the support pose the product reports, or remove it when the product
+/// reports the support destroyed. A pose the call already has for that entity
+/// (a retained mesh admission or a box obstacle) stays the support pose, so
+/// the product may pass an empty support value for mesh support. Without a
+/// pose for the continuation's support entity the controller observes
+/// support loss and departs cleanly.
 fn apply_character_support(
     poses: &mut EntityPoses,
-    mesh_instances: &[SpatialCharacterMeshInstance],
     motion: NativeCharacterMotion,
     support: NativeCharacterSupport,
-) -> Result<(), CsharpEngineServicesError> {
-    // Without admitted support facts the controller observes support loss and
-    // departs cleanly; no stale support pose is synthesized.
+) {
     if !motion.support_entity_present || !support.present {
-        return Ok(());
+        return;
     }
-    let entity = EntityId::new(motion.support_entity);
-    let mesh_support = mesh_instances.iter().any(|mesh| mesh.entity == entity);
-    if !mesh_support && support.entity != motion.support_entity {
-        return Err(CsharpEngineServicesError::new(
-            "CSHARP_CHARACTER_SUPPORT",
-            "C# support context did not match character continuation",
-        ));
-    }
+    let entity = EntityId::new(support.entity);
     match support.lifecycle {
         NativeCharacterSupportLifecycle::Destroyed => {
             poses.retain(|(candidate, _)| *candidate != entity);
@@ -3598,7 +3570,6 @@ fn apply_character_support(
             }
         }
     }
-    Ok(())
 }
 
 fn character_mesh_instances(
@@ -8511,41 +8482,61 @@ mod tests {
 
         // A destroyed support leaves no pose to carry from: the character
         // departs with the support's point velocity instead of failing.
+        let destroyed = NativeCharacterStepRequest {
+            tether: NativeCharacterTetherRequest::default(),
+            session,
+            position: first.transform.translation,
+            motion: first.motion,
+            support: NativeCharacterSupport {
+                present: true,
+                lifecycle: NativeCharacterSupportLifecycle::Destroyed,
+                entity: 1,
+                transform: second_obstacles[0].transform,
+            },
+            obstacles: std::ptr::null(),
+            obstacles_len: 0,
+            mesh_instances: std::ptr::null(),
+            mesh_instances_len: 0,
+            config,
+            command: NativeCharacterControllerCommand {
+                movement: Default::default(),
+                planar_intent: NativeVec2::default(),
+                heading_yaw_radians: 0.0,
+                jump_pressed: false,
+                jump_held: false,
+                crouch_requested: false,
+                external_velocity: NativeVec3::default(),
+                external_impulse: NativeVec3::default(),
+                step_seconds: 1.0 / 60.0,
+                sequence: 2,
+            },
+        };
         let departed = bridge
-            .propose_character(NativeCharacterStepRequest {
-                tether: NativeCharacterTetherRequest::default(),
-                session,
-                position: first.transform.translation,
-                motion: first.motion,
-                support: NativeCharacterSupport {
-                    present: true,
-                    lifecycle: NativeCharacterSupportLifecycle::Destroyed,
-                    entity: 1,
-                    transform: second_obstacles[0].transform,
-                },
-                obstacles: std::ptr::null(),
-                obstacles_len: 0,
-                mesh_instances: std::ptr::null(),
-                mesh_instances_len: 0,
-                config,
-                command: NativeCharacterControllerCommand {
-                    movement: Default::default(),
-                    planar_intent: NativeVec2::default(),
-                    heading_yaw_radians: 0.0,
-                    jump_pressed: false,
-                    jump_held: false,
-                    crouch_requested: false,
-                    external_velocity: NativeVec3::default(),
-                    external_impulse: NativeVec3::default(),
-                    step_seconds: 1.0 / 60.0,
-                    sequence: 2,
-                },
-            })
+            .propose_character(destroyed)
             .expect("a destroyed support departs");
         assert!(departed.platform.present);
         assert_eq!(departed.platform.entity, 1);
         assert!(departed.platform.departed);
         assert!(!departed.motion.support_entity_present);
+
+        // A support fact naming another entity supplies no pose for the
+        // continuation's support either, so the character leaves it the same
+        // way.
+        let mismatched = bridge
+            .propose_character(NativeCharacterStepRequest {
+                support: NativeCharacterSupport {
+                    present: true,
+                    lifecycle: NativeCharacterSupportLifecycle::Active,
+                    entity: 7,
+                    transform: second_obstacles[0].transform,
+                },
+                ..destroyed
+            })
+            .expect("a support fact for another entity departs");
+        assert!(mismatched.platform.present);
+        assert_eq!(mismatched.platform.entity, 1);
+        assert!(mismatched.platform.departed);
+        assert!(!mismatched.motion.support_entity_present);
     }
 
     #[test]

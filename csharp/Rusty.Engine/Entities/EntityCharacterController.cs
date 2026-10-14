@@ -4,7 +4,7 @@ namespace Rusty.Engine.Entities;
 
 /// <summary>
 /// One generated Character step and the managed writes that applied it. The native
-/// receipt always identifies its temporary native character as entity 1; <see cref="Entity"/>
+/// receipt names no character entity (its entity is 0); <see cref="Entity"/>
 /// is therefore preserved explicitly rather than hidden behind a managed mirror.
 /// </summary>
 public readonly record struct EntityCharacterControllerReceipt(

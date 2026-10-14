@@ -530,7 +530,32 @@ fn environment_change_between_prepare_and_commit_is_fail_atomic() {
         .prepare(&state, &scene, entity, &config, command(1, Vec2::ZERO))
         .unwrap();
     let before = state.clone();
-    scene.replace_static_mesh_colliders([], []).unwrap();
+    // A plate admitted through the character's capsule: publishing the
+    // prepared position would leave it inside the new collision.
+    let plate = StaticMeshColliderAsset::new(
+        StaticMeshAssetId(1),
+        vec![
+            [-1.5, 0.0, -1.5],
+            [1.5, 0.0, -1.5],
+            [-1.5, 0.0, 1.5],
+            [1.5, 0.0, 1.5],
+        ],
+        vec![[0, 2, 1], [1, 2, 3]],
+    )
+    .unwrap();
+    scene
+        .replace_static_mesh_colliders(
+            [plate],
+            [StaticMeshColliderInstance {
+                id: StaticMeshInstanceId(1),
+                asset: StaticMeshAssetId(1),
+                transform: StaticMeshTransform {
+                    translation: [0.0, 1.5, 0.0],
+                    ..StaticMeshTransform::IDENTITY
+                },
+            }],
+        )
+        .unwrap();
     assert!(matches!(
         service.commit(&mut state, &scene, prepared),
         Err(CharacterControllerError::StaleEnvironment)
@@ -541,6 +566,86 @@ fn environment_change_between_prepare_and_commit_is_fail_atomic() {
         state.character_motion(entity),
         before.character_motion(entity)
     );
+}
+
+#[test]
+fn obstacle_moved_between_prepare_and_commit_is_refused() {
+    let scene = floor_scene();
+    let entity = EntityId::new(1);
+    let crate_id = EntityId::new(2);
+    let mut state = EntityState::from_definitions([
+        EntityDefinition::new(entity, "character")
+            .with_transform(Vec3::new(0.0, 1.9, 0.0))
+            .with_character_motion(CharacterMotionComponent::at_rest(1.9)),
+        EntityDefinition::new(crate_id, "crate")
+            .with_transform(Vec3::new(4.0, 1.5, 0.0))
+            .with_bounds(Vec3::new(-0.5, -0.5, -0.5), Vec3::new(0.5, 0.5, 0.5))
+            .with_collision(true, false),
+    ])
+    .unwrap();
+    let config = CharacterControllerConfig::default();
+    let mut service = CharacterControllerService::default();
+    let prepared = service
+        .prepare(
+            &state,
+            &scene,
+            entity,
+            &config,
+            command(1, Vec2::new(1.0, 0.0)),
+        )
+        .unwrap();
+    let transform_revision = state.component_revision::<TransformComponent>(entity);
+    let motion_revision = state.component_revision::<CharacterMotionComponent>(entity);
+    // The crate moves onto the character. Neither of the character's own
+    // revisions changes, so publishing would place it inside the crate.
+    state
+        .apply_transform(
+            state.revision(),
+            entity_state::TransformCommand::Translate {
+                entity: crate_id,
+                delta: Vec3::new(-4.0, 0.0, 0.0),
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        state.component_revision::<TransformComponent>(entity),
+        transform_revision
+    );
+    assert_eq!(
+        state.component_revision::<CharacterMotionComponent>(entity),
+        motion_revision
+    );
+    let before = state.clone();
+    assert!(matches!(
+        service.commit(&mut state, &scene, prepared),
+        Err(CharacterControllerError::StaleEnvironment)
+    ));
+    assert_eq!(state.revision(), before.revision());
+    assert_eq!(state.transform(entity), before.transform(entity));
+}
+
+#[test]
+fn a_repeated_or_restarted_command_sequence_steps_again() {
+    let scene = floor_scene();
+    let (entity, mut state) = character(1.9);
+    let config = CharacterControllerConfig::default();
+    let mut service = CharacterControllerService::default();
+    let walk = |sequence| command(sequence, Vec2::new(1.0, 0.0));
+    let first = service
+        .step(&mut state, &scene, entity, &config, walk(5))
+        .unwrap();
+    let repeated = service
+        .step(&mut state, &scene, entity, &config, walk(5))
+        .unwrap();
+    // A product restarting its counter, for example after loading a
+    // checkpoint, keeps stepping.
+    let restarted = service
+        .step(&mut state, &scene, entity, &config, walk(1))
+        .unwrap();
+    assert!(first.displacement.x > 0.0);
+    assert!(repeated.transform_after.translation.x > first.transform_after.translation.x);
+    assert!(restarted.transform_after.translation.x > repeated.transform_after.translation.x);
+    assert_eq!(restarted.motion_after.last_command_sequence, 1);
 }
 
 #[test]

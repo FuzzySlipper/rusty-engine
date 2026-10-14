@@ -1289,12 +1289,12 @@ the Engine uses them for the one controller proposal and returns ordinary
 `CharacterMotion`, `CharacterSupport`, and platform facts. Resubmit the
 current support transform and obstacle list on later steps so Engine-owned
 support/carry continuation can apply; the session never retains product
-entities or collider records. Every identity is the product's, the first an
-`EntityStore` allocates (1) included: the proposal names no character entity,
-and its receipt's `Entity` is 0. Collision uses the obstacle's bounds offset by
-its translation, so give bounds that already carry any scale; the transform's
-scale is not used, and its rotation participates in platform carry but does
-not rotate the collider volume.
+entities or collider records. Every identity below `ulong.MaxValue`, which
+the proposal keeps for its own character, is the product's; the receipt's and
+the controller readout's `Entity` is 0. Collision uses the obstacle's bounds
+offset by its translation, so give bounds that already carry any scale; the
+transform's scale is not used, and its rotation participates in platform carry
+but does not rotate the collider volume.
 
 For a moving retained static-mesh instance, use the call-local
 `CharacterStepRequest.MeshInstances` collection. Each
@@ -1307,8 +1307,11 @@ the one collision and support authority for its entity: a `CharacterObstacle`
 with the same entity ID is ignored for collision and support pose. Update its retained pose through `ApplyCollisionResidency`
 before the step and resubmit its `CharacterMeshInstance` each step. The
 separate `CharacterSupport` value may be absent for mesh support; the Engine
-reads its pose from residency. Product persistence keeps the instance/entity
-IDs and pose as ordinary values; no native handle is part of the saved state.
+reads its pose from residency. A `CharacterSupport` poses the entity it names
+only when no obstacle or mesh instance does; when nothing poses the motion's
+support entity, the character departs that support. Product persistence keeps
+the instance/entity IDs and pose as ordinary values; no native handle is part
+of the saved state.
 
 ### Character tethers
 
