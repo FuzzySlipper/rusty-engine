@@ -10,7 +10,7 @@ use crate::composition::{borrowed_slice, CsharpEngineServicesError};
 use crate::content::RetainedContent;
 use asset_import::{
     admit_glb_source, import_animated_glb_asset, import_parsed_animated_glb_asset,
-    GlbModelTriangles, GlbSourceClosure, GltfResource, ImportContext, ParsedGlb, SourceUri,
+    GlbSourceClosure, GltfResource, ImportContext, ParsedGlb, SourceUri,
 };
 use csharp_engine_abi::{
     NativeMeshMaterialBinding, NativeMeshPartitionHandle, NativeMeshPartitionPartRequest,
@@ -19,6 +19,7 @@ use csharp_engine_abi::{
     NativeRenderResourceInfo, NativeRenderResourceKind, NativeTextureColorSpace,
     NativeTextureFilter, NativeTextureWrap, NativeVec3,
 };
+use engine_spatial::ModelSurface;
 use render_model::{
     pack_mesh_resources, partition_mesh_spatially, validate_mesh_resource_header,
     AnimatedMeshAsset, MeshAttribute, MeshAttributeKind, MeshAttributeName, MeshBoundsDescriptor,
@@ -44,27 +45,27 @@ pub struct CsharpRenderResource {
     bytes: Arc<[u8]>,
     texture: Option<TextureDescriptor>,
     animated_mesh: Option<AnimatedMeshAsset>,
-    model_triangles: ModelTriangles,
+    model_surface: ModelSurfaceCell,
 }
 
-/// A GLB model's surface triangles, read from its body on the first model
-/// surface query and shared by every copy of the admitted resource. The
-/// cache is released with the resource: content reloaded in place has a new
-/// identity, and opening it admits a new resource with an empty cache, while
-/// handles to the old content keep the old triangles.
+/// A GLB model's surface in its own space, built from the model's triangles
+/// on the first model surface query and shared by every copy of the
+/// admitted resource. It is released with the resource: content reloaded in
+/// place has a new identity, and opening it admits a new resource with an
+/// empty cell, while handles to the old content keep the old surface.
 #[derive(Clone, Default)]
-struct ModelTriangles(Arc<OnceLock<Arc<GlbModelTriangles>>>);
+struct ModelSurfaceCell(Arc<OnceLock<Arc<ModelSurface>>>);
 
 /// Derived from the body, so not part of the resource's value.
-impl PartialEq for ModelTriangles {
+impl PartialEq for ModelSurfaceCell {
     fn eq(&self, _: &Self) -> bool {
         true
     }
 }
 
-impl std::fmt::Debug for ModelTriangles {
+impl std::fmt::Debug for ModelSurfaceCell {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str("ModelTriangles")
+        formatter.write_str("ModelSurfaceCell")
     }
 }
 
@@ -130,7 +131,7 @@ impl CsharpRenderResource {
             bytes,
             texture: Some(descriptor),
             animated_mesh: None,
-            model_triangles: ModelTriangles::default(),
+            model_surface: ModelSurfaceCell::default(),
         }
     }
 
@@ -150,7 +151,7 @@ impl CsharpRenderResource {
             bytes,
             texture: None,
             animated_mesh: None,
-            model_triangles: ModelTriangles::default(),
+            model_surface: ModelSurfaceCell::default(),
         })
     }
 
@@ -165,7 +166,7 @@ impl CsharpRenderResource {
             bytes,
             texture: None,
             animated_mesh: None,
-            model_triangles: ModelTriangles::default(),
+            model_surface: ModelSurfaceCell::default(),
         }
     }
 
@@ -188,7 +189,7 @@ impl CsharpRenderResource {
             bytes,
             texture: None,
             animated_mesh: None,
-            model_triangles: ModelTriangles::default(),
+            model_surface: ModelSurfaceCell::default(),
         })
     }
 
@@ -227,7 +228,7 @@ impl CsharpRenderResource {
             bytes,
             texture: None,
             animated_mesh: None,
-            model_triangles: ModelTriangles::default(),
+            model_surface: ModelSurfaceCell::default(),
         })
     }
 
@@ -254,7 +255,7 @@ impl CsharpRenderResource {
             bytes: Arc::from(render_model::pack_star_catalogue(&stars)),
             texture: None,
             animated_mesh: None,
-            model_triangles: ModelTriangles::default(),
+            model_surface: ModelSurfaceCell::default(),
         })
     }
 
@@ -278,7 +279,7 @@ impl CsharpRenderResource {
             bytes,
             texture: None,
             animated_mesh: None,
-            model_triangles: ModelTriangles::default(),
+            model_surface: ModelSurfaceCell::default(),
         })
     }
 
@@ -306,7 +307,7 @@ impl CsharpRenderResource {
             bytes,
             texture: None,
             animated_mesh: None,
-            model_triangles: ModelTriangles::default(),
+            model_surface: ModelSurfaceCell::default(),
         })
     }
 
@@ -363,7 +364,7 @@ impl CsharpRenderResource {
             bytes,
             texture: None,
             animated_mesh: Some(imported.animated_mesh),
-            model_triangles: ModelTriangles::default(),
+            model_surface: ModelSurfaceCell::default(),
         })
     }
 
@@ -398,18 +399,20 @@ impl CsharpRenderResource {
     pub(crate) fn animated_mesh(&self) -> Option<&AnimatedMeshAsset> {
         self.animated_mesh.as_ref()
     }
-    /// The GLB model's surface triangles, read once for this body.
-    pub(crate) fn model_triangles(&self) -> Result<Arc<GlbModelTriangles>, String> {
-        if let Some(triangles) = self.model_triangles.0.get() {
-            return Ok(Arc::clone(triangles));
+    /// The GLB model's surface in its own space, built once for this body.
+    pub(crate) fn model_surface(&self) -> Result<Arc<ModelSurface>, String> {
+        if let Some(surface) = self.model_surface.0.get() {
+            return Ok(Arc::clone(surface));
         }
         #[cfg(test)]
-        crate::appearance::MODEL_TRIANGLE_READS.with(|count| count.set(count.get() + 1));
-        let triangles = Arc::new(asset_import::glb_model_triangles(
-            &self.bytes,
-            &self.content_hash,
-        )?);
-        Ok(Arc::clone(self.model_triangles.0.get_or_init(|| triangles)))
+        crate::appearance::MODEL_SURFACE_BUILDS.with(|count| count.set(count.get() + 1));
+        let model = asset_import::glb_model_triangles(&self.bytes, &self.content_hash)
+            .map_err(|error| format!("the model's triangles could not be read: {error}"))?;
+        let surface = ModelSurface::new(&model.positions, model.triangles)
+            .map_err(|error| format!("the model is not a surface: {error:?}"))?;
+        Ok(Arc::clone(
+            self.model_surface.0.get_or_init(|| Arc::new(surface)),
+        ))
     }
     /// A shader resource's renderer definition, its errors naming `path`.
     pub(crate) fn shader(&self) -> Option<render_model::ShaderDescriptor> {
@@ -441,7 +444,7 @@ impl CsharpRenderResource {
             bytes,
             texture: None,
             animated_mesh: None,
-            model_triangles: ModelTriangles::default(),
+            model_surface: ModelSurfaceCell::default(),
         }
     }
 }
@@ -1010,10 +1013,10 @@ impl RenderResourceImports {
                     },
                 );
             }
-            // The import cache keeps no model triangles: each admitted
-            // resource reads its own, released with it.
+            // The import cache keeps no model surface: each admitted
+            // resource builds its own, released with it.
             CsharpRenderResource {
-                model_triangles: ModelTriangles::default(),
+                model_surface: ModelSurfaceCell::default(),
                 ..self.animated[&key].resource.clone()
             }
         };
@@ -1879,7 +1882,7 @@ pub(crate) mod tests {
                 "pub fn shared_bytes",
                 "pub(crate) fn texture",
                 "pub(crate) fn animated_mesh",
-                "pub(crate) fn model_triangles",
+                "pub(crate) fn model_surface",
                 "pub(crate) fn shader",
                 "pub(crate) fn test_mesh",
                 "pub struct RenderOutputResources",

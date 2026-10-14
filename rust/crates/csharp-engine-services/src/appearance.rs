@@ -1349,7 +1349,7 @@ thread_local! {
     pub(crate) static GRAPHICS_SNAPSHOT_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     pub(crate) static MEDIA_SNAPSHOT_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     pub(crate) static RESOURCE_INVENTORY_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-    pub(crate) static MODEL_TRIANGLE_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    pub(crate) static MODEL_SURFACE_BUILDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// Graphics state. A product call owns it for the call's duration, so the

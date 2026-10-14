@@ -499,12 +499,13 @@ pose).
 Nothing enters collision, so a held viewmodel can be measured in camera
 space against hand joints from
 [`ReadJointPose`](skeleton-poses.md#fitting-to-a-held-model). The first call
-reads the model's triangles, which the resource keeps until it is released;
-content reloaded in place opens as a new resource and answers with its new
-triangles. Each call builds the placed surface from them, about 140 ms for a
-140,000-triangle model, then takes about a microsecond per point. Batch a
-step's points into one call. It suits developer commands and fitting tools,
-not every frame.
+builds the model's surface, about 140 ms and 35 MB for a 140,000-triangle
+model, which the resource keeps until it is released; content reloaded in
+place opens as a new resource and answers with its new triangles. A placement
+with the same scale on every axis then answers in about a microsecond per
+point or ray. A scale that differs between axes builds a placed copy on every
+call, about 100 ms for that model, so keep such calls to developer commands
+and fitting tools.
 
 ```csharp
 Transform shown = new(gripOffset, gripTurn, Vector3.One); // the model as drawn

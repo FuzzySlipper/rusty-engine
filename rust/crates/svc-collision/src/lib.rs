@@ -55,7 +55,7 @@ pub use dynamics::{
     DynamicsMassProperties, DynamicsShape, DynamicsSolver, DynamicsStepReceipt,
 };
 pub use joint::{DynamicsJoint, DynamicsJointError, DynamicsJointFrame, DynamicsJointLimit};
-pub use model_surface::{ModelSurface, ModelSurfaceHit, ModelSurfacePoint};
+pub use model_surface::{ModelSurface, ModelSurfaceHit, ModelSurfacePoint, PlacedModelSurface};
 pub use ragdoll::{
     DynamicsPlacement, RagdollBone, RagdollLink, RagdollMaterial, RagdollShape, RagdollSpawn,
 };

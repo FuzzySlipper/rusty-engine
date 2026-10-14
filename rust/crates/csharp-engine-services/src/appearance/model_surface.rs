@@ -2,24 +2,26 @@
 //! `CastModelRays`): the nearest surface to points, and where rays meet it,
 //! with the model placed where the caller says, in the caller's space. The
 //! model's mesh nodes are taken at rest under their node transforms (an
-//! animated model in its bind pose). The model's triangles are read once per
-//! resource and kept with it; the placed surface is built for each call and
-//! nothing enters collision: a held viewmodel can be measured against hands
-//! in camera space.
+//! animated model in its bind pose). The model's surface is built once per
+//! resource and kept with it; a call with a uniform scale queries it through
+//! the placement, any other scale builds a placed copy. Nothing enters
+//! collision: a held viewmodel can be measured against hands in camera
+//! space.
 
 use super::*;
-use engine_spatial::{ModelSurface, StaticMeshTransform};
+use engine_spatial::{PlacedModelSurface, StaticMeshTransform};
 
 fn surface_error(message: String) -> CsharpEngineServicesError {
     CsharpEngineServicesError::new("CSHARP_MODEL_SURFACE", message)
 }
 
-/// The model's triangles placed by `placement`.
-fn placed_surface(
+/// Answers `query` against the model's surface placed by `placement`.
+fn with_placed_surface<T>(
     bridge: &RuntimeAppearanceBridge,
     model: NativeRenderResourceHandle,
     placement: NativeTransform,
-) -> Result<ModelSurface, CsharpEngineServicesError> {
+    query: impl FnOnce(&PlacedModelSurface<'_>) -> T,
+) -> Result<T, CsharpEngineServicesError> {
     let resource = bridge.resource(model.value)?;
     if resource.animated_mesh().is_none() {
         return Err(CsharpEngineServicesError::new(
@@ -27,9 +29,7 @@ fn placed_surface(
             "resource is not a GLB model (open it with OpenAnimatedMesh)",
         ));
     }
-    let model = resource.model_triangles().map_err(|error| {
-        surface_error(format!("the model's triangles could not be read: {error}"))
-    })?;
+    let surface = resource.model_surface().map_err(surface_error)?;
     let vector = |value: NativeVec3| [value.x, value.y, value.z].map(f64::from);
     let rotation = placement.rotation;
     let placement = StaticMeshTransform {
@@ -37,8 +37,10 @@ fn placed_surface(
         rotation: [rotation.x, rotation.y, rotation.z, rotation.w].map(f64::from),
         scale: vector(placement.scale),
     };
-    ModelSurface::new(&model.positions, model.triangles.clone(), placement)
-        .map_err(|error| surface_error(format!("the placed model is not a surface: {error:?}")))
+    let placed = surface
+        .placed(placement)
+        .map_err(|error| surface_error(format!("the placed model is not a surface: {error:?}")))?;
+    Ok(query(&placed))
 }
 
 fn native(value: [f64; 3]) -> NativeVec3 {
@@ -69,23 +71,25 @@ pub(crate) unsafe extern "C" fn query_model_surface(
             let points = unsafe {
                 borrowed_slice(request.points, request.points_len, "model surface points")?
             };
-            let surface = placed_surface(bridge, request.model, request.placement)?;
             let max_distance = f64::from(request.max_distance);
-            let found: Vec<NativeModelSurfacePoint> = points
-                .iter()
-                .map(|query| {
-                    surface.nearest(point(*query), max_distance).map_or_else(
-                        NativeModelSurfacePoint::default,
-                        |nearest| NativeModelSurfacePoint {
-                            found: true,
-                            point: native(nearest.point),
-                            normal: native(nearest.normal),
-                            distance: nearest.distance as f32,
-                            inside: nearest.inside,
-                        },
-                    )
-                })
-                .collect();
+            let found: Vec<NativeModelSurfacePoint> =
+                with_placed_surface(bridge, request.model, request.placement, |surface| {
+                    points
+                        .iter()
+                        .map(|query| {
+                            surface.nearest(point(*query), max_distance).map_or_else(
+                                NativeModelSurfacePoint::default,
+                                |nearest| NativeModelSurfacePoint {
+                                    found: true,
+                                    point: native(nearest.point),
+                                    normal: native(nearest.normal),
+                                    distance: nearest.distance as f32,
+                                    inside: nearest.inside,
+                                },
+                            )
+                        })
+                        .collect()
+                })?;
             let result = NativeModelSurfacePointsResult {
                 points: found.as_ptr(),
                 points_len: found.len(),
@@ -110,22 +114,23 @@ pub(crate) unsafe extern "C" fn cast_model_rays(
         animation_result(context, result, |bridge| {
             // SAFETY: the caller keeps the rays valid for this call.
             let rays = unsafe { borrowed_slice(request.rays, request.rays_len, "model rays")? };
-            let surface = placed_surface(bridge, request.model, request.placement)?;
             let max_distance = f64::from(request.max_distance);
-            let hits: Vec<NativeModelRayHit> = rays
-                .iter()
-                .map(|ray| {
-                    surface
-                        .raycast(point(ray.origin), point(ray.direction), max_distance)
-                        .map_or_else(NativeModelRayHit::default, |hit| NativeModelRayHit {
-                            hit: true,
-                            point: native(hit.point),
-                            normal: native(hit.normal),
-                            distance: hit.distance as f32,
-                            back_face: hit.back_face,
+            let hits: Vec<NativeModelRayHit> =
+                with_placed_surface(bridge, request.model, request.placement, |surface| {
+                    rays.iter()
+                        .map(|ray| {
+                            surface
+                                .raycast(point(ray.origin), point(ray.direction), max_distance)
+                                .map_or_else(NativeModelRayHit::default, |hit| NativeModelRayHit {
+                                    hit: true,
+                                    point: native(hit.point),
+                                    normal: native(hit.normal),
+                                    distance: hit.distance as f32,
+                                    back_face: hit.back_face,
+                                })
                         })
-                })
-                .collect();
+                        .collect()
+                })?;
             let result = NativeModelRayHitsResult {
                 hits: hits.as_ptr(),
                 hits_len: hits.len(),
@@ -377,9 +382,13 @@ mod tests {
         bridge.end_call();
     }
 
-    /// Where a ray down -z from (0, 0, 5) meets `model` at the identity
-    /// placement.
-    fn hit_from_above(context: *mut c_void, model: NativeRenderResourceHandle) -> f32 {
+    /// Where a ray down -z from (0, 0, 5) meets `model` scaled by `scale`
+    /// about its origin.
+    fn hit_from_above(
+        context: *mut c_void,
+        model: NativeRenderResourceHandle,
+        scale: [f32; 3],
+    ) -> f32 {
         let ray = NativeModelRay {
             origin: vec3(0.0, 0.0, 5.0),
             direction: vec3(0.0, 0.0, -1.0),
@@ -394,7 +403,7 @@ mod tests {
                     z: 0.0,
                     w: 1.0,
                 },
-                scale: vec3(1.0, 1.0, 1.0),
+                scale: vec3(scale[0], scale[1], scale[2]),
             },
             rays: &ray,
             rays_len: 1,
@@ -414,14 +423,15 @@ mod tests {
         hit.point.z
     }
 
-    /// A model's triangles are read once per resource and released with it.
-    /// Content reloaded in place opens as a new resource that answers with
-    /// the new triangles, while the handle to the old content keeps the old
-    /// ones.
+    /// A model's surface is built once per resource, whatever the placement,
+    /// and released with it. Content reloaded in place opens as a new
+    /// resource that answers with the new triangles, while the handle to the
+    /// old content keeps the old surface.
     #[test]
     fn a_reloaded_model_answers_with_its_new_triangles() {
         const PATH: &str = "prop.glb";
-        let reads = || crate::appearance::MODEL_TRIANGLE_READS.with(std::cell::Cell::get);
+        const ONE: [f32; 3] = [1.0; 3];
+        let builds = || crate::appearance::MODEL_SURFACE_BUILDS.with(std::cell::Cell::get);
         let cube_at = |z: f32| {
             Arc::<[u8]>::from(cube_glb(
                 &[0],
@@ -443,26 +453,27 @@ mod tests {
         };
         let first = bridge.open_animated_mesh(&request).unwrap();
         let context: *mut c_void = (&mut bridge as *mut RuntimeAppearanceBridge).cast();
-        let start = reads();
-        assert_eq!(hit_from_above(context, first), 0.5);
-        assert_eq!(hit_from_above(context, first), 0.5);
-        assert_eq!(reads(), start + 1, "one read for repeated queries");
+        let start = builds();
+        assert_eq!(hit_from_above(context, first, ONE), 0.5);
+        assert_eq!(hit_from_above(context, first, [2.0; 3]), 1.0);
+        assert_eq!(hit_from_above(context, first, [1.0, 1.0, 3.0]), 1.5);
+        assert_eq!(builds(), start + 1, "one build for repeated queries");
 
         content.reload(BTreeMap::from([(PATH.to_owned(), cube_at(1.0))]));
         let reloaded = bridge.open_animated_mesh(&request).unwrap();
         assert_ne!(reloaded, first);
-        assert_eq!(hit_from_above(context, reloaded), 1.5);
-        assert_eq!(hit_from_above(context, first), 0.5);
-        assert_eq!(reads(), start + 2);
+        assert_eq!(hit_from_above(context, reloaded, ONE), 1.5);
+        assert_eq!(hit_from_above(context, first, ONE), 0.5);
+        assert_eq!(builds(), start + 2);
 
-        // Released with the resource: a later admission reads them again.
+        // Released with the resource: a later admission builds it again.
         bridge.destroy_resource(reloaded).unwrap();
         bridge.end_call();
         bridge.begin_call();
         let reopened = bridge.open_animated_mesh(&request).unwrap();
         let context: *mut c_void = (&mut bridge as *mut RuntimeAppearanceBridge).cast();
-        assert_eq!(hit_from_above(context, reopened), 1.5);
-        assert_eq!(reads(), start + 3);
+        assert_eq!(hit_from_above(context, reopened, ONE), 1.5);
+        assert_eq!(builds(), start + 3);
         bridge.end_call();
     }
 
