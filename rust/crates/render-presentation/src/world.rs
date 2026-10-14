@@ -125,6 +125,9 @@ struct RetainedGraphics {
     /// Each parent's children, kept with `nodes`, so destroying a node
     /// visits its subtree, not every node.
     children: BTreeMap<RenderHandle, BTreeSet<RenderHandle>>,
+    /// The light nodes, kept with `nodes`, so a capture takes the scene's
+    /// lights without visiting every node.
+    lights: BTreeSet<RenderHandle>,
     /// How many retained nodes, resources, the sky and ghost captures name
     /// each resource, by `Resource` kind, so a release of a resource still
     /// named is refused without a scan.
@@ -233,6 +236,7 @@ impl RetainedGraphics {
                 continue;
             };
             self.unindex_entity(handle, node.kind.source_entity());
+            self.lights.remove(&handle);
             self.count(false, |use_| node_uses(&node.kind, use_));
             pending.extend(self.children.remove(&handle).into_iter().flatten());
         }
@@ -343,6 +347,52 @@ fn capture_uses(capture: &RenderFrameDiff, use_: &mut dyn FnMut(Resource, &str))
             _ => {}
         }
     }
+}
+
+/// A node drawn as nothing but the group that places its children.
+fn group_node(node: &PresentationNode) -> PresentationNode {
+    macro_rules! group {
+        ($value:expr, $layer:expr) => {
+            RenderNode {
+                geometry: Geometry::Group,
+                material: Material::DEFAULT,
+                transform: $value.transform,
+                visible: $value.visible,
+                layer: $layer,
+                metadata: $value.metadata.clone(),
+                shadow_casting: Default::default(),
+            }
+        };
+    }
+    let group = match &node.kind {
+        NodeKind::Primitive(value) => group!(value, value.layer),
+        NodeKind::StaticMesh(value) => group!(value, RenderLayer::Scene),
+        NodeKind::AnimatedMesh(value) => group!(value, RenderLayer::Scene),
+        NodeKind::VoxelObject(value) => group!(value, RenderLayer::Scene),
+        NodeKind::Sprite(value) => group!(value, value.layer),
+        NodeKind::SpriteBatch(batch) => group!(batch.sprite, batch.sprite.layer),
+        NodeKind::Scatter(_) => RenderNode::new(Geometry::Group),
+        NodeKind::Light(_) => return node.clone(),
+    };
+    PresentationNode {
+        parent_joint: node.parent_joint.clone(),
+        morph_focus: node.morph_focus,
+        parent: node.parent,
+        kind: NodeKind::Primitive(group),
+        mesh_payload: None,
+        material_override: None,
+        material_parameters: BTreeMap::new(),
+        playback: node.playback.clone(),
+        pose: Default::default(),
+    }
+}
+
+/// The definitions `ids` name, shared with the live world.
+fn pick<T>(live: &BTreeMap<String, Arc<T>>, ids: &BTreeSet<&str>) -> BTreeMap<String, Arc<T>> {
+    ids.iter()
+        .filter_map(|id| live.get_key_value(*id))
+        .map(|(id, value)| (id.clone(), value.clone()))
+        .collect()
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -617,209 +667,205 @@ impl PresentationWorld {
         self.capture_output_scene(source, false)
     }
 
+    /// Capture `source`'s subtree and the scene lights, with the ancestors
+    /// that place them as plain groups, and only the resources those nodes
+    /// draw with, without copying the rest of the world.
     pub fn capture_output_scene(
         &self,
         source: RenderHandle,
         retain_background: bool,
     ) -> Result<RenderFrameDiff, PresentationWorldError> {
-        if !self.retained.nodes.contains_key(&source) {
+        // Every field is named so a new one is placed in or out of captures.
+        let RetainedGraphics {
+            ghost_captures: _,
+            ghost_sources: _,
+            nodes: live_nodes,
+            entity_nodes: _,
+            children,
+            lights,
+            users: _,
+            textures: live_textures,
+            shaders,
+            materials: live_materials,
+            atlases: live_atlases,
+            static_meshes: live_static_meshes,
+            animated_meshes: live_animated_meshes,
+            voxel_objects: live_voxel_objects,
+            sky,
+            background_color,
+            fog,
+            tone_mapping,
+            bloom,
+            auto_exposure,
+            color_grading,
+            atmosphere,
+            sun_shafts,
+            moon,
+            stars,
+            wind,
+            clouds,
+            wetness,
+            backdrops,
+            volumetric_fog,
+            cloud_regions,
+            fog_volumes,
+            precipitation,
+            image_effect,
+            indirect_light,
+            sky_light,
+            renderer_settings,
+            controllers,
+        } = &*self.retained;
+        if !live_nodes.contains_key(&source) {
             return Err(PresentationWorldError::UnknownNode(source));
         }
-        let mut selected = BTreeSet::new();
+        let mut renderable = BTreeSet::new();
         let mut pending = vec![source];
         while let Some(handle) = pending.pop() {
-            selected.insert(handle);
-            pending.extend(self.retained.children.get(&handle).into_iter().flatten());
+            renderable.insert(handle);
+            pending.extend(children.get(&handle).into_iter().flatten());
         }
-        let mut renderable = selected.clone();
+        renderable.extend(lights);
         // Ancestors preserve the capture's original world-space transform.
-        let mut parent = self.retained.nodes[&source].parent;
-        while let Some(handle) = parent {
-            selected.insert(handle);
-            parent = self.retained.nodes[&handle].parent;
-        }
-        for (handle, node) in &self.retained.nodes {
-            if matches!(node.kind, NodeKind::Light(_)) {
-                renderable.insert(*handle);
-                selected.insert(*handle);
-                let mut parent = node.parent;
-                while let Some(handle) = parent {
-                    selected.insert(handle);
-                    parent = self.retained.nodes[&handle].parent;
+        // A node already taken has its ancestors taken with it.
+        let mut nodes = BTreeMap::new();
+        for &handle in &renderable {
+            let mut cursor = Some(handle);
+            while let Some(handle) = cursor {
+                if nodes.contains_key(&handle) {
+                    break;
                 }
-            }
-        }
-        let mut captured = self.clone();
-        captured
-            .retained
-            .nodes
-            .retain(|handle, _| selected.contains(handle));
-        for (handle, node) in &mut captured.retained.nodes {
-            if renderable.contains(handle) {
-                continue;
-            }
-            let node = Arc::make_mut(node);
-            macro_rules! group {
-                ($value:expr, $layer:expr) => {
-                    RenderNode {
-                        geometry: Geometry::Group,
-                        material: Material::DEFAULT,
-                        transform: $value.transform,
-                        visible: $value.visible,
-                        layer: $layer,
-                        metadata: $value.metadata.clone(),
-                        shadow_casting: Default::default(),
-                    }
+                let node = &live_nodes[&handle];
+                let taken = if renderable.contains(&handle) {
+                    node.clone()
+                } else {
+                    Arc::new(group_node(node))
                 };
+                nodes.insert(handle, taken);
+                cursor = node.parent;
             }
-            let group = match &node.kind {
-                NodeKind::Primitive(value) => group!(value, value.layer),
-                NodeKind::StaticMesh(value) => group!(value, RenderLayer::Scene),
-                NodeKind::AnimatedMesh(value) => group!(value, RenderLayer::Scene),
-                NodeKind::VoxelObject(value) => group!(value, RenderLayer::Scene),
-                NodeKind::Sprite(value) => group!(value, value.layer),
-                NodeKind::SpriteBatch(batch) => group!(batch.sprite, batch.sprite.layer),
-                NodeKind::Scatter(_) => RenderNode::new(Geometry::Group),
-                NodeKind::Light(_) => continue,
-            };
-            node.kind = NodeKind::Primitive(group);
-            node.mesh_payload = None;
-            node.material_override = None;
-            node.material_parameters.clear();
-            node.pose = Default::default();
         }
 
-        if !retain_background {
-            captured.retained.sky = None;
-            captured.retained.background_color = None;
-        }
-        // Capture dependencies are a subset of the live world. In particular,
-        // one small plate must not copy or realize every unrelated mesh.
+        // One small plate must not copy or realize every unrelated resource.
         let mut meshes = BTreeSet::new();
         let mut animated = BTreeSet::new();
         let mut voxels = BTreeSet::new();
         let mut atlases = BTreeSet::new();
         let mut materials = BTreeSet::new();
         let mut textures = BTreeSet::new();
-        for node in captured.retained.nodes.values() {
-            match &node.kind {
+        for node in nodes.values() {
+            let overrides = match &node.kind {
                 NodeKind::StaticMesh(instance) => {
-                    meshes.insert(instance.asset.clone());
-                    materials.extend(
-                        instance
-                            .material_overrides
-                            .iter()
-                            .map(|slot| slot.material.clone()),
-                    );
+                    meshes.insert(instance.asset.as_str());
+                    &instance.material_overrides
                 }
                 NodeKind::AnimatedMesh(instance) => {
-                    animated.insert(instance.asset.clone());
-                    materials.extend(
-                        instance
-                            .material_overrides
-                            .iter()
-                            .map(|slot| slot.material.clone()),
-                    );
+                    animated.insert(instance.asset.as_str());
+                    &instance.material_overrides
                 }
                 NodeKind::VoxelObject(instance) => {
-                    voxels.insert(instance.asset.clone());
-                    materials.extend(
-                        instance
-                            .material_overrides
-                            .iter()
-                            .map(|slot| slot.material.clone()),
-                    );
+                    voxels.insert(instance.asset.as_str());
+                    &instance.material_overrides
                 }
                 NodeKind::Scatter(patch) => {
-                    meshes.insert(patch.asset.clone());
-                    materials.extend(
-                        patch
-                            .material_overrides
-                            .iter()
-                            .map(|slot| slot.material.clone()),
-                    );
+                    meshes.insert(patch.asset.as_str());
+                    &patch.material_overrides
                 }
                 NodeKind::Sprite(sprite)
                 | NodeKind::SpriteBatch(SpriteBatchDescriptor { sprite, .. }) => {
-                    atlases.insert(sprite.asset.clone());
-                    textures.extend(sprite.material.normal_texture.iter().cloned());
-                    textures.extend(sprite.material.depth_texture.iter().cloned());
+                    atlases.insert(sprite.asset.as_str());
+                    textures.extend(sprite.material.normal_texture.as_deref());
+                    textures.extend(sprite.material.depth_texture.as_deref());
+                    continue;
                 }
-                _ => {}
-            }
+                NodeKind::Primitive(_) | NodeKind::Light(_) => continue,
+            };
+            materials.extend(overrides.iter().map(|slot| slot.material.as_str()));
         }
-        captured
-            .retained
-            .static_meshes
-            .retain(|id, _| meshes.contains(id));
-        captured
-            .retained
-            .animated_meshes
-            .retain(|id, _| animated.contains(id));
-        captured
-            .retained
-            .voxel_objects
-            .retain(|id, _| voxels.contains(id));
-        captured
-            .retained
-            .atlases
-            .retain(|id, _| atlases.contains(id));
-        for asset in captured.retained.static_meshes.values() {
-            materials.extend(
-                asset
-                    .material_slots
-                    .iter()
-                    .map(|slot| slot.material.clone()),
+        let static_meshes = pick(live_static_meshes, &meshes);
+        let animated_meshes = pick(live_animated_meshes, &animated);
+        let voxel_objects = pick(live_voxel_objects, &voxels);
+        let atlases = pick(live_atlases, &atlases);
+        let slots = static_meshes
+            .values()
+            .flat_map(|asset| &asset.material_slots)
+            .chain(
+                animated_meshes
+                    .values()
+                    .flat_map(|asset| &asset.material_slots),
+            )
+            .chain(
+                voxel_objects
+                    .values()
+                    .flat_map(|asset| &asset.material_slots),
             );
-        }
-        for asset in captured.retained.animated_meshes.values() {
-            materials.extend(
-                asset
-                    .material_slots
-                    .iter()
-                    .map(|slot| slot.material.clone()),
-            );
-        }
-        for asset in captured.retained.voxel_objects.values() {
-            materials.extend(
-                asset
-                    .material_slots
-                    .iter()
-                    .map(|slot| slot.material.clone()),
-            );
-        }
-        captured
-            .retained
-            .materials
-            .retain(|id, _| materials.contains(id));
-        for material in captured.retained.materials.values() {
-            textures.extend(material.textures().cloned());
+        materials.extend(slots.map(|slot| slot.material.as_str()));
+        let materials = pick(live_materials, &materials);
+        for material in materials.values() {
+            textures.extend(material.textures().map(String::as_str));
             if let Some(surface) = &material.voxel_surface {
                 match &surface.mapping {
                     VoxelSurfaceMappingDescriptor::Repeat { texture, .. }
                     | VoxelSurfaceMappingDescriptor::Atlas { texture, .. } => {
-                        textures.insert(texture.clone());
+                        textures.insert(texture.as_str());
                     }
                 }
             }
         }
-        for atlas in captured.retained.atlases.values() {
-            textures.insert(atlas.texture.clone());
-        }
-        if let Some(sky) = &captured.retained.sky {
-            textures.insert(sky.texture.clone());
+        textures.extend(atlases.values().map(|atlas| atlas.texture.as_str()));
+        let (sky, background_color) = if retain_background {
+            (sky.clone(), *background_color)
+        } else {
+            (None, None)
+        };
+        if let Some(sky) = &sky {
+            textures.insert(sky.texture.as_str());
             if let Some(blend) = &sky.blend {
-                textures.insert(blend.texture.clone());
+                textures.insert(blend.texture.as_str());
             }
         }
-        captured
-            .retained
-            .textures
-            .retain(|id, _| textures.contains(id));
+        let textures = pick(live_textures, &textures);
+
+        let captured = PresentationWorld {
+            revision: self.revision,
+            elapsed_seconds: self.elapsed_seconds,
+            retained: SharedGraphics(Arc::new(RetainedGraphics {
+                nodes,
+                textures,
+                shaders: shaders.clone(),
+                materials,
+                atlases,
+                static_meshes,
+                animated_meshes,
+                voxel_objects,
+                sky,
+                background_color,
+                fog: *fog,
+                tone_mapping: *tone_mapping,
+                bloom: *bloom,
+                auto_exposure: *auto_exposure,
+                color_grading: *color_grading,
+                atmosphere: *atmosphere,
+                sun_shafts: *sun_shafts,
+                moon: *moon,
+                stars: stars.clone(),
+                wind: *wind,
+                clouds: *clouds,
+                wetness: *wetness,
+                backdrops: backdrops.clone(),
+                volumetric_fog: *volumetric_fog,
+                cloud_regions: cloud_regions.clone(),
+                fog_volumes: fog_volumes.clone(),
+                precipitation: *precipitation,
+                image_effect: image_effect.clone(),
+                indirect_light: *indirect_light,
+                sky_light: *sky_light,
+                renderer_settings: *renderer_settings,
+                ..RetainedGraphics::default()
+            })),
+        };
         let mut frame = captured.snapshot().frame;
-        for controller in self
-            .retained
-            .controllers
+        for controller in controllers
             .values()
             .filter(|controller| renderable.contains(&controller.target))
         {
@@ -1139,6 +1185,9 @@ impl PresentationWorld {
         }
         let retained = &mut *self.retained;
         retained.index_entity(handle, kind.source_entity());
+        if matches!(kind, NodeKind::Light(_)) {
+            retained.lights.insert(handle);
+        }
         retained.count(true, |use_| node_uses(&kind, use_));
         if let Some(parent) = parent {
             retained.children.entry(parent).or_default().insert(handle);
@@ -2096,6 +2145,14 @@ mod tests {
             }
         }
         assert_eq!(world.retained.children, children);
+        let lights: BTreeSet<_> = world
+            .retained
+            .nodes
+            .iter()
+            .filter(|(_, node)| matches!(node.kind, NodeKind::Light(_)))
+            .map(|(handle, _)| *handle)
+            .collect();
+        assert_eq!(world.retained.lights, lights);
     }
 
     #[test]
@@ -2200,8 +2257,8 @@ mod tests {
                     node: entity_node(42, 1.0),
                 },
                 group(4, Some(3)),
-                group(5, Some(4)),
-                group(6, Some(2)),
+                light(5, Some(4), 1.0),
+                light(6, Some(2), 1.0),
             ]))
             .unwrap();
         assert_indexes_match_nodes(&world);
@@ -2225,7 +2282,12 @@ mod tests {
                 .collect::<Vec<_>>()
         };
         assert_eq!(live(&world), [1, 2, 3, 6]);
-        world.apply(frame(vec![group(4, Some(3))])).unwrap();
+        // A light created again as a group is no longer a light.
+        world
+            .apply(frame(vec![group(4, Some(3)), group(6, Some(2))]))
+            .unwrap();
+        assert_indexes_match_nodes(&world);
+        assert!(world.retained.lights.is_empty());
 
         // Its old parent's subtree no longer includes it.
         world.apply(frame(vec![destroy(1)])).unwrap();
@@ -2320,6 +2382,293 @@ mod tests {
             .unwrap();
         try_apply(&mut world, release_texture("texture/a")).unwrap();
         assert!(world.retained.users.iter().all(BTreeMap::is_empty));
+    }
+
+    fn light(handle: u64, parent: Option<u64>, intensity: f32) -> RenderDiff {
+        RenderDiff::CreateLight {
+            handle: RenderHandle::new(handle),
+            parent: parent.map(RenderHandle::new),
+            light: LightDescriptor::Ambient {
+                color: [1.0; 3],
+                intensity,
+                enabled: true,
+                shadow_intent: LightShadowIntent::Disabled,
+                shadow: Default::default(),
+                range: None,
+            },
+        }
+    }
+
+    fn sprite(handle: u64, parent: Option<u64>, atlas: &str, normal: Option<&str>) -> RenderDiff {
+        RenderDiff::CreateSprite {
+            handle: RenderHandle::new(handle),
+            parent: parent.map(RenderHandle::new),
+            sprite: SpriteInstanceDescriptor {
+                asset: atlas.to_owned(),
+                frame: 0,
+                pivot: [0.5, 0.5],
+                size: [1.0, 1.0],
+                size_mode: SpriteSizeMode::World,
+                billboard: BillboardMode::Spherical,
+                tint: [1.0; 4],
+                render_order: 0,
+                depth: SpriteDepthPolicy::Default,
+                layer: RenderLayer::Scene,
+                viewport_placement: None,
+                shading: SpriteShading::Unlit,
+                material: SpriteMaterialDescriptor {
+                    normal_texture: normal.map(str::to_owned),
+                    ..SpriteMaterialDescriptor::default()
+                },
+                visible: true,
+                transform: Transform::IDENTITY,
+                attachment: SpriteAttachment::default(),
+                metadata: RenderMetadata::default(),
+            },
+        }
+    }
+
+    fn atlas(id: &str, texture: &str) -> RenderDiff {
+        RenderDiff::DefineSpriteAtlas {
+            atlas: SpriteAtlasDescriptor {
+                id: id.to_owned(),
+                texture: texture.to_owned(),
+                frames: vec![SpriteFrameRect {
+                    frame: 0,
+                    uv_min: [0.0, 0.0],
+                    uv_max: [1.0, 1.0],
+                    size: None,
+                }],
+            },
+        }
+    }
+
+    /// Subtree 1 (a mesh with an override material and a normal-mapped
+    /// sprite) under a drawn primitive 100 and mesh 101, beside lights at
+    /// the root and under an unrelated mesh, a sky, and `unrelated` nodes
+    /// with their own meshes, materials, atlases and textures.
+    fn capture_world(unrelated: u64) -> PresentationWorld {
+        let mut ops = vec![
+            "texture/a",
+            "texture/override",
+            "texture/normal",
+            "texture/atlas",
+            "texture/sky",
+            "texture/blend",
+            "texture/unrelated",
+            "texture/unrelated-atlas",
+        ]
+        .into_iter()
+        .map(|id| RenderDiff::DefineTexture {
+            texture: texture(id),
+        })
+        .collect::<Vec<_>>();
+        ops.extend([
+            RenderDiff::DefineShader {
+                shader: ShaderDescriptor {
+                    id: "shader/unused".to_owned(),
+                    path: "shaders/unused.wgsl".to_owned(),
+                    source: String::new(),
+                    keywords: Vec::new(),
+                },
+            },
+            RenderDiff::DefineMaterial {
+                material: material("material/plain", "texture/a"),
+            },
+            RenderDiff::DefineMaterial {
+                material: material("material/override", "texture/override"),
+            },
+            RenderDiff::DefineMaterial {
+                material: material("material/unrelated", "texture/unrelated"),
+            },
+            RenderDiff::DefineStaticMesh {
+                asset: static_mesh("mesh/one"),
+            },
+            RenderDiff::DefineStaticMesh {
+                asset: static_mesh("mesh/unrelated"),
+            },
+            atlas("sprite/atlas", "texture/atlas"),
+            atlas("sprite/unrelated", "texture/unrelated-atlas"),
+            RenderDiff::SetSkyBackground {
+                background: Some(SkyBackgroundDescriptor {
+                    texture: "texture/sky".to_owned(),
+                    blend: Some(SkyBackgroundBlend {
+                        texture: "texture/blend".to_owned(),
+                        amount: 0.5,
+                    }),
+                }),
+            },
+            RenderDiff::Create {
+                handle: RenderHandle::new(100),
+                parent: None,
+                node: RenderNode::new(Geometry::Cube),
+            },
+            RenderDiff::Update {
+                handle: RenderHandle::new(100),
+                material: Some(Material::DEFAULT),
+                transform: Some(Transform {
+                    translation: [3.0, 0.0, 0.0],
+                    ..Transform::IDENTITY
+                }),
+                visible: None,
+                metadata: None,
+            },
+            mesh_instance(101, Some(100), "mesh/unrelated", &["material/unrelated"]),
+            group(1, Some(101)),
+            mesh_instance(2, Some(1), "mesh/one", &["material/override"]),
+            sprite(3, Some(1), "sprite/atlas", Some("texture/normal")),
+            light(10, None, 0.5),
+            mesh_instance(102, None, "mesh/unrelated", &["material/unrelated"]),
+            light(11, Some(102), 0.25),
+        ]);
+        let first = 1_000;
+        for index in 0..unrelated {
+            let handle = first + index;
+            ops.push(match index % 3 {
+                0 => RenderDiff::Create {
+                    handle: RenderHandle::new(handle),
+                    parent: None,
+                    node: RenderNode::new(Geometry::Cube),
+                },
+                1 => mesh_instance(handle, Some(handle - 1), "mesh/unrelated", &[]),
+                _ => sprite(handle, Some(handle - 2), "sprite/unrelated", None),
+            });
+        }
+        let mut world = PresentationWorld::default();
+        world.apply(frame(ops)).unwrap();
+        // Lights that have gone, replaced or with their parent, are not
+        // captured.
+        world
+            .apply(frame(vec![light(12, None, 1.0), group(103, None)]))
+            .unwrap();
+        world
+            .apply(frame(vec![light(13, Some(103), 1.0), group(12, None)]))
+            .unwrap();
+        world.apply(frame(vec![destroy(103)])).unwrap();
+        world
+    }
+
+    #[test]
+    fn a_capture_takes_its_subtree_lights_and_the_resources_they_draw_with() {
+        let world = capture_world(300);
+        let definitions = |captured: &RenderFrameDiff| {
+            captured
+                .ops
+                .iter()
+                .filter_map(|op| match op {
+                    RenderDiff::DefineTexture { texture } => Some(texture.id.clone()),
+                    RenderDiff::DefineShader { shader } => Some(shader.id.clone()),
+                    RenderDiff::DefineMaterial { material } => Some(material.id.clone()),
+                    RenderDiff::DefineSpriteAtlas { atlas } => Some(atlas.id.clone()),
+                    RenderDiff::DefineStaticMesh { asset } => Some(asset.asset.clone()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        let nodes = |captured: &RenderFrameDiff| {
+            captured
+                .ops
+                .iter()
+                .filter_map(|op| match op {
+                    RenderDiff::Create { handle, node, .. } => {
+                        Some((handle.raw(), format!("{:?}", node.geometry)))
+                    }
+                    RenderDiff::CreateStaticMeshInstance { handle, .. } => {
+                        Some((handle.raw(), "mesh".to_owned()))
+                    }
+                    RenderDiff::CreateSprite { handle, .. } => {
+                        Some((handle.raw(), "sprite".to_owned()))
+                    }
+                    RenderDiff::CreateLight { handle, .. } => {
+                        Some((handle.raw(), "light".to_owned()))
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        let captured = world
+            .capture_output_scene(RenderHandle::new(1), false)
+            .unwrap();
+        assert_eq!(
+            definitions(&captured),
+            [
+                "texture/a",
+                "texture/atlas",
+                "texture/normal",
+                "texture/override",
+                "shader/unused",
+                "material/override",
+                "material/plain",
+                "sprite/atlas",
+                "mesh/one",
+            ]
+        );
+        // Ancestors of the subtree and of the lights are only groups.
+        let group = || "Group".to_owned();
+        assert_eq!(
+            nodes(&captured),
+            [
+                (100, group()),
+                (101, group()),
+                (1, group()),
+                (2, "mesh".to_owned()),
+                (3, "sprite".to_owned()),
+                (10, "light".to_owned()),
+                (102, group()),
+                (11, "light".to_owned()),
+            ]
+        );
+        assert!(captured.ops.iter().any(|op| matches!(op,
+            RenderDiff::Create { handle, node, .. }
+                if handle.raw() == 100 && node.transform.translation == [3.0, 0.0, 0.0])));
+        assert!(!captured
+            .ops
+            .iter()
+            .any(|op| matches!(op, RenderDiff::Update { .. })));
+        assert!(captured
+            .ops
+            .contains(&RenderDiff::SetSkyBackground { background: None }));
+
+        // With its background, the capture keeps the sky and its textures.
+        let backed = world
+            .capture_output_scene(RenderHandle::new(1), true)
+            .unwrap();
+        let mut expected = definitions(&captured);
+        expected.splice(2..2, ["texture/blend".to_owned()]);
+        expected.splice(5..5, ["texture/sky".to_owned()]);
+        assert_eq!(definitions(&backed), expected);
+        assert_eq!(nodes(&backed), nodes(&captured));
+        assert!(backed.ops.iter().any(|op| matches!(op,
+            RenderDiff::SetSkyBackground { background: Some(sky) } if sky.texture == "texture/sky")));
+    }
+
+    /// A capture visits its subtree, the lights and the resources they
+    /// name, not every retained node.
+    #[test]
+    fn capture_work_does_not_grow_with_unrelated_nodes() {
+        const ROUNDS: u32 = 200;
+        let time_captures = |unrelated: u64| {
+            let world = capture_world(unrelated);
+            let started = std::time::Instant::now();
+            for _ in 0..ROUNDS {
+                std::hint::black_box(
+                    world
+                        .capture_output_scene(RenderHandle::new(1), false)
+                        .unwrap(),
+                );
+            }
+            started.elapsed()
+        };
+        let small = time_captures(10);
+        let large = time_captures(5_000);
+        println!("{ROUNDS} captures: 10 unrelated nodes {small:?}, 5000 unrelated nodes {large:?}");
+        // Copying the world to filter it is about a hundred times slower
+        // here; building the capture from its subtree stays within a small
+        // factor.
+        assert!(
+            large < small * 20,
+            "capture grew with unrelated nodes: {small:?} -> {large:?}"
+        );
     }
 
     /// Destroying a small subtree and releasing its mesh visits that subtree
