@@ -293,13 +293,8 @@ impl Lattice {
             return Err(MeshError::InvalidIsovalue);
         }
         let values = samples
-            .map(|sample| {
-                if !sample.is_finite() {
-                    return Err(MeshError::InvalidScalarSample);
-                }
-                Ok(f64::from(isovalue) - f64::from(sample))
-            })
-            .collect::<Result<Vec<_>, _>>()?;
+            .map(|sample| f64::from(isovalue) - f64::from(sample))
+            .collect();
         let materials = match materials {
             Some(materials) if materials.len() == count => materials,
             Some(materials) => {
@@ -1439,15 +1434,8 @@ pub(super) fn voxel_payload(
                         let point =
                             reconstruction.positions[vertex as usize].map(|value| value * scale);
                         for axis in 0..3 {
-                            let value = (point[axis] - pivot[axis]) * cell_size;
-                            let rendered = value as f32;
+                            let rendered = ((point[axis] - pivot[axis]) * cell_size) as f32;
                             let rendered_normal = normal[axis] as f32;
-                            if !value.is_finite()
-                                || !rendered.is_finite()
-                                || !rendered_normal.is_finite()
-                            {
-                                return Err(MeshError::PositionOutOfRange);
-                            }
                             minimum[axis] = minimum[axis].min(rendered);
                             maximum[axis] = maximum[axis].max(rendered);
                             positions.push(rendered);

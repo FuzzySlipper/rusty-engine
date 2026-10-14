@@ -16,7 +16,7 @@ use std::sync::Arc;
 use core_space::{ChunkCoord, Direction6, LocalVoxelCoord, VoxelCoord, VoxelGridSpec};
 use svc_spatial::VoxelWorld;
 use svc_volume::VoxelChunk;
-use texture_mapping::{project_voxel_surface_tile_point, VoxelTextureMappingError};
+use texture_mapping::project_voxel_surface_tile_point;
 
 pub mod distance_field;
 pub mod heightfield;
@@ -426,14 +426,11 @@ pub enum MeshError {
         expected: usize,
         actual: usize,
     },
-    InvalidScalarSample,
     InvalidScalarOrigin,
     InvalidIsovalue,
     DuplicateCell {
         coordinate: [i64; 3],
     },
-    PositionOutOfRange,
-    TextureMapping(VoxelTextureMappingError),
 }
 
 impl core::fmt::Display for MeshError {
@@ -492,16 +489,11 @@ impl core::fmt::Display for MeshError {
                 f,
                 "scalar sample count is {actual}; dimensions require exactly {expected}"
             ),
-            MeshError::InvalidScalarSample => write!(f, "scalar samples must be finite"),
             MeshError::InvalidScalarOrigin => write!(f, "scalar sample origin must be finite"),
             MeshError::InvalidIsovalue => write!(f, "scalar isovalue must be finite"),
             MeshError::DuplicateCell { coordinate } => {
                 write!(f, "duplicate mesh cell at {coordinate:?}")
             }
-            MeshError::PositionOutOfRange => {
-                write!(f, "mesh position is outside the finite f32 render range")
-            }
-            MeshError::TextureMapping(source) => source.fmt(f),
         }
     }
 }
@@ -659,10 +651,7 @@ fn sparse_plane_rectangles(mut cells: BTreeSet<(i64, i64)>) -> Result<Vec<[i64; 
     while let Some(&(v_start, u_start)) = cells.first() {
         let mut u_length = 1_u32;
         loop {
-            let Some(next_u) = u_start.checked_add(i64::from(u_length)) else {
-                return Err(MeshError::PositionOutOfRange);
-            };
-            if cells.contains(&(v_start, next_u)) {
+            if cells.contains(&(v_start, u_start + i64::from(u_length))) {
                 u_length = u_length.checked_add(1).ok_or(MeshError::TooManyVertices {
                     vertices: u64::from(u32::MAX) + 1,
                 })?;
@@ -673,14 +662,9 @@ fn sparse_plane_rectangles(mut cells: BTreeSet<(i64, i64)>) -> Result<Vec<[i64; 
 
         let mut v_length = 1_u32;
         'rows: loop {
-            let Some(next_v) = v_start.checked_add(i64::from(v_length)) else {
-                return Err(MeshError::PositionOutOfRange);
-            };
+            let next_v = v_start + i64::from(v_length);
             for u_offset in 0..u_length {
-                let Some(u) = u_start.checked_add(i64::from(u_offset)) else {
-                    return Err(MeshError::PositionOutOfRange);
-                };
-                if !cells.contains(&(next_v, u)) {
+                if !cells.contains(&(next_v, u_start + i64::from(u_offset))) {
                     break 'rows;
                 }
             }
@@ -690,14 +674,8 @@ fn sparse_plane_rectangles(mut cells: BTreeSet<(i64, i64)>) -> Result<Vec<[i64; 
         }
 
         for v_offset in 0..v_length {
-            let v = v_start
-                .checked_add(i64::from(v_offset))
-                .ok_or(MeshError::PositionOutOfRange)?;
             for u_offset in 0..u_length {
-                let u = u_start
-                    .checked_add(i64::from(u_offset))
-                    .ok_or(MeshError::PositionOutOfRange)?;
-                cells.remove(&(v, u));
+                cells.remove(&(v_start + i64::from(v_offset), u_start + i64::from(u_offset)));
             }
         }
         rectangles.push([v_start, u_start, i64::from(u_length), i64::from(v_length)]);
@@ -707,7 +685,7 @@ fn sparse_plane_rectangles(mut cells: BTreeSet<(i64, i64)>) -> Result<Vec<[i64; 
 
 /// The four absolute grid points of one greedy quad, wound CCW so the polygon
 /// normal points outward along `quad.dir`.
-fn quad_corners(quad: Quad) -> Result<[[i64; 3]; 4], MeshError> {
+fn quad_corners(quad: Quad) -> [[i64; 3]; 4] {
     let axis = quad.dir.axis().index();
     let (u_axis, v_axis) = in_plane_axes(quad.dir);
     let fixed = i64::from(quad.dir.is_positive());
@@ -720,21 +698,15 @@ fn quad_corners(quad: Quad) -> Result<[[i64; 3]; 4], MeshError> {
     let mut out = [[0_i64; 3]; 4];
     for (index, (u_offset, v_offset)) in loop_uv.into_iter().enumerate() {
         let mut point = quad.coordinate;
-        point[axis] = point[axis]
-            .checked_add(fixed)
-            .ok_or(MeshError::PositionOutOfRange)?;
-        point[u_axis] = point[u_axis]
-            .checked_add(u_offset)
-            .ok_or(MeshError::PositionOutOfRange)?;
-        point[v_axis] = point[v_axis]
-            .checked_add(v_offset)
-            .ok_or(MeshError::PositionOutOfRange)?;
+        point[axis] += fixed;
+        point[u_axis] += u_offset;
+        point[v_axis] += v_offset;
         out[index] = point;
     }
     if !quad.dir.is_positive() {
         out.swap(1, 3);
     }
-    Ok(out)
+    out
 }
 
 // ── Mesher ─────────────────────────────────────────────────────────────────────
@@ -852,7 +824,8 @@ pub fn mesh_scalar_samples(
 
 /// A dense scalar lattice: `origin + [x, y, z] * spacing` in x-fastest order.
 /// Values below `isovalue` are inside. Each sample may carry a material slot;
-/// without them every sample is slot zero.
+/// without them every sample is slot zero. Samples are finite: their owner
+/// (`svc-implicit`'s sampled volume) refuses others when they are written.
 #[derive(Debug, Clone, Copy)]
 pub struct ScalarVolume<'a> {
     pub origin: [f64; 3],
@@ -1013,15 +986,8 @@ pub fn mesh_scalar_surface(
         let mut position = [0.0_f32; 3];
         let mut rendered_normal = [0.0_f32; 3];
         for axis in 0..3 {
-            let value = (point[axis] - pivot[axis]) * volume.spacing;
-            position[axis] = value as f32;
+            position[axis] = ((point[axis] - pivot[axis]) * volume.spacing) as f32;
             rendered_normal[axis] = normal[axis] as f32;
-            if !value.is_finite()
-                || !position[axis].is_finite()
-                || !rendered_normal[axis].is_finite()
-            {
-                return Err(MeshError::PositionOutOfRange);
-            }
         }
         positions.push(position);
         normals.push(rendered_normal);
@@ -1092,15 +1058,9 @@ pub fn mesh_cells_standalone_with_options(
             for dir in Direction6::ALL {
                 let normal = dir.normal();
                 let neighbour = [
-                    coordinate[0]
-                        .checked_add(normal.x as i64)
-                        .ok_or(MeshError::PositionOutOfRange)?,
-                    coordinate[1]
-                        .checked_add(normal.y as i64)
-                        .ok_or(MeshError::PositionOutOfRange)?,
-                    coordinate[2]
-                        .checked_add(normal.z as i64)
-                        .ok_or(MeshError::PositionOutOfRange)?,
+                    coordinate[0] + normal.x as i64,
+                    coordinate[1] + normal.y as i64,
+                    coordinate[2] + normal.z as i64,
                 ];
                 if occupied
                     .get(&neighbour)
@@ -1956,25 +1916,12 @@ fn state_tile_point(
     mut point: [i64; 3],
     mut origin: [i64; 3],
     state: u16,
-) -> Result<[f32; 2], MeshError> {
+) -> [f32; 2] {
     for _ in 0..(state & 3) {
-        point = [
-            point[2]
-                .checked_neg()
-                .ok_or(MeshError::PositionOutOfRange)?,
-            point[1],
-            point[0],
-        ];
-        origin = [
-            origin[2]
-                .checked_neg()
-                .ok_or(MeshError::PositionOutOfRange)?,
-            origin[1],
-            origin[0],
-        ];
+        point = [-point[2], point[1], point[0]];
+        origin = [-origin[2], origin[1], origin[0]];
     }
     project_voxel_surface_tile_point(state_direction(dir, state), point, origin)
-        .map_err(MeshError::TextureMapping)
 }
 
 #[allow(clippy::too_many_arguments, reason = "one payload")]
@@ -2049,19 +1996,12 @@ fn emit_quads(
         let base = (positions.len() / 3) as u32;
         let normal = quad.dir.normal();
         let [nx, ny, nz] = [normal.x as f32, normal.y as f32, normal.z as f32];
-        for (corner, point) in quad_corners(*quad)?.into_iter().enumerate() {
+        for (corner, point) in quad_corners(*quad).into_iter().enumerate() {
             if let Some(field) = occlusion {
                 occlusions.push(field.cube_occlusion(quad.occlusion[corner]));
             }
-            let mut p = [0.0_f32; 3];
-            for axis in 0..3 {
-                let value = (point[axis] as f64 - pivot[axis]) * cell_size;
-                let rendered = value as f32;
-                if !value.is_finite() || !rendered.is_finite() {
-                    return Err(MeshError::PositionOutOfRange);
-                }
-                p[axis] = rendered;
-            }
+            let p: [f32; 3] =
+                std::array::from_fn(|axis| ((point[axis] as f64 - pivot[axis]) * cell_size) as f32);
             for axis in 0..3 {
                 bmin[axis] = bmin[axis].min(p[axis]);
                 bmax[axis] = bmax[axis].max(p[axis]);
@@ -2073,7 +2013,7 @@ fn emit_quads(
                 point,
                 texture_coordinate_origin,
                 quad.state,
-            )?);
+            ));
         }
         // Two CCW triangles of the quad: (0,1,2) (0,2,3).
         indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
@@ -2183,9 +2123,7 @@ mod tests {
     use super::*;
     use core_space::{ChunkDims, GridId, LocalVoxelCoord};
     use core_voxel::VoxelValue;
-    use texture_mapping::{
-        project_voxel_surface_tile_corners, repeat_voxel_tile_coordinate, VoxelTextureMappingError,
-    };
+    use texture_mapping::{project_voxel_surface_tile_corners, repeat_voxel_tile_coordinate};
 
     fn spec() -> VoxelGridSpec {
         VoxelGridSpec::new(GridId::new(0), 1.0, ChunkDims::cubic(4).unwrap()).unwrap()
@@ -2623,17 +2561,6 @@ mod tests {
                 [0.0; 3],
                 1.0,
                 [2, 2, 2],
-                &[f32::NAN; 8],
-                0.0,
-                SurfaceMeshLimits::default()
-            ),
-            Err(MeshError::InvalidScalarSample)
-        ));
-        assert!(matches!(
-            mesh_scalar_samples(
-                [0.0; 3],
-                1.0,
-                [2, 2, 2],
                 &[0.0; 8],
                 f32::INFINITY,
                 SurfaceMeshLimits::default()
@@ -3041,8 +2968,8 @@ mod tests {
                 v_length: 3,
                 occlusion: OPEN_CORNERS,
             };
-            let corners = quad_corners(quad).unwrap();
-            let tiles = project_voxel_surface_tile_corners(dir, corners, [0, 0, 0]).unwrap();
+            let corners = quad_corners(quad);
+            let tiles = project_voxel_surface_tile_corners(dir, corners, [0, 0, 0]);
             let signed_area = tiles
                 .iter()
                 .zip(tiles.iter().cycle().skip(1))
@@ -3080,14 +3007,12 @@ mod tests {
             Direction6::PosZ,
             [[15, 0, 1], [16, 0, 1], [16, 1, 1], [15, 1, 1]],
             [-16, -8, 0],
-        )
-        .unwrap();
+        );
         let right = project_voxel_surface_tile_corners(
             Direction6::PosZ,
             [[0, 0, 1], [1, 0, 1], [1, 1, 1], [0, 1, 1]],
             [0, -8, 0],
-        )
-        .unwrap();
+        );
         assert_eq!([left[1], left[2]], [right[0], right[3]]);
     }
 
@@ -3120,30 +3045,6 @@ mod tests {
         .unwrap();
         assert_eq!(object_mesh.tile_coordinates, pivoted.tile_coordinates);
         assert_ne!(object_mesh.positions, pivoted.positions);
-    }
-
-    #[test]
-    fn production_mesh_stream_rejects_the_first_unrepresentable_rectangle() {
-        let last = MeshVoxelCell {
-            coordinate: [texture_mapping::MAX_EXACT_TILE_COORDINATE - 1, 0, 0],
-            material_slot: 1,
-        };
-        let accepted = mesh_cells_standalone(1.0, [0.0; 3], &[last], 10).unwrap();
-        assert_eq!(
-            accepted.tile_coordinates.len(),
-            accepted.stats.vertices as usize * 2
-        );
-
-        let first_rejected = MeshVoxelCell {
-            coordinate: [texture_mapping::MAX_EXACT_TILE_COORDINATE, 0, 0],
-            material_slot: 1,
-        };
-        assert!(matches!(
-            mesh_cells_standalone(1.0, [0.0; 3], &[first_rejected], 10),
-            Err(MeshError::TextureMapping(
-                VoxelTextureMappingError::CoordinateOutOfExactRange { .. }
-            ))
-        ));
     }
 
     #[test]

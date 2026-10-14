@@ -388,13 +388,6 @@ impl Field {
         {
             return Err(Error("extracted surface exceeds output capacity; increase cell size or split the authored composition".into()));
         }
-        if mesh
-            .vertices
-            .iter()
-            .any(|p| p.iter().any(|v| !v.is_finite()))
-        {
-            return Err(Error("extraction produced a non-finite vertex".into()));
-        }
         let positions = mesh.vertices.iter().map(|p| [p.x, p.y, p.z]).collect();
         let mut triangles = Vec::with_capacity(mesh.triangles.len());
         let mut degenerate_triangles = 0;

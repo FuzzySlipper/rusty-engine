@@ -800,7 +800,7 @@ fn set_edge_normal(
     if let Some(chunk) = scene.voxel_world.get_mut(coordinate) {
         chunk
             .set_edge_crossing(local, axis, normal)
-            .expect("local coordinate from the grid, finite normal");
+            .expect("local coordinate from the grid, axis below 3");
     }
 }
 

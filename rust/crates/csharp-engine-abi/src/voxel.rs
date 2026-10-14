@@ -165,8 +165,8 @@ pub struct NativeVoxelResidencyOperation {
     pub density_count: u32,
 }
 
-/// Densities are signed, negative inside, in voxel units, one per slot and
-/// negative exactly where the slot is solid.
+/// Densities are in voxel units, one per slot. Their magnitude places the
+/// surface; the sign follows whether the slot is solid.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeVoxelResidencyTransaction {

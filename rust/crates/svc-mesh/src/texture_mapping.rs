@@ -46,15 +46,8 @@ impl SignedTextureAxis {
         self.sign
     }
 
-    fn project(self, point: [i64; 3]) -> Result<i64, VoxelTextureMappingError> {
-        let value = point[self.axis.index()];
-        if self.sign < 0 {
-            value
-                .checked_neg()
-                .ok_or(VoxelTextureMappingError::CoordinateOverflow)
-        } else {
-            Ok(value)
-        }
+    fn project(self, point: [i64; 3]) -> i64 {
+        point[self.axis.index()] * i64::from(self.sign)
     }
 }
 
@@ -106,29 +99,20 @@ pub const fn voxel_surface_texture_basis(direction: Direction6) -> VoxelSurfaceT
 /// `coordinate_origin` is the absolute voxel coordinate of a chunk-local
 /// mesher origin for `engine-spatial`, and `[0, 0, 0]` for voxel objects. The
 /// result therefore remains continuous across independently rebuilt chunks
-/// while moving with an object's local transform.
+/// while moving with an object's local transform. It is exact while the
+/// absolute coordinate stays within [`MAX_EXACT_TILE_COORDINATE`], which the
+/// voxel coordinate bounds at every voxel entry point keep it inside.
 pub fn project_voxel_surface_tile_point(
     direction: Direction6,
     grid_point: [i64; 3],
     coordinate_origin: [i64; 3],
-) -> Result<[f32; 2], VoxelTextureMappingError> {
-    let mut absolute = [0_i64; 3];
-    for axis in 0..3 {
-        absolute[axis] = grid_point[axis]
-            .checked_add(coordinate_origin[axis])
-            .ok_or(VoxelTextureMappingError::CoordinateOverflow)?;
-    }
+) -> [f32; 2] {
+    let absolute = std::array::from_fn(|axis| grid_point[axis] + coordinate_origin[axis]);
     let basis = voxel_surface_texture_basis(direction);
-    let projected = [basis.u.project(absolute)?, basis.v.project(absolute)?];
-    for coordinate in projected {
-        if !(-MAX_EXACT_TILE_COORDINATE..=MAX_EXACT_TILE_COORDINATE).contains(&coordinate) {
-            return Err(VoxelTextureMappingError::CoordinateOutOfExactRange {
-                coordinate,
-                limit: MAX_EXACT_TILE_COORDINATE,
-            });
-        }
-    }
-    Ok([projected[0] as f32, projected[1] as f32])
+    [
+        basis.u.project(absolute) as f32,
+        basis.v.project(absolute) as f32,
+    ]
 }
 
 /// Project the four already-wound grid corners of one greedy rectangle.
@@ -136,12 +120,8 @@ pub fn project_voxel_surface_tile_corners(
     direction: Direction6,
     grid_corners: [[i64; 3]; 4],
     coordinate_origin: [i64; 3],
-) -> Result<[[f32; 2]; 4], VoxelTextureMappingError> {
-    let mut output = [[0.0_f32; 2]; 4];
-    for (target, point) in output.iter_mut().zip(grid_corners) {
-        *target = project_voxel_surface_tile_point(direction, point, coordinate_origin)?;
-    }
-    Ok(output)
+) -> [[f32; 2]; 4] {
+    grid_corners.map(|point| project_voxel_surface_tile_point(direction, point, coordinate_origin))
 }
 
 /// Compute the selected shader's repeat coordinate before atlas remapping.
@@ -181,8 +161,6 @@ pub fn repeat_voxel_tile_coordinate(
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VoxelTextureMappingError {
-    CoordinateOverflow,
-    CoordinateOutOfExactRange { coordinate: i64, limit: i64 },
     NonFiniteMapping,
     MappingCoordinateOutOfRange,
     InvalidTileScale,
@@ -192,11 +170,6 @@ pub enum VoxelTextureMappingError {
 impl core::fmt::Display for VoxelTextureMappingError {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            Self::CoordinateOverflow => write!(formatter, "voxel texture coordinate overflow"),
-            Self::CoordinateOutOfExactRange { coordinate, limit } => write!(
-                formatter,
-                "voxel texture coordinate {coordinate} exceeds exact f32 limit {limit}",
-            ),
             Self::NonFiniteMapping => write!(formatter, "voxel texture mapping must be finite"),
             Self::MappingCoordinateOutOfRange => write!(
                 formatter,
@@ -240,8 +213,8 @@ mod tests {
             Direction6::PosZ,
             Direction6::NegZ,
         ] {
-            let lower_uv = project_voxel_surface_tile_point(direction, lower, [0, 0, 0]).unwrap();
-            let upper_uv = project_voxel_surface_tile_point(direction, upper, [0, 0, 0]).unwrap();
+            let lower_uv = project_voxel_surface_tile_point(direction, lower, [0, 0, 0]);
+            let upper_uv = project_voxel_surface_tile_point(direction, upper, [0, 0, 0]);
             assert_eq!(lower_uv[1], -7.0, "{direction:?}");
             assert_eq!(upper_uv[1], -12.0, "{direction:?}");
             assert_eq!(upper_uv[0], lower_uv[0], "{direction:?}");
@@ -270,7 +243,7 @@ mod tests {
         ];
 
         for (direction, corners) in faces {
-            let uv = project_voxel_surface_tile_corners(direction, corners, [13, 17, 19]).unwrap();
+            let uv = project_voxel_surface_tile_corners(direction, corners, [13, 17, 19]);
             assert_eq!(uv[0][1], -19.0, "{direction:?}");
             assert_eq!(uv[1][1], -19.0, "{direction:?}");
             assert_eq!(uv[2][1], -25.0, "{direction:?}");
@@ -291,23 +264,15 @@ mod tests {
     }
 
     #[test]
-    fn coordinate_projection_is_exact_at_limit_and_rejects_one_over() {
+    fn coordinate_projection_is_exact_at_limit_and_repeat_rejects_unsupported_mappings() {
         assert_eq!(
             project_voxel_surface_tile_point(
                 Direction6::NegZ,
                 [MAX_EXACT_TILE_COORDINATE, 0, 0],
                 [0, 0, 0],
             ),
-            Ok([MAX_EXACT_TILE_COORDINATE as f32, 0.0]),
+            [MAX_EXACT_TILE_COORDINATE as f32, 0.0],
         );
-        assert!(matches!(
-            project_voxel_surface_tile_point(
-                Direction6::PosZ,
-                [MAX_EXACT_TILE_COORDINATE + 1, 0, 0],
-                [0, 0, 0],
-            ),
-            Err(VoxelTextureMappingError::CoordinateOutOfExactRange { .. })
-        ));
         assert_eq!(
             repeat_voxel_tile_coordinate([0.0, 0.0], [MIN_TILE_SCALE_CELLS / 2.0, 1.0], [0.0, 0.0],),
             Err(VoxelTextureMappingError::InvalidTileScale),
@@ -389,11 +354,9 @@ mod tests {
             Direction6::PosZ,
             [16, 0, 0],
             [integer_limit - 16, 0, 0],
-        )
-        .unwrap();
+        );
         let right_chunk_seam =
-            project_voxel_surface_tile_point(Direction6::PosZ, [0, 0, 0], [integer_limit, 0, 0])
-                .unwrap();
+            project_voxel_surface_tile_point(Direction6::PosZ, [0, 0, 0], [integer_limit, 0, 0]);
         assert_eq!(left_chunk_seam, right_chunk_seam);
         assert_eq!(
             repeat_voxel_tile_coordinate(

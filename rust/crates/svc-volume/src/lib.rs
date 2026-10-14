@@ -53,7 +53,8 @@ pub enum VolumeError {
         local: LocalVoxelCoord,
         dims: ChunkDims,
     },
-    /// A density was not finite, or a density array did not match the chunk.
+    /// A density was not finite, a density array did not match the chunk, or
+    /// an edge axis was not 0, 1 or 2.
     InvalidDensity,
 }
 
@@ -437,11 +438,9 @@ impl VoxelChunk {
             local,
             dims: self.dims,
         })?;
-        if axis > 2
-            || crossing.is_some_and(|value| {
-                !(value.normal.iter().all(|v| v.is_finite()) && (0.0..=1.0).contains(&value.at))
-            })
-        {
+        // A larger axis would alias another voxel's key. Packing clamps the
+        // fraction and normal into their 16-bit range.
+        if axis > 2 {
             return Err(VolumeError::InvalidDensity);
         }
         let key = (index * 3 + axis) as u32;

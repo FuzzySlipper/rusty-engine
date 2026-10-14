@@ -277,8 +277,8 @@ restores the scene. The receipt reports changed voxels, solidity changes, rebuil
 and meshing time. `Voxel.ReadDensities(new(session, min, sizeX, sizeY,
 sizeZ))` reads densities and materials back (borrowed until the next Voxel
 call). Residency operations may carry a chunk's densities through
-`DensityOffset`/`DensityCount` into the transaction's `Densities`; they must
-be negative exactly where the chunk's material slots are solid. A classic
+`DensityOffset`/`DensityCount` into the transaction's `Densities`, one finite
+density per slot; as everywhere, the slots decide the sign. A classic
 voxel edit keeps the edited voxel's density magnitude.
 
 ## Collision follows the drawn surface

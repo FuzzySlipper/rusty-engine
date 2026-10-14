@@ -82,10 +82,10 @@ pub struct VoxelChunkPayload {
     pub material_slots: Vec<u16>,
     /// Empty means default state for every cell; otherwise exactly one entry per slot.
     pub states: Vec<u16>,
-    /// Empty means the default density for every cell; otherwise one signed
-    /// density per slot (negative inside, in voxel units), negative exactly
-    /// where the slot is solid. Reconstructed surfaces cross between samples
-    /// where the densities say.
+    /// Empty means the default density for every cell; otherwise one density
+    /// per slot, in voxel units. Its magnitude places the surface; its sign
+    /// follows whether the slot is solid. Reconstructed surfaces cross between
+    /// samples where the densities say.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub densities: Vec<f32>,
 }
@@ -154,8 +154,7 @@ pub enum VoxelChunkResidencyRejection {
     InvalidCellStates {
         operation_index: usize,
     },
-    /// Densities must be finite, one per slot, and negative exactly where the
-    /// slot is solid.
+    /// Densities must be finite and one per slot.
     InvalidDensities {
         operation_index: usize,
     },
@@ -484,13 +483,7 @@ fn validate_payload(
         .collect::<Result<_, _>>()?;
     if !payload.densities.is_empty()
         && (payload.densities.len() != expected_slot_count
-            || payload
-                .densities
-                .iter()
-                .zip(&payload.material_slots)
-                .any(|(density, material)| {
-                    !density.is_finite() || (*density < 0.0) != (*material != 0)
-                }))
+            || payload.densities.iter().any(|density| !density.is_finite()))
     {
         return Err(VoxelChunkResidencyApplyError::Rejected(
             VoxelChunkResidencyRejection::InvalidDensities { operation_index },

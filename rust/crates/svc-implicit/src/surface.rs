@@ -156,7 +156,6 @@ pub fn assemble_with(
             ..options
         })?;
     }
-    validate_positions(&geometry.positions)?;
     let count = geometry.triangles.len();
     if !(geometry.slots.is_empty() || geometry.slots.len() == count)
         || !(geometry.halo.is_empty() || geometry.halo.len() == count)
@@ -171,19 +170,10 @@ pub fn assemble_with(
     for (index, &triangle) in geometry.triangles.iter().enumerate() {
         let vertices = triangle_positions(&geometry.positions, triangle)?;
         let area_normal = cross(sub(vertices[1], vertices[0]), sub(vertices[2], vertices[0]));
-        let length_squared = dot(area_normal, area_normal);
-        // Extraction already omits degenerate triangles. Keeping that contract
-        // at this boundary avoids emitting non-finite normals for hand-built
-        // or partially recovered Geometry values too.
-        if !length_squared.is_finite() {
-            return Err(Error(
-                "geometry triangle has an unrepresentable area".into(),
-            ));
-        }
-        if length_squared == 0.0 {
+        // A triangle without a representable normal draws nothing.
+        let Some(normal) = normalize(area_normal) else {
             continue;
-        }
-        let normal = normalize(area_normal).expect("nonzero finite face normal");
+        };
         faces.push(Face {
             vertices: triangle,
             normal,
@@ -196,13 +186,10 @@ pub fn assemble_with(
                 .unwrap_or(options.default_slot),
             halo: geometry.halo.get(index).copied().unwrap_or(false),
         });
-        let centroid = scale(add(add(vertices[0], vertices[1]), vertices[2]), 1.0 / 3.0);
-        if centroid.iter().any(|value| !value.is_finite()) {
-            return Err(Error(
-                "geometry triangle has an unrepresentable centroid".into(),
-            ));
-        }
-        centroids.push(centroid);
+        centroids.push(scale(
+            add(add(vertices[0], vertices[1]), vertices[2]),
+            1.0 / 3.0,
+        ));
     }
 
     if faces.is_empty() {
@@ -297,13 +284,6 @@ fn validate_options(options: SurfaceOptions) -> Result<(), Error> {
                 "texture projection basis must contain finite orthonormal U and V axes".into(),
             ));
         }
-    }
-    Ok(())
-}
-
-fn validate_positions(positions: &[[f32; 3]]) -> Result<(), Error> {
-    if positions.iter().flatten().any(|value| !value.is_finite()) {
-        return Err(Error("geometry positions must be finite".into()));
     }
     Ok(())
 }

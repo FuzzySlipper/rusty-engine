@@ -436,17 +436,29 @@ fn residency_carries_densities_through_eviction_and_rebase() {
     assert!((scene.density([3, 2, 4]).unwrap() - 0.2).abs() < 1.0e-6);
     assert!((scene.density([3, 1, 4]).unwrap() + 0.8).abs() < 1.0e-6);
 
-    // A payload whose density sign disagrees with its slot is refused.
-    let mut wrong = payload(2);
-    wrong.densities[0] = 0.4;
+    // A density whose sign disagrees with its slot keeps its magnitude and
+    // takes its sign from the slot; a non-finite one is refused.
+    let mut positive = payload(2);
+    positive.densities[0] = 0.4;
+    let mut not_finite = payload(3);
+    not_finite.densities[0] = f32::NAN;
     assert!(VoxelChunkResidencyService::apply(
         &mut scene,
         &[VoxelChunkResidencyOperation::Admit {
-            chunk: VoxelChunkIdentity::new(2, 0, 0),
-            payload: wrong,
+            chunk: VoxelChunkIdentity::new(3, 0, 0),
+            payload: not_finite,
         }],
     )
     .is_err());
+    VoxelChunkResidencyService::apply(
+        &mut scene,
+        &[VoxelChunkResidencyOperation::Admit {
+            chunk: VoxelChunkIdentity::new(2, 0, 0),
+            payload: positive,
+        }],
+    )
+    .unwrap();
+    assert!((scene.density([16, 0, 0]).unwrap() + 0.4).abs() < 1.0e-6);
 
     // Evicted and readmitted, the chunk draws and collides the same.
     VoxelChunkResidencyService::apply(
