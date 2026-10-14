@@ -93,7 +93,7 @@ impl VoxelScatter {
             .tints
             .iter()
             .flatten()
-            .all(|value| value.is_finite() && (0.0..=16.0).contains(value))
+            .all(|value| value.is_finite() && *value >= 0.0)
         {
             return Err(VoxelScatterError::Tint);
         }

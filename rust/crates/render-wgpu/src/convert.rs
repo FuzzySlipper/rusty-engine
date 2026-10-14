@@ -20,9 +20,16 @@ pub(crate) fn world_vec3(value: [f64; 3]) -> Vec3 {
     DVec3::from_array(value).as_vec3()
 }
 
-/// A presentation rotation as `[x, y, z, w]`, normalized.
+/// A presentation rotation as `[x, y, z, w]`, normalized. Products' object
+/// rotations arrive unchecked, so a zero or non-finite one is the identity.
 pub(crate) fn rotation(value: [f32; 4]) -> Quat {
-    Quat::from_array(value).normalize()
+    let rotation = Quat::from_array(value);
+    let length_squared = rotation.length_squared();
+    if length_squared.is_finite() && length_squared > f32::MIN_POSITIVE {
+        rotation.normalize()
+    } else {
+        Quat::IDENTITY
+    }
 }
 
 /// A retained node transform as a local matrix.
@@ -72,4 +79,27 @@ pub fn rotation_facing(direction: [f32; 3]) -> [f32; 4] {
         Vec3::NEG_Z,
         vec3(direction).normalize_or(Vec3::NEG_Z),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_zero_or_non_finite_rotation_is_the_identity() {
+        for value in [
+            [0.0; 4],
+            [f32::NAN, 0.0, 0.0, 1.0],
+            [0.0, f32::INFINITY, 0.0, 1.0],
+        ] {
+            assert_eq!(rotation(value), Quat::IDENTITY);
+            assert!(transform_matrix(&Transform {
+                rotation: value,
+                ..Transform::IDENTITY
+            })
+            .is_finite());
+        }
+        let turned = rotation([0.0, 0.0, 2.0, 0.0]);
+        assert!((turned.length() - 1.0).abs() < 1e-6);
+    }
 }

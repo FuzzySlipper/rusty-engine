@@ -2036,7 +2036,8 @@ impl MaterialParams {
             keep_dry: descriptor.keep_dry,
             wind: descriptor.wind,
             water: descriptor.water.clone(),
-            metalness: descriptor.metalness,
+            // Metalness above 1 would turn the diffuse term negative.
+            metalness: descriptor.metalness.min(1.0),
             voxel_surface,
             triplanar: descriptor.triplanar.map(|triplanar| triplanar.sharpness),
             stochastic_tiling: descriptor
@@ -2736,5 +2737,46 @@ fn op_name(op: &RenderDiff) -> &'static str {
         RenderDiff::SetVoxelObjectFrame { .. } => "setVoxelObjectFrame",
         RenderDiff::CreateSprite { .. } => "createSprite",
         RenderDiff::UpdateSprite { .. } => "updateSprite",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use render_model::{MaterialAlphaModeDescriptor, MaterialUvStrategy, RenderMaterialDescriptor};
+
+    use super::MaterialParams;
+
+    #[test]
+    fn metalness_above_one_shades_as_a_metal() {
+        let material = |metalness| RenderMaterialDescriptor {
+            texture_transform: None,
+            stochastic_tiling: None,
+            terrain_layers: None,
+            shader: None,
+            id: "material/metal".to_owned(),
+            color: [1.0; 4],
+            texture: None,
+            roughness: 0.5,
+            metalness,
+            texture_tint: [1.0; 4],
+            emission_color: [0.0; 3],
+            emission_intensity: 0.0,
+            uv_strategy: MaterialUvStrategy::Flat,
+            alpha_mode: MaterialAlphaModeDescriptor::Opaque,
+            double_sided: false,
+            voxel_surface: None,
+            normal_map: None,
+            triplanar: None,
+            emission_map: Default::default(),
+            occlusion_map: Default::default(),
+            unlit: false,
+            flat_shading: false,
+            keep_dry: false,
+            wind: None,
+            water: None,
+            translucent_shadow: false,
+        };
+        assert_eq!(MaterialParams::of(&material(1.5), None).metalness, 1.0);
+        assert_eq!(MaterialParams::of(&material(0.25), None).metalness, 0.25);
     }
 }

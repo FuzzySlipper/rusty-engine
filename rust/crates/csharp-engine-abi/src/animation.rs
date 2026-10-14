@@ -219,14 +219,14 @@ pub struct NativeAnimatedMeshMaterialUpdateRequest {
 pub struct NativeMeshMaterialFactors {
     pub material_slot: u32,
     /// Replace the slot's `baseColorFactor` with `base_color` (linear RGBA,
-    /// each 0 to 1).
+    /// not negative; alpha 0 to 1).
     pub override_base_color: bool,
-    /// Linear RGBA, each 0 to 1.
+    /// Linear RGBA, not negative; alpha 0 to 1.
     pub base_color: NativeColor,
-    /// Replace the slot's `emissiveFactor` (each 0 to 1) and emissive
+    /// Replace the slot's `emissiveFactor` (not negative) and emissive
     /// strength (finite, not negative).
     pub override_emission: bool,
-    /// Linear RGB, each 0 to 1.
+    /// Linear RGB, not negative.
     pub emissive_factor: NativeVec3,
     pub emissive_strength: f32,
     /// Replace the slot's texture tint (the material's own without; a GLB

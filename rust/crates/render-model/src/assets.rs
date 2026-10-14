@@ -2,7 +2,7 @@ use crate::RenderLayer;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::{RenderMetadata, Transform, JSON_SAFE_U64_MAX};
+use crate::{RenderMetadata, Transform};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -655,7 +655,7 @@ impl RenderMaterialDescriptor {
         if !self.roughness.is_finite() || !(0.0..=1.0).contains(&self.roughness) {
             return Err(MaterialDescriptorError::InvalidRoughness);
         }
-        if !self.metalness.is_finite() || !(0.0..=1.0).contains(&self.metalness) {
+        if !self.metalness.is_finite() || self.metalness < 0.0 {
             return Err(MaterialDescriptorError::InvalidMetalness);
         }
         if self
@@ -1324,7 +1324,7 @@ impl SpriteMaterialDescriptor {
     }
 
     pub fn validate(&self) -> Result<(), SpriteMaterialError> {
-        if !self.normal_strength.is_finite() || !(0.0..=4.0).contains(&self.normal_strength) {
+        if !self.normal_strength.is_finite() || self.normal_strength < 0.0 {
             return Err(SpriteMaterialError::InvalidNormalStrength);
         }
         if !self.normal_bias.is_finite() || !(-1.0..=1.0).contains(&self.normal_bias) {
@@ -1433,17 +1433,6 @@ impl SpriteInstanceDescriptor {
         if let Some(placement) = self.viewport_placement {
             placement.validate()?;
         }
-        self.transform.validate().map_err(SpriteError::Transform)?;
-        self.metadata.validate().map_err(SpriteError::Metadata)?;
-        if self
-            .attachment
-            .source_entity
-            .into_iter()
-            .chain(self.attachment.source_scene_node)
-            .any(|value| value > JSON_SAFE_U64_MAX)
-        {
-            return Err(SpriteError::UnsafeSourceIdentity);
-        }
         if self
             .attachment
             .attachment_point
@@ -1464,16 +1453,17 @@ pub enum SpriteError {
     InvalidTint,
     InvalidViewportPlacement,
     Material(SpriteMaterialError),
-    Transform(crate::TransformError),
-    Metadata(crate::NodeError),
     EmptyAttachmentPoint,
-    UnsafeSourceIdentity,
 }
 
-fn valid_color<const N: usize>(values: [f32; N]) -> bool {
-    values
-        .iter()
-        .all(|value| value.is_finite() && (0.0..=1.0).contains(value))
+/// A colour feeds shading, so each channel is finite and not negative (a
+/// NaN or negative pixel would reach auto exposure's retained average); it
+/// has no upper bound, as an HDR tint is a look. An alpha (the fourth
+/// channel) stays within 0 to 1, as blending takes `1 - alpha`.
+pub fn valid_color<const N: usize>(values: [f32; N]) -> bool {
+    values.iter().enumerate().all(|(channel, value)| {
+        value.is_finite() && *value >= 0.0 && (channel < 3 || *value <= 1.0)
+    })
 }
 
 #[cfg(test)]
@@ -1543,7 +1533,15 @@ mod tests {
         );
         assert_eq!(
             SpriteMaterialDescriptor {
-                normal_strength: 4.1,
+                normal_strength: 6.0,
+                ..authored.clone()
+            }
+            .validate(),
+            Ok(())
+        );
+        assert_eq!(
+            SpriteMaterialDescriptor {
+                normal_strength: f32::NAN,
                 ..authored
             }
             .validate(),

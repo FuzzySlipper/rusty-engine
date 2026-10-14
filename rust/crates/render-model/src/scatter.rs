@@ -103,7 +103,7 @@ impl ScatterInstance {
             && self
                 .tint
                 .iter()
-                .all(|value| value.is_finite() && (0.0..=16.0).contains(value))
+                .all(|value| value.is_finite() && *value >= 0.0)
     }
 }
 

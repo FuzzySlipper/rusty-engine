@@ -473,13 +473,13 @@ pub(crate) fn validate_descriptor(
     assets: &impl PresentationAssetLookup,
     descriptor: &BillboardDescriptor,
 ) -> Result<(), BillboardProjectionDiagnosticCode> {
-    if !anchor_is_finite(&descriptor.anchor)
-        || !in_range(descriptor.height_pixels, 8.0, 256.0)
-        || !in_range(
-            descriptor.max_distance,
-            MIN_POSITIVE_BILLBOARD_VALUE,
-            10_000.0,
-        )
+    // A label rasterises at its height into a texture of its own, so the
+    // height has the 256 px ceiling; a non-finite anchor only fails to draw.
+    if !in_range(
+        descriptor.height_pixels,
+        MIN_POSITIVE_BILLBOARD_VALUE,
+        256.0,
+    ) || !at_least(descriptor.max_distance, MIN_POSITIVE_BILLBOARD_VALUE)
         || !color_is_valid(descriptor.color)
         || !color_is_valid(descriptor.background)
     {
@@ -731,15 +731,6 @@ impl BillboardDescriptor {
             descriptor.layout = Some(value.clone());
         }
         descriptor
-    }
-}
-
-fn anchor_is_finite(anchor: &BillboardAnchor) -> bool {
-    match anchor {
-        BillboardAnchor::World { position }
-        | BillboardAnchor::EntityAttached {
-            offset: position, ..
-        } => position.iter().all(|value| value.is_finite()),
     }
 }
 

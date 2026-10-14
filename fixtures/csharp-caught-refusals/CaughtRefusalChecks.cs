@@ -15,7 +15,7 @@ internal static class CaughtRefusalChecks
     private const string MissingClip = "missing/caught-refusal.wav";
     private const string PresentTexture = "spatial-particle.png";
     private const ulong NonAdvancingUiSequence = 0;
-    private const float OutOfRangeBlendAmount = 2f;
+    private const float NonFiniteBlendAmount = float.NaN;
 
     internal static void Run(IEngineContext engine, UiStream stream)
     {
@@ -23,7 +23,7 @@ internal static class CaughtRefusalChecks
         ExpectRefusal("Audio", () => engine.Audio.OpenClip(new AudioClipRequest(MissingClip)));
         RenderResourceInfo sky = engine.Graphics.OpenResource(new RenderResourceRequest(PresentTexture));
         ExpectRefusal("CameraView", () => engine.CameraView.SetSkyBackgroundBlend(
-            new SkyBackgroundBlendRequest(sky.Handle, sky.Handle, OutOfRangeBlendAmount)));
+            new SkyBackgroundBlendRequest(sky.Handle, sky.Handle, NonFiniteBlendAmount)));
         EngineCallException dynamics = ExpectRefusal("Dynamics", () => engine.Dynamics.CreateWorld(
             new DynamicsWorldConfig(new Vector3(float.NaN, 0, 0))));
         if (dynamics.Diagnostics.Span[0].Code != "CSHARP_DYNAMICS_WORLD")

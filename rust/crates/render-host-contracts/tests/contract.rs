@@ -1,6 +1,8 @@
 use render_host_contracts::{
-    RendererCameraInterpolation, RendererCameraMotion, RendererCameraPose,
-    RendererCameraProjection, RendererCompositionCamera,
+    validate_target_pixels, RendererCameraInterpolation, RendererCameraMotion, RendererCameraPose,
+    RendererCameraProjection, RendererCompositionCamera, RendererCompositionTarget,
+    RendererHostContractError, RendererTargetColor, RendererTargetDepth, RendererTargetSampling,
+    MAX_RENDERER_TARGET_DIMENSION,
 };
 
 #[test]
@@ -37,5 +39,33 @@ fn camera_motion_contract_carries_renderer_sampling_facts() {
             "interpolation": "pose",
             "cut": true,
         })
+    );
+}
+
+#[test]
+fn a_target_takes_any_side_up_to_the_texture_limit_within_the_pixel_budget() {
+    let target = |width, height, revision| RendererCompositionTarget {
+        id: "inset".to_owned(),
+        revision,
+        width,
+        height,
+        color: RendererTargetColor::Rgba8Srgb,
+        depth: RendererTargetDepth::Depth24,
+        sampling: RendererTargetSampling::Linear,
+    };
+    let wide = target(4_096, 512, 1 << 60);
+    assert_eq!(wide.validate(), Ok(()));
+    assert_eq!(validate_target_pixels([&wide]), Ok(()));
+    assert_eq!(
+        target(MAX_RENDERER_TARGET_DIMENSION, 1, 1).validate(),
+        Ok(())
+    );
+    assert_eq!(
+        target(MAX_RENDERER_TARGET_DIMENSION + 1, 1, 1).validate(),
+        Err(RendererHostContractError::InvalidDimension)
+    );
+    assert_eq!(
+        validate_target_pixels([&target(4_096, 4_096, 1)]),
+        Err(RendererHostContractError::LimitExceeded)
     );
 }

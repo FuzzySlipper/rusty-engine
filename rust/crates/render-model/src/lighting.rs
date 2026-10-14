@@ -1,7 +1,5 @@
 use serde::{Deserialize, Serialize};
 
-pub const MAX_RENDER_LIGHT_INTENSITY: f32 = 10_000.0;
-
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum LightShadowIntent {
@@ -116,20 +114,18 @@ impl LightDescriptor {
                 color, intensity, ..
             } => (color, *intensity),
         };
-        if !color
-            .iter()
-            .all(|value| value.is_finite() && (0.0..=1.0).contains(value))
-        {
+        // Lights fit shadow cascades and clusters and feed auto exposure, so
+        // a non-finite or negative value would spoil the whole view. Colour
+        // and intensity have no upper bound: an HDR colour or a bright
+        // light is a look.
+        let valid_color =
+            |color: &[f32; 3]| color.iter().all(|value| value.is_finite() && *value >= 0.0);
+        if !valid_color(color) {
             return Err(LightDescriptorError::InvalidColor);
         }
-        if !intensity.is_finite() || !(0.0..=MAX_RENDER_LIGHT_INTENSITY).contains(&intensity) {
+        if !intensity.is_finite() || intensity < 0.0 {
             return Err(LightDescriptorError::InvalidIntensity);
         }
-        let valid_color = |color: &[f32; 3]| {
-            color
-                .iter()
-                .all(|value| value.is_finite() && (0.0..=1.0).contains(value))
-        };
         match self {
             Self::Ambient { range, .. } => validate_range_decay(*range, 0.0),
             Self::Hemisphere { ground_color, .. } => valid_color(ground_color)
@@ -293,24 +289,27 @@ mod tests {
     }
 
     #[test]
-    fn light_intensity_has_a_shared_hard_ceiling() {
-        let exact = LightDescriptor::Ambient {
-            color: [1.0; 3],
-            intensity: MAX_RENDER_LIGHT_INTENSITY,
+    fn bright_and_hdr_lights_are_accepted_and_non_finite_ones_refused() {
+        let ambient = |color: [f32; 3], intensity: f32| LightDescriptor::Ambient {
+            color,
+            intensity,
             enabled: true,
             shadow_intent: LightShadowIntent::Disabled,
             shadow: Default::default(),
             range: None,
         };
-        let over = LightDescriptor::Ambient {
-            color: [1.0; 3],
-            intensity: MAX_RENDER_LIGHT_INTENSITY + 1.0,
-            enabled: true,
-            shadow_intent: LightShadowIntent::Disabled,
-            shadow: Default::default(),
-            range: None,
-        };
-        assert_eq!(exact.validate(), Ok(()));
-        assert_eq!(over.validate(), Err(LightDescriptorError::InvalidIntensity));
+        assert_eq!(ambient([4.0, 2.0, 1.0], 50_000.0).validate(), Ok(()));
+        assert_eq!(
+            ambient([1.0; 3], f32::NAN).validate(),
+            Err(LightDescriptorError::InvalidIntensity)
+        );
+        assert_eq!(
+            ambient([f32::INFINITY, 1.0, 1.0], 1.0).validate(),
+            Err(LightDescriptorError::InvalidColor)
+        );
+        assert_eq!(
+            ambient([-0.5, 1.0, 1.0], 1.0).validate(),
+            Err(LightDescriptorError::InvalidColor)
+        );
     }
 }

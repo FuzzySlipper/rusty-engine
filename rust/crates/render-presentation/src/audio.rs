@@ -519,7 +519,7 @@ impl AudioProjector {
                 let state = self.buses.entry(*bus).or_default();
                 match control {
                     AudioBusControl::SetVolume { volume } => {
-                        if !in_range(*volume, 0.0, 1.0) {
+                        if !at_least(*volume, 0.0) {
                             return Err(AudioProjectionDiagnosticCode::InvalidControl);
                         }
                         state.volume = *volume;
@@ -536,8 +536,11 @@ fn validate_descriptor(
     assets: &impl PresentationAssetLookup,
     descriptor: &AudioSourceDescriptor,
 ) -> Result<(), AudioProjectionDiagnosticCode> {
-    if !in_range(descriptor.volume, 0.0, 1.0)
-        || !in_range(descriptor.pitch, 0.25, 4.0)
+    // Volume is a gain and pitch a playback rate (kira takes any positive
+    // one), so neither has an upper bound.
+    if !at_least(descriptor.volume, 0.0)
+        || !descriptor.pitch.is_finite()
+        || descriptor.pitch <= 0.0
         || !in_range(descriptor.spatial_blend, 0.0, 1.0)
         || !in_range(descriptor.pan, -1.0, 1.0)
         || !descriptor.max_distance.is_finite()
@@ -590,6 +593,10 @@ fn asset_diagnostic(error: PresentationAssetError) -> AudioProjectionDiagnosticC
         PresentationAssetError::Missing => AudioProjectionDiagnosticCode::AssetMissing,
         PresentationAssetError::WrongKind => AudioProjectionDiagnosticCode::AssetKindMismatch,
     }
+}
+
+fn at_least(value: f32, minimum: f32) -> bool {
+    value.is_finite() && value >= minimum
 }
 
 fn in_range(value: f32, minimum: f32, maximum: f32) -> bool {

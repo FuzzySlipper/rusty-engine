@@ -165,30 +165,25 @@ impl RuntimeRenderOutputBridge {
             r.background.b,
             r.background.a,
         ];
-        if r.width == 0
-            || r.height == 0
-            || !background
-                .iter()
-                .all(|v| v.is_finite() && (0.0..=1.0).contains(v))
-            || !r.exposure.is_finite()
-            || r.exposure < 0.0
-        {
-            return Err(error(
-                "capture dimensions, background, or exposure are invalid",
-            ));
+        // A one-off capture keeps no state across frames: an odd background
+        // or exposure only shows in its own image.
+        if r.width == 0 || r.height == 0 {
+            return Err(error("capture dimensions must be above 0"));
         }
         let pose = if r.pose_object_id == 0 {
             None
         } else {
-            if !r.pose_time.is_finite() || !(0.0..=1.0).contains(&r.pose_time) {
-                return Err(error("pose time must be in [0,1]"));
-            }
             let clip = unsafe { borrowed_utf8(r.pose_clip.bytes, r.pose_clip.len, "pose clip") }?
                 .to_owned();
             Some(RenderOutputPose {
                 handle: RenderHandle::new(r.pose_object_id),
                 clip,
-                normalized_time: r.pose_time,
+                // Within the clip; NaN takes its start.
+                normalized_time: if r.pose_time.is_nan() {
+                    0.0
+                } else {
+                    r.pose_time.clamp(0.0, 1.0)
+                },
             })
         };
         self.request(Request::Image {

@@ -39,7 +39,7 @@ fn eye() -> RendererCompositionCamera {
 }
 
 fn frame(ops: Vec<BillboardProjectionOp>) -> PresentationFrameDiff {
-    PresentationFrameDiff::try_from_ops(
+    PresentationFrameDiff::from_ops(
         ops.into_iter()
             .enumerate()
             .map(|(sequence, op)| PresentationOp::Billboard {
@@ -48,7 +48,6 @@ fn frame(ops: Vec<BillboardProjectionOp>) -> PresentationFrameDiff {
             })
             .collect(),
     )
-    .expect("a valid presentation frame")
 }
 
 /// Apply billboard ops and return the issues.

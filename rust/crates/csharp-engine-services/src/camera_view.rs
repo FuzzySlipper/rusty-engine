@@ -754,12 +754,12 @@ impl RuntimeCameraViewBridge {
         ];
         if !color
             .iter()
-            .all(|component| component.is_finite() && (0.0..=1.0).contains(component))
+            .all(|component| component.is_finite() && *component >= 0.0)
             || request.color.a != 1.0
         {
             return Err(CsharpEngineServicesError::new(
                 "CSHARP_BACKGROUND_COLOR",
-                "background color must be finite, normalized, and opaque",
+                "background color must be finite, non-negative and opaque",
             ));
         }
         let staged = self.staged_mut()?;
@@ -868,7 +868,7 @@ impl RuntimeCameraViewBridge {
         if !bloom.valid() {
             return Err(CsharpEngineServicesError::new(
                 "CSHARP_BLOOM",
-                "bloom threshold must be finite and non-negative, and intensity within 0 to 16",
+                "bloom threshold and intensity must be finite and non-negative",
             ));
         }
         self.staged_mut()?.bloom = Some((request.intensity > 0.0).then_some(bloom));
@@ -947,7 +947,7 @@ impl RuntimeCameraViewBridge {
         if !atmosphere.valid() {
             return Err(CsharpEngineServicesError::new(
                 "CSHARP_ATMOSPHERE",
-                "atmosphere values must be finite; falloff height, haze colour, haze exponent and sun halo non-negative; sun radius within 0 to 20 degrees; sun radiance within 0 to 1000; sky sun colour and intensity within 0 to 16",
+                "atmosphere values must be finite, and all but the fog base height and sky sun direction non-negative",
             ));
         }
         // All zero is no atmosphere.
@@ -962,12 +962,12 @@ impl RuntimeCameraViewBridge {
     ) -> Result<(), CsharpEngineServicesError> {
         let shafts = SunShaftsDescriptor {
             intensity: request.intensity,
-            length: request.length,
+            length: request.length.clamp(0.0, 1.0),
         };
         if !shafts.valid() {
             return Err(CsharpEngineServicesError::new(
                 "CSHARP_SUN_SHAFTS",
-                "sun shafts intensity must be within 0 to 16 and length within 0 to 1",
+                "sun shafts intensity must be finite and non-negative, and length finite",
             ));
         }
         self.staged_mut()?.sun_shafts = Some((request.intensity > 0.0).then_some(shafts));
@@ -984,8 +984,8 @@ impl RuntimeCameraViewBridge {
             radius_degrees: request.radius_degrees,
             color: [request.color.x, request.color.y, request.color.z],
             radiance: request.radiance,
-            phase: request.phase,
-            earthshine: request.earthshine,
+            phase: request.phase.clamp(0.0, 1.0),
+            earthshine: request.earthshine.clamp(0.0, 1.0),
             halo: request.halo,
             light_intensity: request.light_intensity,
         };
@@ -997,7 +997,7 @@ impl RuntimeCameraViewBridge {
         if !moon.valid() {
             return Err(CsharpEngineServicesError::new(
                 "CSHARP_MOON",
-                "the moon needs a finite direction with some length, a radius within 0 to 20 degrees, colour channels, a halo and a light intensity within 0 to 16, a radiance within 0 to 1000, and a phase and earthshine within 0 to 1",
+                "the moon needs a finite direction with some length, and finite values otherwise, all but the phase and earthshine non-negative",
             ));
         }
         self.staged_mut()?.moon = Some(Some(moon));
@@ -1042,12 +1042,12 @@ impl RuntimeCameraViewBridge {
         let wind = WindDescriptor {
             direction: [request.direction.x, request.direction.y],
             strength: request.strength,
-            gust: request.gust,
+            gust: request.gust.clamp(0.0, 1.0),
         };
         if !wind.valid() {
             return Err(CsharpEngineServicesError::new(
                 "CSHARP_WIND",
-                "wind direction must be finite with some length, strength within 0 to 16 and gust within 0 to 1",
+                "wind direction must be finite with some length, strength finite and non-negative and gust finite",
             ));
         }
         self.staged_mut()?.wind = Some((request.strength > 0.0).then_some(wind));
@@ -1059,7 +1059,7 @@ impl RuntimeCameraViewBridge {
         request: NativeCloudsRequest,
     ) -> Result<(), CsharpEngineServicesError> {
         let clouds = CloudsDescriptor {
-            coverage: request.coverage,
+            coverage: request.coverage.clamp(0.0, 1.0),
             drift: [request.drift.x, request.drift.y],
             altitude: request.altitude,
             scale: request.scale,
@@ -1071,7 +1071,7 @@ impl RuntimeCameraViewBridge {
         if !clouds.valid() {
             return Err(CsharpEngineServicesError::new(
                 "CSHARP_CLOUDS",
-                "clouds need coverage within 0 to 1, a finite drift of at most 1000 m/s, an altitude and scale above 0 and at most 100 km, a thickness from 0 to 100 km, colour channels within 0 to 16, and a twilight within 0 to 20 degrees",
+                "clouds need a finite coverage and drift, an altitude and scale above 0, and a non-negative thickness, colour and twilight, all finite",
             ));
         }
         // Coverage 0 draws no layer, but its altitude, scale, drift, kind and
@@ -1085,16 +1085,16 @@ impl RuntimeCameraViewBridge {
         request: NativeWetnessRequest,
     ) -> Result<(), CsharpEngineServicesError> {
         let wetness = WetnessDescriptor {
-            wetness: request.wetness,
-            puddles: request.puddles,
+            wetness: request.wetness.clamp(0.0, 1.0),
+            puddles: request.puddles.clamp(0.0, 1.0),
         };
         if !wetness.valid() {
             return Err(CsharpEngineServicesError::new(
                 "CSHARP_WETNESS",
-                "wetness and puddles must each be within 0 to 1",
+                "wetness and puddles must each be finite",
             ));
         }
-        self.staged_mut()?.wetness = Some((request.wetness > 0.0).then_some(wetness));
+        self.staged_mut()?.wetness = Some((wetness.wetness > 0.0).then_some(wetness));
         Ok(())
     }
 
@@ -1169,8 +1169,8 @@ impl RuntimeCameraViewBridge {
         let region = render_model::CloudRegionDescriptor {
             center: [request.center.x, request.center.y],
             radius: request.radius,
-            coverage: request.coverage,
-            darkness: request.darkness,
+            coverage: request.coverage.clamp(0.0, 1.0),
+            darkness: request.darkness.clamp(0.0, 1.0),
             drift: [request.drift.x, request.drift.y],
             kind: cloud_kind(request.kind),
             thickness: request.thickness,
@@ -1178,7 +1178,7 @@ impl RuntimeCameraViewBridge {
         if !region.valid() {
             return Err(CsharpEngineServicesError::new(
                 "CSHARP_CLOUD_REGION",
-                "a cloud region needs a finite centre and drift, a radius above 0 and at most 1000 km, coverage and darkness within 0 to 1, and a thickness from 0 to 100 km",
+                "a cloud region needs a finite centre, drift, coverage and darkness, a finite radius above 0 and a finite non-negative thickness",
             ));
         }
         self.staged_mut()?
@@ -1211,7 +1211,7 @@ impl RuntimeCameraViewBridge {
         if !fog.valid() {
             return Err(CsharpEngineServicesError::new(
                 "CSHARP_VOLUMETRIC_FOG",
-                "volumetric fog needs density within 0 to 1, albedo channels within 0 to 1, anisotropy within -0.9 to 0.9, a finite base height, a non-negative falloff height, a distance of 8 to 1000 m and ambient within 0 to 4",
+                "volumetric fog needs finite values: non-negative density, albedo, falloff height and ambient, anisotropy within -0.9 to 0.9 and a distance above 0",
             ));
         }
         self.staged_mut()?.volumetric_fog = Some(fog);
@@ -1234,15 +1234,15 @@ impl RuntimeCameraViewBridge {
             density: request.density,
             albedo: vec3(request.albedo),
             emission: vec3(request.emission),
-            edge: request.edge,
+            edge: request.edge.clamp(0.0, 1.0),
             noise_scale: request.noise_scale,
-            noise_strength: request.noise_strength,
+            noise_strength: request.noise_strength.clamp(0.0, 1.0),
             noise_velocity: vec3(request.noise_velocity),
         };
         if !volume.valid() {
             return Err(CsharpEngineServicesError::new(
                 "CSHARP_FOG_VOLUME",
-                "a fog volume needs a finite centre and drift, half extents above 0 and at most 10 km, density within 0 to 4, albedo within 0 to 1, emission within 0 to 16, edge and noise strength within 0 to 1 and a non-negative noise scale",
+                "a fog volume needs finite values: half extents above 0, and a non-negative density, albedo, emission and noise scale",
             ));
         }
         self.staged_mut()?
@@ -1311,7 +1311,7 @@ impl RuntimeCameraViewBridge {
         if !precipitation.valid() {
             return Err(CsharpEngineServicesError::new(
                 "CSHARP_PRECIPITATION",
-                "precipitation needs at most 200000 drops, a finite velocity of at most 200 m/s, a size above 0 and at most 4 m, a streak time within 0 to 1 s, colour channels within 0 to 16 and alpha within 0 to 1, and a radius and height within 1 to 500 m",
+                "precipitation needs at most 200000 drops and finite values: a size above 0, a non-negative streak time and colour with alpha within 0 to 1, and a radius and height of at least 1 m",
             ));
         }
         self.staged_mut()?.precipitation = Some((request.drops > 0).then_some(precipitation));
@@ -1353,7 +1353,7 @@ impl RuntimeCameraViewBridge {
         if !sky_light.valid() {
             return Err(CsharpEngineServicesError::new(
                 "CSHARP_SKY_LIGHT",
-                "sky light intensity must be within 0 to 16",
+                "sky light intensity must be finite and non-negative",
             ));
         }
         self.staged_mut()?.sky_light = Some((request.intensity > 0.0).then_some(sky_light));
@@ -2758,21 +2758,17 @@ pub(crate) unsafe extern "C" fn set_sky_background_blend(
     let bridge = unsafe { &mut *context.cast::<RuntimeCameraViewBridge>() };
     let request = unsafe { *request };
     let result = (|| {
-        if request.first.value == 0
-            || request.second.value == 0
-            || !request.amount.is_finite()
-            || !(0.0..=1.0).contains(&request.amount)
-        {
+        if request.first.value == 0 || request.second.value == 0 || !request.amount.is_finite() {
             return Err(CsharpEngineServicesError::new(
                 "CSHARP_SKY_BLEND",
-                "sky blend requires two live textures and amount in [0,1]",
+                "sky blend requires two live textures and a finite amount",
             ));
         }
         let staged = bridge.staged_mut()?;
         staged.state.background = CameraBackground::Blend {
             first: request.first.value,
             second: request.second.value,
-            amount: request.amount,
+            amount: request.amount.clamp(0.0, 1.0),
         };
         staged.background = Some(staged.state.background);
         Ok(())
@@ -3023,9 +3019,10 @@ mod tests {
     #[test]
     fn a_refused_change_leaves_the_cameras_and_the_published_composition_as_they_were() {
         let mut bridge = RuntimeCameraViewBridge::new();
+        // Half the composition's pixel budget, wider than it is tall.
         let largest = NativeCameraTargetDescriptor {
-            width: render_host_contracts::MAX_RENDERER_TARGET_DIMENSION,
-            height: render_host_contracts::MAX_RENDERER_TARGET_DIMENSION,
+            width: 4_096,
+            height: 1_024,
             ..target_descriptor()
         };
         // One target at the largest size leaves room for the small ones
@@ -3226,9 +3223,10 @@ mod tests {
         bridge.commit(initial);
 
         bridge.begin_call();
+        // Half the composition's pixel budget, wider than it is tall.
         let largest = NativeCameraTargetDescriptor {
-            width: render_host_contracts::MAX_RENDERER_TARGET_DIMENSION,
-            height: render_host_contracts::MAX_RENDERER_TARGET_DIMENSION,
+            width: 4_096,
+            height: 1_024,
             ..target_descriptor()
         };
         bridge

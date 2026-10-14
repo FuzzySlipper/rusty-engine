@@ -9,7 +9,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use render_model::{
     LightDescriptor, RenderDiff, RenderFrameDiff, RenderHandle, RenderLayer, RenderMetadata,
-    ShadowCasting, Transform, JSON_SAFE_U64_MAX,
+    ShadowCasting, Transform,
 };
 use serde::Deserialize;
 
@@ -365,9 +365,6 @@ impl RuntimeAppearanceProjector {
         }
         for fact in facts {
             let id = fact.object_id;
-            if id > JSON_SAFE_U64_MAX {
-                return Err(AppearanceProjectionError::UnsafeObjectId { id });
-            }
             let Some(appearance) = self.catalog.appearances.get(fact.appearance) else {
                 unknown.insert(id, fact.appearance);
                 continue;
@@ -436,9 +433,6 @@ impl RuntimeAppearanceProjector {
         }
         for fact in light_facts {
             let id = fact.light_id;
-            if id > JSON_SAFE_U64_MAX {
-                return Err(AppearanceProjectionError::UnsafeLightId { id });
-            }
             if self.lights.get(&id) != Some(fact) {
                 light_changes.insert(id, Change::Put(fact));
             } else {
@@ -467,9 +461,6 @@ impl RuntimeAppearanceProjector {
             match change {
                 Change::Put(next) => {
                     let previous = objects.get(&id);
-                    next.transform.validate().map_err(|source| {
-                        AppearanceProjectionError::InvalidNodeTransform { id, source }
-                    })?;
                     let appearance_changed = previous.is_none_or(|previous| {
                         previous.appearance_id != next.appearance_id
                             || previous.appearance != *next.appearance

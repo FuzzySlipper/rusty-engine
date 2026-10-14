@@ -343,7 +343,7 @@ pub struct NativeToneMappingRequest {
 
 /// Bloom: the world's light above `threshold` (with a soft knee below it)
 /// spreads into a glow added at `intensity` before exposure and tone
-/// mapping. Intensity 0 (the default) turns it off; at most 16.
+/// mapping. Intensity 0 (the default) turns it off.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeBloomRequest {
@@ -372,10 +372,10 @@ pub struct NativeAutoExposureRequest {
 /// at every height). Looking toward the sun the fog turns toward
 /// `haze_color` (linear RGB, alpha ignored) by the cosine between the view
 /// and the sun raised to `haze_exponent` (0: no haze). The sky (panorama or
-/// clear colour) shows a disc of `sun_radius_degrees` (0 to 20; 0: none)
+/// clear colour) shows a disc of `sun_radius_degrees` (0: none)
 /// and a halo of strength `sun_halo` (0: none), in the sun's colour.
 ///
-/// `sun_radiance` (0 to 1000) gives the disc a linear HDR radiance of its
+/// `sun_radiance` (0 or more) gives the disc a linear HDR radiance of its
 /// own, whatever the light's intensity, and the halo its strength as one:
 /// the sky shows them at up to full brightness, and with bloom on they bloom
 /// where nothing in the world or the clouds covers them. 0 draws them at the
@@ -383,7 +383,7 @@ pub struct NativeAutoExposureRequest {
 ///
 /// `sky_sun_direction` (world space, toward the sun, any length) places the
 /// sky's sun apart from the ground's light, in `sky_sun_color` (linear RGB,
-/// alpha ignored, 0 to 16 a channel) at `sky_sun_intensity` (0 to 16): its
+/// alpha ignored) at `sky_sun_intensity`: its
 /// disc and halo, the haze, sun shafts and the clouds' light take it, while
 /// the world stays lit by its lights. A twilight sun may be below the
 /// horizon while the ground's light stays above it. Zero takes the brightest
@@ -406,22 +406,22 @@ pub struct NativeAtmosphereRequest {
 }
 
 /// The moon in the sky, apart from the sun, when `radiance` is above 0 (0,
-/// the default, takes it away). A disc of `radius_degrees` (0 to 20) toward
+/// the default, takes it away). A disc of `radius_degrees` toward
 /// `direction` (world space, toward the moon, any length), its lit part
-/// `radiance` (0 to 1000, linear HDR) times `color` (linear, 0 to 16 a
-/// channel). The sky shows it at up to full brightness, added over the sky
-/// so it reads as a pale disc by day, under the clouds and behind the world
-/// and the backdrop; with bloom on, a radiance above bloom's threshold
-/// blooms as the sun's does. `phase` is the lit fraction, 0 (new) to 1
-/// (full), with its lit limb toward the sky's sun (`SetAtmosphere`'s, or the
-/// brightest directional light; up without one). `earthshine` (0 to 1)
-/// lights the dark part by that share of the radiance, and `halo` (0 to 16)
-/// adds a glow a few degrees wide. `light_intensity` (0 to 16; 0 for none)
-/// lights the cloud layer and regions from the moon in its colour, a second
-/// light beside the sky's sun with the same self-shadowing (a full moon's is
-/// about 0.2 to 0.3 against a sun's 1.5; a product scales it with the
-/// phase). The moon lights nothing else: the haze keeps the sky's sun, and a
-/// product lights the world with its own moonlight.
+/// `radiance` (linear HDR) times `color` (linear). The sky shows it at up
+/// to full brightness, added over the sky so it reads as a pale disc by
+/// day, under the clouds and behind the world and the backdrop; with bloom
+/// on, a radiance above bloom's threshold blooms as the sun's does. `phase`
+/// is the lit fraction, 0 (new) to 1 (full; clamped), with its lit limb
+/// toward the sky's sun (`SetAtmosphere`'s, or the brightest directional
+/// light; up without one). `earthshine` (0 to 1, clamped) lights the dark
+/// part by that share of the radiance, and `halo` adds a glow a few degrees
+/// wide. `light_intensity` (0 for none) lights the cloud layer and regions
+/// from the moon in its colour, a second light beside the sky's sun with
+/// the same self-shadowing (a full moon's is about 0.2 to 0.3 against a
+/// sun's 1.5; a product scales it with the phase). The moon lights nothing
+/// else: the haze keeps the sky's sun, and a product lights the world with
+/// its own moonlight.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeMoonRequest {
@@ -438,8 +438,8 @@ pub struct NativeMoonRequest {
 
 /// Sun shafts: the sky around the sun (the brightest enabled directional
 /// world light) blurred along rays from it, so light streams past whatever
-/// stands in front of it. `intensity` (0 to 16) scales the light added; 0
-/// (the default) turns them off. `length` (0 to 1) is how far the rays
+/// stands in front of it. `intensity` scales the light added; 0 (the
+/// default) turns them off. `length` (0 to 1, clamped) is how far the rays
 /// reach, as a fraction of the way from each pixel to the sun; 0 takes the
 /// Engine's default.
 #[repr(C)]
@@ -451,9 +451,9 @@ pub struct NativeSunShaftsRequest {
 
 /// The scene's wind: what materials with a wind bend or flutter
 /// (`NativeMaterialRequest`) and product displace stages sway in.
-/// `direction` is over the ground (world x, z; any length); `strength` (0
-/// to 16) scales every material's bend and flutter, and 0 (the default)
-/// stills the scene; `gust` (0 to 1) is the share of the lean that rises and
+/// `direction` is over the ground (world x, z; any length); `strength`
+/// scales every material's bend and flutter, and 0 (the default) stills the
+/// scene; `gust` (0 to 1, clamped) is the share of the lean that rises and
 /// falls in gusts rather than holding steady.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -476,16 +476,15 @@ pub enum NativeCloudKind {
 }
 
 /// The sky's cloud layer, drawn over the sky panorama and lit by the sun.
-/// `coverage` (0 to 1) is how much of the sky it covers, and 0 (the
-/// default) draws no layer, though the layer still shapes and lights the
-/// cloud regions under it (`SetCloudRegion`); `drift` is its velocity over
-/// the ground (world
-/// x, z) in metres per second (at most 1000); `altitude` (above 0, at most
-/// 100 km) is the layer's height and `scale` (likewise) the size of one
-/// cloud, in metres; `color` (linear, 0 to 16 a channel) tints the light
-/// they take. The volumetric clouds stand from `altitude` up by `thickness`
-/// metres (0: six tenths of the altitude), shaped by `kind`.
-/// `twilight_degrees` (0 to 20) is how far below the horizon the sky's sun
+/// `coverage` (0 to 1, clamped) is how much of the sky it covers, and 0
+/// (the default) draws no layer, though the layer still shapes and lights
+/// the cloud regions under it (`SetCloudRegion`); `drift` is its velocity
+/// over the ground (world x, z) in metres per second; `altitude` (above 0)
+/// is the layer's height and `scale` (above 0) the size of one cloud, in
+/// metres; `color` (linear) tints the light they take. The volumetric
+/// clouds stand from `altitude` up by `thickness` metres (0: six tenths of
+/// the altitude), shaped by `kind`. `twilight_degrees` is how far below the
+/// horizon the sky's sun
 /// (`SetAtmosphere`) still lights the clouds at the layer's altitude, from
 /// below, reddening as it sinks and then fading; higher cloud keeps it a
 /// little longer. 0 (the default) lights them only while the sun is up.
@@ -503,10 +502,10 @@ pub struct NativeCloudsRequest {
     pub twilight_degrees: f32,
 }
 
-/// How wet the scene's lit surfaces are, after rain. `wetness` (0 to 1, 0
-/// the default) darkens their diffuse colour and smooths them, most where
-/// they face up and only under the open sky; `puddles` (0 to 1) gathers
-/// standing water in patches on flat ground as they wet.
+/// How wet the scene's lit surfaces are, after rain. `wetness` (0 to 1,
+/// clamped; 0 the default) darkens their diffuse colour and smooths them,
+/// most where they face up and only under the open sky; `puddles` (0 to 1,
+/// clamped) gathers standing water in patches on flat ground as they wet.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeWetnessRequest {
@@ -516,14 +515,15 @@ pub struct NativeWetnessRequest {
 
 /// A cloud region, placed or replaced by `id`: where the sky holds more
 /// cloud than the layer's coverage, such as a weather front's storm.
-/// `coverage` (0 to 1) fills a disc `radius` metres across around `center`
-/// (world x, z), fading over its outer third and drifting at `drift` metres
-/// per second; `darkness` (0 to 1) darkens its clouds' undersides. The cloud
-/// layer, flat or volumetric, and its shade on the ground take the most
-/// cloud of the layer and every region. At most 32 regions. Its volumetric
-/// clouds are of `kind` and stand `thickness` metres tall from the layer's
-/// altitude (0: the layer's thickness), blending into the layer's over its
-/// outer third: a towering storm front beside a thin overcast at one base.
+/// `coverage` (0 to 1, clamped) fills a disc `radius` metres across around
+/// `center` (world x, z), fading over its outer third and drifting at
+/// `drift` metres per second; `darkness` (0 to 1, clamped) darkens its
+/// clouds' undersides. The cloud layer, flat or volumetric, and its shade
+/// on the ground take the most cloud of the layer and every region. At most
+/// 32 regions. Its volumetric clouds are of `kind` and stand `thickness`
+/// metres tall from the layer's altitude (0: the layer's thickness),
+/// blending into the layer's over its outer third: a towering storm front
+/// beside a thin overcast at one base.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeCloudRegionRequest {
@@ -592,13 +592,12 @@ pub struct NativeCloudRegionRemoval {
 }
 
 /// The medium volumetric fog lights, while the renderer's `VolumetricFog`
-/// setting is on. `density` (0 to 1, extinction per metre at `base_height`;
-/// 0 fills no air, so only fog volumes draw) falls by e every
-/// `falloff_height` metres up (0: one density everywhere); `albedo` (0 to 1
-/// a channel) is the colour it scatters; `anisotropy` (-0.9 to 0.9)
-/// scatters forward when positive, so it glows toward the sun; `distance`
-/// (8 to 1000 m) is how far the fog grid reaches; `ambient` (0 to 4) scales
-/// the ambient and sky light it scatters.
+/// setting is on. `density` (extinction per metre at `base_height`; 0 fills
+/// no air, so only fog volumes draw) falls by e every `falloff_height`
+/// metres up (0: one density everywhere); `albedo` is the colour it
+/// scatters; `anisotropy` (-0.9 to 0.9) scatters forward when positive, so
+/// it glows toward the sun; `distance` (above 0, in metres) is how far the
+/// fog grid reaches; `ambient` scales the ambient and sky light it scatters.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeVolumetricFogRequest {
@@ -622,12 +621,12 @@ pub enum NativeFogVolumeShape {
 
 /// A fog volume, placed or replaced by `id`: a box or ellipsoid of fog the
 /// volumetric fog adds to its medium, in the renderer's world space (as an
-/// indirect light volume's centre). `half_extents` (above 0, at most 10 km),
-/// turned `yaw_degrees` about the vertical; `density` (0 to 4) at its heart,
-/// fading to nothing over `edge` (0 to 1) of its half extent; `albedo` (0
-/// to 1) and `emission` (0 to 16, light per unit of density); 3D noise cells
-/// `noise_scale` metres across (0: none) thin it by `noise_strength` (0 to 1)
-/// as they drift at `noise_velocity` metres per second. At most 64 volumes.
+/// indirect light volume's centre). `half_extents` (above 0), turned
+/// `yaw_degrees` about the vertical; `density` at its heart, fading to
+/// nothing over `edge` (0 to 1, clamped) of its half extent; `albedo` and
+/// `emission` (light per unit of density); 3D noise cells `noise_scale`
+/// metres across (0: none) thin it by `noise_strength` (0 to 1, clamped) as
+/// they drift at `noise_velocity` metres per second. At most 64 volumes.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeFogVolumeRequest {
@@ -715,12 +714,12 @@ pub enum NativePrecipitationShape {
 
 /// Rain or snow around the camera, drawn by the Engine with no simulation:
 /// `drops` (at most 200,000; 0 the default draws none) fall at `velocity`
-/// (world metres per second, wind included; at most 200) through a box
-/// `radius` metres to each side of the camera and `height` metres above
-/// and below it (each 1 to 500), which wraps as the camera moves so the
-/// drops stay put in the world. Each drop is `size` metres across (above 0,
-/// at most 4); a streak is as long as it travels in `streak_seconds` (0 to
-/// 1). `color` is linear radiance (0 to 16 a channel) and alpha, added to
+/// (world metres per second, wind included) through a box `radius` metres
+/// to each side of the camera and `height` metres above and below it (each
+/// at least 1), which wraps as the camera moves so the drops stay put in
+/// the world. Each drop is `size` metres across (above 0); a streak is as
+/// long as it travels in `streak_seconds`. `color` is linear radiance and
+/// alpha (0 to 1), added to
 /// the frame when `additive`, else blended over it. No drop falls where an
 /// ambient light's sky layer says the sky is closed overhead.
 #[repr(C)]
@@ -768,8 +767,8 @@ pub struct NativeIndirectLightRequest {
 
 /// The sky's light: the background (a sky panorama, two blended, or the
 /// clear colour) lights the world as an environment, prefiltered for each
-/// surface's roughness, its radiance scaled by `intensity` (0 to 16). 0 (the
-/// default) turns it off.
+/// surface's roughness, its radiance scaled by `intensity`. 0 (the default)
+/// turns it off.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeSkyLightRequest {

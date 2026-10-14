@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use render_model::{RenderAssetKind, JSON_SAFE_U64_MAX};
+use render_model::RenderAssetKind;
 use serde::{de::Error as _, Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::{
@@ -629,7 +629,6 @@ impl ParticleProjector {
             || !finite_vec3(descriptor.acceleration)
             || !at_least(descriptor.flipbook_frames_per_second, 0.0)
             || descriptor.burst_count > descriptor.max_particles
-            || descriptor.seed > JSON_SAFE_U64_MAX
             || !validate_scalar_curve(&descriptor.size_curve)
             || !validate_color_curve(&descriptor.color_curve)
             || !validate_collision(descriptor.collision.as_ref())
@@ -751,11 +750,11 @@ fn validate_collision(collision: Option<&ParticleCollisionDescriptor>) -> bool {
     let Some(collision) = collision else {
         return true;
     };
-    in_range(collision.radius, 0.0, 2.0)
+    at_least(collision.radius, 0.0)
         && in_range(collision.restitution, 0.0, 1.0)
         && in_range(collision.friction, 0.0, 1.0)
         && (1..=32).contains(&collision.maximum_impacts)
-        && in_range(collision.sleep_speed, 0.0, 100.0)
+        && at_least(collision.sleep_speed, 0.0)
         && (1..=16).contains(&collision.volumes.len())
         && collision.volumes.iter().all(validate_collision_volume)
 }
@@ -783,9 +782,15 @@ fn validate_scalar_curve(keys: &[ParticleScalarKey]) -> bool {
 
 fn validate_color_curve(keys: &[ParticleColorKey]) -> bool {
     curve_ages(keys.iter().map(|key| key.age))
-        && keys
-            .iter()
-            .all(|key| key.color.into_iter().all(|value| in_range(value, 0.0, 1.0)))
+        && keys.iter().all(|key| {
+            // Colour channels have no upper bound (an HDR glow); alpha
+            // stays a share, as blending takes `1 - alpha`.
+            let [red, green, blue, alpha] = key.color;
+            [red, green, blue]
+                .into_iter()
+                .all(|value| at_least(value, 0.0))
+                && in_range(alpha, 0.0, 1.0)
+        })
 }
 
 fn curve_ages(ages: impl Iterator<Item = f32>) -> bool {

@@ -124,6 +124,5 @@ pub fn video_frame(ops: impl IntoIterator<Item = VideoProjectionOp>) -> Presenta
             op,
         })
         .collect();
-    PresentationFrameDiff::try_from_ops(ops)
-        .expect("video projector emits bounded contiguous operations")
+    PresentationFrameDiff::from_ops(ops)
 }

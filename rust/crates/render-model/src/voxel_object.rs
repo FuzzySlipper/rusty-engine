@@ -5,7 +5,6 @@ use serde::{Deserialize, Serialize};
 use crate::{
     mesh::validate_slots, validate_asset_id, MeshMaterialSlot, MeshMaterialSlotError,
     MeshPayloadDescriptor, RenderAssetError, RenderAssetKind, RenderMetadata, Transform,
-    TransformError,
 };
 
 pub const MAX_RENDER_VOXEL_OBJECT_FRAMES: usize = 8_193;
@@ -150,20 +149,12 @@ impl VoxelObjectInstanceDescriptor {
     pub fn validate(&self) -> Result<(), VoxelObjectInstanceError> {
         validate_asset_id(&self.asset, RenderAssetKind::VoxelObject)
             .map_err(VoxelObjectInstanceError::Asset)?;
-        self.transform
-            .validate()
-            .map_err(VoxelObjectInstanceError::Transform)?;
-        validate_slots(&self.material_overrides).map_err(VoxelObjectInstanceError::MaterialSlot)?;
-        self.metadata
-            .validate()
-            .map_err(VoxelObjectInstanceError::Metadata)
+        validate_slots(&self.material_overrides).map_err(VoxelObjectInstanceError::MaterialSlot)
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VoxelObjectInstanceError {
     Asset(RenderAssetError),
-    Transform(TransformError),
     MaterialSlot(MeshMaterialSlotError),
-    Metadata(crate::NodeError),
 }

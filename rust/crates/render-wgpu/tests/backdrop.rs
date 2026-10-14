@@ -503,7 +503,7 @@ fn backdrop_particles_draw_only_in_the_backdrop_and_the_world_covers_them() {
         })
         .collect();
     let issues = harness.renderer.apply_presentation(
-        &PresentationFrameDiff::try_from_ops(ops).expect("frame"),
+        &PresentationFrameDiff::from_ops(ops),
         &harness.resources,
         no_entities,
     );

@@ -31,7 +31,8 @@ internal static class ParticleEmissionChecks
         ExpectRefusal(engine, valid with { Anchor = default });
         ExpectRefusal(engine, valid with { Visual = (PresentationParticleVisual)999 });
         ExpectRefusal(engine, valid with { HasCollision = true });
-        ExpectRefusal(engine, valid with { SignalId = "fixture.particle.bad-seed", Seed = ulong.MaxValue });
+        Require(engine.Presentation.EmitParticles(valid with { SignalId = "fixture.particle.wide-seed", Seed = ulong.MaxValue }).Outcome == PresentationParticleEmissionOutcome.Admitted,
+            "a seed using all 64 bits was not admitted");
         Require(engine.Presentation.EmitParticles(valid).Outcome == PresentationParticleEmissionOutcome.Admitted,
             "a repeated signal label was not admitted as a distinct burst");
         ExpectRefusal(engine, valid with { SignalId = "fixture.particle.no-color", ColorCurve = default });

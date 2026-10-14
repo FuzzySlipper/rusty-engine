@@ -6,7 +6,7 @@ use std::{
 };
 
 use csharp_engine_abi::*;
-use render_model::{RenderAssetKind, JSON_SAFE_U64_MAX};
+use render_model::RenderAssetKind;
 use render_presentation::{
     AudioBus, AudioBusControl, AudioEmitter, AudioHandle, AudioProjectionDiagnosticCode,
     AudioProjectionOp, AudioProjector, AudioRolloff, AudioSourceDescriptor, AudioVoiceControl,
@@ -420,12 +420,7 @@ impl RuntimeAudioBridge {
                 },
             });
         }
-        PresentationFrameDiff::try_from_ops(ops).map_err(|error| {
-            CsharpEngineServicesError::new(
-                "CSHARP_AUDIO_BASELINE",
-                format!("retained audio baseline is invalid: {error:?}"),
-            )
-        })
+        Ok(PresentationFrameDiff::from_ops(ops))
     }
 
     fn staged_mut(&mut self) -> Result<&mut RuntimeAudioCall, CsharpEngineServicesError> {
@@ -742,12 +737,6 @@ impl RuntimeAudioBridge {
         let signal_handle = {
             let staged = self.staged_mut()?;
             let value = staged.state.next_signal;
-            if value > JSON_SAFE_U64_MAX {
-                return Err(CsharpEngineServicesError::new(
-                    "CSHARP_AUDIO_SIGNAL_HANDLE",
-                    "audio signal handles exhausted the JSON-safe range",
-                ));
-            }
             staged.state.next_signal = value + 1;
             NativeAudioSignalHandle { value }
         };
@@ -1999,7 +1988,7 @@ mod tests {
         bridge.emit(request).expect("initial one-shot");
         let invalid = NativeAudioEmitRequest {
             descriptor: NativeAudioSourceDescriptor {
-                volume: 2.0,
+                volume: -1.0,
                 ..request.descriptor
             },
             ..request
@@ -2119,7 +2108,7 @@ mod tests {
             .expect("retained voice");
         // The projector refuses the volume after the bridge converts the descriptor.
         let invalid = NativeAudioSourceDescriptor {
-            volume: 2.0,
+            volume: -1.0,
             ..descriptor(clip, NativeAudioBus::Sfx)
         };
         bridge
@@ -2265,6 +2254,56 @@ mod tests {
                 && patch.max_distance == Some(20.0)
                 && patch.rolloff == Some(AudioRolloff::LinearDecibels)
         ));
+    }
+
+    #[test]
+    fn a_large_entity_and_loud_fast_voice_reach_the_frame_and_the_baseline() {
+        let mut content = BTreeMap::new();
+        content.insert("audio/trial.wav".to_owned(), wav());
+        let mut bridge = RuntimeAudioBridge::new(content);
+        bridge.begin_call();
+        let path = b"audio/trial.wav";
+        let clip = bridge
+            .open_clip(&NativeAudioClipRequest {
+                path: NativeUtf8Slice {
+                    bytes: path.as_ptr(),
+                    len: path.len(),
+                },
+            })
+            .expect("admitted clip");
+        // Entity ids are the product's u64s; nothing on this path reaches
+        // JavaScript, so ids above 2^53 pass as they are.
+        let entity = 1_u64 << 60;
+        bridge
+            .create_voice(NativeAudioSourceDescriptor {
+                volume: 2.0,
+                pitch: 6.0,
+                emitter_kind: NativeAudioEmitterKind::EntityAttached,
+                entity,
+                ..descriptor(clip, NativeAudioBus::Sfx)
+            })
+            .expect("retained voice");
+        let call = bridge.take_staged_call().expect("audio call");
+        let created = |frame: &PresentationFrameDiff| {
+            frame.ops.iter().any(|op| {
+                matches!(
+                    op,
+                    PresentationOp::Audio {
+                        op: AudioProjectionOp::Create { descriptor, .. }
+                            | AudioProjectionOp::Restore { descriptor, .. },
+                        ..
+                    } if descriptor.pitch == 6.0
+                        && descriptor.volume == 2.0
+                        && matches!(
+                            descriptor.emitter,
+                            AudioEmitter::EntityAttached { entity: id, .. } if id == entity
+                        )
+                )
+            })
+        };
+        assert!(created(call.frame.as_ref().expect("audio frame")));
+        bridge.commit(call);
+        assert!(created(&bridge.snapshot_frame().expect("baseline")));
     }
 
     #[test]

@@ -6,8 +6,7 @@ const LOCAL_HANDLE_BITS: u32 = 40;
 const LOCAL_HANDLE_MASK: u64 = (1_u64 << LOCAL_HANDLE_BITS) - 1;
 
 /// Compact namespaces let independent projection owners share one retained
-/// scene without an ambient/global allocator. Every handle stays within
-/// `JSON_SAFE_U64_MAX`.
+/// scene without an ambient/global allocator.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RenderHandleNamespace(u8);
 

@@ -363,7 +363,6 @@ impl std::ops::DerefMut for SharedGraphics {
 #[derive(Debug, Clone, PartialEq)]
 pub enum PresentationWorldError {
     Frame(RenderFrameError),
-    Presentation(crate::PresentationFrameError),
     RevisionExhausted,
     InvalidPlayback,
     UnknownNode(RenderHandle),
@@ -434,7 +433,6 @@ impl PresentationWorld {
         let revision = self
             .revision
             .checked_add(1)
-            .filter(|revision| *revision <= JSON_SAFE_U64_MAX)
             .ok_or(PresentationWorldError::RevisionExhausted)?;
         let mut operations = Vec::with_capacity(frame.ops.len());
         for op in frame.ops {
@@ -533,7 +531,6 @@ impl PresentationWorld {
         let revision = self
             .revision
             .checked_add(1)
-            .filter(|revision| *revision <= JSON_SAFE_U64_MAX)
             .ok_or(PresentationWorldError::RevisionExhausted)?;
         let mut output = frame;
         for operation in &mut output.ops {
@@ -2262,11 +2259,10 @@ mod tests {
             ]))
             .unwrap();
         let ghost = |op| {
-            PresentationFrameDiff::try_from_ops(vec![PresentationOp::GhostPlate {
+            PresentationFrameDiff::from_ops(vec![PresentationOp::GhostPlate {
                 meta: PresentationOpMeta::new(0),
                 op,
             }])
-            .unwrap()
         };
         let handle = GhostPlateHandle::new(3);
         let descriptor = crate::GhostPlateDescriptor {
@@ -2458,14 +2454,13 @@ mod tests {
                 node: RenderNode::new(Geometry::Cube),
             }]))
             .unwrap();
-        let retained = PresentationFrameDiff::try_from_ops(vec![PresentationOp::Audio {
+        let retained = PresentationFrameDiff::from_ops(vec![PresentationOp::Audio {
             meta: PresentationOpMeta::new(0),
             op: AudioProjectionOp::BusControl {
                 bus: AudioBus::Sfx,
                 control: AudioBusControl::SetMuted { muted: true },
             },
-        }])
-        .unwrap();
+        }]);
         let effect_delta = world.apply_presentation(retained.clone()).unwrap();
         assert_eq!(
             effect_delta.publication.as_ref().unwrap().base_revision,

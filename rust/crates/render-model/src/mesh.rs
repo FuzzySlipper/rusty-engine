@@ -3,9 +3,7 @@ use std::collections::BTreeSet;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::{
-    validate_asset_id, RenderAssetError, RenderAssetKind, RenderMetadata, Transform, TransformError,
-};
+use crate::{validate_asset_id, RenderAssetError, RenderAssetKind, RenderMetadata, Transform};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -543,11 +541,22 @@ fn validate_optional_color_stream(
                 actual: values.len(),
             });
         }
-        if values.iter().any(|value| !(0.0..=1.0).contains(value)) {
+        // Colour channels have no upper bound; alpha stays a share, as
+        // blending takes `1 - alpha`.
+        if values
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .any(|color| !valid_vertex_color(color))
+        {
             return Err(MeshDescriptorError::ColorOutOfRange);
         }
     }
     Ok(())
+}
+
+fn valid_vertex_color(color: &[f32; 4]) -> bool {
+    color[..3].iter().all(|channel| *channel >= 0.0) && (0.0..=1.0).contains(&color[3])
 }
 
 fn validate_optional_color_offset(
@@ -791,22 +800,14 @@ impl StaticMeshInstanceDescriptor {
     pub fn validate(&self) -> Result<(), StaticMeshInstanceError> {
         validate_asset_id(&self.asset, RenderAssetKind::StaticMesh)
             .map_err(StaticMeshInstanceError::Asset)?;
-        self.transform
-            .validate()
-            .map_err(StaticMeshInstanceError::Transform)?;
-        validate_slots(&self.material_overrides).map_err(StaticMeshInstanceError::MaterialSlot)?;
-        self.metadata
-            .validate()
-            .map_err(StaticMeshInstanceError::Metadata)
+        validate_slots(&self.material_overrides).map_err(StaticMeshInstanceError::MaterialSlot)
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StaticMeshInstanceError {
     Asset(RenderAssetError),
-    Transform(TransformError),
     MaterialSlot(MeshMaterialSlotError),
-    Metadata(crate::NodeError),
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -1121,7 +1122,7 @@ impl AnimationClipPack {
         {
             return Err(AnimationClipPackError::EmptyProvenance);
         }
-        if self.clips.is_empty() || self.clips.len() > 256 {
+        if self.clips.is_empty() {
             return Err(AnimationClipPackError::InvalidClips);
         }
         let mut ids = BTreeSet::new();
@@ -1345,9 +1346,6 @@ impl AnimatedMeshInstanceDescriptor {
     pub fn validate(&self) -> Result<(), AnimatedMeshInstanceError> {
         validate_asset_id(&self.asset, RenderAssetKind::AnimatedMesh)
             .map_err(AnimatedMeshInstanceError::Asset)?;
-        self.transform
-            .validate()
-            .map_err(AnimatedMeshInstanceError::Transform)?;
         validate_slots(&self.material_overrides)
             .map_err(AnimatedMeshInstanceError::MaterialSlot)?;
         if let Some(playback) = &self.playback {
@@ -1355,19 +1353,15 @@ impl AnimatedMeshInstanceDescriptor {
                 .validate()
                 .map_err(AnimatedMeshInstanceError::Playback)?;
         }
-        self.metadata
-            .validate()
-            .map_err(AnimatedMeshInstanceError::Metadata)
+        Ok(())
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AnimatedMeshInstanceError {
     Asset(RenderAssetError),
-    Transform(TransformError),
     MaterialSlot(MeshMaterialSlotError),
     Playback(AnimatedMeshPlaybackError),
-    Metadata(crate::NodeError),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1471,11 +1465,13 @@ impl AnimatedMeshPlaybackCommand {
 fn validate_animated_mesh_pose(
     clips: &[AnimatedMeshClipPose],
 ) -> Result<(), AnimatedMeshPlaybackError> {
-    if clips.is_empty() || clips.len() > 4 {
+    // The renderer blends the weights as a weighted average and mixes a
+    // total below 1 toward the rest pose (render-wgpu `animated.rs`), so they
+    // need not sum to 1.
+    if clips.is_empty() {
         return Err(AnimatedMeshPlaybackError::InvalidPose);
     }
     let mut names = BTreeSet::new();
-    let mut total_weight = 0.0_f32;
     for clip in clips {
         if clip.clip.trim().is_empty() || !names.insert(&clip.clip) {
             return Err(AnimatedMeshPlaybackError::InvalidPose);
@@ -1483,13 +1479,9 @@ fn validate_animated_mesh_pose(
         if !clip.time_seconds.is_finite() || clip.time_seconds < 0.0 {
             return Err(AnimatedMeshPlaybackError::InvalidPose);
         }
-        if !clip.weight.is_finite() || !(0.0..=1.0).contains(&clip.weight) {
+        if !clip.weight.is_finite() || clip.weight < 0.0 {
             return Err(AnimatedMeshPlaybackError::InvalidPose);
         }
-        total_weight += clip.weight;
-    }
-    if (total_weight - 1.0).abs() > 0.001 {
-        return Err(AnimatedMeshPlaybackError::InvalidPose);
     }
     Ok(())
 }

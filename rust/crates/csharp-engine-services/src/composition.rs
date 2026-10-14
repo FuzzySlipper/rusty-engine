@@ -1794,6 +1794,103 @@ mod tests {
         assert!(call.take_output().frames.is_empty());
     }
 
+    /// Look values above the old ranges publish as they are, share values
+    /// clamp into 0 to 1, and a non-finite value is still refused, as the
+    /// renderer keeps environment state across frames.
+    #[test]
+    fn environment_look_values_publish_shares_clamp_and_non_finite_is_refused() {
+        use crate::operation_diagnostics::{empty_receipt, receipt_codes};
+        let mut services = EngineServiceSet::new(
+            parse_runtime_appearance_catalog(None).expect("default catalog"),
+            BTreeMap::new(),
+            None,
+            RuntimeDiagnosticsSink::new(Default::default()).unwrap(),
+        )
+        .expect("service set");
+        services.begin_call(binding());
+        let api = services.api();
+        let view = &api.camera_view;
+        let fog = |density| NativeVolumetricFogRequest {
+            density,
+            albedo: NativeVec3 {
+                x: 1.5,
+                y: 1.5,
+                z: 1.5,
+            },
+            anisotropy: 0.5,
+            base_height: 0.0,
+            falloff_height: 20.0,
+            distance: 2_000.0,
+            ambient: 6.0,
+        };
+        unsafe {
+            assert_eq!(
+                (view.set_bloom)(
+                    view.context,
+                    &NativeBloomRequest {
+                        threshold: 1.0,
+                        intensity: 20.0,
+                    },
+                    std::ptr::null_mut()
+                ),
+                ABI_OK
+            );
+            assert_eq!(
+                (view.set_wind)(
+                    view.context,
+                    &NativeWindRequest {
+                        direction: NativeVec2 { x: 1.0, y: 0.0 },
+                        strength: 24.0,
+                        gust: 1.5,
+                    },
+                    std::ptr::null_mut()
+                ),
+                ABI_OK
+            );
+            assert_eq!(
+                (view.set_volumetric_fog)(view.context, &fog(3.0), std::ptr::null_mut()),
+                ABI_OK
+            );
+            let mut refusal = empty_receipt();
+            assert_eq!(
+                (view.set_volumetric_fog)(view.context, &fog(f32::NAN), &mut refusal),
+                0
+            );
+            assert_eq!(receipt_codes(&refusal), ["CSHARP_VOLUMETRIC_FOG"]);
+        }
+        let mut call = services.finish_call().expect("environment call");
+        let ops = call.take_output().frames[0].ops.clone();
+        assert_eq!(
+            ops,
+            [
+                render_model::RenderDiff::SetBloom {
+                    bloom: Some(render_model::BloomDescriptor {
+                        threshold: 1.0,
+                        intensity: 20.0,
+                    }),
+                },
+                render_model::RenderDiff::SetWind {
+                    wind: Some(render_model::WindDescriptor {
+                        direction: [1.0, 0.0],
+                        strength: 24.0,
+                        gust: 1.0,
+                    }),
+                },
+                render_model::RenderDiff::SetVolumetricFog {
+                    fog: render_model::VolumetricFogDescriptor {
+                        density: 3.0,
+                        albedo: [1.5; 3],
+                        anisotropy: 0.5,
+                        base_height: 0.0,
+                        falloff_height: 20.0,
+                        distance: 2_000.0,
+                        ambient: 6.0,
+                    },
+                },
+            ]
+        );
+    }
+
     #[test]
     fn bloom_and_auto_exposure_publish_as_retained_environment_and_refuse_invalid_values() {
         use crate::operation_diagnostics::{empty_receipt, receipt_codes};
@@ -1948,7 +2045,7 @@ mod tests {
                 refusal,
             )
         };
-        for intensity in [-1.0, 17.0, f32::NAN] {
+        for intensity in [-1.0, f32::NAN] {
             let mut refusal = empty_receipt();
             assert_eq!(set(intensity, &mut refusal), 0);
             assert_eq!(receipt_codes(&refusal), ["CSHARP_SKY_LIGHT"]);
@@ -2033,7 +2130,7 @@ mod tests {
             },
             ..request(4.0, 0.5)
         };
-        for refused in [request(4.0, 1.5), request(2000.0, 0.5), nowhere] {
+        for refused in [request(4.0, f32::NAN), request(-1.0, 0.5), nowhere] {
             let mut refusal = empty_receipt();
             assert_eq!(set(refused, &mut refusal), 0);
             assert_eq!(receipt_codes(&refusal), ["CSHARP_MOON"]);
@@ -2222,7 +2319,7 @@ mod tests {
                 refusal,
             )
         };
-        for (intensity, length) in [(20.0, 0.5), (1.0, 1.5), (f32::NAN, 0.5)] {
+        for (intensity, length) in [(-1.0, 0.5), (1.0, f32::NAN), (f32::NAN, 0.5)] {
             let mut refusal = empty_receipt();
             assert_eq!(set(intensity, length, &mut refusal), 0);
             assert_eq!(receipt_codes(&refusal), ["CSHARP_SUN_SHAFTS"]);
@@ -2294,8 +2391,8 @@ mod tests {
         };
         for (x, y, strength, gust) in [
             (0.0, 0.0, 1.0, 0.0),
-            (1.0, 0.0, 20.0, 0.0),
-            (1.0, 0.0, 1.0, 1.5),
+            (1.0, 0.0, -1.0, 0.0),
+            (1.0, 0.0, 1.0, f32::NAN),
             (f32::NAN, 0.0, 1.0, 0.0),
         ] {
             let mut refusal = empty_receipt();
@@ -2425,7 +2522,6 @@ mod tests {
         };
         for refused in [
             request(300_000, -1.5, 0.1, 20.0),
-            request(5_000, -500.0, 0.1, 20.0),
             request(5_000, f32::NAN, 0.1, 20.0),
             request(5_000, -1.5, 0.0, 20.0),
             request(5_000, -1.5, 0.1, 0.5),
@@ -2495,7 +2591,7 @@ mod tests {
                 refusal,
             )
         };
-        for (wetness, puddles) in [(1.5, 0.0), (-0.1, 0.0), (0.5, 2.0), (f32::NAN, 0.0)] {
+        for (wetness, puddles) in [(f32::NAN, 0.0), (0.5, f32::NAN)] {
             let mut refusal = empty_receipt();
             assert_eq!(set(wetness, puddles, &mut refusal), 0);
             assert_eq!(receipt_codes(&refusal), ["CSHARP_WETNESS"]);
@@ -2564,13 +2660,13 @@ mod tests {
             );
             let mut refusal = empty_receipt();
             assert_eq!(
-                (view.set_volumetric_fog)(view.context, &medium(0.02, 2.0), &mut refusal),
+                (view.set_volumetric_fog)(view.context, &medium(0.02, 0.0), &mut refusal),
                 0
             );
             assert_eq!(receipt_codes(&refusal), ["CSHARP_VOLUMETRIC_FOG"]);
             let mut refusal = empty_receipt();
             assert_eq!(
-                (view.set_fog_volume)(view.context, &volume(4, 9.0), &mut refusal),
+                (view.set_fog_volume)(view.context, &volume(4, f32::NAN), &mut refusal),
                 0
             );
             assert_eq!(receipt_codes(&refusal), ["CSHARP_FOG_VOLUME"]);
@@ -3016,14 +3112,13 @@ mod tests {
             (api.camera_view.set_clouds)(api.camera_view.context, &request, refusal)
         };
         for refused in [
-            request(1.5, 8.0, 1500.0, 600.0, 1.0),
+            request(f32::NAN, 8.0, 1500.0, 600.0, 1.0),
             request(0.5, f32::NAN, 1500.0, 600.0, 1.0),
-            request(0.5, 2000.0, 1500.0, 600.0, 1.0),
             request(0.5, 8.0, 0.0, 600.0, 1.0),
             request(0.5, 8.0, 1500.0, -1.0, 1.0),
-            request(0.5, 8.0, 1500.0, 600.0, 20.0),
+            request(0.5, 8.0, 1500.0, 600.0, -1.0),
             NativeCloudsRequest {
-                twilight_degrees: 25.0,
+                twilight_degrees: -1.0,
                 ..request(0.5, 8.0, 1500.0, 600.0, 1.0)
             },
         ] {
@@ -3131,13 +3226,13 @@ mod tests {
         };
         for refused in [
             request(-1.0, 1.0),
-            request(10.0, 30.0),
+            request(10.0, f32::NAN),
             NativeAtmosphereRequest {
-                sun_radiance: 2000.0,
+                sun_radiance: -1.0,
                 ..request(10.0, 1.0)
             },
             NativeAtmosphereRequest {
-                sky_sun_intensity: 20.0,
+                sky_sun_intensity: f32::INFINITY,
                 ..request(10.0, 1.0)
             },
         ] {

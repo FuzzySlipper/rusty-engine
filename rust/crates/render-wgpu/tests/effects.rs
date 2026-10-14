@@ -406,7 +406,7 @@ fn synthetic_sprite_domes_span_the_atlas_frame() {
 }
 
 fn particle_frame(ops: Vec<ParticleProjectionOp>) -> PresentationFrameDiff {
-    PresentationFrameDiff::try_from_ops(
+    PresentationFrameDiff::from_ops(
         ops.into_iter()
             .enumerate()
             .map(|(sequence, op)| PresentationOp::Particle {
@@ -415,7 +415,6 @@ fn particle_frame(ops: Vec<ParticleProjectionOp>) -> PresentationFrameDiff {
             })
             .collect(),
     )
-    .expect("a valid presentation frame")
 }
 
 fn emitter(

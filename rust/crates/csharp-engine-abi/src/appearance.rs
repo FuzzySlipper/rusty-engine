@@ -42,8 +42,10 @@ pub struct NativeMaterialHandle {
     pub value: u64,
 }
 
-/// RGBA, each 0 to 1. Colours are linear, drawn as given, unless a field
-/// says otherwise: billboard and label colours are sRGB, as in CSS. Decode an
+/// RGBA. Colours are linear, drawn as given, unless a field says otherwise:
+/// billboard and label colours are sRGB, as in CSS, each 0 to 1. A linear
+/// colour's channels are not negative and may exceed 1 (an HDR tint);
+/// alpha is 0 to 1. Decode an
 /// sRGB colour (a palette, a picker, a hex code) with `Color.FromSrgb`.
 /// Alpha is coverage and never encoded.
 #[repr(C)]

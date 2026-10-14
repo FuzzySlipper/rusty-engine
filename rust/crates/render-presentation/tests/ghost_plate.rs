@@ -121,14 +121,13 @@ fn canonical_capture_survives_source_changes_and_explicit_recapture_replaces_it(
             ..RenderFrameDiff::new()
         })
         .unwrap();
-    let create = PresentationFrameDiff::try_from_ops(vec![PresentationOp::GhostPlate {
+    let create = PresentationFrameDiff::from_ops(vec![PresentationOp::GhostPlate {
         meta: PresentationOpMeta::new(0),
         op: GhostPlateProjectionOp::Create {
             handle: GhostPlateHandle::new(3),
             descriptor: descriptor(7),
         },
-    }])
-    .unwrap();
+    }]);
     let first = world.apply_presentation(create.clone()).unwrap();
     let capture = match &first.ops[0] {
         PresentationOp::GhostPlate {
@@ -157,17 +156,16 @@ fn canonical_capture_survives_source_changes_and_explicit_recapture_replaces_it(
         matches!(&baseline[0].ops[0], PresentationOp::GhostPlate { op: GhostPlateProjectionOp::Create { descriptor, .. }, .. } if descriptor.captured_scene.as_ref() == Some(&capture))
     );
     let recapture = world
-        .apply_presentation(
-            PresentationFrameDiff::try_from_ops(vec![PresentationOp::GhostPlate {
+        .apply_presentation(PresentationFrameDiff::from_ops(vec![
+            PresentationOp::GhostPlate {
                 meta: PresentationOpMeta::new(0),
                 op: GhostPlateProjectionOp::Recapture {
                     handle: GhostPlateHandle::new(3),
                     capture: None,
                     captured_scene: None,
                 },
-            }])
-            .unwrap(),
-        )
+            },
+        ]))
         .unwrap();
     assert!(
         matches!(&recapture.ops[0], PresentationOp::GhostPlate { op: GhostPlateProjectionOp::Recapture { captured_scene: Some(next), .. }, .. } if next != &capture)

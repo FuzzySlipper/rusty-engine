@@ -237,7 +237,7 @@ engine.CameraView.SetSkyLight(new(Intensity: 1));
 - An ambient light's [sky layer](#dark-caves-an-ambient-lights-sky), occlusion
   maps and screen-space ambient occlusion shade the sky's light as they shade
   ambient light, so a cave stays dark.
-- `Intensity` (0 to 16) scales the background's radiance: panorama colours
+- `Intensity` (0 or more) scales the background's radiance: panorama colours
   are read as linear light, so at 1 a white surface under a white sky is
   white.
 - The Engine builds it on the GPU whenever the background changes (its
@@ -669,22 +669,21 @@ Material lake = engine.Graphics.CreateMaterial(new MaterialRequest(new Color(1, 
 
 ## Wind
 
-`engine.CameraView.SetWind(new(Direction: new Vector2(1, 0.3f), Strength: 1.5f,
-Gust: 0.6f))` blows a wind over the scene: materials with a wind bend or
-flutter ([the standard shader](#the-standard-shader)) sway in it, and
-product shaders read it in a displace stage ([product
-shaders](#product-shaders)). `Direction` is over the ground (world x, z;
-any length); `Strength` (0 to 16) scales every material's bend and flutter,
-and 0 stills the scene (the default, and `SetWind` with strength 0); `Gust`
-(0 to 1) is the share of the lean that rises and falls in slow gusts rather
-than holding steady. The sway moves with presentation time, so it holds
-while the simulation is paused and costs nothing per frame on the C# side;
-each part's lean is phased by where it stands, so neighbouring trees differ,
-and each vertex's flutter by where it is. The wind is retained with the
-other environment settings and survives a runtime restart. A swaying
-material's shadow sways too: while one draws, the shadow maps redraw every
-frame, so give the wind feature to trees, grass and banners rather than to
-whole terrains.
+`engine.CameraView.SetWind(new(Direction: new Vector2(1, 0.3f), Strength:
+1.5f, Gust: 0.6f))` blows a wind over the scene: materials with a wind bend or
+flutter ([the standard shader](#the-standard-shader)) sway in it, and product
+shaders read it in a displace stage ([product shaders](#product-shaders)).
+`Direction` is over the ground (world x, z; any length); `Strength` (0 or
+more) scales every material's bend and flutter, and 0 stills the scene (the
+default, and `SetWind` with strength 0); `Gust` (0 to 1, clamped) is the share
+of the lean that rises and falls in slow gusts rather than holding steady. The
+sway moves with presentation time, so it holds while the simulation is paused
+and costs nothing per frame on the C# side; each part's lean is phased by
+where it stands, so neighbouring trees differ, and each vertex's flutter by
+where it is. The wind is retained with the other environment settings and
+survives a runtime restart. A swaying material's shadow sways too: while one
+draws, the shadow maps redraw every frame, so give the wind feature to trees,
+grass and banners rather than to whole terrains.
 
 ## Exposure, tone mapping and fog
 
@@ -722,7 +721,7 @@ engine.CameraView.SetSunShafts(new(Intensity: 0.8f, Length: 0));
   full emission rolls off under `Neutral` or `AcesFilmic` instead of clipping.
 - **Bloom** spreads the world's light above `Threshold` (linear, before
   exposure, with a soft knee below it) through six half-resolution mips and
-  adds it back at `Intensity` (0 to 16) before exposure and the operator, so
+  adds it back at `Intensity` (0 or more) before exposure and the operator, so
   a glow rolls off as the light does. It is off by default; an intensity of 0
   turns it off. A threshold of 1 keeps ordinary lit surfaces out and lets
   emission and highlights above white glow. The background does not bloom,
@@ -772,10 +771,10 @@ engine.CameraView.SetSunShafts(new(Intensity: 0.8f, Length: 0));
     (linear RGB) by the cosine between the view and the sun raised to
     `HazeExponent`. A larger exponent gathers the haze closer to the sun.
   - The sky, panorama or clear colour alike, shows a disc of
-    `SunRadiusDegrees` (up to 20) and a halo a few degrees wide of
+    `SunRadiusDegrees` and a halo a few degrees wide of
     strength `SunHalo`. Both take the sun's colour, dimmed when its
     intensity is below 1, and follow its direction.
-  - `SunRadiance` (0 to 1000) gives the disc a linear HDR radiance of its
+  - `SunRadiance` (0 or more) gives the disc a linear HDR radiance of its
     own, in the sun's colour, whatever its intensity: a sun dimmed toward
     the horizon to light the ground less keeps a bright disc. The halo
     glows at `SunHalo` as a radiance too, so a halo above bloom's threshold
@@ -791,8 +790,8 @@ engine.CameraView.SetSunShafts(new(Intensity: 0.8f, Length: 0));
     of the volumetric clouds under those. That is about 0.01 ms at
     1920×1080 with 4× multisampling on an RX 9070 XT, flat clouds included.
   - `SkySunDirection` (world space, toward the sun, any length) places the
-    sky's sun apart from the ground's light, in `SkySunColor` (linear RGB,
-    0 to 16 a channel) at `SkySunIntensity` (0 to 16). Its disc and halo,
+    sky's sun apart from the ground's light, in `SkySunColor` (linear RGB)
+    at `SkySunIntensity`. Its disc and halo,
     the haze, sun shafts and the [clouds](#clouds)' light take it; the
     world stays lit by its lights. A product that keeps its twilight light
     above the horizon, so the land stays lit after sunset, places the real
@@ -800,8 +799,8 @@ engine.CameraView.SetSunShafts(new(Intensity: 0.8f, Length: 0));
 - **Sun shafts** stream light from the sun past whatever stands in front of
   it: a tree line at dusk, a doorway. At half resolution, the sky the world
   leaves uncovered near the sun is blurred along rays toward the sun, and
-  added in the sun's colour at `Intensity` (0 to 16; 0 turns them off)
-  before exposure and the operator, as bloom is. `Length` (0 to 1) is how
+  added in the sun's colour at `Intensity` (0 turns them off) before
+  exposure and the operator, as bloom is. `Length` (0 to 1, clamped) is how
   far the rays reach, as a fraction of the way from each pixel to the sun;
   0 takes the Engine's default, 0.6. The sun is the atmosphere's sky sun:
   its `SkySunDirection`, or the brightest enabled directional world light.
@@ -931,16 +930,16 @@ engine.CameraView.SetMoon(default); // no moon
 ```
 
 - `Direction` (world space, toward the moon, any length) places it, and
-  `RadiusDegrees` (0 to 20) sizes its disc. `Color` (linear, 0 to 16 a
-  channel) and `Radiance` (0 to 1000; 0, the default, takes the moon away)
-  light it. A product warms and enlarges a rising moon by changing them.
-- `Phase` is the lit fraction, 0 (new) to 1 (full). The lit limb turns
-  toward the sky's sun (the [atmosphere](#exposure-tone-mapping-and-fog)'s
-  `SkySunDirection`, or the brightest directional light; up without one):
-  a crescent at dusk faces the setting sun. The terminator softens over a
-  few pixels. The dark part shows the sky behind it, lit by `Earthshine`
-  (0 to 1, a share of the radiance), and `Halo` (0 to 16) adds a glow a few
-  degrees wide.
+  `RadiusDegrees` sizes its disc. `Color` (linear) and `Radiance` (0, the
+  default, takes the moon away) light it. A product warms and enlarges a
+  rising moon by changing them.
+- `Phase` is the lit fraction, 0 (new) to 1 (full), clamped. The lit limb
+  turns toward the sky's sun (the
+  [atmosphere](#exposure-tone-mapping-and-fog)'s `SkySunDirection`, or the
+  brightest directional light; up without one): a crescent at dusk faces the
+  setting sun. The terminator softens over a few pixels. The dark part shows
+  the sky behind it, lit by `Earthshine` (0 to 1, clamped, a share of the
+  radiance), and `Halo` adds a glow a few degrees wide.
 - It is added over the sky, panorama or clear colour, after the sun's disc:
   by day its lit part is a pale disc over the blue and its dark part is the
   sky. The background is never finished, so it shows at most at full
@@ -950,7 +949,7 @@ engine.CameraView.SetMoon(default); // no moon
 - With [bloom](#exposure-tone-mapping-and-fog) on, a radiance above bloom's
   threshold blooms as the sun's disc does, through the same pass: only
   where the world leaves the sky open, less what the clouds cover.
-- `LightIntensity` (0 to 16; 0, the default, for none) lights the
+- `LightIntensity` (0, the default, for none) lights the
   [clouds](#clouds) from the moon in its colour: a second light beside the
   sky's sun, layer and regions, flat and volumetric, with the same
   self-shadowing, fading as the moon nears the horizon. A full moon's is
@@ -1024,21 +1023,21 @@ gets cumulus six tenths of the altitude thick; a cloud region left without
 them is cumulus as thick as the layer. Leaving out `TwilightDegrees` lights
 the clouds only while the sun is up.
 
-- `Coverage` (0 to 1) is how much of the sky is cloud. 0 clears the layer,
-  draws no `clouds` pass and leaves the sky exactly as without it (the
+- `Coverage` (0 to 1, clamped) is how much of the sky is cloud. 0 clears the
+  layer, draws no `clouds` pass and leaves the sky exactly as without it (the
   default). [Cloud regions](#cloud-regions) under it still take the layer's
   altitude, size, drift, kind and twilight.
 - `Drift` is the layer's velocity over the ground (world x, z) in metres per
-  second, at most 1000. Pass the [wind](#wind)'s direction to have clouds
+  second. Pass the [wind](#wind)'s direction to have clouds
   follow it. Clouds move with presentation time, so they hold while the
   simulation is paused.
-- `Altitude` and `Scale` (above 0, at most 100 km) are the layer's height
+- `Altitude` and `Scale` (above 0) are the layer's height
   and the size of one cloud, in metres. `Altitude` is above the world's
   zero, not above the camera. The view ray meets a plane at that height, so
   clouds look larger overhead and shrink toward the horizon, where they
   fade into the panorama. A camera at or above the altitude sees no flat
   layer overhead.
-- `Color` (linear, 0 to 16 a channel) tints the light the clouds take.
+- `Color` (linear) tints the light the clouds take.
 - The clouds take the sky's sun's colour and direction (the atmosphere's
   `SkySunDirection`, or the brightest directional light), less where more
   cloud lies between them and the sun, and brighter at their thin edges
@@ -1048,7 +1047,7 @@ the clouds only while the sun is up.
   darkens them at night with no other call. Without a twilight their sun
   fades out as it reaches the horizon. At night the [moon](#the-moon)'s
   `LightIntensity` lights them as a second light.
-- `TwilightDegrees` (0 to 20) keeps them lit after sunset: the sun lights
+- `TwilightDegrees` (0 or more) keeps them lit after sunset: the sun lights
   them in full while it is up, and below the horizon until it is that far
   down for a cloud at the layer's altitude. A higher cloud sees it longer,
   as over the curve of the ground (a cloud at altitude h sees a sun d down
@@ -1102,7 +1101,7 @@ engine.CameraView.RemoveCloudRegion(new(1));
 - Within two thirds of its `Radius` (metres) of `Center` (world x, z) the sky
   holds at least the region's `Coverage`; past that it fades to the layer's
   own. It drifts at `Drift` metres per second from where it was placed, so
-  move it by placing it again. `Darkness` (0 to 1) darkens its clouds'
+  move it by placing it again. `Darkness` (0 to 1, clamped) darkens its clouds'
   undersides and lets even less sun through them.
 - The flat layer, the volumetric clouds and the shade on the ground all read
   it, so a storm overhead shades the ground under it. A region needs no layer
@@ -1169,17 +1168,17 @@ After rain, the scene's lit surfaces can read as wet:
 engine.CameraView.SetWetness(new(Wetness: .8f, Puddles: .5f));
 ```
 
-- `Wetness` (0 to 1) darkens a surface's diffuse colour toward 55 % (metals
-  keep theirs) and lowers its roughness toward 0.15, so the sun and sky
-  glint off it. Up-facing surfaces take the full wetness, walls half of it,
-  and undersides none.
+- `Wetness` (0 to 1, clamped) darkens a surface's diffuse colour toward 55 %
+  (metals keep theirs) and lowers its roughness toward 0.15, so the sun and
+  sky glint off it. Up-facing surfaces take the full wetness, walls half of
+  it, and undersides none.
 - Only surfaces under the open sky get wet. Where an ambient light has a sky
   layer ([the sky's occlusion](#the-skys-light)), what it shades (the ground
   under a roof, a cave) stays dry. Without such a light every surface counts
   as open.
-- `Puddles` (0 to 1) gathers standing water in patches about 2.5 m across on
-  flat ground, as much as the surface is wet: darker still, nearly smooth
-  and flat.
+- `Puddles` (0 to 1, clamped) gathers standing water in patches about 2.5 m
+  across on flat ground, as much as the surface is wet: darker still, nearly
+  smooth and flat.
 - A material can keep dry: `new MaterialRequest(...) with { KeepDry = true }`
   shades it as on a dry day beside surfaces that wet, such as a sheltered
   sign, an awning's underside or a waxed hull. Its product shader, if any,
@@ -1243,20 +1242,20 @@ engine.CameraView.SetFogVolume(new(Id: 1, FogVolumeShape.Ellipsoid, Center: new(
 engine.CameraView.RemoveFogVolume(new(1));
 ```
 
-- **The medium.** `SetVolumetricFog` fills the air: `Density` (0 to 1,
-  extinction per metre at `BaseHeight`; 0 fills none, so only fog volumes
+- **The medium.** `SetVolumetricFog` fills the air: `Density` (extinction
+  per metre at `BaseHeight`; 0 fills none, so only fog volumes
   draw) thinning by e every `FalloffHeight` metres up (0: one density
   everywhere); `Albedo` the colour it scatters; `Anisotropy` (-0.9 to 0.9)
   scatters forward when positive, so fog glows looking toward a light;
-  `Distance` (8 to 1000 m, 96 by default) how far the fog grid reaches;
-  `Ambient` (0 to 4) how much ambient and sky light it scatters.
+  `Distance` (above 0, in metres; 96 by default) how far the fog grid
+  reaches; `Ambient` how much ambient and sky light it scatters.
 - **Fog volumes.** `SetFogVolume` places or replaces a box or ellipsoid by
-  `Id` (at most 64): `Density` (0 to 4) at its heart, fading to nothing over
-  `Edge` of its half extent; `Emission` light it gives off per unit of
+  `Id` (at most 64): `Density` at its heart, fading to nothing over `Edge` (0
+  to 1, clamped) of its half extent; `Emission` light it gives off per unit of
   density (a glowing storm, an arcane haze); 3D noise cells `NoiseScale`
   metres across thin it by `NoiseStrength` as they drift at `NoiseVelocity`.
-  Positions are in the renderer's world space, as an indirect light
-  volume's. `RemoveFogVolume` takes one away.
+  Positions are in the renderer's world space, as an indirect light volume's.
+  `RemoveFogVolume` takes one away.
 - **The light.** Every light of the view lights it through its shadows
   (sun cascades, point and spot shadows), the sun and moon through the cloud
   layer, plus the ambient and hemisphere lights and the sky's light. Light

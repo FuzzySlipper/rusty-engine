@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use render_model::{RenderHandle, Transform, JSON_SAFE_U64_MAX};
+use render_model::{RenderHandle, Transform};
 use serde::{Deserialize, Serialize};
 
 use crate::{PresentationOp, PresentationOpMeta, RenderTargetLookup};
@@ -258,9 +258,6 @@ impl GhostPlateProjector {
         match op {
             // Creating a live handle replaces its plate.
             GhostPlateProjectionOp::Create { handle, descriptor } => {
-                if handle.raw() > JSON_SAFE_U64_MAX {
-                    return Err(GhostPlateProjectionDiagnosticCode::InvalidDescriptor);
-                }
                 validate_descriptor(targets, descriptor)?;
                 self.active.insert(*handle, descriptor.clone());
             }
@@ -320,16 +317,9 @@ fn validate_descriptor(
     targets: &impl RenderTargetLookup,
     descriptor: &GhostPlateDescriptor,
 ) -> Result<(), GhostPlateProjectionDiagnosticCode> {
-    if descriptor.source.raw() > JSON_SAFE_U64_MAX
-        || !targets.contains_render_target(descriptor.source)
-    {
+    if !targets.contains_render_target(descriptor.source) {
         return Err(GhostPlateProjectionDiagnosticCode::UnknownSource);
     }
-    descriptor
-        .placement
-        .transform
-        .validate()
-        .map_err(|_| GhostPlateProjectionDiagnosticCode::InvalidDescriptor)?;
     finite_range(descriptor.placement.width, 0.05, 64.0)?;
     finite_range(descriptor.placement.height, 0.05, 64.0)?;
     let capture = &descriptor.capture;

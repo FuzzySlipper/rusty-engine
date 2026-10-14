@@ -39,6 +39,18 @@ impl SkyBackgroundDescriptor {
     }
 }
 
+/// Environment values feed state the renderer keeps across frames (fog and
+/// cloud histories, auto exposure), where one NaN would persist after the
+/// product fixed it, so they are finite. Their upper bounds are a look the
+/// product chooses, not a limit.
+fn non_negative(value: f32) -> bool {
+    value.is_finite() && value >= 0.0
+}
+
+fn positive(value: f32) -> bool {
+    value.is_finite() && value > 0.0
+}
+
 /// Distance fog over everything drawn in the world (not the background),
 /// blended toward `color` after exposure and tone mapping, by distance from
 /// the camera.
@@ -109,8 +121,8 @@ impl Default for ToneMappingDescriptor {
 }
 
 /// Bloom: the world's light above `threshold` (a soft knee below it)
-/// spreads into a glow added at `intensity` before exposure and tone
-/// mapping.
+/// spreads into a glow added at `intensity` (0 or more) before exposure and
+/// tone mapping.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct BloomDescriptor {
@@ -119,16 +131,9 @@ pub struct BloomDescriptor {
 }
 
 impl BloomDescriptor {
-    /// The largest intensity a product may set.
-    pub const MAX_INTENSITY: f32 = 16.0;
-
-    /// A finite non-negative threshold and an intensity within
-    /// `0..=MAX_INTENSITY`.
+    /// A finite non-negative threshold and intensity.
     pub fn valid(&self) -> bool {
-        self.threshold.is_finite()
-            && self.threshold >= 0.0
-            && self.intensity.is_finite()
-            && (0.0..=Self::MAX_INTENSITY).contains(&self.intensity)
+        non_negative(self.threshold) && non_negative(self.intensity)
     }
 }
 
@@ -194,9 +199,9 @@ pub struct AtmosphereDescriptor {
     pub sun_radius_degrees: f32,
     /// The glow around the sun; 0 for none.
     pub sun_halo: f32,
-    /// The disc's radiance in the sun's colour, linear HDR (0 to
-    /// `MAX_SUN_RADIANCE`), whatever the light's intensity. 0 draws the disc
-    /// and halo at the light's intensity, at most 1, and bloom does not see
+    /// The disc's radiance in the sun's colour, linear HDR (0 or more),
+    /// whatever the light's intensity. 0 draws the disc and halo at the
+    /// light's intensity, at most 1, and bloom does not see
     /// them; above 0 the sky shows them at up to full brightness, and bloom
     /// spreads the disc at this radiance and the halo at `sun_halo` where
     /// nothing in the world or the clouds covers them.
@@ -218,36 +223,25 @@ pub struct AtmosphereDescriptor {
 }
 
 impl AtmosphereDescriptor {
-    /// The largest sun disc radius a product may set, in degrees.
-    pub const MAX_SUN_RADIUS_DEGREES: f32 = 20.0;
-    /// The largest disc radiance a product may set.
-    pub const MAX_SUN_RADIANCE: f32 = 1000.0;
-    /// The largest sky sun colour channel and intensity.
-    pub const MAX_SKY_SUN: f32 = 16.0;
-
-    /// Finite values: a non-negative falloff, haze colour, exponent and
-    /// halo, a sun radius within `0..=MAX_SUN_RADIUS_DEGREES`, a radiance
-    /// within `0..=MAX_SUN_RADIANCE`, and a sky sun colour and intensity
-    /// within `0..=MAX_SKY_SUN`.
+    /// Finite values, all but the fog base height and the sky sun
+    /// direction non-negative.
     pub fn valid(&self) -> bool {
-        let non_negative = |value: f32| value.is_finite() && value >= 0.0;
-        let sky_sun = |value: f32| (0.0..=Self::MAX_SKY_SUN).contains(&value);
         self.fog_base_height.is_finite()
             && non_negative(self.fog_falloff_height)
             && self.haze_color.iter().all(|&value| non_negative(value))
             && non_negative(self.haze_exponent)
-            && (0.0..=Self::MAX_SUN_RADIUS_DEGREES).contains(&self.sun_radius_degrees)
+            && non_negative(self.sun_radius_degrees)
             && non_negative(self.sun_halo)
-            && (0.0..=Self::MAX_SUN_RADIANCE).contains(&self.sun_radiance)
+            && non_negative(self.sun_radiance)
             && self.sky_sun_direction.iter().all(|value| value.is_finite())
-            && self.sky_sun_color.iter().all(|&value| sky_sun(value))
-            && sky_sun(self.sky_sun_intensity)
+            && self.sky_sun_color.iter().all(|&value| non_negative(value))
+            && non_negative(self.sky_sun_intensity)
     }
 }
 
 /// Sun shafts: the sky around the sun, blurred along rays from it, so light
 /// streams past whatever stands in front of it. `intensity` scales the
-/// light added (0 to 16); `length` is how far the rays reach from the sun,
+/// light added (0 or more); `length` is how far the rays reach from the sun,
 /// as a fraction of the way to each pixel (0 takes the Engine's default).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -257,12 +251,9 @@ pub struct SunShaftsDescriptor {
 }
 
 impl SunShaftsDescriptor {
-    /// The largest intensity a product may set.
-    pub const MAX_INTENSITY: f32 = 16.0;
-
-    /// An intensity within `0..=MAX_INTENSITY` and a length within `0..=1`.
+    /// A finite non-negative intensity and a length within `0..=1`.
     pub fn valid(&self) -> bool {
-        (0.0..=Self::MAX_INTENSITY).contains(&self.intensity) && (0.0..=1.0).contains(&self.length)
+        non_negative(self.intensity) && (0.0..=1.0).contains(&self.length)
     }
 }
 
@@ -271,9 +262,9 @@ impl SunShaftsDescriptor {
 /// times `color` (linear HDR). `phase` is the lit fraction, 0 (new) to 1
 /// (full); the lit limb turns toward the sky's sun. `earthshine` (0 to 1)
 /// lights the dark part by that share of the radiance, and `halo` adds a
-/// glow a few degrees wide of that strength. `light_intensity` (0 to 16)
-/// lights the clouds from the moon in its colour, a second light beside the
-/// sky's sun; 0 lights nothing.
+/// glow a few degrees wide of that strength. `light_intensity` lights the
+/// clouds from the moon in its colour, a second light beside the sky's sun;
+/// 0 lights nothing.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct MoonDescriptor {
@@ -289,38 +280,27 @@ pub struct MoonDescriptor {
 }
 
 impl MoonDescriptor {
-    /// The largest disc radius a product may set, in degrees.
-    pub const MAX_RADIUS_DEGREES: f32 = 20.0;
-    /// The largest colour channel and halo.
-    pub const MAX_COLOR: f32 = 16.0;
-    /// The largest radiance a product may set.
-    pub const MAX_RADIANCE: f32 = 1000.0;
-
-    /// A finite direction with some length, a radius within
-    /// `0..=MAX_RADIUS_DEGREES`, colour channels and a halo within
-    /// `0..=MAX_COLOR`, a radiance within `0..=MAX_RADIANCE`, a phase and
-    /// earthshine within `0..=1`, and a light intensity within
-    /// `0..=MAX_COLOR`.
+    /// A finite direction with some length, a phase and earthshine within
+    /// `0..=1`, and every other value finite and non-negative.
     pub fn valid(&self) -> bool {
         let [x, y, z] = self.direction;
         let unit = 0.0..=1.0;
-        let color = 0.0..=Self::MAX_COLOR;
         [x, y, z].iter().all(|value| value.is_finite())
             && x * x + y * y + z * z > 0.0
-            && (0.0..=Self::MAX_RADIUS_DEGREES).contains(&self.radius_degrees)
-            && self.color.iter().all(|channel| color.contains(channel))
-            && (0.0..=Self::MAX_RADIANCE).contains(&self.radiance)
+            && non_negative(self.radius_degrees)
+            && self.color.iter().all(|&channel| non_negative(channel))
+            && non_negative(self.radiance)
             && unit.contains(&self.phase)
             && unit.contains(&self.earthshine)
-            && color.contains(&self.halo)
-            && color.contains(&self.light_intensity)
+            && non_negative(self.halo)
+            && non_negative(self.light_intensity)
     }
 }
 
 /// The scene's wind, which materials with the wind feature
 /// (`RenderMaterialDescriptor::wind`) and product displace stages sway in.
 /// `direction` is over the ground (world x, z; any length, normalized when
-/// read); `strength` (0 to 16) scales every material's bend and flutter;
+/// read); `strength` (0 or more) scales every material's bend and flutter;
 /// `gust` (0 to 1) is the share of the lean that rises and falls in gusts
 /// rather than holding steady.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -332,17 +312,14 @@ pub struct WindDescriptor {
 }
 
 impl WindDescriptor {
-    /// The largest strength a product may set.
-    pub const MAX_STRENGTH: f32 = 16.0;
-
-    /// A finite direction with some length, a strength within
-    /// `0..=MAX_STRENGTH` and a gust share within `0..=1`.
+    /// A finite direction with some length, a finite non-negative strength
+    /// and a gust share within `0..=1`.
     pub fn valid(&self) -> bool {
         let [x, z] = self.direction;
         x.is_finite()
             && z.is_finite()
             && (x * x + z * z) > 0.0
-            && (0.0..=Self::MAX_STRENGTH).contains(&self.strength)
+            && non_negative(self.strength)
             && (0.0..=1.0).contains(&self.gust)
     }
 
@@ -437,15 +414,16 @@ impl CloudRegionDescriptor {
     /// The most cloud regions a scene holds.
     pub const MAX_REGIONS: usize = 32;
 
+    /// A finite centre and drift, a finite radius above 0, a coverage and
+    /// darkness within `0..=1` and a finite non-negative thickness.
     pub fn valid(&self) -> bool {
         let finite = |values: &[f32]| values.iter().all(|value| value.is_finite());
         finite(&self.center)
             && finite(&self.drift)
-            && self.radius > 0.0
-            && self.radius <= 1_000_000.0
+            && positive(self.radius)
             && (0.0..=1.0).contains(&self.coverage)
             && (0.0..=1.0).contains(&self.darkness)
-            && (0.0..=CloudsDescriptor::MAX_DISTANCE).contains(&self.thickness)
+            && non_negative(self.thickness)
     }
 }
 
@@ -457,10 +435,10 @@ impl CloudRegionDescriptor {
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct VolumetricFogDescriptor {
-    /// Extinction per metre at `base_height` (0 to 1): 0 fills no air, so
-    /// only fog volumes draw.
+    /// Extinction per metre at `base_height` (0 or more): 0 fills no air,
+    /// so only fog volumes draw.
     pub density: f32,
-    /// The colour the fog scatters, linear (0 to 1 a channel).
+    /// The colour the fog scatters, linear (0 or more a channel).
     pub albedo: [f32; 3],
     /// Henyey–Greenstein anisotropy (-0.9 to 0.9): positive scatters forward,
     /// so fog glows looking toward a light and shafts read against it.
@@ -470,9 +448,9 @@ pub struct VolumetricFogDescriptor {
     /// Density falls by e every this many metres up; 0 is one density
     /// everywhere.
     pub falloff_height: f32,
-    /// How far from the camera the fog grid reaches, metres (8 to 1000).
+    /// How far from the camera the fog grid reaches, metres (above 0).
     pub distance: f32,
-    /// How much of the ambient and sky light the fog scatters (0 to 4).
+    /// How much of the ambient and sky light the fog scatters (0 or more).
     pub ambient: f32,
 }
 
@@ -488,19 +466,17 @@ impl VolumetricFogDescriptor {
         ambient: 1.0,
     };
 
+    /// Finite values: a non-negative density, albedo, falloff and ambient,
+    /// an anisotropy within `-0.9..=0.9` (Henyey–Greenstein's domain) and a
+    /// distance above 0 (the history reprojection divides by it).
     pub fn valid(&self) -> bool {
-        let finite = |value: f32| value.is_finite();
-        (0.0..=1.0).contains(&self.density)
-            && self
-                .albedo
-                .iter()
-                .all(|channel| (0.0..=1.0).contains(channel))
+        non_negative(self.density)
+            && self.albedo.iter().all(|&channel| non_negative(channel))
             && (-0.9..=0.9).contains(&self.anisotropy)
-            && finite(self.base_height)
-            && finite(self.falloff_height)
-            && self.falloff_height >= 0.0
-            && (8.0..=1000.0).contains(&self.distance)
-            && (0.0..=4.0).contains(&self.ambient)
+            && self.base_height.is_finite()
+            && non_negative(self.falloff_height)
+            && positive(self.distance)
+            && non_negative(self.ambient)
     }
 }
 
@@ -529,16 +505,16 @@ pub enum FogVolumeShape {
 pub struct FogVolumeDescriptor {
     pub shape: FogVolumeShape,
     pub center: [f32; 3],
-    /// Half the size along each axis, metres (above 0, at most 10 km).
+    /// Half the size along each axis, metres (above 0).
     pub half_extents: [f32; 3],
     /// Turn about the vertical axis, degrees.
     pub yaw_degrees: f32,
-    /// Extinction per metre at its heart (0 to 4).
+    /// Extinction per metre at its heart (0 or more).
     pub density: f32,
-    /// The colour it scatters, linear (0 to 1 a channel).
+    /// The colour it scatters, linear (0 or more a channel).
     pub albedo: [f32; 3],
-    /// Light it gives off per unit of density, linear (0 to 16 a channel):
-    /// a glowing storm or an arcane haze.
+    /// Light it gives off per unit of density, linear (0 or more a
+    /// channel): a glowing storm or an arcane haze.
     pub emission: [f32; 3],
     /// The share of the half extent over which the edge fades (0 to 1).
     pub edge: f32,
@@ -554,27 +530,20 @@ impl FogVolumeDescriptor {
     /// The most fog volumes a scene holds.
     pub const MAX_VOLUMES: usize = 64;
 
+    /// Finite values: half extents above 0, a non-negative density, albedo,
+    /// emission and noise scale, and an edge and noise strength within
+    /// `0..=1`.
     pub fn valid(&self) -> bool {
         let finite = |values: &[f32]| values.iter().all(|value| value.is_finite());
         finite(&self.center)
             && finite(&self.noise_velocity)
             && self.yaw_degrees.is_finite()
-            && self
-                .half_extents
-                .iter()
-                .all(|half| *half > 0.0 && *half <= 10_000.0)
-            && (0.0..=4.0).contains(&self.density)
-            && self
-                .albedo
-                .iter()
-                .all(|channel| (0.0..=1.0).contains(channel))
-            && self
-                .emission
-                .iter()
-                .all(|channel| (0.0..=16.0).contains(channel))
+            && self.half_extents.iter().all(|&half| positive(half))
+            && non_negative(self.density)
+            && self.albedo.iter().all(|&channel| non_negative(channel))
+            && self.emission.iter().all(|&channel| non_negative(channel))
             && (0.0..=1.0).contains(&self.edge)
-            && self.noise_scale.is_finite()
-            && self.noise_scale >= 0.0
+            && non_negative(self.noise_scale)
             && (0.0..=1.0).contains(&self.noise_strength)
     }
 }
@@ -595,7 +564,7 @@ pub enum PrecipitationShape {
 /// metres above and below it, which wraps as the camera moves so the drops
 /// stay put in the world. Each is `size` metres across; a streak is as
 /// long as it travels in `streak_seconds`. `color` is linear radiance (0
-/// to 16 a channel) and alpha (0 to 1), added to the frame when
+/// or more a channel) and alpha (0 to 1), added to the frame when
 /// `additive`, else blended over it. No drop falls where an ambient light's
 /// sky layer says the sky is closed overhead.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -613,44 +582,22 @@ pub struct PrecipitationDescriptor {
 }
 
 impl PrecipitationDescriptor {
-    /// The most drops one volume draws.
+    /// The most drops one volume draws: the draw's instance count.
     pub const MAX_DROPS: u32 = 200_000;
-    /// The fastest fall, metres per second.
-    pub const MAX_SPEED: f32 = 200.0;
-    /// The largest drop, metres across.
-    pub const MAX_SIZE: f32 = 4.0;
-    /// The longest streak, in seconds of travel.
-    pub const MAX_STREAK_SECONDS: f32 = 1.0;
-    /// The widest and tallest volume: half its side and half its height, in
-    /// metres.
-    pub const MAX_EXTENT: f32 = 500.0;
-    /// The largest colour channel.
-    pub const MAX_COLOR: f32 = 16.0;
-    /// The deepest twilight, in degrees below the horizon.
-    pub const MAX_TWILIGHT_DEGREES: f32 = 20.0;
 
-    /// Drops within `MAX_DROPS`; a finite velocity no faster than
-    /// `MAX_SPEED`; a size above 0 and within `MAX_SIZE`; a streak time
-    /// within `0..=MAX_STREAK_SECONDS`; colour channels within
-    /// `0..=MAX_COLOR` and alpha within `0..=1`; and a radius and height of
-    /// at least 1 m and within `MAX_EXTENT`.
+    /// Drops within `MAX_DROPS`; a finite velocity; a finite size above 0;
+    /// a finite non-negative streak time and colour channels with alpha
+    /// within `0..=1`; and a finite radius and height of at least 1 m.
     pub fn valid(&self) -> bool {
-        let [x, y, z] = self.velocity;
-        let extent = 1.0..=Self::MAX_EXTENT;
+        let extent = |value: f32| value.is_finite() && value >= 1.0;
         self.drops <= Self::MAX_DROPS
-            && x.is_finite()
-            && y.is_finite()
-            && z.is_finite()
-            && (x * x + y * y + z * z).sqrt() <= Self::MAX_SPEED
-            && self.size > 0.0
-            && self.size <= Self::MAX_SIZE
-            && (0.0..=Self::MAX_STREAK_SECONDS).contains(&self.streak_seconds)
-            && self.color[..3]
-                .iter()
-                .all(|channel| (0.0..=Self::MAX_COLOR).contains(channel))
+            && self.velocity.iter().all(|value| value.is_finite())
+            && positive(self.size)
+            && non_negative(self.streak_seconds)
+            && self.color[..3].iter().all(|&channel| non_negative(channel))
             && (0.0..=1.0).contains(&self.color[3])
-            && extent.contains(&self.radius)
-            && extent.contains(&self.height)
+            && extent(self.radius)
+            && extent(self.height)
     }
 }
 
@@ -708,10 +655,11 @@ impl CloudKind {
 /// the ground (world x, z) in metres per second; `altitude` is the height
 /// of the layer and `scale` the size of one cloud, both in metres, which
 /// together set how large clouds look and how they shrink toward the
-/// horizon; `color` (linear, 0 to 16 a channel) tints the light they take.
-/// The volumetric clouds stand from `altitude` up by `thickness` metres (0:
-/// six tenths of the altitude), shaped by `kind`. `twilight_degrees` (0 to
-/// 20) is how far below the horizon the sky's sun still lights the clouds
+/// horizon; `color` (linear, 0 or more a channel) tints the light they
+/// take. The volumetric clouds stand from `altitude` up by `thickness`
+/// metres (0: six tenths of the altitude), shaped by `kind`.
+/// `twilight_degrees` (0 or more) is how far below the horizon the sky's
+/// sun still lights the clouds
 /// overhead, from below and reddening as it sinks; 0 lights them only while
 /// the sun is up.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -731,36 +679,16 @@ pub struct CloudsDescriptor {
 }
 
 impl CloudsDescriptor {
-    /// The largest altitude and cloud size, in metres.
-    pub const MAX_DISTANCE: f32 = 100_000.0;
-    /// The fastest drift, in metres per second.
-    pub const MAX_DRIFT: f32 = 1_000.0;
-    /// The largest colour channel.
-    pub const MAX_COLOR: f32 = 16.0;
-    /// The deepest twilight, in degrees below the horizon.
-    pub const MAX_TWILIGHT_DEGREES: f32 = 20.0;
-
-    /// Coverage within `0..=1`, a finite drift no faster than `MAX_DRIFT`, an
-    /// altitude and scale above 0 and within `MAX_DISTANCE`, colour
-    /// channels within `0..=MAX_COLOR`, and a twilight within
-    /// `0..=MAX_TWILIGHT_DEGREES`.
+    /// Coverage within `0..=1`, a finite drift, a finite altitude and scale
+    /// above 0, and a finite non-negative thickness, colour and twilight.
     pub fn valid(&self) -> bool {
-        let [x, z] = self.drift;
-        let distance = 0.0..=Self::MAX_DISTANCE;
         (0.0..=1.0).contains(&self.coverage)
-            && x.is_finite()
-            && z.is_finite()
-            && (x * x + z * z).sqrt() <= Self::MAX_DRIFT
-            && self.altitude > 0.0
-            && distance.contains(&self.altitude)
-            && self.scale > 0.0
-            && distance.contains(&self.scale)
-            && distance.contains(&self.thickness)
-            && self
-                .color
-                .iter()
-                .all(|channel| (0.0..=Self::MAX_COLOR).contains(channel))
-            && (0.0..=Self::MAX_TWILIGHT_DEGREES).contains(&self.twilight_degrees)
+            && self.drift.iter().all(|value| value.is_finite())
+            && positive(self.altitude)
+            && positive(self.scale)
+            && non_negative(self.thickness)
+            && self.color.iter().all(|&channel| non_negative(channel))
+            && non_negative(self.twilight_degrees)
     }
 }
 
@@ -828,7 +756,7 @@ impl IndirectLightDescriptor {
 
 /// The sky's light: the background (a sky panorama, two blended, or the
 /// clear colour) lights the world as an environment, its radiance scaled by
-/// `intensity` (0 to 16).
+/// `intensity` (0 or more).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SkyLightDescriptor {
@@ -836,12 +764,9 @@ pub struct SkyLightDescriptor {
 }
 
 impl SkyLightDescriptor {
-    /// The largest intensity a product may set.
-    pub const MAX_INTENSITY: f32 = 16.0;
-
-    /// An intensity within `0..=MAX_INTENSITY`.
+    /// A finite non-negative intensity.
     pub fn valid(&self) -> bool {
-        (0.0..=Self::MAX_INTENSITY).contains(&self.intensity)
+        non_negative(self.intensity)
     }
 }
 
@@ -1019,8 +944,6 @@ pub enum ToneMappingOperator {
     AcesFilmic,
 }
 
-pub const JSON_SAFE_U64_MAX: u64 = (1_u64 << 53) - 1;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct RenderHandle(u64);
@@ -1033,19 +956,6 @@ impl RenderHandle {
     pub const fn raw(self) -> u64 {
         self.0
     }
-
-    pub const fn validate(self) -> Result<(), RenderHandleError> {
-        if self.0 <= JSON_SAFE_U64_MAX {
-            Ok(())
-        } else {
-            Err(RenderHandleError::OutsideJsonSafeRange(self.0))
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RenderHandleError {
-    OutsideJsonSafeRange(u64),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -1063,36 +973,12 @@ impl Transform {
         rotation: [0.0, 0.0, 0.0, 1.0],
         scale: [1.0, 1.0, 1.0],
     };
-
-    pub fn validate(self) -> Result<(), TransformError> {
-        if !self.translation.iter().all(|value| value.is_finite()) {
-            return Err(TransformError::InvalidTranslation);
-        }
-        if !self.rotation.iter().all(|value| value.is_finite()) {
-            return Err(TransformError::InvalidRotation);
-        }
-        let rotation_length = self.rotation.iter().map(|value| value * value).sum::<f32>();
-        if rotation_length <= f32::EPSILON {
-            return Err(TransformError::InvalidRotation);
-        }
-        if !self.scale.iter().all(|value| value.is_finite()) {
-            return Err(TransformError::InvalidScale);
-        }
-        Ok(())
-    }
 }
 
 impl Default for Transform {
     fn default() -> Self {
         Self::IDENTITY
     }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TransformError {
-    InvalidTranslation,
-    InvalidRotation,
-    InvalidScale,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -1110,22 +996,6 @@ pub enum Geometry {
     },
 }
 
-impl Geometry {
-    fn validate(self) -> Result<(), NodeError> {
-        match self {
-            Self::Line { a, b }
-                if !a
-                    .into_iter()
-                    .chain(b)
-                    .all(|component| component.is_finite()) =>
-            {
-                Err(NodeError::InvalidGeometry)
-            }
-            _ => Ok(()),
-        }
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Material {
@@ -1138,14 +1008,6 @@ impl Material {
         color: [1.0, 1.0, 1.0, 1.0],
         wireframe: false,
     };
-
-    pub fn validate(self) -> Result<(), NodeError> {
-        self.color
-            .iter()
-            .all(|value| value.is_finite() && (0.0..=1.0).contains(value))
-            .then_some(())
-            .ok_or(NodeError::InvalidMaterial)
-    }
 }
 
 impl Default for Material {
@@ -1202,20 +1064,6 @@ pub struct RenderMetadata {
     pub label: Option<String>,
 }
 
-impl RenderMetadata {
-    pub fn validate(&self) -> Result<(), NodeError> {
-        if self
-            .source_entity
-            .into_iter()
-            .chain(self.source_scene_node)
-            .any(|value| value > JSON_SAFE_U64_MAX)
-        {
-            return Err(NodeError::UnsafeSourceIdentity);
-        }
-        Ok(())
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RenderNode {
@@ -1242,21 +1090,6 @@ impl RenderNode {
             metadata: RenderMetadata::default(),
         }
     }
-
-    pub fn validate(&self) -> Result<(), NodeError> {
-        self.geometry.validate()?;
-        self.material.validate()?;
-        self.transform.validate().map_err(NodeError::Transform)?;
-        self.metadata.validate()
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum NodeError {
-    InvalidGeometry,
-    InvalidMaterial,
-    Transform(TransformError),
-    UnsafeSourceIdentity,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

@@ -971,9 +971,6 @@ pub enum AppearanceProjectionError {
         owner: String,
         material: String,
     },
-    UnsafeObjectId {
-        id: u64,
-    },
     UnknownAppearance {
         id: u64,
         appearance: String,
@@ -990,10 +987,6 @@ pub enum AppearanceProjectionError {
     ParentCycle {
         id: u64,
     },
-    InvalidNodeTransform {
-        id: u64,
-        source: render_model::TransformError,
-    },
     MissingStaticMesh {
         id: u64,
         asset: String,
@@ -1005,9 +998,6 @@ pub enum AppearanceProjectionError {
     MissingSpriteAtlas {
         id: u64,
         asset: String,
-    },
-    UnsafeLightId {
-        id: u64,
     },
     MissingLightParent {
         id: u64,

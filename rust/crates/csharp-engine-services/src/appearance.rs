@@ -1992,14 +1992,7 @@ impl RuntimeAppearanceBridge {
         if ops.is_empty() {
             return Ok(Vec::new());
         }
-        PresentationFrameDiff::try_from_ops(ops)
-            .map(|frame| vec![frame])
-            .map_err(|error| {
-                CsharpEngineServicesError::new(
-                    "CSHARP_PRESENTATION_BASELINE",
-                    format!("retained presentation baseline is invalid: {error:?}"),
-                )
-            })
+        Ok(vec![PresentationFrameDiff::from_ops(ops)])
     }
 
     pub(crate) fn presentation_create_billboard(
@@ -2414,7 +2407,7 @@ impl RuntimeAppearanceBridge {
     ) -> Result<NativeGhostPlatePresentationHandle, CsharpEngineServicesError> {
         let presentation = RuntimeGhostPlatePresentation {
             source_object_id: request.source_object_id,
-            placement: native_ghost_plate_placement(request.placement),
+            placement: native_ghost_plate_placement(request.placement)?,
             capture: native_ghost_plate_capture(request.capture),
             config: native_ghost_plate_config(request.config),
         };
@@ -2448,7 +2441,7 @@ impl RuntimeAppearanceBridge {
     ) -> Result<(), CsharpEngineServicesError> {
         let handle = request.presentation.value;
         let mut next = self.ghost_plate(handle)?;
-        next.placement = native_ghost_plate_placement(request.placement);
+        next.placement = native_ghost_plate_placement(request.placement)?;
         next.config = native_ghost_plate_config(request.config);
         // The renderer applies this patch as one retained replacement,
         // recapturing when the sector count changes.
@@ -7131,7 +7124,7 @@ impl RuntimeAppearanceBridge {
                 object_id: fact.object_id,
                 parent_object_id: fact.has_parent_object.then_some(fact.parent_object_id),
                 appearance,
-                transform: native_transform(fact.transform),
+                transform: product_transform(fact.transform, "CSHARP_APPEARANCE_TRANSFORM")?,
                 visible: fact.visible,
                 layer: native_render_layer(fact.layer)?,
                 shadow_casting: match fact.shadow_casting {
@@ -7488,8 +7481,16 @@ fn command_clip(command: &AnimatedMeshPlaybackCommand) -> Option<&str> {
     }
 }
 
-fn native_transform(value: NativeTransform) -> Transform {
-    Transform {
+/// A product transform where it enters the render path: every component
+/// finite. A non-finite one would reach the renderer's aggregates (a run's
+/// culling bounds, the indirect light bricks it marks), not only its own
+/// object. Any finite value is admitted; a zero rotation draws as the
+/// identity (render-wgpu `convert::rotation`).
+pub(crate) fn product_transform(
+    value: NativeTransform,
+    code: &'static str,
+) -> Result<Transform, CsharpEngineServicesError> {
+    let transform = Transform {
         translation: [
             value.translation.x,
             value.translation.y,
@@ -7502,7 +7503,20 @@ fn native_transform(value: NativeTransform) -> Transform {
             value.rotation.w,
         ],
         scale: [value.scale.x, value.scale.y, value.scale.z],
+    };
+    if !transform
+        .translation
+        .iter()
+        .chain(&transform.rotation)
+        .chain(&transform.scale)
+        .all(|value| value.is_finite())
+    {
+        return Err(CsharpEngineServicesError::new(
+            code,
+            "a transform's translation, rotation and scale must be finite",
+        ));
     }
+    Ok(transform)
 }
 
 fn native_render_layer(value: NativeRenderLayer) -> Result<RenderLayer, CsharpEngineServicesError> {
@@ -9443,39 +9457,31 @@ fn native_color(value: NativeColor) -> [f32; 4] {
     [value.r, value.g, value.b, value.a]
 }
 
-/// A product colour for a primitive or a mesh's own materials: finite, each
-/// channel 0 to 1. Admitted here; the projection retains it as it is.
+/// A product colour for a primitive or a mesh's own materials
+/// (`render_model::valid_color`). Admitted here; the projection retains it
+/// as it is.
 fn product_color(
     value: NativeColor,
     code: &'static str,
 ) -> Result<[f32; 4], CsharpEngineServicesError> {
     let color = native_color(value);
-    Material {
-        color,
-        wireframe: false,
+    if !render_model::valid_color(color) {
+        return Err(CsharpEngineServicesError::new(
+            code,
+            "colour channels must be finite and non-negative, and alpha within 0 to 1",
+        ));
     }
-    .validate()
-    .map_err(|_| {
-        CsharpEngineServicesError::new(code, "colour channels must be finite and within 0 to 1")
-    })?;
     Ok(color)
 }
 
-fn native_ghost_plate_placement(value: NativeGhostPlatePlacement) -> GhostPlatePlacement {
-    GhostPlatePlacement {
-        transform: Transform {
-            translation: native_vec3_array(value.transform.translation),
-            rotation: [
-                value.transform.rotation.x,
-                value.transform.rotation.y,
-                value.transform.rotation.z,
-                value.transform.rotation.w,
-            ],
-            scale: native_vec3_array(value.transform.scale),
-        },
+fn native_ghost_plate_placement(
+    value: NativeGhostPlatePlacement,
+) -> Result<GhostPlatePlacement, CsharpEngineServicesError> {
+    Ok(GhostPlatePlacement {
+        transform: product_transform(value.transform, "CSHARP_GHOST_PLATE_TRANSFORM")?,
         width: value.width,
         height: value.height,
-    }
+    })
 }
 
 fn native_ghost_plate_capture(value: NativeGhostPlateCaptureSettings) -> GhostPlateCaptureSettings {
@@ -10244,7 +10250,7 @@ fn mesh_material_parameters(
     value.validate().map_err(|_| {
         CsharpEngineServicesError::new(
             code,
-            "base colour, texture tint and emissive factor channels are 0 to 1 and emissive strength is finite and not negative",
+            "base colour, texture tint and emissive factor channels are finite and not negative, alphas are 0 to 1, and emissive strength is finite and not negative",
         )
     })?;
     Ok(value)
@@ -10730,6 +10736,71 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn large_object_ids_and_zero_rotations_publish_and_non_finite_transforms_are_refused() {
+        let mut bridge =
+            RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), BTreeMap::new());
+        bridge.begin_call();
+        let parent = bridge.create_primitive(primitive_request()).unwrap();
+        let child = bridge.create_primitive(primitive_request()).unwrap();
+        // Object ids are the product's u64s; render frames never reach
+        // JavaScript, so ids above 2^53 pass as they are.
+        let parent_id = 1_u64 << 60;
+        let mut parent_fact = appearance_fact(parent);
+        parent_fact.object_id = parent_id;
+        // A zero rotation is admitted; the renderer draws it as the identity.
+        parent_fact.transform.rotation = NativeQuat {
+            x: 0.0,
+            y: 0.0,
+            z: 0.0,
+            w: 0.0,
+        };
+        let mut child_fact = appearance_fact(child);
+        child_fact.object_id = parent_id + 1;
+        child_fact.has_parent_object = true;
+        child_fact.parent_object_id = parent_id;
+        // A non-finite component is refused where the fact enters, before
+        // anything is staged: it would reach the renderer's shared bounds.
+        for poison in [f32::NAN, f32::INFINITY] {
+            let mut bad = child_fact;
+            bad.transform.translation.x = poison;
+            let facts = [parent_fact, bad];
+            let error = unsafe { bridge.stage_snapshot(facts.as_ptr(), facts.len()) }.unwrap_err();
+            assert_eq!(error.code(), "CSHARP_APPEARANCE_TRANSFORM");
+        }
+        let mut bad = child_fact;
+        bad.transform.scale.y = f32::NAN;
+        let error = unsafe { bridge.stage_snapshot(&bad, 1) }.unwrap_err();
+        assert_eq!(error.code(), "CSHARP_APPEARANCE_TRANSFORM");
+        assert!(bridge.staged_ref().unwrap().outputs.is_empty());
+
+        let facts = [parent_fact, child_fact];
+        unsafe { bridge.stage_snapshot(facts.as_ptr(), facts.len()) }.unwrap();
+        let call = bridge.take_staged_call();
+        let mut world = render_presentation::PresentationWorld::default();
+        for output in call.outputs {
+            if let RuntimeAppearanceCallOutput::Frame(frame) = output {
+                world.apply(frame.clone()).unwrap();
+            }
+        }
+        let sources = world
+            .snapshot()
+            .frame
+            .ops
+            .iter()
+            .filter_map(|op| match op {
+                RenderDiff::Create { node, .. } => {
+                    Some((node.metadata.source_entity?, node.transform.rotation))
+                }
+                _ => None,
+            })
+            .collect::<BTreeMap<_, _>>();
+        assert_eq!(
+            sources,
+            BTreeMap::from([(parent_id, [0.0; 4]), (parent_id + 1, [0.0, 0.0, 0.0, 1.0])])
+        );
+    }
+
+    #[test]
     fn product_call_snapshot_shares_immutable_resource_bodies() {
         let bytes: Arc<[u8]> = Arc::from(vec![0x5a; 8 * 1024 * 1024]);
         let pointer = bytes.as_ptr();
@@ -11127,7 +11198,7 @@ pub(super) mod tests {
         // A repeated slot takes its last factors.
         update(&mut bridge, tinted, &[tint(0, 0.25), tint(0, 1.0)]).expect("slot 0 factors");
         for (factors, code) in [
-            (vec![tint(0, 1.5)], "CSHARP_STATIC_MESH_FACTORS"),
+            (vec![tint(0, f32::NAN)], "CSHARP_STATIC_MESH_FACTORS"),
             (vec![tint(70_000, 0.5)], "CSHARP_STATIC_MESH_SLOT"),
         ] {
             assert_eq!(
@@ -12126,7 +12197,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn material_metalness_reaches_the_descriptor_and_out_of_range_is_refused() {
+    fn material_metalness_and_hdr_colours_reach_the_descriptor_and_nan_is_refused() {
         let color = NativeColor {
             r: 1.0,
             g: 0.75,
@@ -12181,18 +12252,40 @@ pub(super) mod tests {
         )
         .expect("dry material");
         assert!(dry.keep_dry, "KeepDry reaches the descriptor");
-        let error = material_descriptor(
+        // Above-1 metalness and an HDR tint are a look; the renderer takes
+        // metalness at most 1 where it shades.
+        let hdr = NativeColor {
+            r: 1.5,
+            g: 2.0,
+            b: 0.5,
+            a: 1.0,
+        };
+        let over = material_descriptor(
             "material/over".to_owned(),
             NativeMaterialRequest {
                 metalness: 1.5,
-                normal_map: NativeRenderResourceReference::default(),
-                normal_scale: 1.0,
+                texture_tint: hdr,
                 ..metal
             },
             &resources,
         )
-        .unwrap_err();
-        assert_eq!(error.code(), "CSHARP_MATERIAL");
+        .expect("bright metal");
+        assert_eq!(over.metalness, 1.5);
+        assert_eq!(over.texture_tint, [1.5, 2.0, 0.5, 1.0]);
+        for refused in [
+            NativeMaterialRequest {
+                metalness: f32::NAN,
+                ..metal
+            },
+            NativeMaterialRequest {
+                texture_tint: NativeColor { a: 1.5, ..hdr },
+                ..metal
+            },
+        ] {
+            let error =
+                material_descriptor("material/bad".to_owned(), refused, &resources).unwrap_err();
+            assert_eq!(error.code(), "CSHARP_MATERIAL");
+        }
     }
 
     #[test]
@@ -13460,7 +13553,7 @@ fn shade(surface: Surface) -> vec4<f32> {
         assert_eq!(primitive.unwrap_err().code(), "CSHARP_PRIMITIVE_COLOR");
         let mesh =
             bridge.create_static_mesh_from_content(&NativeStaticMeshContentAppearanceRequest {
-                color: NativeColor { r: 2.0, ..invalid },
+                color: NativeColor { r: -1.0, ..invalid },
                 ..mesh_content_request()
             });
         assert_eq!(mesh.unwrap_err().code(), "CSHARP_STATIC_MESH_COLOR");
@@ -14353,7 +14446,7 @@ fn shade(surface: Surface) -> vec4<f32> {
         );
         for (factors, code) in [
             (vec![factor(1, 0.5)], "CSHARP_ANIMATED_MESH_SLOT"),
-            (vec![factor(0, 1.5)], "CSHARP_ANIMATED_MESH_FACTORS"),
+            (vec![factor(0, f32::NAN)], "CSHARP_ANIMATED_MESH_FACTORS"),
         ] {
             assert_eq!(
                 update(&mut bridge, &factors).expect_err("refused").code(),
@@ -15395,10 +15488,6 @@ fn shade(surface: Surface) -> vec4<f32> {
         assert_eq!(bridge.presentation_readout().emitted_bursts, 1);
         let call = bridge.take_staged_call();
         assert_eq!(call.presentation().len(), 4);
-        assert!(call
-            .presentation()
-            .into_iter()
-            .all(|frame| frame.validate().is_ok()));
         bridge.commit(call);
 
         let before = bridge.presentation_readout();
@@ -16028,11 +16117,17 @@ mod light_and_shadow_facts {
             "it casts no shadow"
         );
 
-        let mut dark_ground = native(NativeLightKind::Hemisphere);
-        dark_ground.ground_color.x = 1.5;
+        let mut bright_ground = native(NativeLightKind::Hemisphere);
+        bright_ground.ground_color.x = 1.5;
         assert!(
-            native_light_descriptor(dark_ground).is_err(),
-            "the ground colour is held to 0..=1 like the sky's"
+            native_light_descriptor(bright_ground).is_ok(),
+            "an HDR ground colour is a look"
+        );
+        let mut negative_ground = native(NativeLightKind::Hemisphere);
+        negative_ground.ground_color.x = -0.5;
+        assert!(
+            native_light_descriptor(negative_ground).is_err(),
+            "the ground colour is finite and not negative like the sky's"
         );
     }
 

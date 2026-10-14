@@ -43,7 +43,8 @@ pub struct NativeCaptureImageRequest {
     /// Zero keeps the frozen retained pose. Otherwise sample this animated node.
     pub pose_object_id: u64,
     pub pose_clip: NativeUtf8Slice,
-    /// Exact normalized clip time, including the endpoint; no wall-clock advance.
+    /// Exact normalized clip time, including the endpoint (clamped to 0..=1);
+    /// no wall-clock advance.
     pub pose_time: f64,
 }
 

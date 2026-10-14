@@ -99,13 +99,12 @@ fn descriptor(sectors: u8) -> GhostPlateDescriptor {
 fn ghost(harness: &mut Harness, op: GhostPlateProjectionOp) {
     let delta = harness
         .world
-        .apply_presentation(
-            PresentationFrameDiff::try_from_ops(vec![PresentationOp::GhostPlate {
+        .apply_presentation(PresentationFrameDiff::from_ops(vec![
+            PresentationOp::GhostPlate {
                 meta: PresentationOpMeta::new(0),
                 op,
-            }])
-            .expect("presentation frame"),
-        )
+            },
+        ]))
         .expect("retained world admits the plate");
     let issues = harness
         .renderer

@@ -366,7 +366,7 @@ fn audio_retained_voice_controls_and_fixed_bus_state_are_owner_truth() {
                     PresentationOpMeta::new(10),
                     AudioProjectionOp::BusControl {
                         bus: AudioBus::Sfx,
-                        control: AudioBusControl::SetVolume { volume: 2.0 },
+                        control: AudioBusControl::SetVolume { volume: -1.0 },
                     },
                 ),
             ],
@@ -427,7 +427,7 @@ fn billboard_assets_bounds_and_retained_lifecycle_are_checked() {
             BillboardProjectionOp::Update {
                 handle,
                 patch: BillboardPatch {
-                    height_pixels: Some(2.0),
+                    height_pixels: Some(300.0),
                     ..BillboardPatch::default()
                 },
             },
@@ -884,4 +884,115 @@ fn a_zero_rate_pauses_a_retained_emitter_and_a_negative_rate_is_invalid() {
         ParticleProjectionDiagnosticCode::InvalidDescriptor
     );
     assert_eq!(projector.descriptor(handle).unwrap().rate_per_second, 0.0);
+}
+
+#[test]
+fn look_values_without_a_resource_behind_them_are_accepted() {
+    let assets = assets();
+    let mut audio = AudioProjector::default();
+    let loud = AudioSourceDescriptor {
+        volume: 2.0,
+        pitch: 6.0,
+        ..audio_descriptor()
+    };
+    audio
+        .project(
+            &assets,
+            PresentationOpMeta::new(0),
+            AudioProjectionOp::Create {
+                handle: AudioHandle::new(1),
+                descriptor: loud.clone(),
+            },
+        )
+        .unwrap();
+    assert_eq!(audio.voice(AudioHandle::new(1)).unwrap().descriptor, loud);
+    audio
+        .project(
+            &assets,
+            PresentationOpMeta::new(1),
+            AudioProjectionOp::BusControl {
+                bus: AudioBus::Sfx,
+                control: AudioBusControl::SetVolume { volume: 3.0 },
+            },
+        )
+        .unwrap();
+    assert_eq!(audio.bus(AudioBus::Sfx).volume, 3.0);
+    for pitch in [0.0, f32::NAN] {
+        let error = audio
+            .project(
+                &assets,
+                PresentationOpMeta::new(2),
+                AudioProjectionOp::Create {
+                    handle: AudioHandle::new(2),
+                    descriptor: AudioSourceDescriptor {
+                        pitch,
+                        ..audio_descriptor()
+                    },
+                },
+            )
+            .unwrap_err();
+        assert_eq!(error.code, AudioProjectionDiagnosticCode::InvalidDescriptor);
+    }
+
+    let mut billboards = BillboardProjector::default();
+    billboards
+        .project(
+            &assets,
+            PresentationOpMeta::new(0),
+            BillboardProjectionOp::Create {
+                handle: BillboardHandle::new(1),
+                descriptor: BillboardDescriptor {
+                    height_pixels: 2.0,
+                    max_distance: 50_000.0,
+                    anchor: BillboardAnchor::World {
+                        position: [f32::NAN, 0.0, 0.0],
+                    },
+                    ..billboard_descriptor()
+                },
+            },
+        )
+        .unwrap();
+
+    let mut descriptor = particle_descriptor();
+    descriptor.visual = ParticleVisual::Cube;
+    descriptor.flipbook_frames_per_second = 0.0;
+    descriptor.color_curve[0].color = [4.0, 2.0, 1.0, 1.0];
+    descriptor.collision = Some(ParticleCollisionDescriptor {
+        radius: 5.0,
+        restitution: 0.5,
+        friction: 0.25,
+        maximum_impacts: 4,
+        sleep_speed: 500.0,
+        limit_behavior: ParticleCollisionLimitBehavior::Sleep,
+        volumes: vec![ParticleCollisionVolume::Plane {
+            normal: [0.0, 1.0, 0.0],
+            offset: -1.0,
+        }],
+    });
+    let mut particles = ParticleProjector::default();
+    particles
+        .project(
+            &BTreeMap::<String, RenderAssetKind>::new(),
+            PresentationOpMeta::new(0),
+            ParticleProjectionOp::Emit {
+                signal_id: "bright".into(),
+                descriptor: descriptor.clone(),
+            },
+        )
+        .unwrap();
+    descriptor.color_curve[0].color = [1.0, 1.0, 1.0, 1.5];
+    assert_eq!(
+        particles
+            .project(
+                &BTreeMap::<String, RenderAssetKind>::new(),
+                PresentationOpMeta::new(1),
+                ParticleProjectionOp::Emit {
+                    signal_id: "overopaque".into(),
+                    descriptor,
+                },
+            )
+            .unwrap_err()
+            .code,
+        ParticleProjectionDiagnosticCode::InvalidDescriptor
+    );
 }

@@ -464,8 +464,8 @@ rather than treating each input sample as a mouse displacement.
 ### Runtime-generated geometry
 
 Ordinary `MaterialRequest` exposes opaque, mask/cutoff, and blend alpha modes,
-and `Metalness` from 0 (the default, dielectric) to 1 (metal; see
-[the standard shader](lighting-and-sky.md#the-standard-shader)).
+and `Metalness` from 0 (the default, dielectric) to 1 (metal; more shades
+as 1; see [the standard shader](lighting-and-sky.md#the-standard-shader)).
 `NormalMap` names a tangent-space normal map (x right, y up the image, as
 glTF stores them), and `NormalScale` scales its tilt. The texture must be
 opened as data, with `TextureColorSpace.Linear`. A colour texture is refused

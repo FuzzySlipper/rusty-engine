@@ -6,10 +6,12 @@
 
 #![forbid(unsafe_code)]
 
-use render_model::JSON_SAFE_U64_MAX;
 use serde::{Deserialize, Serialize};
 
-pub const MAX_RENDERER_TARGET_DIMENSION: u32 = 2_048;
+/// The longest side of an offscreen target: wgpu's default
+/// `max_texture_dimension_2d`, which every supported adapter meets.
+pub const MAX_RENDERER_TARGET_DIMENSION: u32 = 8_192;
+/// The pixels one composition's offscreen targets hold together.
 const MAX_RENDERER_TARGET_PIXELS: u64 = 8_388_608;
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -279,7 +281,6 @@ impl RendererViewport {
 impl RendererCompositionTarget {
     pub fn validate(&self) -> Result<(), RendererHostContractError> {
         validate_identifier(&self.id)?;
-        validate_json_safe(self.revision)?;
         if self.width == 0
             || self.height == 0
             || self.width > MAX_RENDERER_TARGET_DIMENSION
@@ -313,14 +314,8 @@ impl RendererCompositionView {
         validate_identifier(&self.id)?;
         validate_identifier(&self.camera_id)?;
         self.viewport.validate()?;
-        validate_json_safe(self.order)?;
-        if let RendererViewTarget::Offscreen {
-            target_id,
-            target_revision,
-        } = &self.target
-        {
+        if let RendererViewTarget::Offscreen { target_id, .. } = &self.target {
             validate_identifier(target_id)?;
-            validate_json_safe(*target_revision)?;
         }
         Ok(())
     }
@@ -330,8 +325,6 @@ impl RendererCompositionPresentation {
     pub fn validate(&self) -> Result<(), RendererHostContractError> {
         validate_identifier(&self.id)?;
         validate_identifier(&self.source_target_id)?;
-        validate_json_safe(self.source_target_revision)?;
-        validate_json_safe(self.order)?;
         self.destination.viewport.validate()
     }
 }
@@ -342,7 +335,6 @@ pub enum RendererHostContractError {
     InvalidIdentifier,
     InvalidNumber,
     InvalidDimension,
-    OutsideJsonSafeRange,
 }
 
 fn validate_identifier(value: &str) -> Result<(), RendererHostContractError> {
@@ -350,14 +342,6 @@ fn validate_identifier(value: &str) -> Result<(), RendererHostContractError> {
         Err(RendererHostContractError::InvalidIdentifier)
     } else {
         Ok(())
-    }
-}
-
-fn validate_json_safe(value: u64) -> Result<(), RendererHostContractError> {
-    if value <= JSON_SAFE_U64_MAX {
-        Ok(())
-    } else {
-        Err(RendererHostContractError::OutsideJsonSafeRange)
     }
 }
 

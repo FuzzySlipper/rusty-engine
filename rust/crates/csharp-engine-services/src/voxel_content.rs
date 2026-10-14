@@ -718,7 +718,10 @@ impl RuntimeVoxelContentBridge {
         let presentation = RetainedVoxelObjectPresentation {
             object,
             runtime_frame: request.runtime_frame,
-            transform: presentation_transform(request.transform)?,
+            transform: crate::appearance::product_transform(
+                request.transform,
+                "CSHARP_VOXEL_PRESENTATION_TRANSFORM",
+            )?,
             visible: request.visible,
             materials: self.presentation_materials(
                 request.materials,
@@ -760,7 +763,10 @@ impl RuntimeVoxelContentBridge {
             request.materials_len,
             request.presentation,
         )?;
-        let transform = presentation_transform(request.transform)?;
+        let transform = crate::appearance::product_transform(
+            request.transform,
+            "CSHARP_VOXEL_PRESENTATION_TRANSFORM",
+        )?;
         let mut candidate = self.staged_presentation_state()?.clone();
         let presentation = candidate
             .presentations
@@ -946,27 +952,6 @@ fn project_presentation_state(
             CsharpEngineServicesError::new("CSHARP_VOXEL_PRESENTATION", format!("{error:?}"))
         })?;
     Ok(result.frame)
-}
-
-fn presentation_transform(value: NativeTransform) -> Result<Transform, CsharpEngineServicesError> {
-    let transform = Transform {
-        translation: [
-            value.translation.x,
-            value.translation.y,
-            value.translation.z,
-        ],
-        rotation: [
-            value.rotation.x,
-            value.rotation.y,
-            value.rotation.z,
-            value.rotation.w,
-        ],
-        scale: [value.scale.x, value.scale.y, value.scale.z],
-    };
-    transform.validate().map_err(|error| {
-        CsharpEngineServicesError::new("CSHARP_VOXEL_PRESENTATION_TRANSFORM", format!("{error:?}"))
-    })?;
-    Ok(transform)
 }
 
 #[cfg(test)]
