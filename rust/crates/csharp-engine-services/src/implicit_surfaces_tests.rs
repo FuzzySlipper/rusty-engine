@@ -417,6 +417,189 @@ fn native_implicit_mesh_generation_keeps_renderer_owners_alive_until_released() 
 }
 
 #[test]
+fn generation_takes_any_region_count_and_samples_spacing_only_for_interpolated_boundaries() {
+    const REGIONS: usize = 300;
+    let mut appearance =
+        RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), BTreeMap::new());
+    let mut implicit = RuntimeImplicitBridge::new();
+    appearance.begin_call();
+    implicit.begin_call();
+    let api = implicit_api(&mut implicit, &mut appearance);
+    let appearance_context = (&mut appearance as *mut RuntimeAppearanceBridge).cast();
+    let mut field = NativeImplicitFieldHandle { value: 0 };
+    assert_eq!(
+        unsafe { (api.create_field)(api.context, &mut field, std::ptr::null_mut()) },
+        ABI_OK
+    );
+    let mut sphere = NativeImplicitNode { value: 0 };
+    assert_eq!(
+        unsafe {
+            (api.add_sphere)(
+                api.context,
+                NativeImplicitSphereRequest {
+                    field,
+                    center: NativeVec3::default(),
+                    radius: 0.8,
+                },
+                &mut sphere,
+                std::ptr::null_mut(),
+            )
+        },
+        ABI_OK
+    );
+    let mut default_material = NativeMaterialHandle::default();
+    assert_eq!(
+        unsafe {
+            appearance::create_material(
+                appearance_context,
+                opaque_material(),
+                &mut default_material,
+                std::ptr::null_mut(),
+            )
+        },
+        ABI_OK
+    );
+    // Slabs across the sphere, each with its own material, so material slots
+    // run past 255.
+    let width = 1.6 / REGIONS as f32;
+    let regions: Vec<_> = (0..REGIONS)
+        .map(|index| {
+            let mut material = NativeMaterialHandle::default();
+            assert_eq!(
+                unsafe {
+                    appearance::create_material(
+                        appearance_context,
+                        opaque_material(),
+                        &mut material,
+                        std::ptr::null_mut(),
+                    )
+                },
+                ABI_OK
+            );
+            let mut node = NativeImplicitNode { value: 0 };
+            let low = -0.8 + width * index as f32;
+            assert_eq!(
+                unsafe {
+                    (api.add_box)(
+                        api.context,
+                        NativeImplicitBoxRequest {
+                            field,
+                            minimum: NativeVec3 {
+                                x: low,
+                                y: -1.0,
+                                z: -1.0,
+                            },
+                            maximum: NativeVec3 {
+                                x: low + width,
+                                y: 1.0,
+                                z: 1.0,
+                            },
+                        },
+                        &mut node,
+                        std::ptr::null_mut(),
+                    )
+                },
+                ABI_OK
+            );
+            NativeImplicitMaterialRegion { node, material }
+        })
+        .collect();
+    let request = |mode, spacing| NativeImplicitGenerateRequest {
+        field,
+        source: sphere,
+        minimum: NativeVec3 {
+            x: -1.0,
+            y: -1.0,
+            z: -1.0,
+        },
+        maximum: NativeVec3 {
+            x: 1.0,
+            y: 1.0,
+            z: 1.0,
+        },
+        cell_size: 0.08,
+        crease_angle_degrees: 35.0,
+        uv_scale: 1.0,
+        texture_mapping: NativeImplicitTextureMapping::default(),
+        default_material,
+        regions: regions.as_ptr(),
+        regions_len: regions.len(),
+        material_boundary_mode: mode,
+        material_sample_spacing: spacing,
+        max_extraction_vertices: 0,
+        max_extraction_triangles: 0,
+    };
+    let generate = |api: &NativeImplicitSurfacesApi, request: &NativeImplicitGenerateRequest| {
+        let mut mesh = NativeMeshResourceHandle::default();
+        let mut receipt = unsafe { std::mem::zeroed::<NativeOperationErrorReceipt>() };
+        let status = unsafe { (api.generate)(api.context, request, &mut mesh, &mut receipt) };
+        let message = (receipt.diagnostics_len > 0).then(|| unsafe {
+            let diagnostic = &*receipt.diagnostics;
+            String::from_utf8_lossy(std::slice::from_raw_parts(
+                diagnostic.message.bytes,
+                diagnostic.message.len,
+            ))
+            .into_owned()
+        });
+        assert_eq!(status, ABI_OK, "{message:?}");
+        assert_ne!(mesh.value, 0);
+        let mut generation = unsafe { std::mem::zeroed::<NativeImplicitGenerationReadout>() };
+        assert_eq!(
+            unsafe {
+                (api.read_generation)(api.context, field, &mut generation, std::ptr::null_mut())
+            },
+            ABI_OK
+        );
+        generation
+    };
+
+    // Centroid boundaries take no sampling, whatever the spacing, so the
+    // spacing changes nothing.
+    let centroid = generate(
+        &api,
+        &request(NativeImplicitMaterialBoundaryMode::Centroid, 0.0),
+    );
+    assert!(
+        centroid.material_groups > 255,
+        "{} groups",
+        centroid.material_groups
+    );
+    let centroid_spaced = generate(
+        &api,
+        &request(NativeImplicitMaterialBoundaryMode::Centroid, 0.01),
+    );
+    assert_eq!(
+        (
+            centroid_spaced.vertices,
+            centroid_spaced.triangles,
+            centroid_spaced.material_groups
+        ),
+        (
+            centroid.vertices,
+            centroid.triangles,
+            centroid.material_groups
+        )
+    );
+    // Interpolated boundaries sample only a positive spacing.
+    let interpolated = generate(
+        &api,
+        &request(NativeImplicitMaterialBoundaryMode::Interpolated, 0.0),
+    );
+    for spacing in [-1.0, f32::NAN] {
+        let unsampled = generate(
+            &api,
+            &request(NativeImplicitMaterialBoundaryMode::Interpolated, spacing),
+        );
+        assert_eq!(
+            (unsampled.vertices, unsampled.triangles),
+            (interpolated.vertices, interpolated.triangles)
+        );
+    }
+    appearance.end_call();
+    implicit.end_call();
+}
+
+#[test]
 fn native_sampled_volume_copies_snapshots_and_invalidates_stale_generation() {
     let mut appearance =
         RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), BTreeMap::new());
@@ -1122,40 +1305,6 @@ fn native_implicit_nodes_reject_foreign_tokens() {
     appearance.end_call();
     implicit.end_call();
 
-    appearance.begin_call();
-    implicit.begin_call();
-    let api = implicit_api(&mut implicit, &mut appearance);
-    let invalid_sampling_request = NativeImplicitGenerateRequest {
-        material_sample_spacing: 0.1,
-        ..generate_request(second_node, std::ptr::null(), 0)
-    };
-    let mut sampling_error = unsafe { std::mem::zeroed::<NativeOperationErrorReceipt>() };
-    assert_eq!(
-        unsafe {
-            (api.generate)(
-                api.context,
-                &invalid_sampling_request,
-                &mut NativeMeshResourceHandle::default(),
-                &mut sampling_error,
-            )
-        },
-        0
-    );
-    assert_eq!(sampling_error.diagnostics_len, 1);
-    let diagnostic = unsafe { *sampling_error.diagnostics };
-    let message = unsafe {
-        std::str::from_utf8(std::slice::from_raw_parts(
-            diagnostic.message.bytes,
-            diagnostic.message.len,
-        ))
-    }
-    .expect("implicit sampling diagnostic is UTF-8");
-    assert!(message.contains("requires interpolated material boundaries"));
-    let retained = implicit
-        .take_call()
-        .expect("expected sampling rejection leaves the implicit call usable");
-    implicit.commit_call(retained);
-    appearance.end_call();
     appearance.begin_call();
     implicit.begin_call();
     let api = implicit_api(&mut implicit, &mut appearance);

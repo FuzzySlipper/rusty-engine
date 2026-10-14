@@ -166,15 +166,14 @@ impl RuntimeSpatialBridge {
         &mut self,
         request: &NativeVoxelVertexOcclusionRequest,
     ) -> Result<NativeVoxelSceneReadout, CsharpEngineServicesError> {
-        if !request.strength.is_finite() || !(0.0..=1.0).contains(&request.strength) {
-            return Err(voxel_error(
-                "CSHARP_VOXEL_VERTEX_OCCLUSION",
-                "vertex occlusion strength must be within 0 to 1",
-            ));
-        }
         let session = self.session_mut(request.session)?;
         let options = SurfaceMeshOptions {
-            vertex_occlusion: request.strength,
+            // Within 0 to 1; NaN is 0, off.
+            vertex_occlusion: if request.strength.is_nan() {
+                0.0
+            } else {
+                request.strength.clamp(0.0, 1.0)
+            },
             ..session.scene.mesh_options().clone()
         };
         self.edit_scene(request.session, |session| {
@@ -229,10 +228,10 @@ impl RuntimeSpatialBridge {
         let vector = |value: NativeVec3| [value.x, value.y, value.z].map(f64::from);
         let low = vector(request.bounds_min);
         let high = vector(request.bounds_max);
-        if !(0..3)
-            .all(|axis| low[axis].is_finite() && high[axis].is_finite() && low[axis] < high[axis])
-        {
-            return Err(refuse("stamp bounds must be finite with min below max"));
+        // NaN would stamp the origin voxel, and an infinite bound overflows
+        // the box's voxel count. A box without volume covers no voxels.
+        if !low.iter().chain(&high).all(|value| value.is_finite()) {
+            return Err(refuse("stamp bounds must be finite"));
         }
         let material_slot = u16::try_from(request.material_slot)
             .map_err(|_| refuse("stamp material slot exceeds the slot limit"))?;
@@ -1837,6 +1836,29 @@ mod tests {
         session
     }
 
+    #[test]
+    fn vertex_occlusion_strength_clamps_to_zero_to_one() {
+        let mut bridge = RuntimeSpatialBridge::new();
+        let session = dual_contoured_floor(&mut bridge);
+        for (requested, applied) in [(1.5, 1.0), (-0.5, 0.0), (f32::NAN, 0.0), (0.25, 0.25)] {
+            bridge
+                .configure_voxel_vertex_occlusion(&NativeVoxelVertexOcclusionRequest {
+                    session,
+                    strength: requested,
+                })
+                .unwrap();
+            assert_eq!(
+                bridge
+                    .session_mut(session)
+                    .unwrap()
+                    .scene
+                    .mesh_options()
+                    .vertex_occlusion,
+                applied
+            );
+        }
+    }
+
     /// A stamp of an implicit sphere carves what the sphere brush carves; a
     /// sphere scaled up by a transform (whose values are not distances)
     /// carves the same once its values are divided by its gradient; a stamp
@@ -1998,7 +2020,8 @@ mod tests {
             );
         }
 
-        // A stamp needs live field and node handles, and bounds with volume.
+        // A stamp needs live field and node handles, and bounds covering a
+        // voxel: bounds inverted past the brush margin cover none.
         let mut stamped = RuntimeSpatialBridge::new();
         stamped.bind_implicit(&mut implicit);
         let session = dual_contoured_floor(&mut stamped);
@@ -2007,7 +2030,7 @@ mod tests {
             field,
             node: exact,
             bounds_min: NativeVec3 {
-                x: 5.0,
+                x: 11.0,
                 y: 1.0,
                 z: 5.0,
             },
@@ -2024,14 +2047,41 @@ mod tests {
         assert!(stamped
             .stamp_voxel_implicit(&NativeVoxelImplicitStampRequest {
                 node: NativeImplicitNode { value: 999 },
-                bounds_max: NativeVec3 {
-                    x: 11.0,
-                    y: 7.0,
-                    z: 11.0
+                bounds_min: NativeVec3 {
+                    x: 5.0,
+                    y: 1.0,
+                    z: 5.0
                 },
                 ..request
             })
             .is_err());
+        assert!(stamped
+            .stamp_voxel_implicit(&NativeVoxelImplicitStampRequest {
+                bounds_min: NativeVec3 {
+                    x: f32::NAN,
+                    y: 1.0,
+                    z: 5.0
+                },
+                ..request
+            })
+            .is_err());
+        // A flat box stamps the voxels within the brush margin of it.
+        let flat = stamped
+            .stamp_voxel_implicit(&NativeVoxelImplicitStampRequest {
+                bounds_min: NativeVec3 {
+                    x: 8.0,
+                    y: 1.0,
+                    z: 5.0,
+                },
+                bounds_max: NativeVec3 {
+                    x: 8.0,
+                    y: 7.0,
+                    z: 11.0,
+                },
+                ..request
+            })
+            .unwrap();
+        assert!(flat.solidity_changes > 0);
     }
 
     fn set(address: NativeVoxelAddress, material_slot: u32) -> NativeVoxelEdit {

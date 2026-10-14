@@ -248,7 +248,7 @@ pub struct NativeSampledVolumeGenerateRequest {
     pub max_sampled_cells: u64,
     pub max_temporary_bytes: u64,
     /// GenerateSampledVolumeBlock only: owned samples per block axis, and the
-    /// block. GenerateSampledVolume requires zero.
+    /// block. GenerateSampledVolume ignores them.
     pub block_samples: u32,
     pub block_x: u32,
     pub block_y: u32,
@@ -383,8 +383,9 @@ pub struct NativeImplicitGenerateRequest {
     pub regions: *const NativeImplicitMaterialRegion,
     pub regions_len: usize,
     pub material_boundary_mode: NativeImplicitMaterialBoundaryMode,
-    /// Optional material-boundary sample spacing. Zero preserves ordinary
-    /// interpolation; a positive value requests bounded material refinement.
+    /// Optional material-boundary sample spacing. A positive value with
+    /// interpolated boundaries requests bounded material refinement; any
+    /// other value preserves ordinary interpolation.
     pub material_sample_spacing: f32,
     /// Extraction-only budgets before normal/UV/material splitting. Zero uses
     /// the Engine default of 262144. These are output caps, not peak-memory caps.

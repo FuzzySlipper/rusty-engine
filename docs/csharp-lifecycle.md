@@ -106,8 +106,9 @@ becomes steps. The product decides when and by how much
 - `SetRate(rate)`: from `0` (held) through slow motion to `1` (realtime).
   Faster than realtime is refused (`CSHARP_GAMEPLAY_TIME_RATE`).
 - `Hold()` and `RunRealtime()` are `SetRate(0)` and `SetRate(1)`.
-- `Advance(seconds, rate = 1)`: run `seconds` of world time, rounded up to
-  whole fixed steps, at `rate` (above 0), then hold. The returned
+- `Advance(seconds, rate = 1)`: run `seconds` of world time (positive, at
+  most `uint.MaxValue` steps), rounded up to whole fixed steps, at `rate`
+  (above 0), then hold. The returned
   `AdvanceRemainingSteps` is the number of steps it will admit; an update's
   `GameplayAdvanceRemainingSteps` counts them down.
 - `Read()`: the selection in force from the next observation.

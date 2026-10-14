@@ -73,9 +73,9 @@ angle, UV scale, default material, and optional ordered material regions:
   polygonal approximations; regions hidden between vertices can be missed.
   Set `MaterialSampleSpacing` to a positive world-space edge length to subdivide
   the attributed surface before sampling material fields, independently of DC
-  simplification. Zero disables this refinement. This option requires
-  `Interpolated`; it does not change geometry extraction or recover missing
-  grooves. Shared edges subdivide consistently and new normals/UVs interpolate
+  simplification. It applies only to `Interpolated`; zero, a negative value or
+  `Centroid` boundaries leave the surface unrefined. It does not change
+  geometry extraction or recover missing grooves. Shared edges subdivide consistently and new normals/UVs interpolate
   the original attributes. Choose spacing below the narrowest desired motif;
   arbitrarily small, tangent or undersampled regions can still disappear.
   Refinement and subsequent clipping enforce the ordinary 262,144 vertex and

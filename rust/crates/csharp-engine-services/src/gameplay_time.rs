@@ -11,8 +11,6 @@ use crate::composition::ABI_OK;
 use crate::operation_diagnostics::{clear_receipt, refuse};
 use crate::CsharpEngineServicesError;
 
-/// Longest bounded advance one request may ask for.
-pub const MAX_GAMEPLAY_ADVANCE_SECONDS: f64 = 3600.0;
 /// Rounding slack so that, say, 0.1 s at 60 Hz is 6 steps rather than 7.
 const STEP_ROUNDING_TOLERANCE: f64 = 1e-6;
 
@@ -116,17 +114,19 @@ fn gameplay_rate(value: f64, allow_hold: bool) -> Result<GameplayRate, CsharpEng
 }
 
 fn advance_steps(seconds: f64, hz: u32) -> Result<NonZeroU32, CsharpEngineServicesError> {
-    if !seconds.is_finite() || seconds <= 0.0 || seconds > MAX_GAMEPLAY_ADVANCE_SECONDS {
-        return Err(CsharpEngineServicesError::new(
-            "CSHARP_GAMEPLAY_TIME_ADVANCE",
-            format!(
-                "gameplay advance of {seconds} s is outside (0, {MAX_GAMEPLAY_ADVANCE_SECONDS}] s"
-            ),
-        ));
-    }
     let steps = (seconds * f64::from(hz) - STEP_ROUNDING_TOLERANCE)
         .ceil()
         .max(1.0);
+    // The lifecycle counts an advance's steps in a u32.
+    if !(seconds > 0.0 && steps <= f64::from(u32::MAX)) {
+        return Err(CsharpEngineServicesError::new(
+            "CSHARP_GAMEPLAY_TIME_ADVANCE",
+            format!(
+                "gameplay advance of {seconds} s is not a positive time of at most {} steps at {hz} Hz",
+                u32::MAX
+            ),
+        ));
+    }
     Ok(NonZeroU32::new(steps as u32).expect("at least one step"))
 }
 
@@ -292,9 +292,28 @@ mod tests {
                 .advance_remaining_steps,
             1
         );
-        for (seconds, rate) in [(0.0, 1.0), (-1.0, 1.0), (3601.0, 1.0), (f64::NAN, 1.0)] {
+        // Two hours at 60 Hz; an advance's only bound is its u32 step count.
+        assert_eq!(
+            advance_for(&mut bridge, 7200.0, 1.0)
+                .unwrap()
+                .advance_remaining_steps,
+            432_000
+        );
+        assert_eq!(
+            advance_for(&mut bridge, f64::from(u32::MAX) / 60.0, 1.0)
+                .unwrap()
+                .advance_remaining_steps,
+            u32::MAX
+        );
+        for seconds in [
+            0.0,
+            -1.0,
+            f64::NAN,
+            f64::INFINITY,
+            (f64::from(u32::MAX) + 1.0) / 60.0,
+        ] {
             assert_eq!(
-                advance_for(&mut bridge, seconds, rate),
+                advance_for(&mut bridge, seconds, 1.0),
                 Err(vec!["CSHARP_GAMEPLAY_TIME_ADVANCE".to_owned()])
             );
         }

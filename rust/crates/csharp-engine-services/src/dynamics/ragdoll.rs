@@ -32,11 +32,12 @@ fn ragdoll_error(message: impl Into<String>) -> CsharpEngineServicesError {
     CsharpEngineServicesError::new("CSHARP_RAGDOLL", message)
 }
 
-fn blend(value: f32) -> Result<f32, CsharpEngineServicesError> {
-    if value.is_finite() && (0.0..=1.0).contains(&value) {
-        Ok(value)
+/// A blend weight within 0 to 1; NaN is 0.
+fn blend(value: f32) -> f32 {
+    if value.is_nan() {
+        0.0
     } else {
-        Err(ragdoll_error("blend must be between 0 and 1"))
+        value.clamp(0.0, 1.0)
     }
 }
 
@@ -124,7 +125,7 @@ impl RuntimeDynamicsBridge {
     ) -> Result<NativeDynamicsRagdollHandle, CsharpEngineServicesError> {
         let bones = unsafe { borrowed_slice(request.bones, request.bones_len, "ragdoll bones") }?;
         let links = unsafe { borrowed_slice(request.links, request.links_len, "ragdoll links") }?;
-        let blend = blend(request.blend)?;
+        let blend = blend(request.blend);
         self.active_world(request.world.value)?;
         let source = self.appearance()?.ragdoll_source(request.instance.value)?;
         let joint = |index: u32| {
@@ -323,7 +324,7 @@ impl RuntimeDynamicsBridge {
         &mut self,
         request: NativeDynamicsRagdollBlendRequest,
     ) -> Result<(), CsharpEngineServicesError> {
-        let value = blend(request.blend)?;
+        let value = blend(request.blend);
         self.active_ragdoll(request.ragdoll.value)?;
         if let Some(RagdollSlot::Active(ragdoll)) = self.ragdolls.get_mut(&request.ragdoll.value) {
             ragdoll.blend = value;
@@ -684,6 +685,22 @@ mod tests {
         );
         let read = dynamics.read_ragdoll(ragdoll).unwrap();
         assert_eq!((read.bones_len, read.resting, read.blend), (3, false, 0.5));
+        // A blend outside 0 to 1 clamps, and NaN is 0.
+        for (requested, clamped) in [(1.2, 1.0), (-0.5, 0.0), (f32::NAN, 0.0), (0.5, 0.5)] {
+            dynamics
+                .set_ragdoll_blend(NativeDynamicsRagdollBlendRequest {
+                    ragdoll,
+                    blend: requested,
+                })
+                .unwrap();
+            assert_eq!(
+                ragdoll_layer_for_test(&appearance, instance)
+                    .unwrap()
+                    .weight,
+                clamped
+            );
+            assert_eq!(dynamics.read_ragdoll(ragdoll).unwrap().blend, clamped);
+        }
 
         // The call sends them as the instance's pose.
         let call = appearance.take_staged_call();

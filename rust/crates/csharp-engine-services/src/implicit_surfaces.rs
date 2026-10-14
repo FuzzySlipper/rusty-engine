@@ -263,26 +263,15 @@ impl RuntimeImplicitBridge {
         options: SurfaceGenerationOptions,
         started: Instant,
     ) -> Result<(NativeMeshResourceHandle, NativeImplicitGenerationReadout)> {
-        let material_sampling = if !options.material_sample_spacing.is_finite()
-            || options.material_sample_spacing < 0.0
-        {
-            return Err(error(
-                "material sample spacing must be finite and non-negative",
-            ));
-        } else if options.material_sample_spacing > 0.0 {
-            if options.material_boundary_mode != NativeImplicitMaterialBoundaryMode::Interpolated {
-                return Err(error(
-                    "material sample spacing requires interpolated material boundaries",
-                ));
-            }
-            Some(MaterialSampling {
+        // Spacing samples interpolated boundaries only; any other spacing
+        // (zero, negative, NaN, or with centroid boundaries) samples none.
+        let material_sampling = (options.material_sample_spacing > 0.0
+            && options.material_boundary_mode == NativeImplicitMaterialBoundaryMode::Interpolated)
+            .then_some(MaterialSampling {
                 max_edge_length: options.material_sample_spacing,
                 max_vertices: 262_144,
                 max_triangles: 262_144,
-            })
-        } else {
-            None
-        };
+            });
         if geometry.triangles.is_empty() {
             return Err(error(
                 "field has no extractable surface in the selected domain",
@@ -450,9 +439,6 @@ impl RuntimeImplicitBridge {
                 "sampled volume material regions",
             )
         }?;
-        if regions.len() > 255 {
-            return Err(error("at most 255 material regions are supported per mesh"));
-        }
         let sampled = unsafe {
             borrowed_slice(
                 request.materials,
@@ -551,9 +537,6 @@ impl RuntimeImplicitBridge {
                 "implicit material regions",
             )
         }?;
-        if regions.len() > 255 {
-            return Err(error("at most 255 material regions are supported per mesh"));
-        }
         let (field, source, region_nodes) = {
             let retained = self.retained(request.field)?;
             let source = retained.node(request.source)?;
@@ -900,11 +883,6 @@ unsafe extern "C" fn generate_sampled_volume(
             return Err(error("sampled volume generate request was null"));
         }
         let request = unsafe { &*request };
-        if request.block_samples != 0 {
-            return Err(error(
-                "GenerateSampledVolume meshes the whole volume; use GenerateSampledVolumeBlock for a block",
-            ));
-        }
         let started = Instant::now();
         let generated = unsafe { b.generate_volume(request, None) }?;
         let (mesh, readout) = unsafe { b.admit_volume(request, generated, started) }?;

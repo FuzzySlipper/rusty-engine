@@ -141,8 +141,9 @@ pose and the bodies, so the skeleton blends as one pose:
 
 **Getting up.**
 
-- `SetRagdollBlend` mixes the bodies over the clips from 0 to 1. To get up,
-  play the get-up clip and lower the blend over a few updates.
+- `SetRagdollBlend` mixes the bodies over the clips from 0 to 1 (a value
+  outside clamps, and NaN is 0). To get up, play the get-up clip and lower
+  the blend over a few updates.
 - The bodies keep simulating while the blend changes.
 - Move the character's appearance to where the ragdoll lies before it stands:
   the clips draw it at its own placement.

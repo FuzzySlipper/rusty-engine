@@ -195,7 +195,7 @@ weighing more; a cube face's corner takes the classic voxel rule from the
 two voxels beside it across the face's plane and the one diagonal, and
 greedy faces merge only with equal corners, so a merged quad keeps each
 corner's own value. `Strength` scales the darkening (0, the default, turns it
-off and costs nothing; 1 applies it fully). The value rides the chunk's
+off and costs nothing; 1 applies it fully; values outside clamp, and NaN is 0). The value rides the chunk's
 vertex colour alpha and scales the ambient, hemisphere, sky and probe light
 the standard shader gives the surface, as the occlusion map and
 [screen-space occlusion](lighting-and-sky.md#contact-darkening-screen-space-ambient-occlusion)

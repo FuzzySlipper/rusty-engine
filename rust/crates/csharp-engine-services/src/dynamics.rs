@@ -1220,31 +1220,36 @@ fn record_contact(
     entry.count = entry.count.saturating_add(1);
 }
 
+/// A body's pose. Bodies have no scale, so a scaled transform would collide
+/// unscaled; the solver refuses a non-finite pose or a zero rotation, and
+/// takes any other rotation normalized.
 fn checked_transform(value: NativeTransform) -> Result<EntityTransform, CsharpEngineServicesError> {
-    let transform = EntityTransform {
-        translation: native_vec3_value(value.translation),
-        rotation: native_quat_value(value.rotation),
-        scale: native_vec3_value(value.scale),
-    };
-    if !finite_vec3(transform.translation)
-        || !finite_vec3(transform.scale)
-        || !finite_quat(transform.rotation)
-        || (transform.rotation.norm_squared() - 1.0).abs() > 0.001
-        || transform.scale != Vec3::ONE
-    {
+    if native_vec3_value(value.scale) != Vec3::ONE {
         return Err(CsharpEngineServicesError::new(
             "CSHARP_DYNAMICS_TRANSFORM",
-            "transform must be finite with unit scale",
+            "a body transform has unit scale",
         ));
     }
-    Ok(transform)
+    let rotation = native_quat_value(value.rotation);
+    let length = rotation.norm_squared().sqrt();
+    Ok(EntityTransform {
+        translation: native_vec3_value(value.translation),
+        rotation: if length.is_finite() && length > 0.0 {
+            Quat::new(
+                rotation.x / length,
+                rotation.y / length,
+                rotation.z / length,
+                rotation.w / length,
+            )
+        } else {
+            rotation
+        },
+        scale: Vec3::ONE,
+    })
 }
 
 fn finite_vec3(value: Vec3) -> bool {
     value.x.is_finite() && value.y.is_finite() && value.z.is_finite()
-}
-fn finite_quat(value: Quat) -> bool {
-    value.x.is_finite() && value.y.is_finite() && value.z.is_finite() && value.w.is_finite()
 }
 
 fn native_transform(value: EntityTransform) -> NativeTransform {
@@ -2619,6 +2624,88 @@ mod tests {
         assert_eq!(generic_error.to_string(), shape_error.to_string());
         // A refused replacement leaves the original body in place.
         assert!(bridge.read(NativeDynamicsReadRequest { body }).is_ok());
+    }
+
+    #[test]
+    fn body_transforms_normalize_rotations_and_refuse_scale() {
+        let spatial = crate::spatial::RuntimeSpatialBridge::new();
+        let mut bridge = RuntimeDynamicsBridge::new(spatial.collision_source());
+        let world = bridge
+            .create_world(NativeDynamicsWorldConfig {
+                gravity: NativeVec3::default(),
+            })
+            .unwrap();
+        let rotation = |x, y, z, w| NativeQuat { x, y, z, w };
+        let norm = |value: NativeQuat| {
+            (value.x * value.x + value.y * value.y + value.z * value.z + value.w * value.w).sqrt()
+        };
+        let mut config = body_config(NativeVec3::default());
+        config.transform.rotation = rotation(0.0, 0.0, 0.0, 1.001);
+        let body = bridge
+            .create_body(&NativeDynamicsCreateBodyRequest {
+                world,
+                body: config,
+            })
+            .unwrap();
+        let read = bridge.read(NativeDynamicsReadRequest { body }).unwrap();
+        assert!((norm(read.transform.rotation) - 1.0).abs() < 1e-6);
+
+        let reset = |rotation, translation| NativeDynamicsResetRequest {
+            body,
+            transform: NativeTransform {
+                rotation,
+                ..transform(translation)
+            },
+            linear_velocity: NativeVec3::default(),
+            angular_velocity: NativeVec3::default(),
+            sleeping: false,
+        };
+        let half_turn = rotation(0.0, 2.0, 0.0, 0.0);
+        bridge
+            .reset(reset(half_turn, NativeVec3::default()))
+            .unwrap();
+        let turned = bridge.read(NativeDynamicsReadRequest { body }).unwrap();
+        assert!((turned.transform.rotation.y.abs() - 1.0).abs() < 1e-6);
+
+        // A zero or non-finite pose never reaches the solver.
+        for (rotation, x) in [
+            (rotation(0.0, 0.0, 0.0, 0.0), 0.0),
+            (rotation(f32::NAN, 0.0, 0.0, 1.0), 0.0),
+            (rotation(0.0, 0.0, 0.0, f32::INFINITY), 0.0),
+            (rotation(0.0, 0.0, 0.0, 1.0), f32::NAN),
+        ] {
+            let translation = NativeVec3 { x, y: 0.0, z: 0.0 };
+            assert!(bridge.reset(reset(rotation, translation)).is_err());
+            let mut refused = config;
+            refused.transform = NativeTransform {
+                rotation,
+                ..transform(translation)
+            };
+            assert!(bridge
+                .create_body(&NativeDynamicsCreateBodyRequest {
+                    world,
+                    body: refused,
+                })
+                .is_err());
+        }
+        let after = bridge.read(NativeDynamicsReadRequest { body }).unwrap();
+        assert_eq!(
+            (after.transform.translation.x, after.transform.rotation.y),
+            (turned.transform.translation.x, turned.transform.rotation.y)
+        );
+
+        // Bodies have no scale.
+        config.transform.scale.x = 2.0;
+        assert_eq!(
+            bridge
+                .create_body(&NativeDynamicsCreateBodyRequest {
+                    world,
+                    body: config
+                })
+                .unwrap_err()
+                .code(),
+            "CSHARP_DYNAMICS_TRANSFORM"
+        );
     }
 
     #[test]
