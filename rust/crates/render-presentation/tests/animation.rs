@@ -523,13 +523,6 @@ fn animation_projection_validates_handles_targets_revisions_and_batches_atomical
     projector
         .update_for_state(&assets, &targets, &changed, PresentationOpMeta::new(2))
         .unwrap();
-    assert_eq!(
-        projector
-            .update_for_state(&assets, &targets, &changed, PresentationOpMeta::new(3),)
-            .unwrap_err()
-            .code,
-        AnimationProjectionDiagnosticCode::StaleRevision
-    );
 
     projector
         .destroy_entity(7, PresentationOpMeta::new(4))

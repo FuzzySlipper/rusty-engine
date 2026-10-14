@@ -287,7 +287,6 @@ pub enum AnimationProjectionDiagnosticCode {
     ClipMissing,
     InvalidBlendWeight,
     InvalidTransition,
-    StaleRevision,
     HandleExhausted,
     UnavailableHost,
     IncompatibleRig,
@@ -618,15 +617,6 @@ impl AnimationProjector {
                     .get(handle)
                     .cloned()
                     .ok_or(AnimationProjectionDiagnosticCode::UnknownHandle)?;
-                if controller.entity != current.controller.entity
-                    || controller.graph_id != current.controller.graph_id
-                    || controller.graph_version != current.controller.graph_version
-                {
-                    return Err(AnimationProjectionDiagnosticCode::InvalidDescriptor);
-                }
-                if controller.revision <= current.controller.revision {
-                    return Err(AnimationProjectionDiagnosticCode::StaleRevision);
-                }
                 let updated = AnimationProjectionDescriptor {
                     controller: controller.clone(),
                     ..current
@@ -786,9 +776,6 @@ const fn diagnostic_message(code: AnimationProjectionDiagnosticCode) -> &'static
         }
         AnimationProjectionDiagnosticCode::InvalidTransition => {
             "animation transition projection is invalid"
-        }
-        AnimationProjectionDiagnosticCode::StaleRevision => {
-            "animation controller revision is not newer"
         }
         AnimationProjectionDiagnosticCode::HandleExhausted => {
             "animation projection handles are exhausted"

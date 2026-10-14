@@ -1512,8 +1512,6 @@ pub(crate) struct RuntimeAppearanceCall {
     /// output transport and only represents this service family's existing
     /// renderer and presentation outputs.
     pub(crate) outputs: Vec<RuntimeAppearanceCallOutput>,
-    /// A retained snapshot or light projection frame was emitted in this call.
-    projected_frame: bool,
     /// Presentation frames emitted in this call; their sequence numbers.
     presentation_frames: u32,
 }
@@ -1578,8 +1576,9 @@ struct AnimationController {
     projected: bool,
     last_target: Option<RenderHandle>,
     last_revision: Option<u64>,
-    /// The projection detached because its target object was recreated; the
-    /// next flush recreates it on the new target with the same clip phases.
+    /// The projection detached because its target left the scene or was
+    /// recreated; the next flush that finds the target recreates it there
+    /// with the same clip phases.
     detached: Option<AnimationProjectionDescriptor>,
 }
 
@@ -1958,7 +1957,6 @@ impl RuntimeAppearanceBridge {
             resource_releases_pending: false,
             release_error: None,
             outputs: Vec::new(),
-            projected_frame: false,
             presentation_frames: 0,
         });
         self.operation_error = None;
@@ -6576,12 +6574,6 @@ impl RuntimeAppearanceBridge {
         handle: NativeAnimationControllerHandle,
     ) -> Result<(), CsharpEngineServicesError> {
         let staged = self.staged_mut()?;
-        if staged.projected_frame {
-            return Err(CsharpEngineServicesError::new(
-                "CSHARP_ANIMATION_SNAPSHOT_ORDER",
-                "dispose the animation controller before publishing its removal snapshot",
-            ));
-        }
         let Some(controller) = staged.state.animation_controllers.get(&handle.value) else {
             return Ok(());
         };
@@ -6660,7 +6652,6 @@ impl RuntimeAppearanceBridge {
             .get(&instance)
             .expect("controller instance remains live")
             .object_id;
-        require_projectable_controller(staged, request.controller.value)?;
         let controller = staged
             .state
             .animation_controllers
@@ -6705,7 +6696,6 @@ impl RuntimeAppearanceBridge {
             .get(&instance)
             .expect("controller instance remains live")
             .object_id;
-        require_projectable_controller(staged, request.controller.value)?;
         let controller = staged
             .state
             .animation_controllers
@@ -6750,7 +6740,6 @@ impl RuntimeAppearanceBridge {
             .get(&instance)
             .expect("controller instance remains live")
             .object_id;
-        require_projectable_controller(staged, request.controller.value)?;
         let controller = staged
             .state
             .animation_controllers
@@ -6787,7 +6776,6 @@ impl RuntimeAppearanceBridge {
             .get(&instance)
             .expect("controller instance remains live")
             .object_id;
-        require_projectable_controller(staged, request.controller.value)?;
         let controller = staged
             .state
             .animation_controllers
@@ -6947,13 +6935,9 @@ impl RuntimeAppearanceBridge {
                     "animation controller instance is not live",
                 )
             })?;
-        let Some(target) = data.projector.object_handle(instance.object_id) else {
-            if controller.projected {
-                return Err(CsharpEngineServicesError::new(
-                    "CSHARP_ANIMATION_SNAPSHOT_ORDER",
-                    "remove a projected controller before publishing a snapshot that removes or replaces its animated target",
-                ));
-            }
+        let Some(target) = instance_target(&data.projector, &data.appearances, instance) else {
+            // A controller detaches when its target leaves, so this one is
+            // not projected.
             controller.projected = false;
             controller.last_target = None;
             controller.last_revision = None;
@@ -7278,45 +7262,18 @@ impl RuntimeAppearanceBridge {
             }
         }
 
-        // Objects that animation controllers or ghost plates depend on must
-        // keep their appearance.
-        if !state.animation_controllers.is_empty() || !state.ghost_plates.is_empty() {
-            let changed: BTreeMap<u64, &str> = owned
-                .iter()
-                .map(|fact| (fact.object_id, fact.appearance))
-                .collect();
-            let next_appearance = |object: u64| match changed.get(&object) {
-                Some(appearance) => Some(*appearance),
-                None if removals.is_none_or(|removals| removals.contains(&object)) => None,
-                None => state.projector.object_appearance(object),
-            };
-            for controller in state.animation_controllers.values() {
-                if !controller.projected {
-                    continue;
-                }
-                let instance = state
-                    .animation_instances
-                    .get(&controller.instance)
-                    .expect("live controller retains its instance");
-                if next_appearance(instance.object_id)
-                    != state
-                        .appearances
-                        .get(&instance.appearance)
-                        .map(String::as_str)
-                {
-                    return Err(CsharpEngineServicesError::new(
-                        "CSHARP_ANIMATION_SNAPSHOT_ORDER",
-                        "remove a projected controller before removing or replacing its animated target",
-                    ));
-                }
-            }
-            for ghost in state.ghost_plates.values() {
-                if next_appearance(ghost.source_object_id).is_none() {
-                    return Err(CsharpEngineServicesError::new(
-                        "CSHARP_GHOST_PLATE_SNAPSHOT_ORDER",
-                        "dispose ghost plate presentations before removing their source object",
-                    ));
-                }
+        // A ghost plate's source must stay: its presentation is captured and
+        // recaptured from the source node.
+        for ghost in state.ghost_plates.values() {
+            let source = ghost.source_object_id;
+            let kept = fact_ids.contains(&source)
+                || removals.is_some_and(|removals| !removals.contains(&source))
+                    && state.projector.object_appearance(source).is_some();
+            if !kept {
+                return Err(CsharpEngineServicesError::new(
+                    "CSHARP_GHOST_PLATE_SNAPSHOT_ORDER",
+                    "dispose ghost plate presentations before removing their source object",
+                ));
             }
         }
 
@@ -7374,7 +7331,7 @@ impl RuntimeAppearanceBridge {
         }
         pending.extend(hidden);
         detach_retargeted_controllers(staged)?;
-        append_projection_frame(staged, frame)?;
+        push_extra_frame(staged, frame);
         self.flush_all_animations()?;
         Ok(())
     }
@@ -7681,31 +7638,6 @@ fn runtime_material_id(handle: u64) -> String {
     format!("material/csharp-{handle}")
 }
 
-/// flush. Refuse before changing controller state so the refusal is local.
-fn require_projectable_controller(
-    staged: &RuntimeAppearanceCall,
-    controller_handle: u64,
-) -> Result<(), CsharpEngineServicesError> {
-    let controller = staged
-        .state
-        .animation_controllers
-        .get(&controller_handle)
-        .expect("controller was checked by the caller");
-    let object_id = staged
-        .state
-        .animation_instances
-        .get(&controller.instance)
-        .expect("controller instance remains live")
-        .object_id;
-    if controller.projected && staged.state.projector.object_handle(object_id).is_none() {
-        return Err(CsharpEngineServicesError::new(
-            "CSHARP_ANIMATION_SNAPSHOT_ORDER",
-            "remove a projected controller before publishing a snapshot that removes or replaces its animated target",
-        ));
-    }
-    Ok(())
-}
-
 /// Projects changed lights. A refused change leaves the retained lights unchanged.
 fn project_light_change(
     staged: &mut RuntimeAppearanceCall,
@@ -7719,7 +7651,8 @@ fn project_light_change(
         .map_err(|error| {
             CsharpEngineServicesError::new("CSHARP_LIGHT_PROJECTION", format!("{error:?}"))
         })?;
-    append_projection_frame(staged, frame)
+    push_extra_frame(staged, frame);
+    Ok(())
 }
 
 /// Makes `fact` the light under `handle`, replacing the live light under
@@ -7779,8 +7712,9 @@ fn set_light(
 }
 
 /// Detaches every projected animation controller whose target the projector
-/// has just recreated. Its Destroy goes out before the graphics frame that
-/// removes the old target; the next flush recreates it on the new target.
+/// has just removed, recreated or given another appearance. Its Destroy goes
+/// out before the graphics frame that removes the old target, and it keeps
+/// its descriptor: the next flush that finds the target recreates it there.
 fn detach_retargeted_controllers(
     staged: &mut RuntimeAppearanceCall,
 ) -> Result<(), CsharpEngineServicesError> {
@@ -7793,8 +7727,7 @@ fn detach_retargeted_controllers(
         let Some(instance) = data.animation_instances.get(&controller.instance) else {
             continue;
         };
-        let current = data.projector.object_handle(instance.object_id);
-        if current.is_none() || current == controller.last_target {
+        if instance_target(&data.projector, &data.appearances, instance) == controller.last_target {
             continue;
         }
         let (op, descriptor) = controller
@@ -7818,15 +7751,17 @@ fn detach_retargeted_controllers(
     Ok(())
 }
 
-fn append_projection_frame(
-    staged: &mut RuntimeAppearanceCall,
-    next: render_model::RenderFrameDiff,
-) -> Result<(), CsharpEngineServicesError> {
-    staged.projected_frame = true;
-    staged
-        .outputs
-        .push(RuntimeAppearanceCallOutput::Frame(next));
-    Ok(())
+/// The renderer node an animation instance animates: its object, while the
+/// object shows the instance's appearance.
+fn instance_target(
+    projector: &RuntimeAppearanceProjector,
+    appearances: &BTreeMap<u64, String>,
+    instance: &AnimationInstance,
+) -> Option<RenderHandle> {
+    let appearance = appearances.get(&instance.appearance)?;
+    (projector.object_appearance(instance.object_id) == Some(appearance.as_str()))
+        .then(|| projector.object_handle(instance.object_id))
+        .flatten()
 }
 
 pub(crate) fn push_extra_frame(
@@ -15397,18 +15332,12 @@ fn shade(surface: Surface) -> vec4<f32> {
             .projector
             .object_handle(7);
         assert_ne!(new, old);
-        let outputs = &bridge.staged_ref().unwrap().outputs;
-        let order: Vec<_> = outputs
-            .iter()
-            .map(|output| match output {
-                RuntimeAppearanceCallOutput::Frame(_) => vec!["frame"],
-                other => animation_ops(other),
-            })
-            .filter(|ops| !ops.is_empty())
-            .collect();
         // The old projection goes before the frame that removes its target;
         // the new one follows the frame that creates the new target.
-        assert_eq!(order, vec![vec!["destroy"], vec!["frame"], vec!["create"]]);
+        assert_eq!(
+            animation_order(&bridge),
+            vec![vec!["destroy"], vec!["frame"], vec!["create"]]
+        );
         assert_eq!(controller_target(&bridge), new);
         bridge.end_call();
 
@@ -15451,6 +15380,234 @@ fn shade(surface: Surface) -> vec4<f32> {
             .object_handle(7);
         assert_ne!(after, before);
         assert_eq!(controller_target(&bridge), after);
+        bridge.end_call();
+    }
+
+    /// The open call's outputs in order: "frame" for a graphics frame, the
+    /// animation ops of each presentation frame.
+    fn animation_order(bridge: &RuntimeAppearanceBridge) -> Vec<Vec<&'static str>> {
+        bridge
+            .staged_ref()
+            .unwrap()
+            .outputs
+            .iter()
+            .map(|output| match output {
+                RuntimeAppearanceCallOutput::Frame(_) => vec!["frame"],
+                other => animation_ops(other),
+            })
+            .filter(|ops| !ops.is_empty())
+            .collect()
+    }
+
+    /// The clip phases of the controller's live projection, if it has one.
+    fn projected_phases(
+        bridge: &RuntimeAppearanceBridge,
+        controller: NativeAnimationControllerHandle,
+    ) -> Option<Vec<render_presentation::AnimationControllerClipPhase>> {
+        let state = &bridge.staged_ref().unwrap().state;
+        state.animation_controllers[&controller.value]
+            .projector
+            .active_projections()
+            .next()
+            .map(|(_, descriptor)| descriptor.controller.clip_phases.clone())
+    }
+
+    #[test]
+    fn a_controller_detaches_while_its_target_is_away_and_resumes_its_clip_phases() {
+        let (mut bridge, appearance, controller) = animated_controller_setup();
+        let fact = appearance_fact(appearance);
+        unsafe { bridge.stage_snapshot(&fact, 1) }.expect("controller target");
+        for tick in 1..=3 {
+            bridge
+                .tick_animation(NativeAnimationTickRequest { controller, tick })
+                .expect("tick");
+        }
+        let before = projected_phases(&bridge, controller).expect("projected");
+        assert!(before[0].time_seconds > 0.0);
+        bridge.end_call();
+
+        // A snapshot without the target detaches the controller: its Destroy
+        // goes before the frame that removes the target, and it keeps its
+        // descriptor.
+        bridge.begin_call();
+        unsafe { bridge.stage_snapshot(std::ptr::null(), 0) }.expect("the target may leave");
+        assert_eq!(
+            animation_order(&bridge),
+            vec![vec!["destroy"], vec!["frame"]]
+        );
+        assert_eq!(projected_phases(&bridge, controller), None);
+        let state = &bridge.staged_ref().unwrap().state;
+        let kept = state.animation_controllers[&controller.value]
+            .detached
+            .as_ref()
+            .expect("the detached controller keeps its descriptor");
+        assert_eq!(kept.controller.clip_phases, before);
+        // It still ticks while its target is away, and projects nothing.
+        bridge
+            .tick_animation(NativeAnimationTickRequest {
+                controller,
+                tick: 4,
+            })
+            .expect("a detached controller ticks");
+        assert_eq!(
+            animation_order(&bridge),
+            vec![vec!["destroy"], vec!["frame"]]
+        );
+        bridge.end_call();
+
+        // Publishing the target again creates the kept projection on the new
+        // node, then the tick it missed moves its clip phases on.
+        bridge.begin_call();
+        unsafe { bridge.stage_snapshot(&fact, 1) }.expect("the target returns");
+        assert_eq!(
+            animation_order(&bridge),
+            vec![vec!["frame"], vec!["create"], vec!["update"]]
+        );
+        let target = bridge
+            .staged_ref()
+            .unwrap()
+            .state
+            .projector
+            .object_handle(7);
+        assert_eq!(controller_target(&bridge), target);
+        let created = bridge
+            .staged_ref()
+            .unwrap()
+            .presentation()
+            .into_iter()
+            .flat_map(|frame| &frame.ops)
+            .find_map(|op| match op {
+                PresentationOp::Animation {
+                    op: render_presentation::AnimationProjectionOp::Create { descriptor, .. },
+                    ..
+                } => Some(descriptor.controller.clip_phases.clone()),
+                _ => None,
+            })
+            .expect("create");
+        assert_eq!(created, before, "the clip phases continue");
+        let after = projected_phases(&bridge, controller).expect("projected again");
+        assert!(after[0].time_seconds > before[0].time_seconds);
+        bridge.end_call();
+    }
+
+    #[test]
+    fn a_controller_leaves_a_target_that_shows_another_appearance() {
+        let (mut bridge, appearance, controller) = animated_controller_setup();
+        let fact = appearance_fact(appearance);
+        unsafe { bridge.stage_snapshot(&fact, 1) }.expect("controller target");
+        bridge.end_call();
+
+        // The object is recreated as a cube: the controller does not drive it.
+        bridge.begin_call();
+        let cube = bridge.create_primitive(primitive_request()).unwrap();
+        let cube_fact = NativeAppearanceFact {
+            appearance: cube,
+            ..fact
+        };
+        unsafe { bridge.stage_snapshot(&cube_fact, 1) }.expect("the target may change");
+        assert_eq!(
+            animation_order(&bridge),
+            vec![vec!["destroy"], vec!["frame"]]
+        );
+        bridge
+            .tick_animation(NativeAnimationTickRequest {
+                controller,
+                tick: 1,
+            })
+            .expect("tick");
+        assert_eq!(
+            animation_order(&bridge),
+            vec![vec!["destroy"], vec!["frame"]]
+        );
+        bridge.end_call();
+
+        // Back to the instance's appearance, the controller drives it again.
+        bridge.begin_call();
+        unsafe { bridge.stage_snapshot(&fact, 1) }.expect("the target returns");
+        assert_eq!(
+            animation_order(&bridge),
+            vec![vec!["frame"], vec!["create"], vec!["update"]]
+        );
+        bridge.end_call();
+
+        // Another appearance of the same mesh keeps the node, but it is not
+        // the instance's appearance, so the controller leaves it too.
+        bridge.begin_call();
+        let resource = bridge.staged_ref().unwrap().state.animated_appearances[&appearance.value];
+        let other = bridge
+            .create_animated_mesh_appearance(NativeAnimatedMeshAppearanceRequest {
+                resource: NativeRenderResourceHandle { value: resource },
+            })
+            .unwrap();
+        let node = bridge
+            .staged_ref()
+            .unwrap()
+            .state
+            .projector
+            .object_handle(7);
+        let other_fact = NativeAppearanceFact {
+            appearance: other,
+            ..fact
+        };
+        unsafe { bridge.stage_snapshot(&other_fact, 1) }.expect("another appearance");
+        assert_eq!(
+            bridge
+                .staged_ref()
+                .unwrap()
+                .state
+                .projector
+                .object_handle(7),
+            node
+        );
+        assert_eq!(
+            animation_order(&bridge),
+            vec![vec!["destroy"], vec!["frame"]]
+        );
+        bridge.end_call();
+    }
+
+    #[test]
+    fn a_controller_may_be_destroyed_after_a_snapshot_in_the_same_call() {
+        let projected = || {
+            let (mut bridge, appearance, controller) = animated_controller_setup();
+            let fact = appearance_fact(appearance);
+            unsafe { bridge.stage_snapshot(&fact, 1) }.expect("controller target");
+            bridge.end_call();
+            (bridge, fact, controller)
+        };
+
+        // The snapshot keeps the target: destroying releases the projection.
+        let (mut bridge, fact, controller) = projected();
+        bridge.begin_call();
+        unsafe { bridge.stage_snapshot(&fact, 1) }.expect("snapshot");
+        bridge
+            .destroy_animation_controller(controller)
+            .expect("destroy after a snapshot");
+        assert_eq!(
+            animation_order(&bridge),
+            vec![vec!["frame"], vec!["destroy"]]
+        );
+        bridge.end_call();
+
+        let (mut bridge, _, controller) = projected();
+
+        // The snapshot removes the target: the controller already released
+        // its projection, so destroying it releases nothing more.
+        bridge.begin_call();
+        unsafe { bridge.stage_snapshot(std::ptr::null(), 0) }.expect("removal");
+        bridge
+            .destroy_animation_controller(controller)
+            .expect("destroy after the removal snapshot");
+        assert_eq!(
+            animation_order(&bridge),
+            vec![vec!["destroy"], vec!["frame"]]
+        );
+        assert!(bridge
+            .staged_ref()
+            .unwrap()
+            .state
+            .animation_controllers
+            .is_empty());
         bridge.end_call();
     }
 
@@ -15544,17 +15701,6 @@ fn shade(surface: Surface) -> vec4<f32> {
         );
         let setup = bridge.take_staged_call();
         bridge.commit(setup);
-
-        bridge.begin_call();
-        unsafe { bridge.stage_snapshot(&fact, 1) }.expect("snapshot before teardown");
-        assert_eq!(
-            bridge
-                .destroy_animation_controller(controller)
-                .expect_err("snapshot-before-teardown remains rejected")
-                .code(),
-            "CSHARP_ANIMATION_SNAPSHOT_ORDER"
-        );
-        bridge.end_call();
 
         bridge.begin_call();
         bridge
