@@ -1806,30 +1806,34 @@ impl RuntimeSpatialBridge {
         &mut self,
         request: &NativeCollisionNavigationReplaceRequest,
     ) -> Result<NativeCollisionNavigationReplaceReceipt, CsharpEngineServicesError> {
-        let world_min = native_vec3_value(request.world_min);
-        let world_max = native_vec3_value(request.world_max);
-        if !finite_vec3(world_min)
-            || !finite_vec3(world_max)
-            || world_min.x >= world_max.x
-            || world_min.y >= world_max.y
-            || world_min.z >= world_max.z
-        {
+        let (world_min, world_max) = (
+            native_vec3_value(request.world_min),
+            native_vec3_value(request.world_max),
+        );
+        if !finite_vec3(world_min) || !finite_vec3(world_max) {
             return Err(CsharpEngineServicesError::new(
                 "CSHARP_COLLISION_NAVIGATION_REGION",
-                "collision navigation region must be finite and strictly ordered",
+                "collision navigation region must be finite",
             ));
         }
+        // The region lies between the two corners in either order.
+        let (world_min, world_max) = (
+            Vec3::new(
+                world_min.x.min(world_max.x),
+                world_min.y.min(world_max.y),
+                world_min.z.min(world_max.z),
+            ),
+            Vec3::new(
+                world_min.x.max(world_max.x),
+                world_min.y.max(world_max.y),
+                world_min.z.max(world_max.z),
+            ),
+        );
         let (navigation_policy, snap) = CollisionNavigationPolicy::from_native(&request.config)?;
         let grid = navigation_policy.grid()?;
         let policy = navigation_policy.neighbor_policy();
         let step_height = f64::from(navigation_policy.character.surface.maximum_step_height);
         let max_cells = request.config.maximum_cells;
-        if max_cells == 0 {
-            return Err(CsharpEngineServicesError::new(
-                "CSHARP_COLLISION_NAVIGATION_CONFIG",
-                "collision navigation needs a nonzero cell budget",
-            ));
-        }
         let min_cell = grid.world_to_voxel(core_space::WorldPos::new(
             f64::from(world_min.x),
             0.0,
@@ -2970,10 +2974,22 @@ impl RuntimeSpatialBridge {
         request: &NativeSpatialAabbQueryRequest,
         sweep: bool,
     ) -> Result<NativeSpatialQueryReceipt, CsharpEngineServicesError> {
-        let min = native_vec3_value(request.min);
-        let max = native_vec3_value(request.max);
+        // A non-finite corner would be answered wrongly rather than refused
+        // by the narrow phase.
+        let (min, max) = (native_array(request.min), native_array(request.max));
+        if !min.into_iter().chain(max).all(f64::is_finite) {
+            return Err(spatial_error(
+                "CSHARP_SPATIAL_AABB",
+                "AABB corners were not finite",
+            ));
+        }
+        // The box lies between the two corners in either order; every
+        // consumer below reads the same ordered pair.
+        let (min, max) = (
+            [0, 1, 2].map(|axis| min[axis].min(max[axis])),
+            [0, 1, 2].map(|axis| min[axis].max(max[axis])),
+        );
         let translation = native_vec3_value(request.translation);
-        validate_aabb(min, max)?;
         if !finite_vec3(translation) {
             return Err(spatial_error(
                 "CSHARP_SPATIAL_SWEEP",
@@ -2997,10 +3013,6 @@ impl RuntimeSpatialBridge {
         let scene = self.session_mut(request.session)?.scene.clone();
         let ignored = ignored_set(ignored)?;
         let records = filtered_entities(entities, request.filter, &ignored);
-        let (min, max) = (
-            [f64::from(min.x), f64::from(min.y), f64::from(min.z)],
-            [f64::from(max.x), f64::from(max.y), f64::from(max.z)],
-        );
         let voxel_or_mesh = if sweep {
             scene.axis_sweep_overlaps(
                 min,
@@ -3062,12 +3074,6 @@ impl RuntimeSpatialBridge {
     ) -> Result<NativeSpatialHit, CsharpEngineServicesError> {
         let center = native_vec3_value(request.center);
         let translation = native_vec3_value(request.translation);
-        if !finite_vec3(center) || !finite_vec3(translation) {
-            return Err(spatial_error(
-                "CSHARP_SPATIAL_CAPSULE",
-                "capsule position or translation was not finite",
-            ));
-        }
         let entities = unsafe {
             borrowed_slice(
                 request.entities,
@@ -5644,16 +5650,6 @@ fn checked_u32(value: usize, field: &'static str) -> Result<u32, CsharpEngineSer
         .map_err(|_| spatial_error("CSHARP_SPATIAL_RESULT", format!("{field} exceeded u32")))
 }
 
-fn validate_aabb(min: Vec3, max: Vec3) -> Result<(), CsharpEngineServicesError> {
-    if !finite_vec3(min) || !finite_vec3(max) || min.x > max.x || min.y > max.y || min.z > max.z {
-        return Err(spatial_error(
-            "CSHARP_SPATIAL_AABB",
-            "AABB endpoints were invalid",
-        ));
-    }
-    Ok(())
-}
-
 fn ignored_set(values: &[u64]) -> Result<Vec<EntityId>, CsharpEngineServicesError> {
     Ok(values.iter().copied().map(EntityId::new).collect())
 }
@@ -5760,12 +5756,6 @@ fn cast_ray_parts(
 ) -> Result<NativeSpatialHit, CsharpEngineServicesError> {
     let origin = native_array(origin);
     let direction = native_array(direction);
-    if !origin.into_iter().chain(direction).all(f64::is_finite)
-        || max_distance <= 0.0
-        || !max_distance.is_finite()
-    {
-        return Err(spatial_error("CSHARP_SPATIAL_RAY", "ray was invalid"));
-    }
     let ignored = ignored_set(ignored_values)?;
     let entities = filtered_entities(entity_values, filter, &ignored);
     let colliders = entities.iter().filter(|value| value.enabled).map(|value| {
@@ -6181,6 +6171,167 @@ mod tests {
                 "overlap enabled={enabled} trigger={trigger}"
             );
         }
+    }
+
+    #[test]
+    fn aabb_queries_read_reversed_corners_as_the_same_box_and_refuse_non_finite_ones() {
+        let mut bridge = RuntimeSpatialBridge::new();
+        let api = api(&mut bridge);
+        let entity_session = create_session(&api);
+        let voxel_session = create_session(&api);
+        bridge.sessions.get_mut(&voxel_session.value).unwrap().scene =
+            Arc::new(VoxelCollisionScene::from_solid_voxels(1.0, 8, [[1, 1, 1]]).unwrap());
+        let corner = |value: f32| NativeVec3 {
+            x: value,
+            y: value,
+            z: value,
+        };
+        let collider = NativeSpatialEntityCollider {
+            entity: 7,
+            min: corner(1.0),
+            max: corner(2.0),
+            enabled: true,
+            ..Default::default()
+        };
+        for (session, entities) in [(entity_session, 1), (voxel_session, 0)] {
+            for (min, max) in [(0.0, 3.0), (3.0, 0.0)] {
+                let request = NativeSpatialAabbQueryRequest {
+                    session,
+                    min: corner(min),
+                    max: corner(max),
+                    translation: NativeVec3 {
+                        x: 0.5,
+                        y: 0.0,
+                        z: 0.0,
+                    },
+                    filter: NativeSpatialQueryFilter::default(),
+                    entities: &collider,
+                    entities_len: entities,
+                    ignored_entities: std::ptr::null(),
+                    ignored_entities_len: 0,
+                };
+                let what = format!("entities={entities} corners={min}..{max}");
+                assert!(
+                    bridge.overlap_aabb(&request).unwrap().present,
+                    "overlap {what}"
+                );
+                assert!(bridge.sweep_aabb(&request).unwrap().present, "sweep {what}");
+            }
+        }
+
+        // A non-finite corner is refused, not answered.
+        for bad in [f32::INFINITY, f32::NEG_INFINITY, f32::NAN] {
+            let base = NativeSpatialAabbQueryRequest {
+                session: voxel_session,
+                min: corner(0.0),
+                max: corner(3.0),
+                translation: NativeVec3::default(),
+                filter: NativeSpatialQueryFilter::default(),
+                entities: &collider,
+                entities_len: 1,
+                ignored_entities: std::ptr::null(),
+                ignored_entities_len: 0,
+            };
+            let mut low = base;
+            low.min.x = bad;
+            let mut high = base;
+            high.max.y = bad;
+            for request in [low, high] {
+                for (kind, result) in [
+                    ("overlap", bridge.overlap_aabb(&request)),
+                    ("sweep", bridge.sweep_aabb(&request)),
+                ] {
+                    let error = result.expect_err(kind);
+                    assert_eq!(error.code(), "CSHARP_SPATIAL_AABB", "{kind} {bad}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn capsule_and_ray_queries_report_the_inner_refusal_for_non_finite_input() {
+        let mut bridge = RuntimeSpatialBridge::new();
+        let api = api(&mut bridge);
+        let session = create_session(&api);
+        let mut capsule = NativeSpatialCapsuleQueryRequest {
+            session,
+            center: NativeVec3 {
+                x: f32::NAN,
+                y: 0.0,
+                z: 0.0,
+            },
+            half_height: 0.5,
+            radius: 0.25,
+            translation: NativeVec3::default(),
+            contact_skin: 0.02,
+            filter: NativeSpatialQueryFilter::default(),
+            entities: std::ptr::null(),
+            entities_len: 0,
+            ignored_entities: std::ptr::null(),
+            ignored_entities_len: 0,
+        };
+        for result in [
+            bridge.cast_capsule(&capsule),
+            bridge.overlap_capsule(&capsule),
+        ] {
+            let error = result.unwrap_err();
+            assert_eq!(
+                (error.code(), error.detail()),
+                ("CSHARP_SPATIAL_CAPSULE", "InvalidCapsule")
+            );
+        }
+        capsule.center.x = 0.0;
+        capsule.translation.x = f32::INFINITY;
+        let error = bridge.cast_capsule(&capsule).unwrap_err();
+        assert_eq!(
+            (error.code(), error.detail()),
+            ("CSHARP_SPATIAL_CAPSULE", "InvalidTranslation")
+        );
+
+        let mut ray = NativeSpatialRaycastRequest {
+            session,
+            origin: NativeVec3 {
+                x: f32::NAN,
+                y: 0.0,
+                z: 0.0,
+            },
+            direction: NativeVec3 {
+                x: 1.0,
+                y: 0.0,
+                z: 0.0,
+            },
+            max_distance: 10.0,
+            filter: NativeSpatialQueryFilter::default(),
+            entities: std::ptr::null(),
+            entities_len: 0,
+            ignored_entities: std::ptr::null(),
+            ignored_entities_len: 0,
+            hitbox_overrides: std::ptr::null(),
+            hitbox_overrides_len: 0,
+        };
+        let refusal = |result: Result<NativeSpatialHit, CsharpEngineServicesError>| {
+            let error = result.unwrap_err();
+            assert_eq!(error.code(), "CSHARP_SPATIAL_RAY");
+            error.detail().to_owned()
+        };
+        assert!(refusal(bridge.cast_ray(&ray)).ends_with("InvalidOrigin"));
+        ray.origin.x = 0.0;
+        ray.max_distance = 0.0;
+        assert!(refusal(bridge.cast_ray(&ray)).ends_with("InvalidMaxDistance"));
+        // A segment from a point to itself has no length to cast.
+        let segment = NativeSpatialSegmentCastRequest {
+            session,
+            start: NativeVec3::default(),
+            end: NativeVec3::default(),
+            filter: NativeSpatialQueryFilter::default(),
+            entities: std::ptr::null(),
+            entities_len: 0,
+            ignored_entities: std::ptr::null(),
+            ignored_entities_len: 0,
+            hitbox_overrides: std::ptr::null(),
+            hitbox_overrides_len: 0,
+        };
+        assert!(refusal(bridge.cast_segment(&segment)).ends_with("InvalidMaxDistance"));
     }
 
     fn utf8(value: &str) -> NativeUtf8Slice {

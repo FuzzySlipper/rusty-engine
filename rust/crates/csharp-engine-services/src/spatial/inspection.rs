@@ -29,14 +29,20 @@ impl RuntimeSpatialBridge {
             || request.cell_size <= 0.0
             || x1 <= x0
             || z1 <= z0
-            || request.collision_min_y >= request.collision_max_y
-            || request.navigation_min_y > request.navigation_max_y
         {
             return Err(spatial_error(
                 "CSHARP_SPATIAL_MAP",
                 "invalid map bounds or scale",
             ));
         }
+        // Each Y interval lies between its two values in either order; the
+        // collision query, the collider overlap and the support filter all
+        // read the ordered pair.
+        let ordered = |a: f64, b: f64| (a.min(b), a.max(b));
+        let (collision_min_y, collision_max_y) =
+            ordered(request.collision_min_y, request.collision_max_y);
+        let (navigation_min_y, navigation_max_y) =
+            ordered(request.navigation_min_y, request.navigation_max_y);
         let entities =
             unsafe { borrowed_slice(request.entities, request.entities_len, "map colliders") }?;
         let records = filtered_entities(entities, NativeSpatialQueryFilter::default(), &[]);
@@ -50,7 +56,7 @@ impl RuntimeSpatialBridge {
             for cell in nav.projection.walkable_cells() {
                 let center = nav.cell_center(cell);
                 let y = f64::from(center.y);
-                if y >= request.navigation_min_y && y <= request.navigation_max_y {
+                if y >= navigation_min_y && y <= navigation_max_y {
                     let [x, _, z] = cell.to_array();
                     columns
                         .entry((x, z))
@@ -64,12 +70,12 @@ impl RuntimeSpatialBridge {
             for column in 0..request.columns {
                 let min = [
                     x0 + f64::from(column) * request.cell_size,
-                    request.collision_min_y,
+                    collision_min_y,
                     z0 + f64::from(row) * request.cell_size,
                 ];
                 let max = [
                     min[0] + request.cell_size,
-                    request.collision_max_y,
+                    collision_max_y,
                     min[2] + request.cell_size,
                 ];
                 let mut cell = NativeSpatialMapCell {
@@ -236,6 +242,45 @@ mod tests {
         assert_eq!(large_cells.len(), 4096);
         assert!(large_cells[1].static_collision);
         assert_eq!(large_cells[0].navigation_samples, 2);
+
+        // Each Y interval reads the same in either order, for retained
+        // collision, supplied colliders and navigation supports alike.
+        let shelf = NativeSpatialEntityCollider {
+            entity: 18,
+            min: NativeVec3 {
+                x: 0.1,
+                y: 1.0,
+                z: 0.1,
+            },
+            max: NativeVec3 {
+                x: 0.9,
+                y: 1.2,
+                z: 0.9,
+            },
+            enabled: true,
+            ..Default::default()
+        };
+        request.columns = 2;
+        request.entities = &shelf;
+        let read = |bridge: &mut RuntimeSpatialBridge, request: &NativeSpatialMapRequest| {
+            let result = bridge.read_map(request).unwrap();
+            format!("{:?}", unsafe {
+                std::slice::from_raw_parts(result.cells, result.cells_len)
+            })
+        };
+        let ordered = read(&mut bridge, &request);
+        assert!(ordered.contains("first_dynamic_entity: 18"));
+        assert!(ordered.contains("navigation_samples: 2"));
+        assert!(ordered.contains("static_collision: true"));
+        let reversed = NativeSpatialMapRequest {
+            collision_min_y: request.collision_max_y,
+            collision_max_y: request.collision_min_y,
+            navigation_min_y: request.navigation_max_y,
+            navigation_max_y: request.navigation_min_y,
+            ..request
+        };
+        assert_eq!(read(&mut bridge, &reversed), ordered);
+
         request.columns = 0;
         assert!(bridge.read_map(&request).is_err());
     }

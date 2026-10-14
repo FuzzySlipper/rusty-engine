@@ -548,8 +548,8 @@ Registration is local and explicit; there is no mechanics discovery.
 
 `Spatial.ReadMap` reads a world-aligned X/Z map of any requested size
 from a live `SpatialSession`. Supply the minimum X/Z corner, cell size,
-columns/rows, a collision Y interval, a separate navigation support Y interval,
-and current product-owned dynamic colliders. Columns advance +X; rows advance
+columns/rows, a collision Y interval, a separate navigation support Y interval
+(each in either order), and current product-owned dynamic colliders. Columns advance +X; rows advance
 +Z. The copied receipt carries spatial publication identity and source,
 collision and navigation revisions. It does not change navigation or gameplay.
 

@@ -1444,26 +1444,12 @@ impl CollisionProjection {
         }
     }
 
-    /// Whether the world-space AABB `[min, max]` overlaps any solid voxel collider.
-    /// The placement/camera-basics shape query. Only chunks the AABB spans are tested.
+    /// Whether the world-space AABB between corners `min` and `max`, in
+    /// either order, overlaps any solid voxel or static-mesh collider. The
+    /// placement/camera-basics shape query. Only resident chunks the AABB
+    /// spans are tested.
     pub fn aabb_overlaps_solid(&self, min: WorldPos, max: WorldPos) -> bool {
-        let lo = WorldPos::new(min.x.min(max.x), min.y.min(max.y), min.z.min(max.z));
-        let hi = WorldPos::new(min.x.max(max.x), min.y.max(max.y), min.z.max(max.z));
-        let half = Vector::new(
-            (hi.x - lo.x) * 0.5,
-            (hi.y - lo.y) * 0.5,
-            (hi.z - lo.z) * 0.5,
-        );
-        let cuboid = Cuboid::new(half);
-        let pose = Pose::from_translation(Vector::new(
-            (lo.x + hi.x) * 0.5,
-            (lo.y + hi.y) * 0.5,
-            (lo.z + hi.z) * 0.5,
-        ));
-        if self.aabb_overlaps_chunks(self.chunk_span(lo, hi), &pose, &cuboid) {
-            return true;
-        }
-        self.static_meshes.aabb_overlaps(lo, hi)
+        self.aabb_overlaps_voxels(min, max) || self.static_meshes.aabb_overlaps(min, max)
     }
 
     /// Whether an AABB translated along one axis intersects any solid collider
@@ -1540,14 +1526,27 @@ impl CollisionProjection {
     fn chunk_span(&self, lo: WorldPos, hi: WorldPos) -> ChunkRegion {
         let mut vmin = self.grid.world_to_voxel(lo - self.world_offset);
         let mut vmax = self.grid.world_to_voxel(hi - self.world_offset);
+        // A far or unbounded box saturates at the lattice's ends.
         if self.has_surfaces {
-            vmin = VoxelCoord::new(vmin.x - 1, vmin.y - 1, vmin.z - 1);
-            vmax = VoxelCoord::new(vmax.x + 1, vmax.y + 1, vmax.z + 1);
+            vmin = VoxelCoord::new(
+                vmin.x.saturating_sub(1),
+                vmin.y.saturating_sub(1),
+                vmin.z.saturating_sub(1),
+            );
+            vmax = VoxelCoord::new(
+                vmax.x.saturating_add(1),
+                vmax.y.saturating_add(1),
+                vmax.z.saturating_add(1),
+            );
         }
         let last = self.grid.voxel_to_chunk(vmax);
         ChunkRegion::new(
             self.grid.voxel_to_chunk(vmin),
-            ChunkCoord::new(last.x + 1, last.y + 1, last.z + 1),
+            ChunkCoord::new(
+                last.x.saturating_add(1),
+                last.y.saturating_add(1),
+                last.z.saturating_add(1),
+            ),
         )
     }
 
@@ -1556,16 +1555,35 @@ impl CollisionProjection {
     fn aabb_overlaps_chunks(&self, span: ChunkRegion, pose: &Pose, cuboid: &Cuboid) -> bool {
         let id = identity();
         let mut surfaces = false;
-        for chunk in span.iter() {
-            if let Some(collider) = self.chunks.get(&chunk) {
-                surfaces |= collider.surface.is_some();
-                if collider
-                    .shapes()
-                    .any(|shape| intersection_test(pose, cuboid, &id, shape) == Ok(true))
-                {
-                    return true;
-                }
-            }
+        let mut overlaps = |collider: &ChunkCollider| {
+            surfaces |= collider.surface.is_some();
+            collider
+                .shapes()
+                .any(|shape| intersection_test(pose, cuboid, &id, shape) == Ok(true))
+        };
+        // A span covering more chunk cells than there are colliders is
+        // cheaper to answer by scanning the colliders inside it, as character
+        // queries do; a far or unbounded box then costs the resident count.
+        let cells = [
+            (span.min.x, span.max.x),
+            (span.min.y, span.max.y),
+            (span.min.z, span.max.z),
+        ]
+        .into_iter()
+        .map(|(low, high)| (high as f64 - low as f64).max(0.0))
+        .product::<f64>();
+        let hit = if cells <= self.chunks.len() as f64 {
+            span.iter()
+                .filter_map(|chunk| self.chunks.get(&chunk))
+                .any(&mut overlaps)
+        } else {
+            self.chunks
+                .iter()
+                .filter(|(chunk, _)| span.contains(**chunk))
+                .any(|(_, collider)| overlaps(collider))
+        };
+        if hit {
+            return true;
         }
         surfaces
             && self.contains_point(WorldPos::new(
@@ -1757,9 +1775,6 @@ fn validate_obstacle(obstacle: CharacterObstacle) -> Result<(), CharacterCollisi
     ]
     .into_iter()
     .all(f64::is_finite)
-        || obstacle.half_extents.x <= 0.0
-        || obstacle.half_extents.y <= 0.0
-        || obstacle.half_extents.z <= 0.0
     {
         Err(CharacterCollisionQueryError::InvalidCapsule)
     } else {
@@ -2215,6 +2230,36 @@ mod tests {
     }
 
     #[test]
+    fn obstacle_half_extents_are_read_by_magnitude() {
+        let capsule = CharacterCapsule {
+            center: WorldPos::new(0.0, 1.0, 0.0),
+            half_height: 0.5,
+            radius: 0.4,
+        };
+        let cast = |half_extents| {
+            cast_character_capsule_against_obstacles(
+                capsule,
+                WorldVec::new(3.0, 0.0, 0.0),
+                0.0,
+                &[CharacterObstacle {
+                    id: 1,
+                    center: WorldPos::new(2.0, 1.0, 0.0),
+                    half_extents,
+                    linear_velocity: WorldVec::ZERO,
+                    angular_velocity: WorldVec::ZERO,
+                }],
+            )
+            .unwrap()
+            .map(|hit| hit.point.x)
+        };
+        let positive = cast(WorldVec::new(0.5, 0.5, 0.5)).expect("hit");
+        assert!((positive - 1.5).abs() < 1.0e-6);
+        assert_eq!(cast(WorldVec::new(-0.5, -0.5, -0.5)), Some(positive));
+        // A flat obstacle is still met.
+        assert!(cast(WorldVec::new(0.0, 0.5, 0.5)).is_some());
+    }
+
+    #[test]
     fn character_query_stats_saturate_without_wrapping() {
         let mut stats = CharacterCollisionQueryStats {
             voxel_candidates: u64::MAX,
@@ -2460,6 +2505,69 @@ mod tests {
         // AABB straddling the chunk-0/chunk-1 boundary still finds the solid in chunk 0.
         assert!(
             proj.aabb_overlaps_solid(WorldPos::new(7.5, 0.5, 0.5), WorldPos::new(8.5, 0.5, 0.5))
+        );
+    }
+
+    #[test]
+    fn far_and_unbounded_aabb_queries_walk_only_resident_chunks() {
+        // One resident chunk, with and without a reconstructed surface (which
+        // widens the span by a voxel at the lattice's ends).
+        let world = world_with(ChunkCoord::new(0, 0, 0), &[LocalVoxelCoord::new(2, 2, 2)]);
+        let cubes = CollisionProjection::build(&world);
+        let mut surfaced = CollisionProjection::build(&VoxelWorld::new(spec()));
+        surfaced.set_chunk_parts(
+            ChunkCoord::new(0, 0, 0),
+            &[VoxelCoord::new(2, 2, 2)],
+            7,
+            || {
+                Some(ChunkSurfaceCollider {
+                    positions: vec![[0.0, 6.0, 0.0], [0.0, 6.0, 8.0], [8.0, 6.0, 0.0]],
+                    triangles: vec![[0, 1, 2]],
+                    owners: vec![VoxelBox::single(VoxelCoord::new(1, 5, 1))],
+                })
+            },
+        );
+        surfaced.touch();
+        let inf = f64::INFINITY;
+        let started = std::time::Instant::now();
+        for projection in [&cubes, &surfaced] {
+            // A 10 km cube around the solid voxel finds it; one beside it does not.
+            assert!(projection.aabb_overlaps_solid(
+                WorldPos::new(-5_000.0, -5_000.0, -5_000.0),
+                WorldPos::new(5_000.0, 5_000.0, 5_000.0),
+            ));
+            assert!(!projection.aabb_overlaps_solid(
+                WorldPos::new(-5_000.0, -5_000.0, 100.0),
+                WorldPos::new(5_000.0, 5_000.0, 10_100.0),
+            ));
+            // Swept 10 km through the voxel, and past it.
+            assert!(projection.axis_swept_aabb_overlaps_solid(
+                WorldPos::new(-5_000.0, 2.1, 2.1),
+                WorldPos::new(-4_999.0, 2.9, 2.9),
+                WorldVec::new(10_000.0, 0.0, 0.0),
+            ));
+            assert!(!projection.axis_swept_aabb_overlaps_solid(
+                WorldPos::new(-5_000.0, 3.1, 2.1),
+                WorldPos::new(-4_999.0, 3.9, 2.9),
+                WorldVec::new(10_000.0, 0.0, 0.0),
+            ));
+            // Unbounded boxes answer without walking the lattice.
+            projection.aabb_overlaps_solid(
+                WorldPos::new(-inf, -inf, -inf),
+                WorldPos::new(inf, inf, inf),
+            );
+            projection
+                .aabb_overlaps_solid(WorldPos::new(0.0, 0.0, 0.0), WorldPos::new(inf, inf, inf));
+            projection.axis_swept_aabb_overlaps_solid(
+                WorldPos::new(-inf, 0.0, 0.0),
+                WorldPos::new(inf, 1.0, 1.0),
+                WorldVec::new(1.0, 0.0, 0.0),
+            );
+        }
+        let elapsed = started.elapsed();
+        assert!(
+            elapsed < std::time::Duration::from_millis(250),
+            "far box queries took {elapsed:?}"
         );
     }
 

@@ -77,14 +77,12 @@ impl CollisionNavigationPolicy {
                 "collision navigation needs a positive cell at least the agent's diameter and a slope of at most 89 degrees",
             ));
         }
-        if !(config.maximum_drop.is_finite() && config.maximum_drop >= 0.0)
-            || config.supports_per_column == 0
-            || [snap.above, snap.below, snap.across]
-                .iter()
-                .any(|value| !(value.is_finite() && *value >= 0.0))
+        if ![config.maximum_drop, snap.above, snap.below, snap.across]
+            .iter()
+            .all(|value| value.is_finite())
         {
             return Err(invalid(
-                "collision navigation drop and snap distances must be finite and non-negative, with at least one support per column",
+                "collision navigation drop and snap distances must be finite",
             ));
         }
         let vertical_search_cells = u8::try_from(config.vertical_search_cells)
@@ -1679,6 +1677,48 @@ mod tests {
         taller.world_max.y = 13.0;
         let receipt = bridge.replace_collision_navigation(&taller).unwrap();
         assert_eq!(receipt.reused_column_count, 0);
+    }
+
+    #[test]
+    fn a_region_reads_its_corners_in_either_order_and_policy_signs_are_not_refused() {
+        let (mut bridge, session) = bridge_with(Arc::new(terrain()));
+        let ordered = request(session, 0.0);
+        bridge.replace_collision_navigation(&ordered).unwrap();
+        let installed = published(&bridge, session);
+        assert!(installed.1 > 0);
+        let reversed = NativeCollisionNavigationReplaceRequest {
+            world_min: ordered.world_max,
+            world_max: ordered.world_min,
+            ..ordered
+        };
+        assert_eq!(from_scratch(&bridge, session, reversed), installed);
+        // The same box under the same policy reuses every column.
+        let receipt = bridge.replace_collision_navigation(&reversed).unwrap();
+        assert_eq!(receipt.derived_column_count, 0);
+
+        // A zero budget is refused by the budget itself.
+        let mut no_budget = ordered;
+        no_budget.config.maximum_cells = 0;
+        let error = bridge.replace_collision_navigation(&no_budget).unwrap_err();
+        assert_eq!(error.code(), "CSHARP_COLLISION_NAVIGATION_BUDGET");
+
+        // No supports per column samples nothing.
+        let mut no_supports = ordered;
+        no_supports.config.supports_per_column = 0;
+        let receipt = bridge.replace_collision_navigation(&no_supports).unwrap();
+        assert_eq!(receipt.walkable_cell_count, 0);
+
+        // A negative drop or snap allows no drop or snap; non-finite stays refused.
+        let mut negative = ordered;
+        negative.config.maximum_drop = -1.0;
+        negative.config.snap_above = -1.0;
+        negative.config.snap_below = -1.0;
+        negative.config.snap_across = -1.0;
+        let receipt = bridge.replace_collision_navigation(&negative).unwrap();
+        assert_eq!(receipt.walkable_cell_count as usize, installed.1);
+        negative.config.snap_across = f64::NAN;
+        let error = bridge.replace_collision_navigation(&negative).unwrap_err();
+        assert_eq!(error.code(), "CSHARP_COLLISION_NAVIGATION_CONFIG");
     }
 
     #[test]

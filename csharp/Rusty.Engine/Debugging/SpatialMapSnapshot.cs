@@ -127,15 +127,16 @@ public sealed class SpatialMapSnapshot
         SpatialMapResult receipt = spatial.ReadMap(request);
         // Retain a managed array so either formatter can index the cells directly.
         SpatialMapCell[] copiedCells = receipt.Cells.ToArray();
+        // The Engine reads each Y interval in either order; keep the ordered pair it used.
         SpatialMapGeometry geometry = new(
             request.Origin,
             request.CellSize,
             request.Columns,
             request.Rows,
-            request.CollisionMinY,
-            request.CollisionMaxY,
-            request.NavigationMinY,
-            request.NavigationMaxY);
+            Math.Min(request.CollisionMinY, request.CollisionMaxY),
+            Math.Max(request.CollisionMinY, request.CollisionMaxY),
+            Math.Min(request.NavigationMinY, request.NavigationMaxY),
+            Math.Max(request.NavigationMinY, request.NavigationMaxY));
         (SpatialMapPlacedAnnotation[] retained, SpatialMapAnnotationSummary summary) =
             CaptureAnnotations(geometry, annotations, maximumAnnotations);
         return new SpatialMapSnapshot(geometry, observation, receipt, copiedCells, retained, summary);

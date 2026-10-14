@@ -885,8 +885,8 @@ so a product that needs a path later keeps the one it was given.
 
 `Spatial.ReplaceCollisionNavigation` derives and retains a planar projection
 from the session's current Engine collision scene. The request supplies a
-finite `WorldMin`/`WorldMax` volume and a `CollisionNavigationConfig`; it never
-supplies geometry. The Engine samples voxel and retained static-mesh collision
+finite volume between the corners `WorldMin` and `WorldMax`, in either order,
+and a `CollisionNavigationConfig`; it never supplies geometry. The Engine samples voxel and retained static-mesh collision
 for support and headroom, preserves supported elevations, and checks a
 standing capsule at each cell's support. A support stands at its cell's centre
 unless a crossing of the cell along X or Z, above the step height, is blocked
