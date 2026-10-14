@@ -98,7 +98,7 @@ public sealed class Product : IEngineProduct
     public Product(ProductCreateContext context)
     {
         _ui = context.Engine.Ui.OpenStream(new("pair.ui", "pair.ui.v1"));
-        context.Engine.Ui.PublishProjection(new(_ui, 1, new UiValue(
+        context.Engine.Ui.PublishProjection(new(_ui, new UiValue(
             new StructuredValueNode[] {
                 new(StructuredValueKind.Object, 0, 0, 0, 0, 0, 0, 0, 1),
                 new(StructuredValueKind.String, 0, 0, 0, 5, 5, 0, 0, 0),

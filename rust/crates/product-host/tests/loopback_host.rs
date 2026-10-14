@@ -650,7 +650,7 @@ fn output_publication_failure_returns_the_consumed_receipt_for_resync_without_re
     assert!(first.contains("X-Rusty-Resync-Outputs: fresh\r\n"));
     assert!(first.contains("\"accepted\":true"));
     assert!(first.contains("\"binding\":{\"instanceId\":\"7\""));
-    assert!(first.contains("\"readout\":{\"artifact\":\"rusty.product.runtime-readout\""));
+    assert!(first.contains("\"readout\":{\"runtime\":{"));
     assert_eq!(inputs.load(Ordering::SeqCst), 1);
 
     let mut fresh = open_sse(host.address(), "/__rusty/product/runtime/outputs/fresh");

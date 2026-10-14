@@ -101,11 +101,12 @@ pub struct NativeStructuredValue {
     pub utf8_len: usize,
 }
 
+/// One value published to an open stream. The Engine numbers each change it
+/// publishes on that stream.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeUiProjection {
     pub stream: NativeUiStreamHandle,
-    pub sequence: u64,
     pub value: NativeStructuredValue,
 }
 

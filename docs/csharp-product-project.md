@@ -39,7 +39,9 @@ Input intents and mappings are `RustyEngineProductInputIntent` and
 `RustyEngineProductInputMapping` items. An optional UI-projection identity is
 the `RustyEngineProductUiProjectionStream` and
 `RustyEngineProductUiProjectionContract` pair of properties; build a
-projection's `UiValue` from ordinary JSON with `UiValues.FromJson`. Declaring
+projection's `UiValue` from ordinary JSON with `UiValues.FromJson`. A
+`UiProjection` names only its stream and value: the Engine numbers each change
+it publishes on a stream, and an unchanged value is not sent again. Declaring
 `RustyEngineProductEntryType` makes that project the product root: the SDK's
 generator adds its bind export and debug catalog to the project's own
 compilation, and the project builds as a CoreCLR component (runtimeconfig and

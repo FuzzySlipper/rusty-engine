@@ -10,7 +10,6 @@ import { RUNTIME_BASE_PATH, type RuntimeInputWireEvent } from './generated/contr
 const RUNTIME = { instanceId: '7', generation: '1', controlRevision: '2' } as const;
 const ACCEPTED_FAULT = { code: 'PRODUCT_HOST_ACCEPTED', disposition: 'accepted' } as const;
 const READOUT = {
-  artifact: 'rusty.product.runtime-readout',
   runtime: RUNTIME,
   mode: 'realtime',
   state: 'running',
@@ -464,7 +463,6 @@ test('runtime output UI projections pass empty strings and large deep data throu
   stream.emit([{
       kind: 'ui-projection',
       envelope: {
-        artifact: 'rusty.product.ui-projection',
         runtime: RUNTIME,
         sequence: '1',
         stream: 'product.ui',
@@ -539,7 +537,6 @@ test('sixty hertz receipt stream parses once and preserves output order per rece
         {
           kind: 'ui-projection',
           envelope: {
-            artifact: 'rusty.product.ui-projection',
             runtime: RUNTIME,
             sequence: String(tick),
             stream: 'product.ui',
@@ -911,7 +908,6 @@ test('one output batch far above the former 256 KiB event bound arrives as one e
   stream.emit([{
       kind: 'ui-projection',
       envelope: {
-        artifact: 'rusty.product.ui-projection',
         runtime: RUNTIME,
         sequence: '1',
         stream: 'product.ui',

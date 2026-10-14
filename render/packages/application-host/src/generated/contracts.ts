@@ -119,9 +119,10 @@ export type RuntimeInputWirePointerPosition = { x: number, y: number, };
  * The wire shape of a UI projection envelope: what the browser host
  * receives and passes to the mounted product UI.
  */
-export type RuntimeUiProjectionEnvelope = { artifact: "rusty.product.ui-projection", runtime: RuntimeUiRuntimeWire, 
+export type RuntimeUiProjectionEnvelope = { runtime: RuntimeUiRuntimeWire, 
 /**
- * Canonical decimal u64, increasing within the runtime binding.
+ * Canonical decimal u64 the Engine assigns, advancing with each change
+ * published on the stream.
  */
 sequence: string, stream: string, 
 /**

@@ -52,7 +52,6 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     private bool _alternatePulse;
     private uint _pulseCount;
     private uint _rebuildCount;
-    private ulong _uiSequence;
 
     public Product(ProductCreateContext context)
     {
@@ -476,7 +475,6 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         ];
         _engine.Ui.PublishProjection(new UiProjection(
             _uiStream,
-            ++_uiSequence,
             new UiValue(nodes, new uint[] { 1, 2, 3, 4, 5, 6, 7 }, 0, utf8)));
     }
 

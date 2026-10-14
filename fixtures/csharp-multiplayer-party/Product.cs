@@ -39,7 +39,6 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     private string notice = "";
     private string endedReason = "";
     private bool introduced;
-    private ulong uiSequence;
     private ulong steps;
     private bool uiDirty = true;
 
@@ -283,7 +282,7 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     private void PublishUi()
     {
         uiDirty = false;
-        engine.Ui.PublishProjection(new UiProjection(ui, ++uiSequence, UiValues.FromJson(Panel())));
+        engine.Ui.PublishProjection(new UiProjection(ui, UiValues.FromJson(Panel())));
     }
 
     /// <summary>Everything the DOM panel shows; it renders text only.</summary>

@@ -8,7 +8,7 @@ public sealed class Product : IEngineProduct
     private const uint RootNode = 0;
     private readonly IEngineContext _engine;
     private readonly UiStream _stream;
-    private ulong _sequence;
+    private ulong _publishes;
 
     public Product(ProductCreateContext context)
     {
@@ -39,7 +39,7 @@ public sealed class Product : IEngineProduct
             new(
                 Kind: StructuredValueKind.Number,
                 BoolValue: 0,
-                NumberValue: _sequence,
+                NumberValue: _publishes++,
                 KeyOffset: 0,
                 KeyLen: 0,
                 TextOffset: 0,
@@ -49,7 +49,6 @@ public sealed class Product : IEngineProduct
         ];
         _engine.Ui.PublishProjection(new UiProjection(
             _stream,
-            ++_sequence,
             new UiValue(nodes, System.Array.Empty<uint>(), RootNode, System.Array.Empty<byte>())));
     }
 }

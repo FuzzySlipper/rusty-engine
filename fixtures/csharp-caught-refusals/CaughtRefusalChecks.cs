@@ -14,7 +14,7 @@ internal static class CaughtRefusalChecks
     private const string MissingTexture = "missing/caught-refusal.png";
     private const string MissingClip = "missing/caught-refusal.wav";
     private const string PresentTexture = "spatial-particle.png";
-    private const ulong NonAdvancingUiSequence = 0;
+    private const uint SelfCycleEdge = 0;
     private const float NonFiniteBlendAmount = float.NaN;
 
     internal static void Run(IEngineContext engine, UiStream stream)
@@ -31,11 +31,11 @@ internal static class CaughtRefusalChecks
             throw new InvalidOperationException($"Dynamics refusal lost its reason: {dynamics.Message}");
         }
 
-        StructuredValueNode[] nodes = [new(StructuredValueKind.Null, 0, 0, 0, 0, 0, 0, 0, 0)];
+        // The root array's one child is the root itself.
+        StructuredValueNode[] nodes = [new(StructuredValueKind.Array, 0, 0, 0, 0, 0, 0, 0, 1)];
         ExpectRefusal("Ui", () => engine.Ui.PublishProjection(new UiProjection(
             stream,
-            NonAdvancingUiSequence,
-            new UiValue(nodes, Array.Empty<uint>(), 0, Array.Empty<byte>()))));
+            new UiValue(nodes, new uint[] { SelfCycleEdge }, 0, Array.Empty<byte>()))));
 
         // Valid work after the caught refusals belongs to the same settled callback.
         RenderResourceInfo texture = engine.Graphics.OpenResource(new RenderResourceRequest(PresentTexture));

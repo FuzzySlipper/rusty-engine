@@ -7,9 +7,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use ts_rs::TS;
 
-/// The current immutable UI projection artifact identity.
-pub const RUNTIME_UI_PROJECTION_ARTIFACT: &str = "rusty.product.ui-projection";
-
 /// Largest integer-valued JSON number that crosses the JavaScript host
 /// boundary without losing precision.
 pub const MAX_RUNTIME_UI_PROJECTION_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
@@ -74,7 +71,7 @@ pub struct RuntimeUiProjectionEnvelope {
 
 impl RuntimeUiProjectionEnvelope {
     /// Creates one validated envelope from typed runtime facts and an owned
-    /// JSON value. The sequence is normally the admitted simulation step.
+    /// JSON value. The sequence numbers the change on its stream.
     pub fn new(
         runtime: RuntimeUiRuntimeBinding,
         sequence: u64,
@@ -147,7 +144,6 @@ impl RuntimeUiProjectionEnvelope {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RuntimeUiProjectionError {
     ValueUnsafeInteger { value: String },
-    WireUnknownArtifact { received: String },
     WireNonCanonicalInteger { field: &'static str },
     WireIntegerOutOfRange { field: &'static str },
     WireEncoding,
@@ -198,10 +194,9 @@ fn validate_number(number: &serde_json::Number) -> Result<(), RuntimeUiProjectio
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 #[ts(rename = "RuntimeUiProjectionEnvelope")]
 pub struct RuntimeUiProjectionWire {
-    #[ts(type = "\"rusty.product.ui-projection\"")]
-    artifact: String,
     runtime: RuntimeUiRuntimeWire,
-    /// Canonical decimal u64, increasing within the runtime binding.
+    /// Canonical decimal u64 the Engine assigns, advancing with each change
+    /// published on the stream.
     sequence: String,
     stream: String,
     /// The product's projection contract identity.
@@ -222,8 +217,7 @@ pub struct RuntimeUiRuntimeWire {
 impl Serialize for RuntimeUiProjectionEnvelope {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         use serde::ser::SerializeStruct;
-        let mut wire = serializer.serialize_struct("RuntimeUiProjectionWire", 6)?;
-        wire.serialize_field("artifact", RUNTIME_UI_PROJECTION_ARTIFACT)?;
+        let mut wire = serializer.serialize_struct("RuntimeUiProjectionWire", 5)?;
         wire.serialize_field(
             "runtime",
             &RuntimeUiRuntimeWire {
@@ -250,11 +244,6 @@ impl<'de> Deserialize<'de> for RuntimeUiProjectionEnvelope {
 
 impl RuntimeUiProjectionWire {
     fn into_envelope(self) -> Result<RuntimeUiProjectionEnvelope, RuntimeUiProjectionError> {
-        if self.artifact != RUNTIME_UI_PROJECTION_ARTIFACT {
-            return Err(RuntimeUiProjectionError::WireUnknownArtifact {
-                received: self.artifact,
-            });
-        }
         let runtime = RuntimeUiRuntimeBinding::new(
             RuntimeInstanceId::new(parse_canonical_u64(
                 "runtime.instanceId",

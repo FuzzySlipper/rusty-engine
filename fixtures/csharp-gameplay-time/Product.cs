@@ -73,7 +73,6 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     private Vector3 lastHit;
     private int shots;
     private ProductUpdateFacts lastFacts;
-    private ulong hudSequence;
     private bool turretScheduled;
     // Window output can end from the product; streamed output cannot, so the
     // HUD hides Quit there.
@@ -321,7 +320,7 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         writer.Number("hits", hits);
         writer.Number("pausedClears", pausedClears);
         writer.Bool("exitAvailable", exitAvailable);
-        engine.Ui.PublishProjection(new UiProjection(hud, ++hudSequence, writer.Value()));
+        engine.Ui.PublishProjection(new UiProjection(hud, writer.Value()));
     }
 
     public void RegisterDebugCommands(IDebugCommandModuleRegistrar registrar) => registrar.Register(this);

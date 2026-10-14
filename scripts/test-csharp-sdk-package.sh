@@ -192,7 +192,6 @@ public sealed class Product : IEngineProduct
     private readonly SpatialSession _spatial;
     private readonly VoxelScenePresentation _voxelPresentation;
     private readonly ProductContentMixedBundleChecks _mixedBundleChecks;
-    private ulong _sequence;
     private bool _particlesChecked;
 
     public Product(ProductCreateContext context)
@@ -265,7 +264,7 @@ public sealed class Product : IEngineProduct
     private void PublishUi()
     {
         StructuredValueNode[] nodes = [new(StructuredValueKind.Null, 0, 0, 0, 0, 0, 0, 0, 0)];
-        _engine.Ui.PublishProjection(new UiProjection(_stream, ++_sequence, new UiValue(nodes, System.Array.Empty<uint>(), 0, System.Array.Empty<byte>())));
+        _engine.Ui.PublishProjection(new UiProjection(_stream, new UiValue(nodes, System.Array.Empty<uint>(), 0, System.Array.Empty<byte>())));
     }
 }
 EOF

@@ -4,7 +4,6 @@ import { readFile } from 'node:fs/promises';
 
 import type { RuntimeUiProjectionEnvelope } from './generated/contracts.js';
 import {
-  RUSTY_APPLICATION_UI_PROJECTION_ARTIFACT,
   RustyApplicationUiProjectionError,
   createRustyApplicationUiProjection,
 } from './ui-projection.js';
@@ -28,7 +27,6 @@ const OPTIONS = {
 
 function envelope(sequence: string, value: unknown = { health: 72 }): RuntimeUiProjectionEnvelope {
   return {
-    artifact: RUSTY_APPLICATION_UI_PROJECTION_ARTIFACT,
     runtime: { ...RUNTIME },
     sequence,
     stream: 'product.hud',

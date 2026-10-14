@@ -5804,7 +5804,6 @@ mod tests {
         };
         let projection = NativeUiProjection {
             stream,
-            sequence: 1,
             value: NativeStructuredValue {
                 nodes: &node,
                 node_count: 1,

@@ -88,7 +88,6 @@ function fakeApplication(input: Record<string, unknown>, projections: unknown[] 
 test('pre-mount buffering keeps the newest readout and the newest projection per stream', () => {
   const pending: ProductHostRuntimeOutput[] = [];
   const readout = {
-    artifact: 'rusty.product.runtime-readout' as const,
     runtime: { instanceId: '1', generation: '1', controlRevision: '1' },
     state: 'running' as const,
     admittedSimulationSteps: '1',
@@ -191,7 +190,6 @@ test('mounted UI pauses and resumes the runtime it is bound to and follows its r
   await withFakeRoot(async (root) => {
     const PAUSED = { ...RUNNING, controlRevision: '3' } as const;
     const readout = (runtime: typeof RUNNING | typeof PAUSED, state: 'running' | 'paused') => ({
-      artifact: 'rusty.product.runtime-readout' as const,
       runtime, state,
       admittedSimulationSteps: '1', admittedPresentations: '1', droppedRealtimeSteps: '0',
       clockRegressions: '0', scaledRemainder: 0, lastObservedTimeNs: null, fault: null,
@@ -266,7 +264,6 @@ test('a lifecycle response that settles after a newer published change does not 
     const PAUSED = { ...RUNNING, controlRevision: '3' } as const;
     const RESUMED = { ...RUNNING, controlRevision: '4' } as const;
     const readout = (runtime: typeof RUNNING | typeof PAUSED | typeof RESUMED, state: 'running' | 'paused') => ({
-      artifact: 'rusty.product.runtime-readout' as const,
       runtime, state,
       admittedSimulationSteps: '1', admittedPresentations: '1', droppedRealtimeSteps: '0',
       clockRegressions: '0', scaledRemainder: 0, lastObservedTimeNs: null, fault: null,

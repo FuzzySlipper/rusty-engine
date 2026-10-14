@@ -374,8 +374,6 @@ pub struct ProductHostUpdateAttributionSnapshot {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ProductHostRuntimeReadout {
-    #[ts(type = "\"rusty.product.runtime-readout\"")]
-    artifact: String,
     runtime: ProductHostRuntimeBinding,
     state: ProductHostRuntimeState,
     admitted_simulation_steps: CanonicalU64,
@@ -390,7 +388,6 @@ pub struct ProductHostRuntimeReadout {
 impl ProductHostRuntimeReadout {
     pub fn new(runtime: ProductHostRuntimeBinding, state: ProductHostRuntimeState) -> Self {
         Self {
-            artifact: "rusty.product.runtime-readout".to_owned(),
             runtime,
             state,
             admitted_simulation_steps: CanonicalU64::new(0),

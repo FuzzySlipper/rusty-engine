@@ -82,7 +82,7 @@ fn portable_numbers_admit_fractions_and_reject_unsafe_integers() {
 #[test]
 fn deserialize_rejects_unknown_fields_and_noncanonical_integers() {
     let decode = |text: &str| serde_json::from_str::<RuntimeUiProjectionEnvelope>(text);
-    let valid = r#"{"artifact":"rusty.product.ui-projection","runtime":{"instanceId":"33","generation":"1","controlRevision":"1"},"sequence":"0","stream":"stealth.hud","contract":"stealth.ui.snapshot.v1","value":{}}"#;
+    let valid = r#"{"runtime":{"instanceId":"33","generation":"1","controlRevision":"1"},"sequence":"0","stream":"stealth.hud","contract":"stealth.ui.snapshot.v1","value":{}}"#;
     assert!(decode(valid).is_ok());
     assert!(decode(&valid.replace(r#""value":{}"#, r#""value":{},"extra":true"#)).is_err());
     assert!(decode(&valid.replace(r#""instanceId":"33""#, r#""instanceId":"033""#)).is_err());

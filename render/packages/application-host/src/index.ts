@@ -23,7 +23,6 @@ export type {
 export { parseRustyApplicationStreamedFrame } from './frame-view.js';
 export type { RustyApplicationStreamedFrame } from './frame-view.js';
 export {
-  RUSTY_APPLICATION_UI_PROJECTION_ARTIFACT,
   RUSTY_APPLICATION_UI_PROJECTION_DEFAULT_STREAM,
   RUSTY_APPLICATION_UI_PROJECTION_MAX_SUBSCRIBERS,
   RustyApplicationUiProjectionError,

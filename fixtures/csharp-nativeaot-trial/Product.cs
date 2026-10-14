@@ -27,7 +27,6 @@ public sealed class Product : IEngineProduct
     private bool _started;
     private bool _paused;
     private bool _shutdown;
-    private ulong _uiSequence;
     private ulong _lastRandom;
     private LookState _look;
     private bool _physicalMappingConfigured;
@@ -1470,7 +1469,7 @@ public sealed class Product : IEngineProduct
         VoxelScenePresentationReadout voxel = _engine.VoxelScenePresentation.RefreshScene(_voxelPresentation);
         Require(voxel.Present && voxel.ChunkCount == 1 && voxel.MaterialCount == 1,
             "retained voxel scene presentation did not refresh");
-        _engine.Ui.PublishProjection(new UiProjection(_uiStream, ++_uiSequence, UiValue()));
+        _engine.Ui.PublishProjection(new UiProjection(_uiStream, UiValue()));
     }
 
     private UiValue UiValue()

@@ -201,8 +201,10 @@ internal static class EngineTestHostChecks
                 new(StructuredValueKind.Object, 0, 0, 0, 0, 0, 0, 0, 1),
                 new(StructuredValueKind.String, 0, 0, 0, 5, 5, 0, 0, 0),
             }, new uint[] { 1 }, 0, "state"u8.ToArray());
-            engine.Ui.PublishProjection(new(stream, 1, value));
-            ExpectRefusal(() => engine.Ui.PublishProjection(new(stream, 1, value)), "CSHARP_UI_SEQUENCE");
+            engine.Ui.PublishProjection(new(stream, value));
+            // The Engine numbers each published change, so an unchanged value
+            // may be published again.
+            engine.Ui.PublishProjection(new(stream, value));
         });
 
         host.Call(engine =>

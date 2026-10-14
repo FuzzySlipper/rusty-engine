@@ -1,16 +1,11 @@
 import type { JsonValue, RuntimeUiProjectionEnvelope } from './generated/contracts.js';
 import type { RustyApplicationRuntimeIdentity } from './input-ingress.js';
 
-/** The one Product UI projection artifact admitted by the application host. */
-export const RUSTY_APPLICATION_UI_PROJECTION_ARTIFACT =
-  'rusty.product.ui-projection' as const;
-
 export const RUSTY_APPLICATION_UI_PROJECTION_DEFAULT_STREAM = 'product.ui';
 
 export const RUSTY_APPLICATION_UI_PROJECTION_MAX_SUBSCRIBERS = 64;
 
 export interface RustyApplicationUiProjectionReadout {
-  readonly artifact: typeof RUSTY_APPLICATION_UI_PROJECTION_ARTIFACT;
   readonly expectedStream: string;
   readonly expectedContract: string;
   readonly runtime: RustyApplicationRuntimeIdentity | null;
@@ -158,10 +153,10 @@ export function createRustyApplicationUiProjection(
     if (!sameRuntime(runtime, envelope.runtime)) {
       reject('runtime_mismatch', 'UI projection envelope runtime does not match the bound runtime');
     }
-    // Output arrives in order on one stream, and Rust holds each product stream
-    // to an advancing sequence. A fresh output baseline replays the latest
-    // envelope, and a product that reopens a stream starts its sequence again,
-    // so the page admits whatever sequence it is given.
+    // Output arrives in order on one stream, and the Engine numbers each change
+    // it publishes on a product stream. A fresh output baseline replays the
+    // latest envelope, and a reopened stream starts its sequence again, so the
+    // page admits whatever sequence it is given.
     lastSequence = BigInt(envelope.sequence);
     // Every subscriber shares this value, so none may change it.
     current = Object.freeze({ ...envelope, value: deepFreeze(envelope.value) });
@@ -199,7 +194,6 @@ export function createRustyApplicationUiProjection(
     };
   };
   const readout = (): RustyApplicationUiProjectionReadout => Object.freeze({
-    artifact: RUSTY_APPLICATION_UI_PROJECTION_ARTIFACT,
     expectedStream,
     expectedContract,
     runtime,

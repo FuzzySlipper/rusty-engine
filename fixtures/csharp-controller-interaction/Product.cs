@@ -37,7 +37,6 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     private readonly CharacterControllerConfig characterConfig;
     private ulong sequence;
     private ulong sceneRevision;
-    private ulong uiSequence;
     private bool locked;
     private string viewpoint = "free";
     private int uses;
@@ -150,7 +149,7 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     }
     private void PublishContainerPanel()
     {
-        engine.Ui.PublishProjection(new UiProjection(uiStream,++uiSequence,UiValue()));
+        engine.Ui.PublishProjection(new UiProjection(uiStream,UiValue()));
     }
 
     // The panel's Take buttons claim container.take. While the Engine is

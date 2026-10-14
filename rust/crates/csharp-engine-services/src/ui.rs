@@ -85,7 +85,9 @@ pub(crate) struct RuntimeUiBridge {
 struct RuntimeUiStream {
     stream: String,
     contract: String,
-    last_sequence: Option<u64>,
+    /// The sequence of the last change published on this stream; the Engine
+    /// assigns the next one.
+    sequence: u64,
     /// The last committed product projection for this live stream. Delivery is
     /// deliberately separate: a new renderer attachment gets this copied
     /// baseline without asking the product to publish again.
@@ -268,7 +270,7 @@ impl RuntimeUiBridge {
             RuntimeUiStream {
                 stream,
                 contract,
-                last_sequence: None,
+                sequence: 0,
                 latest: None,
             },
         );
@@ -281,12 +283,6 @@ impl RuntimeUiBridge {
         &mut self,
         handle: NativeUiStreamHandle,
     ) -> Result<(), CsharpEngineServicesError> {
-        if handle.value == 0 {
-            return Err(CsharpEngineServicesError::new(
-                "CSHARP_UI_STREAM",
-                "C# UI stream handle was zero",
-            ));
-        }
         self.streams
             .remove(&handle.value)
             .map(|_| ())
@@ -326,31 +322,21 @@ impl RuntimeUiBridge {
                     "C# UI projection used an unopened stream handle",
                 )
             })?;
-        if stream
-            .last_sequence
-            .is_some_and(|sequence| projection.sequence <= sequence)
-        {
-            return Err(CsharpEngineServicesError::new(
-                "CSHARP_UI_SEQUENCE",
-                "C# UI sequence did not advance",
-            ));
-        }
         // SAFETY: pointer/null and range checks occur in the decoder before every slice.
         let value = unsafe { decode_structured_value(projection.value) }?;
-        // The browser already shows an unchanged value under the same binding;
-        // only the product's sequence advances. A rebind or baseline still
-        // sends `latest`.
+        // The browser already shows an unchanged value under the same binding,
+        // so it is not published again. A rebind or baseline still sends
+        // `latest`.
         if stream
             .latest
             .as_ref()
             .is_some_and(|latest| latest.runtime() == binding && *latest.value() == value)
         {
-            stream.last_sequence = Some(projection.sequence);
             return Ok(());
         }
         let envelope = RuntimeUiProjectionEnvelope::new(
             binding,
-            projection.sequence,
+            stream.sequence + 1,
             &stream.stream,
             &stream.contract,
             value,
@@ -358,7 +344,7 @@ impl RuntimeUiBridge {
         .map_err(|error| {
             CsharpEngineServicesError::new("CSHARP_UI_PROJECTION", error.to_string())
         })?;
-        stream.last_sequence = Some(projection.sequence);
+        stream.sequence = envelope.sequence();
         stream.latest = Some(envelope.clone());
         self.published.push(envelope);
         Ok(())
@@ -366,7 +352,7 @@ impl RuntimeUiBridge {
 
     /// Copies the current projection of every live UI stream for a fresh host
     /// attachment. Rebinding changes only the Engine-owned lifecycle fence;
-    /// it never advances product stream sequences or mutates retained state.
+    /// it never advances stream sequences or mutates retained state.
     pub(crate) fn snapshot_projections(
         &self,
         binding: RuntimeUiRuntimeBinding,
@@ -906,7 +892,6 @@ mod tests {
         }];
         let mut projection = NativeUiProjection {
             stream,
-            sequence: 1,
             value: NativeStructuredValue {
                 nodes: nodes.as_ptr(),
                 node_count: nodes.len(),
@@ -927,41 +912,40 @@ mod tests {
         let published = bridge.finish_call();
         assert_eq!(published.len(), 1);
         assert_eq!(published[0].runtime(), binding(13));
+        assert_eq!(
+            published[0].sequence(),
+            1,
+            "the Engine numbers a stream from 1"
+        );
 
-        projection.sequence = 2;
         bridge.begin_call(binding(14));
         assert_eq!(
             unsafe { (api.publish_projection)(api.context, &projection, &mut receipt) },
             ABI_OK,
-            "the next call accepts an advancing stream sequence"
+            "the same value under a new binding is published again"
         );
         let rebound = bridge.finish_call();
         assert_eq!(rebound.len(), 1);
         assert_eq!(rebound[0].runtime(), binding(14));
+        assert_eq!(rebound[0].sequence(), 2);
 
-        projection.sequence = 3;
-        bridge.begin_call(binding(14));
-        assert_eq!(
-            unsafe { (api.publish_projection)(api.context, &projection, &mut receipt) },
-            ABI_OK
-        );
-        assert!(
-            bridge.finish_call().is_empty(),
-            "an unchanged value under the same binding is not republished"
-        );
-        bridge.begin_call(binding(14));
-        assert_eq!(
-            unsafe { (api.publish_projection)(api.context, &projection, &mut receipt) },
-            0,
-            "the skipped publish still advanced the stream sequence"
-        );
-        bridge.finish_call();
+        for _ in 0..2 {
+            bridge.begin_call(binding(14));
+            assert_eq!(
+                unsafe { (api.publish_projection)(api.context, &projection, &mut receipt) },
+                ABI_OK,
+                "republishing an unchanged value is accepted"
+            );
+            assert!(
+                bridge.finish_call().is_empty(),
+                "an unchanged value under the same binding is not republished"
+            );
+        }
         let changed = [NativeStructuredValueNode {
             kind: NativeStructuredValueKind::Bool,
             bool_value: 1,
             ..nodes[0]
         }];
-        projection.sequence = 4;
         projection.value.nodes = changed.as_ptr();
         bridge.begin_call(binding(14));
         assert_eq!(
@@ -970,7 +954,11 @@ mod tests {
         );
         let published = bridge.finish_call();
         assert_eq!(published.len(), 1, "a changed value is published");
-        assert_eq!(published[0].sequence(), 4);
+        assert_eq!(
+            published[0].sequence(),
+            3,
+            "only published changes advance the stream sequence"
+        );
         projection.value.nodes = nodes.as_ptr();
 
         bridge.begin_call(binding(14));
@@ -982,6 +970,17 @@ mod tests {
             unsafe { (api.destroy_stream)(api.context, stream, std::ptr::null_mut()) },
             0,
             "duplicate close is rejected"
+        );
+        assert_eq!(
+            unsafe {
+                (api.destroy_stream)(
+                    api.context,
+                    NativeUiStreamHandle { value: 0 },
+                    std::ptr::null_mut(),
+                )
+            },
+            0,
+            "the zero handle is never open"
         );
         bridge.finish_call();
 
@@ -1027,7 +1026,6 @@ mod tests {
         }];
         let mut projection = NativeUiProjection {
             stream,
-            sequence: 1,
             value: NativeStructuredValue {
                 nodes: nodes.as_ptr(),
                 node_count: nodes.len(),
@@ -1046,7 +1044,12 @@ mod tests {
         );
         bridge.finish_call();
 
-        projection.sequence = 2;
+        let changed = [NativeStructuredValueNode {
+            kind: NativeStructuredValueKind::Bool,
+            bool_value: 1,
+            ..nodes[0]
+        }];
+        projection.value.nodes = changed.as_ptr();
         bridge.begin_call(binding(14));
         assert_eq!(
             unsafe { (api.publish_projection)(api.context, &projection, &mut receipt) },
@@ -1059,5 +1062,84 @@ mod tests {
         assert_eq!(snapshot.len(), 1);
         assert_eq!(snapshot[0].runtime(), binding(99));
         assert_eq!(snapshot[0].sequence(), 2);
+    }
+
+    fn node(
+        kind: NativeStructuredValueKind,
+        first_edge: u32,
+        child_count: u32,
+    ) -> NativeStructuredValueNode {
+        NativeStructuredValueNode {
+            kind,
+            bool_value: 0,
+            number_value: 0.0,
+            key_offset: 0,
+            key_len: 0,
+            text_offset: 0,
+            text_len: 0,
+            first_edge,
+            child_count,
+        }
+    }
+
+    fn decode(
+        nodes: &[NativeStructuredValueNode],
+        edges: &[u32],
+    ) -> Result<Value, CsharpEngineServicesError> {
+        // SAFETY: the test's slices outlive the synchronous decode.
+        unsafe {
+            decode_structured_value(NativeStructuredValue {
+                nodes: nodes.as_ptr(),
+                node_count: nodes.len(),
+                edges: edges.as_ptr(),
+                edge_count: edges.len(),
+                root: 0,
+                utf8: std::ptr::null(),
+                utf8_len: 0,
+            })
+        }
+    }
+
+    #[test]
+    fn short_cycles_in_a_wide_arena_are_refused() {
+        const NODES: usize = 100_000;
+        let mut nodes = vec![node(NativeStructuredValueKind::Null, 0, 0); NODES];
+        nodes[0] = node(NativeStructuredValueKind::Array, 0, 1);
+        let error = decode(&nodes, &[0]).expect_err("a root that holds itself is a cycle");
+        assert_eq!(error.code(), "CSHARP_UI_CYCLE");
+
+        nodes[0] = node(NativeStructuredValueKind::Array, 0, 1);
+        nodes[1] = node(NativeStructuredValueKind::Array, 1, 1);
+        let error = decode(&nodes, &[1, 0]).expect_err("root and node 1 hold each other");
+        assert_eq!(error.code(), "CSHARP_UI_CYCLE");
+    }
+
+    #[test]
+    fn a_child_shared_by_two_parents_decodes_and_children_may_precede_parents() {
+        // Node 0 is the shared leaf, written before the parents that hold it.
+        let nodes = [
+            NativeStructuredValueNode {
+                number_value: 7.0,
+                ..node(NativeStructuredValueKind::Number, 0, 0)
+            },
+            node(NativeStructuredValueKind::Array, 0, 1),
+            node(NativeStructuredValueKind::Array, 1, 1),
+            node(NativeStructuredValueKind::Array, 2, 2),
+        ];
+        let edges = [0, 0, 1, 2];
+        // SAFETY: the test's slices outlive the synchronous decode.
+        let value = unsafe {
+            decode_structured_value(NativeStructuredValue {
+                nodes: nodes.as_ptr(),
+                node_count: nodes.len(),
+                edges: edges.as_ptr(),
+                edge_count: edges.len(),
+                root: 3,
+                utf8: std::ptr::null(),
+                utf8_len: 0,
+            })
+        }
+        .expect("a shared child is not a cycle");
+        assert_eq!(value, serde_json::json!([[7.0], [7.0]]));
     }
 }
