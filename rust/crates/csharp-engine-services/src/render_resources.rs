@@ -1682,7 +1682,9 @@ fn pack_animated_glb_closure(
 /// computed: the descriptor's `resource` and `contentHash` are replaced, so a
 /// stale value written by a tool cannot name another mesh's resource.
 /// Admission checks the descriptor and the resource header against the bytes,
-/// not the streams, which the renderer reads when it draws.
+/// and reads the index stream once so every index names a vertex: CPU users of
+/// the streams (ghost bounds, probe voxelization) index positions by them. The
+/// other streams are not read.
 const STATIC_MESH_MAGIC: &[u8; 8] = b"RSTATMSH";
 
 type DecodedStaticMesh = (StaticMeshAsset, MeshPayloadDescriptor, PackedMeshResource);
@@ -1712,6 +1714,7 @@ fn decode_static_mesh(
         resource: identity,
         content_hash,
         byte_length,
+        indices_byte_offset,
         ..
     } = &mut asset.payload.source
     else {
@@ -1725,6 +1728,7 @@ fn decode_static_mesh(
             resource.len()
         )));
     }
+    let indices_start = *indices_byte_offset as usize;
     *identity = format!("mesh-resource/{}", &file_hash["sha256:".len()..]);
     *content_hash = file_hash;
     let packed = PackedMeshResource {
@@ -1736,6 +1740,21 @@ fn decode_static_mesh(
         .payload
         .validate()
         .map_err(|error| pack_error(format!("{error:?}")))?;
+    // The validated descriptor keeps the index stream inside the resource.
+    let layout = &asset.payload.layout;
+    let indices = &resource[indices_start..indices_start + layout.index_count as usize * 4];
+    if let Some(index) = indices
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|bytes| u32::from_le_bytes(*bytes))
+        .find(|index| *index >= layout.vertex_count)
+    {
+        return Err(pack_error(format!(
+            "binary static mesh index {index} is outside its {} vertices",
+            layout.vertex_count
+        )));
+    }
     let payload = asset.payload.clone();
     Ok((asset, payload, packed))
 }
@@ -2140,11 +2159,16 @@ pub(crate) mod tests {
             refused(binary[..binary.len() - 4].to_vec()),
             "CSHARP_STATIC_MESH_PACK"
         );
-        // The streams are not decoded on admission: a changed stream is
-        // admitted, under the changed file's identity.
+        // An index outside the vertices is refused: index 2 becomes 16777218.
+        let mut outside = binary.clone();
+        *outside.last_mut().unwrap() ^= 1;
+        assert_eq!(refused(outside), "CSHARP_STATIC_MESH_PACK");
+        // A changed stream that stays in range is admitted, under the changed
+        // file's identity: index 2 becomes 1.
         let (_, _, original) = import_static_mesh(binary.clone()).unwrap();
         let mut changed = binary;
-        *changed.last_mut().unwrap() ^= 1;
+        let last_index = changed.len() - 4;
+        changed[last_index] ^= 3;
         let (_, _, admitted) = import_static_mesh(changed.clone()).unwrap();
         assert_ne!(admitted.identity(), original.identity());
         assert_eq!(

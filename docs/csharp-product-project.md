@@ -606,8 +606,9 @@ The packed mesh resource is the Engine's `.rmesh` body: an 8-byte magic
 colors; encoding `packedStreamsLeV1`/`V2`/`V3`), its total byte length and its
 payload count (1) as u32, then f32 positions, normals, UVs and colors and u32
 indices. The admitted mesh and its bytes are the JSON form's. Admission reads the
-descriptor and the resource header against the bytes (`CSHARP_STATIC_MESH_PACK`
-when they disagree), not the streams. The Engine names the resource by the
+descriptor and the resource header against the bytes and checks that every
+index names a vertex (`CSHARP_STATIC_MESH_PACK` otherwise); it does not read the
+other streams. The Engine names the resource by the
 file's own content identity, so the descriptor's `resource` and `contentHash`
 must be present but their values are ignored: a stale hash from a tool cannot
 make two different files share a resource. A town-sized mesh of 100,000
