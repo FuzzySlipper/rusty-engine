@@ -257,6 +257,17 @@ impl StaticMeshCollisionProjection {
         self.assets.len()
     }
 
+    /// The instances baked from one resident asset.
+    pub(crate) fn asset_users(
+        &self,
+        id: StaticMeshAssetId,
+    ) -> impl Iterator<Item = StaticMeshInstanceId> + '_ {
+        self.assets
+            .get(&id)
+            .into_iter()
+            .flat_map(|asset| asset.users.iter().copied())
+    }
+
     pub fn instance_count(&self) -> usize {
         self.instances.len()
     }

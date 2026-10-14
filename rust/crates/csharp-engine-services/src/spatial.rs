@@ -1139,17 +1139,22 @@ impl RuntimeSpatialBridge {
                         .filter(|(id, _)| !leaving.contains(id))
                         .map(|(_, placed)| placed)
                 };
-                let in_use: BTreeSet<StaticMeshAssetId> = remaining()
-                    .filter_map(|placed| placed.asset)
-                    .chain(base_asset.filter(|_| !base_leaves))
-                    .chain(instances.iter().map(|instance| instance.asset))
+                // Whatever else uses a leaving asset after the delta, an
+                // artifact's instance or the product's own, keeps it.
+                let replaced: BTreeSet<StaticMeshInstanceId> = removed
+                    .into_iter()
+                    .flat_map(|(_, removed_instances)| removed_instances.iter().copied())
+                    .map(StaticMeshInstanceId)
+                    .chain(instances.iter().map(|instance| instance.id))
                     .collect();
                 released_assets.extend(
                     leaving
                         .iter()
                         .filter_map(|id| session.content.placed[id].asset)
                         .chain(base_asset.filter(|_| base_leaves))
-                        .filter(|asset| !in_use.contains(asset)),
+                        .filter(|asset| {
+                            !asset_used_after(&session.scene, *asset, &replaced, &instances)
+                        }),
                 );
                 Some(compose_content_navigation(
                     current.projection.grid(),
@@ -1494,7 +1499,7 @@ impl RuntimeSpatialBridge {
                 .map(|(id, placed)| (*id, placed))
                 .collect();
             // An arriving id replaces whatever collision instance it named.
-            let removed_instances: Vec<StaticMeshInstanceId> = removed
+            let removed_instances: BTreeSet<StaticMeshInstanceId> = removed
                 .iter()
                 .filter(|id| session.content.placed.contains_key(id))
                 .chain(arrivals.iter().map(|(placement, ..)| &placement.id))
@@ -1524,8 +1529,9 @@ impl RuntimeSpatialBridge {
             }
             placed.extend(arriving.iter().map(|(id, placed)| (*id, placed)));
 
-            // Assets: add the ones no resident instance has, drop the ones
-            // nothing uses any more.
+            // Assets: add the ones no resident artifact has, drop the ones
+            // no collision instance, an artifact's or the product's own, uses
+            // any more.
             let base_asset = session.content.base.as_ref().map(|(identity, _)| {
                 StaticMeshAssetId(spatial_content_asset_id(identity.content_sha256))
             });
@@ -1549,8 +1555,6 @@ impl RuntimeSpatialBridge {
                     }
                 }
             }
-            let removed_assets: Vec<StaticMeshAssetId> =
-                resident.difference(&in_use).copied().collect();
             let instances: Vec<StaticMeshColliderInstance> = arriving
                 .iter()
                 .filter_map(|(id, placed)| {
@@ -1575,6 +1579,13 @@ impl RuntimeSpatialBridge {
                             ..StaticMeshTransform::IDENTITY
                         },
                     })
+                })
+                .collect();
+            let removed_assets: Vec<StaticMeshAssetId> = resident
+                .difference(&in_use)
+                .copied()
+                .filter(|asset| {
+                    !asset_used_after(&session.scene, *asset, &removed_instances, &instances)
                 })
                 .collect();
 
@@ -5526,6 +5537,20 @@ fn content_navigation_cells(artifact: &SpatialContentArtifact) -> ContentNavigat
             })
             .collect(),
     }
+}
+
+/// Whether a collision instance still uses `asset` after a residency delta
+/// that removes or replaces the `replaced` instances and upserts `instances`.
+fn asset_used_after(
+    scene: &VoxelCollisionScene,
+    asset: StaticMeshAssetId,
+    replaced: &BTreeSet<StaticMeshInstanceId>,
+    instances: &[StaticMeshColliderInstance],
+) -> bool {
+    scene
+        .static_mesh_asset_users(asset)
+        .any(|id| !replaced.contains(&id))
+        || instances.iter().any(|instance| instance.asset == asset)
 }
 
 /// The composition's navigation at `revision`: one planar projection over the

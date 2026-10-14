@@ -1235,12 +1235,14 @@ SpatialContentArtifactResidencyReceipt resident = engine.Spatial.ApplyContentArt
   replaces a placed artifact's instance, or the base artifact's, takes that
   artifact out of the composition in the same call: navigation is recomposed
   on the same grid without its cells under a new navigation revision, and its
-  collider asset is released if no other artifact uses it. Without a base,
-  `ReadContentArtifact` reports nothing present and the placements remain.
+  collider asset is released if no other collision instance uses it. Without a
+  base, `ReadContentArtifact` reports nothing present and the placements
+  remain.
 - **Refusals.** A malformed artifact or a non-finite translation is refused
   and changes nothing.
 - **Lifetime.** Placed artifacts with the same content share one collider
-  asset, released with the last of them. The content references are read
+  asset, released with the last of them unless an instance added through
+  `ApplyCollisionResidency` still uses it. The content references are read
   during the call and can be disposed afterwards.
 
 Products own generation recipes and artifact semantics: required connected

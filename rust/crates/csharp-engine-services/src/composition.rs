@@ -3688,37 +3688,73 @@ mod tests {
 
         // Collision residency that removes the base artifact's instance takes
         // the base out of the composition: its cells leave navigation in the
-        // same call and its asset is released.
-        let base_instance = [crate::spatial::spatial_content_asset_id(
-            receipt.content_sha256,
-        )];
-        let mut collision = NativeCollisionReplaceReceipt::default();
-        assert_eq!(
-            unsafe {
-                (api.spatial.apply_collision_residency)(
-                    api.spatial.context,
-                    &NativeCollisionResidencyRequest {
-                        session,
-                        assets: std::ptr::null(),
-                        assets_len: 0,
-                        vertices: std::ptr::null(),
-                        vertices_len: 0,
-                        triangles: std::ptr::null(),
-                        triangles_len: 0,
-                        instances: std::ptr::null(),
-                        instances_len: 0,
-                        removed_assets: std::ptr::null(),
-                        removed_assets_len: 0,
-                        removed_instances: base_instance.as_ptr(),
-                        removed_instances_len: base_instance.len(),
-                    },
-                    &mut collision,
-                    &mut error,
-                )
+        // same call. Its asset stays while an ordinary instance uses it.
+        let base_asset = crate::spatial::spatial_content_asset_id(receipt.content_sha256);
+        let collision_residency = |instances: &[NativeStaticMeshInstance],
+                                   removed_instances: &[u64]| {
+            let mut collision = NativeCollisionReplaceReceipt::default();
+            let mut error: NativeOperationErrorReceipt = unsafe { std::mem::zeroed() };
+            assert_eq!(
+                unsafe {
+                    (api.spatial.apply_collision_residency)(
+                        api.spatial.context,
+                        &NativeCollisionResidencyRequest {
+                            session,
+                            assets: std::ptr::null(),
+                            assets_len: 0,
+                            vertices: std::ptr::null(),
+                            vertices_len: 0,
+                            triangles: std::ptr::null(),
+                            triangles_len: 0,
+                            instances: instances.as_ptr(),
+                            instances_len: instances.len(),
+                            removed_assets: std::ptr::null(),
+                            removed_assets_len: 0,
+                            removed_instances: removed_instances.as_ptr(),
+                            removed_instances_len: removed_instances.len(),
+                        },
+                        &mut collision,
+                        &mut error,
+                    )
+                },
+                ABI_OK
+            );
+            collision
+        };
+        let product_copy = [NativeStaticMeshInstance {
+            id: 77,
+            asset: base_asset,
+            transform: NativeTransform {
+                translation: NativeVec3 {
+                    x: 10.0,
+                    y: 0.0,
+                    z: 0.0,
+                },
+                rotation: NativeQuat {
+                    x: 0.0,
+                    y: 0.0,
+                    z: 0.0,
+                    w: 1.0,
+                },
+                scale: NativeVec3 {
+                    x: 1.0,
+                    y: 1.0,
+                    z: 1.0,
+                },
             },
-            ABI_OK
-        );
-        assert_eq!((collision.asset_count, collision.instance_count), (0, 0));
+        }];
+        collision_residency(&product_copy, &[]);
+        let collision = collision_residency(&[], &[base_asset]);
+        assert_eq!((collision.asset_count, collision.instance_count), (1, 1));
+        match services.spatial.sessions[&session.value]
+            .scene
+            .raycast_world([10.4, 5.0, 0.4], [0.0, -1.0, 0.0], 50.0)
+        {
+            Some(engine_spatial::SpatialCollisionHit::StaticMesh(hit)) => {
+                assert_eq!((hit.instance.0, hit.asset.0), (77, base_asset));
+            }
+            other => panic!("the base asset's copy was not hit: {other:?}"),
+        }
         let mut removed = NativeNavigationStepResult::default();
         assert_eq!(
             unsafe {
@@ -4371,6 +4407,68 @@ mod tests {
             NativeNavigationPathOutcome::StartNotWalkable
         );
         // Reload it under the same identity.
+        let receipt = residency(&[translated(1, west, 0, translated_west)], &[]).unwrap();
+        assert_eq!(
+            (receipt.instance_count, receipt.navigation_cell_count),
+            (2, 5)
+        );
+        assert!(floor_below(&services, [1.5, 0.5]));
+
+        // An ordinary instance of the west artifact's asset keeps the asset
+        // when the artifact leaves, through collision or content residency.
+        let west_asset = services.spatial.sessions[&session.value]
+            .scene
+            .static_mesh_instance(engine_spatial::StaticMeshInstanceId(1))
+            .unwrap()
+            .0;
+        let product_copy = [NativeStaticMeshInstance {
+            id: 600,
+            asset: west_asset.0,
+            transform: NativeTransform {
+                translation: NativeVec3 {
+                    x: 30.0,
+                    y: 0.0,
+                    z: 0.0,
+                },
+                ..identity
+            },
+        }];
+        let copy_hit = |services: &EngineServiceSet| match services.spatial.sessions[&session.value]
+            .scene
+            .raycast_world([30.5, 5.0, 0.5], [0.0, -1.0, 0.0], 50.0)
+        {
+            Some(engine_spatial::SpatialCollisionHit::StaticMesh(hit)) => {
+                Some((hit.instance.0, hit.asset))
+            }
+            _ => None,
+        };
+        collision_residency(&[], &product_copy, &[]);
+        assert_eq!(copy_hit(&services), Some((600, west_asset)));
+        let before = step([0.5, 0.0, 0.5], [4.5, 0.0, 0.5]);
+        assert_eq!(before.outcome, NativeNavigationPathOutcome::Reached);
+        let receipt = collision_residency(&[], &[], &[1]);
+        assert_eq!(
+            (receipt.asset_count, receipt.instance_count),
+            (3, 3),
+            "terrain, east and the west asset its copy still uses"
+        );
+        assert!(!has_instance(&services, 1) && !floor_below(&services, [1.5, 0.5]));
+        assert_eq!(copy_hit(&services), Some((600, west_asset)));
+        let removed = step([0.5, 0.0, 0.5], [4.5, 0.0, 0.5]);
+        assert_eq!(
+            removed.outcome,
+            NativeNavigationPathOutcome::StartNotWalkable
+        );
+        assert!(removed.navigation_revision > before.navigation_revision);
+        residency(&[translated(1, west, 0, translated_west)], &[]).unwrap();
+        let receipt = residency(&[], &[1]).unwrap();
+        assert_eq!(
+            (receipt.instance_count, receipt.navigation_cell_count),
+            (1, 2)
+        );
+        assert!(!has_instance(&services, 1) && !floor_below(&services, [1.5, 0.5]));
+        assert_eq!(copy_hit(&services), Some((600, west_asset)));
+        collision_residency(&[], &[], &[600]);
         let receipt = residency(&[translated(1, west, 0, translated_west)], &[]).unwrap();
         assert_eq!(
             (receipt.instance_count, receipt.navigation_cell_count),
