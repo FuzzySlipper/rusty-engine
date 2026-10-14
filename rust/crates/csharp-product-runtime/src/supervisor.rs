@@ -71,15 +71,7 @@ pub(crate) fn run(args: Arguments) -> Result<std::process::ExitCode, String> {
             std::process::exit(BIND_FAILURE_EXIT_CODE);
         }
     };
-    let address = listener
-        .local_addr()
-        .map_err(|error| format!("PRODUCT_HOST_ADDRESS: {error}"))?;
-    let unavailable = Unavailable::start(
-        listener
-            .try_clone()
-            .map_err(|error| format!("PRODUCT_HOST_BIND: {error}"))?,
-    )?;
-    let mut launch = RuntimeLaunch {
+    let launch = RuntimeLaunch {
         executable: env::current_exe().map_err(|error| error.to_string())?,
         listener: platform::shared_listener(&listener)?,
         product_directory: args.product_path.clone().ok_or(
@@ -99,12 +91,40 @@ pub(crate) fn run(args: Arguments) -> Result<std::process::ExitCode, String> {
             "RUSTY_HOST debugger: runtime startup deadline is disabled; source restaging still replaces the runtime"
         );
     }
+    supervise(
+        launch,
+        &listener,
+        &termination,
+        &diagnostics,
+        args.supervised,
+        args.headless.then_some(args.chromium.as_deref()),
+    )
+}
+
+/// Runs runtimes from `launch` on `listener` until the host stops.
+/// `headless` holds the `--chromium` choice when a headless page is opened.
+fn supervise(
+    mut launch: RuntimeLaunch,
+    listener: &TcpListener,
+    termination: &AtomicBool,
+    diagnostics: &ProductHostLog,
+    supervised: bool,
+    headless: Option<Option<&Path>>,
+) -> Result<std::process::ExitCode, String> {
+    let address = listener
+        .local_addr()
+        .map_err(|error| format!("PRODUCT_HOST_ADDRESS: {error}"))?;
+    let unavailable = Unavailable::start(
+        listener
+            .try_clone()
+            .map_err(|error| format!("PRODUCT_HOST_BIND: {error}"))?,
+    )?;
     let mut runtime = Some(launch.start(&unavailable)?);
     // Until the first runtime serves, a failed start stops the supervisor.
     // Later ones, and any restaged Product, pause for a restage instead.
     let mut initial_start = true;
     let mut headless_browser = None;
-    let commands = args.supervised.then(read_supervisor_commands);
+    let commands = supervised.then(read_supervisor_commands);
     // One automatic recovery attempt is intentionally small. A repeated
     // failure pauses until source restaging supplies a new product; no
     // request is replayed in either case.
@@ -134,19 +154,19 @@ pub(crate) fn run(args: Arguments) -> Result<std::process::ExitCode, String> {
                 if initial_start {
                     return Err(error);
                 }
-                publish_supervisor_diagnostic(&diagnostics, "PRODUCT_HOST_RUNTIME_START", &error);
+                publish_supervisor_diagnostic(diagnostics, "PRODUCT_HOST_RUNTIME_START", &error);
                 pause(
-                    &diagnostics,
+                    diagnostics,
                     &unavailable,
                     "the runtime could not start; waiting for source restage",
                 );
                 automatic_restart_used = true;
             } else if starting.serving {
                 initial_start = false;
-                if args.headless && headless_browser.is_none() {
+                if let Some(chromium) = headless.filter(|_| headless_browser.is_none()) {
                     headless_browser = Some(headless_browser::HeadlessBrowser::launch(
                         &browser_url(address),
-                        args.chromium.as_deref(),
+                        chromium,
                     )?);
                 }
             }
@@ -157,8 +177,8 @@ pub(crate) fn run(args: Arguments) -> Result<std::process::ExitCode, String> {
                 break "product-stopped";
             }
             let detail = format!("runtime exited unexpectedly ({status})");
-            publish_supervisor_diagnostic(&diagnostics, "PRODUCT_HOST_RUNTIME_EXIT", &detail);
-            if !args.supervised {
+            publish_supervisor_diagnostic(diagnostics, "PRODUCT_HOST_RUNTIME_EXIT", &detail);
+            if !supervised {
                 unavailable.stop();
                 if let Some(browser) = headless_browser {
                     let _ = browser.shutdown();
@@ -169,13 +189,13 @@ pub(crate) fn run(args: Arguments) -> Result<std::process::ExitCode, String> {
             }
             if automatic_restart_used {
                 pause(
-                    &diagnostics,
+                    diagnostics,
                     &unavailable,
                     "the runtime exhausted its one automatic restart; waiting for source restage",
                 );
             } else {
                 automatic_restart_used = true;
-                runtime = start_or_pause(&mut launch, &unavailable, &diagnostics);
+                runtime = start_or_pause(&mut launch, &unavailable, diagnostics);
             }
         }
         // Nothing reopens the page, so a browser that ends, during startup
@@ -185,7 +205,7 @@ pub(crate) fn run(args: Arguments) -> Result<std::process::ExitCode, String> {
             .and_then(headless_browser::HeadlessBrowser::exited)
         {
             let detail = format!("the headless browser exited ({status})");
-            publish_supervisor_diagnostic(&diagnostics, "RUSTY_HEADLESS_BROWSER_EXIT", &detail);
+            publish_supervisor_diagnostic(diagnostics, "RUSTY_HEADLESS_BROWSER_EXIT", &detail);
             unavailable.stop();
             if let Some(runtime) = runtime {
                 let _ = runtime.stop();
@@ -205,7 +225,7 @@ pub(crate) fn run(args: Arguments) -> Result<std::process::ExitCode, String> {
             Ok(Ok(SupervisorCommand::ReplaceRuntime { product_directory })) => {
                 if !product_directory.is_absolute() {
                     publish_supervisor_diagnostic(
-                        &diagnostics,
+                        diagnostics,
                         "PRODUCT_HOST_SUPERVISOR_REPLACE",
                         "productDirectory must be absolute",
                     );
@@ -216,14 +236,14 @@ pub(crate) fn run(args: Arguments) -> Result<std::process::ExitCode, String> {
                 if let Some(previous) = runtime.take() {
                     if let Err(error) = previous.stop() {
                         publish_supervisor_diagnostic(
-                            &diagnostics,
+                            diagnostics,
                             "PRODUCT_HOST_RUNTIME_STOP",
                             &error,
                         );
                     }
                 }
                 launch.product_directory = product_directory;
-                runtime = start_or_pause(&mut launch, &unavailable, &diagnostics);
+                runtime = start_or_pause(&mut launch, &unavailable, diagnostics);
                 if runtime.is_none() {
                     automatic_restart_used = true;
                 }
@@ -232,11 +252,7 @@ pub(crate) fn run(args: Arguments) -> Result<std::process::ExitCode, String> {
             // starts, so there is nothing to forward.
             Ok(Ok(SupervisorCommand::ReloadAssets)) => {
                 if let Some(Err(error)) = runtime.as_mut().map(RuntimeProcess::reload_assets) {
-                    publish_supervisor_diagnostic(
-                        &diagnostics,
-                        "PRODUCT_HOST_ASSET_RELOAD",
-                        &error,
-                    );
+                    publish_supervisor_diagnostic(diagnostics, "PRODUCT_HOST_ASSET_RELOAD", &error);
                 }
             }
             Ok(Ok(SupervisorCommand::ReloadContent { paths })) => {
@@ -245,7 +261,7 @@ pub(crate) fn run(args: Arguments) -> Result<std::process::ExitCode, String> {
                     .map(|runtime| runtime.reload_content(paths))
                 {
                     publish_supervisor_diagnostic(
-                        &diagnostics,
+                        diagnostics,
                         "PRODUCT_HOST_CONTENT_RELOAD",
                         &error,
                     );
@@ -254,7 +270,7 @@ pub(crate) fn run(args: Arguments) -> Result<std::process::ExitCode, String> {
             Ok(Err(error)) if error == SUPERVISOR_EOF => break "supervisor-stdin-closed",
             Ok(Err(error)) => {
                 publish_supervisor_diagnostic(
-                    &diagnostics,
+                    diagnostics,
                     "PRODUCT_HOST_SUPERVISOR_CONTROL",
                     &error,
                 );
@@ -273,7 +289,7 @@ pub(crate) fn run(args: Arguments) -> Result<std::process::ExitCode, String> {
     browser_shutdown?;
     runtime_shutdown?;
     // `rusty dev` reads the same code, so it stops rather than restarting.
-    Ok(if reason == "product-stopped" && args.supervised {
+    Ok(if reason == "product-stopped" && supervised {
         std::process::ExitCode::from(crate::PRODUCT_STOPPED_EXIT_CODE)
     } else {
         std::process::ExitCode::SUCCESS
@@ -815,6 +831,79 @@ mod tests {
                 .windows(2)
                 .any(|pair| pair == ["--cef-switch", "remote-debugging-port=9333"]));
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_headless_browser_that_ends_after_launch_stops_the_host() {
+        use std::os::unix::fs::PermissionsExt;
+        let scripts = tempfile::tempdir().unwrap();
+        let script = |name: &str, body: &str| {
+            let path = scripts.path().join(name);
+            std::fs::write(&path, format!("#!/bin/sh\n{body}")).unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+            path
+        };
+        let runtime_stopped = scripts.path().join("runtime-stopped");
+        let profile_record = scripts.path().join("profile");
+        // A runtime that serves at once and stops cleanly when stdin closes.
+        let runtime = script(
+            "runtime",
+            &format!(
+                "echo '{RUNTIME_READY_LINE}'\ncat >/dev/null\ntouch '{}'\n",
+                runtime_stopped.display()
+            ),
+        );
+        // A browser that ends after the startup window a fixed wait watched.
+        let chromium = script(
+            "chromium",
+            &format!(
+                "for a in \"$@\"; do case \"$a\" in --user-data-dir=*) \
+                 echo \"${{a#--user-data-dir=}}\" >'{}';; esac; done\nsleep 0.3\nexit 1\n",
+                profile_record.display()
+            ),
+        );
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let launch = RuntimeLaunch {
+            executable: runtime,
+            listener: platform::shared_listener(&listener).unwrap(),
+            product_directory: PathBuf::from("/tmp/product"),
+            loader: ProductLoader::CoreClr,
+            next_runtime_instance_id: 1,
+            persistence_root: None,
+            forwarded: Vec::new(),
+            startup_timeout: Some(Duration::from_secs(10)),
+        };
+        let termination = Arc::new(AtomicBool::new(false));
+        let (done, result) = mpsc::channel();
+        let supervisor = {
+            let termination = Arc::clone(&termination);
+            thread::spawn(move || {
+                let diagnostics =
+                    ProductHostLog::new(product_host::ProductHostLogConfig::default()).unwrap();
+                let _ = done.send(supervise(
+                    launch,
+                    &listener,
+                    &termination,
+                    &diagnostics,
+                    false,
+                    Some(Some(&chromium)),
+                ));
+            })
+        };
+        // A host that ignores the exit keeps running; stop it to fail.
+        let outcome = result.recv_timeout(Duration::from_secs(10));
+        if outcome.is_err() {
+            termination.store(true, Ordering::Relaxed);
+        }
+        supervisor.join().unwrap();
+        let error = outcome
+            .expect("the host kept running after its browser exited")
+            .expect_err("the host stopped cleanly instead of reporting the browser exit");
+        assert!(error.starts_with("RUSTY_HEADLESS_BROWSER_EXIT"), "{error}");
+        assert!(runtime_stopped.exists(), "the runtime was not stopped");
+        let profile = std::fs::read_to_string(&profile_record).unwrap();
+        assert!(!Path::new(profile.trim_end()).exists(), "profile kept");
     }
 
     #[test]

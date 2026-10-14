@@ -306,33 +306,4 @@ mod tests {
         assert!(unrelated.exists());
         fs::remove_dir_all(&base).unwrap();
     }
-
-    #[test]
-    fn a_browser_that_ends_after_launch_reports_its_exit_and_shutdown_removes_its_profile() {
-        use std::os::unix::fs::PermissionsExt;
-        let scripts = tempfile::tempdir().unwrap();
-        let chromium = scripts.path().join("chromium");
-        // Ends after the startup window a fixed wait would have watched.
-        fs::write(&chromium, "#!/bin/sh\nsleep 0.3\nexit 1\n").unwrap();
-        fs::set_permissions(&chromium, fs::Permissions::from_mode(0o755)).unwrap();
-
-        let mut browser = HeadlessBrowser::launch("http://127.0.0.1:9/", Some(&chromium)).unwrap();
-        let profile = browser.profile.clone();
-        assert!(profile.is_dir());
-        assert!(browser.exited().is_none(), "the browser is still running");
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-        let status = loop {
-            if let Some(status) = browser.exited() {
-                break status;
-            }
-            assert!(
-                std::time::Instant::now() < deadline,
-                "the exit was never observed"
-            );
-            std::thread::sleep(std::time::Duration::from_millis(20));
-        };
-        assert_eq!(status.code(), Some(1));
-        browser.shutdown().unwrap();
-        assert!(!profile.exists());
-    }
 }
