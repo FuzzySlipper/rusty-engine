@@ -64,7 +64,7 @@ fn admit_bytes(name: &str, bytes: &[u8]) -> (AnimatedMeshAsset, Vec<u8>) {
     let imported = imported
         .assets
         .unwrap_or_else(|| panic!("{name} is admitted: {:?}", imported.diagnostics));
-    (imported.animated_mesh, imported.runtime_resource_bytes)
+    (imported.animated_mesh, bytes.to_vec())
 }
 
 fn hold(resources: &mut Resources, asset: &AnimatedMeshAsset, bytes: Vec<u8>) {

@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use crate::import::MAX_SOURCE_STREAM_COUNT;
 use core_assets::{AssetId, AssetKind};
 use serde::{Deserialize, Serialize};
@@ -28,12 +30,13 @@ pub struct MeshSourceRef {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct MeshSourceImportRequest {
+pub struct MeshSourceImportRequest<'a> {
     pub source_asset_id: String,
     pub asset_version: u64,
     pub source_path: String,
     pub format: MeshSourceFormat,
-    pub source_bytes: Vec<u8>,
+    /// Borrowed by a caller that keeps the source; owned when decoded.
+    pub source_bytes: Cow<'a, [u8]>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub expected_source_sha256: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -141,7 +144,7 @@ pub fn source_sha256(bytes: &[u8]) -> String {
 }
 
 pub fn import_mesh_source(
-    request: &MeshSourceImportRequest,
+    request: &MeshSourceImportRequest<'_>,
 ) -> Result<ImportedMeshSource, ConversionError> {
     validate_import_request(request, AssetKind::StaticMesh)?;
     import_static_mesh_source(request, source_sha256(&request.source_bytes))
@@ -150,7 +153,7 @@ pub fn import_mesh_source(
 /// [`import_mesh_source`] for a caller that already hashed
 /// `request.source_bytes`: `source_hash` is their [`source_sha256`].
 pub fn import_mesh_source_with_hash(
-    request: &MeshSourceImportRequest,
+    request: &MeshSourceImportRequest<'_>,
     source_hash: String,
 ) -> Result<ImportedMeshSource, ConversionError> {
     validate_import_request(request, AssetKind::StaticMesh)?;
@@ -158,7 +161,7 @@ pub fn import_mesh_source_with_hash(
 }
 
 fn import_static_mesh_source(
-    request: &MeshSourceImportRequest,
+    request: &MeshSourceImportRequest<'_>,
     source_hash: String,
 ) -> Result<ImportedMeshSource, ConversionError> {
     validate_expected_source_hash(request, &source_hash)?;
@@ -190,7 +193,7 @@ fn import_static_mesh_source(
 }
 
 pub fn import_animated_mesh_source(
-    request: &MeshSourceImportRequest,
+    request: &MeshSourceImportRequest<'_>,
 ) -> Result<ImportedAnimatedMeshSource, ConversionError> {
     validate_import_request(request, AssetKind::AnimatedMesh)?;
     import_animated_mesh_source_with(request, source_sha256(&request.source_bytes), false)
@@ -201,7 +204,7 @@ pub fn import_animated_mesh_source(
 /// voxel conversion and animation sampling remain strict. `source_hash` is the
 /// caller's [`source_sha256`] of `request.source_bytes`.
 pub fn import_animated_mesh_source_for_visual_metadata(
-    request: &MeshSourceImportRequest,
+    request: &MeshSourceImportRequest<'_>,
     source_hash: String,
 ) -> Result<ImportedAnimatedMeshSource, ConversionError> {
     validate_import_request(request, AssetKind::AnimatedMesh)?;
@@ -209,7 +212,7 @@ pub fn import_animated_mesh_source_for_visual_metadata(
 }
 
 fn import_animated_mesh_source_with(
-    request: &MeshSourceImportRequest,
+    request: &MeshSourceImportRequest<'_>,
     source_hash: String,
     visual_metadata: bool,
 ) -> Result<ImportedAnimatedMeshSource, ConversionError> {
@@ -362,7 +365,7 @@ fn select_primitive_group(
 
 pub fn decode_mesh_source_import_request(
     input: &str,
-) -> Result<MeshSourceImportRequest, ConversionError> {
+) -> Result<MeshSourceImportRequest<'static>, ConversionError> {
     let mut deserializer = serde_json::Deserializer::from_str(input);
     let request = serde_path_to_error::deserialize(&mut deserializer).map_err(|error| {
         ConversionError::one(
@@ -391,7 +394,7 @@ pub fn decode_mesh_source_import_request(
 }
 
 fn validate_import_request(
-    request: &MeshSourceImportRequest,
+    request: &MeshSourceImportRequest<'_>,
     expected_kind: AssetKind,
 ) -> Result<(), ConversionError> {
     match AssetId::parse(&request.source_asset_id) {
@@ -429,7 +432,7 @@ fn validate_import_request(
 }
 
 fn validate_expected_source_hash(
-    request: &MeshSourceImportRequest,
+    request: &MeshSourceImportRequest<'_>,
     source_hash: &str,
 ) -> Result<(), ConversionError> {
     if request

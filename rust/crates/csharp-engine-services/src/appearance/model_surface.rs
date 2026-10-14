@@ -26,9 +26,10 @@ fn placed_surface(
             "resource is not a GLB model (open it with OpenAnimatedMesh)",
         ));
     }
-    let model = asset_import::glb_model_triangles(resource.bytes()).map_err(|error| {
-        surface_error(format!("the model's triangles could not be read: {error}"))
-    })?;
+    let model = asset_import::glb_model_triangles(resource.bytes(), resource.content_hash())
+        .map_err(|error| {
+            surface_error(format!("the model's triangles could not be read: {error}"))
+        })?;
     let vector = |value: NativeVec3| [value.x, value.y, value.z].map(f64::from);
     let rotation = placement.rotation;
     let placement = StaticMeshTransform {

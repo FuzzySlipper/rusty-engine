@@ -23,10 +23,11 @@ use render_model::{
     pack_mesh_resources, partition_mesh_spatially, validate_mesh_resource_header,
     AnimatedMeshAsset, MeshAttribute, MeshAttributeKind, MeshAttributeName, MeshBoundsDescriptor,
     MeshBufferLayout, MeshCollisionPolicy, MeshGroupDescriptor, MeshIndexWidth, MeshMaterialSlot,
-    MeshPayloadDescriptor, MeshPayloadSource, MeshProvenance, PackedMeshResource, StaticMeshAsset,
-    TextureDescriptor, TextureFilter, TextureWrap, MAX_MESH_RESOURCE_BYTES,
+    MeshPayloadDescriptor, MeshPayloadSource, MeshProvenance, StaticMeshAsset, TextureDescriptor,
+    TextureFilter, TextureWrap, MAX_MESH_RESOURCE_BYTES,
 };
 use std::{
+    borrow::Cow,
     collections::{BTreeMap, BTreeSet},
     ffi::c_void,
     sync::Arc,
@@ -129,13 +130,15 @@ impl CsharpRenderResource {
         })
     }
 
-    fn from_packed_mesh(path: String, packed: PackedMeshResource) -> Self {
+    /// A packed mesh resource: `identity` names `bytes`, whose content
+    /// identity is `content_hash`.
+    fn packed_mesh(path: String, identity: String, content_hash: String, bytes: Arc<[u8]>) -> Self {
         Self {
             kind: CsharpRenderResourceKind::Mesh,
-            identity: packed.resource,
-            content_hash: packed.content_hash,
+            identity,
+            content_hash,
             path,
-            bytes: Arc::from(packed.bytes),
+            bytes,
             texture: None,
             animated_mesh: None,
         }
@@ -202,34 +205,26 @@ impl CsharpRenderResource {
     }
 
     /// A star catalogue: `rusty.stars.v1` JSON (`render_model::stars`),
-    /// checked now and packed into the binary resource the renderer reads.
+    /// checked now and packed into the binary resource the renderer reads,
+    /// which is named by the catalogue's content identity.
     fn admit_star_catalogue(
         path: String,
         relative_path: &str,
         bytes: &[u8],
+        content_hash: String,
     ) -> Result<Self, CsharpEngineServicesError> {
-        use sha2::{Digest, Sha256};
-
         let stars = render_model::parse_star_catalogue(bytes).map_err(|error| {
             CsharpEngineServicesError::new(
                 "CSHARP_STAR_CATALOGUE",
                 format!("star catalogue `{relative_path}` is not admitted: {error:?}"),
             )
         })?;
-        let packed = render_model::pack_star_catalogue(&stars);
-        let content_hash = format!("sha256:{:x}", Sha256::digest(&packed));
-        let identity = format!(
-            "stars/{}",
-            content_hash
-                .strip_prefix("sha256:")
-                .expect("SHA-256 prefix")
-        );
         Ok(Self {
             kind: CsharpRenderResourceKind::StarCatalogue,
-            identity,
+            identity: format!("stars/{}", &content_hash["sha256:".len()..]),
             content_hash,
             path,
-            bytes: Arc::from(packed),
+            bytes: Arc::from(render_model::pack_star_catalogue(&stars)),
             texture: None,
             animated_mesh: None,
         })
@@ -285,9 +280,10 @@ impl CsharpRenderResource {
         })
     }
 
+    /// An animated GLB, retained as `bytes`: a self-contained GLB.
     fn admit_animated_mesh(
         path: String,
-        bytes: Vec<u8>,
+        bytes: Arc<[u8]>,
     ) -> Result<Self, CsharpEngineServicesError> {
         require_extension(&path, ".glb")?;
         let relative_path = path
@@ -330,7 +326,7 @@ impl CsharpRenderResource {
             identity,
             content_hash,
             path,
-            bytes: Arc::from(imported.runtime_resource_bytes),
+            bytes,
             texture: None,
             animated_mesh: Some(imported.animated_mesh),
         })
@@ -802,9 +798,6 @@ struct ImportedAnimatedContent {
 #[derive(Default)]
 pub(crate) struct RenderResourceImports {
     static_content: BTreeMap<String, ImportedStaticContent>,
-    /// The dimensions of each PNG body admitted so far, by content identity,
-    /// so reopening one reads neither its chunks nor its hash again.
-    png_dimensions: BTreeMap<String, [u32; 2]>,
     animated: BTreeMap<String, ImportedAnimatedContent>,
 }
 
@@ -825,26 +818,16 @@ impl RenderResourceImports {
         let content_hash = || content.identity.content_hash(&bytes);
         match () {
             _ if relative_path.ends_with(".png") => {
-                let content_hash = content_hash();
-                let dimensions = match self.png_dimensions.get(&content_hash) {
-                    Some(dimensions) => *dimensions,
-                    None => {
-                        #[cfg(test)]
-                        tests::PNG_ADMISSIONS.with(|count| count.set(count.get() + 1));
-                        let dimensions = render_model::admit_png_rgba8(&bytes).map_err(|error| {
-                            CsharpEngineServicesError::new(
-                                "CSHARP_RENDER_RESOURCE_TEXTURE",
-                                format!("renderer resource is not an admitted PNG: {error:?}"),
-                            )
-                        })?;
-                        self.png_dimensions.insert(content_hash.clone(), dimensions);
-                        dimensions
-                    }
-                };
+                let dimensions = render_model::admit_png_rgba8(&bytes).map_err(|error| {
+                    CsharpEngineServicesError::new(
+                        "CSHARP_RENDER_RESOURCE_TEXTURE",
+                        format!("renderer resource is not an admitted PNG: {error:?}"),
+                    )
+                })?;
                 Ok(CsharpRenderResource::admit_texture(
                     browser_path,
-                    bytes,
-                    content_hash,
+                    Arc::clone(&bytes),
+                    content_hash(),
                     dimensions,
                     filter,
                     wrap,
@@ -858,7 +841,12 @@ impl RenderResourceImports {
                 CsharpRenderResource::admit_font(browser_path, Arc::clone(&bytes), content_hash())
             }
             _ if relative_path.ends_with(".stars.json") => {
-                CsharpRenderResource::admit_star_catalogue(browser_path, &relative_path, &bytes)
+                CsharpRenderResource::admit_star_catalogue(
+                    browser_path,
+                    &relative_path,
+                    &bytes,
+                    content_hash(),
+                )
             }
             _ if relative_path.ends_with(".wgsl") => CsharpRenderResource::admit_shader(
                 browser_path,
@@ -896,7 +884,7 @@ impl RenderResourceImports {
             .is_some_and(|imported| Arc::ptr_eq(&imported.source, &content.bytes))
         {
             let bytes = content.bytes.as_ref();
-            let (asset, payload, packed_resource) = if bytes.starts_with(STATIC_MESH_MAGIC) {
+            let (asset, payload, resource) = if bytes.starts_with(STATIC_MESH_MAGIC) {
                 decode_static_mesh(bytes, content.identity.content_hash(bytes))?
             } else {
                 let asset = serde_json::from_slice::<StaticMeshAsset>(bytes).map_err(|error| {
@@ -913,12 +901,19 @@ impl RenderResourceImports {
                     CsharpEngineServicesError::new("CSHARP_STATIC_MESH_PACK", format!("{error:?}"))
                 })?;
                 let payload = packed.payloads.pop().expect("one packed inline payload");
-                let packed_resource = packed.resources.pop().expect("one packed inline resource");
-                (asset, payload, packed_resource)
+                let packed = packed.resources.pop().expect("one packed inline resource");
+                let path = format!(
+                    "content/engine-mesh/{}.rmesh",
+                    &packed.content_hash["sha256:".len()..]
+                );
+                let resource = CsharpRenderResource::packed_mesh(
+                    path,
+                    packed.resource,
+                    packed.content_hash,
+                    Arc::from(packed.bytes),
+                );
+                (asset, payload, resource)
             };
-            let content_hash = &packed_resource.content_hash["sha256:".len()..];
-            let browser_path = format!("content/engine-mesh/{content_hash}.rmesh");
-            let resource = CsharpRenderResource::from_packed_mesh(browser_path, packed_resource);
             self.static_content.insert(
                 content.path.clone(),
                 ImportedStaticContent {
@@ -1590,13 +1585,14 @@ fn require_extension(path: &str, extension: &str) -> Result<(), CsharpEngineServ
 }
 
 struct PackedAnimatedSource {
-    bytes: Vec<u8>,
+    /// The root itself when it is already self-contained.
+    bytes: Arc<[u8]>,
     dependencies: Vec<(String, Arc<[u8]>)>,
 }
 
 fn pack_animated_glb_closure(
     root_path: &str,
-    root_bytes: &[u8],
+    root_bytes: &Arc<[u8]>,
     content_resources: &crate::content::ContentFiles,
 ) -> Result<PackedAnimatedSource, CsharpEngineServicesError> {
     let resource_uris = glb_relative_resource_uris(root_bytes).map_err(|diagnostic| {
@@ -1611,9 +1607,8 @@ fn pack_animated_glb_closure(
     let directory = root_path
         .rsplit_once('/')
         .map_or("", |(directory, _)| directory);
-    let mut dependencies = Vec::new();
-    let resources = resource_uris
-        .into_iter()
+    let dependencies = resource_uris
+        .iter()
         .map(|uri| {
             let content_path = if directory.is_empty() {
                 uri.clone()
@@ -1626,21 +1621,19 @@ fn pack_animated_glb_closure(
                     format!("animated GLB dependency `{content_path}` is missing"),
                 )
             })?;
-            let resource = GltfResource {
-                uri,
-                bytes: bytes.to_vec(),
-            };
-            dependencies.push((content_path, bytes));
-            Ok(resource)
+            Ok((content_path, bytes))
         })
         .collect::<Result<Vec<_>, CsharpEngineServicesError>>()?;
-    admit_glb_source(&GlbSourceClosure {
-        root_glb: root_bytes.to_vec(),
-        resources,
-    })
-    .map(|packed| PackedAnimatedSource {
-        bytes: packed.glb_bytes,
-        dependencies,
+    let packed = admit_glb_source(&GlbSourceClosure {
+        root_glb: root_bytes,
+        resources: resource_uris
+            .into_iter()
+            .zip(&dependencies)
+            .map(|(uri, (_, bytes))| GltfResource {
+                uri,
+                bytes: Cow::Borrowed(&bytes[..]),
+            })
+            .collect(),
     })
     .map_err(|diagnostic| {
         CsharpEngineServicesError::new(
@@ -1650,6 +1643,14 @@ fn pack_animated_glb_closure(
                 diagnostic.locus, diagnostic.message, diagnostic.code
             ),
         )
+    })?;
+    let bytes = match packed {
+        Cow::Borrowed(_) => Arc::clone(root_bytes),
+        Cow::Owned(packed) => Arc::from(packed),
+    };
+    Ok(PackedAnimatedSource {
+        bytes,
+        dependencies,
     })
 }
 
@@ -1673,7 +1674,7 @@ fn pack_animated_glb_closure(
 /// other streams are not read.
 const STATIC_MESH_MAGIC: &[u8; 8] = b"RSTATMSH";
 
-type DecodedStaticMesh = (StaticMeshAsset, MeshPayloadDescriptor, PackedMeshResource);
+type DecodedStaticMesh = (StaticMeshAsset, MeshPayloadDescriptor, CsharpRenderResource);
 
 /// `file_hash` is the content identity of the whole file (`sha256:<hex>`).
 fn decode_static_mesh(
@@ -1717,11 +1718,7 @@ fn decode_static_mesh(
     let indices_start = *indices_byte_offset as usize;
     *identity = format!("mesh-resource/{}", &file_hash["sha256:".len()..]);
     *content_hash = file_hash;
-    let packed = PackedMeshResource {
-        resource: identity.clone(),
-        content_hash: content_hash.clone(),
-        bytes: resource.to_vec(),
-    };
+    let (identity, content_hash) = (identity.clone(), content_hash.clone());
     asset
         .payload
         .validate()
@@ -1734,7 +1731,14 @@ fn decode_static_mesh(
         )));
     }
     let payload = asset.payload.clone();
-    Ok((asset, payload, packed))
+    let path = format!(
+        "content/engine-mesh/{}.rmesh",
+        &content_hash["sha256:".len()..]
+    );
+    // The one copy of the body the resource retains.
+    let resource =
+        CsharpRenderResource::packed_mesh(path, identity, content_hash, Arc::from(resource));
+    Ok((asset, payload, resource))
 }
 
 /// The first index in a packed mesh resource's u32 index stream that names no
@@ -1766,15 +1770,6 @@ pub(crate) mod tests {
     const CHARACTER_GLB: &[u8] = include_bytes!(
         "../../../../fixtures/render/assets/kenney-retro-character/character-medium.glb"
     );
-
-    thread_local! {
-        pub(super) static PNG_ADMISSIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-    }
-
-    /// PNG bodies whose chunks were read on this thread so far.
-    pub(crate) fn png_admissions() -> usize {
-        PNG_ADMISSIONS.with(std::cell::Cell::get)
-    }
 
     pub(crate) fn external_image_glb(source: &[u8], uri: &str) -> Vec<u8> {
         assert_eq!(&source[..4], b"glTF");
@@ -1922,7 +1917,7 @@ pub(crate) mod tests {
         let animated = || {
             CsharpRenderResource::admit_animated_mesh(
                 "content/character.glb".to_owned(),
-                CHARACTER_GLB.to_vec(),
+                Arc::from(CHARACTER_GLB),
             )
             .expect("animated mesh")
         };
@@ -1995,7 +1990,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn reopening_content_reuses_its_identity_and_png_facts_under_any_filename() {
+    fn reopening_content_reuses_its_identity_under_any_filename() {
         let packed = pack_mesh_resources(
             std::slice::from_ref(
                 &serde_json::from_slice::<StaticMeshAsset>(&static_mesh_fixture(
@@ -2009,6 +2004,7 @@ pub(crate) mod tests {
         .unwrap();
         let mut font = b"wOF2".to_vec();
         font.resize(64, 0);
+        let stars = br#"{"format": "rusty.stars.v1", "stars": [[0, 1, 0, 2, 1, 1, 1]]}"#;
         let mut imports = RenderResourceImports::default();
         for (path, bytes) in [
             ("textures/ß #1 ткань.png", RGBA_PNG.to_vec()),
@@ -2017,11 +2013,12 @@ pub(crate) mod tests {
                 packed.resources[0].bytes.clone(),
             ),
             ("fonts/日本語.woff2", font),
+            ("sky/небо.stars.json", stars.to_vec()),
         ] {
             let retained = content(path, Arc::from(bytes));
-            let (hashes, pngs) = (crate::content::tests::body_hashes(), png_admissions());
+            let hashes = crate::content::tests::body_hashes();
             let first = open_file(&mut imports, retained.clone()).expect(path);
-            let second = open_file(&mut imports, retained).unwrap();
+            let second = open_file(&mut imports, retained.clone()).unwrap();
             assert_eq!(first, second);
             assert_eq!(first.path(), format!("content/{path}"));
             assert_eq!(
@@ -2029,27 +2026,32 @@ pub(crate) mod tests {
                 hashes + 1,
                 "{path} is hashed once, by its content identity"
             );
-            assert_eq!(
-                png_admissions(),
-                pngs + usize::from(path.ends_with(".png")),
-                "{path}'s PNG chunks are read once"
-            );
-            if path.ends_with(".rmesh") {
-                assert_eq!(first.identity(), packed.resources[0].resource);
+            let digest = &retained.identity.content_hash(&retained.bytes)["sha256:".len()..];
+            match path.rsplit_once('.').unwrap().1 {
+                "rmesh" => assert_eq!(first.identity(), packed.resources[0].resource),
+                "json" => {
+                    // The packed catalogue is named by its source's identity.
+                    assert_eq!(first.identity(), format!("stars/{digest}"));
+                    assert_eq!(
+                        render_model::unpack_star_catalogue(first.bytes())
+                            .unwrap()
+                            .len(),
+                        1
+                    );
+                }
+                "png" => {
+                    let texture = first.texture().unwrap();
+                    assert_eq!((texture.width, texture.height), (2, 1));
+                }
+                _ => {}
             }
         }
-        // Other content with the same body reuses the facts of its identity.
-        let alias = content("textures/alias.png", Arc::from(RGBA_PNG));
-        let pngs = png_admissions();
-        let texture = open_file(&mut imports, alias).unwrap();
-        assert_eq!(png_admissions(), pngs);
-        let texture = texture.texture().unwrap();
-        assert_eq!((texture.width, texture.height), (2, 1));
-        // A changed body is a new identity, admitted afresh.
-        let mut damaged = RGBA_PNG.to_vec();
-        damaged[20] ^= 1;
+        // A changed body is a new identity, admitted afresh: this one's
+        // header names RGB, not RGBA.
+        let mut rgb = RGBA_PNG.to_vec();
+        rgb[25] = 2;
         assert_eq!(
-            open_file(&mut imports, content("damaged.png", Arc::from(damaged)))
+            open_file(&mut imports, content("rgb.png", Arc::from(rgb)))
                 .unwrap_err()
                 .code(),
             "CSHARP_RENDER_RESOURCE_TEXTURE"
@@ -2062,25 +2064,31 @@ pub(crate) mod tests {
             "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLttAAAAABJRU5ErkJggg==");
         let packed = pack_animated_glb_closure(
             "character.glb",
-            &embedded,
+            &Arc::from(embedded.as_slice()),
             &crate::content::ContentFiles::snapshot(BTreeMap::new()),
         )
         .expect("embedded image is packed without companion files");
         assert!(packed.dependencies.is_empty());
-        assert_ne!(packed.bytes, embedded);
+        assert_ne!(*packed.bytes, embedded[..]);
         let imported = asset_import::import_animated_glb_asset(
             &asset_import::SourceUri::RelativePath("character.glb".to_owned()),
             &packed.bytes,
             &asset_import::ImportContext::default(),
         );
         assert!(!imported.has_errors(), "{:?}", imported.diagnostics);
+        // A self-contained GLB is retained as the content's own body.
+        let root = Arc::<[u8]>::from(CHARACTER_GLB);
         let unchanged = pack_animated_glb_closure(
             "character.glb",
-            CHARACTER_GLB,
+            &root,
             &crate::content::ContentFiles::snapshot(BTreeMap::new()),
         )
         .unwrap();
-        assert_eq!(unchanged.bytes, CHARACTER_GLB);
+        assert!(Arc::ptr_eq(&unchanged.bytes, &root));
+        let resource = RenderResourceImports::default()
+            .animated(content("character.glb", Arc::clone(&root)), false)
+            .unwrap();
+        assert!(Arc::ptr_eq(&resource.shared_bytes(), &root));
     }
 
     fn content(path: &str, bytes: Arc<[u8]>) -> RetainedContent {

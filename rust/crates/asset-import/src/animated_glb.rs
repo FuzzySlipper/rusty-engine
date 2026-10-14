@@ -16,7 +16,7 @@ use render_model::{
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use voxel_convert::{
-    import_animated_mesh_source_for_visual_metadata, import_mesh_source_with_hash, source_sha256,
+    import_animated_mesh_source_for_visual_metadata, import_mesh_source_with_hash,
     AnimationChannelValues, AnimationProperty, MeshSourceFormat, MeshSourceImportRequest,
 };
 
@@ -70,8 +70,9 @@ pub struct AnimatedGlbImportReceipt {
 pub struct ImportedAnimatedGlb {
     pub animated_mesh: AnimatedMeshAsset,
     pub catalog: AssetCatalog,
+    /// Where the runtime resource is published: the imported source bytes,
+    /// unchanged.
     pub runtime_resource_path: String,
-    pub runtime_resource_bytes: Vec<u8>,
     pub receipt: AnimatedGlbImportReceipt,
 }
 
@@ -98,20 +99,21 @@ pub struct GlbModelTriangles {
 /// The triangles an admitted GLB draws at rest, in its own model space: each
 /// mesh node's primitives under the node's model transform (an animated or
 /// skinned model in its bind pose), as a surface query builds them into a
-/// placed mesh.
-pub fn glb_model_triangles(source: &[u8]) -> Result<GlbModelTriangles, String> {
+/// placed mesh. `source_hash` is the admitted body's content identity
+/// (`sha256:<hex>`).
+pub fn glb_model_triangles(source: &[u8], source_hash: &str) -> Result<GlbModelTriangles, String> {
     let request = MeshSourceImportRequest {
         source_asset_id: "mesh/model-surface".to_owned(),
         asset_version: 1,
         source_path: "model.glb".to_owned(),
         format: MeshSourceFormat::Glb,
-        source_bytes: source.to_vec(),
+        source_bytes: source.into(),
         expected_source_sha256: None,
         mesh_primitive: None,
     };
     // The static parser refuses skins and animations; the animated one
     // gives those models' bind pose.
-    let source_hash = source_sha256(source);
+    let source_hash = source_hash.to_owned();
     let imported = match import_mesh_source_with_hash(&request, source_hash.clone()) {
         Ok(imported) => imported,
         Err(error) => import_animated_mesh_source_for_visual_metadata(&request, source_hash)
@@ -182,8 +184,7 @@ pub fn import_animated_glb_asset(
     else {
         return failed(diagnostics);
     };
-    if !context.settings.is_valid()
-        || context.settings.scale != 1.0
+    if context.settings.scale != 1.0
         || context.settings.generate_collision
         || context.settings.material_namespace.is_some()
     {
@@ -208,7 +209,7 @@ pub fn import_animated_glb_asset(
         asset_version: 1,
         source_path: source_uri.value().to_owned(),
         format: MeshSourceFormat::Glb,
-        source_bytes: source.to_vec(),
+        source_bytes: source.into(),
         expected_source_sha256: None,
         mesh_primitive: None,
     };
@@ -398,7 +399,6 @@ pub fn import_animated_glb_asset(
             animated_mesh,
             catalog: catalog.canonical(),
             runtime_resource_path,
-            runtime_resource_bytes: source.to_vec(),
             receipt: AnimatedGlbImportReceipt {
                 animation_kind,
                 source_hash,

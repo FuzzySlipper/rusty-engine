@@ -9,22 +9,23 @@ use sha2::{Digest, Sha256};
 use crate::{ImportCode, ImportDiagnostic};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct GltfResource {
+pub struct GltfResource<'a> {
     /// Canonical project-relative URI, without a scheme, query, or fragment.
     pub uri: String,
-    pub bytes: Vec<u8>,
+    pub bytes: Cow<'a, [u8]>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GltfSourceClosure {
     pub root_json: Vec<u8>,
-    pub resources: Vec<GltfResource>,
+    pub resources: Vec<GltfResource<'static>>,
 }
 
+/// A binary GLB and its relative resources, borrowed from their owner.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct GlbSourceClosure {
-    pub root_glb: Vec<u8>,
-    pub resources: Vec<GltfResource>,
+pub struct GlbSourceClosure<'a> {
+    pub root_glb: &'a [u8],
+    pub resources: Vec<GltfResource<'a>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -193,9 +194,12 @@ pub fn admit_gltf_source(source: &GltfSourceClosure) -> Result<PackedGltfSource,
 
 /// Validates a complete immutable binary GLB closure and packs its embedded
 /// BIN chunk plus any relative buffers/images into one self-contained
-/// GLB for the ordinary renderer resource path.
-pub fn admit_glb_source(source: &GlbSourceClosure) -> Result<PackedGltfSource, ImportDiagnostic> {
-    let parsed = parse_glb_root(&source.root_glb)?;
+/// GLB for the ordinary renderer resource path. A root that is already
+/// self-contained is returned as it is, borrowed.
+pub fn admit_glb_source<'a>(
+    source: &GlbSourceClosure<'a>,
+) -> Result<Cow<'a, [u8]>, ImportDiagnostic> {
+    let parsed = parse_glb_root(source.root_glb)?;
     let expected_uris = relative_resource_uris(&parsed)?;
     let resources = validate_resources(&source.resources)?;
     require_exact_resources(&expected_uris, &resources)?;
@@ -209,15 +213,10 @@ pub fn admit_glb_source(source: &GlbSourceClosure) -> Result<PackedGltfSource, I
             .buffers()
             .all(|buffer| matches!(buffer.source(), BufferSource::Bin))
     {
-        return Ok(PackedGltfSource {
-            glb_bytes: source.root_glb.clone(),
-            source_hash: closure_hash(&source.root_glb, &resources),
-            source_byte_count: closure_byte_count_parts(source.root_glb.len(), &source.resources)?,
-            external_resource_uris: expected_uris,
-        });
+        return Ok(Cow::Borrowed(source.root_glb));
     }
 
-    let mut root = glb_json_document(&source.root_glb, "source")?;
+    let mut root = glb_json_document(source.root_glb, "source")?;
     let root_object = root.as_object_mut().ok_or_else(|| {
         error(
             ImportCode::InvalidContainer,
@@ -301,14 +300,7 @@ pub fn admit_glb_source(source: &GlbSourceClosure) -> Result<PackedGltfSource, I
             "repair the source document",
         )
     })?;
-    let glb_bytes = encode_glb(json, packed_bin)?;
-    let total = closure_byte_count_parts(source.root_glb.len(), &source.resources)?;
-    Ok(PackedGltfSource {
-        glb_bytes,
-        source_hash: closure_hash(&source.root_glb, &resources),
-        source_byte_count: total,
-        external_resource_uris: expected_uris,
-    })
+    encode_glb(json, packed_bin).map(Cow::Owned)
 }
 
 fn require_exact_resources(
@@ -427,9 +419,9 @@ fn document_resource_uris(parsed: &gltf::Gltf) -> Vec<(String, &str)> {
     uris
 }
 
-fn validate_resources(
-    resources: &[GltfResource],
-) -> Result<BTreeMap<String, &[u8]>, ImportDiagnostic> {
+fn validate_resources<'a>(
+    resources: &'a [GltfResource<'_>],
+) -> Result<BTreeMap<String, &'a [u8]>, ImportDiagnostic> {
     let mut result = BTreeMap::new();
     for (index, resource) in resources.iter().enumerate() {
         let canonical =
@@ -451,7 +443,7 @@ fn validate_resources(
             ));
         }
         if result
-            .insert(canonical.clone(), resource.bytes.as_slice())
+            .insert(canonical.clone(), resource.bytes.as_ref())
             .is_some()
         {
             return Err(error(
@@ -761,16 +753,10 @@ fn hash_field(hasher: &mut Sha256, name: &[u8], bytes: &[u8]) {
 }
 
 fn closure_byte_count(source: &GltfSourceClosure) -> Result<u64, ImportDiagnostic> {
-    closure_byte_count_parts(source.root_json.len(), &source.resources)
-}
-
-fn closure_byte_count_parts(
-    root_bytes: usize,
-    resources: &[GltfResource],
-) -> Result<u64, ImportDiagnostic> {
-    resources
+    source
+        .resources
         .iter()
-        .try_fold(root_bytes as u64, |total, resource| {
+        .try_fold(source.root_json.len() as u64, |total, resource| {
             total
                 .checked_add(resource.bytes.len() as u64)
                 .ok_or_else(|| {

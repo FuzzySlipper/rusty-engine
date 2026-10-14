@@ -61,7 +61,7 @@ pub fn convert_voxel_object_and_install(
         asset_version: request.source.asset_version,
         source_path: request.source_path.clone(),
         format: MeshSourceFormat::Glb,
-        source_bytes: source_bytes.to_vec(),
+        source_bytes: source_bytes.into(),
         expected_source_sha256: Some(request.source.source_sha256.clone()),
         mesh_primitive: request.source.mesh_primitive.clone(),
     };

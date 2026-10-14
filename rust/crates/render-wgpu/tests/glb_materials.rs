@@ -173,7 +173,7 @@ fn render(glb: Vec<u8>, lights: Vec<RenderDiff>) -> Vec<u8> {
             "animated-mesh-resource/{}",
             hash.trim_start_matches("sha256:")
         ),
-        imported.runtime_resource_bytes,
+        glb,
     );
     let mut ops = vec![
         RenderDiff::DefineAnimatedMesh {
@@ -520,7 +520,7 @@ fn render_pair(
             "animated-mesh-resource/{}",
             hash.trim_start_matches("sha256:")
         ),
-        imported.runtime_resource_bytes,
+        glb,
     );
     let mut ops = vec![RenderDiff::DefineAnimatedMesh {
         asset: asset.clone(),

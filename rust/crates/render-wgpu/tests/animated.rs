@@ -42,7 +42,7 @@ fn admit(harness: &mut Harness, path: &str) -> AnimatedMeshAsset {
             "animated-mesh-resource/{}",
             hash.trim_start_matches("sha256:")
         ),
-        imported.runtime_resource_bytes,
+        bytes,
     );
     imported.animated_mesh
 }

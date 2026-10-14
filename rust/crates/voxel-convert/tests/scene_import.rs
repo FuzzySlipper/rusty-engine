@@ -455,13 +455,13 @@ fn wide_scene_fixture() -> Vec<u8> {
     })
 }
 
-fn request(source: &[u8], mesh_primitive: Option<&str>) -> MeshSourceImportRequest {
+fn request<'a>(source: &'a [u8], mesh_primitive: Option<&str>) -> MeshSourceImportRequest<'a> {
     MeshSourceImportRequest {
         source_asset_id: "mesh/licensed-hierarchy".to_owned(),
         asset_version: 1,
         source_path: "fixtures/voxel-conversion/kenney-wall-hierarchy.glb".to_owned(),
         format: MeshSourceFormat::Glb,
-        source_bytes: source.to_vec(),
+        source_bytes: source.into(),
         expected_source_sha256: Some(source_sha256(source)),
         mesh_primitive: mesh_primitive.map(str::to_owned),
     }

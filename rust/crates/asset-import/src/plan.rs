@@ -210,7 +210,7 @@ pub fn plan_animated_glb_import(
         .asset
         .strip_prefix("mesh-animation/")
         .unwrap_or(&assets.animated_mesh.asset);
-    let Ok(mut files) = render_animated_glb_artifacts(name, &assets) else {
+    let Ok(mut files) = render_animated_glb_artifacts(name, &assets, source_bytes) else {
         report.push_str("result: failed; generated artifacts could not be encoded\n");
         return ImportPlan {
             mode,
@@ -358,7 +358,7 @@ pub fn plan_animated_gltf_import(
         .asset
         .strip_prefix("mesh-animation/")
         .unwrap_or(&assets.animated_mesh.asset);
-    let Ok(mut files) = render_animated_glb_artifacts(name, &assets) else {
+    let Ok(mut files) = render_animated_glb_artifacts(name, &assets, &packed.glb_bytes) else {
         report.push_str("result: failed; generated artifacts could not be encoded\n");
         return ImportPlan {
             mode,

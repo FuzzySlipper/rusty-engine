@@ -319,7 +319,10 @@ fn load_gltf_source_closure(
         let bytes = fs::read(&canonical).map_err(|error| {
             format!("source.resources[{uri}]: resource could not be read: {error}")
         })?;
-        resources.push(GltfResource { uri, bytes });
+        resources.push(GltfResource {
+            uri,
+            bytes: bytes.into(),
+        });
     }
     Ok(GltfSourceClosure {
         root_json,

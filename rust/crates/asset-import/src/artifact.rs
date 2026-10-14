@@ -47,9 +47,11 @@ pub fn render_artifacts(
     Ok(artifacts)
 }
 
+/// `source` is the imported GLB, published unchanged as the runtime resource.
 pub fn render_animated_glb_artifacts(
     name: &str,
     assets: &ImportedAnimatedGlb,
+    source: &[u8],
 ) -> Result<Vec<GeneratedArtifact>, ArtifactRenderError> {
     let catalog =
         encode_catalog(&assets.catalog).map_err(|error| ArtifactRenderError(error.to_string()))?;
@@ -64,7 +66,7 @@ pub fn render_animated_glb_artifacts(
         },
         GeneratedArtifact {
             relative_path: assets.runtime_resource_path.clone(),
-            bytes: assets.runtime_resource_bytes.clone(),
+            bytes: source.to_vec(),
             sha256: assets
                 .animated_mesh
                 .content_hash

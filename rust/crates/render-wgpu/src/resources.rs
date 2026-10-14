@@ -316,6 +316,46 @@ pub fn decode_png_rgba(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), String> {
 mod tests {
     use super::*;
 
+    /// Admission reads a PNG's header only; decoding the texture refuses a
+    /// body damaged or cut short after it (its definition reports the error).
+    #[test]
+    fn an_admitted_png_with_damaged_data_is_refused_when_it_is_decoded() {
+        struct One(Vec<u8>);
+        impl ResourceSource for One {
+            fn bytes(&self, _identity: &str) -> Option<Cow<'_, [u8]>> {
+                Some(Cow::Borrowed(&self.0))
+            }
+        }
+        let png = encode_png(2, 2, &[200; 16]).unwrap();
+        let idat = png.windows(4).position(|kind| kind == b"IDAT").unwrap();
+        let mut damaged = png.clone();
+        damaged[idat + 6] ^= 0x40;
+        for body in [damaged, png[..png.len() - 20].to_vec()] {
+            let texture = TextureDescriptor::admit_png_rgba8_resource(
+                "texture/damaged".to_owned(),
+                &body,
+                render_model::TextureFilter::Nearest,
+                render_model::TextureWrap::Clamp,
+                1,
+            )
+            .expect("the header admits");
+            assert_eq!((texture.width, texture.height), (2, 2));
+            assert!(texture_image(&texture, &One(body)).is_err());
+        }
+        assert!(texture_image(
+            &TextureDescriptor::admit_png_rgba8_resource(
+                "texture/whole".to_owned(),
+                &png,
+                render_model::TextureFilter::Nearest,
+                render_model::TextureWrap::Clamp,
+                1,
+            )
+            .unwrap(),
+            &One(png.clone())
+        )
+        .is_ok());
+    }
+
     #[test]
     fn mip_levels_average_in_linear_light_down_to_one_texel() {
         // A 4×2 sRGB black/white checker: levels 4×2, 2×1, 1×1.

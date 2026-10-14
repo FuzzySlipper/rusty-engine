@@ -403,7 +403,7 @@ fn aggregate_clip_snapshot_storage_is_bounded_before_accumulation() {
         asset_version: 1,
         source_path: "fixtures/generated/repeated-triangles.glb".to_owned(),
         format: MeshSourceFormat::Glb,
-        source_bytes,
+        source_bytes: source_bytes.into(),
         expected_source_sha256: None,
         mesh_primitive: None,
     })
@@ -506,13 +506,13 @@ fn identical_quantized_frames_merge_without_changing_the_selected_timing() {
     );
 }
 
-fn static_import_request() -> MeshSourceImportRequest {
+fn static_import_request() -> MeshSourceImportRequest<'static> {
     MeshSourceImportRequest {
         source_asset_id: "mesh/kenney-wall-a".to_owned(),
         asset_version: 1,
         source_path: "fixtures/voxel-conversion/kenney-wall-a.glb".to_owned(),
         format: MeshSourceFormat::Glb,
-        source_bytes: STATIC_SOURCE.to_vec(),
+        source_bytes: STATIC_SOURCE.into(),
         expected_source_sha256: None,
         mesh_primitive: None,
     }
@@ -527,14 +527,14 @@ fn frame_coordinates(
         .collect()
 }
 
-fn animated_import_request() -> MeshSourceImportRequest {
+fn animated_import_request() -> MeshSourceImportRequest<'static> {
     MeshSourceImportRequest {
         source_asset_id: "mesh-animation/retro-character".to_owned(),
         asset_version: 1,
         source_path: "fixtures/render/assets/kenney-retro-character/character-medium.glb"
             .to_owned(),
         format: MeshSourceFormat::Glb,
-        source_bytes: ANIMATED_SOURCE.to_vec(),
+        source_bytes: ANIMATED_SOURCE.into(),
         expected_source_sha256: None,
         mesh_primitive: None,
     }

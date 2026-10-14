@@ -524,6 +524,9 @@ fn shape_world_aabb(shape: &dyn Shape) -> Option<WorldAabb> {
     }
 }
 
+/// What each instance's trimesh needs from its asset: geometry to build it
+/// from (parry refuses only an empty index list), finite positions, and
+/// indices that name vertices, which parry and `bake` index without checking.
 fn validate_geometry(
     positions: &[[f64; 3]],
     triangles: &[[u32; 3]],
@@ -546,14 +549,6 @@ fn validate_geometry(
             });
         }
     }
-    SharedShape::trimesh(
-        positions
-            .iter()
-            .map(|point| Vector::new(point[0], point[1], point[2]))
-            .collect(),
-        triangles.to_vec(),
-    )
-    .map_err(|_| StaticMeshCollisionError::InvalidTriangleMesh)?;
     Ok(())
 }
 

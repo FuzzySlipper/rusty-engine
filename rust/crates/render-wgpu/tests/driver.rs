@@ -432,7 +432,7 @@ impl Body {
                 hash.trim_start_matches("sha256:")
             ),
             asset: imported.animated_mesh,
-            bytes: imported.runtime_resource_bytes,
+            bytes: source,
         }
     }
 }

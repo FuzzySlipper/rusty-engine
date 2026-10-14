@@ -70,14 +70,6 @@ pub fn import_with_context(source: &SourceMesh, context: &ImportContext) -> Impo
             "use lowercase kebab-case path segments",
         ));
     }
-    if !context.settings.is_valid() {
-        diagnostics.push(ImportDiagnostic::error(
-            ImportCode::InvalidImportSettings,
-            &mesh_id,
-            "import scale must be finite and greater than zero; material namespace must be scoped kebab-case",
-            "correct the sidecar or project override settings",
-        ));
-    }
     if !source.positions.len().is_multiple_of(3) {
         diagnostics.push(ImportDiagnostic::error(
             ImportCode::AttributeLengthMismatch,

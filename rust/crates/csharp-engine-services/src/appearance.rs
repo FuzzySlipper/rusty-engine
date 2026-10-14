@@ -12759,7 +12759,7 @@ fn shade(surface: Surface) -> vec4<f32> {
     }
 
     #[test]
-    fn reopened_content_resources_realize_without_rehashing_or_rereading() {
+    fn reopened_content_resources_realize_without_rehashing() {
         const TEXTURE: &str = "textures/ß #1 ткань.png";
         const MESH: &str = "meshes/треугольник.rstatmsh";
         let mesh = std::fs::read(
@@ -12777,7 +12777,6 @@ fn shade(surface: Surface) -> vec4<f32> {
         bridge.bind_content(&content);
         bridge.begin_call();
         let hashes = crate::content::tests::body_hashes();
-        let pngs = crate::render_resources::tests::png_admissions();
         let first = bridge.open_resource(&resource_request(TEXTURE)).unwrap();
         let again = bridge.open_resource(&resource_request(TEXTURE)).unwrap();
         let mut repeat = resource_request(TEXTURE);
@@ -12786,7 +12785,6 @@ fn shade(surface: Surface) -> vec4<f32> {
         assert_eq!(first.handle, again.handle);
         assert_ne!(first.handle, repeat.handle);
         assert_eq!(crate::content::tests::body_hashes(), hashes + 1);
-        assert_eq!(crate::render_resources::tests::png_admissions(), pngs + 1);
         assert_eq!(
             [first.byte_length, repeat.byte_length],
             [RGBA_PNG.len() as u32; 2]
@@ -12799,7 +12797,6 @@ fn shade(surface: Surface) -> vec4<f32> {
         let reloaded = bridge.open_resource(&resource_request(TEXTURE)).unwrap();
         assert_ne!(reloaded.handle, first.handle);
         assert_eq!(crate::content::tests::body_hashes(), hashes + 2);
-        assert_eq!(crate::render_resources::tests::png_admissions(), pngs + 2);
         let reloaded = bridge
             .resource(reloaded.handle.value)
             .unwrap()

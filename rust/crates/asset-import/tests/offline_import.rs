@@ -362,7 +362,6 @@ fn animated_glb_filename_spelling_is_provenance_only_for_identity() {
         );
         let assets = imported.assets.expect("filename spelling is not identity");
         assert_eq!(assets.animated_mesh.asset, expected_asset);
-        assert_eq!(assets.runtime_resource_bytes, ANIMATED_GLB);
         assert_eq!(
             assets.catalog.entries[0].id.as_str(),
             expected_asset.as_str()
@@ -409,7 +408,6 @@ fn animated_glb_admits_large_texture_transform_and_retains_exact_bytes() {
     let assets = imported
         .assets
         .expect("an f32-finite transform is admitted");
-    assert_eq!(assets.runtime_resource_bytes, source);
     assert_eq!(
         assets.receipt.source_hash,
         format!("sha256:{:x}", sha2::Sha256::digest(&source))
@@ -441,10 +439,9 @@ fn animated_glb_preserves_physical_material_extensions_and_optional_polygon_hint
     let imported = import_animated_glb_asset(&uri, &source, &ImportContext::default());
     assert!(!imported.has_errors(), "{:?}", imported.diagnostics);
     let assets = imported.assets.unwrap();
-    assert_eq!(assets.runtime_resource_bytes, source);
     assert_eq!(assets.receipt.clip_count, 3);
     let closure = admit_glb_source(&GlbSourceClosure {
-        root_glb: source.clone(),
+        root_glb: &source,
         resources: Vec::new(),
     })
     .unwrap();
@@ -453,7 +450,7 @@ fn animated_glb_preserves_physical_material_extensions_and_optional_polygon_hint
         serde_json::from_slice(&glb.json).unwrap()
     };
     for key in ["materials", "extensionsUsed", "extensionsRequired"] {
-        assert_eq!(json(&closure.glb_bytes)[key], json(&source)[key]);
+        assert_eq!(json(&closure)[key], json(&source)[key]);
     }
     let invalid = rewrite_glb_json(&source, |root| {
         root["accessors"][0]["componentType"] = serde_json::json!(0);
@@ -482,7 +479,6 @@ fn animated_glb_admits_required_embedded_webp_texture_extension_and_retains_exac
     let imported = import_animated_glb_asset(&uri, &source, &ImportContext::default());
     assert!(!imported.has_errors(), "{:?}", imported.diagnostics);
     let assets = imported.assets.expect("embedded WebP GLB is admitted");
-    assert_eq!(assets.runtime_resource_bytes, source);
     assert_eq!(
         assets.receipt.source_hash,
         format!("sha256:{:x}", sha2::Sha256::digest(&source))
@@ -673,10 +669,10 @@ fn binary_glb_closure_packs_external_image_and_admits_embedded_clips() {
         );
     });
     let closure = GlbSourceClosure {
-        root_glb: external_character.clone(),
+        root_glb: &external_character,
         resources: vec![GltfResource {
             uri: "Textures/character.png".to_owned(),
-            bytes: png,
+            bytes: png.into(),
         }],
     };
     assert_eq!(
@@ -686,19 +682,12 @@ fn binary_glb_closure_packs_external_image_and_admits_embedded_clips() {
     let first = admit_glb_source(&closure).unwrap();
     let second = admit_glb_source(&closure).unwrap();
     assert_eq!(first, second);
-    assert_ne!(first.glb_bytes, external_character);
-    assert!(glb_relative_resource_uris(&first.glb_bytes)
-        .unwrap()
-        .is_empty());
-    assert_eq!(first.external_resource_uris, ["Textures/character.png"]);
-    assert_eq!(
-        first.source_byte_count,
-        (external_character.len() + closure.resources[0].bytes.len()) as u64
-    );
+    assert_ne!(*first, external_character[..]);
+    assert!(glb_relative_resource_uris(&first).unwrap().is_empty());
 
     let imported = import_animated_glb_asset(
         &SourceUri::RelativePath("content/actors/character.glb".to_owned()),
-        &first.glb_bytes,
+        &first,
         &ImportContext::default(),
     );
     assert!(!imported.has_errors(), "{:?}", imported.diagnostics);
@@ -725,7 +714,7 @@ fn glb_closure_keeps_basisu_and_dds_required_extensions_outside_the_admitted_con
             &[0; 4],
         );
         let error = admit_glb_source(&GlbSourceClosure {
-            root_glb: source,
+            root_glb: &source,
             resources: Vec::new(),
         })
         .expect_err("generic GLB packing must not admit {extension}");
@@ -740,24 +729,21 @@ fn exact_loading_bay_closure_admits_visual_metadata_and_embedded_clips() {
         .decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL95wAAAABJRU5ErkJggg==")
         .unwrap();
     let packed = admit_glb_source(&GlbSourceClosure {
-        root_glb: LOADING_BAY_BUTTON_GLB.to_vec(),
+        root_glb: LOADING_BAY_BUTTON_GLB,
         resources: vec![GltfResource {
             uri: "Textures/colormap.png".to_owned(),
-            bytes: png,
+            bytes: png.into(),
         }],
     })
     .unwrap();
-    assert!(glb_relative_resource_uris(&packed.glb_bytes)
-        .unwrap()
-        .is_empty());
+    assert!(glb_relative_resource_uris(&packed).unwrap().is_empty());
     let imported = import_animated_glb_asset(
         &SourceUri::RelativePath("content/loading-bay/button-floor-square.glb".to_owned()),
-        &packed.glb_bytes,
+        &packed,
         &ImportContext::default(),
     );
     assert!(!imported.has_errors(), "{:?}", imported.diagnostics);
     let assets = imported.assets.unwrap();
-    assert_eq!(assets.runtime_resource_bytes, packed.glb_bytes);
     assets.animated_mesh.validate().unwrap();
     assert_eq!(
         assets
@@ -844,7 +830,7 @@ fn gltf_closure_converges_with_glb_for_static_and_animated_sources() {
         asset_version: 1,
         source_path: "static-triangle.gltf".to_owned(),
         format: MeshSourceFormat::Glb,
-        source_bytes: packed.glb_bytes,
+        source_bytes: packed.glb_bytes.into(),
         expected_source_sha256: None,
         mesh_primitive: None,
     })
@@ -909,7 +895,7 @@ fn gltf_data_uris_and_resource_fingerprint_are_bounded_and_deterministic() {
     let external = external_gltf(ANIMATED_GLB, "actor.bin", None);
     let first = admit_gltf_source(&external).unwrap();
     let mut changed = external.clone();
-    changed.resources[0].bytes[0] ^= 1;
+    changed.resources[0].bytes.to_mut()[0] ^= 1;
     let second = admit_gltf_source(&changed).unwrap();
     assert_ne!(first.source_hash, second.source_hash);
 }
@@ -964,7 +950,7 @@ fn gltf_closure_rejects_ambient_paths_collisions_missing_and_unsupported_resourc
             base.resources[0].clone(),
             GltfResource {
                 uri: "texture.gif".to_owned(),
-                bytes: vec![1, 2, 3],
+                bytes: vec![1, 2, 3].into(),
             },
         ],
     };
@@ -1010,7 +996,7 @@ fn gltf_closure_packs_above_retired_external_resource_quotas() {
             }));
         source.resources.push(GltfResource {
             uri,
-            bytes: vec![index as u8; length],
+            bytes: vec![index as u8; length].into(),
         });
     }
     source.root_json = serde_json::to_vec(&root).unwrap();
@@ -1030,7 +1016,7 @@ fn gltf_closure_packs_above_retired_external_resource_quotas() {
     for resource in &source.resources {
         assert_eq!(
             &packed.glb_bytes[offset..offset + resource.bytes.len()],
-            resource.bytes
+            &resource.bytes[..]
         );
         offset += resource.bytes.len().next_multiple_of(4);
     }
@@ -1913,7 +1899,6 @@ fn skinned_import_preserves_large_rig_and_shared_skin_tables() {
     assert_eq!(rig.joints.len(), 257);
     assert_eq!(assets.receipt.skin_count, 129);
     assert_eq!(assets.receipt.joint_count, 129 * 257);
-    assert_eq!(assets.runtime_resource_bytes, source);
 }
 
 #[test]
@@ -1945,7 +1930,6 @@ fn imported_materials_are_not_limited_by_voxel_palette_capacity() {
         assets.animated_mesh.embedded_material_slots[4095].source_material_slot,
         4095
     );
-    assert_eq!(assets.runtime_resource_bytes, source);
 }
 
 #[test]
@@ -1970,10 +1954,7 @@ fn static_and_animated_glb_import_accept_bodies_above_old_conversion_byte_cap() 
             &source,
             &ImportContext::default(),
         );
-        let assets = result
-            .assets
-            .unwrap_or_else(|| panic!("{name}: {:?}", result.diagnostics));
-        assert_eq!(assets.runtime_resource_bytes, source);
+        assert!(result.assets.is_some(), "{name}: {:?}", result.diagnostics);
     }
 }
 
@@ -2104,7 +2085,7 @@ fn external_gltf(glb: &[u8], buffer_uri: &str, image_uri: Option<&str>) -> GltfS
     root["buffers"][0]["uri"] = serde_json::Value::String(buffer_uri.to_owned());
     let mut resources = vec![GltfResource {
         uri: buffer_uri.to_owned(),
-        bytes: bin.clone(),
+        bytes: bin.clone().into(),
     }];
     if let Some(image_uri) = image_uri {
         let view_index = root["images"][0]["bufferView"].as_u64().unwrap() as usize;
@@ -2120,7 +2101,7 @@ fn external_gltf(glb: &[u8], buffer_uri: &str, image_uri: Option<&str>) -> GltfS
         );
         resources.push(GltfResource {
             uri: image_uri.to_owned(),
-            bytes: image_bytes,
+            bytes: image_bytes.into(),
         });
         resources.sort_by(|left, right| left.uri.cmp(&right.uri));
     }
@@ -2145,18 +2126,18 @@ fn glb_embedded_buffer_is_packed_without_companions() {
     });
     assert!(glb_relative_resource_uris(&source).unwrap().is_empty());
     let packed = admit_glb_source(&GlbSourceClosure {
-        root_glb: source,
+        root_glb: &source,
         resources: vec![],
     })
     .unwrap();
-    let parsed = gltf::Gltf::from_slice(&packed.glb_bytes).unwrap();
+    let parsed = gltf::Gltf::from_slice(&packed).unwrap();
     assert_eq!(parsed.buffers().count(), 1);
     assert!(parsed
         .buffers()
         .all(|buffer| matches!(buffer.source(), gltf::buffer::Source::Bin)));
     let imported = import_animated_glb_asset(
         &SourceUri::RelativePath("embedded.glb".into()),
-        &packed.glb_bytes,
+        &packed,
         &ImportContext::default(),
     );
     assert!(!imported.has_errors(), "{:?}", imported.diagnostics);
@@ -2173,7 +2154,7 @@ fn animated_glb_uses_first_scene_when_default_is_omitted() {
         &ImportContext::default(),
     );
     assert!(!imported.has_errors(), "{:?}", imported.diagnostics);
-    assert_eq!(imported.assets.unwrap().runtime_resource_bytes, source);
+    assert!(imported.assets.is_some());
 }
 
 #[test]
@@ -2191,7 +2172,7 @@ fn glb_exact_byte_fast_path_preserves_embedded_buffer_validation() {
             );
         });
         assert!(admit_glb_source(&GlbSourceClosure {
-            root_glb: source,
+            root_glb: &source,
             resources: vec![]
         })
         .is_err());

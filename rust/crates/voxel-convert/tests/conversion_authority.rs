@@ -84,7 +84,7 @@ fn imported_source_has_hash_pinned_groups_materials_and_strict_shape() {
 #[test]
 fn adjacent_primitives_keep_distinct_groups_when_they_share_a_material() {
     let mut request = import_request();
-    request.source_bytes = glb_with_shared_primitive_material();
+    request.source_bytes = glb_with_shared_primitive_material().into();
     request.expected_source_sha256 = None;
     let imported = import_mesh_source(&request).expect("shared-material primitives import");
 
@@ -320,7 +320,7 @@ fn texture_palette_uses_hash_pinned_barycentric_uv_per_voxel() {
 fn solid_topology_limits_and_rejected_install_leave_no_partial_output() {
     let imported = imported_source();
     let mut open_request = import_request();
-    open_request.source_bytes = glb_with_removed_triangle();
+    open_request.source_bytes = glb_with_removed_triangle().into();
     open_request.expected_source_sha256 = None;
     let open_imported = import_mesh_source(&open_request).unwrap();
     let mut solid_request = plan_request(&open_imported);
@@ -434,13 +434,13 @@ fn model_info_and_windows_are_bounded_deterministic_and_stale_safe() {
     );
 }
 
-fn import_request() -> MeshSourceImportRequest {
+fn import_request() -> MeshSourceImportRequest<'static> {
     MeshSourceImportRequest {
         source_asset_id: "mesh/kenney-wall-a".to_string(),
         asset_version: 1,
         source_path: "fixtures/voxel-conversion/kenney-wall-a.glb".to_string(),
         format: MeshSourceFormat::Glb,
-        source_bytes: SOURCE.to_vec(),
+        source_bytes: SOURCE.into(),
         expected_source_sha256: Some(SOURCE_HASH.to_string()),
         mesh_primitive: None,
     }

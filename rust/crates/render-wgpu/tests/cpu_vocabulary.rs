@@ -39,7 +39,7 @@ fn character() -> GlbModel {
             "animated-mesh-resource/{}",
             hash.trim_start_matches("sha256:")
         ),
-        imported.runtime_resource_bytes,
+        bytes,
     );
     decode_animated_asset(&asset, &resources)
         .expect("the admitted character decodes")

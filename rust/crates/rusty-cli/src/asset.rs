@@ -15,7 +15,7 @@ use serde_json::{json, Value};
 /// first step's refusal, or the import's diagnostics.
 pub(crate) fn check_glb(file_name: &str, bytes: Vec<u8>) -> (bool, Vec<ImportDiagnostic>) {
     let packed = match admit_glb_source(&GlbSourceClosure {
-        root_glb: bytes,
+        root_glb: &bytes,
         resources: Vec::new(),
     }) {
         Ok(packed) => packed,
@@ -23,7 +23,7 @@ pub(crate) fn check_glb(file_name: &str, bytes: Vec<u8>) -> (bool, Vec<ImportDia
     };
     let outcome = import_animated_glb_asset(
         &SourceUri::RelativePath(file_name.to_owned()),
-        &packed.glb_bytes,
+        &packed,
         &ImportContext::default(),
     );
     (outcome.assets.is_some(), outcome.diagnostics)

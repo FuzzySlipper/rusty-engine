@@ -1052,10 +1052,11 @@ fn validate_texture_payload(
     Ok(())
 }
 
-/// Checks exact encoded RGBA8 PNG bytes when they are first imported and
-/// returns their dimensions: the signature, every chunk's CRC, an 8-bit RGBA
-/// non-interlaced `IHDR` first, `IDAT`, and a final `IEND`. Facts derived from
-/// the admitted body (its identity and dimensions) are not checked again.
+/// Reads exact encoded RGBA8 PNG bytes when they are first imported and
+/// returns their dimensions: the signature and a first `IHDR` naming a
+/// non-empty 8-bit RGBA non-interlaced image. The image data is not read
+/// here: the renderer's decoder refuses a damaged or truncated body when it
+/// realizes the texture, and reports it for that texture.
 pub fn admit_png_rgba8(bytes: &[u8]) -> Result<[u32; 2], TextureError> {
     if bytes.is_empty() || u32::try_from(bytes.len()).is_err() {
         return Err(TextureError::EncodedByteQuotaExceeded {
@@ -1063,86 +1064,23 @@ pub fn admit_png_rgba8(bytes: &[u8]) -> Result<[u32; 2], TextureError> {
         });
     }
     const SIGNATURE: &[u8; 8] = b"\x89PNG\r\n\x1a\n";
-    if bytes.get(..8) != Some(SIGNATURE) {
+    // The first chunk's length and type: 13 bytes of IHDR.
+    const IHDR: &[u8; 8] = b"\0\0\0\x0dIHDR";
+    if bytes.get(..8) != Some(SIGNATURE) || bytes.get(8..16) != Some(IHDR) {
         return Err(TextureError::InvalidPng);
     }
-    let mut offset = 8_usize;
-    let mut dimensions = [0, 0];
-    let mut saw_ihdr = false;
-    let mut saw_idat = false;
-    let mut saw_iend = false;
-    while offset < bytes.len() {
-        let length = bytes
-            .get(offset..offset + 4)
-            .and_then(|value| value.try_into().ok())
-            .map(u32::from_be_bytes)
-            .ok_or(TextureError::InvalidPng)? as usize;
-        let kind = bytes
-            .get(offset + 4..offset + 8)
-            .ok_or(TextureError::InvalidPng)?;
-        let data_start = offset.checked_add(8).ok_or(TextureError::InvalidPng)?;
-        let data_end = data_start
-            .checked_add(length)
-            .ok_or(TextureError::InvalidPng)?;
-        let chunk_end = data_end.checked_add(4).ok_or(TextureError::InvalidPng)?;
-        if chunk_end > bytes.len() {
-            return Err(TextureError::InvalidPng);
-        }
-        let expected_crc = u32::from_be_bytes(
-            bytes[data_end..chunk_end]
-                .try_into()
-                .map_err(|_| TextureError::InvalidPng)?,
-        );
-        if png_crc32(&bytes[offset + 4..data_end]) != expected_crc {
-            return Err(TextureError::InvalidPng);
-        }
-        match kind {
-            b"IHDR" if !saw_ihdr && offset == 8 && length == 13 => {
-                let data = &bytes[data_start..data_end];
-                dimensions = [
-                    u32::from_be_bytes(data[0..4].try_into().expect("IHDR width")),
-                    u32::from_be_bytes(data[4..8].try_into().expect("IHDR height")),
-                ];
-                if dimensions.contains(&0) {
-                    return Err(TextureError::InvalidPng);
-                }
-                if data[8..13] != [8, 6, 0, 0, 0] {
-                    return Err(TextureError::UnsupportedPng);
-                }
-                saw_ihdr = true;
-            }
-            b"IDAT" if saw_ihdr && !saw_iend => saw_idat = true,
-            b"IEND" if saw_ihdr && saw_idat && length == 0 => {
-                saw_iend = true;
-                if chunk_end != bytes.len() {
-                    return Err(TextureError::InvalidPng);
-                }
-            }
-            b"IHDR" | b"IEND" => return Err(TextureError::InvalidPng),
-            _ => {}
-        }
-        offset = chunk_end;
+    let data = bytes.get(16..29).ok_or(TextureError::InvalidPng)?;
+    let dimensions = [
+        u32::from_be_bytes(data[0..4].try_into().expect("IHDR width")),
+        u32::from_be_bytes(data[4..8].try_into().expect("IHDR height")),
+    ];
+    if dimensions.contains(&0) {
+        return Err(TextureError::InvalidPng);
     }
-    if saw_ihdr && saw_idat && saw_iend {
-        Ok(dimensions)
-    } else {
-        Err(TextureError::InvalidPng)
+    if data[8..13] != [8, 6, 0, 0, 0] {
+        return Err(TextureError::UnsupportedPng);
     }
-}
-
-fn png_crc32(bytes: &[u8]) -> u32 {
-    let mut crc = u32::MAX;
-    for byte in bytes {
-        crc ^= u32::from(*byte);
-        for _ in 0..8 {
-            crc = if crc & 1 == 0 {
-                crc >> 1
-            } else {
-                (crc >> 1) ^ 0xedb8_8320
-            };
-        }
-    }
-    !crc
+    Ok(dimensions)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -1707,12 +1645,23 @@ mod tests {
                 TextureWrap::Repeat,
                 1,
             ),
-            Err(TextureError::InvalidPng),
+            Err(TextureError::UnsupportedPng),
         );
+        assert_eq!(admit_png_rgba8(CHECKER_PNG), Ok([2, 1]));
+        // Admission reads the header only: damaged image data is the
+        // renderer decoder's to refuse.
         let mut damaged = CHECKER_PNG.to_vec();
         damaged[45] ^= 1;
-        assert_eq!(admit_png_rgba8(&damaged), Err(TextureError::InvalidPng));
-        assert_eq!(admit_png_rgba8(CHECKER_PNG), Ok([2, 1]));
+        assert_eq!(admit_png_rgba8(&damaged), Ok([2, 1]));
+        let mut not_ihdr = CHECKER_PNG.to_vec();
+        not_ihdr[12..16].copy_from_slice(b"IDAT");
+        for refused in [
+            &CHECKER_PNG[..28],
+            &not_ihdr[..],
+            &b"GIF89a, an image that is no PNG"[..],
+        ] {
+            assert_eq!(admit_png_rgba8(refused), Err(TextureError::InvalidPng));
+        }
     }
 
     #[test]
