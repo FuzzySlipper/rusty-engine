@@ -33,9 +33,6 @@ use render_presentation::{PresentationFrameDiff, PresentationOp, VideoProjection
 
 use crate::{native_audio_diagnostic_code, AudioOutputSelection, CsharpProductRuntimeError};
 
-/// The Engine's realization feedback admits this many facts per report.
-const MAX_FACTS_PER_REPORT: usize = 128;
-
 pub(crate) struct AudioOutput {
     realizer: Realizer,
     next_fact_id: u64,
@@ -236,13 +233,11 @@ impl AudioOutput {
         self.realizer
             .retain_clips(|hash| services.audio_clip_bytes(hash).is_some());
         let facts = self.realizer.take_facts();
-        for chunk in facts.chunks(MAX_FACTS_PER_REPORT) {
-            let facts: Vec<_> = chunk
-                .iter()
-                .map(|fact| self.engine_fact(fact.clone()))
-                .collect();
-            services.ingest_audio_realization_feedback(false, 0, facts)?;
-        }
+        services.ingest_audio_realization_feedback(
+            false,
+            0,
+            facts.into_iter().map(|fact| self.engine_fact(fact)),
+        )?;
         Ok(())
     }
 

@@ -65,6 +65,9 @@ impl SceneLightInvalid {
 }
 
 impl SceneLight {
+    /// Values stay finite so the document encodes, and signs follow the
+    /// render model's. The render model's `LightDescriptor::validate` checks
+    /// the rest, such as the spot cone, where a product publishes the light.
     pub fn validate(&self) -> Result<(), SceneLightInvalid> {
         let (color, intensity) = match self {
             Self::Ambient {
@@ -80,10 +83,7 @@ impl SceneLight {
                 color, intensity, ..
             } => (color, *intensity),
         };
-        if !color
-            .iter()
-            .all(|value| value.is_finite() && (0.0..=1.0).contains(value))
-        {
+        if !color.iter().all(|value| value.is_finite() && *value >= 0.0) {
             return Err(SceneLightInvalid::InvalidColor);
         }
         if !intensity.is_finite() || intensity < 0.0 {
@@ -100,13 +100,10 @@ impl SceneLight {
                 ..
             } => {
                 validate_range_and_decay(*range, *decay)?;
-                if !outer_angle_radians.is_finite()
-                    || *outer_angle_radians <= 0.0
-                    || *outer_angle_radians > std::f32::consts::FRAC_PI_2
-                {
+                if !outer_angle_radians.is_finite() {
                     return Err(SceneLightInvalid::InvalidSpotAngle);
                 }
-                if !penumbra.is_finite() || !(0.0..=1.0).contains(penumbra) {
+                if !penumbra.is_finite() {
                     return Err(SceneLightInvalid::InvalidPenumbra);
                 }
                 Ok(())

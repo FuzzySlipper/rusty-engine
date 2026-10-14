@@ -23,14 +23,11 @@ pub enum RigidBodyValidationError {
     InvalidPrincipalInertiaFrame,
     InvalidLinearVelocity,
     InvalidAngularVelocity,
-    LockedTranslationAxisVelocity,
-    LockedRotationAxisVelocity,
     InvalidLinearDamping,
     InvalidAngularDamping,
     InvalidGravityScale,
     InvalidFriction,
     InvalidRestitution,
-    EmptyCollisionGroups,
 }
 
 impl RigidBodyValidationError {
@@ -45,14 +42,11 @@ impl RigidBodyValidationError {
             Self::InvalidPrincipalInertiaFrame => "invalid-rigid-body-inertia-frame",
             Self::InvalidLinearVelocity => "invalid-rigid-body-linear-velocity",
             Self::InvalidAngularVelocity => "invalid-rigid-body-angular-velocity",
-            Self::LockedTranslationAxisVelocity => "locked-rigid-body-translation-axis-velocity",
-            Self::LockedRotationAxisVelocity => "locked-rigid-body-rotation-axis-velocity",
             Self::InvalidLinearDamping => "invalid-rigid-body-linear-damping",
             Self::InvalidAngularDamping => "invalid-rigid-body-angular-damping",
             Self::InvalidGravityScale => "invalid-rigid-body-gravity-scale",
             Self::InvalidFriction => "invalid-rigid-body-friction",
             Self::InvalidRestitution => "invalid-rigid-body-restitution",
-            Self::EmptyCollisionGroups => "empty-rigid-body-collision-groups",
         }
     }
 }
@@ -99,12 +93,6 @@ pub fn validate_rigid_body(value: &RigidBodyComponent) -> Result<(), RigidBodyVa
     if !finite_vector(value.angular_velocity) {
         return Err(RigidBodyValidationError::InvalidAngularVelocity);
     }
-    if has_velocity_on_locked_axis(value.linear_velocity, value.locked_translation_axes) {
-        return Err(RigidBodyValidationError::LockedTranslationAxisVelocity);
-    }
-    if has_velocity_on_locked_axis(value.angular_velocity, value.locked_rotation_axes) {
-        return Err(RigidBodyValidationError::LockedRotationAxisVelocity);
-    }
     if !nonnegative(value.linear_damping) {
         return Err(RigidBodyValidationError::InvalidLinearDamping);
     }
@@ -119,9 +107,6 @@ pub fn validate_rigid_body(value: &RigidBodyComponent) -> Result<(), RigidBodyVa
     }
     if !nonnegative(value.restitution) {
         return Err(RigidBodyValidationError::InvalidRestitution);
-    }
-    if value.collision_groups == 0 {
-        return Err(RigidBodyValidationError::EmptyCollisionGroups);
     }
     Ok(())
 }
@@ -165,13 +150,6 @@ fn normalized_quaternion(value: Quat) -> bool {
         && value.z.is_finite()
         && value.w.is_finite()
         && (value.norm_squared() - 1.0).abs() <= RIGID_BODY_INERTIA_FRAME_NORMALIZATION_TOLERANCE
-}
-
-fn has_velocity_on_locked_axis(velocity: Vec3, locked_axes: [bool; 3]) -> bool {
-    locked_axes
-        .into_iter()
-        .zip(velocity.to_array())
-        .any(|(locked, component)| locked && component != 0.0)
 }
 
 pub(crate) fn rigid_body_registration() -> ComponentRegistration<RigidBodyComponent> {
@@ -593,25 +571,20 @@ mod tests {
             validate_rigid_body(&body),
             Err(RigidBodyValidationError::InvalidShape)
         );
-        body.shape = RigidBodyShape::Sphere { radius: 0.5 };
+    }
+
+    #[test]
+    fn locked_axis_velocity_and_empty_groups_admit_and_locks_zero_the_free_velocity() {
+        let mut body = RigidBodyComponent::dynamic(RigidBodyShape::Sphere { radius: 0.5 }, 1.0);
         body.collision_groups = 0;
-        assert_eq!(
-            validate_rigid_body(&body),
-            Err(RigidBodyValidationError::EmptyCollisionGroups)
-        );
-        body.collision_groups = u32::MAX;
         body.locked_translation_axes = [false, true, false];
-        body.linear_velocity = Vec3::new(0.0, 1.0, 0.0);
-        assert_eq!(
-            validate_rigid_body(&body),
-            Err(RigidBodyValidationError::LockedTranslationAxisVelocity)
-        );
-        body.linear_velocity = Vec3::ZERO;
+        body.linear_velocity = Vec3::new(2.0, 1.0, 3.0);
         body.locked_rotation_axes = [true, false, true];
-        body.angular_velocity = Vec3::new(1.0, 0.0, 0.0);
+        body.angular_velocity = Vec3::new(1.0, 4.0, 5.0);
+        assert_eq!(validate_rigid_body(&body), Ok(()));
         assert_eq!(
-            validate_rigid_body(&body),
-            Err(RigidBodyValidationError::LockedRotationAxisVelocity)
+            body.free_velocities(),
+            (Vec3::new(2.0, 0.0, 3.0), Vec3::new(0.0, 4.0, 0.0))
         );
     }
 

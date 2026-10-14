@@ -53,10 +53,9 @@ impl RuntimeDynamicsBridge {
         let reactions = unsafe {
             borrowed_slice(request.reactions, request.reactions_len, "anchor reactions")
         }?;
-        let mut actions = self.step_actions(request.world.value, actions)?;
+        let mut actions = Self::step_actions(actions);
         for reaction in reactions.iter().filter(|reaction| reaction.present) {
             let body = reaction.anchor.body.value;
-            self.world_body(request.world.value, body, "CSHARP_DYNAMICS_ANCHOR")?;
             let impulse = native_vec3_value(reaction.impulse);
             let lever = native_vec3_value(reaction.anchor.point)
                 - native_vec3_value(reaction.anchor.center_of_mass);

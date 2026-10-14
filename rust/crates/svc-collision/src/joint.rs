@@ -97,14 +97,10 @@ impl SolverJoint {
             .flat_map(|frame| frame.anchor.into_iter().chain(frame.rotation))
             .chain([joint.damping])
             .all(f64::is_finite);
-        let unit = frames.iter().all(|frame| {
-            let length = frame
-                .rotation
-                .iter()
-                .map(|value| value * value)
-                .sum::<f64>();
-            (length - 1.0).abs() <= 1.0e-3
-        });
+        // `DynamicsJointFrame::pose` normalizes; a zero rotation has no unit.
+        let rotations = frames
+            .iter()
+            .all(|frame| crate::dynamics::unit_rotation(frame.rotation).is_some());
         let angle = |value: f64| value.is_finite() && value.abs() <= std::f64::consts::PI;
         let limits = match joint.limit {
             DynamicsJointLimit::Hinge { min, max } => angle(min) && angle(max) && min <= max,
@@ -120,7 +116,7 @@ impl SolverJoint {
                     && twist_min <= twist_max
             }
         };
-        if !finite || !unit || !limits || joint.damping < 0.0 {
+        if !finite || !rotations || !limits || joint.damping < 0.0 {
             return Err(invalid);
         }
         Ok(())
@@ -211,6 +207,11 @@ mod tests {
     /// axis is along world Z, so it swings in the XY plane; a cone's is along
     /// the rods.
     fn hanging(limit: DynamicsJointLimit, damping: f64) -> DynamicsSolver {
+        hanging_with(limit, damping, 1.0)
+    }
+
+    /// `hanging`, with each joint frame's quaternion scaled by `scale`.
+    fn hanging_with(limit: DynamicsJointLimit, damping: f64, scale: f64) -> DynamicsSolver {
         let axes = match limit {
             DynamicsJointLimit::Hinge { .. } => {
                 Rotation::from_rotation_y(-std::f64::consts::FRAC_PI_2)
@@ -224,7 +225,7 @@ mod tests {
         solver.insert_body(rod(2, 0.0, false)).unwrap();
         let frame = |y: f64| DynamicsJointFrame {
             anchor: [0.0, y, 0.0],
-            rotation: axes.to_array(),
+            rotation: axes.to_array().map(|component| component * scale),
         };
         solver
             .set_joint(DynamicsJoint {
@@ -319,6 +320,38 @@ mod tests {
                 contacts_enabled: false,
             }),
             Err(crate::DynamicsError::Joint(DynamicsJointError::SameBody {
+                id: 2
+            }))
+        );
+    }
+
+    #[test]
+    fn joint_frames_normalize_a_scaled_rotation_and_refuse_a_zero_one() {
+        let limit = DynamicsJointLimit::Hinge {
+            min: -0.5,
+            max: 0.5,
+        };
+        let mut unit = hanging(limit, 0.0);
+        let mut scaled = hanging_with(limit, 0.0, 1.5);
+        for solver in [&mut unit, &mut scaled] {
+            kick(solver);
+            for _ in 0..60 {
+                solver.step(TICK, 1, &[]).unwrap();
+            }
+        }
+        let (unit_swing, scaled_swing) = (swing(&unit), swing(&scaled));
+        assert!(unit_swing > 0.1, "swung to {unit_swing} rad");
+        assert!(
+            (unit_swing - scaled_swing).abs() < 1.0e-9,
+            "{unit_swing} against {scaled_swing}"
+        );
+        // A zero quaternion has no unit; Rapier would hold NaN frames.
+        let mut zero = unit.joint(1).unwrap();
+        zero.id = 2;
+        zero.second_frame.rotation = [0.0; 4];
+        assert_eq!(
+            unit.set_joint(zero),
+            Err(crate::DynamicsError::Joint(DynamicsJointError::Invalid {
                 id: 2
             }))
         );

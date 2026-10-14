@@ -249,17 +249,6 @@ impl RuntimeAudioBridge {
         evicted_fact_count: u64,
         facts: impl IntoIterator<Item = AudioRealizationFact>,
     ) -> Result<(), CsharpEngineServicesError> {
-        let facts: Vec<_> = facts.into_iter().collect();
-        if facts.len() > 128
-            || facts
-                .windows(2)
-                .any(|facts| facts[0].fact_id() >= facts[1].fact_id())
-        {
-            return Err(CsharpEngineServicesError::new(
-                "CSHARP_AUDIO_REALIZATION_BOUNDS",
-                "audio realization feedback must contain at most 128 strictly ordered facts",
-            ));
-        }
         if replace_owner {
             self.realized_facts.clear();
             self.renderer_evicted_fact_count = evicted_fact_count;
@@ -2410,6 +2399,33 @@ mod tests {
                 desired_state: AudioVoiceDesiredState::Paused, cursor_seconds, ..
             }, .. } if (*cursor_seconds - 1.0).abs() < f64::EPSILON
         ));
+    }
+
+    #[test]
+    fn one_report_larger_than_the_store_keeps_its_newest_facts() {
+        let mut bridge = RuntimeAudioBridge::new(BTreeMap::new());
+        let fact = |fact_id| AudioRealizationFact::NaturalCompletionRetainedVoice {
+            fact_id,
+            sequence: 0,
+            voice_handle: 1,
+        };
+        // 130 facts and then an already accepted one, in a single report.
+        bridge
+            .ingest_realized_feedback(false, 0, (1..=130).map(fact).chain([fact(4)]))
+            .expect("any report is ingested");
+        bridge.begin_call();
+        let result = bridge.read_realization().expect("realization facts");
+        let facts = copied(result.facts, result.facts_len);
+        assert_eq!(
+            (
+                facts.len(),
+                facts[0].fact_id,
+                facts[127].fact_id,
+                result.evicted_fact_count
+            ),
+            (128, 3, 130, 2)
+        );
+        bridge.end_call();
     }
 
     #[test]

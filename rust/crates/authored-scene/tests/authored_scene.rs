@@ -170,6 +170,19 @@ fn validation_classifies_hierarchy_transform_light_and_voxel_failures() {
             node: SceneNodeId::new(1),
             reason: SceneLightInvalid::InvalidRange,
         }));
+    // An HDR colour and a wide cone admit; the render model's light rules
+    // apply where a product publishes the light.
+    light_document.nodes[0].kind = SceneNodeKind::Light(SceneLight::Spot {
+        color: [4.0, 2.0, 1.0],
+        intensity: 1.0,
+        enabled: true,
+        range: Some(10.0),
+        decay: 2.0,
+        outer_angle_radians: 2.0,
+        penumbra: 1.5,
+        shadow_intent: SceneLightShadowIntent::Requested,
+    });
+    assert!(validate_scene(&light_document).errors.is_empty());
 
     let voxel = voxel_reference();
     let mut voxel_document = FlatSceneDocument::new(SceneId::new(3));

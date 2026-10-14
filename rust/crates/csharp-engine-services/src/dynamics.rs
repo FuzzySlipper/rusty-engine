@@ -446,7 +446,7 @@ impl RuntimeDynamicsBridge {
     ) -> Result<NativeDynamicsStepReceipt, CsharpEngineServicesError> {
         let actions =
             unsafe { borrowed_slice(request.actions, request.actions_len, "dynamics actions") }?;
-        let actions = self.step_actions(request.world.value, actions)?;
+        let actions = Self::step_actions(actions);
         self.execute_step(
             request.world.value,
             request.step_seconds,
@@ -475,7 +475,7 @@ impl RuntimeDynamicsBridge {
                 "dynamics step/read bodies",
             )
         }?;
-        let actions = self.step_actions(request.world.value, actions)?;
+        let actions = Self::step_actions(actions);
         for body in bodies {
             self.world_body(request.world.value, body.value, "CSHARP_DYNAMICS_BODY")?;
         }
@@ -504,23 +504,18 @@ impl RuntimeDynamicsBridge {
         })
     }
 
-    fn step_actions(
-        &self,
-        world: u64,
-        actions: &[NativeDynamicsAction],
-    ) -> Result<Vec<DynamicsAction>, CsharpEngineServicesError> {
+    /// The solver's step refuses a body its world does not hold, whether it
+    /// was released or belongs to another world.
+    fn step_actions(actions: &[NativeDynamicsAction]) -> Vec<DynamicsAction> {
         actions
             .iter()
-            .map(|action| {
-                self.world_body(world, action.body.value, "CSHARP_DYNAMICS_BODY")?;
-                Ok(DynamicsAction {
-                    body: DynamicsBodyId(action.body.value),
-                    force: vec3_f64(native_vec3_value(action.force)),
-                    torque: vec3_f64(native_vec3_value(action.torque)),
-                    impulse: vec3_f64(native_vec3_value(action.impulse)),
-                    torque_impulse: vec3_f64(native_vec3_value(action.torque_impulse)),
-                    wake: action.wake,
-                })
+            .map(|action| DynamicsAction {
+                body: DynamicsBodyId(action.body.value),
+                force: vec3_f64(native_vec3_value(action.force)),
+                torque: vec3_f64(native_vec3_value(action.torque)),
+                impulse: vec3_f64(native_vec3_value(action.impulse)),
+                torque_impulse: vec3_f64(native_vec3_value(action.torque_impulse)),
+                wake: action.wake,
             })
             .collect()
     }
@@ -1893,6 +1888,19 @@ mod tests {
         invalid = request;
         invalid.config.properties.mass = -1.0;
         assert!(bridge.create_body_chain(invalid).is_err());
+        // Beyond the links' reach the first link's tether refuses; a NaN end
+        // gives its first bead a NaN position, which body admission refuses.
+        invalid = request;
+        invalid.end.x = 5.0;
+        assert_eq!(
+            bridge.create_body_chain(invalid).unwrap_err().code(),
+            "dynamics-tether-out-of-reach"
+        );
+        invalid.end.x = f32::NAN;
+        assert_eq!(
+            bridge.create_body_chain(invalid).unwrap_err().code(),
+            "CSHARP_DYNAMICS_BODY"
+        );
         // A refused chain leaves no beads behind.
         assert_eq!(bridge.active_world(world.value).unwrap().bodies.len(), 1);
         assert_eq!(
@@ -1943,6 +1951,84 @@ mod tests {
         assert_eq!(receipt.removed_bodies, 4);
         assert!(!bridge.remove_chain(query).unwrap().released);
         assert_eq!(bridge.active_world(world.value).unwrap().bodies.len(), 0);
+    }
+
+    #[test]
+    fn locked_axis_velocity_and_empty_collision_groups_admit_with_mass_properties() {
+        let spatial = crate::spatial::RuntimeSpatialBridge::new();
+        let mut bridge = RuntimeDynamicsBridge::new(spatial.collision_source());
+        let world = bridge
+            .create_world(NativeDynamicsWorldConfig {
+                gravity: NativeVec3 {
+                    x: 0.0,
+                    y: -9.81,
+                    z: 0.0,
+                },
+            })
+            .unwrap();
+        let mut floor = body_config(NativeVec3::default());
+        floor.properties.axis_locks = NativeAxisLocks {
+            translation_x: true,
+            translation_y: true,
+            translation_z: true,
+            rotation_x: true,
+            rotation_y: true,
+            rotation_z: true,
+        };
+        let floor = bridge
+            .create_body(&NativeDynamicsCreateBodyRequest { world, body: floor })
+            .unwrap();
+        // Collides with nothing, so it falls through the floor.
+        let mut ghost = body_config(NativeVec3 {
+            x: 0.0,
+            y: 2.0,
+            z: 0.0,
+        });
+        ghost.properties.collision_groups = 0;
+        ghost.properties.gravity_scale = 1.0;
+        let ghost = bridge
+            .create_body(&NativeDynamicsCreateBodyRequest { world, body: ghost })
+            .unwrap();
+        // Its Y velocity is on a locked axis, so only X moves it.
+        let mut slider = body_config(NativeVec3 {
+            x: 5.0,
+            y: 0.0,
+            z: 0.0,
+        });
+        slider.properties.axis_locks.translation_y = true;
+        slider.properties.linear_velocity = NativeVec3 {
+            x: 1.0,
+            y: 3.0,
+            z: 0.0,
+        };
+        let slider = bridge
+            .create_body(&NativeDynamicsCreateBodyRequest {
+                world,
+                body: slider,
+            })
+            .unwrap();
+        for _ in 0..60 {
+            bridge
+                .step(&NativeDynamicsStepRequest {
+                    world,
+                    step_seconds: ONE_SIXTIETH_SECOND,
+                    steps: 1,
+                    actions: std::ptr::null(),
+                    actions_len: 0,
+                })
+                .unwrap();
+        }
+        let mut read = |body| bridge.read(NativeDynamicsReadRequest { body }).unwrap();
+        let (floor, ghost, slider) = (read(floor), read(ghost), read(slider));
+        assert!(ghost.transform.translation.y < -1.0, "{ghost:?}");
+        assert_eq!((ghost.contact_count, floor.contact_count), (0, 0));
+        assert_eq!(slider.transform.translation.y, 0.0);
+        assert_eq!(slider.linear_velocity.y, 0.0);
+        assert!(
+            (slider.transform.translation.x - 6.0).abs() < 1.0e-3,
+            "{slider:?}"
+        );
+        assert!(ghost.mass_properties.available && slider.mass_properties.available);
     }
 
     #[test]

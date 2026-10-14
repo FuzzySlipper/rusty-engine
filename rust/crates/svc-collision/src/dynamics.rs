@@ -16,7 +16,6 @@ use crate::water::{shape_volume, submerged, DynamicsWaterPlane, DynamicsWaterRea
 use crate::CollisionProjection;
 
 const MASS_PROPERTIES_FRAME_NORMALIZATION_TOLERANCE: f64 = 1.0e-3;
-const ROTATION_NORMALIZATION_TOLERANCE: f64 = 1.0e-4;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct DynamicsBodyId(pub u64);
@@ -305,11 +304,11 @@ impl DynamicsSolver {
         receipt
     }
 
-    pub fn insert_body(&mut self, body: DynamicsBodyInput) -> Result<(), DynamicsError> {
+    pub fn insert_body(&mut self, mut body: DynamicsBodyInput) -> Result<(), DynamicsError> {
         if self.bodies.contains_key(&body.id) {
             return Err(DynamicsError::DuplicateBody { body: body.id });
         }
-        validate_body(&body)?;
+        validate_body(&mut body)?;
         let (builder, collider) = body_builders(&body);
         let (handle, _) = self.world.insert(builder, collider);
         self.bodies.insert(body.id, handle);
@@ -342,11 +341,11 @@ impl DynamicsSolver {
 
     /// Replace a body's shape, mass and material in place. Attached ropes
     /// stay attached; `body.translation` and `body.rotation` become its pose.
-    pub fn replace_body(&mut self, body: DynamicsBodyInput) -> Result<(), DynamicsError> {
+    pub fn replace_body(&mut self, mut body: DynamicsBodyInput) -> Result<(), DynamicsError> {
         let Some(previous) = self.bodies.get(&body.id).copied() else {
             return Err(DynamicsError::UnknownBody { body: body.id });
         };
-        validate_body(&body)?;
+        validate_body(&mut body)?;
         let attached = self
             .tethers_attached_to(body.id)
             .into_iter()
@@ -379,7 +378,8 @@ impl DynamicsSolver {
         Ok(())
     }
 
-    /// Teleport a body and set its velocity and sleep state.
+    /// Teleport a body and set its velocity and sleep state. A non-zero
+    /// rotation is normalized.
     pub fn set_body_motion(
         &mut self,
         id: DynamicsBodyId,
@@ -390,16 +390,18 @@ impl DynamicsSolver {
         sleeping: bool,
     ) -> Result<(), DynamicsError> {
         let handle = self.handle(id)?;
-        if !translation
-            .into_iter()
-            .chain(rotation)
-            .chain(linear_velocity)
-            .chain(angular_velocity)
-            .all(f64::is_finite)
-            || !unit_rotation(rotation)
-        {
-            return Err(DynamicsError::InvalidBody { body: id });
-        }
+        let rotation = match unit_rotation(rotation) {
+            Some(rotation)
+                if translation
+                    .into_iter()
+                    .chain(linear_velocity)
+                    .chain(angular_velocity)
+                    .all(f64::is_finite) =>
+            {
+                rotation
+            }
+            _ => return Err(DynamicsError::InvalidBody { body: id }),
+        };
         let body = &mut self.world.bodies[handle];
         let locks = body.locked_axes();
         body.set_translation(vector(translation), false);
@@ -735,15 +737,18 @@ impl DynamicsSolver {
                 actual: step_seconds,
             });
         }
-        for action in actions {
-            self.handle(action.body)?;
-            if !action.is_finite() {
-                return Err(DynamicsError::InvalidAction { body: action.body });
-            }
-        }
+        let handles = actions
+            .iter()
+            .map(|action| {
+                let handle = self.handle(action.body)?;
+                if !action.is_finite() {
+                    return Err(DynamicsError::InvalidAction { body: action.body });
+                }
+                Ok(handle)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
         let mut forced = Vec::new();
-        for action in actions {
-            let handle = self.bodies[&action.body];
+        for (action, handle) in actions.iter().zip(handles) {
             let body = &mut self.world.bodies[handle];
             body.apply_impulse(vector(action.impulse), action.wake);
             body.apply_torque_impulse(vector(action.torque_impulse), action.wake);
@@ -914,11 +919,11 @@ fn body_builders(body: &DynamicsBodyInput) -> (RigidBodyBuilder, ColliderBuilder
     (builder, collider)
 }
 
-fn validate_body(body: &DynamicsBodyInput) -> Result<(), DynamicsError> {
+/// Refuses what Rapier cannot hold, and normalizes a non-zero rotation.
+fn validate_body(body: &mut DynamicsBodyInput) -> Result<(), DynamicsError> {
     let finite = body
         .translation
         .into_iter()
-        .chain(body.rotation)
         .chain(body.linear_velocity)
         .chain(body.angular_velocity)
         .chain([
@@ -938,15 +943,18 @@ fn validate_body(body: &DynamicsBodyInput) -> Result<(), DynamicsError> {
             radius,
         } => positive(half_height) && positive(radius),
     };
-    if !finite
-        || !shape_valid
-        || !positive(body.mass)
-        || !body.mass_properties.is_none_or(valid_mass_properties)
-        || !unit_rotation(body.rotation)
-    {
-        return Err(DynamicsError::InvalidBody { body: body.id });
+    match unit_rotation(body.rotation) {
+        Some(rotation)
+            if finite
+                && shape_valid
+                && positive(body.mass)
+                && body.mass_properties.is_none_or(valid_mass_properties) =>
+        {
+            body.rotation = rotation;
+            Ok(())
+        }
+        _ => Err(DynamicsError::InvalidBody { body: body.id }),
     }
-    Ok(())
 }
 
 fn valid_mass_properties(properties: DynamicsMassProperties) -> bool {
@@ -960,8 +968,11 @@ fn valid_mass_properties(properties: DynamicsMassProperties) -> bool {
             <= MASS_PROPERTIES_FRAME_NORMALIZATION_TOLERANCE
 }
 
-fn unit_rotation(value: [f64; 4]) -> bool {
-    (norm_squared(value) - 1.0).abs() <= ROTATION_NORMALIZATION_TOLERANCE
+/// The unit quaternion of a finite, non-zero one. Rapier and glam turn a
+/// zero or non-finite rotation into NaN poses.
+pub(crate) fn unit_rotation(value: [f64; 4]) -> Option<[f64; 4]> {
+    let length = norm_squared(value).sqrt();
+    (length.is_finite() && length > 0.0).then(|| value.map(|component| component / length))
 }
 
 fn norm_squared(value: [f64; 4]) -> f64 {
@@ -1387,6 +1398,61 @@ mod tests {
         );
         // Nothing from the refused call was applied.
         assert_eq!(output(&solver, 1).linear_velocity, [0.0; 3]);
+        let unknown = DynamicsAction::impulse(DynamicsBodyId(9), [1.0, 0.0, 0.0]);
+        assert_eq!(
+            solver.step(TICK, 1, &[good, unknown]),
+            Err(DynamicsError::UnknownBody {
+                body: DynamicsBodyId(9)
+            })
+        );
+        assert_eq!(output(&solver, 1).linear_velocity, [0.0; 3]);
+    }
+
+    #[test]
+    fn a_non_zero_rotation_is_normalized_and_a_zero_one_refused() {
+        let unit = |rotation: [f64; 4]| (norm_squared(rotation) - 1.0).abs() < 1.0e-12;
+        let mut tilted = body();
+        tilted.rotation = [0.0, 0.0, 0.0, 1.001];
+        let mut solver = solver([0.0; 3], &[tilted]);
+        let created = output(&solver, 1).rotation;
+        assert!(unit(created), "{created:?}");
+        assert_eq!(created, [0.0, 0.0, 0.0, 1.0]);
+
+        let id = DynamicsBodyId(1);
+        solver
+            .set_body_motion(
+                id,
+                [0.0; 3],
+                [0.0, 0.6, 0.0, 0.9],
+                [0.0; 3],
+                [0.0; 3],
+                false,
+            )
+            .unwrap();
+        let moved = output(&solver, 1).rotation;
+        assert!(unit(moved), "{moved:?}");
+        assert!(
+            (moved[1] / moved[3] - 0.6 / 0.9).abs() < 1.0e-9,
+            "{moved:?}"
+        );
+
+        // A zero or overflowing quaternion has no unit; Rapier would hold NaN.
+        for rotation in [[0.0; 4], [0.0, 0.0, 0.0, f64::MAX]] {
+            assert_eq!(
+                solver.set_body_motion(id, [0.0; 3], rotation, [0.0; 3], [0.0; 3], false),
+                Err(DynamicsError::InvalidBody { body: id })
+            );
+            let mut refused = body();
+            refused.id = DynamicsBodyId(2);
+            refused.rotation = rotation;
+            assert_eq!(
+                solver.insert_body(refused),
+                Err(DynamicsError::InvalidBody {
+                    body: DynamicsBodyId(2)
+                })
+            );
+        }
+        assert_eq!(output(&solver, 1).rotation, moved);
     }
 
     #[test]

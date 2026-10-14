@@ -224,6 +224,23 @@ impl RigidBodyComponent {
         }
     }
 
+    /// Linear and angular velocity with locked axes zeroed: the solver never
+    /// moves a body along or about an axis it locks.
+    pub fn free_velocities(&self) -> (Vec3, Vec3) {
+        let free = |velocity: Vec3, locked: [bool; 3]| {
+            let axis = |value: f32, locked: bool| if locked { 0.0 } else { value };
+            Vec3::new(
+                axis(velocity.x, locked[0]),
+                axis(velocity.y, locked[1]),
+                axis(velocity.z, locked[2]),
+            )
+        };
+        (
+            free(self.linear_velocity, self.locked_translation_axes),
+            free(self.angular_velocity, self.locked_rotation_axes),
+        )
+    }
+
     /// Select authored local mass properties while preserving this body's
     /// authoritative total mass and every other dynamic-body default.
     pub const fn with_explicit_inertia(

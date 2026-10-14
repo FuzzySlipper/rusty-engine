@@ -6,7 +6,7 @@ use core_space::{WorldPos, WorldVec};
 use entity_state::{
     replace_character_motion_state, CharacterMotionComponent, CharacterMotionPublicationError,
     CharacterMotionStateReplacement, CharacterStance, ComponentRevision, EntityLifecycle,
-    EntityState, EntityTransform, Quat, TransformComponent,
+    EntityState, EntityTransform, Quat, RigidBodyComponent, TransformComponent,
 };
 use serde::{Deserialize, Serialize};
 use svc_collision::{
@@ -789,7 +789,7 @@ impl CharacterStepWorld for EntityState {
     }
 
     fn rigid_body_linear_velocity(&self, entity: EntityId) -> Option<Vec3> {
-        self.rigid_body(entity).map(|body| body.linear_velocity)
+        self.rigid_body(entity).map(|body| body.free_velocities().0)
     }
 }
 
@@ -2956,7 +2956,7 @@ fn character_obstacles(entities: &EntityState, controlled: EntityId) -> Vec<Char
             let half = (collider.bounds.max - collider.bounds.min) * 0.5;
             let (linear, angular) = entities
                 .rigid_body(collider.entity)
-                .map(|body| (body.linear_velocity, body.angular_velocity))
+                .map(RigidBodyComponent::free_velocities)
                 .or_else(|| {
                     entities.character_motion(collider.entity).map(|motion| {
                         (
@@ -3650,6 +3650,31 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn a_rigid_body_carries_no_velocity_along_a_locked_axis() {
+        use entity_state::{
+            EntityAuthoringService, EntityDefinition, RigidBodyComponent, RigidBodyShape,
+        };
+        let entity = EntityId::new(7);
+        let mut state = EntityState::from_definitions([
+            EntityDefinition::new(entity, "slider").with_transform(Vec3::ZERO)
+        ])
+        .expect("entity fixture");
+        let mut body = RigidBodyComponent::dynamic(RigidBodyShape::Sphere { radius: 0.5 }, 1.0);
+        body.locked_translation_axes = [false, true, false];
+        body.linear_velocity = Vec3::new(1.0, 3.0, 0.0);
+        let revision = state
+            .component_revision::<RigidBodyComponent>(entity)
+            .expect("built-in registration");
+        EntityAuthoringService
+            .attach_component(&mut state, revision, entity, body)
+            .expect("a locked-axis velocity admits");
+        assert_eq!(
+            CharacterStepWorld::rigid_body_linear_velocity(&state, entity),
+            Some(Vec3::new(1.0, 0.0, 0.0))
+        );
+    }
 
     #[test]
     fn sparse_config_documents_inherit_defaults() {

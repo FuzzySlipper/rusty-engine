@@ -113,16 +113,6 @@ impl RuntimeDynamicsBridge {
         }
         let start = endpoint_point(world, anchor);
         let end = native_vec3_value(end);
-        let separation = (end - start).length();
-        if !finite_vec3(end)
-            || !separation.is_finite()
-            || separation > config.link_length * config.bead_count as f32 + 0.001
-        {
-            return Err(error(
-                "dynamics-chain-invalid-anchor",
-                "chain endpoints are nonfinite or out of reach",
-            ));
-        }
         let mut chain = DynamicsChain {
             links: Vec::new(),
             bodies: Vec::new(),
