@@ -616,11 +616,7 @@ public sealed class Product : IEngineProduct
             session,
             origin,
             direction,
-            10.0,
-            cast.VoxelX,
-            cast.VoxelY,
-            cast.VoxelZ,
-            cast.Face));
+            10.0));
         Require(picked.Present && picked.Kind == SpatialHitKind.Voxel
             && picked.VoxelX == address.X && picked.VoxelY == address.Y && picked.VoxelZ == address.Z
             && picked.Face == SpatialFace.PosX,
@@ -695,11 +691,7 @@ public sealed class Product : IEngineProduct
             session,
             new Vector3(8.0f, 5.0f, 7.0f),
             -Vector3.UnitY,
-            10.0,
-            cast.VoxelX,
-            cast.VoxelY,
-            cast.VoxelZ,
-            cast.Face));
+            10.0));
         VoxelReadout beforeClear = _engine.Voxel.Read(new VoxelReadRequest(
             session,
             new VoxelAddress(picked.VoxelX, picked.VoxelY, picked.VoxelZ)));
@@ -846,51 +838,19 @@ public sealed class Product : IEngineProduct
             && checkpointSourceAfterStale.Generation == checkpointSecond.Generation,
             "stale continuation capture changed its source controller");
 
-        using SpatialSession usedRestoreTarget = _engine.Spatial.CreateSession(
+        using SpatialSession resumedSpatial = _engine.Spatial.CreateSession(
             new SpatialSessionConfig(1.0, 16, VoxelSurfaceMode.GreedyCubes));
-        CharacterStepReceipt usedTargetStep = _engine.Spatial.ProposeCharacterStep(new CharacterStepRequest(
-            usedRestoreTarget, new Vector3(0, 3, 0), motion, noSupport,
-            ReadOnlyMemory<CharacterObstacle>.Empty, ReadOnlyMemory<CharacterMeshInstance>.Empty, config, firstCommand));
-        ExpectEngineFailure(() => _engine.Spatial.RestoreCharacterContinuation(
-            new CharacterContinuationRestoreRequest(usedRestoreTarget, checkpoint)));
-        Require(_engine.Spatial.ReadCharacterController(new CharacterControllerReadRequest(usedRestoreTarget)).Generation
-            == usedTargetStep.Generation,
-            "rejected restore changed an already-used target session");
-
-        using SpatialSession incompatibleConfigTarget = _engine.Spatial.CreateSession(
-            new SpatialSessionConfig(2.0, 16, VoxelSurfaceMode.GreedyCubes));
-        ExpectEngineFailure(() => _engine.Spatial.RestoreCharacterContinuation(
-            new CharacterContinuationRestoreRequest(incompatibleConfigTarget, checkpoint)));
-        Require(!_engine.Spatial.ReadCharacterController(
-            new CharacterControllerReadRequest(incompatibleConfigTarget)).Present,
-            "configuration-mismatched restore changed its target session");
-
-        using SpatialSession incompatibleContentTarget = _engine.Spatial.CreateSession(
-            new SpatialSessionConfig(1.0, 16, VoxelSurfaceMode.GreedyCubes));
-        _engine.Voxel.ApplyEdits(new VoxelEditTransaction(
-            incompatibleContentTarget,
-            new[] { new VoxelEdit(VoxelEditKind.Set, new VoxelAddress(0, 0, 0), 1) }));
-        ExpectEngineFailure(() => _engine.Spatial.RestoreCharacterContinuation(
-            new CharacterContinuationRestoreRequest(incompatibleContentTarget, checkpoint)));
-        Require(!_engine.Spatial.ReadCharacterController(
-            new CharacterControllerReadRequest(incompatibleContentTarget)).Present,
-            "content-mismatched restore changed its target session");
-
-        using SpatialSession restoredSpatial = _engine.Spatial.CreateSession(
-            new SpatialSessionConfig(1.0, 16, VoxelSurfaceMode.GreedyCubes));
-        CharacterContinuationRestoreReceipt restored = _engine.Spatial.RestoreCharacterContinuation(
-            new CharacterContinuationRestoreRequest(restoredSpatial, checkpoint));
         CharacterControllerCommand thirdCommand = secondCommand with { Sequence = 3 };
         CharacterStepReceipt uninterrupted = _engine.Spatial.ProposeCharacterStep(new CharacterStepRequest(
             checkpointSource, checkpointSecond.Transform.Translation, checkpointSecond.Motion, noSupport,
             ReadOnlyMemory<CharacterObstacle>.Empty, ReadOnlyMemory<CharacterMeshInstance>.Empty, config, thirdCommand));
         CharacterStepReceipt resumed = _engine.Spatial.ProposeCharacterStep(new CharacterStepRequest(
-            restoredSpatial, checkpointSecond.Transform.Translation, restored.Motion, noSupport,
+            resumedSpatial, checkpointSecond.Transform.Translation, checkpoint.Motion, noSupport,
             ReadOnlyMemory<CharacterObstacle>.Empty, ReadOnlyMemory<CharacterMeshInstance>.Empty, checkpoint.Config, thirdCommand));
         Require(resumed.Motion.Grounded == uninterrupted.Motion.Grounded
             && resumed.Motion.LastCommandSequence == uninterrupted.Motion.LastCommandSequence
             && MathF.Abs(resumed.Transform.Translation.Y - uninterrupted.Transform.Translation.Y) < 0.0001f,
-            "restored character continuation did not match uninterrupted airborne motion");
+            "resumed character continuation did not match uninterrupted airborne motion");
 
         CharacterObstacle platform = new(
             2,
@@ -920,21 +880,19 @@ public sealed class Product : IEngineProduct
             new CharacterContinuationCaptureRequest(groundedSource, groundedFirst.Generation));
         using SpatialSession groundedTarget = _engine.Spatial.CreateSession(
             new SpatialSessionConfig(1.0, 16, VoxelSurfaceMode.GreedyCubes));
-        CharacterContinuationRestoreReceipt groundedRestored = _engine.Spatial.RestoreCharacterContinuation(
-            new CharacterContinuationRestoreRequest(groundedTarget, groundedCheckpoint));
         CharacterSupport platformSupport = new(true, CharacterSupportLifecycle.Active, platform.Entity, platform.Transform);
         CharacterControllerCommand groundedNextCommand = firstCommand with { Sequence = 2 };
         CharacterStepReceipt groundedUninterrupted = _engine.Spatial.ProposeCharacterStep(new CharacterStepRequest(
             groundedSource, groundedFirst.Transform.Translation, groundedFirst.Motion, platformSupport,
             new[] { platform }, ReadOnlyMemory<CharacterMeshInstance>.Empty, config, groundedNextCommand));
         CharacterStepReceipt groundedResumed = _engine.Spatial.ProposeCharacterStep(new CharacterStepRequest(
-            groundedTarget, groundedFirst.Transform.Translation, groundedRestored.Motion, platformSupport,
+            groundedTarget, groundedFirst.Transform.Translation, groundedCheckpoint.Motion, platformSupport,
             new[] { platform }, ReadOnlyMemory<CharacterMeshInstance>.Empty, groundedCheckpoint.Config, groundedNextCommand));
         Require(groundedResumed.Motion.Grounded
             && groundedResumed.Motion.SupportEntity == groundedUninterrupted.Motion.SupportEntity
             && groundedResumed.Motion.LastCommandSequence == groundedUninterrupted.Motion.LastCommandSequence
             && MathF.Abs(groundedResumed.Transform.Translation.Y - groundedUninterrupted.Transform.Translation.Y) < 0.0001f,
-            "restored grounded continuation did not preserve support motion");
+            "resumed grounded continuation did not preserve support motion");
         CharacterControllerResult readout = _engine.Spatial.ReadCharacterController(new CharacterControllerReadRequest(_spatial));
         Require(readout.Present && readout.CommandSequence == 2 && readout.Generation == second.Generation,
             "character session readout did not describe the latest proposal");

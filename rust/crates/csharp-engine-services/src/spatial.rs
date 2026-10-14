@@ -33,7 +33,7 @@ use engine_spatial::{
     StaticMeshColliderAsset, StaticMeshColliderInstance, StaticMeshInstanceId, StaticMeshTransform,
     SurfaceMeshOptions, SurfaceMode, TriggerCollider, TriggerGeometrySource, TriggerOverlapFact,
     TriggerOverlapFactKind, TriggerReconcileCause, TriggerVolumeError, TriggerVolumeSystem,
-    VoxelCollisionScene, VoxelPickHint, VoxelPickService,
+    VoxelCollisionScene, VoxelPickRay, VoxelPickService,
 };
 use entity_state::{
     CharacterMotionComponent, CharacterStance, EntityTransform, Quat, TransformComponent,
@@ -216,7 +216,6 @@ pub(crate) struct RuntimeSpatialBridge {
 }
 
 pub(crate) struct SpatialSession {
-    config: NativeSpatialSessionConfig,
     pub(crate) scene: Arc<VoxelCollisionScene>,
     pub(crate) world_origin: engine_spatial::WorldOriginState,
     navigation: Option<NavigationState>,
@@ -228,7 +227,6 @@ pub(crate) struct SpatialSession {
     controller: CharacterControllerService,
     last_character_receipt: Option<CharacterControllerReceipt>,
     last_character_config: Option<NativeCharacterControllerConfig>,
-    last_character_content_authority_hash: Option<u64>,
     last_character_mesh_entities: BTreeMap<u64, u64>,
     triggers: TriggerVolumeSystem,
 }
@@ -876,7 +874,6 @@ impl RuntimeSpatialBridge {
         self.sessions.insert(
             value,
             SpatialSession {
-                config,
                 scene: Arc::clone(&scene),
                 world_origin: engine_spatial::WorldOriginState::default(),
                 navigation: None,
@@ -886,7 +883,6 @@ impl RuntimeSpatialBridge {
                 controller: CharacterControllerService::default(),
                 last_character_receipt: None,
                 last_character_config: None,
-                last_character_content_authority_hash: None,
                 last_character_mesh_entities: BTreeMap::new(),
                 triggers: TriggerVolumeSystem::default(),
             },
@@ -2670,7 +2666,6 @@ impl RuntimeSpatialBridge {
             .map_err(|error| CsharpEngineServicesError::new(error.code(), error.to_string()))?;
         session.last_character_receipt = Some(receipt.clone());
         session.last_character_config = Some(request.config);
-        session.last_character_content_authority_hash = Some(session.scene.authority_hash());
         session.last_character_mesh_entities = mesh_entities;
         let query_stats = receipt.collision_query_stats;
         let mut native_receipt =
@@ -2711,60 +2706,11 @@ impl RuntimeSpatialBridge {
                 "character continuation capture had no admitted controller configuration",
             )
         })?;
-        let content_authority_hash =
-            session
-                .last_character_content_authority_hash
-                .ok_or_else(|| {
-                    CsharpEngineServicesError::new(
-                        "CSHARP_CHARACTER_CONTINUATION",
-                        "character continuation capture had no admitted content identity",
-                    )
-                })?;
-        if content_authority_hash != session.scene.authority_hash() {
-            return Err(CsharpEngineServicesError::new(
-                "CSHARP_CHARACTER_CONTINUATION",
-                "character continuation capture required unchanged Spatial session content",
-            ));
-        }
         Ok(NativeCharacterContinuationCheckpoint {
             source_session_identity: request.session.value,
             source_generation: receipt.generation,
-            spatial_session: session.config,
-            content_authority_hash,
             config,
             motion: native_character_motion(receipt.motion_after),
-        })
-    }
-
-    fn restore_character_continuation(
-        &mut self,
-        request: NativeCharacterContinuationRestoreRequest,
-    ) -> Result<NativeCharacterContinuationRestoreReceipt, CsharpEngineServicesError> {
-        let checkpoint = request.checkpoint;
-        let session = self.session_mut(request.session)?;
-        // The content identity counts voxels in cells: the same cells at
-        // another size or surface mode are other collision.
-        if checkpoint.spatial_session != session.config {
-            return Err(CsharpEngineServicesError::new(
-                "CSHARP_CHARACTER_CONTINUATION",
-                "character continuation checkpoint did not match the Spatial session configuration",
-            ));
-        }
-        if checkpoint.content_authority_hash != session.scene.authority_hash() {
-            return Err(CsharpEngineServicesError::new(
-                "CSHARP_CHARACTER_CONTINUATION",
-                "character continuation checkpoint did not match the Spatial session content",
-            ));
-        }
-        if session.last_character_receipt.is_some() || session.controller.readout().is_some() {
-            return Err(CsharpEngineServicesError::new(
-                "CSHARP_CHARACTER_CONTINUATION",
-                "character continuation restore requires a newly-created Spatial session",
-            ));
-        }
-        Ok(NativeCharacterContinuationRestoreReceipt {
-            source_generation: checkpoint.source_generation,
-            motion: checkpoint.motion,
         })
     }
 
@@ -3147,32 +3093,28 @@ impl RuntimeSpatialBridge {
         request: NativeSpatialPickRequest,
     ) -> Result<NativeSpatialHit, CsharpEngineServicesError> {
         let scene = self.session_mut(request.session)?.scene.clone();
-        let anchor = VoxelPickService::validate(
+        let hit = VoxelPickService::pick(
             scene.as_ref(),
-            VoxelPickHint {
+            VoxelPickRay {
                 origin: native_array(request.origin),
                 direction: native_array(request.direction),
                 max_distance: request.max_distance,
-                claimed_voxel: [
-                    request.claimed_voxel_x,
-                    request.claimed_voxel_y,
-                    request.claimed_voxel_z,
-                ],
-                claimed_face: native_face(request.claimed_face)?,
             },
         )
         .map_err(|error| spatial_error("CSHARP_SPATIAL_PICK", format!("{error:?}")))?;
-        Ok(NativeSpatialHit {
-            present: true,
-            kind: NativeSpatialHitKind::Voxel,
-            voxel_x: anchor.hit_voxel[0],
-            voxel_y: anchor.hit_voxel[1],
-            voxel_z: anchor.hit_voxel[2],
-            face: native_face_value(anchor.hit_face),
-            point: native_f64_vec3(anchor.point),
-            distance: anchor.distance,
-            ..Default::default()
-        })
+        Ok(
+            hit.map_or_else(NativeSpatialHit::default, |hit| NativeSpatialHit {
+                present: true,
+                kind: NativeSpatialHitKind::Voxel,
+                voxel_x: hit.voxel[0],
+                voxel_y: hit.voxel[1],
+                voxel_z: hit.voxel[2],
+                face: native_face_value(hit.face),
+                point: native_f64_vec3(hit.point),
+                distance: hit.distance,
+                ..Default::default()
+            }),
+        )
     }
 
     fn register_trigger(
@@ -4801,27 +4743,6 @@ unsafe extern "C" fn capture_character_continuation(
     }
 }
 
-unsafe extern "C" fn restore_character_continuation(
-    context: *mut c_void,
-    request: NativeCharacterContinuationRestoreRequest,
-    receipt: *mut NativeCharacterContinuationRestoreReceipt,
-    error: *mut NativeOperationErrorReceipt,
-) -> i32 {
-    clear_receipt(error);
-    if context.is_null() || receipt.is_null() {
-        return 0;
-    }
-    match unsafe { &mut *context.cast::<RuntimeSpatialBridge>() }
-        .restore_character_continuation(request)
-    {
-        Ok(value) => {
-            unsafe { *receipt = value };
-            ABI_OK
-        }
-        Err(refusal) => refuse(&refusal, error),
-    }
-}
-
 unsafe extern "C" fn default_character_controller_config(
     context: *mut c_void,
     config: *mut NativeCharacterControllerConfig,
@@ -5234,7 +5155,6 @@ pub(crate) fn api(bridge: &mut RuntimeSpatialBridge) -> NativeSpatialApi {
         validate_character_controller_command,
         propose_character_step,
         capture_character_continuation,
-        restore_character_continuation,
         read_character_controller,
         evaluate_navigation_step,
         read_projection,
@@ -5931,18 +5851,6 @@ fn native_character_collision_source(
             entity,
             ..Default::default()
         },
-    }
-}
-
-fn native_face(value: NativeSpatialFace) -> Result<core_space::Face, CsharpEngineServicesError> {
-    match value {
-        NativeSpatialFace::PosX => Ok(core_space::Face::PosX),
-        NativeSpatialFace::NegX => Ok(core_space::Face::NegX),
-        NativeSpatialFace::PosY => Ok(core_space::Face::PosY),
-        NativeSpatialFace::NegY => Ok(core_space::Face::NegY),
-        NativeSpatialFace::PosZ => Ok(core_space::Face::PosZ),
-        NativeSpatialFace::NegZ => Ok(core_space::Face::NegZ),
-        NativeSpatialFace::None => Err(spatial_error("CSHARP_SPATIAL_PICK", "face was missing")),
     }
 }
 
@@ -7835,10 +7743,6 @@ mod tests {
                             z: 0.0,
                         },
                         max_distance: 10.0,
-                        claimed_voxel_x: cast.voxel_x,
-                        claimed_voxel_y: cast.voxel_y,
-                        claimed_voxel_z: cast.voxel_z,
-                        claimed_face: cast.face,
                     },
                     &mut picked,
                     std::ptr::null_mut(),
@@ -7850,6 +7754,34 @@ mod tests {
         assert_eq!(picked.kind, NativeSpatialHitKind::Voxel);
         assert_eq!([picked.voxel_x, picked.voxel_y, picked.voxel_z], [8, 3, 7]);
         assert_eq!(picked.face, NativeSpatialFace::PosX);
+
+        // A ray that meets no voxel is an absent hit, not a refusal.
+        let mut missed = NativeSpatialHit::default();
+        assert_eq!(
+            unsafe {
+                (spatial_api.pick_voxel)(
+                    spatial_api.context,
+                    NativeSpatialPickRequest {
+                        session,
+                        origin: NativeVec3 {
+                            x: 12.5,
+                            y: 3.5,
+                            z: 7.5,
+                        },
+                        direction: NativeVec3 {
+                            x: 1.0,
+                            y: 0.0,
+                            z: 0.0,
+                        },
+                        max_distance: 10.0,
+                    },
+                    &mut missed,
+                    std::ptr::null_mut(),
+                )
+            },
+            ABI_OK
+        );
+        assert!(!missed.present);
 
         let mut before_clear = NativeVoxelReadout::default();
         assert_eq!(
@@ -8998,25 +8930,14 @@ mod tests {
         );
     }
 
-    #[test]
-    fn character_continuation_checkpoint_restores_airborne_motion_into_a_matching_session() {
-        let mut bridge = RuntimeSpatialBridge::new();
-        let config = bridge.default_character_controller_config();
-        let session_config = NativeSpatialSessionConfig {
-            collision_voxel_size: 1.0,
-            collision_chunk_size: 16,
-            voxel_surface_mode: NativeVoxelSurfaceMode::GreedyCubes,
-        };
-        let source = bridge
-            .create(session_config)
-            .expect("source session creates");
-        let initial_motion = NativeCharacterMotion {
-            stance: NativeCharacterStance::Standing,
-            fall_origin_y: 3.0,
-            peak_y: 3.0,
-            ..Default::default()
-        };
-        let step = |session, position, motion, sequence| NativeCharacterStepRequest {
+    fn continuation_step(
+        config: NativeCharacterControllerConfig,
+        session: NativeSpatialSessionHandle,
+        position: NativeVec3,
+        motion: NativeCharacterMotion,
+        sequence: u64,
+    ) -> NativeCharacterStepRequest {
+        NativeCharacterStepRequest {
             tether: NativeCharacterTetherRequest::default(),
             session,
             position,
@@ -9039,16 +8960,145 @@ mod tests {
                 step_seconds: 1.0 / 60.0,
                 sequence,
             },
-        };
-        let first = bridge
-            .propose_character(step(
-                source,
+        }
+    }
+
+    fn continuation_motion_at(y: f32) -> NativeCharacterMotion {
+        NativeCharacterMotion {
+            stance: NativeCharacterStance::Standing,
+            fall_origin_y: y,
+            peak_y: y,
+            ..Default::default()
+        }
+    }
+
+    fn set_continuation_floor(
+        bridge: &mut RuntimeSpatialBridge,
+        session: NativeSpatialSessionHandle,
+    ) {
+        let edits = (-2..=2)
+            .flat_map(|x| (-2..=2).map(move |z| (x, z)))
+            .map(|(x, z)| NativeVoxelEdit {
+                state: 0,
+                kind: NativeVoxelEditKind::Set,
+                address: NativeVoxelAddress { x, y: 0, z },
+                material_slot: 1,
+            })
+            .collect::<Vec<_>>();
+        let voxel_api = crate::voxel::api(bridge);
+        let mut receipt = NativeVoxelEditReceipt::default();
+        let mut error = unsafe { std::mem::zeroed::<NativeOperationErrorReceipt>() };
+        assert_eq!(
+            unsafe {
+                (voxel_api.apply_edits)(
+                    voxel_api.context,
+                    &NativeVoxelEditTransaction {
+                        session,
+                        edits: edits.as_ptr(),
+                        edits_len: edits.len(),
+                    },
+                    &mut receipt,
+                    &mut error,
+                )
+            },
+            ABI_OK
+        );
+    }
+
+    #[test]
+    fn character_continuation_capture_takes_only_the_named_step() {
+        let mut bridge = RuntimeSpatialBridge::new();
+        let config = bridge.default_character_controller_config();
+        let session = bridge
+            .create(NativeSpatialSessionConfig {
+                collision_voxel_size: 1.0,
+                collision_chunk_size: 16,
+                voxel_surface_mode: NativeVoxelSurfaceMode::GreedyCubes,
+            })
+            .expect("session creates");
+        let player = bridge
+            .propose_character(continuation_step(
+                config,
+                session,
                 NativeVec3 {
                     x: 0.0,
                     y: 3.0,
                     z: 0.0,
                 },
-                initial_motion,
+                continuation_motion_at(3.0),
+                1,
+            ))
+            .expect("player step succeeds");
+        assert!(bridge
+            .capture_character_continuation(NativeCharacterContinuationCaptureRequest {
+                session,
+                expected_generation: player.generation + 1,
+            })
+            .is_err());
+
+        // An edit between the step and the capture leaves the captured motion
+        // what the next step starts from.
+        set_continuation_floor(&mut bridge, session);
+        let checkpoint = bridge
+            .capture_character_continuation(NativeCharacterContinuationCaptureRequest {
+                session,
+                expected_generation: player.generation,
+            })
+            .expect("the latest step captures after an edit");
+        assert_eq!(checkpoint.source_generation, player.generation);
+        assert_eq!(checkpoint.motion.last_command_sequence, 1);
+        assert_eq!(
+            checkpoint.motion.collision_world_hash,
+            player.motion.collision_world_hash
+        );
+
+        // The session's latest step is now another character's: capturing the
+        // player's generation must not return that character's motion.
+        let other = bridge
+            .propose_character(continuation_step(
+                config,
+                session,
+                NativeVec3 {
+                    x: 0.0,
+                    y: 8.0,
+                    z: 0.0,
+                },
+                continuation_motion_at(8.0),
+                7,
+            ))
+            .expect("another character's step succeeds");
+        assert_ne!(other.generation, player.generation);
+        assert!(bridge
+            .capture_character_continuation(NativeCharacterContinuationCaptureRequest {
+                session,
+                expected_generation: player.generation,
+            })
+            .is_err());
+    }
+
+    #[test]
+    fn character_continuation_checkpoint_resumes_airborne_motion_in_a_new_session() {
+        let mut bridge = RuntimeSpatialBridge::new();
+        let config = bridge.default_character_controller_config();
+        let session_config = NativeSpatialSessionConfig {
+            collision_voxel_size: 1.0,
+            collision_chunk_size: 16,
+            voxel_surface_mode: NativeVoxelSurfaceMode::GreedyCubes,
+        };
+        let source = bridge
+            .create(session_config)
+            .expect("source session creates");
+        let start = NativeVec3 {
+            x: 0.0,
+            y: 3.0,
+            z: 0.0,
+        };
+        let first = bridge
+            .propose_character(continuation_step(
+                config,
+                source,
+                start,
+                continuation_motion_at(3.0),
                 1,
             ))
             .expect("airborne source step succeeds");
@@ -9059,118 +9109,28 @@ mod tests {
                 expected_generation: first.generation,
             })
             .expect("latest admitted continuation captures");
-        assert_eq!(checkpoint.motion.last_command_sequence, 1);
-        assert!(bridge
-            .capture_character_continuation(NativeCharacterContinuationCaptureRequest {
-                session: source,
-                expected_generation: first.generation + 1,
-            })
-            .is_err());
-
-        // A checkpoint never captured names no session configuration.
-        let unused_target = bridge
-            .create(session_config)
-            .expect("unused target creates");
-        assert!(bridge
-            .restore_character_continuation(NativeCharacterContinuationRestoreRequest {
-                session: unused_target,
-                checkpoint: unsafe { std::mem::zeroed() },
-            })
-            .is_err());
-
-        // Both sessions are empty, so their content identities agree: only
-        // the configuration tells the voxels' size or surface apart.
-        for incompatible in [
-            NativeSpatialSessionConfig {
-                collision_voxel_size: 2.0,
-                ..session_config
-            },
-            NativeSpatialSessionConfig {
-                voxel_surface_mode: NativeVoxelSurfaceMode::MarchingCubes,
-                ..session_config
-            },
-        ] {
-            let incompatible_config = bridge
-                .create(incompatible)
-                .expect("incompatible session creates");
-            assert!(bridge
-                .restore_character_continuation(NativeCharacterContinuationRestoreRequest {
-                    session: incompatible_config,
-                    checkpoint,
-                })
-                .is_err());
-            assert!(
-                !bridge
-                    .read_character_controller(NativeCharacterControllerReadRequest {
-                        session: incompatible_config,
-                    })
-                    .expect("incompatible restore leaves controller untouched")
-                    .present
-            );
-        }
-
-        let incompatible_content = bridge
-            .create(session_config)
-            .expect("content-mismatch session creates");
-        let voxel_api = crate::voxel::api(&mut bridge);
-        let edits = [NativeVoxelEdit {
-            state: 0,
-            kind: NativeVoxelEditKind::Set,
-            address: NativeVoxelAddress { x: 0, y: 0, z: 0 },
-            material_slot: 1,
-        }];
-        let mut voxel_receipt = NativeVoxelEditReceipt::default();
-        let mut error = unsafe { std::mem::zeroed::<NativeOperationErrorReceipt>() };
-        assert_eq!(
-            unsafe {
-                (voxel_api.apply_edits)(
-                    voxel_api.context,
-                    &NativeVoxelEditTransaction {
-                        session: incompatible_content,
-                        edits: edits.as_ptr(),
-                        edits_len: edits.len(),
-                    },
-                    &mut voxel_receipt,
-                    &mut error,
-                )
-            },
-            ABI_OK
-        );
-        assert!(bridge
-            .restore_character_continuation(NativeCharacterContinuationRestoreRequest {
-                session: incompatible_content,
-                checkpoint,
-            })
-            .is_err());
-        assert!(
-            !bridge
-                .read_character_controller(NativeCharacterControllerReadRequest {
-                    session: incompatible_content,
-                })
-                .expect("content mismatch leaves controller untouched")
-                .present
-        );
 
         let target = bridge
             .create(session_config)
             .expect("target session creates");
-        let restored = bridge
-            .restore_character_continuation(NativeCharacterContinuationRestoreRequest {
-                session: target,
-                checkpoint,
-            })
-            .expect("compatible continuation restores");
         let uninterrupted = bridge
-            .propose_character(step(source, first.transform.translation, first.motion, 2))
-            .expect("uninterrupted airborne continuation succeeds");
-        let resumed = bridge
-            .propose_character(step(
-                target,
+            .propose_character(continuation_step(
+                config,
+                source,
                 first.transform.translation,
-                restored.motion,
+                first.motion,
                 2,
             ))
-            .expect("restored airborne continuation succeeds");
+            .expect("uninterrupted airborne continuation succeeds");
+        let resumed = bridge
+            .propose_character(continuation_step(
+                checkpoint.config,
+                target,
+                first.transform.translation,
+                checkpoint.motion,
+                2,
+            ))
+            .expect("resumed airborne continuation succeeds");
         assert_eq!(resumed.motion.grounded, uninterrupted.motion.grounded);
         assert_eq!(resumed.motion.last_command_sequence, 2);
         assert!(
@@ -9185,7 +9145,72 @@ mod tests {
     }
 
     #[test]
-    fn character_continuation_checkpoint_restores_grounded_support_motion() {
+    fn character_continuation_in_a_differently_sized_session_probes_its_collision() {
+        // The same cells at another voxel size are other collision. Nothing in
+        // the checkpoint's motion is counted in cells, and the next step
+        // probes the ground it finds.
+        let mut bridge = RuntimeSpatialBridge::new();
+        let config = bridge.default_character_controller_config();
+        let session_config = NativeSpatialSessionConfig {
+            collision_voxel_size: 1.0,
+            collision_chunk_size: 16,
+            voxel_surface_mode: NativeVoxelSurfaceMode::GreedyCubes,
+        };
+        let source = bridge
+            .create(session_config)
+            .expect("source session creates");
+        set_continuation_floor(&mut bridge, source);
+        // Standing on the 1 m floor, whose top is at y = 1.
+        let standing = NativeVec3 {
+            x: 0.0,
+            y: 1.9,
+            z: 0.0,
+        };
+        let first = bridge
+            .propose_character(continuation_step(
+                config,
+                source,
+                standing,
+                continuation_motion_at(1.9),
+                1,
+            ))
+            .expect("source step succeeds");
+        assert!(first.motion.grounded);
+        let checkpoint = bridge
+            .capture_character_continuation(NativeCharacterContinuationCaptureRequest {
+                session: source,
+                expected_generation: first.generation,
+            })
+            .expect("grounded continuation captures");
+
+        let resume_in = |bridge: &mut RuntimeSpatialBridge, session_config| {
+            let target = bridge.create(session_config).expect("target creates");
+            set_continuation_floor(bridge, target);
+            bridge
+                .propose_character(continuation_step(
+                    checkpoint.config,
+                    target,
+                    first.transform.translation,
+                    checkpoint.motion,
+                    2,
+                ))
+                .expect("resumed step succeeds")
+        };
+        let same = resume_in(&mut bridge, session_config);
+        assert!(same.motion.grounded);
+        // At 0.5 m the floor's top is at y = 0.5, beyond the floor snap.
+        let smaller = resume_in(
+            &mut bridge,
+            NativeSpatialSessionConfig {
+                collision_voxel_size: 0.5,
+                ..session_config
+            },
+        );
+        assert!(!smaller.motion.grounded);
+    }
+
+    #[test]
+    fn character_continuation_checkpoint_resumes_grounded_support_motion() {
         let mut bridge = RuntimeSpatialBridge::new();
         let config = bridge.default_character_controller_config();
         let session_config = NativeSpatialSessionConfig {
@@ -9276,12 +9301,6 @@ mod tests {
                 expected_generation: first.generation,
             })
             .expect("grounded continuation captures");
-        let restored = bridge
-            .restore_character_continuation(NativeCharacterContinuationRestoreRequest {
-                session: target,
-                checkpoint,
-            })
-            .expect("grounded continuation restores");
         let support = NativeCharacterSupport {
             present: true,
             lifecycle: NativeCharacterSupportLifecycle::Active,
@@ -9316,8 +9335,8 @@ mod tests {
             .propose_character(next(source, first.motion))
             .expect("uninterrupted grounded continuation succeeds");
         let resumed = bridge
-            .propose_character(next(target, restored.motion))
-            .expect("restored grounded continuation succeeds");
+            .propose_character(next(target, checkpoint.motion))
+            .expect("resumed grounded continuation succeeds");
         assert!(resumed.motion.grounded && resumed.motion.support_entity_present);
         assert_eq!(
             resumed.motion.support_entity,

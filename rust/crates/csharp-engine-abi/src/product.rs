@@ -349,12 +349,6 @@ pub type NativeCaptureCharacterContinuation = unsafe extern "C" fn(
     *mut NativeCharacterContinuationCheckpoint,
     *mut NativeOperationErrorReceipt,
 ) -> i32;
-pub type NativeRestoreCharacterContinuation = unsafe extern "C" fn(
-    *mut c_void,
-    NativeCharacterContinuationRestoreRequest,
-    *mut NativeCharacterContinuationRestoreReceipt,
-    *mut NativeOperationErrorReceipt,
-) -> i32;
 pub type NativeReadCharacterController = unsafe extern "C" fn(
     *mut c_void,
     NativeCharacterControllerReadRequest,
@@ -1511,7 +1505,6 @@ pub struct NativeSpatialApi {
     pub validate_character_controller_command: NativeValidateCharacterControllerCommand,
     pub propose_character_step: NativeProposeCharacterStep,
     pub capture_character_continuation: NativeCaptureCharacterContinuation,
-    pub restore_character_continuation: NativeRestoreCharacterContinuation,
     pub read_character_controller: NativeReadCharacterController,
     pub evaluate_navigation_step: NativeEvaluateNavigationStep,
     pub read_projection: NativeReadSpatialProjection,

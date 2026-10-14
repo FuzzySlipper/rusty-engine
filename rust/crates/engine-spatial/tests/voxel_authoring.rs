@@ -1,12 +1,10 @@
-use core_math::Vec3;
 use core_space::Face;
 use engine_spatial::{
-    MaterialVoxel, VoxelBoxFill, VoxelCollisionScene, VoxelEdit, VoxelPickError, VoxelPickHint,
+    MaterialVoxel, VoxelBoxFill, VoxelCollisionScene, VoxelEdit, VoxelPickError, VoxelPickRay,
     VoxelPickService, VoxelPrimitive, VoxelPrimitiveEditService, VoxelPrimitiveError,
     VoxelPrimitiveMaterial, VoxelPrimitiveRequest, VoxelTemplate, VoxelTemplateEditService,
     VoxelTemplateError, VoxelTemplateRequest, VOXEL_HOUSE_TEMPLATE_BOUNDS,
 };
-use entity_state::{EntityTransform, Quat};
 
 #[test]
 fn house_template_is_deterministic_bounded_and_preserves_openings() {
@@ -57,46 +55,37 @@ fn house_template_rejects_invalid_material_and_overflow_without_output() {
 }
 
 #[test]
-fn renderer_hints_are_revalidated_for_local_and_transformed_instances() {
+fn voxel_pick_returns_the_first_voxel_the_ray_meets() {
     let scene = scene();
-    let local_hint = VoxelPickHint {
+    let ray = VoxelPickRay {
         origin: [1.1, 0.5, 0.5],
         direction: [1.0, 0.0, 0.0],
         max_distance: 10.0,
-        claimed_voxel: [2, 0, 0],
-        claimed_face: Face::NegX,
     };
-    let anchor = VoxelPickService::validate(&scene, local_hint).unwrap();
-    assert_eq!(anchor.place_voxel, [1, 0, 0]);
+    let hit = VoxelPickService::pick(&scene, ray).unwrap().unwrap();
+    assert_eq!(hit.voxel, [2, 0, 0]);
+    assert_eq!(hit.face, Face::NegX);
+    assert!((hit.distance - 0.9).abs() < 1.0e-9);
     assert_eq!(
-        anchor.place_edit(3),
-        VoxelEdit::Set {
-            address: [1, 0, 0],
-            material_slot: 3
-        }
+        VoxelPickService::pick(
+            &scene,
+            VoxelPickRay {
+                direction: [0.0, 1.0, 0.0],
+                ..ray
+            }
+        ),
+        Ok(None)
     );
-    let mut stale = local_hint;
-    stale.claimed_voxel = [3, 0, 0];
-    assert!(matches!(
-        VoxelPickService::validate(&scene, stale),
-        Err(VoxelPickError::HintMismatch { .. })
-    ));
-
-    let transform = EntityTransform {
-        translation: Vec3::new(10.0, 0.0, 0.0),
-        rotation: Quat::IDENTITY,
-        scale: Vec3::new(2.0, 1.0, 1.0),
-    };
-    let world = VoxelPickHint {
-        origin: [12.2, 0.5, 0.5],
-        direction: [1.0, 0.0, 0.0],
-        max_distance: 10.0,
-        ..local_hint
-    };
-    let instance = VoxelPickService::validate_instance(&scene, transform, world).unwrap();
-    assert_eq!(instance.local.hit_voxel, [2, 0, 0]);
-    assert!((instance.world_point[0] - 14.0).abs() < 1.0e-9);
-    assert!((instance.world_distance - 1.8).abs() < 1.0e-9);
+    assert_eq!(
+        VoxelPickService::pick(
+            &scene,
+            VoxelPickRay {
+                direction: [0.0, 0.0, 0.0],
+                ..ray
+            }
+        ),
+        Err(VoxelPickError::InvalidRay)
+    );
 }
 
 #[test]

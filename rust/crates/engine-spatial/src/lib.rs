@@ -113,9 +113,7 @@ pub use voxel_edit::{
     VoxelEditRejection, VoxelEditService, VoxelProjectionRevisions, VoxelSourceRevision,
     MAX_VOXEL_COORDINATE_ABS,
 };
-pub use voxel_picking::{
-    InstanceVoxelPickAnchor, VoxelPickAnchor, VoxelPickError, VoxelPickHint, VoxelPickService,
-};
+pub use voxel_picking::{VoxelPickError, VoxelPickRay, VoxelPickService};
 pub use voxel_primitive::{
     VoxelBoxFill, VoxelPrimitive, VoxelPrimitiveEditService, VoxelPrimitiveError,
     VoxelPrimitiveMaterial, VoxelPrimitiveRequest,

@@ -44,11 +44,8 @@ pub struct NativePerceptionQueryRequest {
     pub targets_len: usize,
     pub occluders: *const NativeSpatialEntityCollider,
     pub occluders_len: usize,
-    /// Zero starts a new deterministic read; later pages must echo the observed publication
-    /// identity. This is not a projection-local counter and cannot alias after a rebuild.
-    pub expected_projection_identity: u64,
-    /// Zero is the first qualified pair. A non-zero cursor is rejected when the published scene
-    /// identity changed.
+    /// Zero is the first qualified pair. A later page is evaluated against the scene current
+    /// when it is read.
     pub pair_cursor: u32,
     /// Bounded requested pair count. Zero is rejected rather than inferred or silently capped.
     pub page_size: u32,

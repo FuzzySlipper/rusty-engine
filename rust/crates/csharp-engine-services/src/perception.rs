@@ -50,14 +50,6 @@ impl RuntimePerceptionBridge {
         }?;
         let scene = self.collision_source.scene(request.session)?;
         let projection_identity = self.collision_source.cursor_identity(request.session)?;
-        if request.expected_projection_identity != 0
-            && request.expected_projection_identity != projection_identity
-        {
-            return Err(CsharpEngineServicesError::new(
-                "CSHARP_PERCEPTION_STALE_CURSOR",
-                "perception continuation projection identity changed",
-            ));
-        }
         let pair_cursor = usize::try_from(request.pair_cursor).map_err(|_| {
             CsharpEngineServicesError::new("CSHARP_PERCEPTION", "perception pair cursor overflow")
         })?;
@@ -263,7 +255,6 @@ mod tests {
             targets_len: targets.len(),
             occluders: std::ptr::null(),
             occluders_len: occluders.len(),
-            expected_projection_identity: 0,
             pair_cursor: 0,
             page_size: 64,
         };
@@ -364,7 +355,6 @@ mod tests {
                 targets_len: targets.len(),
                 occluders: occluders.as_ptr(),
                 occluders_len: occluders.len(),
-                expected_projection_identity: 0,
                 pair_cursor: 0,
                 page_size: 64,
             };
@@ -478,7 +468,6 @@ mod tests {
                         targets_len: targets.len(),
                         occluders: std::ptr::null(),
                         occluders_len: 0,
-                        expected_projection_identity: 0,
                         pair_cursor: 0,
                         page_size: 1,
                     },
@@ -493,124 +482,6 @@ mod tests {
         assert_eq!(result.occlusion_rejects, 1);
         let pairs = unsafe { std::slice::from_raw_parts(result.pairs, result.pairs_len) };
         assert_eq!(pairs[0].kind, NativePerceptionPairKind::Occluded);
-        assert_eq!(
-            unsafe { (spatial_api.destroy_session)(spatial_api.context, session) },
-            ABI_OK
-        );
-    }
-
-    #[test]
-    fn continuation_rejects_a_rebuilt_projection_that_reuses_its_local_version() {
-        let mut spatial_bridge = RuntimeSpatialBridge::new();
-        let mut perception_bridge = RuntimePerceptionBridge::new(&spatial_bridge);
-        let spatial_api = spatial::api(&mut spatial_bridge);
-        let mut session = NativeSpatialSessionHandle::default();
-        assert_eq!(
-            unsafe {
-                (spatial_api.create_session)(
-                    spatial_api.context,
-                    NativeSpatialSessionConfig {
-                        collision_voxel_size: 1.0,
-                        collision_chunk_size: 8,
-                        voxel_surface_mode: NativeVoxelSurfaceMode::GreedyCubes,
-                    },
-                    &mut session,
-                    std::ptr::null_mut(),
-                )
-            },
-            ABI_OK
-        );
-        let observers = [NativePerceptionObserver {
-            entity: 1,
-            origin: NativeVec3::default(),
-            forward: NativeVec3 {
-                x: 1.0,
-                y: 0.0,
-                z: 0.0,
-            },
-            maximum_distance: 10.0,
-            minimum_facing_cosine: 0.5,
-            evidence: 1.0,
-        }];
-        let targets = [
-            NativePerceptionTarget {
-                entity: 2,
-                center: NativeVec3 {
-                    x: 2.0,
-                    y: 0.0,
-                    z: 0.0,
-                },
-            },
-            NativePerceptionTarget {
-                entity: 3,
-                center: NativeVec3 {
-                    x: 3.0,
-                    y: 0.0,
-                    z: 0.0,
-                },
-            },
-        ];
-        let mut request = NativePerceptionQueryRequest {
-            session,
-            observers: observers.as_ptr(),
-            observers_len: observers.len(),
-            targets: targets.as_ptr(),
-            targets_len: targets.len(),
-            occluders: std::ptr::null(),
-            occluders_len: 0,
-            expected_projection_identity: 0,
-            pair_cursor: 0,
-            page_size: 1,
-        };
-        let perception_api = api(&mut perception_bridge);
-        let mut first = NativePerceptionReadoutResult::default();
-        assert_eq!(
-            unsafe {
-                (perception_api.query_visibility)(
-                    perception_api.context,
-                    &request,
-                    &mut first,
-                    std::ptr::null_mut(),
-                )
-            },
-            ABI_OK
-        );
-        assert!(first.has_next_pair_cursor);
-        let initial_local_version = spatial_bridge
-            .collision_source()
-            .scene(session)
-            .unwrap()
-            .projection_version();
-        assert_eq!(initial_local_version, 1);
-
-        spatial_bridge.publish_scene(
-            session,
-            Arc::new(engine_spatial::VoxelCollisionScene::from_solid_voxels(1.0, 8, []).unwrap()),
-        );
-        assert_eq!(
-            spatial_bridge
-                .collision_source()
-                .scene(session)
-                .unwrap()
-                .projection_version(),
-            initial_local_version,
-            "rebuilt scenes reset their projection-local counter",
-        );
-        request.expected_projection_identity = first.projection_identity;
-        request.pair_cursor = first.next_pair_cursor;
-        let mut continued = NativePerceptionReadoutResult::default();
-        assert_eq!(
-            unsafe {
-                (perception_api.query_visibility)(
-                    perception_api.context,
-                    &request,
-                    &mut continued,
-                    std::ptr::null_mut(),
-                )
-            },
-            0,
-            "publication identity must reject a cursor from the replaced scene",
-        );
         assert_eq!(
             unsafe { (spatial_api.destroy_session)(spatial_api.context, session) },
             ABI_OK

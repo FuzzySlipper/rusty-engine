@@ -1346,17 +1346,15 @@ exercise is in `fixtures/csharp-nativeaot-trial/Product.cs`.
 
 To save a character continuation, call `CaptureCharacterContinuation` with the
 latest `CharacterStepReceipt.Generation` and persist the copied
-`CharacterContinuationCheckpoint` beside the product-owned pose and look. After
-recreating a compatible `SpatialSession` and its canonical content, call
-`RestoreCharacterContinuation`; use its returned `Motion` and the checkpoint's
-`Config` for the next `ProposeCharacterStep`, while supplying current
-product-authored support and obstacle facts as usual. Capture rejects a
-generation other than the latest step's. Restore rejects a changed session
-configuration, changed canonical content, and a target session that has
-already stepped a character. A checkpoint is a plain value, restored as
-captured: its motion and `Config` are what the next step uses. Its source
-session identity and generation are copied diagnostic provenance, not a native
-handle that remains resolvable after save/load.
+`CharacterContinuationCheckpoint` beside the product-owned pose and look. A
+session's latest step can be another character's, so capture refuses any
+generation but the latest step's; capture right after the step whose motion
+you want. On load, supply the checkpoint's `Motion` and `Config` to the next
+`ProposeCharacterStep`, in any Spatial session, with current product-authored
+support and obstacle facts as usual. That step probes the collision it finds,
+as it does after any content change: ground, contacts and headroom come from
+the current session. The source session identity and generation are copied diagnostic
+provenance, not a native handle that remains resolvable after save/load.
 
 ## Values, handles, and native lifetime
 

@@ -258,6 +258,8 @@ pub struct NativeSpatialCapsuleQueryRequest {
     pub ignored_entities_len: usize,
 }
 
+/// Picks the first voxel a ray meets in the session's current collision.
+/// Only voxels are cast against; a ray that meets none returns an absent hit.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeSpatialPickRequest {
@@ -265,10 +267,6 @@ pub struct NativeSpatialPickRequest {
     pub origin: NativeVec3,
     pub direction: NativeVec3,
     pub max_distance: f64,
-    pub claimed_voxel_x: i64,
-    pub claimed_voxel_y: i64,
-    pub claimed_voxel_z: i64,
-    pub claimed_face: NativeSpatialFace,
 }
 
 /// One trigger registration keeps scope and an optional single tag as direct
@@ -1562,8 +1560,9 @@ pub struct NativeCharacterStepRequest {
 }
 
 /// Captures the latest admitted controller continuation from one Spatial
-/// session. `expected_generation` prevents a caller from checkpointing a
-/// newer controller result by mistake.
+/// session. A session's latest step can belong to any character the product
+/// steps there, so `expected_generation` names the step whose motion to
+/// capture and a later step refuses the capture.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct NativeCharacterContinuationCaptureRequest {
@@ -1571,42 +1570,17 @@ pub struct NativeCharacterContinuationCaptureRequest {
     pub expected_generation: u64,
 }
 
-/// Durable, copied controller continuation facts. This is a value, never a
-/// borrowed result or session handle: product persistence may retain it, then
-/// restore it only into a compatible newly-created Spatial session. The
-/// source identity and generation are diagnostic provenance from the capture;
-/// compatibility is the target session's configuration and canonical content
-/// matching the captured ones, not resolving an old native handle. The
-/// voxel content identity names voxels in cells, so the session
-/// configuration that sizes and surfaces them is part of it.
+/// Copied controller continuation facts: a value, never a borrowed result or
+/// session handle. Product persistence may retain it and supply its motion
+/// and configuration to the next character step in any session; that step
+/// probes the collision it finds as it does after any content change. The
+/// source identity and generation are diagnostic provenance from the capture.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeCharacterContinuationCheckpoint {
     pub source_session_identity: u64,
     pub source_generation: u64,
-    pub spatial_session: NativeSpatialSessionConfig,
-    pub content_authority_hash: u64,
     pub config: NativeCharacterControllerConfig,
-    pub motion: NativeCharacterMotion,
-}
-
-/// Restores a copied continuation after the product has restored its authored
-/// pose and recreated compatible Spatial content. The checkpoint's
-/// configuration is the one to supply to the next character step.
-#[repr(C)]
-#[derive(Debug, Clone, Copy)]
-pub struct NativeCharacterContinuationRestoreRequest {
-    pub session: NativeSpatialSessionHandle,
-    pub checkpoint: NativeCharacterContinuationCheckpoint,
-}
-
-/// The Engine-confirmed continuation to supply to the next character step.
-/// Current support transforms remain product-authored, call-local facts and
-/// must be resubmitted with that later step.
-#[repr(C)]
-#[derive(Debug, Clone, Copy, Default)]
-pub struct NativeCharacterContinuationRestoreReceipt {
-    pub source_generation: u64,
     pub motion: NativeCharacterMotion,
 }
 
