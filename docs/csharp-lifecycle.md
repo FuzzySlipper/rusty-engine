@@ -1097,7 +1097,10 @@ Run it with `scripts/test-csharp-sdk-package.sh --coreclr-smoke`.
 ### Spatial triggers
 
 Spatial trigger definitions stay registered for the session while their
-active state can change. `ReconcileTriggers` and `RestoreTriggers` read the
+active state can change. Registering a trigger again replaces its scope, tag
+and geometry source; it keeps its active flag and current overlaps, and the
+next reconcile senses under the new geometry source. Scope and tag are product
+text taken as given. `ReconcileTriggers` and `RestoreTriggers` read the
 product's collider rows for that call only: a row whose entity is a registered
 trigger is that trigger's world-space AABB, and every other row with enabled
 collision is a subject. `SetTriggerActive` deactivation removes current
@@ -1113,10 +1116,11 @@ a trigger's geometry is its row from the last `ReconcileTriggers` or
 `RestoreTriggers`, sensed under the same rule, and a point on a face is
 outside, as a touching subject is. The points need not be registered subjects
 and the answer does not wait for a reconcile, so an actor can ask whether its
-current position is in water without being a trigger subject. Unknown IDs, activating an
-active trigger (or deactivating an inactive one), and duplicate restore IDs
-reject without changing the session. Disposing the Spatial session destroys
-the definitions, active set and overlaps together.
+current position is in water without being a trigger subject. Setting the
+active state a trigger already has returns a receipt without facts, and a
+repeated restore ID counts once. Unknown IDs reject without changing the
+session. Disposing the Spatial session destroys the definitions, active set
+and overlaps together.
 
 `EntityTriggerProjection` (`Rusty.Engine.Entities`) builds those collider rows
 from an `EntityStore`'s Transform and `SpatialCollider` components:

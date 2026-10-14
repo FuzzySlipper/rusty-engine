@@ -630,11 +630,6 @@ pub struct NavPathReadout {
     pub nearest: Option<VoxelCoord>,
 }
 
-/// Maximum number of caller-supplied per-cell traversal records retained by
-/// one navigation projection. This bounds both retained owner state and the
-/// deterministic search lookup surface.
-pub const MAX_NAV_TRAVERSAL_CELLS: usize = 65_536;
-
 /// One purpose-neutral traversal rule for a projected navigation cell.
 ///
 /// A missing cell remains allowed with the unit cost. Costs are charged when a
@@ -649,8 +644,8 @@ pub struct NavTraversalCell {
 /// Canonical, owned per-cell traversal rules for a [`NavProjection`].
 ///
 /// The map deliberately carries no product interpretation: callers decide
-/// the values while this owner validates membership, admissibility, bounded
-/// retention, deterministic lookup, and the stable hash.
+/// the values while this owner validates membership and admissibility and
+/// keeps deterministic lookup and the stable hash.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NavTraversalOverlay {
     cells: BTreeMap<VoxelCoord, NavTraversalCell>,
@@ -659,7 +654,8 @@ pub struct NavTraversalOverlay {
 
 impl NavTraversalOverlay {
     /// Build canonical traversal rules for one already-admitted projection.
-    /// Input order does not affect retained state or the overlay hash.
+    /// The last record for a coordinate wins; otherwise input order does not
+    /// affect retained state or the overlay hash.
     pub fn from_cells(
         projection: &NavProjection,
         cells: impl IntoIterator<Item = NavTraversalCell>,
@@ -671,14 +667,6 @@ impl NavTraversalOverlay {
             }
             if !projection.is_walkable(cell.coord) {
                 return Err(NavTraversalOverlayError::CellOutsideProjection { coord: cell.coord });
-            }
-            if canonical.contains_key(&cell.coord) {
-                return Err(NavTraversalOverlayError::DuplicateCell { coord: cell.coord });
-            }
-            if canonical.len() == MAX_NAV_TRAVERSAL_CELLS {
-                return Err(NavTraversalOverlayError::TooManyCells {
-                    maximum: MAX_NAV_TRAVERSAL_CELLS,
-                });
             }
             canonical.insert(cell.coord, cell);
         }
@@ -718,8 +706,6 @@ impl NavTraversalOverlay {
 /// Why a caller-provided traversal overlay was rejected before replacement.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NavTraversalOverlayError {
-    TooManyCells { maximum: usize },
-    DuplicateCell { coord: VoxelCoord },
     CellOutsideProjection { coord: VoxelCoord },
     ZeroCost { coord: VoxelCoord },
 }
@@ -737,11 +723,10 @@ pub struct VolumetricNavTraversalCell {
     pub cost: u64,
 }
 
-/// Canonical, bounded traversal rules for a volumetric navigation query.
+/// Canonical traversal rules for a volumetric navigation query.
 ///
 /// The overlay is independent of the planar surface projection.  Admission
-/// only owns the concerns that are meaningful for a caller-supplied set of
-/// records: duplicate coordinates, non-zero costs, bounded retention, and a
+/// only owns non-zero costs, last-record-wins canonical order and a
 /// deterministic hash.  Voxel occupancy and agent-volume validity remain
 /// query concerns owned by the volumetric pathfinding service.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -752,7 +737,8 @@ pub struct VolumetricNavTraversalOverlay {
 
 impl VolumetricNavTraversalOverlay {
     /// Build canonical traversal rules without requiring planar projection
-    /// membership. Input order does not affect retained state or its hash.
+    /// membership. The last record for a coordinate wins; otherwise input
+    /// order does not affect retained state or its hash.
     pub fn from_cells(
         cells: impl IntoIterator<Item = VolumetricNavTraversalCell>,
     ) -> Result<Self, VolumetricNavTraversalOverlayError> {
@@ -760,16 +746,6 @@ impl VolumetricNavTraversalOverlay {
         for cell in cells {
             if cell.cost == 0 {
                 return Err(VolumetricNavTraversalOverlayError::ZeroCost { coord: cell.coord });
-            }
-            if canonical.contains_key(&cell.coord) {
-                return Err(VolumetricNavTraversalOverlayError::DuplicateCell {
-                    coord: cell.coord,
-                });
-            }
-            if canonical.len() == MAX_NAV_TRAVERSAL_CELLS {
-                return Err(VolumetricNavTraversalOverlayError::TooManyCells {
-                    maximum: MAX_NAV_TRAVERSAL_CELLS,
-                });
             }
             canonical.insert(cell.coord, cell);
         }
@@ -810,16 +786,12 @@ impl VolumetricNavTraversalOverlay {
 /// replacement.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VolumetricNavTraversalOverlayError {
-    TooManyCells { maximum: usize },
-    DuplicateCell { coord: VoxelCoord },
     ZeroCost { coord: VoxelCoord },
 }
 
 impl VolumetricNavTraversalOverlayError {
     pub const fn label(self) -> &'static str {
         match self {
-            Self::TooManyCells { .. } => "tooManyCells",
-            Self::DuplicateCell { .. } => "duplicateCell",
             Self::ZeroCost { .. } => "zeroCost",
         }
     }
@@ -828,8 +800,6 @@ impl VolumetricNavTraversalOverlayError {
 impl NavTraversalOverlayError {
     pub const fn label(self) -> &'static str {
         match self {
-            NavTraversalOverlayError::TooManyCells { .. } => "tooManyCells",
-            NavTraversalOverlayError::DuplicateCell { .. } => "duplicateCell",
             NavTraversalOverlayError::CellOutsideProjection { .. } => "cellOutsideProjection",
             NavTraversalOverlayError::ZeroCost { .. } => "zeroCost",
         }
@@ -2791,7 +2761,7 @@ mod tests {
     }
 
     #[test]
-    fn traversal_overlay_is_canonical_and_rejects_invalid_records() {
+    fn traversal_overlay_is_canonical_last_wins_and_rejects_invalid_records() {
         let cells = [
             VoxelCoord::new(0, 0, 0),
             VoxelCoord::new(1, 0, 0),
@@ -2828,23 +2798,35 @@ mod tests {
             ),
             Err(NavTraversalOverlayError::ZeroCost { coord: cells[1] })
         );
+        let repeated = NavTraversalOverlay::from_cells(
+            &projection,
+            [
+                NavTraversalCell {
+                    coord: cells[1],
+                    allowed: true,
+                    cost: 1,
+                },
+                NavTraversalCell {
+                    coord: cells[1],
+                    allowed: false,
+                    cost: 1,
+                },
+            ],
+        )
+        .expect("a repeated coordinate keeps its last record");
+        assert_eq!(repeated.len(), 1);
+        assert!(!repeated.is_allowed(cells[1]));
         assert_eq!(
+            repeated,
             NavTraversalOverlay::from_cells(
                 &projection,
-                [
-                    NavTraversalCell {
-                        coord: cells[1],
-                        allowed: true,
-                        cost: 1,
-                    },
-                    NavTraversalCell {
-                        coord: cells[1],
-                        allowed: false,
-                        cost: 1,
-                    },
-                ],
-            ),
-            Err(NavTraversalOverlayError::DuplicateCell { coord: cells[1] })
+                [NavTraversalCell {
+                    coord: cells[1],
+                    allowed: false,
+                    cost: 1,
+                }],
+            )
+            .unwrap()
         );
         let outside = VoxelCoord::new(9, 0, 0);
         assert_eq!(
@@ -2859,24 +2841,24 @@ mod tests {
             Err(NavTraversalOverlayError::CellOutsideProjection { coord: outside })
         );
 
-        let bounded_cells = (0..=MAX_NAV_TRAVERSAL_CELLS)
-            .map(|x| VoxelCoord::new(x as i64, 1, 0))
+        // The product decides how many cells it rules; 70,000 records simply work.
+        let large_cells = (0..70_000)
+            .map(|x| VoxelCoord::new(x, 1, 0))
             .collect::<Vec<_>>();
-        let bounded_projection =
-            NavProjection::from_walkable_cells(test_grid(), bounded_cells.iter().copied());
-        assert_eq!(
-            NavTraversalOverlay::from_cells(
-                &bounded_projection,
-                bounded_cells.iter().copied().map(|coord| NavTraversalCell {
-                    coord,
-                    allowed: true,
-                    cost: 1,
-                }),
-            ),
-            Err(NavTraversalOverlayError::TooManyCells {
-                maximum: MAX_NAV_TRAVERSAL_CELLS
-            })
-        );
+        let large_projection =
+            NavProjection::from_walkable_cells(test_grid(), large_cells.iter().copied());
+        let large = NavTraversalOverlay::from_cells(
+            &large_projection,
+            large_cells.iter().copied().map(|coord| NavTraversalCell {
+                coord,
+                allowed: coord.x != 50_000,
+                cost: 2,
+            }),
+        )
+        .expect("large overlay");
+        assert_eq!(large.len(), 70_000);
+        assert!(!large.is_allowed(VoxelCoord::new(50_000, 1, 0)));
+        assert_eq!(large.cost_for(VoxelCoord::new(69_999, 1, 0)), 2);
     }
 
     #[test]
@@ -3304,7 +3286,7 @@ mod tests {
     }
 
     #[test]
-    fn weighted_volumetric_overlay_blocks_and_rejects_invalid_records() {
+    fn weighted_volumetric_overlay_blocks_keeps_last_record_and_rejects_zero_cost() {
         let mut world = solid_test_world();
         let start = VoxelCoord::new(1, 1, 1);
         let goal = VoxelCoord::new(1, 2, 1);
@@ -3322,20 +3304,24 @@ mod tests {
             Err(WeightedVolumetricNavPathError::GoalBlocked { goal })
         );
 
+        let repeated = VolumetricNavTraversalOverlay::from_cells([
+            VolumetricNavTraversalCell {
+                coord: goal,
+                allowed: true,
+                cost: 1,
+            },
+            VolumetricNavTraversalCell {
+                coord: goal,
+                allowed: false,
+                cost: 2,
+            },
+        ])
+        .expect("a repeated coordinate keeps its last record");
+        assert_eq!(repeated.len(), 1);
+        assert_eq!(repeated.cost_for(goal), 2);
         assert_eq!(
-            VolumetricNavTraversalOverlay::from_cells([
-                VolumetricNavTraversalCell {
-                    coord: start,
-                    allowed: true,
-                    cost: 1,
-                },
-                VolumetricNavTraversalCell {
-                    coord: start,
-                    allowed: true,
-                    cost: 2,
-                },
-            ]),
-            Err(VolumetricNavTraversalOverlayError::DuplicateCell { coord: start })
+            find_weighted_volumetric_path(&world, &repeated, volumetric_query(start, goal, 16)),
+            Err(WeightedVolumetricNavPathError::GoalBlocked { goal })
         );
         assert_eq!(
             VolumetricNavTraversalOverlay::from_cells([VolumetricNavTraversalCell {

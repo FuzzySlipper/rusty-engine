@@ -422,12 +422,12 @@ public sealed class SpatialMapSnapshot
     {
         if (!float.IsFinite(request.Origin.X) || !float.IsFinite(request.Origin.Y) || !float.IsFinite(request.Origin.Z)
             || !double.IsFinite(request.CellSize) || request.CellSize <= 0
-            || request.Columns == 0 || request.Rows == 0 || (ulong)request.Columns * request.Rows > 1024
+            || request.Columns == 0 || request.Rows == 0
             || !double.IsFinite(request.CollisionMinY) || !double.IsFinite(request.CollisionMaxY)
             || !double.IsFinite(request.NavigationMinY) || !double.IsFinite(request.NavigationMaxY)
             || request.CollisionMinY >= request.CollisionMaxY || request.NavigationMinY > request.NavigationMaxY)
         {
-            throw new ArgumentException("Spatial map geometry must be finite, ordered, and contain 1..1024 cells.", nameof(request));
+            throw new ArgumentException("Spatial map geometry must be finite, ordered, and contain at least one cell.", nameof(request));
         }
     }
 

@@ -124,7 +124,7 @@ fn retained_static_mesh_occludes_visibility_while_a_clear_target_remains_visible
 }
 
 #[test]
-fn distance_rejected_pairs_are_not_retained_and_duplicate_ids_are_rejected() {
+fn distance_rejected_pairs_are_not_retained_and_repeated_ids_are_evaluated() {
     let scene = VoxelCollisionScene::from_solid_voxels(1.0, 8, []).unwrap();
     let observers = [observer(1, [0.0, 0.0, 0.0], 1.0)];
     let targets = [target(2, [100.0, 0.0, 0.0])];
@@ -134,14 +134,28 @@ fn distance_rejected_pairs_are_not_retained_and_duplicate_ids_are_rejected() {
     assert_eq!(readout.distance_rejects, 1);
     assert!(readout.pairs.is_empty());
 
-    let duplicate_observers = [
+    // A repeated observer or target is evaluated like any other entry, in
+    // supplied order among equal ids.
+    let repeated_observers = [
         observer(1, [0.0, 0.0, 0.0], 1.0),
-        observer(1, [1.0, 0.0, 0.0], 1.0),
+        observer(1, [1.0, 0.0, 0.0], 0.5),
     ];
-    assert_eq!(
-        SpatialPerceptionService.evaluate(query(&scene, &[], &duplicate_observers, &targets)),
-        Err(SpatialPerceptionError::DuplicateObserver(EntityId::new(1)))
-    );
+    let repeated_targets = [target(2, [4.0, 0.0, 0.0]), target(2, [4.0, 0.0, 0.0])];
+    let readout = SpatialPerceptionService
+        .evaluate(query(&scene, &[], &repeated_observers, &repeated_targets))
+        .unwrap();
+    assert_eq!(readout.selected_observers, 2);
+    assert_eq!(readout.selected_targets, 2);
+    assert_eq!(readout.pairs.len(), 4);
+    assert!(readout
+        .pairs
+        .iter()
+        .all(|pair| pair.kind == SpatialPerceptionPairKind::Visible));
+    assert_eq!(readout.pairs[0].distance, 4.0);
+    assert_eq!(readout.pairs[2].distance, 3.0);
+    assert_eq!(readout.aggregates.len(), 1);
+    assert_eq!(readout.aggregates[0].visible_observer_count, 4);
+    assert_eq!(readout.aggregates[0].evidence_total, 3.0);
 }
 
 #[test]

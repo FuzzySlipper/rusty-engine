@@ -1286,3 +1286,155 @@ fn implicit_backend_panics_return_their_diagnostic() {
         bridge.end_call();
     }
 }
+
+#[test]
+fn capturing_an_audit_piece_id_again_replaces_the_earlier_capture() {
+    let mut appearance =
+        RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), BTreeMap::new());
+    let mut implicit = RuntimeImplicitBridge::new();
+    appearance.begin_call();
+    implicit.begin_call();
+    let api = implicit_api(&mut implicit, &mut appearance);
+    let appearance_context = (&mut appearance as *mut RuntimeAppearanceBridge).cast();
+    let mut material = NativeMaterialHandle::default();
+    assert_eq!(
+        unsafe {
+            appearance::create_material(
+                appearance_context,
+                opaque_material(),
+                &mut material,
+                std::ptr::null_mut(),
+            )
+        },
+        ABI_OK
+    );
+    let vec3 = |x: f32, y: f32, z: f32| NativeVec3 { x, y, z };
+    let mut audit = NativeImplicitAuditHandle { value: 0 };
+    assert_eq!(
+        unsafe { (api.create_audit)(api.context, &mut audit, std::ptr::null_mut()) },
+        ABI_OK
+    );
+    // The fixture's column/capital pair: an exposed shared top, then the
+    // column trimmed under the capital and captured again under its id.
+    let capture = |piece_id: u64, minimum: NativeVec3, maximum: NativeVec3| {
+        let mut field = NativeImplicitFieldHandle { value: 0 };
+        assert_eq!(
+            unsafe { (api.create_field)(api.context, &mut field, std::ptr::null_mut()) },
+            ABI_OK
+        );
+        let mut node = NativeImplicitNode { value: 0 };
+        assert_eq!(
+            unsafe {
+                (api.add_box)(
+                    api.context,
+                    NativeImplicitBoxRequest {
+                        field,
+                        minimum,
+                        maximum,
+                    },
+                    &mut node,
+                    std::ptr::null_mut(),
+                )
+            },
+            ABI_OK
+        );
+        let mut mesh = NativeMeshResourceHandle::default();
+        let mut receipt = unsafe { std::mem::zeroed::<NativeOperationErrorReceipt>() };
+        assert_eq!(
+            unsafe {
+                (api.generate)(
+                    api.context,
+                    &NativeImplicitGenerateRequest {
+                        field,
+                        source: node,
+                        minimum: vec3(minimum.x - 0.5, minimum.y - 0.5, minimum.z - 0.5),
+                        maximum: vec3(maximum.x + 0.5, maximum.y + 0.5, maximum.z + 0.5),
+                        cell_size: 0.25,
+                        crease_angle_degrees: 0.0,
+                        uv_scale: 1.0,
+                        texture_mapping: NativeImplicitTextureMapping::default(),
+                        default_material: material,
+                        regions: std::ptr::null(),
+                        regions_len: 0,
+                        material_boundary_mode: NativeImplicitMaterialBoundaryMode::Interpolated,
+                        material_sample_spacing: 0.0,
+                        max_extraction_vertices: 0,
+                        max_extraction_triangles: 0,
+                    },
+                    &mut mesh,
+                    &mut receipt,
+                )
+            },
+            ABI_OK
+        );
+        assert_eq!(
+            unsafe {
+                (api.capture_audit_piece)(
+                    api.context,
+                    NativeImplicitAuditPieceRequest {
+                        audit,
+                        piece_id,
+                        field,
+                        source: node,
+                        mesh,
+                        placement: NativeTransform {
+                            translation: NativeVec3::default(),
+                            rotation: NativeQuat {
+                                w: 1.0,
+                                ..NativeQuat::default()
+                            },
+                            scale: vec3(1.0, 1.0, 1.0),
+                        },
+                        sample_spacing: 0.25,
+                    },
+                    &mut receipt,
+                )
+            },
+            ABI_OK
+        );
+    };
+    let classifications = || {
+        let mut report = unsafe { std::mem::zeroed::<NativeImplicitAuditReportResult>() };
+        let mut receipt = unsafe { std::mem::zeroed::<NativeOperationErrorReceipt>() };
+        assert_eq!(
+            unsafe {
+                (api.read_audit)(
+                    api.context,
+                    NativeImplicitAuditRequest {
+                        audit,
+                        tolerance_cells: 0.1,
+                    },
+                    &mut report,
+                    &mut receipt,
+                )
+            },
+            ABI_OK
+        );
+        if report.diagnostics_len == 0 {
+            return Vec::new();
+        }
+        unsafe { std::slice::from_raw_parts(report.diagnostics, report.diagnostics_len) }
+            .iter()
+            .map(|diagnostic| {
+                (
+                    diagnostic.piece_a,
+                    diagnostic.piece_b,
+                    diagnostic.classification,
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    capture(101, vec3(-0.55, 0.0, -0.55), vec3(0.55, 5.0, 0.55));
+    capture(102, vec3(-0.7, 4.5, -0.7), vec3(0.7, 5.0, 0.7));
+    assert!(classifications().contains(&(
+        101,
+        102,
+        NativeImplicitAuditClassification::CoincidentExposed
+    )));
+
+    capture(101, vec3(-0.55, 0.0, -0.55), vec3(0.55, 4.5, 0.55));
+    let replaced = classifications();
+    assert!(replaced.iter().all(|(_, _, classification)| *classification
+        == NativeImplicitAuditClassification::BuriedSurface));
+    assert!(replaced.iter().all(|(a, b, _)| (*a, *b) == (101, 102)));
+}

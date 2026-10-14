@@ -255,7 +255,8 @@ allocation and is not streamed; for a streamed, editable density world use
 `RecipeWriter` receiver, generate the ordinary mesh, then call
 `CaptureAuditPiece(new(audit, pieceId, surface.Field, surface.Root, mesh,
 surface.Placement, service.ReadGeneration(surface.Field).SampleSpacing))`.
-Use stable unique `ulong` piece IDs and keep a product dictionary for labels.
+Use stable `ulong` piece IDs and keep a product dictionary for labels;
+capturing an ID again replaces the earlier capture.
 The Engine copies geometry and retains an independent field snapshot; source
 fields, meshes and materials can be disposed before running the audit.
 
@@ -545,7 +546,7 @@ save. Registration is local and explicit; there is no mechanics discovery.
 
 ### Spatial debugging maps
 
-`Spatial.ReadMap` reads a bounded (up to 1,024 cells), world-aligned X/Z map
+`Spatial.ReadMap` reads a world-aligned X/Z map of any requested size
 from a live `SpatialSession`. Supply the minimum X/Z corner, cell size,
 columns/rows, a collision Y interval, a separate navigation support Y interval,
 and current product-owned dynamic colliders. Columns advance +X; rows advance

@@ -250,6 +250,57 @@ mod tests {
     }
 
     #[test]
+    fn keyed_draws_accept_empty_and_long_scope_and_key() {
+        let mut bridge = RuntimeRngBridge::new();
+        let api = api(&mut bridge);
+        let long_scope = "s".repeat(1_000);
+        let long_key = "k".repeat(10_000);
+        let draw_keyed = |scope: &str, key: &str| {
+            let mut receipt = NativeKeyedRngReceipt::default();
+            let mut error = crate::operation_diagnostics::empty_receipt();
+            let status = unsafe {
+                (api.draw_keyed)(
+                    api.context,
+                    &NativeKeyedRngRequest {
+                        seed: 7,
+                        // An empty C# string may arrive without bytes.
+                        scope: NativeUtf8Slice {
+                            bytes: if scope.is_empty() {
+                                std::ptr::null()
+                            } else {
+                                scope.as_ptr()
+                            },
+                            len: scope.len(),
+                        },
+                        key: NativeUtf8Slice {
+                            bytes: if key.is_empty() {
+                                std::ptr::null()
+                            } else {
+                                key.as_ptr()
+                            },
+                            len: key.len(),
+                        },
+                        minimum: -9,
+                        maximum: 9,
+                    },
+                    &mut receipt,
+                    &mut error,
+                )
+            };
+            assert_eq!(status, ABI_OK);
+            receipt.value
+        };
+        assert_eq!(draw_keyed("world/event", "alpha"), 1); // svc-rng golden
+        for (scope, key) in [("", "alpha"), ("world/event", ""), ("", "")] {
+            assert_eq!(draw_keyed(scope, key), draw_keyed(scope, key));
+        }
+        assert_eq!(
+            draw_keyed(&long_scope, &long_key),
+            draw_keyed(&long_scope, &long_key)
+        );
+    }
+
+    #[test]
     fn lcg15_preserves_the_known_32_bit_compatibility_sequence() {
         let mut bridge = RuntimeRngBridge::new();
         let api = api(&mut bridge);

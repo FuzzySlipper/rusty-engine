@@ -191,8 +191,7 @@ fn rebase_keeps_voxel_nav_trigger_and_static_mesh_continuous() {
         TRIGGER,
         "test.zone",
         ["test"],
-    )])
-    .unwrap();
+    )]);
     let entered = triggers.reconcile(
         [
             collider(TRIGGER, Vec3::new(FAR_X as f32 + 4.0, 1.0, 0.0), 0.5),

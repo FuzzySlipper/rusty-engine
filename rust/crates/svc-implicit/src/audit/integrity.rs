@@ -96,7 +96,8 @@ impl Aggregate {
     }
 }
 
-/// Inspects mesh topology without welding or modifying it.
+/// Inspects mesh topology of pieces with distinct ids without welding or
+/// modifying it.
 ///
 /// `OpenRegion` is an explicit world-space exception for a single stable piece
 /// id.  It suppresses a boundary diagnostic only when the whole boundary edge
@@ -107,11 +108,6 @@ impl Aggregate {
 pub fn inspect(pieces: &[Arc<Piece>], openings: &[OpenRegion]) -> Result<AnalysisReport, Error> {
     let mut ordered: Vec<_> = pieces.iter().map(Arc::as_ref).collect();
     ordered.sort_by_key(|piece| piece.id);
-    for pair in ordered.windows(2) {
-        if pair[0].id == pair[1].id {
-            return Err(Error(format!("duplicate audit piece id {}", pair[0].id)));
-        }
-    }
 
     let known = ordered
         .iter()

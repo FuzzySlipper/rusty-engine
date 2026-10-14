@@ -26,26 +26,12 @@ impl RngSeed {
     }
 }
 
-/// Maximum UTF-8 bytes accepted for a keyed-draw scope.
-pub const MAX_KEYED_RNG_SCOPE_BYTES: usize = 256;
-
-/// Maximum bytes accepted for a keyed-draw key.
-pub const MAX_KEYED_RNG_KEY_BYTES: usize = 4 * 1024;
-
 /// Maximum deterministic rejection-sampling attempts for one keyed draw.
 pub const KEYED_RNG_V1_MAX_ATTEMPTS: u32 = 128;
 
-/// Input validation or deterministic sampling failure for [`KeyedRngV1`].
+/// Range or deterministic sampling failure for [`KeyedRngV1`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum KeyedRngError {
-    /// A keyed draw needs a non-empty scope to keep caller domains explicit.
-    EmptyScope,
-    /// The scope exceeds the bounded keyed-draw input quota.
-    ScopeQuotaExceeded { actual: usize, maximum: usize },
-    /// A keyed draw needs a non-empty caller-owned key.
-    EmptyKey,
-    /// The key exceeds the bounded keyed-draw input quota.
-    KeyQuotaExceeded { actual: usize, maximum: usize },
     /// The inclusive range has its bounds in reverse order.
     InvalidRange { minimum: i64, maximum: i64 },
     /// Deterministic rejection sampling did not accept a sample within its quota.
@@ -80,7 +66,9 @@ impl KeyedRngV1 {
         minimum: i64,
         maximum: i64,
     ) -> Result<i64, KeyedRngError> {
-        validate_keyed_input(scope, key, minimum, maximum)?;
+        if minimum > maximum {
+            return Err(KeyedRngError::InvalidRange { minimum, maximum });
+        }
 
         let input_hash = hash_keyed_v1_input(seed, scope.as_bytes(), key);
         let span = inclusive_span(minimum, maximum);
@@ -163,36 +151,6 @@ fn hash_seed_scope(seed: RngSeed, scope: &str) -> u64 {
         h = h.wrapping_mul(0x0000_0100_0000_01b3);
     }
     h
-}
-
-fn validate_keyed_input(
-    scope: &str,
-    key: &[u8],
-    minimum: i64,
-    maximum: i64,
-) -> Result<(), KeyedRngError> {
-    if scope.is_empty() {
-        return Err(KeyedRngError::EmptyScope);
-    }
-    if scope.len() > MAX_KEYED_RNG_SCOPE_BYTES {
-        return Err(KeyedRngError::ScopeQuotaExceeded {
-            actual: scope.len(),
-            maximum: MAX_KEYED_RNG_SCOPE_BYTES,
-        });
-    }
-    if key.is_empty() {
-        return Err(KeyedRngError::EmptyKey);
-    }
-    if key.len() > MAX_KEYED_RNG_KEY_BYTES {
-        return Err(KeyedRngError::KeyQuotaExceeded {
-            actual: key.len(),
-            maximum: MAX_KEYED_RNG_KEY_BYTES,
-        });
-    }
-    if minimum > maximum {
-        return Err(KeyedRngError::InvalidRange { minimum, maximum });
-    }
-    Ok(())
 }
 
 fn inclusive_span(minimum: i64, maximum: i64) -> u128 {
@@ -418,15 +376,7 @@ mod tests {
     }
 
     #[test]
-    fn keyed_v1_reports_typed_input_errors() {
-        assert_eq!(
-            KeyedRngV1::draw_i64_inclusive(RngSeed::new(1), "", b"key", 0, 1),
-            Err(KeyedRngError::EmptyScope)
-        );
-        assert_eq!(
-            KeyedRngV1::draw_i64_inclusive(RngSeed::new(1), "scope", b"", 0, 1),
-            Err(KeyedRngError::EmptyKey)
-        );
+    fn keyed_v1_accepts_empty_and_long_inputs_and_rejects_reversed_ranges() {
         assert_eq!(
             KeyedRngV1::draw_i64_inclusive(RngSeed::new(1), "scope", b"key", 2, 1),
             Err(KeyedRngError::InvalidRange {
@@ -434,31 +384,39 @@ mod tests {
                 maximum: 1,
             })
         );
-        assert_eq!(
-            KeyedRngV1::draw_i64_inclusive(
-                RngSeed::new(1),
-                &"s".repeat(MAX_KEYED_RNG_SCOPE_BYTES + 1),
-                b"key",
-                0,
-                1,
-            ),
-            Err(KeyedRngError::ScopeQuotaExceeded {
-                actual: MAX_KEYED_RNG_SCOPE_BYTES + 1,
-                maximum: MAX_KEYED_RNG_SCOPE_BYTES,
-            })
+
+        // Empty and long scopes/keys are ordinary length-framed inputs: each
+        // draw reproduces, and the framing keeps empty fields distinct.
+        let long_scope = "s".repeat(10_000);
+        let long_key = vec![7u8; 64 * 1024];
+        let inputs: [(&str, &[u8]); 4] = [
+            ("", b"key"),
+            ("scope", b""),
+            ("", b""),
+            (&long_scope, &long_key),
+        ];
+        let draws = inputs.map(|(scope, key)| {
+            let first =
+                KeyedRngV1::draw_i64_inclusive(RngSeed::new(1), scope, key, i64::MIN, i64::MAX)
+                    .unwrap();
+            assert_eq!(
+                KeyedRngV1::draw_i64_inclusive(RngSeed::new(1), scope, key, i64::MIN, i64::MAX),
+                Ok(first)
+            );
+            first
+        });
+        for (index, draw) in draws.iter().enumerate() {
+            assert!(draws[index + 1..].iter().all(|other| other != draw));
+        }
+        assert_ne!(
+            hash_keyed_v1_input(RngSeed::new(1), b"", b"key"),
+            hash_keyed_v1_input(RngSeed::new(1), b"key", b"")
         );
-        assert_eq!(
-            KeyedRngV1::draw_i64_inclusive(
-                RngSeed::new(1),
-                "scope",
-                &vec![0; MAX_KEYED_RNG_KEY_BYTES + 1],
-                0,
-                1,
-            ),
-            Err(KeyedRngError::KeyQuotaExceeded {
-                actual: MAX_KEYED_RNG_KEY_BYTES + 1,
-                maximum: MAX_KEYED_RNG_KEY_BYTES,
-            })
+        let mut changed_key = long_key.clone();
+        changed_key[60_000] = 8;
+        assert_ne!(
+            hash_keyed_v1_input(RngSeed::new(1), long_scope.as_bytes(), &long_key),
+            hash_keyed_v1_input(RngSeed::new(1), long_scope.as_bytes(), &changed_key)
         );
     }
 }

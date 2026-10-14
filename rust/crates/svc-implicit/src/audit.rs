@@ -14,10 +14,7 @@
 //! artifacts, contacts below the supplied extraction spacing, or malformed
 //! open/non-manifold extraction topology.
 
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    sync::Arc,
-};
+use std::{collections::BTreeMap, sync::Arc};
 
 use nalgebra::{Matrix4, Quaternion, UnitQuaternion, Vector3};
 
@@ -176,7 +173,8 @@ pub struct Report {
     pub triangle_pairs: u64,
 }
 
-/// Audits independently extracted pieces. `tolerance_cells` is multiplied by
+/// Audits independently extracted pieces with distinct ids (the Engine keeps
+/// an audit collection keyed by piece id). `tolerance_cells` is multiplied by
 /// the coarser of each pair's extraction spacings, so the reported tolerance
 /// remains tied to finite extraction resolution rather than field magnitude.
 pub fn audit(pieces: &[Arc<Piece>], tolerance_cells: f32) -> Result<Report, Error> {
@@ -184,12 +182,6 @@ pub fn audit(pieces: &[Arc<Piece>], tolerance_cells: f32) -> Result<Report, Erro
         return Err(Error(
             "audit tolerance_cells must be finite and positive".into(),
         ));
-    }
-    let mut ids = BTreeSet::new();
-    for piece in pieces {
-        if !ids.insert(piece.id) {
-            return Err(Error(format!("duplicate audit piece id {}", piece.id)));
-        }
     }
     if pieces.len() < 2 {
         return Ok(Report::default());
@@ -1011,13 +1003,11 @@ mod tests {
     }
 
     #[test]
-    fn reports_buried_inner_shape_and_rejects_duplicate_ids() {
+    fn reports_buried_inner_shape() {
         let outer = box_piece(1, [-2.0, -2.0, -2.0], [2.0, 2.0, 2.0]);
         let inner = box_piece(2, [-0.5, -0.5, -0.5], [0.5, 0.5, 0.5]);
-        let report = audit(&[outer.clone(), inner], 0.5).unwrap();
+        let report = audit(&[outer, inner], 0.5).unwrap();
         assert!(classes(&report).contains(&Classification::BuriedSurface));
-        let duplicate = box_piece(1, [4.0, 4.0, 4.0], [5.0, 5.0, 5.0]);
-        assert!(audit(&[outer, duplicate], 0.5).is_err());
     }
 
     #[test]

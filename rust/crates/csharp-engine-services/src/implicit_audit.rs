@@ -48,13 +48,8 @@ pub(super) unsafe extern "C" fn capture_audit_piece(
     receipt: *mut NativeOperationErrorReceipt,
 ) -> i32 {
     call_operation(context, &mut (), receipt, |b| {
-        let collection = b
-            .stage()?
-            .audits
-            .get(&request.audit.value)
-            .ok_or_else(|| error("unknown implicit audit"))?;
-        if collection.pieces.contains_key(&request.piece_id) {
-            return Err(error("duplicate audit piece identity"));
+        if !b.stage()?.audits.contains_key(&request.audit.value) {
+            return Err(error("unknown implicit audit"));
         }
         let retained = b.retained(request.field)?;
         let node = retained.node(request.source)?;
@@ -86,6 +81,7 @@ pub(super) unsafe extern "C" fn capture_audit_piece(
             .get_mut(&request.audit.value)
             .expect("validated audit")
             .pieces
+            // A piece id captured again replaces the earlier capture.
             .insert(request.piece_id, Arc::new(piece));
         Ok(())
     })

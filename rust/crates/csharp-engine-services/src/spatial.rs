@@ -3200,8 +3200,8 @@ impl RuntimeSpatialBridge {
                     tags,
                 )
                 .with_geometry_source(geometry),
-            )
-            .map_err(SpatialTriggerOperationError::Trigger)
+            );
+        Ok(())
     }
 
     fn reconcile_triggers(
@@ -9334,19 +9334,40 @@ mod tests {
         );
         assert_eq!(receipt.diagnostics_len, 0);
 
+        // Registering the same trigger again replaces its definition.
         receipt = unsafe { std::mem::zeroed() };
         assert_eq!(
             unsafe { (api.register_trigger)(api.context, &request, &mut receipt) },
+            ABI_OK
+        );
+        assert_eq!(receipt.diagnostics_len, 0);
+
+        let mut lifecycle: NativeSpatialTriggerLifecycleResult = unsafe { std::mem::zeroed() };
+        receipt = unsafe { std::mem::zeroed() };
+        assert_eq!(
+            unsafe {
+                (api.set_trigger_active)(
+                    api.context,
+                    &NativeSpatialTriggerSetActiveRequest {
+                        session,
+                        trigger: 999,
+                        active: false,
+                        tick: 1,
+                    },
+                    &mut lifecycle,
+                    &mut receipt,
+                )
+            },
             0
         );
         assert_eq!(receipt.diagnostics_len, 1);
         let diagnostic = unsafe { *receipt.diagnostics };
-        assert_eq!(copied_utf8(diagnostic.code), "duplicate-trigger-definition");
+        assert_eq!(copied_utf8(diagnostic.code), "missing-trigger-definition");
         assert_eq!(
             copied_utf8(diagnostic.message),
-            "trigger entity already has a registered definition"
+            "trigger definition is not registered"
         );
-        assert_eq!(copied_utf8(diagnostic.source), "entity:41");
+        assert_eq!(copied_utf8(diagnostic.source), "entity:999");
 
         let mut read: NativeSpatialTriggerReadResult = unsafe { std::mem::zeroed() };
         assert_eq!(
@@ -9745,29 +9766,47 @@ mod tests {
         );
         assert!(!read.active && read.subjects_len == 0);
 
-        for (trigger, active, code) in [
-            (41, false, "duplicate-trigger-lifecycle"),
-            (999, false, "missing-trigger-definition"),
-        ] {
-            error = unsafe { std::mem::zeroed() };
-            assert_eq!(
-                unsafe {
-                    (api.set_trigger_active)(
-                        api.context,
-                        &NativeSpatialTriggerSetActiveRequest {
-                            session,
-                            trigger,
-                            active,
-                            tick: 3,
-                        },
-                        &mut lifecycle,
-                        &mut error,
-                    )
-                },
-                0
-            );
-            assert_eq!(take_operation_diagnostic_code(&api, error), code);
-        }
+        // Deactivating an inactive trigger is idempotent.
+        error = unsafe { std::mem::zeroed() };
+        assert_eq!(
+            unsafe {
+                (api.set_trigger_active)(
+                    api.context,
+                    &NativeSpatialTriggerSetActiveRequest {
+                        session,
+                        trigger: 41,
+                        active: false,
+                        tick: 3,
+                    },
+                    &mut lifecycle,
+                    &mut error,
+                )
+            },
+            ABI_OK
+        );
+        assert!(!lifecycle.active && lifecycle.facts_len == 0);
+        assert_eq!(lifecycle.removed_overlap_count, 0);
+        error = unsafe { std::mem::zeroed() };
+        assert_eq!(
+            unsafe {
+                (api.set_trigger_active)(
+                    api.context,
+                    &NativeSpatialTriggerSetActiveRequest {
+                        session,
+                        trigger: 999,
+                        active: false,
+                        tick: 3,
+                    },
+                    &mut lifecycle,
+                    &mut error,
+                )
+            },
+            0
+        );
+        assert_eq!(
+            take_operation_diagnostic_code(&api, error),
+            "missing-trigger-definition"
+        );
         assert_eq!(
             unsafe {
                 (api.set_trigger_active)(
@@ -9831,7 +9870,7 @@ mod tests {
         let subjects = unsafe { std::slice::from_raw_parts(read.subjects, read.subjects_len) };
         assert!(read.active && subjects.len() == 1 && subjects[0].subject == 50);
 
-        let duplicate_active = [42_u64, 42_u64];
+        let repeated_active = [42_u64, 42_u64];
         error = unsafe { std::mem::zeroed() };
         assert_eq!(
             unsafe {
@@ -9839,8 +9878,8 @@ mod tests {
                     api.context,
                     &NativeSpatialTriggerRestoreRequest {
                         session,
-                        active_triggers: duplicate_active.as_ptr(),
-                        active_triggers_len: duplicate_active.len(),
+                        active_triggers: repeated_active.as_ptr(),
+                        active_triggers_len: repeated_active.len(),
                         entities: entities.as_ptr(),
                         entities_len: entities.len(),
                     },
@@ -9848,11 +9887,15 @@ mod tests {
                     &mut error,
                 )
             },
-            0
+            ABI_OK
         );
         assert_eq!(
-            take_operation_diagnostic_code(&api, error),
-            "duplicate-trigger-lifecycle"
+            (
+                restored.registered_count,
+                restored.active_count,
+                restored.active_overlap_count,
+            ),
+            (2, 1, 1)
         );
 
         assert_eq!(

@@ -142,25 +142,17 @@ pub struct TriggerOverlapFact {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum TriggerVolumeDiagnosticCode {
-    DuplicateDefinition,
     MissingDefinition,
-    InvalidIdentifier,
-    InvalidTag,
     StaleEntity,
     InactiveCollision,
-    DuplicateLifecycle,
 }
 
 impl TriggerVolumeDiagnosticCode {
     pub const fn code(self) -> &'static str {
         match self {
-            Self::DuplicateDefinition => "duplicate-trigger-definition",
             Self::MissingDefinition => "missing-trigger-definition",
-            Self::InvalidIdentifier => "invalid-trigger-identifier",
-            Self::InvalidTag => "invalid-trigger-tag",
             Self::StaleEntity => "stale-trigger-entity",
             Self::InactiveCollision => "trigger-inactive-collision",
-            Self::DuplicateLifecycle => "duplicate-trigger-lifecycle",
         }
     }
 }
@@ -232,36 +224,22 @@ pub struct TriggerVolumeSystem {
 }
 
 impl TriggerVolumeSystem {
-    pub fn new(
-        definitions: impl IntoIterator<Item = KinematicTriggerDefinition>,
-    ) -> Result<Self, TriggerVolumeError> {
+    pub fn new(definitions: impl IntoIterator<Item = KinematicTriggerDefinition>) -> Self {
         let mut system = Self::default();
         for definition in definitions {
-            system.register(definition)?;
+            system.register(definition);
         }
-        Ok(system)
+        system
     }
 
-    pub fn register(
-        &mut self,
-        mut definition: KinematicTriggerDefinition,
-    ) -> Result<(), TriggerVolumeError> {
-        let trigger = definition.trigger_id();
-        let mut diagnostics = validate_definition(&definition);
-        if self.definitions.contains_key(&trigger) {
-            diagnostics.push(diagnostic(
-                TriggerVolumeDiagnosticCode::DuplicateDefinition,
-                Some(trigger),
-                "trigger entity already has a registered definition",
-            ));
-        }
-        if !diagnostics.is_empty() {
-            return Err(TriggerVolumeError { diagnostics });
-        }
+    /// Registers `definition`, replacing any definition its trigger entity
+    /// already has. A replaced trigger keeps its active flag, current overlaps
+    /// and last geometry row: later facts carry the new scope and tags, and
+    /// the next reconcile senses under the new geometry source.
+    pub fn register(&mut self, mut definition: KinematicTriggerDefinition) {
         definition.tags.sort();
         definition.tags.dedup();
-        self.definitions.insert(trigger, definition);
-        Ok(())
+        self.definitions.insert(definition.trigger_id(), definition);
     }
 
     pub fn definitions(&self) -> impl Iterator<Item = &KinematicTriggerDefinition> {
@@ -283,6 +261,8 @@ impl TriggerVolumeSystem {
         self.definitions.len() - self.inactive_triggers.len()
     }
 
+    /// Activates or deactivates a registered trigger. Asking for the state it
+    /// already has changes nothing and returns a receipt without facts.
     pub fn set_active(
         &mut self,
         trigger: EntityId,
@@ -290,20 +270,9 @@ impl TriggerVolumeSystem {
         tick: u64,
     ) -> Result<TriggerLifecycleReceipt, TriggerVolumeError> {
         let currently_active = self.is_active(trigger)?;
-        if currently_active == active {
-            return Err(TriggerVolumeError {
-                diagnostics: vec![diagnostic(
-                    TriggerVolumeDiagnosticCode::DuplicateLifecycle,
-                    Some(trigger),
-                    if active {
-                        "trigger is already active"
-                    } else {
-                        "trigger is already inactive"
-                    },
-                )],
-            });
-        }
-        let removed_overlaps = if active {
+        let removed_overlaps = if currently_active == active {
+            Vec::new()
+        } else if active {
             self.inactive_triggers.remove(&trigger);
             Vec::new()
         } else {
@@ -341,15 +310,6 @@ impl TriggerVolumeSystem {
         colliders: impl IntoIterator<Item = TriggerCollider>,
     ) -> Result<TriggerRestoreReceipt, TriggerVolumeError> {
         let active = active_triggers.iter().copied().collect::<BTreeSet<_>>();
-        if active.len() != active_triggers.len() {
-            return Err(TriggerVolumeError {
-                diagnostics: vec![diagnostic(
-                    TriggerVolumeDiagnosticCode::DuplicateLifecycle,
-                    None,
-                    "restore active trigger set contains a duplicate",
-                )],
-            });
-        }
         if let Some(unknown) = active
             .iter()
             .find(|trigger| !self.definitions.contains_key(trigger))
@@ -539,35 +499,6 @@ fn overlaps_for(
         )
         .copied()
         .collect()
-}
-
-fn validate_definition(definition: &KinematicTriggerDefinition) -> Vec<TriggerVolumeDiagnostic> {
-    let mut diagnostics = Vec::new();
-    if !valid_identifier(&definition.scope) {
-        diagnostics.push(diagnostic(
-            TriggerVolumeDiagnosticCode::InvalidIdentifier,
-            Some(definition.trigger_id()),
-            "scope must be a non-empty dot, dash, or underscore identifier",
-        ));
-    }
-    for tag in &definition.tags {
-        if !valid_identifier(tag) {
-            diagnostics.push(diagnostic(
-                TriggerVolumeDiagnosticCode::InvalidTag,
-                Some(definition.trigger_id()),
-                format!("invalid trigger tag `{tag}`"),
-            ));
-        }
-    }
-    diagnostics
-}
-
-fn valid_identifier(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= 128
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_'))
 }
 
 pub(crate) fn diagnostic(

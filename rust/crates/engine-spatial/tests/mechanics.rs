@@ -220,12 +220,12 @@ fn trigger_lifecycle_retirement_and_reactivation_are_deliberate() {
         .is_empty());
     assert!(!triggers.is_active(trigger).unwrap());
 
+    // Asking for the state a trigger already has changes nothing.
     let unchanged = triggers.clone();
-    let duplicate = triggers.set_active(trigger, false, 3).unwrap_err();
-    assert_eq!(
-        duplicate.diagnostics[0].code,
-        TriggerVolumeDiagnosticCode::DuplicateLifecycle
-    );
+    let repeated = triggers.set_active(trigger, false, 3).unwrap();
+    assert!(!repeated.active);
+    assert!(repeated.removed_overlaps.is_empty());
+    assert!(repeated.facts.is_empty());
     assert_eq!(triggers, unchanged);
     let unknown = triggers
         .set_active(EntityId::new(999), false, 3)
@@ -239,9 +239,58 @@ fn trigger_lifecycle_retirement_and_reactivation_are_deliberate() {
     let reactivated = triggers.set_active(trigger, true, 4).unwrap();
     assert!(reactivated.active);
     assert!(reactivated.facts.is_empty());
-    let reentered = triggers.reconcile(colliders, 5, TriggerReconcileCause::Movement);
+    let reentered = triggers.reconcile(colliders.clone(), 5, TriggerReconcileCause::Movement);
     assert_eq!(reentered.facts.len(), 1);
     assert_eq!(reentered.facts[0].kind, TriggerOverlapFactKind::Enter);
+    let active = triggers.clone();
+    let again = triggers.set_active(trigger, true, 6).unwrap();
+    assert!(again.active && again.facts.is_empty() && again.removed_overlaps.is_empty());
+    assert_eq!(triggers, active);
+    let continued = triggers.reconcile(colliders, 7, TriggerReconcileCause::Movement);
+    assert!(continued.facts.is_empty());
+    assert_eq!(continued.continued.len(), 1);
+}
+
+#[test]
+fn registering_a_trigger_again_replaces_its_definition_and_keeps_its_state() {
+    let (mut colliders, mut triggers, trigger, subject) = trigger_fixture();
+    move_collider(&mut colliders, subject, Vec3::ZERO);
+    let entered = triggers.reconcile(colliders.clone(), 1, TriggerReconcileCause::Movement);
+    assert_eq!(entered.facts[0].scope, "zone.exit");
+
+    // Product-authored scope and tags are copied into facts as given.
+    triggers.register(
+        KinematicTriggerDefinition::new(trigger, "Zone exit/北", ["", "b tag", "a tag"])
+            .with_geometry_source(TriggerGeometrySource::EntityBounds),
+    );
+    assert_eq!(triggers.definitions().count(), 1);
+    assert!(triggers.is_active(trigger).unwrap());
+    assert_eq!(
+        triggers.current_overlaps(trigger).unwrap().subjects,
+        [subject]
+    );
+
+    // The overlap continues, and the next edge carries the new definition.
+    let continued = triggers.reconcile(colliders.clone(), 2, TriggerReconcileCause::Movement);
+    assert!(continued.facts.is_empty());
+    assert_eq!(continued.continued.len(), 1);
+    // The new geometry source senses without enabled collision.
+    set_collision(&mut colliders, trigger, false);
+    let sensed = triggers.reconcile(colliders.clone(), 3, TriggerReconcileCause::Movement);
+    assert!(sensed.facts.is_empty() && sensed.diagnostics.is_empty());
+    let retired = triggers.set_active(trigger, false, 4).unwrap();
+    assert_eq!(retired.facts.len(), 1);
+    assert_eq!(retired.facts[0].scope, "Zone exit/北");
+    assert_eq!(retired.facts[0].tags, ["", "a tag", "b tag"]);
+
+    // Replacing an inactive trigger keeps it inactive.
+    triggers.register(KinematicTriggerDefinition::new(
+        trigger,
+        "zone.exit",
+        ["door"],
+    ));
+    assert!(!triggers.is_active(trigger).unwrap());
+    assert_eq!(triggers.active_trigger_count(), 0);
 }
 
 #[test]
@@ -257,8 +306,7 @@ fn trigger_restore_rebases_active_set_and_overlaps_without_edges() {
     let mut triggers = TriggerVolumeSystem::new([
         KinematicTriggerDefinition::new(trigger_a, "zone.a", ["zone"]),
         KinematicTriggerDefinition::new(trigger_b, "zone.b", ["zone"]),
-    ])
-    .unwrap();
+    ]);
     let entered = triggers.reconcile(colliders, 1, TriggerReconcileCause::Spawn);
     assert_eq!(entered.facts.len(), 2);
 
@@ -274,13 +322,10 @@ fn trigger_restore_rebases_active_set_and_overlaps_without_edges() {
     assert_eq!(after.continued.len(), 1);
 
     let unchanged = triggers.clone();
-    let duplicate = triggers
+    let repeated = triggers
         .restore(&[trigger_b, trigger_b], colliders)
-        .unwrap_err();
-    assert_eq!(
-        duplicate.diagnostics[0].code,
-        TriggerVolumeDiagnosticCode::DuplicateLifecycle
-    );
+        .unwrap();
+    assert_eq!(repeated.active_count, 1);
     assert_eq!(triggers, unchanged);
     let unknown = triggers
         .restore(&[EntityId::new(999)], colliders)
@@ -293,24 +338,12 @@ fn trigger_restore_rebases_active_set_and_overlaps_without_edges() {
 }
 
 #[test]
-fn malformed_definitions_stale_entities_and_unknown_reads_are_typed() {
-    let invalid = TriggerVolumeSystem::new([KinematicTriggerDefinition::new(
-        EntityId::new(1),
-        "bad scope",
-        ["ok"],
-    )])
-    .unwrap_err();
-    assert_eq!(
-        invalid.diagnostics[0].code,
-        TriggerVolumeDiagnosticCode::InvalidIdentifier
-    );
-
+fn stale_entities_and_unknown_reads_are_typed() {
     let mut stale = TriggerVolumeSystem::new([KinematicTriggerDefinition::new(
         EntityId::new(99),
         "zone.stale",
         ["zone"],
-    )])
-    .unwrap();
+    )]);
     let receipt = stale.reconcile([], 1, TriggerReconcileCause::Scheduled);
     assert_eq!(
         receipt.diagnostics[0].code,
@@ -351,8 +384,7 @@ fn entity_bounds_trigger_senses_traversal_with_one_enter_and_one_exit() {
         "zone.sensor",
         ["zone"],
     )
-    .with_geometry_source(TriggerGeometrySource::EntityBounds)])
-    .unwrap();
+    .with_geometry_source(TriggerGeometrySource::EntityBounds)]);
 
     let outside = triggers.reconcile(colliders.clone(), 1, TriggerReconcileCause::Spawn);
     assert!(outside.facts.is_empty());
@@ -387,8 +419,7 @@ fn entity_bounds_trigger_keeps_subject_eligibility() {
         "zone.sensor",
         ["zone"],
     )
-    .with_geometry_source(TriggerGeometrySource::EntityBounds)])
-    .unwrap();
+    .with_geometry_source(TriggerGeometrySource::EntityBounds)]);
 
     let receipt = triggers.reconcile(colliders, 1, TriggerReconcileCause::Spawn);
     assert!(receipt.facts.is_empty());
@@ -408,8 +439,7 @@ fn triggers_containing_a_point_read_the_last_reconciled_geometry_of_active_trigg
         KinematicTriggerDefinition::new(beside, "shore", ["land"]),
         KinematicTriggerDefinition::new(bounds_only, "mist", ["air"])
             .with_geometry_source(TriggerGeometrySource::EntityBounds),
-    ])
-    .unwrap();
+    ]);
     // Nothing has been reconciled: no geometry, no containment.
     assert!(triggers.triggers_containing(Vec3::ZERO).is_empty());
 
@@ -494,8 +524,7 @@ fn trigger_fixture() -> (
         trigger,
         "zone.exit",
         ["door", "exit"],
-    )])
-    .unwrap();
+    )]);
     (colliders, triggers, trigger, subject)
 }
 
@@ -532,7 +561,6 @@ fn registers_more_triggers_than_the_former_cap() {
     let system = TriggerVolumeSystem::new(
         (1..=5_000)
             .map(|raw| KinematicTriggerDefinition::new(EntityId::new(raw), "zone", ["zone"])),
-    )
-    .unwrap();
+    );
     assert_eq!(system.definitions().count(), 5_000);
 }

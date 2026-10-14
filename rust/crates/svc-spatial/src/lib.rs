@@ -12,8 +12,8 @@
 //! # Design soul
 //!
 //! - **Distinct presence states** (decision 1): `Absent` (never tracked),
-//!   `Pending` (requested, not generated), `Resident` (data loaded), `Unloaded`
-//!   (was resident, data evicted, slot remembered). These are *authoritative*;
+//!   `Resident` (data loaded), `Unloaded` (was resident, data evicted, slot
+//!   remembered). These are *authoritative*;
 //!   render-only states (meshed/rendered) live in the render lane (decision 2).
 //! - **Deterministic everywhere** (replay-safe): the chunk map is a `BTreeMap`
 //!   and the dirty set a `BTreeSet`, so iteration/drain order is coordinate-
@@ -31,10 +31,8 @@ use svc_volume::VoxelChunk;
 /// The authoritative lifecycle state of a chunk coordinate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChunkState {
-    /// Not tracked at all — never requested, generated, or loaded.
+    /// Not tracked at all — never generated or loaded.
     Absent,
-    /// Requested/queued for generation; no voxel data yet.
-    Pending,
     /// Voxel data is loaded and authoritative.
     Resident,
     /// Was resident; data evicted but the slot is remembered (distinct from
@@ -45,11 +43,6 @@ pub enum ChunkState {
 /// An invalid lifecycle transition was requested.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PartitionError {
-    /// `request` was called on a coordinate that already has a slot.
-    AlreadyTracked {
-        coord: ChunkCoord,
-        state: ChunkState,
-    },
     /// An operation needed a resident chunk but the coordinate was not resident.
     NotResident {
         coord: ChunkCoord,
@@ -60,13 +53,6 @@ pub enum PartitionError {
 impl core::fmt::Display for PartitionError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            PartitionError::AlreadyTracked { coord, state } => {
-                write!(
-                    f,
-                    "chunk {:?} already tracked ({state:?})",
-                    coord.to_array()
-                )
-            }
             PartitionError::NotResident { coord, state } => {
                 write!(
                     f,
@@ -128,23 +114,6 @@ impl VoxelWorld {
         self.chunks
             .get(&coord)
             .map_or(ChunkState::Absent, |s| s.state)
-    }
-
-    /// Reserve a slot for generation. Valid only from `Absent`.
-    pub fn request(&mut self, coord: ChunkCoord) -> Result<(), PartitionError> {
-        match self.state(coord) {
-            ChunkState::Absent => {
-                self.chunks.insert(
-                    coord,
-                    Slot {
-                        state: ChunkState::Pending,
-                        data: None,
-                    },
-                );
-                Ok(())
-            }
-            state => Err(PartitionError::AlreadyTracked { coord, state }),
-        }
     }
 
     /// Insert/replace resident voxel data (generation result or reload). Valid
@@ -296,19 +265,9 @@ mod tests {
     }
 
     #[test]
-    fn lifecycle_absent_pending_resident_unloaded_reload() {
+    fn lifecycle_absent_resident_unloaded_reload() {
         let mut w = VoxelWorld::new(grid());
         let c = cc(1, 0, -2);
-        assert_eq!(w.request(c), Ok(()));
-        assert_eq!(w.state(c), ChunkState::Pending);
-        // Requesting again is an invalid transition.
-        assert_eq!(
-            w.request(c),
-            Err(PartitionError::AlreadyTracked {
-                coord: c,
-                state: ChunkState::Pending
-            }),
-        );
         // Generation result.
         assert!(w.insert(c, chunk(&w)).is_none());
         assert_eq!(w.state(c), ChunkState::Resident);
@@ -338,11 +297,15 @@ mod tests {
                 state: ChunkState::Absent
             }),
         );
-        w.request(c).unwrap();
-        assert!(matches!(
+        w.insert(c, chunk(&w));
+        w.unload(c).unwrap();
+        assert_eq!(
             w.unload(c),
-            Err(PartitionError::NotResident { .. })
-        ));
+            Err(PartitionError::NotResident {
+                coord: c,
+                state: ChunkState::Unloaded
+            }),
+        );
     }
 
     #[test]

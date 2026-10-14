@@ -139,16 +139,16 @@ impl SpatialPerceptionService {
             return Err(SpatialPerceptionError::InvalidPageSize);
         }
 
+        // Stable sorts: a repeated entity keeps its supplied order and is
+        // evaluated like any other entry.
         let mut observers = query.observers.to_vec();
         observers.sort_by_key(|observer| observer.entity);
-        ensure_unique_observers(&observers)?;
         for observer in &observers {
             validate_observer(*observer)?;
         }
 
         let mut targets = query.targets.to_vec();
         targets.sort_by_key(|target| target.entity);
-        ensure_unique_targets(&targets)?;
         for target in &targets {
             if !finite_vec3(target.center) {
                 return Err(SpatialPerceptionError::InvalidTarget(target.entity));
@@ -285,8 +285,6 @@ impl SpatialPerceptionService {
 pub enum SpatialPerceptionError {
     InvalidPageSize,
     InvalidPairCursor { cursor: usize, total: usize },
-    DuplicateObserver(EntityId),
-    DuplicateTarget(EntityId),
     InvalidObserver(EntityId),
     InvalidTarget(EntityId),
     NonFiniteEvidence,
@@ -318,28 +316,6 @@ impl std::fmt::Display for SpatialPerceptionError {
 }
 
 impl std::error::Error for SpatialPerceptionError {}
-
-fn ensure_unique_observers(
-    observers: &[SpatialPerceptionObserver],
-) -> Result<(), SpatialPerceptionError> {
-    for pair in observers.windows(2) {
-        if pair[0].entity == pair[1].entity {
-            return Err(SpatialPerceptionError::DuplicateObserver(pair[0].entity));
-        }
-    }
-    Ok(())
-}
-
-fn ensure_unique_targets(
-    targets: &[SpatialPerceptionTarget],
-) -> Result<(), SpatialPerceptionError> {
-    for pair in targets.windows(2) {
-        if pair[0].entity == pair[1].entity {
-            return Err(SpatialPerceptionError::DuplicateTarget(pair[0].entity));
-        }
-    }
-    Ok(())
-}
 
 fn validate_observer(observer: SpatialPerceptionObserver) -> Result<(), SpatialPerceptionError> {
     if !finite_vec3(observer.origin)

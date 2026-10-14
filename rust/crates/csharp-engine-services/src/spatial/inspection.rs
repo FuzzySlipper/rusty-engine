@@ -1,7 +1,5 @@
 use super::*;
 
-const MAX_MAP_CELLS: u32 = 1024;
-
 impl RuntimeSpatialBridge {
     fn read_map(
         &mut self,
@@ -10,8 +8,7 @@ impl RuntimeSpatialBridge {
         let count = request
             .columns
             .checked_mul(request.rows)
-            .filter(|count| *count > 0 && *count <= MAX_MAP_CELLS)
-            .ok_or_else(|| spatial_error("CSHARP_SPATIAL_MAP", "map requires 1..1024 cells"))?;
+            .ok_or_else(|| spatial_error("CSHARP_SPATIAL_MAP", "map cell count overflows u32"))?;
         let x0 = f64::from(request.origin.x);
         let z0 = f64::from(request.origin.z);
         let x1 = x0 + f64::from(request.columns) * request.cell_size;
@@ -230,7 +227,16 @@ mod tests {
         assert_eq!(open.navigation_revision, closed.navigation_revision);
         assert_eq!(open.projection_identity, closed.projection_identity);
         assert_eq!(cells[0].dynamic_collision_count, 1); // The earlier copy is independent.
-        request.columns = 1025;
+
+        // A map is as large as the product asks for.
+        request.columns = 64;
+        request.rows = 64;
+        let large = bridge.read_map(&request).unwrap();
+        let large_cells = unsafe { std::slice::from_raw_parts(large.cells, large.cells_len) };
+        assert_eq!(large_cells.len(), 4096);
+        assert!(large_cells[1].static_collision);
+        assert_eq!(large_cells[0].navigation_samples, 2);
+        request.columns = 0;
         assert!(bridge.read_map(&request).is_err());
     }
 }
