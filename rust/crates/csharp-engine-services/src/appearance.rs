@@ -1426,6 +1426,10 @@ pub(crate) struct RuntimeAppearanceData {
     animation_graphs: BTreeMap<u64, AnimationGraphBuilder>,
     animation_transitions: BTreeMap<u64, AnimationTransitionRef>,
     animation_controllers: BTreeMap<u64, AnimationController>,
+    /// Every controller's projection, keyed by its instance's object, so
+    /// projection handles are unique across controllers as the renderer and
+    /// the presentation world key them.
+    animation_projector: AnimationProjector,
     next_animation_instance: u64,
     next_animation_graph: u64,
     next_animation_transition: u64,
@@ -1572,7 +1576,6 @@ struct AnimationController {
     instance: u64,
     tick_duration_millis: u32,
     service: AnimationControllerService,
-    projector: AnimationProjector,
     projected: bool,
     last_target: Option<RenderHandle>,
     last_revision: Option<u64>,
@@ -1809,6 +1812,7 @@ impl RuntimeAppearanceBridge {
             animation_graphs: BTreeMap::new(),
             animation_transitions: BTreeMap::new(),
             animation_controllers: BTreeMap::new(),
+            animation_projector: AnimationProjector::new(),
             next_animation_instance: 1,
             next_animation_graph: 1,
             next_animation_transition: 1,
@@ -2119,16 +2123,14 @@ impl RuntimeAppearanceBridge {
                 },
             });
         }
-        for controller in state.animation_controllers.values() {
-            for (handle, descriptor) in controller.projector.active_projections() {
-                ops.push(PresentationOp::Animation {
-                    meta: PresentationOpMeta::new(snapshot_presentation_sequence(ops.len())?),
-                    op: render_presentation::AnimationProjectionOp::Create {
-                        handle,
-                        descriptor: descriptor.clone(),
-                    },
-                });
-            }
+        for (handle, descriptor) in state.animation_projector.active_projections() {
+            ops.push(PresentationOp::Animation {
+                meta: PresentationOpMeta::new(snapshot_presentation_sequence(ops.len())?),
+                op: render_presentation::AnimationProjectionOp::Create {
+                    handle,
+                    descriptor: descriptor.clone(),
+                },
+            });
         }
         if ops.is_empty() {
             return Ok(Vec::new());
@@ -6559,7 +6561,6 @@ impl RuntimeAppearanceBridge {
                 instance: request.instance.value,
                 tick_duration_millis: request.tick_duration_millis,
                 service,
-                projector: AnimationProjector::new(),
                 projected: false,
                 last_target: None,
                 last_revision: None,
@@ -6578,8 +6579,8 @@ impl RuntimeAppearanceBridge {
             return Ok(());
         };
         let instance_handle = controller.instance;
-        // Build the renderer removal before releasing the controller so a
-        // refusal leaves the controller and its instance binding intact.
+        // Release the projection before the controller so a refusal leaves
+        // the controller and its instance binding intact.
         let frame = if controller.projected {
             let sequence = staged.presentation_frames;
             let object_id = staged
@@ -6593,8 +6594,9 @@ impl RuntimeAppearanceBridge {
                     )
                 })?
                 .object_id;
-            let mut projector = controller.projector.clone();
-            let op = projector
+            let op = staged
+                .state
+                .animation_projector
                 .destroy_entity(object_id, PresentationOpMeta::new(sequence))
                 .map_err(|diagnostic| {
                     CsharpEngineServicesError::new(
@@ -6938,10 +6940,6 @@ impl RuntimeAppearanceBridge {
         let Some(target) = instance_target(&data.projector, &data.appearances, instance) else {
             // A controller detaches when its target leaves, so this one is
             // not projected.
-            controller.projected = false;
-            controller.last_target = None;
-            controller.last_revision = None;
-            controller.projector.reset();
             return Ok(());
         };
         let state = controller
@@ -6966,8 +6964,8 @@ impl RuntimeAppearanceBridge {
             // target, then update it below if the state has since moved on.
             let revision = descriptor.controller.revision;
             descriptor.target = target;
-            let op = controller
-                .projector
+            let op = data
+                .animation_projector
                 .create_from_descriptor(&asset, &targets, descriptor, meta)
                 .map_err(|diagnostic| {
                     CsharpEngineServicesError::new(
@@ -6984,11 +6982,10 @@ impl RuntimeAppearanceBridge {
             return self.flush_animation_controller(controller_handle);
         }
         let op = if controller.projected {
-            controller
-                .projector
+            data.animation_projector
                 .update_for_state(&asset, &targets, &state, meta)
         } else {
-            controller.projector.create_for_state(
+            data.animation_projector.create_for_state(
                 &asset,
                 &targets,
                 AnimationProjectionTarget {
@@ -7730,8 +7727,8 @@ fn detach_retargeted_controllers(
         if instance_target(&data.projector, &data.appearances, instance) == controller.last_target {
             continue;
         }
-        let (op, descriptor) = controller
-            .projector
+        let (op, descriptor) = data
+            .animation_projector
             .detach_entity(
                 instance.object_id,
                 PresentationOpMeta::new(staged.presentation_frames),
@@ -15405,11 +15402,14 @@ fn shade(surface: Surface) -> vec4<f32> {
         controller: NativeAnimationControllerHandle,
     ) -> Option<Vec<render_presentation::AnimationControllerClipPhase>> {
         let state = &bridge.staged_ref().unwrap().state;
-        state.animation_controllers[&controller.value]
-            .projector
-            .active_projections()
-            .next()
-            .map(|(_, descriptor)| descriptor.controller.clip_phases.clone())
+        let object = state.animation_instances
+            [&state.animation_controllers[&controller.value].instance]
+            .object_id;
+        let handle = state.animation_projector.handle(object)?;
+        state
+            .animation_projector
+            .descriptor(handle)
+            .map(|descriptor| descriptor.controller.clip_phases.clone())
     }
 
     #[test]
@@ -15609,6 +15609,153 @@ fn shade(surface: Surface) -> vec4<f32> {
             .animation_controllers
             .is_empty());
         bridge.end_call();
+    }
+
+    /// Folds the open call's presentation frames into `world` the way the
+    /// presentation world and the renderer retain controller projections: by
+    /// projection handle.
+    fn retain_controllers(
+        bridge: &RuntimeAppearanceBridge,
+        world: &mut BTreeMap<
+            render_presentation::AnimationProjectionHandle,
+            AnimationProjectionDescriptor,
+        >,
+    ) {
+        for op in bridge
+            .staged_ref()
+            .unwrap()
+            .presentation()
+            .into_iter()
+            .flat_map(|frame| &frame.ops)
+        {
+            let PresentationOp::Animation { op, .. } = op else {
+                continue;
+            };
+            match op {
+                render_presentation::AnimationProjectionOp::Create { handle, descriptor } => {
+                    world.insert(*handle, descriptor.clone());
+                }
+                render_presentation::AnimationProjectionOp::Update { handle, controller } => {
+                    if let Some(descriptor) = world.get_mut(handle) {
+                        descriptor.controller = controller.clone();
+                    }
+                }
+                render_presentation::AnimationProjectionOp::Destroy { handle } => {
+                    world.remove(handle);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn two_controllers_each_drive_only_their_own_target() {
+        let (mut bridge, appearance, first) = animated_controller_setup();
+        let graph = NativeAnimationGraphHandle {
+            value: bridge.staged_ref().unwrap().state.animation_controllers[&first.value].graph,
+        };
+        let instance = bridge
+            .create_animation_instance(NativeAnimationInstanceRequest {
+                appearance,
+                object_id: 8,
+            })
+            .expect("second instance");
+        let second = bridge
+            .create_animation_controller(NativeAnimationControllerCreateRequest {
+                graph,
+                instance,
+                tick_duration_millis: 16,
+            })
+            .expect("second controller");
+        let facts = [
+            appearance_fact(appearance),
+            NativeAppearanceFact {
+                object_id: 8,
+                ..appearance_fact(appearance)
+            },
+        ];
+        let mut world = BTreeMap::new();
+        unsafe { bridge.stage_snapshot(facts.as_ptr(), 2) }.expect("both targets");
+        retain_controllers(&bridge, &mut world);
+        let target = |bridge: &RuntimeAppearanceBridge, object| {
+            bridge
+                .staged_ref()
+                .unwrap()
+                .state
+                .projector
+                .object_handle(object)
+                .expect("target")
+        };
+        let (first_target, second_target) = (target(&bridge, 7), target(&bridge, 8));
+        bridge.end_call();
+        // The projections of the target's controller, in the world.
+        let driving = |world: &BTreeMap<_, AnimationProjectionDescriptor>, target| {
+            world
+                .values()
+                .filter(|descriptor| descriptor.target == target)
+                .map(|descriptor| descriptor.controller.clip_phases[0].time_seconds)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(world.len(), 2, "each controller has its own projection");
+        assert_eq!(driving(&world, first_target), vec![0.0]);
+        assert_eq!(driving(&world, second_target), vec![0.0]);
+
+        // The first controller's updates reach only its target.
+        bridge.begin_call();
+        for tick in 1..=3 {
+            bridge
+                .tick_animation(NativeAnimationTickRequest {
+                    controller: first,
+                    tick,
+                })
+                .expect("tick");
+        }
+        retain_controllers(&bridge, &mut world);
+        bridge.end_call();
+        let moved = driving(&world, first_target);
+        assert!(moved.len() == 1 && moved[0] > 0.0);
+        assert_eq!(driving(&world, second_target), vec![0.0]);
+
+        // The first target leaves and returns: its controller detaches and is
+        // recreated beside the second, which keeps its projection.
+        let second_handle = |bridge: &RuntimeAppearanceBridge| {
+            bridge
+                .staged_ref()
+                .unwrap()
+                .state
+                .animation_projector
+                .handle(8)
+        };
+        bridge.begin_call();
+        let kept = second_handle(&bridge);
+        unsafe { bridge.stage_snapshot(&facts[1], 1) }.expect("first target leaves");
+        retain_controllers(&bridge, &mut world);
+        assert_eq!(world.len(), 1);
+        bridge.end_call();
+        bridge.begin_call();
+        unsafe { bridge.stage_snapshot(facts.as_ptr(), 2) }.expect("first target returns");
+        retain_controllers(&bridge, &mut world);
+        let first_target = target(&bridge, 7);
+        assert_eq!(second_handle(&bridge), kept);
+        bridge.end_call();
+        assert_eq!(world.len(), 2);
+        assert_eq!(driving(&world, first_target), moved);
+        assert_eq!(driving(&world, second_target), vec![0.0]);
+
+        // Destroying the first leaves the second playing.
+        bridge.begin_call();
+        bridge.destroy_animation_controller(first).expect("destroy");
+        bridge
+            .tick_animation(NativeAnimationTickRequest {
+                controller: second,
+                tick: 1,
+            })
+            .expect("the second still ticks");
+        retain_controllers(&bridge, &mut world);
+        bridge.end_call();
+        assert_eq!(world.len(), 1);
+        assert!(driving(&world, first_target).is_empty());
+        let playing = driving(&world, second_target);
+        assert!(playing.len() == 1 && playing[0] > 0.0);
     }
 
     #[test]

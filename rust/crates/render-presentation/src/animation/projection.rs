@@ -355,8 +355,12 @@ impl AnimationProjector {
         meta: PresentationOpMeta,
         op: AnimationProjectionOp,
     ) -> Result<PresentationOp, AnimationProjectionDiagnostic> {
-        let mut projected = self.project_batch(assets, targets, vec![(meta, op)])?;
-        Ok(projected.pop().expect("one input produces one operation"))
+        // One operation changes nothing when it is refused, so it applies in
+        // place; only a batch needs a staged copy.
+        if let Err(code) = self.validate_and_apply(assets, targets, &op) {
+            return Err(self.refuse(code, &meta, &op));
+        }
+        Ok(PresentationOp::Animation { meta, op })
     }
 
     pub fn project_batch(
@@ -369,20 +373,29 @@ impl AnimationProjector {
         let mut projected = Vec::with_capacity(ops.len());
         for (meta, op) in ops {
             if let Err(code) = staged.validate_and_apply(assets, targets, &op) {
-                let diagnostic = AnimationProjectionDiagnostic {
-                    code,
-                    sequence: meta.sequence,
-                    handle: operation_handle(&op),
-                    target: operation_target(&op),
-                    message: diagnostic_message(code).to_string(),
-                };
-                self.retain_diagnostic(diagnostic.clone());
-                return Err(diagnostic);
+                return Err(self.refuse(code, &meta, &op));
             }
             projected.push(PresentationOp::Animation { meta, op });
         }
         *self = staged;
         Ok(projected)
+    }
+
+    fn refuse(
+        &mut self,
+        code: AnimationProjectionDiagnosticCode,
+        meta: &PresentationOpMeta,
+        op: &AnimationProjectionOp,
+    ) -> AnimationProjectionDiagnostic {
+        let diagnostic = AnimationProjectionDiagnostic {
+            code,
+            sequence: meta.sequence,
+            handle: operation_handle(op),
+            target: operation_target(op),
+            message: diagnostic_message(code).to_string(),
+        };
+        self.retain_diagnostic(diagnostic.clone());
+        diagnostic
     }
 
     pub fn create_for_state(
@@ -580,6 +593,7 @@ impl AnimationProjector {
         self.diagnostics.push(diagnostic);
     }
 
+    /// Each operation refuses before it changes anything.
     fn validate_and_apply(
         &mut self,
         assets: &impl PresentationAssetLookup,
