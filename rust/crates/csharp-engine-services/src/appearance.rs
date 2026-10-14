@@ -3663,15 +3663,7 @@ impl RuntimeAppearanceBridge {
             descriptor,
             textures,
             shader,
-            held: resource_set([
-                request.texture.value,
-                request.normal_map.value,
-                request.shader.shader.value,
-                request.shader.texture_a.value,
-                request.shader.texture_b.value,
-                request.water.foam_texture.value,
-                request.water.ripple_texture.value,
-            ]),
+            held: material_request_resources(&request),
         })
     }
 
@@ -3828,15 +3820,12 @@ impl RuntimeAppearanceBridge {
         staged.state.set_held(
             Holder::Material,
             handle,
-            resource_set([
-                request.texture.value,
-                request.normal_map.value,
-                request.shader.shader.value,
-                request.shader.texture_a.value,
-                request.shader.texture_b.value,
-                request.water.foam_texture.value,
-                request.water.ripple_texture.value,
-            ]),
+            resource_set(
+                [request.texture.value, request.normal_map.value]
+                    .into_iter()
+                    .chain(material_shader_resources(request.shader))
+                    .chain(material_water_resources(request.water)),
+            ),
         );
         Ok(NativeMaterialHandle { value: handle })
     }
@@ -3964,13 +3953,7 @@ impl RuntimeAppearanceBridge {
         staged.state.set_held(
             Holder::Material,
             request.material.value,
-            resource_set([
-                request.replacement.texture.value,
-                request.replacement.normal_map.value,
-                request.replacement.shader.shader.value,
-                request.replacement.shader.texture_a.value,
-                request.replacement.shader.texture_b.value,
-            ]),
+            material_request_resources(&request.replacement),
         );
         Ok(())
     }
@@ -9752,6 +9735,50 @@ fn resource_set(handles: impl IntoIterator<Item = u64>) -> BTreeSet<u64> {
     handles.into_iter().filter(|handle| *handle != 0).collect()
 }
 
+/// The resources a material built from `request` names, as
+/// [`material_descriptor`] resolves them: create, update and replace hold
+/// exactly these.
+fn material_request_resources(request: &NativeMaterialRequest) -> BTreeSet<u64> {
+    resource_set(
+        [
+            request.texture.value,
+            request.normal_map.value,
+            request.emission_map.value,
+            request.occlusion_map.value,
+            request.orm_map.value,
+        ]
+        .into_iter()
+        .chain(material_shader_resources(request.shader))
+        .chain(material_water_resources(request.water)),
+    )
+}
+
+/// A product shader and its textures; none without a shader.
+fn material_shader_resources(
+    shader: csharp_engine_abi::NativeMaterialShader,
+) -> impl Iterator<Item = u64> {
+    let named = if shader.shader.value == 0 {
+        [0; 3]
+    } else {
+        [
+            shader.shader.value,
+            shader.texture_a.value,
+            shader.texture_b.value,
+        ]
+    };
+    named.into_iter()
+}
+
+/// A water surface's foam and ripple textures; none at depth scale 0.
+fn material_water_resources(water: NativeMaterialWater) -> impl Iterator<Item = u64> {
+    let named = if water.depth_scale == 0.0 {
+        [0; 2]
+    } else {
+        [water.foam_texture.value, water.ripple_texture.value]
+    };
+    named.into_iter()
+}
+
 /// A kind of retained Engine object that holds renderer resources.
 #[derive(Clone, Copy)]
 enum Holder {
@@ -13484,6 +13511,121 @@ fn shade(surface: Surface) -> vec4<f32> {
             reopened.handle, first.handle,
             "released handles stay tombstoned"
         );
+    }
+
+    #[test]
+    fn material_updates_hold_exactly_the_textures_the_material_names() {
+        let mut content = BTreeMap::new();
+        content.insert("foam.png".to_owned(), Arc::from(RGBA_PNG));
+        content.insert("glow.png".to_owned(), Arc::from(RGBA_PNG));
+        let mut bridge = RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), content);
+        bridge.begin_call();
+        let foam = bridge.open_resource(&resource_request("foam.png")).unwrap();
+        let glow = bridge
+            .open_resource(&NativeRenderResourceRequest {
+                // Sampled differently, so a resource apart from the foam.
+                filter: NativeTextureFilter::Linear,
+                ..resource_request("glow.png")
+            })
+            .unwrap();
+        assert_ne!(foam.handle, glow.handle);
+        let white = NativeColor {
+            r: 1.0,
+            g: 1.0,
+            b: 1.0,
+            a: 1.0,
+        };
+        let water = |foam_texture: u64, emission_map: u64| NativeMaterialRequest {
+            texture_scale: NativeVec2::default(),
+            texture_offset: NativeVec2::default(),
+            stochastic_tiling: 0.0,
+            shader: Default::default(),
+            triplanar_sharpness: 0.0,
+            color: white,
+            texture: Default::default(),
+            roughness: 0.1,
+            texture_tint: white,
+            emission_color: NativeVec3::default(),
+            emission_intensity: 0.0,
+            double_sided: false,
+            alpha_mode: NativeMaterialAlphaMode::Blend,
+            alpha_cutoff: 0.5,
+            metalness: 0.0,
+            normal_map: Default::default(),
+            normal_scale: 1.0,
+            emission_map: NativeRenderResourceReference {
+                value: emission_map,
+            },
+            occlusion_map: Default::default(),
+            orm_map: Default::default(),
+            occlusion_strength: 0.0,
+            unlit: false,
+            flat_shading: false,
+            keep_dry: false,
+            wind_bend: 0.0,
+            wind_flutter: 0.0,
+            water: NativeMaterialWater {
+                shallow_color: white,
+                deep_color: white,
+                depth_scale: 2.0,
+                shoreline_width: 0.5,
+                foam_threshold: 0.5,
+                wave_scale: 4.0,
+                foam_texture: NativeRenderResourceReference {
+                    value: foam_texture,
+                },
+                ..Default::default()
+            },
+            translucent_shadow: false,
+        };
+        let material = bridge.create_material(water(0, 0)).unwrap();
+        // Updated to name a foam texture and an emission map, twice: each
+        // is held once.
+        for _ in 0..2 {
+            bridge
+                .update_material(NativeMaterialUpdateRequest {
+                    material,
+                    replacement: water(foam.handle.value, glow.handle.value),
+                })
+                .unwrap();
+        }
+        for texture in [foam.handle, glow.handle] {
+            assert_eq!(
+                bridge.destroy_resource(texture).unwrap_err().code(),
+                "CSHARP_RENDER_RESOURCE_IN_USE"
+            );
+        }
+        // Updated to name neither: both are let go.
+        bridge
+            .update_material(NativeMaterialUpdateRequest {
+                material,
+                replacement: water(0, 0),
+            })
+            .unwrap();
+        // A replacement holds what it names, and releases what it replaced.
+        let material = bridge
+            .replace_material(NativeMaterialUpdateRequest {
+                material,
+                replacement: water(foam.handle.value, glow.handle.value),
+            })
+            .unwrap();
+        for texture in [foam.handle, glow.handle] {
+            assert_eq!(
+                bridge.destroy_resource(texture).unwrap_err().code(),
+                "CSHARP_RENDER_RESOURCE_IN_USE"
+            );
+        }
+        bridge
+            .replace_material(NativeMaterialUpdateRequest {
+                material,
+                replacement: water(0, 0),
+            })
+            .unwrap();
+        bridge.destroy_resource(foam.handle).unwrap();
+        bridge.destroy_resource(glow.handle).unwrap();
+        assert!(bridge.resource(foam.handle.value).is_err());
+        assert!(bridge.resource(glow.handle.value).is_err());
+        bridge.end_call();
     }
 
     #[test]
