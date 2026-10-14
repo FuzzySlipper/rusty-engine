@@ -1819,7 +1819,6 @@ dependencies = [
  "core-time",
  "core-voxel",
  "entity-state",
- "environment-authoring",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -1871,19 +1870,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 3.0.4",
-]
-
-[[package]]
-name = "environment-authoring"
-version = "0.1.0"
-dependencies = [
- "authored-scene",
- "core-assets",
- "core-ids",
- "core-math",
- "sha2 0.10.9",
- "svc-rng",
- "voxel-asset",
 ]
 
 [[package]]

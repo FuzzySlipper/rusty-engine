@@ -7,7 +7,6 @@ use engine_spatial::{
     TriggerCollider, TriggerGeometrySource, TriggerOverlapFactKind, TriggerReconcileCause,
     TriggerVolumeDiagnosticCode, TriggerVolumeSystem, VoxelCollisionScene,
 };
-use environment_authoring::{generate_tunnel, TunnelGeneratorConfig};
 
 #[test]
 fn fixed_step_integration_preserves_donor_velocity_acceleration_and_gravity_behavior() {
@@ -109,29 +108,6 @@ fn zero_steps_and_invalid_inputs_are_typed() {
         .unwrap_err(),
         PhysicsError::NonFiniteInput
     );
-}
-
-#[test]
-fn generated_tunnel_cells_feed_existing_collision_navigation_and_mesh_authority() {
-    let tunnel = generate_tunnel(TunnelGeneratorConfig::tiny_enclosed(19)).unwrap();
-    let scene = VoxelCollisionScene::from_material_voxels(
-        tunnel.config.voxel_size,
-        tunnel.config.chunk_size,
-        tunnel
-            .spatial_cells()
-            .map(|(address, material_slot)| MaterialVoxel {
-                state: 0,
-                address,
-                material_slot,
-            }),
-    )
-    .unwrap();
-
-    assert_eq!(scene.solid_voxel_count(), tunnel.voxels.len());
-    assert!(scene.contains_point([0.5, 0.5, 0.5]));
-    assert!(!scene.contains_point([2.5, 2.5, 2.5]));
-    assert_eq!(scene.resident_chunk_count(), 1);
-    assert!(scene.mesh_chunks().len() != 0);
 }
 
 #[test]

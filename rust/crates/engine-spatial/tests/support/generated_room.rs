@@ -1,10 +1,6 @@
-//! Exact regression fixture for the former product-shaped generated-room recipe.
-//!
-//! This fixture intentionally has no runtime owner. It preserves the old
-//! seed/dimensions/material/pillar/accent/exit-aperture recipe so the spatial
-//! projections remain covered while durable environment generation stays owned
-//! by `environment-authoring`, whose tunnel semantics are intentionally
-//! different.
+//! Exact regression fixture: a seeded generated room (seed, dimensions,
+//! materials, pillars, accents and an exit aperture) that the spatial
+//! projection tests build their scenes from. It has no runtime owner.
 
 use engine_spatial::{CollisionSceneError, MaterialVoxel, VoxelCollisionScene};
 use svc_rng::{RngSeed, ScopedRng};

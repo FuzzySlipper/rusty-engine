@@ -22,7 +22,6 @@ ENTITY_SPATIAL_CONTENT_ASSET_VOXEL_OWNERS = frozenset(
         "content-store",
         "engine-spatial",
         "entity-state",
-        "environment-authoring",
         "voxel-annotation",
         "voxel-asset",
         "voxel-convert",
