@@ -1740,16 +1740,8 @@ fn decode_static_mesh(
         .payload
         .validate()
         .map_err(|error| pack_error(format!("{error:?}")))?;
-    // The validated descriptor keeps the index stream inside the resource.
     let layout = &asset.payload.layout;
-    let indices = &resource[indices_start..indices_start + layout.index_count as usize * 4];
-    if let Some(index) = indices
-        .as_chunks::<4>()
-        .0
-        .iter()
-        .map(|bytes| u32::from_le_bytes(*bytes))
-        .find(|index| *index >= layout.vertex_count)
-    {
+    if let Some(index) = resource_index_outside_vertices(resource, indices_start, layout) {
         return Err(pack_error(format!(
             "binary static mesh index {index} is outside its {} vertices",
             layout.vertex_count
@@ -1757,6 +1749,26 @@ fn decode_static_mesh(
     }
     let payload = asset.payload.clone();
     Ok((asset, payload, packed))
+}
+
+/// The first index in a packed mesh resource's u32 index stream that names no
+/// vertex. Payload validation keeps a resource source's index stream inside
+/// the resource bytes but does not read index values, and CPU users of the
+/// streams (ghost bounds, probe voxelization) index positions by them, so each
+/// admission that first pairs a product's resource bytes with a descriptor
+/// reads the index stream once. The caller has validated the descriptor
+/// against `resource`.
+pub(crate) fn resource_index_outside_vertices(
+    resource: &[u8],
+    indices_byte_offset: usize,
+    layout: &MeshBufferLayout,
+) -> Option<u32> {
+    resource[indices_byte_offset..indices_byte_offset + layout.index_count as usize * 4]
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|bytes| u32::from_le_bytes(*bytes))
+        .find(|index| *index >= layout.vertex_count)
 }
 
 #[cfg(test)]
@@ -1886,6 +1898,7 @@ pub(crate) mod tests {
                 "pub(crate) unsafe extern \"C\" fn read_mesh_partition",
                 "pub(crate) unsafe extern \"C\" fn take_mesh_partition_part",
                 "pub(crate) unsafe extern \"C\" fn destroy_mesh_partition",
+                "pub(crate) fn resource_index_outside_vertices",
             ]
         );
     }

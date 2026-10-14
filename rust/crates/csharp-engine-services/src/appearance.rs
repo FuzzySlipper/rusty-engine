@@ -4482,6 +4482,20 @@ impl RuntimeAppearanceBridge {
         asset.validate().map_err(|error| {
             CsharpEngineServicesError::new("CSHARP_STATIC_MESH_LAYOUT", format!("{error:?}"))
         })?;
+        // The validated descriptor keeps the index stream inside the bytes.
+        if let Some(index) = crate::render_resources::resource_index_outside_vertices(
+            resource.bytes(),
+            request.indices_byte_offset as usize,
+            &asset.payload.layout,
+        ) {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_STATIC_MESH_LAYOUT",
+                format!(
+                    "static mesh index {index} is outside its {} vertices",
+                    request.vertex_count
+                ),
+            ));
+        }
         {
             let resources = self.staged_mut()?.state.projector.resources_mut();
             resources.materials.extend(materials);
@@ -12730,6 +12744,97 @@ fn shade(surface: Surface) -> vec4<f32> {
         );
         bridge.destroy_material(material).unwrap();
         bridge.destroy_resource(noise.handle).unwrap();
+    }
+
+    #[test]
+    fn packed_mesh_resource_index_outside_its_vertices_is_refused() {
+        const MESH: &str = "meshes/triangle.rmesh";
+        const BAD: &str = "meshes/outside.rmesh";
+        let triangle = std::fs::read(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../../fixtures/csharp-static-mesh/triangle.static-mesh.json"),
+        )
+        .unwrap();
+        let triangle = serde_json::from_slice::<StaticMeshAsset>(&triangle).unwrap();
+        let packed = render_model::pack_mesh_resources(
+            std::slice::from_ref(&triangle.payload),
+            render_model::MAX_MESH_RESOURCE_BYTES,
+        )
+        .unwrap();
+        let MeshPayloadSource::Resource {
+            positions_byte_offset,
+            normals_byte_offset,
+            indices_byte_offset,
+            ..
+        } = packed.payloads[0].source
+        else {
+            panic!("packed payload names its resource");
+        };
+        let bytes = packed.resources[0].bytes.clone();
+        // Index 2, the last stream value, becomes 3: one past the vertices.
+        let mut outside = bytes.clone();
+        let last = outside.len() - 4;
+        outside[last..].copy_from_slice(&3_u32.to_le_bytes());
+        let content = Box::new(crate::content::RuntimeContentBridge::new(BTreeMap::from([
+            (MESH.to_owned(), Arc::from(bytes)),
+            (BAD.to_owned(), Arc::from(outside)),
+        ])));
+        let mut bridge =
+            RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), BTreeMap::new());
+        bridge.bind_content(&content);
+        bridge.begin_call();
+        let group = NativeMeshGroup {
+            material_slot: 0,
+            start: 0,
+            count: 3,
+        };
+        let request = |resource| NativeStaticMeshAppearanceRequest {
+            resource,
+            encoding: 1,
+            vertex_count: 3,
+            index_count: 3,
+            positions_byte_offset,
+            normals_byte_offset,
+            uvs_byte_offset: 0,
+            colors_byte_offset: 0,
+            indices_byte_offset,
+            bounds_min: NativeVec3::default(),
+            bounds_max: NativeVec3 {
+                x: 1.0,
+                y: 1.0,
+                z: 0.0,
+            },
+            color: NativeColor {
+                r: 1.0,
+                g: 1.0,
+                b: 1.0,
+                a: 1.0,
+            },
+            groups: &group,
+            groups_len: 1,
+        };
+        // The packed resource header holds, so the file opens as a mesh.
+        let good = bridge.open_resource(&resource_request(MESH)).unwrap();
+        let bad = bridge.open_resource(&resource_request(BAD)).unwrap();
+        let meshes = |bridge: &RuntimeAppearanceBridge| {
+            bridge
+                .staged
+                .as_ref()
+                .unwrap()
+                .state
+                .projector
+                .resources()
+                .static_meshes
+                .iter()
+                .count()
+        };
+        let before = meshes(&bridge);
+        let error = unsafe { bridge.create_static_mesh(&request(bad.handle)) }.unwrap_err();
+        assert_eq!(error.code(), "CSHARP_STATIC_MESH_LAYOUT");
+        assert!(error.detail().contains("index 3"), "{}", error.detail());
+        assert_eq!(meshes(&bridge), before, "a refused mesh is not retained");
+        unsafe { bridge.create_static_mesh(&request(good.handle)) }.unwrap();
+        assert_eq!(meshes(&bridge), before + 1);
     }
 
     #[test]

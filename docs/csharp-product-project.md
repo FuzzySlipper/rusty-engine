@@ -617,6 +617,12 @@ instead of 41 ms.
 [`triangle.rstatmsh`](../fixtures/csharp-static-mesh/triangle.rstatmsh) is
 `triangle.static-mesh.json` in this form.
 
+A loose `.rmesh` opened with `Graphics.OpenResourceFromContent` is admitted by
+its header alone. `Graphics.CreateStaticMesh` (and `ReplaceStaticMesh`) pairs it
+with the request's counts, stream offsets and groups, checks them against the
+resource and reads its index stream once so every index names a vertex
+(`CSHARP_STATIC_MESH_LAYOUT` otherwise); the other streams are not read.
+
 ## Run and package
 
 `rusty install` installs the pinned [SDK/runtime pair](csharp-distribution.md):
