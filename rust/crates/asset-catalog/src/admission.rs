@@ -1,6 +1,5 @@
-use crate::{
-    decode_catalog, validate_catalog, AssetCatalog, AssetCatalogCodecError, CatalogValidationReport,
-};
+use crate::validation::validate_catalog;
+use crate::{decode_catalog, AssetCatalog, AssetCatalogCodecError, CatalogValidationReport};
 use sha2::{Digest, Sha256};
 
 #[derive(Debug, Clone, PartialEq)]

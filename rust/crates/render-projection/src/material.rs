@@ -104,30 +104,33 @@ fn project_surface(
         ResolvedVoxelSurfaceMapping::Repeat {
             texture,
             texture_version,
+            texture_hash,
             tile_scale_cells,
             tile_origin_cells,
         } => VoxelSurfaceMappingDescriptor::Repeat {
             texture: texture.id().as_str().to_string(),
             texture_version: *texture_version,
-            texture_content_hash: reference_hash(texture)?,
+            texture_content_hash: content_hash(texture_hash.as_ref())?,
             tile_scale_cells: *tile_scale_cells,
             tile_origin_cells: *tile_origin_cells,
         },
         ResolvedVoxelSurfaceMapping::Atlas {
             atlas,
             atlas_version,
+            atlas_hash,
             texture,
             texture_version,
+            texture_hash,
             region,
             tile_scale_cells,
             tile_origin_cells,
         } => VoxelSurfaceMappingDescriptor::Atlas {
             atlas: atlas.id().as_str().to_string(),
             atlas_version: *atlas_version,
-            atlas_content_hash: reference_hash(atlas)?,
+            atlas_content_hash: content_hash(atlas_hash.as_ref())?,
             texture: texture.id().as_str().to_string(),
             texture_version: *texture_version,
-            texture_content_hash: reference_hash(texture)?,
+            texture_content_hash: content_hash(texture_hash.as_ref())?,
             region: VoxelAtlasRegionDescriptor {
                 id: region.id.clone(),
                 content_min: region.content_min,
@@ -166,11 +169,11 @@ fn surface_texture_id(surface: &ResolvedVoxelSurface) -> &str {
     }
 }
 
-fn reference_hash(
-    reference: &core_assets::AssetReference,
+/// The content hash of the entry a surface reference resolved to.
+fn content_hash(
+    hash: Option<&core_assets::AssetHash>,
 ) -> Result<String, CatalogMaterialProjectionError> {
-    let digest = reference
-        .hash()
+    let digest = hash
         .map(core_assets::AssetHash::as_str)
         .ok_or(CatalogMaterialProjectionError::MissingContentHash)?;
     if digest.len() != 64 {

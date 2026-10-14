@@ -202,7 +202,7 @@ impl VoxelSurfaceDescriptor {
                 if self.wrap != TextureWrap::Clamp {
                     return Err(VoxelSurfaceDescriptorError::InvalidWrap);
                 }
-                validate_voxel_region(region, self.filter)?;
+                validate_voxel_region(region)?;
                 (
                     texture,
                     *texture_version,
@@ -253,29 +253,18 @@ pub enum VoxelSurfaceDescriptorError {
     InvalidAtlasReference,
     InvalidAtlasProvenance,
     InvalidAtlasRegion,
-    InvalidAtlasPadding,
     InvalidWrap,
     InvalidTileScale,
     InvalidTileOrigin,
 }
 
+/// Padding only keeps linear filtering from bleeding in a neighbour's
+/// texels; the renderer samples within the content's half-texel inset.
 fn validate_voxel_region(
     region: &VoxelAtlasRegionDescriptor,
-    filter: TextureFilter,
 ) -> Result<(), VoxelSurfaceDescriptorError> {
     if region.id.is_empty() || region.content_extent.contains(&0) || region.inset != "halfTexel" {
         return Err(VoxelSurfaceDescriptorError::InvalidAtlasRegion);
-    }
-    let padding = [
-        region.padding.left,
-        region.padding.right,
-        region.padding.bottom,
-        region.padding.top,
-    ];
-    if padding.into_iter().any(|value| value > 32)
-        || (filter == TextureFilter::Linear && padding.contains(&0))
-    {
-        return Err(VoxelSurfaceDescriptorError::InvalidAtlasPadding);
     }
     Ok(())
 }
@@ -1779,14 +1768,14 @@ mod tests {
             material
         );
 
-        let mut invalid_padding = surface;
-        if let VoxelSurfaceMappingDescriptor::Atlas { region, .. } = &mut invalid_padding.mapping {
+        // A linear region with no padding, or more than any atlas needs,
+        // only changes how its edges blend.
+        let mut padding = surface;
+        if let VoxelSurfaceMappingDescriptor::Atlas { region, .. } = &mut padding.mapping {
             region.padding.left = 0;
+            region.padding.top = 64;
         }
-        assert_eq!(
-            invalid_padding.validate(),
-            Err(VoxelSurfaceDescriptorError::InvalidAtlasPadding)
-        );
+        assert_eq!(padding.validate(), Ok(()));
 
         let legacy = RenderMaterialDescriptor {
             voxel_surface: None,

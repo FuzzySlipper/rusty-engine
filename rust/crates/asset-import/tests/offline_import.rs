@@ -2,7 +2,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
 
-use asset_catalog::{decode_catalog, validate_catalog};
+use asset_catalog::{decode_catalog, AdmittedAssetCatalog};
 use asset_import::*;
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use core_space::{WorldPos, WorldVec};
@@ -98,7 +98,7 @@ fn valid_source_produces_deterministic_native_assets_and_manifest() {
     let imported = import_text(VALID, uri().value(), &context);
     let assets = imported.assets.unwrap();
     assets.static_mesh.validate().unwrap();
-    assert!(validate_catalog(&assets.catalog).is_ok());
+    assert!(AdmittedAssetCatalog::admit(assets.catalog.clone()).is_ok());
     assert_eq!(
         assets.static_mesh.payload.provenance,
         render_model::MeshProvenance::StaticAsset
@@ -303,7 +303,7 @@ fn animated_glb_produces_deterministic_runtime_resource_descriptor_and_provenanc
             .unwrap(),
     )
     .unwrap();
-    assert!(validate_catalog(&catalog).is_ok());
+    assert!(AdmittedAssetCatalog::admit(catalog.clone()).is_ok());
     let entry = catalog.entries.first().unwrap();
     assert_eq!(entry.id.as_str(), descriptor.asset);
     assert_eq!(entry.source_path.as_deref(), Some("character-medium.glb"));
@@ -1407,7 +1407,7 @@ fn published_import_resolves_its_material_and_texture_from_the_written_files() {
     let catalog =
         decode_catalog(&fs::read_to_string(output.join("fixture-triangle.catalog.json")).unwrap())
             .unwrap();
-    assert!(validate_catalog(&catalog).is_ok());
+    assert!(AdmittedAssetCatalog::admit(catalog.clone()).is_ok());
     let mesh = catalog
         .entries
         .iter()

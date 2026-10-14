@@ -1,19 +1,28 @@
 use asset_catalog::{
     classify_material_change, decode_catalog, decode_lock, encode_catalog, encode_lock,
-    fallback_for, generate_lock, material_change_impact, revalidate_asset, validate_catalog,
-    validate_lock, AdmittedAssetCatalog, AssetCatalog, AssetContext, AtlasInset, AtlasPadding,
-    AtlasRegionDefinition, CatalogEntry, CatalogValidationError, ChangeKind, DependencyGraph,
-    FallbackOutcome, FallbackVisual, LockIssue, MaterialAuthority, MaterialDefinition,
-    MaterialStyle, ReloadSuggestion, ResolvedVoxelSurfaceMapping, Rgba, StructuralClass,
-    TextureDefinition, TextureFilter, TextureWrap, UvStrategy, VoxelAlphaMode,
-    VoxelAtlasDefinition, VoxelMaterialError, VoxelMaterialTable, VoxelSurfaceBinding,
-    VoxelSurfaceMapping,
+    fallback_for, generate_lock, material_change_impact, revalidate_asset, validate_lock,
+    AdmittedAssetCatalog, AssetCatalog, AssetContext, AtlasInset, AtlasPadding,
+    AtlasRegionDefinition, CatalogAdmissionError, CatalogEntry, CatalogValidationError,
+    CatalogValidationReport, ChangeKind, DependencyGraph, FallbackOutcome, FallbackVisual,
+    LockIssue, MaterialAuthority, MaterialDefinition, MaterialStyle, ReloadSuggestion,
+    ResolvedVoxelSurfaceMapping, Rgba, StructuralClass, TextureDefinition, TextureFilter,
+    TextureWrap, UvStrategy, VoxelAlphaMode, VoxelAtlasDefinition, VoxelMaterialError,
+    VoxelMaterialTable, VoxelSurfaceBinding, VoxelSurfaceMapping,
 };
 use core_assets::{AssetHash, AssetId, AssetKind, AssetReference, AssetVersionReq};
 use core_voxel::VoxelMaterialId;
 
 fn id(value: &str) -> AssetId {
     AssetId::parse(value).expect("fixture asset id")
+}
+
+/// What admission reports about a candidate; empty when it admits.
+fn admission_report(catalog: &AssetCatalog) -> CatalogValidationReport {
+    match AdmittedAssetCatalog::admit(catalog.clone()) {
+        Ok(_) => CatalogValidationReport::default(),
+        Err(CatalogAdmissionError::Validation(report)) => report,
+        Err(error) => panic!("unexpected admission error: {error:?}"),
+    }
 }
 
 fn reference(value: &str) -> AssetReference {
@@ -144,28 +153,9 @@ fn surface_catalog() -> AssetCatalog {
     ])
 }
 
-fn quota_atlas(name: &str, region_count: usize) -> CatalogEntry {
-    let texture = pinned("texture/quota-atlas", 1, "aa01");
-    CatalogEntry::new(id(&format!("sprite-sheet/{name}")), 1)
-        .with_dependencies(vec![texture.clone()])
-        .with_voxel_atlas(VoxelAtlasDefinition {
-            schema_version: 1,
-            texture,
-            regions: (0..region_count)
-                .map(|index| AtlasRegionDefinition {
-                    id: format!("r-{index:04}"),
-                    content_min: [index as u32, 0],
-                    content_extent: [1, 1],
-                    padding: AtlasPadding::ZERO,
-                    inset: AtlasInset::HalfTexel,
-                })
-                .collect(),
-        })
-}
-
 #[test]
 fn catalog_validation_preserves_classified_dependency_and_material_failures() {
-    assert!(validate_catalog(&sample_catalog()).is_ok());
+    assert!(admission_report(&sample_catalog()).is_ok());
 
     let mut invalid = sample_catalog();
     invalid
@@ -189,7 +179,7 @@ fn catalog_validation_preserves_classified_dependency_and_material_failures() {
         .style
         .texture = Some(reference("material/surface-a"));
 
-    let report = validate_catalog(&invalid);
+    let report = admission_report(&invalid);
     assert!(report.errors.iter().any(|error| matches!(
         error,
         CatalogValidationError::DuplicateAssetId { id } if id.as_str() == "mesh/fixture-a"
@@ -232,7 +222,7 @@ fn dependency_cycles_and_reverse_dependents_are_deterministic() {
         .expect("cycle path");
     assert_eq!(path.first(), path.last());
     assert_eq!(path.len(), 4);
-    assert!(validate_catalog(&cycle)
+    assert!(admission_report(&cycle)
         .errors
         .iter()
         .any(|error| matches!(error, CatalogValidationError::DependencyCycle { .. })));
@@ -276,7 +266,7 @@ fn canonical_authored_json_is_a_strict_fixed_point() {
 #[test]
 fn voxel_surface_catalog_is_canonical_and_resolves_immutable_provenance() {
     let catalog = surface_catalog();
-    assert!(validate_catalog(&catalog).is_ok());
+    assert!(admission_report(&catalog).is_ok());
     let encoded = encode_catalog(&catalog).expect("encode textured catalog");
     let restored = decode_catalog(&encoded).expect("decode textured catalog");
     assert_eq!(restored, catalog.canonical());
@@ -317,7 +307,7 @@ fn voxel_surface_dependency_and_atlas_failures_reject_before_resolution() {
         .find(|entry| entry.id.as_str() == "texture/stone-tile")
         .unwrap()
         .hash = Some(AssetHash::parse("ffff").unwrap());
-    assert!(validate_catalog(&stale)
+    assert!(admission_report(&stale)
         .errors
         .iter()
         .any(|error| matches!(error, CatalogValidationError::StaleDependencyHash { .. })));
@@ -334,7 +324,14 @@ fn voxel_surface_dependency_and_atlas_failures_reject_before_resolution() {
         .find(|entry| entry.id.as_str() == "material/repeating-stone")
         .unwrap();
     material.dependencies.push(material.dependencies[0].clone());
-    assert!(validate_catalog(&duplicate_dependency)
+    assert!(admission_report(&duplicate_dependency).is_ok());
+    let material = duplicate_dependency
+        .entries
+        .iter_mut()
+        .find(|entry| entry.id.as_str() == "material/repeating-stone")
+        .unwrap();
+    material.dependencies.push(reference("texture/stone-tile"));
+    assert!(admission_report(&duplicate_dependency)
         .errors
         .iter()
         .any(|error| matches!(error, CatalogValidationError::DuplicateDependency { .. })));
@@ -350,10 +347,10 @@ fn voxel_surface_dependency_and_atlas_failures_reject_before_resolution() {
         .unwrap()
         .regions[1]
         .content_min = [30, 2];
-    assert!(validate_catalog(&invalid_atlas)
-        .errors
-        .iter()
-        .any(|error| matches!(error, CatalogValidationError::AtlasRegionOverlap { .. })));
+    assert!(
+        admission_report(&invalid_atlas).is_ok(),
+        "overlapping regions admit"
+    );
     invalid_atlas
         .entries
         .iter_mut()
@@ -364,7 +361,7 @@ fn voxel_surface_dependency_and_atlas_failures_reject_before_resolution() {
         .unwrap()
         .regions[1]
         .content_min = [63, 2];
-    assert!(validate_catalog(&invalid_atlas)
+    assert!(admission_report(&invalid_atlas)
         .errors
         .iter()
         .any(|error| matches!(error, CatalogValidationError::AtlasRegionOutOfBounds { .. })));
@@ -392,7 +389,7 @@ fn voxel_surface_rejects_conflicting_legacy_texture_facts() {
             .unwrap()
             .style
             .texture = Some(pinned("texture/conflicting", 1, "ffff"));
-        assert!(validate_catalog(&conflicting)
+        assert!(admission_report(&conflicting)
             .errors
             .iter()
             .any(|error| matches!(
@@ -402,7 +399,7 @@ fn voxel_surface_rejects_conflicting_legacy_texture_facts() {
             )));
         let encoded = encode_catalog(&conflicting).unwrap();
         let reopened = decode_catalog(&encoded).unwrap();
-        assert!(validate_catalog(&reopened)
+        assert!(admission_report(&reopened)
             .errors
             .iter()
             .any(|error| matches!(
@@ -419,65 +416,72 @@ fn voxel_surface_rejects_conflicting_legacy_texture_facts() {
             }
         }
     }
-    assert!(validate_catalog(&omitted).is_ok());
+    assert!(admission_report(&omitted).is_ok());
+}
+
+fn set_repeat_tile(catalog: &mut AssetCatalog, scale: [f32; 2], origin: [f32; 2]) {
+    let material = catalog
+        .entries
+        .iter_mut()
+        .find(|entry| entry.id.as_str() == "material/repeating-stone")
+        .unwrap()
+        .material
+        .as_mut()
+        .unwrap();
+    if let VoxelSurfaceMapping::Repeat {
+        tile_scale_cells,
+        tile_origin_cells,
+        ..
+    } = &mut material.style.voxel_surface.as_mut().unwrap().mapping
+    {
+        *tile_scale_cells = scale;
+        *tile_origin_cells = origin;
+    }
 }
 
 #[test]
-fn atlas_padding_tile_and_region_quota_boundaries_are_typed() {
+fn atlas_padding_region_ids_and_tile_magnitudes_admit() {
     let mut catalog = surface_catalog();
-    let atlas_entry = catalog
+    let atlas = catalog
         .entries
         .iter_mut()
         .find(|entry| entry.id.as_str() == "sprite-sheet/voxel-atlas")
+        .unwrap()
+        .voxel_atlas
+        .as_mut()
         .unwrap();
-    let atlas = atlas_entry.voxel_atlas.as_mut().unwrap();
-    atlas.regions[0].padding.left = 0;
-    assert!(validate_catalog(&catalog)
-        .errors
-        .iter()
-        .any(|error| matches!(
-            error,
-            CatalogValidationError::InsufficientAtlasPadding { .. }
-        )));
+    // The atlas texture is linear; an unpadded region only bleeds at its edges.
+    atlas.regions[0].padding = AtlasPadding::ZERO;
+    atlas.regions[1].padding.left = 2;
+    atlas.regions.push(AtlasRegionDefinition {
+        id: "Whole Atlas".to_string(),
+        content_min: [0, 0],
+        content_extent: [64, 32],
+        padding: AtlasPadding::ZERO,
+        inset: AtlasInset::HalfTexel,
+    });
+    assert!(admission_report(&catalog).is_ok());
 
     let mut catalog = surface_catalog();
-    {
-        let material = catalog
-            .entries
-            .iter_mut()
-            .find(|entry| entry.id.as_str() == "material/repeating-stone")
-            .unwrap()
-            .material
-            .as_mut()
-            .unwrap();
-        if let VoxelSurfaceMapping::Repeat {
-            tile_scale_cells, ..
-        } = &mut material.style.voxel_surface.as_mut().unwrap().mapping
-        {
-            *tile_scale_cells = [1.0 / 256.0, 4_096.0];
-        }
+    set_repeat_tile(&mut catalog, [1.0e-6, 1.0e6], [-1.0e9, 3.0e30]);
+    assert!(admission_report(&catalog).is_ok());
+    for scale in [
+        [0.0, 1.0],
+        [1.0, -2.0],
+        [f32::NAN, 1.0],
+        [1.0, f32::INFINITY],
+    ] {
+        set_repeat_tile(&mut catalog, scale, [0.0, 0.0]);
+        assert!(admission_report(&catalog)
+            .errors
+            .iter()
+            .any(|error| matches!(error, CatalogValidationError::InvalidTileScale { .. })));
     }
-    assert!(validate_catalog(&catalog).is_ok());
-    {
-        let material = catalog
-            .entries
-            .iter_mut()
-            .find(|entry| entry.id.as_str() == "material/repeating-stone")
-            .unwrap()
-            .material
-            .as_mut()
-            .unwrap();
-        if let VoxelSurfaceMapping::Repeat {
-            tile_scale_cells, ..
-        } = &mut material.style.voxel_surface.as_mut().unwrap().mapping
-        {
-            tile_scale_cells[0] = (1.0 / 256.0) / 2.0;
-        }
-    }
-    assert!(validate_catalog(&catalog)
+    set_repeat_tile(&mut catalog, [1.0, 1.0], [f32::NEG_INFINITY, 0.0]);
+    assert!(admission_report(&catalog)
         .errors
         .iter()
-        .any(|error| matches!(error, CatalogValidationError::InvalidTileScale { .. })));
+        .any(|error| matches!(error, CatalogValidationError::InvalidTileOrigin { .. })));
 }
 
 #[test]
@@ -497,14 +501,20 @@ fn strict_reopen_keeps_the_admitted_identity() {
         .iter_mut()
         .find(|entry| entry.id.as_str() == "material/atlas-stone")
         .unwrap()
-        .dependencies
-        .clear();
+        .hash = None;
+    invalid
+        .entries
+        .iter_mut()
+        .find(|entry| entry.id.as_str() == "texture/voxel-atlas")
+        .unwrap()
+        .version = 4;
     assert!(AdmittedAssetCatalog::admit(invalid).is_err());
 }
 
 #[test]
-fn atlas_per_asset_and_aggregate_region_quotas_have_exact_boundaries() {
-    let texture = CatalogEntry::new(id("texture/quota-atlas"), 1)
+fn atlases_admit_any_number_of_regions_and_refuse_a_repeated_region() {
+    let texture_ref = pinned("texture/large-atlas", 1, "aa01");
+    let texture = CatalogEntry::new(id("texture/large-atlas"), 1)
         .with_hash(AssetHash::parse("aa01").unwrap())
         .with_texture(TextureDefinition {
             width: 8_192,
@@ -512,31 +522,162 @@ fn atlas_per_asset_and_aggregate_region_quotas_have_exact_boundaries() {
             filter: TextureFilter::Nearest,
             wrap: TextureWrap::Clamp,
         });
-    let exact = AssetCatalog::from_entries(vec![texture.clone(), quota_atlas("quota", 1_024)]);
-    assert!(validate_catalog(&exact).is_ok());
-    let over = AssetCatalog::from_entries(vec![texture.clone(), quota_atlas("quota", 1_025)]);
-    assert!(validate_catalog(&over).errors.iter().any(|error| matches!(
-        error,
-        CatalogValidationError::AtlasRegionQuotaExceeded { .. }
-    )));
-
-    let aggregate_exact = AssetCatalog::from_entries(vec![
+    let atlas = |name: &str, region_count: u32| {
+        CatalogEntry::new(id(&format!("sprite-sheet/{name}")), 1).with_voxel_atlas(
+            VoxelAtlasDefinition {
+                schema_version: 1,
+                texture: texture_ref.clone(),
+                regions: (0..region_count)
+                    .map(|index| AtlasRegionDefinition {
+                        id: format!("r-{index:05}"),
+                        content_min: [index % 8_192, index / 8_192],
+                        content_extent: [1, 1],
+                        padding: AtlasPadding::ZERO,
+                        inset: AtlasInset::HalfTexel,
+                    })
+                    .collect(),
+            },
+        )
+    };
+    let catalog = AssetCatalog::from_entries(vec![
         texture.clone(),
-        quota_atlas("quota-a", 1_024),
-        quota_atlas("quota-b", 1_024),
-        quota_atlas("quota-c", 1_024),
-        quota_atlas("quota-d", 1_024),
+        atlas("large-a", 5_000),
+        atlas("large-b", 5_000),
     ]);
-    assert!(validate_catalog(&aggregate_exact).is_ok());
-    let mut aggregate_over = aggregate_exact;
-    aggregate_over.entries.push(quota_atlas("quota-e", 1));
-    assert!(validate_catalog(&aggregate_over)
+    assert!(admission_report(&catalog).is_ok());
+
+    let mut repeated = atlas("repeated", 3);
+    repeated.voxel_atlas.as_mut().unwrap().regions[2].id = "r-00000".to_string();
+    assert!(
+        admission_report(&AssetCatalog::from_entries(vec![texture, repeated]))
+            .errors
+            .iter()
+            .any(|error| matches!(
+                error,
+                CatalogValidationError::DuplicateAtlasRegion { region, .. } if region == "r-00000"
+            ))
+    );
+}
+
+#[test]
+fn surface_references_are_dependencies_without_being_listed_twice() {
+    let mut source = surface_catalog();
+    for entry in &mut source.entries {
+        entry.dependencies.clear();
+    }
+    // The surface references are any-version and unhashed; the renderer takes
+    // the content hash from the entry each resolves to.
+    let tile = reference("texture/stone-tile");
+    for entry in &mut source.entries {
+        if let Some(material) = &mut entry.material {
+            material.style.texture = None;
+            if let VoxelSurfaceMapping::Repeat { texture, .. } =
+                &mut material.style.voxel_surface.as_mut().unwrap().mapping
+            {
+                *texture = tile.clone();
+            }
+        }
+    }
+    let admitted = AdmittedAssetCatalog::admit(source.clone()).expect("surface-only references");
+    let dependencies = |id_value: &str| {
+        admitted
+            .catalog()
+            .get(&id(id_value))
+            .unwrap()
+            .dependencies
+            .iter()
+            .map(|dependency| dependency.id().as_str().to_string())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        dependencies("material/repeating-stone"),
+        ["texture/stone-tile"]
+    );
+    assert_eq!(
+        dependencies("material/atlas-stone"),
+        ["sprite-sheet/voxel-atlas"]
+    );
+    assert_eq!(
+        dependencies("sprite-sheet/voxel-atlas"),
+        ["texture/voxel-atlas"]
+    );
+
+    let lock = generate_lock(admitted.catalog());
+    let locked = lock
+        .entries
+        .iter()
+        .find(|entry| entry.id.as_str() == "material/repeating-stone")
+        .unwrap();
+    assert_eq!(locked.dependencies, [id("texture/stone-tile")]);
+    assert_eq!(
+        DependencyGraph::build(admitted.catalog()).dependents_of(&id("texture/voxel-atlas")),
+        [id("material/atlas-stone"), id("sprite-sheet/voxel-atlas")]
+    );
+    let reopened = AdmittedAssetCatalog::reopen(admitted.canonical_json()).unwrap();
+    assert_eq!(reopened.canonical_hash(), admitted.canonical_hash());
+    let resolved = admitted
+        .catalog()
+        .render_material(&id("material/repeating-stone"))
+        .unwrap()
+        .voxel_surface
+        .unwrap();
+    match resolved.mapping {
+        ResolvedVoxelSurfaceMapping::Repeat { texture_hash, .. } => {
+            assert_eq!(texture_hash, Some(AssetHash::parse("aa02").unwrap()));
+        }
+        other => panic!("unexpected mapping: {other:?}"),
+    }
+
+    // A surface reference is resolved, pinned and cycle-checked as a
+    // dependency even though no dependency lists it.
+    let mut stale = source.clone();
+    let material = stale
+        .entries
+        .iter_mut()
+        .find(|entry| entry.id.as_str() == "material/repeating-stone")
+        .unwrap();
+    if let VoxelSurfaceMapping::Repeat { texture, .. } = &mut material
+        .material
+        .as_mut()
+        .unwrap()
+        .style
+        .voxel_surface
+        .as_mut()
+        .unwrap()
+        .mapping
+    {
+        *texture = pinned("texture/stone-tile", 2, "ffff");
+    }
+    assert!(admission_report(&stale)
+        .errors
+        .iter()
+        .any(|error| matches!(error, CatalogValidationError::StaleDependencyHash { .. })));
+
+    let mut missing = source.clone();
+    missing
+        .entries
+        .retain(|entry| entry.id.as_str() != "texture/voxel-atlas");
+    assert!(admission_report(&missing)
         .errors
         .iter()
         .any(|error| matches!(
             error,
-            CatalogValidationError::AggregateAtlasRegionQuotaExceeded
+            CatalogValidationError::UnknownDependency { dependency, .. }
+                if dependency.as_str() == "texture/voxel-atlas"
         )));
+
+    let mut cycle = source;
+    cycle
+        .entries
+        .iter_mut()
+        .find(|entry| entry.id.as_str() == "texture/stone-tile")
+        .unwrap()
+        .dependencies
+        .push(reference("material/repeating-stone"));
+    assert!(admission_report(&cycle)
+        .errors
+        .iter()
+        .any(|error| matches!(error, CatalogValidationError::DependencyCycle { .. })));
 }
 
 #[test]
@@ -552,7 +693,7 @@ fn texture_dimension_validation_defers_capacity_to_the_renderer() {
         texture.width = u32::MAX;
         texture.height = u32::MAX;
     }
-    assert!(validate_catalog(&catalog).is_ok());
+    assert!(admission_report(&catalog).is_ok());
 
     catalog
         .entries
@@ -561,7 +702,7 @@ fn texture_dimension_validation_defers_capacity_to_the_renderer() {
         .and_then(|entry| entry.texture.as_mut())
         .expect("fixture texture definition")
         .width = 0;
-    assert!(validate_catalog(&catalog)
+    assert!(admission_report(&catalog)
         .errors
         .iter()
         .any(|error| matches!(

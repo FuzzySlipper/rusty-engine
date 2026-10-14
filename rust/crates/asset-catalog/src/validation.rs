@@ -1,12 +1,9 @@
-use std::collections::BTreeSet;
-
 use core_assets::{AssetHash, AssetId, AssetKind, AssetReference, AssetVersionReq};
 use serde::Serialize;
 
 use crate::{
-    AssetCatalog, AtlasRegionDefinition, CatalogEntry, DependencyGraph, TextureFilter, TextureWrap,
-    VoxelAlphaMode, VoxelSurfaceMapping, MAX_AGGREGATE_ATLAS_REGIONS, MAX_ATLAS_PADDING,
-    MAX_ATLAS_REGIONS, MAX_TILE_ORIGIN_CELLS, MAX_TILE_SCALE_CELLS, MIN_TILE_SCALE_CELLS,
+    AssetCatalog, AtlasRegionDefinition, CatalogEntry, DependencyGraph, TextureWrap,
+    VoxelAlphaMode, VoxelSurfaceMapping,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -60,14 +57,6 @@ pub enum CatalogValidationError {
         required: AssetHash,
         actual: Option<AssetHash>,
     },
-    UnpinnedSurfaceReference {
-        from: AssetId,
-        reference: AssetId,
-    },
-    UndeclaredSurfaceDependency {
-        from: AssetId,
-        reference: AssetId,
-    },
     ConflictingSurfaceTexture {
         from: AssetId,
         style_texture: AssetId,
@@ -100,15 +89,7 @@ pub enum CatalogValidationError {
         expected: TextureWrap,
         actual: TextureWrap,
     },
-    AtlasRegionQuotaExceeded {
-        id: AssetId,
-    },
-    AggregateAtlasRegionQuotaExceeded,
     DuplicateAtlasRegion {
-        id: AssetId,
-        region: String,
-    },
-    InvalidAtlasRegionId {
         id: AssetId,
         region: String,
     },
@@ -116,20 +97,7 @@ pub enum CatalogValidationError {
         id: AssetId,
         region: String,
     },
-    InvalidAtlasPadding {
-        id: AssetId,
-        region: String,
-    },
     AtlasRegionOutOfBounds {
-        id: AssetId,
-        region: String,
-    },
-    AtlasRegionOverlap {
-        id: AssetId,
-        first: String,
-        second: String,
-    },
-    InsufficientAtlasPadding {
         id: AssetId,
         region: String,
     },
@@ -154,8 +122,6 @@ impl CatalogValidationError {
             Self::DuplicateDependency { .. } => "duplicate_dependency",
             Self::StaleDependencyVersion { .. } => "stale_dependency_version",
             Self::StaleDependencyHash { .. } => "stale_dependency_hash",
-            Self::UnpinnedSurfaceReference { .. } => "unpinned_surface_reference",
-            Self::UndeclaredSurfaceDependency { .. } => "undeclared_surface_dependency",
             Self::ConflictingSurfaceTexture { .. } => "conflicting_surface_texture",
             Self::MissingTextureDefinition { .. } => "missing_texture_definition",
             Self::InvalidTextureDimensions { .. } => "invalid_texture_dimensions",
@@ -165,15 +131,9 @@ impl CatalogValidationError {
             Self::InvalidTileOrigin { .. } => "invalid_tile_origin",
             Self::InvalidAlphaCutoff { .. } => "invalid_alpha_cutoff",
             Self::InvalidTextureWrap { .. } => "invalid_texture_wrap",
-            Self::AtlasRegionQuotaExceeded { .. } => "atlas_region_quota_exceeded",
-            Self::AggregateAtlasRegionQuotaExceeded => "aggregate_atlas_region_quota_exceeded",
             Self::DuplicateAtlasRegion { .. } => "duplicate_atlas_region",
-            Self::InvalidAtlasRegionId { .. } => "invalid_atlas_region_id",
             Self::InvalidAtlasRegionRect { .. } => "invalid_atlas_region_rect",
-            Self::InvalidAtlasPadding { .. } => "invalid_atlas_padding",
             Self::AtlasRegionOutOfBounds { .. } => "atlas_region_out_of_bounds",
-            Self::AtlasRegionOverlap { .. } => "atlas_region_overlap",
-            Self::InsufficientAtlasPadding { .. } => "insufficient_atlas_padding",
             Self::MissingAtlasRegion { .. } => "missing_atlas_region",
         }
     }
@@ -264,15 +224,15 @@ impl CatalogValidationReport {
     }
 }
 
-pub fn validate_catalog(catalog: &AssetCatalog) -> CatalogValidationReport {
+/// Validate a canonical catalog ([`AssetCatalog::canonical`]): entries in id
+/// order and each entry's dependencies complete. Admission is the one caller.
+pub(crate) fn validate_catalog(catalog: &AssetCatalog) -> CatalogValidationReport {
     let mut errors = Vec::new();
-    let mut seen = BTreeSet::new();
-    let mut reported = BTreeSet::new();
-    let mut aggregate_regions = 0usize;
-    for entry in &catalog.entries {
-        if !seen.insert(entry.id.as_str()) && reported.insert(entry.id.as_str()) {
+    for (index, pair) in catalog.entries.windows(2).enumerate() {
+        let repeated = index > 0 && catalog.entries[index - 1].id == pair[0].id;
+        if pair[0].id == pair[1].id && !repeated {
             errors.push(CatalogValidationError::DuplicateAssetId {
-                id: entry.id.clone(),
+                id: pair[1].id.clone(),
             });
         }
     }
@@ -323,15 +283,18 @@ pub fn validate_catalog(catalog: &AssetCatalog) -> CatalogValidationReport {
                 id: entry.id.clone(),
             });
         }
-        let mut dependency_ids = BTreeSet::new();
-        for dependency in &entry.dependencies {
-            if !dependency_ids.insert(dependency.id().as_str()) {
+        // Canonical dependencies are sorted with exact repeats removed, so
+        // neighbours sharing an id ask for different versions or hashes.
+        for pair in entry.dependencies.windows(2) {
+            if pair[0].id() == pair[1].id() {
                 errors.push(CatalogValidationError::DuplicateDependency {
                     from: entry.id.clone(),
-                    dependency: dependency.id().clone(),
+                    dependency: pair[1].id().clone(),
                 });
             }
-            let Some(target) = catalog.get(dependency.id()) else {
+        }
+        for dependency in &entry.dependencies {
+            let Some(target) = find(catalog, dependency.id()) else {
                 errors.push(CatalogValidationError::UnknownDependency {
                     from: entry.id.clone(),
                     dependency: dependency.id().clone(),
@@ -342,7 +305,6 @@ pub fn validate_catalog(catalog: &AssetCatalog) -> CatalogValidationReport {
         }
 
         if let Some(atlas) = &entry.voxel_atlas {
-            aggregate_regions = aggregate_regions.saturating_add(atlas.regions.len());
             validate_atlas(catalog, entry, atlas, &mut errors);
         }
         if let Some(surface) = entry
@@ -355,14 +317,19 @@ pub fn validate_catalog(catalog: &AssetCatalog) -> CatalogValidationReport {
         }
     }
 
-    if aggregate_regions > MAX_AGGREGATE_ATLAS_REGIONS {
-        errors.push(CatalogValidationError::AggregateAtlasRegionQuotaExceeded);
-    }
-
     if let Some(path) = DependencyGraph::build(catalog).detect_cycle() {
         errors.push(CatalogValidationError::DependencyCycle { path });
     }
     CatalogValidationReport { errors }
+}
+
+/// The first entry with `id`, as [`AssetCatalog::get`] finds it, by binary
+/// search over the canonical id order.
+fn find<'a>(catalog: &'a AssetCatalog, id: &AssetId) -> Option<&'a CatalogEntry> {
+    let index = catalog
+        .entries
+        .partition_point(|entry| entry.id.as_str() < id.as_str());
+    catalog.entries.get(index).filter(|entry| entry.id == *id)
 }
 
 fn validate_surface_texture_identity(
@@ -380,8 +347,7 @@ fn validate_surface_texture_identity(
     };
     let surface_texture = match &surface.mapping {
         VoxelSurfaceMapping::Repeat { texture, .. } => Some(texture),
-        VoxelSurfaceMapping::Atlas { atlas, .. } => catalog
-            .get(atlas.id())
+        VoxelSurfaceMapping::Atlas { atlas, .. } => find(catalog, atlas.id())
             .and_then(|target| target.voxel_atlas.as_ref())
             .map(|definition| &definition.texture),
     };
@@ -446,7 +412,9 @@ fn validate_reference_target(
     }
 }
 
-fn validate_owned_reference(
+/// A surface or atlas reference's resolution and pins are checked as one of
+/// the entry's dependencies, which the canonical catalog includes it in.
+fn validate_owned_reference_kind(
     from: &CatalogEntry,
     reference: &AssetReference,
     expected: AssetKind,
@@ -458,22 +426,6 @@ fn validate_owned_reference(
             slot: "surface",
             expected,
             actual: reference.kind(),
-            reference: reference.id().clone(),
-        });
-    }
-    if !matches!(reference.version(), AssetVersionReq::Exact(_)) || reference.hash().is_none() {
-        errors.push(CatalogValidationError::UnpinnedSurfaceReference {
-            from: from.id.clone(),
-            reference: reference.id().clone(),
-        });
-    }
-    if !from
-        .dependencies
-        .iter()
-        .any(|dependency| dependency == reference)
-    {
-        errors.push(CatalogValidationError::UndeclaredSurfaceDependency {
-            from: from.id.clone(),
             reference: reference.id().clone(),
         });
     }
@@ -520,12 +472,12 @@ fn validate_surface(
             AssetKind::SpriteSheet,
         ),
     };
-    validate_owned_reference(entry, reference, expected, errors);
+    validate_owned_reference_kind(entry, reference, expected, errors);
     validate_tile_mapping(entry, *scale, *origin, errors);
 
     match &surface.mapping {
         VoxelSurfaceMapping::Repeat { texture, .. } => {
-            if let Some(target) = catalog.get(texture.id()) {
+            if let Some(target) = find(catalog, texture.id()) {
                 match &target.texture {
                     Some(definition) if definition.wrap != TextureWrap::Repeat => {
                         errors.push(CatalogValidationError::InvalidTextureWrap {
@@ -543,9 +495,13 @@ fn validate_surface(
             }
         }
         VoxelSurfaceMapping::Atlas { atlas, region, .. } => {
-            if let Some(target) = catalog.get(atlas.id()) {
+            if let Some(target) = find(catalog, atlas.id()) {
+                // Canonical atlas regions are sorted by id.
                 if target.voxel_atlas.as_ref().is_none_or(|definition| {
-                    !definition.regions.iter().any(|item| item.id == *region)
+                    definition
+                        .regions
+                        .binary_search_by(|item| item.id.as_str().cmp(region))
+                        .is_err()
                 }) {
                     errors.push(CatalogValidationError::MissingAtlasRegion {
                         id: entry.id.clone(),
@@ -558,23 +514,23 @@ fn validate_surface(
     }
 }
 
+/// The voxel mesher divides by the tile scale and keeps the origin in its
+/// tile phase; how large or small either may be is the mesher's limit.
 fn validate_tile_mapping(
     entry: &CatalogEntry,
     scale: [f32; 2],
     origin: [f32; 2],
     errors: &mut Vec<CatalogValidationError>,
 ) {
-    if scale.into_iter().any(|value| {
-        !value.is_finite() || !(MIN_TILE_SCALE_CELLS..=MAX_TILE_SCALE_CELLS).contains(&value)
-    }) {
+    if scale
+        .into_iter()
+        .any(|value| !value.is_finite() || value <= 0.0)
+    {
         errors.push(CatalogValidationError::InvalidTileScale {
             id: entry.id.clone(),
         });
     }
-    if origin
-        .into_iter()
-        .any(|value| !value.is_finite() || value.abs() > MAX_TILE_ORIGIN_CELLS)
-    {
+    if origin.into_iter().any(|value| !value.is_finite()) {
         errors.push(CatalogValidationError::InvalidTileOrigin {
             id: entry.id.clone(),
         });
@@ -592,13 +548,8 @@ fn validate_atlas(
             id: entry.id.clone(),
         });
     }
-    validate_owned_reference(entry, &atlas.texture, AssetKind::Texture, errors);
-    if atlas.regions.len() > MAX_ATLAS_REGIONS {
-        errors.push(CatalogValidationError::AtlasRegionQuotaExceeded {
-            id: entry.id.clone(),
-        });
-    }
-    let Some(texture_entry) = catalog.get(atlas.texture.id()) else {
+    validate_owned_reference_kind(entry, &atlas.texture, AssetKind::Texture, errors);
+    let Some(texture_entry) = find(catalog, atlas.texture.id()) else {
         return;
     };
     let Some(texture) = &texture_entry.texture else {
@@ -616,17 +567,10 @@ fn validate_atlas(
         });
     }
 
-    let mut seen = BTreeSet::new();
-    let mut rects: Vec<(&str, [u32; 4])> = Vec::new();
-    for region in &atlas.regions {
-        if !seen.insert(region.id.as_str()) {
+    // Canonical atlas regions are sorted by id, so a repeated id is adjacent.
+    for (index, region) in atlas.regions.iter().enumerate() {
+        if index > 0 && atlas.regions[index - 1].id == region.id {
             errors.push(CatalogValidationError::DuplicateAtlasRegion {
-                id: entry.id.clone(),
-                region: region.id.clone(),
-            });
-        }
-        if !valid_region_id(&region.id) {
-            errors.push(CatalogValidationError::InvalidAtlasRegionId {
                 id: entry.id.clone(),
                 region: region.id.clone(),
             });
@@ -638,77 +582,24 @@ fn validate_atlas(
             });
             continue;
         }
-        if [
-            region.padding.left,
-            region.padding.right,
-            region.padding.bottom,
-            region.padding.top,
-        ]
-        .into_iter()
-        .any(|value| value > MAX_ATLAS_PADDING)
-        {
-            errors.push(CatalogValidationError::InvalidAtlasPadding {
+        if !padded_rect_fits(region, texture.width, texture.height) {
+            errors.push(CatalogValidationError::AtlasRegionOutOfBounds {
                 id: entry.id.clone(),
                 region: region.id.clone(),
             });
         }
-        if texture.filter == TextureFilter::Linear
-            && [
-                region.padding.left,
-                region.padding.right,
-                region.padding.bottom,
-                region.padding.top,
-            ]
-            .contains(&0)
-        {
-            errors.push(CatalogValidationError::InsufficientAtlasPadding {
-                id: entry.id.clone(),
-                region: region.id.clone(),
-            });
-        }
-        match padded_rect(region, texture.width, texture.height) {
-            Some(rect) => rects.push((region.id.as_str(), rect)),
-            None => errors.push(CatalogValidationError::AtlasRegionOutOfBounds {
-                id: entry.id.clone(),
-                region: region.id.clone(),
-            }),
-        }
-    }
-    for left in 0..rects.len() {
-        for right in left + 1..rects.len() {
-            if rects_overlap(rects[left].1, rects[right].1) {
-                errors.push(CatalogValidationError::AtlasRegionOverlap {
-                    id: entry.id.clone(),
-                    first: rects[left].0.to_string(),
-                    second: rects[right].0.to_string(),
-                });
-            }
-        }
     }
 }
 
-fn valid_region_id(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= 64
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
-        && !value.starts_with('-')
-        && !value.ends_with('-')
-}
-
-fn padded_rect(region: &AtlasRegionDefinition, width: u32, height: u32) -> Option<[u32; 4]> {
-    let x0 = region.content_min[0].checked_sub(u32::from(region.padding.left))?;
-    let y0 = region.content_min[1].checked_sub(u32::from(region.padding.bottom))?;
-    let x1 = region.content_min[0]
-        .checked_add(region.content_extent[0])?
-        .checked_add(u32::from(region.padding.right))?;
-    let y1 = region.content_min[1]
-        .checked_add(region.content_extent[1])?
-        .checked_add(u32::from(region.padding.top))?;
-    (x1 <= width && y1 <= height).then_some([x0, y0, x1, y1])
-}
-
-fn rects_overlap(left: [u32; 4], right: [u32; 4]) -> bool {
-    left[0] < right[2] && right[0] < left[2] && left[1] < right[3] && right[1] < left[3]
+fn padded_rect_fits(region: &AtlasRegionDefinition, width: u32, height: u32) -> bool {
+    let end_fits = |axis: usize, padding: u16, limit: u32| {
+        region.content_min[axis]
+            .checked_add(region.content_extent[axis])
+            .and_then(|end| end.checked_add(u32::from(padding)))
+            .is_some_and(|end| end <= limit)
+    };
+    region.content_min[0] >= u32::from(region.padding.left)
+        && region.content_min[1] >= u32::from(region.padding.bottom)
+        && end_fits(0, region.padding.right, width)
+        && end_fits(1, region.padding.top, height)
 }

@@ -118,3 +118,39 @@ fn algorithm_ambiguous_surface_hash_never_reaches_the_renderer_contract() {
         Err(CatalogMaterialProjectionError::InvalidSha256ContentHash)
     ));
 }
+
+#[test]
+fn unpinned_unpadded_surface_projects_the_resolved_content_hashes() {
+    let mut source = catalog();
+    for entry in &mut source.entries {
+        entry.dependencies.clear();
+        if let Some(material) = &mut entry.material {
+            material.style.texture = None;
+            if let Some(surface) = &mut material.style.voxel_surface {
+                if let VoxelSurfaceMapping::Atlas { atlas, .. } = &mut surface.mapping {
+                    *atlas = AssetReference::new(atlas.id().clone(), AssetVersionReq::Any, None);
+                }
+            }
+        }
+        if let Some(atlas) = &mut entry.voxel_atlas {
+            atlas.texture =
+                AssetReference::new(atlas.texture.id().clone(), AssetVersionReq::Any, None);
+            // A linear atlas region without padding only bleeds at its edges.
+            atlas.regions[0].padding = AtlasPadding::ZERO;
+        }
+    }
+    let admitted = AdmittedAssetCatalog::admit(source).unwrap();
+    let descriptor = project_catalog_material(&admitted, &id("material/stone")).unwrap();
+    assert_eq!(descriptor.validate(), Ok(()));
+    match descriptor.voxel_surface.unwrap().mapping {
+        VoxelSurfaceMappingDescriptor::Atlas {
+            atlas_content_hash,
+            texture_content_hash,
+            ..
+        } => {
+            assert_eq!(atlas_content_hash, format!("sha256:{ATLAS_HASH}"));
+            assert_eq!(texture_content_hash, format!("sha256:{TEXTURE_HASH}"));
+        }
+        other => panic!("unexpected mapping: {other:?}"),
+    }
+}

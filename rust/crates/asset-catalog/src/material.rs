@@ -1,11 +1,4 @@
-use core_assets::AssetReference;
-
-pub const MAX_ATLAS_REGIONS: usize = 1_024;
-pub const MAX_AGGREGATE_ATLAS_REGIONS: usize = 4_096;
-pub const MAX_ATLAS_PADDING: u16 = 32;
-pub const MIN_TILE_SCALE_CELLS: f32 = 1.0 / 256.0;
-pub const MAX_TILE_SCALE_CELLS: f32 = 4_096.0;
-pub const MAX_TILE_ORIGIN_CELLS: f32 = 16_777_216.0;
+use core_assets::{AssetHash, AssetReference};
 
 /// Authority-relevant occupancy classification.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -138,18 +131,23 @@ pub struct VoxelSurfaceBinding {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+/// The authored references with the version and content hash of the entries
+/// they resolved to.
 pub enum ResolvedVoxelSurfaceMapping {
     Repeat {
         texture: AssetReference,
         texture_version: u32,
+        texture_hash: Option<AssetHash>,
         tile_scale_cells: [f32; 2],
         tile_origin_cells: [f32; 2],
     },
     Atlas {
         atlas: AssetReference,
         atlas_version: u32,
+        atlas_hash: Option<AssetHash>,
         texture: AssetReference,
         texture_version: u32,
+        texture_hash: Option<AssetHash>,
         region: AtlasRegionDefinition,
         tile_scale_cells: [f32; 2],
         tile_origin_cells: [f32; 2],

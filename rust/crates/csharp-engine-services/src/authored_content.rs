@@ -1471,6 +1471,7 @@ fn surface_row(
             region,
             tile_scale_cells,
             tile_origin_cells,
+            ..
         } => (
             NativeAuthoredVoxelSurfaceMappingKind::Atlas,
             empty_reference(text),
@@ -1533,6 +1534,7 @@ fn resolved_surface_row(
             texture_version,
             tile_scale_cells,
             tile_origin_cells,
+            ..
         } => (
             NativeAuthoredVoxelSurfaceMappingKind::Repeat,
             native_reference(text, texture),
@@ -1552,6 +1554,7 @@ fn resolved_surface_row(
             region,
             tile_scale_cells,
             tile_origin_cells,
+            ..
         } => (
             NativeAuthoredVoxelSurfaceMappingKind::Atlas,
             native_reference(text, texture),

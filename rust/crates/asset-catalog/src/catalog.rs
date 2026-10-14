@@ -130,6 +130,7 @@ impl AssetCatalog {
                     mapping: ResolvedVoxelSurfaceMapping::Repeat {
                         texture: texture.clone(),
                         texture_version: texture_entry.version,
+                        texture_hash: texture_entry.hash.clone(),
                         tile_scale_cells: *tile_scale_cells,
                         tile_origin_cells: *tile_origin_cells,
                     },
@@ -165,8 +166,10 @@ impl AssetCatalog {
                     mapping: ResolvedVoxelSurfaceMapping::Atlas {
                         atlas: atlas.clone(),
                         atlas_version: atlas_entry.version,
+                        atlas_hash: atlas_entry.hash.clone(),
                         texture: atlas_definition.texture.clone(),
                         texture_version: texture_entry.version,
+                        texture_hash: texture_entry.hash.clone(),
                         region,
                         tile_scale_cells: *tile_scale_cells,
                         tile_origin_cells: *tile_origin_cells,
@@ -206,13 +209,31 @@ impl AssetCatalog {
             })
     }
 
-    /// Deterministically order owned catalog data by entry identity. Normalize
-    /// dependencies without changing authored multiplicity so validation can still
-    /// report the original semantic content.
+    /// Deterministically order owned catalog data by entry identity and
+    /// complete each entry's dependencies: the texture or atlas a voxel
+    /// surface maps, and an atlas's texture, are dependencies of the entry
+    /// that names them whether or not they were also listed there. Exact
+    /// repeats collapse; one id asked for at different versions or hashes
+    /// stays for validation to refuse.
     pub fn canonical(mut self) -> Self {
         self.entries
             .sort_by(|left, right| left.id.as_str().cmp(right.id.as_str()));
         for entry in &mut self.entries {
+            let surface = entry
+                .material
+                .as_ref()
+                .and_then(|material| material.style.voxel_surface.as_ref())
+                .map(|surface| match &surface.mapping {
+                    VoxelSurfaceMapping::Repeat { texture, .. } => texture.clone(),
+                    VoxelSurfaceMapping::Atlas { atlas, .. } => atlas.clone(),
+                });
+            let atlas_texture = entry
+                .voxel_atlas
+                .as_ref()
+                .map(|atlas| atlas.texture.clone());
+            entry
+                .dependencies
+                .extend(surface.into_iter().chain(atlas_texture));
             entry.dependencies.sort_by(|left, right| {
                 left.id()
                     .as_str()
@@ -224,6 +245,7 @@ impl AssetCatalog {
                             .cmp(&right.hash().map(AssetHash::as_str))
                     })
             });
+            entry.dependencies.dedup();
             if let Some(atlas) = &mut entry.voxel_atlas {
                 atlas.regions.sort_by(|left, right| left.id.cmp(&right.id));
             }

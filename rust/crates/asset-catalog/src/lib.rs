@@ -44,13 +44,9 @@ pub use material::{
     MaterialDefinition, MaterialStyle, RenderMaterial, ResolvedVoxelSurface,
     ResolvedVoxelSurfaceMapping, Rgba, StructuralClass, TextureDefinition, TextureFilter,
     TextureWrap, UvStrategy, VoxelAlphaMode, VoxelAtlasDefinition, VoxelSurfaceBinding,
-    VoxelSurfaceMapping, VoxelSurfaceResolutionError, MAX_AGGREGATE_ATLAS_REGIONS,
-    MAX_ATLAS_PADDING, MAX_ATLAS_REGIONS, MAX_TILE_ORIGIN_CELLS, MAX_TILE_SCALE_CELLS,
-    MIN_TILE_SCALE_CELLS,
+    VoxelSurfaceMapping, VoxelSurfaceResolutionError,
 };
-pub use validation::{
-    validate_catalog, CatalogDiagnostic, CatalogValidationError, CatalogValidationReport,
-};
+pub use validation::{CatalogDiagnostic, CatalogValidationError, CatalogValidationReport};
 pub use voxel::{
     VoxelMaterialError, VoxelMaterialTable, VoxelMaterialTableReport, VoxelRenderResolution,
 };
