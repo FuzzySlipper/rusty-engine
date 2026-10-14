@@ -2216,10 +2216,8 @@ impl CsharpProductRuntime {
     }
 
     fn snapshot_outputs(&self) -> Result<Vec<RuntimePublication>, CsharpProductRuntimeError> {
-        let mut outputs = service_outputs(
-            self.services
-                .snapshot_outputs(ui_binding(&self.lifecycle))?,
-        )?;
+        let mut outputs =
+            service_outputs(self.services.snapshot_outputs(ui_binding(&self.lifecycle)))?;
         if self.audio_output.is_some() {
             audio_output::take_audio_ops(&mut outputs);
         }
@@ -2509,7 +2507,7 @@ impl CsharpProductRuntime {
         self.rebind_input_in_place(reason)?;
         self.services.reset_audio_realization_owner();
         if let Some(audio) = &mut self.audio_output {
-            audio.rebaseline(&self.services)?;
+            audio.rebaseline(&self.services);
         }
         self.rebaseline_frames();
         self.follow_world_time();
@@ -2563,11 +2561,7 @@ impl CsharpProductRuntime {
         if path.is_empty() {
             return Err(format!("usage: {SCENE_SNAPSHOT_COMMAND} <path>"));
         }
-        let baseline = self
-            .services
-            .snapshot_outputs(ui_binding(&self.lifecycle))
-            .map_err(CsharpProductRuntimeError::from)
-            .and_then(service_outputs)
+        let baseline = service_outputs(self.services.snapshot_outputs(ui_binding(&self.lifecycle)))
             .map_err(|error| format!("{}: {}", error.code(), error.detail()))?;
         let metadata = scene_snapshot::SceneSnapshotMetadata {
             product: self.product.clone(),
@@ -2693,12 +2687,7 @@ impl CsharpProductRuntime {
         let Some(frames) = &self.frame_output else {
             return;
         };
-        match self
-            .services
-            .snapshot_outputs(ui_binding(&self.lifecycle))
-            .map_err(CsharpProductRuntimeError::from)
-            .and_then(service_outputs)
-        {
+        match service_outputs(self.services.snapshot_outputs(ui_binding(&self.lifecycle))) {
             Ok(baseline) => frames.rebaseline(&self.services, &baseline, self.frame_simulation()),
             Err(error) => {
                 let _ = self.diagnostics.publish(
@@ -3545,25 +3534,11 @@ impl ProductHostRuntime for CsharpProductRuntime {
             product_host::TimelineCompletionOutcome::Success(data)
             | product_host::TimelineCompletionOutcome::Failure(data) => data
                 .as_ref()
-                .map(|value| serde_json::to_vec(value.value()))
-                .transpose()
-                .map_err(|error| {
-                    ProductHostRuntimeError::new(
-                        "CSHARP_TIMELINE_DATA",
-                        format!("timeline outcome data could not be copied: {error}"),
-                    )
-                })?,
+                .map(|value| value.value().to_string().into_bytes()),
         };
         let provenance_detail = envelope
             .provenance()
-            .map(|value| serde_json::to_vec(value.value()))
-            .transpose()
-            .map_err(|error| {
-                ProductHostRuntimeError::new(
-                    "CSHARP_TIMELINE_DATA",
-                    format!("timeline provenance data could not be copied: {error}"),
-                )
-            })?;
+            .map(|value| value.value().to_string().into_bytes());
         let native = NativeProductTimelineCompletion {
             ticket: ticket.get(),
             instance_id: current.instance_id.get(),

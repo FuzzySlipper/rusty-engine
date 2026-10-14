@@ -213,9 +213,9 @@ fn build_motion_result(
         candidates_len: candidates.len(),
         facts: facts.as_ptr(),
         facts_len: facts.len(),
-        bodies_considered: u64::try_from(resolution.bodies_considered).map_err(|_| 0)?,
-        moved_bodies: u64::try_from(resolution.moved_bodies).map_err(|_| 0)?,
-        blocked_axes: u64::try_from(resolution.blocked_axes).map_err(|_| 0)?,
+        bodies_considered: resolution.bodies_considered as u64,
+        moved_bodies: resolution.moved_bodies as u64,
+        blocked_axes: resolution.blocked_axes as u64,
     };
     bridge.borrowed.hold((candidates, facts));
     Ok(result)

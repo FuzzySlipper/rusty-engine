@@ -196,14 +196,14 @@ impl RuntimeVoxelContentBridge {
         content.retained_content(reference)
     }
 
-    fn insert_asset(&mut self, asset: VoxelAsset) -> Option<NativeVoxelAssetHandle> {
+    fn insert_asset(&mut self, asset: VoxelAsset) -> NativeVoxelAssetHandle {
         let value = self.next_asset;
-        self.next_asset = value.checked_add(1)?;
+        self.next_asset = value + 1;
         self.assets.insert(value, Arc::new(asset));
-        Some(NativeVoxelAssetHandle { value })
+        NativeVoxelAssetHandle { value }
     }
 
-    fn insert_object(&mut self, object: AdmittedVoxelObject) -> Option<NativeVoxelObjectHandle> {
+    fn insert_object(&mut self, object: AdmittedVoxelObject) -> NativeVoxelObjectHandle {
         self.insert_object_with_magica_palette(object, None)
     }
 
@@ -211,9 +211,9 @@ impl RuntimeVoxelContentBridge {
         &mut self,
         object: AdmittedVoxelObject,
         magica_palette: Option<RetainedMagicaVoxelPalette>,
-    ) -> Option<NativeVoxelObjectHandle> {
+    ) -> NativeVoxelObjectHandle {
         let value = self.next_object;
-        self.next_object = value.checked_add(1)?;
+        self.next_object = value + 1;
         self.objects.insert(
             value,
             RetainedVoxelObject {
@@ -228,7 +228,7 @@ impl RuntimeVoxelContentBridge {
                 magica_palette,
             },
         );
-        Some(NativeVoxelObjectHandle { value })
+        NativeVoxelObjectHandle { value }
     }
 
     fn read_magica_palette(
@@ -269,12 +269,9 @@ impl RuntimeVoxelContentBridge {
         Ok((result, MagicaVoxelPaletteBacking { _rows: rows }))
     }
 
-    fn insert_player(
-        &mut self,
-        object: Arc<AdmittedVoxelObject>,
-    ) -> Option<NativeVoxelObjectPlayerHandle> {
+    fn insert_player(&mut self, object: Arc<AdmittedVoxelObject>) -> NativeVoxelObjectPlayerHandle {
         let value = self.next_player;
-        self.next_player = value.checked_add(1)?;
+        self.next_player = value + 1;
         self.players.insert(
             value,
             RetainedVoxelObjectPlayer {
@@ -282,7 +279,7 @@ impl RuntimeVoxelContentBridge {
                 player: VoxelObjectPlayer::new(),
             },
         );
-        Some(NativeVoxelObjectPlayerHandle { value })
+        NativeVoxelObjectPlayerHandle { value }
     }
 
     fn create_player(
@@ -290,12 +287,7 @@ impl RuntimeVoxelContentBridge {
         object_handle: NativeVoxelObjectHandle,
     ) -> Result<NativeVoxelObjectPlayerHandle, CsharpEngineServicesError> {
         let object = Arc::clone(&self.object(object_handle)?.object);
-        self.insert_player(object).ok_or_else(|| {
-            CsharpEngineServicesError::new(
-                "CSHARP_VOXEL_CONTENT_PLAYER",
-                "voxel object player handle space overflowed",
-            )
-        })
+        Ok(self.insert_player(object))
     }
 
     /// Internal retained-owner resolution for the later annotation bridge.
@@ -384,9 +376,9 @@ impl RuntimeVoxelContentBridge {
         &mut self,
         asset: Arc<VoxelAsset>,
         layer: VoxelAnnotationLayer,
-    ) -> Option<NativeVoxelAnnotationHandle> {
+    ) -> NativeVoxelAnnotationHandle {
         let value = self.next_annotation;
-        self.next_annotation = value.checked_add(1)?;
+        self.next_annotation = value + 1;
         self.annotations.insert(
             value,
             RetainedVoxelAnnotation {
@@ -395,7 +387,7 @@ impl RuntimeVoxelContentBridge {
                 revision: 0,
             },
         );
-        Some(NativeVoxelAnnotationHandle { value })
+        NativeVoxelAnnotationHandle { value }
     }
 
     fn annotation(
@@ -463,7 +455,7 @@ impl RuntimeVoxelContentBridge {
         let result = NativeVoxelAnnotationRegionResult {
             regions: readout.as_ptr(),
             regions_len: readout.len(),
-            total_layer_regions: narrow(total_layer_regions)?,
+            total_layer_regions: total_layer_regions as u32,
             truncated,
             revision,
             layer_hash,
@@ -492,13 +484,13 @@ impl RuntimeVoxelContentBridge {
         let result = NativeVoxelAnnotationEditResult {
             affected_ids: readout.as_ptr(),
             affected_ids_len: readout.len(),
-            layer_hash_before: hash(&receipt.layer_hash_before)?,
-            layer_hash_after: hash(&receipt.layer_hash_after)?,
-            membership_hash_before: hash(&receipt.membership_hash_before)?,
-            membership_hash_after: hash(&receipt.membership_hash_after)?,
+            layer_hash_before: hash(&receipt.layer_hash_before),
+            layer_hash_after: hash(&receipt.layer_hash_after),
+            membership_hash_before: hash(&receipt.membership_hash_before),
+            membership_hash_after: hash(&receipt.membership_hash_after),
             revision,
-            command_count: narrow(receipt.command_count)?,
-            region_count: narrow(receipt.region_count)?,
+            command_count: receipt.command_count as u32,
+            region_count: receipt.region_count as u32,
             assigned_cell_count: receipt.assigned_cell_count,
         };
         Ok((
@@ -517,12 +509,7 @@ impl RuntimeVoxelContentBridge {
         command: VoxelAnnotationEditCommand,
     ) -> Result<NativeVoxelAnnotationEditResult, CsharpEngineServicesError> {
         let annotation = self.annotation_mut(handle)?;
-        let next_revision = annotation.revision.checked_add(1).ok_or_else(|| {
-            CsharpEngineServicesError::new(
-                "CSHARP_VOXEL_ANNOTATION_REVISION",
-                "annotation revision overflowed",
-            )
-        })?;
+        let next_revision = annotation.revision + 1;
         let receipt = VoxelAnnotationEditService::apply(
             &mut annotation.layer,
             VoxelAnnotationEditTransaction {
@@ -553,13 +540,7 @@ impl RuntimeVoxelContentBridge {
             clip_frame_index: 0,
             is_default: true,
         };
-        retained.selection_revision =
-            retained.selection_revision.checked_add(1).ok_or_else(|| {
-                CsharpEngineServicesError::new(
-                    "CSHARP_VOXEL_CONTENT_SELECTION",
-                    "selection revision overflowed",
-                )
-            })?;
+        retained.selection_revision += 1;
         native_frame_readout(&retained.object, retained.selected)
     }
 
@@ -593,17 +574,11 @@ impl RuntimeVoxelContentBridge {
             })?;
         retained.selected = ObjectFrameSelection {
             runtime_frame,
-            clip_index: narrow(clip_index)?,
+            clip_index: clip_index as u32,
             clip_frame_index: frame_index,
             is_default: false,
         };
-        retained.selection_revision =
-            retained.selection_revision.checked_add(1).ok_or_else(|| {
-                CsharpEngineServicesError::new(
-                    "CSHARP_VOXEL_CONTENT_SELECTION",
-                    "selection revision overflowed",
-                )
-            })?;
+        retained.selection_revision += 1;
         native_frame_readout(&retained.object, retained.selected)
     }
 
@@ -722,12 +697,6 @@ impl RuntimeVoxelContentBridge {
         let materials =
             self.presentation_materials(&object, request.materials, request.materials_len)?;
         let next = self.staged_presentation_mut()?.state.next_presentation;
-        let next_after = next.checked_add(1).ok_or_else(|| {
-            CsharpEngineServicesError::new(
-                "CSHARP_VOXEL_PRESENTATION_HANDLE",
-                "voxel presentation handle space overflowed",
-            )
-        })?;
         self.replace_presentation(
             next,
             Some(RetainedVoxelObjectPresentation {
@@ -738,7 +707,7 @@ impl RuntimeVoxelContentBridge {
                 materials,
             }),
         )?;
-        self.staged_presentation_mut()?.state.next_presentation = next_after;
+        self.staged_presentation_mut()?.state.next_presentation = next + 1;
         Ok(NativeVoxelObjectPresentationHandle { value: next })
     }
 
@@ -997,13 +966,9 @@ unsafe extern "C" fn admit_asset(
         Err(_) => return 0,
     };
     let bridge = unsafe { &mut *context.cast::<RuntimeVoxelContentBridge>() };
-    match bridge.insert_asset(asset) {
-        Some(handle) => {
-            unsafe { *output = handle };
-            ABI_OK
-        }
-        None => 0,
-    }
+    let handle = bridge.insert_asset(asset);
+    unsafe { *output = handle };
+    ABI_OK
 }
 
 unsafe extern "C" fn load_asset_from_content(
@@ -1029,13 +994,9 @@ unsafe extern "C" fn load_asset_from_content(
         Ok(value) => value,
         Err(_) => return 0,
     };
-    match bridge.insert_asset(asset) {
-        Some(handle) => {
-            unsafe { *output = handle };
-            ABI_OK
-        }
-        None => 0,
-    }
+    let handle = bridge.insert_asset(asset);
+    unsafe { *output = handle };
+    ABI_OK
 }
 
 unsafe extern "C" fn destroy_asset(context: *mut c_void, handle: NativeVoxelAssetHandle) -> i32 {
@@ -1090,14 +1051,8 @@ unsafe extern "C" fn publish_asset_to_spatial(
         Ok(value) => value,
         Err(refusal) => return refuse(&refusal, error),
     };
-    let voxel_data_hash = match hash(&asset.voxel_data_hash) {
-        Ok(value) => value,
-        Err(refusal) => return refuse(&refusal, error),
-    };
-    let content_hash = match hash(&asset.content_hash) {
-        Ok(value) => value,
-        Err(refusal) => return refuse(&refusal, error),
-    };
+    let voxel_data_hash = hash(&asset.voxel_data_hash);
+    let content_hash = hash(&asset.content_hash);
     let spatial = match bridge.spatial {
         Some(value) if !value.is_null() => unsafe { &mut *value },
         _ => return 0,
@@ -1133,13 +1088,9 @@ unsafe extern "C" fn admit_object(
         Err(_) => return 0,
     };
     let bridge = unsafe { &mut *context.cast::<RuntimeVoxelContentBridge>() };
-    match bridge.insert_object(object) {
-        Some(handle) => {
-            unsafe { *output = handle };
-            ABI_OK
-        }
-        None => 0,
-    }
+    let handle = bridge.insert_object(object);
+    unsafe { *output = handle };
+    ABI_OK
 }
 
 unsafe extern "C" fn load_object_from_content(
@@ -1165,13 +1116,9 @@ unsafe extern "C" fn load_object_from_content(
         Ok(value) => value,
         Err(_) => return 0,
     };
-    match bridge.insert_object(object) {
-        Some(handle) => {
-            unsafe { *output = handle };
-            ABI_OK
-        }
-        None => 0,
-    }
+    let handle = bridge.insert_object(object);
+    unsafe { *output = handle };
+    ABI_OK
 }
 
 unsafe extern "C" fn admit_magica_voxel_object(
@@ -1278,23 +1225,17 @@ fn admit_magica_bytes(
 ) -> Result<NativeVoxelObjectHandle, i32> {
     let admission =
         admit_magica_vox(bytes, asset_id, source_path, options).map_err(magica_status)?;
-    // The admitted digest is Engine-produced SHA-256 hex; a conversion failure
-    // means the admitted object is not in canonical form.
-    let source_hash = hash(&admission.source_hash)
-        .map_err(|_| NativeMagicaVoxelAdmissionStatus::CanonicalObject as i32)?;
+    let source_hash = hash(&admission.source_hash);
     let palette = RetainedMagicaVoxelPalette {
         rows: admission.palette,
         source_hash,
         source_byte_count: admission.source_byte_count,
     };
-    let object =
-        match voxel_object_runtime::admit_voxel_object(admission.object, Default::default()) {
-            Ok(value) => value,
-            Err(_) => return Err(NativeMagicaVoxelAdmissionStatus::CanonicalObject as i32),
-        };
-    bridge
-        .insert_object_with_magica_palette(object, Some(palette))
-        .ok_or(NativeMagicaVoxelAdmissionStatus::HandleExhausted as i32)
+    // The parse produced a canonical object; what admission can still refuse
+    // are its runtime work limits.
+    let object = voxel_object_runtime::admit_voxel_object(admission.object, Default::default())
+        .map_err(|_| NativeMagicaVoxelAdmissionStatus::VoxelLimit as i32)?;
+    Ok(bridge.insert_object_with_magica_palette(object, Some(palette)))
 }
 
 unsafe extern "C" fn read_magica_voxel_palette(
@@ -1371,13 +1312,9 @@ unsafe extern "C" fn admit_annotation(
         Ok(value) => value,
         Err(_) => return 0,
     };
-    match bridge.insert_annotation(asset, layer) {
-        Some(handle) => {
-            unsafe { *output = handle };
-            ABI_OK
-        }
-        None => 0,
-    }
+    let handle = bridge.insert_annotation(asset, layer);
+    unsafe { *output = handle };
+    ABI_OK
 }
 
 unsafe extern "C" fn load_annotation_from_content(
@@ -1407,13 +1344,9 @@ unsafe extern "C" fn load_annotation_from_content(
         Ok(value) => value,
         Err(_) => return 0,
     };
-    match bridge.insert_annotation(asset, layer) {
-        Some(handle) => {
-            unsafe { *output = handle };
-            ABI_OK
-        }
-        None => 0,
-    }
+    let handle = bridge.insert_annotation(asset, layer);
+    unsafe { *output = handle };
+    ABI_OK
 }
 
 unsafe extern "C" fn destroy_annotation(
@@ -1470,10 +1403,7 @@ unsafe extern "C" fn query_annotation(
         };
         (readout, annotation.revision)
     };
-    let layer_hash = match hash(&readout.layer_hash) {
-        Ok(value) => value,
-        Err(refusal) => return refuse(&refusal, error),
-    };
+    let layer_hash = hash(&readout.layer_hash);
     match bridge.hold_region_result(
         readout.matched_regions,
         readout.total_layer_regions,
@@ -2232,10 +2162,10 @@ fn native_asset_readout(
     Ok(NativeVoxelAssetReadout {
         schema_version: asset.schema_version,
         represented_voxel_count: represented_voxel_count(&VoxelFrame::from(asset)) as u64,
-        material_palette_count: narrow(asset.material_palette.len())?,
-        material_mapping_count: narrow(asset.material_map.len())?,
-        voxel_data_hash: hash(&asset.voxel_data_hash)?,
-        content_hash: hash(&asset.content_hash)?,
+        material_palette_count: asset.material_palette.len() as u32,
+        material_mapping_count: asset.material_map.len() as u32,
+        voxel_data_hash: hash(&asset.voxel_data_hash),
+        content_hash: hash(&asset.content_hash),
     })
 }
 
@@ -2245,14 +2175,14 @@ fn native_object_readout(
     let source = retained.object.source();
     Ok(NativeVoxelObjectReadout {
         schema_version: source.schema_version,
-        frame_count: narrow(retained.object.frames().len())?,
-        clip_count: narrow(retained.object.clips().len())?,
-        material_palette_count: narrow(source.material_palette.len())?,
-        material_mapping_count: narrow(source.material_map.len())?,
+        frame_count: retained.object.frames().len() as u32,
+        clip_count: retained.object.clips().len() as u32,
+        material_palette_count: source.material_palette.len() as u32,
+        material_mapping_count: source.material_map.len() as u32,
         default_runtime_frame: 0,
         selected_runtime_frame: retained.selected.runtime_frame,
         selection_revision: retained.selection_revision,
-        content_hash: hash(retained.object.content_hash())?,
+        content_hash: hash(retained.object.content_hash()),
     })
 }
 
@@ -2272,9 +2202,9 @@ fn native_frame_readout(
         clip_frame_index: selected.clip_frame_index,
         is_default: selected.is_default,
         cell_count: frame.cells.len() as u64,
-        anchor_count: narrow(frame.anchors.len())?,
+        anchor_count: frame.anchors.len() as u32,
         has_collision: frame.collision.is_some(),
-        voxel_data_hash: hash(&frame.voxel_data_hash)?,
+        voxel_data_hash: hash(&frame.voxel_data_hash),
     })
 }
 
@@ -2328,28 +2258,25 @@ fn native_player_sample_readout(
     }
 }
 
-fn hash(value: &str) -> Result<NativeVoxelContentHash, CsharpEngineServicesError> {
-    let value = value.strip_prefix("sha256:").unwrap_or(value);
-    if value.len() != 64 || !value.is_ascii() {
-        return Err(CsharpEngineServicesError::new(
-            "CSHARP_VOXEL_CONTENT_HASH",
-            "admitted voxel digest was not SHA-256",
-        ));
-    }
-    let word = |offset| {
-        u64::from_str_radix(&value[offset..offset + 16], 16).map_err(|_| {
-            CsharpEngineServicesError::new(
-                "CSHARP_VOXEL_CONTENT_HASH",
-                "admitted voxel digest was not hexadecimal",
-            )
-        })
+/// Splits a digest the voxel codecs or MagicaVoxel admission computed
+/// (`sha256:` and 64 lowercase hex digits) into its words.
+fn hash(value: &str) -> NativeVoxelContentHash {
+    let hex = value.strip_prefix("sha256:").unwrap_or(value);
+    debug_assert!(
+        hex.len() == 64 && hex.bytes().all(|byte| byte.is_ascii_hexdigit()),
+        "voxel digest {value} is not Engine-computed SHA-256"
+    );
+    let word = |offset: usize| {
+        hex.get(offset..offset + 16)
+            .and_then(|digits| u64::from_str_radix(digits, 16).ok())
+            .unwrap_or_default()
     };
-    Ok(NativeVoxelContentHash {
-        word0: word(0)?,
-        word1: word(16)?,
-        word2: word(32)?,
-        word3: word(48)?,
-    })
+    NativeVoxelContentHash {
+        word0: word(0),
+        word1: word(16),
+        word2: word(32),
+        word3: word(48),
+    }
 }
 
 fn hash_string(value: NativeVoxelContentHash) -> String {
@@ -2357,15 +2284,6 @@ fn hash_string(value: NativeVoxelContentHash) -> String {
         "sha256:{:016x}{:016x}{:016x}{:016x}",
         value.word0, value.word1, value.word2, value.word3
     )
-}
-
-fn narrow(value: usize) -> Result<u32, CsharpEngineServicesError> {
-    u32::try_from(value).map_err(|_| {
-        CsharpEngineServicesError::new(
-            "CSHARP_VOXEL_CONTENT_LIMIT",
-            "voxel owner count exceeds the C# ABI range",
-        )
-    })
 }
 
 #[cfg(test)]
@@ -3289,7 +3207,7 @@ mod tests {
             "annotation retains its admitted target after the direct asset release"
         );
 
-        let initial_hash = hash(&annotation.content_hashes.canonical_layer).expect("valid hash");
+        let initial_hash = hash(&annotation.content_hashes.canonical_layer);
         let region_a = b"region/bridge-a";
         let bounds = NativeVoxelAnnotationBounds {
             min_x: 0,
@@ -3755,9 +3673,7 @@ mod tests {
         assert_ne!(palette.source_hash, NativeVoxelContentHash::default());
 
         let plain = voxel_object_runtime::admit_voxel_object(object(), Default::default()).unwrap();
-        let plain = bridge
-            .insert_object_with_magica_palette(plain, None)
-            .unwrap();
+        let plain = bridge.insert_object_with_magica_palette(plain, None);
         assert_eq!(
             unsafe { read_magica_voxel_palette(context, plain, &mut palette) },
             NativeMagicaVoxelAdmissionStatus::NotMagicaVoxelObject as i32
@@ -3772,6 +3688,32 @@ mod tests {
             },
             NativeMagicaVoxelAdmissionStatus::InvalidRequest as i32
         );
+    }
+
+    /// A source the MagicaVoxel parse accepts can still exceed the object's
+    /// runtime work limits; admission reports that as a voxel limit.
+    #[test]
+    fn magica_source_over_the_runtime_mesh_limits_reports_voxel_limit() {
+        use crate::magica_vox::tests::{options, sized_fixture};
+        // A 3D checkerboard hides no face: its 340,736 cubes emit more than
+        // the 2,000,000 unique mesh faces an object may have.
+        const EDGE: u8 = 88;
+        let voxels = (0..EDGE)
+            .flat_map(|x| (0..EDGE).flat_map(move |y| (0..EDGE).map(move |z| [x, y, z, 1])))
+            .filter(|[x, y, z, _]| (u32::from(*x) + u32::from(*y) + u32::from(*z)) % 2 == 0)
+            .collect::<Vec<_>>();
+        let source = sized_fixture(u32::from(EDGE), &voxels);
+        let mut bridge = RuntimeVoxelContentBridge::new();
+        let status = admit_magica_bytes(
+            &mut bridge,
+            &source,
+            "voxel-object/checkerboard".to_owned(),
+            "checkerboard.vox".to_owned(),
+            options(),
+        )
+        .expect_err("the checkerboard exceeds the runtime face limit");
+        assert_eq!(status, NativeMagicaVoxelAdmissionStatus::VoxelLimit as i32);
+        assert!(bridge.objects.is_empty());
     }
 
     /// Each palette slot takes the last binding naming it; a binding for a
@@ -4020,22 +3962,6 @@ mod tests {
             assert_eq!(refusal.code(), *code, "{kind}: {refusal:?}");
         }
         assert_eq!(presentation_readout(&bridge), before);
-
-        bridge
-            .staged_presentation
-            .as_mut()
-            .unwrap()
-            .state
-            .next_presentation = u64::MAX;
-        let exhausted = presentation_readout(&bridge);
-        assert_eq!(
-            bridge
-                .project_object(create(object_handle, 0, identity_transform(), &retained))
-                .unwrap_err()
-                .code(),
-            "CSHARP_VOXEL_PRESENTATION_HANDLE"
-        );
-        assert_eq!(presentation_readout(&bridge), exhausted);
 
         let mut hidden = update(second, 1, identity_transform(), &retained);
         hidden.visible = false;

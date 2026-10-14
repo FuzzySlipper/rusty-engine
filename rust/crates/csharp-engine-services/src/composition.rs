@@ -980,9 +980,7 @@ impl EngineServiceSet {
 
     /// Committed retained-audio baseline (voices at their Engine cursors and
     /// bus state) for an in-process audio realization.
-    pub fn audio_snapshot_frame(
-        &self,
-    ) -> Result<render_presentation::PresentationFrameDiff, CsharpEngineServicesError> {
+    pub fn audio_snapshot_frame(&self) -> render_presentation::PresentationFrameDiff {
         self.audio.snapshot_frame()
     }
 
@@ -1058,17 +1056,14 @@ impl EngineServiceSet {
 
     /// Complete committed state for a fresh renderer. No product callback,
     /// projector reset, resource admission, or active publication occurs.
-    pub fn snapshot_outputs(
-        &self,
-        binding: RuntimeUiRuntimeBinding,
-    ) -> Result<CsharpEngineCallOutput, CsharpEngineServicesError> {
+    pub fn snapshot_outputs(&self, binding: RuntimeUiRuntimeBinding) -> CsharpEngineCallOutput {
         let snapshot = self.presentation_world.snapshot();
         // Retained effect and media baselines are built from committed state
         // only here, for the fresh renderer that needs them.
         let mut presentation = self
             .presentation_world
-            .with_retained_captures(self.appearance.snapshot_presentation()?);
-        let audio = self.audio.snapshot_frame()?;
+            .with_retained_captures(self.appearance.snapshot_presentation());
+        let audio = self.audio.snapshot_frame();
         if !audio.ops.is_empty() {
             presentation.push(audio);
         }
@@ -1076,14 +1071,14 @@ impl EngineServiceSet {
         if !video.ops.is_empty() {
             presentation.push(video);
         }
-        Ok(CsharpEngineCallOutput {
+        CsharpEngineCallOutput {
             render_output: Vec::new(),
             appearance: vec![CsharpAppearanceCallOutput::Frame(snapshot.frame)],
             frames: Vec::new(),
             view_composition: Some(self.camera_view.snapshot_composition()),
             ui: self.ui.snapshot_projections(binding),
             presentation,
-        })
+        }
     }
 
     fn take_raw_outputs(
@@ -1207,7 +1202,6 @@ mod tests {
         let billboards = |services: &EngineServiceSet| {
             services
                 .snapshot_outputs(binding())
-                .unwrap()
                 .presentation
                 .iter()
                 .flat_map(|frame| &frame.ops)
@@ -1564,9 +1558,7 @@ mod tests {
                 && defined.content_hash.is_some()
         ));
 
-        let attachment_output = services
-            .snapshot_outputs(binding())
-            .expect("fresh attachment");
+        let attachment_output = services.snapshot_outputs(binding());
         let CsharpAppearanceCallOutput::Frame(frame) = &attachment_output.appearance[0] else {
             panic!("baseline graphics frame");
         };
@@ -1724,9 +1716,7 @@ mod tests {
             },
         };
         assert_eq!(call.take_output().frames[0].ops, vec![selected.clone()]);
-        let attachment = services
-            .snapshot_outputs(binding())
-            .expect("fresh attachment");
+        let attachment = services.snapshot_outputs(binding());
         let CsharpAppearanceCallOutput::Frame(frame) = &attachment.appearance[0] else {
             panic!("baseline graphics frame");
         };
@@ -1941,9 +1931,7 @@ mod tests {
             },
         ];
         assert_eq!(call.take_output().frames[0].ops, selected);
-        let attachment = services
-            .snapshot_outputs(binding())
-            .expect("fresh attachment");
+        let attachment = services.snapshot_outputs(binding());
         let CsharpAppearanceCallOutput::Frame(frame) = &attachment.appearance[0] else {
             panic!("baseline graphics frame");
         };
@@ -2028,9 +2016,7 @@ mod tests {
             call.take_output().frames[0].ops,
             std::slice::from_ref(&selected)
         );
-        let attachment = services
-            .snapshot_outputs(binding())
-            .expect("fresh attachment");
+        let attachment = services.snapshot_outputs(binding());
         let CsharpAppearanceCallOutput::Frame(frame) = &attachment.appearance[0] else {
             panic!("baseline graphics frame");
         };
@@ -2109,9 +2095,7 @@ mod tests {
             call.take_output().frames[0].ops,
             std::slice::from_ref(&selected)
         );
-        let attachment = services
-            .snapshot_outputs(binding())
-            .expect("fresh attachment");
+        let attachment = services.snapshot_outputs(binding());
         let CsharpAppearanceCallOutput::Frame(frame) = &attachment.appearance[0] else {
             panic!("baseline graphics frame");
         };
@@ -2302,9 +2286,7 @@ mod tests {
             call.take_output().frames[0].ops,
             std::slice::from_ref(&selected)
         );
-        let attachment = services
-            .snapshot_outputs(binding())
-            .expect("fresh attachment");
+        let attachment = services.snapshot_outputs(binding());
         let CsharpAppearanceCallOutput::Frame(frame) = &attachment.appearance[0] else {
             panic!("baseline graphics frame");
         };
@@ -2368,9 +2350,7 @@ mod tests {
             call.take_output().frames[0].ops,
             std::slice::from_ref(&selected)
         );
-        let attachment = services
-            .snapshot_outputs(binding())
-            .expect("fresh attachment");
+        let attachment = services.snapshot_outputs(binding());
         let CsharpAppearanceCallOutput::Frame(frame) = &attachment.appearance[0] else {
             panic!("baseline graphics frame");
         };
@@ -2507,9 +2487,7 @@ mod tests {
             call.take_output().frames[0].ops,
             std::slice::from_ref(&selected)
         );
-        let attachment = services
-            .snapshot_outputs(binding())
-            .expect("fresh attachment");
+        let attachment = services.snapshot_outputs(binding());
         let CsharpAppearanceCallOutput::Frame(frame) = &attachment.appearance[0] else {
             panic!("baseline graphics frame");
         };
@@ -2574,9 +2552,7 @@ mod tests {
             call.take_output().frames[0].ops,
             std::slice::from_ref(&selected)
         );
-        let attachment = services
-            .snapshot_outputs(binding())
-            .expect("fresh attachment");
+        let attachment = services.snapshot_outputs(binding());
         let CsharpAppearanceCallOutput::Frame(frame) = &attachment.appearance[0] else {
             panic!("baseline graphics frame");
         };
@@ -3098,9 +3074,7 @@ mod tests {
             call.take_output().frames[0].ops,
             std::slice::from_ref(&selected)
         );
-        let attachment = services
-            .snapshot_outputs(binding())
-            .expect("fresh attachment");
+        let attachment = services.snapshot_outputs(binding());
         let CsharpAppearanceCallOutput::Frame(frame) = &attachment.appearance[0] else {
             panic!("baseline graphics frame");
         };
@@ -3211,9 +3185,7 @@ mod tests {
             call.take_output().frames[0].ops,
             std::slice::from_ref(&selected)
         );
-        let attachment = services
-            .snapshot_outputs(binding())
-            .expect("fresh attachment");
+        let attachment = services.snapshot_outputs(binding());
         let CsharpAppearanceCallOutput::Frame(frame) = &attachment.appearance[0] else {
             panic!("baseline graphics frame");
         };
@@ -3312,9 +3284,7 @@ mod tests {
             call.take_output().frames[0].ops,
             std::slice::from_ref(&selected)
         );
-        let attachment = services
-            .snapshot_outputs(binding())
-            .expect("fresh attachment");
+        let attachment = services.snapshot_outputs(binding());
         let CsharpAppearanceCallOutput::Frame(frame) = &attachment.appearance[0] else {
             panic!("baseline graphics frame");
         };
@@ -3411,9 +3381,7 @@ mod tests {
         assert_eq!(call.take_output().frames[0].ops, selected);
 
         // A fresh attachment's baseline carries the retained selections.
-        let attachment = services
-            .snapshot_outputs(binding())
-            .expect("fresh attachment");
+        let attachment = services.snapshot_outputs(binding());
         let CsharpAppearanceCallOutput::Frame(frame) = &attachment.appearance[0] else {
             panic!("baseline graphics frame");
         };

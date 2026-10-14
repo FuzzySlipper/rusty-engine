@@ -140,7 +140,6 @@ pub enum NativeMagicaVoxelAdmissionStatus {
     DuplicateCell = 8,
     VoxelLimit = 9,
     CanonicalObject = 10,
-    HandleExhausted = 11,
     NotMagicaVoxelObject = 12,
 }
 

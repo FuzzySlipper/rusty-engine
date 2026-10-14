@@ -222,7 +222,8 @@ Each sample may carry a material index. `WriteSampledVolumeMaterials` and
 zero an index. A face takes the index of its edge's inside sample. List every
 index on the surface other than zero in the request's `Materials` as
 `SampledVolumeMaterial(index, material, character, textureMapping)`; index
-zero is the default material unless listed. The character's placement and
+zero is the default material unless listed, and an index listed twice takes
+its last entry. The character's placement and
 roughness shape that material's cells ([surface characters](smooth-voxel-surfaces.md#surface-modes-and-characters));
 its crease angle and texture mapping replace the request's for its faces. A
 `Blocky` brick index inside `Smooth` rock gives planar, hard-edged blocks on

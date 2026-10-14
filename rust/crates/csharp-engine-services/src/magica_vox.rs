@@ -712,11 +712,18 @@ pub(crate) mod tests {
     }
 
     pub(crate) fn fixture(voxels: &[[u8; 4]]) -> Vec<u8> {
+        sized_fixture(2, voxels)
+    }
+
+    /// A single model `edge` voxels wide on each axis.
+    pub(crate) fn sized_fixture(edge: u32, voxels: &[[u8; 4]]) -> Vec<u8> {
         let mut children = Vec::new();
         children.extend_from_slice(b"SIZE");
         children.extend_from_slice(&12u32.to_le_bytes());
         children.extend_from_slice(&0u32.to_le_bytes());
-        children.extend_from_slice(&[2, 0, 0, 0, 2, 0, 0, 0, 2, 0, 0, 0]);
+        for _ in 0..3 {
+            children.extend_from_slice(&edge.to_le_bytes());
+        }
         let mut xyzi = Vec::new();
         xyzi.extend_from_slice(&(voxels.len() as u32).to_le_bytes());
         for voxel in voxels {

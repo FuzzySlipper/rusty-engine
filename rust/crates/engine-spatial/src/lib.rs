@@ -184,8 +184,9 @@ pub struct VoxelMeshChunk {
     /// Hash of the complete derived mesh payload, including the selected surface
     /// mode and neighbor-dependent seam geometry.
     pub content_hash: u64,
-    /// Hash of the canonical resident chunk. This is diagnostic provenance, not
-    /// the retained-render replacement key.
+    /// Hash of the canonical resident chunk. The coarse LOD plan reads it to
+    /// tell a voxel edit from a seam-only remesh; it is not the retained-render
+    /// replacement key.
     pub source_chunk_hash: u64,
     pub surface_mode: SurfaceMode,
     pub translation: [f32; 3],

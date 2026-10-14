@@ -2079,21 +2079,17 @@ impl RuntimeAppearanceBridge {
     /// The result contains only retained creates. Direct particle emissions
     /// and animation realization events are historical signals and are
     /// deliberately excluded.
-    pub(crate) fn snapshot_presentation(
-        &self,
-    ) -> Result<Vec<PresentationFrameDiff>, CsharpEngineServicesError> {
+    pub(crate) fn snapshot_presentation(&self) -> Vec<PresentationFrameDiff> {
         Self::snapshot_presentation_state(&self.state)
     }
 
-    fn snapshot_presentation_state(
-        state: &RuntimeAppearanceState,
-    ) -> Result<Vec<PresentationFrameDiff>, CsharpEngineServicesError> {
+    fn snapshot_presentation_state(state: &RuntimeAppearanceState) -> Vec<PresentationFrameDiff> {
         #[cfg(test)]
         GRAPHICS_SNAPSHOT_READS.with(|count| count.set(count.get() + 1));
         let mut ops = Vec::new();
         for (handle, descriptor) in state.billboard_projector.active_billboards() {
             ops.push(PresentationOp::Billboard {
-                meta: PresentationOpMeta::new(snapshot_presentation_sequence(ops.len())?),
+                meta: PresentationOpMeta::new(ops.len() as u32),
                 op: BillboardProjectionOp::Create {
                     handle,
                     descriptor: descriptor.clone(),
@@ -2102,7 +2098,7 @@ impl RuntimeAppearanceBridge {
         }
         for (handle, descriptor) in state.particle_projector.active_emitters() {
             ops.push(PresentationOp::Particle {
-                meta: PresentationOpMeta::new(snapshot_presentation_sequence(ops.len())?),
+                meta: PresentationOpMeta::new(ops.len() as u32),
                 op: ParticleProjectionOp::Create {
                     handle,
                     descriptor: {
@@ -2116,7 +2112,7 @@ impl RuntimeAppearanceBridge {
         }
         for (handle, descriptor) in state.ghost_plate_projector.active_plates() {
             ops.push(PresentationOp::GhostPlate {
-                meta: PresentationOpMeta::new(snapshot_presentation_sequence(ops.len())?),
+                meta: PresentationOpMeta::new(ops.len() as u32),
                 op: GhostPlateProjectionOp::Create {
                     handle,
                     descriptor: descriptor.clone(),
@@ -2125,7 +2121,7 @@ impl RuntimeAppearanceBridge {
         }
         for (handle, descriptor) in state.animation_projector.active_projections() {
             ops.push(PresentationOp::Animation {
-                meta: PresentationOpMeta::new(snapshot_presentation_sequence(ops.len())?),
+                meta: PresentationOpMeta::new(ops.len() as u32),
                 op: render_presentation::AnimationProjectionOp::Create {
                     handle,
                     descriptor: descriptor.clone(),
@@ -2133,9 +2129,9 @@ impl RuntimeAppearanceBridge {
             });
         }
         if ops.is_empty() {
-            return Ok(Vec::new());
+            return Vec::new();
         }
-        Ok(vec![PresentationFrameDiff::from_ops(ops)])
+        vec![PresentationFrameDiff::from_ops(ops)]
     }
 
     pub(crate) fn presentation_create_billboard(
@@ -7777,15 +7773,6 @@ fn push_presentation_frame(staged: &mut RuntimeAppearanceCall, frame: Presentati
         .push(RuntimeAppearanceCallOutput::Presentation(frame));
 }
 
-fn snapshot_presentation_sequence(length: usize) -> Result<u32, CsharpEngineServicesError> {
-    u32::try_from(length).map_err(|_| {
-        CsharpEngineServicesError::new(
-            "CSHARP_PRESENTATION_BASELINE",
-            "retained presentation baseline has too many operations",
-        )
-    })
-}
-
 fn runtime_light_fact(
     request: NativeLightRequest,
 ) -> Result<RuntimeLightFact, CsharpEngineServicesError> {
@@ -8858,26 +8845,13 @@ pub(crate) unsafe extern "C" fn read_presentation(
             .as_ref()
             .map(|call| &call.state)
             .unwrap_or(&bridge.state);
-        let resource_count =
-            match u32::try_from(state.render_resources.len() + state.generated_meshes.len()) {
-                Ok(value) => value,
-                Err(_) => return 0,
-            };
-        let appearance_count = match u32::try_from(state.appearances.len()) {
-            Ok(value) => value,
-            Err(_) => return 0,
-        };
-        let material_count = match u32::try_from(state.materials.len()) {
-            Ok(value) => value,
-            Err(_) => return 0,
-        };
+        let count = |value: usize| u32::try_from(value).unwrap_or(u32::MAX);
         unsafe {
             *result = NativePresentationReadout {
-                retained_object_count: u32::try_from(state.projector.retained_objects())
-                    .unwrap_or(u32::MAX),
-                appearance_count,
-                material_count,
-                resource_count,
+                retained_object_count: count(state.projector.retained_objects()),
+                appearance_count: count(state.appearances.len()),
+                material_count: count(state.materials.len()),
+                resource_count: count(state.render_resources.len() + state.generated_meshes.len()),
             };
         }
         ABI_OK
@@ -16048,8 +16022,7 @@ fn shade(surface: Surface) -> vec4<f32> {
         bridge.commit(call);
 
         let before = bridge.presentation_readout();
-        let baseline = RuntimeAppearanceBridge::snapshot_presentation_state(&bridge.state)
-            .expect("retained presentation baseline");
+        let baseline = RuntimeAppearanceBridge::snapshot_presentation_state(&bridge.state);
         assert_eq!(baseline.len(), 1);
         assert!(baseline[0].ops.iter().all(|op| !matches!(
             op,

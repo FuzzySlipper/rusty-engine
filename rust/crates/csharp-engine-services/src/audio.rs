@@ -10,7 +10,8 @@ use render_model::RenderAssetKind;
 use render_presentation::{
     AudioBus, AudioBusControl, AudioEmitter, AudioHandle, AudioProjectionDiagnosticCode,
     AudioProjectionOp, AudioProjector, AudioRolloff, AudioSourceDescriptor, AudioVoiceControl,
-    AudioVoiceDesiredState, PresentationFrameDiff, PresentationOp, PresentationOpMeta,
+    AudioVoiceDesiredState, PresentationAssetLookup, PresentationFrameDiff, PresentationOp,
+    PresentationOpMeta,
 };
 
 #[cfg(test)]
@@ -38,6 +39,19 @@ struct AudioClip {
 }
 
 /// The hex SHA-256 digest an admitted clip's content hash names.
+/// The live clips' presentation assets, from the digest index: a clip's
+/// asset is `audio/<digest>`.
+struct ClipAssets<'a>(&'a BTreeMap<String, u64>);
+
+impl PresentationAssetLookup for ClipAssets<'_> {
+    fn presentation_asset_kind(&self, id: &str) -> Option<RenderAssetKind> {
+        let digest = id.strip_prefix("audio/")?;
+        self.0
+            .contains_key(digest)
+            .then_some(RenderAssetKind::Audio)
+    }
+}
+
 fn clip_digest(content_hash: &str) -> String {
     content_hash
         .strip_prefix("sha256:")
@@ -65,7 +79,6 @@ struct AudioState {
     /// content hash (`sha256:<digest>`) and its resource identity
     /// (`audio-resource/<digest>`).
     digests: BTreeMap<String, u64>,
-    assets: BTreeMap<String, RenderAssetKind>,
     voices: BTreeMap<u64, AudioHandle>,
     voice_clips: BTreeMap<u64, u64>,
     one_shot_clips: BTreeMap<u64, u64>,
@@ -208,7 +221,6 @@ impl RuntimeAudioBridge {
                 projector: AudioProjector::default(),
                 clips: BTreeMap::new(),
                 digests: BTreeMap::new(),
-                assets: BTreeMap::new(),
                 voices: BTreeMap::new(),
                 voice_clips: BTreeMap::new(),
                 one_shot_clips: BTreeMap::new(),
@@ -370,21 +382,17 @@ impl RuntimeAudioBridge {
     ///
     /// A baseline uses the Engine cursor and desired state. Historical
     /// one-shots and realization feedback remain outside it.
-    pub(crate) fn snapshot_frame(
-        &self,
-    ) -> Result<PresentationFrameDiff, CsharpEngineServicesError> {
+    pub(crate) fn snapshot_frame(&self) -> PresentationFrameDiff {
         Self::snapshot_frame_for_state(&self.state)
     }
 
-    fn snapshot_frame_for_state(
-        state: &AudioState,
-    ) -> Result<PresentationFrameDiff, CsharpEngineServicesError> {
+    fn snapshot_frame_for_state(state: &AudioState) -> PresentationFrameDiff {
         #[cfg(test)]
         crate::appearance::MEDIA_SNAPSHOT_READS.with(|count| count.set(count.get() + 1));
         let mut ops = Vec::new();
         for voice in state.projector.active_voices() {
             ops.push(PresentationOp::Audio {
-                meta: PresentationOpMeta::new(next_presentation_sequence(ops.len())?),
+                meta: PresentationOpMeta::new(ops.len() as u32),
                 op: AudioProjectionOp::Restore {
                     handle: voice.handle,
                     descriptor: voice.descriptor,
@@ -395,21 +403,21 @@ impl RuntimeAudioBridge {
         }
         for bus in state.projector.buses() {
             ops.push(PresentationOp::Audio {
-                meta: PresentationOpMeta::new(next_presentation_sequence(ops.len())?),
+                meta: PresentationOpMeta::new(ops.len() as u32),
                 op: AudioProjectionOp::BusControl {
                     bus: bus.bus,
                     control: AudioBusControl::SetVolume { volume: bus.volume },
                 },
             });
             ops.push(PresentationOp::Audio {
-                meta: PresentationOpMeta::new(next_presentation_sequence(ops.len())?),
+                meta: PresentationOpMeta::new(ops.len() as u32),
                 op: AudioProjectionOp::BusControl {
                     bus: bus.bus,
                     control: AudioBusControl::SetMuted { muted: bus.muted },
                 },
             });
         }
-        Ok(PresentationFrameDiff::from_ops(ops))
+        PresentationFrameDiff::from_ops(ops)
     }
 
     fn staged_mut(&mut self) -> Result<&mut RuntimeAudioCall, CsharpEngineServicesError> {
@@ -564,10 +572,6 @@ impl RuntimeAudioBridge {
         staged.state.next_clip = handle + 1;
         staged
             .state
-            .assets
-            .insert(asset.clone(), RenderAssetKind::Audio);
-        staged
-            .state
             .digests
             .insert(clip_digest(&content_hash), handle);
         staged.state.clips.insert(
@@ -686,21 +690,12 @@ impl RuntimeAudioBridge {
         let ops = ops
             .into_iter()
             .enumerate()
-            .map(|(offset, op)| {
-                u32::try_from(first + offset)
-                    .map(|sequence| (PresentationOpMeta::new(sequence), op))
-                    .map_err(|_| {
-                        CsharpEngineServicesError::new(
-                            "CSHARP_AUDIO_FRAME",
-                            "audio presentation frame has too many operations",
-                        )
-                    })
-            })
-            .collect::<Result<Vec<_>, _>>()?;
+            .map(|(offset, op)| (PresentationOpMeta::new((first + offset) as u32), op))
+            .collect::<Vec<_>>();
         let projected = staged
             .state
             .projector
-            .project_batch(&staged.state.assets, ops)
+            .project_batch(&ClipAssets(&staged.state.digests), ops)
             .map_err(audio_error)?;
         staged
             .frame
@@ -944,7 +939,6 @@ impl RuntimeAudioBridge {
             .clips
             .remove(&clip.value)
             .expect("checked clip");
-        staged.state.assets.remove(&clip.asset);
         staged
             .state
             .digests
@@ -1095,15 +1089,6 @@ impl RuntimeAudioBridge {
             muted: readout.muted,
         })
     }
-}
-
-fn next_presentation_sequence(length: usize) -> Result<u32, CsharpEngineServicesError> {
-    u32::try_from(length).map_err(|_| {
-        CsharpEngineServicesError::new(
-            "CSHARP_AUDIO_BASELINE",
-            "retained audio baseline has too many operations",
-        )
-    })
 }
 
 /// Reads the duration of ordinary RIFF/WAVE content with byte-rate metadata. Admission
@@ -2292,7 +2277,7 @@ mod tests {
         };
         assert!(created(call.frame.as_ref().expect("audio frame")));
         bridge.commit(call);
-        assert!(created(&bridge.snapshot_frame().expect("baseline")));
+        assert!(created(&bridge.snapshot_frame()));
     }
 
     #[test]
@@ -2332,7 +2317,7 @@ mod tests {
         bridge.commit(call);
 
         let before = bridge.state.projector.readout();
-        let baseline = bridge.snapshot_frame().expect("retained baseline");
+        let baseline = bridge.snapshot_frame();
         assert!(baseline.ops.iter().all(|op| !matches!(
             op,
             PresentationOp::Audio {
@@ -2380,7 +2365,7 @@ mod tests {
         bridge.advance_elapsed(0.75);
         let staged = bridge.take_staged_call().expect("staged elapsed state");
         bridge.commit(staged);
-        let baseline = bridge.snapshot_frame().expect("baseline");
+        let baseline = bridge.snapshot_frame();
         assert!(matches!(
             &baseline.ops[0],
             PresentationOp::Audio { op: AudioProjectionOp::Restore {
@@ -2392,7 +2377,7 @@ mod tests {
         bridge.advance_elapsed(0.5);
         let staged = bridge.take_staged_call().expect("completed elapsed state");
         bridge.commit(staged);
-        let baseline = bridge.snapshot_frame().expect("baseline");
+        let baseline = bridge.snapshot_frame();
         assert!(matches!(
             &baseline.ops[0],
             PresentationOp::Audio { op: AudioProjectionOp::Restore {
@@ -2811,7 +2796,7 @@ mod tests {
             "path does not alias immutable content versions"
         );
         let state = &bridge.staged_ref().expect("audio call").state;
-        assert_eq!(state.assets.len(), 2);
+        assert_eq!(state.digests.len(), 2);
         assert_ne!(
             state.clips[&first.value].asset, state.clips[&second.value].asset,
             "render assets are keyed by immutable body identity"

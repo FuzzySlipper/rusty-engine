@@ -94,54 +94,15 @@ impl RuntimePublication {
             Some(Self::Presentation(transient))
         }
     }
-
-    pub const fn binding_marker(&self) -> Option<RuntimeInputBinding> {
-        match self {
-            Self::Binding { runtime, .. } => Some(*runtime),
-            _ => None,
-        }
-    }
-
-    pub const fn complete_baseline_marker(&self) -> Option<RuntimeInputBinding> {
-        match self {
-            Self::CompleteBaseline { runtime, .. } => Some(*runtime),
-            _ => None,
-        }
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use render_model::{Geometry, RenderDiff, RenderHandle};
     use render_presentation::{
         AudioBus, AudioClipRef, AudioEmitter, AudioProjectionOp, AudioSignalHandle,
         AudioSourceDescriptor, PresentationOp, PresentationOpMeta,
     };
-    use runtime_lifecycle::{RuntimeControlRevision, RuntimeGeneration, RuntimeInstanceId};
-
-    fn binding() -> RuntimeInputBinding {
-        RuntimeInputBinding::new(
-            RuntimeInstanceId::new(7),
-            RuntimeGeneration::new(2),
-            RuntimeControlRevision::new(3),
-        )
-    }
-
-    #[test]
-    fn typed_frame_and_binding_validate_without_wire_encoding() {
-        let frame = RenderFrameDiff::from_ops(vec![RenderDiff::Create {
-            handle: RenderHandle::new(1),
-            parent: None,
-            node: render_model::RenderNode::new(Geometry::Cube),
-        }]);
-        let publication = RuntimePublication::Frame(frame);
-        assert!(matches!(publication, RuntimePublication::Frame(_)));
-        assert_eq!(
-            RuntimePublication::binding(binding(), 11).binding_marker(),
-            Some(binding())
-        );
-    }
 
     #[test]
     fn transient_presentation_drops_retained_operations() {

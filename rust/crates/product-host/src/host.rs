@@ -3906,7 +3906,7 @@ fn read_request(stream: &mut TcpStream) -> Result<HttpRequest, HttpResponse> {
     if request_parts.next().is_some()
         || !matches!(method, "GET" | "POST")
         || protocol != "HTTP/1.1"
-        || !valid_request_path(path)
+        || !path.starts_with('/')
     {
         return Err(HttpResponse::error(
             400,
@@ -4006,21 +4006,6 @@ fn read_request(stream: &mut TcpStream) -> Result<HttpRequest, HttpResponse> {
         headers,
         body,
     })
-}
-
-fn valid_request_path(path: &str) -> bool {
-    path.starts_with('/')
-        && path.len() <= 512
-        && !path.contains('#')
-        && !path.contains("//")
-        && !path.split('/').any(|part| part == "." || part == "..")
-        && path.bytes().all(|byte| {
-            byte.is_ascii_alphanumeric()
-                || matches!(
-                    byte,
-                    b'/' | b'.' | b'-' | b'_' | b'@' | b'+' | b'~' | b'?' | b'&' | b'=' | b'%'
-                )
-        })
 }
 
 fn has_admitted_origin(request: &HttpRequest, bind_host: Ipv4Addr, expected_port: u16) -> bool {

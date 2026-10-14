@@ -861,12 +861,7 @@ impl RuntimeVoxelScenePresentationBridge {
     ) -> Result<NativeVoxelScenePresentationClearReceipt, CsharpEngineServicesError> {
         let spatial = self.spatial.clone();
         let staged = self.staged_mut()?;
-        let cleared_count = u32::try_from(staged.state.presentations.len()).map_err(|_| {
-            CsharpEngineServicesError::new(
-                "CSHARP_VOXEL_SCENE_PRESENTATION_CLEAR",
-                "voxel scene presentation count exceeded the C# receipt range",
-            )
-        })?;
+        let cleared_count = staged.state.presentations.len() as u32;
         let removed = std::mem::take(&mut staged.state.presentations);
         staged
             .frames
@@ -972,12 +967,7 @@ impl RuntimeVoxelScenePresentationBridge {
                 shaders.insert(shader.id.clone(), shader);
             }
         }
-        let base_material_count = u32::try_from(slots.len()).map_err(|_| {
-            CsharpEngineServicesError::new(
-                "CSHARP_VOXEL_SCENE_PRESENTATION_MATERIALS",
-                "voxel scene material count exceeded the C# range",
-            )
-        })?;
+        let base_material_count = slots.len() as u32;
         Ok(ResolvedSceneMaterials {
             base_materials,
             face_materials,
@@ -1204,12 +1194,7 @@ fn project_all_presentations(
         // published frame counts them.
         operations.append(&mut frame.ops);
         if let Some(publication) = &mut frame.publication {
-            publication.operation_count = u32::try_from(operations.len()).map_err(|_| {
-                CsharpEngineServicesError::new(
-                    "CSHARP_VOXEL_SCENE_PRESENTATION",
-                    "a presentation frame has more than u32::MAX operations",
-                )
-            })?;
+            publication.operation_count = operations.len() as u32;
         }
         frame.ops = operations;
     }
@@ -1237,12 +1222,7 @@ fn presentation_readout(
         present: true,
         source_revision: scene.source_revision().raw(),
         mesh_revision: scene.projection_revisions().mesh().raw(),
-        chunk_count: u64::try_from(chunk_count).map_err(|_| {
-            CsharpEngineServicesError::new(
-                "CSHARP_VOXEL_SCENE_PRESENTATION",
-                "voxel scene chunk count exceeded the C# receipt range",
-            )
-        })?,
+        chunk_count: chunk_count as u64,
         material_count: presentation.base_material_count,
         coarse_chunk_count: state
             .projector

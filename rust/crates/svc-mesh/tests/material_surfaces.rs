@@ -447,15 +447,26 @@ fn scalar_volumes_without_materials_keep_slot_zero_and_default_character() {
 }
 
 #[test]
-fn invalid_characters_and_duplicate_slots_are_refused() {
+fn characters_clamp_into_range_and_a_repeated_slot_takes_its_last_surface() {
     let surface = |crease, roughness| MaterialSurface {
         mode: SurfaceMode::DualContouring,
         character: character(VertexPlacement::Sharp, crease, roughness),
     };
-    assert!(SurfaceMaterials::new([(1, surface(190.0, 0.0))]).is_err());
-    assert!(SurfaceMaterials::new([(1, surface(30.0, 0.6))]).is_err());
-    assert!(SurfaceMaterials::new([(1, surface(30.0, 0.1)), (1, surface(0.0, 0.0))]).is_err());
-    assert!(SurfaceMaterials::new([(1, surface(30.0, 0.1)), (2, surface(0.0, 0.0))]).is_ok());
+    assert!(SurfaceMaterials::new([(1, surface(f32::NAN, 0.0))]).is_err());
+    assert!(SurfaceMaterials::new([(1, surface(30.0, f32::INFINITY))]).is_err());
+
+    let materials = SurfaceMaterials::new([
+        (2, surface(190.0, 0.6)),
+        (1, surface(30.0, 0.1)),
+        (2, surface(-5.0, -0.2)),
+        (1, surface(45.0, 0.2)),
+    ])
+    .unwrap();
+    assert_eq!(materials.entries().len(), 2);
+    assert_eq!(materials.get(1), Some(&surface(45.0, 0.2)));
+    assert_eq!(materials.get(2), Some(&surface(0.0, 0.0)));
+    let clamped = SurfaceMaterials::new([(3, surface(190.0, 0.6))]).unwrap();
+    assert_eq!(clamped.get(3), Some(&surface(180.0, 0.5)));
 }
 
 #[test]

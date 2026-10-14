@@ -29,7 +29,8 @@ its own surface. `Voxel.ConfigureMaterialSurfaces(new(session, mode,
 materials))` replaces the session's mode and each listed slot's
 `VoxelMaterialSurface(slot, mode, character)` at any time: every chunk is
 remeshed, its collision rebuilt, and the next collision-navigation publication
-derives everything. The returned `VoxelSceneReadout` reports the rebuild.
+derives everything. The returned `VoxelSceneReadout` reports the rebuild. A
+slot listed more than once takes its last surface.
 
 A `SurfaceCharacter(placement, creaseAngleDegrees, roughness)` shapes a
 reconstructed material:
@@ -51,6 +52,9 @@ reconstructed material:
   180, no roughness.
 - `Roughness` (0 to 0.5 of a cell) displaces each vertex by a deterministic
   amount chosen by its cell, so independently meshed chunks agree.
+
+A crease angle or roughness outside its range is clamped into it; a
+non-finite one is refused.
 
 Where materials meet in one cell, the sharper placement (Smooth, Sharp,
 Blocky, then a cube material) and the smaller roughness place the shared

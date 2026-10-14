@@ -22,7 +22,7 @@ use product_host::{
 };
 use render_model::{AmbientOcclusionMode, AmbientOcclusionSettings, RendererSettingsDescriptor};
 use runtime_input::{DirectInputIntentDescriptor, RuntimeInputMapping};
-use runtime_lifecycle::{validate_runtime_identity, RuntimeLifecycleConfig};
+use runtime_lifecycle::RuntimeLifecycleConfig;
 use serde::Deserialize;
 
 use super::{content_type, parse_direct_intent, parse_physical_mapping, ProductLoader};
@@ -47,7 +47,7 @@ pub(super) struct ProductBundle {
     /// Content subtrees, relative to the content root, the page may read.
     ui_content: Vec<String>,
     ui_entry: String,
-    ui_projection: Option<ProductUiProjection>,
+    ui_projection: Option<ManifestUiProjection>,
     renderer_settings: ProductRendererSettings,
     /// Where the runtime draws (`renderer.output`).
     pub(super) render_output: csharp_product_runtime::RenderOutput,
@@ -83,10 +83,6 @@ impl ProductBundle {
         if manifest.schema_version != 1 {
             return Err(field_error("schemaVersion", "must be 1"));
         }
-        validate_runtime_identity(&manifest.product.id).map_err(|_| {
-            field_error("product.id", "must be a bounded lowercase runtime identity")
-        })?;
-
         let native_module = manifest
             .native_aot
             .map(|native| native_artifact(root, &native.module, "nativeAot.module"))
@@ -119,10 +115,6 @@ impl ProductBundle {
         for subtree in &manifest.content.ui {
             product_directory(source, &content_root, subtree, "content.ui")?;
         }
-        let ui_projection = manifest
-            .ui_projection
-            .map(ProductUiProjection::from_manifest)
-            .transpose()?;
         let render_output = match manifest.renderer.output.as_deref() {
             None | Some("stream") => csharp_product_runtime::RenderOutput::Stream,
             Some("window") => csharp_product_runtime::RenderOutput::Window,
@@ -189,7 +181,7 @@ impl ProductBundle {
             ui_root,
             ui_content: manifest.content.ui,
             ui_entry,
-            ui_projection,
+            ui_projection: manifest.ui_projection,
             renderer_settings,
             render_output,
             presentation_aspect,
@@ -498,31 +490,6 @@ struct ManifestUi {
 struct ManifestUiProjection {
     expected_stream: String,
     expected_contract: String,
-}
-#[derive(Debug)]
-struct ProductUiProjection {
-    expected_stream: String,
-    expected_contract: String,
-}
-impl ProductUiProjection {
-    fn from_manifest(value: ManifestUiProjection) -> Result<Self, String> {
-        validate_runtime_identity(&value.expected_stream).map_err(|_| {
-            field_error(
-                "uiProjection.expectedStream",
-                "must be a bounded lowercase runtime identity",
-            )
-        })?;
-        validate_runtime_identity(&value.expected_contract).map_err(|_| {
-            field_error(
-                "uiProjection.expectedContract",
-                "must be a bounded lowercase runtime identity",
-            )
-        })?;
-        Ok(Self {
-            expected_stream: value.expected_stream,
-            expected_contract: value.expected_contract,
-        })
-    }
 }
 #[derive(Debug, Deserialize)]
 struct ManifestContent {

@@ -20,7 +20,6 @@ use runtime_diagnostics::{
 use crate::ProductHostError;
 
 const DEFAULT_ROTATE_BYTES: u64 = 6 * 1024 * 1024;
-const MAX_RETENTION_FILES: u8 = 4;
 
 /// Host filesystem policy around the neutral retained diagnostic sink.
 #[derive(Debug, Clone)]
@@ -96,12 +95,6 @@ pub struct ProductHostLog {
 
 impl ProductHostLog {
     pub fn new(config: ProductHostLogConfig) -> Result<Self, ProductHostError> {
-        if !(1..=MAX_RETENTION_FILES).contains(&config.retention_files) {
-            return Err(ProductHostError::new(
-                "PRODUCT_HOST_LOG_CONFIG",
-                "diagnostic log configuration is outside fixed bounds",
-            ));
-        }
         let writer = Arc::new(HostFileDiagnosticsWriter::new(
             config.path,
             config.rotate_bytes,

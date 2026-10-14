@@ -1316,7 +1316,7 @@ fn catalog_result(
             bytes: backing.hash.as_ptr(),
             len: backing.hash.len(),
         },
-        entry_count: u32::try_from(backing.entries.len()).ok()?,
+        entry_count: backing.entries.len() as u32,
         entries: backing.entries.as_ptr(),
         entries_len: backing.entries.len(),
         dependencies: backing.dependencies.as_ptr(),

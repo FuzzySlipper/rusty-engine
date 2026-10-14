@@ -50,12 +50,8 @@ impl RuntimePerceptionBridge {
         }?;
         let scene = self.collision_source.scene(request.session)?;
         let projection_identity = self.collision_source.cursor_identity(request.session)?;
-        let pair_cursor = usize::try_from(request.pair_cursor).map_err(|_| {
-            CsharpEngineServicesError::new("CSHARP_PERCEPTION", "perception pair cursor overflow")
-        })?;
-        let page_size = usize::try_from(request.page_size).map_err(|_| {
-            CsharpEngineServicesError::new("CSHARP_PERCEPTION", "perception page size overflow")
-        })?;
+        let pair_cursor = request.pair_cursor as usize;
+        let page_size = request.page_size as usize;
         // Disabled colliders do not block sight.
         let occluders = occluders
             .iter()
@@ -121,21 +117,17 @@ impl RuntimePerceptionBridge {
             pairs_len: pairs.len(),
             aggregates: pointer_or_null(&aggregates),
             aggregates_len: aggregates.len(),
-            pair_total: checked_count(readout.pair_total, "pairs")?,
+            pair_total: count(readout.pair_total),
             has_next_pair_cursor: readout.next_pair_cursor.is_some(),
-            next_pair_cursor: readout
-                .next_pair_cursor
-                .map(|value| checked_count(value, "pair cursor"))
-                .transpose()?
-                .unwrap_or_default(),
+            next_pair_cursor: readout.next_pair_cursor.map(count).unwrap_or_default(),
             projection_identity,
-            selected_observers: checked_count(readout.selected_observers, "observers")?,
-            selected_targets: checked_count(readout.selected_targets, "targets")?,
+            selected_observers: count(readout.selected_observers),
+            selected_targets: count(readout.selected_targets),
             selection_comparisons: readout.selection_comparisons as u64,
-            distance_rejects: checked_count(readout.distance_rejects, "distance rejects")?,
-            facing_rejects: checked_count(readout.facing_rejects, "facing rejects")?,
-            visibility_casts: checked_count(readout.visibility_casts, "visibility casts")?,
-            occlusion_rejects: checked_count(readout.occlusion_rejects, "occlusion rejects")?,
+            distance_rejects: count(readout.distance_rejects),
+            facing_rejects: count(readout.facing_rejects),
+            visibility_casts: count(readout.visibility_casts),
+            occlusion_rejects: count(readout.occlusion_rejects),
         };
         self.borrowed.hold((pairs, aggregates));
         Ok(result)
@@ -192,10 +184,9 @@ fn pointer_or_null<T>(values: &[T]) -> *const T {
     }
 }
 
-fn checked_count(value: usize, field: &'static str) -> Result<u32, CsharpEngineServicesError> {
-    u32::try_from(value).map_err(|_| {
-        CsharpEngineServicesError::new("CSHARP_PERCEPTION", format!("{field} exceeded u32"))
-    })
+/// Counts reach `u32::MAX` only after billions of per-pair steps in one query.
+fn count(value: usize) -> u32 {
+    u32::try_from(value).unwrap_or(u32::MAX)
 }
 
 #[cfg(test)]

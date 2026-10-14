@@ -899,6 +899,49 @@ fn native_sampled_volume_blocks_carry_sample_materials_and_regenerate_only_dirty
     );
     assert_eq!(unsafe { (*indices.materials).index }, 2);
 
+    // A material index named twice takes its last surface: the list
+    // generates what its last entry alone does.
+    let generated = |materials: &[NativeSampledVolumeMaterial]| {
+        let request = NativeSampledVolumeGenerateRequest {
+            materials: materials.as_ptr(),
+            materials_len: materials.len(),
+            ..whole
+        };
+        let mut mesh = NativeMeshResourceHandle::default();
+        let mut receipt = unsafe { std::mem::zeroed::<NativeOperationErrorReceipt>() };
+        assert_eq!(
+            unsafe {
+                (api.generate_sampled_volume)(api.context, &request, &mut mesh, &mut receipt)
+            },
+            ABI_OK
+        );
+        let mut generation = unsafe { std::mem::zeroed::<NativeImplicitGenerationReadout>() };
+        assert_eq!(
+            unsafe {
+                (api.read_sampled_volume_generation)(
+                    api.context,
+                    volume,
+                    &mut generation,
+                    &mut receipt,
+                )
+            },
+            ABI_OK
+        );
+        (generation.vertices, generation.triangles)
+    };
+    let flat = materials[0];
+    let smooth = NativeSampledVolumeMaterial {
+        character: NativeSurfaceCharacter {
+            placement: NativeVertexPlacement::Sharp,
+            crease_angle_degrees: 180.0,
+            roughness: 0.0,
+        },
+        ..flat
+    };
+    assert_ne!(generated(&[flat]), generated(&[smooth]));
+    assert_eq!(generated(&[smooth, flat]), generated(&[flat]));
+    assert_eq!(generated(&[flat, smooth]), generated(&[smooth]));
+
     // A surface index without a material in the request is refused.
     let missing = NativeSampledVolumeGenerateRequest {
         materials: std::ptr::null(),

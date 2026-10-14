@@ -202,11 +202,8 @@ impl AudioOutput {
     /// Replaces the realization with the committed baseline after the
     /// realization owner was reset. Voices resume at their Engine cursors;
     /// earlier one-shots are not replayed.
-    pub(crate) fn rebaseline(
-        &mut self,
-        services: &EngineServiceSet,
-    ) -> Result<(), CsharpProductRuntimeError> {
-        let baseline = services.audio_snapshot_frame()?;
+    pub(crate) fn rebaseline(&mut self, services: &EngineServiceSet) {
+        let baseline = services.audio_snapshot_frame();
         self.world_seconds = services.presentation_elapsed_seconds();
         self.follow_camera(&services.view_composition());
         self.realizer.reset();
@@ -219,7 +216,6 @@ impl AudioOutput {
             &|hash: &str| services.audio_clip_bytes(hash),
             &EngineEntities(services),
         );
-        Ok(())
     }
 
     /// Reports what the device finished or failed since the last call, and

@@ -109,13 +109,17 @@ impl Default for SurfaceCharacter {
 }
 
 impl SurfaceCharacter {
-    pub fn validate(&self) -> Result<(), MeshError> {
-        if !(0.0..=180.0).contains(&self.crease_angle_degrees)
-            || !(0.0..=0.5).contains(&self.roughness)
-        {
+    /// Clamps the crease angle into 0 to 180 degrees and the roughness into
+    /// 0 to 0.5. A non-finite value has no place in either range.
+    fn normalized(self) -> Result<Self, MeshError> {
+        if !self.crease_angle_degrees.is_finite() || !self.roughness.is_finite() {
             return Err(MeshError::InvalidSurfaceCharacter);
         }
-        Ok(())
+        Ok(Self {
+            crease_angle_degrees: self.crease_angle_degrees.clamp(0.0, 180.0),
+            roughness: self.roughness.clamp(0.0, 0.5),
+            ..self
+        })
     }
 }
 
@@ -143,19 +147,32 @@ impl MaterialSurface {
 pub struct SurfaceMaterials(Arc<[(u16, MaterialSurface)]>);
 
 impl SurfaceMaterials {
+    /// A slot named more than once takes its last surface.
     pub fn new(
         entries: impl IntoIterator<Item = (u16, MaterialSurface)>,
     ) -> Result<Self, MeshError> {
-        let mut entries: Vec<_> = entries.into_iter().collect();
+        let mut entries = entries
+            .into_iter()
+            .map(|(slot, surface)| {
+                Ok((
+                    slot,
+                    MaterialSurface {
+                        character: surface.character.normalized()?,
+                        ..surface
+                    },
+                ))
+            })
+            .collect::<Result<Vec<_>, MeshError>>()?;
+        // The sort is stable, so each slot's surfaces stay in their given
+        // order and the dedup can keep the last.
         entries.sort_by_key(|(slot, _)| *slot);
-        for window in entries.windows(2) {
-            if window[0].0 == window[1].0 {
-                return Err(MeshError::DuplicateMaterialSurface { slot: window[0].0 });
+        entries.dedup_by(|later, earlier| {
+            let same = later.0 == earlier.0;
+            if same {
+                *earlier = *later;
             }
-        }
-        for (_, surface) in &entries {
-            surface.character.validate()?;
-        }
+            same
+        });
         Ok(Self(entries.into()))
     }
 
@@ -389,9 +406,6 @@ pub enum MeshError {
     /// A terrain layer set needs 1 to 16 distinct slots, each on a layer
     /// below 4, and a transition of 1 to 4 voxels.
     InvalidTerrainLayers,
-    DuplicateMaterialSurface {
-        slot: u16,
-    },
     /// The chunk would emit more vertices than a `u32` index can address.
     TooManyVertices {
         vertices: u64,
@@ -445,11 +459,8 @@ impl core::fmt::Display for MeshError {
             ),
             MeshError::InvalidSurfaceCharacter => write!(
                 f,
-                "a surface character needs a crease angle of 0 to 180 degrees and a roughness of 0 to 0.5"
+                "a surface character needs a finite crease angle and roughness"
             ),
-            MeshError::DuplicateMaterialSurface { slot } => {
-                write!(f, "material slot {slot} has more than one surface")
-            }
             MeshError::TooManyVertices { vertices } => {
                 write!(
                     f,
