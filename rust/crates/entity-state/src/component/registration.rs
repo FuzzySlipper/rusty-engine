@@ -356,24 +356,11 @@ pub enum RegisteredComponentSnapshotError {
         actual_codec: String,
         actual_version: u32,
     },
-    DuplicateEntityValue {
-        component: ComponentTypeId,
-        entity: EntityId,
-    },
     UnknownEntity {
         component: ComponentTypeId,
         entity: EntityId,
     },
-    TombstonedEntity {
-        component: ComponentTypeId,
-        entity: EntityId,
-    },
     DecodeFailed {
-        component: ComponentTypeId,
-        entity: EntityId,
-        reason: String,
-    },
-    InvalidValue {
         component: ComponentTypeId,
         entity: EntityId,
         reason: String,

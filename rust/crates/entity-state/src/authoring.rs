@@ -174,7 +174,7 @@ impl EntityAuthoringService {
                     entity: definition.id,
                 });
             }
-            staged.insert_definition(definition.clone());
+            staged.insert_definition(definition.clone(), EntityLifecycle::Active);
             facts.push(EntityAuthoringFact::Created {
                 entity: definition.id,
             });

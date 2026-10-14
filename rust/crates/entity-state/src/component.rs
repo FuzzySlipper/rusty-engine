@@ -8,6 +8,7 @@ use crate::components::{
     AssetBindingComponent, BoundsComponent, CollisionComponent, ControllerComponent,
     KinematicComponent, RenderableComponent, TransformComponent,
 };
+use crate::model::{EntityCore, EntityLifecycle};
 
 mod registration;
 
@@ -53,8 +54,7 @@ trait ErasedComponentTable: Send + Sync {
     fn restore_snapshot(
         &mut self,
         snapshot: &RegisteredComponentSnapshot,
-        known_entities: &BTreeSet<EntityId>,
-        tombstones: &BTreeSet<EntityId>,
+        entities: &BTreeMap<EntityId, EntityCore>,
     ) -> Result<(), RegisteredComponentSnapshotError>;
 }
 
@@ -207,8 +207,7 @@ impl<T: EntityComponent> ErasedComponentTable for ComponentTable<T> {
     fn restore_snapshot(
         &mut self,
         snapshot: &RegisteredComponentSnapshot,
-        known_entities: &BTreeSet<EntityId>,
-        tombstones: &BTreeSet<EntityId>,
+        entities: &BTreeMap<EntityId, EntityCore>,
     ) -> Result<(), RegisteredComponentSnapshotError> {
         let component = self.registration.type_id.clone();
         let RegistrationPersistence::Durable(codec) = &self.registration.persistence else {
@@ -226,26 +225,18 @@ impl<T: EntityComponent> ErasedComponentTable for ComponentTable<T> {
             });
         }
 
-        let mut decoded = BTreeMap::new();
         for item in &snapshot.values {
             let entity = EntityId::new(item.entity);
-            if !known_entities.contains(&entity) {
-                return Err(RegisteredComponentSnapshotError::UnknownEntity {
-                    component: component.clone(),
-                    entity,
-                });
-            }
-            if tombstones.contains(&entity) {
-                return Err(RegisteredComponentSnapshotError::TombstonedEntity {
-                    component: component.clone(),
-                    entity,
-                });
-            }
-            if decoded.contains_key(&entity) || self.values.contains_key(&entity) {
-                return Err(RegisteredComponentSnapshotError::DuplicateEntityValue {
-                    component: component.clone(),
-                    entity,
-                });
+            match entities.get(&entity) {
+                None => {
+                    return Err(RegisteredComponentSnapshotError::UnknownEntity {
+                        component: component.clone(),
+                        entity,
+                    })
+                }
+                // A tombstone restores with its identity only, like its own record.
+                Some(core) if core.lifecycle == EntityLifecycle::Tombstoned => continue,
+                Some(_) => {}
             }
             let value = if version_is_current {
                 (codec.decode)(item.value.clone())
@@ -263,16 +254,8 @@ impl<T: EntityComponent> ErasedComponentTable for ComponentTable<T> {
                 entity,
                 reason,
             })?;
-            (self.registration.validator)(&value).map_err(|reason| {
-                RegisteredComponentSnapshotError::InvalidValue {
-                    component: component.clone(),
-                    entity,
-                    reason,
-                }
-            })?;
-            decoded.insert(entity, value);
+            self.values.insert(entity, value);
         }
-        self.values.extend(decoded);
         Ok(())
     }
 }
@@ -583,8 +566,7 @@ impl ComponentStore {
     pub(crate) fn restore_registered_snapshots(
         &mut self,
         snapshots: &[RegisteredComponentSnapshot],
-        known_entities: &BTreeSet<EntityId>,
-        tombstones: &BTreeSet<EntityId>,
+        entities: &BTreeMap<EntityId, EntityCore>,
     ) -> Result<(), RegisteredComponentSnapshotError> {
         let mut seen = BTreeSet::new();
         for snapshot in snapshots {
@@ -605,7 +587,7 @@ impl ComponentStore {
                 }
                 continue;
             };
-            table.restore_snapshot(snapshot, known_entities, tombstones)?;
+            table.restore_snapshot(snapshot, entities)?;
         }
         Ok(())
     }

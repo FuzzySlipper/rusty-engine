@@ -523,7 +523,7 @@ fn durable_external_component_round_trips_only_with_matching_explicit_registry()
 }
 
 #[test]
-fn durable_component_snapshot_rejects_duplicates_codec_drift_and_bad_values() {
+fn durable_component_snapshot_rejects_duplicate_types_codec_drift_and_unknown_entities() {
     let entity = EntityId::new(40);
     let mut registry = ComponentRegistry::new();
     registry.register(durable_registration()).unwrap();
@@ -559,18 +559,6 @@ fn durable_component_snapshot_rejects_duplicates_codec_drift_and_bad_values() {
         ))
     ));
 
-    let mut duplicate_value = source.clone();
-    let values = duplicate_value["registeredComponents"][0]["values"]
-        .as_array_mut()
-        .unwrap();
-    values.push(values[0].clone());
-    assert!(matches!(
-        decode_snapshot_with_registry(&duplicate_value.to_string(), registry.clone()),
-        Err(EntityStateSnapshotError::RegisteredComponent(
-            RegisteredComponentSnapshotError::DuplicateEntityValue { .. }
-        ))
-    ));
-
     let mut codec_drift = source.clone();
     codec_drift["registeredComponents"][0]["version"] = json!(2);
     assert!(matches!(
@@ -589,32 +577,45 @@ fn durable_component_snapshot_rejects_duplicates_codec_drift_and_bad_values() {
         ))
     ));
 
-    let mut tombstone_value = source.clone();
-    tombstone_value["entities"][0]["lifecycle"] = json!("tombstoned");
-    assert!(matches!(
-        decode_snapshot_with_registry(&tombstone_value.to_string(), registry.clone()),
-        Err(EntityStateSnapshotError::RegisteredComponent(
-            RegisteredComponentSnapshotError::TombstonedEntity { .. }
-        ))
-    ));
-
-    let mut malformed_identity = source.clone();
+    let mut malformed_identity = source;
     malformed_identity["registeredComponents"][0]["typeId"] = json!("Fixture.Invalid");
     assert!(matches!(
-        decode_snapshot_with_registry(&malformed_identity.to_string(), registry.clone()),
+        decode_snapshot_with_registry(&malformed_identity.to_string(), registry),
         Err(EntityStateSnapshotError::RegisteredComponent(
             RegisteredComponentSnapshotError::InvalidTypeId { .. }
         ))
     ));
+}
 
-    let mut bad_value = source;
-    bad_value["registeredComponents"][0]["values"][0]["value"]["strength"] = json!(101);
-    assert!(matches!(
-        decode_snapshot_with_registry(&bad_value.to_string(), registry),
-        Err(EntityStateSnapshotError::RegisteredComponent(
-            RegisteredComponentSnapshotError::InvalidValue { .. }
-        ))
-    ));
+#[test]
+fn durable_component_value_of_a_tombstone_is_not_restored() {
+    let entity = EntityId::new(41);
+    let mut registry = ComponentRegistry::new();
+    registry.register(durable_registration()).unwrap();
+    let mut state = EntityState::from_definitions_with_registry(
+        registry.clone(),
+        [EntityDefinition::new(entity, "spent")],
+    )
+    .unwrap();
+    let revision = state.component_revision::<DurablePower>(entity).unwrap();
+    EntityAuthoringService
+        .attach_component(
+            &mut state,
+            revision,
+            entity,
+            DurablePower {
+                strength: 10,
+                enabled: true,
+            },
+        )
+        .unwrap();
+    let mut snapshot: Value = serde_json::from_str(&encode_snapshot(&state).unwrap()).unwrap();
+    snapshot["entities"][0]["lifecycle"] = json!("tombstoned");
+
+    let restored = decode_snapshot_with_registry(&snapshot.to_string(), registry).unwrap();
+    assert!(!restored.is_alive(entity));
+    assert_eq!(restored.component::<DurablePower>(entity).unwrap(), None);
+    assert!(restored.component_types_for_entity(entity).is_empty());
 }
 
 #[test]

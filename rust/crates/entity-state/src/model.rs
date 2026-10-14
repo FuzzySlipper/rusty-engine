@@ -213,9 +213,24 @@ impl EntityState {
         registry: ComponentRegistry,
         definitions: impl IntoIterator<Item = EntityDefinition>,
     ) -> Result<Self, EntityDefinitionError> {
-        let definitions: Vec<_> = definitions.into_iter().collect();
+        Self::from_lifecycle_definitions(
+            registry,
+            definitions
+                .into_iter()
+                .map(|definition| (definition, EntityLifecycle::Active))
+                .collect(),
+        )
+    }
+
+    /// Builds a state whose entities start in the given lifecycles. Relationships are
+    /// applied after every lifecycle is set, so they are refused from or to a tombstone
+    /// exactly as a live relationship edit would be.
+    pub(crate) fn from_lifecycle_definitions(
+        registry: ComponentRegistry,
+        definitions: Vec<(EntityDefinition, EntityLifecycle)>,
+    ) -> Result<Self, EntityDefinitionError> {
         let mut ids = BTreeSet::new();
-        for definition in &definitions {
+        for (definition, _) in &definitions {
             if !ids.insert(definition.id) {
                 return Err(EntityDefinitionError::DuplicateEntity {
                     entity: definition.id,
@@ -225,10 +240,10 @@ impl EntityState {
         }
 
         let mut state = Self::with_registry(registry);
-        for definition in &definitions {
-            state.insert_definition(definition.clone());
+        for (definition, lifecycle) in &definitions {
+            state.insert_definition(definition.clone(), *lifecycle);
         }
-        for definition in &definitions {
+        for (definition, _) in &definitions {
             crate::relationship::apply_definition_relationships(&mut state, definition).map_err(
                 |error| EntityDefinitionError::InvalidRelationship {
                     entity: definition.id,
@@ -611,7 +626,11 @@ impl EntityState {
         chain.into_iter().rev().reduce(EntityTransform::compose)
     }
 
-    pub(crate) fn insert_definition(&mut self, mut definition: EntityDefinition) {
+    pub(crate) fn insert_definition(
+        &mut self,
+        mut definition: EntityDefinition,
+        lifecycle: EntityLifecycle,
+    ) {
         definition.labels.sort_unstable();
         definition.labels.dedup();
         let id = definition.id;
@@ -620,7 +639,7 @@ impl EntityState {
             EntityCore {
                 id,
                 name: definition.name,
-                lifecycle: EntityLifecycle::Active,
+                lifecycle,
                 source: definition.source,
                 labels: definition.labels,
             },

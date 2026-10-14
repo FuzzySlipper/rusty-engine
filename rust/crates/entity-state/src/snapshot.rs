@@ -12,10 +12,9 @@ use crate::component::{
     ComponentRegistry, RegisteredComponentSnapshot, RegisteredComponentSnapshotError,
 };
 use crate::model::{
-    AssetBindingComponent, BoundsComponent, CharacterMotionComponent, CollisionComponent,
-    ControllerComponent, EntityDefinition, EntityLifecycle, EntitySource, EntityState,
-    EntityTransform, KinematicComponent, Quat, RenderableComponent, RigidBodyComponent,
-    TransformComponent,
+    AssetBindingComponent, BoundsComponent, CollisionComponent, ControllerComponent,
+    EntityDefinition, EntityLifecycle, EntitySource, EntityState, EntityTransform,
+    KinematicComponent, Quat, RenderableComponent, TransformComponent,
 };
 
 pub const ENTITY_STATE_SNAPSHOT_SCHEMA_VERSION: u32 = 3;
@@ -148,27 +147,10 @@ pub enum AssetVersionSnapshot {
 pub enum EntityStateSnapshotError {
     Encode(serde_json::Error),
     Decode(serde_json::Error),
-    UnsupportedSchema {
-        actual: u64,
-    },
-    DuplicateEntity {
-        entity: u64,
-    },
-    InvalidLifecycleState {
-        entity: u64,
-        reason: &'static str,
-    },
-    InvalidAssetReference {
-        entity: u64,
-        reason: String,
-    },
+    UnsupportedSchema { actual: u64 },
+    InvalidAssetReference { entity: u64, reason: String },
     InvalidDefinition(crate::model::EntityDefinitionError),
     RegisteredComponent(RegisteredComponentSnapshotError),
-    ConflictingComponents {
-        entity: u64,
-        first: &'static str,
-        second: &'static str,
-    },
 }
 
 impl std::fmt::Display for EntityStateSnapshotError {
@@ -299,40 +281,23 @@ impl EntityState {
                 actual: u64::from(snapshot.schema_version),
             });
         }
-        let mut ids = BTreeSet::new();
         let registered_components = snapshot.registered_components;
-        let tombstones: BTreeSet<_> = snapshot
-            .entities
-            .iter()
-            .filter_map(|entity| {
-                (entity.lifecycle == SnapshotLifecycle::Tombstoned).then_some(entity.id)
-            })
-            .collect();
-        let mut lifecycles = Vec::with_capacity(snapshot.entities.len());
         let mut inactive_controllers = Vec::new();
         let mut definitions = Vec::with_capacity(snapshot.entities.len());
 
         for entity in snapshot.entities {
-            if !ids.insert(entity.id) {
-                return Err(EntityStateSnapshotError::DuplicateEntity { entity: entity.id });
-            }
-            validate_tombstone_shape(&entity)?;
-            for target in [entity.transform_parent, entity.contained_in]
-                .into_iter()
-                .flatten()
-            {
-                if tombstones.contains(&target) {
-                    return Err(EntityStateSnapshotError::InvalidLifecycleState {
-                        entity: entity.id,
-                        reason: "relationship targets a tombstone",
-                    });
-                }
-            }
             let id = EntityId::new(entity.id);
             let source = source_from_snapshot(entity.id, entity.source)?;
             let mut definition = EntityDefinition::new(id, entity.name)
                 .with_source(source)
                 .with_labels(entity.labels.into_iter().map(TagId::new));
+            let lifecycle = lifecycle_from_snapshot(entity.lifecycle);
+            if lifecycle == EntityLifecycle::Tombstoned {
+                // A tombstone keeps only its identity, as `destroy` leaves it; the
+                // encoder writes no components or relationships for one.
+                definitions.push((definition, lifecycle));
+                continue;
+            }
             definition.transform = entity.transform.map(transform_from_snapshot);
             definition.bounds = entity.bounds.map(|value| BoundsComponent {
                 min: vec3(value.min),
@@ -379,73 +344,17 @@ impl EntityState {
             definition.transform_parent = entity.transform_parent.map(EntityId::new);
             definition.contained_in = entity.contained_in.map(EntityId::new);
             definition.derived_from = entity.derived_from.map(EntityId::new);
-            lifecycles.push((id, entity.lifecycle));
-            definitions.push(definition);
+            definitions.push((definition, lifecycle));
         }
 
-        let mut state = EntityState::from_definitions_with_registry(registry, definitions)
+        let mut state = EntityState::from_lifecycle_definitions(registry, definitions)
             .map_err(EntityStateSnapshotError::InvalidDefinition)?;
         state.revision = snapshot.revision;
-        for entity in inactive_controllers {
-            state.inactive_controllers.insert(entity);
-        }
-        for (entity, lifecycle) in lifecycles {
-            state
-                .entities
-                .get_mut(&entity)
-                .expect("snapshot definition created entity")
-                .lifecycle = lifecycle_from_snapshot(lifecycle);
-        }
-        let known_entities = state.entities.keys().copied().collect();
-        let tombstoned_entities = state
-            .entities
-            .iter()
-            .filter_map(|(entity, core)| {
-                (core.lifecycle == EntityLifecycle::Tombstoned).then_some(*entity)
-            })
-            .collect();
-        state.components.restore_registered_snapshots(
-            &registered_components,
-            &known_entities,
-            &tombstoned_entities,
-        )?;
-        for entity in state.entities.keys().copied() {
-            validate_restored_motion_authority(&state, entity)?;
-        }
+        state.inactive_controllers.extend(inactive_controllers);
+        state
+            .components
+            .restore_registered_snapshots(&registered_components, &state.entities)?;
         Ok(state)
-    }
-}
-
-fn validate_restored_motion_authority(
-    state: &EntityState,
-    entity: EntityId,
-) -> Result<(), EntityStateSnapshotError> {
-    let has_kinematic = state
-        .has_component::<KinematicComponent>(entity)
-        .expect("built-in kinematic registration");
-    let has_rigid_body = state
-        .has_component::<RigidBodyComponent>(entity)
-        .expect("built-in rigid-body registration");
-    let has_character_motion = state
-        .has_component::<CharacterMotionComponent>(entity)
-        .expect("built-in character-motion registration");
-    let conflict = if has_kinematic && has_rigid_body {
-        Some(("kinematic", "rigid-body"))
-    } else if has_character_motion && has_kinematic {
-        Some(("character-motion", "kinematic"))
-    } else if has_character_motion && has_rigid_body {
-        Some(("character-motion", "rigid-body"))
-    } else {
-        None
-    };
-    if let Some((first, second)) = conflict {
-        Err(EntityStateSnapshotError::ConflictingComponents {
-            entity: entity.raw(),
-            first,
-            second,
-        })
-    } else {
-        Ok(())
     }
 }
 
@@ -612,27 +521,6 @@ fn asset_from_snapshot(
             reason: error.to_string(),
         })?;
     Ok(AssetReference::new(id, version, hash))
-}
-
-fn validate_tombstone_shape(entity: &EntitySnapshot) -> Result<(), EntityStateSnapshotError> {
-    if entity.lifecycle == SnapshotLifecycle::Tombstoned
-        && (entity.transform.is_some()
-            || entity.bounds.is_some()
-            || entity.collision.is_some()
-            || entity.renderable.is_some()
-            || entity.kinematic.is_some()
-            || entity.controller.is_some()
-            || entity.asset_binding.is_some()
-            || entity.transform_parent.is_some()
-            || entity.contained_in.is_some()
-            || entity.derived_from.is_some())
-    {
-        return Err(EntityStateSnapshotError::InvalidLifecycleState {
-            entity: entity.id,
-            reason: "tombstone carries components or relationships",
-        });
-    }
-    Ok(())
 }
 
 fn vec3(value: [f32; 3]) -> Vec3 {

@@ -5,7 +5,11 @@
 //!
 //! Explicit JSON snapshots use schema 3. The decoder reads the typed format once;
 //! legacy schema-2 migration is removed. Extra JSON metadata is ignored, while
-//! required fields, complete-input parsing and entity invariants still apply.
+//! required fields and complete-input parsing still apply. Restore builds entities
+//! through the definition and relationship checks of `from_definitions`, with each
+//! lifecycle set first, so duplicate ids and unknown, cyclic or tombstoned
+//! relationship targets are refused, and a tombstone restores with its identity
+//! only. Component combinations and values are taken as the encoder wrote them.
 //! These snapshots are not the C# product's persistence format.
 
 #![forbid(unsafe_code)]

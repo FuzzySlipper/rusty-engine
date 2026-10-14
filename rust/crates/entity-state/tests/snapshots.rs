@@ -3,8 +3,14 @@ use core_ids::{EntityId, ProcessId, SceneId, SceneNodeId, TagId};
 use core_math::Vec3;
 use entity_state::{
     decode_snapshot, encode_durable_snapshot, encode_snapshot, ControllerComponent,
-    EntityAuthoringService, EntityDefinition, EntityLifecycle, EntitySource, EntityState,
+    ControllerSnapshot, EntityAuthoringService, EntityDefinition, EntityDefinitionError,
+    EntityLifecycle, EntitySource, EntityState, EntityStateSnapshot, EntityStateSnapshotError,
+    SnapshotLifecycle,
 };
+
+fn restore(snapshot: &EntityStateSnapshot) -> Result<EntityState, EntityStateSnapshotError> {
+    decode_snapshot(&serde_json::to_string(snapshot).unwrap())
+}
 
 fn asset(text: &str) -> AssetReference {
     AssetReference::new(
@@ -109,4 +115,126 @@ fn decode_ignores_extra_metadata_but_rejects_trailing_input() {
 #[test]
 fn unsupported_snapshot_version_is_not_migrated() {
     assert!(decode_snapshot(r#"{"schemaVersion":2,"revision":0,"entities":[]}"#).is_err());
+}
+
+#[test]
+fn restore_rebuilds_the_transform_child_index() {
+    let parent = EntityId::new(40);
+    let child = EntityId::new(41);
+    let state = EntityState::from_definitions([
+        EntityDefinition::new(parent, "parent").with_transform(Vec3::new(4.0, 0.0, 0.0)),
+        EntityDefinition::new(child, "child")
+            .with_transform(Vec3::new(1.0, 0.0, 0.0))
+            .with_transform_parent(parent),
+    ])
+    .unwrap();
+    let world = state.world_transform(child).unwrap();
+    let mut restored = decode_snapshot(&encode_snapshot(&state).unwrap()).unwrap();
+
+    // `destroy` reroots the children its index lists.
+    let revision = restored.revision();
+    EntityAuthoringService
+        .destroy(&mut restored, revision, parent)
+        .unwrap();
+    assert_eq!(restored.transform_parent(child), None);
+    assert_eq!(restored.world_transform(child), Some(world));
+}
+
+#[test]
+fn tombstone_record_restores_as_its_identity_only() {
+    let parent = EntityId::new(50);
+    let spent = EntityId::new(51);
+    let state = EntityState::from_definitions([
+        EntityDefinition::new(parent, "parent").with_transform(Vec3::new(4.0, 0.0, 0.0)),
+        EntityDefinition::new(spent, "spent")
+            .with_labels([TagId::new(3)])
+            .with_transform(Vec3::new(1.0, 0.0, 0.0))
+            .with_controller(ControllerComponent::Process(ProcessId::new(9)))
+            .with_transform_parent(parent)
+            .with_containment(parent)
+            .with_derivation(parent),
+    ])
+    .unwrap();
+    let mut snapshot = state.snapshot();
+    snapshot.entities[1].lifecycle = SnapshotLifecycle::Tombstoned;
+    snapshot.entities[1].controller = Some(ControllerSnapshot::Process {
+        id: 9,
+        active: false,
+    });
+
+    let mut restored = restore(&snapshot).unwrap();
+    let view = restored.view(spent).unwrap();
+    assert_eq!(view.lifecycle, EntityLifecycle::Tombstoned);
+    assert_eq!(view.labels, vec![TagId::new(3)]);
+    assert!(view.transform.is_none());
+    assert!(restored.controller(spent).is_none());
+    assert_eq!(restored.transform_parent(spent), None);
+    assert_eq!(restored.contained_in(spent), None);
+    assert_eq!(restored.derived_from(spent), None);
+    assert_eq!(restored.contained_entity_count(parent), 0);
+    assert!(restored.component_types_for_entity(spent).is_empty());
+
+    // The parent's child index does not list the tombstone, so destroying the
+    // parent gives it no rerooted transform.
+    let revision = restored.revision();
+    EntityAuthoringService
+        .destroy(&mut restored, revision, parent)
+        .unwrap();
+    assert!(restored.transform(spent).is_none());
+}
+
+#[test]
+fn restore_refuses_relationships_into_a_tombstone() {
+    let spent = EntityId::new(60);
+    let child = EntityId::new(61);
+    let state = EntityState::from_definitions([
+        EntityDefinition::new(spent, "spent").with_transform(Vec3::ZERO),
+        EntityDefinition::new(child, "child")
+            .with_transform(Vec3::ZERO)
+            .with_transform_parent(spent)
+            .with_containment(spent),
+    ])
+    .unwrap();
+    let mut snapshot = state.snapshot();
+    snapshot.entities[0].lifecycle = SnapshotLifecycle::Tombstoned;
+
+    let mut parented = snapshot.clone();
+    parented.entities[1].contained_in = None;
+    let mut contained = snapshot;
+    contained.entities[1].transform_parent = None;
+    for forged in [parented, contained] {
+        assert!(matches!(
+            restore(&forged),
+            Err(EntityStateSnapshotError::InvalidDefinition(
+                EntityDefinitionError::InvalidRelationship { entity, .. }
+            )) if entity == child
+        ));
+    }
+}
+
+#[test]
+fn restore_refuses_duplicate_ids_and_unknown_relationship_targets() {
+    let entity = EntityId::new(70);
+    let state = EntityState::from_definitions([
+        EntityDefinition::new(entity, "only").with_transform(Vec3::ZERO)
+    ])
+    .unwrap();
+
+    let mut duplicate = state.snapshot();
+    duplicate.entities.push(duplicate.entities[0].clone());
+    assert!(matches!(
+        restore(&duplicate),
+        Err(EntityStateSnapshotError::InvalidDefinition(
+            EntityDefinitionError::DuplicateEntity { entity: duplicated }
+        )) if duplicated == entity
+    ));
+
+    let mut dangling = state.snapshot();
+    dangling.entities[0].contained_in = Some(999);
+    assert!(matches!(
+        restore(&dangling),
+        Err(EntityStateSnapshotError::InvalidDefinition(
+            EntityDefinitionError::InvalidRelationship { .. }
+        ))
+    ));
 }

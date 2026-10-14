@@ -3,9 +3,8 @@ use core_math::Vec3;
 use entity_state::{
     decode_snapshot, encode_snapshot, validate_rigid_body, ComponentPersistence,
     EntityAuthoringError, EntityAuthoringService, EntityDefinition, EntityState,
-    EntityStateSnapshotError, KinematicComponent, KinematicSnapshot, Quat, RigidBodyComponent,
-    RigidBodyInertiaPolicy, RigidBodyShape, RigidBodyValidationError, RIGID_BODY_CODEC_VERSION,
-    RIGID_BODY_COMPONENT_TYPE_ID,
+    KinematicComponent, Quat, RigidBodyComponent, RigidBodyInertiaPolicy, RigidBodyShape,
+    RigidBodyValidationError, RIGID_BODY_CODEC_VERSION, RIGID_BODY_COMPONENT_TYPE_ID,
 };
 use serde_json::json;
 
@@ -239,11 +238,11 @@ fn kinematic_and_dynamic_rigid_body_components_conflict_without_mutation() {
 }
 
 #[test]
-fn snapshot_restore_rejects_kinematic_and_dynamic_rigid_body_conflict() {
+fn restored_kinematic_and_rigid_body_pair_can_be_separated() {
     let entity = EntityId::new(76);
     let body = RigidBodyComponent::dynamic(RigidBodyShape::Sphere { radius: 0.5 }, 1.0);
     let mut source = EntityState::from_definitions([
-        EntityDefinition::new(entity, "forged mover").with_transform(Vec3::ZERO)
+        EntityDefinition::new(entity, "mover").with_transform(Vec3::ZERO)
     ])
     .unwrap();
     let body_slot = source
@@ -252,24 +251,20 @@ fn snapshot_restore_rejects_kinematic_and_dynamic_rigid_body_conflict() {
     EntityAuthoringService
         .attach_component(&mut source, body_slot, entity, body)
         .unwrap();
-    let source_bytes = encode_snapshot(&source).unwrap();
-
-    let mut forged = source.snapshot();
-    forged.entities[0].kinematic = Some(KinematicSnapshot {
+    let mut snapshot = source.snapshot();
+    snapshot.entities[0].kinematic = Some(entity_state::KinematicSnapshot {
         half_extents: [0.5, 0.5, 0.5],
         velocity: [0.0, 0.0, 0.0],
     });
-    let forged_bytes = serde_json::to_string_pretty(&forged).unwrap();
 
-    assert!(matches!(
-        decode_snapshot(&forged_bytes),
-        Err(EntityStateSnapshotError::ConflictingComponents {
-            entity: 76,
-            first: "kinematic",
-            second: "rigid-body",
-        })
-    ));
-    assert_eq!(encode_snapshot(&source).unwrap(), source_bytes);
-    assert!(source.kinematic(entity).is_none());
-    assert_eq!(source.rigid_body(entity), Some(&body));
+    let mut restored = decode_snapshot(&serde_json::to_string(&snapshot).unwrap()).unwrap();
+    assert!(restored.kinematic(entity).is_some());
+    let kinematic_slot = restored
+        .component_revision::<KinematicComponent>(entity)
+        .unwrap();
+    EntityAuthoringService
+        .detach_component::<KinematicComponent>(&mut restored, kinematic_slot, entity)
+        .unwrap();
+    assert!(restored.kinematic(entity).is_none());
+    assert_eq!(restored.rigid_body(entity), Some(&body));
 }
