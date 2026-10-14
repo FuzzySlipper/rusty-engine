@@ -450,13 +450,15 @@ the configuration each call: check one with `Diagnose` where it is chosen
 beyond that bound.
 
 Controller sticks arrive as `ControllerAxis` physical input with the normalized
-value in `ProductInputEvent.X`. Analog buttons (including standard-gamepad
-triggers) arrive independently as `ControllerButtonValue`, with `X` in `[0, 1]`;
-`ControllerButton` carries digital press/release edges. Products can map
-`controller-button-value:button-7` to an `axis` intent for proportional right
-trigger input, just as `controller-axis:axis-0` maps the left stick's X axis.
-The runtime retains these scalar values between samples and clears them with
-the input lane. Products own dead zones, movement meaning, and stick look speed;
+value in `ProductInputEvent.X`, in `[-1, 1]`. Analog buttons (including
+standard-gamepad triggers) arrive independently as `ControllerButtonValue`,
+with `X` in `[0, 1]`. A value past its range, and a direct `axis` claim
+outside `[-1, 1]`, is saturated to it. `ControllerButton` carries digital
+press/release edges. Products can map `controller-button-value:button-7` to
+an `axis` intent for proportional right trigger input, just as
+`controller-axis:axis-0` maps the left stick's X axis. The runtime retains
+these scalar values between samples and clears them with the input lane.
+Products own dead zones, movement meaning, and stick look speed;
 integrate a held stick's angular rate over time (admitted simulation time, or
 `HostElapsedSeconds` for look that ignores [gameplay time](#gameplay-time)),
 rather than treating each input sample as a mouse displacement.

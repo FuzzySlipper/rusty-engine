@@ -814,7 +814,8 @@ impl ProductHostInputBatch {
     }
 
     /// Converts the wire envelopes a host deserialized with its request.
-    /// runtime-input owns event semantics and the event-page count.
+    /// runtime-input owns event semantics; the request body bound caps the
+    /// event count.
     pub fn from_wire(
         events: Vec<runtime_input::RuntimeInputWireEvent>,
     ) -> Result<Self, ProductHostError> {
@@ -1710,13 +1711,8 @@ mod tests {
     }
 
     #[test]
-    fn wire_decode_resync_receipt_preserves_host_bounded_rejected_counts() {
-        for count in [
-            0,
-            1,
-            runtime_input::MAX_RUNTIME_INPUT_WIRE_EVENTS,
-            runtime_input::MAX_RUNTIME_INPUT_WIRE_EVENTS + 1,
-        ] {
+    fn wire_decode_resync_receipt_preserves_rejected_counts() {
+        for count in [0, 1, 2_000] {
             let result = ProductHostInputResult::wire_decode_resynchronized(count);
             assert!(!result.accepted);
             assert_eq!(result.code, "PRODUCT_HOST_INPUT_DECODE");

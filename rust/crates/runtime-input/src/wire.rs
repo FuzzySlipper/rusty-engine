@@ -3,15 +3,11 @@ use serde::Deserialize;
 use ts_rs::TS;
 
 use crate::{
-    model::{validate_controller_axis, validate_controller_button_value},
     parse_canonical_u64, AxisValue, ControllerAxis, ControllerButton, InputClearReason,
     InputContext, KeyboardControl, PhysicalEdge, PointerButton, PointerPosition,
     RuntimeDirectIntentClaim, RuntimeInputBinding, RuntimeInputError, RuntimeInputEvent,
     RuntimeInputFact, RuntimeInputIngress, RuntimeIntentValue, RuntimeProductPayload,
 };
-
-/// Maximum normalized physical/direct envelopes accepted in one wire batch.
-pub const MAX_RUNTIME_INPUT_WIRE_EVENTS: usize = 1_024;
 
 /// Strictly decodes one structural host envelope. The wire uses only canonical
 /// decimal strings for u64 values so JavaScript never loses correlation bits.
@@ -34,9 +30,6 @@ pub fn decode_runtime_input_wire_events_json(
 pub fn runtime_input_wire_events(
     events: Vec<RuntimeInputWireEvent>,
 ) -> Result<Vec<RuntimeInputEvent>, RuntimeInputError> {
-    if events.len() > MAX_RUNTIME_INPUT_WIRE_EVENTS {
-        return Err(RuntimeInputError::WireEventLimit);
-    }
     events
         .into_iter()
         .map(RuntimeInputWireEvent::into_event)
@@ -119,7 +112,7 @@ impl RuntimeInputWireIntentClaim {
                 InputContext::new(self.context),
                 self.intent,
                 self.value.into_value()?,
-            )?,
+            ),
         ))
     }
 }
@@ -240,12 +233,12 @@ impl RuntimeInputWireFact {
             },
             Self::ControllerAxis { axis, value } => RuntimeInputFact::ControllerAxis {
                 axis,
-                value: validate_controller_axis(AxisValue::new(value)?)?,
+                value: AxisValue::new(value)?,
             },
             Self::ControllerButtonValue { button, value } => {
                 RuntimeInputFact::ControllerButtonValue {
                     button,
-                    value: validate_controller_button_value(AxisValue::new(value)?)?,
+                    value: AxisValue::new(value)?,
                 }
             }
             Self::Clear { reason } => RuntimeInputFact::Clear {
@@ -321,7 +314,7 @@ impl RuntimeInputWireIntentValue {
                 value: AxisValue::new(value)?,
             },
             Self::ProductPayload { contract, data } => RuntimeIntentValue::ProductPayload {
-                payload: RuntimeProductPayload::new(contract, data)?,
+                payload: RuntimeProductPayload::new(contract, data),
             },
         })
     }

@@ -1602,8 +1602,7 @@ impl CsharpProductRuntime {
         })?;
         // A refused claim fences input, so each later claim uses the fresh
         // binding and its first sequence.
-        let unmapped =
-            payload_intent(current_binding, next_sequence, "runtime.unmapped", contract)?;
+        let unmapped = payload_intent(current_binding, next_sequence, "runtime.unmapped", contract);
         let (current_binding, next_sequence) = self.exercise_refused_input(
             unmapped,
             "CSHARP_EXERCISE_UNMAPPED_DIRECT_INTENT",
@@ -1614,7 +1613,7 @@ impl CsharpProductRuntime {
             next_sequence,
             descriptor.id(),
             "runtime.wrong.contract",
-        )?;
+        );
         let (current_binding, next_sequence) = self.exercise_refused_input(
             mismatched,
             "CSHARP_EXERCISE_MISMATCHED_DIRECT_INTENT",
@@ -3790,19 +3789,18 @@ fn direct_intent(
                     )
                 })?,
                 serde_json::json!({ "exercise": true }),
-            )
-            .map_err(input_error)?,
+            ),
         },
     };
-    RuntimeDirectIntentClaim::new(
-        binding,
-        sequence,
-        standard_input_context(),
-        descriptor.id(),
-        value,
-    )
-    .map(RuntimeInputEvent::DirectIntent)
-    .map_err(input_error)
+    Ok(RuntimeInputEvent::DirectIntent(
+        RuntimeDirectIntentClaim::new(
+            binding,
+            sequence,
+            standard_input_context(),
+            descriptor.id(),
+            value,
+        ),
+    ))
 }
 
 fn payload_intent(
@@ -3810,8 +3808,8 @@ fn payload_intent(
     sequence: u64,
     intent: &str,
     contract: &str,
-) -> Result<RuntimeInputEvent, CsharpProductRuntimeError> {
-    RuntimeDirectIntentClaim::new(
+) -> RuntimeInputEvent {
+    RuntimeInputEvent::DirectIntent(RuntimeDirectIntentClaim::new(
         binding,
         sequence,
         standard_input_context(),
@@ -3820,12 +3818,9 @@ fn payload_intent(
             payload: runtime_input::RuntimeProductPayload::new(
                 contract,
                 serde_json::json!({ "exercise": true }),
-            )
-            .map_err(input_error)?,
+            ),
         },
-    )
-    .map(RuntimeInputEvent::DirectIntent)
-    .map_err(input_error)
+    ))
 }
 
 fn native_input_value_kind(value_kind: IntentValueKind) -> NativeInputValueKind {
@@ -3992,24 +3987,11 @@ fn input_error_code(error: &runtime_input::RuntimeInputError) -> &'static str {
 
     match error {
         RuntimeInputError::InvalidAxisValue => "CSHARP_INPUT_INVALID_AXIS_VALUE",
-        RuntimeInputError::InvalidDirectIntentAxisValue => {
-            "CSHARP_INPUT_INVALID_DIRECT_INTENT_AXIS_VALUE"
-        }
-        RuntimeInputError::ProductPayloadUnsafeInteger => {
-            "CSHARP_INPUT_PRODUCT_PAYLOAD_UNSAFE_INTEGER"
-        }
         RuntimeInputError::ProductPayloadContractMismatch => {
             "CSHARP_INPUT_PRODUCT_PAYLOAD_CONTRACT_MISMATCH"
         }
-        RuntimeInputError::InvalidControllerAxisValue => {
-            "CSHARP_INPUT_INVALID_CONTROLLER_AXIS_VALUE"
-        }
-        RuntimeInputError::InvalidControllerButtonValue => {
-            "CSHARP_INPUT_INVALID_CONTROLLER_BUTTON_VALUE"
-        }
         RuntimeInputError::NonCanonicalWireInteger => "CSHARP_INPUT_NON_CANONICAL_WIRE_INTEGER",
         RuntimeInputError::WireMalformed => "CSHARP_INPUT_WIRE_MALFORMED",
-        RuntimeInputError::WireEventLimit => "CSHARP_INPUT_WIRE_EVENT_LIMIT",
         RuntimeInputError::SequenceOutOfOrder { .. } => "CSHARP_INPUT_SEQUENCE_OUT_OF_ORDER",
         RuntimeInputError::BindingMismatch => "CSHARP_INPUT_BINDING_MISMATCH",
         RuntimeInputError::InvalidRebindClear => "CSHARP_INPUT_INVALID_REBIND_CLEAR",
@@ -7238,8 +7220,7 @@ mod tests {
             2,
             "fixture.product.payload",
             "fixture.product.payload.v1",
-        )
-        .expect("fixture payload intent");
+        );
         runtime
             .input(ProductHostInputBatch::new(vec![
                 input_clear(binding, 1),
@@ -8888,7 +8869,7 @@ mod tests {
     }
 
     #[test]
-    fn two_full_input_batches_before_one_update_reach_it_in_order_with_held_keys_kept() {
+    fn two_large_input_batches_before_one_update_reach_it_in_order_with_held_keys_kept() {
         let _guard = DROP_FIXTURE_GATE
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
@@ -8903,7 +8884,7 @@ mod tests {
         // closes with an attack. S stays held across both.
         let binding = input_binding(&run.runtime.lifecycle);
         let page = run.runtime.binding();
-        let count = runtime_input::MAX_RUNTIME_INPUT_WIRE_EVENTS as u64;
+        let count = 1_024_u64;
         let key = |code, edge| RuntimeInputFact::Key { code, edge };
         let event = |sequence: u64| {
             use runtime_input::PhysicalEdge::{Pressed, Released};
@@ -9325,16 +9306,14 @@ mod tests {
                     1,
                     "fixture.product.payload",
                     "fixture.product.payload.v1",
-                )
-                .unwrap(),
+                ),
                 key,
                 payload_intent(
                     binding,
                     3,
                     "fixture.product.payload",
                     "fixture.product.payload.v1",
-                )
-                .unwrap(),
+                ),
             ]))
             .expect("paused claims are admitted");
         assert!(receipt.result().is_accepted());
@@ -9367,8 +9346,7 @@ mod tests {
                 9,
                 "fixture.product.payload",
                 "fixture.product.payload.v1",
-            )
-            .unwrap()]))
+            )]))
             .expect("a stale claim is answered");
         assert_eq!(
             serde_json::to_value(stale.result()).unwrap()["droppedCount"],
@@ -9413,8 +9391,7 @@ mod tests {
             1,
             "fixture.product.payload",
             "fixture.product.payload.v1",
-        )
-        .unwrap()]));
+        )]));
         PAUSED_INTENT_CALLBACK_STATUS.store(ABI_OK, Ordering::SeqCst);
         let receipt = receipt.expect("the claim was admitted before the product failed");
         assert_eq!(runtime.lifecycle.state(), RuntimeState::Faulted);
@@ -9557,16 +9534,13 @@ mod tests {
         let refused = runtime
             .input(ProductHostInputBatch::new(vec![
                 physical(old_binding, 2, pointer_delta()),
-                RuntimeInputEvent::DirectIntent(
-                    RuntimeDirectIntentClaim::new(
-                        old_binding,
-                        3,
-                        standard_input_context(),
-                        "no.such.intent",
-                        RuntimeIntentValue::Digital { active: true },
-                    )
-                    .unwrap(),
-                ),
+                RuntimeInputEvent::DirectIntent(RuntimeDirectIntentClaim::new(
+                    old_binding,
+                    3,
+                    standard_input_context(),
+                    "no.such.intent",
+                    RuntimeIntentValue::Digital { active: true },
+                )),
                 physical(old_binding, 4, key_w(runtime_input::PhysicalEdge::Released)),
             ]))
             .expect("a refused batch is answered with a fence");

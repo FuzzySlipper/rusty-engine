@@ -1,13 +1,12 @@
 use runtime_lifecycle::{RuntimeLifecycle, RuntimePhase, RuntimePhaseToken, SimulationStep};
 
 use crate::{
-    model::{validate_controller_axis, validate_controller_button_value, InputFrameFacts},
-    AxisValue, ButtonSnapshot, CompiledInputMappings, ControllerAxis, ControllerButton, InputAxis,
-    InputClearReason, InputContext, InputEdge, InputFrame, IntentPhase, IntentProvenance,
-    IntentValueKind, KeyboardControl, PhysicalEdge, PointerButton, RuntimeDirectIntentClaim,
-    RuntimeInputBatchReceipt, RuntimeInputBinding, RuntimeInputError, RuntimeInputEvent,
-    RuntimeInputFact, RuntimeInputIngress, RuntimeInputTrigger, RuntimeIntentEnvelope,
-    RuntimeIntentValue,
+    model::InputFrameFacts, AxisValue, ButtonSnapshot, CompiledInputMappings, ControllerAxis,
+    ControllerButton, InputAxis, InputClearReason, InputContext, InputEdge, InputFrame,
+    IntentPhase, IntentProvenance, IntentValueKind, KeyboardControl, PhysicalEdge, PointerButton,
+    RuntimeDirectIntentClaim, RuntimeInputBatchReceipt, RuntimeInputBinding, RuntimeInputError,
+    RuntimeInputEvent, RuntimeInputFact, RuntimeInputIngress, RuntimeInputTrigger,
+    RuntimeIntentEnvelope, RuntimeIntentValue,
 };
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -455,16 +454,12 @@ impl RuntimeInputLane {
                 self.pointer = add_pair(self.pointer, (*x, *y))?
             }
             RuntimeInputFact::Wheel { x, y } => self.wheel = add_pair(self.wheel, (*x, *y))?,
-            RuntimeInputFact::ControllerAxis { axis, value } => set_axis(
-                &mut self.controller_axes,
-                *axis,
-                validate_controller_axis(*value)?,
-            ),
-            RuntimeInputFact::ControllerButtonValue { button, value } => set_axis(
-                &mut self.controller_button_values,
-                *button,
-                validate_controller_button_value(*value)?,
-            ),
+            RuntimeInputFact::ControllerAxis { axis, value } => {
+                set_axis(&mut self.controller_axes, *axis, *value)
+            }
+            RuntimeInputFact::ControllerButtonValue { button, value } => {
+                set_axis(&mut self.controller_button_values, *button, *value)
+            }
         }
         if !matches!(ingress.fact(), RuntimeInputFact::Clear { .. }) {
             self.queue_physical_mappings(ingress.sequence(), ingress.fact())?;

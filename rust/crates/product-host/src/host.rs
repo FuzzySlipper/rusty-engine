@@ -3196,7 +3196,7 @@ mod tests {
             4_000_000_000,
             InputTelemetry {
                 batches: MAX_HOST_INPUT_BATCHES,
-                events: runtime_input::MAX_RUNTIME_INPUT_WIRE_EVENTS,
+                events: 4_096,
                 oldest_ns: Some(1_500_000_000),
                 overflowed: true,
             },

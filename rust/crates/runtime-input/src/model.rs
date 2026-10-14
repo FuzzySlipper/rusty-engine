@@ -11,7 +11,6 @@ use crate::CompiledInputIntent;
 pub const MAX_DIRECT_INTENT_AXIS_MAGNITUDE: f32 = 1.0;
 pub const MAX_CONTROLLER_AXIS_MAGNITUDE: f32 = 1.0;
 pub const MAX_CONTROLLER_BUTTON_VALUE: f32 = 1.0;
-pub const MAX_DIRECT_INTENT_PRODUCT_PAYLOAD_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
 
 /// The retained host-neutral direct input value vocabulary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -261,22 +260,10 @@ impl AxisValue {
     pub const fn value(self) -> f32 {
         self.0
     }
-}
 
-pub(crate) fn validate_controller_axis(value: AxisValue) -> Result<AxisValue, RuntimeInputError> {
-    if value.value().abs() > MAX_CONTROLLER_AXIS_MAGNITUDE {
-        return Err(RuntimeInputError::InvalidControllerAxisValue);
+    fn clamped(self, minimum: f32, maximum: f32) -> Self {
+        Self(self.0.clamp(minimum, maximum))
     }
-    Ok(value)
-}
-
-pub(crate) fn validate_controller_button_value(
-    value: AxisValue,
-) -> Result<AxisValue, RuntimeInputError> {
-    if value.value() < 0.0 || value.value() > MAX_CONTROLLER_BUTTON_VALUE {
-        return Err(RuntimeInputError::InvalidControllerButtonValue);
-    }
-    Ok(value)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -354,6 +341,25 @@ impl RuntimeInputIngress {
         context: InputContext,
         fact: RuntimeInputFact,
     ) -> Self {
+        // A stick or trigger past its range (a driver's 1.0000001) is
+        // saturated once here, so the lane and the raw event a product
+        // receives carry the same value.
+        let fact = match fact {
+            RuntimeInputFact::ControllerAxis { axis, value } => RuntimeInputFact::ControllerAxis {
+                axis,
+                value: value.clamped(
+                    -MAX_CONTROLLER_AXIS_MAGNITUDE,
+                    MAX_CONTROLLER_AXIS_MAGNITUDE,
+                ),
+            },
+            RuntimeInputFact::ControllerButtonValue { button, value } => {
+                RuntimeInputFact::ControllerButtonValue {
+                    button,
+                    value: value.clamped(0.0, MAX_CONTROLLER_BUTTON_VALUE),
+                }
+            }
+            fact => fact,
+        };
         Self {
             runtime,
             sequence,
@@ -388,17 +394,13 @@ pub struct RuntimeProductPayload {
 }
 
 impl RuntimeProductPayload {
-    pub fn new(
-        contract: impl Into<String>,
-        data: serde_json::Value,
-    ) -> Result<Self, RuntimeInputError> {
-        let contract = contract.into();
-        let bytes = encode_product_payload_json(&data)?;
-        Ok(Self {
-            contract,
+    pub fn new(contract: impl Into<String>, data: serde_json::Value) -> Self {
+        let bytes = data.to_string().into_bytes();
+        Self {
+            contract: contract.into(),
             data,
             bytes,
-        })
+        }
     }
 
     pub fn contract(&self) -> &str {
@@ -435,26 +437,30 @@ pub struct RuntimeDirectIntentClaim {
 }
 
 impl RuntimeDirectIntentClaim {
+    /// An axis value is saturated to the direct-intent range.
     pub fn new(
         runtime: RuntimeInputBinding,
         sequence: u64,
         context: InputContext,
         intent: impl Into<String>,
         value: RuntimeIntentValue,
-    ) -> Result<Self, RuntimeInputError> {
-        let intent = intent.into();
-        if let RuntimeIntentValue::Axis { value } = &value {
-            if value.value().abs() > MAX_DIRECT_INTENT_AXIS_MAGNITUDE {
-                return Err(RuntimeInputError::InvalidDirectIntentAxisValue);
-            }
-        }
-        Ok(Self {
+    ) -> Self {
+        let value = match value {
+            RuntimeIntentValue::Axis { value } => RuntimeIntentValue::Axis {
+                value: value.clamped(
+                    -MAX_DIRECT_INTENT_AXIS_MAGNITUDE,
+                    MAX_DIRECT_INTENT_AXIS_MAGNITUDE,
+                ),
+            },
+            value => value,
+        };
+        Self {
             runtime,
             sequence,
             context,
-            intent,
+            intent: intent.into(),
             value,
-        })
+        }
     }
     pub const fn runtime(&self) -> RuntimeInputBinding {
         self.runtime
@@ -689,14 +695,9 @@ impl RuntimeIntentEnvelope {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RuntimeInputError {
     InvalidAxisValue,
-    InvalidDirectIntentAxisValue,
-    ProductPayloadUnsafeInteger,
     ProductPayloadContractMismatch,
-    InvalidControllerAxisValue,
-    InvalidControllerButtonValue,
     NonCanonicalWireInteger,
     WireMalformed,
-    WireEventLimit,
     SequenceOutOfOrder { expected: u64, received: u64 },
     BindingMismatch,
     InvalidRebindClear,
@@ -782,40 +783,6 @@ impl RuntimeInputBatchReceipt {
     pub fn accepted_indices(&self) -> &[usize] {
         &self.accepted_indices
     }
-}
-
-fn encode_product_payload_json(value: &serde_json::Value) -> Result<Vec<u8>, RuntimeInputError> {
-    validate_product_payload_numbers(value)?;
-    serde_json::to_vec(value).map_err(|_| RuntimeInputError::WireMalformed)
-}
-
-fn validate_product_payload_numbers(value: &serde_json::Value) -> Result<(), RuntimeInputError> {
-    let mut pending = vec![value];
-    while let Some(value) = pending.pop() {
-        match value {
-            serde_json::Value::Null | serde_json::Value::Bool(_) | serde_json::Value::String(_) => {
-            }
-            serde_json::Value::Number(value) => {
-                let unsafe_integer = if let Some(value) = value.as_i64() {
-                    value.unsigned_abs() > MAX_DIRECT_INTENT_PRODUCT_PAYLOAD_SAFE_INTEGER
-                } else if let Some(value) = value.as_u64() {
-                    value > MAX_DIRECT_INTENT_PRODUCT_PAYLOAD_SAFE_INTEGER
-                } else if let Some(value) = value.as_f64() {
-                    !value.is_finite()
-                        || (value.fract() == 0.0
-                            && value.abs() > MAX_DIRECT_INTENT_PRODUCT_PAYLOAD_SAFE_INTEGER as f64)
-                } else {
-                    true
-                };
-                if unsafe_integer {
-                    return Err(RuntimeInputError::ProductPayloadUnsafeInteger);
-                }
-            }
-            serde_json::Value::Array(values) => pending.extend(values),
-            serde_json::Value::Object(values) => pending.extend(values.values()),
-        }
-    }
-    Ok(())
 }
 
 impl fmt::Display for RuntimeInputError {

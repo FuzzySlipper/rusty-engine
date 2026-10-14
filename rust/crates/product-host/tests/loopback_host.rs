@@ -990,10 +990,33 @@ fn malformed_pointer_batch_resynchronizes_without_closing_the_host() {
 }
 
 #[test]
-fn over_limit_malformed_batch_resynchronizes_once_without_becoming_terminal() {
+fn a_large_batch_with_saturating_axes_is_admitted_and_a_malformed_one_resynchronizes_once() {
     let (host, recovery_calls) = start_debug_with_recovery_calls();
     let origin = host.origin();
-    let batch = vec!["{}"; 1_025].join(",");
+    // More events than the page's own queue holds, each a stick just past
+    // full deflection: admitted as one batch, with no input recovery.
+    let batch = (0..2_000)
+        .map(|sequence| {
+            format!(
+                r#"{{"runtime":{{"instanceId":"7","generation":"1","controlRevision":"2"}},"sequence":"{sequence}","context":"gameplay.default","fact":{{"kind":"controller-axis","axis":"axis-0","value":1.0000001}}}}"#
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+    let large_body = format!(r#"{{"batch":[{batch}]}}"#);
+    let large = request(
+        &origin,
+        &format!(
+            "POST /__rusty/product/runtime/input HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{large_body}",
+            large_body.len(),
+        ),
+    );
+    assert!(large.starts_with("HTTP/1.1 200 OK\r\n"), "{large}");
+    assert!(large.contains("\"accepted\":true"), "{large}");
+    assert!(large.contains("\"count\":2000"), "{large}");
+    assert_eq!(recovery_calls.load(Ordering::SeqCst), 0);
+
+    let batch = vec!["{}"; 2_000].join(",");
     let malformed_body = format!(r#"{{"batch":[{batch}]}}"#);
     let malformed = request(
         &origin,
@@ -1006,8 +1029,8 @@ fn over_limit_malformed_batch_resynchronizes_once_without_becoming_terminal() {
     assert!(malformed.starts_with("HTTP/1.1 200 OK\r\n"), "{malformed}");
     assert!(malformed.contains("\"code\":\"PRODUCT_HOST_INPUT_DECODE\""));
     assert!(malformed.contains("\"disposition\":\"resync-required\""));
-    assert!(malformed.contains("\"count\":1025"));
-    assert!(malformed.contains("\"droppedCount\":1025"));
+    assert!(malformed.contains("\"count\":2000"));
+    assert!(malformed.contains("\"droppedCount\":2000"));
     assert!(!malformed.contains("\"disposition\":\"terminal\""));
     assert_eq!(recovery_calls.load(Ordering::SeqCst), 1);
     host.shutdown().unwrap();

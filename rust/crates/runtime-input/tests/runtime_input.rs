@@ -133,16 +133,13 @@ fn a_refused_batch_releases_held_input_and_a_rebind_admits_fresh_input() {
                 y: axis(-0.25),
             },
         ),
-        RuntimeInputEvent::DirectIntent(
-            RuntimeDirectIntentClaim::new(
-                binding,
-                2,
-                context(),
-                "no.such.intent",
-                RuntimeIntentValue::Digital { active: true },
-            )
-            .unwrap(),
-        ),
+        RuntimeInputEvent::DirectIntent(RuntimeDirectIntentClaim::new(
+            binding,
+            2,
+            context(),
+            "no.such.intent",
+            RuntimeIntentValue::Digital { active: true },
+        )),
         physical(
             binding,
             3,
@@ -346,8 +343,7 @@ fn direct_runtime_descriptors_preserve_physical_edges_and_order() {
             context(),
             "move.forward",
             RuntimeIntentValue::Digital { active: true },
-        )
-        .unwrap(),
+        ),
     ))
     .unwrap();
     lane.ingest(physical(
@@ -482,11 +478,9 @@ fn same_context_input_losses_release_physical_input_and_deliver_one_direct_paylo
                 payload: RuntimeProductPayload::new(
                     "example.inventory.drop.v1",
                     serde_json::json!({"sourceSlot": 3, "targetSlot": 5}),
-                )
-                .unwrap(),
+                ),
             },
-        )
-        .unwrap(),
+        ),
     ))
     .unwrap();
     // Opening a menu: the mode changes, then pointer lock and focus go.
@@ -516,8 +510,7 @@ fn same_context_input_losses_release_physical_input_and_deliver_one_direct_paylo
             payload: RuntimeProductPayload::new(
                 "example.inventory.drop.v1",
                 serde_json::json!({"sourceSlot": 3, "targetSlot": 5}),
-            )
-            .unwrap(),
+            ),
         }
     );
 
@@ -532,8 +525,7 @@ fn restart_and_context_invalidation_cancel_pending_direct_payloads() {
         payload: RuntimeProductPayload::new(
             "example.inventory.drop.v1",
             serde_json::json!({"sourceSlot": 3, "targetSlot": 5}),
-        )
-        .unwrap(),
+        ),
     };
 
     let (mut restart_lifecycle, restart_binding) = lifecycle_and_binding();
@@ -546,8 +538,7 @@ fn restart_and_context_invalidation_cancel_pending_direct_payloads() {
                 context(),
                 "inventory.drop",
                 payload(),
-            )
-            .unwrap(),
+            ),
         ))
         .unwrap();
     restart_lifecycle.restart().unwrap();
@@ -574,8 +565,7 @@ fn restart_and_context_invalidation_cancel_pending_direct_payloads() {
                 context(),
                 "inventory.drop",
                 payload(),
-            )
-            .unwrap(),
+            ),
         ))
         .unwrap();
     context_lane
@@ -897,8 +887,7 @@ fn direct_payload_contract_is_checked_by_the_neutral_input_lane() {
     let payload = RuntimeProductPayload::new(
         "example.inventory.drop.v1",
         serde_json::json!({"sourceSlot": 3, "targetSlot": 5}),
-    )
-    .unwrap();
+    );
     lane.ingest(RuntimeInputEvent::DirectIntent(
         RuntimeDirectIntentClaim::new(
             binding,
@@ -906,8 +895,7 @@ fn direct_payload_contract_is_checked_by_the_neutral_input_lane() {
             context(),
             "inventory.drop",
             RuntimeIntentValue::ProductPayload { payload },
-        )
-        .unwrap(),
+        ),
     ))
     .unwrap();
     let (_, envelopes) = snapshot(&mut lane, &mut lifecycle).unwrap();
@@ -934,11 +922,9 @@ fn direct_payload_contract_is_checked_by_the_neutral_input_lane() {
             payload: RuntimeProductPayload::new(
                 "example.inventory.equip.v1",
                 serde_json::json!({}),
-            )
-            .unwrap(),
+            ),
         },
-    )
-    .unwrap();
+    );
     assert!(matches!(
         lane.ingest(RuntimeInputEvent::DirectIntent(mismatch)),
         Err(RuntimeInputError::ProductPayloadContractMismatch)
@@ -946,7 +932,7 @@ fn direct_payload_contract_is_checked_by_the_neutral_input_lane() {
 }
 
 #[test]
-fn direct_claims_fail_closed_for_unknown_kind_and_axis_range() {
+fn direct_claims_fail_closed_for_unknown_or_mismatched_kind() {
     let (_, binding) = lifecycle_and_binding();
 
     let mut unknown = RuntimeInputLane::new(compiled_mappings(), binding, context());
@@ -958,8 +944,7 @@ fn direct_claims_fail_closed_for_unknown_kind_and_axis_range() {
                 context(),
                 "missing.intent",
                 RuntimeIntentValue::Digital { active: true },
-            )
-            .unwrap(),
+            ),
         )),
         Err(RuntimeInputError::UnknownIntent)
     ));
@@ -973,56 +958,126 @@ fn direct_claims_fail_closed_for_unknown_kind_and_axis_range() {
                 context(),
                 "move.forward",
                 RuntimeIntentValue::Axis { value: axis(0.0) },
-            )
-            .unwrap(),
+            ),
         )),
         Err(RuntimeInputError::IntentValueKindMismatch)
     ));
-    assert!(matches!(
-        RuntimeDirectIntentClaim::new(
-            binding,
-            0,
-            context(),
-            "look.horizontal",
-            RuntimeIntentValue::Axis { value: axis(1.01) },
-        ),
-        Err(RuntimeInputError::InvalidDirectIntentAxisValue)
-    ));
+}
 
-    let mut controller_bound = RuntimeInputLane::new(compiled_mappings(), binding, context());
-    assert!(matches!(
-        controller_bound.ingest(physical(
-            binding,
-            0,
-            RuntimeInputFact::ControllerAxis {
-                axis: ControllerAxis::Axis0,
-                value: axis(1.01),
-            },
-        )),
-        Err(RuntimeInputError::InvalidControllerAxisValue)
-    ));
+fn wire_event(sequence: u64, body: &str) -> String {
+    format!(
+        r#"{{"runtime":{{"instanceId":"41","generation":"1","controlRevision":"1"}},"sequence":"{sequence}","context":"gameplay",{body}}}"#
+    )
 }
 
 #[test]
-fn claims_beyond_one_wire_batch_all_reach_the_next_snapshot_in_order() {
+fn axes_just_past_their_range_saturate_and_keep_held_input() {
+    let (mut lifecycle, binding) = lifecycle_and_binding();
+    assert_eq!(
+        (
+            binding.instance_id().value(),
+            binding.generation().value(),
+            binding.control_revision().value()
+        ),
+        (41, 1, 1)
+    );
+    let mut lane = RuntimeInputLane::new(compiled_mappings(), binding, context());
+    let batch = format!(
+        "[{}]",
+        [
+            wire_event(0, r#""fact":{"kind":"key","code":"key-w","edge":"pressed"}"#),
+            wire_event(
+                1,
+                r#""fact":{"kind":"controller-axis","axis":"axis-0","value":1.0000001}"#
+            ),
+            wire_event(
+                2,
+                r#""fact":{"kind":"controller-button-value","button":"button-7","value":1.0000001}"#
+            ),
+            wire_event(
+                3,
+                r#""fact":{"kind":"controller-button-value","button":"button-6","value":-0.0000001}"#
+            ),
+            wire_event(
+                4,
+                r#""intent":"look.horizontal","value":{"kind":"axis","value":-1.0000001}"#
+            ),
+        ]
+        .join(",")
+    );
+    let events = runtime_input::decode_runtime_input_wire_events_json(batch.as_bytes()).unwrap();
+    // The decoded event is what the runtime forwards to the product as raw
+    // input, so it carries the saturated value the lane holds.
+    assert_eq!(
+        events[1],
+        physical(
+            binding,
+            1,
+            RuntimeInputFact::ControllerAxis {
+                axis: ControllerAxis::Axis0,
+                value: axis(1.0),
+            }
+        )
+    );
+    let receipt = lane.ingest_batch(&events).unwrap();
+    assert_eq!(receipt.accepted_count(), 5);
+    assert_eq!(receipt.next_sequence(), Some(5));
+
+    let (frame, envelopes) = snapshot(&mut lane, &mut lifecycle).unwrap();
+    assert_eq!(
+        frame.controller_axis(ControllerAxis::Axis0),
+        Some(axis(1.0))
+    );
+    assert_eq!(
+        frame.controller_button_value(ControllerButton::Button7),
+        Some(axis(1.0))
+    );
+    assert_eq!(
+        frame.controller_button_value(ControllerButton::Button6),
+        Some(axis(0.0))
+    );
+    assert!(envelopes.iter().any(|entry| {
+        entry.intent() == "move.forward"
+            && entry.provenance()
+                == &IntentProvenance::Physical {
+                    mapping_id: "w-held".into(),
+                }
+    }));
+    assert!(envelopes.iter().any(|entry| {
+        entry.provenance()
+            == &IntentProvenance::Physical {
+                mapping_id: "controller-look".into(),
+            }
+            && entry.value() == RuntimeIntentValue::Axis { value: axis(1.0) }
+    }));
+    assert!(envelopes.iter().any(|entry| {
+        entry.provenance() == &IntentProvenance::DirectUi
+            && entry.value() == RuntimeIntentValue::Axis { value: axis(-1.0) }
+    }));
+}
+
+#[test]
+fn a_wire_batch_of_two_thousand_events_is_ingested_in_order() {
     let (mut lifecycle, binding) = lifecycle_and_binding();
     let mut lane = RuntimeInputLane::new(compiled_mappings(), binding, context());
-    let claims = 2 * runtime_input::MAX_RUNTIME_INPUT_WIRE_EVENTS as u64;
-    for sequence in 0..claims {
-        lane.ingest(RuntimeInputEvent::DirectIntent(
-            RuntimeDirectIntentClaim::new(
-                binding,
+    let claims = 2_000_u64;
+    let batch = format!(
+        "[{}]",
+        (0..claims)
+            .map(|sequence| wire_event(
                 sequence,
-                context(),
-                "move.forward",
-                RuntimeIntentValue::Digital {
-                    active: sequence % 2 == 0,
-                },
-            )
-            .unwrap(),
-        ))
-        .unwrap();
-    }
+                &format!(
+                    r#""intent":"move.forward","value":{{"kind":"digital","active":{}}}"#,
+                    sequence % 2 == 0
+                )
+            ))
+            .collect::<Vec<_>>()
+            .join(",")
+    );
+    let events = runtime_input::decode_runtime_input_wire_events_json(batch.as_bytes()).unwrap();
+    let receipt = lane.ingest_batch(&events).unwrap();
+    assert_eq!(receipt.accepted_count(), claims as usize);
+    assert_eq!(receipt.next_sequence(), Some(claims));
     let (_, envelopes) = snapshot(&mut lane, &mut lifecycle).unwrap();
     let sequences = envelopes
         .iter()
@@ -1095,17 +1150,20 @@ fn controller_button_values_are_bounded_persistent_axes_and_mappable() {
         RuntimeIntentValue::Axis { value: axis(0.0) }
     );
 
-    assert!(matches!(
-        lane.ingest(physical(
-            binding,
-            2,
-            RuntimeInputFact::ControllerButtonValue {
-                button: ControllerButton::Button7,
-                value: axis(1.01),
-            },
-        )),
-        Err(RuntimeInputError::InvalidControllerButtonValue)
-    ));
+    lane.ingest(physical(
+        binding,
+        2,
+        RuntimeInputFact::ControllerButtonValue {
+            button: ControllerButton::Button7,
+            value: axis(1.01),
+        },
+    ))
+    .unwrap();
+    let (frame, _) = snapshot(&mut lane, &mut lifecycle).unwrap();
+    assert_eq!(
+        frame.controller_button_value(ControllerButton::Button7),
+        Some(axis(1.0))
+    );
 }
 
 #[test]
@@ -1122,9 +1180,6 @@ fn wire_decode_retains_canonical_host_facts_and_rejects_bad_values() {
     for invalid in [
         br#"{"runtime":{"instanceId":"7","generation":"3","controlRevision":"11"},"sequence":"01","context":"gameplay","fact":{"kind":"clear","reason":"focus-loss"}}"# as &[u8],
         br#"{"runtime":{"instanceId":"7","generation":"3","controlRevision":"11"},"sequence":"0","context":"gameplay","intent":"move.forward","value":{"kind":"unknown","active":true}}"#,
-        br#"{"runtime":{"instanceId":"7","generation":"3","controlRevision":"11"},"sequence":"0","context":"gameplay","intent":"look.horizontal","value":{"kind":"axis","value":1.1}}"#,
-        br#"{"runtime":{"instanceId":"7","generation":"3","controlRevision":"11"},"sequence":"0","context":"gameplay","fact":{"kind":"controller-axis","axis":"axis-0","value":1.1}}"#,
-        br#"{"runtime":{"instanceId":"7","generation":"3","controlRevision":"11"},"sequence":"0","context":"gameplay","fact":{"kind":"controller-button-value","button":"button-7","value":1.1}}"#,
         br#"{"runtime":{"instanceId":"7","generation":"3","controlRevision":"11"},"sequence":"0","context":"gameplay","fact":{"kind":"clear","reason":"focus-loss","extra":true}}"#,
     ] {
         assert!(runtime_input::decode_runtime_input_wire_event_json(invalid).is_err());
