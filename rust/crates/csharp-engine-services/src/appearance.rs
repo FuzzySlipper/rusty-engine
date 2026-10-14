@@ -1349,6 +1349,7 @@ thread_local! {
     pub(crate) static GRAPHICS_SNAPSHOT_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     pub(crate) static MEDIA_SNAPSHOT_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     pub(crate) static RESOURCE_INVENTORY_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    pub(crate) static MODEL_TRIANGLE_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// Graphics state. A product call owns it for the call's duration, so the
@@ -14362,7 +14363,9 @@ fn shade(surface: Surface) -> vec4<f32> {
             .render_resources
             .first()
             .unwrap();
-        assert!(asset_import::glb_relative_resource_uris(packed.bytes())
+        assert!(asset_import::ParsedGlb::parse(packed.bytes())
+            .unwrap()
+            .relative_resource_uris()
             .unwrap()
             .is_empty());
         assert_ne!(packed.bytes(), external.as_slice());
@@ -14492,9 +14495,11 @@ fn shade(surface: Surface) -> vec4<f32> {
             Arc::from(RGBA_PNG),
         )]));
         let external_resource = bridge.admit_animated_mesh(external_content).unwrap();
-        assert!(asset_import::glb_relative_resource_uris(
+        assert!(asset_import::ParsedGlb::parse(
             bridge.resource(external_resource.value).unwrap().bytes()
         )
+        .unwrap()
+        .relative_resource_uris()
         .unwrap()
         .is_empty());
         assert!(bridge.imports.cached("live.glb").is_none());

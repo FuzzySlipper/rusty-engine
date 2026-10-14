@@ -18,17 +18,17 @@ mod sidecar;
 mod source;
 
 pub use animated_glb::{
-    glb_model_triangles, import_animated_glb_asset, AnimatedGlbImportOutcome,
-    AnimatedGlbImportReceipt, GlbAnimationKind, GlbModelTriangles, ImportedAnimatedGlb,
-    SUPPORTED_ANIMATED_GLB_VERSION,
+    glb_model_triangles, import_animated_glb_asset, import_parsed_animated_glb_asset,
+    AnimatedGlbImportOutcome, AnimatedGlbImportReceipt, GlbAnimationKind, GlbModelTriangles,
+    ImportedAnimatedGlb, SUPPORTED_ANIMATED_GLB_VERSION,
 };
 pub use artifact::{
     render_animated_glb_artifacts, render_artifacts, ArtifactRenderError, GeneratedArtifact,
 };
 pub use diagnostic::{ImportCode, ImportDiagnostic, ImportSeverity};
 pub use gltf_package::{
-    admit_glb_source, admit_gltf_source, glb_relative_resource_uris, gltf_relative_resource_uris,
-    GlbSourceClosure, GltfResource, GltfSourceClosure, PackedGltfSource,
+    admit_glb_source, admit_gltf_source, gltf_relative_resource_uris, GlbSourceClosure,
+    GltfResource, GltfSourceClosure, PackedGltfSource, ParsedGlb,
 };
 pub use importer::{import, import_with_context, ImportContext, ImportOutcome, ImportedAssets};
 pub use manifest::{

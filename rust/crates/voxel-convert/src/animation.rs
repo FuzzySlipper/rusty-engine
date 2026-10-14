@@ -242,16 +242,19 @@ pub struct AnimationBindPoseReceipt {
 }
 
 pub fn import_animated_glb(source: &[u8]) -> Result<ImportedAnimatedModel, crate::ConversionError> {
-    import::import_animated_glb(source, crate::source_sha256(source))
+    import::import_animated_glb(
+        &crate::import::parse_glb(source)?,
+        crate::source_sha256(source),
+    )
 }
 
-/// [`import_animated_glb`] for a caller that already computed
-/// [`crate::source_sha256`] of `source`.
-pub(crate) fn import_animated_glb_with_hash(
-    source: &[u8],
+/// [`import_animated_glb`] for a caller that already parsed the source and
+/// computed its [`crate::source_sha256`].
+pub(crate) fn import_parsed_animated_glb(
+    parsed: &crate::ParsedGltf<'_>,
     source_sha256: String,
 ) -> Result<ImportedAnimatedModel, crate::ConversionError> {
-    import::import_animated_glb(source, source_sha256)
+    import::import_animated_glb(parsed, source_sha256)
 }
 
 pub fn sample_animation_clip(

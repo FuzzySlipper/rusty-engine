@@ -2,11 +2,11 @@
 //! producers that write GLBs outside a product. It reads the file and never
 //! writes.
 
-use std::path::Path;
+use std::{borrow::Cow, path::Path};
 
 use asset_import::{
-    admit_glb_source, import_animated_glb_asset, GlbSourceClosure, ImportContext, ImportDiagnostic,
-    SourceUri,
+    admit_glb_source, import_animated_glb_asset, import_parsed_animated_glb_asset,
+    GlbSourceClosure, ImportContext, ImportDiagnostic, ParsedGlb, SourceUri,
 };
 use serde_json::{json, Value};
 
@@ -14,18 +14,24 @@ use serde_json::{json, Value};
 /// the closure packer, then the animated-mesh import. The diagnostics are the
 /// first step's refusal, or the import's diagnostics.
 pub(crate) fn check_glb(file_name: &str, bytes: Vec<u8>) -> (bool, Vec<ImportDiagnostic>) {
-    let packed = match admit_glb_source(&GlbSourceClosure {
-        root_glb: &bytes,
-        resources: Vec::new(),
-    }) {
-        Ok(packed) => packed,
+    let admitted = ParsedGlb::parse(&bytes).and_then(|root| {
+        let packed = admit_glb_source(&GlbSourceClosure {
+            root: &root,
+            resources: Vec::new(),
+        })?;
+        Ok((root, packed))
+    });
+    let (root, packed) = match admitted {
+        Ok(admitted) => admitted,
         Err(diagnostic) => return (false, vec![diagnostic]),
     };
-    let outcome = import_animated_glb_asset(
-        &SourceUri::RelativePath(file_name.to_owned()),
-        &packed,
-        &ImportContext::default(),
-    );
+    let uri = SourceUri::RelativePath(file_name.to_owned());
+    let outcome = match packed {
+        Cow::Borrowed(_) => {
+            import_parsed_animated_glb_asset(&uri, &root, &ImportContext::default())
+        }
+        Cow::Owned(packed) => import_animated_glb_asset(&uri, &packed, &ImportContext::default()),
+    };
     (outcome.assets.is_some(), outcome.diagnostics)
 }
 

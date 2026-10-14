@@ -16,10 +16,10 @@ use crate::{ConversionError, ImportedModelScene};
 mod clip;
 
 pub(super) fn import_animated_glb(
-    source: &[u8],
+    parsed: &crate::ParsedGltf<'_>,
     source_sha256: String,
 ) -> Result<ImportedAnimatedModel, ConversionError> {
-    let (parsed, scene) = import_animated_glb_scene(source)?;
+    let scene = import_animated_glb_scene(parsed)?;
     let blob = parsed
         .blob
         .as_deref()

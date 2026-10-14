@@ -2,7 +2,8 @@
 //! `CastModelRays`): the nearest surface to points, and where rays meet it,
 //! with the model placed where the caller says, in the caller's space. The
 //! model's mesh nodes are taken at rest under their node transforms (an
-//! animated model in its bind pose). Nothing is retained between calls and
+//! animated model in its bind pose). The model's triangles are read once per
+//! resource and kept with it; the placed surface is built for each call and
 //! nothing enters collision: a held viewmodel can be measured against hands
 //! in camera space.
 
@@ -26,10 +27,9 @@ fn placed_surface(
             "resource is not a GLB model (open it with OpenAnimatedMesh)",
         ));
     }
-    let model = asset_import::glb_model_triangles(resource.bytes(), resource.content_hash())
-        .map_err(|error| {
-            surface_error(format!("the model's triangles could not be read: {error}"))
-        })?;
+    let model = resource.model_triangles().map_err(|error| {
+        surface_error(format!("the model's triangles could not be read: {error}"))
+    })?;
     let vector = |value: NativeVec3| [value.x, value.y, value.z].map(f64::from);
     let rotation = placement.rotation;
     let placement = StaticMeshTransform {
@@ -37,7 +37,7 @@ fn placed_surface(
         rotation: [rotation.x, rotation.y, rotation.z, rotation.w].map(f64::from),
         scale: vector(placement.scale),
     };
-    ModelSurface::new(&model.positions, model.triangles, placement)
+    ModelSurface::new(&model.positions, model.triangles.clone(), placement)
         .map_err(|error| surface_error(format!("the placed model is not a surface: {error:?}")))
 }
 
@@ -374,6 +374,95 @@ mod tests {
             unsafe { query_model_surface(context, &request, &mut result, &mut receipt) },
             0
         );
+        bridge.end_call();
+    }
+
+    /// Where a ray down -z from (0, 0, 5) meets `model` at the identity
+    /// placement.
+    fn hit_from_above(context: *mut c_void, model: NativeRenderResourceHandle) -> f32 {
+        let ray = NativeModelRay {
+            origin: vec3(0.0, 0.0, 5.0),
+            direction: vec3(0.0, 0.0, -1.0),
+        };
+        let request = NativeModelRayRequest {
+            model,
+            placement: NativeTransform {
+                translation: vec3(0.0, 0.0, 0.0),
+                rotation: NativeQuat {
+                    x: 0.0,
+                    y: 0.0,
+                    z: 0.0,
+                    w: 1.0,
+                },
+                scale: vec3(1.0, 1.0, 1.0),
+            },
+            rays: &ray,
+            rays_len: 1,
+            max_distance: 10.0,
+        };
+        let mut hits = NativeModelRayHitsResult {
+            hits: std::ptr::null(),
+            hits_len: 0,
+        };
+        let mut receipt = unsafe { std::mem::zeroed::<NativeOperationErrorReceipt>() };
+        assert_eq!(
+            unsafe { cast_model_rays(context, &request, &mut hits, &mut receipt) },
+            ABI_OK
+        );
+        let hit = unsafe { *hits.hits };
+        assert!(hit.hit, "{hit:?}");
+        hit.point.z
+    }
+
+    /// A model's triangles are read once per resource and released with it.
+    /// Content reloaded in place opens as a new resource that answers with
+    /// the new triangles, while the handle to the old content keeps the old
+    /// ones.
+    #[test]
+    fn a_reloaded_model_answers_with_its_new_triangles() {
+        const PATH: &str = "prop.glb";
+        let reads = || crate::appearance::MODEL_TRIANGLE_READS.with(std::cell::Cell::get);
+        let cube_at = |z: f32| {
+            Arc::<[u8]>::from(cube_glb(
+                &[0],
+                serde_json::json!([{"mesh": 0, "translation": [0.0, 0.0, z]}]),
+            ))
+        };
+        let mut content = Box::new(crate::content::RuntimeContentBridge::new(BTreeMap::from([
+            (PATH.to_owned(), cube_at(0.0)),
+        ])));
+        let mut bridge =
+            RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), BTreeMap::new());
+        bridge.bind_content(&content);
+        bridge.begin_call();
+        let request = NativeAnimatedMeshResourceRequest {
+            path: NativeUtf8Slice {
+                bytes: PATH.as_ptr(),
+                len: PATH.len(),
+            },
+        };
+        let first = bridge.open_animated_mesh(&request).unwrap();
+        let context: *mut c_void = (&mut bridge as *mut RuntimeAppearanceBridge).cast();
+        let start = reads();
+        assert_eq!(hit_from_above(context, first), 0.5);
+        assert_eq!(hit_from_above(context, first), 0.5);
+        assert_eq!(reads(), start + 1, "one read for repeated queries");
+
+        content.reload(BTreeMap::from([(PATH.to_owned(), cube_at(1.0))]));
+        let reloaded = bridge.open_animated_mesh(&request).unwrap();
+        assert_ne!(reloaded, first);
+        assert_eq!(hit_from_above(context, reloaded), 1.5);
+        assert_eq!(hit_from_above(context, first), 0.5);
+        assert_eq!(reads(), start + 2);
+
+        // Released with the resource: a later admission reads them again.
+        bridge.destroy_resource(reloaded).unwrap();
+        bridge.end_call();
+        bridge.begin_call();
+        let reopened = bridge.open_animated_mesh(&request).unwrap();
+        let context: *mut c_void = (&mut bridge as *mut RuntimeAppearanceBridge).cast();
+        assert_eq!(hit_from_above(context, reopened), 1.5);
+        assert_eq!(reads(), start + 3);
         bridge.end_call();
     }
 

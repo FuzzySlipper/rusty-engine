@@ -5,6 +5,7 @@ use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use gltf::{buffer::Source as BufferSource, image::Source as ImageSource};
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
+use voxel_convert::ParsedGltf;
 
 use crate::{ImportCode, ImportDiagnostic};
 
@@ -22,10 +23,40 @@ pub struct GltfSourceClosure {
 }
 
 /// A binary GLB and its relative resources, borrowed from their owner.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct GlbSourceClosure<'a> {
-    pub root_glb: &'a [u8],
+#[derive(Debug, Clone)]
+pub struct GlbSourceClosure<'r, 'a> {
+    pub root: &'r ParsedGlb<'a>,
     pub resources: Vec<GltfResource<'a>>,
+}
+
+/// A binary GLB root decoded once: its bytes and document, with the BIN
+/// chunk borrowed from the bytes. Closure admission and the animated import
+/// share it.
+#[derive(Debug, Clone)]
+pub struct ParsedGlb<'a> {
+    bytes: &'a [u8],
+    pub(crate) gltf: voxel_convert::ParsedGltf<'a>,
+}
+
+impl<'a> ParsedGlb<'a> {
+    /// Decodes a binary GLB root that embeds a BIN chunk and requires only
+    /// admitted extensions.
+    pub fn parse(bytes: &'a [u8]) -> Result<Self, ImportDiagnostic> {
+        Ok(Self {
+            bytes,
+            gltf: parse_glb_root(bytes)?,
+        })
+    }
+
+    pub fn bytes(&self) -> &'a [u8] {
+        self.bytes
+    }
+
+    /// The canonical relative resources the root references. Its embedded
+    /// BIN chunk remains part of the root and is not returned here.
+    pub fn relative_resource_uris(&self) -> Result<Vec<String>, ImportDiagnostic> {
+        relative_resource_uris(&self.gltf)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -44,14 +75,7 @@ pub fn gltf_relative_resource_uris(root_json: &[u8]) -> Result<Vec<String>, Impo
     relative_resource_uris(&parsed)
 }
 
-/// Returns the canonical relative resources referenced by a binary GLB root.
-/// Its embedded BIN chunk remains part of the root and is not returned here.
-pub fn glb_relative_resource_uris(root_glb: &[u8]) -> Result<Vec<String>, ImportDiagnostic> {
-    let parsed = parse_glb_root(root_glb)?;
-    relative_resource_uris(&parsed)
-}
-
-fn relative_resource_uris(parsed: &gltf::Gltf) -> Result<Vec<String>, ImportDiagnostic> {
+fn relative_resource_uris(parsed: &ParsedGltf<'_>) -> Result<Vec<String>, ImportDiagnostic> {
     let mut authored_by_canonical = BTreeMap::<String, String>::new();
     for (path, uri) in document_resource_uris(parsed) {
         if uri.starts_with("data:") {
@@ -195,28 +219,29 @@ pub fn admit_gltf_source(source: &GltfSourceClosure) -> Result<PackedGltfSource,
 /// Validates a complete immutable binary GLB closure and packs its embedded
 /// BIN chunk plus any relative buffers/images into one self-contained
 /// GLB for the ordinary renderer resource path. A root that is already
-/// self-contained is returned as it is, borrowed.
+/// self-contained is returned as it is, borrowed, and its parse serves the
+/// import.
 pub fn admit_glb_source<'a>(
-    source: &GlbSourceClosure<'a>,
+    source: &GlbSourceClosure<'_, 'a>,
 ) -> Result<Cow<'a, [u8]>, ImportDiagnostic> {
-    let parsed = parse_glb_root(source.root_glb)?;
-    let expected_uris = relative_resource_uris(&parsed)?;
+    let parsed = &source.root.gltf;
+    let expected_uris = relative_resource_uris(parsed)?;
     let resources = validate_resources(&source.resources)?;
     require_exact_resources(&expected_uris, &resources)?;
 
     // Preserve already packed sources exactly, but normalize embedded data URIs
     // through the same resource packer used for declared companions.
-    if document_resource_uris(&parsed).is_empty()
+    if document_resource_uris(parsed).is_empty()
         && parsed.document.buffers().count() == 1
         && parsed
             .document
             .buffers()
             .all(|buffer| matches!(buffer.source(), BufferSource::Bin))
     {
-        return Ok(Cow::Borrowed(source.root_glb));
+        return Ok(Cow::Borrowed(source.root.bytes));
     }
 
-    let mut root = glb_json_document(source.root_glb, "source")?;
+    let mut root = glb_json_document(source.root.bytes, "source")?;
     let root_object = root.as_object_mut().ok_or_else(|| {
         error(
             ImportCode::InvalidContainer,
@@ -284,7 +309,7 @@ pub fn admit_glb_source<'a>(
     }
 
     rewrite_buffer_views(root_object, &buffer_offsets)?;
-    embed_uri_images(root_object, &parsed, &resources, &mut packed_bin)?;
+    embed_uri_images(root_object, parsed, &resources, &mut packed_bin)?;
     root_object.insert(
         "buffers".to_owned(),
         Value::Array(vec![Value::Object(Map::from_iter([(
@@ -333,7 +358,7 @@ fn require_exact_resources(
     ))
 }
 
-fn parse_root(root_json: &[u8]) -> Result<gltf::Gltf, ImportDiagnostic> {
+fn parse_root(root_json: &[u8]) -> Result<ParsedGltf<'_>, ImportDiagnostic> {
     let parsed = voxel_convert::parse_gltf_document(root_json).map_err(|failure| {
         error(
             ImportCode::InvalidContainer,
@@ -354,7 +379,7 @@ fn parse_root(root_json: &[u8]) -> Result<gltf::Gltf, ImportDiagnostic> {
     Ok(parsed)
 }
 
-fn parse_glb_root(root_glb: &[u8]) -> Result<gltf::Gltf, ImportDiagnostic> {
+fn parse_glb_root(root_glb: &[u8]) -> Result<ParsedGltf<'_>, ImportDiagnostic> {
     if root_glb.len() >= 12 && &root_glb[..4] == b"glTF" {
         let declared_length =
             u32::from_le_bytes(root_glb[8..12].try_into().expect("fixed GLB header slice"))
@@ -390,7 +415,7 @@ fn parse_glb_root(root_glb: &[u8]) -> Result<gltf::Gltf, ImportDiagnostic> {
 
 /// Closure packing and animated admission share the renderer capability set.
 /// Parser features alone do not admit an unsupported required extension.
-fn validate_required_extensions(parsed: &gltf::Gltf) -> Result<(), ImportDiagnostic> {
+fn validate_required_extensions(parsed: &ParsedGltf<'_>) -> Result<(), ImportDiagnostic> {
     for extension in parsed.document.extensions_required() {
         if !crate::animated_glb::is_admitted_extension(extension) {
             return Err(error(
@@ -404,7 +429,7 @@ fn validate_required_extensions(parsed: &gltf::Gltf) -> Result<(), ImportDiagnos
     Ok(())
 }
 
-fn document_resource_uris(parsed: &gltf::Gltf) -> Vec<(String, &str)> {
+fn document_resource_uris<'p>(parsed: &'p ParsedGltf<'_>) -> Vec<(String, &'p str)> {
     let mut uris = Vec::new();
     for buffer in parsed.document.buffers() {
         if let BufferSource::Uri(uri) = buffer.source() {
@@ -617,7 +642,7 @@ fn rewrite_buffer_views(
 
 fn embed_uri_images(
     root: &mut Map<String, Value>,
-    parsed: &gltf::Gltf,
+    parsed: &ParsedGltf<'_>,
     resources: &BTreeMap<String, &[u8]>,
     packed_bin: &mut Vec<u8>,
 ) -> Result<(), ImportDiagnostic> {

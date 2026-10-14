@@ -16,12 +16,14 @@ use render_model::{
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use voxel_convert::{
-    import_animated_mesh_source_for_visual_metadata, import_mesh_source_with_hash,
+    import_animated_mesh_source_for_visual_metadata, import_parsed_mesh_source,
     AnimationChannelValues, AnimationProperty, MeshSourceFormat, MeshSourceImportRequest,
+    ParsedGltf,
 };
 
 use crate::{
-    gltf_package::glb_json_document, ImportCode, ImportContext, ImportDiagnostic, SourceUri,
+    gltf_package::glb_json_document, ImportCode, ImportContext, ImportDiagnostic, ParsedGlb,
+    SourceUri,
 };
 
 pub const SUPPORTED_ANIMATED_GLB_VERSION: u32 = 2;
@@ -102,6 +104,8 @@ pub struct GlbModelTriangles {
 /// placed mesh. `source_hash` is the admitted body's content identity
 /// (`sha256:<hex>`).
 pub fn glb_model_triangles(source: &[u8], source_hash: &str) -> Result<GlbModelTriangles, String> {
+    let parsed = voxel_convert::parse_gltf_document(source)
+        .map_err(|error| format!("invalid GLB 2.0 source: {error}"))?;
     let request = MeshSourceImportRequest {
         source_asset_id: "mesh/model-surface".to_owned(),
         asset_version: 1,
@@ -111,14 +115,20 @@ pub fn glb_model_triangles(source: &[u8], source_hash: &str) -> Result<GlbModelT
         expected_source_sha256: None,
         mesh_primitive: None,
     };
-    // The static parser refuses skins and animations; the animated one
-    // gives those models' bind pose.
+    // The static importer refuses skins, animations and morph targets; the
+    // animated one gives those models' bind pose.
     let source_hash = source_hash.to_owned();
-    let imported = match import_mesh_source_with_hash(&request, source_hash.clone()) {
+    let imported = match import_parsed_mesh_source(&request, source_hash.clone(), &parsed) {
         Ok(imported) => imported,
-        Err(error) => import_animated_mesh_source_for_visual_metadata(&request, source_hash)
-            .map(|imported| imported.source)
-            .map_err(|_| error.to_string())?,
+        Err(_) => {
+            let request = MeshSourceImportRequest {
+                source_asset_id: "mesh-animation/model-surface".to_owned(),
+                ..request
+            };
+            import_animated_mesh_source_for_visual_metadata(&request, source_hash, &parsed)
+                .map(|imported| imported.source)
+                .map_err(|error| error.to_string())?
+        }
     };
     let (scene, mesh) = (imported.scene, imported.mesh);
     let mut triangles: Vec<[u32; 3]> = mesh
@@ -173,6 +183,26 @@ pub fn import_animated_glb_asset(
     source: &[u8],
     context: &ImportContext,
 ) -> AnimatedGlbImportOutcome {
+    import_glb(source_uri, source, None, context)
+}
+
+/// [`import_animated_glb_asset`] of a GLB the caller already parsed, such as
+/// a self-contained root that closure admission returned as it is.
+pub fn import_parsed_animated_glb_asset(
+    source_uri: &SourceUri,
+    source: &ParsedGlb<'_>,
+    context: &ImportContext,
+) -> AnimatedGlbImportOutcome {
+    import_glb(source_uri, source.bytes(), Some(&source.gltf), context)
+}
+
+/// `parsed`, when given, is `source` decoded.
+fn import_glb(
+    source_uri: &SourceUri,
+    source: &[u8],
+    parsed: Option<&ParsedGltf<'_>>,
+    context: &ImportContext,
+) -> AnimatedGlbImportOutcome {
     let mut diagnostics = Vec::new();
     // Animated mesh IDs are content identities, not filename-derived labels.
     // Hashing before source-name inspection means a source can retain its
@@ -196,8 +226,19 @@ pub fn import_animated_glb_asset(
         ));
         return failed(diagnostics);
     }
-    let parsed = match parse_and_preflight(source, source_uri.value()) {
-        Ok(parsed) => parsed,
+    let owned;
+    let preflight = match parsed {
+        Some(parsed) => preflight(source, parsed, source_uri.value()).map(|json| (json, parsed)),
+        None => match parse_and_preflight(source, source_uri.value()) {
+            Ok((json, parsed)) => {
+                owned = parsed;
+                Ok((json, &owned))
+            }
+            Err(diagnostic) => Err(diagnostic),
+        },
+    };
+    let (json_document, parsed) = match preflight {
+        Ok(preflight) => preflight,
         Err(diagnostic) => {
             diagnostics.push(diagnostic);
             return failed(diagnostics);
@@ -225,6 +266,7 @@ pub fn import_animated_glb_asset(
         let imported = match import_animated_mesh_source_for_visual_metadata(
             &animated_request,
             source_hash.clone(),
+            parsed,
         ) {
             Ok(imported) => imported,
             Err(error) => {
@@ -265,7 +307,7 @@ pub fn import_animated_glb_asset(
             .flat_map(|clip| &clip.channels)
             .map(|channel| channel.timestamps_microseconds.len() as u64)
             .sum::<u64>();
-        let rig = match derive_animation_rig_signature(&imported.model, source) {
+        let rig = match derive_animation_rig_signature(&imported.model, &json_document) {
             Ok(rig) => rig,
             Err(message) => {
                 // Embedded clips remain independently usable. We retain no
@@ -306,7 +348,8 @@ pub fn import_animated_glb_asset(
             source_asset_id: format!("mesh/{source_hash_hex}"),
             ..animated_request
         };
-        let imported = match import_mesh_source_with_hash(&static_request, source_hash.clone()) {
+        let imported = match import_parsed_mesh_source(&static_request, source_hash.clone(), parsed)
+        {
             Ok(imported) => imported,
             Err(error) => {
                 diagnostics.extend(error.diagnostics().iter().map(|item| {
@@ -425,7 +468,7 @@ pub fn import_animated_glb_asset(
 /// ancestry stays out of the skeleton and is never promoted into a joint.
 fn derive_animation_rig_signature(
     model: &voxel_convert::ImportedAnimatedModel,
-    source: &[u8],
+    root: &serde_json::Value,
 ) -> Result<Option<AnimationRigSignature>, String> {
     if model.skins.is_empty() {
         return Ok(None);
@@ -437,7 +480,6 @@ fn derive_animation_rig_signature(
         .map(|node| (node.source_node_index, node))
         .collect::<BTreeMap<_, _>>();
     let mut inverse_binds = BTreeMap::<u32, [f64; 16]>::new();
-    let root = glb_json_document(source, "source").map_err(|diagnostic| diagnostic.message)?;
     let raw_nodes = root
         .get("nodes")
         .and_then(serde_json::Value::as_array)
@@ -854,7 +896,39 @@ fn embedded_material_slots(
         .collect()
 }
 
-fn parse_and_preflight(source: &[u8], locus: &str) -> Result<gltf::Gltf, ImportDiagnostic> {
+/// Decodes `source` after the checks on its raw JSON, so an unadmitted
+/// required extension is reported as such rather than as a decoding failure,
+/// and returns the raw JSON with the document.
+fn parse_and_preflight<'a>(
+    source: &'a [u8],
+    locus: &str,
+) -> Result<(serde_json::Value, ParsedGltf<'a>), ImportDiagnostic> {
+    let json_document = preflight_json(source, locus)?;
+    let parsed = voxel_convert::parse_gltf_document(source).map_err(|error| {
+        ImportDiagnostic::error(
+            ImportCode::InvalidContainer,
+            locus,
+            format!("invalid GLB 2.0 source: {error}"),
+            "export a valid binary glTF 2.0 file",
+        )
+    })?;
+    preflight_document(&json_document, &parsed, locus)?;
+    Ok((json_document, parsed))
+}
+
+/// The animated import's checks on an already decoded `source`, returning
+/// its raw JSON.
+fn preflight(
+    source: &[u8],
+    parsed: &ParsedGltf<'_>,
+    locus: &str,
+) -> Result<serde_json::Value, ImportDiagnostic> {
+    let json_document = preflight_json(source, locus)?;
+    preflight_document(&json_document, parsed, locus)?;
+    Ok(json_document)
+}
+
+fn preflight_json(source: &[u8], locus: &str) -> Result<serde_json::Value, ImportDiagnostic> {
     let json_document = glb_json_document(source, locus)?;
     for extension in extension_names(&json_document, "extensionsRequired")? {
         if !is_admitted_extension(&extension) {
@@ -867,14 +941,14 @@ fn parse_and_preflight(source: &[u8], locus: &str) -> Result<gltf::Gltf, ImportD
         }
     }
     validate_webp_texture_extensions(&json_document)?;
-    let parsed = voxel_convert::parse_gltf_document(source).map_err(|error| {
-        ImportDiagnostic::error(
-            ImportCode::InvalidContainer,
-            locus,
-            format!("invalid GLB 2.0 source: {error}"),
-            "export a valid binary glTF 2.0 file",
-        )
-    })?;
+    Ok(json_document)
+}
+
+fn preflight_document(
+    json_document: &serde_json::Value,
+    parsed: &ParsedGltf<'_>,
+    locus: &str,
+) -> Result<(), ImportDiagnostic> {
     if parsed.blob.is_none() {
         return Err(ImportDiagnostic::error(
             ImportCode::InvalidContainer,
@@ -906,7 +980,7 @@ fn parse_and_preflight(source: &[u8], locus: &str) -> Result<gltf::Gltf, ImportD
             ));
         }
     }
-    validate_texture_transforms(&json_document)?;
+    validate_texture_transforms(json_document)?;
     for buffer in document.buffers() {
         if let BufferSource::Uri(uri) = buffer.source() {
             return Err(ImportDiagnostic::error(
@@ -953,7 +1027,7 @@ fn parse_and_preflight(source: &[u8], locus: &str) -> Result<gltf::Gltf, ImportD
             }
         }
     }
-    Ok(parsed)
+    Ok(())
 }
 
 pub(crate) fn is_admitted_extension(extension: &str) -> bool {
@@ -1428,7 +1502,7 @@ mod image_capacity_tests {
         glb.extend_from_slice(&(body_length as u32).to_le_bytes());
         glb.extend_from_slice(b"BIN\0");
         glb.resize(length, 0);
-        let parsed = parse_and_preflight(&glb, "fixture").unwrap();
+        let (_, parsed) = parse_and_preflight(&glb, "fixture").unwrap();
         assert_eq!(parsed.document.images().count(), 257);
         assert_eq!(parsed.document.textures().count(), 257);
     }

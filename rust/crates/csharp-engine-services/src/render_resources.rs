@@ -9,8 +9,8 @@ use crate::appearance::{
 use crate::composition::{borrowed_slice, CsharpEngineServicesError};
 use crate::content::RetainedContent;
 use asset_import::{
-    admit_glb_source, glb_relative_resource_uris, import_animated_glb_asset, GlbSourceClosure,
-    GltfResource, ImportContext, SourceUri,
+    admit_glb_source, import_animated_glb_asset, import_parsed_animated_glb_asset,
+    GlbModelTriangles, GlbSourceClosure, GltfResource, ImportContext, ParsedGlb, SourceUri,
 };
 use csharp_engine_abi::{
     NativeMeshMaterialBinding, NativeMeshPartitionHandle, NativeMeshPartitionPartRequest,
@@ -30,7 +30,7 @@ use std::{
     borrow::Cow,
     collections::{BTreeMap, BTreeSet},
     ffi::c_void,
-    sync::Arc,
+    sync::{Arc, OnceLock},
 };
 
 /// Immutable renderer content selected through the Engine appearance API.
@@ -44,6 +44,28 @@ pub struct CsharpRenderResource {
     bytes: Arc<[u8]>,
     texture: Option<TextureDescriptor>,
     animated_mesh: Option<AnimatedMeshAsset>,
+    model_triangles: ModelTriangles,
+}
+
+/// A GLB model's surface triangles, read from its body on the first model
+/// surface query and shared by every copy of the admitted resource. The
+/// cache is released with the resource: content reloaded in place has a new
+/// identity, and opening it admits a new resource with an empty cache, while
+/// handles to the old content keep the old triangles.
+#[derive(Clone, Default)]
+struct ModelTriangles(Arc<OnceLock<Arc<GlbModelTriangles>>>);
+
+/// Derived from the body, so not part of the resource's value.
+impl PartialEq for ModelTriangles {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+impl std::fmt::Debug for ModelTriangles {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("ModelTriangles")
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -108,6 +130,7 @@ impl CsharpRenderResource {
             bytes,
             texture: Some(descriptor),
             animated_mesh: None,
+            model_triangles: ModelTriangles::default(),
         }
     }
 
@@ -127,6 +150,7 @@ impl CsharpRenderResource {
             bytes,
             texture: None,
             animated_mesh: None,
+            model_triangles: ModelTriangles::default(),
         })
     }
 
@@ -141,6 +165,7 @@ impl CsharpRenderResource {
             bytes,
             texture: None,
             animated_mesh: None,
+            model_triangles: ModelTriangles::default(),
         }
     }
 
@@ -163,6 +188,7 @@ impl CsharpRenderResource {
             bytes,
             texture: None,
             animated_mesh: None,
+            model_triangles: ModelTriangles::default(),
         })
     }
 
@@ -201,6 +227,7 @@ impl CsharpRenderResource {
             bytes,
             texture: None,
             animated_mesh: None,
+            model_triangles: ModelTriangles::default(),
         })
     }
 
@@ -227,6 +254,7 @@ impl CsharpRenderResource {
             bytes: Arc::from(render_model::pack_star_catalogue(&stars)),
             texture: None,
             animated_mesh: None,
+            model_triangles: ModelTriangles::default(),
         })
     }
 
@@ -250,6 +278,7 @@ impl CsharpRenderResource {
             bytes,
             texture: None,
             animated_mesh: None,
+            model_triangles: ModelTriangles::default(),
         })
     }
 
@@ -277,23 +306,28 @@ impl CsharpRenderResource {
             bytes,
             texture: None,
             animated_mesh: None,
+            model_triangles: ModelTriangles::default(),
         })
     }
 
-    /// An animated GLB, retained as `bytes`: a self-contained GLB.
+    /// An animated GLB, retained as `bytes`: a self-contained GLB. `parsed`,
+    /// when given, is `bytes` decoded.
     fn admit_animated_mesh(
         path: String,
         bytes: Arc<[u8]>,
+        parsed: Option<&ParsedGlb<'_>>,
     ) -> Result<Self, CsharpEngineServicesError> {
         require_extension(&path, ".glb")?;
         let relative_path = path
             .strip_prefix("content/")
             .expect("renderer path retains content prefix");
-        let outcome = import_animated_glb_asset(
-            &SourceUri::RelativePath(relative_path.to_owned()),
-            &bytes,
-            &ImportContext::default(),
-        );
+        let uri = SourceUri::RelativePath(relative_path.to_owned());
+        let outcome = match parsed {
+            Some(parsed) => {
+                import_parsed_animated_glb_asset(&uri, parsed, &ImportContext::default())
+            }
+            None => import_animated_glb_asset(&uri, &bytes, &ImportContext::default()),
+        };
         let imported = outcome.assets.ok_or_else(|| {
             let detail = outcome
                 .diagnostics
@@ -329,6 +363,7 @@ impl CsharpRenderResource {
             bytes,
             texture: None,
             animated_mesh: Some(imported.animated_mesh),
+            model_triangles: ModelTriangles::default(),
         })
     }
 
@@ -363,6 +398,19 @@ impl CsharpRenderResource {
     pub(crate) fn animated_mesh(&self) -> Option<&AnimatedMeshAsset> {
         self.animated_mesh.as_ref()
     }
+    /// The GLB model's surface triangles, read once for this body.
+    pub(crate) fn model_triangles(&self) -> Result<Arc<GlbModelTriangles>, String> {
+        if let Some(triangles) = self.model_triangles.0.get() {
+            return Ok(Arc::clone(triangles));
+        }
+        #[cfg(test)]
+        crate::appearance::MODEL_TRIANGLE_READS.with(|count| count.set(count.get() + 1));
+        let triangles = Arc::new(asset_import::glb_model_triangles(
+            &self.bytes,
+            &self.content_hash,
+        )?);
+        Ok(Arc::clone(self.model_triangles.0.get_or_init(|| triangles)))
+    }
     /// A shader resource's renderer definition, its errors naming `path`.
     pub(crate) fn shader(&self) -> Option<render_model::ShaderDescriptor> {
         (self.kind == CsharpRenderResourceKind::Shader).then(|| render_model::ShaderDescriptor {
@@ -393,6 +441,7 @@ impl CsharpRenderResource {
             bytes,
             texture: None,
             animated_mesh: None,
+            model_triangles: ModelTriangles::default(),
         }
     }
 }
@@ -935,11 +984,7 @@ impl RenderResourceImports {
         // Live imports belong only to reference/resource owners. Immutable
         // startup sources retain the existing import cache across opens.
         let mut resource = if content.transient {
-            let packed = pack_animated_glb_closure(&content.path, &content.bytes, &content.files)?;
-            CsharpRenderResource::admit_animated_mesh(
-                format!("content/{}", content.path),
-                packed.bytes,
-            )?
+            import_animated_glb_closure(&content.path, &content.bytes, &content.files)?.resource
         } else {
             let key = content.path.clone();
             let matches_source = self.animated.get(&key).is_some_and(|imported| {
@@ -954,22 +999,23 @@ impl RenderResourceImports {
                     })
             });
             if !matches_source {
-                let packed =
-                    pack_animated_glb_closure(&content.path, &content.bytes, &content.files)?;
-                let resource = CsharpRenderResource::admit_animated_mesh(
-                    format!("content/{}", content.path),
-                    packed.bytes,
-                )?;
+                let imported =
+                    import_animated_glb_closure(&content.path, &content.bytes, &content.files)?;
                 self.animated.insert(
                     key.clone(),
                     ImportedAnimatedContent {
                         source: content.bytes,
-                        dependencies: packed.dependencies,
-                        resource,
+                        dependencies: imported.dependencies,
+                        resource: imported.resource,
                     },
                 );
             }
-            self.animated[&key].resource.clone()
+            // The import cache keeps no model triangles: each admitted
+            // resource reads its own, released with it.
+            CsharpRenderResource {
+                model_triangles: ModelTriangles::default(),
+                ..self.animated[&key].resource.clone()
+            }
         };
         if clip_pack {
             if resource
@@ -1577,18 +1623,23 @@ fn require_extension(path: &str, extension: &str) -> Result<(), CsharpEngineServ
     Ok(())
 }
 
-struct PackedAnimatedSource {
-    /// The root itself when it is already self-contained.
-    bytes: Arc<[u8]>,
+/// An animated GLB admitted with its relative dependencies: the resource, and
+/// the dependency bodies it read.
+struct ImportedAnimatedClosure {
+    resource: CsharpRenderResource,
     dependencies: Vec<(String, Arc<[u8]>)>,
 }
 
-fn pack_animated_glb_closure(
+/// Admits the GLB at `root_path` and its relative dependencies as one
+/// self-contained GLB resource. The root is parsed once: a root that is
+/// already self-contained is retained as the content's own body and imported
+/// from that parse; a packed closure is new bytes, which the import parses.
+fn import_animated_glb_closure(
     root_path: &str,
     root_bytes: &Arc<[u8]>,
     content_resources: &crate::content::ContentFiles,
-) -> Result<PackedAnimatedSource, CsharpEngineServicesError> {
-    let resource_uris = glb_relative_resource_uris(root_bytes).map_err(|diagnostic| {
+) -> Result<ImportedAnimatedClosure, CsharpEngineServicesError> {
+    let closure_error = |diagnostic: asset_import::ImportDiagnostic| {
         CsharpEngineServicesError::new(
             "CSHARP_ANIMATION_GLB_CLOSURE",
             format!(
@@ -1596,7 +1647,9 @@ fn pack_animated_glb_closure(
                 diagnostic.locus, diagnostic.message, diagnostic.code
             ),
         )
-    })?;
+    };
+    let root = ParsedGlb::parse(root_bytes).map_err(closure_error)?;
+    let resource_uris = root.relative_resource_uris().map_err(closure_error)?;
     let directory = root_path
         .rsplit_once('/')
         .map_or("", |(directory, _)| directory);
@@ -1618,7 +1671,7 @@ fn pack_animated_glb_closure(
         })
         .collect::<Result<Vec<_>, CsharpEngineServicesError>>()?;
     let packed = admit_glb_source(&GlbSourceClosure {
-        root_glb: root_bytes,
+        root: &root,
         resources: resource_uris
             .into_iter()
             .zip(&dependencies)
@@ -1628,21 +1681,18 @@ fn pack_animated_glb_closure(
             })
             .collect(),
     })
-    .map_err(|diagnostic| {
-        CsharpEngineServicesError::new(
-            "CSHARP_ANIMATION_GLB_CLOSURE",
-            format!(
-                "{}: {} ({:?})",
-                diagnostic.locus, diagnostic.message, diagnostic.code
-            ),
-        )
-    })?;
-    let bytes = match packed {
-        Cow::Borrowed(_) => Arc::clone(root_bytes),
-        Cow::Owned(packed) => Arc::from(packed),
+    .map_err(closure_error)?;
+    let path = format!("content/{root_path}");
+    let resource = match packed {
+        Cow::Borrowed(_) => {
+            CsharpRenderResource::admit_animated_mesh(path, Arc::clone(root_bytes), Some(&root))?
+        }
+        Cow::Owned(packed) => {
+            CsharpRenderResource::admit_animated_mesh(path, Arc::from(packed), None)?
+        }
     };
-    Ok(PackedAnimatedSource {
-        bytes,
+    Ok(ImportedAnimatedClosure {
+        resource,
         dependencies,
     })
 }
@@ -1829,6 +1879,7 @@ pub(crate) mod tests {
                 "pub fn shared_bytes",
                 "pub(crate) fn texture",
                 "pub(crate) fn animated_mesh",
+                "pub(crate) fn model_triangles",
                 "pub(crate) fn shader",
                 "pub(crate) fn test_mesh",
                 "pub struct RenderOutputResources",
@@ -1914,6 +1965,7 @@ pub(crate) mod tests {
             CsharpRenderResource::admit_animated_mesh(
                 "content/character.glb".to_owned(),
                 Arc::from(CHARACTER_GLB),
+                None,
             )
             .expect("animated mesh")
         };
@@ -2067,29 +2119,23 @@ pub(crate) mod tests {
     fn animated_embedded_image_is_packed_without_external_dependencies() {
         let embedded = external_image_glb(CHARACTER_GLB,
             "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLttAAAAABJRU5ErkJggg==");
-        let packed = pack_animated_glb_closure(
+        let packed = import_animated_glb_closure(
             "character.glb",
             &Arc::from(embedded.as_slice()),
             &crate::content::ContentFiles::snapshot(BTreeMap::new()),
         )
         .expect("embedded image is packed without companion files");
         assert!(packed.dependencies.is_empty());
-        assert_ne!(*packed.bytes, embedded[..]);
-        let imported = asset_import::import_animated_glb_asset(
-            &asset_import::SourceUri::RelativePath("character.glb".to_owned()),
-            &packed.bytes,
-            &asset_import::ImportContext::default(),
-        );
-        assert!(!imported.has_errors(), "{:?}", imported.diagnostics);
+        assert_ne!(packed.resource.bytes(), &embedded[..]);
         // A self-contained GLB is retained as the content's own body.
         let root = Arc::<[u8]>::from(CHARACTER_GLB);
-        let unchanged = pack_animated_glb_closure(
+        let unchanged = import_animated_glb_closure(
             "character.glb",
             &root,
             &crate::content::ContentFiles::snapshot(BTreeMap::new()),
         )
         .unwrap();
-        assert!(Arc::ptr_eq(&unchanged.bytes, &root));
+        assert!(Arc::ptr_eq(&unchanged.resource.shared_bytes(), &root));
         let resource = RenderResourceImports::default()
             .animated(content("character.glb", Arc::clone(&root)), false)
             .unwrap();

@@ -8,7 +8,7 @@ use super::{
     ImportedModelNode, ImportedModelPrimitive, ImportedModelScene, ImportedTextureCoordinates,
     MAX_SOURCE_STREAM_COUNT,
 };
-use crate::ConversionError;
+use crate::{ConversionError, ParsedGltf};
 
 #[derive(Debug)]
 struct SourceNode {
@@ -27,28 +27,31 @@ enum VisitState {
 }
 
 pub(super) fn import_static_glb_scene(
-    source: &[u8],
+    parsed: &ParsedGltf<'_>,
 ) -> Result<ImportedModelScene, ConversionError> {
-    let parsed = parse_embedded_glb(source)?;
-    import_glb_scene(&parsed, false)
+    require_embedded_glb(parsed)?;
+    import_glb_scene(parsed, false)
 }
 
-pub(super) fn parse_animated_glb(
-    source: &[u8],
-) -> Result<(gltf::Gltf, ImportedModelScene), ConversionError> {
-    let parsed = parse_embedded_glb(source)?;
-    let scene = import_glb_scene(&parsed, true)?;
-    Ok((parsed, scene))
+pub(super) fn import_animated_glb_scene(
+    parsed: &ParsedGltf<'_>,
+) -> Result<ImportedModelScene, ConversionError> {
+    require_embedded_glb(parsed)?;
+    import_glb_scene(parsed, true)
 }
 
-fn parse_embedded_glb(source: &[u8]) -> Result<gltf::Gltf, ConversionError> {
-    let parsed = crate::parse_gltf_document(source).map_err(|error| {
+/// Decodes a GLB source for the scene importers.
+pub(crate) fn parse_glb(source: &[u8]) -> Result<ParsedGltf<'_>, ConversionError> {
+    crate::parse_gltf_document(source).map_err(|error| {
         ConversionError::one(
             "conversion.invalidSource",
             "source",
             format!("invalid GLB 2.0 source: {error}"),
         )
-    })?;
+    })
+}
+
+fn require_embedded_glb(parsed: &ParsedGltf<'_>) -> Result<(), ConversionError> {
     parsed.blob.as_deref().ok_or_else(|| {
         ConversionError::one(
             "conversion.unsupportedFeature",
@@ -65,11 +68,11 @@ fn parse_embedded_glb(source: &[u8]) -> Result<gltf::Gltf, ConversionError> {
             ));
         }
     }
-    Ok(parsed)
+    Ok(())
 }
 
 fn import_glb_scene(
-    parsed: &gltf::Gltf,
+    parsed: &ParsedGltf<'_>,
     allow_animated_features: bool,
 ) -> Result<ImportedModelScene, ConversionError> {
     let blob = parsed

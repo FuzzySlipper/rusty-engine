@@ -100,17 +100,25 @@ pub struct ImportedTextureCoordinates {
 }
 
 pub fn import_static_glb_scene(source: &[u8]) -> Result<ImportedModelScene, ConversionError> {
-    gltf_scene::import_static_glb_scene(source)
+    gltf_scene::import_static_glb_scene(&gltf_scene::parse_glb(source)?)
 }
+
+pub(crate) fn import_parsed_static_glb_scene(
+    parsed: &crate::ParsedGltf<'_>,
+) -> Result<ImportedModelScene, ConversionError> {
+    gltf_scene::import_static_glb_scene(parsed)
+}
+
+pub(crate) use gltf_scene::parse_glb;
 
 pub fn import_static_glb(source: &[u8]) -> Result<ImportedStaticMesh, ConversionError> {
     flatten_static_scene(&import_static_glb_scene(source)?)
 }
 
 pub(crate) fn import_animated_glb_scene(
-    source: &[u8],
-) -> Result<(gltf::Gltf, ImportedModelScene), ConversionError> {
-    gltf_scene::parse_animated_glb(source)
+    parsed: &crate::ParsedGltf<'_>,
+) -> Result<ImportedModelScene, ConversionError> {
+    gltf_scene::import_animated_glb_scene(parsed)
 }
 
 /// Hash one flattened UV attribute exactly as the converter samples it.

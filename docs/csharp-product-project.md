@@ -496,12 +496,15 @@ pose).
   and normal. `BackFace` says the ray met that triangle from behind, from
   inside a closed mesh.
 
-Nothing is retained between calls and nothing enters collision, so a held
-viewmodel can be measured in camera space against hand joints from
-[`ReadJointPose`](skeleton-poses.md#fitting-to-a-held-model). Each call reads
-the model's triangles again: about 20 ms for a 15,000-triangle prop, then
-about a microsecond per point. Batch a step's points into one call. It suits
-developer commands and fitting tools, not every frame.
+Nothing enters collision, so a held viewmodel can be measured in camera
+space against hand joints from
+[`ReadJointPose`](skeleton-poses.md#fitting-to-a-held-model). The first call
+reads the model's triangles, which the resource keeps until it is released;
+content reloaded in place opens as a new resource and answers with its new
+triangles. Each call builds the placed surface from them, about 140 ms for a
+140,000-triangle model, then takes about a microsecond per point. Batch a
+step's points into one call. It suits developer commands and fitting tools,
+not every frame.
 
 ```csharp
 Transform shown = new(gripOffset, gripTurn, Vector3.One); // the model as drawn

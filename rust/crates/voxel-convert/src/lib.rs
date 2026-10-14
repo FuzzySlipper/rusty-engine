@@ -36,7 +36,7 @@ pub use animation::{
 };
 pub use convert::{convert_glb, ConversionReceipt, CONVERTER_ID, MAX_SURFACE_SAMPLE_WORK};
 pub use diagnostic::{ConversionDiagnostic, ConversionError};
-pub use gltf_document::parse_gltf_document;
+pub use gltf_document::{parse_gltf_document, ParsedGltf};
 pub use import::{
     flatten_static_scene, import_static_glb, import_static_glb_scene,
     texture_coordinate_source_hash, ImportedMaterial, ImportedModelMesh, ImportedModelNode,
@@ -65,11 +65,11 @@ pub use query::{
 };
 pub use source::{
     decode_mesh_source_import_request, import_animated_mesh_source,
-    import_animated_mesh_source_for_visual_metadata, import_mesh_source,
-    import_mesh_source_with_hash, source_sha256, ImportedAnimatedMeshSource, ImportedMeshSource,
-    MeshSourceBounds, MeshSourceFormat, MeshSourceGroup, MeshSourceImportReceipt,
-    MeshSourceImportRequest, MeshSourceMaterialSlot, MeshSourceMetadata, MeshSourceNode,
-    MeshSourceRef, MeshSourceTextureCoordinates,
+    import_animated_mesh_source_for_visual_metadata, import_mesh_source, import_parsed_mesh_source,
+    source_sha256, ImportedAnimatedMeshSource, ImportedMeshSource, MeshSourceBounds,
+    MeshSourceFormat, MeshSourceGroup, MeshSourceImportReceipt, MeshSourceImportRequest,
+    MeshSourceMaterialSlot, MeshSourceMetadata, MeshSourceNode, MeshSourceRef,
+    MeshSourceTextureCoordinates,
 };
 pub use store::{convert_and_install, decode_conversion_request};
 pub use voxelize::MAX_GEOMETRIC_VOXELIZATION_WORK;

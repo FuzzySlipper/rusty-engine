@@ -6,10 +6,10 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::{
-    flatten_static_scene, import_static_glb_scene, sample_animation_bind_pose,
-    texture_coordinate_source_hash, AnimationAnchorPolicy, AnimationBindPoseRequest,
-    ConversionError, ImportedAnimatedModel, ImportedModelScene, ImportedPrimitiveGroup,
-    ImportedStaticMesh, ImportedStaticTextureCoordinates,
+    flatten_static_scene, import::import_parsed_static_glb_scene, import_static_glb_scene,
+    sample_animation_bind_pose, texture_coordinate_source_hash, AnimationAnchorPolicy,
+    AnimationBindPoseRequest, ConversionError, ImportedAnimatedModel, ImportedModelScene,
+    ImportedPrimitiveGroup, ImportedStaticMesh, ImportedStaticTextureCoordinates, ParsedGltf,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -147,26 +147,30 @@ pub fn import_mesh_source(
     request: &MeshSourceImportRequest<'_>,
 ) -> Result<ImportedMeshSource, ConversionError> {
     validate_import_request(request, AssetKind::StaticMesh)?;
-    import_static_mesh_source(request, source_sha256(&request.source_bytes))
+    import_static_mesh_source(request, source_sha256(&request.source_bytes), None)
 }
 
-/// [`import_mesh_source`] for a caller that already hashed
-/// `request.source_bytes`: `source_hash` is their [`source_sha256`].
-pub fn import_mesh_source_with_hash(
+/// [`import_mesh_source`] for a caller that already hashed and parsed
+/// `request.source_bytes`: `source_hash` is their [`source_sha256`] and
+/// `parsed` their [`crate::parse_gltf_document`].
+pub fn import_parsed_mesh_source(
     request: &MeshSourceImportRequest<'_>,
     source_hash: String,
+    parsed: &ParsedGltf<'_>,
 ) -> Result<ImportedMeshSource, ConversionError> {
     validate_import_request(request, AssetKind::StaticMesh)?;
-    import_static_mesh_source(request, source_hash)
+    import_static_mesh_source(request, source_hash, Some(parsed))
 }
 
 fn import_static_mesh_source(
     request: &MeshSourceImportRequest<'_>,
     source_hash: String,
+    parsed: Option<&ParsedGltf<'_>>,
 ) -> Result<ImportedMeshSource, ConversionError> {
     validate_expected_source_hash(request, &source_hash)?;
-    let scene = match request.format {
-        MeshSourceFormat::Glb => import_static_glb_scene(&request.source_bytes)?,
+    let scene = match (request.format, parsed) {
+        (MeshSourceFormat::Glb, Some(parsed)) => import_parsed_static_glb_scene(parsed)?,
+        (MeshSourceFormat::Glb, None) => import_static_glb_scene(&request.source_bytes)?,
     };
     let mesh = flatten_static_scene(&scene)?;
     let mesh = match request.mesh_primitive.as_deref() {
@@ -196,24 +200,27 @@ pub fn import_animated_mesh_source(
     request: &MeshSourceImportRequest<'_>,
 ) -> Result<ImportedAnimatedMeshSource, ConversionError> {
     validate_import_request(request, AssetKind::AnimatedMesh)?;
-    import_animated_mesh_source_with(request, source_sha256(&request.source_bytes), false)
+    import_animated_mesh_source_with(request, source_sha256(&request.source_bytes), None, false)
 }
 
 /// Imports the exact animated source for runtime visual-resource metadata.
 /// Degenerate faces are omitted only from the derived bind-pose mesh; ordinary
 /// voxel conversion and animation sampling remain strict. `source_hash` is the
-/// caller's [`source_sha256`] of `request.source_bytes`.
+/// caller's [`source_sha256`] of `request.source_bytes` and `parsed` its
+/// [`crate::parse_gltf_document`].
 pub fn import_animated_mesh_source_for_visual_metadata(
     request: &MeshSourceImportRequest<'_>,
     source_hash: String,
+    parsed: &ParsedGltf<'_>,
 ) -> Result<ImportedAnimatedMeshSource, ConversionError> {
     validate_import_request(request, AssetKind::AnimatedMesh)?;
-    import_animated_mesh_source_with(request, source_hash, true)
+    import_animated_mesh_source_with(request, source_hash, Some(parsed), true)
 }
 
 fn import_animated_mesh_source_with(
     request: &MeshSourceImportRequest<'_>,
     source_hash: String,
+    parsed: Option<&ParsedGltf<'_>>,
     visual_metadata: bool,
 ) -> Result<ImportedAnimatedMeshSource, ConversionError> {
     if request.mesh_primitive.is_some() {
@@ -225,10 +232,17 @@ fn import_animated_mesh_source_with(
     }
     validate_expected_source_hash(request, &source_hash)?;
     let model = match request.format {
-        MeshSourceFormat::Glb => crate::animation::import_animated_glb_with_hash(
-            &request.source_bytes,
-            source_hash.clone(),
-        )?,
+        MeshSourceFormat::Glb => {
+            let owned;
+            let parsed = match parsed {
+                Some(parsed) => parsed,
+                None => {
+                    owned = crate::import::parse_glb(&request.source_bytes)?;
+                    &owned
+                }
+            };
+            crate::animation::import_parsed_animated_glb(parsed, source_hash.clone())?
+        }
     };
     let bind_request = AnimationBindPoseRequest {
         expected_source_sha256: source_hash.clone(),
