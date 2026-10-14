@@ -104,6 +104,24 @@ Read [the architecture overview](docs/architecture.md) and
 
 ## Rendering and TypeScript
 
+The Engine keeps one committed description of what is shown. Products
+publish facts into it through named services, each retained and revisioned,
+so an unchanged fact is never sent again. The Engine alone realizes that
+description, and everything that shows or inspects the scene is a reading of
+it: the stream, the window, a tool capture, a snapshot, an offline render, an
+inspection view. A reading never changes the description and costs nothing
+while nothing consumes it. Every frame names the step and presentation time
+it drew. Nothing downstream holds a second description of the scene, and no
+tool does either; tools are readings hosted beside the running game. How the
+description is realized is the Engine's choice per adapter; a product selects
+options, options coexist, and an option is accepted when it draws correctly,
+refuses cleanly where it cannot run, and reports its cost.
+
+Mechanisms and features are different things under "Keeping mechanisms
+small" above: a mechanism is infrastructure, a protocol or a check, removed
+by default; a feature is an option a product picks, allowed to coexist with
+the others. The rules below follow from the premise.
+
 - Engine owns renderer resources, retained handles, frame construction,
   backend realization, canvas ownership, and renderer lifecycle.
 - C# publishes product facts through named Engine APIs. It must not build a
