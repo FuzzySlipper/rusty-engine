@@ -6,7 +6,7 @@ use sha2::{Digest, Sha256};
 use voxel_asset::{VoxelAssetBounds, VoxelConversionRequest, VoxelConversionSettings};
 
 use crate::{
-    convert::{conversion_receipt, convert_mesh_cells},
+    convert::{conversion_receipt, convert_mesh_cells, validate_mesh_conversion},
     material::{
         canonicalize_material_policy, material_sampling_context, resolve_material_map,
         ConversionMaterialPolicy,
@@ -155,11 +155,15 @@ pub fn plan_conversion(
         settings: effective_settings,
     };
     let settings_sha256 = plan_settings_sha256(&request.settings);
-    let cells = convert_mesh_cells(
+    validate_mesh_conversion(
         &conversion_request,
         &transformed_mesh,
         &source.receipt.source.source_sha256,
         source.receipt.source_byte_count,
+    )?;
+    let cells = convert_mesh_cells(
+        &conversion_request,
+        &transformed_mesh,
         Some(&material_sampling),
         None,
     )?;

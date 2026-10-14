@@ -36,6 +36,14 @@ struct InstanceSnapshot {
     surface_mode: SurfaceMode,
 }
 
+impl InstanceSnapshot {
+    /// An instance whose resource or material overrides changed is destroyed
+    /// and created again: the renderer has no update for either.
+    fn rebinds(&self, previous: &InstanceSnapshot) -> bool {
+        self.asset != previous.asset || self.material_overrides != previous.material_overrides
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct VoxelObjectRenderProjector {
     registry: StableHandleRegistry<String>,
@@ -148,7 +156,7 @@ impl VoxelObjectRenderProjector {
         for (instance_id, previous) in &self.last_instances {
             let rebound = current_instances
                 .get(instance_id)
-                .is_some_and(|current| current.asset != previous.asset);
+                .is_some_and(|current| current.rebinds(previous));
             if !current_instances.contains_key(instance_id) || rebound {
                 let handle = registry
                     .remove(instance_id)
@@ -163,7 +171,7 @@ impl VoxelObjectRenderProjector {
 
         for (instance_id, snapshot) in &current_instances {
             let previous = self.last_instances.get(instance_id);
-            let rebound = previous.is_some_and(|value| value.asset != snapshot.asset);
+            let rebound = previous.is_some_and(|value| snapshot.rebinds(value));
             if previous.is_none() || rebound {
                 let handle = registry
                     .allocate(instance_id.clone())
@@ -187,11 +195,6 @@ impl VoxelObjectRenderProjector {
             let handle = registry
                 .handle_of(instance_id)
                 .expect("retained voxel-object instance has a render handle");
-            if previous.material_overrides != snapshot.material_overrides {
-                return Err(VoxelObjectProjectionError::ChangedMaterialOverrides {
-                    instance: instance_id.clone(),
-                });
-            }
             if previous.transform != snapshot.transform
                 || previous.visible != snapshot.visible
                 || previous.metadata != snapshot.metadata
@@ -571,9 +574,6 @@ pub enum VoxelObjectProjectionError {
     UnboundMaterialOverride {
         instance: String,
         slot: u16,
-    },
-    ChangedMaterialOverrides {
-        instance: String,
     },
     InvalidMesh(MeshDescriptorError),
     Handle(HandleAllocationError),

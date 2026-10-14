@@ -397,6 +397,51 @@ fn voxel_object_material_override_defines_the_selected_material() {
     );
 }
 
+/// The renderer has no in-place override change, so changing an instance's
+/// overrides destroys it and creates it again with the new ones.
+#[test]
+fn changed_material_overrides_recreate_the_instance() {
+    let object = admitted();
+    let mut projector = VoxelObjectRenderProjector::new();
+    let mut available_materials = materials();
+    let override_material = material("material/override", [0.1, 0.4, 0.9, 1.0]);
+    available_materials.insert(override_material.id.clone(), override_material.clone());
+    projector
+        .project(&[instance(&object, 0)], &available_materials)
+        .unwrap();
+    let handle = projector.handle("runner").unwrap();
+
+    let mut overridden = instance(&object, 1);
+    overridden.material_overrides = vec![MeshMaterialSlot {
+        slot: 1,
+        material: override_material.id.clone(),
+    }];
+    let projected = projector
+        .project(&[overridden], &available_materials)
+        .unwrap();
+    let recreated = projector.handle("runner").unwrap();
+    let [RenderDiff::DefineMaterial { material: defined }, RenderDiff::Destroy { handle: destroyed }, RenderDiff::CreateVoxelObjectInstance {
+        handle: created,
+        instance: created_instance,
+        ..
+    }] = projected.frame.ops.as_slice()
+    else {
+        panic!("unexpected ops {:?}", projected.frame.ops);
+    };
+    assert_eq!(defined, &override_material);
+    assert_eq!(*destroyed, handle);
+    assert_eq!(*created, recreated);
+    assert_eq!(created_instance.frame, 1);
+    assert_eq!(
+        created_instance.material_overrides,
+        vec![MeshMaterialSlot {
+            slot: 1,
+            material: "material/override".to_string(),
+        }]
+    );
+    assert!(projected.readout.materialized_resources.is_empty());
+}
+
 #[test]
 fn material_slot_can_switch_from_color_to_tile_without_voxel_republication() {
     let object = admitted();

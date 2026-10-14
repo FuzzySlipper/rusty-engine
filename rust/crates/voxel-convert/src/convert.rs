@@ -44,14 +44,8 @@ pub fn convert_glb(
     let source_sha256 = sha256(source);
     let mesh = crate::import_static_glb(source)?;
     let source_byte_count = source.len() as u64;
-    let cells = convert_mesh_cells(
-        request,
-        &mesh,
-        &source_sha256,
-        source_byte_count,
-        None,
-        None,
-    )?;
+    validate_mesh_conversion(request, &mesh, &source_sha256, source_byte_count)?;
+    let cells = convert_mesh_cells(request, &mesh, None, None)?;
     conversion_receipt(
         request,
         &mesh,
@@ -69,14 +63,15 @@ pub(crate) struct ConvertedCells {
     pub(crate) voxelization_work: u64,
 }
 
-pub(crate) fn convert_mesh_cells(
+/// Checks a conversion request against its source once. Every mesh a
+/// request converts afterwards (an animated object's sampled poses) shares
+/// the checked mesh's material set, so it is not checked again.
+pub(crate) fn validate_mesh_conversion(
     request: &VoxelConversionRequest,
     mesh: &ImportedStaticMesh,
     source_sha256: &str,
     source_byte_count: u64,
-    material_sampling: Option<&MaterialSamplingContext<'_>>,
-    source_bounds: Option<VoxelizationSourceBounds>,
-) -> Result<ConvertedCells, ConversionError> {
+) -> Result<(), ConversionError> {
     validate_conversion_request(request, source_byte_count)?;
     if source_sha256 != request.expected_source_sha256 {
         return Err(ConversionError::one(
@@ -89,7 +84,16 @@ pub(crate) fn convert_mesh_cells(
         ));
     }
 
-    validate_material_map(request, mesh)?;
+    validate_material_map(request, mesh)
+}
+
+/// Voxelizes one mesh of a request `validate_mesh_conversion` admitted.
+pub(crate) fn convert_mesh_cells(
+    request: &VoxelConversionRequest,
+    mesh: &ImportedStaticMesh,
+    material_sampling: Option<&MaterialSamplingContext<'_>>,
+    source_bounds: Option<VoxelizationSourceBounds>,
+) -> Result<ConvertedCells, ConversionError> {
     let (cells, voxelization_work) =
         convert_cells(request, mesh, material_sampling, source_bounds)?;
     Ok(ConvertedCells {

@@ -13,7 +13,7 @@ use super::model::*;
 use super::validation::*;
 use crate::{
     animation::{preflight_animation_bind_pose, preflight_animation_clip_range},
-    convert::convert_mesh_cells,
+    convert::{convert_mesh_cells, validate_mesh_conversion},
     material::{material_sampling_context, resolve_material_map},
     planning::{transform_mesh, transform_mesh_owned, transform_position},
     sample_animation_bind_pose, sample_animation_clip_range,
@@ -195,14 +195,18 @@ fn build_candidate(
         license_path: request.license_path.clone(),
         settings: effective_settings.clone(),
     };
+    validate_mesh_conversion(
+        &conversion_request,
+        &default_mesh,
+        &source.receipt.source.source_sha256,
+        source.receipt.source_byte_count,
+    )?;
     let convert_frame = |mesh: &ImportedStaticMesh| -> Result<ConvertedFrame, ConversionError> {
         // Frame identities are computed once, with the object's, by
         // `with_computed_voxel_object_hashes` below.
         let cells = convert_mesh_cells(
             &conversion_request,
             mesh,
-            &source.receipt.source.source_sha256,
-            source.receipt.source_byte_count,
             Some(&material_sampling),
             Some(fixed_bounds),
         )?;
