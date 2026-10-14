@@ -517,6 +517,215 @@ fn invalid_frame_is_fail_atomic() {
     assert_eq!(projector.handle("runner"), Some(handle));
 }
 
+/// The settings of one projected instance in the incremental tests:
+/// object, frame, x offset and an optional override for slot 1.
+type InstanceEntry<'a> = (
+    &'a voxel_object_runtime::AdmittedVoxelObject,
+    u32,
+    f32,
+    Option<&'static str>,
+);
+
+fn entry_instance<'a>(
+    instance_id: &str,
+    entry: InstanceEntry<'a>,
+) -> VoxelObjectProjectionInstance<'a> {
+    let (object, frame, offset, override_material) = entry;
+    let mut instance = named_instance(object, frame, instance_id);
+    instance.transform.translation[0] = offset;
+    instance.material_overrides = override_material
+        .map(|material| MeshMaterialSlot {
+            slot: 1,
+            material: material.to_string(),
+        })
+        .into_iter()
+        .collect();
+    instance
+}
+
+/// Puts or removes one instance on `changed`, then projects the whole set
+/// on `whole`, and checks both publish the same.
+fn expect_whole_projection<'a>(
+    changed: &mut VoxelObjectRenderProjector,
+    whole: &mut VoxelObjectRenderProjector,
+    retained: &mut BTreeMap<String, InstanceEntry<'a>>,
+    materials: &BTreeMap<String, RenderMaterialDescriptor>,
+    instance_id: &str,
+    entry: Option<InstanceEntry<'a>>,
+) {
+    let (frame, mesh_resources) = match entry {
+        Some(entry) => {
+            let projected = changed
+                .put_instance(&entry_instance(instance_id, entry), materials)
+                .unwrap();
+            retained.insert(instance_id.to_string(), entry);
+            (projected.frame, projected.mesh_resources)
+        }
+        None => {
+            retained.remove(instance_id);
+            (changed.remove_instance(instance_id).unwrap(), Vec::new())
+        }
+    };
+    let instances = retained
+        .iter()
+        .map(|(id, entry)| entry_instance(id, *entry))
+        .collect::<Vec<_>>();
+    let expected = whole.project(&instances, materials).unwrap();
+    assert_eq!(frame, expected.frame, "{instance_id}: {entry:?}");
+    assert_eq!(mesh_resources, expected.mesh_resources, "{instance_id}");
+    for id in retained.keys() {
+        assert_eq!(changed.handle(id), whole.handle(id), "{id}");
+    }
+}
+
+/// Putting or removing one instance publishes what projecting the whole
+/// set again would: shared, replaced and released resources, materials
+/// defined, dropped and defined again, rebinding overrides and surface
+/// modes. A refused change leaves the projector as it was.
+#[test]
+fn one_instance_changes_publish_what_a_whole_projection_would() {
+    use render_projection::VoxelObjectProjectionError;
+
+    let runner = admitted();
+    let revised = admitted_variant("voxel-object/runner", "material/runner", "test-v2");
+    let other = admitted_variant("voxel-object/other", "material/other", "test");
+    let greedy = admitted_with_surface(SurfaceMode::GreedyCubes);
+    let marching = admitted_with_surface(SurfaceMode::MarchingCubes);
+    let mut all_materials = materials();
+    for material in [
+        material("material/other", [0.1, 0.2, 0.8, 1.0]),
+        material("material/override", [0.1, 0.4, 0.9, 1.0]),
+    ] {
+        all_materials.insert(material.id.clone(), material);
+    }
+    let steps: [(&str, Option<InstanceEntry>); 14] = [
+        ("a", Some((&runner, 0, 0.0, None))),
+        ("b", Some((&runner, 1, 0.0, None))),
+        ("c", Some((&other, 0, 0.0, None))),
+        ("a", Some((&runner, 1, 2.0, None))),
+        ("b", Some((&runner, 1, 0.0, Some("material/override")))),
+        ("c", None),
+        ("c", Some((&other, 1, 0.0, None))),
+        ("b", None),
+        ("a", None),
+        ("a", Some((&revised, 0, 0.0, None))),
+        ("a", Some((&runner, 0, 0.0, None))),
+        ("a", Some((&marching, 0, 0.0, None))),
+        ("a", Some((&other, 0, 1.0, None))),
+        ("d", Some((&runner, 0, 0.0, None))),
+    ];
+    for packed in [false, true] {
+        let projector = || {
+            if packed {
+                VoxelObjectRenderProjector::with_packed_mesh_resources()
+            } else {
+                VoxelObjectRenderProjector::new()
+            }
+        };
+        let (mut changed, mut whole) = (projector(), projector());
+        let mut retained = BTreeMap::new();
+        for (id, entry) in steps {
+            expect_whole_projection(
+                &mut changed,
+                &mut whole,
+                &mut retained,
+                &all_materials,
+                id,
+                entry,
+            );
+        }
+
+        let refusals: [(&str, InstanceEntry, VoxelObjectProjectionError); 4] = [
+            (
+                "x",
+                (&revised, 0, 0.0, None),
+                VoxelObjectProjectionError::ConflictingResource {
+                    asset: "voxel-object/runner".to_string(),
+                },
+            ),
+            (
+                "x",
+                (&marching, 0, 0.0, None),
+                VoxelObjectProjectionError::SurfaceModeRegrouping {
+                    asset: "voxel-object/runner".to_string(),
+                },
+            ),
+            (
+                "d",
+                (&runner, 9, 0.0, None),
+                VoxelObjectProjectionError::FrameOutOfRange {
+                    instance: "d".to_string(),
+                    frame: 9,
+                    frame_count: 3,
+                },
+            ),
+            (
+                "d",
+                (&runner, 0, 0.0, Some("material/missing")),
+                VoxelObjectProjectionError::MissingMaterial {
+                    asset: "material/missing".to_string(),
+                },
+            ),
+        ];
+        for (id, entry, error) in refusals {
+            assert_eq!(
+                changed.put_instance(&entry_instance(id, entry), &all_materials),
+                Err(error)
+            );
+        }
+        expect_whole_projection(
+            &mut changed,
+            &mut whole,
+            &mut retained,
+            &all_materials,
+            "d",
+            Some((&runner, 1, 3.0, Some("material/override"))),
+        );
+
+        // A projection with two surface modes of one object, then changes
+        // that keep it so; one that would merge them is refused.
+        let mut retained = BTreeMap::from([
+            ("g".to_string(), (&greedy, 0, 0.0, None)),
+            ("m".to_string(), (&marching, 0, 0.0, None)),
+        ]);
+        let instances = retained
+            .iter()
+            .map(|(id, entry)| entry_instance(id, *entry))
+            .collect::<Vec<_>>();
+        let (mut changed, mut whole) = (projector(), projector());
+        changed.project(&instances, &all_materials).unwrap();
+        whole.project(&instances, &all_materials).unwrap();
+        for (id, entry) in [
+            ("g", Some((&greedy, 1, 0.0, None))),
+            ("m2", Some((&marching, 1, 0.0, None))),
+            ("m", None),
+        ] {
+            expect_whole_projection(
+                &mut changed,
+                &mut whole,
+                &mut retained,
+                &all_materials,
+                id,
+                entry,
+            );
+        }
+        assert_eq!(
+            changed.remove_instance("m2"),
+            Err(VoxelObjectProjectionError::SurfaceModeRegrouping {
+                asset: "voxel-object/runner".to_string(),
+            })
+        );
+        expect_whole_projection(
+            &mut changed,
+            &mut whole,
+            &mut retained,
+            &all_materials,
+            "g",
+            Some((&greedy, 0, 1.0, None)),
+        );
+    }
+}
+
 fn instance(
     object: &voxel_object_runtime::AdmittedVoxelObject,
     frame: u32,

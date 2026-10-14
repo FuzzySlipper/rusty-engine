@@ -742,34 +742,42 @@ impl RuntimeVoxelContentBridge {
         self.replace_presentation(handle.value, None)
     }
 
-    /// Puts one presentation entry in place (or removes it) and reprojects.
-    /// A refused projection puts the previous entry back, so the call's
-    /// state and published frames are as they were before the operation.
+    /// Puts one presentation entry in place (or removes it) and projects
+    /// only that change. The entry is retained once the projection accepts
+    /// it, so a refused operation leaves the call's state and published
+    /// frames as they were.
     fn replace_presentation(
         &mut self,
         handle: u64,
         entry: Option<RetainedVoxelObjectPresentation>,
     ) -> Result<(), CsharpEngineServicesError> {
         let staged = self.staged_presentation_mut()?;
-        let presentations = &mut staged.state.presentations;
-        let previous = match entry {
-            Some(entry) => presentations.insert(handle, entry),
-            None => presentations.remove(&handle),
-        };
-        match project_presentation_state(&mut staged.state) {
-            Ok(frame) => {
-                staged.frames.push(frame);
-                Ok(())
+        let state = &mut staged.state;
+        let frame = match &entry {
+            Some(entry) => {
+                check_material_descriptors(
+                    &state.projector,
+                    state.presentations.get(&handle),
+                    entry,
+                )?;
+                state
+                    .projector
+                    .put_instance(&projection_instance(handle, entry), &entry.materials)
+                    .map(|projection| projection.frame)
             }
-            Err(error) => {
-                let presentations = &mut staged.state.presentations;
-                match previous {
-                    Some(previous) => presentations.insert(handle, previous),
-                    None => presentations.remove(&handle),
-                };
-                Err(error)
-            }
+            None => state
+                .projector
+                .remove_instance(&presentation_instance_id(handle)),
         }
+        .map_err(|error| {
+            CsharpEngineServicesError::new("CSHARP_VOXEL_PRESENTATION", format!("{error:?}"))
+        })?;
+        match entry {
+            Some(entry) => state.presentations.insert(handle, entry),
+            None => state.presentations.remove(&handle),
+        };
+        staged.frames.push(frame);
+        Ok(())
     }
 
     fn retained_presentation(
@@ -842,47 +850,51 @@ impl RuntimeVoxelContentBridge {
     }
 }
 
-fn project_presentation_state(
-    state: &mut VoxelObjectPresentationState,
-) -> Result<RenderFrameDiff, CsharpEngineServicesError> {
-    let instances = state
-        .presentations
-        .iter()
-        .map(|(handle, presentation)| VoxelObjectProjectionInstance {
-            instance_id: format!("csharp-voxel-presentation-{handle}"),
-            object: presentation.object.as_ref(),
-            frame: presentation.runtime_frame,
-            transform: presentation.transform,
-            visible: presentation.visible,
-            material_overrides: Vec::new(),
-            metadata: RenderMetadata {
-                source_entity: None,
-                source_scene_node: None,
-                tags: vec!["csharp-voxel-object".to_owned()],
-                label: Some(format!("Voxel object presentation {handle}")),
-            },
-        })
-        .collect::<Vec<_>>();
-    let mut materials = BTreeMap::new();
-    for presentation in state.presentations.values() {
-        for (id, descriptor) in &presentation.materials {
-            if let Some(existing) = materials.insert(id.clone(), descriptor.clone()) {
-                if existing != *descriptor {
-                    return Err(CsharpEngineServicesError::new(
-                        "CSHARP_VOXEL_PRESENTATION_MATERIALS",
-                        "one retained voxel material identity resolved to conflicting descriptors",
-                    ));
-                }
-            }
+fn presentation_instance_id(handle: u64) -> String {
+    format!("csharp-voxel-presentation-{handle}")
+}
+
+fn projection_instance(
+    handle: u64,
+    presentation: &RetainedVoxelObjectPresentation,
+) -> VoxelObjectProjectionInstance<'_> {
+    VoxelObjectProjectionInstance {
+        instance_id: presentation_instance_id(handle),
+        object: presentation.object.as_ref(),
+        frame: presentation.runtime_frame,
+        transform: presentation.transform,
+        visible: presentation.visible,
+        material_overrides: Vec::new(),
+        metadata: RenderMetadata {
+            source_entity: None,
+            source_scene_node: None,
+            tags: vec!["csharp-voxel-object".to_owned()],
+            label: Some(format!("Voxel object presentation {handle}")),
+        },
+    }
+}
+
+/// One material identity keeps one descriptor across presentations: a
+/// material this presentation names that another retained presentation
+/// uses must resolve to the descriptor already published for it.
+fn check_material_descriptors(
+    projector: &VoxelObjectRenderProjector,
+    previous: Option<&RetainedVoxelObjectPresentation>,
+    entry: &RetainedVoxelObjectPresentation,
+) -> Result<(), CsharpEngineServicesError> {
+    for (id, descriptor) in &entry.materials {
+        let Some((published, users)) = projector.used_material(id) else {
+            continue;
+        };
+        let own = usize::from(previous.is_some_and(|previous| previous.materials.contains_key(id)));
+        if users > own && published != descriptor {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_VOXEL_PRESENTATION_MATERIALS",
+                "one retained voxel material identity resolved to conflicting descriptors",
+            ));
         }
     }
-    let result = state
-        .projector
-        .project(&instances, &materials)
-        .map_err(|error| {
-            CsharpEngineServicesError::new("CSHARP_VOXEL_PRESENTATION", format!("{error:?}"))
-        })?;
-    Ok(result.frame)
+    Ok(())
 }
 
 #[cfg(test)]
@@ -3963,16 +3975,27 @@ mod tests {
         }
         assert_eq!(presentation_readout(&bridge), before);
 
+        let mut reference = VoxelObjectRenderProjector::new();
+        full_reprojection(
+            &mut reference,
+            &bridge
+                .staged_presentation
+                .as_ref()
+                .unwrap()
+                .state
+                .presentations,
+        );
         let mut hidden = update(second, 1, identity_transform(), &retained);
         hidden.visible = false;
         bridge.update_object_presentation(hidden).expect("update");
         let call = bridge.take_staged_call().expect("open call");
         let projector = &call.state.projector;
+        let published = call.frames.last().expect("published update");
         assert_eq!(
-            call.frames.last().expect("published update").ops,
+            published.ops,
             vec![render_model::RenderDiff::Update {
                 handle: projector
-                    .handle(&format!("csharp-voxel-presentation-{}", second.value))
+                    .handle(&presentation_instance_id(second.value))
                     .expect("second handle"),
                 transform: None,
                 material: None,
@@ -3980,10 +4003,168 @@ mod tests {
                 metadata: None,
             }]
         );
+        assert_eq!(
+            *published,
+            full_reprojection(&mut reference, &call.state.presentations)
+        );
+    }
+
+    /// Each presentation operation projects only the presentation it
+    /// changes, and publishes exactly what projecting every retained
+    /// presentation again would: shared and released resources, materials
+    /// that are redefined, dropped and defined again, and handles.
+    #[test]
+    fn presentation_operations_publish_what_a_full_reprojection_would() {
+        let mut bridge = Box::new(RuntimeVoxelContentBridge::new());
+        let mut appearance = Box::new(RuntimeAppearanceBridge::new(
+            RuntimeAppearanceCatalog::default(),
+            BTreeMap::new(),
+        ));
+        let api = super::api(&mut bridge, &mut appearance);
+        let runner = admit_presentation_object(api, &object());
+        let mut other = object();
+        other.asset_id = "voxel-object/bridge-other".to_owned();
+        other.material_palette[0].material_asset_id = "material/bridge-other".to_owned();
+        let other = admit_presentation_object(
+            api,
+            &with_computed_voxel_object_hashes(other).expect("valid object"),
+        );
+        appearance.begin_call();
+        let dull = [NativeVoxelObjectMaterialBinding {
+            material_slot: 1,
+            material: presentation_material(&mut appearance, 0.25),
+        }];
+        let bright = [NativeVoxelObjectMaterialBinding {
+            material_slot: 1,
+            material: presentation_material(&mut appearance, 0.75),
+        }];
+        let create = |object, runtime_frame, materials: &[NativeVoxelObjectMaterialBinding]| {
+            NativeProjectVoxelObjectRequest {
+                object,
+                runtime_frame,
+                transform: identity_transform(),
+                visible: true,
+                materials: materials.as_ptr(),
+                materials_len: materials.len(),
+            }
+        };
+        let update = |presentation,
+                      runtime_frame,
+                      offset: f32,
+                      visible,
+                      materials: &[NativeVoxelObjectMaterialBinding]| {
+            let mut transform = identity_transform();
+            transform.translation.x = offset;
+            NativeUpdateVoxelObjectPresentationRequest {
+                presentation,
+                runtime_frame,
+                transform,
+                visible,
+                materials: materials.as_ptr(),
+                materials_len: materials.len(),
+            }
+        };
+
+        bridge.begin_call();
+        let mut reference = VoxelObjectRenderProjector::new();
+        let mut published = 0;
+        let mut expect_published = |bridge: &RuntimeVoxelContentBridge, step: &str| {
+            let call = bridge.staged_presentation.as_ref().expect("open call");
+            published += 1;
+            assert_eq!(call.frames.len(), published, "{step}");
+            let expected = full_reprojection(&mut reference, &call.state.presentations);
+            assert_eq!(call.frames.last(), Some(&expected), "{step}");
+            assert!(!expected.ops.is_empty(), "{step} publishes its change");
+        };
+
+        let first = bridge.project_object(create(runner, 0, &dull)).unwrap();
+        expect_published(&bridge, "first runner");
+        let second = bridge.project_object(create(runner, 1, &dull)).unwrap();
+        expect_published(&bridge, "second runner shares the resource");
+        let third = bridge.project_object(create(other, 0, &bright)).unwrap();
+        expect_published(&bridge, "other object");
+        bridge
+            .update_object_presentation(update(first, 1, 2.0, true, &dull))
+            .unwrap();
+        expect_published(&bridge, "frame and transform");
+        bridge
+            .update_object_presentation(update(second, 1, 0.0, false, &dull))
+            .unwrap();
+        expect_published(&bridge, "hidden");
+        bridge
+            .update_object_presentation(update(first, 1, 2.0, true, &bright))
+            .expect_err("a shared material keeps its descriptor");
+        bridge.destroy_object_presentation(second).unwrap();
+        expect_published(&bridge, "destroy one of two runners");
+        bridge
+            .update_object_presentation(update(first, 0, 2.0, true, &bright))
+            .unwrap();
+        expect_published(&bridge, "redefine a material only it uses");
+        bridge.destroy_object_presentation(third).unwrap();
+        expect_published(&bridge, "release the other resource and its material");
+        bridge
+            .project_object(create(other, 9, &bright))
+            .expect_err("frame the object does not admit");
+        let fourth = bridge.project_object(create(other, 0, &dull)).unwrap();
+        expect_published(&bridge, "define the released resource and material again");
+        let mut more = Vec::new();
+        for index in 0..9 {
+            more.push(
+                bridge
+                    .project_object(create(runner, index % 2, &bright))
+                    .unwrap(),
+            );
+            expect_published(&bridge, "more runners");
+        }
+        bridge.destroy_object_presentation(first).unwrap();
+        expect_published(&bridge, "destroy a runner others share");
+        for (index, presentation) in more.iter().enumerate() {
+            bridge
+                .update_object_presentation(update(
+                    *presentation,
+                    1,
+                    index as f32,
+                    index % 3 != 0,
+                    &bright,
+                ))
+                .unwrap();
+            expect_published(&bridge, "update more runners");
+        }
+        for presentation in more.into_iter().chain([fourth]) {
+            bridge.destroy_object_presentation(presentation).unwrap();
+            expect_published(&bridge, "destroy everything");
+        }
+        let call = bridge.take_staged_call().expect("open call");
+        assert!(call.state.presentations.is_empty());
+        assert!(call
+            .state
+            .projector
+            .used_material("material/bridge-test")
+            .is_none());
+    }
+
+    /// Projects every retained presentation at once, as each operation
+    /// did before it projected only its own change.
+    fn full_reprojection(
+        projector: &mut VoxelObjectRenderProjector,
+        presentations: &BTreeMap<u64, RetainedVoxelObjectPresentation>,
+    ) -> RenderFrameDiff {
+        let instances = presentations
+            .iter()
+            .map(|(handle, presentation)| projection_instance(*handle, presentation))
+            .collect::<Vec<_>>();
+        let materials = presentations
+            .values()
+            .flat_map(|presentation| presentation.materials.clone())
+            .collect::<BTreeMap<_, _>>();
+        projector
+            .project(&instances, &materials)
+            .expect("full reprojection")
+            .frame
     }
 
     /// The call's presentations, handle counter, projector handles and
-    /// published frame count.
+    /// material uses, and published frames.
     #[allow(clippy::type_complexity)]
     fn presentation_readout(
         bridge: &RuntimeVoxelContentBridge,
@@ -3996,6 +4177,7 @@ mod tests {
             bool,
             BTreeMap<String, RenderMaterialDescriptor>,
             Option<render_model::RenderHandle>,
+            Vec<Option<(RenderMaterialDescriptor, usize)>>,
         )>,
         u64,
         Vec<RenderFrameDiff>,
@@ -4015,7 +4197,17 @@ mod tests {
                         presentation.materials.clone(),
                         call.state
                             .projector
-                            .handle(&format!("csharp-voxel-presentation-{handle}")),
+                            .handle(&presentation_instance_id(*handle)),
+                        presentation
+                            .materials
+                            .keys()
+                            .map(|id| {
+                                call.state
+                                    .projector
+                                    .used_material(id)
+                                    .map(|(descriptor, users)| (descriptor.clone(), users))
+                            })
+                            .collect(),
                     )
                 })
                 .collect(),
